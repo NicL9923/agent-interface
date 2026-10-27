@@ -43,6 +43,14 @@
         if let preferences = FixtureProtocol.designFixture?["preferences"] as? [String: Any] {
           FixtureProtocol.preferences.merge(preferences) { _, new in new }
         }
+        if FixtureProtocol.designFixture?["screen"] as? String == "models" {
+          for kind in ["tools", "skills"] {
+            FixtureProtocol.designCatalogs[kind] = FixtureProtocol.designFixture?[kind] as? [[String: Any]] ?? []
+          }
+          if let inference = FixtureProtocol.designFixture?["inference"] as? [String: Any] {
+            FixtureProtocol.inference = inference
+          }
+        }
         if environment["AGENT_INTERFACE_UI_AUTOMATION"] == "1" {
           FixtureProtocol.automation = AutomationDebugFixture()
           FixtureProtocol.routines = [["id": "trial", "botId": "ranch", "name": "Morning brief trial",
@@ -160,6 +168,8 @@
         "enabled": false,
       ],
     ]
+    nonisolated(unsafe) static var designCatalogs: [String: [[String: Any]]] = [:]
+    nonisolated(unsafe) static var designFailures: Set<String> = []
     nonisolated(unsafe) static var routines: [[String: Any]] = ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_EXPERIENCE"] == "1" ? [["id": "trial", "botId": "ranch", "name": "Morning brief trial", "prompt": "Report today's tasks. Do not modify anything.", "schedule": "0 7 * * *", "enabled": false, "recipientIds": []]] : []
     nonisolated(unsafe) static var trialRequestId: String?
     nonisolated(unsafe) static var trialCount = 0
@@ -378,6 +388,14 @@
           var bootstrap = object as! [String: Any]
           var capabilities = bootstrap["capabilities"] as! [String: Any]
           capabilities["botConfiguration"] = ["supported": false, "reason": Self.designFixture?["unsupportedReason"] ?? "Assistant configuration is unavailable."]
+          bootstrap["capabilities"] = capabilities; object = bootstrap
+        }
+        if Self.designFixture?["catalogUnsupported"] as? Bool == true {
+          var bootstrap = object as! [String: Any]
+          var capabilities = bootstrap["capabilities"] as! [String: Any]
+          for kind in ["tools", "skills"] {
+            capabilities[kind] = ["supported": false, "reason": Self.designFixture?["capabilityUnsupportedReason"] ?? "This catalog is unavailable."]
+          }
           bootstrap["capabilities"] = capabilities; object = bootstrap
         }
         if Self.designFixture?["portraitUnsupported"] as? Bool == true {
@@ -703,7 +721,31 @@
             "requestId": request.url!.lastPathComponent, "status": "uncertain",
           ]
       } else if path.hasSuffix("/tools") || path.hasSuffix("/skills") {
-        if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_CATALOG_FAILURE"] == "1",
+        if Self.designFixture?["screen"] as? String == "models" {
+          let kind = request.url!.lastPathComponent
+          if method == "PUT" { print("DESIGN_CATALOG_PUT \(kind) \((body["ids"] as? [String] ?? []).sorted())") }
+          let failureKey = "\(method == "GET" ? "load" : "save")-\(kind)"
+          if Self.designFixture?["failCapability"] as? String == failureKey,
+            Self.designFailures.insert(failureKey).inserted {
+            status = 503
+            let errorKey = method == "GET" ? "capabilityLoadError" : kind == "skills" ? "skillSaveError" : "capabilitySaveError"
+            object = ["error": Self.designFixture?[errorKey] ?? "Catalog request failed."]
+          } else if method == "GET" {
+            object = Self.designCatalogs[kind] ?? []
+          } else {
+            let ids = body["ids"] as? [String] ?? []
+            let items = Self.designCatalogs[kind] ?? []
+            let known = Set(items.compactMap { $0["id"] as? String })
+            if !Set(ids).isSubset(of: known) {
+              status = 422; object = ["error": "Unknown catalog choice."]
+            } else {
+              Self.designCatalogs[kind] = items.map { item in
+                var value = item; value["enabled"] = ids.contains(item["id"] as? String ?? ""); return value
+              }
+              object = ["ok": true]
+            }
+          }
+        } else if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_CATALOG_FAILURE"] == "1",
           method == "GET"
         {
           status = 503
@@ -719,11 +761,21 @@
           }
         }
       } else if path == "/api/preferences/models" {
-        Self.preferences["modelFavorites"] = body["modelFavorites"]
-        object = ["modelFavorites": Self.preferences["modelFavorites"] ?? []]
+        if Self.designFixture?["screen"] as? String == "models" { print("DESIGN_FAVORITES_PUT \(body)") }
+        if Self.designFixture?["failFavorite"] as? Bool == true, Self.designFailures.insert("favorite").inserted {
+          status = 503; object = ["error": Self.designFixture?["favoriteError"] ?? "Favorites could not be saved."]
+        } else {
+          Self.preferences["modelFavorites"] = body["modelFavorites"]
+          object = ["modelFavorites": Self.preferences["modelFavorites"] ?? []]
+        }
       } else if path.hasSuffix("/inference") {
-        if method == "PATCH" { for (key, value) in body { Self.inference[key] = value } }
-        object = Self.inference
+        if method == "PATCH", body["reasoning"] as? String == "ultra", Self.designFixture?["failInference"] as? Bool == true,
+          Self.designFailures.insert("inference").inserted {
+          status = 503; object = ["error": Self.designFixture?["inferenceError"] ?? "The conversation setting could not be saved."]
+        } else {
+          if method == "PATCH" { for (key, value) in body { Self.inference[key] = value } }
+          object = Self.inference
+        }
       } else if path == "/api/preferences" {
         if method == "PATCH" && Self.preferencesFailures > 0 {
           Self.preferencesFailures -= 1; status = 503; object = ["error": "Fixture settings save failed"]
@@ -821,13 +873,23 @@
         Self.createdBots.append(bot)
         object = bot
       } else if path == "/api/models" {
-        object = ["provider": "openrouter", "model": Self.ranchModel.model, "providers": [
+        if Self.designFixture?["failModels"] as? Bool == true, Self.designFailures.insert("models").inserted {
+          status = 503; object = ["error": Self.designFixture?["catalogError"] ?? "Models could not be loaded."]
+        } else if let catalog = Self.designFixture?["catalog"] as? [String: Any] {
+          object = catalog
+        } else {
+          object = ["provider": "openrouter", "model": Self.ranchModel.model, "providers": [
           ["id": "openrouter", "name": "OpenRouter", "authenticated": true, "models": [
             ["id": "configured-model", "name": "Configured model", "available": true],
             ["id": "fixture-fast", "name": "Fixture fast model", "available": true],
           ]],
-        ]]
+          ]]
+        }
+        if Self.designFixture?["screen"] as? String == "models" { print("DESIGN_MODELS_GET \(status == 200 ? "ok" : "failed")") }
       } else if path.hasPrefix("/api/bots/"), method == "PATCH" {
+        if Self.designFixture?["screen"] as? String == "models" {
+          print("DESIGN_MODEL_PATCH \(body["provider"] ?? "") \(body["model"] ?? "") \(body["confirmModel"] ?? false)")
+        }
         if request.url!.lastPathComponent == "ranch", let model = body["model"] as? String {
           Self.ranchModel = (body["provider"] as? String ?? Self.ranchModel.provider, model)
         }
@@ -835,7 +897,7 @@
         bot["id"] = request.url!.lastPathComponent
         bot["activity"] = "idle"
         object = bot
-        if Self.designFixture?["screen"] as? String == "settings" {
+        if ["settings", "models"].contains(Self.designFixture?["screen"] as? String ?? "") {
           if Self.designFixture?["settingsModelError"] as? Bool == true, body["confirmModel"] as? Bool != true {
             status = 409; object = ["error": Self.designFixture?["modelWarning"] ?? "Confirm this model before saving.", "confirmRequired": true]
           } else if Self.designFixture?["settingsSaveError"] as? Bool == true, !Self.settingsSaveFailed {

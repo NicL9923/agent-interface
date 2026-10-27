@@ -4,10 +4,12 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
   if (!["127.0.0.1", "localhost"].includes(origin.hostname)) throw Error("Use a loopback fixture.");
   const boot = await (await page.request.get(`${origin.origin}/api/bootstrap`)).json();
   if (boot.user?.email !== "preview@localhost.invalid") throw Error("Use the synthetic household preview.");
-  if (!["today", "home", "conversation", "questions", "approvals", "recovery", "details", "settings", "avatar"].includes(screen)) throw Error(`Unsupported screen: ${screen}`);
+  if (!["today", "home", "conversation", "questions", "approvals", "recovery", "details", "settings", "avatar", "models"].includes(screen)) throw Error(`Unsupported screen: ${screen}`);
   const context = await page.context().browser().newContext({ serviceWorkers: "block", reducedMotion: "reduce", viewport: { width: 1440, height: 1000 } });
+  if (screen === "models") await context.addInitScript(() => { window.name="wildbots-design-models-capture"; });
   const tab = await context.newPage();
   const browserErrors = [];
+  if (screen === "models") tab.on("dialog", dialog => dialog.type() === "beforeunload" ? dialog.accept() : dialog.dismiss());
   tab.on("pageerror", error => browserErrors.push(error.message));
   const pointer = ["questions", "approvals"].includes(screen) ? await context.newCDPSession(tab) : undefined;
   const fontSession = ["details", "conversation"].includes(screen) ? await context.newCDPSession(tab) : undefined;
@@ -30,15 +32,19 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
   let settingsBots = structuredClone(fixture?.bots || []);
   let settingsSaveFailed = false;
   let settingsLoadFailed = false;
-  const modelWarning = "This model may cost more than your current model. Confirm the choice before saving.";
+  const modelWarning = fixture?.modelWarning || "This model may cost more than your current model. Confirm the choice before saving.";
   const settingsSubmissions = [];
   const avatarSubmissions = [], portraitPrompts = [];
+  let modelFavorites = structuredClone(fixture?.preferences?.modelFavorites || []);
+  let inference = structuredClone(fixture?.inference || {});
+  let catalogs = {tools: structuredClone(fixture?.tools || []), skills: structuredClone(fixture?.skills || [])};
+  const modelFailures = new Set(), modelSubmissions = [];
   let avatarSaveFailed = false;
   for (const [path, encoded] of Object.entries(fixture?.images || {})) {
     await context.route(`**${path}`, route => route.fulfill({ contentType: "image/png", body: Buffer.from(encoded, "base64") }));
   }
   await context.route("**/api/bots/*/conversation*", async route => {
-    if (!["conversation", "questions", "approvals", "recovery", "details", "settings", "avatar"].includes(screen) || !fixture?.conversation) return route.continue();
+    if (!["conversation", "questions", "approvals", "recovery", "details", "settings", "avatar", "models"].includes(screen) || !fixture?.conversation) return route.continue();
     if (screen === "details") {
       const conversation = structuredClone(fixture.conversation);
       conversation.earlierFiles = state === "earlier-error" ? 1 : 0;
@@ -97,7 +103,7 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
     });
     await context.route("**/api/bots/*/files*", route => state === "earlier-error" ? route.fulfill({status:503,json:{error:"Earlier files unavailable."}}) : route.fulfill({json:{messages:[]}}));
   }
-  if (["settings", "avatar"].includes(screen)) {
+  if (["settings", "avatar", "models"].includes(screen)) {
     await context.route("**/api/bots/*", route => {
       const id = decodeURIComponent(new URL(route.request().url()).pathname.split("/").at(-1));
       const bot = settingsBots.find(item => item.id === id);
@@ -110,7 +116,8 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
       }
       const body = route.request().postDataJSON();
       settingsSubmissions.push({method:route.request().method(), id, body});
-      if (state === "model-confirm" && !body.confirmModel) return route.fulfill({status:409,json:{error:modelWarning,confirmRequired:true}});
+      if (["model-confirm", "composer-confirm"].includes(state) && !body.confirmModel) return route.fulfill({status:409,json:{error:modelWarning,confirmRequired:true}});
+      if (screen === "models" && state === "model-save-error" && !settingsSaveFailed) { settingsSaveFailed=true; return route.fulfill({status:503,json:{}}); }
       if (state === "save-error" && !settingsSaveFailed) {
         settingsSaveFailed = true;
         return route.fulfill({status:503, json:{error:fixture.saveError}});
@@ -140,6 +147,45 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
     await new Promise(resolve => setTimeout(resolve,1500));
     return route.fulfill({json:{id:"fixture-generated-portrait",name:"ranch-portrait.png",mime:"image/png",url:"/api/files/fixture-generated-portrait"}});
   });
+  if (screen === "models") {
+    const failOnce = key => !modelFailures.has(key) && (modelFailures.add(key), true);
+    await context.route("**/api/models*", route => {
+      if (state === "models-error" && failOnce(state)) return route.fulfill({status:503,json:{error:fixture.catalogError}});
+      const catalog = structuredClone(fixture.catalog);
+      if (state === "catalog-empty") catalog.providers = [];
+      return route.fulfill({json:catalog});
+    });
+    await context.route("**/api/preferences/models", route => {
+      const body = route.request().postDataJSON();
+      const failed = state === "favorite-error" && failOnce(state);
+      modelSubmissions.push({kind:"favorites",body,failed});
+      if (failed) return route.fulfill({status:503,json:{error:fixture.favoriteError}});
+      modelFavorites = body.modelFavorites;
+      return route.fulfill({json:{modelFavorites}});
+    });
+    await context.route("**/api/bots/*/inference", route => {
+      if (route.request().method() === "PATCH") {
+        const body = route.request().postDataJSON(), failed = state === "inference-error" && body.reasoning === "ultra" && failOnce(state);
+        modelSubmissions.push({kind:"inference",body,failed});
+        if (failed) return route.fulfill({status:503,json:{error:fixture.inferenceError}});
+        Object.assign(inference,body);
+      }
+      return route.fulfill({json:inference});
+    });
+    for (const kind of ["tools", "skills"]) await context.route(`**/api/bots/*/${kind}`, route => {
+      if (route.request().method() === "GET") {
+        if (state === "capabilities-load-error" && failOnce(`load-${kind}`)) return route.fulfill({status:503,json:{error:fixture.capabilityLoadError}});
+        return route.fulfill({json:state === "capabilities-empty" ? [] : catalogs[kind]});
+      }
+      const body = route.request().postDataJSON(), failed = state === "capabilities-save-error" && failOnce(`save-${kind}`);
+      modelSubmissions.push({kind,body,failed});
+      if (failed) return route.fulfill({status:503,json:{error:(kind==="skills"?fixture.skillSaveError:fixture.capabilitySaveError)}});
+      const ids = new Set(body.ids), known = new Set(catalogs[kind].map(item => item.id));
+      if (body.ids.some(id => !known.has(id)) ) throw Error("Unknown catalog choice.");
+      catalogs[kind] = catalogs[kind].map(item => ({...item,enabled:ids.has(item.id)}));
+      return route.fulfill({json:{ok:true}});
+    });
+  }
   await context.route("**/api/today", async route => {
     if (!fixture?.overview || screen !== "today") return route.continue();
     const value = structuredClone(fixture.overview);
@@ -161,7 +207,7 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
     const response = await route.fetch();
     const value = await response.json();
     if (fixture) value.bots = state === "empty" ? [] : fixture.bots;
-    if (["settings", "avatar"].includes(screen)) {
+    if (["settings", "avatar", "models"].includes(screen)) {
       value.bots = settingsBots.map(({instructions, enabledMcpServers, ...roster}) => roster);
       if (state === "unsupported") value.capabilities.botConfiguration = {supported:false,reason:fixture.unsupportedReason};
     }
@@ -172,6 +218,10 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
     if (screen === "recovery" && state === "unsupported-retry") value.capabilities.idempotency = { supported: false, reason: "This Hermes connection cannot look up requests." };
     if (screen === "approvals" && state === "unsupported") value.capabilities.approvals = { supported: false, reason: fixture.unsupportedReason };
     if (fixture?.preferences) value.preferences = { ...value.preferences, ...fixture.preferences };
+    if (screen === "models") {
+      value.preferences.modelFavorites = modelFavorites;
+      if (state === "capabilities-unavailable") for (const kind of ["tools", "skills"]) value.capabilities[kind] = {supported:false, reason:fixture.capabilityUnsupportedReason};
+    }
     if (screen === "avatar" && state === "composer-regression") value.preferences.presentation = "advanced";
     if (screen === "home" && state === "three-pins") value.preferences.favorites = ["ranch", "garden", "kitchen"];
     if (screen === "home" && state === "no-pins") value.preferences.favorites = [];
@@ -230,6 +280,159 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
     }
   };
   try {
+    if (screen === "models") {
+      const dialog = tab.locator(".settings-dialog");
+      const modelChecks = [];
+      const reset = async ({width=390,theme="light",large=false,savedUnavailable=false,denseTools=false}={}) => {
+        settingsSaveFailed=false; settingsBots=structuredClone(fixture.bots); modelFavorites=structuredClone(fixture.preferences.modelFavorites || []);
+        if(savedUnavailable) Object.assign(settingsBots[0],{provider:"field",model:"field-planner"});
+        inference=structuredClone(fixture.inference); catalogs={tools:structuredClone(fixture.tools),skills:structuredClone(fixture.skills)};
+        if(denseTools) catalogs.tools=structuredClone(fixture.longTools);
+        modelFailures.clear();
+        await tab.setViewportSize({width,height:width>1000?1000:844});
+        await tab.emulateMedia({colorScheme:theme});
+        await tab.goto(`${origin.origin}/?bot=ranch`);
+        await tab.evaluate(({large,theme}) => {document.documentElement.style.fontSize=large?"200%":"";document.documentElement.dataset.theme=theme;},{large,theme});
+      };
+      const settings = async kind => {
+        await tab.locator('.chat-header [title="Details, pin, artifacts and settings"]').click();
+        await tab.locator(".bot-details").getByRole("button",{name:"Settings",exact:true}).click();
+        await dialog.waitFor();
+        if (kind !== "models") {
+          const overflow=dialog.locator(".settings-tabs-overflow");
+          if (await overflow.count()) await overflow.locator("summary").click();
+          await dialog.getByRole("button",{name:kind,exact:true}).click();
+        } else {
+          await dialog.locator(".model-picker > summary").click();
+          await dialog.getByRole("searchbox",{name:"Search models"}).waitFor();
+        }
+      };
+      const composer = async () => {
+        await tab.getByRole("button",{name:/^Model: /}).click();
+        await tab.getByRole("dialog",{name:"Choose a model"}).waitFor();
+      };
+      const shot = async (name,width=390,theme="light") => {
+        await capture(name,width,width>1000?1000:844,theme);
+        geometry.at(-1).models=await tab.evaluate(()=>{
+          const pane=document.querySelector(".model-popover");
+          const rect=element=>{const r=element.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height};};
+          return {popup:pane&&rect(pane),popupOverflowX:pane&&pane.scrollWidth>pane.clientWidth,
+            targets:pane?[...pane.querySelectorAll('.model-choice,.model-favorite,.model-refresh,.model-search input,[role="radio"],.icon-button')].map(el=>({label:el.getAttribute("aria-label")||el.textContent,...rect(el)})).filter(r=>r.width>0):[],
+            confirmation:[...document.querySelectorAll('[role="alertdialog"][open] button')].map(el=>({label:el.textContent,...rect(el)}))};
+        });
+        if(stage==="after" && geometry.at(-1).models.popupOverflowX) throw Error("Model popup overflows horizontally.");
+        if(stage==="after" && geometry.at(-1).models.targets.some(target=>target.width<43.9||target.height<43.9)) throw Error("A model control is smaller than 44 pixels.");
+      };
+      for (const [name,width,theme,large] of [
+        ["desktop",1440,"light",false],["phone",390,"light",false],["dark",390,"dark",false],["large-text",390,"light",true],
+      ]) {
+        state="loaded";
+        for (const kind of ["models","tools","skills"]) {
+          await reset({width,theme,large}); await settings(kind);
+          await (kind==="models" ? dialog.getByRole("button",{name:"daily-planner",exact:true}).first() : dialog.locator(".capability-item").first()).waitFor();
+          await shot(`${kind}-${name}`,width,theme);
+          if (kind === "skills") {
+            const required=dialog.getByRole("checkbox").first();
+            if (!await required.isChecked() || await required.isEnabled()) throw Error("Required skill must remain checked and disabled.");
+          }
+        }
+        await reset({width,theme,large}); await composer();
+        await tab.locator(".inference-controls").getByRole("radiogroup",{name:"Reasoning",exact:true}).waitFor();
+        await shot(`composer-${name}`,width,theme);
+        if(large && stage==="after") { await tab.getByRole("radio",{name:"Ultrafast",exact:true}).scrollIntoViewIfNeeded(); await shot("composer-settings-large-text",width,theme); }
+      }
+      for (const width of [320,768]) { state="loaded"; await reset({width}); await composer(); await shot(`composer-width-${width}`,width); }
+      state="loaded"; await reset(); await settings("models");
+      await dialog.locator(".model-provider").filter({hasText:"Household provider"}).getByRole("button",{name:"daily-planner",exact:true}).click();
+      const aliasSelectedRows=await dialog.locator('.model-choice[aria-pressed="true"]').count();
+      modelChecks.push({aliasSelectedRows});
+      if(stage==="after" && aliasSelectedRows!==2) throw Error("Alias favorite lost its selected state.");
+      const search=dialog.getByRole("searchbox",{name:"Search models"});
+      await search.fill("field"); await shot("model-search");
+      await search.fill("no such model"); await dialog.getByText("No models match your search.",{exact:true}).waitFor(); await shot("model-no-results");
+      await search.fill("field");
+      const offline=dialog.locator(".model-choice").filter({hasText:"field-planner"});
+      if(await offline.isEnabled()) throw Error("Unavailable model can be selected.");
+      await offline.scrollIntoViewIfNeeded(); await shot("model-unavailable");
+      await search.fill("");
+      state="favorite-error"; const star=dialog.getByRole("button",{name:"Add quick-reply to favorites",exact:true});
+      await star.click(); await dialog.getByText(fixture.favoriteError,{exact:true}).waitFor(); await shot("favorite-error");
+      if(await star.getAttribute("aria-label")!=="Add quick-reply to favorites") throw Error("Failed favorite write changed selection.");
+      await star.click(); await dialog.getByRole("button",{name:"Remove quick-reply from favorites",exact:true}).first().waitFor();
+      await dialog.locator(".model-picker-content").evaluate(el=>{el.scrollTop=0;}); await shot("favorite-saved");
+      for(const mode of ["models-error","catalog-empty"]) {
+        state=mode; await reset(); await composer();
+        await tab.getByText(mode==="models-error"?fixture.catalogError:"No connected models were reported. Connect a provider in Hermes, then retry.",{exact:true}).waitFor();
+        await shot(mode);
+        if(mode==="models-error") {
+          await tab.getByRole("button",{name:"Retry loading models",exact:true}).click();
+          await tab.getByRole("button",{name:"daily-planner",exact:true}).first().waitFor(); await shot("models-retried");
+        }
+      }
+      state="inference-error"; await reset(); await composer();
+      await tab.getByRole("radio",{name:"Ultra",exact:true}).click();
+      await tab.getByText(fixture.inferenceError,{exact:true}).waitFor(); await shot("inference-error");
+      if(inference.reasoning!==fixture.inference.reasoning) throw Error("Failed inference write changed saved value.");
+      await tab.getByRole("radio",{name:"Fast",exact:true}).click();
+      await tab.waitForFunction(()=>[...document.querySelectorAll('.inference-controls [role="radio"]')].some(el=>el.textContent==="Fast"&&el.getAttribute("aria-checked")==="true"));
+      if(inference.speed!=="fast") throw Error("Inference retry was not saved.");
+      await shot("inference-saved");
+      state="composer-confirm"; await tab.getByRole("button",{name:"quick-reply",exact:true}).first().click();
+      await tab.getByRole("button",{name:stage==="before"?"Confirm this model":"Use this model",exact:true}).waitFor(); await shot("composer-confirm");
+      const writesBeforeCancel=settingsSubmissions.length;
+      await tab.getByRole("button",{name:"Cancel",exact:true}).click();
+      if(settingsSubmissions.length!==writesBeforeCancel || settingsBots[0].model!==fixture.bots[0].model) throw Error("Cancel wrote a model.");
+      await tab.getByRole("button",{name:"quick-reply",exact:true}).first().click();
+      await tab.getByRole("button",{name:stage==="before"?"Confirm this model":"Use this model",exact:true}).click();
+      await tab.getByRole("dialog",{name:"Choose a model"}).waitFor({state:"hidden"});
+      if(settingsBots[0].model!=="quick-reply") throw Error("Confirmed model did not persist.");
+      modelChecks.push({confirmedModel:settingsBots[0].model,provider:settingsBots[0].provider});
+      if(stage==="after") { state="loaded"; await reset({savedUnavailable:true}); await composer(); await tab.getByRole("searchbox",{name:"Search models"}).fill("field"); await shot("current-unavailable"); }
+      if(stage==="after") {
+        for(const width of [1440,390]) {
+          state="inference-error"; await reset({width}); await composer();
+          await tab.getByRole("radio",{name:"Ultra",exact:true}).click();
+          await tab.waitForFunction(message=>[...document.querySelectorAll('.model-popover [role="alert"]')].some(el=>{const p=el.closest('.model-popover').getBoundingClientRect(),r=el.getBoundingClientRect(),h=el.closest('.model-popover').querySelector('header').getBoundingClientRect();return el.textContent.includes(message)&&r.top>=h.bottom&&r.bottom<=p.bottom&&document.activeElement===el;}),fixture.inferenceError);
+          await shot(`inference-error-visible-${width}`,width);
+          state="model-save-error"; await reset({width}); await composer();
+          await tab.getByRole("button",{name:"quick-reply",exact:true}).first().click();
+          await tab.waitForFunction(message=>[...document.querySelectorAll('.model-popover [role="alert"]')].some(el=>{const p=el.closest('.model-popover').getBoundingClientRect(),r=el.getBoundingClientRect(),h=el.closest('.model-popover').querySelector('header').getBoundingClientRect();return el.textContent.includes(message)&&r.top>=h.bottom&&r.bottom<=p.bottom&&document.activeElement===el;}),fixture.modelSaveError);
+          await shot(`model-error-visible-${width}`,width);
+          state="loaded"; await reset({width,denseTools:true}); await settings("tools");
+          await dialog.locator('.capability-item').nth(11).waitFor();
+          if(await dialog.locator('.capability-item').count()!==12) throw Error("Dense catalog fixture did not load twelve tools.");
+          await dialog.locator('.settings-content').evaluate(el=>{el.scrollTop=el.scrollHeight;});
+          await shot(`tools-long-bottom-${width}`,width);
+        }
+      }
+      for(const mode of ["capabilities-load-error","capabilities-save-error","capabilities-empty","capabilities-unavailable"]) {
+        state=mode; await reset(); const kind=mode==="capabilities-save-error"||mode==="capabilities-empty"?"skills":"tools"; await settings(kind);
+        if(mode==="capabilities-load-error") {
+          await dialog.getByText(fixture.capabilityLoadError,{exact:true}).waitFor(); await shot(mode);
+          if(await dialog.getByRole("button",{name:"Save tools",exact:true}).isEnabled()) throw Error("Unloaded catalog can be saved.");
+          await dialog.getByRole("button",{name:"Retry loading tools",exact:true}).click();
+          await dialog.locator(".capability-item").first().waitFor(); await shot("capabilities-retried");
+        } else if(mode==="capabilities-save-error") {
+          await dialog.getByRole("checkbox").last().check();
+          await dialog.getByRole("button",{name:"Save skills",exact:true}).click();
+          await dialog.getByText(fixture.skillSaveError,{exact:true}).waitFor(); await shot(mode);
+          if(!await dialog.getByRole("checkbox").last().isChecked()) throw Error("Failure lost catalog draft.");
+          await dialog.getByRole("button",{name:"Save skills",exact:true}).click();
+          await tab.waitForFunction(()=>[...document.querySelectorAll("button")].some(el=>el.textContent.trim()==="Saved"));
+          await shot("capabilities-saved");
+          if(!catalogs.skills.find(item=>item.id==="packing-list")?.enabled) throw Error("Catalog retry did not persist.");
+          const skillWrites=modelSubmissions.filter(item=>item.kind==="skills");
+          const requiredSkillIncluded=skillWrites.every(item=>item.body.ids.includes("weekly-plan"));
+          modelChecks.push({requiredSkillIncluded});
+          if(stage==="after" && !requiredSkillIncluded) throw Error("Required skill was omitted from save.");
+        } else {
+          await dialog.getByText(mode==="capabilities-empty"?"No skills were reported by Hermes.":fixture.capabilityUnsupportedReason,{exact:true}).waitFor();
+          await shot(mode);
+        }
+      }
+      if(browserErrors.length) throw Error(`Browser errors: ${browserErrors.join("; ")}`);
+      return {paths,geometry,modelSubmissions,settingsSubmissions,modelChecks,browserErrors};
+    }
     if (screen === "avatar") {
       const keyboardChecks=[];
       const dialog=tab.locator(".settings-dialog");
@@ -482,7 +685,7 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
           } else {
             state="model-confirm";await dialog.getByLabel("Description",{exact:true}).fill("Preserve this description while reviewing the model.");
             await dialog.getByRole("button",{name:"Save changes",exact:true}).click();
-            await dialog.getByRole("button",{name:"Confirm this model",exact:true}).waitFor();
+            await dialog.getByRole("button",{name:stage==="before"?"Confirm this model":"Use this model",exact:true}).waitFor();
           }
           const prompt = dialog.getByRole("alertdialog");
           if (stage!=="before") {

@@ -55,7 +55,7 @@ References collected October 25, 2026. External artwork is reference material on
 | Assistant details and artifacts | Web, iPhone and iPad captured | Complete | Web details 9.1; artifacts desktop 9.2, phone 9; iPhone profile/artifacts 9.1, preview 9; iPad 9 |
 | Assistant creation and settings | Web, iPhone and iPad captured | Complete | Web creation/details 9.1, confirmations 9.2; iPhone creation/details/confirmations 9.2; iPad creation/details 9.1, confirmations 9 |
 | Avatar editor | 17 web and 15 native baseline states; 24 web and 19 each on iPhone/iPad after states | Complete | Web desktop/phone, iPhone and iPad 9 |
-| Models and capabilities | Pending | Pending | Pending |
+| Models and capabilities | 35 web before, 43 web after; 26 native before and after states per device | Complete | Models, Tools and Skills: web desktop/phone, iPhone and iPad 9 |
 | Memory, work and learning | Pending | Pending | Pending |
 | Routines and results | Pending | Pending | Pending |
 | Logins and secure requests | Pending | Pending | Pending |

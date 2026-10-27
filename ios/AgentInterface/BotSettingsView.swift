@@ -196,7 +196,7 @@ struct BotSettingsView: View {
           if let error {
             VStack(alignment: .leading, spacing: 12) {
               ErrorBanner(message: error)
-              Button { self.error = nil; Task { await loadTab() } } label: {
+              Button(action: retryTab) {
                 Text("Retry settings").frame(minHeight: 44).contentShape(Rectangle())
               }.buttonStyle(.accentProminent)
             }.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal).padding(.top, 8)
@@ -227,7 +227,8 @@ struct BotSettingsView: View {
         }
       }
       .sheet(item: $confirmation, onDismiss: performConfirmation) { item in
-        SettingsConfirmationSheet(confirmation: item,
+        AssistantConfirmationSheet(title: item.title, message: item.message,
+          acceptLabel: item.acceptLabel, keepLabel: item.keepLabel, destructive: item.destructive,
           accept: { acceptedConfirmation = item; confirmation = nil },
           keep: { confirmation = nil })
       }
@@ -576,12 +577,12 @@ struct BotSettingsView: View {
     avatar = next
   }
   @ViewBuilder private func capabilities(_ kind: CatalogKind) -> some View {
+    let items = kind == .tools ? tools : skills
     Section {
       unavailable(kind.capability)
       if bot != nil {
-        let items = kind == .tools ? tools : skills
         ForEach(items) { item in
-          Toggle(
+          let control = Toggle(
             isOn: Binding(
               get: {
                 (kind == .tools ? tools : skills).first { $0.id == item.id }?.enabled == true
@@ -598,22 +599,35 @@ struct BotSettingsView: View {
           ) {
             VStack(alignment: .leading, spacing: 4) {
               Text(item.name).font(.headline)
-              Text(item.description).font(.caption).foregroundStyle(.secondary)
-              if item.required == true {
-                Text("Required by Hermes").font(.caption).foregroundStyle(.secondary)
+              let description = item.description.trimmingCharacters(in: .whitespacesAndNewlines)
+              if !description.isEmpty && !["required by hermes", "hermes profile skill"].contains(description.lowercased()) {
+                Text(description).font(.footnote).foregroundStyle(Palette.muted)
               }
             }
           }.disabled(item.required == true || !store.supports(kind.capability) || !catalogReady.contains(kind))
+          if item.required == true {
+            VStack(alignment: .leading, spacing: 4) {
+              control
+              Text("Required by Hermes").font(.footnote).foregroundStyle(Palette.muted)
+            }
+          } else { control }
         }
         if catalogLoading.contains(kind) {
           ProgressView("Loading \(kind.rawValue)…")
         } else if !catalogReady.contains(kind) && store.supports(kind.capability) {
-          Button("Retry loading \(kind.rawValue)") { Task { await loadTab() } }
+          Button("Retry loading \(kind.rawValue)", action: retryTab)
         }
         if items.isEmpty && catalogReady.contains(kind) {
-          Text("No \(kind.rawValue) were reported by Hermes.").foregroundStyle(.secondary)
+          Text("No \(kind.rawValue) were reported by Hermes.").foregroundStyle(Palette.muted)
         }
-        Button(progress.label(kind.rawValue, idle: "Save \(kind.rawValue)")) {
+      }
+    } header: { settingsHeader(kind.rawValue.capitalized) } footer: {
+      Text(kind == .skills ? "Required skills stay enabled. Save to apply your changes." : "Save to apply your changes.")
+        .foregroundStyle(Palette.muted)
+    }
+    if bot != nil {
+      Section {
+        Button {
           action(progressKey: kind.rawValue) {
             guard let bot, catalogReady.contains(kind) else { return }
             let ids = (kind == .tools ? tools : skills).filter {
@@ -624,8 +638,12 @@ struct BotSettingsView: View {
             savedCapabilities[kind] = Set(ids)
             notice = "Saved"
           }
-        }.disabled(!store.supports(kind.capability) || !store.connected || !catalogReady.contains(kind))
-      }
+        } label: {
+          Text(progress.label(kind.rawValue, idle: "Save \(kind.rawValue)"))
+            .frame(maxWidth: .infinity, minHeight: 44)
+        }.buttonStyle(.accentProminent)
+          .disabled(!store.supports(kind.capability) || !store.connected || !catalogReady.contains(kind))
+      }.listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
     }
   }
   @ViewBuilder private var routineList: some View {
@@ -864,6 +882,11 @@ struct BotSettingsView: View {
       guard let saved = savedCapabilities[kind] else { return false }
       return Set((kind == .tools ? tools : skills).filter { $0.enabled || $0.required == true }.map(\.id)) != saved
     }
+  }
+  /// Every explicit retry dismisses the previous failure before starting the next load.
+  private func retryTab() {
+    error = nil
+    Task { await loadTab() }
   }
   private func loadTab() async {
     guard let bot, let api = store.api else { return }
@@ -1183,8 +1206,12 @@ private enum SettingsConfirmation: Identifiable {
 }
 
 /// A native modal sheet with explicit colors. System alert glass cannot style warning text.
-private struct SettingsConfirmationSheet: View {
-  let confirmation: SettingsConfirmation
+struct AssistantConfirmationSheet: View {
+  let title: String
+  let message: String
+  let acceptLabel: String
+  let keepLabel: String
+  let destructive: Bool
   let accept: () -> Void
   let keep: () -> Void
   @Environment(\.colorScheme) private var scheme
@@ -1193,21 +1220,21 @@ private struct SettingsConfirmationSheet: View {
   @AccessibilityFocusState private var titleFocused: Bool
   private var content: some View {
     VStack(alignment: .leading, spacing: 20) {
-      Text(confirmation.title).font(.title3.weight(.semibold)).foregroundStyle(Color.primary)
+      Text(title).font(.title3.weight(.semibold)).foregroundStyle(Color.primary)
         .fixedSize(horizontal: false, vertical: true).accessibilityAddTraits(.isHeader)
         .accessibilityFocused($titleFocused)
-      Text(confirmation.message).font(.body).foregroundStyle(Palette.messageMetadata)
+      Text(message).font(.body).foregroundStyle(Palette.messageMetadata)
         .fixedSize(horizontal: false, vertical: true)
       VStack(spacing: 12) {
-        Button(role: confirmation.destructive ? .destructive : nil, action: accept) {
-          Text(confirmation.acceptLabel).font(.body.weight(.semibold))
+        Button(role: destructive ? .destructive : nil, action: accept) {
+          Text(acceptLabel).font(.body.weight(.semibold))
             .frame(maxWidth: .infinity, minHeight: 44).padding(.vertical, 6).contentShape(Capsule())
-        }.buttonStyle(.plain).foregroundStyle(confirmation.destructive ? Palette.danger : Palette.accent)
+        }.buttonStyle(.plain).foregroundStyle(destructive ? Palette.danger : Palette.accent)
           .background(Palette.raised(scheme), in: Capsule())
           .overlay(Capsule().strokeBorder(Palette.line))
           .accessibilityIdentifier("confirmationAccept")
         Button(role: .cancel, action: keep) {
-          Text(confirmation.keepLabel).font(.body.weight(.semibold))
+          Text(keepLabel).font(.body.weight(.semibold))
             .frame(maxWidth: .infinity, minHeight: 44)
         }.buttonStyle(.accentProminent).keyboardShortcut(.cancelAction)
           .accessibilityIdentifier("confirmationKeep")

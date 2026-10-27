@@ -2,6 +2,7 @@
 """Run the shared design capture in an existing Playwright CLI session."""
 import argparse
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -44,12 +45,16 @@ wrapper.write_text(f"async page => {{ await page.goto({json.dumps(args.origin)})
 report = args.root / f"{name}.json"
 installed = shutil.which("playwright-cli")
 command = [installed] if installed else ["npm", "exec", "--yes", "--package=@playwright/cli@0.1.22", "--", "playwright-cli"]
+inherited_lease = os.environ.get("WILDBOTS_DESIGN_LOCK_FD")
+pass_fds = (int(inherited_lease),) if inherited_lease else ()
+for descriptor in pass_fds:
+    os.fstat(descriptor)
 temporary = None
 try:
     with tempfile.NamedTemporaryFile(mode="w", dir=args.root, prefix=f".{name}-", suffix=".json", delete=False) as output:
         temporary = Path(output.name)
         subprocess.run([*command, f"-s={args.session}", "--raw", "run-code", f"--filename={wrapper}"],
-                       cwd=repo, stdout=output, check=True)
+                       cwd=repo, stdout=output, check=True, pass_fds=pass_fds)
     result = json.loads(temporary.read_text())
     summary = {"report": str(report), "screenshots": len(result["paths"]),
                "overflow": [item["name"] for item in result["geometry"] if item["overflow"]]}

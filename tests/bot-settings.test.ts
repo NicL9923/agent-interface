@@ -92,6 +92,23 @@ describe.each(["tools", "skills"])("%s configuration", (tab) => {
   });
 });
 
+it("keeps required skills enabled when Hermes reports them disabled", async () => {
+  vi.mocked(api).mockResolvedValueOnce([
+    { id: "required", name: "required", description: "Required by Hermes", required: true, enabled: false },
+    { id: "optional", name: "optional", description: "Hermes profile skill", enabled: false },
+  ]);
+  await click("skills");
+  const required = container.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+  expect(required.checked).toBe(true);
+  expect(required.disabled).toBe(true);
+  expect(container.textContent?.match(/Required by Hermes/g)).toHaveLength(1);
+  vi.mocked(write).mockResolvedValueOnce({});
+  await click("Save skills");
+  expect(write).toHaveBeenCalledExactlyOnceWith("/bots/shared/skills", { ids: ["required"] }, "PUT");
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Close assistant settings"]')!.click());
+  expect(onClose).toHaveBeenCalledOnce();
+});
+
 
 describe("assistant deletion", () => {
   it("opens and cancels confirmation without submitting the settings form", async () => {

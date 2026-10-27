@@ -523,6 +523,316 @@ import XCTest
     XCTAssertTrue(element.hasFrame && element.frame.intersects(form.frame), "The requested control must be visible in the settings form")
   }
 
+  private func revealModels(_ element: XCUIElement, in form: XCUIElement, app: XCUIApplication, up: Bool = true) {
+    func cells() -> [String] {
+      form.cells.allElementsBoundByIndex.filter { $0.hasFrame && $0.frame.intersects(form.frame) }.map {
+        "\($0.label.prefix(64)):\(String(describing: $0.frame))"
+      }
+    }
+    for attempt in 0..<12 {
+      let keyboard = app.keyboards.firstMatch
+      let navigationBottom = app.navigationBars.allElementsBoundByIndex
+        .filter { $0.hasFrame && $0.frame.intersects(form.frame) }.map { $0.frame.maxY }.max() ?? form.frame.minY
+      let top = max(form.frame.minY, navigationBottom) + 12
+      let bottom = min(form.frame.maxY - 12, keyboard.exists ? keyboard.frame.minY - 8 : form.frame.maxY - 12)
+      print("DESIGN_MODELS_REVEAL target=\(element) attempt=\(attempt) exists=\(element.exists) frame=\(element.hasFrame ? String(describing: element.frame) : "none") band=\(top)...\(bottom) upHint=\(up)")
+      if element.hasFrame && element.frame.minY >= top && element.frame.maxY <= bottom {
+        print("DESIGN_MODELS_TARGET type=\(element.elementType.rawValue) frame=\(element.frame)"); return
+      }
+      let upward = element.hasFrame ? element.frame.maxY > bottom : up
+      let before = cells()
+      let height = max(40, bottom - top)
+      if element.hasFrame && element.frame.height > height {
+        XCTFail("Models target is taller than the usable viewport: \(element)"); return
+      }
+      let distance: CGFloat
+      if element.hasFrame {
+        let desiredTop = top + (height - element.frame.height) / 2
+        distance = min(height * 0.38, max(12, abs(element.frame.minY - desiredTop)))
+      } else { distance = height * 0.38 }
+      let start = form.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 8, dy: (upward ? top + height * 0.72 : top + height * 0.28) - form.frame.minY))
+      let end = start.withOffset(CGVector(dx: 0, dy: distance * (upward ? -1 : 1)))
+      start.press(forDuration: 0.3, thenDragTo: end)
+      if !before.isEmpty && before == cells() {
+        XCTFail("Models list did not move. Check up hint \(up) for target \(element)"); return
+      }
+    }
+    XCTFail("Models control did not fit within the visible form: \(element)")
+  }
+
+  /// Only states affected by moving guidance outside disabled controls. Other captures stay valid.
+  func testModelsCaptionDesignReview() throws {
+    let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_MODELS_PATH"] ?? ""
+    try XCTSkipUnless(!source.isEmpty, "Set the shared Models fixture to capture caption corrections.")
+    let original = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: source))) as? [String: Any])
+    for (name, theme, size) in [
+      ("models-loaded", "light", "UICTContentSizeCategoryL"),
+      ("models-dark", "dark", "UICTContentSizeCategoryL"),
+      ("models-large-text", "light", "UICTContentSizeCategoryAccessibilityXL"),
+    ] {
+      var fixture = original
+      if name == "models-loaded" { fixture["failCapability"] = "save-skills" }
+      let encoded = String(decoding: try JSONSerialization.data(withJSONObject: fixture), as: UTF8.self)
+      let app = launch(textSize: size, environment: ["AGENT_INTERFACE_UI_DESIGN_FIXTURE": encoded, "AGENT_INTERFACE_UI_THEME": theme])
+      XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 15))
+      if name == "models-loaded" {
+        app.buttons["composerModel"].tapWhenReady()
+        let form = app.descendants(matching: .any)["composerModelForm"].firstMatch
+        let search = app.textFields["modelSearch"]
+        XCTAssertTrue(form.waitForExistence(timeout: 5)); XCTAssertTrue(search.waitForExistence(timeout: 5))
+        revealModels(search, in: form, app: app); search.typeWhenFocused("field")
+        let reason = app.staticTexts["Reconnect in Hermes to use this model"]
+        revealModels(reason, in: form, app: app)
+        let unavailable = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "field-planner")).firstMatch
+        XCTAssertTrue(unavailable.exists); XCTAssertFalse(unavailable.isEnabled)
+        let refresh = app.buttons["Refresh models"]
+        XCTAssertGreaterThanOrEqual(refresh.frame.width, 44); XCTAssertGreaterThanOrEqual(refresh.frame.height, 44)
+        try capture(name + "-search")
+        app.buttons["Close"].tapWhenReady()
+      }
+      app.openAssistantSettings("Ranch hand"); app.selectSettingsTab("Skills")
+      let form = app.descendants(matching: .any)["assistantSettingsForm"].firstMatch
+      let required = app.switches.matching(NSPredicate(format: "label BEGINSWITH %@", "weekly-plan")).firstMatch
+      XCTAssertTrue(required.waitForExistence(timeout: 5)); XCTAssertFalse(required.isEnabled)
+      XCTAssertEqual(required.value as? String, "1")
+      let caption = app.staticTexts["Required by Hermes"]
+      revealModels(caption, in: form, app: app)
+      XCTAssertEqual(app.staticTexts.matching(NSPredicate(format: "label == %@", "Required by Hermes")).count, 1)
+      try capture(name + "-skills")
+      if name == "models-loaded" {
+        let packing = app.switches.matching(NSPredicate(format: "label BEGINSWITH %@", "packing-list")).firstMatch
+        revealModels(packing, in: form, app: app)
+        packing.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+        XCTAssertTrue(packing.wait(until: "value == %@", "1"))
+        let save = app.buttons["Save skills"]; revealModels(save, in: form, app: app); save.tapWhenReady()
+        let error = app.staticTexts[original["skillSaveError"] as! String]
+        XCTAssertTrue(error.waitForExistence(timeout: 5)); XCTAssertTrue(app.windows.firstMatch.frame.contains(error.frame))
+        XCTAssertEqual(packing.value as? String, "1"); try capture(name + "-skills-save-error")
+        revealModels(save, in: form, app: app); save.tapWhenReady()
+        XCTAssertTrue(app.staticTexts["Saved"].firstMatch.waitForExistence(timeout: 5)); try capture(name + "-skills-saved")
+        app.buttons["Close"].tapWhenReady()
+        app.openAssistantSettings("Ranch hand"); app.selectSettingsTab("Skills")
+        XCTAssertTrue(packing.waitForExistence(timeout: 5)); XCTAssertEqual(packing.value as? String, "1")
+        XCTAssertEqual(required.value as? String, "1")
+      }
+      app.terminate()
+    }
+  }
+
+  /// Shared production-shaped model and capability data, with explicit recoverable failures.
+  func testModelsDesignReview() throws {
+    let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_MODELS_PATH"] ?? ""
+    try XCTSkipUnless(!source.isEmpty, "Set AGENT_INTERFACE_DESIGN_MODELS_PATH to capture Models.")
+    let original = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: source))) as? [String: Any])
+    let after = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_STAGE"] == "after"
+    let selection = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_VARIANT"] ?? ""
+    let variants = [
+      ("models-loaded", "light", "UICTContentSizeCategoryL"),
+      ("models-dark", "dark", "UICTContentSizeCategoryL"),
+      ("models-large-text", "light", "UICTContentSizeCategoryAccessibilityXL"),
+      ("models-errors", "light", "UICTContentSizeCategoryL"),
+      ("models-empty", "light", "UICTContentSizeCategoryL"),
+      ("models-unavailable", "light", "UICTContentSizeCategoryL"),
+      ("models-missing", "light", "UICTContentSizeCategoryL"),
+    ]
+    let selections = selection.components(separatedBy: ",")
+    guard selection.isEmpty || selections.allSatisfy({ value in variants.contains { $0.0 == value } }) else {
+      XCTFail("Unknown Models variant: \(selection)"); return
+    }
+    for (name, theme, size) in variants where selection.isEmpty || selections.contains(name) {
+      var fixture = original
+      if name == "models-loaded" {
+        fixture["failFavorite"] = true; fixture["failInference"] = true
+        fixture["failCapability"] = "save-skills"; fixture["settingsModelError"] = true
+      }
+      if name == "models-errors" { fixture["failModels"] = true; fixture["failCapability"] = "load-tools" }
+      if name == "models-empty" {
+        var catalog = try XCTUnwrap(fixture["catalog"] as? [String: Any]); catalog["providers"] = []
+        fixture["catalog"] = catalog; fixture["skills"] = []
+      }
+      if name == "models-unavailable" { fixture["catalogUnsupported"] = true }
+      if name == "models-missing" {
+        var bots = try XCTUnwrap(fixture["bots"] as? [[String: Any]])
+        bots[0]["model"] = "retired-house-model"; fixture["bots"] = bots
+      }
+      let encoded = String(decoding: try JSONSerialization.data(withJSONObject: fixture), as: UTF8.self)
+      let app = launch(textSize: size, environment: ["AGENT_INTERFACE_UI_DESIGN_FIXTURE": encoded, "AGENT_INTERFACE_UI_THEME": theme])
+      XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 15))
+      func reveal(_ element: XCUIElement, in form: XCUIElement, up: Bool = true) {
+        revealModels(element, in: form, app: app, up: up)
+      }
+      func bannerVisible(_ element: XCUIElement) {
+        XCTAssertTrue(element.waitForExistence(timeout: 5))
+        let window = app.windows.firstMatch.frame
+        XCTAssertTrue(element.hasFrame && window.contains(element.frame), "The banner must be visible in its sheet, outside the scrolling form")
+      }
+      func settings(_ kind: String) -> XCUIElement {
+        app.openAssistantSettings("Ranch hand")
+        if kind != "Details" { app.selectSettingsTab(kind) }
+        return app.descendants(matching: .any)["assistantSettingsForm"].firstMatch
+      }
+      if name == "models-unavailable" {
+        let form = settings("Tools")
+        let reason = app.staticTexts[original["capabilityUnsupportedReason"] as! String]
+        reveal(reason, in: form); XCTAssertTrue(reason.exists)
+        XCTAssertFalse(app.buttons["Save tools"].isEnabled)
+        try capture(name + "-tools"); app.terminate(); continue
+      }
+      if name == "models-loaded" {
+        let settingsForm = settings("Details")
+        let model = app.buttons["assistantModel"]; reveal(model, in: settingsForm); model.tapWhenReady()
+        XCTAssertTrue(app.textFields["modelSearch"].waitForExistence(timeout: 5))
+        try capture(name + "-settings-regression")
+        app.navigationBars["Model"].buttons.firstMatch.tapWhenReady()
+        app.buttons["Close"].tapWhenReady()
+      }
+      var composerOpen = true
+      app.buttons["composerModel"].tapWhenReady()
+      let form = app.descendants(matching: .any)["composerModelForm"].firstMatch
+      let search = app.textFields["modelSearch"]
+      // iPad virtualizes the provider row below the fold. Its favorite has the provider in its label.
+      let loadedModel = app.buttons.matching(NSPredicate(
+        format: "label == %@ OR label BEGINSWITH %@", "daily-planner", "daily-planner,")).firstMatch
+      if !size.contains("Accessibility") { XCTAssertTrue(search.waitForExistence(timeout: 10)) }
+      if size.contains("Accessibility") {
+        XCTAssertTrue(form.waitForExistence(timeout: 5))
+        if after {
+          XCTAssertFalse(app.segmentedControls["inferenceSpeed"].exists, "Accessibility text uses a scalable menu instead of fixed-size segments")
+          XCTAssertTrue(app.descendants(matching: .any)["inferenceSpeed"].firstMatch.waitForExistence(timeout: 5))
+        }
+        try capture(name + "-composer")
+        reveal(search, in: form)
+        XCTAssertTrue(search.waitForExistence(timeout: 5))
+        let catalog = try XCTUnwrap(original["catalog"] as? [String: Any])
+        let providers = try XCTUnwrap(catalog["providers"] as? [[String: Any]])
+        let models = try XCTUnwrap(providers.first?["models"] as? [[String: Any]])
+        let longName = try XCTUnwrap(models.first(where: { ($0["id"] as? String)?.contains("/") == true })?["name"] as? String)
+        let longRow = app.buttons[longName].firstMatch
+        reveal(longRow, in: form); try capture(name + "-catalog")
+      } else if name == "models-errors" {
+        let error = app.staticTexts[original["catalogError"] as! String]
+        reveal(error, in: form); XCTAssertTrue(error.waitForExistence(timeout: 5)); try capture(name + "-catalog")
+        let retry = app.buttons["Retry loading models"]; reveal(retry, in: form); retry.tapWhenReady()
+        XCTAssertTrue(loadedModel.waitForExistence(timeout: 5))
+        XCTAssertFalse(error.exists); try capture(name + "-retried")
+      } else if name == "models-empty" {
+        let empty = app.staticTexts["No connected models were reported. Connect a provider in Hermes, then retry."]
+        reveal(empty, in: form); XCTAssertTrue(empty.exists); try capture(name + "-catalog")
+      } else if name == "models-missing" {
+        let kept = app.staticTexts["Your saved model is kept. Hermes did not include it in the current catalog."]
+        reveal(kept, in: form); XCTAssertTrue(kept.exists); try capture(name + "-catalog")
+      } else {
+        XCTAssertTrue(loadedModel.waitForExistence(timeout: 5))
+        try capture(name + "-composer")
+      }
+      if name == "models-loaded" {
+        reveal(search, in: form); search.typeWhenFocused("field")
+        let field = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "field-planner")).firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 5)); XCTAssertFalse(field.isEnabled)
+        try capture(name + "-search")
+        search.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 5) + "zzz")
+        XCTAssertTrue(app.staticTexts["No models match your search."].waitForExistence(timeout: 5)); try capture(name + "-no-results")
+        search.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 3) + "\n")
+        let star = app.buttons["Add quick-reply to favorites"]
+        reveal(star, in: form); star.tapWhenReady()
+        let favoriteError = app.staticTexts[original["favoriteError"] as! String]
+        reveal(favoriteError, in: form); XCTAssertTrue(favoriteError.exists); try capture(name + "-favorite-error")
+        XCTAssertFalse(app.buttons["Remove quick-reply from favorites"].exists)
+        reveal(star, in: form); star.tapWhenReady()
+        XCTAssertTrue(app.buttons["Remove quick-reply from favorites"].firstMatch.waitForExistence(timeout: 5))
+        reveal(search, in: form, up: false); try capture(name + "-favorite-saved")
+        let reasoning = app.descendants(matching: .any)["inferenceReasoning"].firstMatch
+        reveal(reasoning, in: form, up: false); reasoning.tapWhenReady()
+        let ultra = app.descendants(matching: .any).matching(NSPredicate(
+          format: "label == %@ AND elementType IN %@", "Ultra",
+          [XCUIElement.ElementType.button.rawValue, XCUIElement.ElementType.menuItem.rawValue])).firstMatch
+        if after {
+          XCTAssertTrue(app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Extra high")).firstMatch.exists)
+        }
+        ultra.tapWhenReady()
+        let inferenceError = app.staticTexts[original["inferenceError"] as! String]
+        reveal(inferenceError, in: form, up: false); XCTAssertTrue(inferenceError.exists); try capture(name + "-inference-error")
+        let speed = app.segmentedControls["inferenceSpeed"]
+        reveal(speed, in: form, up: false); speed.buttons["Fast"].tapWhenReady()
+        XCTAssertTrue(speed.buttons["Fast"].wait(until: "selected == true")); try capture(name + "-inference-saved")
+        let choice = app.buttons["quick-reply"].firstMatch
+        reveal(choice, in: form); choice.tapWhenReady()
+        XCTAssertTrue(app.buttons["Use this model"].waitForExistence(timeout: 5))
+        if after {
+          XCTAssertTrue(app.staticTexts["Use this model?"].exists)
+          let warning = app.staticTexts.matching(NSPredicate(format: "label == %@", original["modelWarning"] as! String)).firstMatch
+          XCTAssertTrue(warning.waitForExistence(timeout: 5))
+          let keep = app.buttons["confirmationKeep"]
+          XCTAssertEqual(keep.label, "Keep current model")
+          XCTAssertTrue(keep.wait(until: "hittable == true"))
+        }
+        try capture(name + "-confirmation")
+        if after { app.buttons["confirmationKeep"].tapWhenReady() }
+        else if app.buttons["Cancel"].exists { app.buttons["Cancel"].tapWhenReady() }
+        else if app.otherElements["PopoverDismissRegion"].firstMatch.exists {
+          app.otherElements["PopoverDismissRegion"].firstMatch.tap()
+        }
+        else { app.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.1)).tap() }
+        XCTAssertTrue(app.buttons["Use this model"].wait(until: "exists == false"))
+        XCTAssertTrue(app.buttons["Close"].isEnabled)
+        reveal(choice, in: form); choice.tapWhenReady()
+        if after { app.buttons["confirmationAccept"].tapWhenReady() }
+        else { app.buttons["Use this model"].tapWhenReady() }
+        XCTAssertTrue(app.buttons["composerModel"].wait(until: "label == %@", "Model: quick-reply"))
+        app.buttons["composerModel"].tapWhenReady()
+        XCTAssertTrue(search.waitForExistence(timeout: 5))
+        reveal(speed, in: form, up: false); XCTAssertTrue(speed.buttons["Fast"].isSelected)
+        let savedFavorite = app.buttons["Remove quick-reply from favorites"].firstMatch
+        reveal(savedFavorite, in: form); XCTAssertTrue(savedFavorite.exists)
+        app.buttons["Close"].tapWhenReady(); composerOpen = false
+      }
+      if composerOpen { app.buttons["Close"].tapWhenReady() }
+      XCTAssertTrue(app.buttons["composerModel"].waitForExistence(timeout: 5))
+      if name == "models-missing" { app.terminate(); continue }
+      if name == "models-loaded" || name == "models-errors" {
+        let toolsForm = settings("Tools")
+        if name == "models-errors" {
+          let error = app.staticTexts[original["capabilityLoadError"] as! String]
+          bannerVisible(error); try capture(name + "-tools")
+          XCTAssertFalse(app.buttons["Save tools"].isEnabled)
+          let retry = app.buttons["Retry loading tools"]; reveal(retry, in: toolsForm); retry.tapWhenReady()
+          XCTAssertTrue(app.switches.matching(NSPredicate(format: "label BEGINSWITH %@", "Web search")).firstMatch.waitForExistence(timeout: 5))
+          XCTAssertFalse(error.exists, "A successful retry must remove the previous capability-load failure")
+          try capture(name + "-tools-retried")
+        } else { try capture(name + "-tools") }
+        app.buttons["Close"].tapWhenReady()
+      }
+      if name == "models-errors" { app.terminate(); continue }
+      let skillsForm = settings("Skills")
+      if name == "models-empty" {
+        XCTAssertTrue(app.staticTexts["No skills were reported by Hermes."].waitForExistence(timeout: 5)); try capture(name + "-skills")
+      } else {
+        let required = app.switches.matching(NSPredicate(format: "label BEGINSWITH %@", "weekly-plan")).firstMatch
+        XCTAssertTrue(required.waitForExistence(timeout: 5)); XCTAssertFalse(required.isEnabled)
+        XCTAssertEqual(required.value as? String, "1")
+        try capture(name + "-skills")
+        if name == "models-loaded" {
+          let packing = app.switches.matching(NSPredicate(format: "label BEGINSWITH %@", "packing-list")).firstMatch
+          reveal(packing, in: skillsForm)
+          XCTAssertEqual(packing.value as? String, "0")
+          packing.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+          XCTAssertTrue(packing.wait(until: "value == %@", "1"), "The switch must change before Save tests draft retention")
+          print("DESIGN_CATALOG_DRAFT beforeSave=\(packing.value ?? "nil")")
+          let save = app.buttons["Save skills"]; reveal(save, in: skillsForm); save.tapWhenReady()
+          let error = app.staticTexts[original["skillSaveError"] as! String]
+          bannerVisible(error); try capture(name + "-skills-save-error")
+          XCTAssertEqual(packing.value as? String, "1")
+          reveal(save, in: skillsForm); save.tapWhenReady()
+          XCTAssertTrue(app.staticTexts["Saved"].firstMatch.waitForExistence(timeout: 5)); try capture(name + "-skills-saved")
+          app.buttons["Close"].tapWhenReady(); _ = settings("Skills")
+          XCTAssertTrue(packing.waitForExistence(timeout: 5)); XCTAssertEqual(packing.value as? String, "1")
+          XCTAssertTrue(required.waitForExistence(timeout: 5)); XCTAssertEqual(required.value as? String, "1")
+        }
+      }
+      app.terminate()
+    }
+  }
+
   /// Captures the real editor with fixture-backed writes and refresh readback.
   func testAvatarDesignReview() throws {
     let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_AVATAR_PATH"] ?? ""

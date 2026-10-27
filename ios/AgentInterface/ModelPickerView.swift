@@ -19,14 +19,15 @@ struct ModelCatalogSections: View {
   var body: some View {
     Section {
       HStack {
-        Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-        TextField("Find a model or provider", text: $search).autocorrectionDisabled()
+        Image(systemName: "magnifyingglass").foregroundStyle(Palette.muted).accessibilityHidden(true)
+        TextField("Search models", text: $search, prompt: Text("Search models").foregroundColor(Palette.muted)).autocorrectionDisabled()
           .textInputAutocapitalization(.never).accessibilityIdentifier("modelSearch")
         if ModelPickerRules.refreshVisible(error: error, providerCount: providers.count) {
-          Button { Task { await load() } } label: { Image(systemName: "arrow.clockwise") }
-            .accessibilityLabel("Refresh models").disabled(loading)
+          Button { Task { await load() } } label: {
+            Image(systemName: "arrow.clockwise").frame(width: 44, height: 44).contentShape(Rectangle())
+          }.buttonStyle(.borderless).accessibilityLabel("Refresh models").disabled(loading)
         }
-      }
+      }.frame(minHeight: 44)
       if loading { ProgressView("Loading models from Hermes…") }
       if let error {
         ErrorBanner(message: error)
@@ -36,11 +37,11 @@ struct ModelCatalogSections: View {
     }
     .task(id: "\(botId ?? "default"):\(store.scope ?? "")") { await load() }
     if !favoriteRows.isEmpty {
-      Section("Favorites") {
+      Section {
         ForEach(favoriteRows, id: \.choice) { item in
           row(item.provider, item.model, showProvider: true)
         }
-      }
+      } header: { Text("Favorites").foregroundStyle(Palette.muted) }
     }
     ForEach(providers.filter { query.isEmpty || !filtered($0).isEmpty }) { provider in
       Section {
@@ -48,29 +49,33 @@ struct ModelCatalogSections: View {
           get: { !query.isEmpty || expanded.contains(provider.id) },
           set: { if $0 { expanded.insert(provider.id) } else { expanded.remove(provider.id) } }
         )) {
-          if let warning = provider.warning { Text(warning).font(.caption).foregroundStyle(.secondary) }
-          if provider.models.isEmpty { Text(ModelPickerRules.noModelsForProvider).font(.caption).foregroundStyle(.secondary) }
+          if let warning = provider.warning { Text(warning).font(.footnote).foregroundStyle(Palette.muted) }
+          if provider.models.isEmpty { Text(ModelPickerRules.noModelsForProvider).font(.footnote).foregroundStyle(Palette.muted) }
           ForEach(filtered(provider)) { model in row(provider, model) }
         } label: {
           HStack {
             Text(provider.name).foregroundStyle(.primary)
             Spacer()
-            Text("\(filtered(provider).count)").font(.caption).foregroundStyle(.secondary)
+            Text("\(filtered(provider).count)").font(.footnote).foregroundStyle(Palette.muted)
           }
         }
       }
     }
     if !loading && error == nil && (providers.isEmpty || !query.isEmpty && providers.allSatisfy({ filtered($0).isEmpty })) {
       Section {
-        Text(query.isEmpty ? ModelPickerRules.noModelsReported : "No models match your search.").foregroundStyle(.secondary)
+        Text(query.isEmpty ? ModelPickerRules.noModelsReported : "No models match your search.").foregroundStyle(Palette.muted)
         if providers.isEmpty { Button("Retry loading models") { Task { await load() } } }
       }
     }
     Section {
-      LabeledContent("Selected model", value: selection.model.isEmpty ? "None" : selection.model)
-      if !selection.provider.isEmpty { LabeledContent("Provider", value: selection.provider) }
+      LabeledContent("Selected model") {
+        Text(selection.model.isEmpty ? "None" : selection.model).foregroundStyle(Palette.muted)
+      }
+      if !selection.provider.isEmpty {
+        LabeledContent("Provider") { Text(selection.provider).foregroundStyle(Palette.muted) }
+      }
       if !loading && error == nil && !selection.model.isEmpty && !providers.contains(where: { $0.matches(selection.provider) && $0.models.contains(where: { $0.id == selection.model }) }) {
-        Text(ModelPickerRules.savedModelKept).font(.caption).foregroundStyle(.secondary)
+        Text(ModelPickerRules.savedModelKept).font(.footnote).foregroundStyle(Palette.muted)
       }
     }
 
@@ -85,17 +90,16 @@ struct ModelCatalogSections: View {
       return (choice, provider, model)
     }
   }
-  private func row(_ provider: ModelProviderInfo, _ model: ModelInfo, showProvider: Bool = false) -> some View {
+  @ViewBuilder private func row(_ provider: ModelProviderInfo, _ model: ModelInfo, showProvider: Bool = false) -> some View {
     let choice = ModelChoice(provider: provider.id, model: model.id)
     let selected = selection.model == model.id && provider.matches(selection.provider)
     let favorite = favorites.first { $0.model == model.id && provider.matches($0.provider) }
-    return HStack(spacing: 8) {
+    let controls = HStack(spacing: 8) {
       Button { choose(choice) } label: {
         HStack {
           VStack(alignment: .leading, spacing: 4) {
             Text(model.name).foregroundStyle(.primary)
-            if showProvider { Text(provider.name).font(.caption).foregroundStyle(.secondary) }
-            if !model.available { Text("Reconnect in Hermes to use this model").font(.caption).foregroundStyle(.secondary) }
+            if showProvider { Text(provider.name).font(.footnote).foregroundStyle(Palette.muted) }
           }.frame(maxWidth: .infinity, alignment: .leading)
           if selected { Image(systemName: "checkmark").foregroundStyle(Palette.accent) }
         }.frame(minHeight: 44).contentShape(Rectangle())
@@ -105,6 +109,13 @@ struct ModelCatalogSections: View {
         Image(systemName: favorite == nil ? "star" : "star.fill").frame(width: 44, height: 44)
       }.buttonStyle(.borderless).disabled(ModelPickerRules.starDisabled(saving: savingFavorite, favoriteCount: favorites.count, isFavorite: favorite != nil))
         .accessibilityLabel("\(favorite == nil ? "Add" : "Remove") \(model.name) \(favorite == nil ? "to" : "from") favorites")
+    }
+    if model.available { controls }
+    else {
+      VStack(alignment: .leading, spacing: 4) {
+        controls
+        Text("Reconnect in Hermes to use this model").font(.footnote).foregroundStyle(Palette.muted)
+      }
     }
   }
   private func load() async {
@@ -173,7 +184,8 @@ struct ModelCatalogPage: View {
         choose(choice)
         dismiss()
       }
-    }.householdListBackground().navigationTitle("Model").navigationBarTitleDisplayMode(.inline)
+    }.accessibilityIdentifier("modelCatalogForm")
+      .householdListBackground().navigationTitle("Model").navigationBarTitleDisplayMode(.inline)
   }
 }
 
@@ -186,7 +198,8 @@ struct ComposerModelSheet: View {
   @State private var settings: InferenceSettings?
   @State private var settingsError: String?
   @State private var error: String?
-  @State private var confirmation: ModelChoice?
+  @State private var confirmation: ComposerModelConfirmation?
+  @State private var acceptedConfirmation: ComposerModelConfirmation?
   private var bot: Bot? { store.bootstrap?.bots.first { $0.id == botId } }
   private var blocked: Bool { !store.connected || store.sessionExpired || !store.supports(.botConfiguration) }
   var body: some View {
@@ -194,36 +207,47 @@ struct ComposerModelSheet: View {
       Form {
         Group {
         if let bot {
-          if bot.shared { Section { Text("Shared assistant: the model changes for your household.").font(.footnote).foregroundStyle(.secondary) } }
+          if bot.shared { Section { Text("Shared assistant: the model changes for your household.").font(.footnote).foregroundStyle(Palette.muted) } }
           if let error { Section { ErrorBanner(message: error) } }
-          Section("This conversation") {
+          Section {
             if let settings {
               InferenceChoice(title: "Reasoning", options: InferenceSettings.reasoningLevels, identifier: "inferenceReasoning",
-                label: { $0 == "none" ? "Off" : $0.capitalized },
+                label: { $0 == "none" ? "Off" : $0 == "xhigh" ? "Extra high" : $0.capitalized },
                 selection: Binding(get: { settings.reasoning }, set: { changeSettings(["reasoning": $0]) }))
               InferenceChoice(title: "Speed", options: InferenceSettings.speeds, identifier: "inferenceSpeed",
                 label: { $0.capitalized },
                 selection: Binding(get: { settings.speed }, set: { changeSettings(["speed": $0]) }))
-              Text("Available levels and speeds depend on the model.").font(.caption).foregroundStyle(.secondary)
+              Text("Available levels and speeds depend on the model.").font(.footnote).foregroundStyle(Palette.muted)
             } else if settingsError == nil { ProgressView("Loading reasoning and speed…") }
             if let settingsError {
               ErrorBanner(message: settingsError)
               Button("Retry reasoning and speed") { Task { await loadSettings() } }
             }
-          }.disabled(busy || blocked)
+          } header: { Text("This conversation").foregroundStyle(Palette.muted) }
+            .disabled(busy || blocked)
           ModelCatalogSections(botId: bot.id, selection: ModelChoice(provider: bot.provider ?? "", model: bot.model),
             disabled: busy || blocked, choose: { save($0) })
         }
         }.listRowBackground(Palette.raised(scheme))
-      }.listSectionSpacing(18).householdListBackground().navigationTitle("Choose a model").navigationBarTitleDisplayMode(.inline)
+      }.accessibilityIdentifier("composerModelForm")
+        .listSectionSpacing(18).householdListBackground().navigationTitle("Choose a model").navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() }.disabled(busy) } }
         .task(id: store.scope) { await loadSettings() }
-        .confirmationDialog("Use this model? Hermes asks for confirmation.", isPresented: Binding(
-          get: { confirmation != nil }, set: { if !$0 { confirmation = nil } }), titleVisibility: .visible
-        ) { Button("Use this model") { if let choice = confirmation { save(choice, confirmed: true) } } }
+        .sheet(item: $confirmation, onDismiss: performConfirmation) { item in
+          AssistantConfirmationSheet(title: "Use this model?", message: item.message,
+            acceptLabel: "Use this model", keepLabel: "Keep current model", destructive: false,
+            accept: { acceptedConfirmation = item; confirmation = nil },
+            keep: { confirmation = nil })
+        }
         .interactiveDismissDisabled(busy)
         .onChange(of: store.scope) { _, _ in dismiss() }
     }
+  }
+  private func performConfirmation() {
+    guard let accepted = acceptedConfirmation else { return }
+    acceptedConfirmation = nil
+    guard accepted.scope == store.scope, accepted.botId == botId else { return }
+    save(accepted.choice, confirmed: true)
   }
   private func loadSettings() async {
     settingsError = nil
@@ -255,12 +279,21 @@ struct ComposerModelSheet: View {
       }) {
       case .success?: dismiss()
       case .failure(let failure)?:
-        if (failure as? APIError)?.confirmRequired == true { confirmation = choice }
-        error = failure.localizedDescription
+        if (failure as? APIError)?.confirmRequired == true {
+          confirmation = ComposerModelConfirmation(choice: choice, message: failure.localizedDescription, scope: store.scope, botId: botId)
+        } else { error = failure.localizedDescription }
       case nil: break
       }
     }
   }
+}
+
+private struct ComposerModelConfirmation: Identifiable {
+  let choice: ModelChoice
+  let message: String
+  let scope: String?
+  let botId: String
+  var id: ModelChoice { choice }
 }
 
 /// One inference setting. A few options read best as a segmented control, which shows every
@@ -271,10 +304,11 @@ struct InferenceChoice: View {
   var identifier: String
   var label: (String) -> String
   @Binding var selection: String
+  @Environment(\.dynamicTypeSize) private var dynamicTypeSize
   static let segmentLimit = 4
   static func segmented(_ count: Int) -> Bool { count > 1 && count <= segmentLimit }
   var body: some View {
-    if Self.segmented(options.count) {
+    if Self.segmented(options.count) && !dynamicTypeSize.isAccessibilitySize {
       ViewThatFits(in: .horizontal) {
         VStack(alignment: .leading, spacing: 8) {
           Text(title)

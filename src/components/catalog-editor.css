@@ -1,0 +1,9 @@
+.catalog-editor { min-width: 0; }
+.catalog-editor > header { margin-bottom: 8px; }
+.catalog-editor h2 { margin: 0 0 6px; font-size: 1.125rem; }
+.catalog-editor > header p { margin: 0; color: var(--muted); font-size: .875rem; line-height: 1.55; }
+.catalog-editor .capability-item { min-height: 44px; padding: 16px 0; gap: 12px; }
+.catalog-editor .capability-item > span { min-width: 0; overflow-wrap: anywhere; }
+.catalog-editor .capability-item small { font-size: .875rem; }
+.catalog-editor .capability-item input { width: 20px; height: 20px; margin-top: 2px; flex-shrink: 0; }
+.catalog-save-actions button { min-height: 44px; }
