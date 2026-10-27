@@ -353,8 +353,17 @@ extension Data {
     body.append(data)
     body.append(Data("\r\n--\(boundary)--\r\n".utf8))
     let path = "/api/bots/\(Self.component(botId))/uploads"
-    let request = try self.request(
+    var request = try self.request(
       path: path, method: "POST", contentType: "multipart/form-data; boundary=\(boundary)", authenticated: true)
+    #if DEBUG
+      // URLProtocol may not receive an upload task's body. Preserve the exact multipart bytes
+      // only for the invalid-host fixture transport; Release uses the ordinary upload request.
+      if request.url?.host?.hasSuffix(".native-fixture.invalid") == true {
+        let mutable = (request as NSURLRequest).mutableCopy() as! NSMutableURLRequest
+        URLProtocol.setProperty(body, forKey: "fixtureUploadBody", in: mutable)
+        request = mutable as URLRequest
+      }
+    #endif
     let (result, response): (Data, URLResponse)
     do {
       (result, response) = try await session.upload(

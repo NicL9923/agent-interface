@@ -5,6 +5,15 @@
   /// UI test transport only. Shipping Release builds contain no fixture transport.
   /// Simulator results validate native interaction, not Hermes or APNs execution.
   @MainActor enum DebugFixtures {
+    /// Test-only file selection. The normal importer stays unchanged without an explicit fixture.
+    static func portraitUploadURL() throws -> URL? {
+      let environment = ProcessInfo.processInfo.environment
+      guard environment["AGENT_INTERFACE_UI_FIXTURE"] == "1",
+        let encoded = environment["AGENT_INTERFACE_UI_DESIGN_UPLOAD"], let data = Data(base64Encoded: encoded) else { return nil }
+      let url = FileManager.default.temporaryDirectory.appendingPathComponent("fixture-uploaded-portrait.png")
+      try data.write(to: url, options: .atomic)
+      return url
+    }
     static func configure(_ store: AppStore) async -> Bool {
       let environment = ProcessInfo.processInfo.environment
       if environment["AGENT_INTERFACE_UI_RESET"] == "1" {
@@ -185,6 +194,8 @@
     nonisolated(unsafe) static var settingsLoadFailed = false
     nonisolated(unsafe) static var settingsSaveFailed = false
     nonisolated(unsafe) static var deletedSettingsBotIds: Set<String> = []
+    nonisolated(unsafe) static var uploadedPortraits: [String: Data] = [:]
+    nonisolated(unsafe) static var designAvatarSaveFailed = false
     nonisolated(unsafe) static var avatarFailures = ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_AVATAR_FAILURE"] == "1" ? 1 : 0
     static let currentRevision = "3f9c2a71b0d4e8f6a5c3b2d1e0f9a8b7c6d5e4f3"
     static let candidateRevision = "8e1d4c7b2a9f6e3d0c5b8a7f4e1d2c3b6a9f0e8d"
@@ -235,6 +246,10 @@
       Self.lock.lock()
       defer { Self.lock.unlock() }
       let path = request.url!.path
+      if let data = Self.uploadedPortraits[path] {
+        client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "image/png"])!, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: data); client?.urlProtocolDidFinishLoading(self); return
+      }
       if let encoded = (Self.designFixture?["images"] as? [String: String])?[path], let data = Data(base64Encoded: encoded) {
         client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "image/png"])!, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: data)
@@ -257,6 +272,7 @@
       var object: Any = ["ok": true]
       var status = 200
       let body: [String: Any]
+      var requestData = request.httpBody ?? Data()
       if let data = request.httpBody {
         body = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
       } else if let stream = request.httpBodyStream {
@@ -269,10 +285,12 @@
           if count <= 0 { break }
           data.append(buffer, count: count)
         }
+        requestData = data
         body = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
       } else {
         body = [:]
       }
+      if requestData.isEmpty { requestData = URLProtocol.property(forKey: "fixtureUploadBody", in: request) as? Data ?? Data() }
       if path == "/api/events", let room = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "group" })?.value {
         // A watching stream: one notice when an assistant answered, then the stream ends and the
         // app reconnects, as after a dropped connection.
@@ -360,6 +378,13 @@
           var bootstrap = object as! [String: Any]
           var capabilities = bootstrap["capabilities"] as! [String: Any]
           capabilities["botConfiguration"] = ["supported": false, "reason": Self.designFixture?["unsupportedReason"] ?? "Assistant configuration is unavailable."]
+          bootstrap["capabilities"] = capabilities; object = bootstrap
+        }
+        if Self.designFixture?["portraitUnsupported"] as? Bool == true {
+          var bootstrap = object as! [String: Any]
+          var capabilities = bootstrap["capabilities"] as! [String: Any]
+          capabilities["uploads"] = ["supported": false, "reason": Self.designFixture?["uploadsReason"] ?? "Portrait uploads are unavailable."]
+          capabilities["portraitGeneration"] = ["supported": false, "reason": Self.designFixture?["generationReason"] ?? "Portrait generation is unavailable."]
           bootstrap["capabilities"] = capabilities; object = bootstrap
         }
         // A distributed build newer than any local build, so the update banner shows.
@@ -706,6 +731,36 @@
           if method == "PATCH" { let favorites = Self.preferences["modelFavorites"]; Self.preferences = body; Self.preferences["modelFavorites"] = favorites }
           object = Self.preferences
         }
+      } else if path.hasSuffix("/uploads"), method == "POST", Self.designFixture?["screen"] as? String == "avatar" {
+        if let start = requestData.range(of: Data("\r\n\r\n".utf8)),
+          let end = requestData.range(of: Data("\r\n--".utf8), options: .backwards), start.upperBound <= end.lowerBound,
+          String(decoding: requestData[..<start.lowerBound], as: UTF8.self).contains("image/png")
+        {
+          let data = requestData.subdata(in: start.upperBound..<end.lowerBound)
+          let id = "fixture-upload-\(Self.uploadedPortraits.count + 1)"
+          Self.uploadedPortraits["/api/files/\(id)"] = data
+          object = ["id": id, "name": "fixture-uploaded-portrait.png", "mime": "image/png", "size": data.count, "url": "/api/files/\(id)"]
+          print("DESIGN_PORTRAIT_UPLOAD \(id) \(data.count)")
+        } else {
+          print("DESIGN_PORTRAIT_UPLOAD_EMPTY body=\(request.httpBody?.count ?? -1) stream=\(request.httpBodyStream != nil) bytes=\(requestData.count)")
+          status = 400; object = ["error": "Fixture expected a PNG multipart upload."]
+        }
+      } else if path.hasSuffix("/portrait"), method == "POST", Self.designFixture?["screen"] as? String == "avatar" {
+        print("DESIGN_PORTRAIT_PROMPT \(body["prompt"] as? String ?? "")")
+        if let delay = Self.designFixture?["portraitDelayMs"] as? Double {
+          Self.lock.unlock(); Thread.sleep(forTimeInterval: delay / 1000); Self.lock.lock()
+        }
+        object = ["id": "fixture-generated-portrait", "name": "ranch-portrait.png", "mime": "image/png", "url": "/api/files/fixture-generated-portrait"]
+      } else if path.hasSuffix("/avatar"), method == "PUT", Self.designFixture?["screen"] as? String == "avatar",
+        let bot = Self.bots.first(where: { path == "/api/bots/\($0["id"] as? String ?? "")/avatar" }), let id = bot["id"] as? String
+      {
+        if let error = Self.designFixture?["failAvatarSave"] as? String, !Self.designAvatarSaveFailed {
+          Self.designAvatarSaveFailed = true; status = 503; object = ["error": error]
+          print("DESIGN_AVATAR_PUT_FAILED \(id)")
+        } else {
+          Self.settingsOverrides[id] = bot.merging(["avatar": body]) { $1 }; object = body
+          print("DESIGN_AVATAR_PUT \(id) \(String(data: try! JSONSerialization.data(withJSONObject: body, options: [.sortedKeys]), encoding: .utf8)!)")
+        }
       } else if path.hasSuffix("/avatar"), let index = Self.createdBots.firstIndex(where: { path.hasPrefix("/api/bots/\($0["id"] as? String ?? "")/") }) {
         if Self.avatarFailures > 0 {
           Self.avatarFailures -= 1; status = 503; object = ["error": "Fixture avatar save failed"]
@@ -754,7 +809,7 @@
         detail["enabledTools"] = ["terminal"]
         detail["enabledSkills"] = []
         object = detail
-        if Self.designFixture?["settingsLoadError"] as? Bool == true, !Self.settingsLoadFailed {
+        if Self.designFixture?["settingsLoadError"] as? Bool == true, (!Self.settingsLoadFailed || Self.designFixture?["settingsLoadAlways"] as? Bool == true) {
           Self.settingsLoadFailed = true; status = 503
           object = ["error": Self.designFixture?["loadError"] ?? "Settings could not be loaded."]
         }

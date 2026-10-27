@@ -523,6 +523,236 @@ import XCTest
     XCTAssertTrue(element.hasFrame && element.frame.intersects(form.frame), "The requested control must be visible in the settings form")
   }
 
+  /// Captures the real editor with fixture-backed writes and refresh readback.
+  func testAvatarDesignReview() throws {
+    let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_AVATAR_PATH"] ?? ""
+    try XCTSkipUnless(!source.isEmpty, "Set AGENT_INTERFACE_DESIGN_AVATAR_PATH to capture Avatar.")
+    let original = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: source))) as? [String: Any])
+    let stage = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_STAGE"] ?? "before"
+    guard ["before", "after"].contains(stage) else { XCTFail("Unknown Avatar stage: \(stage)"); return }
+    let selection = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_VARIANT"] ?? ""
+    var variants = [("avatar-loaded", "light", "UICTContentSizeCategoryL"),
+      ("avatar-dark", "dark", "UICTContentSizeCategoryL"),
+      ("avatar-large-text", "light", "UICTContentSizeCategoryAccessibilityXL"),
+      ("avatar-unavailable", "light", "UICTContentSizeCategoryL"),
+      ("avatar-seeded", "dark", "UICTContentSizeCategoryL")]
+    if stage == "after" { variants.append(("avatar-load-error", "light", "UICTContentSizeCategoryL")) }
+    let selections = selection.components(separatedBy: ",")
+    guard selection.isEmpty || selections.allSatisfy({ value in variants.contains { $0.0 == value } }) else {
+      XCTFail("Unknown Avatar variant: \(selection)"); return
+    }
+    for (name, theme, size) in variants where selection.isEmpty || selections.contains(name) {
+      var fixture = original
+      if name == "avatar-loaded" { fixture["failAvatarSave"] = original["avatarSaveError"]; fixture["portraitDelayMs"] = 3500 }
+      if name == "avatar-unavailable" { fixture["portraitUnsupported"] = true }
+      if name == "avatar-load-error" { fixture["settingsLoadError"] = true; fixture["settingsLoadAlways"] = true }
+      if name == "avatar-seeded" {
+        var bots = try XCTUnwrap(fixture["bots"] as? [[String: Any]])
+        bots[0]["avatar"] = ["mode": "portrait", "origin": "uploaded", "src": fixture["seededPortrait"]!]
+        fixture["bots"] = bots
+      }
+      var environment = ["AGENT_INTERFACE_UI_THEME": theme,
+        "AGENT_INTERFACE_UI_DESIGN_FIXTURE": String(decoding: try JSONSerialization.data(withJSONObject: fixture), as: UTF8.self)]
+      if stage == "after" && name == "avatar-loaded" { environment["AGENT_INTERFACE_UI_DESIGN_UPLOAD"] = original["uploadPortrait"] as? String }
+      let app = launch(textSize: size, environment: environment)
+      XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 15))
+      app.openAssistantSettings("Ranch hand")
+      if size.contains("Accessibility") { app.selectSettingsTab("Avatar") } else { app.buttons["Avatar"].tapWhenReady() }
+      let form = app.descendants(matching: .any)["assistantSettingsForm"].firstMatch
+      let style = app.segmentedControls["avatarStyle"]
+      XCTAssertTrue(style.waitForExistence(timeout: 5))
+      let saveButton = stage == "after" ? app.buttons["avatarSave"] : app.buttons["Save avatar"]
+      let previewBar = app.descendants(matching: .any)["avatarPreviewBar"].firstMatch
+      let restingStyleGap = stage == "after" ? style.frame.minY - previewBar.frame.maxY : 0
+      func reveal(_ element: XCUIElement, up: Bool = true) {
+        guard stage == "after" else { settingsReveal(element, in: form, up: up); return }
+        if element.exists, element.identifier == "avatarSave" { return }
+        func viewport() -> CGRect {
+          let preview = app.descendants(matching: .any)["avatarPreviewBar"].firstMatch
+          let save = app.descendants(matching: .any)["avatarSaveBar"].firstMatch
+          let keyboard = app.keyboards.firstMatch
+          let top = max(form.frame.minY, preview.exists ? preview.frame.maxY : form.frame.minY) + 8
+          var bottom = min(form.frame.maxY, save.exists ? save.frame.minY : form.frame.maxY) - 8
+          if keyboard.exists { bottom = min(bottom, keyboard.frame.minY - 8) }
+          return CGRect(x: form.frame.minX, y: top, width: form.frame.width, height: max(0, bottom - top))
+        }
+        for attempt in 1...12 {
+          let visible = viewport()
+          if element.hasFrame && element.frame.minY >= visible.minY && element.frame.maxY <= visible.maxY { return }
+          if element.hasFrame && element.frame.height > visible.height {
+            XCTFail("Control is \(element.frame.height)pt tall but only \(visible.height)pt fits between the bars"); return
+          }
+          let shift = element.hasFrame ? element.frame.midY - visible.midY : (up ? visible.height : -visible.height) * 2
+          let settle = abs(shift) <= visible.height
+          let length = min(settle ? max(abs(shift), 24) : .infinity, visible.height * 0.7)
+          let half = (shift > 0 ? length : -length) / 2
+          let anchor = app.coordinate(withNormalizedOffset: .zero)
+          let start = anchor.withOffset(CGVector(dx: visible.minX + 4, dy: visible.midY + half))
+          let end = anchor.withOffset(CGVector(dx: visible.minX + 4, dy: visible.midY - half))
+          let name = element.exists ? (element.identifier.isEmpty ? element.label : element.identifier) : "unresolved"
+          print("DESIGN_AVATAR_REVEAL \(name) attempt=\(attempt) \(settle ? "settle" : "travel") frame=\(element.hasFrame ? element.frame : .null) viewport=\(visible) drag=\(Int(length))")
+          if settle { start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.3) }
+          else { start.press(forDuration: 0.02, thenDragTo: end) }
+        }
+        let visible = viewport()
+        XCTAssertTrue(element.hasFrame && element.frame.minY >= visible.minY && element.frame.maxY <= visible.maxY,
+          "The control must be between the pinned preview and Save bars: \(element.frame), viewport \(visible)")
+      }
+      func mode(_ value: String) { reveal(style, up: false); style.buttons[value].tapWhenReady() }
+      func top() {
+        guard stage == "after" else { reveal(app.buttons["previewState.idle"], up: false); return }
+        reveal(style, up: false)
+        for _ in 0..<4 {
+          let shift = style.frame.minY - previewBar.frame.maxY - restingStyleGap
+          if abs(shift) <= 12 { return }
+          let length = min(abs(shift), 100)
+          let half = (shift > 0 ? length : -length) / 2
+          let anchor = app.coordinate(withNormalizedOffset: .zero)
+          let center = previewBar.frame.maxY + 140
+          anchor.withOffset(CGVector(dx: form.frame.minX + 4, dy: center + half))
+            .press(forDuration: 0.05, thenDragTo: anchor.withOffset(CGVector(dx: form.frame.minX + 4, dy: center - half)),
+              withVelocity: .slow, thenHoldForDuration: 0.3)
+        }
+        XCTAssertLessThanOrEqual(abs(style.frame.minY - previewBar.frame.maxY - restingStyleGap), 16,
+          "The opening Style header gap is restored")
+      }
+      func preview(_ state: String) {
+        guard stage == "after" else { app.buttons["previewState.\(state)"].tapWhenReady(); return }
+        let label = ["idle": "Ready", "thinking": "Thinking", "working": "Working", "waiting": "Waiting", "blocked": "Needs your help", "done": "Done"][state]!
+        let menu = app.buttons["avatarPreviewState"]
+        let item = app.buttons.matching(NSPredicate(format: "label == %@", label)).firstMatch
+        for _ in 0..<3 {
+          if !item.exists { menu.tapWhenReady() }
+          guard item.waitForExistence(timeout: 3), item.waitUntilHittable(timeout: 3) else { continue }
+          item.tap()
+          if menu.wait(until: "value == %@", label, timeout: 2) { return }
+        }
+        XCTAssertEqual(menu.value as? String, label, "The preview menu selects the requested state")
+      }
+      func save() { reveal(saveButton); saveButton.tapWhenReady() }
+      func reopen() {
+        app.buttons["Close"].tapWhenReady(); app.openAssistantSettings("Ranch hand"); app.buttons["Avatar"].tapWhenReady()
+      }
+      if name == "avatar-load-error" {
+        XCTAssertTrue(app.buttons["Retry settings"].waitForExistence(timeout: 5))
+        XCTAssertFalse(saveButton.isEnabled, "A summary avatar cannot be saved before settings load")
+        XCTAssertFalse(app.buttons["avatarPreviewState"].isEnabled)
+        try capture("avatar-load-error"); app.terminate(); continue
+      }
+      if name == "avatar-seeded" {
+        try capture("avatar-portrait-seeded-dark"); app.terminate(); continue
+      }
+      if name == "avatar-unavailable" {
+        mode("Portrait"); reveal(app.buttons["Generate portrait"])
+        XCTAssertFalse(app.buttons["Upload portrait"].isEnabled)
+        XCTAssertFalse(app.buttons["Generate portrait"].isEnabled)
+        if stage == "after" { XCTAssertTrue(app.staticTexts["Portraits are unavailable. Choose Geometric or Mascot."].exists) }
+        try capture("avatar-portrait-unavailable"); app.terminate(); continue
+      }
+      top(); try capture(name + "-geo-top")
+      if name == "avatar-dark" {
+        if stage == "after" { reveal(app.buttons["Color #292929"]); try capture("avatar-dark-colors") }
+        app.terminate(); continue
+      }
+      if name == "avatar-large-text" {
+        let slider = app.sliders["Eye width"]; reveal(slider)
+        let originalValue = slider.value as? String
+        slider.adjust(toNormalizedSliderPosition: 0.67)
+        XCTAssertNotEqual(slider.value as? String, originalValue, "The visible slider must actually move")
+        if stage == "after" { reveal(app.buttons["Reset eyes"]) } else { reveal(saveButton) }
+        try capture(name + "-tune-bottom")
+        if stage == "after" {
+          mode("Portrait")
+          let prompt = app.descendants(matching: .any)["portraitPrompt"].firstMatch
+          reveal(prompt); prompt.tapWhenReady(); prompt.typeText(original["portraitPrompt"] as! String)
+          XCTAssertFalse(app.descendants(matching: .any)["avatarSaveBar"].firstMatch.exists)
+          try capture("avatar-large-text-portrait-focused")
+        }
+        app.terminate(); continue
+      }
+      mode("Mascot")
+      let pumpkin = app.buttons["avatarTile.family.pumpkin"]; reveal(pumpkin); pumpkin.tapWhenReady()
+      XCTAssertTrue(pumpkin.wait(until: "selected == true"))
+      top(); preview("blocked"); try capture("avatar-mascot-seasonal")
+      if stage == "after" { preview("idle") }
+      let swatch = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Color #")).firstMatch
+      reveal(swatch); print("DESIGN_AVATAR_SWATCH \(swatch.frame.width) \(swatch.frame.height)")
+      if stage == "after" {
+        XCTAssertGreaterThanOrEqual(swatch.frame.width.rounded(), 44); XCTAssertGreaterThanOrEqual(swatch.frame.height.rounded(), 44)
+        swatch.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.5)).tap()
+        XCTAssertTrue(swatch.wait(until: "selected == true"), "The padding is part of the color target")
+      }
+      let hat = app.buttons["avatarTile.accessory.hat"]; reveal(hat); hat.tapWhenReady()
+      try capture("avatar-choices")
+      let slider = app.sliders["Eye width"]; reveal(slider)
+      let originalTuning = slider.value as? String
+      slider.adjust(toNormalizedSliderPosition: 0.67)
+      let tuning = try XCTUnwrap(slider.value as? String)
+      XCTAssertNotEqual(tuning, originalTuning, "The visible slider must actually move")
+      print("DESIGN_AVATAR_TUNING before=\(originalTuning ?? "nil") after=\(tuning)")
+      if stage == "after" { reveal(app.buttons["Reset eyes"]) } else { reveal(saveButton) }
+      try capture("avatar-tune-bottom")
+      if stage == "after" { preview("working") }
+      save()
+      let error = try XCTUnwrap(original["avatarSaveError"] as? String)
+      XCTAssertTrue(app.staticTexts[error].waitForExistence(timeout: 5))
+      reveal(saveButton); try capture("avatar-save-error")
+      save(); XCTAssertTrue(app.staticTexts["Avatar saved"].waitForExistence(timeout: 8))
+      reopen(); reveal(pumpkin)
+      XCTAssertTrue(pumpkin.wait(until: "selected == true"), "Saved avatar is read back from bootstrap")
+      reveal(hat); XCTAssertTrue(hat.isSelected)
+      reveal(slider); XCTAssertEqual(slider.value as? String, tuning)
+      top()
+      if stage == "after" { XCTAssertEqual(app.buttons["avatarPreviewState"].value as? String, "Ready") } else { XCTAssertTrue(app.buttons["previewState.idle"].isSelected) }
+      try capture("avatar-saved-reopen")
+      mode("Portrait"); reveal(saveButton)
+      XCTAssertFalse(saveButton.isEnabled)
+      try capture("avatar-portrait-empty")
+      let prompt = app.descendants(matching: .any)["portraitPrompt"].firstMatch
+      reveal(prompt); prompt.tapWhenReady(); prompt.typeText(original["portraitPrompt"] as! String)
+      // Dismiss the software keyboard through a real form gesture.
+      reveal(app.buttons["Generate portrait"]); form.swipeUp()
+      app.buttons["Generate portrait"].tapWhenReady()
+      try capture("avatar-portrait-busy")
+      XCTAssertTrue(app.staticTexts["Portrait generated. Save avatar to apply it."].waitForExistence(timeout: 10))
+      top(); try capture("avatar-portrait-generated-unsaved")
+      save(); XCTAssertTrue(app.staticTexts["Avatar saved"].waitForExistence(timeout: 8))
+      reopen(); XCTAssertTrue(style.buttons["Portrait"].isSelected)
+      reveal(app.buttons["Upload portrait"]); app.buttons["Upload portrait"].tapWhenReady()
+      if stage == "after" {
+        XCTAssertTrue(app.staticTexts["Portrait uploaded. Save avatar to apply it."].waitForExistence(timeout: 10))
+        top(); try capture("avatar-portrait-uploaded")
+        save(); XCTAssertTrue(app.staticTexts["Avatar saved"].waitForExistence(timeout: 8))
+        reopen(); XCTAssertTrue(style.buttons["Portrait"].isSelected)
+        try capture("avatar-upload-saved-reopen")
+      } else { try capture("avatar-portrait-picker") }
+      app.terminate()
+    }
+  }
+
+  /// Avatar controls are shared with creation, whose accepted full preview stays unchanged.
+  func testAvatarCreationLayoutRegression() throws {
+    let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_AVATAR_PATH"] ?? ""
+    try XCTSkipUnless(!source.isEmpty, "Set AGENT_INTERFACE_DESIGN_AVATAR_PATH for the creation regression.")
+    let fixture = try String(contentsOfFile: source, encoding: .utf8)
+    for (name, theme, size) in [("light", "light", "UICTContentSizeCategoryL"),
+      ("dark", "dark", "UICTContentSizeCategoryL"),
+      ("large-text", "light", "UICTContentSizeCategoryAccessibilityXL")] {
+      let app = launch(textSize: size, environment: ["AGENT_INTERFACE_UI_DESIGN_FIXTURE": fixture, "AGENT_INTERFACE_UI_THEME": theme])
+      XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 15))
+      goToAssistantList(app); app.buttons["New assistant"].tapWhenReady()
+      XCTAssertTrue(app.descendants(matching: .any)["creationStep"].waitForExistence(timeout: 5))
+      try capture("avatar-create-\(name)-top")
+      let form = app.descendants(matching: .any)["assistantCreationForm"].firstMatch
+      let field = app.textFields["Name"]
+      settingsReveal(field, in: form); field.typeWhenFocused("Garden companion\n")
+      settingsReveal(app.buttons["creationNextBottom"], in: form)
+      try capture("avatar-create-\(name)-bottom")
+      XCTAssertTrue(app.buttons["creationNextBottom"].isEnabled)
+      app.terminate()
+    }
+  }
+
   func testSettingsDesignReview() throws {
     let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_SETTINGS_PATH"] ?? ""
     try XCTSkipUnless(!source.isEmpty, "Set AGENT_INTERFACE_DESIGN_SETTINGS_PATH to capture assistant creation and settings.")

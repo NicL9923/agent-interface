@@ -54,7 +54,7 @@ References collected October 25, 2026. External artwork is reference material on
 | Failed and interrupted turns | Web, iPhone and iPad captured | Complete | Web desktop/phone and iPhone 9.2; iPad 9.1 |
 | Assistant details and artifacts | Web, iPhone and iPad captured | Complete | Web details 9.1; artifacts desktop 9.2, phone 9; iPhone profile/artifacts 9.1, preview 9; iPad 9 |
 | Assistant creation and settings | Web, iPhone and iPad captured | Complete | Web creation/details 9.1, confirmations 9.2; iPhone creation/details/confirmations 9.2; iPad creation/details 9.1, confirmations 9 |
-| Avatar editor | Pending | Pending | Pending |
+| Avatar editor | 17 web and 15 native baseline states; 24 web and 19 each on iPhone/iPad after states | Complete | Web desktop/phone, iPhone and iPad 9 |
 | Models and capabilities | Pending | Pending | Pending |
 | Memory, work and learning | Pending | Pending | Pending |
 | Routines and results | Pending | Pending | Pending |
@@ -228,3 +228,26 @@ The [acceptance note](evidence/design-review/settings-acceptance.md) records the
 32 annotated comparisons and limits. Native enlarged text is AX3, not AX5.
 The final [independent review](evidence/design-review/settings-final-review.md)
 recomputed the source and measured both Retry labels at 5.91:1.
+
+
+## Avatar editor acceptance
+
+Avatar passes Opus 5.5 High at 9.0 on web desktop, web phone, iPhone and iPad.
+The [web review](evidence/design-review/avatar-web-review.md) and
+[native recheck](evidence/design-review/avatar-native-review.md) close all blockers.
+The [acceptance note](evidence/design-review/avatar-acceptance.md) records the
+76 focused web tests, production build, native receipts and source fingerprints.
+
+A compact preview stays visible while appearance controls scroll. Save remains
+the primary action. Portrait upload and generation have separate groups, with
+readable progress, recovery and unavailable explanations. Web keyboard navigation
+keeps the focused choice and dialog header visible. Native controls respect busy
+and load-error states, with visibly disabled preview menus. The wizard retains
+its full preview, and the existing artwork, characters and palette are preserved.
+
+The accepted after evidence contains 24 web screenshots and 19 per native device.
+All native image hashes and capture windows were verified. Twenty-six annotated
+comparisons are staged for the final PR. Enlarged native text uses AX3. The iPad
+focused capture shows a software keyboard; the iPhone one does not. Native upload
+uses a DEBUG-only file-selection hook followed by the real multipart function.
+All portrait images are synthetic fixtures, with no live provider-quality claim.

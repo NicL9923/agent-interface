@@ -204,7 +204,7 @@ final class SettingsParityTests: XCTestCase {
     XCTAssertEqual(SettingsLimits.message("Instructions are", count: 45_000, limit: limit), "45,000 of 50,000 characters")
     XCTAssertEqual(SettingsLimits.message("Instructions are", count: 50_000, limit: limit), "50,000 of 50,000 characters")
     XCTAssertEqual(SettingsLimits.message("Instructions are", count: 50_012, limit: limit), "Instructions are 12 characters over the 50,000 limit. Shorten the text to save.")
-    XCTAssertEqual(SettingsLimits.message("The description is", count: 2_001, limit: SettingsLimits.portraitPrompt), "The description is 1 character over the 2,000 limit. Shorten the text to save.")
+    XCTAssertEqual(SettingsLimits.message("The description is", count: 2_001, limit: SettingsLimits.portraitPrompt, action: "generate a portrait"), "The description is 1 character over the 2,000 limit. Shorten the text to generate a portrait.")
   }
   // MARK: Model picker
 

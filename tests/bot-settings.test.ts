@@ -683,3 +683,68 @@ describe("creating an assistant", () => {
     expect(container.querySelector('[role="status"]')?.textContent).toBe("Avatar saved");
   });
 });
+
+
+describe("existing assistant portraits", () => {
+  const choose = async (name: string) => {
+    const label = [...container.querySelectorAll("label")].find(item => item.textContent?.trim() === name)!;
+    await act(async () => label.querySelector("input")!.click());
+  };
+  beforeEach(async () => {
+    const supported = { ...bootstrap, capabilities: { ...bootstrap.capabilities, uploads: { supported: true }, portraitGeneration: { supported: true } } };
+    await act(async () => root.render(createElement(BotSettings, { bot, bootstrap: supported, onClose, onSaved })));
+    await click("avatar"); await choose("Portrait"); vi.mocked(api).mockClear();
+  });
+  const upload = async (file: File) => {
+    const input = container.querySelector<HTMLInputElement>('input[type="file"]')!;
+    Object.defineProperty(input, "files", { configurable: true, value: [file] });
+    Object.defineProperty(input, "value", { configurable: true, writable: true, value: "C:\\fakepath\\portrait.png" });
+    await act(async () => input.dispatchEvent(new Event("change", { bubbles: true })));
+    return input;
+  };
+  it.each([new File(["bad"], "portrait.txt", { type: "text/plain" }), new File([new Uint8Array(2_000_001)], "portrait.png", { type: "image/png" })])("rejects invalid files without submitting or enabling Save", async file => {
+    await upload(file);
+    expect(api).not.toHaveBeenCalled();
+    expect(container.textContent).toContain("Choose a PNG, JPEG, or WebP portrait no larger than 2 MB.");
+    expect([...container.querySelectorAll("button")].find(button => button.textContent === "Save avatar")!.disabled).toBe(true);
+  });
+  it("clears the file input after failure so choosing the same file can retry", async () => {
+    vi.mocked(api).mockRejectedValueOnce(new Error("Upload interrupted."));
+    const file = new File(["png"], "portrait.png", { type: "image/png" });
+    const input = await upload(file);
+    expect(input.value).toBe("");
+    expect(container.textContent).toContain("Upload interrupted.");
+    vi.mocked(api).mockResolvedValueOnce({ id: "portrait-1" });
+    await upload(file); await click("Save avatar");
+    expect(write).toHaveBeenLastCalledWith("/bots/shared/avatar", { mode: "portrait", src: "/api/files/portrait-1", origin: "uploaded" }, "PUT");
+  });
+  it("generates from the prompt, shows progress and saves the resulting draft", async () => {
+    let finish!: (value: unknown) => void;
+    vi.mocked(write).mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+    await typeInto(container.querySelector<HTMLTextAreaElement>('textarea')!, "A friendly ranch companion");
+    await click("Generate portrait");
+    expect([...container.querySelectorAll('.avatar-operation[role="status"]')].some(region => region.textContent?.includes("Generating portrait…"))).toBe(true);
+    expect(write).toHaveBeenCalledWith("/bots/shared/portrait", { prompt: "A friendly ranch companion" });
+    await act(async () => finish({ id: "generated-1" }));
+    await click("Save avatar");
+    expect(write).toHaveBeenLastCalledWith("/bots/shared/avatar", { mode: "portrait", src: "/api/files/generated-1", origin: "generated" }, "PUT");
+  });
+  it("explains unavailable portrait operations and disables them even with a prompt", async () => {
+    const unsupported = { ...bootstrap, capabilities: { ...bootstrap.capabilities, uploads: { supported: false, reason: "Uploads unavailable." }, portraitGeneration: { supported: false, reason: "Generation unavailable." } } };
+    await act(async () => root.render(createElement(BotSettings, { bot, bootstrap: unsupported, onClose, onSaved })));
+    await typeInto(container.querySelector<HTMLTextAreaElement>('textarea')!, "A friendly ranch companion");
+    expect(container.querySelector<HTMLInputElement>('input[type="file"]')!.disabled).toBe(true);
+    await click("Generate portrait");
+    expect(write).not.toHaveBeenCalled();
+    expect(container.textContent).toContain("Uploads unavailable.");
+    expect(container.textContent).toContain("Generation unavailable.");
+    expect(container.textContent).toContain("Choose Geometric or Mascot.");
+  });
+  it("blocks a description over the server limit while keeping it editable", async () => {
+    await typeInto(container.querySelector<HTMLTextAreaElement>('textarea')!, "x".repeat(2001));
+    await click("Generate portrait");
+    expect(api).not.toHaveBeenCalled();
+    expect(container.querySelector('textarea')?.getAttribute("aria-invalid")).toBe("true");
+    expect(container.textContent).toContain("The description is 1 character over the 2,000 limit. Shorten the text to generate a portrait.");
+  });
+});

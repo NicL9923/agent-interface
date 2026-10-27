@@ -4,7 +4,7 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
   if (!["127.0.0.1", "localhost"].includes(origin.hostname)) throw Error("Use a loopback fixture.");
   const boot = await (await page.request.get(`${origin.origin}/api/bootstrap`)).json();
   if (boot.user?.email !== "preview@localhost.invalid") throw Error("Use the synthetic household preview.");
-  if (!["today", "home", "conversation", "questions", "approvals", "recovery", "details", "settings"].includes(screen)) throw Error(`Unsupported screen: ${screen}`);
+  if (!["today", "home", "conversation", "questions", "approvals", "recovery", "details", "settings", "avatar"].includes(screen)) throw Error(`Unsupported screen: ${screen}`);
   const context = await page.context().browser().newContext({ serviceWorkers: "block", reducedMotion: "reduce", viewport: { width: 1440, height: 1000 } });
   const tab = await context.newPage();
   const browserErrors = [];
@@ -32,11 +32,13 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
   let settingsLoadFailed = false;
   const modelWarning = "This model may cost more than your current model. Confirm the choice before saving.";
   const settingsSubmissions = [];
+  const avatarSubmissions = [], portraitPrompts = [];
+  let avatarSaveFailed = false;
   for (const [path, encoded] of Object.entries(fixture?.images || {})) {
     await context.route(`**${path}`, route => route.fulfill({ contentType: "image/png", body: Buffer.from(encoded, "base64") }));
   }
   await context.route("**/api/bots/*/conversation*", async route => {
-    if (!["conversation", "questions", "approvals", "recovery", "details", "settings"].includes(screen) || !fixture?.conversation) return route.continue();
+    if (!["conversation", "questions", "approvals", "recovery", "details", "settings", "avatar"].includes(screen) || !fixture?.conversation) return route.continue();
     if (screen === "details") {
       const conversation = structuredClone(fixture.conversation);
       conversation.earlierFiles = state === "earlier-error" ? 1 : 0;
@@ -95,7 +97,7 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
     });
     await context.route("**/api/bots/*/files*", route => state === "earlier-error" ? route.fulfill({status:503,json:{error:"Earlier files unavailable."}}) : route.fulfill({json:{messages:[]}}));
   }
-  if (screen === "settings") {
+  if (["settings", "avatar"].includes(screen)) {
     await context.route("**/api/bots/*", route => {
       const id = decodeURIComponent(new URL(route.request().url()).pathname.split("/").at(-1));
       const bot = settingsBots.find(item => item.id === id);
@@ -126,10 +128,18 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
     await context.route("**/api/bots/*/avatar", route => {
       const body = route.request().postDataJSON();
       const id = new URL(route.request().url()).pathname.split("/").at(-2);
+      const failed = state === "save-error" && !avatarSaveFailed;
+      avatarSubmissions.push({id,body,failed});
+      if (failed) { avatarSaveFailed=true; return route.fulfill({status:503,json:{error:fixture.avatarSaveError}}); }
       Object.assign(settingsBots.find(bot => bot.id === id), {avatar:body});
       return route.fulfill({json:body});
     });
   }
+  if (screen === "avatar") await context.route("**/api/bots/*/portrait", async route => {
+    portraitPrompts.push(route.request().postDataJSON().prompt);
+    await new Promise(resolve => setTimeout(resolve,1500));
+    return route.fulfill({json:{id:"fixture-generated-portrait",name:"ranch-portrait.png",mime:"image/png",url:"/api/files/fixture-generated-portrait"}});
+  });
   await context.route("**/api/today", async route => {
     if (!fixture?.overview || screen !== "today") return route.continue();
     const value = structuredClone(fixture.overview);
@@ -151,13 +161,18 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
     const response = await route.fetch();
     const value = await response.json();
     if (fixture) value.bots = state === "empty" ? [] : fixture.bots;
-    if (screen === "settings") {
+    if (["settings", "avatar"].includes(screen)) {
       value.bots = settingsBots.map(({instructions, enabledMcpServers, ...roster}) => roster);
       if (state === "unsupported") value.capabilities.botConfiguration = {supported:false,reason:fixture.unsupportedReason};
+    }
+    if (screen === "avatar" && state === "portrait-unavailable") {
+      value.capabilities.uploads={supported:false,reason:fixture.uploadsReason};
+      value.capabilities.portraitGeneration={supported:false,reason:fixture.generationReason};
     }
     if (screen === "recovery" && state === "unsupported-retry") value.capabilities.idempotency = { supported: false, reason: "This Hermes connection cannot look up requests." };
     if (screen === "approvals" && state === "unsupported") value.capabilities.approvals = { supported: false, reason: fixture.unsupportedReason };
     if (fixture?.preferences) value.preferences = { ...value.preferences, ...fixture.preferences };
+    if (screen === "avatar" && state === "composer-regression") value.preferences.presentation = "advanced";
     if (screen === "home" && state === "three-pins") value.preferences.favorites = ["ranch", "garden", "kitchen"];
     if (screen === "home" && state === "no-pins") value.preferences.favorites = [];
     return route.fulfill({ response, json: value });
@@ -215,6 +230,153 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
     }
   };
   try {
+    if (screen === "avatar") {
+      const keyboardChecks=[];
+      const dialog=tab.locator(".settings-dialog");
+      const content=dialog.locator(".settings-content");
+      const top=()=>content.evaluate(el=>{el.scrollTop=0;});
+      const bottom=()=>content.evaluate(el=>{el.scrollTop=el.scrollHeight;});
+      const save=()=>dialog.getByRole("button",{name:"Save avatar",exact:true});
+      const previewState=async state=>{
+        const select=dialog.locator(".avatar-stage select");
+        if(await select.count()) await select.selectOption(state);
+        else await dialog.getByRole("button",{name:({idle:"Ready",thinking:"Thinking",working:"Working",waiting:"Waiting",blocked:"Needs your help",done:"Done"})[state],exact:true}).click();
+      };
+      const choose=async name=>dialog.getByRole("radio",{name,exact:true}).locator("..").click();
+      const tune=async()=>{const slider=dialog.locator('input[type="range"]').first();await slider.focus();await slider.press("Home");for(let i=0;i<12;i++)await slider.press("ArrowRight");};
+      const open=async ({reset=true,width=390,theme="light",large=false}={})=>{
+        if(reset) settingsBots=structuredClone(fixture.bots);
+        await tab.setViewportSize({width,height:width===1440?1000:844});
+        await tab.emulateMedia({colorScheme:theme});
+        await tab.goto(`${origin.origin}/?bot=ranch`);
+        await tab.evaluate(({large,theme})=>{document.documentElement.style.fontSize=large?"200%":"";document.documentElement.dataset.theme=theme;},{large,theme});
+        await tab.locator('.chat-header [title="Details, pin, artifacts and settings"]').click();
+        await tab.locator(".bot-details").getByRole("button",{name:"Settings",exact:true}).click();
+        await dialog.getByRole("button",{name:"avatar",exact:true}).click();
+        await dialog.locator(".avatar-stage").waitFor();
+      };
+      const checkAccessoryKeyboard=async compact=>{
+        await dialog.getByRole("radio",{name:"Oval",exact:true}).focus();
+        await tab.keyboard.press("Tab");
+        await tab.keyboard.press("ArrowRight");
+        await tab.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+        const result=await dialog.evaluate((root,compact)=>{
+          const content=root.querySelector(".settings-content").getBoundingClientRect();
+          const header=root.querySelector(":scope > header").getBoundingClientRect();
+          const stage=root.querySelector(".avatar-stage").getBoundingClientRect();
+          const footer=root.querySelector(compact?".avatar-save-actions":".settings-save-actions").getBoundingClientRect();
+          const input=document.activeElement;
+          const group=input.closest("fieldset")?.querySelector("legend")?.textContent;
+          const tile=input.closest("label")?.querySelector(".choice-art")?.getBoundingClientRect();
+          const visibleTop=Math.max(content.top,compact?stage.bottom:content.top);
+          const visibleBottom=Math.min(content.bottom,footer.top);
+          return {compact,group,focused:input?.type,headerVisible:header.top>=root.getBoundingClientRect().top-1,
+            visibleTop,visibleBottom,tile:tile&&{top:tile.top,bottom:tile.bottom},
+            tileVisible:!!tile&&tile.top>=visibleTop-1&&tile.bottom<=visibleBottom+1};
+        },compact);
+        keyboardChecks.push(result);
+        if(result.group!=="Accessory"||!result.tileVisible||!result.headerVisible) throw Error(`Keyboard focus is obscured: ${JSON.stringify(result)}`);
+      };
+      const shot=async(name,width=390,theme="light")=>{
+        await capture(name,width,width===1440?1000:844,theme);
+        geometry.at(-1).avatar=await dialog.evaluate(root=>{
+          const bounds=el=>{if(!el)return null;const r=el.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height};};
+          return {scrollTop:root.querySelector('.settings-content').scrollTop, outerScrollTop:root.scrollTop,
+            controls:[...root.querySelectorAll('.swatch,.choice,.avatar-stage-states button')].map(el=>({label:el.textContent||el.title||el.querySelector('input')?.getAttribute('aria-label'),...bounds(el)})),
+            preview:bounds(root.querySelector('.avatar-stage')),
+            footer:bounds(root.querySelector('.avatar-save-actions')),
+            promptLimit:(()=>{const el=root.querySelector('.portrait-prompt-limit');return el&&{text:el.textContent,color:getComputedStyle(el).color,fontSize:getComputedStyle(el).fontSize,...bounds(el)};})(),
+            portrait:[...root.querySelectorAll('img.avatar-portrait')].map(el=>({src:el.getAttribute('src'),loaded:el.complete&&el.naturalWidth>0}))};
+        });
+      };
+      for(const v of [{name:"geo-desktop",width:1440},{name:"geo-desktop-dark",width:1440,theme:"dark"},{name:"geo-phone"},{name:"geo-large",large:true}]){
+        await open(v);await shot(v.name,v.width,v.theme);
+      }
+      await open({width:1440});
+      const first=dialog.getByRole("radio",{name:"Blob",exact:true});
+      await first.focus();await tab.keyboard.press("ArrowRight");
+      await shot("tile-keyboard-focus",1440);
+      if(stage === "after") { await checkAccessoryKeyboard(true); await shot("accessory-keyboard-focus",1440); }
+      await open();
+      await choose("Mascot");
+      await choose("Pumpkin");
+      await top();await previewState("blocked");
+      await shot("mascot-seasonal-phone");
+      if(stage === "after") await previewState("idle");
+      await choose("Cowboy hat");
+      await shot("choices-phone");
+      const range=dialog.locator('input[type="range"]').first();
+      await tune();await bottom();await shot("tune-bottom-phone");
+      const draft=await dialog.getByRole("radio",{name:"Pumpkin",exact:true}).isChecked();
+      if(!draft)throw Error("Seasonal draft was lost while tuning.");
+      // Persist through a deliberate failure, retry, and a fresh bootstrap.
+      if(stage === "after") await previewState("working");
+      state="save-error";await save().click();await dialog.getByText(fixture.avatarSaveError,{exact:true}).waitFor();
+      await shot("save-error-phone");
+      const failedBody=structuredClone(avatarSubmissions.at(-1).body);
+      await save().click();await dialog.getByText("Avatar saved",{exact:true}).waitFor();
+      if(JSON.stringify(avatarSubmissions.at(-1).body)!==JSON.stringify(failedBody))throw Error("Retry changed the draft.");
+      await open({reset:false});
+      if(!await dialog.getByRole("radio",{name:"Pumpkin",exact:true}).isChecked())throw Error("Saved avatar reverted on reopen.");
+      const select=dialog.locator(".avatar-stage select");
+      const previewIdle=await select.count()?await select.inputValue()==="idle":await dialog.getByRole("button",{name:"Ready",exact:true}).getAttribute("aria-pressed")==="true";
+      if(!previewIdle)throw Error("Preview state was persisted.");
+      await top();await shot("saved-reopen-phone");
+      await open({large:true});await tune();await bottom();await shot("tune-bottom-large");
+      await open();await choose("Portrait");await bottom();await shot("portrait-empty-phone");
+      if(await save().isEnabled())throw Error("Empty portrait can be saved.");
+      const input=dialog.locator('input[type="file"]');
+      const uploadFinished=tab.waitForResponse(r=>r.url().endsWith("/uploads")&&r.request().method()==="POST");
+      await input.setInputFiles({name:"ranch-portrait.png",mimeType:"image/png",buffer:Buffer.from(fixture.uploadPortrait,"base64")});
+      if(stage === "after") await dialog.getByText("Uploading portrait…",{exact:true}).waitFor();
+      await shot("portrait-busy-phone");
+      const uploaded=await (await uploadFinished).json();
+      await dialog.getByText(stage === "before" ? "Portrait uploaded. Save avatar to apply it." : "Portrait ready to save.",{exact:true}).waitFor();
+      await top();await dialog.locator("img.avatar-portrait").evaluate(el=>el.decode());
+      await shot("portrait-uploaded-phone-dark",390,"dark");
+      await bottom();await save().click();await dialog.getByText("Avatar saved",{exact:true}).waitFor();
+      if(settingsBots[0].avatar.src!==`/api/files/${uploaded.id}`||settingsBots[0].avatar.origin!=="uploaded")throw Error("Upload was not persisted.");
+      for(const width of [1440,390]){
+        await open({width});await choose("Portrait");
+        await dialog.getByPlaceholder("Describe the portrait you want…",{exact:true}).fill(fixture.portraitPrompt);
+        await dialog.getByRole("button",{name:"Generate portrait",exact:true}).click();
+        await dialog.getByText(stage === "before" ? "Portrait generated. Save avatar to apply it." : "Portrait ready to save.",{exact:true}).waitFor();
+        await top();await dialog.locator("img.avatar-portrait").evaluate(el=>el.decode());
+        await shot(width===1440?"portrait-generated-desktop":"portrait-generated-phone",width);
+      }
+      if(stage === "after") {
+        await open();await choose("Portrait");
+        const prompt=dialog.getByPlaceholder("Describe the portrait you want…",{exact:true});
+        await prompt.fill("x".repeat(1900));await bottom();await shot("portrait-limit-near-phone");
+        await prompt.fill("x".repeat(2001));await bottom();await shot("portrait-limit-over-phone");
+        if(await dialog.getByRole("button",{name:"Generate portrait",exact:true}).isEnabled())throw Error("An over-limit prompt can be generated.");
+        await open({large:true});await choose("Portrait");
+        await dialog.getByPlaceholder("Describe the portrait you want…",{exact:true}).fill(fixture.portraitPrompt);
+        await dialog.getByRole("button",{name:"Generate portrait",exact:true}).click();
+        await dialog.getByText("Portrait ready to save.",{exact:true}).waitFor();
+        await bottom();await shot("portrait-status-large");
+        if(geometry.at(-1).avatar.preview.height>160)throw Error("The large-text pinned preview exceeds160px.");
+      }
+      state="portrait-unavailable";await open();await choose("Portrait");await bottom();
+      await shot("portrait-unavailable-phone");
+      if(stage === "after") {
+        state="creation-regression";settingsBots=structuredClone(fixture.bots);
+        await tab.setViewportSize({width:1440,height:1000});await tab.goto(origin.origin);
+        await tab.getByRole("button",{name:"New assistant",exact:true}).click();
+        await dialog.getByRole("heading",{name:"Name and look",exact:true}).waitFor();
+        await checkAccessoryKeyboard(false);await shot("creation-keyboard-focus",1440);
+        await choose("Portrait");await top();await shot("creation-portrait-phone");
+      }
+      state="composer-regression";await open({width:1440});
+      await dialog.getByRole("button",{name:"Close assistant settings",exact:true}).click();
+      await tab.getByRole("button",{name:/^Model:/}).click();
+      await tab.locator(".model-popover").waitFor();
+      await capture("composer-after-avatar-css",1440,1000);
+      const modelSegments=await tab.locator(".model-popover .segmented").evaluateAll(rows=>rows.map(row=>({padding:getComputedStyle(row).padding,wrap:getComputedStyle(row).flexWrap})));
+      if(avatarSubmissions.some(({body})=>"state" in body))throw Error("Preview state leaked into a saved avatar.");
+
+      return {paths,geometry,avatarSubmissions,portraitPrompts,uploaded,modelSegments,keyboardChecks,readback:{drawn:failedBody,upload:`/api/files/${uploaded.id}`},browserErrors};
+    }
     if (screen === "settings") {
       await tab.addInitScript(() => document.addEventListener("DOMContentLoaded", () => {
         if (sessionStorage.getItem("design-large-text") === "true") document.documentElement.style.fontSize = "200%";

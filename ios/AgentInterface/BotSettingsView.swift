@@ -19,6 +19,7 @@ struct BotSettingsView: View {
   @Environment(AppStore.self) private var store
   @Environment(\.dismiss) private var dismiss
   @Environment(\.dynamicTypeSize) private var typeSize
+  @Environment(\.colorScheme) private var scheme
   @State private var form = BotInput()
   @State private var savedForm = BotInput()
   @State private var savedAvatar = AvatarConfig()
@@ -40,7 +41,9 @@ struct BotSettingsView: View {
   @State private var notice: String?
   @State private var personalConfirmed = false
   @State private var portraitImport = false
+  @FocusState private var portraitPromptFocused: Bool
   @State private var portraitPrompt = ""
+  @State private var portraitOperation: String?
   @State private var editingRoutine: Routine?
   @State private var addingRoutine = false
   @State private var mcpText = ""
@@ -111,7 +114,13 @@ struct BotSettingsView: View {
       case "Skills": capabilities(.skills)
       default: routineList
       }
-    }.householdListBackground().disabled(busy || (bot != nil && !detailLoaded)).accessibilityIdentifier("assistantSettingsForm") }
+    }.householdListBackground()
+      .accessibilityIdentifier("assistantSettingsForm")
+      .safeAreaInset(edge: .top, spacing: 0) { if tab == "Avatar" { compactAvatarPreview } }
+      .safeAreaInset(edge: .bottom, spacing: 0) { if tab == "Avatar" && !portraitPromptFocused { avatarSaveBar } }
+      .disabled(busy || (bot != nil && !detailLoaded))
+    }
+
   }
   var body: some View {
     NavigationStack { routinePresentations(editor) }
@@ -354,8 +363,56 @@ struct BotSettingsView: View {
   private var interactiveEnabled: Bool { form.instructions.contains(NativeInteractiveReplyInstructions) }
   @ViewBuilder private var avatarEditor: some View {
     if let avatarFailure { avatarFailureSection(avatarFailure) }
-    avatarPreview
     avatarControls
+  }
+  private var compactAvatarPreview: some View {
+    HStack(spacing: 16) {
+      AvatarView(avatar: avatar, state: previewState, size: 64, name: savedName)
+      VStack(alignment: .leading, spacing: 6) {
+        Menu {
+          ForEach([ActivityState.idle, .thinking, .working, .waiting, .blocked, .done], id: \.self) { state in
+            Button { previewState = state } label: {
+              if previewState == state { Label(state.label, systemImage: "checkmark") } else { Text(state.label) }
+            }.accessibilityIdentifier("previewState.\(state.rawValue)")
+          }
+        } label: {
+          HStack { Text("Preview: \(previewState.label)").multilineTextAlignment(.leading); Spacer(); Image(systemName: "chevron.down") }
+            .font(.subheadline).padding(.horizontal, 12).frame(minHeight: 44)
+            .background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 10))
+            .modifier(EnabledPrimaryMenuLabel())
+        }.accessibilityIdentifier("avatarPreviewState")
+          .accessibilityLabel("Preview state").accessibilityValue(previewState.label)
+          .disabled(avatar.mode == .portrait && (avatar.src ?? "").isEmpty)
+          .accessibilityHint("Preview only. Real activity comes from Hermes.")
+        Text("Preview only").font(.caption).foregroundStyle(Palette.muted)
+      }
+    }.padding(.horizontal, 20).padding(.vertical, 12).background(Palette.surface(scheme))
+      .overlay(alignment: .bottom) { Divider() }
+      .accessibilityElement(children: .contain).accessibilityIdentifier("avatarPreviewBar")
+  }
+  private var avatarSaveBar: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      if let portraitOperation {
+        ProgressView(portraitOperation == "upload" ? "Uploading portrait…" : "Generating portrait…")
+          .font(.footnote).foregroundStyle(Palette.muted).tint(Palette.accent)
+      }
+      if avatar.mode == .portrait && (avatar.src ?? "").isEmpty {
+        Text(portraitNextStep).font(.footnote).foregroundStyle(Palette.muted)
+      }
+      if !store.connected { Text("Reconnect to save your avatar.").font(.footnote).foregroundStyle(Palette.muted) }
+      Button { saveAvatar() } label: {
+        Text(progress.label("avatar", idle: "Save avatar")).frame(maxWidth: .infinity, minHeight: 44)
+      }.buttonStyle(.accentProminent).accessibilityIdentifier("avatarSave")
+        .disabled(busy || !store.connected || avatar.mode == .portrait && (avatar.src ?? "").isEmpty)
+    }.padding(.horizontal, 20).padding(.vertical, 12).background(Palette.surface(scheme))
+      .overlay(alignment: .top) { Divider() }
+      .accessibilityElement(children: .contain).accessibilityIdentifier("avatarSaveBar")
+  }
+  private var portraitNextStep: String {
+    if store.supports(.uploads) {
+      return store.supports(.portraitGeneration) ? "Upload or generate a portrait before saving." : "Upload a portrait before saving."
+    }
+    return store.supports(.portraitGeneration) ? "Generate a portrait before saving." : "Portraits are unavailable. Choose Geometric or Mascot."
   }
   private var avatarPreview: some View {
     Section {
@@ -376,25 +433,30 @@ struct BotSettingsView: View {
         if bot == nil { Text("Want a portrait? Upload or generate one in Avatar settings after you create the assistant.").foregroundStyle(Palette.muted) }
       }
       if avatar.mode == .portrait {
-        Section("Portrait") {
+        Section {
           Text("Portraits stay still. Activity appears in a separate state indicator.")
-            .font(.caption).foregroundStyle(.secondary)
-          Button("Upload portrait") { portraitImport = true }.disabled(
+            .font(.caption).foregroundStyle(Palette.muted)
+          Button("Upload portrait") { beginPortraitImport() }.disabled(
             bot == nil || !store.supports(.uploads) || !store.connected)
+          Text("PNG, JPEG, or WebP, up to 2 MB.").font(.caption).foregroundStyle(Palette.muted)
           unavailable(.uploads)
-          TextField("Describe a portrait", text: $portraitPrompt, axis: .vertical).lineLimit(2...5)
-          if let limit = SettingsLimits.message("The description is", count: portraitPrompt.count, limit: SettingsLimits.portraitPrompt) {
-            Text(limit).font(.caption).foregroundStyle(portraitPrompt.count > SettingsLimits.portraitPrompt ? Color.red : Color.secondary)
+        } header: { settingsHeader("Upload a portrait") }
+        Section {
+          VStack(alignment: .leading, spacing: 8) {
+            Text("Describe a portrait").font(.subheadline.weight(.medium)).accessibilityHidden(true)
+            TextField("", text: $portraitPrompt, prompt: Text("Like a friendly ranch companion").foregroundStyle(Palette.muted), axis: .vertical)
+              .lineLimit(2...5).focused($portraitPromptFocused).accessibilityLabel("Describe a portrait").accessibilityIdentifier("portraitPrompt")
+          }
+          if let limit = SettingsLimits.message("The description is", count: portraitPrompt.count, limit: SettingsLimits.portraitPrompt, action: "generate a portrait") {
+            Text(limit).font(.caption).foregroundStyle(portraitPrompt.count > SettingsLimits.portraitPrompt ? Palette.danger : Palette.muted)
               .accessibilityIdentifier("portraitPromptLimit")
           }
-          Button("Generate portrait") { generatePortrait() }.disabled(
+          Button { generatePortrait() } label: { Text("Generate portrait").frame(maxWidth: .infinity, minHeight: 44, alignment: .leading) }.disabled(
             bot == nil || !store.supports(.portraitGeneration) || !store.connected
               || portraitPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
               || portraitPrompt.count > SettingsLimits.portraitPrompt)
           unavailable(.portraitGeneration)
-          Text("Use a PNG, JPEG, or WebP image up to 2 MB.").font(.caption).foregroundStyle(
-            .secondary)
-        }
+        } header: { settingsHeader("Generate a portrait") }
       } else {
         if avatar.mode == .geometric {
           Section {
@@ -437,12 +499,6 @@ struct BotSettingsView: View {
           }
         } header: { settingsHeader("Fine-tune eyes") }
       }
-      if bot != nil {
-        Section {
-          Button(progress.label("avatar", idle: "Save avatar")) { saveAvatar() }.disabled(
-            !store.connected || avatar.mode == .portrait && (avatar.src ?? "").isEmpty)
-        }
-      }
     }
   }
   /// Creation went through but the look did not save: say so plainly and offer the retry here.
@@ -462,14 +518,16 @@ struct BotSettingsView: View {
       select: { avatar = avatar.selectingFamily($0) })
   }
   private var colorSwatches: some View {
-    LazyVGrid(columns: [GridItem(.adaptive(minimum: 40), spacing: 6)], spacing: 8) {
+    let custom = !AvatarConfig.colors.contains { $0.lowercased() == (avatar.color ?? "#1084FE").lowercased() }
+    return LazyVGrid(columns: [GridItem(.adaptive(minimum: 44), spacing: 6)], spacing: 8) {
       ForEach(AvatarConfig.colors, id: \.self) { hex in
         let selected = avatar.color?.lowercased() == hex.lowercased()
         Button {
           avatar.color = hex
         } label: {
-          Circle().fill(Color(hex: hex)).overlay(Circle().strokeBorder(.black.opacity(0.1)))
-            .frame(width: 32, height: 32).padding(4)
+          Circle().fill(Color(hex: hex)).padding(2)
+            .overlay(Circle().strokeBorder(Palette.muted, lineWidth: 1))
+            .frame(width: 36, height: 36).frame(width: 44, height: 44).contentShape(Rectangle())
             .overlay(Circle().strokeBorder(selected ? Palette.accent : .clear, lineWidth: 2))
         }.buttonStyle(.plain).accessibilityLabel("Color \(hex)")
           .accessibilityAddTraits(selected ? .isSelected : [])
@@ -488,7 +546,9 @@ struct BotSettingsView: View {
               avatar.color = String(format: "#%02X%02X%02X", byte(r), byte(g), byte(b))
             }
           }), supportsOpacity: false
-      ).labelsHidden().frame(width: 40, height: 40)
+      ).labelsHidden().frame(width: 44, height: 44)
+        .overlay(Circle().strokeBorder(custom ? Palette.accent : .clear, lineWidth: 2).allowsHitTesting(false))
+        .accessibilityAddTraits(custom ? .isSelected : [])
     }.padding(.vertical, 4)
   }
   /// Switching styles keeps the drawn character's color, eyes, accessory, and eye tuning,
@@ -754,7 +814,10 @@ struct BotSettingsView: View {
     }
   }
   private func generatePortrait() {
+    portraitPromptFocused = false
     action {
+      portraitOperation = "generate"
+      defer { portraitOperation = nil }
       guard let bot, let api = store.api else { return }
       let file: FileRef = try await api.write(
         "/bots/\(APIClient.component(bot.id))/portrait", ["prompt": portraitPrompt])
@@ -763,8 +826,19 @@ struct BotSettingsView: View {
       notice = "Portrait generated. Save avatar to apply it."
     }
   }
+  private func beginPortraitImport() {
+    #if DEBUG
+      do {
+        if let url = try DebugFixtures.portraitUploadURL() { uploadPortrait(url); return }
+      } catch { self.error = error.localizedDescription; return }
+    #endif
+    portraitImport = true
+  }
   private func uploadPortrait(_ url: URL) {
     action {
+      portraitOperation = "upload"
+      defer { portraitOperation = nil }
+
       guard let bot, let api = store.api else { return }
       let accessed = url.startAccessingSecurityScopedResource()
       defer { if accessed { url.stopAccessingSecurityScopedResource() } }
@@ -1157,6 +1231,14 @@ private struct SettingsConfirmationSheet: View {
   }
 }
 
+/// Preserve native disabled styling instead of forcing the enabled label color through it.
+private struct EnabledPrimaryMenuLabel: ViewModifier {
+  @Environment(\.isEnabled) private var enabled
+  @ViewBuilder func body(content: Content) -> some View {
+    if enabled { content.foregroundStyle(.primary) } else { content }
+  }
+}
+
 private struct AvatarStage: View {
   var avatar: AvatarConfig
   @Binding var state: ActivityState
@@ -1321,8 +1403,8 @@ enum SettingsLimits {
   static let instructions = 50_000
   static let portraitPrompt = 2_000
   /// Quiet until a field nears its limit, then a counter, then a plain instruction once it is over.
-  static func message(_ subject: String, count: Int, limit: Int) -> String? {
-    if count > limit { return "\(subject) \((count - limit).formatted()) character\(count - limit == 1 ? "" : "s") over the \(limit.formatted()) limit. Shorten the text to save." }
+  static func message(_ subject: String, count: Int, limit: Int, action: String = "save") -> String? {
+    if count > limit { return "\(subject) \((count - limit).formatted()) character\(count - limit == 1 ? "" : "s") over the \(limit.formatted()) limit. Shorten the text to \(action)." }
     if count * 10 >= limit * 9 { return "\(count.formatted()) of \(limit.formatted()) characters" }
     return nil
   }

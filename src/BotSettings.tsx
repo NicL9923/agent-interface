@@ -137,6 +137,14 @@ function LoadedBotSettings({
   const [personalConfirmed, setPersonalConfirmed] = useState(false);
   const shownError = error || routinesResource.error;
   const [prompt, setPrompt] = useState("");
+  const [portraitOperation, setPortraitOperation] = useState<"upload" | "generate" | null>(null);
+  const portraitNotice = tab === "avatar" && notice?.startsWith("Portrait ") ? notice : "";
+  const portraitNextStep = bootstrap.capabilities.uploads?.supported
+    ? bootstrap.capabilities.portraitGeneration?.supported ? "Upload or generate a portrait before saving." : "Upload a portrait before saving."
+    : bootstrap.capabilities.portraitGeneration?.supported ? "Generate a portrait before saving." : "Portraits are unavailable. Choose Geometric or Mascot.";
+  const portraitPromptLimit = prompt.length > 2000
+    ? `The description is ${(prompt.length - 2000).toLocaleString()} character${prompt.length - 2000 === 1 ? "" : "s"} over the ${(2000).toLocaleString()} limit. Shorten the text to generate a portrait.`
+    : prompt.length >= 1800 ? `${prompt.length.toLocaleString()} of ${(2000).toLocaleString()} characters` : "";
   // The banner sits above the fold on phones, so each save button reports its own progress.
   const [saving, setSaving] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
@@ -224,7 +232,8 @@ function LoadedBotSettings({
       setError("Choose a PNG, JPEG, or WebP portrait no larger than 2 MB.");
       return;
     }
-    await run(async () => {
+    setPortraitOperation("upload");
+    try { await run(async () => {
       const data = new FormData();
       data.append("file", file);
       // Multipart, so the mapped route is posted with a form body instead of through request().
@@ -237,7 +246,17 @@ function LoadedBotSettings({
         src: result.url || `/api/files/${encodeURIComponent(result.id)}`,
         origin: "uploaded",
       });
-    }, "Portrait uploaded. Save avatar to apply it.");
+    }, "Portrait ready to save."); } finally { setPortraitOperation(null); }
+  };
+  const generatePortrait = async () => {
+    if (!existing || !prompt.trim() || prompt.length > 2000) return;
+    setPortraitOperation("generate");
+    try {
+      await run(async () => {
+        const result = await request("POST /bots/:id/portrait", { params: { id: existing.id }, body: { prompt } });
+        setAvatar({ mode: "portrait", src: result.url || `/api/files/${encodeURIComponent(result.id)}`, origin: "generated" });
+      }, "Portrait ready to save.");
+    } finally { setPortraitOperation(null); }
   };
   const unavailable = (
     key:
@@ -336,7 +355,7 @@ function LoadedBotSettings({
       </nav>}
       <div className="settings-content">
         {shownError && <FormMessage tone="error" ref={errorBanner}>{shownError}</FormMessage>}
-        {notice && <FormMessage tone="notice">{notice}</FormMessage>}
+        {notice && !portraitNotice && <FormMessage tone="notice">{notice}</FormMessage>}
         {confirmDiscard && (
           <div className="capability-note" role="alert">
             <p>Discard your unsaved changes?</p>
@@ -515,57 +534,58 @@ function LoadedBotSettings({
         {existing && tab === "avatar" && (
           <>
             <AvatarEditor
+              compactPreview
               avatar={avatar}
               onChange={setAvatar}
               name={savedName}
               portraitControls={avatar.mode === "portrait" && (
-                <>
+                <div className="avatar-portrait-group">
                   <p className="muted">
                     Portraits stay still. Activity appears in a separate state
                     indicator.
                   </p>
+                  <fieldset className="avatar-portrait-group"><legend>Upload a portrait</legend>
                   <label>
-                    Upload portrait
+                    Image file
                     <Input
                       type="file"
                       accept="image/png,image/jpeg,image/webp"
                       disabled={busy || !bootstrap.capabilities.uploads.supported}
-                      onChange={(e) => void uploadPortrait(e.target.files?.[0])}
+                      onChange={(e) => { const file = e.currentTarget.files?.[0]; e.currentTarget.value = ""; void uploadPortrait(file); }}
                     />
                   </label>
                   <p className="muted">PNG, JPEG, or WebP, up to 2 MB.</p>
                   {unavailable("uploads")}
+                  </fieldset>
+                  <fieldset className="avatar-portrait-group"><legend>Generate a portrait</legend>
                   <label>
-                    Generate a portrait
+                    Describe a portrait
                     <Textarea
                       rows={3}
+                      aria-describedby={portraitPromptLimit ? "portrait-prompt-count" : undefined}
+                      aria-invalid={prompt.length > 2000 || undefined}
                       value={prompt}
                       onChange={(e) => setPrompt(e.target.value)}
                       placeholder="Describe the portrait you want…"
                     />
                   </label>
+                  {portraitPromptLimit && <p className="portrait-prompt-limit" data-invalid={prompt.length > 2000} id="portrait-prompt-count">{portraitPromptLimit}</p>}
                   <Button
-                    disabled={busy || !prompt.trim() || !bootstrap.capabilities.portraitGeneration.supported}
-                    onClick={() =>
-                      void run(async () => {
-                        const result = await request("POST /bots/:id/portrait", { params: { id: existing.id }, body: { prompt } });
-                        setAvatar({
-                          mode: "portrait",
-                          src:
-                            result.url ||
-                            `/api/files/${encodeURIComponent(result.id)}`,
-                          origin: "generated",
-                        });
-                      }, "Portrait generated. Save avatar to apply it.")
-                    }
+                    disabled={busy || !prompt.trim() || prompt.length > 2000 || !bootstrap.capabilities.portraitGeneration.supported}
+                    onClick={() => void generatePortrait()}
                   >
                     Generate portrait
                   </Button>
                   {unavailable("portraitGeneration")}
-                </>
+                  </fieldset>
+                </div>
               )}
             />
-            <div className="actions sticky-actions">
+            {avatar.mode === "portrait" && !avatar.src && <p className="muted">{portraitNextStep}</p>}
+            <div className="actions sticky-actions avatar-save-actions">
+              <p className="avatar-operation" role="status">{portraitOperation
+                ? <><Icon name="spinner" className="spin" size={16} />{portraitOperation === "upload" ? "Uploading portrait…" : "Generating portrait…"}</>
+                : portraitNotice}</p>
               <Button
                 className="primary with-progress"
                 disabled={busy || (avatar.mode === "portrait" && !avatar.src)}
