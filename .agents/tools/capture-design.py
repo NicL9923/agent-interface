@@ -28,8 +28,16 @@ name = args.report or f"{args.screen}-{args.stage}"
 if Path(name).name != name or name in {".", ".."}:
     parser.error("Report must be a basename")
 fixture = args.fixture or repo / ".agents" / "fixtures" / f"{args.screen}-design.json"
+payload = json.loads(fixture.read_text())
+if not isinstance(payload, dict) or not isinstance(payload.get("bots"), list):
+    parser.error("The fixture must be an object with a bots array")
+if "conversation" in payload:
+    conversation = payload["conversation"]
+    for field in ("messages", "approvals", "attention", "files"):
+        if not isinstance(conversation, dict) or not isinstance(conversation.get(field), list):
+            parser.error(f"The fixture conversation must include a {field} array")
 options = {"outputDir": str(args.root / args.stage), "prefix": "web", "screen": args.screen, "stage": args.stage,
-           "fixture": json.loads(fixture.read_text())}
+           "fixture": payload}
 source = Path(__file__).with_suffix(".js").read_text()
 wrapper = args.root / f"{name}-capture.js"
 wrapper.write_text(f"async page => {{ await page.goto({json.dumps(args.origin)}); return ({source})(page, {json.dumps(options)}); }}")

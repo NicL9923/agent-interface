@@ -181,6 +181,10 @@
     ]
     /// Assistants made through New assistant, and how many of their avatar saves should fail.
     nonisolated(unsafe) static var createdBots: [[String: Any]] = []
+    nonisolated(unsafe) static var settingsOverrides: [String: [String: Any]] = [:]
+    nonisolated(unsafe) static var settingsLoadFailed = false
+    nonisolated(unsafe) static var settingsSaveFailed = false
+    nonisolated(unsafe) static var deletedSettingsBotIds: Set<String> = []
     nonisolated(unsafe) static var avatarFailures = ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_AVATAR_FAILURE"] == "1" ? 1 : 0
     static let currentRevision = "3f9c2a71b0d4e8f6a5c3b2d1e0f9a8b7c6d5e4f3"
     static let candidateRevision = "8e1d4c7b2a9f6e3d0c5b8a7f4e1d2c3b6a9f0e8d"
@@ -194,7 +198,10 @@
       .flatMap { $0.data(using: .utf8) }
       .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
     static var bots: [[String: Any]] {
-      if let bots = designFixture?["bots"] as? [[String: Any]] { return bots }
+      if let bots = designFixture?["bots"] as? [[String: Any]] {
+        return (bots.map { settingsOverrides[$0["id"] as? String ?? ""] ?? $0 } + createdBots)
+          .filter { !deletedSettingsBotIds.contains($0["id"] as? String ?? "") }
+      }
       return [
         [
           "id": "ranch", "name": "Ranch hand", "description": "Everyday household help",
@@ -347,6 +354,12 @@
           var bootstrap = object as! [String: Any]
           var capabilities = bootstrap["capabilities"] as! [String: Any]
           capabilities["idempotency"] = ["supported": false, "reason": "This Hermes connection cannot look up requests."]
+          bootstrap["capabilities"] = capabilities; object = bootstrap
+        }
+        if Self.designFixture?["settingsSupported"] as? Bool == false {
+          var bootstrap = object as! [String: Any]
+          var capabilities = bootstrap["capabilities"] as! [String: Any]
+          capabilities["botConfiguration"] = ["supported": false, "reason": Self.designFixture?["unsupportedReason"] ?? "Assistant configuration is unavailable."]
           bootstrap["capabilities"] = capabilities; object = bootstrap
         }
         // A distributed build newer than any local build, so the update banner shows.
@@ -728,6 +741,12 @@
         }
       } else if path == "/api/native/push/config" {
         object = ["available": ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_PUSH"] == "1", "environment": "sandbox"]
+      } else if path.hasPrefix("/api/bots/"), path.split(separator: "/").count == 3, method == "DELETE",
+        Self.designFixture?["screen"] as? String == "settings" {
+        let id = request.url!.lastPathComponent
+        Self.deletedSettingsBotIds.insert(id)
+        Self.settingsOverrides.removeValue(forKey: id)
+        object = ["ok": true]
       } else if path.hasPrefix("/api/bots/"), path.split(separator: "/").count == 3, method == "GET" {
         var detail = Self.bots.first { $0["id"] as? String == path.components(separatedBy: "/").last } ?? Self.bots[0]
         detail["instructions"] = detail["instructions"] ?? "Be clear and useful."
@@ -735,6 +754,10 @@
         detail["enabledTools"] = ["terminal"]
         detail["enabledSkills"] = []
         object = detail
+        if Self.designFixture?["settingsLoadError"] as? Bool == true, !Self.settingsLoadFailed {
+          Self.settingsLoadFailed = true; status = 503
+          object = ["error": Self.designFixture?["loadError"] ?? "Settings could not be loaded."]
+        }
       } else if path == "/api/bots", method == "POST" {
         var bot = body
         bot["id"] = "created-\(Self.createdBots.count + 1)"
@@ -757,6 +780,17 @@
         bot["id"] = request.url!.lastPathComponent
         bot["activity"] = "idle"
         object = bot
+        if Self.designFixture?["screen"] as? String == "settings" {
+          if Self.designFixture?["settingsModelError"] as? Bool == true, body["confirmModel"] as? Bool != true {
+            status = 409; object = ["error": Self.designFixture?["modelWarning"] ?? "Confirm this model before saving.", "confirmRequired": true]
+          } else if Self.designFixture?["settingsSaveError"] as? Bool == true, !Self.settingsSaveFailed {
+            Self.settingsSaveFailed = true; status = 503
+            object = ["error": Self.designFixture?["saveError"] ?? "Settings could not be saved."]
+          } else {
+            let id = request.url!.lastPathComponent
+            Self.settingsOverrides[id] = (Self.bots.first { $0["id"] as? String == id } ?? [:]).merging(bot) { _, new in new }
+          }
+        }
       }
       let data =
         (try? JSONSerialization.data(withJSONObject: object, options: [.fragmentsAllowed]))

@@ -857,3 +857,214 @@ The optional blocked-avatar morph, standard iPad form-sheet height at AX3 and
 tile padding remain accepted nonblocking notes. Two remaining web Courier
 fallbacks belong to the later work-details and keyboard-hints passes. No native
 rerun is needed for this accepted gate. Assistant creation/settings is next.
+
+### Assistant creation and settings, awaiting screen review
+
+Opus 5.5 High pressure-tested confirmation behavior in review 18. Implementation
+uses modal privacy/model/delete confirmations with safe choices, larger helper
+text, separate primary and destructive actions, wrapping descriptions and saved
+names in headings. Native navigation adapts to accessibility text sizes. The
+separate Avatar editor and settings tab bodies remain queued for their own gates.
+
+Web settings-tests-v7.log passes 44 tests and settings-build-v5.log passes the
+production build. settings-v3-after.json has 63 screenshots with no overflow,
+12 modal bounds inside the viewport and 32 real keyboard field checks with no
+obscured fields. settings-before-expanded.json records 63 original client images
+from 6fc7384. Web fingerprint a393ec654f68989a25f2044e3634d711e32594914d6f0f09f263f4e2962a2481.
+
+Final native changes remain unaccepted until the current bounded batch and a
+new independent screen review finish. Frozen native fingerprint is
+baccf1aaffc292255a3b07ce157120ad3bada4904ad9d878d667c52e11762015.
+The prior 56 after images are intermediate. The current batch captures the old
+model warning on both devices and then all six final variants on both devices.
+Automatic cleanup verification and coordinator handback run when the batch ends.
+Its work cutoff is thirteen minutes and cleanup deadline is fifteen minutes.
+No extension or silent retry is authorized by the reservation.
+
+The frozen final iPhone flow passed, with 33 fresh images verified against its
+receipt .private/ios-test-20261026T222126Z-13690.txt. Its native alert presentation
+revealed a real remaining failure: body contrast 3.63:1 and green safe-action text
+on a blue default fill at 1.59:1. Native creation/settings is not accepted. The
+current iPad run will finish without source changes, then automatic cleanup and
+handback will release this reservation. No same-slot extension is planned.
+Opus review 19 is a read-only rubber duck on native confirmation presentation.
+
+### Native alert attempt rejected and runtime released
+
+The native iPhone flow passed 33 images on baccf1aa. The iPad flow reached the
+thirteen-minute work cutoff in its last model variant and produced 30 partial
+images without a passing result. The cutoff remained in force. Automatic cleanup
+and coordinator handback finished at 22:32:00Z within the fifteen-minute bound.
+Both task simulators are Shutdown, no owned xcodebuild remains, and the exact
+machine lock probed free. settings-recapture-heavy-release.json is the receipt.
+SteadLog has the next separately authorized twenty-minute supplement window.
+
+Opus discussion 19 confirmed the UIKit alert message cannot take an explicit
+SwiftUI color and also found the old discard prompt's low contrast. All four
+native prompts now use one local themed sheet, with the accepted action executed
+after dismissal. Associated warning text cannot disappear when a banner clears.
+Native source 29f713df is UNBUILT and unaccepted. Two final full after runs are
+queued after SteadLog's release, capped at twenty minutes including cleanup.
+Each should capture 37 images and test chained privacy/model prompts, fresh consent
+after re-sharing, swipe cancellation, and dark/AX Delete and safe discard actions.
+
+The stale private-consent flag is also fixed on web. 45 tests in settings-tests-v8.log
+and production build in settings-build-v6.log pass. Current web fingerprint is
+b6a31dc0180458babd3a0cad42c36f9c314d884310fbef2a050ad75365ce4001.
+The 63 existing web captures remain visually unchanged by this logic-only guard.
+Independent Opus 20 is reviewing web design and the new native implementation.
+It cannot close the native visual gate before fresh captures. 16 comparisons are
+rendered; rejected alert captures and source are preserved in an immutable archive.
+
+### Review 20 fixes and final settings batch admitted
+
+Opus 20 scores the web wizard 9.1 on desktop and phone. Phone Details is 8.8
+because loading/error had no gutters. W1 now has form gutters and a normal-width
+Retry button. Focused before/after reports each cover 390 and 1440 px. The after
+report measures 21 px phone gutters and at least 27 px desktop gutters, 128 px
+Retry, no overflow and a working retry. The composite web manifest reuses the
+62 unaffected frames and adds both new error captures, for 64 total. 45 tests
+and the production build pass in settings-tests-v9.log and settings-build-v7.log.
+
+Before native execution, N1 added real fixture deletion plus a positive delete
+control after swipe cancellation, making the roster assertion falsifiable. Keep
+also preserves the form and notices. N2 switches sizing to horizontal size class.
+N3 fills step one's Next action. Current frozen native fingerprint is
+3dd5c0a5a8fdbbd432d556705096b2385e5e9f5988b968815bb8fc757f8fb68d.
+No final native score exists yet.
+
+The final batch acquired the shared inherited fcntl lease at 22:59:55.833605Z,
+queued less than 0.001 seconds. Work cutoff is 23:17:55.833601Z and cleanup deadline
+is 23:19:55.833601Z. The focused web supplement passed first and closed its browser
+contexts. The serialized iPhone/iPad runs are active. Cleanup and coordinator
+handback are automatic. No reservation extension is assumed.
+
+### Final settings captures passed and runtime handed back
+
+Both final flows passed with zero skips. iPhone result is
+.private/ios-test-20261026T230006Z-35789.xcresult; iPad is
+.private/ios-test-20261026T230606Z-39651.xcresult. Each produced 37 fresh images.
+The evidence tool verifies all 74 hashes and capture times inside the passing run
+windows. Both receipts match current native 3dd5c0a5. All 28 comparisons are rendered.
+The five-file delta since review 20 reverse-applies cleanly to the current tree.
+
+All sampled native Delete text pairs pass on both devices: light title 20.65,
+message 5.69, accept 6.35, Keep 5.91; dark title 14.43, message 6.67, accept 8.04,
+Keep 9.32. The fitted sheet and actions render at normal and AX3 sizes. No final
+native score is claimed before the independent recheck.
+
+Automatic cleanup and coordinator handback completed 23:12:38.526188Z. Execution
+including cleanup was 762.693 seconds, with under 0.001 seconds queued, inside the
+20-minute bound. Both owned devices were Shutdown, no owned xcodebuild remained,
+and the exact shared lock probed free. SteadLog acknowledged the handback and
+has no heavy work active. Future captures require separate coordination.
+
+A wording correction: the enlarged native captures use AX3, the third
+accessibility category, not the system maximum AX5. The evidence labels now say
+AX3. Physical device, VoiceOver focus/escape, hardware keyboard Escape/Return,
+iPad compact multitasking and iOS 17 fallback remain unverified. Opus 21 is the
+scoped recheck for W1, N1-N3 and the final native pixels. No next screen or PR
+is authorized by test passes alone.
+
+### Review 21 passes all but native settings load failure
+
+Review 21 independently verified the five-file patch, both fingerprints, both
+37-frame native receipts, all 16 contrast pairs and the annotations. Web wizard
+and Details score 9.1, confirmations 9.2. Native creation scores 9.2 on iPhone
+and 9.1 on iPad; confirmations score 9.2 and 9.0. Native Details remains 8.6
+on both because a failed load displays two copies of its error, N4.
+
+The two-file N4 fix skips the normal dismissable banner until detail is loaded,
+and gives the loader one padded banner with a bordered Retry whose label has a
+44 pt minimum. The capture test now requires exactly one matching error text.
+The reconstruction of the source before these edits matches the reviewed
+3dd5c0a5 fingerprint exactly. No unrelated app source changed.
+
+Only settings-error is being rerun, seven frames per device, in a separate
+artifact directory. The 30 unaffected images per device retain their accepted
+review 21 receipts; the strict evidence checker will validate the seven fresh
+images against each new run. The composite dataset will still have 37 states per
+device, with each state linked to its actual receipt rather than pretending all
+37 belong to the focused run.
+
+The exact shared inherited lease was acquired at 23:30:51.875225Z, queued under
+0.001 seconds. Work cutoff is 23:38:51.875220Z and cleanup deadline is
+23:40:51.875220Z. Source is cd41240f91ed59a901922fdd88dc35adecff890420c12c327cd1cc5752585897.
+Automatic cleanup and coordinator handback are wired to completion. SteadLog's
+prepared web-only W1 has the next separately authorized ten-minute slot.
+
+### N4 focused flows pass, awaiting scoped review 22
+
+Both focused settings-error flows pass with zero skips. iPhone result is
+.private/ios-test-20261026T233052Z-47912.xcresult; iPad result is
+.private/ios-test-20261026T233230Z-49480.xcresult. The exact-one-error assertion,
+Retry, save-error and saved states all passed. The strict evidence checker
+validates seven fresh images per device, each inside its passing run window.
+Current native source is cd41240f91ed59a901922fdd88dc35adecff890420c12c327cd1cc5752585897.
+
+The prior 37-frame sets remain intact. A separate composite manifest verifies
+37 current states per device: 30 accepted review 21 frames and seven fresh N4
+frames. Each keeps its actual source fingerprint and receipt. This preserves
+the checker's strict freshness requirement instead of pretending a focused run
+produced all 37 frames. All 30 annotated comparisons use the composite data.
+The new Retry label samples at 4.64:1 on its native fill on iPhone.
+
+Automatic cleanup and coordinator handback completed at 23:34:20.671635Z,
+208.796 seconds including cleanup, inside the ten-minute bound. Both devices
+were Shutdown, no owned xcodebuild remained and the exact shared lock probed
+free. SteadLog verified the receipt and is preparing its authorized ten-minute
+web-only W1. No new heavy work starts here during that window.
+
+Review 22 covers only N4 and its affected error/save states. All other scores
+from review 21 are reused. No final Details score or next-screen acceptance
+is inferred from passing tests.
+
+### Review 22 Retry fixes and focused validation
+
+Review 22 closed N4 but found N5, the stale load error after successful Retry,
+and N6, the translucent iPad Retry label at 4.25:1. Other scores stay accepted.
+Retry now clears self.error before loading and uses the shared solid accent
+style. The test waits until Name is enabled and requires the old error to be
+absent before capture. The patch remains two files; its reconstructed before
+source matches cd41240f exactly.
+
+The first compile attempt stopped before captures because the local error
+binding shadowed the state property. The failed log and 5.953-second cleanup
+receipt remain preserved. The explicit self.error correction ran under a NEW
+bounded reservation, never extending the ended one.
+
+Both corrected seven-frame flows pass with zero skips. Phone result is
+.private/ios-test-20261026T235051Z-56342.xcresult; iPad is
+.private/ios-test-20261026T235227Z-57066.xcresult. Exact current source is
+a9d2bdfdd510b270043687545f649b2518985685acbe7246a0e79db3ce8be516.
+Strict count-seven validation and the composite retain actual image/source/receipt
+bindings. The new fourteen frames replace N4's fourteen; sixty accepted base
+frames remain reused. Retry measures 5.91:1 on both devices, sampled inside its
+solid fill. The recovered form has no error. All 32 comparisons are regenerated.
+
+Automatic cleanup and coordinator handback completed at 23:54:26.086177Z,
+215.108 seconds including cleanup, within the new ten-minute bound. Both owned
+devices were Shutdown, no owned xcodebuild remained, and the exact shared lock
+probed free. SteadLog's subsequent web-only W1 passed all 35 cases and released
+at 23:57:34.062903Z. No heavy work remains active here. Review 23 is scoped to
+N5 and N6. The native Details score is not inferred from these passing checks.
+
+### Creation/settings accepted by Opus 5.5 High
+
+Review 23 closes the full gate, with no blocker. Actual final Details scores are
+9.2 on iPhone and 9.1 on iPad. Reused accepted scores are web creation/Details
+9.1 and confirmations 9.2, native creation 9.2/9.1, and confirmations 9.2/9.0.
+Every row is at least 9.0. No projection or averaging was used.
+
+The reviewer independently reconstructed the patch, recomputed source a9d2bdfd,
+verified both focused passes, all fourteen fresh hashes and times, all 74 composite
+hashes, the absent stale banner, and the 5.91:1 opaque Retry on both devices.
+Composite window bindings were not rechecked by this reviewer; the deterministic
+composer had already verified them. Physical device, VoiceOver, hardware keyboard,
+iOS 17 fallback, iPad compact widths and AX5 remain unverified.
+
+The final report is archived in docs/evidence/design-review/settings-final-review.md.
+No native rerun is needed for this accepted screen. The next screen is Avatar
+editor, whose baseline scope and fixtures are being prepared offline. SteadLog
+has requested its next separately coordinated iOS baseline window once ready.
+No heavy work is active or imminent here during that preparation.

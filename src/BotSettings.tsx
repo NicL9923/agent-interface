@@ -1,4 +1,4 @@
-import { Dialog } from "./components/ui/dialog";
+import { Dialog, type DialogFocusTarget } from "./components/ui/dialog";
 import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
 import { Textarea } from "./components/ui/textarea";
@@ -90,6 +90,7 @@ function LoadedBotSettings({
     form: formFromBot(existing, bootstrap.bots[0]),
     avatar: existing?.avatar || defaultAvatar,
   }));
+  const savedName = baseline.form.name || existing?.name || "";
   // The dialog stays mounted while detail loads; only authoritative detail seeds the form.
   const wasLoading = useRef(!!loading);
   useEffect(() => {
@@ -130,7 +131,7 @@ function LoadedBotSettings({
   const requestClose = () => unsaved ? setConfirmDiscard(true) : onClose();
   const routinesResource = useResource(existing && tab === "routines" && bootstrap.capabilities.routines.supported ? routeUrl("GET /routines", {}) : null, { load: (_, signal) => request("GET /routines", { signal }) });
   const routines = (routinesResource.data || []).filter(routine => routine.botId === existing?.id);
-  const [confirmModel, setConfirmModel] = useState(false);
+  const [confirmModel, setConfirmModel] = useState<string | null>(null);
   // Making a shared or ownerless assistant personal hides it from everyone else, so it asks first.
   const [confirmPersonal, setConfirmPersonal] = useState(false);
   const [personalConfirmed, setPersonalConfirmed] = useState(false);
@@ -158,8 +159,8 @@ function LoadedBotSettings({
   }, {
     success,
     onError: cause => {
-      if (cause instanceof ApiError && cause.confirmRequired) setConfirmModel(true);
       if (cause instanceof ApiError && cause.code === "private_confirmation_required") { setConfirmPersonal(true); return null; }
+      if (cause instanceof ApiError && cause.confirmRequired) { setConfirmModel(cause.message); return null; }
     },
   });
   const createBot = (submitted: BotInput, confirmed: boolean) => actions.run(async () => {
@@ -167,7 +168,7 @@ function LoadedBotSettings({
     let saved: Bot;
     try {
       saved = await request("POST /bots", { body: { ...submitted, confirmModel: confirmed } });
-      setConfirmModel(false);
+      setConfirmModel(null);
     } finally { setSaving(null); }
     const chosen = avatar;
     // Portraits are stored with the assistant, so a portrait is added once it exists.
@@ -184,7 +185,7 @@ function LoadedBotSettings({
     setTab("avatar");
     if (failure) setAvatarFailure(failure);
     else setNotice(`${saved.name} is ready. Upload or generate its portrait here, then save it.`);
-  }, { onError: cause => { if (cause instanceof ApiError && cause.confirmRequired) setConfirmModel(true); } });
+  }, { onError: cause => { if (cause instanceof ApiError && cause.confirmRequired) { setConfirmModel(cause.message); return null; } } });
   const saveAvatar = () => void run(async () => {
     const submitted = avatar;
     await request("PUT /bots/:id/avatar", { params: { id: existing!.id }, body: submitted });
@@ -194,6 +195,7 @@ function LoadedBotSettings({
   const saveBot = (confirmed = false, personal = personalConfirmed) => {
     if (loading) return;
     const submitted = form;
+    personal = personal && !submitted.shared;
     if (!existing) return createBot(submitted, confirmed);
     if (existing && !submitted.shared && !(existing.shared === false && existing.ownerId) && !personal) {
       setConfirmPersonal(true);
@@ -207,10 +209,10 @@ function LoadedBotSettings({
           params: { id: existing.id },
           body: { ...submitted, confirmModel: confirmed, ...(personal ? { confirmPrivate: true } : {}) },
         });
-        setConfirmModel(false);
+        setConfirmModel(null);
         setBaseline((current) => ({ ...current, form: submitted }));
       },
-      existing.shared
+      submitted.shared
         ? "Changes saved for both household members."
         : "Assistant saved.",
       "details",
@@ -284,7 +286,7 @@ function LoadedBotSettings({
       <header>
         <div>
           <p className="eyebrow">{existing ? "Assistant settings" : `New assistant · Step ${step === "look" ? 1 : 2} of 2`}</p>
-          <h2 id="assistant-settings-title" tabIndex={-1}>{existing?.name || (step === "look" ? "Name and look" : "Role and model")}</h2>
+          <h2 id="assistant-settings-title" tabIndex={-1}>{existing ? savedName : step === "look" ? "Name and look" : "Role and model"}</h2>
         </div>
         <Button
           className="icon-button"
@@ -294,13 +296,13 @@ function LoadedBotSettings({
           <Icon name="close" />
         </Button>
       </header>
-      {loading ? <>
+      {loading ? <div className="settings-content settings-load-state">
         <p role={loading.error ? "alert" : "status"}>{loading.error || "Loading assistant settings…"}</p>
         {loading.error && <Button onClick={() => {
           dialog.current?.querySelector<HTMLElement>("#assistant-settings-title")?.focus();
           loading.retry();
         }}>Retry settings</Button>}
-      </> : <>
+      </div> : <>
       {/* Sections that need the assistant to exist appear once it does. */}
       {existing && <nav className={`settings-tabs${compactSettings ? " settings-tabs-mobile" : ""}`} aria-label="Settings sections">
         {(compactSettings ? settingsSections.slice(0, 2) : settingsSections).map((t) => (
@@ -344,38 +346,18 @@ function LoadedBotSettings({
             </div>
           </div>
         )}
-        {confirmPersonal && existing && (
-          <div className="capability-note" role="alert">
-            <p>
-              Make {existing.name} your personal assistant? It will disappear for the
-              rest of the household, along with its conversation, routines and group chats.
-            </p>
-            <div className="actions">
-              <Button type="button" className="danger" disabled={busy} onClick={() => void saveBot(false, true)}>
-                Make it personal
-              </Button>
-              <Button type="button" onClick={() => setConfirmPersonal(false)}>
-                Keep editing
-              </Button>
-            </div>
-          </div>
-        )}
-        {confirmModel && (
-          <div className="capability-note">
-            <p>
-              Hermes requires confirmation for this provider and model. Review
-              the reported warning above before continuing.
-            </p>
-            <div className="actions">
-              <Button disabled={busy} onClick={() => void saveBot(true)}>
-                Confirm this model
-              </Button>
-              <Button onClick={() => setConfirmModel(false)}>
-                Keep editing
-              </Button>
-            </div>
-          </div>
-        )}
+        {confirmPersonal && existing && <SettingsConfirmation
+          title={`Make ${savedName} personal?`}
+          detail="It will disappear for the rest of the household, along with its conversation, routines and group chats."
+          confirmLabel="Make it personal" danger busy={busy}
+          fallbackFocus={() => dialog.current?.querySelector<HTMLElement>("[data-settings-save]:not(:disabled)") ?? dialog.current?.querySelector<HTMLElement>("#assistant-settings-title") ?? null}
+          onCancel={() => setConfirmPersonal(false)}
+          onConfirm={() => { setConfirmPersonal(false); void saveBot(false, true); }} />}
+        {confirmModel && <SettingsConfirmation
+          title="Use this model?" detail={confirmModel} confirmLabel="Confirm this model" busy={busy}
+          fallbackFocus={() => dialog.current?.querySelector<HTMLElement>("[data-settings-save]:not(:disabled)") ?? dialog.current?.querySelector<HTMLElement>("#assistant-settings-title") ?? null}
+          onCancel={() => setConfirmModel(null)}
+          onConfirm={() => { setConfirmModel(null); void saveBot(true); }} />}
         {avatarFailure && existing && (
           <div className="capability-note avatar-failure" role="alert">
             <p>{existing.name} was created, but its avatar didn't save: {avatarFailure} Your choice is still here.</p>
@@ -407,8 +389,8 @@ function LoadedBotSettings({
             <AvatarEditor avatar={avatar} onChange={setAvatar} name={form.name.trim() || "New assistant"}
               portraitControls={avatar.mode === "portrait" && <p className="muted">
                 Portraits are stored with the assistant, so you'll upload or generate one right after you create it.</p>} />
-            <div className="actions sticky-actions">
-              <Button type="submit" className="primary" disabled={!bootstrap.capabilities.botConfiguration.supported}>Next: role and model</Button>
+            <div className="actions sticky-actions settings-save-actions">
+              <Button type="submit" className="primary" aria-label="Next: role and model" disabled={!bootstrap.capabilities.botConfiguration.supported}>Next</Button>
             </div>
           </form>
         )}
@@ -429,18 +411,18 @@ function LoadedBotSettings({
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
               />
             </label>}
-            <label>
-              Description
-              <Input
+            <label htmlFor="assistant-description">
+              <span id="assistant-description-label">Description</span>
+              <Textarea id="assistant-description" aria-labelledby="assistant-description-label" rows={2}
                 value={form.description}
                 onChange={(e) =>
                   setForm({ ...form, description: e.target.value })
                 }
               />
             </label>
-            <label>
-              Instructions
-              <Textarea
+            <label htmlFor="assistant-instructions">
+              <span id="assistant-instructions-label">Instructions</span>
+              <Textarea id="assistant-instructions" aria-labelledby="assistant-instructions-label"
                 rows={7}
                 value={form.instructions}
                 onChange={(e) =>
@@ -460,7 +442,7 @@ function LoadedBotSettings({
               disabled={busy || !bootstrap.capabilities.botConfiguration.supported}
               onChange={({ provider, model }) => {
                 setForm({ ...form, provider, model });
-                setConfirmModel(false);
+                setConfirmModel(null);
                 setError("");
               }}
               onFavoritesSaved={onSaved}
@@ -497,24 +479,26 @@ function LoadedBotSettings({
             <p className="muted">
               Only existing Hermes connections can be configured here.
             </p>
-            <div className="actions">
+            <div className="actions sticky-actions settings-save-actions">
+              {!existing && <Button type="button" disabled={busy} onClick={() => {
+                setStep("look"); setError(""); setConfirmModel(null);
+                dialog.current?.querySelector<HTMLElement>("#assistant-settings-title")?.focus();
+              }}>Back</Button>}
               <Button
-                type="submit"
+                type="submit" data-settings-save
+                aria-label={existing ? undefined : busy ? "Creating assistant" : "Create assistant"}
                 className="primary with-progress"
                 disabled={
                   busy || !form.model || !bootstrap.capabilities.botConfiguration.supported
                 }
               >
                 {existing ? <SaveProgress state={progress("details")} label="Save changes" />
-                  : busy ? <><Icon name="spinner" className="spin" size={16} />Creating…</> : "Create assistant"}
+                  : busy ? <><Icon name="spinner" className="spin" size={16} />Creating…</> : "Create"}
               </Button>
-              {!existing && <Button type="button" disabled={busy} onClick={() => {
-                setStep("look"); setError(""); setConfirmModel(false);
-                dialog.current?.querySelector<HTMLElement>("#assistant-settings-title")?.focus();
-              }}>Back</Button>}
-              {existing && (
+            </div>
+              {existing && <div className="settings-danger-zone">
                 <DeleteBot
-                  bot={existing}
+                  bot={{...existing, name:savedName}}
                   busy={busy}
                   supported={bootstrap.capabilities.botConfiguration.supported}
                   remove={() =>
@@ -525,8 +509,7 @@ function LoadedBotSettings({
                     }, "Assistant deleted")
                   }
                 />
-              )}
-            </div>
+              </div>}
           </form>
         )}
         {existing && tab === "avatar" && (
@@ -534,7 +517,7 @@ function LoadedBotSettings({
             <AvatarEditor
               avatar={avatar}
               onChange={setAvatar}
-              name={existing?.name}
+              name={savedName}
               portraitControls={avatar.mode === "portrait" && (
                 <>
                   <p className="muted">
@@ -622,36 +605,37 @@ function LoadedBotSettings({
     </Dialog>
   );
 }
-function DeleteBot({
-  bot,
-  busy,
-  supported,
-  remove,
-}: {
-  bot: Bot;
-  busy: boolean;
-  supported: boolean;
-  remove: () => void;
+function SettingsConfirmation({ title, detail, confirmLabel, cancelLabel = "Keep editing", danger = false, busy, onConfirm, onCancel, fallbackFocus }: {
+  title: string; detail: string; confirmLabel: string; cancelLabel?: string; danger?: boolean; busy: boolean;
+  onConfirm(): void; onCancel(): void; fallbackFocus: DialogFocusTarget;
+}) {
+  const titleId = useId(), detailId = useId();
+  return <Dialog className="confirm-dialog settings-confirmation" role="alertdialog"
+    aria-labelledby={titleId} aria-describedby={detailId} initialFocus="[data-confirm-default]" fallbackFocus={fallbackFocus}
+    onCancel={event => { event.preventDefault(); event.stopPropagation(); onCancel(); }}
+    onClose={event => { event.stopPropagation(); onCancel(); }}>
+    <h2 id={titleId}>{title}</h2>
+    <p id={detailId}>{detail}</p>
+    <div className="actions">
+      <Button data-confirm-default onClick={onCancel}>{cancelLabel}</Button>
+      <Button className={danger ? "danger" : "primary"} disabled={busy} onClick={onConfirm}>{confirmLabel}</Button>
+    </div>
+  </Dialog>;
+}
+
+function DeleteBot({ bot, busy, supported, remove }: {
+  bot: Bot; busy: boolean; supported: boolean; remove(): void;
 }) {
   const [confirm, setConfirm] = useState(false);
-  return confirm ? (
-    <>
-      <span>Delete {bot.name}?</span>
-      <Button type="button" className="danger" disabled={busy} onClick={remove}>
-        Yes, delete
-      </Button>
-      <Button type="button" onClick={() => setConfirm(false)}>Keep assistant</Button>
-    </>
-  ) : (
-    <Button
-      type="button"
-      className="danger"
-      disabled={busy || !supported}
-      onClick={() => setConfirm(true)}
-    >
-      Delete assistant
-    </Button>
-  );
+  const trigger = useRef<HTMLButtonElement>(null);
+  return <>
+    <Button ref={trigger} className="danger" disabled={busy || !supported} onClick={() => setConfirm(true)}>Delete assistant</Button>
+    {confirm && <SettingsConfirmation title={`Delete ${bot.name}?`}
+      detail="This deletes the assistant in Hermes and removes its settings from WildBots."
+      confirmLabel="Yes, delete" cancelLabel="Keep assistant" danger busy={busy}
+      fallbackFocus={() => trigger.current && !trigger.current.disabled ? trigger.current : document.getElementById("assistant-settings-title")}
+      onCancel={() => setConfirm(false)} onConfirm={() => { setConfirm(false); remove(); }} />}
+  </>;
 }
 function RoutineManager({
   onOpenRoutine,

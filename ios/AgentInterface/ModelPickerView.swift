@@ -149,7 +149,7 @@ struct ModelSelectionRow: View {
       VStack(alignment: .leading, spacing: 2) {
         Text(selection.model.isEmpty ? "Choose a model" : selection.model).font(.headline)
         Text(providerName ?? (selection.provider.isEmpty ? "Connected providers" : selection.provider))
-          .font(.caption).foregroundStyle(.secondary)
+          .font(.caption).foregroundStyle(Palette.muted)
       }.frame(minHeight: 44, alignment: .leading)
     }.accessibilityIdentifier("assistantModel")
       .task(id: "\(botId ?? "default"):\(store.scope ?? ""):\(selection.provider)") {

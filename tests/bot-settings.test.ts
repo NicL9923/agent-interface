@@ -132,6 +132,8 @@ describe("making an assistant personal", () => {
     await submit();
     await click("Make it personal");
     expect(write).toHaveBeenCalledExactlyOnceWith("/bots/shared", expect.objectContaining({ shared: false, confirmPrivate: true }), "PATCH");
+    expect(container.textContent).toContain("Assistant saved.");
+    expect(container.textContent).not.toContain("Changes saved for both household members.");
   });
 
   it("asks when the server reports the assistant is still visible to others", async () => {
@@ -143,6 +145,80 @@ describe("making an assistant personal", () => {
     expect(write).toHaveBeenCalledExactlyOnceWith("/bots/mine", expect.not.objectContaining({ confirmPrivate: true }), "PATCH");
     await click("Make it personal");
     expect(write).toHaveBeenLastCalledWith("/bots/mine", expect.objectContaining({ shared: false, confirmPrivate: true }), "PATCH");
+  });
+
+  it("asks again after the assistant is re-shared instead of reusing old consent", async () => {
+    await uncheckShared(); await submit(); await click("Make it personal");
+    await uncheckShared(); await submit();
+    expect(write).toHaveBeenLastCalledWith("/bots/shared", expect.objectContaining({ shared: true }), "PATCH");
+    expect(vi.mocked(write).mock.calls.at(-1)?.[1]).not.toHaveProperty("confirmPrivate");
+    vi.mocked(write).mockClear();
+    await uncheckShared(); await submit();
+    expect(container.querySelector('[role="alertdialog"]')?.textContent).toContain("Make Shared personal?");
+    expect(write).not.toHaveBeenCalled();
+  });
+});
+
+describe("settings confirmations", () => {
+  const prompt = () => container.querySelector<HTMLDialogElement>('[role="alertdialog"]')!;
+  const save = () => container.querySelector<HTMLButtonElement>("[data-settings-save]")!;
+  const askPersonal = async () => {
+    await act(async () => container.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click());
+    save().focus();
+    await click("Save changes");
+  };
+
+  it("focuses the safe choice and keeps Escape inside the confirmation", async () => {
+    await askPersonal();
+    expect(prompt().textContent).toContain("It will disappear for the rest of the household");
+    expect(document.activeElement?.textContent).toBe("Keep editing");
+    await act(async () => prompt().dispatchEvent(new Event("cancel", { bubbles: true, cancelable: true })));
+    expect(prompt()).toBeNull();
+    expect(container.querySelector(".settings-dialog")?.hasAttribute("open")).toBe(true);
+    expect(container.textContent).not.toContain("Discard your unsaved changes?");
+    expect(document.activeElement).toBe(save());
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it("keeps a confirmation close event away from the unsaved editor guard", async () => {
+    await askPersonal();
+    await act(async () => { prompt().open = false; prompt().dispatchEvent(new Event("close", { bubbles: true })); });
+    expect(prompt()).toBeNull();
+    expect(container.querySelector<HTMLDialogElement>(".settings-dialog")!.open).toBe(true);
+    expect(container.textContent).not.toContain("Discard your unsaved changes?");
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it("puts the server's model warning inside the confirmation without a second banner", async () => {
+    vi.mocked(write).mockRejectedValueOnce(new ApiError("This model has a higher price", 409, "MODEL_CONFIRMATION_REQUIRED", true));
+    await click("Save changes");
+    expect(prompt().textContent).toContain("This model has a higher price");
+    expect(container.querySelector('[data-slot="form-message"]')).toBeNull();
+    expect(document.activeElement?.textContent).toBe("Keep editing");
+    await click("Keep editing");
+    expect(document.activeElement).toBe(save());
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns focus to Delete assistant after keeping it", async () => {
+    const trigger = Array.from(container.querySelectorAll("button")).find(button => button.textContent === "Delete assistant")!;
+    trigger.focus();
+    await click("Delete assistant");
+    expect(document.activeElement?.textContent).toBe("Keep assistant");
+    await click("Keep assistant");
+    expect(document.activeElement).toBe(trigger);
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it("confirms a model only after the explicit action", async () => {
+    vi.mocked(write).mockRejectedValueOnce(new ApiError("This model has a higher price", 409, "MODEL_CONFIRMATION_REQUIRED", true));
+    await click("Save changes");
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(write).toHaveBeenLastCalledWith("/bots/shared", expect.objectContaining({confirmModel:false}), "PATCH");
+    await click("Confirm this model");
+    expect(prompt()).toBeNull();
+    expect(write).toHaveBeenCalledTimes(2);
+    expect(write).toHaveBeenLastCalledWith("/bots/shared", expect.objectContaining({confirmModel:true}), "PATCH");
   });
 });
 
@@ -156,6 +232,7 @@ it("clears expensive-model confirmation when a different model is selected", asy
   vi.mocked(write).mockRejectedValueOnce(new ApiError("This model has a higher price", 409, "MODEL_CONFIRMATION_REQUIRED", true));
   await act(async () => container.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
   expect(container.textContent).toContain("Confirm this model");
+  await click("Keep editing");
   await click("Other model");
   expect(container.textContent).not.toContain("Confirm this model");
   expect(container.textContent).not.toContain("This model has a higher price");
@@ -165,7 +242,7 @@ it("clears expensive-model confirmation when a different model is selected", asy
 
 describe("closing with unsaved edits", () => {
   const dialog = () => container.querySelector("dialog")!;
-  const instructions = () => container.querySelector<HTMLTextAreaElement>("textarea")!;
+  const instructions = () => container.querySelector<HTMLTextAreaElement>("#assistant-instructions")!;
   const escape = async () => {
     const event = new Event("cancel", { cancelable: true });
     await act(async () => dialog().dispatchEvent(event));
@@ -215,6 +292,19 @@ describe("closing with unsaved edits", () => {
     await escape();
     expect(container.textContent).not.toContain("Discard your unsaved changes?");
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the saved name in the heading and confirmations after a rename", async () => {
+    const heading = () => container.querySelector("#assistant-settings-title")!.textContent;
+    await typeInto(container.querySelector<HTMLInputElement>('form input[maxlength="100"]')!, "Garden companion");
+    expect(heading()).toBe("Shared");
+    vi.mocked(write).mockRejectedValueOnce(new Error("Gateway unavailable"));
+    await click("Save changes");
+    expect(heading()).toBe("Shared");
+    await click("Save changes");
+    expect(heading()).toBe("Garden companion");
+    await click("Delete assistant");
+    expect(container.querySelector('[role="alertdialog"]')?.textContent).toContain("Delete Garden companion?");
   });
 
   it("keeps the baseline when a save fails", async () => {
@@ -485,7 +575,7 @@ it("loads roster detail before showing a writable settings form", async () => {
   await act(async()=>root.render(createElement(BotSettings,{bot:{...bot,instructions:undefined},bootstrap,onClose,onSaved})));
   expect(container.querySelector("form")).toBeNull();
   await act(async()=>finish({...bot,instructions:"Saved instructions",enabledMcpServers:["calendar"]}));
-  expect(container.querySelector("textarea")!.value).toBe("Saved instructions");
+  expect(container.querySelector<HTMLTextAreaElement>("#assistant-instructions")!.value).toBe("Saved instructions");
 });
 
 
@@ -512,7 +602,7 @@ describe("lean roster settings", () => {
     expect(dialog.querySelector("#assistant-settings-title")).toBe(heading);
     expect(dialog.querySelector('[aria-label="Close assistant settings"]')).toBe(close);
     expect(document.activeElement).toBe(heading);
-    expect((container.querySelector("textarea") as HTMLTextAreaElement).value).toBe("Keep this saved SOUL");
+    expect((container.querySelector("#assistant-instructions") as HTMLTextAreaElement).value).toBe("Keep this saved SOUL");
     vi.mocked(api).mockClear();
     await act(async () => root.render(createElement(BotSettings, { bot: { ...lean, activity: "working" }, bootstrap, onClose, onSaved })));
     expect(api).not.toHaveBeenCalled();
@@ -527,7 +617,7 @@ describe("lean roster settings", () => {
 describe("creating an assistant", () => {
   const created: Bot = { id: "ranch-hand", name: "Ranch hand", shared: true, model: "test", activity: "idle", instructions: "" };
   // Unlike the shared button helper, a missing button is a valid answer here.
-  const button = (text: string) => Array.from(container.querySelectorAll("button")).find(item => item.textContent === text);
+  const button = (text: string) => Array.from(container.querySelectorAll("button")).find(item => (item.getAttribute("aria-label") || item.textContent) === text);
   const title = () => container.querySelector("#assistant-settings-title")?.textContent;
   const type = (value: string) => typeInto(container.querySelector<HTMLInputElement>("#create-name")!, value);
   const choose = (label: string) => act(async () => Array.from(container.querySelectorAll("label"))

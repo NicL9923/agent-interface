@@ -24,8 +24,9 @@
 }
 .avatar-stage > p {
   margin: 0;
-  font-size: 0.6875rem;
-  color: var(--muted);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--message-meta);
 }
 .avatar-stage-states {
   display: flex;
@@ -38,6 +39,9 @@
   padding: 6px 11px;
   border-radius: 999px;
   background: var(--raised);
+}
+@media (max-width: 620px) {
+  .avatar-stage-states button { min-height: 44px; }
 }
 .avatar-stage-states button[aria-pressed="true"] {
   background: var(--accent);
@@ -88,7 +92,7 @@
 }
 .choice-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 4.5rem), 1fr));
   gap: 8px;
 }
 .choice-category {
@@ -101,7 +105,7 @@
   margin: 0;
   gap: 6px;
   align-items: center;
-  font-size: 0.6875rem;
+  font-size: 0.8125rem;
   color: var(--muted);
   cursor: pointer;
 }

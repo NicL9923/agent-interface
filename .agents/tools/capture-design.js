@@ -4,9 +4,11 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
   if (!["127.0.0.1", "localhost"].includes(origin.hostname)) throw Error("Use a loopback fixture.");
   const boot = await (await page.request.get(`${origin.origin}/api/bootstrap`)).json();
   if (boot.user?.email !== "preview@localhost.invalid") throw Error("Use the synthetic household preview.");
-  if (!["today", "home", "conversation", "questions", "approvals", "recovery", "details"].includes(screen)) throw Error(`Unsupported screen: ${screen}`);
+  if (!["today", "home", "conversation", "questions", "approvals", "recovery", "details", "settings"].includes(screen)) throw Error(`Unsupported screen: ${screen}`);
   const context = await page.context().browser().newContext({ serviceWorkers: "block", reducedMotion: "reduce", viewport: { width: 1440, height: 1000 } });
   const tab = await context.newPage();
+  const browserErrors = [];
+  tab.on("pageerror", error => browserErrors.push(error.message));
   const pointer = ["questions", "approvals"].includes(screen) ? await context.newCDPSession(tab) : undefined;
   const fontSession = ["details", "conversation"].includes(screen) ? await context.newCDPSession(tab) : undefined;
   if (fontSession) { await fontSession.send("DOM.enable"); await fontSession.send("CSS.enable"); }
@@ -25,11 +27,16 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
   let recoveryReceipt;
   const questionSubmissions = [];
   let questionFailed = false;
+  let settingsBots = structuredClone(fixture?.bots || []);
+  let settingsSaveFailed = false;
+  let settingsLoadFailed = false;
+  const modelWarning = "This model may cost more than your current model. Confirm the choice before saving.";
+  const settingsSubmissions = [];
   for (const [path, encoded] of Object.entries(fixture?.images || {})) {
     await context.route(`**${path}`, route => route.fulfill({ contentType: "image/png", body: Buffer.from(encoded, "base64") }));
   }
   await context.route("**/api/bots/*/conversation*", async route => {
-    if (!["conversation", "questions", "approvals", "recovery", "details"].includes(screen) || !fixture?.conversation) return route.continue();
+    if (!["conversation", "questions", "approvals", "recovery", "details", "settings"].includes(screen) || !fixture?.conversation) return route.continue();
     if (screen === "details") {
       const conversation = structuredClone(fixture.conversation);
       conversation.earlierFiles = state === "earlier-error" ? 1 : 0;
@@ -88,6 +95,41 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
     });
     await context.route("**/api/bots/*/files*", route => state === "earlier-error" ? route.fulfill({status:503,json:{error:"Earlier files unavailable."}}) : route.fulfill({json:{messages:[]}}));
   }
+  if (screen === "settings") {
+    await context.route("**/api/bots/*", route => {
+      const id = decodeURIComponent(new URL(route.request().url()).pathname.split("/").at(-1));
+      const bot = settingsBots.find(item => item.id === id);
+      if (route.request().method() === "GET") {
+        if (state === "load-error" && !settingsLoadFailed) {
+          settingsLoadFailed = true;
+          return route.fulfill({status:503, json:{error:fixture.loadError}});
+        }
+        return route.fulfill({json:bot});
+      }
+      const body = route.request().postDataJSON();
+      settingsSubmissions.push({method:route.request().method(), id, body});
+      if (state === "model-confirm" && !body.confirmModel) return route.fulfill({status:409,json:{error:modelWarning,confirmRequired:true}});
+      if (state === "save-error" && !settingsSaveFailed) {
+        settingsSaveFailed = true;
+        return route.fulfill({status:503, json:{error:fixture.saveError}});
+      }
+      Object.assign(bot, body);
+      return route.fulfill({json:bot});
+    });
+    await context.route("**/api/bots", route => {
+      if (route.request().method() !== "POST") return route.continue();
+      const body = route.request().postDataJSON();
+      settingsSubmissions.push({method:"POST",body});
+      const bot = {...body,id:"created-1",activity:"idle"}; settingsBots.push(bot);
+      return route.fulfill({json:bot});
+    });
+    await context.route("**/api/bots/*/avatar", route => {
+      const body = route.request().postDataJSON();
+      const id = new URL(route.request().url()).pathname.split("/").at(-2);
+      Object.assign(settingsBots.find(bot => bot.id === id), {avatar:body});
+      return route.fulfill({json:body});
+    });
+  }
   await context.route("**/api/today", async route => {
     if (!fixture?.overview || screen !== "today") return route.continue();
     const value = structuredClone(fixture.overview);
@@ -109,6 +151,10 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
     const response = await route.fetch();
     const value = await response.json();
     if (fixture) value.bots = state === "empty" ? [] : fixture.bots;
+    if (screen === "settings") {
+      value.bots = settingsBots.map(({instructions, enabledMcpServers, ...roster}) => roster);
+      if (state === "unsupported") value.capabilities.botConfiguration = {supported:false,reason:fixture.unsupportedReason};
+    }
     if (screen === "recovery" && state === "unsupported-retry") value.capabilities.idempotency = { supported: false, reason: "This Hermes connection cannot look up requests." };
     if (screen === "approvals" && state === "unsupported") value.capabilities.approvals = { supported: false, reason: fixture.unsupportedReason };
     if (fixture?.preferences) value.preferences = { ...value.preferences, ...fixture.preferences };
@@ -169,6 +215,132 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
     }
   };
   try {
+    if (screen === "settings") {
+      await tab.addInitScript(() => document.addEventListener("DOMContentLoaded", () => {
+        if (sessionStorage.getItem("design-large-text") === "true") document.documentElement.style.fontSize = "200%";
+      }));
+      const dialog = tab.locator(".settings-dialog");
+      const bottom = () => dialog.locator(".settings-content").evaluate(el => { el.scrollTop=el.scrollHeight; });
+      const openNew = async () => {
+        settingsBots=structuredClone(fixture.bots);
+        await tab.goto(origin.origin);
+        await tab.getByRole("button", {name:"New assistant",exact:true}).click();
+        await dialog.getByRole("heading", {name:"Name and look",exact:true}).waitFor();
+      };
+      const openEdit = async () => {
+        settingsBots=structuredClone(fixture.bots);
+        await tab.goto(`${origin.origin}/?bot=ranch`);
+        await tab.locator('.chat-header [title="Details, pin, artifacts and settings"]').click();
+        await tab.locator(".bot-details").getByRole("button",{name:"Settings",exact:true}).click();
+        await dialog.waitFor();
+      };
+      const closeDirty = async () => {
+        if (await dialog.locator('[role="alertdialog"][open]').count()) await tab.keyboard.press("Escape");
+        await dialog.getByRole("button",{name:"Close assistant settings",exact:true}).click();
+        if (await dialog.getByRole("button",{name:"Discard changes",exact:true}).count()) await dialog.getByRole("button",{name:"Discard changes",exact:true}).click();
+        await dialog.waitFor({state:"hidden"});
+      };
+      await tab.goto(origin.origin);
+      for (const [name,width,height,theme] of [
+        ["desktop",1440,1000,"light"],["desktop-dark",1440,1000,"dark"],["phone",390,844,"light"],
+        ["phone-dark",390,844,"dark"],["narrow",320,720,"light"],["tablet",768,1024,"light"],["large-text",390,844,"light"],
+      ]) {
+        state="loaded";
+        await tab.setViewportSize({width,height}); await tab.emulateMedia({colorScheme:theme});
+        await tab.evaluate(large => sessionStorage.setItem("design-large-text", String(large)),name==="large-text");
+        await openNew(); await capture("create-look-"+name,width,height,theme);
+        await dialog.getByLabel("Name",{exact:true}).fill(fixture.createdName); await bottom(); await capture("create-look-bottom-"+name,width,height,theme);
+        await dialog.getByRole("button",{name:"Next: role and model",exact:true}).click();
+        await dialog.getByRole("heading",{name:"Role and model",exact:true}).waitFor();
+        await capture("create-role-"+name,width,height,theme); await bottom(); await capture("create-role-bottom-"+name,width,height,theme);
+        await dialog.getByRole("button",{name:"Back",exact:true}).click();
+        if (await dialog.getByLabel("Name",{exact:true}).inputValue()!==fixture.createdName) throw Error("Back lost the assistant name.");
+        await closeDirty(); await openEdit(); await dialog.getByLabel("Name",{exact:true}).waitFor();
+        await capture("edit-"+name,width,height,theme); await bottom(); await capture("edit-bottom-"+name,width,height,theme);
+      }
+      await tab.evaluate(() => sessionStorage.removeItem("design-large-text"));
+      await tab.setViewportSize({width:390,height:844}); await tab.emulateMedia({colorScheme:"light"});
+      await openNew(); await dialog.getByRole("button",{name:"Next: role and model",exact:true}).click();
+      await dialog.getByText("Give your assistant a name.",{exact:true}).waitFor(); await capture("create-name-required",390,844);
+      await dialog.getByLabel("Name",{exact:true}).fill(fixture.bots[0].name);
+      await dialog.getByRole("button",{name:"Next: role and model",exact:true}).click();
+      await dialog.getByText("An assistant with this name already exists. Choose another name.",{exact:true}).waitFor(); await capture("create-name-taken",390,844);
+      await closeDirty(); await openEdit(); await dialog.getByLabel("Name",{exact:true}).waitFor();
+      await dialog.getByLabel("Description",{exact:true}).fill("Keep this edited description.");
+      await dialog.getByRole("button",{name:"Close assistant settings",exact:true}).click();
+      await dialog.getByRole("button",{name:"Keep editing",exact:true}).waitFor(); await capture("edit-discard",390,844);
+      await dialog.getByRole("button",{name:"Keep editing",exact:true}).click();
+      state="save-error";settingsSaveFailed=false;
+      await dialog.getByRole("button",{name:"Save changes",exact:true}).click();
+      await dialog.getByText(fixture.saveError,{exact:true}).waitFor(); await capture("edit-save-error",390,844);
+      if (await dialog.getByLabel("Description",{exact:true}).inputValue()!=="Keep this edited description.") throw Error("A failed save lost the edited description.");
+      await dialog.getByRole("button",{name:"Save changes",exact:true}).click();
+      await dialog.getByText("Changes saved for both household members.",{exact:true}).waitFor(); await capture("edit-saved",390,844);
+      state="loaded";await closeDirty();await openEdit(); await dialog.getByLabel("Name",{exact:true}).waitFor();
+      await dialog.getByRole("checkbox",{name:"Shared with your household",exact:true}).uncheck();
+      await dialog.getByRole("button",{name:"Save changes",exact:true}).click();
+      await dialog.getByRole("button",{name:"Make it personal",exact:true}).waitFor(); await capture("edit-personal-confirmation",390,844);
+      await dialog.getByRole("button",{name:"Keep editing",exact:true}).click(); await closeDirty();
+      await openEdit();await dialog.getByLabel("Name",{exact:true}).waitFor();
+      await dialog.getByRole("button",{name:"Delete assistant",exact:true}).click(); await capture("edit-delete-confirmation",390,844);
+      await closeDirty(); state="load-error";settingsLoadFailed=false;await openEdit();
+      await dialog.getByRole("button",{name:"Retry settings",exact:true}).waitFor(); await capture("edit-load-error",390,844);
+      await dialog.getByRole("button",{name:"Retry settings",exact:true}).click();await dialog.getByLabel("Name",{exact:true}).waitFor();
+      await closeDirty();state="unsupported";await openEdit();await dialog.getByText(fixture.unsupportedReason,{exact:true}).waitFor();await capture("edit-unsupported",390,844);
+      await closeDirty();state="loaded";await openNew();await dialog.getByLabel("Name",{exact:true}).fill(fixture.createdName);
+      await dialog.getByRole("button",{name:"Next: role and model",exact:true}).click();await dialog.getByRole("button",{name:"Create assistant",exact:true}).click();await dialog.waitFor({state:"hidden"});
+      const confirmations = [];
+      const keyboardFocus = [];
+      for (const [name,width,height,theme,large] of [["desktop",1440,1000,"light",false],["phone",390,844,"light",false],["phone-dark",390,844,"dark",false],["large-text",390,844,"light",true]]) {
+        await tab.setViewportSize({width,height});await tab.emulateMedia({colorScheme:theme});
+        await tab.evaluate(value => sessionStorage.setItem("design-large-text",String(value)),large);
+        for (const kind of ["personal","delete","model"]) {
+          state="loaded";await openEdit();await dialog.getByLabel("Name",{exact:true}).waitFor();
+          if (stage!=="before" && kind==="personal") {
+            await dialog.getByLabel("Name",{exact:true}).focus();
+            for (let index=0;index<8;index++) {
+              await tab.keyboard.press("Tab");
+              const check=await tab.evaluate(() => {
+                const focused=document.activeElement, bounds=focused.getBoundingClientRect();
+                const footer=document.querySelector(".settings-save-actions").getBoundingClientRect();
+                return {label:focused.getAttribute("aria-label") || focused.textContent?.trim() || focused.getAttribute("placeholder") || focused.tagName,
+                  obscured:!focused.closest(".settings-save-actions") && bounds.top<footer.bottom && bounds.bottom>footer.top};
+              });
+              if (check.obscured) throw Error(`Sticky actions obscure keyboard focus: ${check.label}`);
+              keyboardFocus.push({name,...check});
+            }
+          }
+          if (kind==="personal") {
+            await dialog.getByRole("checkbox",{name:"Shared with your household",exact:true}).uncheck();
+            await dialog.getByRole("button",{name:"Save changes",exact:true}).click();
+            await dialog.getByRole("button",{name:"Make it personal",exact:true}).waitFor();
+          } else if (kind==="delete") {
+            await dialog.getByRole("button",{name:"Delete assistant",exact:true}).click();
+            await dialog.getByRole("button",{name:"Keep assistant",exact:true}).waitFor();
+          } else {
+            state="model-confirm";await dialog.getByLabel("Description",{exact:true}).fill("Preserve this description while reviewing the model.");
+            await dialog.getByRole("button",{name:"Save changes",exact:true}).click();
+            await dialog.getByRole("button",{name:"Confirm this model",exact:true}).waitFor();
+          }
+          const prompt = dialog.getByRole("alertdialog");
+          if (stage!=="before") {
+            await prompt.waitFor();
+            const safe = prompt.getByRole("button",{name:kind==="delete"?"Keep assistant":"Keep editing",exact:true});
+            if (!await safe.evaluate(element=>element===document.activeElement)) throw Error("The confirmation's safe action did not receive focus.");
+            await tab.keyboard.press("Tab");await tab.keyboard.press("Shift+Tab");
+          }
+          await capture(`edit-${kind}-confirmation-${name}-focus`,width,height,theme);
+          confirmations.push({kind,name,modal:await prompt.count(),...await tab.evaluate(()=>({focused:document.activeElement?.textContent?.trim(),confirmationBounds:document.querySelector('[role="alertdialog"]')?.getBoundingClientRect().toJSON()}))});
+          if (stage!=="before") {
+            const writes=settingsSubmissions.length;await tab.keyboard.press("Escape");await prompt.waitFor({state:"hidden"});
+            if (!await dialog.isVisible() || await dialog.getByText("Discard your unsaved changes?",{exact:true}).count()) throw Error("Confirmation Escape reached the unsaved editor guard.");
+            if (settingsSubmissions.length!==writes) throw Error("Cancelling a confirmation submitted a write.");
+          } else await dialog.getByRole("button",{name:kind==="delete"?"Keep assistant":"Keep editing",exact:true}).click();
+          await closeDirty();
+        }
+      }
+      return {paths,geometry,settingsSubmissions,confirmations,keyboardFocus,backPreservesName:true,failedSavePreservesDraft:true,loadRetry:true};
+    }
     if (screen === "details") {
       await tab.addInitScript(() => document.addEventListener("DOMContentLoaded", () => {
         if (sessionStorage.getItem("design-large-text") === "true") document.documentElement.style.fontSize = "200%";
@@ -568,5 +740,8 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
       await tab.waitForURL(url => url.searchParams.get("bot") === "ranch" && !url.searchParams.has("view"));
     }
     return { paths, geometry };
+  } catch (error) {
+    await tab.screenshot({path:`${outputDir}/${prefix}-${screen}-capture-error.png`,animations:"disabled"}).catch(() => {});
+    throw new Error(`${error.message}\nBrowser errors: ${browserErrors.join("; ")}`);
   } finally { await context.close(); }
 }

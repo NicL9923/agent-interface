@@ -53,7 +53,7 @@ References collected October 25, 2026. External artwork is reference material on
 | Approvals | Web, iPhone and iPad captured | Complete | Web desktop/phone and iPhone/iPad 9 |
 | Failed and interrupted turns | Web, iPhone and iPad captured | Complete | Web desktop/phone and iPhone 9.2; iPad 9.1 |
 | Assistant details and artifacts | Web, iPhone and iPad captured | Complete | Web details 9.1; artifacts desktop 9.2, phone 9; iPhone profile/artifacts 9.1, preview 9; iPad 9 |
-| Assistant creation and settings | In progress | In progress | Pending |
+| Assistant creation and settings | Web, iPhone and iPad captured | Complete | Web creation/details 9.1, confirmations 9.2; iPhone creation/details/confirmations 9.2; iPad creation/details 9.1, confirmations 9 |
 | Avatar editor | Pending | Pending | Pending |
 | Models and capabilities | Pending | Pending | Pending |
 | Memory, work and learning | Pending | Pending | Pending |
@@ -214,3 +214,17 @@ Native tests tap padding and trailing whitespace in normal, dark and AX3 layouts
 [Acceptance evidence](evidence/design-review/recovery-acceptance.md) records
 captures, source fingerprints and limits. Twelve annotated comparisons are ready
 for the final PR. The refused-retry marker was moved off its text after review.
+
+## Assistant creation and settings acceptance
+
+Opus 5.5 High closed this gate in review 23. Web creation and Details score 9.1,
+with confirmations at 9.2. iPhone scores 9.2 in each area. iPad creation and Details
+score 9.1, with confirmations at 9.0. All blockers are closed. The final scope
+fixes stale load errors after Retry and gives the recovery action solid readable
+colors on both native surfaces.
+
+The [acceptance note](evidence/design-review/settings-acceptance.md) records the
+45 web tests, production build, focused native receipts, composite evidence,
+32 annotated comparisons and limits. Native enlarged text is AX3, not AX5.
+The final [independent review](evidence/design-review/settings-final-review.md)
+recomputed the source and measured both Retry labels at 5.91:1.

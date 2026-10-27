@@ -1,0 +1,57 @@
+{
+  "screen": "settings",
+  "bots": [
+    {
+      "id": "ranch",
+      "lastMessage": {
+        "text": "**Gate check complete.** Replace the north battery, then check the others next month.",
+        "at": "2026-10-26T13:00:00Z"
+      },
+      "name": "Ranch hand",
+      "shared": true,
+      "model": "configured-model",
+      "provider": "openrouter",
+      "activity": "idle",
+      "description": "Weekly plans, shared reminders, and practical help around the house.",
+      "instructions": "Help our household plan the week. Keep replies concise and explain what needs a decision. Before changing shared plans, ask for confirmation. Use the connected calendar only when someone asks you to schedule a task.",
+      "avatar": {
+        "mode": "geometric",
+        "shape": "blob",
+        "color": "#1084FE",
+        "eyes": "oval",
+        "accessory": "none"
+      },
+      "enabledMcpServers": [
+        "existing-calendar"
+      ]
+    }
+  ],
+  "preferences": {
+    "startPage": "assistant",
+    "defaultBotId": "ranch",
+    "favorites": [],
+    "sections": [],
+    "presentation": "simple"
+  },
+  "conversation": {
+    "botId": "ranch",
+    "sessionId": "ranch-canonical",
+    "messages": [],
+    "files": [],
+    "activity": {
+      "state": "idle"
+    },
+    "approvals": [],
+    "attention": [],
+    "draft": {
+      "text": "",
+      "attachments": []
+    },
+    "earlier": 0
+  },
+  "createdName": "Garden companion",
+  "saveError": "The settings could not be saved because the connection was interrupted. Your changes are still here.",
+  "loadError": "Assistant settings could not be loaded. Try again.",
+  "unsupportedReason": "This Hermes connection does not support assistant configuration.",
+  "modelWarning": "This model may cost more than your current model. Confirm the choice before saving."
+}

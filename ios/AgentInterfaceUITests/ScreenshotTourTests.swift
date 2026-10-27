@@ -512,6 +512,207 @@ import XCTest
     }
   }
 
+  /// The gutter drag scrolls the form without sending the gesture into its nested TextEditor.
+  private func settingsReveal(_ element: XCUIElement, in form: XCUIElement, up: Bool = true) {
+    for _ in 0..<10 {
+      if element.hasFrame && element.frame.minY >= form.frame.minY + 12 && element.frame.maxY <= form.frame.maxY - 12 { return }
+      let start = form.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: up ? 0.8 : 0.3))
+      let end = form.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: up ? 0.3 : 0.8))
+      start.press(forDuration: 0.02, thenDragTo: end)
+    }
+    XCTAssertTrue(element.hasFrame && element.frame.intersects(form.frame), "The requested control must be visible in the settings form")
+  }
+
+  func testSettingsDesignReview() throws {
+    let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_SETTINGS_PATH"] ?? ""
+    try XCTSkipUnless(!source.isEmpty, "Set AGENT_INTERFACE_DESIGN_SETTINGS_PATH to capture assistant creation and settings.")
+    let original = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: source))) as? [String: Any])
+    let stage = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_STAGE"] ?? "before"
+    guard ["before", "after"].contains(stage) else { XCTFail("Unknown settings stage: \(stage)"); return }
+    let variants = [
+      ("settings-loaded", "light", "UICTContentSizeCategoryL"),
+      ("settings-dark", "dark", "UICTContentSizeCategoryL"),
+      ("settings-large-text", "light", "UICTContentSizeCategoryAccessibilityXL"),
+      ("settings-error", "light", "UICTContentSizeCategoryL"),
+      ("settings-unsupported", "light", "UICTContentSizeCategoryL"),
+      ("settings-model", "light", "UICTContentSizeCategoryL"),
+    ]
+    let selection = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_VARIANT"] ?? ""
+    let selections = selection.components(separatedBy: ",")
+    guard selection.isEmpty || selections.allSatisfy({ selected in variants.contains { $0.0 == selected } }) else { XCTFail("Unknown settings variant: \(selection)"); return }
+    for (name, theme, size) in variants where selection.isEmpty || selections.contains(name) {
+      var fixture = original
+      if name == "settings-error" { fixture["settingsLoadError"] = true; fixture["settingsSaveError"] = true }
+      if name == "settings-unsupported" { fixture["settingsSupported"] = false }
+      if name == "settings-model" { fixture["settingsModelError"] = true }
+      let encoded = String(decoding: try JSONSerialization.data(withJSONObject: fixture), as: UTF8.self)
+      let app = launch(textSize: size, environment: ["AGENT_INTERFACE_UI_DESIGN_FIXTURE": encoded, "AGENT_INTERFACE_UI_THEME": theme, "AGENT_INTERFACE_UI_HOME": "1"])
+      goToAssistantList(app)
+      XCTAssertTrue(app.buttons["New assistant"].waitForExistence(timeout: 15))
+      if ["settings-loaded", "settings-dark", "settings-large-text"].contains(name) {
+        app.buttons["New assistant"].tapWhenReady()
+        XCTAssertTrue(app.descendants(matching: .any)["creationStep"].waitForExistence(timeout: 5))
+        try capture(name + "-create-look")
+        let field = app.textFields["Name"]
+        let creation = app.descendants(matching: .any)["assistantCreationForm"].firstMatch
+        settingsReveal(field, in: creation)
+        field.typeWhenFocused((fixture["createdName"] as! String) + "\n")
+        settingsReveal(app.buttons["creationNextBottom"], in: creation)
+        try capture(name + "-create-look-bottom")
+        app.buttons["creationNext"].tapWhenReady()
+        XCTAssertTrue(app.buttons["creationCreate"].waitForExistence(timeout: 5))
+        try capture(name + "-create-role")
+        settingsReveal(app.buttons["Create assistant"], in: creation)
+        try capture(name + "-create-role-bottom")
+        app.buttons["creationBack"].tapWhenReady()
+        settingsReveal(app.textFields["Name"], in: creation)
+        XCTAssertEqual(app.textFields["Name"].value as? String, fixture["createdName"] as? String)
+        if name == "settings-loaded" {
+          app.buttons["creationNext"].tapWhenReady(); app.buttons["creationCreate"].tapWhenReady()
+          XCTAssertTrue(app.buttons["bot.created-1"].waitForExistence(timeout: 10), "The created assistant appears in the synthetic household")
+        } else {
+          app.buttons["Close"].tapWhenReady(); app.buttons["Discard changes"].tapWhenReady()
+        }
+      }
+      app.buttons["bot.ranch"].tapWhenReady()
+      app.openAssistantSettings("Ranch hand")
+      if name == "settings-error" {
+        XCTAssertTrue(app.buttons["Retry settings"].waitForExistence(timeout: 10))
+        if stage == "after" {
+          let message = fixture["loadError"] as! String
+          XCTAssertTrue(app.staticTexts[message].waitForExistence(timeout: 5))
+          XCTAssertEqual(app.staticTexts.matching(NSPredicate(format: "label == %@", message)).count, 1,
+            "A failed detail load presents one error message")
+        }
+        try capture(name + "-load-error")
+        app.buttons["Retry settings"].tapWhenReady()
+      }
+      let form = app.descendants(matching: .any)["assistantSettingsForm"].firstMatch
+      XCTAssertTrue(form.waitForExistence(timeout: 10))
+      XCTAssertTrue(app.textFields["Name"].waitForExistence(timeout: 10))
+      if name == "settings-error" && stage == "after" {
+        XCTAssertTrue(app.textFields["Name"].wait(until: "isEnabled == true"), "Retry enables the loaded form")
+        XCTAssertFalse(app.staticTexts[fixture["loadError"] as! String].exists,
+          "A successful Retry removes the old load error")
+      }
+      try capture(name + "-edit")
+      if name == "settings-large-text" && stage == "after" {
+        app.buttons["settingsMore"].tapWhenReady()
+        XCTAssertTrue(app.buttons["Details"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Avatar"].exists)
+        try capture("settings-large-text-sections")
+        app.buttons["Details"].tapWhenReady()
+      }
+      let save = app.buttons["Save changes"]
+      settingsReveal(save, in: form)
+      try capture(name + "-edit-bottom")
+      if name == "settings-model" {
+        let prompt = app.descendants(matching: .any)["settingsConfirmation"].firstMatch
+        let shared = app.switches["Shared with your household"]
+        if stage == "after" {
+          settingsReveal(shared, in: form, up: false)
+          shared.coordinate(withNormalizedOffset: CGVector(dx: 0.94, dy: 0.5)).tap()
+          settingsReveal(save, in: form); save.tapWhenReady()
+          XCTAssertTrue(prompt.staticTexts["Make Ranch hand your personal assistant?"].waitForExistence(timeout: 5))
+          try capture("settings-model-personal-confirmation")
+          app.buttons["confirmationAccept"].tapWhenReady()
+        } else { save.tapWhenReady() }
+        XCTAssertTrue(app.buttons["Confirm this model"].waitForExistence(timeout: 10))
+        if stage == "after" { XCTAssertTrue(prompt.staticTexts[fixture["modelWarning"] as! String].exists) }
+        try capture("settings-model-confirmation")
+        (stage == "after" ? app.buttons["confirmationAccept"] : app.buttons["Confirm this model"]).tapWhenReady()
+        XCTAssertTrue(app.staticTexts[stage == "after" ? "Assistant saved." : "Changes saved for both household members."].waitForExistence(timeout: 10))
+        try capture("settings-model-confirmed")
+        if stage == "after" {
+          settingsReveal(shared, in: form, up: false)
+          shared.coordinate(withNormalizedOffset: CGVector(dx: 0.94, dy: 0.5)).tap()
+          settingsReveal(save, in: form); save.tapWhenReady()
+          XCTAssertTrue(prompt.staticTexts["Use this model?"].waitForExistence(timeout: 10))
+          app.buttons["confirmationAccept"].tapWhenReady()
+          XCTAssertTrue(app.staticTexts["Changes saved for both household members."].waitForExistence(timeout: 10))
+          settingsReveal(shared, in: form, up: false)
+          shared.coordinate(withNormalizedOffset: CGVector(dx: 0.94, dy: 0.5)).tap()
+          settingsReveal(save, in: form); save.tapWhenReady()
+          XCTAssertTrue(prompt.staticTexts["Make Ranch hand your personal assistant?"].waitForExistence(timeout: 5), "Re-sharing revokes the previous private consent")
+          try capture("settings-personal-reconfirmed")
+          app.buttons["confirmationKeep"].tapWhenReady()
+          XCTAssertFalse(app.staticTexts["Assistant saved."].exists)
+        }
+      }
+      if name == "settings-loaded" || (stage == "after" && ["settings-dark", "settings-large-text"].contains(name)) {
+        app.buttons["Delete assistant"].tapWhenReady()
+        XCTAssertTrue(app.staticTexts["Delete Ranch hand?"].waitForExistence(timeout: 5))
+        try capture(name == "settings-loaded" ? "settings-delete-confirmation" : name + "-delete-confirmation")
+        if stage == "after" {
+          let prompt = app.descendants(matching: .any)["settingsConfirmation"].firstMatch
+          if name == "settings-loaded" {
+            prompt.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.02)).press(forDuration: 0.02,
+              thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.98)))
+            XCTAssertTrue(prompt.waitForDisappearance(), "Swiping the confirmation down cancels it")
+            XCTAssertTrue(form.exists)
+            app.buttons["Close"].tapWhenReady(); goToAssistantList(app)
+            XCTAssertTrue(app.buttons["bot.ranch"].waitForExistence(timeout: 5), "Cancellation keeps the assistant")
+            // Prove the same fixture and assertion can observe an actual deletion.
+            app.buttons["bot.ranch"].tapWhenReady(); app.openAssistantSettings("Ranch hand")
+            let reloaded = app.descendants(matching: .any)["assistantSettingsForm"].firstMatch
+            settingsReveal(app.buttons["Delete assistant"], in: reloaded)
+            app.buttons["Delete assistant"].tapWhenReady()
+            app.buttons["confirmationAccept"].tapWhenReady()
+            XCTAssertTrue(reloaded.waitForDisappearance(), "Confirmed deletion closes settings after its refresh")
+            goToAssistantList(app)
+            XCTAssertTrue(app.buttons["bot.ranch"].waitForDisappearance(), "Confirmed deletion must remove the fixture assistant")
+          } else {
+            settingsReveal(app.buttons["confirmationKeep"], in: prompt)
+            app.buttons["confirmationKeep"].tapWhenReady()
+            XCTAssertFalse(app.staticTexts["Assistant saved."].exists)
+            XCTAssertFalse(app.staticTexts["Changes saved for both household members."].exists)
+            app.buttons["Close"].tapWhenReady(); goToAssistantList(app)
+            XCTAssertTrue(app.buttons["bot.ranch"].waitForExistence(timeout: 5), "Keep assistant sends no delete")
+          }
+        }
+      }
+      if name == "settings-error" {
+        let field = app.textFields["Name"]
+        settingsReveal(field, in: form, up: false)
+        field.typeWhenFocused(" revised\n")
+        let editedName = field.value as? String
+        settingsReveal(save, in: form); save.tapWhenReady()
+        XCTAssertTrue(app.staticTexts[fixture["saveError"] as! String].waitForExistence(timeout: 10))
+        try capture("settings-save-error")
+        settingsReveal(field, in: form, up: false)
+        XCTAssertEqual(field.value as? String, editedName)
+        settingsReveal(save, in: form); save.tapWhenReady()
+        XCTAssertTrue(app.staticTexts["Changes saved for both household members."].waitForExistence(timeout: 10))
+        settingsReveal(field, in: form, up: false)
+        try capture("settings-saved")
+        let shared = app.switches["Shared with your household"]
+        settingsReveal(shared, in: form)
+        shared.coordinate(withNormalizedOffset: CGVector(dx: 0.94, dy: 0.5)).tap()
+        settingsReveal(save, in: form); save.tapWhenReady()
+        XCTAssertTrue(app.buttons["Make it personal"].waitForExistence(timeout: 5))
+        try capture("settings-personal-confirmation")
+        if stage == "after" { app.buttons["confirmationKeep"].tapWhenReady() }
+        else if app.buttons["Keep editing"].exists { app.buttons["Keep editing"].tapWhenReady() }
+        else if app.buttons["Cancel"].exists { app.buttons["Cancel"].tapWhenReady() }
+        else { app.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.1)).tap() }
+        XCTAssertTrue(app.buttons["Make it personal"].waitForDisappearance())
+        if stage == "after" { XCTAssertFalse(app.staticTexts["Assistant saved."].exists) }
+        app.buttons["Close"].tapWhenReady()
+        XCTAssertTrue(app.buttons["Discard changes"].waitForExistence(timeout: 5))
+        try capture("settings-discard-confirmation")
+        if stage == "after" {
+          XCTAssertTrue(app.buttons["confirmationKeep"].isHittable)
+          app.buttons["confirmationKeep"].tapWhenReady()
+          XCTAssertTrue(form.exists, "Keeping unsaved changes leaves the editor open")
+          XCTAssertFalse(app.staticTexts["Assistant saved."].exists)
+          settingsReveal(field, in: form, up: false)
+          XCTAssertEqual(field.value as? String, editedName)
+        }
+      }
+      app.terminate()
+    }
+  }
+
   func testScreenshotTour() throws {
     var app = launch()
     XCTAssertTrue(app.textViews["messageComposer"].waitForExistence(timeout: 15))

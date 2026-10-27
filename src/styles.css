@@ -944,7 +944,7 @@ a {
   grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 .settings-tabs button {
-  font-size: 0.75rem;
+  font-size: 0.875rem;
   text-transform: capitalize;
   border: 0;
   border-radius: 0;
@@ -973,7 +973,7 @@ a {
   min-height: 46px;
   padding: 14px 12px;
   border-bottom: 2px solid transparent;
-  font-size: 0.75rem;
+  font-size: 0.875rem;
   text-transform: capitalize;
   cursor: pointer;
   list-style: none;
@@ -1026,7 +1026,23 @@ a {
   overflow: auto;
   min-height: 0;
   flex: 1;
+  scroll-padding-bottom: calc(3rem + 44px);
 }
+.settings-load-state { display: flex; flex-direction: column; align-items: flex-start; gap: 16px; }
+.settings-load-state > p { margin: 0; }
+.settings-content .muted,
+.settings-content > .form-error,
+.settings-content > .form-notice,
+.settings-content > .capability-note { font-size: 0.875rem; line-height: 1.55; }
+.settings-dialog .settings-save-actions { justify-content: flex-end; margin-bottom: 0; z-index: 1; }
+.settings-save-actions > .primary { min-width: 6rem; min-height: 44px; }
+.settings-dialog .checkbox-label { min-height: 44px; }
+.settings-danger-zone { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--line); }
+.settings-confirmation { max-height: calc(100dvh - 32px); overflow: auto; }
+.settings-confirmation h2 { overflow-wrap: anywhere; }
+.settings-confirmation p { line-height: 1.55; overflow-wrap: anywhere; }
+.settings-confirmation .actions { flex-wrap: wrap; }
+.settings-confirmation .actions > button { flex: 1 1 9rem; min-height: 44px; }
 .form-row {
   display: flex;
   gap: 16px;
