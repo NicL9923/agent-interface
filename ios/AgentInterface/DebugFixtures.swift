@@ -1,5 +1,6 @@
 #if DEBUG
   import Foundation
+  import CryptoKit
   import UserNotifications
 
   /// UI test transport only. Shipping Release builds contain no fixture transport.
@@ -181,6 +182,7 @@
     nonisolated(unsafe) static var computerControl: [String: Any] = ["kind": "bot", "name": "Ranch hand"]
     nonisolated(unsafe) static var desktopTickets = 0
     static var groupState: [String: Any] { ["room": groupRooms.first ?? [:], "driver_status": ["working": false, "blocked": false, "pending_actions": []]] }
+    nonisolated(unsafe) static var designMemory: [String: Any]?
     nonisolated(unsafe) static var memoryEntries: [[String: Any]] = [["id": "m1", "text": "Weeknight dinners under 30 minutes"]]
     nonisolated(unsafe) static var vaultItems: [[String: Any]] = [["id": "fixture-login", "kind": "login", "label": "Fixture school portal", "origin": "https://school.example.test", "createdAt": "2026-10-02T12:00:00Z", "identifier": "fixture.parent@example.test", "identifierType": "email", "hasOtp": false, "backend": "local", "canRemove": true]]
     nonisolated(unsafe) static var secureIndex = 0
@@ -578,6 +580,15 @@
         if body["frontier"] as? String != expectedFrontier || body["seenAt"] as? String != "2026-10-01T13:30:00Z" {
           status = 400; object = ["error": "Acknowledge the exact returned snapshot frontier and time"]
         } else { Self.todayFrontier = expectedFrontier; Self.todaySince = body["seenAt"] as? String ?? Self.todaySince }
+      } else if Self.designFixture?["screen"] as? String == "memory", path.hasPrefix("/api/bots/ranch/memory") {
+        if method == "GET", Self.designFixture?["mode"] as? String == "loading" {
+          return // Dedicated loading capture: no response until this fixture process terminates.
+        }
+        let result = Self.memoryResponse(path: path, method: method, body: body)
+        if method != "GET", result.status == 200, let delay = Self.designFixture?["memoryWriteDelayMs"] as? Double {
+          Self.lock.unlock(); Thread.sleep(forTimeInterval: delay / 1000); Self.lock.lock()
+        }
+        status = result.status; object = result.object
       } else if path.hasSuffix("/memory") || path.hasSuffix("/memory/memory") {
         if method == "PATCH" { Self.memoryEntries = (body["entries"] as? [[String: Any]] ?? []).enumerated().map { index, entry in var entry = entry; if entry["id"] == nil { entry["id"] = "m-new-\(index)" }; return entry } }
         if method == "DELETE" { Self.memoryEntries.removeAll { $0["id"] as? String == body["entryId"] as? String } }
@@ -918,6 +929,59 @@
       client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
       client?.urlProtocol(self, didLoad: data)
       client?.urlProtocolDidFinishLoading(self)
+    }
+    /// Design-only Memory transport. Mutations use the same whole-document revision contract as Hermes.
+    /// Called under the fixture lock; the legacy experience fixture remains separate.
+    private static func memoryResponse(path: String, method: String, body: [String: Any]) -> (status: Int, object: [String: Any]) {
+      let fixture = designFixture!, mode = fixture["mode"] as? String ?? "loaded"
+      let messages = fixture["memoryMessages"] as! [String: String]
+      let config = fixture["memoryFixture"] as! [String: String]
+      if designMemory == nil {
+        designMemory = (fixture["memoryStates"] as? [String: [String: Any]])?[mode] ?? fixture["memory"] as? [String: Any]
+      }
+      func reject(_ code: Int, _ key: String) -> (Int, [String: Any]) { (code, ["error": messages[key] ?? key]) }
+      if method == "GET" {
+        guard path == "/api/bots/ranch/memory" else { return reject(400, "Unexpected memory read") }
+        if mode == "load-error", designFailures.insert("memory-read").inserted { return reject(409, "loadError") }
+        if mode == "reload-error", designFailures.contains("memory-write"), designFailures.insert("memory-reload").inserted { return reject(409, "loadError") }
+        return (200, designMemory!)
+      }
+      guard ["PATCH", "DELETE"].contains(method), let target = path.split(separator: "/").last.map(String.init), ["memory", "user"].contains(target),
+        path == "/api/bots/ranch/memory/" + target,
+        var documents = designMemory?["documents"] as? [[String: Any]], let index = documents.firstIndex(where: { $0["target"] as? String == target }),
+        let revision = body["revision"] as? String, revision.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil else { return reject(400, "Invalid memory mutation") }
+      let document = documents[index], entries = document["entries"] as! [[String: String]], profile = designMemory!["profile"] as! String
+      guard revision == document["revision"] as? String else { return reject(409, "conflict") }
+      guard document["enabled"] as? Bool == true else { return reject(409, "disabled") }
+      func digest(_ parts: [Any]) -> String {
+        let data = try! JSONSerialization.data(withJSONObject: parts, options: [.withoutEscapingSlashes])
+        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+      }
+      func replace(_ texts: [String]) {
+        documents[index]["entries"] = texts.map { ["id": digest([profile, target, $0]), "text": $0] }
+        documents[index]["revision"] = digest([profile, target, texts])
+        documents[index]["charCount"] = texts.joined(separator: config["delimiter"]!).unicodeScalars.count
+        designMemory!["documents"] = documents
+      }
+      if ["conflict", "paused", "reload-error"].contains(mode), designFailures.insert("memory-write").inserted {
+        if mode == "conflict" { replace(entries.map { $0["text"]! } + [config["externalEntry"]!]) }
+        return reject(409, mode == "conflict" ? "conflict" : "paused")
+      }
+      let texts: [String]
+      if method == "DELETE" {
+        guard Set(body.keys) == ["entryId", "revision"], let id = body["entryId"] as? String, entries.contains(where: { $0["id"] == id }) else { return reject(400, "Invalid memory deletion") }
+        texts = entries.filter { $0["id"] != id }.map { $0["text"]! }
+      } else {
+        guard Set(body.keys) == ["entries", "revision"], let replacements = body["entries"] as? [[String: String]], replacements.count <= 100,
+          replacements.allSatisfy({ entry in Set(entry.keys).isSubset(of: ["id", "text"]) && !(entry["text"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && (entry["id"] == nil || entries.contains { $0["id"] == entry["id"] }) }) else { return reject(400, "Invalid memory replacement") }
+        texts = replacements.map { $0["text"]!.trimmingCharacters(in: .whitespacesAndNewlines) }
+        guard Set(texts).count == texts.count else { return reject(400, "Memory entries must be unique.") }
+        guard texts.joined(separator: config["delimiter"]!).unicodeScalars.count <= document["charLimit"] as! Int else { return reject(400, "tooLong") }
+      }
+      replace(texts)
+      designMemory!["refresh"] = ["revision": config["refreshRevision"]!, "state": "next_turn", "busy": false, "message": messages["nextTurn"]!]
+      print("DESIGN_MEMORY_WRITE method=\(method) target=\(target) revision=\(revision) entries=\(texts.count)")
+      return (200, designMemory!)
     }
     override func stopLoading() {}
     private func respond(raw data: Data, type: String) {

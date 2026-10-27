@@ -56,7 +56,8 @@ References collected October 25, 2026. External artwork is reference material on
 | Assistant creation and settings | Web, iPhone and iPad captured | Complete | Web creation/details 9.1, confirmations 9.2; iPhone creation/details/confirmations 9.2; iPad creation/details 9.1, confirmations 9 |
 | Avatar editor | 17 web and 15 native baseline states; 24 web and 19 each on iPhone/iPad after states | Complete | Web desktop/phone, iPhone and iPad 9 |
 | Models and capabilities | 35 web before, 43 web after; 26 native before and after states per device | Complete | Models, Tools and Skills: web desktop/phone, iPhone and iPad 9 |
-| Memory, work and learning | Pending | Pending | Pending |
+| Memory | 20 web before, 35 after; 18 native before, 26 after per device | Complete | Web desktop, tablet, phone, dark and 200% text 9; iPhone and iPad normal, dark, AX3 and recovery 9 |
+| Work and learning | Pending | Pending | Pending |
 | Routines and results | Pending | Pending | Pending |
 | Logins and secure requests | Pending | Pending | Pending |
 | Search, saved items and automations | Pending | Pending | Pending |
@@ -251,3 +252,31 @@ comparisons are staged for the final PR. Enlarged native text uses AX3. The iPad
 focused capture shows a software keyboard; the iPhone one does not. Native upload
 uses a DEBUG-only file-selection hook followed by the real multipart function.
 All portrait images are synthetic fixtures, with no live provider-quality claim.
+
+## Memory acceptance
+
+Memory passes Opus 5.5 High at 9.0 on web, iPhone and iPad. The
+[web review](evidence/design-review/memory-web-review.md) accepts all six layouts.
+The [native recheck](evidence/design-review/memory-native-review.md) closes the
+Add styling and Forget confirmation blockers, and the
+[final iPad check](evidence/design-review/memory-native-final-review.md) accepts
+the remaining reload sequence. No blocker remains in this screen.
+
+Shared profile ownership, document labels and readable captions establish scope.
+Saved notices follow actual writes. Conflict drafts stay readable; failed reloads
+retain edits and successful retries restore saved entries. Close, tab changes and
+reload protect drafts. Native confirmation quotes the exact entry and offers
+Keep before deletion. Web long fields grow within the viewport and explain their
+scrolling. Counts account for Unicode scalars and known saved overhead while
+Hermes remains authoritative.
+
+The [acceptance note](evidence/design-review/memory-acceptance.md) records the
+75 focused web tests, typecheck, production build, passing native segments,
+87 accepted after images and 13 annotated comparisons. Earlier native image
+reuse was independently checked against reconstructed source states. Failed and
+interrupted attempts stay excluded. Native enlarged text is AX3; physical
+devices, VoiceOver output and the Copy menu remain unverified.
+
+The [shared settings navigation recheck](evidence/design-review/memory-settings-navigation-review.md)
+retains the earlier Details, Avatar, Models, Tools and Skills scores after fresh
+200% captures. The five target images match their previously accepted pixels.

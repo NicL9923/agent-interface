@@ -33,6 +33,8 @@ struct BotSettingsView: View {
   @State private var lastPortrait: AvatarConfig?
   @State private var previewState: ActivityState = .idle
   @State private var tab = "Details"
+  @State private var memoryDirty = false
+  @State private var memorySaving = false
   @State private var tools: [CapabilityItem] = []
   @State private var skills: [CapabilityItem] = []
   @State private var routines: [Routine] = []
@@ -101,7 +103,7 @@ struct BotSettingsView: View {
     } else if tab == "Logins" {
       if let bot { VaultView(botId: bot.id) }
     } else if tab == "Memory" {
-      if let bot { MemoryDrawer(botId: bot.id) }
+      if let bot { MemoryDrawer(botId: bot.id, onDirtyChange: { memoryDirty = $0 }, onSavingChange: { memorySaving = $0 }) }
     } else if tab == "Work" {
       if let bot { HermesWorkView(botId: bot.id).id("work|\(store.scope ?? "")|\(bot.id)").id(store.api.map(ObjectIdentifier.init)) }
     } else if tab == "Learning" {
@@ -166,7 +168,7 @@ struct BotSettingsView: View {
         Button { creationStep = .look } label: { Label("Back", systemImage: "chevron.backward").labelStyle(.titleAndIcon) }
           .disabled(busy).accessibilityIdentifier("creationBack")
       } else {
-        Button("Close") { if dirty { confirmation = .discard } else { closeSheet() } }.disabled(busy)
+        Button("Close") { if dirty { confirmation = .discard } else { closeSheet() } }.disabled(busy || memorySaving)
       }
     }
     if bot == nil {
@@ -181,7 +183,9 @@ struct BotSettingsView: View {
     }
   }
   /// A message belongs to the screen that produced it, so it does not follow you to another tab.
-  private func selectTab(_ title: String) {
+  private func selectTab(_ title: String, discardMemory: Bool = false) {
+    guard !memorySaving else { return }
+    if tab == "Memory", title != tab, memoryDirty, !discardMemory { confirmation = .leaveMemory(title); return }
     tab = title
     error = nil
     notice = nil
@@ -191,7 +195,7 @@ struct BotSettingsView: View {
       if bot == nil {
         creationContent
       } else {
-        tabBar.disabled(busy)
+        tabBar.disabled(busy || memorySaving)
         if !detailLoaded {
           if let error {
             VStack(alignment: .leading, spacing: 12) {
@@ -218,7 +222,7 @@ struct BotSettingsView: View {
         if avatar.mode != .portrait { lastDrawn = avatar } else { lastPortrait = avatar }
       }
       .task(id: tab) { await loadTab() }
-      .interactiveDismissDisabled(dirty || busy)
+      .interactiveDismissDisabled(dirty || busy || memorySaving)
       .onChange(of: avatar) { _, value in
         if value.mode != .portrait {
           lastDrawn = value
@@ -747,6 +751,7 @@ struct BotSettingsView: View {
     case .model: saveBot(confirmed: true)
     case .personal: saveBot(personal: true)
     case .discard: closeSheet()
+    case .leaveMemory(let title): memoryDirty = false; selectTab(title, discardMemory: true)
     case .delete:
       action {
         guard let id = bot?.id, let api = store.api else { return }
@@ -878,7 +883,7 @@ struct BotSettingsView: View {
   private func closeSheet() { if let close { close() } else { dismiss() } }
   private var dirty: Bool {
     guard initialized else { return false }
-    return form != savedForm || avatar != savedAvatar || CatalogKind.allCases.contains { kind in
+    return memoryDirty || form != savedForm || avatar != savedAvatar || CatalogKind.allCases.contains { kind in
       guard let saved = savedCapabilities[kind] else { return false }
       return Set((kind == .tools ? tools : skills).filter { $0.enabled || $0.required == true }.map(\.id)) != saved
     }
@@ -1168,13 +1173,14 @@ private struct RoutineAdvancedFields: View {
 
 /// The editor's preview: the avatar large, with chips to try each live state.
 private enum SettingsConfirmation: Identifiable {
-  case model(warning: String), personal(name: String), delete(name: String), discard
+  case model(warning: String), personal(name: String), delete(name: String), discard, leaveMemory(String)
   var id: String {
     switch self {
     case .model: "model"
     case .personal: "personal"
     case .delete: "delete"
     case .discard: "discard"
+    case .leaveMemory: "leave-memory"
     }
   }
   var title: String {
@@ -1183,6 +1189,7 @@ private enum SettingsConfirmation: Identifiable {
     case .personal(let name): "Make \(name) your personal assistant?"
     case .delete(let name): "Delete \(name)?"
     case .discard: "Discard your unsaved changes?"
+    case .leaveMemory: "Leave memory without saving?"
     }
   }
   var message: String {
@@ -1191,6 +1198,7 @@ private enum SettingsConfirmation: Identifiable {
     case .personal: "It will disappear for the rest of the household, along with its conversation, routines and group chats."
     case .delete: "This deletes the assistant in Hermes and removes its settings from WildBots."
     case .discard: "Your unsaved changes will be lost."
+    case .leaveMemory: "Your unsaved memory edits will be lost. Save them before leaving if you want to keep them."
     }
   }
   var acceptLabel: String {
@@ -1199,6 +1207,7 @@ private enum SettingsConfirmation: Identifiable {
     case .personal: "Make it personal"
     case .delete: "Yes, delete"
     case .discard: "Discard changes"
+    case .leaveMemory: "Discard edits and leave"
     }
   }
   var keepLabel: String { if case .delete = self { "Keep assistant" } else { "Keep editing" } }

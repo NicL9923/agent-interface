@@ -4,12 +4,12 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
   if (!["127.0.0.1", "localhost"].includes(origin.hostname)) throw Error("Use a loopback fixture.");
   const boot = await (await page.request.get(`${origin.origin}/api/bootstrap`)).json();
   if (boot.user?.email !== "preview@localhost.invalid") throw Error("Use the synthetic household preview.");
-  if (!["today", "home", "conversation", "questions", "approvals", "recovery", "details", "settings", "avatar", "models"].includes(screen)) throw Error(`Unsupported screen: ${screen}`);
+  if (!["today", "home", "conversation", "questions", "approvals", "recovery", "details", "settings", "avatar", "models", "memory"].includes(screen)) throw Error(`Unsupported screen: ${screen}`);
   const context = await page.context().browser().newContext({ serviceWorkers: "block", reducedMotion: "reduce", viewport: { width: 1440, height: 1000 } });
-  if (screen === "models") await context.addInitScript(() => { window.name="wildbots-design-models-capture"; });
+  if (["models", "memory"].includes(screen)) await context.addInitScript(screen => { window.name=`wildbots-design-${screen}-capture`; }, screen);
   const tab = await context.newPage();
   const browserErrors = [];
-  if (screen === "models") tab.on("dialog", dialog => dialog.type() === "beforeunload" ? dialog.accept() : dialog.dismiss());
+  if (["models", "memory"].includes(screen)) tab.on("dialog", dialog => dialog.type() === "beforeunload" ? dialog.accept() : dialog.dismiss());
   tab.on("pageerror", error => browserErrors.push(error.message));
   const pointer = ["questions", "approvals"].includes(screen) ? await context.newCDPSession(tab) : undefined;
   const fontSession = ["details", "conversation"].includes(screen) ? await context.newCDPSession(tab) : undefined;
@@ -39,12 +39,66 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
   let inference = structuredClone(fixture?.inference || {});
   let catalogs = {tools: structuredClone(fixture?.tools || []), skills: structuredClone(fixture?.skills || [])};
   const modelFailures = new Set(), modelSubmissions = [];
+  let memory = structuredClone(fixture?.memory);
+  const memoryFailures = new Set(), memorySubmissions = [], memoryChecks = [];
+  let releaseMemoryLoad, releaseMemoryWrite, memoryWriteReady, memoryWriteStarted;
+  const memoryDigest = parts => tab.evaluate(async parts => {
+    const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(parts)));
+    return [...new Uint8Array(bytes)].map(byte => byte.toString(16).padStart(2,"0")).join("");
+  }, parts);
+  const memoryDocument = async (target, texts) => {
+    const saved = memory.documents.find(document => document.target === target);
+    saved.entries = await Promise.all(texts.map(async text => ({id:await memoryDigest([memory.profile,target,text]),text})));
+    saved.revision = await memoryDigest([memory.profile,target,texts]);
+    saved.charCount = [...texts.join(fixture.memoryFixture.delimiter)].length;
+  };
+  if (screen === "memory") await context.route("**/api/bots/*/memory**", async route => {
+    const request=route.request(), method=request.method(), url=new URL(request.url());
+    if (!/^\/api\/bots\/ranch\/memory(?:\/(memory|user))?$/.test(url.pathname)) throw Error("Unexpected Memory route");
+    if (method === "GET") {
+      if (state === "memory-loading") await new Promise(resolve => { releaseMemoryLoad=resolve; });
+      if (state === "memory-load-error" && !memoryFailures.has("read")) {
+        memoryFailures.add("read"); return route.fulfill({status:409,json:{error:fixture.memoryMessages.loadError}});
+      }
+      if (state === "memory-reload-error" && memoryFailures.has("write") && !memoryFailures.has("reload")) {
+        memoryFailures.add("reload"); return route.fulfill({status:409,json:{error:fixture.memoryMessages.loadError}});
+      }
+      return route.fulfill({json:memory});
+    }
+    if (!["PATCH","DELETE"].includes(method)) throw Error("Unexpected Memory write method");
+    const target=url.pathname.split("/").at(-1), document=memory.documents.find(row=>row.target===target);
+    const body=request.postDataJSON(); memorySubmissions.push({method,target,body});
+    const reject=(status,error)=>route.fulfill({status,json:{error}});
+    if (!document || !/^[a-f0-9]{64}$/.test(body.revision)) throw Error("Memory write must use a real target and revision");
+    if (body.revision!==document.revision) return reject(409,fixture.memoryMessages.conflict);
+    if (!document.enabled) return reject(409,fixture.memoryMessages.disabled);
+    if (["memory-conflict","memory-paused","memory-reload-error"].includes(state) && !memoryFailures.has("write")) {
+      memoryFailures.add("write");
+      if (state === "memory-conflict") await memoryDocument(target,[...document.entries.map(entry=>entry.text),fixture.memoryFixture.externalEntry]);
+      return reject(409,fixture.memoryMessages[state === "memory-conflict" ? "conflict" : "paused"]);
+    }
+    let texts;
+    if (method === "DELETE") {
+      if (Object.keys(body).sort().join()!=="entryId,revision" || !document.entries.some(entry=>entry.id===body.entryId)) throw Error("Forget must name one current entry");
+      texts=document.entries.filter(entry=>entry.id!==body.entryId).map(entry=>entry.text);
+    } else {
+      if (Object.keys(body).sort().join()!=="entries,revision" || !Array.isArray(body.entries) || body.entries.length>100) throw Error("Invalid Memory replacement payload");
+      if (body.entries.some(entry=>Object.keys(entry).some(key=>!["id","text"].includes(key)) || typeof entry.text!=="string" || !entry.text.trim() || (entry.id && !document.entries.some(saved=>saved.id===entry.id)))) throw Error("Memory entries must retain their current IDs");
+      texts=body.entries.map(entry=>entry.text.trim());
+      if (new Set(texts).size!==texts.length) return reject(400,"Memory entries must be unique.");
+      if ([...texts.join(fixture.memoryFixture.delimiter)].length>document.charLimit) return reject(400,fixture.memoryMessages.tooLong);
+    }
+    if (state === "memory-busy") await new Promise(resolve => { releaseMemoryWrite=resolve; memoryWriteReady?.(); });
+    await memoryDocument(target,texts);
+    memory.refresh={revision:fixture.memoryFixture.refreshRevision,state:"next_turn",busy:false,message:fixture.memoryMessages.nextTurn};
+    return route.fulfill({json:memory});
+  });
   let avatarSaveFailed = false;
   for (const [path, encoded] of Object.entries(fixture?.images || {})) {
     await context.route(`**${path}`, route => route.fulfill({ contentType: "image/png", body: Buffer.from(encoded, "base64") }));
   }
   await context.route("**/api/bots/*/conversation*", async route => {
-    if (!["conversation", "questions", "approvals", "recovery", "details", "settings", "avatar", "models"].includes(screen) || !fixture?.conversation) return route.continue();
+    if (!["conversation", "questions", "approvals", "recovery", "details", "settings", "avatar", "models", "memory"].includes(screen) || !fixture?.conversation) return route.continue();
     if (screen === "details") {
       const conversation = structuredClone(fixture.conversation);
       conversation.earlierFiles = state === "earlier-error" ? 1 : 0;
@@ -103,7 +157,7 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
     });
     await context.route("**/api/bots/*/files*", route => state === "earlier-error" ? route.fulfill({status:503,json:{error:"Earlier files unavailable."}}) : route.fulfill({json:{messages:[]}}));
   }
-  if (["settings", "avatar", "models"].includes(screen)) {
+  if (["settings", "avatar", "models", "memory"].includes(screen)) {
     await context.route("**/api/bots/*", route => {
       const id = decodeURIComponent(new URL(route.request().url()).pathname.split("/").at(-1));
       const bot = settingsBots.find(item => item.id === id);
@@ -207,7 +261,7 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
     const response = await route.fetch();
     const value = await response.json();
     if (fixture) value.bots = state === "empty" ? [] : fixture.bots;
-    if (["settings", "avatar", "models"].includes(screen)) {
+    if (["settings", "avatar", "models", "memory"].includes(screen)) {
       value.bots = settingsBots.map(({instructions, enabledMcpServers, ...roster}) => roster);
       if (state === "unsupported") value.capabilities.botConfiguration = {supported:false,reason:fixture.unsupportedReason};
     }
@@ -280,6 +334,205 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
     }
   };
   try {
+    if (screen === "memory") {
+      const dialog=tab.locator(".settings-dialog"), panel=dialog.locator(".memory-panel");
+      const doc=target=>panel.locator(`[data-memory-target="${target}"]`);
+      const save=target=>doc(target).getByRole("button",{name:"Save memories",exact:true});
+      const reload=()=>panel.getByRole("button",{name:/^(Reload profile memory|Try loading again)$/});
+      const reloadMemory=async (capturePrompt=false)=>{
+        const response=tab.waitForResponse(response=>response.request().method()==="GET" && new URL(response.url()).pathname==="/api/bots/ranch/memory");
+        await reload().click();
+        if(stage==="after") {
+          const prompt=tab.getByRole("alertdialog",{name:"Reload profile memory?"});
+          await prompt.waitFor();
+          if(capturePrompt) await shot("reload-confirmation");
+          await prompt.getByRole("button",{name:"Reload and discard edits",exact:true}).click();
+        }
+        await response;
+      };
+      const reset=async ({width=390,theme="light",large=false,mode="loaded"}={})=>{
+        releaseMemoryLoad?.(); releaseMemoryLoad=undefined; releaseMemoryWrite?.(); releaseMemoryWrite=undefined;
+        state=`memory-${mode}`; memory=structuredClone(fixture.memoryStates?.[mode] || fixture.memory);
+        memoryFailures.clear(); settingsBots=structuredClone(fixture.bots);
+        await tab.setViewportSize({width,height:width>1000?1000:844});
+        await tab.emulateMedia({colorScheme:theme});
+        await tab.goto(`${origin.origin}/?bot=ranch`);
+        await tab.evaluate(({large,theme})=>{document.documentElement.style.fontSize=large?"200%":"";document.documentElement.dataset.theme=theme;},{large,theme});
+        await tab.locator('.chat-header [title="Details, pin, artifacts and settings"]').click();
+        await tab.locator(".bot-details").getByRole("button",{name:"Settings",exact:true}).click();
+        await dialog.waitFor();
+        const overflow=dialog.locator(".settings-tabs-overflow");
+        if(await overflow.count()) await overflow.locator("summary").click();
+        await dialog.getByRole("button",{name:"memory",exact:true}).click();
+        await panel.waitFor();
+        if(!["loading","load-error"].includes(mode)) await doc("memory").waitFor();
+      };
+      const shot=async (name,width=390,theme="light")=>{
+        await capture(name,width,width>1000?1000:844,theme);
+        geometry.at(-1).memory=await panel.evaluate(el=>{
+          const rect=node=>{const r=node.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height};};
+          return {panel:rect(el),documents:[...el.querySelectorAll('[data-memory-target]')].map(section=>({target:section.dataset.memoryTarget,...rect(section),
+            fields:[...section.querySelectorAll('textarea')].map(field=>({disabled:field.disabled,readOnly:field.readOnly,value:field.value,...rect(field)}))})),
+            errors:[...el.querySelectorAll('[role="alert"]')].map(node=>({text:node.textContent,...rect(node)})),
+            statuses:[...el.querySelectorAll('[role="status"]')].map(node=>node.textContent)};
+        });
+      };
+      const failure=()=>panel.getByRole("alert").filter({hasText:memoryFailures.has("write") && ["memory-paused","memory-reload-error"].includes(state) ? fixture.memoryMessages.paused : fixture.memoryMessages.conflict});
+      const visibleError=async (name,focused=false)=>{
+        const bounds=()=>tab.evaluate(()=>{
+          const error=document.querySelector('[data-memory-target="memory"] [role="alert"]'),view=document.querySelector('.settings-content');
+          const rect=el=>{const r=el?.getBoundingClientRect();return r&&{top:r.top,bottom:r.bottom,height:r.height};};
+          return {error:rect(error),view:rect(view),scrollTop:view?.scrollTop,focusedError:document.activeElement===error,
+            active:document.activeElement?.outerHTML.slice(0,180),scrollMarginTop:error&&getComputedStyle(error).scrollMarginTop};
+        });
+        try {
+          await tab.waitForFunction(focused=>{
+            const error=document.querySelector('[data-memory-target="memory"] [role="alert"]'),view=document.querySelector('.settings-content');
+            const box=error?.getBoundingClientRect(),area=view?.getBoundingClientRect();
+            return box&&area&&box.top>=area.top&&box.bottom<=area.bottom&&(!focused||document.activeElement===error);
+          },focused,{timeout:5000});
+        } catch(cause) {
+          await tab.screenshot({path:`${outputDir}/${prefix}-${screen}-${name}.failed.png`}).catch(()=>{});
+          throw Error(`${name}: error is not fully visible: ${JSON.stringify(await bounds())}`,{cause});
+        }
+        memoryChecks.push({name,...await bounds()});
+      };
+      const fillFirst=async target=>doc(target).locator("textarea").first().fill(fixture.memoryFixture.editEntry);
+      for(const [name,width,theme,large] of [
+        ["desktop",1440,"light",false],["phone",390,"light",false],["narrow",320,"light",false],
+        ["tablet",768,"light",false],["dark",390,"dark",false],["large-text",390,"light",true],
+      ]) {
+        await reset({width,theme,large}); await shot(name,width,theme);
+        if(name==="desktop") {
+          const savedNoticeVisible=await panel.getByText(fixture.memory.refresh.message,{exact:true}).isVisible();
+          memoryChecks.push({name:"initial-refresh",savedNoticeVisible});
+          if(stage==="after" && savedNoticeVisible) throw Error("Initial Memory read announces an unsolicited save.");
+        }
+        if(stage==="after" && ["phone","narrow","dark","large-text"].includes(name)) {
+          const long=doc("memory").locator("textarea").nth(2);
+          await long.scrollIntoViewIfNeeded(); await shot(`${name}-long-entry`,width,theme);
+          const sizing=await long.evaluate(el=>({height:el.clientHeight,content:el.scrollHeight}));
+          if(sizing.content>sizing.height+1 && !await doc("memory").getByText("Scroll within this entry to read more.",{exact:true}).count()) throw Error("Long memory is clipped without a scroll cue.");
+          memoryChecks.push({name:`${name}-long-entry`,sizing});
+          if(name==="large-text") {
+            await save("memory").scrollIntoViewIfNeeded(); await shot("large-text-actions",width,theme);
+          }
+        }
+      }
+      await reset({mode:"loading"});
+      await panel.getByText("Loading profile memory...",{exact:true}).waitFor(); await shot("loading");
+      if(!releaseMemoryLoad) throw Error("Memory loading response was not held.");
+      state="memory-loaded"; releaseMemoryLoad(); releaseMemoryLoad=undefined;
+      await doc("memory").waitFor();
+      await reset({mode:"load-error"});
+      await panel.getByText(fixture.memoryMessages.loadError,{exact:true}).waitFor(); await shot("load-error");
+      await panel.getByRole("button",{name:"Try loading again",exact:true}).click();
+      await doc("memory").waitFor(); await shot("retried");
+      for(const width of [1440,320]) {
+        await reset({width}); await fillFirst("memory");
+        await doc("memory").getByRole("button",{name:"Add memory",exact:true}).click();
+        if(stage==="after") await tab.waitForFunction(()=>document.querySelector('[data-memory-target="memory"] textarea:last-of-type') && [...document.querySelectorAll('[data-memory-target="memory"] textarea')].at(-1)===document.activeElement);
+        await doc("memory").locator("textarea").last().fill(fixture.memoryFixture.newEntry);
+        await shot(`dirty-${width}`,width);
+      }
+      await reset();
+      const otherRevision=memory.documents[1].revision;
+      const otherDraft=`${memory.documents[1].entries[0].text} Keep this draft.`;
+      await doc("user").locator("textarea").first().fill(otherDraft);
+      await fillFirst("memory");
+      await doc("memory").getByRole("button",{name:"Add memory",exact:true}).click();
+      await doc("memory").locator("textarea").last().fill(fixture.memoryFixture.newEntry);
+      const savedRevision=memory.documents[0].revision;
+      if(stage==="after") {
+        await dialog.getByRole("button",{name:"Close assistant settings",exact:true}).click();
+        await dialog.getByText("Discard your unsaved changes?",{exact:true}).waitFor(); await shot("close-confirmation");
+        await dialog.getByRole("button",{name:"Keep editing",exact:true}).click();
+        await dialog.getByRole("button",{name:"details",exact:true}).click();
+        const leave=tab.getByRole("alertdialog",{name:"Leave memory without saving?"}); await leave.waitFor(); await shot("leave-confirmation");
+        await leave.getByRole("button",{name:"Keep editing",exact:true}).click();
+        if(await doc("user").locator("textarea").first().inputValue()!==otherDraft) throw Error("Keep editing lost the other draft.");
+        state="memory-busy"; memoryWriteStarted=new Promise(resolve=>{memoryWriteReady=resolve;});
+      }
+      await save("memory").click();
+      if(stage==="after") {
+        await memoryWriteStarted;
+        await panel.getByText("Saving memories in Hermes...",{exact:true}).waitFor();
+        await tab.waitForFunction(()=>document.querySelector('.memory-panel > button')?.disabled && document.querySelector('[aria-label="Close assistant settings"]')?.disabled,undefined,{timeout:5000});
+        if(!releaseMemoryWrite) throw Error("Memory write interception was not held.");
+        await shot("saving"); state="memory-loaded"; releaseMemoryWrite(); releaseMemoryWrite=undefined;
+      }
+      await panel.getByText(fixture.memoryMessages.nextTurn,{exact:true}).waitFor();
+      if(memory.documents[0].revision===savedRevision || !memory.documents[0].entries.some(entry=>entry.text===fixture.memoryFixture.newEntry)) throw Error("Memory save did not persist.");
+      if(await doc("user").locator("textarea").first().inputValue()!==otherDraft || memory.documents[1].revision!==otherRevision) throw Error("Saving one document lost the other draft.");
+      memoryChecks.push({name:"independent-drafts",preserved:true,otherRevision});
+      await shot("saved");
+      await reset();
+      const beforeDelete=memory.documents[1].entries[0];
+      await doc("user").getByRole("button",{name:"Forget...",exact:true}).first().click();
+      await shot("forget-confirmation");
+      const deleteCount=memorySubmissions.filter(row=>row.method==="DELETE").length;
+      await doc("user").getByRole("button",{name:"Keep it",exact:true}).click();
+      if(memorySubmissions.filter(row=>row.method==="DELETE").length!==deleteCount) throw Error("Keep submitted a deletion.");
+      await doc("user").getByRole("button",{name:"Forget...",exact:true}).first().click();
+      await doc("user").getByRole("button",{name:"Forget entry",exact:true}).click();
+      await tab.waitForFunction(text=>![...document.querySelectorAll('[data-memory-target="user"] textarea')].some(field=>field.value===text),beforeDelete.text);
+      if(memory.documents[1].entries.some(entry=>entry.id===beforeDelete.id)) throw Error("Forgotten entry remains in transport state.");
+      memoryChecks.push({name:"forget",keptWithoutWrite:true,deletedEntryId:beforeDelete.id});
+      for(const width of [1440,320]) {
+        await reset({width,mode:"conflict"}); await fillFirst("memory"); await save("memory").click(); await failure().waitFor();
+        await shot(`conflict-${width}`,width);
+        const field=doc("memory").locator("textarea").first();
+        const selection=await field.evaluate(el=>{el.focus();if(!el.disabled)el.setSelectionRange(0,el.value.length);return {disabled:el.disabled,readOnly:el.readOnly,focused:document.activeElement===el,selectionStart:el.selectionStart,selectionEnd:el.selectionEnd};});
+        memoryChecks.push({name:`conflict-${width}`,selection});
+        if(stage==="after") {
+          if(selection.disabled || !selection.readOnly || !selection.focused || selection.selectionEnd<=selection.selectionStart) throw Error("Conflicted draft cannot be selected.");
+          await shot(`conflict-draft-focus-${width}`,width);
+        }
+        await reloadMemory();
+        await doc("memory").locator("textarea").last().waitFor();
+        await tab.waitForFunction(text=>[...document.querySelectorAll('[data-memory-target="memory"] textarea')].some(field=>field.value===text),fixture.memoryFixture.externalEntry);
+      }
+      await reset({mode:"paused"}); await fillFirst("memory"); await save("memory").click(); await failure().waitFor();
+      await reloadMemory(stage==="after");
+      await tab.waitForFunction(()=>!document.querySelector('.memory-panel')?.textContent.includes('Loading profile memory...'));
+      memoryChecks.push({name:"same-revision-reload",fieldDisabled:await doc("memory").locator("textarea").first().isDisabled(),fieldReadOnly:await doc("memory").locator("textarea").first().evaluate(el=>el.readOnly),draft:await doc("memory").locator("textarea").first().inputValue()});
+      await shot("same-revision-reload");
+      await reset({mode:"paused"}); await fillFirst("memory"); await save("memory").click(); await failure().waitFor();
+      await doc("memory").getByRole("button",{name:"Discard edits",exact:true}).click();
+      memoryChecks.push({name:"conflict-discard",fieldDisabled:await doc("memory").locator("textarea").first().isDisabled()});
+      if(stage==="after") {
+        await visibleError("discard-lock-reason");
+      }
+      await shot("conflict-discard");
+      for(const mode of ["disabled","empty","too-long"]) {
+        await reset({mode});
+        if(mode==="too-long") {
+          const field=doc("memory").locator("textarea").first();
+          await field.fill(`${await field.inputValue()}${fixture.memoryFixture.limitEditSuffix}`);
+          if(stage==="after") {
+            if(!await save("memory").isDisabled()) throw Error("An over-limit document can be saved.");
+            const limit=doc("memory").locator(".memory-limit"); await limit.waitFor(); await limit.scrollIntoViewIfNeeded();
+          } else { await save("memory").click(); await panel.getByText(fixture.memoryMessages.tooLong,{exact:true}).waitFor(); }
+        }
+        if(stage==="after" && mode==="disabled") await doc("user").locator("h3").scrollIntoViewIfNeeded();
+        await shot(mode);
+      }
+      if(stage==="after") {
+        for(const [name,theme,large] of [["dark-conflict","dark",false],["large-text-conflict","light",true]]) {
+          await reset({theme,large,mode:"conflict"}); await fillFirst("memory"); await save("memory").click(); await failure().waitFor();
+          await visibleError(name,true);
+          await shot(name,390,theme);
+        }
+        await reset({mode:"reload-error"}); await fillFirst("memory"); await save("memory").click(); await failure().waitFor();
+        await reloadMemory(); await panel.getByText(fixture.memoryMessages.loadError,{exact:true}).waitFor();
+        if(await doc("memory").locator("textarea").first().inputValue()!==fixture.memoryFixture.editEntry) throw Error("Failed reload lost the draft.");
+        await shot("reload-failed"); await reloadMemory();
+        await tab.waitForFunction(text=>document.querySelector('[data-memory-target="memory"] textarea')?.value===text,fixture.memory.documents[0].entries[0].text);
+        await shot("reload-recovered");
+      }
+      if(browserErrors.length || geometry.some(row=>row.overflow)) throw Error(`Memory capture failed: ${JSON.stringify({browserErrors,overflow:geometry.filter(row=>row.overflow)})}`);
+      return {paths,geometry,memorySubmissions,memoryChecks,browserErrors};
+    }
     if (screen === "models") {
       const dialog = tab.locator(".settings-dialog");
       const modelChecks = [];
@@ -685,7 +938,7 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
           } else {
             state="model-confirm";await dialog.getByLabel("Description",{exact:true}).fill("Preserve this description while reviewing the model.");
             await dialog.getByRole("button",{name:"Save changes",exact:true}).click();
-            await dialog.getByRole("button",{name:stage==="before"?"Confirm this model":"Use this model",exact:true}).waitFor();
+            await dialog.getByRole("button",{name:"Confirm this model",exact:true}).waitFor();
           }
           const prompt = dialog.getByRole("alertdialog");
           if (stage!=="before") {
@@ -1108,5 +1361,5 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
   } catch (error) {
     await tab.screenshot({path:`${outputDir}/${prefix}-${screen}-capture-error.png`,animations:"disabled"}).catch(() => {});
     throw new Error(`${error.message}\nBrowser errors: ${browserErrors.join("; ")}`);
-  } finally { await context.close(); }
+  } finally { releaseMemoryLoad?.(); releaseMemoryWrite?.(); await context.unrouteAll({behavior:"ignoreErrors"}); await context.close(); }
 }

@@ -765,3 +765,39 @@ describe("existing assistant portraits", () => {
     expect(container.textContent).toContain("The description is 1 character over the 2,000 limit. Shorten the text to generate a portrait.");
   });
 });
+
+async function openMemoryForEditing() {
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: vi.fn() });
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { callback(0); return 0; });
+  const memory = { botId: "shared", profile: "shared", scope: "profile" as const, owner: "Hermes", notice: "Shared profile.", documents: [
+    { target: "memory" as const, label: "Assistant notes", revision: "a".repeat(64), enabled: true, charLimit: 2200, charCount: 5, entries: [{ id: "1", text: "First" }] },
+  ] };
+  vi.mocked(api).mockResolvedValue(memory); await click("memory");
+  await typeInto(container.querySelector<HTMLTextAreaElement>(".memory-panel textarea")!, "Edited fact");
+  return memory;
+}
+it("keeps Memory drafts on Close and tab cancellation, and leaves only after explicit discard", async () => {
+  await openMemoryForEditing();
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Close assistant settings"]')!.click());
+  expect(onClose).not.toHaveBeenCalled(); expect(container.textContent).toContain("Discard your unsaved changes?");
+  await click("Keep editing"); expect(container.querySelector<HTMLTextAreaElement>(".memory-panel textarea")!.value).toBe("Edited fact");
+  await click("details"); expect(container.textContent).toContain("Leave memory without saving?");
+  await click("Keep editing"); expect(container.querySelector<HTMLTextAreaElement>(".memory-panel textarea")!.value).toBe("Edited fact");
+  await click("details"); await click("Discard edits and leave");
+  expect(container.querySelector(".memory-panel")).toBeNull(); expect(onClose).not.toHaveBeenCalled();
+});
+it("holds Memory navigation and Close while an accepted save is in flight", async () => {
+  const memory = await openMemoryForEditing();
+  let finish!: (value: typeof memory) => void;
+  vi.mocked(write).mockReturnValueOnce(new Promise<typeof memory>(resolve => { finish = resolve; }));
+  await click("Save memories");
+  const close = container.querySelector<HTMLButtonElement>('[aria-label="Close assistant settings"]')!;
+  expect(close.disabled).toBe(true); await click("details"); expect(container.querySelector(".memory-panel")).not.toBeNull();
+  expect(container.textContent).not.toContain("Leave memory without saving?");
+  const cancel = new Event("cancel", { cancelable: true, bubbles: true });
+  await act(async () => { container.querySelector(".settings-dialog")!.dispatchEvent(cancel); });
+  expect(cancel.defaultPrevented).toBe(true); expect(onClose).not.toHaveBeenCalled();
+  expect(container.textContent).not.toContain("Discard your unsaved changes?");
+  await act(async () => finish({ ...memory, documents: [{ ...memory.documents[0], revision: "b".repeat(64), entries: [{ id: "2", text: "Edited fact" }] }] }));
+  expect(close.disabled).toBe(false); await act(async () => close.click()); expect(onClose).toHaveBeenCalledTimes(1);
+});

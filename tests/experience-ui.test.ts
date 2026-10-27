@@ -5,7 +5,7 @@ import type { Root } from "react-dom/client";
 import { beforeEach, expect, it, vi } from "vitest";
 import { api, ApiError, write } from "../src/client-api";
 import { TodayPanel } from "../src/components/TodayPanel";
-import { MemoryPanel } from "../src/components/MemoryPanel";
+import { MemoryPanel, memoryDraftSize } from "../src/components/MemoryPanel";
 import { ReplyCards } from "../src/components/ReplyCards";
 import { MessageMarkdown } from "../src/components/MessageMarkdown";
 import { RoutineEnhancements, RoutineSchedulePreview } from "../src/components/RoutineEnhancements";
@@ -19,6 +19,12 @@ vi.mock("../src/components/Avatar", async original => ({ ...await original<typeo
 let root: Root; let container: HTMLDivElement;
 beforeEach(() => {
   vi.mocked(api).mockReset(); vi.mocked(write).mockReset();
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: vi.fn() });
+  for (const [name, open] of [["showModal", true], ["close", false]] as const) {
+    Object.defineProperty(HTMLDialogElement.prototype, name, { configurable: true, value: function(this: HTMLDialogElement) { this.open = open; } });
+  }
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { callback(0); return 0; });
+
   ({ container, root } = mountRoot());
 });
 async function render(element: ReactElement) { await act(async () => root.render(element)); }
@@ -151,4 +157,105 @@ it("persists a trial admission before dispatch and checks an uncertain run witho
   expect(Array.from(container.querySelectorAll("button")).some(button => button.textContent === "Try once")).toBe(false);
   await click("Check run status"); expect(api).toHaveBeenCalledWith(`/routines/r1/runs/${requestId}`); expect(write).toHaveBeenCalledTimes(1);
   await click("Retry the same request"); expect(write).toHaveBeenLastCalledWith("/routines/r1/run", { requestId });
+});
+
+function memoryForEditing(): ProfileMemory {
+  return { botId: "ranch", profile: "ranch", scope: "profile", owner: "Hermes", notice: "Shared profile.",
+    refresh: { revision: "", state: "applied", busy: false, message: "Saved in Hermes. No app memory refresh is pending." },
+    documents: [
+      { target: "memory", label: "Assistant notes", revision: "a".repeat(64), enabled: true, charLimit: 2200, charCount: 5, entries: [{ id: "1", text: "First" }] },
+      { target: "user", label: "About you", revision: "b".repeat(64), enabled: true, charLimit: 1375, charCount: 6, entries: [{ id: "2", text: "Second" }] },
+    ] };
+}
+it("counts Unicode scalars and known separator overhead without guessing unknown overhead", () => {
+  const document = { ...memoryForEditing().documents[0], charCount: 11, entries: [{ id: "1", text: "🧑‍🌾" }, { id: "2", text: "élève" }] };
+  expect(memoryDraftSize(document, [{ id: "1", text: " 🧑‍🌾 " }, { id: "2", text: "🍏" }])).toBe(7);
+  expect(memoryDraftSize(memoryForEditing().documents[0], document.entries)).toBeUndefined();
+  expect(memoryDraftSize({ ...document, charCount: 1 }, document.entries)).toBeUndefined();
+  expect(memoryDraftSize(document, [])).toBe(0);
+});
+it("does not announce a save on the first profile read", async () => {
+  vi.mocked(api).mockResolvedValue(memoryForEditing());
+  await render(createElement(MemoryPanel, { botId: "ranch" }));
+  expect(container.textContent).not.toContain("Saved in Hermes.");
+  expect(container.textContent).toContain("About this profile");
+});
+it("keeps conflicted drafts selectable, confirms reload and preserves them if the reload fails", async () => {
+  const memory = memoryForEditing(); vi.mocked(api).mockResolvedValue(memory);
+  vi.mocked(write).mockRejectedValueOnce(new ApiError("Hermes is being upgraded. Memory edits are paused.", 409));
+  await render(createElement(MemoryPanel, { botId: "ranch" }));
+  await typeInto(container.querySelector<HTMLTextAreaElement>("textarea")!, "Keep my draft");
+  await click("Save memories", container.querySelector(".memory-document")!);
+  const field = container.querySelector<HTMLTextAreaElement>("textarea")!;
+  expect(field.readOnly).toBe(true); expect(field.disabled).toBe(false); field.focus(); expect(document.activeElement).toBe(field);
+  await click("Reload profile memory"); await click("Keep editing");
+  expect(api).toHaveBeenCalledTimes(1); expect(field.value).toBe("Keep my draft");
+  vi.mocked(api).mockRejectedValueOnce(new Error("Could not reload memory."));
+  await click("Reload profile memory"); await click("Reload and discard edits");
+  expect(container.textContent).toContain("Could not reload memory.");
+  expect(container.querySelector<HTMLTextAreaElement>("textarea")!.value).toBe("Keep my draft");
+  await click("Try loading again"); await click("Reload and discard edits");
+  const fresh = container.querySelector<HTMLTextAreaElement>("textarea")!;
+  expect(fresh.value).toBe("First"); expect(fresh.readOnly).toBe(false);
+});
+it("keeps the conflict explained after discarding the edited text", async () => {
+  vi.mocked(api).mockResolvedValue(memoryForEditing());
+  vi.mocked(write).mockRejectedValueOnce(new ApiError("Reload the newer profile memory.", 409));
+  await render(createElement(MemoryPanel, { botId: "ranch" }));
+  await typeInto(container.querySelector<HTMLTextAreaElement>("textarea")!, "Edited");
+  await click("Save memories", container.querySelector(".memory-document")!); await click("Discard edits");
+  expect(container.textContent).not.toContain("Your edits are kept");
+  expect(container.textContent).toContain("Reload profile memory before editing again.");
+  expect(container.querySelector<HTMLTextAreaElement>("textarea")!.readOnly).toBe(true);
+});
+it("blocks reload during a document write and restores it when the write settles", async () => {
+  const memory = memoryForEditing(); vi.mocked(api).mockResolvedValue(memory);
+  let finish!: (memory: ProfileMemory) => void;
+  const pending = new Promise<ProfileMemory>(resolve => { finish = resolve; });
+  vi.mocked(write).mockReturnValueOnce(pending);
+  await render(createElement(MemoryPanel, { botId: "ranch" }));
+  await typeInto(container.querySelector<HTMLTextAreaElement>("textarea")!, "Edited");
+  await click("Save memories", container.querySelector(".memory-document")!);
+  const reload = [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Reload profile memory")!;
+  expect(reload.disabled).toBe(true); expect(container.textContent).toContain("Saving memories in Hermes...");
+  await act(async () => finish({ ...memory, documents: [{ ...memory.documents[0], revision: "c".repeat(64), entries: [{ id: "3", text: "Edited" }] }, memory.documents[1]] }));
+  expect(reload.disabled).toBe(false);
+});
+it("accepts server normalization even when the saved document revision is unchanged", async () => {
+  const memory = memoryForEditing(); vi.mocked(api).mockResolvedValue(memory); vi.mocked(write).mockResolvedValue(memory);
+  await render(createElement(MemoryPanel, { botId: "ranch" }));
+  await typeInto(container.querySelector<HTMLTextAreaElement>("textarea")!, " First ");
+  await click("Save memories", container.querySelector(".memory-document")!);
+  expect(container.querySelector<HTMLTextAreaElement>("textarea")!.value).toBe("First");
+  expect(container.querySelector<HTMLButtonElement>(".memory-document .primary")!.disabled).toBe(true);
+});
+it.each(["saved", "failed"] as const)("keeps the caret in the other document when a write %s", async outcome => {
+  const memory = memoryForEditing(); vi.mocked(api).mockResolvedValue(memory);
+  let finish!: (value: ProfileMemory) => void, fail!: (reason: Error) => void;
+  vi.mocked(write).mockReturnValueOnce(new Promise<ProfileMemory>((resolve, reject) => { finish = resolve; fail = reject; }));
+  await render(createElement(MemoryPanel, { botId: "ranch" }));
+  await typeInto(container.querySelector<HTMLTextAreaElement>("textarea")!, "Edited first");
+  await click("Save memories", container.querySelector(".memory-document")!);
+  const other = container.querySelectorAll<HTMLTextAreaElement>("textarea")[1];
+  other.focus(); await typeInto(other, "Continue typing in the second document");
+  await act(async () => {
+    if (outcome === "failed") fail(new Error("Memory write failed."));
+    else finish({ ...memory, documents: [{ ...memory.documents[0], revision: "c".repeat(64), entries: [{ id: "3", text: "Edited first" }] }, memory.documents[1]] });
+  });
+  expect(document.activeElement).toBe(other);
+  expect(other.value).toBe("Continue typing in the second document");
+});
+it("keeps keyboard focus visible at the Memory heading after a clean reload", async () => {
+  vi.mocked(api).mockResolvedValue(memoryForEditing());
+  await render(createElement(MemoryPanel, { botId: "ranch" }));
+  const reload = [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Reload profile memory")!;
+  reload.focus(); await click("Reload profile memory");
+  expect(document.activeElement).toBe(container.querySelector(".memory-intro h2"));
+});
+it("moves keyboard focus to a newly added memory above its Add button", async () => {
+  vi.mocked(api).mockResolvedValue(memoryForEditing());
+  await render(createElement(MemoryPanel, { botId: "ranch" }));
+  const section = container.querySelector('.memory-document[data-memory-target="memory"]')!;
+  await click("Add memory", section);
+  expect(document.activeElement).toBe(section.querySelectorAll("textarea")[1]);
 });

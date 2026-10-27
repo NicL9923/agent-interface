@@ -959,11 +959,13 @@ a {
 .settings-tabs-mobile {
   position: relative;
   z-index: 1;
+  flex-wrap: wrap;
 }
 .settings-tabs-overflow {
   position: relative;
   min-width: 0;
   margin-left: auto;
+  flex-shrink: 0;
 }
 .settings-more-trigger {
   display: flex;
@@ -982,9 +984,6 @@ a {
   display: none;
 }
 .settings-more-trigger > span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 .settings-more-trigger[aria-current="page"] {

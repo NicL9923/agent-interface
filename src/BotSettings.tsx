@@ -82,6 +82,10 @@ function LoadedBotSettings({
   const [step, setStep] = useState<"look" | "role">("look");
   const [avatarFailure, setAvatarFailure] = useState("");
   const [tab, setTab] = useState<SettingsTab>("details");
+  const [memoryDirty, setMemoryDirty] = useState(false);
+  const [memorySaving, setMemorySaving] = useState(false);
+  const [pendingMemoryTab, setPendingMemoryTab] = useState<SettingsTab | null>(null);
+  useEffect(() => { if (!memoryDirty) setPendingMemoryTab(null); }, [memoryDirty]);
   const compactSettings = useCompactSettings();
   const overflowMenu = useRef<HTMLDetailsElement>(null);
   const overflowTrigger = useRef<HTMLElement>(null);
@@ -111,7 +115,7 @@ function LoadedBotSettings({
   const toolsDraft = useCatalogDraft("tools", catalogOptions("tools"));
   const skillsDraft = useCatalogDraft("skills", catalogOptions("skills"));
   const unsaved = JSON.stringify([form, avatar]) !== JSON.stringify([baseline.form, baseline.avatar])
-    || toolsDraft.staged || skillsDraft.staged;
+    || toolsDraft.staged || skillsDraft.staged || memoryDirty;
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const keepEditing = useRef<HTMLButtonElement>(null);
   const beforePrompt = useRef<HTMLElement | null>(null);
@@ -129,7 +133,7 @@ function LoadedBotSettings({
   };
   useEffect(() => { if (!unsaved) setConfirmDiscard(false); }, [unsaved]);
   // Escape and the close button both land here, so nothing is discarded without asking.
-  const requestClose = () => unsaved ? setConfirmDiscard(true) : onClose();
+  const requestClose = () => memorySaving ? undefined : unsaved ? setConfirmDiscard(true) : onClose();
   const routinesResource = useResource(existing && tab === "routines" && bootstrap.capabilities.routines.supported ? routeUrl("GET /routines", {}) : null, { load: (_, signal) => request("GET /routines", { signal }) });
   const routines = (routinesResource.data || []).filter(routine => routine.botId === existing?.id);
   const [confirmModel, setConfirmModel] = useState<string | null>(null);
@@ -274,7 +278,13 @@ function LoadedBotSettings({
           "This capability is unavailable from the connected Hermes installation."}
       </p>
     ) : null;
-  const selectTab = (section: SettingsTab, fromOverflow = false) => {
+  const selectTab = (section: SettingsTab, fromOverflow = false, discardMemory = false) => {
+    if (memorySaving) return;
+    if (tab === "memory" && section !== tab && memoryDirty && !discardMemory) {
+      if (overflowMenu.current) overflowMenu.current.open = false;
+      if (fromOverflow) overflowTrigger.current?.focus();
+      setPendingMemoryTab(section); return;
+    }
     setTab(section);
     setError("");
     setNotice("");
@@ -290,6 +300,7 @@ function LoadedBotSettings({
       className="settings-dialog"
       aria-labelledby="assistant-settings-title"
       onCancel={(event) => {
+        if (memorySaving) { event.preventDefault(); return; }
         if (!unsaved) return onClose();
         event.preventDefault();
         setConfirmDiscard(true);
@@ -297,6 +308,7 @@ function LoadedBotSettings({
       onClose={() => {
         // Closing and reopening in one pass, as Strict Mode does, queues an event for a dialog that is open.
         if (dialog.current?.open) return;
+        if (memorySaving) { dialog.current?.showModal(); return; }
         // A second Escape can close the dialog without a cancelable event, so put it back.
         if (!unsaved) return onClose();
         dialog.current?.showModal();
@@ -312,6 +324,7 @@ function LoadedBotSettings({
           className="icon-button"
           aria-label="Close assistant settings"
           onClick={requestClose}
+          disabled={memorySaving}
         >
           <Icon name="close" />
         </Button>
@@ -330,6 +343,7 @@ function LoadedBotSettings({
             type="button"
             aria-current={tab === t ? "page" : undefined}
             key={t}
+            disabled={memorySaving}
             onClick={() => selectTab(t)}
           >
             {t}
@@ -349,7 +363,7 @@ function LoadedBotSettings({
             <span>{settingsSections.slice(2).includes(tab) ? tab : "More"}</span><Icon name="chevron" size={16} />
           </summary>
           <div className="settings-more-menu" id={overflowMenuId}>
-            {settingsSections.slice(2).map((section) => <Button type="button" key={section}
+            {settingsSections.slice(2).map((section) => <Button type="button" key={section} disabled={memorySaving}
               aria-current={tab === section ? "page" : undefined} onClick={() => selectTab(section, true)}>{section}</Button>)}
           </div>
         </details>}
@@ -366,6 +380,12 @@ function LoadedBotSettings({
             </div>
           </div>
         )}
+        {pendingMemoryTab && <SettingsConfirmation title="Leave memory without saving?"
+          detail="Your unsaved memory edits will be lost. Save them before leaving if you want to keep them."
+          confirmLabel="Discard edits and leave" danger busy={false}
+          fallbackFocus={() => dialog.current?.querySelector<HTMLElement>("#assistant-settings-title") ?? null}
+          onCancel={() => setPendingMemoryTab(null)}
+          onConfirm={() => { const section = pendingMemoryTab; setPendingMemoryTab(null); setMemoryDirty(false); selectTab(section, false, true); }} />}
         {confirmPersonal && existing && <SettingsConfirmation
           title={`Make ${savedName} personal?`}
           detail="It will disappear for the rest of the household, along with its conversation, routines and group chats."
@@ -606,7 +626,7 @@ function LoadedBotSettings({
         {existing && tab === "connections" && <IntegrationList profile={existing.id} bots={bootstrap.bots} accountScope={bootstrap.user.id} />}
         {existing && tab === "work" && <AutomationPanel key={existing.id} botId={existing.id} bots={bootstrap.bots} accountScope={bootstrap.user.id} />}
         {existing && tab === "learning" && <LearningPanel key={existing.id} botId={existing.id} />}
-        {existing && tab === "memory" && <MemoryPanel key={existing.id} botId={existing.id} />}
+        {existing && tab === "memory" && <MemoryPanel key={existing.id} botId={existing.id} onDirtyChange={setMemoryDirty} onSavingChange={setMemorySaving} />}
         {existing && tab === "logins" && <VaultPanel key={existing.id} botId={existing.id} />}
         {existing && tab === "routines" && (
           <>

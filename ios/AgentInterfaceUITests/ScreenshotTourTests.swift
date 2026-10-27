@@ -14,6 +14,17 @@ import XCTest
     continueAfterFailure = false
   }
 
+  override func tearDown() async throws {
+    if (testRun?.failureCount ?? 0) > 0 {
+      let app = XCUIApplication()
+      if app.state == .runningForeground {
+        let screenshot = XCTAttachment(screenshot: app.screenshot()); screenshot.name = "design-failure-screen"; screenshot.lifetime = .keepAlways; add(screenshot)
+        let hierarchy = XCTAttachment(string: app.debugDescription); hierarchy.name = "design-failure-hierarchy"; hierarchy.lifetime = .keepAlways; add(hierarchy)
+      }
+    }
+    try await super.tearDown()
+  }
+
   /// Focused captures for the screen-by-screen design gate, using the same data as the web.
   func testTodayDesignReview() throws {
     let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_TODAY_PATH"] ?? ""
@@ -529,7 +540,9 @@ import XCTest
         "\($0.label.prefix(64)):\(String(describing: $0.frame))"
       }
     }
-    for attempt in 0..<12 {
+    // The two Memory documents at AX3 need more travel than the shorter Models forms.
+    let attempts = form.identifier == "memoryForm" ? 24 : 12
+    for attempt in 0..<attempts {
       let keyboard = app.keyboards.firstMatch
       let navigationBottom = app.navigationBars.allElementsBoundByIndex
         .filter { $0.hasFrame && $0.frame.intersects(form.frame) }.map { $0.frame.maxY }.max() ?? form.frame.minY
@@ -552,7 +565,7 @@ import XCTest
       } else { distance = height * 0.38 }
       let start = form.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 8, dy: (upward ? top + height * 0.72 : top + height * 0.28) - form.frame.minY))
       let end = start.withOffset(CGVector(dx: 0, dy: distance * (upward ? -1 : 1)))
-      start.press(forDuration: 0.3, thenDragTo: end)
+      start.press(forDuration: 0.3, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.2)
       if !before.isEmpty && before == cells() {
         XCTFail("Models list did not move. Check up hint \(up) for target \(element)"); return
       }
@@ -615,6 +628,214 @@ import XCTest
         XCTAssertTrue(packing.waitForExistence(timeout: 5)); XCTAssertEqual(packing.value as? String, "1")
         XCTAssertEqual(required.value as? String, "1")
       }
+      app.terminate()
+    }
+  }
+
+  /// Memory baseline and final comparisons share the production-shaped two-document fixture.
+  func testMemoryDesignReview() throws {
+    let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_MEMORY_PATH"] ?? ""
+    try XCTSkipUnless(!source.isEmpty, "Set AGENT_INTERFACE_DESIGN_MEMORY_PATH to capture Memory.")
+    let original = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: source))) as? [String: Any])
+    let config = try XCTUnwrap(original["memoryFixture"] as? [String: String])
+    let messages = try XCTUnwrap(original["memoryMessages"] as? [String: String])
+    let savedDocuments = try XCTUnwrap((original["memory"] as? [String: Any])?["documents"] as? [[String: Any]])
+    let firstDocument = try XCTUnwrap(savedDocuments.first)
+    let savedEntries = try XCTUnwrap(firstDocument["entries"] as? [[String: String]])
+    let firstSavedText = try XCTUnwrap(savedEntries.first?["text"])
+    let after = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_STAGE"] == "after"
+    let selection = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_VARIANT"] ?? ""
+    let variants = ["loaded", "dark", "large-text", "loading", "load-error", "conflict", "paused", "discard", "disabled", "empty", "too-long"] + (after ? ["reload-error", "conflict-large-text"] : [])
+    let selected = selection.components(separatedBy: ",")
+    guard selection.isEmpty || selected.allSatisfy(variants.contains) else { XCTFail("Unknown Memory variant: \(selection)"); return }
+    for variant in variants where selection.isEmpty || selected.contains(variant) {
+      var fixture = original
+      fixture["mode"] = variant == "discard" ? "paused" : variant == "conflict-large-text" ? "conflict" : variant
+      if after && variant == "loaded" { fixture["memoryWriteDelayMs"] = 8000 }
+      let app = launch(textSize: variant.contains("large-text") ? "UICTContentSizeCategoryAccessibilityXL" : "UICTContentSizeCategoryL",
+        environment: ["AGENT_INTERFACE_UI_THEME": variant == "dark" ? "dark" : "light",
+          "AGENT_INTERFACE_UI_DESIGN_FIXTURE": String(decoding: try JSONSerialization.data(withJSONObject: fixture), as: UTF8.self)])
+      XCTAssertTrue(app.textViews["messageComposer"].waitForExistence(timeout: 15))
+      app.openAssistantSettings("Ranch hand"); app.selectSettingsTab("Memory")
+      let form = app.collectionViews["memoryForm"]
+      XCTAssertTrue(form.waitForExistence(timeout: 5))
+      func field(_ target: String, _ index: Int = 1) -> XCUIElement {
+        let identifier = "memoryEntry.\(target).\(index)"
+        if !after { return app.textFields[identifier] }
+        return app.descendants(matching: .any).matching(NSPredicate(format: "identifier == %@ AND elementType IN %@", identifier,
+          [XCUIElement.ElementType.textField.rawValue, XCUIElement.ElementType.textView.rawValue, XCUIElement.ElementType.staticText.rawValue])).firstMatch
+      }
+      func reveal(_ element: XCUIElement, up: Bool = true) { revealModels(element, in: form, app: app, up: up) }
+      func save(_ target: String = "memory") -> XCUIElement { app.buttons["memorySave.\(target)"] }
+      func error(_ text: String) -> XCUIElement {
+        if after { return app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", text)).firstMatch }
+        return app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", text)).firstMatch
+      }
+      func replace(_ input: XCUIElement, with expected: String) {
+        let previous = input.value as? String ?? ""
+        func attempt() {
+          if !input.waitForKeyboardFocus(true, timeout: 0) { input.tapWhenReady() }
+          XCTAssertTrue(input.waitForKeyboardFocus()); input.waitForKeyboardLayout()
+          XCTAssertTrue(input.waitForKeyboardFocus(), "The field must retain focus after keyboard layout")
+          input.typeKey("a", modifierFlags: .command); input.typeWhenFocused(expected)
+        }
+        attempt()
+        if !input.wait(until: "value == %@", expected, timeout: 3) {
+          let current = input.value as? String ?? ""
+          print("DESIGN_MEMORY_REPLACE variant=\(variant) previous=\(String(reflecting: previous)) afterFirstAttempt=\(String(reflecting: current)) focused=\(input.waitForKeyboardFocus(true, timeout: 0)) enabled=\(input.isEnabled) frame=\(input.frame)")
+          attempt()
+        }
+        if !input.wait(until: "value == %@", expected) {
+          let shot = XCTAttachment(screenshot: app.screenshot()); shot.name = "memory-edit-\(variant)-failed"; shot.lifetime = .keepAlways; add(shot)
+          let tree = XCTAttachment(string: app.debugDescription); tree.name = "memory-edit-\(variant)-hierarchy"; tree.lifetime = .keepAlways; add(tree)
+        }
+        XCTAssertEqual(input.value as? String, expected, "Exact replacement must succeed before the fixture can be saved")
+      }
+      func editFirst() {
+        let first = field("memory"); reveal(first, up: !["loaded", "large-text"].contains(variant))
+        replace(first, with: config["editEntry"]!)
+      }
+      let name = "memory-" + variant
+      if variant == "loading" {
+        let loading = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Loading profile memory…")).firstMatch
+        XCTAssertTrue(loading.waitForExistence(timeout: 5)); try capture(name); XCTAssertTrue(loading.exists)
+        app.terminate(); continue
+      }
+      if variant == "load-error" {
+        let failed = error(messages["loadError"]!); XCTAssertTrue(failed.waitForExistence(timeout: 5)); try capture(name)
+        app.buttons["Try loading again"].tapWhenReady()
+        XCTAssertTrue(field("memory").waitForExistence(timeout: 5)); XCTAssertFalse(failed.exists); try capture("memory-retried")
+        app.terminate(); continue
+      }
+      if variant == "empty" {
+        XCTAssertTrue(app.staticTexts[after ? "Nothing saved here yet. Add a fact you want this profile to remember." : "Nothing saved here yet."].firstMatch.waitForExistence(timeout: 5)); try capture(name)
+        app.terminate(); continue
+      }
+      let profile = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", after ? "Shared profile: ranch" : "Profile: ranch.")).firstMatch
+      XCTAssertTrue(profile.waitForExistence(timeout: 5))
+      if ["loaded", "dark", "large-text"].contains(variant) {
+        try capture(name)
+        reveal(field("user")); try capture(name + "-profile")
+      }
+      if variant == "loaded" {
+        editFirst()
+        let add = app.buttons["memoryAdd.memory"]; reveal(add); add.tapWhenReady()
+        let added = field("memory", 4)
+        if after {
+          XCTAssertTrue(added.waitForExistence(timeout: 5)); XCTAssertTrue(added.waitForKeyboardFocus(), "Add memory focuses its new field")
+        } else { reveal(added) }
+        added.typeWhenFocused(config["newEntry"]!)
+        reveal(save()); XCTAssertTrue(save().isEnabled); try capture("memory-dirty")
+        if after {
+          app.buttons["Close"].tapWhenReady()
+          XCTAssertTrue(app.buttons["confirmationKeep"].waitForExistence(timeout: 5)); try capture("memory-close-confirmation")
+          app.buttons["confirmationKeep"].tapWhenReady(); reveal(added, up: false)
+          XCTAssertTrue(added.wait(until: "value == %@", config["newEntry"]!)); reveal(save())
+        }
+        save().tapWhenReady()
+        if after {
+          let progress = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Saving memories in Hermes…")).firstMatch
+          XCTAssertTrue(progress.waitForExistence(timeout: 3)); try capture("memory-saving"); XCTAssertTrue(progress.exists)
+          XCTAssertFalse(app.buttons["Close"].isEnabled); XCTAssertFalse(app.buttons["settingsMore"].isEnabled)
+        }
+        XCTAssertTrue(app.buttons["memoryDiscard.memory"].waitForDisappearance())
+        reveal(added, up: false); XCTAssertTrue(added.wait(until: "value == %@", config["newEntry"]!))
+        let refreshed = app.staticTexts[after ? "memorySaved.memory" : "memoryRefreshStatus"]
+        reveal(refreshed, up: after)
+        XCTAssertTrue(refreshed.wait(until: "label == %@", messages["nextTurn"]!)); try capture("memory-saved")
+        let forget = app.buttons["memoryForget.user.1"]; reveal(forget); forget.tapWhenReady()
+        XCTAssertTrue(app.buttons["Forget entry"].waitForExistence(timeout: 5)); try capture("memory-forget-confirmation")
+        let userEntries = try XCTUnwrap(savedDocuments[1]["entries"] as? [[String: String]])
+        let forgottenText = try XCTUnwrap(userEntries.first?["text"])
+        if after {
+          XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "\"\(forgottenText)\"")).firstMatch.exists)
+          app.buttons["confirmationKeep"].tapWhenReady()
+        } else if app.buttons["Cancel"].exists { app.buttons["Cancel"].tapWhenReady() }
+        else if app.otherElements["PopoverDismissRegion"].firstMatch.exists { app.otherElements["PopoverDismissRegion"].firstMatch.tap() }
+        else { app.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.1)).tap() }
+        XCTAssertTrue(app.buttons["Forget entry"].waitForDisappearance())
+        XCTAssertTrue(field("user").exists)
+        XCTAssertEqual(field("user").value as? String, forgottenText)
+        reveal(forget); forget.tapWhenReady(); app.buttons["Forget entry"].tapWhenReady()
+        let user = try XCTUnwrap((original["memory"] as? [String: Any])?["documents"] as? [[String: Any]])[1]
+        let remaining = try XCTUnwrap(user["entries"] as? [[String: String]])[1]["text"]!
+        XCTAssertTrue(field("user").wait(until: "value == %@", remaining))
+      } else if ["conflict", "paused", "discard", "reload-error", "conflict-large-text"].contains(variant) {
+        editFirst(); reveal(save()); save().tapWhenReady()
+        let failed = error(messages[variant.contains("conflict") ? "conflict" : "paused"]!)
+        XCTAssertTrue(failed.waitForExistence(timeout: 5)); reveal(failed)
+        if variant != "discard" { try capture(name) }
+        reveal(field("memory"), up: false)
+        print("DESIGN_MEMORY_CONFLICT variant=\(variant) fieldEnabled=\(field("memory").isEnabled) draft=\(String(describing: field("memory").value))")
+        XCTAssertEqual(field("memory").value as? String, config["editEntry"])
+        if after { XCTAssertFalse(app.textFields["memoryEntry.memory.1"].exists, "The conflicted draft is read-only text") }
+        if variant == "discard" {
+          let discard = app.buttons["memoryDiscard.memory"]; reveal(discard); discard.tapWhenReady()
+          XCTAssertTrue(discard.waitForDisappearance()); reveal(field("memory"), up: false); try capture(name)
+          print("DESIGN_MEMORY_DISCARD fieldEnabled=\(field("memory").isEnabled)")
+        } else {
+          let reload = app.buttons["Reload profile memory"]; reveal(reload); reload.tapWhenReady()
+          if after {
+            XCTAssertTrue(app.buttons["confirmationAccept"].waitForExistence(timeout: 5))
+            if variant == "paused" { try capture("memory-reload-confirmation") }
+            app.buttons["confirmationAccept"].tapWhenReady()
+          }
+          if variant == "reload-error" {
+            let readError = error(messages["loadError"]!); XCTAssertTrue(readError.waitForExistence(timeout: 5))
+            let navigationBottom = app.navigationBars.allElementsBoundByIndex.filter { $0.hasFrame && $0.frame.intersects(form.frame) }.map { $0.frame.maxY }.max() ?? form.frame.minY
+            XCTAssertGreaterThanOrEqual(readError.frame.minY, max(form.frame.minY, navigationBottom), "Failed reload clears the navigation bar")
+            XCTAssertLessThanOrEqual(readError.frame.maxY, form.frame.maxY, "Failed reload keeps the entire error visible")
+            try capture("memory-reload-failed")
+            reveal(field("memory")); XCTAssertTrue(field("memory").wait(until: "value == %@", config["editEntry"]!))
+            let retry = app.buttons["Try loading again"]; reveal(retry, up: false); retry.tapWhenReady()
+            app.buttons["confirmationAccept"].tapWhenReady()
+          }
+          XCTAssertTrue(failed.waitForDisappearance(timeout: 5))
+          reveal(field("memory"), up: false)
+          XCTAssertTrue(app.textFields["memoryEntry.memory.1"].wait(until: "enabled == true"))
+          print("DESIGN_MEMORY_RELOAD variant=\(variant) draft=\(String(describing: field("memory").value))")
+          XCTAssertEqual(field("memory").value as? String, firstSavedText)
+          if variant.contains("conflict") { reveal(field("memory", 4)); XCTAssertTrue(field("memory", 4).wait(until: "value == %@", config["externalEntry"]!)) }
+        }
+      } else if variant == "disabled" {
+        let note = app.staticTexts[after ? "Editing is disabled in this Hermes profile. You can still read and copy these notes." : "This memory is disabled in the Hermes profile."]
+        reveal(note); XCTAssertTrue(note.exists)
+        if after {
+          reveal(field("user")); XCTAssertFalse(app.textFields["memoryEntry.user.1"].exists)
+          let documents = try XCTUnwrap((original["memory"] as? [String: Any])?["documents"] as? [[String: Any]])
+          let entries = try XCTUnwrap(documents[1]["entries"] as? [[String: String]])
+          XCTAssertEqual(field("user").value as? String, entries[0]["text"])
+        }
+        else { XCTAssertFalse(field("user").isEnabled) }
+        try capture(name)
+      } else if variant == "too-long" {
+        let edited = field("memory", 2); reveal(edited)
+        let previous = try XCTUnwrap(edited.value as? String)
+        let expected = previous + config["limitEditSuffix"]!
+        replace(edited, with: expected)
+        print("DESIGN_MEMORY_LIMIT previousScalars=\(previous.unicodeScalars.count) editedScalars=\(expected.unicodeScalars.count) aggregateExpected=2207")
+        reveal(save())
+        if after {
+          XCTAssertFalse(save().isEnabled)
+          let limit = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "7 characters over the limit")).firstMatch
+          reveal(limit, up: false); XCTAssertTrue(limit.exists); try capture(name)
+          app.terminate(); continue
+        }
+        XCTAssertTrue(save().isEnabled); save().tapWhenReady()
+        let failed = error(messages["tooLong"]!)
+        if !failed.waitForExistence(timeout: 5) {
+          let screenshot = XCTAttachment(screenshot: app.screenshot()); screenshot.name = "memory-limit-response"; screenshot.lifetime = .keepAlways; add(screenshot)
+          let tree = XCTAttachment(string: app.debugDescription); tree.name = "memory-limit-response-hierarchy"; tree.lifetime = .keepAlways; add(tree)
+        }
+        reveal(failed); XCTAssertTrue(failed.exists); try capture(name)
+      }
+      if after && variant == "large-text" {
+        editFirst()
+        app.buttons["settingsMore"].tapWhenReady(); app.buttons["Details"].tapWhenReady()
+        XCTAssertTrue(app.buttons["confirmationKeep"].waitForExistence(timeout: 5)); try capture("memory-large-text-leave")
+        app.buttons["confirmationKeep"].tapWhenReady(); XCTAssertEqual(app.buttons["settingsMore"].value as? String, "Memory")
+      }
+      if after && variant == "reload-error" { try capture("memory-reload-recovered") }
       app.terminate()
     }
   }

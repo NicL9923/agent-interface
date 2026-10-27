@@ -318,66 +318,201 @@ struct MemorySave: Encodable {
 }
 struct MemoryForget: Encodable { var revision: String; var entryId: String }
 struct MemoryForgetRequest: Identifiable { var document: MemoryDocument; var entryId: String; var id: String { document.target + entryId } }
+extension MemoryDocument {
+  /// Hermes counts Unicode scalars and its delimiter. Infer only consistent server overhead.
+  func draftSize(_ items: [MemoryDraft]) -> Int? {
+    let texts = items.map { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) }
+    let size = texts.reduce(0) { $0 + $1.unicodeScalars.count }
+    guard texts.count > 1 else { return size }
+    guard entries.count > 1 else { return nil }
+    let raw = entries.reduce(0) { $0 + $1.text.unicodeScalars.count }
+    let extra = charCount - raw, gaps = entries.count - 1
+    guard extra >= 0, extra % gaps == 0 else { return nil }
+    return size + (extra / gaps) * (texts.count - 1)
+  }
+}
+
 struct MemoryDrawer: View {
   var botId: String
+  var onDirtyChange: (Bool) -> Void = { _ in }
+  var onSavingChange: (Bool) -> Void = { _ in }
   @Environment(AppStore.self) private var store
   @State private var value: ProfileMemory?
   @State private var drafts: [String: [MemoryDraft]] = [:]
   @State private var busy = false
+  @State private var savingTarget: String?
   @State private var error: String?
   @State private var conflicts: Set<String> = []
   @State private var failures: [String: String] = [:]
   @State private var notices: [String: String] = [:]
   @State private var forget: MemoryForgetRequest?
+  @State private var pendingForget: MemoryForgetRequest?
+  @State private var confirmReload = false
+  @State private var reloadAfterDismiss = false
+  @State private var pendingEntryFocus: String?
+  @FocusState private var focusedEntry: String?
+  @AccessibilityFocusState private var focusedFailure: String?
+  private var changed: Bool { value?.documents.contains { $0.isChanged(drafts[$0.target] ?? []) } ?? false }
   var body: some View {
-    Form {
-      Section {
-        Text("What Hermes remembers").font(.headline)
-        Text("Inspect and correct the facts saved in the assistant's Hermes profile.").font(.footnote).foregroundStyle(.secondary)
-        if let value { (Text("Profile: \(value.profile). ").bold() + Text(value.notice)).font(.footnote) }
-        if let refresh = value?.refresh { Text(refresh.message).font(.footnote).accessibilityIdentifier("memoryRefreshStatus") }
-      }
-      if busy && value == nil { Section { ProgressView("Loading profile memory…") } }
-      if let error { Section { ErrorBanner(message: error) } }
-      ForEach(value?.documents ?? []) { documentSection($0) }
-      Section { Button(error != nil ? "Try loading again" : "Reload profile memory") { Task { await load() } }.disabled(busy) }
-    }.disabled(busy).task(id: "\(store.scope ?? ""):\(botId)") { value = nil; drafts = [:]; await load() }
-      .confirmationDialog("Forget this entry in the profile?", isPresented: Binding(get: { forget != nil }, set: { if !$0 { forget = nil } }), titleVisibility: .visible, presenting: forget) { request in
-        Button("Forget entry", role: .destructive) { forgetEntry(request) }
-      }
+    ScrollViewReader { proxy in
+      Form {
+        Section {
+          Text("What Hermes remembers").font(.title3.weight(.semibold)).accessibilityAddTraits(.isHeader)
+          Text("Review and correct the facts saved in this Hermes profile.").font(.subheadline).foregroundStyle(Palette.muted)
+          if let value {
+            VStack(alignment: .leading, spacing: 6) {
+              Text("Shared profile: \(value.profile)").font(.subheadline.weight(.semibold))
+              Text("Changes apply at the next safe turn boundary. Chat history stays unchanged.")
+              Text("Anyone with Hermes dashboard access can reach this memory.")
+            }.font(.footnote).foregroundStyle(Palette.muted)
+          }
+          if !store.connected { Text(value == nil ? "Reconnect to Hermes to load and edit profile memory." : "You are offline. Reconnect to edit these notes.").font(.footnote).foregroundStyle(Palette.muted) }
+          if let refresh = value?.refresh, !refresh.revision.isEmpty, refresh.busy, notices.isEmpty {
+            Text(refresh.message).font(.footnote).accessibilityIdentifier("memoryRefreshStatus")
+          }
+        }
+        if busy && savingTarget == nil { Section { ProgressView(value == nil ? "Loading profile memory…" : "Reloading profile memory…") } }
+        if let error { Section {
+        ErrorBanner(message: error).id("memoryLoadError").accessibilityElement(children: .combine)
+          .accessibilityFocused($focusedFailure, equals: "load")
+        Button { requestReload() } label: {
+          Text("Try loading again").frame(minHeight: 44).contentShape(Rectangle())
+        }.buttonStyle(.accentProminent).disabled(busy)
+      } }
+        ForEach(value?.documents ?? []) { documentSection($0) }
+        if error == nil { Section {
+          Button("Reload profile memory", action: requestReload).disabled(busy)
+        } }
+      }.accessibilityIdentifier("memoryForm").householdListBackground()
+        .task(id: "\(store.scope ?? ""):\(botId)") { value = nil; drafts = [:]; await load() }
+        .onChange(of: changed, initial: true) { _, dirty in onDirtyChange(dirty) }
+        .onAppear { onDirtyChange(changed) }
+        .onChange(of: savingTarget != nil || pendingForget != nil, initial: true) { _, saving in onSavingChange(saving) }
+        .onDisappear { onDirtyChange(false); onSavingChange(false) }
+        .onChange(of: pendingEntryFocus) { _, identifier in
+          guard let identifier else { return }
+          Task { @MainActor in
+            await Task.yield()
+            proxy.scrollTo(identifier, anchor: .center)
+            focusedEntry = identifier; pendingEntryFocus = nil
+          }
+        }
+        .onChange(of: error) { _, message in
+          guard message != nil else { return }
+          Task { @MainActor in
+            await Task.yield()
+            proxy.scrollTo("memoryLoadError", anchor: .center)
+            focusedFailure = "load"
+          }
+        }
+        .onChange(of: failures) { old, current in
+          guard let target = current.keys.first(where: { current[$0] != old[$0] }) else { return }
+          Task { @MainActor in
+            await Task.yield()
+            proxy.scrollTo("memoryError.\(target)", anchor: .center)
+            focusedFailure = target
+          }
+        }
+        .sheet(item: $forget, onDismiss: {
+          if let request = pendingForget { pendingForget = nil; forgetEntry(request) }
+        }) { request in
+          let entry = request.document.entries.first { $0.id == request.entryId }?.text ?? ""
+          AssistantConfirmationSheet(title: "Forget this entry?",
+            message: "This removes the following entry from the shared Hermes profile:\n\n\"\(entry)\"",
+            acceptLabel: "Forget entry", keepLabel: "Keep entry", destructive: true,
+            accept: { pendingForget = request; forget = nil }, keep: { forget = nil })
+        }
+        .sheet(isPresented: $confirmReload, onDismiss: {
+          if reloadAfterDismiss { reloadAfterDismiss = false; Task { await load() } }
+        }) {
+          AssistantConfirmationSheet(title: "Reload profile memory?", message: "Your unsaved edits will be discarded when the latest memory loads. Copy anything you want to keep first.",
+            acceptLabel: "Reload and discard edits", keepLabel: "Keep editing", destructive: true,
+            accept: { reloadAfterDismiss = true; confirmReload = false }, keep: { confirmReload = false })
+        }
+    }
+  }
+  private func requestReload() {
+    guard pendingForget == nil else { return }
+    if changed { confirmReload = true } else { Task { await load() } }
   }
   @ViewBuilder private func documentSection(_ document: MemoryDocument) -> some View {
-    let items = drafts[document.target] ?? []
+    let target = document.target, items = drafts[target] ?? []
     let changed = document.isChanged(items)
-    let locked = busy || conflicts.contains(document.target) || !document.enabled || !store.connected
+    let conflict = conflicts.contains(target)
+    let locked = busy || reloadAfterDismiss || pendingForget != nil || conflict || !document.enabled || !store.connected
+    let canAdd = !locked && items.count < 100
+    let size = document.draftSize(items)
+    let over = size.map { $0 > document.charLimit } ?? false
     Section {
-      Text("\(document.charCount) / \(document.charLimit) characters").font(.caption).foregroundStyle(.secondary)
-      if !document.enabled { Text("This memory is disabled in the Hermes profile.").foregroundStyle(.secondary) }
-      if items.isEmpty { Text("Nothing saved here yet.").foregroundStyle(.secondary) }
+      Text(size.map { "\($0.formatted()) / \(document.charLimit.formatted()) characters" } ?? "Saved size: \(document.charCount.formatted()) / \(document.charLimit.formatted()) characters")
+        .font(.footnote).foregroundStyle(over ? Palette.danger : Palette.muted)
+      if !document.enabled {
+        Text("Editing is disabled in this Hermes profile. You can still read and copy these notes.").font(.footnote).foregroundStyle(Palette.muted)
+      }
+      if items.isEmpty {
+        Text("Nothing saved here yet. Add a fact you want this profile to remember.").font(.subheadline).foregroundStyle(Palette.muted)
+      }
       ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-        TextField("Memory \(index + 1)", text: text(document, item.id), axis: .vertical).lineLimit(3...8).disabled(locked).accessibilityIdentifier("memoryEntry.\(index + 1)")
+        VStack(alignment: .leading, spacing: 8) {
+          Text("\(target == "user" ? "Profile fact" : "Assistant note") \(index + 1)").font(.footnote).foregroundStyle(Palette.muted).accessibilityHidden(true)
+          if conflict || !document.enabled || !store.connected {
+            Text(item.text).font(.body).foregroundStyle(Color.primary).textSelection(.enabled)
+              .frame(maxWidth: .infinity, alignment: .leading)
+              .accessibilityIdentifier("memoryEntry.\(target).\(index + 1)")
+              .accessibilityLabel("\(target == "user" ? "Profile fact" : "Assistant note") \(index + 1)")
+              .accessibilityValue(item.text)
+          } else {
+            TextField("Enter a fact to remember", text: text(document, item.id), axis: .vertical)
+              .lineLimit(3...8).disabled(busy || reloadAfterDismiss || pendingForget != nil || !store.connected)
+              .focused($focusedEntry, equals: item.id)
+              .accessibilityLabel("\(target == "user" ? "Profile fact" : "Assistant note") \(index + 1)")
+              .accessibilityIdentifier("memoryEntry.\(target).\(index + 1)")
+          }
+        }.padding(.vertical, 4).id(item.id)
         if item.entryId.isEmpty {
-          Button("Remove new entry") { drafts[document.target]?.removeAll { $0.id == item.id } }.disabled(locked)
+          Button("Remove new entry") { drafts[target]?.removeAll { $0.id == item.id }; notices[target] = nil }.disabled(locked)
         } else {
-          Button("Forget…", role: .destructive) { forget = MemoryForgetRequest(document: document, entryId: item.entryId) }.disabled(locked || changed)
+          Button("Forget…", role: .destructive) { forget = MemoryForgetRequest(document: document, entryId: item.entryId) }
+            .disabled(locked || changed).accessibilityIdentifier("memoryForget.\(target).\(index + 1)")
         }
       }
-      Button("Add memory") { drafts[document.target, default: []].append(MemoryDraft()) }.disabled(locked || items.count >= 100)
-      Button(busy ? "Saving…" : "Save memories") { save(document) }.disabled(locked || !changed || items.contains { $0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
-      if changed { Button("Discard edits") { drafts[document.target] = document.drafts(); failures[document.target] = nil }.disabled(busy) }
-      if let failure = failures[document.target] {
-        ErrorBanner(message: failure + (conflicts.contains(document.target) ? " Your edits are kept. Copy them before reloading the newer profile memory." : ""))
+      if let size, over {
+        Text("This document is \((size - document.charLimit).formatted()) characters over the limit. Shorten or remove an entry before saving.")
+          .font(.footnote).foregroundStyle(Palette.danger)
       }
-      if let notice = notices[document.target] { Text(notice).foregroundStyle(Palette.accent) }
-    } header: { Text(document.label) }
+      Button {
+        let entry = MemoryDraft(); drafts[target, default: []].append(entry)
+        notices[target] = nil; pendingEntryFocus = entry.id
+      } label: {
+        Label("Add memory", systemImage: "plus").foregroundStyle(canAdd ? Palette.accent : Palette.muted)
+          .frame(minHeight: 44).contentShape(Rectangle())
+      }.disabled(!canAdd).accessibilityIdentifier("memoryAdd.\(target)")
+      Button { save(document) } label: {
+        Text("Save memories").frame(maxWidth: .infinity, minHeight: 44).contentShape(Rectangle())
+      }.buttonStyle(.accentProminent)
+        .disabled(locked || !changed || over || items.contains { $0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+        .accessibilityIdentifier("memorySave.\(target)")
+      if savingTarget == target { ProgressView("Saving memories in Hermes…").font(.footnote).foregroundStyle(Palette.muted) }
+      if changed {
+        Button("Discard edits") {
+          drafts[target] = document.drafts(); notices[target] = nil
+          if !conflict { failures[target] = nil }
+        }.disabled(busy || pendingForget != nil).accessibilityIdentifier("memoryDiscard.\(target)")
+      }
+      if let failure = failures[target] {
+        ErrorBanner(message: failure + (conflict ? (changed ? " Your edits are kept. Copy any text you want to keep, then reload profile memory to continue." : " Reload profile memory before editing again.") : ""))
+          .id("memoryError.\(target)").accessibilityFocused($focusedFailure, equals: target)
+      }
+      if let notice = notices[target] {
+        Text(notice).font(.footnote).foregroundStyle(Palette.accent).accessibilityIdentifier("memorySaved.\(target)")
+      }
+    } header: { Text(target == "user" ? "About this profile" : document.label).font(.subheadline.weight(.semibold)).foregroundStyle(Palette.muted) }
   }
   private func text(_ document: MemoryDocument, _ id: String) -> Binding<String> {
-    Binding(
-      get: { drafts[document.target]?.first { $0.id == id }?.text ?? "" },
-      set: { text in
-        guard let index = drafts[document.target]?.firstIndex(where: { $0.id == id }) else { return }
-        drafts[document.target]?[index].text = String(text.prefix(document.charLimit))
-      })
+    Binding(get: { drafts[document.target]?.first { $0.id == id }?.text ?? "" }, set: { text in
+      guard let index = drafts[document.target]?.firstIndex(where: { $0.id == id }) else { return }
+      drafts[document.target]?[index].text = text; notices[document.target] = nil
+    })
   }
   private func path(_ document: MemoryDocument) -> String { "/bots/\(APIClient.component(botId))/memory/\(APIClient.component(document.target))" }
   private func load() async {
@@ -391,17 +526,18 @@ struct MemoryDrawer: View {
     mutate(document) { api in try await api.write(path(document), MemorySave(revision: document.revision, drafts: drafts[document.target] ?? []), method: "PATCH") }
   }
   private func forgetEntry(_ request: MemoryForgetRequest) {
-    let document = request.document
-    mutate(document) { api in try await api.write(path(document), MemoryForget(revision: document.revision, entryId: request.entryId), method: "DELETE") }
+    mutate(request.document) { api in try await api.write(path(request.document), MemoryForget(revision: request.document.revision, entryId: request.entryId), method: "DELETE") }
   }
   private func mutate(_ document: MemoryDocument, _ operation: @escaping (APIClient) async throws -> ProfileMemory) {
     let target = document.target
-    busy = true; failures[target] = nil; notices[target] = nil
+    busy = true; savingTarget = target; failures[target] = nil; notices[target] = nil
     Task {
+      defer { savingTarget = nil }
       switch await store.attempt(busy: $busy, { try await operation($0.api) }) {
       case .success(let result)?:
         guard let updated = result.documents.first(where: { $0.target == target }) else { return }
-        value?.acceptSavedDocument(target, from: result); drafts[target] = updated.drafts(); notices[target] = result.refresh == nil ? "Saved in Hermes." : nil
+        value?.acceptSavedDocument(target, from: result); drafts[target] = updated.drafts()
+        notices[target] = result.refresh?.message ?? "Saved in Hermes."
       case .failure(let failure)?:
         failures[target] = failure.localizedDescription
         if (failure as? APIError)?.status == 409 { conflicts.insert(target) }
