@@ -233,12 +233,16 @@ struct HermesAutomationStatus: View {
 }
 
 private enum HermesWorkSheet: Identifiable {
+  case goalEditor(HermesGoal?)
+  case newResumeAttempt
   case createTask
   case taskDetail(HermesTask)
   case createTrigger
   case editTrigger(HermesSubscription)
   var id: String {
     switch self {
+    case .goalEditor: return "goal-editor"
+    case .newResumeAttempt: return "new-resume-attempt"
     case .createTask: return "create-task"
     case .taskDetail(let task): return "task:\(task.id)"
     case .createTrigger: return "create-trigger"
@@ -253,6 +257,7 @@ struct HermesWorkView: View {
   @Environment(\.scenePhase) private var scenePhase
   @State private var control: HermesAutomationControls
   @State private var sheet: HermesWorkSheet?
+  @State private var clearingGoal = false
   init(botId: String) {
     self.botId = botId
     _control = State(initialValue: HermesAutomationControls(botId: botId))
@@ -261,7 +266,9 @@ struct HermesWorkView: View {
     Form {
       HermesAutomationStatus(control: control)
       if let value = control.value {
-        HermesGoalSection(control: control, state: value.goals)
+        HermesGoalSection(control: control, state: value.goals,
+          edit: { sheet = .goalEditor(value.goals.goal) },
+          startNewAttempt: { sheet = .newResumeAttempt }, clear: { clearingGoal = true })
         HermesTaskSection(control: control, state: value.tasks,
           create: { sheet = .createTask }, open: { sheet = .taskDetail($0) })
         HermesTriggerSection(control: control, state: value.triggers,
@@ -283,9 +290,16 @@ struct HermesWorkView: View {
       // Form sections are lazy. Keep the presenter and its state on the enclosing form so
       // recycling rows cannot tear down a presented editor or its parent sheet.
       .sheet(item: $sheet) { destination in workDestination(destination) }
+      .confirmationDialog("Clear this standing goal?", isPresented: $clearingGoal, titleVisibility: .visible) {
+        Button("Clear goal", role: .destructive) {
+          Task { _ = await control.changeOK(store, "/goal/clear", [String: String]()) }
+        }
+      } message: { Text("The conversation stays saved.") }
   }
   @ViewBuilder private func workDestination(_ destination: HermesWorkSheet) -> some View {
     switch destination {
+    case .goalEditor(let goal): HermesGoalEditor(control: control, goal: goal)
+    case .newResumeAttempt: HermesNewResumeAttempt(control: control)
     case .createTask: HermesTaskEditor(control: control, task: nil)
     case .taskDetail(let task): HermesTaskDetail(control: control, initial: task)
     case .createTrigger: HermesTriggerEditor(control: control, trigger: nil)
@@ -297,11 +311,11 @@ struct HermesWorkView: View {
 private struct HermesGoalSection: View {
   var control: HermesAutomationControls
   var state: HermesAutomationOverview.Goals
+  var edit: () -> Void
+  var startNewAttempt: () -> Void
+  var clear: () -> Void
   @Environment(AppStore.self) private var store
-  @State private var editing = false
-  @State private var clearing = false
   @State private var reviewedInterruption = false
-  @State private var startingNewAttempt = false
   private var disabled: Bool { control.disabled || !store.connected }
   var body: some View {
     Section("Standing goal") {
@@ -333,27 +347,20 @@ private struct HermesGoalSection: View {
               Task { await control.resume(store, reviewedInterruption: state.interruptionPending == true && reviewedInterruption) }
             }.disabled(disabled || !control.canResume || state.interruptionPending == true && !reviewedInterruption)
             if control.canStartNewResumeAttempt {
-              Button("Start a new resume attempt") { startingNewAttempt = true }.disabled(disabled)
+              Button("Start a new resume attempt", action: startNewAttempt).disabled(disabled)
             }
           }
-          Button("Replace goal") { editing = true }.disabled(disabled)
-          Button("Clear goal", role: .destructive) { clearing = true }.disabled(disabled)
+          Button("Replace goal", action: edit).disabled(disabled)
+          Button("Clear goal", role: .destructive, action: clear).disabled(disabled)
         } else {
           Text("No standing goal. A goal continues across turns until it finishes, pauses, or reaches its budget.")
             .foregroundStyle(.secondary)
-          Button("Set a goal") { editing = true }.disabled(disabled)
+          Button("Set a goal", action: edit).disabled(disabled)
         }
       }
     }
     .onChange(of: state.interruptionPending) { _, _ in reviewedInterruption = false }
     .onChange(of: state.goal?.status) { _, _ in reviewedInterruption = false }
-    .sheet(isPresented: $editing) { HermesGoalEditor(control: control, goal: state.goal) }
-    .sheet(isPresented: $startingNewAttempt) { HermesNewResumeAttempt(control: control) }
-    .confirmationDialog("Clear this standing goal?", isPresented: $clearing, titleVisibility: .visible) {
-      Button("Clear goal", role: .destructive) {
-        Task { _ = await control.changeOK(store, "/goal/clear", [String: String]()) }
-      }
-    } message: { Text("The conversation stays saved.") }
   }
 }
 

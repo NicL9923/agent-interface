@@ -62,6 +62,58 @@ import XCTest
     XCTAssertTrue(changed, "The switch must finish \(expected ? "on" : "off") after the thumb drag and any confirmation.\n\(row.debugDescription)", file: file, line: line)
     return changed
   }
+  func testGoalPresentersStayOverSettings() {
+    for cycle in 1...3 {
+      let app = launch()
+      defer { app.terminate() }
+      app.selectSettingsTab("Work")
+      let form = app.collectionViews["automation.work"]
+      func remainsPresented(_ element: XCUIElement, _ name: String) -> Bool {
+        guard element.waitForExistence(timeout: 5) else {
+          capture(app, "Goal presenter missing")
+          XCTFail("\(name) must open over settings, cycle \(cycle).\n\(app.debugDescription)")
+          return false
+        }
+        let disappears = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: element)
+        disappears.isInverted = true
+        guard XCTWaiter.wait(for: [disappears], timeout: 2) == .completed else {
+          capture(app, "Goal presenter disappeared")
+          XCTFail("\(name) must remain over settings for two seconds, cycle \(cycle).\n\(app.debugDescription)")
+          return false
+        }
+        return true
+      }
+      let replace = app.buttons["Replace goal"]
+      reveal(replace, in: form); replace.tapWhenReady()
+      let editor = app.navigationBars["Replace goal"]
+      guard remainsPresented(editor, "Replace goal editor") else { return }
+      capture(app, "Native goal editor remains presented")
+      editor.buttons["Cancel"].tapWhenReady()
+      XCTAssertTrue(editor.waitForDisappearance(timeout: 5), "Cancel closes only the goal editor, cycle \(cycle)")
+      XCTAssertTrue(form.waitForExistence(timeout: 5))
+      XCTAssertEqual(app.buttons["settingsMore"].value as? String, "Work")
+      let clear = app.buttons["Clear goal"]
+      reveal(clear, in: form); clear.tapWhenReady()
+      let prompt = app.staticTexts["Clear this standing goal?"]
+      guard remainsPresented(prompt, "Clear goal confirmation") else { return }
+      let cancel = app.sheets.buttons["Cancel"]
+      if cancel.exists { cancel.tapWhenReady() }
+      else {
+        let header = app.navigationBars.matching(identifier: "Ranch hand").firstMatch
+        let outside = CGPoint(x: header.frame.midX, y: header.frame.midY)
+        guard !app.sheets.firstMatch.frame.contains(outside) else {
+          XCTFail("The outside tap would land on the Clear goal dialog, cycle \(cycle).\n\(app.debugDescription)"); return
+        }
+        header.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+      }
+      XCTAssertTrue(prompt.wait(until: "exists == false"))
+      XCTAssertTrue(form.exists)
+      XCTAssertEqual(app.buttons["settingsMore"].value as? String, "Work")
+      XCTAssertTrue(app.buttons["Resume goal"].exists, "Cancelling must preserve the paused goal")
+      print("GOAL_PRESENTATION_CYCLE \(cycle) PASSED")
+    }
+  }
+
   func testInterruptedGoalRequiresReviewThenResumesAndPauses() {
     let app = launch(["INTERRUPTED"])
     app.selectSettingsTab("Work")
