@@ -18,8 +18,11 @@ parser.add_argument("--root", type=Path, required=True, help="Existing task arti
 parser.add_argument("--origin", required=True, help="Loopback fixture origin")
 parser.add_argument("--session", required=True, help="Existing, task-owned Playwright CLI session")
 parser.add_argument("--fixture", type=Path)
+parser.add_argument("--work-case", choices=["all", "clear-confirmation"], default="all", help="Capture only a scoped Work recheck")
 parser.add_argument("--report", help="Report basename, without an extension")
 args = parser.parse_args()
+if args.work_case != "all" and (args.screen != "work" or args.stage != "after"):
+    parser.error("A scoped Work recheck requires work after")
 origin = urlparse(args.origin)
 if origin.scheme != "http" or origin.hostname not in {"127.0.0.1", "localhost"} or origin.path not in {"", "/"} or origin.query or origin.fragment or origin.username is not None or origin.password is not None:
     parser.error("Origin must name an HTTP loopback fixture without a path, query or credentials")
@@ -38,7 +41,7 @@ if "conversation" in payload:
         if not isinstance(conversation, dict) or not isinstance(conversation.get(field), list):
             parser.error(f"The fixture conversation must include a {field} array")
 options = {"outputDir": str(args.root / args.stage), "prefix": "web", "screen": args.screen, "stage": args.stage,
-           "fixture": payload}
+           "fixture": payload, "workCase": args.work_case}
 source = Path(__file__).with_suffix(".js").read_text()
 wrapper = args.root / f"{name}-capture.js"
 wrapper.write_text(f"async page => {{ await page.goto({json.dumps(args.origin)}); return ({source})(page, {json.dumps(options)}); }}")

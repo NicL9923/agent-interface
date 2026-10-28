@@ -1,15 +1,16 @@
 // Playwright CLI run-code function. Screenshots and a geometry report for a design gate.
-async (page, { outputDir = ".private/design-review", prefix = "current", screen = "today", stage = "after", fixture } = {}) => {
+async (page, { outputDir = ".private/design-review", prefix = "current", screen = "today", stage = "after", workCase = "all", fixture } = {}) => {
   const origin = new URL(page.url());
   if (!["127.0.0.1", "localhost"].includes(origin.hostname)) throw Error("Use a loopback fixture.");
   const boot = await (await page.request.get(`${origin.origin}/api/bootstrap`)).json();
   if (boot.user?.email !== "preview@localhost.invalid") throw Error("Use the synthetic household preview.");
-  if (!["today", "home", "conversation", "questions", "approvals", "recovery", "details", "settings", "avatar", "models", "memory"].includes(screen)) throw Error(`Unsupported screen: ${screen}`);
+  if (!["today", "home", "conversation", "questions", "approvals", "recovery", "details", "settings", "avatar", "models", "memory", "work"].includes(screen)) throw Error(`Unsupported screen: ${screen}`);
+  if (!["all", "clear-confirmation"].includes(workCase) || workCase !== "all" && (screen !== "work" || stage !== "after")) throw Error("Unknown or invalid Work capture case");
   const context = await page.context().browser().newContext({ serviceWorkers: "block", reducedMotion: "reduce", viewport: { width: 1440, height: 1000 } });
-  if (["models", "memory"].includes(screen)) await context.addInitScript(screen => { window.name=`wildbots-design-${screen}-capture`; }, screen);
+  if (["models", "memory", "work"].includes(screen)) await context.addInitScript(screen => { window.name=`wildbots-design-${screen}-capture`; }, screen);
   const tab = await context.newPage();
   const browserErrors = [];
-  if (["models", "memory"].includes(screen)) tab.on("dialog", dialog => dialog.type() === "beforeunload" ? dialog.accept() : dialog.dismiss());
+  if (["models", "memory", "work"].includes(screen)) tab.on("dialog", dialog => dialog.type() === "beforeunload" ? dialog.accept() : dialog.dismiss());
   tab.on("pageerror", error => browserErrors.push(error.message));
   const pointer = ["questions", "approvals"].includes(screen) ? await context.newCDPSession(tab) : undefined;
   const fontSession = ["details", "conversation"].includes(screen) ? await context.newCDPSession(tab) : undefined;
@@ -52,6 +53,136 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
     saved.revision = await memoryDigest([memory.profile,target,texts]);
     saved.charCount = [...texts.join(fixture.memoryFixture.delimiter)].length;
   };
+  let work, workMode, workReads=0, workLoadingRelease, workReadStarted;
+  let workSubmissions=[], workChecks=[], workResumeIds=new Map(), workTaskIds=new Map(), workRoutes;
+  const workRevision = async route => {
+    const sort = value => Array.isArray(value) ? value.map(sort) : value && typeof value === "object" ? Object.fromEntries(Object.keys(value).sort().map(key => [key,sort(value[key])])) : value;
+    return tab.evaluate(async text => [...new Uint8Array(await crypto.subtle.digest("SHA-256",new TextEncoder().encode(text)))].map(x=>x.toString(16).padStart(2,"0")).join(""), JSON.stringify(sort(route)));
+  };
+  if (screen === "work") {
+    await context.route("**/api/routines", route => {
+      if (route.request().method() !== "GET") throw Error("Unexpected Work routines method");
+      return workMode === "routines-error" ? route.fulfill({status:409,json:{error:"routines is unavailable"}}) : route.fulfill({json:workMode === "no-routines" ? [] : fixture.routines});
+    });
+    await context.route("**/api/bots/*/automation**", async route => {
+      const req=route.request(), method=req.method(), url=new URL(req.url()), prefix="/api/bots/ranch/automation", path=url.pathname;
+      if (!path.startsWith(prefix) || url.search) throw Error(`Unexpected Work route ${method} ${path}`);
+      const suffix=path.slice(prefix.length), reject=(status,error)=>route.fulfill({status,json:{error}});
+      if (!suffix && method === "GET") {
+        workReads++; workReadStarted?.();
+        if (workMode === "loading") await new Promise(resolve=>{workLoadingRelease=resolve;});
+        if (workMode === "load-error") return reject(409,fixture.workMessages.noRuntime);
+        if (workMode === "trigger-external-change" && workReads === 2) {
+          const subscription=work.triggers.items.find(item=>item.id==="freezer-alerts"), native=workRoutes["freezer-alerts"];
+          native.description=fixture.workFixture.externalTriggerEdit.description;
+          subscription.description=native.description; subscription.revision=await workRevision(native);
+          if(subscription.revision!==fixture.workFixture.externalTriggerEdit.revision) throw Error("External trigger revision mismatch");
+        }
+        return route.fulfill({json:work});
+      }
+      if (method === "GET") {
+        const match=suffix.match(/^\/tasks\/(t_[0-9a-f]{8})$/);
+        const task=match && work.tasks.items.find(item=>item.id===match[1]);
+        if (!task) throw Error(`Unexpected Work GET ${suffix}`);
+        return route.fulfill({json:task});
+      }
+      const body=req.postDataJSON() || {};
+      if (!body || Array.isArray(body) || typeof body !== "object") throw Error(`Invalid Work body ${suffix}`);
+      const keys=(required,optional=[])=>{
+        const actual=Object.keys(body); if(required.some(k=>!actual.includes(k)) || actual.some(k=>!required.includes(k)&&!optional.includes(k))) throw Error(`Unexpected Work keys ${method} ${suffix}: ${actual.sort()}`);
+      };
+      const uuid=id=>typeof id==="string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id);
+      workSubmissions.push({mode:workMode,method,path:suffix,body:structuredClone(body)});
+      if (workMode === "write-delay") await new Promise(resolve=>setTimeout(resolve,fixture.workFixture.writeDelayMs));
+      const goals=work.goals;
+      if (suffix==="/goal" && method==="PUT") {
+        keys(["title","maxTurns"]); if(typeof body.title!=="string" || !body.title.trim() || body.title.trim().length>10000 || !Number.isInteger(body.maxTurns) || body.maxTurns<1 || body.maxTurns>1000) throw Error("Invalid goal input");
+        goals.goal={title:body.title.trim(),status:"paused",turnsUsed:0,maxTurns:body.maxTurns,pausedReason:fixture.workMessages.createdPaused}; delete goals.resume; workResumeIds.clear();
+        return route.fulfill({json:work});
+      }
+      if (["/goal/pause","/goal/clear"].includes(suffix) && method==="POST") {
+        keys([]); if(!goals.goal) throw Error("Missing goal");
+        if(suffix.endsWith("clear")) { goals.goal=null; delete goals.resume; workResumeIds.clear(); } else goals.goal.status="paused";
+        return route.fulfill({json:work});
+      }
+      if (suffix==="/goal/resume" && method==="POST") {
+        keys(["requestId"],["reviewedInterruption"]); if(!uuid(body.requestId) || ("reviewedInterruption" in body && typeof body.reviewedInterruption!=="boolean")) throw Error("Invalid resume input");
+        if(workResumeIds.has(body.requestId)) return route.fulfill({json:work});
+        if(goals.interruptionPending && body.reviewedInterruption!==true) return reject(409,fixture.workMessages.interruption);
+        if(!goals.goal || goals.goal.status!=="paused") throw Error("Resume requires paused goal");
+        const status=workMode==="resume-uncertain" && !workResumeIds.size ? "uncertain" : workMode==="resume-rejected" ? "rejected" : "accepted";
+        goals.resume={requestId:body.requestId,status,...(status==="uncertain" ? {message:fixture.workMessages.uncertainResume} : status==="rejected" ? {message:fixture.workMessages.rejectedResume} : {runId:"fixture-run"})};
+        if(status==="accepted") { goals.goal.status="active"; goals.goal.turnsUsed=0; delete goals.goal.pausedReason; goals.interruptionPending=false; }
+        else { goals.goal.turnsUsed=0; goals.goal.pausedReason=fixture.workMessages.resumeNotConfirmed; }
+        workResumeIds.set(body.requestId,structuredClone(work));
+        return route.fulfill({json:work});
+      }
+      const taskMatch=suffix.match(/^\/tasks\/(t_[0-9a-f]{8})(?:\/(actions|dependencies\/([A-Za-z0-9_-]+)))?$/);
+      if (suffix==="/tasks" && method==="POST") {
+        keys(["requestId","title"],["body","priority","assignee","dependencies"]);
+        if(!uuid(body.requestId) || typeof body.title!=="string" || !body.title.trim() || body.title.trim().length>500 || (body.body!==undefined && (typeof body.body!=="string" || body.body.length>20000)) || (body.priority!==undefined && (!Number.isInteger(body.priority)||body.priority < -100 || body.priority > 100)) || (body.assignee != null && !fixture.bots.some(bot=>bot.id===body.assignee)) || (body.dependencies!==undefined && (!Array.isArray(body.dependencies)||body.dependencies.length>20||body.dependencies.some(id=>!work.tasks.items.some(task=>task.id===id))))) throw Error("Invalid task input");
+        if(workTaskIds.has(body.requestId)) return route.fulfill({json:work.tasks.items.find(task=>task.id===workTaskIds.get(body.requestId).id)});
+        const task={id:`t_${(work.tasks.items.length+1).toString(16).padStart(8,"0")}`,title:body.title.trim(),body:body.body || "",priority:body.priority ?? 0,assignee:body.assignee===undefined ? "ranch" : body.assignee,owner:"ranch",dependencies:body.dependencies || [],status:"blocked"};
+        work.tasks.items.push(task); workTaskIds.set(body.requestId,structuredClone(task));
+        if(workMode==="task-create-uncertain") return reject(502,fixture.workMessages.catchAll);
+        return route.fulfill({json:task});
+      }
+      if(taskMatch) {
+        const task=work.tasks.items.find(item=>item.id===taskMatch[1]); if(!task) throw Error("Unknown Work task");
+        if(task.status==="running") return reject(409,fixture.workMessages.claimedTask);
+        if(!taskMatch[2] && method==="PATCH") {
+          keys([], ["title","body","priority","assignee"]); if(!Object.keys(body).length) throw Error("Empty task patch");
+          if((body.title!==undefined && (typeof body.title!=="string" || !body.title.trim() || body.title.trim().length>500)) || (body.body!==undefined && (typeof body.body!=="string"||body.body.length>20000)) || (body.priority!==undefined && (!Number.isInteger(body.priority)||body.priority < -100||body.priority > 100)) || (body.assignee!=null && !fixture.bots.some(bot=>bot.id===body.assignee))) throw Error("Invalid task patch");
+          Object.assign(task,body); if(body.title!==undefined) task.title=body.title.trim(); return route.fulfill({json:task});
+        }
+        if(taskMatch[2]==="actions" && method==="POST") {
+          keys(["action"],["reason","reviewer"]); if(!["start","block","unblock","request_review"].includes(body.action) || (body.reason!==undefined && (typeof body.reason!=="string"||!body.reason.trim()||body.reason.trim().length>2000)) || (body.reviewer!==undefined && !fixture.bots.some(bot=>bot.id===body.reviewer))) throw Error("Invalid task action");
+          if(body.action==="block") { if(!body.reason) return reject(400,fixture.workMessages.blockReason); task.status="blocked"; task.blockedReason=body.reason.trim(); }
+          else {
+            if ((["start","unblock"].includes(body.action) && !["todo","blocked"].includes(task.status)) || task.dependencies.some(id=>work.tasks.items.find(row=>row.id===id)?.status!=="done")) return reject(409,fixture.workMessages.refusedTransition);
+            if(body.action==="request_review") { if(!body.reviewer) throw Error("Review requires reviewer"); task.status="review"; task.assignee=body.reviewer; }
+            else task.status="ready";
+            delete task.blockedReason;
+          }
+          return route.fulfill({json:task});
+        }
+        if(taskMatch[2]?.startsWith("dependencies/") && method==="PUT") {
+          keys(["remove"]); if(typeof body.remove!=="boolean" || !work.tasks.items.some(item=>item.id===taskMatch[3]) || task.id===taskMatch[3]) throw Error("Invalid dependency");
+          task.dependencies=task.dependencies.filter(id=>id!==taskMatch[3]); if(!body.remove) task.dependencies.push(taskMatch[3]); return route.fulfill({json:task});
+        }
+      }
+      const triggerMatch=suffix.match(/^\/triggers(?:\/([a-z0-9][a-z0-9_-]{0,79}))?$/);
+      if(triggerMatch) {
+        if(!work.canManageTriggers) return reject(403,fixture.workMessages.triggerNonAdmin);
+        const id=triggerMatch[1] || body.id, index=work.triggers.items.findIndex(item=>item.id===id);
+        if(method==="POST" && !triggerMatch[1]) {
+          keys(["id","description","events","routineId"]);
+          if(index!==-1) return reject(409,fixture.workMessages.duplicateTrigger);
+          if(!/^[a-z0-9][a-z0-9_-]{0,79}$/.test(id)) throw Error("Invalid trigger ID");
+        } else if(index<0) throw Error("Unknown Work trigger");
+        if((method==="POST" && !triggerMatch[1]) || (method==="PUT" && triggerMatch[1])) {
+          if(method==="PUT") keys(["description","events","routineId","revision"]);
+          if(typeof body.description!=="string" || body.description.length>1000 || !Array.isArray(body.events) || body.events.length<1 || body.events.length>20 || body.events.some(event=>typeof event!=="string" || !/^[A-Za-z0-9_.*:-]{1,100}$/.test(event)) || !fixture.routines.some(r=>r.id===body.routineId && r.botId==="ranch")) throw Error("Invalid trigger fields");
+        } else if(method==="PATCH" && triggerMatch[1]) { keys(["enabled","revision"]); if(typeof body.enabled!=="boolean") throw Error("Invalid trigger toggle"); }
+        else if(method==="DELETE" && triggerMatch[1]) keys(["revision"]);
+        else throw Error(`Unsupported trigger method ${method}`);
+        if(method!=="POST" && (!/^[a-f0-9]{64}$/.test(body.revision) || body.revision!==work.triggers.items[index].revision)) return reject(409,fixture.workMessages.triggerCAS);
+        if(method==="DELETE") { work.triggers.items.splice(index,1); delete workRoutes[id]; return route.fulfill({json:{ok:true}}); }
+        if(method==="PATCH" && body.enabled && !work.triggers.platformEnabled) return reject(409,fixture.workMessages.platformDisabled);
+        if(method==="POST") {
+          const native={profile:"ranch",secret:fixture.workFixture.syntheticSecret,enabled:false,created_at:"2026-10-01T00:00:00Z",deliver:"log",description:body.description,events:body.events,cron_job:body.routineId};
+          workRoutes[id]=native;
+          const subscription={id,description:native.description,events:native.events,routineId:native.cron_job,enabled:false,url:`https://hooks.example.invalid/p/ranch/webhooks/${id}`,secretSet:true,revision:await workRevision(native)};
+          work.triggers.items.push(subscription); return route.fulfill({json:{subscription,secret:fixture.workFixture.syntheticSecret}});
+        }
+        const native=workRoutes[id], subscription=work.triggers.items[index];
+        if(method==="PATCH") {native.enabled=body.enabled; subscription.enabled=body.enabled;}
+        else {Object.assign(native,{description:body.description,events:body.events,cron_job:body.routineId}); Object.assign(subscription,{description:body.description,events:body.events,routineId:body.routineId});}
+        subscription.revision=await workRevision(native); return route.fulfill({json:{subscription}});
+      }
+      throw Error(`Unsupported Work write ${method} ${suffix}`);
+    });
+  }
   if (screen === "memory") await context.route("**/api/bots/*/memory**", async route => {
     const request=route.request(), method=request.method(), url=new URL(request.url());
     if (!/^\/api\/bots\/ranch\/memory(?:\/(memory|user))?$/.test(url.pathname)) throw Error("Unexpected Memory route");
@@ -98,7 +229,7 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
     await context.route(`**${path}`, route => route.fulfill({ contentType: "image/png", body: Buffer.from(encoded, "base64") }));
   }
   await context.route("**/api/bots/*/conversation*", async route => {
-    if (!["conversation", "questions", "approvals", "recovery", "details", "settings", "avatar", "models", "memory"].includes(screen) || !fixture?.conversation) return route.continue();
+    if (!["conversation", "questions", "approvals", "recovery", "details", "settings", "avatar", "models", "memory", "work"].includes(screen) || !fixture?.conversation) return route.continue();
     if (screen === "details") {
       const conversation = structuredClone(fixture.conversation);
       conversation.earlierFiles = state === "earlier-error" ? 1 : 0;
@@ -157,7 +288,7 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
     });
     await context.route("**/api/bots/*/files*", route => state === "earlier-error" ? route.fulfill({status:503,json:{error:"Earlier files unavailable."}}) : route.fulfill({json:{messages:[]}}));
   }
-  if (["settings", "avatar", "models", "memory"].includes(screen)) {
+  if (["settings", "avatar", "models", "memory", "work"].includes(screen)) {
     await context.route("**/api/bots/*", route => {
       const id = decodeURIComponent(new URL(route.request().url()).pathname.split("/").at(-1));
       const bot = settingsBots.find(item => item.id === id);
@@ -261,7 +392,7 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
     const response = await route.fetch();
     const value = await response.json();
     if (fixture) value.bots = state === "empty" ? [] : fixture.bots;
-    if (["settings", "avatar", "models", "memory"].includes(screen)) {
+    if (["settings", "avatar", "models", "memory", "work"].includes(screen)) {
       value.bots = settingsBots.map(({instructions, enabledMcpServers, ...roster}) => roster);
       if (state === "unsupported") value.capabilities.botConfiguration = {supported:false,reason:fixture.unsupportedReason};
     }
@@ -334,6 +465,176 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
     }
   };
   try {
+    if (screen === "work") {
+      const dialog=tab.locator(".settings-dialog"), panel=dialog.locator(".automation-panel");
+      const after=stage==="after", goalCard=()=>panel.locator(after?".automation-goal-card":".automation-item").first();
+      const goalTitle=()=>panel.locator(after?".automation-goal-title":".automation-item > strong");
+      const reset=async ({width=390,theme="light",large=false,mode="loaded"}={})=>{
+        workLoadingRelease?.(); workLoadingRelease=undefined;
+        // Destroy the previous scenario before replacing its transport state.
+        await tab.goto("about:blank");
+        const readStarted=new Promise(resolve=>{workReadStarted=resolve;});
+        workMode=mode; work=structuredClone(fixture.workStates[mode] || fixture.work);
+        workReads=0; workResumeIds=new Map(); workTaskIds=new Map(); workRoutes=Object.fromEntries(fixture.work.triggers.items.map((row,index)=>[row.id,structuredClone(fixture.workFixture.triggerRoutes[index])]));
+        settingsBots=structuredClone(fixture.bots);
+        await tab.setViewportSize({width,height:width>1000?1000:844});
+        await tab.emulateMedia({colorScheme:theme});
+        await tab.goto(`${origin.origin}/?bot=ranch`);
+        await tab.evaluate(({large,theme})=>{localStorage.clear();sessionStorage.clear();document.documentElement.style.fontSize=large?"200%":"";document.documentElement.dataset.theme=theme;},{large,theme});
+        const initialWrites=workSubmissions.length;
+        await tab.locator('.chat-header [title="Details, pin, artifacts and settings"]').click();
+        await tab.locator(".bot-details").getByRole("button",{name:"Settings",exact:true}).click();
+        await dialog.waitFor();
+        const overflow=dialog.locator(".settings-tabs-overflow"); if(await overflow.count()) await overflow.locator("summary").click();
+        await dialog.getByRole("button",{name:"work",exact:true}).click();
+        await panel.waitFor();
+        let readTimeout;
+        try { await Promise.race([readStarted,new Promise((_,reject)=>{readTimeout=setTimeout(()=>reject(Error("Work overview request did not start")),10000);})]); }
+        finally { clearTimeout(readTimeout); }
+        if(mode === "loading") await panel.getByText("Loading assistant controls...",{exact:true}).waitFor();
+        else if(mode === "load-error") await panel.getByRole("alert").waitFor();
+        else await panel.getByRole("heading",{name:"Standing goal"}).waitFor();
+        if(workReads!==1 || workSubmissions.length!==initialWrites) throw Error(`Work ${mode} initial load expected one GET and zero writes, got ${workReads} GETs`);
+        workChecks.push({mode,check:"initial-load",reads:workReads,writes:0});
+      };
+      const shot=async(name,width=390,theme="light")=>{
+        await capture(`goal-${name}`,width,width>1000?1000:844,theme);
+        if(after) geometry.at(-1).workPresentation=await panel.evaluate(node=>{
+          const describe=element=>{const style=getComputedStyle(element),rect=element.getBoundingClientRect();return {text:element.textContent.trim(),fontSize:style.fontSize,lineHeight:style.lineHeight,color:style.color,background:style.backgroundColor,width:rect.width,height:rect.height,flexDirection:style.flexDirection};};
+          return {title:[...node.querySelectorAll('.automation-goal-title')].map(describe),status:[...node.querySelectorAll('.automation-goal-status')].map(describe),buttons:[...node.querySelectorAll('.automation-goal button')].map(describe),checks:[...node.querySelectorAll('.automation-goal .automation-check')].map(describe)};
+        });
+      };
+      const subjectShot=async(name,target,width=390,theme="light")=>{
+        await target.scrollIntoViewIfNeeded();
+        const bounds=await target.evaluate(node=>{
+          const rect=element=>{const r=element.getBoundingClientRect();return {top:r.top,bottom:r.bottom,height:r.height};};
+          const subject=rect(node),view=rect(node.closest('.settings-content'));
+          return {subject,view,fullyVisible:subject.top>=Math.max(0,view.top)&&subject.bottom<=Math.min(innerHeight,view.bottom)};
+        });
+        if(!bounds.fullyVisible) throw Error(`Work ${name} subject is clipped: ${JSON.stringify(bounds)}`);
+        await shot(name,width,theme); geometry.at(-1).workSubject=bounds;
+      };
+      if(workCase==="clear-confirmation") {
+        await reset(); await panel.getByRole("button",{name:"Clear goal…",exact:true}).click();
+        const keep=panel.getByRole("button",{name:"Keep goal",exact:true});
+        if(!await keep.evaluate(node=>node===document.activeElement)) throw Error("Keep goal did not receive focus");
+        // The shared screenshot helper deliberately blurs non-focus captures.
+        await subjectShot("clear-confirmation",panel.locator(".automation-confirm"));
+        if(workSubmissions.length || browserErrors.length) throw Error("Clear-only recheck changed data or raised a browser error");
+        workChecks.push({check:"clear-confirmation-focus",focused:"Keep goal",writes:0});
+        return {title:"Work clear confirmation scoped recheck",paths,geometry,workSubmissions,workChecks,browserErrors,workCase};
+      }
+      for(const [name,width,theme,large] of [["desktop",1440,"light",false],["tablet",768,"light",false],["phone",390,"light",false],["narrow",320,"light",false],["dark",1440,"dark",false],["large-text",390,"light",true]]) {
+        await reset({width,theme,large}); await shot(name,width,theme);
+        if(large) {
+          if(after) await subjectShot("large-text-goal",goalTitle(),width,theme);
+          await subjectShot("large-text-bottom",goalCard().locator(":scope > .actions"),width,theme);
+        }
+        if(name==="phone") {
+          const before=workSubmissions.length; await panel.getByRole("button",{name:"Refresh status"}).click();
+          await tab.waitForFunction(()=>!document.querySelector('.automation-toolbar button')?.disabled);
+          if(workReads!==2 || workSubmissions.length!==before) throw Error("Refresh must issue exactly one read and no writes");
+          workChecks.push({check:"refresh",reads:workReads,writes:0});
+        }
+      }
+      for(const mode of ["loading","load-error","sections-unsupported","empty","goal-done"]) {
+        await reset({mode}); await shot(mode);
+      }
+      await reset({mode:"empty"});
+      await panel.getByRole("button",{name:"Set a goal"}).click(); await subjectShot("set-form",panel.locator(".automation-form"));
+      await panel.getByLabel("Objective").fill(fixture.workFixture.newGoal.title);
+      await panel.getByLabel("Continuation turn budget").fill(String(fixture.workFixture.newGoal.maxTurns));
+      await panel.getByRole("button",{name:"Save paused goal"}).click();
+      await goalTitle().filter({hasText:fixture.workFixture.newGoal.title}).waitFor();
+      await panel.getByRole("status").filter({hasText:"Saved in Hermes."}).waitFor();
+      if(work.goals.goal.status!=="paused" || work.goals.resume) throw Error("Goal set must save paused without a receipt");
+      workChecks.push({check:"transport-set-goal",goal:structuredClone(work.goals.goal)});
+      await reset(); await panel.getByRole("button",{name:after?"Replace goal…":"Replace goal..."}).click();
+      if(await panel.getByRole("button",{name:"Replace with paused goal"}).isEnabled()) throw Error("Replacement enabled before whole-goal confirmation");
+      await subjectShot("replace-confirmation",panel.locator(".automation-confirm"));
+      await panel.getByLabel("Replace the entire standing goal.").check();
+      await panel.getByLabel("Objective").fill(fixture.workFixture.newGoal.title);
+      await panel.getByRole("button",{name:"Replace with paused goal"}).click();
+      await goalTitle().filter({hasText:fixture.workFixture.newGoal.title}).waitFor();
+      await panel.getByRole("status").filter({hasText:"Saved in Hermes."}).waitFor();
+      if(work.goals.resume) throw Error("Replacement retained a resume receipt");
+      workChecks.push({check:"transport-replace-clears-receipt"});
+      await reset(); await panel.getByRole("button",{name:after?"Clear goal…":"Clear goal..."}).click(); await subjectShot("clear-confirmation",panel.locator(".automation-confirm"));
+      await panel.getByRole("button",{name:"Clear goal",exact:true}).click(); await panel.getByText(/^No standing goal/).waitFor();
+      if(work.goals.goal!==null) throw Error("Clear did not persist"); workChecks.push({check:"transport-clear-goal"});
+      await reset({width:1440,mode:"interrupted"});
+      const review=panel.getByLabel("I've reviewed the interrupted work in this conversation.");
+      const resume=panel.getByRole("button",{name:"Resume goal"}); if(await resume.isEnabled()) throw Error("Resume enabled before interruption review");
+      await subjectShot("interrupted",panel.locator(".automation-confirm"),1440); await review.check(); if(!await resume.isEnabled()) throw Error("Resume disabled after review"); await subjectShot("interrupted-reviewed",panel.locator(".automation-confirm"),1440);
+      const before=workSubmissions.length; await resume.click(); await panel.getByRole("button",{name:"Pause goal"}).waitFor();
+      const submitted=workSubmissions.slice(before); if(submitted.length!==1 || submitted[0].body.reviewedInterruption!==true) throw Error("Interruption review did not send one reviewed resume");
+      workChecks.push({check:"interruption-gate",submission:submitted[0]});
+      for(const [name,width] of [["uncertain-desktop",1440],["uncertain-phone",390]]) {
+        await reset({width,mode:"resume-uncertain"}); await panel.getByRole("button",{name:"Resume goal"}).click();
+        await panel.getByRole("alert").filter({hasText:"The goal's start is uncertain."}).waitFor();
+        const writesBeforeRefresh=workSubmissions.length;
+        await panel.getByRole("button",{name:"Refresh status"}).click();
+        await panel.getByText(/previous attempt may have started work/i).waitFor();
+        if(workSubmissions.length!==writesBeforeRefresh) throw Error("Uncertain refresh resent a write");
+        workChecks.push({check:"uncertain-refresh",writes:0});
+        await subjectShot(name,panel.locator(".automation-confirm"),width);
+        if(await panel.getByRole("button",{name:"Resume goal"}).isEnabled()) throw Error("An uncertain receipt must block ordinary resume");
+        if(name==="uncertain-desktop") {
+          await panel.getByLabel("I've reviewed the conversation and want to start a new attempt.").check(); await subjectShot("new-attempt-review",panel.locator(".automation-confirm"),width);
+          const records=workSubmissions.filter(row=>row.mode==="resume-uncertain" && row.path==="/goal/resume"); const first=records.at(-1);
+          await panel.getByRole("button",{name:"Start a new attempt"}).click(); await panel.getByRole("button",{name:"Pause goal"}).waitFor();
+          const last=workSubmissions.at(-1); if(last.body.requestId===first.body.requestId) throw Error("New attempt needs a fresh UUID");
+          workChecks.push({check:"new-attempt",first:first.body.requestId,second:last.body.requestId,reviewedInterruption:last.body.reviewedInterruption ?? false});
+        }
+      }
+      await reset({mode:"resume-rejected"}); await panel.getByRole("button",{name:"Resume goal"}).click();
+      await (after?panel.locator(".automation-goal-callout.is-danger"):panel.getByRole("alert")).filter({hasText:fixture.workMessages.rejectedResume}).waitFor();
+      const rejectedResume=panel.getByRole("button",{name:"Resume goal"});
+      await rejectedResume.waitFor({state:"visible"});
+      await tab.waitForFunction(()=>[...document.querySelectorAll('.automation-panel button')].some(button=>button.textContent.trim()==="Resume goal"&&!button.disabled));
+      await subjectShot("rejected",after?panel.locator(".automation-goal-callout.is-danger"):panel.getByRole("alert"));
+      if(after) {
+        await panel.getByRole("button",{name:"Refresh status"}).click();
+        await panel.locator(".automation-goal-callout.is-danger").getByText(fixture.workMessages.rejectedResume,{exact:true}).waitFor();
+        await tab.waitForFunction(()=>!document.querySelector('.automation-toolbar button')?.disabled);
+        await subjectShot("rejected-refreshed",panel.locator(".automation-goal-callout.is-danger"));
+        workChecks.push({check:"rejection-persists-after-refresh",message:fixture.workMessages.rejectedResume});
+      }
+      if(work.goals.goal.status!=="paused") throw Error("Rejected goal must stay paused");
+      workChecks.push({check:"transport-rejected-paused",resumeRendered:true,resumeEnabled:true});
+      if(after) {
+        await reset({width:320,mode:"interrupted"});
+        await subjectShot("interrupted-narrow",panel.locator(".automation-confirm"),320);
+        await reset({width:320,mode:"resume-uncertain"});
+        await panel.getByRole("button",{name:"Resume goal"}).click();
+        await panel.getByRole("alert").filter({hasText:"The goal's start is uncertain."}).waitFor();
+        await panel.getByRole("button",{name:"Refresh status"}).click();
+        await panel.locator(".automation-goal-callout").getByText(fixture.workMessages.uncertainResume,{exact:true}).waitFor();
+        await subjectShot("uncertain-narrow",panel.locator(".automation-goal-attempt"),320);
+        await reset({width:320}); await panel.getByRole("button",{name:"Replace goal…"}).click();
+        await subjectShot("replace-narrow",panel.locator(".automation-confirm"),320);
+        for(const [name,mode] of [["uncertain-dark","resume-uncertain"],["rejected-dark","resume-rejected"]]) {
+          await reset({width:390,theme:"dark",mode});
+          await panel.getByRole("button",{name:"Resume goal"}).click();
+          if(mode==="resume-uncertain") {
+            await panel.getByRole("alert").filter({hasText:"The goal's start is uncertain."}).waitFor();
+            await panel.getByRole("button",{name:"Refresh status"}).click();
+          }
+          await panel.locator(".automation-goal-callout").waitFor();
+          await subjectShot(name,panel.locator(".automation-goal-callout"),390,"dark");
+        }
+        await reset(); const writes=workSubmissions.length;
+        const overflow=dialog.locator(".settings-tabs-overflow");if(await overflow.count()) await overflow.locator("summary").click();
+        await dialog.getByRole("button",{name:"learning",exact:true}).click();
+        await panel.getByRole("heading",{name:"Skills & learning"}).waitFor();
+        await panel.getByRole("checkbox",{name:"Require approval before skill changes are saved"}).waitFor();
+        if(workSubmissions.length!==writes) throw Error("Learning regression smoke made a write");
+        await shot("learning-smoke");workChecks.push({check:"learning-read-only-smoke",writes:0,scored:false});
+      }
+      if(workSubmissions.some(row=>row.path==="/goal/resume" && !/^[0-9a-f-]{36}$/i.test(row.body.requestId))) throw Error("Invalid resume UUID");
+      if(browserErrors.length) throw Error(`Work browser errors: ${browserErrors.join("; ")}`);
+      return {title:"Work frame and standing goal",paths,geometry,workSubmissions,workChecks,browserErrors};
+    }
     if (screen === "memory") {
       const dialog=tab.locator(".settings-dialog"), panel=dialog.locator(".memory-panel");
       const doc=target=>panel.locator(`[data-memory-target="${target}"]`);
@@ -1361,5 +1662,5 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
   } catch (error) {
     await tab.screenshot({path:`${outputDir}/${prefix}-${screen}-capture-error.png`,animations:"disabled"}).catch(() => {});
     throw new Error(`${error.message}\nBrowser errors: ${browserErrors.join("; ")}`);
-  } finally { releaseMemoryLoad?.(); releaseMemoryWrite?.(); await context.unrouteAll({behavior:"ignoreErrors"}); await context.close(); }
+  } finally { workLoadingRelease?.(); releaseMemoryLoad?.(); releaseMemoryWrite?.(); await context.unrouteAll({behavior:"ignoreErrors"}); await context.close(); }
 }

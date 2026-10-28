@@ -57,7 +57,10 @@ References collected October 25, 2026. External artwork is reference material on
 | Avatar editor | 17 web and 15 native baseline states; 24 web and 19 each on iPhone/iPad after states | Complete | Web desktop/phone, iPhone and iPad 9 |
 | Models and capabilities | 35 web before, 43 web after; 26 native before and after states per device | Complete | Models, Tools and Skills: web desktop/phone, iPhone and iPad 9 |
 | Memory | 20 web before, 35 after; 18 native before, 26 after per device | Complete | Web desktop, tablet, phone, dark and 200% text 9; iPhone and iPad normal, dark, AX3 and recovery 9 |
-| Work and learning | Pending | Pending | Pending |
+| Work frame and standing goal | 21 web and 20 native before frames per device verified | Complete | Web, iPhone and iPad 9 |
+| Work task board and editors | Pending | Pending | Pending |
+| Work event triggers | Pending | Pending | Pending |
+| Learning | Pending | Pending | Pending |
 | Routines and results | Pending | Pending | Pending |
 | Logins and secure requests | Pending | Pending | Pending |
 | Search, saved items and automations | Pending | Pending | Pending |
@@ -280,3 +283,27 @@ devices, VoiceOver output and the Copy menu remain unverified.
 The [shared settings navigation recheck](evidence/design-review/memory-settings-navigation-review.md)
 retains the earlier Details, Avatar, Models, Tools and Skills scores after fresh
 200% captures. The five target images match their previously accepted pixels.
+
+## Work frame and standing-goal acceptance
+
+Work's frame and standing goal pass Opus 5.5 High at 9 on web, iPhone and iPad.
+The [web review](evidence/design-review/work-web-review.md),
+[iPhone review](evidence/design-review/work-phone-review.md) and
+[iPad review](evidence/design-review/work-ipad-review.md) close every blocker.
+Task boards, task editors, event triggers and Learning remain separate pending gates.
+
+The goal has one primary action, grouped status and turn counts, persistent
+resume receipts and review controls beside the action they permit. Native Replace
+and Clear use readable confirmation sheets with explicit Keep actions. Three
+presenter cycles on each native device verify Cancel, draft retention, replacement,
+and keeping or clearing a goal after a fresh read.
+
+The [evidence record](evidence/design-review/work-acceptance.json) binds the
+26 focused web tests, typecheck, production build, isolated native runs and
+source proofs. It records 61 before frames, 74 after frames and 19 annotated
+comparisons. The after total includes two unscored Learning smoke frames.
+Failed and interrupted attempts are excluded; unchanged image reuse was reviewed.
+Native before images follow the essential presenter repair and precede visual
+changes. Enlarged text uses AX3 on native and a 200% root font on web. Physical
+devices, VoiceOver output, hardware keyboards, iOS 17, AX4/AX5 and compact iPad
+widths remain unverified.

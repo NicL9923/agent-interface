@@ -216,18 +216,60 @@ import SwiftUI
 
 struct HermesAutomationStatus: View {
   var control: HermesAutomationControls
+  var compact = false
+  var work = false
+  var showingReceipt = false
   @Environment(AppStore.self) private var store
+  // The goal card owns the server receipt. Keep any distinct reconciliation guidance here.
+  private var displayedError: String? {
+    guard let error = control.error else { return nil }
+    guard let receipt = control.value?.goals.resume,
+      work && ["rejected", "uncertain"].contains(receipt.status) || showingReceipt && receipt.status == "uncertain" else { return error }
+    let message = receipt.message ?? (receipt.status == "rejected"
+      ? "Hermes refused this goal continuation. Review the conversation before trying again."
+      : "Hermes could not confirm this goal continuation.")
+    guard !message.isEmpty, error.hasPrefix(message) else { return error }
+    let remainder = String(error.dropFirst(message.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+    return remainder.isEmpty ? nil : remainder
+  }
   var body: some View {
-    Section {
-      Text("Managed by Hermes").font(.caption).foregroundStyle(.secondary)
-      if !store.connected { Text("Connect to Hermes to make changes.").foregroundStyle(.secondary) }
-      if let error = control.error { ErrorBanner(message: error) }
-      if let notice = control.notice { Text(notice).font(.footnote).accessibilityAddTraits(.updatesFrequently) }
-      if control.loading { ProgressView("Refreshing assistant controls") }
-      Button("Refresh status") { Task { await control.refresh(store) } }
-        .disabled(control.busy || control.loading)
-        .accessibilityIdentifier("automation.refresh")
-      if control.needsRefresh { Text("Refresh and review the current status before making another change.").font(.footnote) }
+    if !work && !compact {
+      Section {
+        Text("Managed by Hermes").font(.caption).foregroundStyle(.secondary)
+        if !store.connected { Text("Connect to Hermes to make changes.").foregroundStyle(.secondary) }
+        if let error = control.error { ErrorBanner(message: error) }
+        if let notice = control.notice { Text(notice).font(.footnote).accessibilityAddTraits(.updatesFrequently) }
+        if control.loading { ProgressView("Refreshing assistant controls") }
+        Button("Refresh status") { Task { await control.refresh(store) } }
+          .disabled(control.busy || control.loading).accessibilityIdentifier("automation.refresh")
+        if control.needsRefresh { Text("Refresh and review the current status before making another change.").font(.footnote) }
+      }
+    } else if !compact || displayedError != nil || control.notice != nil || control.needsRefresh || control.loading || !store.connected {
+      Section {
+        if !compact { Text("Managed by Hermes").font(.caption).foregroundStyle(Palette.muted) }
+        if !store.connected { Text("Connect to Hermes to make changes.").foregroundStyle(Palette.muted) }
+        if let error = displayedError { ErrorBanner(message: error) }
+        if let notice = control.notice { Text(notice).font(.footnote).accessibilityAddTraits(.updatesFrequently) }
+        if control.loading {
+          if work {
+            ProgressView { Text(control.value == nil ? "Loading Work…" : "Refreshing…").foregroundStyle(Palette.muted) }
+          } else { ProgressView("Refreshing assistant controls") }
+        }
+        if !compact || control.needsRefresh || displayedError != nil {
+          if work && control.value == nil && control.error != nil {
+            Button("Try loading again") { Task { await control.refresh(store) } }
+              .buttonStyle(.accentProminent).disabled(control.busy || control.loading)
+              .accessibilityIdentifier("automation.refresh")
+          } else {
+            Button("Refresh status") { Task { await control.refresh(store) } }
+              .disabled(control.busy || control.loading).accessibilityIdentifier("automation.refresh")
+          }
+        }
+        if control.needsRefresh && control.value != nil && (!work || displayedError == nil) {
+          Text("Refresh and review the current status before making another change.").font(.footnote)
+            .foregroundStyle(Palette.muted)
+        }
+      }
     }
   }
 }
@@ -235,6 +277,7 @@ struct HermesAutomationStatus: View {
 private enum HermesWorkSheet: Identifiable {
   case goalEditor(HermesGoal?)
   case newResumeAttempt
+  case clearGoal
   case createTask
   case taskDetail(HermesTask)
   case createTrigger
@@ -243,6 +286,7 @@ private enum HermesWorkSheet: Identifiable {
     switch self {
     case .goalEditor: return "goal-editor"
     case .newResumeAttempt: return "new-resume-attempt"
+    case .clearGoal: return "clear-goal"
     case .createTask: return "create-task"
     case .taskDetail(let task): return "task:\(task.id)"
     case .createTrigger: return "create-trigger"
@@ -257,18 +301,18 @@ struct HermesWorkView: View {
   @Environment(\.scenePhase) private var scenePhase
   @State private var control: HermesAutomationControls
   @State private var sheet: HermesWorkSheet?
-  @State private var clearingGoal = false
+  @State private var pendingClearGoal = false
   init(botId: String) {
     self.botId = botId
     _control = State(initialValue: HermesAutomationControls(botId: botId))
   }
   var body: some View {
     Form {
-      HermesAutomationStatus(control: control)
+      HermesAutomationStatus(control: control, work: true)
       if let value = control.value {
         HermesGoalSection(control: control, state: value.goals,
           edit: { sheet = .goalEditor(value.goals.goal) },
-          startNewAttempt: { sheet = .newResumeAttempt }, clear: { clearingGoal = true })
+          startNewAttempt: { sheet = .newResumeAttempt }, clear: { sheet = .clearGoal })
         HermesTaskSection(control: control, state: value.tasks,
           create: { sheet = .createTask }, open: { sheet = .taskDetail($0) })
         HermesTriggerSection(control: control, state: value.triggers,
@@ -289,22 +333,35 @@ struct HermesWorkView: View {
       .onChange(of: scenePhase) { _, phase in control.foreground(phase == .active) }
       // Form sections are lazy. Keep the presenter and its state on the enclosing form so
       // recycling rows cannot tear down a presented editor or its parent sheet.
-      .sheet(item: $sheet) { destination in workDestination(destination) }
-      .confirmationDialog("Clear this standing goal?", isPresented: $clearingGoal, titleVisibility: .visible) {
-        Button("Clear goal", role: .destructive) {
+      .sheet(item: $sheet, onDismiss: {
+        if pendingClearGoal {
+          pendingClearGoal = false
           Task { _ = await control.changeOK(store, "/goal/clear", [String: String]()) }
         }
-      } message: { Text("The conversation stays saved.") }
+      }) { destination in workDestination(destination) }
   }
   @ViewBuilder private func workDestination(_ destination: HermesWorkSheet) -> some View {
     switch destination {
     case .goalEditor(let goal): HermesGoalEditor(control: control, goal: goal)
     case .newResumeAttempt: HermesNewResumeAttempt(control: control)
+    case .clearGoal:
+      AssistantConfirmationSheet(title: "Clear this standing goal?", message: "The conversation stays saved.",
+        acceptLabel: "Clear goal", keepLabel: "Keep goal", destructive: true,
+        accept: { pendingClearGoal = true; sheet = nil }, keep: { sheet = nil })
     case .createTask: HermesTaskEditor(control: control, task: nil)
     case .taskDetail(let task): HermesTaskDetail(control: control, initial: task)
     case .createTrigger: HermesTriggerEditor(control: control, trigger: nil)
     case .editTrigger(let trigger): HermesTriggerEditor(control: control, trigger: trigger)
     }
+  }
+}
+
+/// A full-width primary action is reserved for an action the person can take now.
+private struct HermesGoalActionStyle: ViewModifier {
+  var primary: Bool
+  @ViewBuilder func body(content: Content) -> some View {
+    if primary { content.buttonStyle(.accentProminent) }
+    else { content.buttonStyle(.bordered).tint(Color.primary) }
   }
 }
 
@@ -315,52 +372,118 @@ private struct HermesGoalSection: View {
   var startNewAttempt: () -> Void
   var clear: () -> Void
   @Environment(AppStore.self) private var store
+  @Environment(\.dynamicTypeSize) private var dynamicTypeSize
   @State private var reviewedInterruption = false
   private var disabled: Bool { control.disabled || !store.connected }
-  var body: some View {
-    Section("Standing goal") {
-      if !state.supported {
-        Text(state.reason ?? "Goals are unavailable on this Hermes installation.").foregroundStyle(.secondary)
+  private func statusLabel(_ status: String) -> String {
+    switch status {
+    case "active": "Active"
+    case "paused": "Paused"
+    case "done": "Done"
+    default: status
+    }
+  }
+  @ViewBuilder private func metadata(_ goal: HermesGoal) -> some View {
+    let status = statusLabel(goal.status)
+    let turns = "\(goal.turnsUsed) of \(goal.maxTurns) turns used"
+    VStack(alignment: .leading, spacing: 8) {
+      if dynamicTypeSize.isAccessibilitySize {
+        VStack(alignment: .leading, spacing: 6) { statusBadge(status); Text(turns).monospacedDigit() }
       } else {
-        if let goal = state.goal {
-          Text(goal.title).font(.headline)
-          LabeledContent("Status", value: goal.status)
-          LabeledContent("Continuation turns", value: "\(goal.turnsUsed) of \(goal.maxTurns)")
-          if let reason = goal.pausedReason, !reason.isEmpty { Text(reason).font(.footnote) }
-          if let resume = state.resume {
-            Text("Last resume: \(resume.status)").font(.footnote).foregroundStyle(.secondary)
-            if let message = resume.message { Text(message).font(.footnote) }
-            if resume.status == "uncertain" {
-              Text("Hermes has not confirmed the continuation. Refresh status and check the conversation before another resume.")
-                .font(.footnote)
-            }
+        HStack(alignment: .firstTextBaseline, spacing: 10) { statusBadge(status); Text(turns).monospacedDigit() }
+      }
+      if let reason = goal.pausedReason, !reason.isEmpty {
+        Text(goal.status == "paused" ? "Paused: " + reason : reason)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+    }.font(.subheadline).foregroundStyle(Palette.muted).accessibilityElement(children: .combine)
+  }
+  private func statusBadge(_ value: String) -> some View {
+    Text(value).font(.subheadline.weight(.semibold)).foregroundStyle(Color.primary)
+      .padding(.horizontal, 9).padding(.vertical, 4).background(Palette.accentSoft, in: Capsule())
+  }
+  private func callout(_ title: String, message: String, danger: Bool = false) -> some View {
+    let symbol = Image(systemName: danger ? "exclamationmark.circle" : "exclamationmark.triangle")
+      .foregroundStyle(danger ? Palette.danger : Palette.attention).accessibilityHidden(true)
+    let heading = Text(title).font(.subheadline.weight(.semibold)).accessibilityAddTraits(.isHeader)
+      .accessibilityIdentifier("automation.goal.callout.title.\(title)")
+    let paragraph = Text(message).font(.subheadline).fixedSize(horizontal: false, vertical: true)
+    return Group {
+      if dynamicTypeSize.isAccessibilitySize {
+        VStack(alignment: .leading, spacing: 8) {
+          HStack(alignment: .top, spacing: 10) { symbol; heading }
+          paragraph
+        }
+      } else {
+        HStack(alignment: .top, spacing: 10) {
+          symbol.padding(.top, 2)
+          VStack(alignment: .leading, spacing: 6) { heading; paragraph }
+        }
+      }
+    }.foregroundStyle(Color.primary).accessibilityElement(children: .contain)
+  }
+  var body: some View {
+    Group {
+      Section {
+        if !state.supported {
+          Text(state.reason ?? "Goals are unavailable on this Hermes installation.").foregroundStyle(Palette.muted)
+        } else if let goal = state.goal {
+          VStack(alignment: .leading, spacing: 10) {
+            Text(goal.title).font(.headline).fixedSize(horizontal: false, vertical: true)
+            metadata(goal)
+          }.padding(.vertical, 4)
+          if let receipt = state.resume, receipt.status == "uncertain" || receipt.status == "rejected" {
+            callout(receipt.status == "uncertain" ? "Resume not confirmed" : "Resume rejected",
+              message: receipt.message ?? (receipt.status == "uncertain"
+                ? "Hermes could not confirm this goal continuation. Review the conversation before trying again."
+                : "Hermes refused this goal continuation. Review the conversation before trying again."),
+              danger: receipt.status == "rejected")
+          }
+          if goal.status != "done" && goal.status != "active" && state.interruptionPending == true {
+            callout("Review interrupted work", message: "Review the interrupted work in this assistant's conversation before resuming.")
+            Toggle("I've reviewed the interrupted work in this conversation.", isOn: $reviewedInterruption)
+              .disabled(disabled).accessibilityIdentifier("automation.reviewedInterruption")
           }
           if goal.status == "active" {
-            Button("Pause goal") { Task { _ = await control.changeOK(store, "/goal/pause", [String: String]()) } }
-              .disabled(disabled)
-          } else {
-            if state.interruptionPending == true {
-              Toggle("I've reviewed the interrupted work in this conversation.", isOn: $reviewedInterruption)
-                .disabled(disabled).accessibilityIdentifier("automation.reviewedInterruption")
-            }
-            Button(control.resumeIntent.requestId == nil ? "Resume goal" : "Retry same resume") {
+            Button { Task { _ = await control.changeOK(store, "/goal/pause", [String: String]()) } } label: {
+              Text("Pause goal").frame(maxWidth: .infinity, minHeight: 44)
+            }.modifier(HermesGoalActionStyle(primary: !disabled)).disabled(disabled).listRowSeparator(.hidden)
+          } else if goal.status != "done" {
+            let uncertain = state.resume?.status == "uncertain"
+            let canResume = !disabled && control.canResume && (state.interruptionPending != true || reviewedInterruption)
+            let label = uncertain ? "Check resume status" : control.resumeIntent.requestId == nil ? "Resume goal" : "Retry same resume"
+            Button {
               Task { await control.resume(store, reviewedInterruption: state.interruptionPending == true && reviewedInterruption) }
-            }.disabled(disabled || !control.canResume || state.interruptionPending == true && !reviewedInterruption)
+            } label: { Text(label).frame(maxWidth: .infinity, minHeight: 44) }
+              .modifier(HermesGoalActionStyle(primary: canResume && !uncertain)).disabled(!canResume).listRowSeparator(.hidden)
             if control.canStartNewResumeAttempt {
-              Button("Start a new resume attempt", action: startNewAttempt).disabled(disabled)
+              Button(action: startNewAttempt) {
+                Text("Start a new resume attempt").frame(maxWidth: .infinity, minHeight: 44)
+              }.modifier(HermesGoalActionStyle(primary: !disabled && (uncertain || !control.canResume))).disabled(disabled).listRowSeparator(.hidden)
             }
           }
-          Button("Replace goal", action: edit).disabled(disabled)
-          Button("Clear goal", role: .destructive, action: clear).disabled(disabled)
+          Button(action: edit) { Text("Replace goal").frame(maxWidth: .infinity, minHeight: 44) }
+            .buttonStyle(.bordered).tint(Color.primary).disabled(disabled).listRowSeparator(.hidden)
         } else {
           Text("No standing goal. A goal continues across turns until it finishes, pauses, or reaches its budget.")
-            .foregroundStyle(.secondary)
-          Button("Set a goal", action: edit).disabled(disabled)
+            .foregroundStyle(Palette.muted)
+          Button(action: edit) { Text("Set a goal").frame(maxWidth: .infinity, minHeight: 44) }
+            .modifier(HermesGoalActionStyle(primary: !disabled)).disabled(disabled).listRowSeparator(.hidden)
+        }
+      } header: {
+        Text("Standing goal").foregroundStyle(Palette.muted)
+      }
+      .onChange(of: state.interruptionPending) { _, _ in reviewedInterruption = false }
+      .onChange(of: state.goal?.status) { _, _ in reviewedInterruption = false }
+      if state.supported && state.goal != nil {
+        Section {
+          Button(role: .destructive, action: clear) {
+            let label = Text("Clear goal").frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
+            if disabled { label } else { label.foregroundStyle(Palette.danger) }
+          }.disabled(disabled).accessibilityIdentifier("automation.goal.clear")
         }
       }
     }
-    .onChange(of: state.interruptionPending) { _, _ in reviewedInterruption = false }
-    .onChange(of: state.goal?.status) { _, _ in reviewedInterruption = false }
   }
 }
 
@@ -373,6 +496,11 @@ private struct HermesNewResumeAttempt: View {
   @State private var acceptsRepeatedWork = false
   @State private var reviewedInterruption = false
   private var interruptionPending: Bool { control.value?.goals.interruptionPending == true }
+  private var admissionMessage: String {
+    guard let receipt = control.value?.goals.resume, receipt.status == "uncertain",
+      let message = receipt.message, !message.isEmpty else { return "Hermes has not confirmed the earlier attempt." }
+    return message
+  }
   private var canSubmit: Bool {
     !control.disabled && store.connected && control.canStartNewResumeAttempt
       && reviewedConversation && acceptsRepeatedWork && (!interruptionPending || reviewedInterruption)
@@ -380,27 +508,31 @@ private struct HermesNewResumeAttempt: View {
   var body: some View {
     NavigationStack {
       Form {
-        HermesAutomationStatus(control: control)
-        Section("Review the conversation first") {
-          Text("Hermes has not confirmed the earlier attempt. It may still run. Starting a new attempt can repeat work.")
+        HermesAutomationStatus(control: control, compact: true, showingReceipt: true)
+        Section {
+          Text(admissionMessage).font(.subheadline).fixedSize(horizontal: false, vertical: true)
+          Text("The earlier attempt may still run. Starting a new attempt can repeat work.")
+            .fixedSize(horizontal: false, vertical: true)
           Toggle("I've reviewed this conversation and the unconfirmed attempt.", isOn: $reviewedConversation)
           if interruptionPending {
             Toggle("I've reviewed the interrupted work in this conversation.", isOn: $reviewedInterruption)
           }
           Toggle("I understand a new attempt may repeat work.", isOn: $acceptsRepeatedWork)
+          Button {
+            let current = lifetime.current
+            Task {
+              if await control.startNewResumeAttempt(store, reviewedConversation: reviewedConversation,
+                acceptsRepeatedWork: acceptsRepeatedWork, reviewedInterruption: interruptionPending && reviewedInterruption, current: current) { dismiss() }
+            }
+          } label: { Text("Start new attempt").frame(maxWidth: .infinity, minHeight: 44) }
+            .modifier(HermesGoalActionStyle(primary: canSubmit)).disabled(!canSubmit).listRowSeparator(.hidden)
+            .accessibilityIdentifier("automation.goal.newAttempt.submit")
+        } header: {
+          Text("Review the conversation first").foregroundStyle(Palette.muted)
         }.disabled(control.disabled || !store.connected)
-      }.householdListBackground().navigationTitle("New resume attempt").navigationBarTitleDisplayMode(.inline)
+      }.householdListBackground().navigationTitle("New attempt").navigationBarTitleDisplayMode(.inline)
         .toolbar {
           ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(control.busy) }
-          ToolbarItem(placement: .confirmationAction) {
-            Button("Start new attempt") {
-              let current = lifetime.current
-              Task {
-                if await control.startNewResumeAttempt(store, reviewedConversation: reviewedConversation,
-                  acceptsRepeatedWork: acceptsRepeatedWork, reviewedInterruption: interruptionPending && reviewedInterruption, current: current) { dismiss() }
-              }
-            }.disabled(!canSubmit)
-          }
         }.interactiveDismissDisabled(control.busy)
         .onAppear { lifetime.appear() }.onDisappear { lifetime.disappear() }
     }
@@ -415,6 +547,7 @@ private struct HermesGoalEditor: View {
   @State private var title: String
   @State private var maxTurns: Int
   @State private var confirmingReplacement = false
+  @State private var pendingReplacement = false
   private let existingGoal: Bool
   private var replacing: Bool { existingGoal || control.value?.goals.goal != nil }
   private let replacementWarning = "This resets turn progress and removes the existing goal's native subgoals, completion contracts and verification gates. The replacement is saved paused."
@@ -427,13 +560,16 @@ private struct HermesGoalEditor: View {
   var body: some View {
     NavigationStack {
       Form {
-        HermesAutomationStatus(control: control)
-        Section("Objective") {
+        HermesAutomationStatus(control: control, compact: true)
+        Section {
           TextField("What should the assistant work toward?", text: $title, axis: .vertical).lineLimit(4...12)
+            .accessibilityLabel("Objective").accessibilityIdentifier("automation.goal.objective")
           Stepper("Continuation turn budget: \(maxTurns)", value: $maxTurns, in: 1...1000)
           Text("Saves paused. Resume the goal when you are ready for the assistant to work.").font(.footnote)
           if replacing { Text(replacementWarning).font(.footnote).foregroundStyle(Palette.danger) }
           if title.utf16.count > 10_000 { Text("Use at most 10,000 characters.").foregroundStyle(Palette.danger) }
+        } header: {
+          Text("Objective").foregroundStyle(Palette.muted)
         }.disabled(control.disabled || !store.connected)
       }.householdListBackground().navigationTitle(replacing ? "Replace goal" : "Standing goal").navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -445,9 +581,17 @@ private struct HermesGoalEditor: View {
           }
         }.interactiveDismissDisabled(control.busy)
         .onAppear { lifetime.appear() }.onDisappear { lifetime.disappear() }
-        .confirmationDialog("Replace this standing goal?", isPresented: $confirmingReplacement, titleVisibility: .visible) {
-          Button("Replace goal", role: .destructive) { save() }
-        } message: { Text(replacementWarning) }
+        .sheet(isPresented: $confirmingReplacement, onDismiss: {
+          if pendingReplacement {
+            pendingReplacement = false
+            save()
+          }
+        }) {
+          AssistantConfirmationSheet(title: "Replace this standing goal?", message: replacementWarning,
+            acceptLabel: "Replace goal", keepLabel: "Keep editing", destructive: true,
+            accept: { pendingReplacement = true; confirmingReplacement = false },
+            keep: { confirmingReplacement = false })
+        }
     }
   }
   private func save() {

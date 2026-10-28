@@ -63,6 +63,7 @@ import XCTest
     return changed
   }
   func testGoalPresentersStayOverSettings() {
+    continueAfterFailure = false
     for cycle in 1...3 {
       let app = launch()
       defer { app.terminate() }
@@ -91,25 +92,51 @@ import XCTest
       editor.buttons["Cancel"].tapWhenReady()
       XCTAssertTrue(editor.waitForDisappearance(timeout: 5), "Cancel closes only the goal editor, cycle \(cycle)")
       XCTAssertTrue(form.waitForExistence(timeout: 5))
+      reveal(replace, in: form); replace.tapWhenReady()
+      guard remainsPresented(editor, "Replace goal editor reopened") else { return }
+      let objective = app.descendants(matching: .any).matching(identifier: "automation.goal.objective").firstMatch
+      XCTAssertTrue(objective.waitUntilHittable()); objective.tapWhenReady()
+      XCTAssertTrue(objective.waitForKeyboardFocus()); objective.waitForKeyboardLayout()
+      let suffix = " replacement \(cycle)"
+      objective.typeWhenFocused(suffix)
+      editor.buttons["Replace goal"].tapWhenReady()
+      let replacement = app.staticTexts["Replace this standing goal?"]
+      guard remainsPresented(replacement, "Replace goal confirmation") else { return }
+      let keepEditing = app.buttons["confirmationKeep"]
+      XCTAssertEqual(keepEditing.label, "Keep editing"); keepEditing.tapWhenReady()
+      XCTAssertTrue(replacement.waitForDisappearance(timeout: 5))
+      guard remainsPresented(editor, "Keep editing preserves the goal editor") else { return }
+      XCTAssertTrue((objective.value as? String)?.contains(suffix) == true, "Keep editing preserves the draft")
+      editor.buttons["Replace goal"].tapWhenReady()
+      guard remainsPresented(replacement, "Replace goal confirmation reopened") else { return }
+      app.buttons["confirmationAccept"].tapWhenReady()
+      XCTAssertTrue(editor.waitForDisappearance(timeout: 10), "Replace closes only the goal editor, cycle \(cycle)")
+      XCTAssertTrue(text(suffix, app: app).waitForExistence(timeout: 10), "Replacement reconciles the edited title")
+      XCTAssertTrue(form.waitForExistence(timeout: 5))
       XCTAssertEqual(app.buttons["settingsMore"].value as? String, "Work")
-      let clear = app.buttons["Clear goal"]
+      let clear = app.buttons["automation.goal.clear"]
       reveal(clear, in: form); clear.tapWhenReady()
       let prompt = app.staticTexts["Clear this standing goal?"]
       guard remainsPresented(prompt, "Clear goal confirmation") else { return }
-      let cancel = app.sheets.buttons["Cancel"]
-      if cancel.exists { cancel.tapWhenReady() }
-      else {
-        let header = app.navigationBars.matching(identifier: "Ranch hand").firstMatch
-        let outside = CGPoint(x: header.frame.midX, y: header.frame.midY)
-        guard !app.sheets.firstMatch.frame.contains(outside) else {
-          XCTFail("The outside tap would land on the Clear goal dialog, cycle \(cycle).\n\(app.debugDescription)"); return
-        }
-        header.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
-      }
+      let keep = app.buttons["confirmationKeep"]
+      XCTAssertTrue(keep.waitForExistence(timeout: 5)); XCTAssertEqual(keep.label, "Keep goal")
+      keep.tapWhenReady()
       XCTAssertTrue(prompt.wait(until: "exists == false"))
       XCTAssertTrue(form.exists)
       XCTAssertEqual(app.buttons["settingsMore"].value as? String, "Work")
-      XCTAssertTrue(app.buttons["Resume goal"].exists, "Cancelling must preserve the paused goal")
+      let resume = app.buttons["Resume goal"]
+      // Resume precedes Clear, whose opener was just scrolled into view.
+      reveal(resume, in: form, downward: true)
+      XCTAssertTrue(resume.waitForExistence(timeout: 5), "Keeping the goal preserves it")
+      app.selectSettingsTab("Learning"); app.selectSettingsTab("Work")
+      XCTAssertTrue(text(suffix, app: app).waitForExistence(timeout: 10), "The replacement remains after a fresh read")
+      reveal(clear, in: form); clear.tapWhenReady()
+      guard remainsPresented(prompt, "Clear goal confirmation reopened") else { return }
+      let accept = app.buttons["confirmationAccept"]
+      XCTAssertTrue(accept.waitForExistence(timeout: 5)); XCTAssertEqual(accept.label, "Clear goal")
+      accept.tapWhenReady()
+      XCTAssertTrue(text("No standing goal.", app: app).waitForExistence(timeout: 10), "Clear reconciles to an empty goal")
+      XCTAssertTrue(app.buttons["Set a goal"].exists)
       print("GOAL_PRESENTATION_CYCLE \(cycle) PASSED")
     }
   }

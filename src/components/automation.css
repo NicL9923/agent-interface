@@ -22,3 +22,37 @@
 .automation-url { display: block; overflow-wrap: anywhere; font-size: 0.75rem; margin: 10px 0; }
 .automation-dependency { margin-bottom: 10px; }
 @media (max-width: 620px) { .automation-section .actions > label { flex-basis: 100%; } .automation-section button { min-height: 44px; } }
+
+/* Work panel header and standing goal. Task, trigger and Learning styles stay scoped separately. */
+.automation-work > h2 { margin: 0 0 6px; font-size: 1.375rem; line-height: 1.35; }
+.automation-work > p.muted { margin: 0 0 20px; font-size: .875rem; line-height: 1.6; }
+.automation-work > .form-error, .automation-work > .form-notice { margin: 12px 0 0; font-size: .875rem; line-height: 1.6; }
+.automation-work > .automation-toolbar > button { min-height: 44px; }
+.automation-goal { font-size: 1rem; line-height: 1.55; }
+.automation-goal h3 { font-size: 1.0625rem; line-height: 1.5; }
+.automation-goal-card { min-width: 0; overflow-wrap: anywhere; }
+.automation-goal-title { margin: 0 0 10px; font-size: 1.0625rem; font-weight: 600; line-height: 1.5; white-space: pre-wrap; }
+.automation-goal-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0; color: var(--muted); font-size: .875rem; line-height: 1.5; font-variant-numeric: tabular-nums; }
+.automation-goal-status { padding: 3px 9px; border-radius: 999px; background: var(--rail); color: var(--ink); font-size: .8125rem; font-weight: 600; }
+.automation-goal-status.is-active { background: var(--accent-soft); color: var(--accent); }
+.automation-goal-reason { margin: 8px 0 0; color: var(--muted); font-size: .875rem; line-height: 1.6; white-space: pre-wrap; }
+.automation-goal-callout, .automation-goal .automation-confirm { margin-top: 12px; padding: 16px; border: 1px solid var(--line); border-radius: 10px; }
+.automation-goal .automation-goal-callout { border-inline-start: 3px solid var(--attention); }
+.automation-goal .automation-goal-callout.is-danger { border-inline-start-color: var(--danger); }
+.automation-goal-callout strong { display: block; margin-bottom: 6px; font-size: .9375rem; }
+.automation-goal-callout p, .automation-goal .automation-confirm p { margin: 0; font-size: 1rem; line-height: 1.55; white-space: pre-wrap; }
+.automation-goal .automation-check, .automation-goal .automation-form .automation-check { display: flex; flex-direction: row; align-items: flex-start; gap: 10px; min-height: 44px; padding: 8px 0; margin: 0; font-size: 1rem; line-height: 1.55; }
+.automation-goal .automation-check input { width: 20px; height: 20px; flex: 0 0 20px; margin: 2px 0 0; padding: 0; }
+.automation-goal button { min-height: 44px; }
+.automation-goal-actions .automation-goal-clear { margin-inline-start: auto; }
+.automation-goal .automation-form label:not(.automation-check) { margin: 0; font-size: .875rem; line-height: 1.5; }
+.automation-goal .automation-form textarea { font-size: 1rem; line-height: 1.55; }
+.automation-goal .automation-form input[type=number] { width: min(100%, 10ch); }
+.automation-goal .automation-form > p.muted { margin: 0; font-size: .875rem; line-height: 1.6; }
+.automation-goal .automation-form > .automation-confirm { margin-top: 0; }
+.automation-goal .automation-confirm > .actions { margin-bottom: 0; }
+.automation-goal .automation-form > .actions { margin-top: 0; }
+@media (max-width: 620px) {
+  .automation-goal-actions > button:first-child { flex-basis: 100%; }
+  .automation-goal-actions .automation-goal-clear { margin-inline-start: 0; }
+}

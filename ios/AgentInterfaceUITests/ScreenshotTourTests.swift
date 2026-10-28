@@ -633,6 +633,242 @@ import XCTest
   }
 
   /// Memory baseline and final comparisons share the production-shaped two-document fixture.
+  /// W1 only. Each variant starts a new fixture process with a fresh account scope.
+  func testWorkGoalDesignReview() throws {
+    let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_WORK_PATH"] ?? ""
+    try XCTSkipUnless(!source.isEmpty, "Set AGENT_INTERFACE_DESIGN_WORK_PATH to the Work fixture.")
+    let original = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: source))) as? [String: Any])
+    let stage = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_STAGE"] ?? "before"
+    guard ["before", "after"].contains(stage) else { XCTFail("Unknown Work stage: \(stage)"); return }
+    let selection = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_VARIANT"] ?? ""
+    let variants = ["goal-loaded", "goal-dark", "goal-large-text", "goal-loading", "goal-load-error", "goal-sections-unsupported", "goal-empty", "goal-done", "goal-set-form", "goal-replace", "goal-clear", "goal-interrupted", "goal-uncertain", "goal-uncertain-large-text", "goal-rejected"] + (stage == "after" && selection == "learning-smoke" ? ["learning-smoke"] : [])
+    let selected = selection.isEmpty ? variants : selection.components(separatedBy: ",")
+    guard !selected.isEmpty, Set(selected).count == selected.count, selected.allSatisfy(variants.contains) else { XCTFail("Unknown or duplicate Work variants: \(selection)"); return }
+    let messages = try XCTUnwrap(original["workMessages"] as? [String: String])
+    for variant in variants where selected.contains(variant) {
+      var fixture = original
+      let mode: String
+      switch variant {
+      case "goal-loading": mode = "loading"
+      case "goal-load-error": mode = "load-error"
+      case "goal-sections-unsupported": mode = "sections-unsupported"
+      case "goal-empty", "goal-set-form": mode = "empty"
+      case "goal-done": mode = "goal-done"
+      case "goal-interrupted": mode = "interrupted"
+      case "goal-uncertain", "goal-uncertain-large-text": mode = "resume-uncertain"
+      case "goal-rejected": mode = "resume-rejected"
+      default: mode = "loaded"
+      }
+      fixture["mode"] = mode
+      let auditURL = directory.appendingPathComponent("\(variant)-requests.jsonl")
+      try Data().write(to: auditURL, options: .atomic)
+      let app = launch(textSize: variant.contains("large-text") ? "UICTContentSizeCategoryAccessibilityXL" : "UICTContentSizeCategoryL", environment: [
+        "AGENT_INTERFACE_UI_THEME": variant == "goal-dark" ? "dark" : "light",
+        "AGENT_INTERFACE_UI_DESIGN_FIXTURE": String(decoding: try JSONSerialization.data(withJSONObject: fixture), as: UTF8.self),
+        "AGENT_INTERFACE_UI_WORK_AUDIT_PATH": auditURL.path,
+      ])
+      XCTAssertTrue(app.textViews["messageComposer"].waitForExistence(timeout: 15))
+      app.openAssistantSettings("Ranch hand")
+      if variant == "learning-smoke" {
+        app.selectSettingsTab("Learning")
+        XCTAssertTrue(app.collectionViews["automation.learning"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.switches["automation.learningPolicy"].waitForExistence(timeout: 10))
+        let reads = try String(contentsOf: auditURL, encoding: .utf8).split(separator: "\n").map {
+          try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any])
+        }
+        XCTAssertEqual(reads.filter { $0["method"] as? String == "GET" }.count, 1)
+        XCTAssertFalse(reads.contains { $0["method"] as? String != "GET" }, "Learning smoke is read-only")
+        try capture("learning-smoke"); app.terminate(); continue
+      }
+      app.selectSettingsTab("Work")
+      XCTAssertEqual(app.buttons["settingsMore"].value as? String, "Work")
+      let form = app.collectionViews["automation.work"]
+      XCTAssertTrue(form.waitForExistence(timeout: 5))
+      func events() throws -> [[String: Any]] {
+        try String(contentsOf: auditURL, encoding: .utf8).split(separator: "\n").map {
+          try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any])
+        }
+      }
+      func waitForReads(_ count: Int) throws {
+        let deadline = Date().addingTimeInterval(10)
+        while Date() < deadline {
+          if try events().filter({ $0["method"] as? String == "GET" }).count >= count { return }
+          usleep(100_000)
+        }
+        let recorded = try events()
+        XCTFail("Expected \(count) overview reads: \(recorded)")
+      }
+      func text(_ fragment: String) -> XCUIElement {
+        app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", fragment)).firstMatch
+      }
+      func reveal(_ element: XCUIElement, up: Bool = true) { revealModels(element, in: form, app: app, up: up) }
+      func press(_ element: XCUIElement, up: Bool = true) { reveal(element, up: up); element.tapWhenReady() }
+      func toggle(_ label: String, in container: XCUIElement) {
+        let row = app.switches[label], control = row.switches.firstMatch
+        revealModels(row, in: container, app: app)
+        XCTAssertTrue(row.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(row.wait(until: "value == %@", "0"))
+        XCTAssertTrue(control.waitUntilHittable())
+        let start = control.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.5))
+        let end = control.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.5))
+        start.press(forDuration: 0.1, thenDragTo: end)
+        XCTAssertTrue(row.wait(until: "value == %@", "1"))
+      }
+      if variant == "goal-loading" {
+        XCTAssertTrue(app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", stage == "after" ? "Loading Work…" : "Refreshing assistant controls")).firstMatch.waitForExistence(timeout: 5)); try capture(variant)
+      } else if variant == "goal-load-error" {
+        XCTAssertTrue(text(messages["noRuntime"]!).waitForExistence(timeout: 5)); try capture(variant)
+      } else {
+        let goalHeading = app.staticTexts["Standing goal"]
+        XCTAssertTrue(goalHeading.waitForExistence(timeout: 10), app.debugDescription)
+        let initial = try events()
+        XCTAssertEqual(initial.filter { $0["method"] as? String == "GET" }.count, 1, "First Work load makes one overview read")
+        XCTAssertFalse(initial.contains { $0["method"] as? String != "GET" }, "Loading Work must not write")
+        switch variant {
+        case "goal-set-form":
+          press(app.buttons["Set a goal"])
+          XCTAssertTrue(app.navigationBars["Standing goal"].waitForExistence(timeout: 5)); try capture(variant)
+          let objective = stage == "after" ? app.descendants(matching: .any).matching(identifier: "automation.goal.objective").firstMatch : app.descendants(matching: .any).matching(NSPredicate(format: "placeholderValue == %@ AND elementType IN %@", "What should the assistant work toward?", [XCUIElement.ElementType.textField.rawValue, XCUIElement.ElementType.textView.rawValue])).firstMatch
+          XCTAssertTrue(objective.waitUntilHittable()); objective.tapWhenReady(); XCTAssertTrue(objective.waitForKeyboardFocus()); objective.waitForKeyboardLayout()
+          let config = try XCTUnwrap(original["workFixture"] as? [String: Any])
+          let newGoal = try XCTUnwrap(config["newGoal"] as? [String: Any])
+          objective.typeWhenFocused(try XCTUnwrap(newGoal["title"] as? String))
+          let save = app.buttons["Save paused"]; XCTAssertTrue(save.wait(until: "enabled == true")); save.tapWhenReady()
+          XCTAssertTrue(objective.waitForDisappearance(timeout: 5), "Saving closes the goal editor")
+          XCTAssertTrue(form.waitUntilHittable(), "Saving returns to interactive Work")
+          XCTAssertEqual(app.buttons["settingsMore"].value as? String, "Work")
+          XCTAssertTrue(text("Prepare the garden for spring.").waitForExistence(timeout: 10))
+        case "goal-replace":
+          press(app.buttons["Replace goal"])
+          XCTAssertTrue(app.navigationBars["Replace goal"].waitForExistence(timeout: 5))
+          app.navigationBars["Replace goal"].buttons["Replace goal"].tapWhenReady()
+          XCTAssertTrue(app.staticTexts["Replace this standing goal?"].waitForExistence(timeout: 5)); try capture(variant)
+          if stage == "after" { app.buttons["confirmationAccept"].tapWhenReady() }
+          else { app.sheets.buttons["Replace goal"].tapWhenReady() }
+          XCTAssertTrue(app.navigationBars["Replace goal"].wait(until: "exists == false"))
+          XCTAssertTrue(form.waitUntilHittable(), "Replacement returns to interactive Work")
+          XCTAssertEqual(app.buttons["settingsMore"].value as? String, "Work")
+          XCTAssertTrue(goalHeading.waitForExistence(timeout: 10))
+          XCTAssertFalse(text("Last resume:").exists, "Replacing a goal removes its receipt")
+        case "goal-clear":
+          let opener = stage == "after" ? app.buttons["automation.goal.clear"] : app.buttons["Clear goal"]
+          press(opener); XCTAssertTrue(text("Clear this standing goal?").waitForExistence(timeout: 5))
+          if stage == "after" {
+            app.buttons["confirmationKeep"].tapWhenReady()
+            XCTAssertTrue(text("Clear this standing goal?").waitForDisappearance(timeout: 5))
+            let priorReads = try events().filter { $0["method"] as? String == "GET" }.count
+            press(app.buttons["Refresh status"], up: false); try waitForReads(priorReads + 1)
+            XCTAssertTrue(text("Get the house ready for winter:").waitForExistence(timeout: 10), "Keep must preserve the goal through a fresh read")
+            let kept = try events()
+            XCTAssertFalse(kept.contains { $0["path"] as? String == "/goal/clear" }, "Keep must send no clear request")
+            press(opener); XCTAssertTrue(text("Clear this standing goal?").waitForExistence(timeout: 5))
+          }
+          try capture(variant)
+          if stage == "after" { app.buttons["confirmationAccept"].tapWhenReady() }
+          else { app.sheets.buttons["Clear goal"].tapWhenReady() }
+          XCTAssertTrue(text("Clear this standing goal?").waitForDisappearance(timeout: 5))
+          XCTAssertTrue(form.waitUntilHittable(), "Clearing returns to interactive Work")
+          XCTAssertEqual(app.buttons["settingsMore"].value as? String, "Work")
+          XCTAssertTrue(text("No standing goal.").waitForExistence(timeout: 10))
+        case "goal-interrupted":
+          let resume = app.buttons["Resume goal"], review = app.switches["automation.reviewedInterruption"]
+          reveal(resume); XCTAssertTrue(resume.waitForExistence(timeout: 5)); XCTAssertFalse(resume.isEnabled); reveal(review, up: false); try capture(variant)
+          toggle("automation.reviewedInterruption", in: form); reveal(resume); XCTAssertTrue(resume.wait(until: "enabled == true")); try capture("goal-interrupted-reviewed")
+          press(resume); let pause = app.buttons["Pause goal"]; reveal(pause, up: false); XCTAssertTrue(pause.waitForExistence(timeout: 10))
+        case "goal-uncertain", "goal-uncertain-large-text":
+          press(app.buttons["Resume goal"])
+          if stage == "before" { XCTAssertTrue(text(messages["uncertainResume"]!).waitForExistence(timeout: 10)) }
+          try waitForReads(2)
+          if stage == "after" {
+            let refresh = app.buttons["Refresh status"]
+            reveal(refresh, up: false); XCTAssertTrue(refresh.wait(until: "enabled == true")); refresh.tapWhenReady()
+          } else { press(app.buttons["Refresh status"], up: false) }
+          if stage == "after" {
+            // At AX3 on iPad, the tall objective leaves the receipt in an unmaterialized Form row.
+            let heading = app.descendants(matching: .any).matching(identifier: "automation.goal.callout.title.Resume not confirmed").firstMatch
+            reveal(heading); XCTAssertTrue(heading.waitForExistence(timeout: 5))
+            XCTAssertTrue(text(messages["uncertainResume"]!).waitForExistence(timeout: 10))
+            if variant == "goal-uncertain-large-text" { try capture(variant + "-callout") }
+          }
+          let retry = app.buttons[stage == "after" ? "Check resume status" : "Retry same resume"]
+          reveal(retry)
+          XCTAssertTrue(retry.waitForExistence(timeout: 5)); XCTAssertTrue(retry.wait(until: "enabled == true"))
+          try capture(variant)
+          try waitForReads(3)
+          press(app.buttons[stage == "after" ? "Check resume status" : "Retry same resume"]); XCTAssertTrue(text(messages["uncertainResume"]!).waitForExistence(timeout: 10))
+          try waitForReads(4)
+          press(app.buttons["Refresh status"], up: false); let newAttempt = app.buttons["Start a new resume attempt"]
+          try waitForReads(5)
+          reveal(newAttempt); XCTAssertTrue(newAttempt.wait(until: "enabled == true")); press(newAttempt)
+          XCTAssertTrue(app.navigationBars[stage == "after" ? "New attempt" : "New resume attempt"].waitForExistence(timeout: 5)); try capture(variant + "-new-attempt-review")
+          let sheet = app.collectionViews.allElementsBoundByIndex.last!
+          toggle("I've reviewed this conversation and the unconfirmed attempt.", in: sheet)
+          if variant == "goal-uncertain-large-text" {
+            revealModels(app.switches["I understand a new attempt may repeat work."], in: sheet, app: app)
+            try capture(variant + "-new-attempt-review-bottom")
+          }
+          toggle("I understand a new attempt may repeat work.", in: sheet)
+          let start = app.buttons["Start new attempt"]; if stage == "after" { revealModels(start, in: sheet, app: app) }; XCTAssertTrue(start.wait(until: "enabled == true")); start.tapWhenReady()
+          XCTAssertTrue(app.navigationBars[stage == "after" ? "New attempt" : "New resume attempt"].waitForDisappearance(timeout: 5))
+          XCTAssertTrue(form.waitUntilHittable(), "A new attempt returns to interactive Work")
+          XCTAssertEqual(app.buttons["settingsMore"].value as? String, "Work")
+          let pausedAction = app.buttons["Pause goal"]; reveal(pausedAction, up: false)
+          XCTAssertTrue(pausedAction.waitForExistence(timeout: 10))
+        case "goal-rejected":
+          press(app.buttons["Resume goal"])
+          let rejected = text(messages["rejectedResume"]!)
+          reveal(rejected, up: false)
+          XCTAssertTrue(rejected.waitForExistence(timeout: 10)); try capture(variant)
+          XCTAssertFalse(app.buttons["Pause goal"].exists)
+        default:
+          try capture(variant)
+          if variant == "goal-large-text" {
+            reveal(app.buttons["Replace goal"]); try capture("goal-large-text-bottom")
+            if stage == "after" {
+              let clear = app.buttons["automation.goal.clear"]; reveal(clear)
+              XCTAssertTrue(clear.waitUntilHittable()); try capture("goal-large-text-clear")
+            }
+          }
+          if variant == "goal-loaded" {
+            press(app.buttons["Refresh status"], up: false)
+            try waitForReads(2)
+            let refreshed = try events()
+            XCTAssertEqual(refreshed.filter { $0["method"] as? String == "GET" }.count, 2)
+            XCTAssertFalse(refreshed.contains { $0["method"] as? String != "GET" })
+          }
+        }
+      }
+      let recorded = try events()
+      if variant == "goal-loading" || variant == "goal-load-error" {
+        XCTAssertEqual(recorded.filter { $0["method"] as? String == "GET" }.count, 1)
+        XCTAssertFalse(recorded.contains { $0["method"] as? String != "GET" })
+      }
+      let writes = recorded.filter { $0["method"] as? String != "GET" }
+      if variant == "goal-set-form" || variant == "goal-replace" {
+        let write = try XCTUnwrap(writes.last)
+        XCTAssertEqual(write["method"] as? String, "PUT"); XCTAssertEqual(write["path"] as? String, "/goal")
+        XCTAssertEqual(Set((write["body"] as? [String: Any] ?? [:]).keys), Set(["title", "maxTurns"]))
+      }
+      if variant == "goal-clear" {
+        let write = try XCTUnwrap(writes.last)
+        XCTAssertEqual(write["path"] as? String, "/goal/clear"); XCTAssertTrue((write["body"] as? [String: Any] ?? [:]).isEmpty)
+      }
+      if variant == "goal-interrupted" {
+        XCTAssertEqual(writes.count, 1); let body = try XCTUnwrap(writes.first?["body"] as? [String: Any])
+        XCTAssertEqual(body["reviewedInterruption"] as? Bool, true)
+        XCTAssertNotNil(UUID(uuidString: body["requestId"] as? String ?? ""))
+      }
+      if ["goal-uncertain", "goal-uncertain-large-text"].contains(variant) {
+        let bodies = try writes.map { try XCTUnwrap($0["body"] as? [String: Any]) }
+        XCTAssertEqual(bodies.count, 3)
+        let ids = bodies.map { $0["requestId"] as? String ?? "" }
+        XCTAssertTrue(ids.allSatisfy { UUID(uuidString: $0) != nil }); XCTAssertEqual(ids[0], ids[1]); XCTAssertNotEqual(ids[1], ids[2])
+      }
+      print("DESIGN_WORK_VARIANT \(variant) complete")
+      app.terminate()
+    }
+  }
+
   func testMemoryDesignReview() throws {
     let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_MEMORY_PATH"] ?? ""
     try XCTSkipUnless(!source.isEmpty, "Set AGENT_INTERFACE_DESIGN_MEMORY_PATH to capture Memory.")

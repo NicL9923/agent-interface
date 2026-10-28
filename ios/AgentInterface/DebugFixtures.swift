@@ -22,6 +22,8 @@
         store.host = ""
       }
       guard environment["AGENT_INTERFACE_UI_FIXTURE"] == "1" else { return false }
+      precondition(!(environment["AGENT_INTERFACE_UI_AUTOMATION"] == "1" && FixtureProtocol.designFixture?["screen"] as? String == "work"),
+        "The Work design fixture cannot be combined with the automation flow fixture.")
       VoiceController.fixtureRecording = true
       let config = URLSessionConfiguration.ephemeral
       config.protocolClasses = [FixtureProtocol.self]
@@ -43,6 +45,11 @@
       FixtureProtocol.lock.withLock {
         if let preferences = FixtureProtocol.designFixture?["preferences"] as? [String: Any] {
           FixtureProtocol.preferences.merge(preferences) { _, new in new }
+        }
+        if FixtureProtocol.designFixture?["screen"] as? String == "work" {
+          let fixture = FixtureProtocol.designFixture!
+          FixtureProtocol.routines = fixture["routines"] as? [[String: Any]] ?? []
+          FixtureProtocol.workDesign = WorkDesignFixture(fixture)
         }
         if FixtureProtocol.designFixture?["screen"] as? String == "models" {
           for kind in ["tools", "skills"] {
@@ -136,6 +143,7 @@
   private final class FixtureProtocol: URLProtocol, @unchecked Sendable {
     static let lock = NSLock()
     nonisolated(unsafe) static var automation = AutomationDebugFixture()
+    nonisolated(unsafe) static var workDesign: WorkDesignFixture?
     // The fixture server's state. Unchecked because `lock` guards every access: requests read and
     // write it only inside `startLoading`, and `configure` seeds it under the same lock.
     nonisolated(unsafe) static var messages: [[String: Any]] = [
@@ -303,6 +311,9 @@
         body = [:]
       }
       if requestData.isEmpty { requestData = URLProtocol.property(forKey: "fixtureUploadBody", in: request) as? Data ?? Data() }
+      if Self.designFixture?["screen"] as? String == "work", path.hasPrefix("/api/bots/"), path.contains("/automation"), !requestData.isEmpty {
+        precondition((try? JSONSerialization.jsonObject(with: requestData)) is [String: Any], "Work request body must be a JSON object")
+      }
       if path == "/api/events", let room = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "group" })?.value {
         // A watching stream: one notice when an assistant answered, then the stream ends and the
         // app reconnects, as after a dropped connection.
@@ -322,7 +333,15 @@
         respond(raw: Self.silence(seconds: 10), type: "audio/wav")
         return
       }
-      if let fixture = Self.automation.response(path: path, method: method, body: body, url: request.url!) {
+      if Self.designFixture?["screen"] as? String == "work", path.hasPrefix("/api/bots/"), path.contains("/automation") {
+        precondition(path.hasPrefix("/api/bots/ranch/automation"), "Unexpected assistant in Work design request: \(path)")
+        let result = Self.workDesign!.response(path: path, method: method, body: body)!
+        if method == "GET", path == "/api/bots/ranch/automation", Self.designFixture?["mode"] as? String == "loading" { return }
+        if method != "GET", Self.designFixture?["mode"] as? String == "write-delay", let config = Self.designFixture?["workFixture"] as? [String: Any], let delay = config["writeDelayMs"] as? Double {
+          Self.lock.unlock(); Thread.sleep(forTimeInterval: delay / 1000); Self.lock.lock()
+        }
+        status = result.status; object = result.object
+      } else if let fixture = Self.automation.response(path: path, method: method, body: body, url: request.url!) {
         status = fixture.status; object = fixture.object
       } else if path.hasSuffix("/voice/transcribe") {
         object = ["text": "Fixture transcript: check the north gate."]
@@ -834,6 +853,10 @@
       } else if path.hasSuffix("/avatar") {
         Self.avatar = body
         object = body
+      } else if path == "/api/routines", method == "GET", Self.designFixture?["screen"] as? String == "work", Self.designFixture?["mode"] as? String == "routines-error" {
+        status = 409; object = ["error": "routines is unavailable"]
+      } else if path == "/api/routines", method == "GET", Self.designFixture?["screen"] as? String == "work", Self.designFixture?["mode"] as? String == "no-routines" {
+        object = []
       } else if path == "/api/routines", method == "GET" {
         object = Self.routines
       } else if path == "/api/routines" || path.hasPrefix("/api/routines/") {

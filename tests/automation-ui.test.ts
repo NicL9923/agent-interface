@@ -87,13 +87,99 @@ it("retires a refused cross-goal request without silently reporting a successful
 
 it("requires an explicit whole-goal replacement before discarding native goal details", async () => {
   vi.mocked(write).mockResolvedValue(initial());
-  await work(); await click("Replace goal...");
+  await work(); await click("Replace goal…");
   expect(container.textContent).toContain("removes its native subgoals, completion contracts and verification gates");
   expect(button("Replace with paused goal").disabled).toBe(true);
   await submit(); expect(write).not.toHaveBeenCalled();
   await act(async () => [...container.querySelectorAll("label")].find(row => row.textContent?.includes("Replace the entire standing goal"))!.querySelector("input")!.click());
   await submit();
   expect(write).toHaveBeenCalledWith("/bots/ranch/automation/goal", { title: "Prepare the fall ranch plan", maxTurns: 20 }, "PUT");
+});
+
+it("keeps an uncertain receipt's server message visible after refresh", async () => {
+  const value = initial();
+  const message = "Admission is still being checked in the canonical conversation.";
+  value.goals.resume = { requestId: crypto.randomUUID(), status: "uncertain", message };
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value);
+  await work();
+  expect(container.textContent).toContain(message);
+  const announcement = container.querySelector('[role="status"][aria-label="Resume status"]');
+  expect(announcement?.textContent).toBe(message);
+  expect([...container.querySelectorAll("p")].filter(node => node.textContent === message && node !== announcement)).toHaveLength(1);
+  await click("Refresh status");
+  expect(container.querySelector('[role="status"][aria-label="Resume status"]')).toBe(announcement);
+  expect([...container.querySelectorAll("p")].filter(node => node.textContent === message && node !== announcement)).toHaveLength(1);
+  expect(button("Resume goal").disabled).toBe(true);
+  expect(write).not.toHaveBeenCalled();
+});
+
+it("shows a rejected receipt loaded from status without a preceding write", async () => {
+  const value = initial();
+  const message = "The scheduler refused this continuation for a specific reason.";
+  value.goals.resume = { requestId: crypto.randomUUID(), status: "rejected", message };
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value);
+  await work(); expect(container.textContent).toContain(message);
+  await click("Refresh status"); expect(container.textContent).toContain(message);
+  expect(write).not.toHaveBeenCalled();
+});
+
+it("announces a newly rejected resume without a second visible error", async () => {
+  let value = initial();
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value);
+  await work();
+  const announcement = container.querySelector('[role="status"][aria-label="Resume result"]');
+  const message = "The scheduler refused the continuation.";
+  value = { ...value, goals: { ...value.goals, resume: { requestId: crypto.randomUUID(), status: "rejected", message } } };
+  vi.mocked(write).mockResolvedValueOnce(value);
+  await click("Resume goal");
+  expect(container.querySelector('[role="status"][aria-label="Resume result"]')).toBe(announcement);
+  expect(announcement?.textContent).toBe(message);
+  expect(container.querySelector('[role="alert"]')).toBeNull();
+  expect([...container.querySelectorAll("p")].filter(node => node.textContent === message && node !== announcement)).toHaveLength(1);
+  await click("Refresh status");
+  expect(container.querySelector('[role="status"][aria-label="Resume status"]')?.textContent).toBe("");
+  expect(announcement?.textContent).toBe("");
+  value = { ...value, goals: { ...value.goals, resume: { requestId: crypto.randomUUID(), status: "rejected", message: "A later continuation was refused." } } };
+  vi.mocked(write).mockResolvedValueOnce(value); await click("Resume goal");
+  expect(announcement?.textContent).toBe("A later continuation was refused.");
+  expect(container.querySelector('[role="status"][aria-label="Resume status"]')?.textContent).toBe("");
+});
+
+it("moves clear confirmation focus to Keep and restores it after Keep or Clear", async () => {
+  let value = initial(); vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value);
+  await work(); const opener = button("Clear goal…");
+  await click("Clear goal…"); expect(document.activeElement).toBe(button("Keep goal"));
+  await click("Keep goal"); expect(document.activeElement).toBe(opener);
+  await click("Clear goal…"); value = { ...value, goals: { ...value.goals, goal: null } }; vi.mocked(write).mockResolvedValueOnce(value);
+  await click("Clear goal"); expect(document.activeElement).toBe(button("Set a goal"));
+});
+
+it("focuses the replacement objective and restores the opener on Cancel", async () => {
+  await work(); const opener = button("Replace goal…");
+  await click("Replace goal…"); expect(document.activeElement).toBe(container.querySelector("textarea"));
+  expect(button("Resume goal").disabled).toBe(true); expect(button("Clear goal…").disabled).toBe(true);
+  await click("Cancel"); expect(document.activeElement).toBe(opener); expect(button("Resume goal").disabled).toBe(false);
+});
+
+it("does not announce an accepted receipt on load", async () => {
+  const value = initial();
+  value.goals.resume = { requestId: crypto.randomUUID(), status: "accepted", runId: "run-1" };
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value);
+  await work();
+  expect(container.textContent).not.toContain("Resume not confirmed");
+  expect(container.textContent).not.toContain("Resume rejected");
+  expect(container.querySelector('[role="status"][aria-label="Resume status"]')?.textContent).toBe("");
+  expect(container.querySelector('[role="status"][aria-label="Resume result"]')?.textContent).toBe("");
+  expect(container.querySelector('[role="alert"]')).toBeNull();
+});
+
+it("preserves an unknown native goal status and offers no resume for a done goal", async () => {
+  let value = initial(); value.goals.goal!.status = "constructor";
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value);
+  await work(); expect(container.textContent).toContain("constructor"); expect(button("Resume goal").disabled).toBe(true);
+  value = { ...value, goals: { ...value.goals, goal: { ...value.goals.goal!, status: "done" } } }; await click("Refresh status");
+  expect(button("Resume goal")).toBeUndefined();
+  expect(container.textContent).toContain("Done");
 });
 
 it("clears task assignment explicitly and shows when the board is truncated", async () => {
