@@ -19,7 +19,7 @@ parser.add_argument("--origin", required=True, help="Loopback fixture origin")
 parser.add_argument("--session", required=True, help="Existing, task-owned Playwright CLI session")
 parser.add_argument("--fixture", type=Path)
 parser.add_argument("--work-case", choices=["all", "clear-confirmation", "tasks"], default="all", help="Capture only a scoped Work recheck")
-parser.add_argument("--task-gate", choices=["a"], help="W2a AFTER task board and detail only")
+parser.add_argument("--task-gate", choices=["a", "b"], help="W2 AFTER: a for board/actions, b for task editors")
 parser.add_argument("--report", help="Report basename, without an extension")
 args = parser.parse_args()
 if args.work_case == "clear-confirmation" and (args.screen != "work" or args.stage != "after"):
@@ -27,19 +27,19 @@ if args.work_case == "clear-confirmation" and (args.screen != "work" or args.sta
 if args.work_case == "tasks" and args.screen != "work":
     parser.error("The task capture requires work")
 if args.task_gate and (args.screen != "work" or args.work_case != "tasks" or args.stage != "after"):
-    parser.error("--task-gate a requires work after --work-case tasks")
-if args.work_case == "tasks" and args.stage == "after" and args.task_gate != "a":
-    parser.error("Work tasks AFTER requires --task-gate a; the full W2 AFTER gate is not available")
+    parser.error("--task-gate requires work after --work-case tasks")
+if args.work_case == "tasks" and args.stage == "after" and not args.task_gate:
+    parser.error("Work tasks AFTER requires an explicit --task-gate a or b")
 origin = urlparse(args.origin)
 if origin.scheme != "http" or origin.hostname not in {"127.0.0.1", "localhost"} or origin.path not in {"", "/"} or origin.query or origin.fragment or origin.username is not None or origin.password is not None:
     parser.error("Origin must name an HTTP loopback fixture without a path, query or credentials")
 if not args.root.is_absolute() or not args.root.is_dir():
     parser.error("Root must be an existing absolute artifact directory")
-name = args.report or ("work-tasks-a-after" if args.task_gate == "a" else f"work-tasks-{args.stage}" if args.work_case == "tasks" else f"{args.screen}-{args.stage}")
+name = args.report or (f"work-tasks-{args.task_gate}-after" if args.task_gate else f"work-tasks-{args.stage}" if args.work_case == "tasks" else f"{args.screen}-{args.stage}")
 if args.work_case == "tasks" and not name.startswith("work-tasks-"):
     parser.error("Task reports must start with work-tasks- to preserve W1 reports")
-if args.task_gate == "a" and not name.startswith("work-tasks-a-"):
-    parser.error("W2a AFTER reports must start with work-tasks-a-")
+if args.task_gate and not name.startswith(f"work-tasks-{args.task_gate}-"):
+    parser.error("Task AFTER reports must name their selected gate")
 if Path(name).name != name or name in {".", ".."}:
     parser.error("Report must be a basename")
 fixture = args.fixture or repo / ".agents" / "fixtures" / ("work-tasks.json" if args.work_case == "tasks" else f"{args.screen}-design.json")
@@ -56,10 +56,10 @@ if "conversation" in payload:
     for field in ("messages", "approvals", "attention", "files"):
         if not isinstance(conversation, dict) or not isinstance(conversation.get(field), list):
             parser.error(f"The fixture conversation must include a {field} array")
-output_dir = args.root / name if args.task_gate == "a" else args.root / args.stage
-if args.task_gate == "a" and (output_dir.exists() or (args.root / f"{name}.json").exists() or (args.root / f"{name}-capture.js").exists() or (args.root / f"{name}.failed.log").exists()):
-    parser.error("W2a AFTER output already exists; choose a new --report basename")
-if args.task_gate == "a":
+output_dir = args.root / name if args.task_gate else args.root / args.stage
+if args.task_gate and (output_dir.exists() or (args.root / f"{name}.json").exists() or (args.root / f"{name}-capture.js").exists() or (args.root / f"{name}.failed.log").exists()):
+    parser.error("Task AFTER output already exists; choose a new --report basename")
+if args.task_gate:
     output_dir.mkdir()
 options = {"outputDir": str(output_dir), "prefix": "web", "screen": args.screen, "stage": args.stage,
            "fixture": payload, "workCase": args.work_case, "taskGate": args.task_gate}

@@ -33,14 +33,14 @@
     input.dispatchEvent(new Event('input', { bubbles: true }));
   };
   const title = 'Browser fixture task ' + Date.now();
-  fill('Task title', title); fill('Instructions', 'Read the last inspection report. Ask before purchases.');
+  fill('Task title', title); fill('Instructions (optional)', 'Read the last inspection report. Ask before purchases.');
   await new Promise(resolve => setTimeout(resolve, 40));
   await click('Create task');
   const created = await wait(() => [...dialog().querySelectorAll('details.automation-item')].find(item => item.querySelector('summary')?.textContent.includes(title)), 'created blocked task');
-  if (!created.textContent.includes('blocked')) throw Error('Task did not start blocked');
-  created.open = true;
+  if (!created.querySelector('.automation-task-status')?.textContent.includes('Blocked')) throw Error('Task did not start blocked');
+  if (!created.open) created.querySelector('summary').click();
   textButton('Start task', created).click();
-  await wait(() => created.querySelector('summary')?.textContent.includes('ready'), 'native task status refreshed');
+  await wait(() => created.querySelector('.automation-task-status')?.textContent.includes('Ready'), 'native task status refreshed');
   const overflow = [...dialog().querySelectorAll('.automation-panel, .automation-form, .automation-code')].some(item => item.scrollWidth > item.clientWidth + 1);
   if (overflow) throw Error('Automation content overflows');
   await section('learning');

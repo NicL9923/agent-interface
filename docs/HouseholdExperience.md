@@ -207,6 +207,8 @@ native reviewer owns requests for changes; WildBots does not take over its claim
 Tasks assigned to a hidden personal assistant and private dependency edges remain
 hidden. The overview shows the newest 100 visible owner tasks and reports when
 older tasks were omitted. Choosing Unassigned clears the native assignment.
+If a create response is lost, Refresh status checks for a new task with the same
+title. A possible match locks the draft for review; nothing is resent automatically.
 
 Event triggers target an existing routine in the same profile. New triggers start
 disabled and return a signing secret once. Copy it to the event sender before

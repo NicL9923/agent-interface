@@ -15,7 +15,7 @@ import XCTest
   }
 
   override func tearDown() async throws {
-    if (testRun?.failureCount ?? 0) > 0 {
+    if (testRun?.totalFailureCount ?? 0) > 0 {
       let app = XCUIApplication()
       if app.state == .runningForeground {
         let screenshot = XCTAttachment(screenshot: app.screenshot()); screenshot.name = "design-failure-screen"; screenshot.lifetime = .keepAlways; add(screenshot)
@@ -542,7 +542,8 @@ import XCTest
     }
     // The two Memory documents at AX3 need more travel than the shorter Models forms.
     let attempts = form.identifier == "memoryForm" ? 24 : 12
-    for attempt in 0..<attempts {
+    // Check the position reached by the final permitted drag before reporting failure.
+    for attempt in 0...attempts {
       let keyboard = app.keyboards.firstMatch
       let navigationBottom = app.navigationBars.allElementsBoundByIndex
         .filter { $0.hasFrame && $0.frame.intersects(form.frame) }.map { $0.frame.maxY }.max() ?? form.frame.minY
@@ -552,6 +553,7 @@ import XCTest
       if element.hasFrame && element.frame.minY >= top && element.frame.maxY <= bottom {
         print("DESIGN_MODELS_TARGET type=\(element.elementType.rawValue) frame=\(element.frame)"); return
       }
+      if attempt == attempts { break }
       let upward = element.hasFrame ? element.frame.maxY > bottom : up
       let before = cells()
       let height = max(40, bottom - top)
@@ -640,6 +642,7 @@ import XCTest
     let original = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: source))) as? [String: Any])
     let stage = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_STAGE"] ?? "before"
     guard ["before", "after"].contains(stage) else { XCTFail("Unknown Work stage: \(stage)"); return }
+    try XCTSkipUnless(stage == "before", "Use the separate W2a or W2b AFTER tour.")
     let selection = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_VARIANT"] ?? ""
     let variants = ["goal-loaded", "goal-dark", "goal-large-text", "goal-loading", "goal-load-error", "goal-sections-unsupported", "goal-empty", "goal-done", "goal-set-form", "goal-replace", "goal-clear", "goal-interrupted", "goal-uncertain", "goal-uncertain-large-text", "goal-rejected"] + (stage == "after" && selection == "learning-smoke" ? ["learning-smoke"] : [])
     let selected = selection.isEmpty ? variants : selection.components(separatedBy: ",")
@@ -1089,6 +1092,203 @@ import XCTest
       }
       print("DESIGN_WORK_W2A_AFTER_VARIANT \(variant) complete")
       app.terminate()
+    }
+  }
+
+  /// W2b only. The shared BEFORE tour and accepted W2a AFTER tour keep their own selectors.
+  func testWorkTaskEditorDesignReviewAfter() throws {
+    let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_WORK_TASKS_PATH"] ?? ""
+    try XCTSkipUnless(!source.isEmpty, "Set the W2 task fixture to capture its editors.")
+    try XCTSkipUnless(ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_STAGE"] == "after", "This is the AFTER editor tour.")
+    guard directory.pathComponents.contains("after"), !(try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)).contains(where: { $0.pathExtension.lowercased() == "png" }) else {
+      XCTFail("AFTER captures require a fresh after directory with no existing PNGs"); return
+    }
+    let original = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: source))) as? [String: Any])
+    let config = try XCTUnwrap(original["workFixture"] as? [String: Any])
+    XCTAssertEqual(config["gate"] as? String, "W2-tasks")
+    let newTask = try XCTUnwrap(config["newTask"] as? [String: Any])
+    let taskSection = try XCTUnwrap((original["work"] as? [String: Any])?["tasks"] as? [String: Any])
+    let tasks = try XCTUnwrap(taskSection["items"] as? [[String: Any]])
+    let pad = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_DEVICE"] == "ipad"
+    let variants = ["task-create", "task-create-dark", "task-create-large-text", pad ? "task-create-refreshed" : "task-create-uncertain", "task-edit"]
+    let selection = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_VARIANT"] ?? ""
+    let selected = selection.isEmpty ? variants : selection.components(separatedBy: ",")
+    guard !selected.isEmpty, Set(selected).count == selected.count, selected.allSatisfy(variants.contains) else { XCTFail("Unknown or duplicate editor variants: \(selection)"); return }
+    func task(_ id: String) throws -> [String: Any] { try XCTUnwrap(tasks.first { $0["id"] as? String == id }) }
+    for variant in selected {
+      var fixture = original
+      fixture["mode"] = ["task-create-uncertain", "task-create-refreshed"].contains(variant) ? "task-create-uncertain" : "loaded"
+      let auditURL = directory.appendingPathComponent("\(variant)-requests.jsonl")
+      try Data().write(to: auditURL, options: .atomic)
+      let app = launch(textSize: variant.contains("large-text") ? "UICTContentSizeCategoryAccessibilityXL" : "UICTContentSizeCategoryL", environment: [
+        "AGENT_INTERFACE_UI_THEME": variant.contains("dark") ? "dark" : "light",
+        "AGENT_INTERFACE_UI_DESIGN_FIXTURE": String(decoding: try JSONSerialization.data(withJSONObject: fixture), as: UTF8.self),
+        "AGENT_INTERFACE_UI_WORK_AUDIT_PATH": auditURL.path,
+      ])
+      XCTAssertTrue(app.textViews["messageComposer"].waitForExistence(timeout: 15))
+      app.openAssistantSettings("Ranch hand"); app.selectSettingsTab("Work")
+      let board = app.collectionViews["automation.work"]
+      XCTAssertTrue(board.waitForExistence(timeout: 5))
+      func events() throws -> [[String: Any]] {
+        try String(contentsOf: auditURL, encoding: .utf8).split(separator: "\n").map { try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any]) }
+      }
+      func reveal(_ element: XCUIElement, _ form: XCUIElement, up: Bool = true) { revealModels(element, in: form, app: app, up: up) }
+      func press(_ element: XCUIElement, _ form: XCUIElement, up: Bool = true) { reveal(element, form, up: up); XCTAssertTrue(element.wait(until: "enabled == true")); element.tapWhenReady() }
+      func contentBottom(_ form: XCUIElement) -> CGFloat { min(form.frame.intersection(app.frame).maxY, app.frame.maxY - 34) }
+      // The accepted W2a range algorithm, local to this separate editor tour.
+      func revealRange(_ first: XCUIElement, through last: XCUIElement, _ form: XCUIElement) {
+        guard !app.keyboards.firstMatch.exists else { XCTFail("Editor layout range requires the keyboard to be dismissed"); return }
+        for attempt in 0...4 {
+          guard first.hasFrame, last.hasFrame else { XCTFail("Editor range endpoints must exist"); return }
+          let top = app.navigationBars.allElementsBoundByIndex.filter { $0.hasFrame && $0.frame.intersects(form.frame) }.map { $0.frame.maxY }.max() ?? form.frame.minY
+          let bottom = contentBottom(form)
+          let firstY = first.frame.minY, lastY = last.frame.maxY
+          if firstY >= top && lastY <= bottom { return }
+          guard lastY - firstY <= bottom - top else { XCTFail("Editor subject is taller than its visible sheet"); return }
+          if attempt == 4 { break }
+          let shift = (top + bottom - firstY - lastY) / 2, distance = min(abs(shift), (bottom - top) * 0.6)
+          let startY = top + (bottom - top) * (shift > 0 ? 0.28 : 0.72)
+          let start = form.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 8, dy: startY - form.frame.minY))
+          print("DESIGN_WORK_EDITOR_RANGE attempt=\(attempt) first=\(firstY) last=\(lastY) band=\(top)...\(bottom)")
+          start.press(forDuration: 0.3, thenDragTo: start.withOffset(CGVector(dx: 0, dy: shift > 0 ? distance : -distance)), withVelocity: .slow, thenHoldForDuration: 0.2)
+          if first.frame.minY == firstY && last.frame.maxY == lastY { XCTFail("Editor did not move"); return }
+        }
+        XCTFail("Editor range did not fit")
+      }
+      func editorLayoutCapture(_ name: String) throws {
+        guard !app.keyboards.firstMatch.exists else {
+          throw NSError(domain: "DesignTaskEditor", code: 1, userInfo: [NSLocalizedDescriptionKey: "Editor layout capture requires the keyboard to be dismissed"])
+        }
+        try capture(name)
+      }
+      func hideEditorKeyboard(_ editor: XCUIElement) throws {
+        let title = editor.textFields["automation.taskTitle"], before = title.value as? String
+        let button = app.buttons["automation.taskEditor.hideKeyboard"]
+        guard let before, button.waitForExistence(timeout: 5), button.waitUntilHittable() else {
+          throw NSError(domain: "DesignTaskEditor", code: 2, userInfo: [NSLocalizedDescriptionKey: "A visible Hide keyboard action is required"])
+        }
+        let target = button.frame
+        let dimensions = "width=\(String(format: "%.17g", Double(target.width))) height=\(String(format: "%.17g", Double(target.height))) frame=\(target)"
+        print("DESIGN_WORK_EDITOR_KEYBOARD_TARGET \(dimensions)")
+        let measurement = XCTAttachment(string: dimensions + "\n" + button.debugDescription)
+        measurement.name = "task-editor-keyboard-target"; measurement.lifetime = .keepAlways; add(measurement)
+        guard target.width >= 44, target.height >= 44 else {
+          throw NSError(domain: "DesignTaskEditor", code: 4, userInfo: [NSLocalizedDescriptionKey: "Hide keyboard must be at least 44 points: \(dimensions)"])
+        }
+        button.tapWhenReady()
+        guard app.keyboards.firstMatch.waitForDisappearance(timeout: 5), editor.exists,
+              title.value as? String == before else {
+          throw NSError(domain: "DesignTaskEditor", code: 3, userInfo: [NSLocalizedDescriptionKey: "Hide keyboard must preserve the editor and task title"])
+        }
+      }
+      func menu(_ label: String) {
+        let query = app.buttons.matching(NSPredicate(format: "label == %@", label))
+        XCTAssertTrue(query.firstMatch.waitForExistence(timeout: 5))
+        for _ in 0..<10 {
+          let visible = query.allElementsBoundByIndex.filter { $0.isHittable }
+          if visible.count == 1 { visible[0].tapWhenReady(); return }
+          usleep(100_000)
+        }
+        XCTFail("Expected exactly one visible menu item: \(label)")
+      }
+      func fill(_ editor: XCUIElement, full: Bool, titleOnly: Bool = false) throws {
+        let title = editor.textFields["automation.taskTitle"], body = editor.textFields["automation.taskBody"]
+        reveal(title, editor); title.tapWhenReady(); XCTAssertTrue(title.waitForKeyboardFocus()); title.waitForKeyboardLayout(); title.typeWhenFocused(try XCTUnwrap(newTask["title"] as? String))
+        if !titleOnly { reveal(body, editor); body.tapWhenReady(); XCTAssertTrue(body.waitForKeyboardFocus()); body.typeWhenFocused(try XCTUnwrap(newTask["body"] as? String)) }
+        if full {
+          try hideEditorKeyboard(editor)
+          let picker = editor.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Assigned assistant,")).firstMatch
+          press(picker, editor); menu("Garden planner")
+          let increment = editor.buttons["Increment"]; reveal(increment, editor); increment.tapWhenReady(); increment.tapWhenReady()
+          for id in try XCTUnwrap(newTask["dependencies"] as? [String]) {
+            let title = try XCTUnwrap(task(id)["title"] as? String)
+            let row = editor.switches.matching(NSPredicate(format: "label BEGINSWITH %@", title)).firstMatch
+            reveal(row, editor); XCTAssertTrue(row.wait(until: "value == %@", "0"))
+            let control = row.switches.firstMatch; XCTAssertTrue(control.waitUntilHittable())
+            control.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.5)).press(forDuration: 0.1, thenDragTo: control.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.5)))
+            XCTAssertTrue(row.wait(until: "value == %@", "1"))
+          }
+        }
+      }
+      func save() { let save = app.buttons["automation.saveTask"]; XCTAssertTrue(save.wait(until: "enabled == true")); save.tapWhenReady() }
+      func createdRow() throws -> XCUIElement {
+        let rows = board.buttons.matching(NSPredicate(format: "label CONTAINS %@", try XCTUnwrap(newTask["title"] as? String)))
+        reveal(rows.firstMatch, board, up: false); XCTAssertEqual(rows.count, 1)
+        return rows.firstMatch
+      }
+      let initial = try events(); XCTAssertEqual(initial.filter { $0["method"] as? String == "GET" }.count, 1)
+      XCTAssertTrue(initial.allSatisfy { $0["method"] as? String == "GET" })
+      if variant == "task-edit" {
+        let row = board.buttons["automation.task.t_00000002"]; press(row, board)
+        let detail = app.collectionViews["automation.taskDetail"]; XCTAssertTrue(detail.waitForExistence(timeout: 5)); press(detail.buttons["Edit task"], detail)
+        let editor = app.collectionViews["automation.taskEditor"]; XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        let picker = editor.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Assigned assistant,")).firstMatch
+        press(picker, editor); menu("Unassigned")
+        let title = editor.textFields["automation.taskTitle"]; reveal(title, editor, up: false); try capture("task-edit")
+        save(); XCTAssertTrue(editor.waitForDisappearance(timeout: 10)); XCTAssertTrue(detail.waitForExistence(timeout: 5))
+        let feedback = detail.descendants(matching: .any).matching(identifier: "automation.taskFeedback").firstMatch
+        XCTAssertTrue(feedback.waitForExistence(timeout: 5)); reveal(feedback, detail)
+        XCTAssertTrue(detail.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", "Unassigned", "Unassigned")).firstMatch.exists)
+        try capture("task-edit-saved")
+      } else {
+        press(board.buttons["New task"], board)
+        let editor = app.collectionViews["automation.taskEditor"]; XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        if variant == "task-create" && !pad { try capture("task-create-empty") }
+        try fill(editor, full: variant == "task-create", titleOnly: variant.contains("dark") || variant.contains("large-text"))
+        switch variant {
+        case "task-create":
+          let selected = editor.switches.matching(NSPredicate(format: "label BEGINSWITH %@", try XCTUnwrap(task("t_00000003")["title"] as? String))).firstMatch
+          reveal(selected, editor); try capture("task-create-filled")
+          save(); XCTAssertTrue(editor.waitForDisappearance(timeout: 10)); let row = try createdRow(); XCTAssertTrue(row.exists)
+          if !pad { try capture("task-create-saved") }
+        case "task-create-dark":
+          reveal(editor.textFields["automation.taskTitle"], editor, up: false); try capture("task-create-dark")
+        case "task-create-large-text":
+          let title = editor.textFields["automation.taskTitle"], body = editor.textFields["automation.taskBody"]
+          XCTAssertTrue(app.buttons["automation.taskEditor.hideKeyboard"].waitForExistence(timeout: 5))
+          try capture("task-create-large-text-keyboard")
+          try hideEditorKeyboard(editor)
+          reveal(title, editor, up: false); revealRange(editor.staticTexts["Title"], through: body, editor); try editorLayoutCapture("task-create-large-text-top")
+          let picker = editor.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Assigned assistant,")).firstMatch, increment = editor.buttons["Increment"]
+          reveal(increment, editor); revealRange(picker, through: increment, editor); try editorLayoutCapture("task-create-large-text-middle")
+          let help = editor.staticTexts["Choose up to 20 dependencies."]; reveal(help, editor); try editorLayoutCapture("task-create-large-text-bottom")
+        case "task-create-uncertain", "task-create-refreshed":
+          save()
+          let error = editor.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "We couldn't confirm this change.")).firstMatch
+          XCTAssertTrue(error.waitForExistence(timeout: 10)); reveal(error, editor, up: false)
+          if !pad { try capture("task-create-uncertain") }
+          press(editor.buttons["automation.refresh"], editor, up: false)
+          let match = editor.descendants(matching: .any).matching(identifier: "automation.taskCreateMatch").firstMatch
+          XCTAssertTrue(match.waitForExistence(timeout: 10)); reveal(match, editor)
+          XCTAssertFalse(editor.textFields["automation.taskTitle"].isEnabled)
+          XCTAssertEqual(app.buttons["automation.saveTask"].label, "Close")
+          try capture("task-create-refreshed")
+          let refreshed = try events(); XCTAssertEqual(refreshed.filter { $0["method"] as? String == "GET" }.count, 2)
+          XCTAssertEqual(refreshed.filter { $0["method"] as? String != "GET" }.count, 1)
+          save(); XCTAssertTrue(editor.waitForDisappearance(timeout: 10)); let row = try createdRow(); XCTAssertTrue(row.exists)
+          if !pad { try capture("task-create-closed") }
+        default: XCTFail("Unknown editor variant")
+        }
+      }
+      let recorded = try events(), writes = recorded.filter { $0["method"] as? String != "GET" }
+      if variant.contains("dark") || variant.contains("large-text") { XCTAssertTrue(writes.isEmpty) }
+      else if variant == "task-edit" {
+        XCTAssertEqual(writes.count, 1); XCTAssertEqual(writes.first?["method"] as? String, "PATCH"); XCTAssertEqual(writes.first?["path"] as? String, "/tasks/t_00000002")
+        let body = try XCTUnwrap(writes.first?["body"] as? [String: Any]), editedTask = try task("t_00000002")
+        XCTAssertEqual(Set(body.keys), Set(["title", "body", "priority", "assignee"])); XCTAssertTrue(body["assignee"] is NSNull)
+        for key in ["title", "body"] { XCTAssertEqual(body[key] as? String, editedTask[key] as? String) }
+        XCTAssertEqual(body["priority"] as? Int, editedTask["priority"] as? Int)
+      } else {
+        XCTAssertEqual(writes.count, 1); XCTAssertEqual(writes.first?["method"] as? String, "POST"); XCTAssertEqual(writes.first?["path"] as? String, "/tasks")
+        let body = try XCTUnwrap(writes.first?["body"] as? [String: Any])
+        XCTAssertEqual(Set(body.keys), Set(["requestId", "title", "body", "priority", "assignee", "dependencies"])); XCTAssertNotNil(UUID(uuidString: body["requestId"] as? String ?? ""))
+        for key in ["title", "body"] { XCTAssertEqual(body[key] as? String, newTask[key] as? String) }
+        if variant == "task-create" {
+          XCTAssertEqual(body["priority"] as? Int, newTask["priority"] as? Int); XCTAssertEqual(body["assignee"] as? String, newTask["assignee"] as? String)
+          XCTAssertEqual(body["dependencies"] as? [String], newTask["dependencies"] as? [String])
+        } else { XCTAssertEqual(recorded.filter { $0["method"] as? String == "GET" }.count, 2) }
+      }
+      print("DESIGN_WORK_TASK_EDITOR_VARIANT \(variant) complete"); app.terminate()
     }
   }
 

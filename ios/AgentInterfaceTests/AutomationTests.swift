@@ -270,6 +270,14 @@ private final class AutomationFixtureServer: @unchecked Sendable {
     let content: HermesSkillContent = try APIClient.decode(Data(##"{"name":"ranch/fences","content":"# Fence inspection","truncated":true}"##.utf8), from: path)
     XCTAssertTrue(content.truncated); XCTAssertEqual(content.content, "# Fence inspection")
   }
+  func testLikelyCreatedTaskRequiresNewIdAndExactTitle() throws {
+    let data = Data(#"[{"id":"known","title":"Fence","body":"","status":"blocked","priority":0,"assignee":null,"owner":"ranch","dependencies":[]},{"id":"new","title":"Fence","body":"","status":"blocked","priority":0,"assignee":null,"owner":"ranch","dependencies":[]}]"#.utf8)
+    let items = try JSONDecoder().decode([HermesTask].self, from: data)
+    XCTAssertEqual(hermesLikelyCreatedTask(["known"], "Fence", items)?.id, "new")
+    XCTAssertNil(hermesLikelyCreatedTask(["known", "new"], "Fence", items))
+    XCTAssertNil(hermesLikelyCreatedTask([], "fence", items))
+    XCTAssertNil(hermesLikelyCreatedTask([], "Fence ", items))
+  }
   func testTaskIntentRetainsUUIDForRetryAndUsesFlatFinitePayload() throws {
     var intent = HermesTaskCreationIntent()
     var draft = HermesTaskDraft(title: "Fix fence", body: "North gate", priority: 5,

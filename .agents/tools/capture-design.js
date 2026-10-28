@@ -1,8 +1,8 @@
 // Playwright CLI run-code function. Screenshots and a geometry report for a design gate.
 async (page, { outputDir = ".private/design-review", prefix = "current", screen = "today", stage = "after", workCase = "all", taskGate = null, fixture } = {}) => {
   if (!["before", "after"].includes(stage)) throw Error("Unknown capture stage");
-  if (taskGate !== null && taskGate !== "a" || taskGate === "a" && (screen !== "work" || workCase !== "tasks" || stage !== "after")) throw Error("Invalid task gate");
-  if (screen === "work" && workCase === "tasks" && stage === "after" && taskGate !== "a") throw Error("Work tasks AFTER requires task gate a; full W2 AFTER is unavailable");
+  if (taskGate !== null && !["a", "b"].includes(taskGate) || taskGate !== null && (screen !== "work" || workCase !== "tasks" || stage !== "after")) throw Error("Invalid task gate");
+  if (screen === "work" && workCase === "tasks" && stage === "after" && !["a", "b"].includes(taskGate)) throw Error("Work tasks AFTER requires an explicit task gate a or b");
   if (!["today", "home", "conversation", "questions", "approvals", "recovery", "details", "settings", "avatar", "models", "memory", "work"].includes(screen)) throw Error(`Unsupported screen: ${screen}`);
   if (!["all", "clear-confirmation", "tasks"].includes(workCase) || workCase === "clear-confirmation" && (screen !== "work" || stage !== "after") || workCase === "tasks" && screen !== "work") throw Error("Unknown or invalid Work capture case");
   if (workCase === "tasks" ? fixture?.workFixture?.gate !== "W2-tasks" : fixture?.workFixture?.gate != null) throw Error("Wrong Work fixture gate");
@@ -664,6 +664,141 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
         if(browserErrors.length) throw Error(`Browser errors: ${browserErrors.join('; ')}`);
         if(paths.length!==19) throw Error(`Expected 19 W2a shots, got ${paths.length}`);
         return {title:'Work W2a tasks AFTER',paths,geometry,workSubmissions,workChecks,browserErrors,workCase,taskGate};
+      }
+      if(workCase === "tasks" && taskGate === "b") {
+        const section=panel.locator('.automation-tasks'), newTask=fixture.workFixture.newTask;
+        const items=fixture.work.tasks.items, subject=id=>items.find(item=>item.id===id);
+        const card=id=>section.locator(`details.automation-task[data-task-id="${id}"]`);
+        const createForm=()=>section.getByRole('form',{name:'New task',exact:true});
+        const assignedAssistant=form=>form.getByRole('combobox',{name:/^Assigned assistant\b/});
+        let width=390,theme='light';
+        const setup=async(opts={})=>{width=opts.width||390;theme=opts.theme||'light';await reset(opts);};
+        const bounds=async target=>target.evaluate(node=>{
+          const r=node.getBoundingClientRect(),v=node.closest('.settings-content').getBoundingClientRect();
+          return {top:r.top,bottom:r.bottom,viewTop:v.top,viewBottom:v.bottom,focused:node===document.activeElement,
+            fullyVisible:r.top>=Math.max(0,v.top)&&r.bottom<=Math.min(innerHeight,v.bottom)};
+        });
+        const shot=async(name,preserveFocus=false)=>{
+          const overflow=await section.evaluate(node=>({document:document.documentElement.scrollWidth>innerWidth,
+            section:node.scrollWidth>node.clientWidth,scroller:node.closest('.settings-content').scrollWidth>node.closest('.settings-content').clientWidth}));
+          if(Object.values(overflow).some(Boolean)||browserErrors.length) throw Error(`Editor ${name}: ${JSON.stringify({overflow,browserErrors})}`);
+          await capture(`task-${name}`,width,width>1000?1000:844,theme,preserveFocus);
+          geometry.at(-1).editorOverflow=overflow;
+        };
+        const anchorShot=async(name,target)=>{
+          await target.evaluate(node=>{const view=node.closest('.settings-content');view.scrollTop+=node.getBoundingClientRect().top-view.getBoundingClientRect().top;});
+          const info=await bounds(target);
+          if(info.top<Math.max(0,info.viewTop)-1||info.top>=Math.min(width>1000?1000:844,info.viewBottom)) throw Error(`Editor ${name} anchor clipped: ${JSON.stringify(info)}`);
+          await shot(name);geometry.at(-1).editorAnchor=info;
+        };
+        const subjectShot=async(name,target)=>{
+          await target.scrollIntoViewIfNeeded();const info=await bounds(target);
+          if(!info.fullyVisible) throw Error(`Editor ${name} subject clipped: ${JSON.stringify(info)}`);
+          await shot(name);geometry.at(-1).editorSubject=info;
+        };
+        const landingShot=async(name,target)=>{
+          await target.waitFor();
+          await target.evaluate(async node=>{
+            const deadline=performance.now()+5000;
+            let last;
+            while(performance.now()<deadline){
+              const r=node.getBoundingClientRect(),v=node.closest('.settings-content').getBoundingClientRect();
+              last={focused:node===document.activeElement,top:r.top,bottom:r.bottom,viewTop:v.top,viewBottom:v.bottom,
+                viewportHeight:innerHeight,activeElement:document.activeElement?.outerHTML.slice(0,600)};
+              if(last.focused&&r.top>=Math.max(0,v.top)&&r.bottom<=Math.min(innerHeight,v.bottom))return;
+              await new Promise(resolve=>requestAnimationFrame(resolve));
+            }
+            throw Error(`Editor result did not receive visible focus: ${JSON.stringify(last)}`);
+          });
+          const info=await bounds(target);
+          if(!info.focused||!info.fullyVisible) throw Error(`Editor ${name} did not focus a visible result: ${JSON.stringify(info)}`);
+          await shot(name,true);geometry.at(-1).editorLanding=info;
+        };
+        const fill=async(full=true)=>{
+          await section.getByRole('button',{name:'New task',exact:true}).click();const form=createForm();
+          if(!await form.getByLabel('Task title',{exact:true}).evaluate(node=>node===document.activeElement)) throw Error('Create title did not receive focus');
+          await form.getByLabel('Task title',{exact:true}).fill(newTask.title);
+          await form.getByLabel('Instructions (optional)',{exact:true}).fill(newTask.body);
+          if(full){
+            await assignedAssistant(form).selectOption(newTask.assignee);
+            await form.getByLabel('Priority',{exact:true}).fill(String(newTask.priority));
+            for(const id of newTask.dependencies) await form.getByRole('checkbox',{name:subject(id).title}).check();
+          }
+          return form;
+        };
+        const verifyCreate=(entry,full=true)=>{
+          const expected={title:newTask.title,body:newTask.body,assignee:full?newTask.assignee:'ranch',priority:full?newTask.priority:0,dependencies:full?newTask.dependencies:[]};
+          if(entry?.method!=='POST'||entry.path!=='/tasks'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(entry.body?.requestId)||
+            JSON.stringify(Object.keys(entry.body).sort())!==JSON.stringify(['requestId',...Object.keys(expected)].sort())||
+            Object.keys(expected).some(key=>JSON.stringify(entry.body[key])!==JSON.stringify(expected[key]))) throw Error(`Editor create payload mismatch: ${JSON.stringify(entry)}`);
+        };
+        const createdTask=()=>{
+          const found=work.tasks.items.filter(item=>item.title===newTask.title&&!items.some(old=>old.id===item.id));
+          if(found.length!==1||found[0].status!=='blocked') throw Error('Expected exactly one new blocked task');
+          return found[0];
+        };
+        for(const [name,w,t,large,anchor] of [
+          ['create-desktop',1440,'light',false,'top'],['create-dark',1440,'dark',false,'top'],
+          ['create-phone-top',390,'light',false,'top'],['create-phone-bottom',390,'light',false,'bottom'],
+          ['create-narrow',320,'light',false,'top'],['create-large-text-top',390,'light',true,'top'],
+          ['create-large-text-bottom',390,'light',true,'actions']]){
+          await setup({width:w,theme:t,large});const form=await fill();
+          if(w===390&&!large){
+            const rows=await form.locator('.automation-check').evaluateAll(nodes=>nodes.map(node=>{
+              const box=node.querySelector('input').getBoundingClientRect(),label=node.querySelector('span').getBoundingClientRect(),r=node.getBoundingClientRect();
+              return {height:r.height,firstLineOffset:Math.abs(box.top-label.top),text:node.textContent};
+            }));
+            if(rows.some(row=>row.firstLineOffset>8||row.height<44)) throw Error(`Dependency checkbox alignment/target mismatch: ${JSON.stringify(rows)}`);
+            workChecks.push({check:'editor-dependency-row-layout',rows});
+          }
+          if(anchor==='bottom'){
+            await form.locator('.automation-task-choices').evaluate(node=>node.scrollTop=node.scrollHeight);
+            await anchorShot(name,form.locator('fieldset'));
+            if(!(await bounds(form.locator('.actions'))).fullyVisible) throw Error('Create help/actions must fit below the bounded dependency list');
+          }else if(anchor==='actions') await subjectShot(name,form.locator('.actions'));
+          else await anchorShot(name,form.getByRole('heading',{name:'New task',exact:true}));
+        }
+        await setup();let form=await fill(),before=workSubmissions.length;
+        await form.getByRole('button',{name:'Create task',exact:true}).click();
+        await section.getByRole('button',{name:'New task',exact:true}).waitFor();
+        let writes=workSubmissions.slice(before);if(writes.length!==1)throw Error('Create must send exactly one POST');verifyCreate(writes[0]);
+        let created=createdTask(),row=card(created.id),feedback=row.locator('.automation-task-feedback');
+        if(await row.getAttribute('open')===null||!await section.getByRole('status',{name:'Task result'}).textContent().then(text=>text.includes('Created.'))) throw Error('Created task not opened/announced');
+        await landingShot('create-saved',feedback);
+        await setup({mode:'task-create-uncertain'});form=await fill(false);before=workSubmissions.length;
+        await form.getByRole('button',{name:'Create task',exact:true}).click();
+        await panel.getByRole('alert').waitFor();
+        const message=form.locator('.automation-task-callout[tabindex="-1"]');
+        await landingShot('create-uncertain-form',message);
+        if(!await form.getByLabel('Task title',{exact:true}).isDisabled())throw Error('Unconfirmed draft must be locked');
+        await subjectShot('create-uncertain-alert',panel.getByRole('alert'));
+        const reads=workReads;await panel.getByRole('button',{name:'Refresh status',exact:true}).click();
+        await form.getByRole('button',{name:'Close',exact:true}).waitFor();
+        if(workReads!==reads+1||workSubmissions.length!==before+1||await form.getByRole('button',{name:'Create task',exact:true}).count())throw Error('Uncertain-create refresh/write guard failed');
+        if(!await form.getByLabel('Task title',{exact:true}).isDisabled())throw Error('Likely-match draft must stay locked');
+        await landingShot('create-refreshed-form',message);
+        await form.getByRole('button',{name:'Close',exact:true}).click();
+        await section.getByRole('button',{name:'New task',exact:true}).waitFor();created=createdTask();row=card(created.id);
+        writes=workSubmissions.slice(before);if(writes.length!==1)throw Error('Close sent a second create');verifyCreate(writes[0],false);
+        if(await row.getAttribute('open')===null)throw Error('Likely-created task did not open');
+        await landingShot('create-uncertain-closed',row.locator('.automation-task-feedback'));
+        workChecks.push({check:'uncertain-create-close',posts:1,refreshReads:1,postCloseWrites:0,uniqueCreated:1});
+        for(const [name,w,large] of [['edit-desktop',1440,false],['edit-phone',390,false],['edit-large-text',390,true]]){
+          await setup({width:w,large});row=card(fixture.workFixture.subjects.edit);await row.locator(':scope > summary').click();
+          await row.getByRole('button',{name:'Edit task',exact:true}).click();form=row.getByRole('form',{name:'Edit task',exact:true});
+          if(!await form.getByLabel('Task title',{exact:true}).evaluate(node=>node===document.activeElement))throw Error('Edit title did not receive focus');
+          await assignedAssistant(form).selectOption('');
+          if(large)await subjectShot(name,form.locator('.actions'));else await anchorShot(name,form.getByRole('heading',{name:'Edit task',exact:true}));
+        }
+        await setup();row=card(fixture.workFixture.subjects.edit);await row.locator(':scope > summary').click();await row.getByRole('button',{name:'Edit task',exact:true}).click();
+        form=row.getByRole('form',{name:'Edit task',exact:true});await assignedAssistant(form).selectOption('');before=workSubmissions.length;
+        await form.getByRole('button',{name:'Save task',exact:true}).click();await row.getByRole('button',{name:'Edit task',exact:true}).waitFor();
+        writes=workSubmissions.slice(before);const original=subject(fixture.workFixture.subjects.edit);
+        const expected={title:original.title,body:original.body,priority:original.priority,assignee:null};
+        if(writes.length!==1||writes[0].method!=='PATCH'||writes[0].path!==`/tasks/${original.id}`||JSON.stringify(writes[0].body)!==JSON.stringify(expected)||!(await row.locator(':scope > summary').textContent()).includes('Unassigned'))throw Error('Editor PATCH/null assignment mismatch');
+        await landingShot('edit-saved',row.locator('.automation-task-feedback'));
+        if(paths.length!==16||browserErrors.length)throw Error(`W2b expected16 clean frames, got${paths.length}: ${browserErrors}`);
+        return {title:'Work W2b task editors AFTER',paths,geometry,workSubmissions,workChecks,browserErrors,workCase,taskGate};
       }
       if(workCase==="tasks") {
         const section=panel.locator("section.automation-section").filter({has:tab.getByRole("heading",{name:"Task board",exact:true})});

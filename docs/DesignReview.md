@@ -59,8 +59,8 @@ References collected October 25, 2026. External artwork is reference material on
 | Memory | 20 web before, 35 after; 18 native before, 26 after per device | Complete | Web desktop, tablet, phone, dark and 200% text 9; iPhone and iPad normal, dark, AX3 and recovery 9 |
 | Work frame and standing goal | 21 web and 20 native before frames per device verified | Complete | Web, iPhone and iPad 9 |
 | Work task board and actions | 67 shared before frames; 19 web, 23 iPhone and 23 iPad after frames | Complete | Web refusal 9.5; remaining web states, iPhone and iPad 9 |
-| Work task editors | Shared before baseline complete | Next | Pending |
-| Work event triggers | Pending | Pending | Pending |
+| Work task editors | Shared before baseline; 16 web, 13 iPhone and 9 iPad after frames reviewed | Complete | Every frame 9 |
+| Work event triggers | Pending | Next | Pending |
 | Learning | Pending | Pending | Pending |
 | Routines and results | Pending | Pending | Pending |
 | Logins and secure requests | Pending | Pending | Pending |
@@ -342,3 +342,35 @@ zoom. Production Hermes transition rules, physical devices, VoiceOver, hardware
 keyboards, iOS 17, AX5 and compact iPad windows remain unverified. The trigger
 contrast follow-up belongs to its upcoming pass. This acceptance covers W2a
 only; task editors and the rest of the app remain pending.
+
+## Work task-editor acceptance
+
+Task creation and editing pass Opus 5.5 High at 9 on web, iPhone and iPad.
+The reviewer scored all 38 actual after frames individually, with no averaging
+or projection. Six annotated comparisons use the pinned shared before baseline.
+The [closing evidence record](evidence/design-review/work-task-editor-acceptance.json)
+contains the image hashes, source bindings, validation receipts and review links.
+
+Forms now keep visible field labels, mark optional inputs and explain the blocked
+state of a newly created task. Web dependency rows align their checkboxes and show
+status. Editing disables inputs during a save and keeps refusals with the task.
+After a lost create response, Refresh reviews the existing request. A likely title
+match locks the draft and offers Close, without sending another create. The copy
+does not claim that a title match proves the server saved this request.
+
+Validation includes 41 focused web tests, typecheck, production build and the
+16-frame browser tour. The original 38 native functional checks passed, and the
+two affected task UI tests passed again after adding the keyboard control.
+Their original source bindings are retained. Five phone tours and five iPad tours
+passed with zero skips. The final test-helper change checks the position reached
+by the last permitted drag; it adds no gesture or relaxed visibility rule.
+
+The iPhone keyboard control measured 44 by 44 points and passed light and dark
+contrast checks. The iPad extra frame shows its keyboard accessory and Hide
+button, but no on-screen key grid. That layout remains a whole-app follow-up.
+The toolbar's unlocated frame-dimension runtime warning has no observed visual
+effect and is also retained for that pass.
+
+These are synthetic fixtures and simulator images. Enlarged native text is AX3;
+web 200% uses root-font scaling. Physical devices, VoiceOver, hardware keyboards,
+AX5, iOS 17 and compact iPad widths remain unverified. Work event triggers are next.

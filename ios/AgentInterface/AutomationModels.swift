@@ -52,6 +52,9 @@ struct HermesTask: Decodable, Identifiable {
   var id: String; var title: String; var body: String; var status: String; var priority: Int
   var assignee: String?; var owner: String; var dependencies: [String]; var blockedReason: String?
 }
+func hermesLikelyCreatedTask(_ knownIds: Set<String>, _ title: String, _ items: [HermesTask]) -> HermesTask? {
+  items.first { !knownIds.contains($0.id) && $0.title == title }
+}
 struct HermesSubscription: Decodable, Identifiable {
   var id: String; var description: String; var events: [String]; var routineId: String
   var enabled: Bool; var url: String; var secretSet: Bool; var revision: String

@@ -208,6 +208,38 @@ import XCTest
     reveal(status, in: app.collectionViews["automation.taskDetail"], downward: true)
     capture(app, "Native explicit task start")
   }
+  func testTaskEditRefusalRefreshesRunningState() throws {
+    let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_WORK_TASKS_PATH"] ?? ""
+    try XCTSkipUnless(!source.isEmpty, "Set AGENT_INTERFACE_DESIGN_WORK_TASKS_PATH to the W2 fixture.")
+    var fixture = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: source))) as? [String: Any])
+    XCTAssertEqual((fixture["workFixture"] as? [String: Any])?["gate"] as? String, "W2-tasks")
+    fixture["mode"] = "task-edit-refreshed-running"
+    let app = XCUIApplication()
+    app.launchEnvironment["AGENT_INTERFACE_UI_FIXTURE"] = "1"
+    app.launchEnvironment["AGENT_INTERFACE_UI_RESET"] = "1"
+    app.launchEnvironment["AGENT_INTERFACE_UI_EXPERIENCE"] = "1"
+    app.launchEnvironment["AGENT_INTERFACE_UI_SCOPE"] = UUID().uuidString.lowercased()
+    app.launchEnvironment["AGENT_INTERFACE_UI_DESIGN_FIXTURE"] = String(decoding: try JSONSerialization.data(withJSONObject: fixture), as: UTF8.self)
+    app.launch()
+    XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 15))
+    app.openAssistantSettings("Ranch hand"); app.selectSettingsTab("Work")
+    let board = app.collectionViews["automation.work"]
+    let row = board.buttons["automation.task.t_00000005"]
+    reveal(row, in: board); XCTAssertTrue(row.waitForExistence(timeout: 10)); row.tapWhenReady()
+    let detail = app.collectionViews["automation.taskDetail"]
+    let edit = detail.buttons["Edit task"]; reveal(edit, in: detail); edit.tapWhenReady()
+    let editor = app.collectionViews["automation.taskEditor"]
+    XCTAssertTrue(editor.waitForExistence(timeout: 10))
+    let save = app.buttons["automation.saveTask"]; XCTAssertTrue(save.wait(until: "enabled == true")); save.tapWhenReady()
+    XCTAssertTrue(editor.staticTexts["A Hermes worker is running this task. You can change it after the run finishes."].waitForExistence(timeout: 10))
+    XCTAssertTrue(save.waitForExistence(timeout: 5)); XCTAssertTrue(save.wait(until: "enabled == false"))
+    XCTAssertTrue(editor.descendants(matching: .any).matching(identifier: "automation.taskFeedback").firstMatch.exists)
+    XCTAssertFalse(editor.buttons["automation.refresh"].exists)
+    app.navigationBars["Edit task"].buttons["Cancel"].tapWhenReady()
+    app.navigationBars["Task details"].buttons["Done"].tapWhenReady()
+    let create = board.buttons["New task"]; reveal(create, in: board)
+    XCTAssertTrue(create.wait(until: "enabled == true"))
+  }
   func testLearningUsesLoadedDiffRevisionWithReadOnlyPolicy() {
     let app = launch(["READONLY_POLICY"])
     app.selectSettingsTab("Learning")

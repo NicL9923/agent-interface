@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bind passed W2a native PNGs to a released run. No runtime or device operations."""
+"""Bind passed W2 native PNGs to a released run. No runtime or device operations."""
 import argparse
 from datetime import datetime
 import hashlib
@@ -7,7 +7,9 @@ import json
 from pathlib import Path
 
 
-def bind(receipt_path: Path, repo: Path) -> dict:
+def bind(receipt_path: Path, repo: Path, gate: str = 'a') -> dict:
+    if gate not in {'a', 'b'}:
+        raise ValueError('Select task gate a or b.')
     receipt = json.loads(receipt_path.read_text())
     if (receipt.get('cleanup', {}).get('errors') != []
             or receipt.get('ownedXcodebuildProcesses') != []
@@ -41,7 +43,8 @@ def bind(receipt_path: Path, repo: Path) -> dict:
                 or result.get('failedTests') != 0 or result.get('skippedTests') != 0
                 or 'ios inputs: ' + receipt['source'] not in lines):
             raise ValueError('The XCTest summary does not prove this source passed without skips.')
-        marker = f"DESIGN_WORK_W2A_AFTER_VARIANT {run['variants']} complete"
+        prefix = 'DESIGN_WORK_W2A_AFTER_VARIANT' if gate == 'a' else 'DESIGN_WORK_TASK_EDITOR_VARIANT'
+        marker = f"{prefix} {run['variants']} complete"
         if marker not in Path(run['log']).read_text():
             raise ValueError('Missing completed AFTER variant marker.')
         device = {'iphone': 'ios', 'ipad': 'ipad'}[run['device']]
@@ -58,7 +61,7 @@ def bind(receipt_path: Path, repo: Path) -> dict:
                           'mtime': stamp, 'summary': str(summary), 'variant': run['variants']})
     if not shots:
         raise ValueError('No passed screenshot variants to bind.')
-    return {'source': receipt['source'], 'fixtureSHA256': receipt['workFixtureSHA256'],
+    return {'source': receipt['source'], 'fixtureSHA256': receipt['workFixtureSHA256'], 'taskGate': gate,
             'bindingToolSHA256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
             'receipt': str(receipt_path), 'screenshots': shots, 'freshCount': len(shots),
             'uniqueImageCount': len({shot['sha256'] for shot in shots}),
@@ -71,8 +74,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('receipt', type=Path)
     parser.add_argument('output', type=Path)
+    parser.add_argument('--gate', choices=['a', 'b'], default='a')
     args = parser.parse_args()
-    result = bind(args.receipt.resolve(), Path(__file__).resolve().parents[2])
+    result = bind(args.receipt.resolve(), Path(__file__).resolve().parents[2], gate=args.gate)
     with args.output.open('x') as output:
         json.dump(result, output, indent=2)
         output.write('\n')

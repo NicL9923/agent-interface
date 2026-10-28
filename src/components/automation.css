@@ -67,6 +67,8 @@
 .automation-task[open] { padding: 16px; margin: 8px 0; border: 1px solid var(--line); border-radius: 10px; background: var(--raised); }
 .automation-task[open] > summary small { display: none; }
 .automation-task-feedback:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.automation-task-feedback--edit,
+.automation-tasks form.automation-form > p[tabindex="-1"] { scroll-margin-block: 12px; }
 .automation-task-detail { padding-top: 12px; }
 .automation-task-detail > p { white-space: pre-wrap; }
 .automation-task-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; color: var(--muted); font-size: .875rem; }
@@ -89,3 +91,11 @@
 
 .automation-task-dependencies > h5, .automation-task-move > h5 { margin: 0 0 8px; font-size: 1em; }
 .automation-task-uncertain { color: var(--muted); }
+
+.automation-tasks form.automation-form > h4, .automation-tasks form.automation-form > p { margin: 0; }
+.automation-tasks form.automation-form > label { margin: 0; }
+.automation-tasks form.automation-form fieldset { margin: 0; min-width: 0; }
+.automation-tasks form.automation-form .automation-check { flex-direction: row; min-height: 44px; margin: 0; }
+.automation-tasks form.automation-form .automation-check input { margin: 2px 0 0; }
+.automation-tasks form.automation-form .automation-task-choices.is-bounded { max-height: 288px; overflow-y: auto; }
+.automation-tasks form.automation-form > .actions { margin-top: 0; }

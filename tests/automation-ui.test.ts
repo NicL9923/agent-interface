@@ -3,7 +3,7 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { api, ApiError, write } from "../src/client-api";
-import { AutomationPanel, LearningPanel } from "../src/components/AutomationPanel";
+import { AutomationPanel, LearningPanel, likelyCreatedTask } from "../src/components/AutomationPanel";
 import type { AutomationOverview } from "../src/shared/automation";
 
 vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(await (async original => ({ ...await original<typeof import("../src/client-api")>(), api: vi.fn(), write: vi.fn() }))(original)));
@@ -197,14 +197,20 @@ it("clears task assignment explicitly and shows when the board is truncated", as
 
 it("keeps task instructions and request ID through an uncertain create, without auto retry", async () => {
   vi.mocked(write).mockRejectedValueOnce(new ApiError("Lost response", 502));
-  await work(); await click("New task"); await input("Task title", "Check the east fence"); await input("Instructions", "Read the last inspection report first."); await submit();
+  await work(); await click("New task"); await input("Task title", "Check the east fence"); await input("Instructions (optional)", "Read the last inspection report first."); await submit();
   const payload = vi.mocked(write).mock.calls[0][1];
   expect(payload).toMatchObject({ title: "Check the east fence", body: "Read the last inspection report first.", assignee: "ranch", requestId: expect.any(String) });
   expect(button("Create task").disabled).toBe(true);
+  expect(document.activeElement?.textContent).toContain("Not confirmed. Hermes may have created this task.");
   expect(container.querySelector("textarea")!.value).toBe("Read the last inspection report first.");
   expect(write).toHaveBeenCalledTimes(1);
-  await click("Refresh status"); vi.mocked(write).mockResolvedValueOnce({ ok: true }); await submit();
+  await click("Refresh status");
+  expect(document.activeElement?.textContent).toContain("No new task with this title is visible.");
+  expect(container.querySelector('[aria-label="Task result"]')?.textContent).toContain("Create task sends the same request again.");
+  vi.mocked(write).mockResolvedValueOnce({ ok: true }); await submit();
   expect(vi.mocked(write).mock.calls[1][1]).toEqual(payload);
+  await act(async () => new Promise<void>(resolve => requestAnimationFrame(() => resolve())));
+  expect(document.activeElement).toBe(button("New task"));
 });
 
 it("shows a new signing secret once and creates a disabled trigger", async () => {
@@ -405,4 +411,146 @@ it("does not reopen a task or steal focus when its late result arrives", async (
   await act(async () => complete(value.tasks.items[0]));
   expect(second.open).toBe(true); expect(document.activeElement).toBe(second.querySelector("summary"));
   expect(container.querySelector<HTMLDetailsElement>('[data-task-id="one"]')?.open).toBe(false);
+});
+
+
+it("matches only a new task with the exact submitted title", () => {
+  const items = [task("known", "blocked"), { ...task("new", "blocked"), title: "Fence" }];
+  expect(likelyCreatedTask(["known"], "Fence", items)?.id).toBe("new");
+  expect(likelyCreatedTask(["known", "new"], "Fence", items)).toBeUndefined();
+  expect(likelyCreatedTask([], "fence", items)).toBeUndefined();
+  expect(likelyCreatedTask([], "Fence ", items)).toBeUndefined();
+});
+
+it("focuses the create title and returns focus on cancel", async () => {
+  await work(); await click("New task");
+  expect(document.activeElement).toBe(container.querySelector('form[aria-labelledby="new-task-heading"] input'));
+  await click("Cancel"); await act(async () => new Promise<void>(resolve => requestAnimationFrame(() => resolve())));
+  expect(document.activeElement).toBe(button("New task"));
+});
+
+it("locks edit fields during a pending save and reports success beside edit", async () => {
+  let value = initial(); value.tasks.items = [task("one", "blocked")];
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value);
+  let complete!: (value: unknown) => void;
+  vi.mocked(write).mockReturnValueOnce(new Promise(resolve => { complete = resolve; }));
+  await work(); await openTask("one"); await click("Edit task"); await input("Task title", "Edited title");
+  await submit();
+  const form = container.querySelector<HTMLFormElement>('form[aria-labelledby^="edit-task-"]')!;
+  expect([...form.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>("input, textarea, select")].every(field => field.disabled)).toBe(true);
+  expect(button("Saving…").disabled).toBe(true);
+  value = { ...value, tasks: { ...value.tasks, items: [{ ...task("one", "blocked"), title: "Edited title" }] } };
+  await act(async () => complete(value.tasks.items[0]));
+  const feedback = container.querySelector<HTMLElement>('.automation-task-feedback')!;
+  expect(form.isConnected).toBe(false); expect(feedback.textContent).toBe("Saved in Hermes.");
+  expect(document.activeElement).toBe(feedback); expect(container.querySelector('[aria-label="Task result"]')?.textContent).toBe("Saved in Hermes.");
+});
+
+it("keeps an edit draft after a local refusal and reconciles a running task", async () => {
+  let value = initial(); value.tasks.items = [task("one", "blocked"), task("two", "ready")];
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value);
+  await work(); await openTask("one"); await click("Edit task"); await input("Task title", "Draft title");
+  vi.mocked(write).mockRejectedValueOnce(new ApiError("Refused.", 409)); await submit();
+  expect(container.querySelector<HTMLInputElement>('form[aria-labelledby^="edit-task-"] input')?.value).toBe("Draft title");
+  expect(container.querySelector('.automation-task-feedback')?.textContent).toContain("Refused. Status refreshed.");
+  expect(button("Resume goal").disabled).toBe(false); expect(button("Start task").disabled).toBe(false);
+  value = { ...value, tasks: { ...value.tasks, items: [task("one", "running"), task("two", "ready")] } };
+  vi.mocked(write).mockRejectedValueOnce(new ApiError("Worker owns it.", 409)); await submit();
+  expect(container.querySelector('form[aria-labelledby^="edit-task-"]')).toBeNull();
+  expect(container.textContent).toContain("A Hermes worker is running this task");
+  expect(container.querySelector('.automation-task-move .automation-task-feedback')?.textContent).toContain("Worker owns it.");
+  expect(button("Resume goal").disabled).toBe(false);
+  value = { ...value, tasks: { ...value.tasks, items: [task("one", "ready"), task("two", "ready")] } };
+  await click("Refresh status");
+  expect(container.querySelector('form[aria-labelledby^="edit-task-"]')).toBeNull();
+  expect(button("Edit task")).toBeDefined();
+});
+
+it("keeps other actions out of a reviewed create attempt and its busy labels", async () => {
+  const value = initial(); value.tasks.items = [task("one", "blocked")];
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value);
+  vi.mocked(write).mockRejectedValueOnce(new ApiError("Lost create response", 502));
+  await work(); await click("New task"); await input("Task title", "A new fence"); await submit();
+  await click("Refresh status");
+  expect(document.activeElement?.textContent).toContain("No new task with this title is visible.");
+  await openTask("one"); await click("Edit task");
+  let fail!: (error: Error) => void;
+  vi.mocked(write).mockReturnValueOnce(new Promise((_, reject) => { fail = reject; }));
+  await click("Start task");
+  expect(button("Create task").disabled).toBe(true); expect(button("Creating…")).toBeUndefined();
+  expect(button("Save task").disabled).toBe(true); expect(button("Saving…")).toBeUndefined();
+  await act(async () => fail(new ApiError("Lost move response", 502)));
+  const form = container.querySelector('form[aria-labelledby="new-task-heading"]')!;
+  expect(form.querySelector('.automation-task-callout')).toBeNull();
+  expect(form.textContent).not.toContain("Hermes may have created this task");
+  expect(document.activeElement?.textContent).not.toContain("Hermes may have created this task");
+  expect(write).toHaveBeenCalledTimes(2);
+});
+
+it("waits for the create review result before moving focus from Refresh status", async () => {
+  const value = initial();
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value);
+  vi.mocked(write).mockRejectedValueOnce(new ApiError("Lost create response", 502));
+  await work(); await click("New task"); await input("Task title", "A new fence"); await submit();
+  let finish!: (result: AutomationOverview) => void;
+  vi.mocked(api).mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+  const refresh = button("Refresh status"); refresh.focus(); await click("Refresh status");
+  expect(document.activeElement).toBe(refresh);
+  await act(async () => finish(value));
+  expect(document.activeElement?.textContent).toContain("No new task with this title is visible.");
+  expect(write).toHaveBeenCalledTimes(1);
+});
+
+it.each([false, true])("keeps a successful move focused after create review (match=%s)", async match => {
+  let value = initial(); value.tasks.items = [task("one", "blocked")];
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value);
+  vi.mocked(write).mockRejectedValueOnce(new ApiError("Lost create response", 502));
+  await work(); await click("New task"); await input("Task title", "A new fence"); await submit();
+  const appeared = { ...task("new", "blocked"), title: "A new fence" };
+  if (match) value = { ...value, tasks: { ...value.tasks, items: [...value.tasks.items, appeared] } };
+  await click("Refresh status");
+  expect(document.activeElement?.textContent).toContain(match ? "A task with this title appeared" : "No new task with this title");
+  await openTask("one");
+  let complete!: (result: unknown) => void;
+  vi.mocked(write).mockReturnValueOnce(new Promise(resolve => { complete = resolve; }));
+  await click("Start task");
+  value = { ...value, tasks: { ...value.tasks, items: [task("one", "ready"), ...(match ? [appeared] : [])] } };
+  await act(async () => complete({ ok: true }));
+  const feedback = container.querySelector<HTMLElement>('[data-task-id="one"] .automation-task-feedback')!;
+  expect(feedback.textContent).toBe("Moved to Ready.");
+  expect(document.activeElement).toBe(feedback);
+  expect(container.querySelector('[aria-label="Task result"]')?.textContent).toBe("Moved to Ready.");
+  expect(write).toHaveBeenCalledTimes(2);
+});
+
+it("creates, opens and announces the new task and resets the next draft", async () => {
+  let value = initial(); vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value);
+  await work(); await click("New task"); await input("Task title", "Fence");
+  const created = { ...task("new", "blocked"), title: "Fence" };
+  value = { ...value, tasks: { ...value.tasks, items: [created] } }; vi.mocked(write).mockResolvedValueOnce(created);
+  await submit(); const first = vi.mocked(write).mock.calls[0][1] as { requestId: string };
+  const card = container.querySelector<HTMLDetailsElement>('[data-task-id="new"]')!;
+  expect(card.open).toBe(true); expect(document.activeElement).toBe(card.querySelector('.automation-task-feedback'));
+  expect(container.querySelector('[aria-label="Task result"]')?.textContent).toBe('Created. "Fence" stays blocked until you start it.');
+  await click("New task"); expect(container.querySelector<HTMLInputElement>('form[aria-labelledby="new-task-heading"] input')?.value).toBe("");
+  await input("Task title", "Another"); vi.mocked(write).mockResolvedValueOnce(created); await submit();
+  expect((vi.mocked(write).mock.calls[1][1] as { requestId: string }).requestId).not.toBe(first.requestId);
+});
+
+it("locks an uncertain create when a likely match appears and closes without another POST", async () => {
+  let value = initial(); vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value);
+  vi.mocked(write).mockRejectedValueOnce(new ApiError("Lost", 502));
+  await work(); await click("New task"); await input("Task title", "Fence"); await submit();
+  value = { ...value, tasks: { ...value.tasks, items: [{ ...task("new", "blocked"), title: "Fence" }] } };
+  await click("Refresh status");
+  expect(container.textContent).toContain("A task with this title appeared on the board.");
+  expect(document.activeElement?.textContent).toContain("A task with this title appeared on the board.");
+  expect(container.querySelector('[aria-label="Task result"]')?.textContent).toContain("Hermes may have saved it.");
+  expect(container.querySelector<HTMLInputElement>('form[aria-labelledby="new-task-heading"] input')?.disabled).toBe(true);
+  expect(button("Create task")).toBeUndefined(); expect(container.querySelector('.automation-task-choices input')).toBeNull();
+  await click("Close"); const card = container.querySelector<HTMLDetailsElement>('[data-task-id="new"]')!;
+  expect(card.open).toBe(true); expect(document.activeElement).toBe(card.querySelector('.automation-task-feedback'));
+  expect(card.querySelector('.automation-task-feedback')?.textContent).toBe('"Fence" appeared on the board. Hermes may have saved it.');
+  expect(container.querySelector('[aria-label="Task result"]')?.textContent).toBe('"Fence" appeared on the board. Hermes may have saved it.');
+  expect(write).toHaveBeenCalledTimes(1);
 });

@@ -186,7 +186,7 @@ import SwiftUI
   /// Task refusals can follow a partial write, so reconcile before releasing the shared lock.
   func changeTask<V: Encodable>(
     _ store: AppStore, taskId: String, _ suffix: String, _ input: V, method: String = "POST",
-    moved: Bool = false, current: @escaping @MainActor () -> Bool = { true }
+    moved: Bool = false, edit: Bool = false, current: @escaping @MainActor () -> Bool = { true }
   ) async -> HermesTask? {
     guard !disabled, isCurrent(store), current() else { return nil }
     busy = true; error = nil; notice = nil; taskFeedback = nil; needsRefresh = true
@@ -200,10 +200,10 @@ import SwiftUI
         let refreshed = await self.refresh(store, current: context.isCurrent)
         try context.checkCurrent()
         if refreshed {
-          self.publishTaskFeedback(taskId, message: refusal.message + " Status refreshed.", isError: true)
+          self.publishTaskFeedback(taskId, edit: edit, message: refusal.message + " Status refreshed.", isError: true)
         } else {
           self.error = refusal.message + " Refresh status before trying again."
-          self.publishTaskFeedback(taskId, message: "Status could not be refreshed. Use Refresh status above.", isError: false)
+          self.publishTaskFeedback(taskId, edit: edit, message: "Status could not be refreshed. Use Refresh status above.", isError: false)
         }
         return nil
       }
@@ -211,12 +211,12 @@ import SwiftUI
       let refreshed = await self.refresh(store, current: context.isCurrent)
       try context.checkCurrent()
       guard refreshed else {
-        self.publishTaskFeedback(taskId, message: "Not confirmed. Use Refresh status above.", isError: false)
+        self.publishTaskFeedback(taskId, edit: edit, message: "Not confirmed. Use Refresh status above.", isError: false)
         return nil
       }
       let status = self.value?.tasks.items.first { $0.id == taskId }?.status
       let message = status.map { moved ? "Moved to \(hermesTaskStatusLabel($0))." : "Saved in Hermes." } ?? "Saved in Hermes."
-      self.publishTaskFeedback(taskId, message: message, isError: false)
+      self.publishTaskFeedback(taskId, edit: edit, message: message, isError: false)
       return result
     }
     switch outcome {
@@ -227,13 +227,13 @@ import SwiftUI
       if failure is CancellationError || status == nil || status == 0 || (status ?? 0) >= 500 {
         error = "We couldn't confirm this change. Refresh status and review it before trying again. Nothing will be sent again automatically."
       } else { error = failure.localizedDescription + " Refresh status before trying again." }
-      publishTaskFeedback(taskId, message: "Not confirmed. Use Refresh status above.", isError: false)
+      publishTaskFeedback(taskId, edit: edit, message: "Not confirmed. Use Refresh status above.", isError: false)
       return nil
     case nil: return nil
     }
   }
-  private func publishTaskFeedback(_ taskId: String, message: String, isError: Bool) {
-    taskFeedback = HermesTaskFeedback(taskId: taskId, message: message, isError: isError)
+  private func publishTaskFeedback(_ taskId: String, edit: Bool, message: String, isError: Bool) {
+    taskFeedback = HermesTaskFeedback(taskId: taskId, message: message, isError: isError, edit: edit)
     AccessibilityNotification.Announcement(message).post()
   }
   func manualRefresh(_ store: AppStore) async {
@@ -277,6 +277,7 @@ struct HermesAutomationStatus: View {
   var compact = false
   var work = false
   var showingReceipt = false
+  var suppressRefreshFootnote = false
   @Environment(AppStore.self) private var store
   // The goal card owns the server receipt. Keep any distinct reconciliation guidance here.
   private var displayedError: String? {
@@ -323,7 +324,7 @@ struct HermesAutomationStatus: View {
               .disabled(control.busy || control.loading).accessibilityIdentifier("automation.refresh")
           }
         }
-        if control.needsRefresh && control.value != nil && (!work || displayedError == nil) {
+        if !suppressRefreshFootnote && control.needsRefresh && control.value != nil && (!work || displayedError == nil) {
           Text("Refresh and review the current status before making another change.").font(.footnote)
             .foregroundStyle(Palette.muted)
         }
@@ -407,7 +408,7 @@ struct HermesWorkView: View {
       AssistantConfirmationSheet(title: "Clear this standing goal?", message: "The conversation stays saved.",
         acceptLabel: "Clear goal", keepLabel: "Keep goal", destructive: true,
         accept: { pendingClearGoal = true; sheet = nil }, keep: { sheet = nil })
-    case .createTask: HermesTaskEditor(control: control, task: nil)
+    case .createTask: HermesTaskEditor(control: control, task: nil, revealTaskGroup: { collapsedTaskStatuses.remove($0) })
     case .taskDetail(let task): HermesTaskDetail(control: control, initial: task)
     case .createTrigger: HermesTriggerEditor(control: control, trigger: nil)
     case .editTrigger(let trigger): HermesTriggerEditor(control: control, trigger: trigger)
@@ -665,6 +666,7 @@ struct HermesTaskFeedback {
   var taskId: String
   var message: String
   var isError: Bool
+  var edit = false
 }
 
 private let hermesTaskStatusOrder = ["blocked", "running", "review", "ready", "todo", "scheduled", "triage"]
@@ -742,15 +744,22 @@ private struct HermesAssigneePicker: View {
 }
 
 private struct HermesTaskEditor: View {
+  private enum Field: Hashable { case title, instructions }
   var control: HermesAutomationControls
   var task: HermesTask?
+  var revealTaskGroup: (String) -> Void
   @Environment(AppStore.self) private var store
   @Environment(\.dismiss) private var dismiss
   @State private var lifetime = HermesAutomationLifetime()
   @State private var draft: HermesTaskDraft
   @State private var intent = HermesTaskCreationIntent()
-  init(control: HermesAutomationControls, task: HermesTask?) {
-    self.control = control; self.task = task
+  @State private var knownIds: Set<String> = []
+  @State private var submittedTitle = ""
+  @State private var submittedDraft: HermesTaskDraft?
+  @State private var uncertainCreate = false
+  @FocusState private var focusedField: Field?
+  init(control: HermesAutomationControls, task: HermesTask?, revealTaskGroup: @escaping (String) -> Void = { _ in }) {
+    self.control = control; self.task = task; self.revealTaskGroup = revealTaskGroup
     _draft = State(initialValue: HermesTaskDraft(title: task?.title ?? "", body: task?.body ?? "",
       priority: task?.priority ?? 0, assignee: task == nil ? control.botId : task?.assignee, dependencies: task?.dependencies ?? []))
   }
@@ -761,60 +770,113 @@ private struct HermesTaskEditor: View {
     guard let assignee = draft.assignee else { return true }
     return store.bootstrap?.bots.contains { $0.id == assignee } == true
   }
+  private var liveTask: HermesTask? { task.flatMap { original in control.value?.tasks.items.first { $0.id == original.id } } }
+  private var unavailable: Bool { task != nil && (liveTask == nil || liveTask?.status == "running") }
+  private var likely: HermesTask? {
+    guard uncertainCreate && !control.needsRefresh && !control.loading else { return nil }
+    return hermesLikelyCreatedTask(knownIds, submittedTitle, control.value?.tasks.items ?? [])
+  }
   var body: some View {
     NavigationStack {
       Form {
-        HermesAutomationStatus(control: control)
-        fields.disabled(control.disabled || !store.connected)
-        if task == nil { dependencies.disabled(control.disabled || !store.connected) }
+        HermesAutomationStatus(control: control, compact: true, suppressRefreshFootnote: true)
+        if let task, let feedback = control.taskFeedback, feedback.taskId == task.id, feedback.edit {
+          Section { if feedback.isError { ErrorBanner(message: feedback.message).accessibilityIdentifier("automation.taskFeedback") }
+            else { Text(feedback.message).foregroundStyle(Palette.muted).accessibilityIdentifier("automation.taskFeedback") } }
+        }
+        if task != nil && unavailable {
+          Section { Text(liveTask == nil ? "This task is no longer available in the current board." : "A Hermes worker is running this task. You can change it after the run finishes.").foregroundStyle(Palette.muted) }
+        }
+        if likely != nil {
+          Section { Text("A task with this title appeared on the board. Hermes may have saved it. Close this form to review it.").accessibilityIdentifier("automation.taskCreateMatch") }
+        } else if uncertainCreate && !control.needsRefresh && !control.loading && submittedDraft == draft {
+          Section { Text("No new task with this title is visible. Create task sends the same request again.").foregroundStyle(Palette.muted) }
+        }
+        fields.disabled(control.disabled || !store.connected || likely != nil || unavailable)
+        if task == nil { dependencies.disabled(control.disabled || !store.connected || likely != nil) }
       }.householdListBackground().accessibilityIdentifier("automation.taskEditor").navigationTitle(task == nil ? "New task" : "Edit task")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
           ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(control.busy) }
           ToolbarItem(placement: .confirmationAction) {
-            Button(task == nil ? "Create task" : "Save task") { save() }
-              .disabled(control.disabled || !store.connected || !draft.valid || !eligibleAssignee)
-              .accessibilityIdentifier("automation.saveTask")
+            if control.busy {
+              ProgressView { Text(task == nil ? "Creating" : "Saving").foregroundStyle(Palette.muted) }
+            }
+            else {
+              Button(likely != nil ? "Close" : task == nil ? "Create task" : "Save task") {
+                if let likely { revealTaskGroup(likely.status); dismiss() } else { save() }
+              }.disabled(control.disabled || !store.connected || (likely == nil && (!draft.valid || !eligibleAssignee || unavailable)))
+                .accessibilityIdentifier("automation.saveTask")
+            }
+          }
+          ToolbarItemGroup(placement: .keyboard) {
+            Spacer()
+            Button { focusedField = nil } label: {
+              Image(systemName: "keyboard.chevron.compact.down").font(.body).frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+            }.buttonStyle(.plain).foregroundStyle(Palette.muted).accessibilityLabel("Hide keyboard")
+              .accessibilityIdentifier("automation.taskEditor.hideKeyboard")
           }
         }.interactiveDismissDisabled(control.busy)
+        .onChange(of: control.loading) { _, loading in
+          if !loading, likely != nil { AccessibilityNotification.Announcement("A task with this title appeared on the board. Hermes may have saved it. Close this form to review it.").post() }
+          else if !loading, uncertainCreate, !control.needsRefresh, submittedDraft == draft {
+            AccessibilityNotification.Announcement("No new task with this title is visible. Create task sends the same request again.").post()
+          }
+        }
         .onAppear { lifetime.appear() }.onDisappear { lifetime.disappear() }
     }
   }
   private var fields: some View {
-    Section("Task") {
-      TextField("Title", text: $draft.title, axis: .vertical).lineLimit(1...4).accessibilityIdentifier("automation.taskTitle")
-      TextField("Instructions", text: $draft.body, axis: .vertical).lineLimit(4...12).accessibilityIdentifier("automation.taskBody")
-      HermesAssigneePicker(title: "Assigned assistant", selection: assignee,
-        emptyLabel: "Unassigned")
+    Section {
+      VStack(alignment: .leading) {
+        Text("Title")
+        TextField("Title", text: $draft.title, prompt: Text("What needs doing?").foregroundStyle(Palette.muted), axis: .vertical).lineLimit(1...4).accessibilityIdentifier("automation.taskTitle")
+          .focused($focusedField, equals: .title)
+      }
+      VStack(alignment: .leading) {
+        Text("Instructions (optional)")
+        TextField("Instructions", text: $draft.body, prompt: Text("Add instructions").foregroundStyle(Palette.muted), axis: .vertical).lineLimit(4...12).accessibilityIdentifier("automation.taskBody")
+          .focused($focusedField, equals: .instructions)
+      }
+      HermesAssigneePicker(title: "Assigned assistant", selection: assignee, emptyLabel: "Unassigned")
       Stepper("Priority: \(draft.priority)", value: $draft.priority, in: -100...100)
       if draft.title.utf16.count > 500 { Text("Use at most 500 characters for the title.").foregroundStyle(Palette.danger) }
       if draft.body.utf16.count > 20_000 { Text("Use at most 20,000 characters for the instructions.").foregroundStyle(Palette.danger) }
-      if task == nil { Text("Creates a blocked task. Start it explicitly when the instructions are ready.").font(.footnote) }
-    }
+      if task == nil { Text("Creates a blocked task. Start it explicitly when the instructions are ready.").font(.footnote).foregroundStyle(Palette.muted) }
+    } header: { Text("Task").foregroundStyle(Palette.muted) }
   }
   private var dependencies: some View {
-    Section("Wait for these tasks") {
-      if control.value?.tasks.items.isEmpty != false { Text("No other tasks yet.").foregroundStyle(.secondary) }
-      ForEach(control.value?.tasks.items ?? []) { item in
-        Toggle(item.title, isOn: Binding(get: { draft.dependencies.contains(item.id) }, set: { selected in
+    Section {
+      if control.value?.tasks.items.isEmpty != false { Text("No other tasks yet.").foregroundStyle(Palette.muted) }
+      ForEach((control.value?.tasks.items ?? []).filter { $0.id != likely?.id }) { item in
+        Toggle(isOn: Binding(get: { draft.dependencies.contains(item.id) }, set: { selected in
           if selected { if !draft.dependencies.contains(item.id) { draft.dependencies.append(item.id) } }
           else { draft.dependencies.removeAll { $0 == item.id } }
-        })).disabled(!draft.dependencies.contains(item.id) && draft.dependencies.count >= 20)
+        })) { VStack(alignment: .leading) { Text(item.title); Text(hermesTaskStatusLabel(item.status)).font(.caption).foregroundStyle(Palette.muted) } }
+          .disabled(!draft.dependencies.contains(item.id) && draft.dependencies.count >= 20)
       }
-      Text("Choose up to 20 dependencies.").font(.footnote).foregroundStyle(.secondary)
-    }
+      Text("Choose up to 20 dependencies.").font(.footnote).foregroundStyle(Palette.muted)
+    } header: { Text("Wait for these tasks (optional)").foregroundStyle(Palette.muted) }
   }
   private func save() {
     let current = lifetime.current
     Task {
       let result: HermesTask?
       if let task {
-        result = await control.change(store, "/tasks/\(APIClient.component(task.id))", HermesTaskUpdate(draft), method: "PATCH", current: current)
+        result = await control.changeTask(store, taskId: task.id, "/tasks/\(APIClient.component(task.id))", HermesTaskUpdate(draft), method: "PATCH", edit: true, current: current)
       } else {
+        knownIds = Set((control.value?.tasks.items ?? []).map(\.id))
+        submittedTitle = draft.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        submittedDraft = draft
         let request = intent.prepare(draft)
         result = await control.change(store, "/tasks", request, current: current)
+        if result == nil && control.needsRefresh { uncertainCreate = true }
       }
-      if result != nil { dismiss() }
+      if let result {
+        if task == nil { revealTaskGroup(result.status); AccessibilityNotification.Announcement("Created \(result.title) in \(hermesTaskStatusLabel(result.status)).").post() }
+        dismiss()
+      }
     }
   }
 }
@@ -884,6 +946,7 @@ private struct HermesTaskDetail: View {
         Text("This task is no longer available in the current board.").foregroundStyle(Palette.muted)
       }
       if !running { Button("Edit task") { control.taskFeedback = nil; editing = true }.disabled(disabled) }
+      if control.taskFeedback?.edit == true { resultNotice }
     }
   }
   private var actions: some View {
@@ -896,7 +959,7 @@ private struct HermesTaskDetail: View {
           .fontWeight(task.status == "blocked" || task.status == "todo" ? .semibold : .regular)
         Button("Block task…") { actionForm = .block; reason = ""; startNote = ""; showStartNote = false }.disabled(disabled)
         Button("Request review…") { actionForm = .review; reason = ""; reviewer = ""; startNote = ""; showStartNote = false }.disabled(disabled)
-        resultNotice
+        if control.taskFeedback?.edit != true { resultNotice }
         if actionForm == .block {
           VStack(alignment: .leading) {
             Text("What is blocking this task?")
@@ -931,7 +994,7 @@ private struct HermesTaskDetail: View {
           Text("The reviewing assistant can request changes through Hermes while it owns the review.").font(.footnote).foregroundStyle(Palette.muted)
         }
       }
-      if running { resultNotice }
+      if running && control.taskFeedback?.edit != true { resultNotice }
       if !running { Text("Hermes checks the task's current state and dependencies before changing it.").font(.footnote).foregroundStyle(Palette.muted) }
     } header: {
       Text("Move task").foregroundStyle(Palette.muted)

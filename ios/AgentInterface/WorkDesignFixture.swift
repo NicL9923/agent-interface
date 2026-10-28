@@ -136,6 +136,9 @@ struct WorkDesignFixture {
         if let text = body["body"] as? String { precondition(text.utf16.count <= 20000) }
         if let priority = body["priority"] as? Int { precondition((-100...100).contains(priority)) }
         if let assignee = body["assignee"] { precondition(assignee is NSNull || (assignee as? String).map(botIds.contains) == true) }
+        if mode == "task-edit-refreshed-running" {
+          tasks[index]["status"] = "running"; persistTasks(); return error("claimedTask")
+        }
         tasks[index].merge(body) { _, new in new }; persistTasks(); return (200, tasks[index])
       }
       if parts.count == 3 && parts[2] == "actions" && method == "POST" {

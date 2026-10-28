@@ -39,10 +39,19 @@ class BindingTests(unittest.TestCase):
                                'phase': 'canary', 'log': str(self.log),
                                'validation': {'summary': 'summary.txt', 'screenshots': ['task-one', 'task-two']}}]}
 
-    def bind(self):
+    def bind(self, gate='a'):
         self.receipt.write_text(json.dumps(self.data))
         self.summary.write_text('ios inputs: ' + self.source + '\n' + json.dumps(self.result) + '\n')
-        return module.bind(self.receipt, self.root)
+        return module.bind(self.receipt, self.root, gate=gate)
+
+    def test_editor_and_board_completion_markers_cannot_be_mixed(self):
+        self.log.write_text('DESIGN_WORK_TASK_EDITOR_VARIANT canary complete\n')
+        with self.assertRaises(ValueError): self.bind()
+        result = self.bind(gate='b')
+        self.assertEqual(result['taskGate'], 'b')
+        self.assertEqual(result['freshCount'], 2)
+        self.log.write_text('DESIGN_WORK_W2A_AFTER_VARIANT canary complete\n')
+        with self.assertRaises(ValueError): self.bind(gate='b')
 
     def test_duplicates_remain_honest_and_failed_runs_are_excluded(self):
         self.data['runs'].append({'returncode': 65, 'variants': 'failed', 'validation': None})
