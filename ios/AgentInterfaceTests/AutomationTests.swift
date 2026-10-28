@@ -80,6 +80,81 @@ private final class AutomationFixtureServer: @unchecked Sendable {
 }
 
 @MainActor final class AutomationTests: XCTestCase {
+  func testTaskRefusalReconcilesChangedStateWithoutLockingGoalsOrReplaying() async throws {
+    let server = AutomationFixtureServer(), store = try makeStore(client(server))
+    defer { AutomationFixtureProtocol.remove(server) }
+    let control = HermesAutomationControls(botId: "ranch")
+    server.enqueue("GET", path, try overview())
+    _ = await control.refresh(store)
+    var changed = try XCTUnwrap(JSONSerialization.jsonObject(with: overview()) as? [String: Any])
+    var tasks = try XCTUnwrap(changed["tasks"] as? [String: Any])
+    var items = try XCTUnwrap(tasks["items"] as? [[String: Any]])
+    items[0]["status"] = "ready"; tasks["items"] = items; changed["tasks"] = tasks
+    server.enqueue("POST", path + "/tasks/t_fence/actions", Data(#"{"error":"Dependencies changed."}"#.utf8), status: 409)
+    server.enqueue("GET", path, try JSONSerialization.data(withJSONObject: changed))
+    let result = await control.changeTask(store, taskId: "t_fence", "/tasks/t_fence/actions", ["action": "start"], moved: true)
+    XCTAssertNil(result); XCTAssertEqual(control.value?.tasks.items.first?.status, "ready")
+    XCTAssertEqual(control.taskFeedback?.message, "Dependencies changed. Status refreshed.")
+    XCTAssertEqual(control.taskFeedback?.isError, true)
+    XCTAssertFalse(control.disabled); XCTAssertNil(control.error)
+    XCTAssertEqual(server.requests.map { $0.httpMethod! }, ["GET", "POST", "GET"])
+  }
+  func testTaskRefusalPreservesReasonWhenReconciliationFailsAndBlocksGoalWrite() async throws {
+    let server = AutomationFixtureServer(), store = try makeStore(client(server))
+    defer { AutomationFixtureProtocol.remove(server) }
+    let control = HermesAutomationControls(botId: "ranch")
+    server.enqueue("GET", path, try overview()); _ = await control.refresh(store)
+    server.enqueue("POST", path + "/tasks/t_fence/actions", Data(#"{"error":"Dependency is still running."}"#.utf8), status: 409)
+    server.enqueue("GET", path, Data(#"{"error":"Read failed"}"#.utf8), status: 503)
+    let result = await control.changeTask(store, taskId: "t_fence", "/tasks/t_fence/actions", ["action": "start"])
+    XCTAssertNil(result); XCTAssertTrue(control.needsRefresh); XCTAssertTrue(control.disabled)
+    XCTAssertTrue(control.error?.contains("Dependency is still running.") == true)
+    XCTAssertEqual(control.taskFeedback?.message, "Status could not be refreshed. Use Refresh status above.")
+    let goal = await control.changeOK(store, "/goal", HermesGoalInput(title: "Keep fence safe", maxTurns: 20), method: "PUT")
+    XCTAssertFalse(goal); XCTAssertEqual(server.requests.count, 3)
+    server.enqueue("GET", path, try overview()); await control.manualRefresh(store)
+    XCTAssertNil(control.taskFeedback); XCTAssertFalse(control.disabled)
+    XCTAssertEqual(server.requests.filter { $0.httpMethod == "POST" }.count, 1)
+  }
+  func testUnconfirmedTaskWriteNeverReplaysAndRequiresManualRefresh() async throws {
+    let server = AutomationFixtureServer(), store = try makeStore(client(server))
+    defer { AutomationFixtureProtocol.remove(server) }
+    let control = HermesAutomationControls(botId: "ranch")
+    server.enqueue("GET", path, try overview()); _ = await control.refresh(store)
+    server.enqueue("POST", path + "/tasks/t_fence/actions", Data(#"{"error":"Response lost"}"#.utf8), status: 502)
+    let first = await control.changeTask(store, taskId: "t_fence", "/tasks/t_fence/actions", ["action": "start"])
+    let second = await control.changeTask(store, taskId: "t_fence", "/tasks/t_fence/actions", ["action": "start"])
+    XCTAssertNil(first); XCTAssertNil(second); XCTAssertTrue(control.needsRefresh)
+    XCTAssertTrue(control.error?.contains("Nothing will be sent again automatically") == true)
+    XCTAssertEqual(control.taskFeedback?.message, "Not confirmed. Use Refresh status above.")
+    XCTAssertEqual(server.requests.map { $0.httpMethod! }, ["GET", "POST"])
+    server.enqueue("GET", path, try overview()); await control.manualRefresh(store)
+    XCTAssertFalse(control.disabled); XCTAssertNil(control.taskFeedback)
+  }
+  func testTaskReconciliationCannotPublishIntoAReplacementSession() async throws {
+    let server = AutomationFixtureServer(), store = try makeStore(client(server))
+    defer { AutomationFixtureProtocol.remove(server) }
+    let control = HermesAutomationControls(botId: "ranch"), gate = AutomationResponseGate()
+    control.appear(foreground: true)
+    server.enqueue("GET", path, try overview()); _ = await control.refresh(store)
+    server.enqueue("POST", path + "/tasks/t_fence/actions", Data(#"{"error":"Dependency changed."}"#.utf8), status: 409)
+    server.enqueue("GET", path, try overview(), gate: gate)
+    let request = Task { await control.changeTask(store, taskId: "t_fence", "/tasks/t_fence/actions", ["action": "start"]) }
+    try await until { server.requests.count == 3 }
+    invalidate(.account, store: store, server: server, control: control)
+    gate.release()
+    let result = await request.value
+    XCTAssertNil(result); XCTAssertNil(control.taskFeedback); XCTAssertNil(control.error)
+    XCTAssertTrue(control.needsRefresh); XCTAssertFalse(control.busy)
+    XCTAssertEqual(server.requests.count, 3)
+  }
+  func testTaskStatusOrderKeepsActionableAndUnknownStatesBeforeDone() {
+    let statuses = ["done", "todo", "in_progress", "cancelled", "running", "blocked", "ready", "review", "triage", "scheduled"]
+    XCTAssertEqual(statuses.sorted(by: hermesTaskStatusLess), ["blocked", "running", "review", "ready", "todo", "scheduled", "triage", "cancelled", "in_progress", "done"])
+    XCTAssertEqual(hermesTaskStatusLabel("in_progress"), "In Progress")
+    XCTAssertEqual(hermesTaskStatusLabel("todo"), "To do")
+  }
+
   private let path = "/api/bots/ranch/automation"
   // Wire fixture for src/shared/automation.ts and src/server/automation.ts.
   private func overview(resume: [String: Any]? = nil, canManage: Bool? = true, goalStatus: String = "paused", interrupted: Bool = false) throws -> Data {

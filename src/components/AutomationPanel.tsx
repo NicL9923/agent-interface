@@ -15,6 +15,7 @@ function useAutomation(botId: string) {
   const path = routeUrl("GET /bots/:id/automation", { id: botId });
   const action = useAction();
   const [uncertain, setUncertain] = useState(false);
+  const [refreshCount, setRefreshCount] = useState(0);
   // A status someone loaded answers "Refresh status before trying again", so it retires that warning.
   const overview = useResource(path, { load: (_, signal) => request("GET /bots/:id/automation", { params: { id: botId }, signal }), onData: () => { setUncertain(false); action.setError(""); } });
   const { data: value, loading } = overview;
@@ -50,7 +51,33 @@ function useAutomation(botId: string) {
       return result;
     });
   };
-  return { value: value ?? undefined, botId, change, refresh: overview.reload, disabled: action.busy || loading || uncertain, loading,
+  const changeTask = <T,>(send: () => Promise<T>): Promise<{ kind: "saved" | "refused"; message: string; overview: AutomationOverview } | undefined> => {
+    if (uncertain || loading) return Promise.resolve(undefined);
+    return action.run(async ({ current }) => {
+      let refusal = "";
+      try { await send(); }
+      catch (cause) {
+        if (!current()) throw cause;
+        if (cause instanceof ApiError && cause.status < 500) refusal = cause.message;
+        else {
+          setUncertain(true);
+          throw new Error("We couldn't confirm this change. Refresh status and review it before trying again. Nothing will be sent again automatically.");
+        }
+      }
+      if (!current()) return undefined;
+      let next: AutomationOverview;
+      try { next = await request("GET /bots/:id/automation", { params: { id: botId } }); }
+      catch {
+        if (current()) { setUncertain(true); action.setError("The change could not be confirmed because status could not refresh. Refresh status before making another change."); }
+        return undefined;
+      }
+      if (!current()) return undefined;
+      overview.setData(next);
+      return { kind: refusal ? "refused" as const : "saved" as const, message: refusal, overview: next };
+    });
+  };
+  const refresh = () => { setRefreshCount(count => count + 1); return overview.reload(); };
+  return { value: value ?? undefined, botId, change, changeTask, refresh, refreshCount, busy: action.busy, disabled: action.busy || loading || uncertain, loading,
     error: action.error || overview.error, notice: action.notice, uncertain };
 }
 type Controls = ReturnType<typeof useAutomation>;
@@ -65,7 +92,7 @@ function Status({ control, work = false }: { control: Controls; work?: boolean }
   const [resultKey, setResultKey] = useState("");
   if (receiptAnnounced && resultKey !== receiptKey) setResultKey(receiptKey);
   const statusText = receiptAnnounced || receiptKey === resultKey ? "" : receiptAnnouncement;
-  return <><div className="automation-toolbar"><span className="muted">Managed by Hermes</span><Button disabled={control.loading} onClick={() => void control.refresh()}>{control.loading ? "Refreshing..." : "Refresh status"}</Button></div>
+  return <><div className="automation-toolbar"><span className="muted">Managed by Hermes</span><Button disabled={control.loading || control.busy} onClick={() => void control.refresh()}>{control.loading ? "Refreshing..." : "Refresh status"}</Button></div>
     {work && <><p className="sr-only" role="status" aria-label="Resume status" aria-live="polite" aria-atomic="true">{statusText}</p>
       <p className="sr-only" role="status" aria-label="Resume result" aria-live="polite" aria-atomic="true">{receiptAnnounced ? control.error : ""}</p></>}
     {control.error && !receiptAnnounced && <p className="form-error" role="alert">{control.error}</p>}
@@ -166,13 +193,58 @@ function TaskSection({ control, bots, botId }: { control: Controls; bots: Bot[];
   const state = control.value!.tasks;
   const [creating, setCreating] = useState(false);
   const [draft, setDraft] = useState<TaskInput>({ requestId: crypto.randomUUID(), title: "", body: "", assignee: botId, priority: 0, dependencies: [] });
+  const [openTask, setOpenTaskState] = useState<string | null>(null);
+  const openTaskRef = useRef<string | null>(null);
+  const setOpenTask = (id: string | null) => { openTaskRef.current = id; setOpenTaskState(id); };
+  const [feedback, setFeedback] = useState<Record<string, TaskFeedback>>({});
+  const [collapsed, setCollapsed] = useState<string[]>(["done"]);
+  const [focusTask, setFocusTask] = useState<string | null>(null);
+  const summaries = useRef<Record<string, HTMLElement | null>>({});
+  const taskHeading = useRef<HTMLHeadingElement>(null);
+  const [announcement, setAnnouncement] = useState("");
+  useEffect(() => { setFeedback({}); setAnnouncement(""); }, [control.refreshCount]);
+  useEffect(() => {
+    if (!focusTask) return;
+    const summary = summaries.current[focusTask];
+    const result = summary?.parentElement?.querySelector<HTMLElement>(".automation-task-feedback");
+    const target = result ?? summary ?? taskHeading.current;
+    if (target) {
+      target.focus({ preventScroll: true });
+      target.scrollIntoView?.({ block: "nearest" });
+    }
+    setFocusTask(null);
+  }, [focusTask, control.value]);
+  const runTask = async (task: AutomationTask, send: () => Promise<unknown>, moved = false) => {
+    setFeedback(previous => { const next = { ...previous }; delete next[task.id]; return next; });
+    setAnnouncement("");
+    const result = await control.changeTask(send);
+    if (!result) {
+      setFeedback(previous => ({ ...previous, [task.id]: { kind: "uncertain", source: moved ? "move" : "dependency", title: task.title, message: "Not confirmed. Use Refresh status at the top of Work." } }));
+      return false;
+    }
+    const updated = result.overview.tasks.items.find(item => item.id === task.id);
+    const message = result.kind === "refused" ? `${result.message} Status refreshed.` : moved && updated ? `Moved to ${taskStatusLabel(updated.status)}.` : "Saved in Hermes.";
+    setFeedback(previous => ({ ...previous, [task.id]: { kind: result.kind, source: moved ? "move" : "dependency", title: task.title, message } }));
+    setAnnouncement(message);
+    if (openTaskRef.current === task.id) {
+      if (updated) setCollapsed(previous => previous.filter(status => status !== updated.status));
+      setFocusTask(task.id);
+    }
+    return result.kind === "saved";
+  };
+  const statuses = [...new Set(state.items.map(task => task.status))].sort(compareTaskStatuses);
   const editDraft = (change: Partial<TaskInput>) => setDraft(previous => ({ ...previous, ...change, requestId: crypto.randomUUID() }));
-  return <section className="automation-section"><h3>Task board</h3>
+  return <section className="automation-section automation-tasks"><h3 ref={taskHeading} tabIndex={-1}>Task board</h3>
+    <p className="sr-only" role="status" aria-label="Task result" aria-live="polite" aria-atomic="true">{announcement}</p>
+    {Object.entries(feedback).filter(([id]) => !state.items.some(task => task.id === id)).map(([id, item]) => <p key={id} className={`automation-task-feedback ${taskFeedbackStyle(item)}`}>{item.title}: {item.message}</p>)}
     {!state.supported ? <p className="capability-note">{state.reason || "Task boards are unavailable on this Hermes installation."}</p> : <>
       <p className="muted">Tasks belong to this assistant. Assign work to a teammate, add dependencies, and request review.</p>
       {state.truncated && <p className="capability-note" role="status">Showing the newest {state.limit || 100} visible tasks. Older tasks remain in Hermes.</p>}
       {!state.items.length && <p>No tasks yet.</p>}
-      {state.items.map(task => <TaskCard key={task.id} task={task} control={control} bots={bots} />)}
+      {statuses.map(status => <div className="automation-task-group" key={status}>
+        <h4><button type="button" className="automation-task-group-toggle" aria-expanded={!collapsed.includes(status)} onClick={() => setCollapsed(previous => previous.includes(status) ? previous.filter(item => item !== status) : [...previous, status])}>{taskStatusLabel(status)} · {state.items.filter(task => task.status === status).length}</button></h4>
+        {!collapsed.includes(status) && state.items.filter(task => task.status === status).map(task => <TaskCard key={task.id} task={task} control={control} bots={bots} open={openTask === task.id} feedback={feedback[task.id]} runTask={runTask} summaryRef={node => { summaries.current[task.id] = node; }} onToggle={() => { if (openTask === task.id) { setOpenTask(null); setFeedback(previous => { const next = { ...previous }; delete next[task.id]; return next; }); setAnnouncement(""); } else { if (openTask) setFeedback(previous => { const next = { ...previous }; delete next[openTask]; return next; }); setAnnouncement(""); setOpenTask(task.id); } }} />)}
+      </div>)}
       {!creating ? <Button disabled={control.disabled} onClick={() => setCreating(true)}>New task</Button> : <form className="automation-form" onSubmit={async event => {
         event.preventDefault();
         if (await control.change(() => request("POST /bots/:id/automation/tasks", { params: { id: botId }, body: { ...draft, dependencies: draft.dependencies || [] } }))) { setCreating(false); setDraft({ requestId: crypto.randomUUID(), title: "", body: "", assignee: botId, priority: 0, dependencies: [] }); }
@@ -189,7 +261,19 @@ function TaskSection({ control, bots, botId }: { control: Controls; bots: Bot[];
   </section>;
 }
 
-function TaskCard({ task, control, bots }: { task: AutomationTask; control: Controls; bots: Bot[] }) {
+const taskStatusOrder = ["blocked", "running", "review", "ready", "todo", "scheduled", "triage"];
+const taskStatusLabels: Record<string, string> = { blocked: "Blocked", running: "Running", review: "In review", ready: "Ready", todo: "To do", scheduled: "Scheduled", triage: "Triage", done: "Done" };
+function taskStatusLabel(status: string) {
+  return Object.hasOwn(taskStatusLabels, status) ? taskStatusLabels[status] : status.replace(/_/g, " ").replace(/\b\w/g, letter => letter.toUpperCase());
+}
+function compareTaskStatuses(a: string, b: string) {
+  const rank = (status: string) => status === "done" ? taskStatusOrder.length + 1 : taskStatusOrder.includes(status) ? taskStatusOrder.indexOf(status) : taskStatusOrder.length;
+  return rank(a) - rank(b) || taskStatusLabel(a).localeCompare(taskStatusLabel(b));
+}
+
+type TaskFeedback = { kind: "saved" | "refused" | "uncertain"; source: "move" | "dependency"; title: string; message: string };
+function taskFeedbackStyle(feedback: TaskFeedback) { return feedback.kind === "refused" ? "form-error" : feedback.kind === "uncertain" ? "automation-task-uncertain" : "form-notice"; }
+function TaskCard({ task, control, bots, open, feedback, runTask, summaryRef, onToggle }: { task: AutomationTask; control: Controls; bots: Bot[]; open: boolean; feedback?: TaskFeedback; runTask: (task: AutomationTask, send: () => Promise<unknown>, moved?: boolean) => Promise<boolean>; summaryRef: (node: HTMLElement | null) => void; onToggle: () => void }) {
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(task.title);
   const [body, setBody] = useState(task.body);
@@ -197,33 +281,51 @@ function TaskCard({ task, control, bots }: { task: AutomationTask; control: Cont
   const [priority, setPriority] = useState(task.priority);
   const [reason, setReason] = useState("");
   const [reviewer, setReviewer] = useState("");
+  const [form, setForm] = useState<"block" | "review" | null>(null);
+  const blockOpener = useRef<HTMLButtonElement>(null);
+  const reviewOpener = useRef<HTMLButtonElement>(null);
+  const cancelForm = () => { const opener = form === "block" ? blockOpener : reviewOpener; setForm(null); setReason(""); opener.current?.focus(); };
   const [dependency, setDependency] = useState("");
   const params = { id: control.botId, taskId: task.id };
-  const action = (name: "start" | "block" | "unblock" | "request_review") => control.change(() => request("POST /bots/:id/automation/tasks/:taskId/actions", { params, body: { action: name, ...(reason.trim() ? { reason } : {}), ...(reviewer ? { reviewer } : {}) } }));
-  return <details className="automation-item"><summary><span>{task.title}</span><small>{task.status} · {bots.find(bot => bot.id === task.assignee)?.name || task.assignee || "Unassigned"}</small></summary>
-    <p className="preserve-lines">{task.body || "No additional instructions."}</p>{task.blockedReason && <p>Blocked: {task.blockedReason}</p>}
-    <p className="muted">Priority {task.priority}</p>
-    {editing ? <form className="automation-form" onSubmit={async event => { event.preventDefault(); if (await control.change(() => request("PATCH /bots/:id/automation/tasks/:taskId", { params, body: { title, body, priority, assignee: assignee || null } }))) setEditing(false); }}>
-      <label>Task title<Input required value={title} maxLength={500} onChange={event => setTitle(event.target.value)} /></label>
-      <label>Instructions<textarea value={body} maxLength={20000} rows={3} onChange={event => setBody(event.target.value)} /></label>
-      <label>Assigned assistant<NativeSelect value={assignee} onChange={event => setAssignee(event.target.value)}><option value="">Unassigned</option>{bots.map(bot => <option key={bot.id} value={bot.id}>{bot.name}</option>)}</NativeSelect></label>
-      <label>Priority<Input type="number" min={-100} max={100} value={priority} onChange={event => setPriority(Number(event.target.value))} /></label>
-      <div className="actions"><Button type="submit" disabled={control.disabled || !title.trim()}>Save task</Button><Button disabled={control.disabled} onClick={() => setEditing(false)}>Cancel</Button></div>
-    </form> : <Button disabled={control.disabled} onClick={() => { setTitle(task.title); setBody(task.body); setPriority(task.priority); setAssignee(task.assignee || ""); setEditing(true); }}>Edit task</Button>}
-    <div className="automation-form"><label>Reason or review feedback<Input value={reason} maxLength={2000} onChange={event => setReason(event.target.value)} disabled={control.disabled} /></label>
-      <label>Reviewer<NativeSelect value={reviewer} onChange={event => setReviewer(event.target.value)} disabled={control.disabled}><option value="">Choose an assistant</option>{bots.map(bot => <option key={bot.id} value={bot.id}>{bot.name}</option>)}</NativeSelect></label>
-      <div className="actions">
-        <Button disabled={control.disabled} onClick={() => void action("start")}>Start task</Button>
-        <Button disabled={control.disabled || !reason.trim()} onClick={() => void action("block")}>Block task</Button>
-        <Button disabled={control.disabled} onClick={() => void action("unblock")}>Unblock task</Button>
-        <Button disabled={control.disabled || !reviewer} onClick={() => void action("request_review")}>Request review</Button>
-      </div>
-      {task.status === "review" && <p className="muted">The reviewing assistant can request changes through Hermes while it owns the review.</p>}
+  const running = task.status === "running";
+  const resultNotice = feedback && <p tabIndex={-1} className={`automation-task-feedback ${taskFeedbackStyle(feedback)}`}>{feedback.message}</p>;
+  const name = bots.find(bot => bot.id === task.assignee)?.name || task.assignee || "Unassigned";
+  const action = async (actionName: "start" | "block" | "request_review") => {
+    const payload = { action: actionName, ...(reason.trim() && (actionName !== "start" || !form) ? { reason } : {}), ...(actionName === "request_review" && reviewer ? { reviewer } : {}) };
+    if (await runTask(task, () => request("POST /bots/:id/automation/tasks/:taskId/actions", { params, body: payload }), true)) { setForm(null); setReason(""); setReviewer(""); }
+  };
+  return <details className="automation-item automation-task" data-task-id={task.id} open={open}>
+    <summary ref={summaryRef} onClick={event => { event.preventDefault(); onToggle(); }}><span>{task.title}</span><small>{name}{task.priority !== 0 && ` · Priority ${task.priority}`}</small></summary>
+    <div className="automation-task-detail">
+      <p className="automation-task-meta"><span className="automation-task-status">{taskStatusLabel(task.status)}</span><span>{name}</span>{task.priority !== 0 && <span>Priority {task.priority}</span>}</p>
+      <p className="preserve-lines">{task.body || "No additional instructions."}</p>
+      {task.blockedReason && <div className="automation-task-callout"><strong>Blocked</strong><p>{task.blockedReason}</p></div>}
+      {!running && (editing ? <form className="automation-form" onSubmit={async event => { event.preventDefault(); if (await control.change(() => request("PATCH /bots/:id/automation/tasks/:taskId", { params, body: { title, body, priority, assignee: assignee || null } }))) setEditing(false); }}>
+        <label>Task title<Input required value={title} maxLength={500} onChange={event => setTitle(event.target.value)} /></label>
+        <label>Instructions<textarea value={body} maxLength={20000} rows={3} onChange={event => setBody(event.target.value)} /></label>
+        <label>Assigned assistant<NativeSelect value={assignee} onChange={event => setAssignee(event.target.value)}><option value="">Unassigned</option>{bots.map(bot => <option key={bot.id} value={bot.id}>{bot.name}</option>)}</NativeSelect></label>
+        <label>Priority<Input type="number" min={-100} max={100} value={priority} onChange={event => setPriority(Number(event.target.value))} /></label>
+        <div className="actions"><Button type="submit" disabled={control.disabled || !title.trim()}>Save task</Button><Button disabled={control.disabled} onClick={() => setEditing(false)}>Cancel</Button></div>
+      </form> : <Button disabled={control.disabled} onClick={() => { setTitle(task.title); setBody(task.body); setPriority(task.priority); setAssignee(task.assignee || ""); setEditing(true); }}>Edit task</Button>)}
+      <section className="automation-task-dependencies"><h5>Dependencies</h5>
+        {!task.dependencies.length && <p className="muted">None.</p>}
+        {task.dependencies.map(id => { const parent = control.value!.tasks.items.find(item => item.id === id); return <div className="automation-dependency" key={id}><span>{parent ? `${parent.title} · ${taskStatusLabel(parent.status)}` : id}</span>{!running && <Button aria-label={`Remove dependency on ${parent?.title || id}`} disabled={control.disabled} onClick={() => void runTask(task, () => request("PUT /bots/:id/automation/tasks/:taskId/dependencies/:dependencyId", { params: { ...params, dependencyId: id }, body: { remove: true } }))}>Remove dependency</Button>}</div>; })}
+        {!running && <div className="automation-task-add"><label>Wait for task<NativeSelect value={dependency} disabled={control.disabled} onChange={event => setDependency(event.target.value)}><option value="">Choose a task</option>{control.value!.tasks.items.filter(item => item.id !== task.id && !task.dependencies.includes(item.id)).map(item => <option key={item.id} value={item.id}>{item.title}</option>)}</NativeSelect></label><Button disabled={control.disabled || !dependency} onClick={async () => { if (await runTask(task, () => request("PUT /bots/:id/automation/tasks/:taskId/dependencies/:dependencyId", { params: { ...params, dependencyId: dependency }, body: { remove: false } }))) setDependency(""); }}>Add dependency</Button></div>}
+        {feedback?.source === "dependency" && resultNotice}
+      </section>
+      <section className="automation-task-move"><h5>Move task</h5>
+        {running ? <p>A Hermes worker is running this task. You can change it after the run finishes.</p> : <>
+          <div className="actions"><Button className={task.status === "blocked" || task.status === "todo" ? "primary" : undefined} disabled={control.disabled} onClick={() => void action("start")}>Start task</Button><Button ref={blockOpener} aria-expanded={form === "block"} disabled={control.disabled} onClick={() => { setForm("block"); setReason(""); }}>Block task…</Button><Button ref={reviewOpener} aria-expanded={form === "review"} disabled={control.disabled} onClick={() => { setForm("review"); setReason(""); }}>Request review…</Button></div>
+          {feedback?.source !== "dependency" && resultNotice}
+          {form === "block" && <div className="automation-form"><label>What is blocking this task?<Input value={reason} maxLength={2000} onChange={event => setReason(event.target.value)} disabled={control.disabled} /></label><div className="actions"><Button disabled={control.disabled || !reason.trim()} onClick={() => void action("block")}>Block task</Button><Button disabled={control.disabled} onClick={cancelForm}>Cancel</Button></div></div>}
+          {form === "review" && <div className="automation-form"><label>Reviewer<NativeSelect value={reviewer} onChange={event => setReviewer(event.target.value)} disabled={control.disabled}><option value="">Choose one</option>{bots.map(bot => <option key={bot.id} value={bot.id}>{bot.name}</option>)}</NativeSelect></label><label>Notes for the reviewer (optional)<Input value={reason} maxLength={2000} onChange={event => setReason(event.target.value)} disabled={control.disabled} /></label><div className="actions"><Button disabled={control.disabled || !reviewer} onClick={() => void action("request_review")}>Request review</Button><Button disabled={control.disabled} onClick={cancelForm}>Cancel</Button></div></div>}
+          {!form && <details className="automation-task-note"><summary>Add an optional start note</summary><label>Start note<Input value={reason} maxLength={2000} onChange={event => setReason(event.target.value)} disabled={control.disabled} /></label></details>}
+          {task.status === "review" && <p className="muted">The reviewing assistant can request changes through Hermes while it owns the review.</p>}
+          <p className="muted">Hermes checks the task's current state and dependencies before changing it.</p>
+        </>}
+        {running && feedback?.source !== "dependency" && resultNotice}
+      </section>
     </div>
-    <h4>Dependencies</h4>
-    {!task.dependencies.length && <p className="muted">None.</p>}
-    {task.dependencies.map(id => <div className="automation-dependency" key={id}><span>{control.value!.tasks.items.find(item => item.id === id)?.title || id}</span><Button disabled={control.disabled} onClick={() => void control.change(() => request("PUT /bots/:id/automation/tasks/:taskId/dependencies/:dependencyId", { params: { ...params, dependencyId: id }, body: { remove: true } }))}>Remove dependency</Button></div>)}
-    <div className="actions"><label>Wait for task<NativeSelect value={dependency} disabled={control.disabled} onChange={event => setDependency(event.target.value)}><option value="">Choose a task</option>{control.value!.tasks.items.filter(item => item.id !== task.id && !task.dependencies.includes(item.id)).map(item => <option key={item.id} value={item.id}>{item.title}</option>)}</NativeSelect></label><Button disabled={control.disabled || !dependency} onClick={async () => { if (await control.change(() => request("PUT /bots/:id/automation/tasks/:taskId/dependencies/:dependencyId", { params: { ...params, dependencyId: dependency }, body: { remove: false } }))) setDependency(""); }}>Add dependency</Button></div>
   </details>;
 }
 

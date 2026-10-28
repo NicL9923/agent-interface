@@ -250,3 +250,159 @@ it("retires a failed status refresh once a change and its follow-up status succe
   expect(container.textContent).not.toContain("Hermes is restarting.");
   expect(container.querySelector('[role="alert"]')).toBeNull();
 });
+
+const task = (id: string, status: string, dependencies: string[] = []) => ({ id, title: `Task ${id}`, body: "Instructions", status, priority: 0, assignee: null, owner: "ranch", dependencies });
+async function openTask(id: string) {
+  const summary = [...container.querySelectorAll(".automation-task > summary")].find(item => item.textContent?.includes(`Task ${id}`)) as HTMLElement;
+  expect(summary).toBeDefined(); await act(async () => summary.click());
+}
+it("groups task statuses, preserves unknown statuses, and keeps running tasks read-only", async () => {
+  const value = initial(); value.tasks.items = [task("done", "done"), task("todo", "todo"), task("unknown", "future_state"), task("running", "running", ["todo"])];
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value);
+  await work();
+  expect([...container.querySelectorAll(".automation-task-group-toggle")].map(item => item.textContent)).toEqual(["Running · 1", "To do · 1", "Future State · 1", "Done · 1"]);
+  await openTask("running");
+  const card = [...container.querySelectorAll(".automation-task")].find(item => item.textContent?.includes("Task running"))!;
+  expect(card.textContent).toContain("Task todo · To do");
+  expect(card.textContent).toContain("A Hermes worker is running this task");
+  expect(card.querySelectorAll("button")).toHaveLength(0);
+});
+
+it("reconciles a task refusal locally and preserves goal controls and partial updates", async () => {
+  let value = initial(); value.tasks.items = [task("one", "blocked")];
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value);
+  await work(); await openTask("one");
+  value = { ...value, tasks: { ...value.tasks, items: [{ ...task("one", "ready"), body: "Updated before refusal" }] } };
+  vi.mocked(write).mockRejectedValueOnce(new ApiError("Exact server refusal.", 409));
+  await click("Start task");
+  expect(container.textContent).toContain("Updated before refusal");
+  const card = container.querySelector<HTMLDetailsElement>(".automation-task")!;
+  expect(card.open).toBe(true); expect(card.textContent).toContain("Exact server refusal. Status refreshed.");
+  expect(document.activeElement).toBe(card.querySelector(".automation-task-feedback"));
+  expect(container.querySelector('[aria-label="Task result"]')?.textContent).toContain("Exact server refusal.");
+  expect(button("Resume goal").disabled).toBe(false); expect(button("Replace goal…").disabled).toBe(false); expect(button("Clear goal…").disabled).toBe(false);
+  expect(vi.mocked(api).mock.calls.filter(([path]) => path === "/bots/ranch/automation")).toHaveLength(2);
+  await click("Refresh status"); expect(card.textContent).not.toContain("Exact server refusal.");
+});
+
+it("locks changes when task refusal reconciliation fails", async () => {
+  const value = initial(); value.tasks.items = [task("one", "blocked")];
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value);
+  await work(); await openTask("one");
+  vi.mocked(write).mockRejectedValueOnce(new ApiError("Refused", 409));
+  vi.mocked(api).mockRejectedValueOnce(new Error("Offline"));
+  await click("Start task");
+  expect(button("Resume goal").disabled).toBe(true);
+  expect(container.textContent).toContain("status could not refresh");
+  expect(container.textContent).toContain("Not confirmed. Use Refresh status");
+});
+
+it("keeps a moved task open, focused and announced and sends only chosen action fields", async () => {
+  let value = initial(); value.tasks.items = [task("one", "blocked")];
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value);
+  await work(); await openTask("one");
+  value = { ...value, tasks: { ...value.tasks, items: [task("one", "ready")] } };
+  vi.mocked(write).mockResolvedValueOnce(value.tasks.items[0]); await click("Start task");
+  expect(vi.mocked(write).mock.calls[0][1]).toEqual({ action: "start" });
+  const card = container.querySelector<HTMLDetailsElement>(".automation-task")!;
+  expect(card.open).toBe(true); expect(card.textContent).toContain("Moved to Ready."); expect(document.activeElement).toBe(card.querySelector(".automation-task-feedback"));
+  expect(container.querySelector('[aria-label="Task result"]')?.textContent).toBe("Moved to Ready.");
+  await click("Block task…"); expect(container.textContent).toContain("What is blocking this task?");
+  await click("Request review…"); expect(container.textContent).not.toContain("What is blocking this task?"); expect(container.textContent).toContain("Notes for the reviewer (optional)");
+});
+
+it("sends an optional start note and sends a reviewer only with a review request", async () => {
+  const value = initial(); value.tasks.items = [task("one", "blocked")];
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value);
+  vi.mocked(write).mockResolvedValue(value.tasks.items[0]);
+  await work(); await openTask("one"); await input("Start note", "Start after lunch"); await click("Start task");
+  expect(vi.mocked(write).mock.calls[0][1]).toEqual({ action: "start", reason: "Start after lunch" });
+  await click("Request review…");
+  const select = [...container.querySelectorAll("label")].find(row => row.firstChild?.textContent === "Reviewer")!.querySelector("select")!;
+  await act(async () => { select.value = "ranch"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+  await input("Notes for the reviewer (optional)", "Check the gate"); await click("Request review");
+  expect(vi.mocked(write).mock.calls[1][1]).toEqual({ action: "request_review", reviewer: "ranch", reason: "Check the gate" });
+});
+
+
+it("reveals a moved task in a previously collapsed status group", async () => {
+  let value = initial(); value.tasks.items = [task("one", "blocked"), task("two", "ready")];
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value);
+  await work(); await click("Ready · 1"); await openTask("one");
+  value = { ...value, tasks: { ...value.tasks, items: [task("one", "ready"), task("two", "ready")] } };
+  vi.mocked(write).mockResolvedValueOnce(value.tasks.items[0]); await click("Start task");
+  expect(button("Ready · 2").getAttribute("aria-expanded")).toBe("true");
+  const card = container.querySelector<HTMLDetailsElement>('[data-task-id="one"]')!;
+  expect(card.open).toBe(true); expect(document.activeElement).toBe(card.querySelector(".automation-task-feedback"));
+});
+
+it("retires a task refusal when another task closes its card", async () => {
+  const value = initial(); value.tasks.items = [task("one", "blocked"), task("two", "ready")];
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value);
+  await work(); await openTask("one"); vi.mocked(write).mockRejectedValueOnce(new ApiError("Old task refusal.", 409));
+  await click("Start task"); expect(container.textContent).toContain("Old task refusal.");
+  await openTask("two"); await openTask("one");
+  expect(container.textContent).not.toContain("Old task refusal.");
+});
+
+it("does not send review notes with a different Start action", async () => {
+  const value = initial(); value.tasks.items = [task("one", "blocked")];
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value);
+  vi.mocked(write).mockResolvedValue(value.tasks.items[0]);
+  await work(); await openTask("one"); await click("Request review…");
+  await input("Notes for the reviewer (optional)", "Review this first"); await click("Start task");
+  expect(vi.mocked(write).mock.calls[0][1]).toEqual({ action: "start" });
+});
+
+
+it("shows vanished-task feedback at the board heading and focuses that heading", async () => {
+  let value = initial(); value.tasks.items = [task("one", "blocked")];
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value);
+  await work(); await openTask("one"); value = { ...value, tasks: { ...value.tasks, items: [] } };
+  vi.mocked(write).mockRejectedValueOnce(new ApiError("Task not found.", 404)); await click("Start task");
+  expect(container.querySelector(".automation-tasks > .automation-task-feedback")?.textContent).toContain("Task one: Task not found. Status refreshed.");
+  expect(document.activeElement).toBe(container.querySelector(".automation-tasks > h3"));
+});
+
+it("keeps dependency results beside their controls and focuses the result", async () => {
+  let value = initial(); value.tasks.items = [task("one", "blocked"), task("two", "ready")];
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value);
+  vi.mocked(write).mockResolvedValue({});
+  await work(); await openTask("one");
+  const select = container.querySelector<HTMLSelectElement>(".automation-task-add select")!;
+  await act(async () => { select.value = "two"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+  value = { ...value, tasks: { ...value.tasks, items: [task("one", "blocked", ["two"]), task("two", "ready")] } };
+  await click("Add dependency");
+  const card = container.querySelector<HTMLDetailsElement>('[data-task-id="one"]')!;
+  expect(card.querySelector(".automation-task-dependencies .automation-task-feedback")?.textContent).toBe("Saved in Hermes.");
+  expect(card.querySelector(".automation-task-move .automation-task-feedback")).toBeNull();
+  expect(document.activeElement).toBe(card.querySelector(".automation-task-feedback"));
+  value = { ...value, tasks: { ...value.tasks, items: [task("one", "blocked"), task("two", "ready")] } };
+  await act(async () => card.querySelector<HTMLButtonElement>('[aria-label="Remove dependency on Task two"]')!.click());
+  expect(card.querySelector(".automation-task-dependencies .automation-task-feedback")?.textContent).toBe("Saved in Hermes.");
+  expect(card.querySelector(".automation-task-move .automation-task-feedback")).toBeNull();
+  expect(document.activeElement).toBe(card.querySelector(".automation-task-feedback"));
+});
+
+it("returns focus to the chosen task action when its form is cancelled", async () => {
+  const value = initial(); value.tasks.items = [task("one", "blocked")];
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value);
+  await work(); await openTask("one");
+  for (const name of ["Block task…", "Request review…"]) {
+    await click(name); expect(button(name).getAttribute("aria-expanded")).toBe("true");
+    button("Cancel").focus(); await click("Cancel");
+    expect(document.activeElement).toBe(button(name)); expect(button(name).getAttribute("aria-expanded")).toBe("false");
+  }
+});
+
+it("does not reopen a task or steal focus when its late result arrives", async () => {
+  let value = initial(); value.tasks.items = [task("one", "blocked"), task("two", "ready")];
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value);
+  let complete!: (result: unknown) => void; vi.mocked(write).mockReturnValueOnce(new Promise(resolve => { complete = resolve; }));
+  await work(); await openTask("one"); await click("Start task"); await openTask("two");
+  const second = container.querySelector<HTMLDetailsElement>('[data-task-id="two"]')!; second.querySelector<HTMLElement>("summary")!.focus();
+  value = { ...value, tasks: { ...value.tasks, items: [task("one", "ready"), task("two", "ready")] } };
+  await act(async () => complete(value.tasks.items[0]));
+  expect(second.open).toBe(true); expect(document.activeElement).toBe(second.querySelector("summary"));
+  expect(container.querySelector<HTMLDetailsElement>('[data-task-id="one"]')?.open).toBe(false);
+});

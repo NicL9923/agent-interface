@@ -31,6 +31,9 @@ if [[ "${IOS_VALIDATION_LOCKED:-}" != "$lock" ]]; then
 fi
 if [[ $# -ge 2 ]]; then shift 2; else shift; fi
 cd "$repo_dir"
+# Simulator state remains on the internal Data volume even when builds are on SSD.
+# Keep a conservative 5 GiB reserve and fail before any simulator or build command.
+python3 -c 'import os, sys; s = os.statvfs("/System/Volumes/Data"); free = s.f_bavail * s.f_frsize; minimum = 5 * 1024**3; print(f"Internal Data headroom: {free / 1024**3:.2f} GiB available; 5 GiB required."); sys.exit(0 if free >= minimum else "Not enough internal disk space for iOS validation. Free space before retrying; no simulator or build command has started.")'
 mkdir -p .private
 
 # Each booted simulator runs hundreds of processes, and four exhausted the per-user process limit.

@@ -8,6 +8,7 @@ import SwiftUI
   var error: String?
   var notice: String?
   var needsRefresh = false
+  var taskFeedback: HermesTaskFeedback?
   var secret = HermesTransientSecret()
   var resumeIntent = HermesGoalResumeIntent()
   var triggerRoutines: [Routine] = []
@@ -182,6 +183,63 @@ import SwiftUI
     case nil: return nil
     }
   }
+  /// Task refusals can follow a partial write, so reconcile before releasing the shared lock.
+  func changeTask<V: Encodable>(
+    _ store: AppStore, taskId: String, _ suffix: String, _ input: V, method: String = "POST",
+    moved: Bool = false, current: @escaping @MainActor () -> Bool = { true }
+  ) async -> HermesTask? {
+    guard !disabled, isCurrent(store), current() else { return nil }
+    busy = true; error = nil; notice = nil; taskFeedback = nil; needsRefresh = true
+    defer { busy = false }
+    let outcome = await attempt(store, current: current) { context -> HermesTask? in
+      let result: HermesTask
+      do {
+        result = try await context.api.write(self.path + suffix, input, method: method)
+      } catch let refusal as APIError where refusal.status > 0 && refusal.status < 500 {
+        try context.checkCurrent()
+        let refreshed = await self.refresh(store, current: context.isCurrent)
+        try context.checkCurrent()
+        if refreshed {
+          self.publishTaskFeedback(taskId, message: refusal.message + " Status refreshed.", isError: true)
+        } else {
+          self.error = refusal.message + " Refresh status before trying again."
+          self.publishTaskFeedback(taskId, message: "Status could not be refreshed. Use Refresh status above.", isError: false)
+        }
+        return nil
+      }
+      try context.checkCurrent()
+      let refreshed = await self.refresh(store, current: context.isCurrent)
+      try context.checkCurrent()
+      guard refreshed else {
+        self.publishTaskFeedback(taskId, message: "Not confirmed. Use Refresh status above.", isError: false)
+        return nil
+      }
+      let status = self.value?.tasks.items.first { $0.id == taskId }?.status
+      let message = status.map { moved ? "Moved to \(hermesTaskStatusLabel($0))." : "Saved in Hermes." } ?? "Saved in Hermes."
+      self.publishTaskFeedback(taskId, message: message, isError: false)
+      return result
+    }
+    switch outcome {
+    case .success(let result)?: return result
+    case .failure(let failure)?:
+      needsRefresh = true
+      let status = (failure as? APIError)?.status
+      if failure is CancellationError || status == nil || status == 0 || (status ?? 0) >= 500 {
+        error = "We couldn't confirm this change. Refresh status and review it before trying again. Nothing will be sent again automatically."
+      } else { error = failure.localizedDescription + " Refresh status before trying again." }
+      publishTaskFeedback(taskId, message: "Not confirmed. Use Refresh status above.", isError: false)
+      return nil
+    case nil: return nil
+    }
+  }
+  private func publishTaskFeedback(_ taskId: String, message: String, isError: Bool) {
+    taskFeedback = HermesTaskFeedback(taskId: taskId, message: message, isError: isError)
+    AccessibilityNotification.Announcement(message).post()
+  }
+  func manualRefresh(_ store: AppStore) async {
+    taskFeedback = nil
+    await refresh(store)
+  }
   func changeOK<V: Encodable>(
     _ store: AppStore, _ suffix: String, _ input: V, method: String = "POST",
     current: @escaping @MainActor () -> Bool = { true }
@@ -240,7 +298,7 @@ struct HermesAutomationStatus: View {
         if let error = control.error { ErrorBanner(message: error) }
         if let notice = control.notice { Text(notice).font(.footnote).accessibilityAddTraits(.updatesFrequently) }
         if control.loading { ProgressView("Refreshing assistant controls") }
-        Button("Refresh status") { Task { await control.refresh(store) } }
+        Button("Refresh status") { Task { await control.manualRefresh(store) } }
           .disabled(control.busy || control.loading).accessibilityIdentifier("automation.refresh")
         if control.needsRefresh { Text("Refresh and review the current status before making another change.").font(.footnote) }
       }
@@ -257,11 +315,11 @@ struct HermesAutomationStatus: View {
         }
         if !compact || control.needsRefresh || displayedError != nil {
           if work && control.value == nil && control.error != nil {
-            Button("Try loading again") { Task { await control.refresh(store) } }
+            Button("Try loading again") { Task { await control.manualRefresh(store) } }
               .buttonStyle(.accentProminent).disabled(control.busy || control.loading)
               .accessibilityIdentifier("automation.refresh")
           } else {
-            Button("Refresh status") { Task { await control.refresh(store) } }
+            Button("Refresh status") { Task { await control.manualRefresh(store) } }
               .disabled(control.busy || control.loading).accessibilityIdentifier("automation.refresh")
           }
         }
@@ -302,6 +360,7 @@ struct HermesWorkView: View {
   @State private var control: HermesAutomationControls
   @State private var sheet: HermesWorkSheet?
   @State private var pendingClearGoal = false
+  @State private var collapsedTaskStatuses: Set<String> = ["done"]
   init(botId: String) {
     self.botId = botId
     _control = State(initialValue: HermesAutomationControls(botId: botId))
@@ -313,7 +372,7 @@ struct HermesWorkView: View {
         HermesGoalSection(control: control, state: value.goals,
           edit: { sheet = .goalEditor(value.goals.goal) },
           startNewAttempt: { sheet = .newResumeAttempt }, clear: { sheet = .clearGoal })
-        HermesTaskSection(control: control, state: value.tasks,
+        HermesTaskSection(control: control, state: value.tasks, collapsedStatuses: $collapsedTaskStatuses,
           create: { sheet = .createTask }, open: { sheet = .taskDetail($0) })
         HermesTriggerSection(control: control, state: value.triggers,
           create: { sheet = .createTrigger }, edit: { sheet = .editTrigger($0) })
@@ -602,41 +661,63 @@ private struct HermesGoalEditor: View {
   }
 }
 
+struct HermesTaskFeedback {
+  var taskId: String
+  var message: String
+  var isError: Bool
+}
+
+private let hermesTaskStatusOrder = ["blocked", "running", "review", "ready", "todo", "scheduled", "triage"]
+func hermesTaskStatusLabel(_ status: String) -> String {
+  let labels = ["blocked": "Blocked", "running": "Running", "review": "In review", "ready": "Ready", "todo": "To do", "scheduled": "Scheduled", "triage": "Triage", "done": "Done"]
+  return labels[status] ?? status.replacingOccurrences(of: "_", with: " ").capitalized
+}
+func hermesTaskStatusLess(_ a: String, _ b: String) -> Bool {
+  func rank(_ status: String) -> Int {
+    if status == "done" { return hermesTaskStatusOrder.count + 1 }
+    return hermesTaskStatusOrder.firstIndex(of: status) ?? hermesTaskStatusOrder.count
+  }
+  let left = rank(a), right = rank(b)
+  return left == right ? hermesTaskStatusLabel(a).localizedStandardCompare(hermesTaskStatusLabel(b)) == .orderedAscending : left < right
+}
+
 private struct HermesTaskSection: View {
   var control: HermesAutomationControls
   var state: HermesAutomationOverview.Tasks
+  @Binding var collapsedStatuses: Set<String>
   var create: () -> Void
   var open: (HermesTask) -> Void
   @Environment(AppStore.self) private var store
-  private var statuses: [String] {
-    let preferred = ["blocked", "ready", "running", "review", "done", "cancelled"]
-    let present = Set(state.items.map(\.status))
-    return preferred.filter { present.contains($0) } + present.subtracting(preferred).sorted()
-  }
+  private var statuses: [String] { Set(state.items.map(\.status)).sorted(by: hermesTaskStatusLess) }
   var body: some View {
-    Section("Task board") {
+    Section {
       if !state.supported {
-        Text(state.reason ?? "Task boards are unavailable on this Hermes installation.").foregroundStyle(.secondary)
+        Text(state.reason ?? "Task boards are unavailable on this Hermes installation.").foregroundStyle(Palette.muted)
       } else {
         if state.truncated == true {
           Text("Showing the newest \(state.limit ?? state.items.count) visible tasks. Older tasks are not shown.")
-            .font(.footnote).foregroundStyle(.secondary)
+            .font(.footnote).foregroundStyle(Palette.muted)
         }
-        if state.items.isEmpty { Text("No tasks yet.").foregroundStyle(.secondary) }
+        if state.items.isEmpty { Text("No tasks yet.").foregroundStyle(Palette.muted) }
         ForEach(statuses, id: \.self) { status in
-          DisclosureGroup("\(status.replacingOccurrences(of: "_", with: " ").capitalized) (\(state.items.filter { $0.status == status }.count))") {
+          DisclosureGroup(isExpanded: Binding(get: { !collapsedStatuses.contains(status) }, set: { expanded in
+            if expanded { collapsedStatuses.remove(status) } else { collapsedStatuses.insert(status) }
+          })) {
             ForEach(state.items.filter { $0.status == status }) { task in
               Button { open(task) } label: {
                 VStack(alignment: .leading, spacing: 4) {
                   Text(task.title).foregroundStyle(Color.primary)
-                  Text("\(assignee(task.assignee)) · Priority \(task.priority)").font(.caption).foregroundStyle(.secondary)
+                  Text(assignee(task.assignee) + (task.priority == 0 ? "" : " · Priority \(task.priority)"))
+                    .font(.caption).foregroundStyle(Palette.muted)
                 }.padding(.vertical, 4)
               }.accessibilityIdentifier("automation.task.\(task.id)")
             }
-          }
+          } label: { Text("\(hermesTaskStatusLabel(status)) (\(state.items.filter { $0.status == status }.count))") }
         }
         Button("New task", action: create).disabled(control.disabled || !store.connected)
       }
+    } header: {
+      Text("Task board").foregroundStyle(Palette.muted)
     }
   }
   private func assignee(_ id: String?) -> String {
@@ -743,96 +824,173 @@ private struct HermesTaskDetail: View {
   var initial: HermesTask
   @Environment(AppStore.self) private var store
   @Environment(\.dismiss) private var dismiss
+  @Environment(\.dynamicTypeSize) private var dynamicTypeSize
   @State private var lifetime = HermesAutomationLifetime()
   @State private var editing = false
+  @State private var actionForm: ActionForm?
   @State private var reason = ""
+  @State private var startNote = ""
+  @State private var showStartNote = false
   @State private var reviewer = ""
   @State private var dependency = ""
+  private enum ActionForm { case block, review }
   private var task: HermesTask { control.value?.tasks.items.first { $0.id == initial.id } ?? initial }
+  private var running: Bool { task.status == "running" }
   private var disabled: Bool {
     control.disabled || !store.connected || control.value?.tasks.items.contains { $0.id == initial.id } != true
   }
   private var path: String { "/tasks/\(APIClient.component(initial.id))" }
   var body: some View {
     NavigationStack {
+      ScrollViewReader { scroll in
       Form {
-        HermesAutomationStatus(control: control)
+        if !control.busy { HermesAutomationStatus(control: control, compact: true) }
         summary
-        actions.disabled(disabled)
-        dependencies.disabled(disabled)
+        dependencies
+        actions
       }.householdListBackground().accessibilityIdentifier("automation.taskDetail").navigationTitle("Task details").navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() }.disabled(control.busy) } }
         .sheet(isPresented: $editing) { HermesTaskEditor(control: control, task: task) }
         .interactiveDismissDisabled(control.busy)
-        .onAppear { lifetime.appear() }.onDisappear { lifetime.disappear() }
+        .onChange(of: control.busy) { _, busy in
+          guard !busy, control.taskFeedback?.taskId == initial.id else { return }
+          Task { @MainActor in
+            await Task.yield()
+            guard !control.busy, control.taskFeedback?.taskId == initial.id else { return }
+            scroll.scrollTo(resultID, anchor: .bottom)
+          }
+        }
+        .onAppear { lifetime.appear() }.onDisappear {
+          lifetime.disappear()
+          if control.taskFeedback?.taskId == initial.id { control.taskFeedback = nil }
+        }
+      }
     }
   }
   private var summary: some View {
     Section {
       Text(task.title).font(.headline)
       Text(task.body.isEmpty ? "No additional instructions." : task.body).textSelection(.enabled)
-      LabeledContent("Status", value: task.status)
-        .accessibilityElement(children: .ignore).accessibilityLabel("Task status").accessibilityValue(task.status)
+      LabeledContent("Status") { Text(hermesTaskStatusLabel(task.status)).foregroundStyle(Palette.muted) }
+        .accessibilityElement(children: .ignore).accessibilityLabel("Task status").accessibilityValue(hermesTaskStatusLabel(task.status))
         .accessibilityIdentifier("automation.taskStatus")
-      LabeledContent("Assigned assistant", value: store.bootstrap?.bots.first { $0.id == task.assignee }?.name ?? task.assignee ?? "Unassigned")
-      LabeledContent("Priority", value: "\(task.priority)")
-      if let reason = task.blockedReason { Text("Blocked: \(reason)").font(.footnote) }
-      if control.value?.tasks.items.contains(where: { $0.id == initial.id }) != true {
-        Text("This task is no longer available in the current board.").foregroundStyle(.secondary)
+      LabeledContent("Assigned assistant") { Text(store.bootstrap?.bots.first { $0.id == task.assignee }?.name ?? task.assignee ?? "Unassigned").foregroundStyle(Palette.muted) }
+      if task.priority != 0 { LabeledContent("Priority") { Text("\(task.priority)").foregroundStyle(Palette.muted) } }
+      if let reason = task.blockedReason {
+        Label { Text("Blocked: \(reason)") } icon: { Image(systemName: "exclamationmark.triangle").accessibilityHidden(true) }
+          .font(.subheadline).foregroundStyle(Palette.attention)
       }
-      Button("Edit task") { editing = true }.disabled(disabled)
+      if control.value?.tasks.items.contains(where: { $0.id == initial.id }) != true {
+        Text("This task is no longer available in the current board.").foregroundStyle(Palette.muted)
+      }
+      if !running { Button("Edit task") { control.taskFeedback = nil; editing = true }.disabled(disabled) }
     }
   }
   private var actions: some View {
-    Section("Move task") {
-      TextField("Reason or review feedback", text: $reason, axis: .vertical).lineLimit(2...6)
-      if reason.utf16.count > 2000 { Text("Use at most 2,000 characters.").foregroundStyle(Palette.danger) }
-      HermesAssigneePicker(title: "Reviewer", selection: $reviewer, emptyLabel: "Choose an assistant")
-      Button("Start task") { action(.start) }.disabled(reason.utf16.count > 2000)
-      Button("Block task") { action(.block) }.disabled(!hasReason)
-      Button("Unblock task") { action(.unblock) }.disabled(reason.utf16.count > 2000)
-      Button("Request review") { action(.requestReview) }
-        .disabled(reviewer.isEmpty || store.bootstrap?.bots.contains { $0.id == reviewer } != true || reason.utf16.count > 2000)
-      if task.status == "review" {
-        Text("The reviewing assistant can request changes through Hermes while it owns the review.").font(.footnote).foregroundStyle(.secondary)
+    Section {
+      if running {
+        Text("A Hermes worker is running this task. You can change it after the run finishes.").foregroundStyle(Palette.muted)
+      } else {
+        Button("Start task") { action(.start) }
+          .disabled(disabled || (showStartNote && startNote.utf16.count > 2000))
+          .fontWeight(task.status == "blocked" || task.status == "todo" ? .semibold : .regular)
+        Button("Block task…") { actionForm = .block; reason = ""; startNote = ""; showStartNote = false }.disabled(disabled)
+        Button("Request review…") { actionForm = .review; reason = ""; reviewer = ""; startNote = ""; showStartNote = false }.disabled(disabled)
+        resultNotice
+        if actionForm == .block {
+          VStack(alignment: .leading) {
+            Text("What is blocking this task?")
+            TextField("What is blocking this task?", text: $reason, prompt: Text("Blocking reason").foregroundStyle(Palette.muted), axis: .vertical).lineLimit(2...6)
+          }.disabled(disabled)
+          Button("Block task") { action(.block) }.fontWeight(.semibold).disabled(disabled || !hasReason)
+          Button("Cancel") { actionForm = nil; reason = "" }.disabled(disabled)
+        } else if actionForm == .review {
+          if dynamicTypeSize.isAccessibilitySize {
+            HermesAssigneePicker(title: "Reviewer", selection: $reviewer, emptyLabel: "Choose an assistant").pickerStyle(.inline).disabled(disabled)
+          } else {
+            HermesAssigneePicker(title: "Reviewer", selection: $reviewer, emptyLabel: "Choose an assistant").disabled(disabled)
+          }
+          VStack(alignment: .leading) {
+            Text("Notes for the reviewer (optional)")
+            TextField("Notes for the reviewer (optional)", text: $reason, prompt: Text("Review notes").foregroundStyle(Palette.muted), axis: .vertical).lineLimit(2...6)
+          }.disabled(disabled)
+          Button("Request review") { action(.requestReview) }
+            .fontWeight(.semibold)
+            .disabled(disabled || reviewer.isEmpty || store.bootstrap?.bots.contains { $0.id == reviewer } != true || reason.utf16.count > 2000)
+          Button("Cancel") { actionForm = nil; reason = ""; reviewer = "" }.disabled(disabled)
+        } else {
+          DisclosureGroup("Add an optional start note", isExpanded: $showStartNote) {
+            VStack(alignment: .leading) {
+              Text("Start note (optional)")
+              TextField("Start note", text: $startNote, prompt: Text("Start note").foregroundStyle(Palette.muted), axis: .vertical).lineLimit(2...6)
+            }.disabled(disabled)
+          }
+        }
+        if reason.utf16.count > 2000 || (showStartNote && startNote.utf16.count > 2000) { Text("Use at most 2,000 characters.").foregroundStyle(Palette.danger) }
+        if task.status == "review" {
+          Text("The reviewing assistant can request changes through Hermes while it owns the review.").font(.footnote).foregroundStyle(Palette.muted)
+        }
       }
-      Text("Hermes checks the task's current state and dependencies before changing it.").font(.footnote).foregroundStyle(.secondary)
+      if running { resultNotice }
+      if !running { Text("Hermes checks the task's current state and dependencies before changing it.").font(.footnote).foregroundStyle(Palette.muted) }
+    } header: {
+      Text("Move task").foregroundStyle(Palette.muted)
+    }
+  }
+  private var resultID: String { "task-result-\(initial.id)" }
+  @ViewBuilder private var resultNotice: some View {
+    if let feedback = control.taskFeedback, feedback.taskId == initial.id {
+      Group {
+        if feedback.isError { ErrorBanner(message: feedback.message).accessibilityElement(children: .combine).accessibilityIdentifier("automation.taskFeedback") }
+        else { Text(feedback.message).font(.footnote).foregroundStyle(Palette.muted).accessibilityAddTraits(.updatesFrequently).accessibilityIdentifier("automation.taskFeedback") }
+      }.id(resultID)
     }
   }
   private var dependencies: some View {
-    Section("Dependencies") {
-      if task.dependencies.isEmpty { Text("None.").foregroundStyle(.secondary) }
+    Section {
+      if task.dependencies.isEmpty { Text("None.").foregroundStyle(Palette.muted) }
       ForEach(task.dependencies, id: \.self) { id in
+        let parent = control.value?.tasks.items.first { $0.id == id }
         VStack(alignment: .leading) {
-          Text(control.value?.tasks.items.first { $0.id == id }?.title ?? id)
-          Button("Remove dependency", role: .destructive) { changeDependency(id, remove: true) }
+          Text(parent.map { "\($0.title) · \(hermesTaskStatusLabel($0.status))" } ?? id)
+          if !running {
+            Button(role: .destructive) { changeDependency(id, remove: true) } label: {
+              if disabled { Text("Remove dependency") }
+              else { Text("Remove dependency").foregroundStyle(Palette.danger) }
+            }.disabled(disabled).accessibilityLabel("Remove dependency on \(parent?.title ?? id)")
+          }
         }
       }
-      Picker("Wait for task", selection: $dependency) {
-        Text("Choose a task").tag("")
-        ForEach((control.value?.tasks.items ?? []).filter { $0.id != task.id && !task.dependencies.contains($0.id) }) { item in
-          Text(item.title).tag(item.id)
-        }
+      if !running {
+        Picker("Wait for task", selection: $dependency) {
+          Text("Choose a task").tag("")
+          ForEach((control.value?.tasks.items ?? []).filter { $0.id != task.id && !task.dependencies.contains($0.id) }) { item in
+            Text(item.title).tag(item.id)
+          }
+        }.disabled(disabled)
+        Button("Add dependency") { changeDependency(dependency, remove: false) }
+          .disabled(disabled || dependency.isEmpty || task.dependencies.count >= 20)
       }
-      Button("Add dependency") { changeDependency(dependency, remove: false) }
-        .disabled(dependency.isEmpty || task.dependencies.count >= 20)
+    } header: {
+      Text("Dependencies").foregroundStyle(Palette.muted)
     }
   }
   private var hasReason: Bool { !reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && reason.utf16.count <= 2000 }
   private func action(_ value: HermesTaskAction.Action) {
-    let trimmed = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+    let note = value == .start ? (showStartNote ? startNote : "") : reason
+    let trimmed = note.trimmingCharacters(in: .whitespacesAndNewlines)
     let input = HermesTaskAction(action: value, reason: trimmed.isEmpty ? nil : trimmed,
       reviewer: value == .requestReview && !reviewer.isEmpty ? reviewer : nil)
     let current = lifetime.current
     Task {
-      let result: HermesTask? = await control.change(store, path + "/actions", input, current: current)
-      if result != nil { reason = ""; reviewer = "" }
+      let result = await control.changeTask(store, taskId: task.id, path + "/actions", input, moved: true, current: current)
+      if result != nil { reason = ""; startNote = ""; reviewer = ""; actionForm = nil }
     }
   }
   private func changeDependency(_ id: String, remove: Bool) {
     let current = lifetime.current
     Task {
-      let result: HermesTask? = await control.change(store, path + "/dependencies/\(APIClient.component(id))", HermesDependencyInput(remove: remove), method: "PUT", current: current)
+      let result = await control.changeTask(store, taskId: task.id, path + "/dependencies/\(APIClient.component(id))", HermesDependencyInput(remove: remove), method: "PUT", current: current)
       if result != nil { dependency = "" }
     }
   }

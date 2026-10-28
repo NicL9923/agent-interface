@@ -746,7 +746,7 @@
     "maintenance": "Hermes is being upgraded. Automation changes are paused.",
     "triggerNonAdmin": "Only an integration administrator can change event triggers and view a new signing secret.",
     "catchAll": "Hermes could not confirm this automation operation. Refresh native status before trying again.",
-    "refusedTransition": "Hermes refused this transition in the task's current state. Refresh it before trying again.",
+    "refusedTransition": "Hermes refused this transition in the task's current state.",
     "claimedTask": "A native worker owns this task. Wait for its claim to settle before changing it.",
     "blockReason": "Explain what blocks this task.",
     "triggerCAS": "This event trigger changed. Refresh before changing it.",

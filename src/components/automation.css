@@ -56,3 +56,36 @@
   .automation-goal-actions > button:first-child { flex-basis: 100%; }
   .automation-goal-actions .automation-goal-clear { margin-inline-start: 0; }
 }
+
+/* Task board and detail. */
+.automation-tasks { line-height: 1.55; }
+.automation-task-group { margin: 18px 0; }
+.automation-task-group h4 { margin: 0; }
+.automation-task-group-toggle { min-height: 44px; padding: 6px 0; border: 0; background: transparent; color: var(--ink); font: inherit; font-weight: 600; text-align: left; cursor: pointer; }
+.automation-task-group-toggle:focus-visible, .automation-task summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.automation-task > summary { min-height: 44px; }
+.automation-task[open] { padding: 16px; margin: 8px 0; border: 1px solid var(--line); border-radius: 10px; background: var(--raised); }
+.automation-task[open] > summary small { display: none; }
+.automation-task-feedback:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.automation-task-detail { padding-top: 12px; }
+.automation-task-detail > p { white-space: pre-wrap; }
+.automation-task-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; color: var(--muted); font-size: .875rem; }
+.automation-task-status { padding: 3px 9px; border-radius: 999px; background: var(--rail); color: var(--ink); font-weight: 600; }
+.automation-task-callout { margin: 12px 0; padding: 16px; border: 1px solid var(--line); border-inline-start: 3px solid var(--attention); border-radius: 10px; }
+.automation-task-callout strong { display: block; margin-bottom: 6px; }
+.automation-task-callout p { margin: 0; white-space: pre-wrap; }
+.automation-task button, .automation-task input, .automation-task select, .automation-task-note > summary { min-height: 44px; }
+.automation-task-dependencies, .automation-task-move { margin-top: 24px; }
+.automation-task-dependencies > p, .automation-task-move > p { margin: 8px 0; }
+.automation-task-add { display: flex; align-items: end; flex-wrap: wrap; gap: 10px; }
+.automation-task-add label, .automation-task-note label { display: grid; gap: 6px; min-width: 0; }
+.automation-task-add label, .automation-task-move label, .automation-task-note label { margin-bottom: 0; }
+.automation-task-add label { flex: 1 1 200px; }
+.automation-task-add select, .automation-task-note input { width: 100%; }
+.automation-task-note { margin-top: 12px; }
+.automation-task-note > summary { cursor: pointer; display: list-item; padding-block: 9px; color: var(--ink); }
+.automation-task-move > .actions [aria-expanded="true"] { border-color: var(--accent); background: var(--accent-soft); }
+.automation-task-note label { margin-top: 8px; }
+
+.automation-task-dependencies > h5, .automation-task-move > h5 { margin: 0 0 8px; font-size: 1em; }
+.automation-task-uncertain { color: var(--muted); }

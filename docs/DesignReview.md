@@ -58,7 +58,8 @@ References collected October 25, 2026. External artwork is reference material on
 | Models and capabilities | 35 web before, 43 web after; 26 native before and after states per device | Complete | Models, Tools and Skills: web desktop/phone, iPhone and iPad 9 |
 | Memory | 20 web before, 35 after; 18 native before, 26 after per device | Complete | Web desktop, tablet, phone, dark and 200% text 9; iPhone and iPad normal, dark, AX3 and recovery 9 |
 | Work frame and standing goal | 21 web and 20 native before frames per device verified | Complete | Web, iPhone and iPad 9 |
-| Work task board and editors | Pending | Pending | Pending |
+| Work task board and actions | 67 shared before frames; 19 web, 23 iPhone and 23 iPad after frames | Complete | Web refusal 9.5; remaining web states, iPhone and iPad 9 |
+| Work task editors | Shared before baseline complete | Next | Pending |
 | Work event triggers | Pending | Pending | Pending |
 | Learning | Pending | Pending | Pending |
 | Routines and results | Pending | Pending | Pending |
@@ -307,3 +308,37 @@ Native before images follow the essential presenter repair and precede visual
 changes. Enlarged text uses AX3 on native and a 200% root font on web. Physical
 devices, VoiceOver output, hardware keyboards, iOS 17, AX4/AX5 and compact iPad
 widths remain unverified.
+
+## Work task board and actions acceptance
+
+The task board and actions pass Opus 5.5 High on all four layouts. The web
+refusal result scores 9.5; the remaining 18 web states and all 23 frame records
+on each native device score 9.0. Review 92 closes the gate and allows the
+separate task create and edit pass.
+
+Tasks now have readable status groups, one copy of their metadata, conditional
+move forms, dependency status labels and a visible start-note disclosure.
+Refusals stay beside the action that produced them and leave goal controls
+usable after a successful refresh. Keyboard focus moves to the visible result.
+Running tasks show a read-only explanation.
+
+The [closing evidence record](evidence/design-review/work-task-acceptance.json)
+binds 65 after frames, 14 annotated comparisons, the source reuse proofs and
+reviews 82 through 92. The shared before baseline contains 67 images, including
+the separate editor states. The 31 focused web UI tests, 25 adapter tests and
+35 native functional tests passed. Unaffected results were reused after the
+later screenshot-framing changes. The web test result is retained in the
+orchestration transcript rather than a standalone log.
+
+The iPhone matrix contains 6 R3, 2 R5, 13 R4 and 2 R6 records. Its top and
+dependencies frames show the same content apart from the backdrop, so 23
+records do not represent 23 different layouts. The iPad matrix contains
+2 R3, 6 R4, 14 R5 and 1 R6 record. The final supplement shows the start-note
+label, prompt and footer inside the sheet. Retired and failed images are
+excluded from both matrices.
+
+Native enlarged text is AX3. Web enlarged text is a 200% root font, not browser
+zoom. Production Hermes transition rules, physical devices, VoiceOver, hardware
+keyboards, iOS 17, AX5 and compact iPad windows remain unverified. The trigger
+contrast follow-up belongs to its upcoming pass. This acceptance covers W2a
+only; task editors and the rest of the app remain pending.

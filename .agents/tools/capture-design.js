@@ -1,11 +1,15 @@
 // Playwright CLI run-code function. Screenshots and a geometry report for a design gate.
-async (page, { outputDir = ".private/design-review", prefix = "current", screen = "today", stage = "after", workCase = "all", fixture } = {}) => {
+async (page, { outputDir = ".private/design-review", prefix = "current", screen = "today", stage = "after", workCase = "all", taskGate = null, fixture } = {}) => {
+  if (!["before", "after"].includes(stage)) throw Error("Unknown capture stage");
+  if (taskGate !== null && taskGate !== "a" || taskGate === "a" && (screen !== "work" || workCase !== "tasks" || stage !== "after")) throw Error("Invalid task gate");
+  if (screen === "work" && workCase === "tasks" && stage === "after" && taskGate !== "a") throw Error("Work tasks AFTER requires task gate a; full W2 AFTER is unavailable");
+  if (!["today", "home", "conversation", "questions", "approvals", "recovery", "details", "settings", "avatar", "models", "memory", "work"].includes(screen)) throw Error(`Unsupported screen: ${screen}`);
+  if (!["all", "clear-confirmation", "tasks"].includes(workCase) || workCase === "clear-confirmation" && (screen !== "work" || stage !== "after") || workCase === "tasks" && screen !== "work") throw Error("Unknown or invalid Work capture case");
+  if (workCase === "tasks" ? fixture?.workFixture?.gate !== "W2-tasks" : fixture?.workFixture?.gate != null) throw Error("Wrong Work fixture gate");
   const origin = new URL(page.url());
   if (!["127.0.0.1", "localhost"].includes(origin.hostname)) throw Error("Use a loopback fixture.");
   const boot = await (await page.request.get(`${origin.origin}/api/bootstrap`)).json();
   if (boot.user?.email !== "preview@localhost.invalid") throw Error("Use the synthetic household preview.");
-  if (!["today", "home", "conversation", "questions", "approvals", "recovery", "details", "settings", "avatar", "models", "memory", "work"].includes(screen)) throw Error(`Unsupported screen: ${screen}`);
-  if (!["all", "clear-confirmation"].includes(workCase) || workCase !== "all" && (screen !== "work" || stage !== "after")) throw Error("Unknown or invalid Work capture case");
   const context = await page.context().browser().newContext({ serviceWorkers: "block", reducedMotion: "reduce", viewport: { width: 1440, height: 1000 } });
   if (["models", "memory", "work"].includes(screen)) await context.addInitScript(screen => { window.name=`wildbots-design-${screen}-capture`; }, screen);
   const tab = await context.newPage();
@@ -123,7 +127,7 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
         if(!uuid(body.requestId) || typeof body.title!=="string" || !body.title.trim() || body.title.trim().length>500 || (body.body!==undefined && (typeof body.body!=="string" || body.body.length>20000)) || (body.priority!==undefined && (!Number.isInteger(body.priority)||body.priority < -100 || body.priority > 100)) || (body.assignee != null && !fixture.bots.some(bot=>bot.id===body.assignee)) || (body.dependencies!==undefined && (!Array.isArray(body.dependencies)||body.dependencies.length>20||body.dependencies.some(id=>!work.tasks.items.some(task=>task.id===id))))) throw Error("Invalid task input");
         if(workTaskIds.has(body.requestId)) return route.fulfill({json:work.tasks.items.find(task=>task.id===workTaskIds.get(body.requestId).id)});
         const task={id:`t_${(work.tasks.items.length+1).toString(16).padStart(8,"0")}`,title:body.title.trim(),body:body.body || "",priority:body.priority ?? 0,assignee:body.assignee===undefined ? "ranch" : body.assignee,owner:"ranch",dependencies:body.dependencies || [],status:"blocked"};
-        work.tasks.items.push(task); workTaskIds.set(body.requestId,structuredClone(task));
+        if(fixture.workFixture.taskOrder==="newest-first") work.tasks.items.unshift(task); else work.tasks.items.push(task); workTaskIds.set(body.requestId,structuredClone(task));
         if(workMode==="task-create-uncertain") return reject(502,fixture.workMessages.catchAll);
         return route.fulfill({json:task});
       }
@@ -412,7 +416,7 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
     if (screen === "home" && state === "no-pins") value.preferences.favorites = [];
     return route.fulfill({ response, json: value });
   });
-  const capture = async (name, width, height, theme = "light") => {
+  const capture = async (name, width, height, theme = "light", preserveFocus = false) => {
     await tab.setViewportSize({ width, height });
     if (pointer) await pointer.send("Emulation.setTouchEmulationEnabled", { enabled: width <= 620, maxTouchPoints: 1 });
     await tab.emulateMedia({ colorScheme: theme });
@@ -423,7 +427,7 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
       await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       if (innerWidth !== width || innerHeight !== height) throw Error("Viewport did not settle.");
     }, { theme, width, height });
-    if (!/menu|focus/.test(name)) {
+    if (!preserveFocus && !/menu|focus/.test(name)) {
       await tab.mouse.move(width - 1, height - 1);
       await tab.evaluate(() => { if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); });
     }
@@ -514,6 +518,201 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
         if(!bounds.fullyVisible) throw Error(`Work ${name} subject is clipped: ${JSON.stringify(bounds)}`);
         await shot(name,width,theme); geometry.at(-1).workSubject=bounds;
       };
+      if(workCase === "tasks" && taskGate === "a") {
+        const section = panel.locator(".automation-tasks"), heading = section.getByRole("heading", {name:"Task board", exact:true});
+        const items = fixture.work.tasks.items, subjects = fixture.workFixture.subjects;
+        const task = id => items.find(item => item.id === id);
+        const card = id => section.locator(`details.automation-task[data-task-id="${id}"]`);
+        const live = section.getByRole("status", {name:"Task result"});
+        let width=390, theme="light", large=false;
+        const setup = async (opts={}) => {
+          width=opts.width || 390; theme=opts.theme || "light"; large=!!opts.large;
+          await reset(opts);
+          await live.evaluate(node => { window.__taskResultRegion = node; });
+        };
+        const open = async id => {
+          const row=card(id);
+          if (await row.count() !== 1) throw Error(`Task ${id} missing from its expanded group`);
+          await row.locator(":scope > summary").click();
+          if (await row.getAttribute("open") === null) throw Error(`Task ${id} did not open`);
+          return row;
+        };
+        const assertOverflow = async name => {
+          const info=await section.evaluate(node=>({document:document.documentElement.scrollWidth>innerWidth,section:node.scrollWidth>node.clientWidth,scroller:node.closest('.settings-content').scrollWidth>node.closest('.settings-content').clientWidth}));
+          if (Object.values(info).some(Boolean)) throw Error(`Task ${name} overflow: ${JSON.stringify(info)}`);
+          if (browserErrors.length) throw Error(`Browser errors: ${browserErrors.join('; ')}`);
+          return info;
+        };
+        const shot = async (name, preserveFocus=false) => {
+          const overflow=await assertOverflow(name);
+          await tab.mouse.move(0,0);
+          await capture(`task-${name}`,width,width>1000?1000:844,theme,preserveFocus);
+          if(geometry.at(-1).overflow) throw Error(`Task ${name} document overflow after capture`);
+          geometry.at(-1).taskOverflow=overflow;
+          geometry.at(-1).rootFontScaling=large ? "200% root font size, not browser zoom" : "default";
+        };
+        const rects = async targets => section.evaluate((node,selectors)=>{
+          const view=node.closest('.settings-content');
+          const rect=el=>{if(!el)return null;const r=el.getBoundingClientRect();return {top:r.top,bottom:r.bottom,left:r.left,right:r.right,width:r.width,height:r.height};};
+          const viewport=rect(view), bounds={top:Math.max(0,viewport.top),bottom:Math.min(innerHeight,viewport.bottom),left:Math.max(0,viewport.left),right:Math.min(innerWidth,viewport.right)};
+          const result=Object.fromEntries(Object.entries(selectors).map(([key,selector])=>{const r=rect(node.querySelector(selector));return [key,r&&{...r,fullyVisible:r.top>=bounds.top&&r.bottom<=bounds.bottom&&r.left>=bounds.left&&r.right<=bounds.right}];}));
+          return {viewport,bounds,targets:result};
+        },targets);
+        const anchorShot = async (name,target,preserveFocus=false) => {
+          const info=await target.evaluate(node=>{
+            const view=node.closest('.settings-content'), r=node.getBoundingClientRect(), v=view.getBoundingClientRect();
+            view.scrollTop+=r.top-v.top-16;
+            const a=node.getBoundingClientRect(), b=view.getBoundingClientRect();
+            return {anchor:{top:a.top,bottom:a.bottom,height:a.height},viewport:{top:b.top,bottom:b.bottom},viewportHeight:innerHeight};
+          });
+          if(info.anchor.top < Math.max(0,info.viewport.top)+15 || info.anchor.top >= Math.min(info.viewportHeight,info.viewport.bottom)) throw Error(`Task ${name} anchor clipped: ${JSON.stringify(info)}`);
+          await shot(name,preserveFocus); geometry.at(-1).taskAnchor=info;
+        };
+        const subjectShot = async (name,target) => {
+          await target.scrollIntoViewIfNeeded();
+          const info=await target.evaluate(node=>{const r=node.getBoundingClientRect(),v=node.closest('.settings-content').getBoundingClientRect();return {top:r.top,bottom:r.bottom,viewTop:v.top,viewBottom:v.bottom,fullyVisible:r.top>=Math.max(0,v.top)&&r.bottom<=Math.min(innerHeight,v.bottom)};});
+          if(!info.fullyVisible) throw Error(`Task ${name} subject clipped: ${JSON.stringify(info)}`);
+          await shot(name); geometry.at(-1).taskSubject=info;
+        };
+        const checkReads = (id,body,before) => {
+          const writes=workSubmissions.slice(before);
+          if(workReads!==2 || writes.length!==1 || writes[0].method!=="POST" || writes[0].path!==`/tasks/${id}/actions` || JSON.stringify(writes[0].body)!==JSON.stringify(body)) throw Error(`Task request/reconcile mismatch: ${JSON.stringify({reads:workReads,writes})}`);
+        };
+        const waitResult = async (id,text) => {
+          const feedback=card(id).locator('.automation-task-feedback');
+          await feedback.waitFor();
+          if(await feedback.textContent()!==text) throw Error(`Task feedback mismatch for ${id}`);
+          await tab.waitForFunction(({id,text})=>{
+            const row=document.querySelector(`.automation-task[data-task-id="${id}"]`), region=document.querySelector('[aria-label="Task result"]');
+            return row?.open && row.querySelector('.automation-task-feedback') === document.activeElement && region === window.__taskResultRegion && region.textContent === text;
+          },{id,text});
+        };
+        const checkGroups = async () => {
+          const groups=await section.locator('.automation-task-group-toggle').allTextContents();
+          const expected=['Blocked · 2','Running · 1','In review · 1','Ready · 1','To do · 1','Done · 1'];
+          if(JSON.stringify(groups)!==JSON.stringify(expected)) throw Error(`Task groups mismatch: ${JSON.stringify(groups)}`);
+          const done=section.getByRole('button',{name:'Done · 1',exact:true});
+          if(await done.getAttribute('aria-expanded')!=='false') throw Error('Done should start collapsed');
+        };
+        const checkParents = async row => {
+          const expected=task(subjects.detail).dependencies.map(id=>{const parent=task(id),label={review:'In review',ready:'Ready',todo:'To do',blocked:'Blocked',running:'Running',done:'Done'}[parent.status] || parent.status;return `${parent.title} · ${label}`;});
+          const actual=await row.locator('.automation-dependency span').allTextContents();
+          if(JSON.stringify(actual)!==JSON.stringify(expected)) throw Error(`Dependency status mismatch: ${JSON.stringify(actual)}`);
+        };
+        for(const [name,w,t,big] of [['board-desktop',1440,'light',false],['board-phone',390,'light',false],['board-large-text',390,'light',true]]) {
+          await setup({width:w,theme:t,large:big}); await checkGroups(); await anchorShot(name,heading);
+        }
+        for(const [name,w,t,big,which] of [['detail-desktop',1440,'light',false,'summary'],['detail-dark',1440,'dark',false,'summary'],['detail-phone-top',390,'light',false,'summary'],['detail-phone-actions',390,'light',false,'move'],['detail-narrow-actions',320,'light',false,'move'],['detail-large-text-top',390,'light',true,'summary'],['detail-large-text-actions',390,'light',true,'move']]) {
+          await setup({width:w,theme:t,large:big}); const row=await open(subjects.detail); await checkParents(row);
+          if(await row.locator('.automation-task-status').textContent()!=='Blocked') throw Error('Detail status mismatch');
+          if(await row.getByRole('combobox',{name:/^Reviewer/}).count() || await row.getByLabel('What is blocking this task?').count()) throw Error('Action fields shown before selection');
+          await anchorShot(name,which==='summary' ? row.locator(':scope > summary') : row.locator('.automation-task-move h5'));
+        }
+        const refusal = async (big,record) => {
+          await setup({large:big}); const id=subjects.refusedStart, row=await open(id), before=workSubmissions.length;
+          await row.getByRole('button',{name:'Start task',exact:true}).focus();
+          await tab.keyboard.press('Tab'); await tab.keyboard.press('Shift+Tab'); await tab.keyboard.press('Enter');
+          const message=fixture.workMessages.refusedTransition+' Status refreshed.';
+          await waitResult(id,message); checkReads(id,{action:'start'},before);
+          if(!await row.locator('.automation-task-feedback').evaluate(node=>node.matches(':focus-visible'))) throw Error('Task result must show keyboard focus');
+          const geometryNow=await rects({feedback:`[data-task-id="${id}"] .automation-task-feedback`,actions:`[data-task-id="${id}"] .automation-task-move > .actions`,start:`[data-task-id="${id}"] .automation-task-move > .actions button:first-child`});
+          if(record) { await shot('refused-card',true); geometry.at(-1).taskLanding=geometryNow; }
+          workChecks.push({check:big?'refusal-200-percent-landing':'refusal-landing',geometry:geometryNow,reads:workReads,writes:1});
+          if(Object.values(geometryNow.targets).some(value=>!value?.fullyVisible)) throw Error(`Refusal landing is clipped: ${JSON.stringify(geometryNow)}`);
+          if(await panel.getByRole('alert').count()) throw Error('Task refusal duplicated in global alert');
+          for(const name of ['Resume goal','Replace goal…','Clear goal…']) if(await panel.getByRole('button',{name,exact:true}).isDisabled()) throw Error(`Goal ${name} remained disabled after refusal`);
+          if(record) await subjectShot('refused-goal-controls',panel.locator('.automation-goal-actions'));
+        };
+        await refusal(false,true); await refusal(true,false);
+        for(const [name,id] of [['running',subjects.running],['review',subjects.review]]) {
+          await setup(); const row=await open(id);
+          if(name==='running') {
+            if(await row.locator('button, input, select, textarea').count() || !await row.getByText('A Hermes worker is running this task. You can change it after the run finishes.',{exact:true}).count()) throw Error('Running task exposes mutation controls');
+            await anchorShot(name,row.locator(':scope > summary'));
+          } else await anchorShot(name,row.locator('.automation-task-move h5'));
+        }
+        for(const [name,mode] of [['empty','empty'],['unsupported','sections-unsupported']]) { await setup({mode}); await anchorShot(name,heading); }
+        await setup(); let id=subjects.start, row=await open(id), before=workSubmissions.length;
+        await row.getByRole('button',{name:'Start task',exact:true}).click(); await waitResult(id,'Moved to Ready.'); checkReads(id,{action:'start'},before);
+        const started=await rects({feedback:`[data-task-id="${id}"] .automation-task-feedback`,actions:`[data-task-id="${id}"] .automation-task-move > .actions`});
+        await shot('started-phone',true); geometry.at(-1).taskLanding=started;
+        if(Object.values(started.targets).some(value=>!value?.fullyVisible)) throw Error(`Started landing is clipped: ${JSON.stringify(started)}`);
+        workChecks.push({check:'start-regroup',geometry:started,reads:workReads,writes:1});
+        await setup(); row=await open(subjects.detail);
+        await row.getByRole('button',{name:'Block task…',exact:true}).click();
+        if(await row.getByRole('button',{name:'Block task…',exact:true}).getAttribute('aria-expanded')!=='true' || await row.getByRole('combobox',{name:/^Reviewer/}).count()) throw Error('Block disclosure mismatch');
+        await row.getByLabel('What is blocking this task?').waitFor();
+        await tab.keyboard.press('Tab');
+        if(!await row.getByRole('button',{name:'Request review…',exact:true}).evaluate(node=>node===document.activeElement && node.matches(':focus-visible'))) throw Error('Keyboard focus ring not established');
+        await anchorShot('block-form-phone',row.locator('.automation-task-move > .actions'),true);
+        if(!await row.getByRole('button',{name:'Request review…',exact:true}).evaluate(node=>{const r=node.getBoundingClientRect(),v=node.closest('.settings-content').getBoundingClientRect();return node===document.activeElement&&r.top>=v.top&&r.bottom<=Math.min(innerHeight,v.bottom);})) throw Error('Focused disclosure button is clipped');
+        await row.getByLabel('What is blocking this task?').fill('Waiting for supplies');
+        before=workSubmissions.length; await row.getByRole('button',{name:'Block task',exact:true}).click();
+        await waitResult(subjects.detail,'Moved to Blocked.'); checkReads(subjects.detail,{action:'block',reason:'Waiting for supplies'},before);
+        await setup({large:true}); row=await open(subjects.start);
+        await row.getByRole('button',{name:'Block task…',exact:true}).click();
+        await row.getByRole('button',{name:'Request review…',exact:true}).click();
+        if(await row.getByLabel('What is blocking this task?').count() || await row.getByRole('button',{name:'Request review…',exact:true}).getAttribute('aria-expanded')!=='true') throw Error('Review disclosure mismatch');
+        await anchorShot('review-form-large-text',row.locator('.automation-task-move > .actions'),true);
+        if(!await row.getByRole('button',{name:'Request review…',exact:true}).evaluate(node=>{const r=node.getBoundingClientRect(),v=node.closest('.settings-content').getBoundingClientRect();return node===document.activeElement&&r.top>=v.top&&r.bottom<=Math.min(innerHeight,v.bottom);})) throw Error('Review disclosure button is clipped');
+        await row.getByRole('combobox',{name:/^Reviewer/}).selectOption(fixture.bots[0].id); await row.getByLabel('Notes for the reviewer (optional)').fill('Please check the gate');
+        before=workSubmissions.length; await row.getByRole('button',{name:'Request review',exact:true}).click();
+        await waitResult(subjects.start,'Moved to In review.'); checkReads(subjects.start,{action:'request_review',reason:'Please check the gate',reviewer:fixture.bots[0].id},before);
+        await setup(); id=subjects.start; row=await open(id); await row.locator('.automation-task-note summary').click(); await row.getByLabel('Start note').fill('Start after lunch');
+        before=workSubmissions.length; await row.getByRole('button',{name:'Start task',exact:true}).click(); await waitResult(id,'Moved to Ready.'); checkReads(id,{action:'start',reason:'Start after lunch'},before);
+        workChecks.push({check:'optional-start-note-and-review-payload',passed:true});
+        if(browserErrors.length) throw Error(`Browser errors: ${browserErrors.join('; ')}`);
+        if(paths.length!==19) throw Error(`Expected 19 W2a shots, got ${paths.length}`);
+        return {title:'Work W2a tasks AFTER',paths,geometry,workSubmissions,workChecks,browserErrors,workCase,taskGate};
+      }
+      if(workCase==="tasks") {
+        const section=panel.locator("section.automation-section").filter({has:tab.getByRole("heading",{name:"Task board",exact:true})});
+        const heading=section.getByRole("heading",{name:"Task board",exact:true});
+        const items=fixture.work.tasks.items, subject=id=>items.find(row=>row.id===id);
+        const card=id=>section.locator("details.automation-item").filter({has:tab.locator("summary > span").filter({hasText:subject(id).title})});
+        const open=async id=>{const row=card(id); await row.locator("summary").click(); return row;};
+        let width=390,theme="light";
+        const setup=async(opts={})=>{width=opts.width||390;theme=opts.theme||"light";await reset(opts);};
+        const taskShot=async name=>{
+          await capture(`task-${name}`,width,width>1000?1000:844,theme);
+          geometry.at(-1).taskPresentation=await section.evaluate(node=>{
+            const describe=el=>{const r=el.getBoundingClientRect(),s=getComputedStyle(el);return {text:el.textContent.trim(),top:r.top,bottom:r.bottom,width:r.width,height:r.height,fontSize:s.fontSize,lineHeight:s.lineHeight};};
+            return {summaries:[...node.querySelectorAll('summary')].map(describe),buttons:[...node.querySelectorAll('button')].map(describe),scrollWidth:node.scrollWidth,clientWidth:node.clientWidth};
+          });
+        };
+        const taskAnchorShot=async(name,target)=>{
+          const info=await target.evaluate(node=>{
+            const view=node.closest('.settings-content'); if(!view) throw Error('Missing settings scroller');
+            view.scrollTop+=node.getBoundingClientRect().top-view.getBoundingClientRect().top;
+            const rect=el=>{if(!el)return null;const r=el.getBoundingClientRect();return {top:r.top,bottom:r.bottom,width:r.width,height:r.height};};
+            const anchor=rect(node),viewport=rect(view),visible=el=>{const r=rect(el);return r.top>=Math.max(0,viewport.top)&&r.bottom<=Math.min(innerHeight,viewport.bottom);};
+            return {anchor,viewport,viewportHeight:innerHeight,lastFullyVisibleCard:[...view.querySelectorAll('details.automation-item')].filter(visible).at(-1)?.querySelector('summary span')?.textContent.trim()||null,alert:rect(view.querySelector('[role=alert]')),notice:rect(view.querySelector('[role=status]'))};
+          });
+          if(info.anchor.top<Math.max(0,info.viewport.top)-1||info.anchor.top>=Math.min(info.viewportHeight,info.viewport.bottom)) throw Error(`Task ${name} anchor clipped: ${JSON.stringify(info)}`);
+          await taskShot(name); geometry.at(-1).taskAnchor=info;
+        };
+        const taskSubjectShot=async(name,target)=>{await target.scrollIntoViewIfNeeded();const info=await target.evaluate(node=>{const r=node.getBoundingClientRect(),v=node.closest('.settings-content').getBoundingClientRect();return {top:r.top,bottom:r.bottom,viewTop:v.top,viewBottom:v.bottom,fullyVisible:r.top>=Math.max(0,v.top)&&r.bottom<=Math.min(innerHeight,v.bottom)};});if(!info.fullyVisible)throw Error(`Task ${name} subject clipped: ${JSON.stringify(info)}`);await taskShot(name);geometry.at(-1).taskSubject=info;};
+        const checkOrder=async()=>{const rows=await section.locator('details.automation-item summary span').allTextContents();if(JSON.stringify(rows)!==JSON.stringify(items.map(item=>item.title)))throw Error('Task order mismatch');};
+        const actionForm=row=>row.locator('div.automation-form');
+        const createForm=()=>section.locator('form.automation-form');
+        const newTask=fixture.workFixture.newTask;
+        const fillCreate=async(full=true)=>{await section.getByRole('button',{name:'New task',exact:true}).click();const form=createForm();await form.getByLabel('Task title').fill(newTask.title);await form.getByLabel('Instructions').fill(newTask.body);if(full){await form.getByLabel('Assigned assistant').selectOption(newTask.assignee);await form.getByLabel('Priority').fill(String(newTask.priority));for(const id of newTask.dependencies)await form.getByLabel(subject(id).title).check();}return form;};
+        const verifyCreate=entry=>{const body=entry.body, expected={...newTask,requestId:body.requestId};if(entry.method!=='POST'||entry.path!=='/tasks'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(body.requestId)||JSON.stringify(Object.keys(body).sort())!==JSON.stringify(Object.keys(expected).sort())||Object.keys(expected).some(k=>JSON.stringify(body[k])!==JSON.stringify(expected[k])))throw Error(`Create payload mismatch ${JSON.stringify(body)}`);};
+        for(const [name,w,t,large] of [['board-desktop',1440,'light',false],['board-phone',390,'light',false],['board-large-text',390,'light',true]]){await setup({width:w,theme:t,large});await checkOrder();await taskAnchorShot(name,heading);}
+        for(const [name,w,t,large,anchor] of [['detail-desktop',1440,'light',false,'summary'],['detail-dark',1440,'dark',false,'summary'],['detail-phone-top',390,'light',false,'summary'],['detail-phone-actions',390,'light',false,'form'],['detail-narrow-actions',320,'light',false,'form'],['detail-large-text-top',390,'light',true,'summary'],['detail-large-text-actions',390,'light',true,'actions']]){await setup({width:w,theme:t,large});const row=await open(fixture.workFixture.subjects.detail);const form=actionForm(row);await taskAnchorShot(name,anchor==='summary'?row.locator('summary'):anchor==='form'?form:form.locator('.actions'));if(w===320)workChecks.push({check:'detail-320-overflow',overflow:await section.evaluate(n=>n.scrollWidth>n.clientWidth)});}
+        await setup();let row=await open(fixture.workFixture.subjects.refusedStart);let before=workSubmissions.length;await row.getByRole('button',{name:'Start task',exact:true}).click();await panel.getByRole('alert').waitFor();let writes=workSubmissions.slice(before);if(writes.length!==1||writes[0].path!=='/tasks/t_00000005/actions'||JSON.stringify(writes[0].body)!=='{"action":"start"}'||!await panel.getByRole('alert').textContent().then(s=>s.includes(fixture.workMessages.refusedTransition)))throw Error('Refusal mismatch');await taskAnchorShot('refused-card',actionForm(row));workChecks.push({check:'refusal',disabledTaskButtons:await section.locator('button:disabled').count(),alertInViewportWhileCardVisible:await panel.evaluate(n=>{const a=n.querySelector('[role=alert]')?.getBoundingClientRect(),c=[...n.querySelectorAll('details')].find(x=>x.open)?.getBoundingClientRect(),v=n.closest('.settings-content').getBoundingClientRect();return !!a&&!!c&&a.top>=v.top&&a.bottom<=v.bottom&&c.top<v.bottom&&c.bottom>v.top;})});await panel.locator('xpath=ancestor::*[contains(concat(" ",normalize-space(@class)," ")," settings-content ")]').evaluate(n=>n.scrollTop=0);await taskSubjectShot('refused-alert',panel.getByRole('alert'));
+        for(const [name,id,anchor] of [['running',fixture.workFixture.subjects.running,'summary'],['review',fixture.workFixture.subjects.review,'form']]){await setup();row=await open(id);await taskAnchorShot(name,anchor==='summary'?row.locator('summary'):actionForm(row));}
+        for(const [name,mode] of [['empty','empty'],['unsupported','sections-unsupported']]){await setup({mode});await taskAnchorShot(name,heading);}
+        for(const [name,w,t,large,anchor] of [['create-desktop',1440,'light',false,'form'],['create-dark',1440,'dark',false,'form'],['create-phone-top',390,'light',false,'form'],['create-phone-bottom',390,'light',false,'fieldset'],['create-narrow',320,'light',false,'form'],['create-large-text-bottom',390,'light',true,'actions']]){await setup({width:w,theme:t,large});const form=await fillCreate();await taskAnchorShot(name,anchor==='form'?form:anchor==='fieldset'?form.locator('fieldset'):form.locator('.actions'));if(w===320||large)workChecks.push({check:`create-${w}${large?'-large':''}-overflow`,overflow:await form.evaluate(n=>n.scrollWidth>n.clientWidth)});}
+        // One ordinary create verifies the complete request and newest-first result.
+        before=workSubmissions.length;await createForm().getByRole('button',{name:'Create task',exact:true}).click();await section.getByRole('button',{name:'New task',exact:true}).waitFor();writes=workSubmissions.slice(before);if(writes.length!==1)throw Error('Expected one create');verifyCreate(writes[0]);if(work.tasks.items[0].title!==newTask.title||work.tasks.items[0].status!=='blocked')throw Error('Created task order/status mismatch');if(await section.locator('details.automation-item summary span').first().textContent()!==newTask.title)throw Error('Created task is not first in the DOM');
+        await setup({mode:'task-create-uncertain'});let form=await fillCreate(false);before=workSubmissions.length;await form.getByRole('button',{name:'Create task',exact:true}).click();await panel.getByRole('alert').waitFor();await taskAnchorShot('create-uncertain-form',form.locator('.actions'));await panel.locator('xpath=ancestor::*[contains(concat(" ",normalize-space(@class)," ")," settings-content ")]').evaluate(n=>n.scrollTop=0);await taskSubjectShot('create-uncertain-alert',panel.getByRole('alert'));let read=workReads;await panel.getByRole('button',{name:'Refresh status',exact:true}).click();await panel.getByRole('alert').waitFor({state:'hidden'});if(workReads!==read+1||workSubmissions.length!==before+1)throw Error('Refresh did not make exactly one read and zero writes');await taskAnchorShot('create-refreshed',heading);await form.getByRole('button',{name:'Create task',exact:true}).click();await section.getByRole('button',{name:'New task',exact:true}).waitFor();writes=workSubmissions.slice(before);if(writes.length!==2||JSON.stringify(writes[0].body)!==JSON.stringify(writes[1].body)||work.tasks.items.filter(t=>t.title===newTask.title).length!==1||work.tasks.items[0].status!=='blocked')throw Error('Uncertain create retry mismatch');if((await section.locator('details.automation-item summary span').allTextContents()).filter(t=>t===newTask.title).length!==1)throw Error('Retried task is not unique in the DOM');await taskAnchorShot('create-retried',heading);
+        await setup({width:1440});row=await open(fixture.workFixture.subjects.edit);await row.getByRole('button',{name:'Edit task',exact:true}).click();form=row.locator('form');await form.getByLabel('Assigned assistant').selectOption('');await taskAnchorShot('edit-desktop',form);before=workSubmissions.length;await form.getByRole('button',{name:'Save task',exact:true}).click();await row.getByRole('button',{name:'Edit task',exact:true}).waitFor();writes=workSubmissions.slice(before);const edited=subject(fixture.workFixture.subjects.edit);if(writes.length!==1||writes[0].method!=='PATCH'||writes[0].path!==`/tasks/${edited.id}`||JSON.stringify(writes[0].body)!==JSON.stringify({title:edited.title,body:edited.body,priority:edited.priority,assignee:null})||!(await row.locator('summary').textContent()).includes('Unassigned'))throw Error('Edit mismatch');
+        await setup();row=await open(fixture.workFixture.subjects.start);before=workSubmissions.length;await row.getByRole('button',{name:'Start task',exact:true}).click();await row.locator('summary').getByText(/ready ·/).waitFor();await panel.getByRole('status').filter({hasText:'Saved in Hermes.'}).waitFor();if(workSubmissions.length!==before+1)throw Error('Start mismatch');workChecks.push({check:'start',noticeInViewportWhileCardVisible:await panel.evaluate(n=>{const a=[...n.querySelectorAll('[role=status]')].find(x=>x.textContent.includes('Saved in Hermes.'))?.getBoundingClientRect(),c=[...n.querySelectorAll('details')].find(x=>x.open)?.getBoundingClientRect(),v=n.closest('.settings-content').getBoundingClientRect();return !!a&&!!c&&a.top>=v.top&&a.bottom<=v.bottom&&c.top<v.bottom&&c.bottom>v.top;})});
+        if(browserErrors.length)throw Error(`Browser errors: ${browserErrors.join('; ')}`);
+        if(paths.length!==27)throw Error(`Expected 27 shots, got ${paths.length}`);
+        return {title:'Work W2 tasks',paths,geometry,workSubmissions,workChecks,browserErrors,workCase};
+      }
       if(workCase==="clear-confirmation") {
         await reset(); await panel.getByRole("button",{name:"Clear goal…",exact:true}).click();
         const keep=panel.getByRole("button",{name:"Keep goal",exact:true});

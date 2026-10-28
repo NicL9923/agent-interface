@@ -120,7 +120,7 @@ struct WorkDesignFixture {
       let priority = body["priority"] as? Int ?? 0, text = body["body"] as? String ?? ""
       precondition((-100...100).contains(priority) && text.utf16.count <= 20000)
       let task: [String: Any] = ["id": String(format: "t_%08x", tasks.count + 1), "title": title.trimmingCharacters(in: .whitespacesAndNewlines), "body": text, "priority": priority, "assignee": assignee, "owner": "ranch", "dependencies": dependencies, "status": "blocked"]
-      tasks.append(task); persistTasks(); tasksByRequest[id] = task
+      if (fixture["workFixture"] as? [String: Any])?["taskOrder"] as? String == "newest-first" { tasks.insert(task, at: 0) } else { tasks.append(task) }; persistTasks(); tasksByRequest[id] = task
       return mode == "task-create-uncertain" ? error("catchAll", 502) : (200, task)
     }
     if parts.count >= 2 && parts[0] == "tasks" {

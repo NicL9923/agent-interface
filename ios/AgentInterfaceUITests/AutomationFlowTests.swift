@@ -196,15 +196,15 @@ import XCTest
     XCTAssertTrue(save.wait(until: "enabled == true")); save.tapWhenReady()
     let blocked = app.buttons["Blocked (1)"]
     XCTAssertTrue(blocked.waitForExistence(timeout: 10))
-    reveal(blocked, in: form); blocked.tapWhenReady()
+    reveal(blocked, in: form)
     let row = app.buttons["automation.task.fixture-task-1"]
     reveal(row, in: form); row.tapWhenReady()
     let status = app.descendants(matching: .any).matching(identifier: "automation.taskStatus").firstMatch
-    XCTAssertTrue(status.wait(until: "value == %@", "blocked"))
+    XCTAssertTrue(status.wait(until: "value == %@", "Blocked"))
     capture(app, "Native new task remains blocked")
     let start = app.buttons["Start task"]
     reveal(start, in: app.collectionViews["automation.taskDetail"]); start.tapWhenReady()
-    XCTAssertTrue(status.wait(until: "value == %@", "ready"))
+    XCTAssertTrue(status.wait(until: "value == %@", "Ready"))
     reveal(status, in: app.collectionViews["automation.taskDetail"], downward: true)
     capture(app, "Native explicit task start")
   }
