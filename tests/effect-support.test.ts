@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { Effect } from 'effect';
 import { cappedBackoff, fromPromise, makeJobs, toPromise } from '../src/server/effect-support.js';
 
@@ -34,5 +34,27 @@ describe('effect support', () => {
     await jobs.interrupt('a');
     expect(jobs.size).toBe(0);
     expect(failures).toEqual([]);
+  });
+  it('runs a pass requested between completion and promise observation', async () => {
+    const jobs = makeJobs<'outbox'>(() => {});
+    let requested = false;
+    let runs = 0;
+    let release!: () => void;
+    const flush = () => {
+      requested = true;
+      return jobs.run('outbox', fromPromise(() => {
+        requested = false;
+        runs++;
+        return runs === 1 ? new Promise<void>(resolve => { release = resolve; }) : Promise.resolve();
+      }), () => requested);
+    };
+    const first = flush();
+    await vi.waitFor(() => expect(runs).toBe(1));
+    release();
+    queueMicrotask(() => { void flush(); });
+    await first;
+    await jobs.drain();
+    expect(runs).toBe(2);
+    expect(requested).toBe(false);
   });
 });

@@ -20,27 +20,37 @@ export interface Jobs<K extends string> {
 }
 
 export function makeJobs<K extends string>(onFailure: (error: unknown) => void): Jobs<K> {
-  const jobs = new Map<K, {fiber: Fiber.Fiber<void, unknown>; done: Promise<void>}>();
+  const jobs = new Map<K, {fiber: Promise<Fiber.Fiber<void, unknown>>; done: Promise<void>}>();
   return {
     run(key, work, rerun) {
       const existing = jobs.get(key);
       if (existing) return existing.done;
+      let started!: (fiber: Fiber.Fiber<void, unknown>) => void;
+      let finished!: () => void;
+      const entry = {
+        fiber: new Promise<Fiber.Fiber<void, unknown>>(resolve => { started = resolve; }),
+        done: new Promise<void>(resolve => { finished = resolve; }),
+      };
+      jobs.set(key, entry);
       const loop = Effect.gen(function* () {
         do { yield* work; } while (rerun?.());
-      });
+      }).pipe(Effect.ensuring(Effect.sync(() => {
+        // Remove the job before its exit is observed, so a new request cannot
+        // join a finished fiber and lose a requested outbox pass.
+        if (jobs.get(key) === entry) jobs.delete(key);
+      })));
       const fiber = Effect.runFork(loop);
-      const done = new Promise<void>(resolve => fiber.addObserver(exit => queueMicrotask(() => {
-        if (jobs.get(key)?.fiber === fiber) jobs.delete(key);
+      started(fiber);
+      fiber.addObserver(exit => queueMicrotask(() => {
         try {
           if (!Exit.isSuccess(exit) && !Cause.hasInterruptsOnly(exit.cause)) onFailure(Cause.squash(exit.cause));
-        } finally { resolve(); }
-      })));
-      jobs.set(key, {fiber, done});
-      return done;
+        } finally { finished(); }
+      }));
+      return entry.done;
     },
     async interrupt(key) {
       const job = jobs.get(key);
-      if (job) { await Effect.runPromise(Fiber.interrupt(job.fiber)); await job.done; }
+      if (job) { await Effect.runPromise(Fiber.interrupt(await job.fiber)); await job.done; }
     },
     async drain() {
       while (jobs.size) await Promise.all([...jobs.values()].map(job => job.done));

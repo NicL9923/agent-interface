@@ -28,7 +28,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const)
       process.exit(1);
     }, 30000);
     stopping = app.close().then(
-      () => { clearTimeout(deadline); app.log.info("WildBots stopped"); },
+      () => { clearTimeout(deadline); app.log.info("WildBots stopped"); process.exit(0); },
       error => { clearTimeout(deadline); app.log.error({ error: safeError(error) }, "WildBots did not stop cleanly"); process.exit(1); },
     );
   });

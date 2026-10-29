@@ -5,7 +5,7 @@ Verified September 29, 2026. Direct dependencies use exact versions in
 
 | Component | Pin | Primary evidence |
 | --- | --- | --- |
-| Effect, server lifecycle | 4.0.7 | [Registry](https://registry.npmjs.org/effect/4.0.7) |
+| Effect, server lifecycle, verified October 29, 2026 | 4.0.7 | [Registry](https://registry.npmjs.org/effect/4.0.7) |
 | React and React DOM | 19.3.0 | [React versions](https://react.dev/versions), [registry](https://registry.npmjs.org/react/19.3.0) |
 | TypeScript, retained comparison and rollback compiler | 7.0.2 | [Microsoft release announcement](https://devblogs.microsoft.com/typescript/announcing-typescript-7-0/), [registry](https://registry.npmjs.org/typescript/7.0.2) |
 | Oxc tsrs, command-line type checking | 0.18.0-ts7.1.0-dev.20260929 | [Primary documentation](https://github.com/oxc-project/tsrs), [registry](https://registry.npmjs.org/tsrs/0.18.0-ts7.1.0-dev.20260929) |

@@ -36,7 +36,7 @@ it("closes once across signals and clears the deadline after clean shutdown", as
   finish();
   await vi.advanceTimersByTimeAsync(30000);
   expect(server.log.info).toHaveBeenCalledWith("WildBots stopped");
-  expect(process.exit).not.toHaveBeenCalled();
+  expect(process.exit).toHaveBeenCalledWith(0);
   expect(vi.getTimerCount()).toBe(0);
 });
 
