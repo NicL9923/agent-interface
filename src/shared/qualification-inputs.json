@@ -45,6 +45,7 @@
   "src/server/config.ts",
   "src/server/conversation-routes.ts",
   "src/server/discovery.ts",
+  "src/server/effect-support.ts",
   "src/server/event-stream.ts",
   "src/server/experience.ts",
   "src/server/group-watch.ts",

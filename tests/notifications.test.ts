@@ -311,7 +311,9 @@ it.each(["runtime", "outbox", "live"] as const)("drains every job before closing
     await vi.waitFor(() => expect(discoverEvents).toHaveBeenCalledTimes(1));
     expect(sender).toHaveBeenCalledTimes(1);
     expect(liveTick).toHaveBeenCalledTimes(1);
-    const stopping = worker.stop().then(() => { stopped = true; });
+    const stop = worker.stop();
+    expect(worker.stop()).toBe(stop);
+    const stopping = stop.then(() => { stopped = true; });
     for (const name of ["runtime", "outbox", "live"] as const) if (name !== last) {
       gates[name].resolve();
       await finished[name].promise;

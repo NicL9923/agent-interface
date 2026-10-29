@@ -297,6 +297,32 @@ it("keeps discovering events and recovering receipts while an approval read hang
   } finally { release(); await worker.stop(); store.close(); vi.useRealTimers(); }
 });
 
+it("does not reconcile a late approval read after worker shutdown closes the store", async () => {
+  const store = people();
+  store.savePreferences("one", { ...defaultPreferences, followBots: ["barn"] });
+  recordedAgo(store, 2, [approvalEvent("ask", "barn", "a1", "run")]);
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const conversation = vi.fn(async () => {
+    await held;
+    return conversationFixture({ botId: "barn", approvals: [] });
+  });
+  const reconcile = vi.spyOn(store, "reconcileApprovals");
+  const worker = new BackgroundWorker(store, fakeRuntime({ conversation }), loadConfig({}));
+  const ticking = worker.tick();
+  try {
+    await vi.waitFor(() => expect(conversation).toHaveBeenCalledTimes(1));
+    await worker.stop();
+    await ticking;
+  } finally {
+    await worker.stop();
+    store.close();
+    release();
+  }
+  await new Promise<void>(resolve => setImmediate(resolve));
+  expect(reconcile).not.toHaveBeenCalled();
+});
+
 it("finds pending decisions through indexes on a realistically sized history", () => {
   const store = people();
   const db = storeDb(store);
