@@ -585,7 +585,7 @@ struct ConversationView: View {
           }
         } else {
           ShimmerText(
-            text: ActivitySentence.text(name: bot.name, state: store.activity, detail: store.conversation?.activity.detail, connectionLost: !store.connected),
+            text: ActivitySentence.text(name: bot.name, state: store.activity, detail: store.conversation?.activity.detail, connectionLost: !store.connected, offline: reachability.offline),
             moving: [.thinking, .working, .waiting].contains(store.activity))
         }
         if working, let receipt = live.receipt {
@@ -1031,7 +1031,8 @@ enum ActivitySentence {
     .idle: "ready", .thinking: "thinking", .working: "working", .waiting: "waiting for approval",
     .blocked: "waiting for your input", .done: "done", .failed: "having trouble", .interrupted: "stopped", .disconnected: "reconnecting",
   ]
-  static func text(name: String, state: ActivityState, detail: String?, connectionLost: Bool) -> String {
+  static func text(name: String, state: ActivityState, detail: String?, connectionLost: Bool, offline: Bool = false) -> String {
+    if offline { return "\(name) is offline." }
     let step = (detail ?? "").trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: #"[.…]+$"#, with: "", options: .regularExpression)
     if !connectionLost && state == .working && !step.isEmpty { return "\(name) is \(step.prefix(1).lowercased() + step.dropFirst())..." }
     // A state from a newer server has no web verb yet.

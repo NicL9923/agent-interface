@@ -90,4 +90,4 @@ The notification capture also exercises account-scoped Following and equal-time 
 
 - `capture-survival.js` captures empty home/conversation states and checks offline draft preservation and reconnect at desktop and phone widths in the loopback fixture preview. Native `capture-settings-ios.sh` also supports Empty, ShareDraft and Widget/WidgetStale/WidgetEmpty, which render production views with sample data, not system-hosted widgets.
 
-- `test-share-inbox.sh EXISTING_OUTPUT_DIRECTORY` compiles the production Foundation inbox code and checks orphan cleanup preserves recent work, saved drafts, unrelated folders and symlinks. No account data or simulator is used.
+- `test-share-inbox.sh EXISTING_OUTPUT_DIRECTORY` compiles the production Foundation inbox code and checks saved edits and failed writes, plus orphan cleanup that preserves recent work, saved drafts, unrelated folders and symlinks. No account data or simulator is used.

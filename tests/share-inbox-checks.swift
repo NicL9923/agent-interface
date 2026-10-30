@@ -33,8 +33,19 @@ import Foundation
     precondition(manager.fileExists(atPath: link.path) && manager.fileExists(atPath: outside.path), "A symbolic link was followed or removed")
     let capture = SharedCapture(id: UUID().uuidString, scope: "account", text: "Review before sending", files: ["item.txt"], createdAt: now)
     precondition(ShareInbox.valid(capture), "Valid share refused")
+    try ShareInbox.save(capture, in: root)
+    var edited = capture; edited.text = "My edited shared text"; edited.botId = "garden"
+    try ShareInbox.save(edited, in: root)
+    let restored = try JSONDecoder().decode(SharedCapture.self, from: Data(contentsOf: root.appendingPathComponent(capture.id + ".json")))
+    precondition(restored.text == edited.text && restored.botId == "garden", "Edits were lost when reopening a saved share")
+    let blocked = root.appendingPathComponent("not-a-directory")
+    try Data().write(to: blocked)
+    do { try ShareInbox.save(edited, in: blocked); preconditionFailure("A failed save was reported as successful") }
+    catch { }
     var unsafe = capture; unsafe.files = ["../outside.txt"]
     precondition(!ShareInbox.valid(unsafe), "A file escaped its capture directory")
-    print("Share inbox orphan cleanup and file bounds checks passed.")
+    do { try ShareInbox.save(unsafe, in: root); preconditionFailure("An invalid share was written") }
+    catch { }
+    print("Share inbox edits, failed saves, orphan cleanup and file bounds checks passed.")
   }
 }

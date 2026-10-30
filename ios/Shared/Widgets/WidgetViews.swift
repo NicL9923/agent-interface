@@ -234,7 +234,7 @@ struct AssistantsWidgetView: View {
     Group {
       if stale {
         if family == .systemSmall {
-          Label { Text(snapshot.generatedAt, style: .relative) } icon: { Image(systemName: "clock.arrow.circlepath") }
+          Label { Text(snapshot.generatedAt, style: .relative) + Text(" ago") } icon: { Image(systemName: "clock.arrow.circlepath") }
         } else {
           (Text(snapshot.generatedAt, style: .relative) + Text(" ago · Open to refresh"))
         }

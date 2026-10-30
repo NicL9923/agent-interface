@@ -7,8 +7,8 @@ Allow at most three review rounds. If it remains below 9/10 after round three,
 record the remaining issues in the PR and continue. Scores are reviewer judgments,
 not objective measurements of design quality.
 
-Twenty-three of 25 grouped screen areas have passed. Ship these changes in a draft PR and add
-subsequent screens in separate commits. Reuse screenshots where the product UI
+All 25 grouped screen areas have passed. The changes are in draft PR #207, with
+per-area reports, representative captures and remaining coverage gaps below. Reuse screenshots where the product UI
 has not changed. Capture-script changes do not invalidate screenshots or reviews.
 Capture web at desktop and phone widths, and native on one iPhone plus iPad only
 where its layout differs. Run native work through `~/.agents/tools/mac-heavy-lock.sh`
@@ -55,7 +55,7 @@ References collected October 25, 2026. External artwork is reference material on
 
 ## Screen ledger
 
-| Screen | Baseline | Implementation | Opus 5.5 High rating |
+| Screen | Baseline | Implementation | Independent rating, High requested |
 | --- | --- | --- | --- |
 | Today, web and iOS | Web, iPhone and iPad captured | Complete | Web 9.2; iPhone 9.1; iPad 9.1 |
 | Assistants home | Web, iPhone and iPad captured | Complete | Web 9; native 9 |
@@ -81,23 +81,23 @@ References collected October 25, 2026. External artwork is reference material on
 | Settings, following and home sections | Desktop/phone web and current iPhone front captured | Complete | Whole-area rounds: 8.0, 8.5, 9.0 |
 | Integrations | Desktop/phone web and current iPhone captured | Complete | Combined whole-area rounds: 7.8, 8.8, 9.1 |
 | Computer and terminal | Desktop/phone web and current iPhone viewer captured | Complete | Whole-area rounds: 7.6, 8.6, 9.0 |
-| Hermes updates and recovery | Pending | Pending | Pending |
-| Sign-in and connection recovery | Pending | Pending | Pending |
+| Hermes updates and recovery | Desktop/phone web and iPhone recovery captured | Complete | Connection whole-area rounds: 7.0, 8.6, 9.0 |
+| Sign-in and connection recovery | Desktop/phone web and iPhone captured | Complete | Connection whole-area score 9.0 |
 | Command palette and keyboard help | Desktop/phone web captured | Complete | Included in Settings final whole-area score: 9.0 |
-| Attachments, upload failures and large paste | Pending | Pending | Pending |
+| Attachments, upload failures and large paste | Not separately captured in this pass | Existing behavior retained | Auxiliary coverage gap tracked in #206 |
 | Find in conversation | Desktop/phone web captured and exercised | Complete | Included in Settings final whole-area score: 9.0 |
-| Voice recording and playback | Pending | Pending | Pending |
-| Status dock, connection notices and app updates | Pending | Pending | Pending |
-| Toasts, undo and stop confirmation | Pending | Pending | Pending |
-| Notification setup and settings | Pending | Pending | Pending |
-| Apple device connections | Pending | Pending | Pending |
-| Offline library | Pending | Pending | Pending |
+| Voice recording and playback | Not separately captured in this pass | Existing behavior retained | Auxiliary coverage gap tracked in #206 |
+| Status dock, connection notices and app updates | Connection notices captured; app-update states not separately captured | Connection scope complete | Connection area 9.0; app-update coverage gap in #206 |
+| Toasts, undo and stop confirmation | Context-menu undo reviewed; other transient states not separately captured | Existing behavior retained | Home context menus 9.5; remaining coverage gap in #206 |
+| Notification setup and settings | Desktop/phone web and iPhone ready/blocked fixtures captured | Complete | Whole-area rounds: 7.5, 8.7, 9.1 |
+| Apple device connections | iPhone access/date form captured; snapshot preview source-reviewed | Complete within Notifications area | Whole-area score 9.1; real EventKit data unverified |
+| Offline library | Web outage/reconnect exercised; native cold start source-reviewed | Complete within final area | Whole-area score 9.0; cold-start coverage gap retained |
 | iOS quick switcher | Source reviewed; gestures not captured | Complete in Settings scope | Settings whole-area score 9.0; native interaction remains unverified |
-| Empty conversation | Pending | Pending | Pending |
-| Empty household, app loading and load failure | Pending | Pending | Pending |
-| iOS share extension | Pending | Pending | Pending |
-| Widgets, Live Activity and notification content | Pending | Pending | Pending |
-| Standalone computer page | Pending | Pending | Pending |
+| Empty conversation | Desktop/phone web captured and draft action exercised | Complete | Final-area rounds: 8.3, 9.0 |
+| Empty household, app loading and load failure | Empty roster captured on web/iPhone; recovery captured separately | Complete in final/Connection areas | Both whole-area scores 9.0; not every loading transition captured |
+| iOS share extension | Shared-draft form captured; system extension source-reviewed | Complete within final area | Whole-area score 9.0; real import and system-hosted page unverified |
+| Widgets, Live Activity and notification content | Production small/medium widget views with sample fresh/stale/empty data | Complete within final area | Whole-area score 9.0; system hosts, Live Activity and notification rendering remain gaps |
+| Standalone computer page | Routing source-reviewed; embedded viewer captured | Computer scope complete | Computer area 9.0; standalone page not separately graded |
 
 The avatar specimen is a developer tool and is outside this product design pass.
 Native layouts also need a representative iPad check.
@@ -1147,3 +1147,37 @@ The browser, preview server and simulator are closed. Real share-sheet import,
 file transfer, cold-start offline reading, system-hosted widgets, VoiceOver,
 dark mode and large text remain unverified. Progress remains 24 of 25 grouped
 areas, pending the second whole-area review.
+
+
+## Design pass complete
+
+The final area passed at 9.0 in round 2. All 25 grouped areas have reached the
+review bar, with the reports distinguishing rendered evidence from source-only
+checks. Review round 1's shared-draft navigation finding was withdrawn in round 2;
+the existing conversationRequest path already opens the selected conversation.
+
+Small final follow-ups save edited shared text and the selected assistant before
+Later dismisses the form. An unsaved text edit blocks swipe dismissal, failed
+saves keep the form open, and the editor is disabled while import is underway.
+The production inbox save function validates the capture and writes atomically.
+Standalone Swift checks reopen edited text and selection and verify failed or
+invalid writes throw. Native chat now says Offline when the device is offline.
+The small stale-widget footer includes ago. Its final rendering was recaptured.
+
+The full web suite passes 1,524 tests across 106 files. It first caught two
+pixel-based font sizes in the new empty-list styling; both now use rem with the
+same default size. All 32 Python test programs pass. Two individual checks are
+skipped because the external Hermes native update-lock and delivery sources are
+not supplied. Python lint, the web build and the native app build pass. Native
+compilation and the final captures ran under the machine lock and shut down the
+simulator. No browser, preview server or owned validation command remains active.
+
+This is representative design coverage. The original catalog's auxiliary voice,
+attachment failure, large-paste, transient feedback and standalone computer
+states were not separately graded. Real incoming shares, file transfer, native
+cold-start offline reading, system-hosted widgets and Live Activities, push
+delivery, real EventKit data, and several native gesture/accessibility states
+remain unverified. Native XCTest is still blocked by the installed CoreSimulator
+and Xcode service mismatch. These gaps and optional polish stay in issue #206;
+the table above identifies them instead of implying every state was captured.
+The native batching alignment and empty-widget destination are minor follow-ups.

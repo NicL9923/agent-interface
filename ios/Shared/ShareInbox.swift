@@ -23,6 +23,12 @@ enum ShareInbox {
     if let value, let data = try? JSONEncoder().encode(value) { try? data.write(to: root.appendingPathComponent("context.json"), options: .atomic) }
     else { try? FileManager.default.removeItem(at: root.appendingPathComponent("context.json")) }
   }
+  static func save(_ capture: SharedCapture, in directory: URL? = Self.root) throws {
+    guard valid(capture) else { throw CocoaError(.fileWriteInvalidFileName) }
+    guard let directory else { throw CocoaError(.fileNoSuchFile) }
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    try JSONEncoder().encode(capture).write(to: directory.appendingPathComponent(capture.id + ".json"), options: .atomic)
+  }
   static func pending(scope: String) -> [SharedCapture] {
     guard let root else { return [] }
     pruneOrphans(in: root)

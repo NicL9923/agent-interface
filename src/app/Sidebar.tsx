@@ -64,7 +64,7 @@ export const Sidebar = memo(function Sidebar({ boot, botId, shownBotId, readThro
                 {unread(bot) && <UnreadMark />}{bot.lastMessage?.at && <ListDate value={bot.lastMessage.at} />}
               </span>}</span>
             <small className={working ? `bot-activity state-${botState}` : undefined}>
-              {working ? offline ? "Offline" : stateLabels[botState] : bot.lastMessage?.text || (bot.shared ? "Shared assistant" : "Personal assistant")}
+              {working ? stateLabels[botState] : bot.lastMessage?.text || (bot.shared ? "Shared assistant" : "Personal assistant")}
             </small>
           </span>
         </Button>
