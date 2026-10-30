@@ -78,7 +78,7 @@ References collected October 25, 2026. External artwork is reference material on
 | Logins and secure requests | Desktop/phone web and current iPhone logins captured | Complete | Combined whole-area rounds: 7.8, 8.8, 9.1 |
 | Search, saved items and automations | Desktop/phone web and current iPhone captures | Complete | Whole-area rounds: 8.2, 8.8, 9.0; final CSS and Back-state fixes applied directly |
 | Group chats and threads | Desktop/phone web and iPhone conversation captured | Complete | Whole-area rounds: 7.0, 8.6, 9.0; final scroll follow-ups applied directly |
-| Settings, following and home sections | Desktop/phone web and current iPhone front captured | In progress | Whole-area round 1: 8.0; fixes implemented, round 2 pending |
+| Settings, following and home sections | Desktop/phone web and current iPhone front captured | In progress | Whole-area rounds: 8.0, 8.5; final fixes implemented, round 3 pending |
 | Integrations | Desktop/phone web and current iPhone captured | Complete | Combined whole-area rounds: 7.8, 8.8, 9.1 |
 | Computer and terminal | Desktop/phone web and current iPhone viewer captured | In progress | Whole-area round 1 pending |
 | Hermes updates and recovery | Pending | Pending | Pending |
@@ -749,3 +749,32 @@ Take over and the Safari and Terminal links. Native takeover and Safari gestures
 identity confirmation, unavailable and reconnecting states, provider access,
 VoiceOver, dark mode and large text remain unverified. The browser and preview
 server are closed. This is a baseline for the first whole-area review.
+
+
+Settings round 2 scored 8.5. The final pass always finishes a native dialog close
+so the app can reopen Settings, even when a local name is invalid. Keep original
+name restores the saved text without sending an edit. Find pins its selected
+message for the query, so a newly arriving matching reply does not replace it.
+Section rows show total membership with an unbroken pinned summary; the section
+page labels pinned members. More assistants and Following wording now agree
+across clients, and the palette uses keyboard and sun icons for those actions.
+
+Native Add refuses a duplicate section name with inline feedback. The first
+rename error is announced through the accessibility announcement API. Settings
+also has a Command-comma action, and the quick-switch sheet handoff waits for
+dismissal. These native interactions remain source-only. The app compiled, the
+Settings front was captured, and the final incremental build completed under
+the machine lock after a small empty-note rendering correction.
+
+All 108 focused checks pass. New regressions cover forced native close with
+valid and invalid drafts, restoring the original name and keeping Find's
+selection when a matching reply arrives. The agent repeated the web flows at
+both widths and reopened Settings after explicitly calling native dialog close.
+This Chromium allowed both Escape cancellations, so the agent does not claim
+Escape forced that close. The noncancelable close is also covered by the focused
+UI test. A first capture stopped on that browser difference; a second stopped
+on a temporary section left by the first. The fixture was reset, and the tool
+now restores its initial preferences even after failure. The completed capture
+contains both widths; the error frames were refreshed after their final CSS
+polish. Browser and preview server are closed. The third review is final; any
+remaining issues will be recorded in the PR and the review will move on.

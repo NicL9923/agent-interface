@@ -4,6 +4,8 @@ async (page, { origin, outputDir }) => {
   const context = await page.context().browser().newContext({ serviceWorkers: 'block', reducedMotion: 'reduce', colorScheme: 'light' });
   const tab = await context.newPage();
   const paths = [];
+  const checks = [];
+  let initialPreferences;
   const shot = async name => {
     await tab.mouse.move(0, 0);
     await tab.evaluate(async () => {
@@ -20,6 +22,9 @@ async (page, { origin, outputDir }) => {
     if (!(await response).ok()) throw new Error('Fixture preferences did not save');
   };
   try {
+    const bootstrap = await context.request.get(`${origin}/api/bootstrap`);
+    if (!bootstrap.ok()) throw new Error('Fixture bootstrap failed');
+    initialPreferences = (await bootstrap.json()).preferences;
     for (const width of [1440, 390]) {
       await tab.setViewportSize({ width, height: width === 1440 ? 1000 : 844 });
       await tab.goto(`${origin}/?view=conversation&bot=ranch`);
@@ -63,6 +68,20 @@ async (page, { origin, outputDir }) => {
       await section.getByRole('button', { name: 'Back to settings', exact: true }).click();
       await section.getByRole('alert').waitFor();
       await shot(`settings-rename-error-${width}`);
+      await section.getByRole('button', { name: 'Keep original name', exact: true }).click();
+      if (await section.getByRole('textbox', { name: 'Section name', exact: true }).inputValue() !== 'Weekend plans') throw new Error('Original section name was not restored');
+      await section.getByRole('textbox', { name: 'Section name', exact: true }).fill('Around the house');
+      await tab.keyboard.press('Escape');
+      await section.getByRole('alert').waitFor();
+      await tab.keyboard.press('Escape');
+      const escapedClosed = !(await section.isVisible());
+      // This Chromium may permit both cancellations. Exercise the noncancelable
+      // close path directly as well, without claiming Escape caused it.
+      if (!escapedClosed) await section.evaluate(dialog => dialog.close());
+      await section.waitFor({ state: 'hidden' });
+      checks.push({ width, repeatedEscapeClosed: escapedClosed, nativeCloseHandled: true });
+      await tab.getByRole('button', { name: 'Settings', exact: true }).click();
+      await sheet.getByRole('button', { name: /^Weekend plans/ }).click();
       await section.getByRole('textbox', { name: 'Section name', exact: true }).fill('Weekend restored');
       await save(() => section.getByRole('button', { name: 'Back to settings', exact: true }).click());
       await sheet.getByRole('button', { name: /^Weekend restored/ }).click();
@@ -108,11 +127,16 @@ async (page, { origin, outputDir }) => {
       await find.press('Escape');
       if (await find.count()) throw new Error('Escape did not close Find');
     }
-    return { paths };
+    return { paths, checks };
   } catch (error) {
     await tab.screenshot({ path: `${outputDir}/capture-failure.png` }).catch(() => {});
     throw error;
   } finally {
-    await context.close();
+    try {
+      if (initialPreferences) {
+        const restored = await context.request.patch(`${origin}/api/preferences`, { data: initialPreferences });
+        if (!restored.ok()) throw new Error('Fixture preferences could not be restored');
+      }
+    } finally { await context.close(); }
   }
 }

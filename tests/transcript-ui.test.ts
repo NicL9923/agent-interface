@@ -535,6 +535,17 @@ describe("find in chat", () => {
     }
   });
 
+  it("keeps the selected match when a new matching reply arrives", async () => {
+    await render();
+    await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "f", metaKey: true, cancelable: true })));
+    await typeInto(find(), "gate");
+    await advance(300);
+    expect(count()).toBe("3 of 3");
+    conversation = { ...conversation, messages: [...conversation.messages, answer("newest", "Another gate update.")] };
+    await changed();
+    expect(count()).toBe("3 of 4");
+  });
+
   it("opens with Cmd+F, counts loaded matches, then merges unloaded history and opens it", async () => {
     await render();
     const before = labelled("Copy reply");

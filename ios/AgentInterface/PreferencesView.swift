@@ -209,7 +209,7 @@ struct PreferencesView: View {
     } label: {
       VStack(alignment: .leading, spacing: 4) {
         Text(HomeSummary.following(bots.filter { preferences.isFollowing($0.id) }.count))
-        Text("All of their activity, not just shared tasks").font(.caption).foregroundStyle(.secondary)
+        Text("Choose whose activity you want to follow").font(.caption).foregroundStyle(.secondary)
       }
     }.accessibilityIdentifier("followedAssistants")
   }

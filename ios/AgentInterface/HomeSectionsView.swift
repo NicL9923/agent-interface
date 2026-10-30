@@ -54,7 +54,7 @@ struct FollowedAssistantsView: View {
       } footer: {
         Text("Shared-task notifications already go to participants. Follow an assistant to receive all their activity.")
       }.disabled(store.sessionExpired)
-    }.householdListBackground().navigationTitle("Follow all activity").navigationBarTitleDisplayMode(.inline)
+    }.householdListBackground().navigationTitle("Following").navigationBarTitleDisplayMode(.inline)
   }
 }
 
@@ -63,6 +63,7 @@ struct HomeSectionRows: View {
   @Binding var preferences: Preferences
   var bots: [Bot]
   @State private var newName = ""
+  @State private var addError: String?
   private var trimmed: String { newName.trimmingCharacters(in: .whitespacesAndNewlines) }
   var body: some View {
     ForEach(preferences.sections) { section in
@@ -78,6 +79,7 @@ struct HomeSectionRows: View {
       NavigationLink("Reorder sections") { ReorderSectionsView(preferences: $preferences) }
         .accessibilityIdentifier("reorderSections")
     }
+    if let addError { Text(addError).font(.footnote).foregroundStyle(Palette.danger) }
     if preferences.canAddSection { addRow } else {
       Text("You have the most sections home can show (\(Preferences.sectionLimit)).").font(.footnote).foregroundStyle(.secondary)
     }
@@ -85,7 +87,7 @@ struct HomeSectionRows: View {
   private func sectionSummary(_ section: BotSection) -> String {
     let members = bots.filter { section.botIds.contains($0.id) }
     let pinned = members.filter { preferences.favorites.contains($0.id) }.count
-    return "\(HomeSummary.assistants(members.count - pinned)) in section" + (pinned > 0 ? " · \(pinned) pinned" : "")
+    return HomeSummary.assistants(members.count) + (pinned > 0 ? (pinned == members.count ? " · All pinned" : " · \(pinned) pinned") : "")
   }
   /// Reads as an action, not a dimmed field: an accent plus and prompt, and Add appears once
   /// there is a name to add. An always-visible but disabled Add made the row look switched off.
@@ -101,6 +103,12 @@ struct HomeSectionRows: View {
     }
   }
   private func add() {
+    if preferences.sections.contains(where: { $0.name.localizedCaseInsensitiveCompare(trimmed) == .orderedSame }) {
+      addError = "A section with that name already exists."
+      AccessibilityNotification.Announcement(addError!).post()
+      return
+    }
+    addError = nil
     guard let next = preferences.addingSection(named: newName) else { return }
     preferences = next
     newName = ""
@@ -147,7 +155,8 @@ struct HomeSectionView: View {
         Section {
           ForEach(bots) { bot in
             let other = preferences.section(of: bot.id).flatMap { $0.id == sectionId ? nil : $0 }
-            AssistantCheckRow(bot: bot, selected: section.botIds.contains(bot.id), note: other.map { "In \($0.displayName)" }) {
+            let note = [other.map { "In \($0.displayName)" }, preferences.favorites.contains(bot.id) ? "Pinned on home" : nil].compactMap { $0 }.joined(separator: " · ")
+            AssistantCheckRow(bot: bot, selected: section.botIds.contains(bot.id), note: note.isEmpty ? nil : note) {
               preferences = preferences.moving(bot: bot.id, toSection: section.botIds.contains(bot.id) ? nil : sectionId)
             }
           }
@@ -158,6 +167,8 @@ struct HomeSectionView: View {
           Button("Delete section", role: .destructive) { deleteConfirm = true }.accessibilityIdentifier("deleteSection")
         } footer: { Text("Its assistants move back to More assistants on home.") }
       }
+    }.onChange(of: nameError) { old, error in
+      if let error, old == nil { AccessibilityNotification.Announcement(error).post() }
     }.onAppear { name = section?.name ?? "" }.disabled(store.sessionExpired).householdListBackground()
       .navigationTitle(section?.displayName ?? "Section").navigationBarTitleDisplayMode(.inline)
       .confirmationDialog("Delete \(section?.displayName ?? "this section")?", isPresented: $deleteConfirm, titleVisibility: .visible) {

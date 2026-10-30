@@ -67,10 +67,10 @@ export function CommandPalette({ boot, botId, shownBotId, readThrough, connectio
       ...onFind ? [{ id: "action:find", group: "Actions", label: "Find in chat", keywords: ["search this chat"], icon: icon("search"), hint: formatCombo(shortcuts.find), run: onFind }] : [],
       { id: "action:new", group: "Actions", label: "New assistant", keywords: ["create", "add"], icon: icon("plus"), run: onNewBot },
       { id: "action:settings", group: "Actions", label: "Settings", keywords: ["preferences", "account", "notifications"], icon: icon("gear"), run: onSettings },
-      { id: "action:shortcuts", group: "Actions", label: "Keyboard shortcuts", keywords: ["keys", "help"], icon: icon("sliders"), hint: formatCombo(shortcuts.help), run: onShortcuts },
+      { id: "action:shortcuts", group: "Actions", label: "Keyboard shortcuts", keywords: ["keys", "help"], icon: icon("keyboard"), hint: formatCombo(shortcuts.help), run: onShortcuts },
       ...themes.map(([theme, name]): Command => ({
         id: `theme:${theme}`, group: "Appearance", label: `Appearance: ${name}`, keywords: [name, "theme", `${name} mode`],
-        icon: icon(theme === "dark" ? "sparkle" : theme === "light" ? "today" : "computer"),
+        icon: icon(theme === "dark" ? "sparkle" : theme === "light" ? "sun" : "computer"),
         checked: (boot.preferences.theme || "system") === theme, run: () => onTheme(theme),
       })),
       { id: "search", group: "Search", label: "", trailing: true, icon: icon("search"), run: () => onSearch(query.trim()) },

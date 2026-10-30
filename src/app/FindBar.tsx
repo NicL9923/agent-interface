@@ -27,7 +27,7 @@ export function FindBar({ botId, conversation, scroll, openMessage, onClose }: {
 }) {
   const input = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
-  const [local, setLocal] = useState<FindMatch[]>([]);
+  const [localResult, setLocal] = useState<{ needle: string; matches: FindMatch[] }>({ needle: "", matches: [] });
   const [remote, setRemote] = useState<{ query: string; hits: SearchHit[] } | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const needle = query.trim().toLocaleLowerCase();
@@ -35,8 +35,8 @@ export function FindBar({ botId, conversation, scroll, openMessage, onClose }: {
   // Loaded matches follow what is on screen, including replies still arriving. A new query brings
   // its newest loaded match into view, without loading anything.
   useEffect(() => {
-    setLocal(scroll.current ? localMatches(shownMessages(scroll.current), query) : []);
-  }, [query, conversation, scroll]);
+    setLocal({ needle, matches: scroll.current ? localMatches(shownMessages(scroll.current), query) : [] });
+  }, [query, needle, conversation, scroll]);
   // Only the latest query's response counts; an older one that lands late is dropped.
   const latest = useRef(0);
   useEffect(() => {
@@ -49,12 +49,16 @@ export function FindBar({ botId, conversation, scroll, openMessage, onClose }: {
     }, SEARCH_DELAY);
     return () => clearTimeout(timer);
   }, [query, botId]);
+  const local = useMemo(() => localResult.needle === needle ? localResult.matches : [], [localResult, needle]);
   const matches = useMemo(() => mergeFindMatches(local, remote?.query === query.trim() ? remote.hits : [], {
     botId, sessionId: conversation?.sessionId, loadedIds: new Set(conversation?.messages.map(message => message.id)),
   }), [local, remote, query, botId, conversation]);
   const chosen = selected ? matches.findIndex(match => match.messageId === selected) : -1;
   const index = chosen >= 0 ? chosen : matches.length - 1;
   const current = matches[index];
+  useEffect(() => {
+    if (current && selected === null) setSelected(current.messageId);
+  }, [current?.messageId, selected]);
   useEffect(() => {
     if (current?.loaded && needle) openMessage(current.messageId, false, needle);
   }, [current?.messageId, current?.loaded, needle, openMessage]);

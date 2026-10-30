@@ -16,7 +16,6 @@ import { addSection, checkSectionName, moveSection, newSectionId, sectionLimit, 
 import type { Section } from "./preferences-editing";
 import { usePreferenceEdits, type PreferenceEdit } from "./use-preference-edits";
 import "./home.css";
-import { FormMessage } from "../components/ui/form-message";
 import { SettingsConfirmation } from "../components/SettingsConfirmation";
 import { formatCombo, shortcuts } from "./shortcuts";
 
@@ -72,7 +71,11 @@ export function PreferencesDialog({ boot, connectionLost, offline, editPreferenc
   }, [shown.kind, section?.id]);
   const title = shown.kind === "following" ? "Following" : shown.kind === "section" ? section!.name : "Settings";
   return (
-    <Dialog initialFocus="#settings-title" className="settings-sheet" aria-labelledby="settings-title" onClose={close}
+    <Dialog initialFocus="#settings-title" className="settings-sheet" aria-labelledby="settings-title" onClose={() => {
+        // Chromium can force a native close after repeated Escape presses. Always
+        // clear the parent's panel state; an invalid local name keeps its saved value.
+        beforeLeave.current?.(); onClose();
+      }}
       onCancel={event => {
         event.preventDefault();
         if (shown.kind === "main") return close();
@@ -135,7 +138,7 @@ export function PreferencesDialog({ boot, connectionLost, offline, editPreferenc
               <option value={15}>Every 15 minutes</option><option value={60}>Hourly</option>
             </NativeSelect></label>
           {bots.length > 0 && <NavRow icon="bell" label={prefs.followBots.some(id => bots.some(bot => bot.id === id)) ? `Following ${assistants(bots.filter(bot => prefs.followBots.includes(bot.id)).length)}` : "Not following any assistants"}
-            detail="All their activity, not only shared tasks" opens="following" onClick={() => go({ kind: "following" })} />}
+            detail="Choose whose activity you want to follow" opens="following" onClick={() => go({ kind: "following" })} />}
           <Switch label="Quiet hours" checked={!!prefs.notifications?.quietStart}
             onChange={checked => save({ notifications: { timezone, batchMinutes: prefs.notifications?.batchMinutes || 0,
               ...(checked ? { quietStart: "22:00", quietEnd: "07:00" } : {}) } })} />
@@ -215,7 +218,7 @@ function SectionList({ preferences, bots, commit, onOpen }: { preferences: Prefe
   const members = (section: Section) => {
     const known = section.botIds.filter(id => bots.some(bot => bot.id === id));
     const pinned = known.filter(id => preferences.favorites.includes(id)).length;
-    return known.length ? `${assistants(known.length - pinned)} in section${pinned ? ` · ${pinned} pinned` : ""}` : "No assistants yet";
+    return known.length ? <>{assistants(known.length)}{pinned > 0 && <> · <span className="section-pinned-count">{pinned === known.length ? "All pinned" : `${pinned} pinned`}</span></>}</> : "No assistants yet";
   };
   return <>
     <div className="settings-group">
@@ -283,14 +286,17 @@ function SectionPage({ preferences, bots, section, commit, beforeLeave, onDelete
         onChange={event => { setName(event.target.value); setError(""); }} />
       {changed && <Button type="submit" className="primary">Rename</Button>}
     </form>
-    {error && <FormMessage tone="error" className="settings-footnote">{error}</FormMessage>}
-    <p className="settings-footnote">The name saves with Rename or when you go back.</p>
+    {error && <p className="settings-footnote form-error" role="alert">{error}</p>}
+    <div className="section-name-help">
+      <p className="settings-footnote">Valid names save with Rename or Back.</p>
+      {changed && <Button type="button" onClick={() => { setName(section.name); setError(""); field.current?.focus(); }}>Keep original name</Button>}
+    </div>
     <h3 className="settings-heading">Assistants in {section.name}</h3>
     <div className="settings-group" role="group" aria-label={`Assistants in ${section.name}`}>
       {bots.map(bot => {
         const elsewhere = sectionOf(preferences, bot.id);
         return <BotChoice key={bot.id} bot={bot} checked={section.botIds.includes(bot.id)}
-          detail={elsewhere && elsewhere.id !== section.id ? `In ${elsewhere.name}` : undefined}
+          detail={[elsewhere && elsewhere.id !== section.id ? `In ${elsewhere.name}` : undefined, preferences.favorites.includes(bot.id) ? "Pinned on home" : undefined].filter(Boolean).join(" · ") || undefined}
           onChange={checked => commit(value => {
             const current = value.sections.find(item => item.id === section.id)?.botIds ?? [];
             return setSectionBots(value, section.id, checked ? [...current, bot.id] : current.filter(id => id !== bot.id));
@@ -302,8 +308,8 @@ function SectionPage({ preferences, bots, section, commit, beforeLeave, onDelete
       <Button type="button" className="settings-row danger" onClick={() => setDeleting(true)}>
         <span className="row-label">Delete section</span></Button>
     </div>
-    <p className="settings-footnote">Its assistants stay on home, in the main list.</p>
-    {deleting && <SettingsConfirmation title={`Delete ${section.name}?`} detail="Its assistants stay on home, in the main list." confirmLabel="Delete section" cancelLabel="Keep section" danger busy={false}
+    <p className="settings-footnote">Its assistants stay on home, under More assistants.</p>
+    {deleting && <SettingsConfirmation title={`Delete ${section.name}?`} detail="Its assistants stay on home, under More assistants." confirmLabel="Delete section" cancelLabel="Keep section" danger busy={false}
       fallbackFocus={() => field.current} onCancel={() => setDeleting(false)} onConfirm={() => {
         commit(value => removeSection(value, section.id)); onDeleted();
       }} />}

@@ -70,7 +70,7 @@ describe("home sections", () => {
 
   it("lists sections with counts, reorders them, and opens one multi-select per section", async () => {
     await render();
-    expect(Array.from(container.querySelectorAll(".section-open small")).map(item => item.textContent)).toEqual(["2 assistants in section", "No assistants yet"]);
+    expect(Array.from(container.querySelectorAll(".section-open small")).map(item => item.textContent)).toEqual(["2 assistants", "No assistants yet"]);
     await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Move Kids up"]')!.click());
     expect(saved.at(-1)!.sections.map(section => section.id)).toEqual(["kids", "house"]);
     await act(async () => container.querySelector<HTMLButtonElement>('[data-opens="section:kids"]')!.click());
@@ -119,10 +119,39 @@ describe("home sections", () => {
     expect(props.onClose).not.toHaveBeenCalled();
   });
 
+  it("discards an invalid local rename without changing the saved section", async () => {
+    await render();
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-opens="section:kids"]')!.click());
+    const name = container.querySelector<HTMLInputElement>('[aria-label="Section name"]')!;
+    await typeInto(name, "Around the house");
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Back to settings"]')!.click());
+    await act(async () => button("Keep original name").click());
+    expect(name.value).toBe("Kids");
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Back to settings"]')!.click());
+    expect(title()).toBe("Settings");
+    expect(saved).toHaveLength(0);
+  });
+
+  it.each(["Around the house", "Family"])("finishes a forced native close with draft %s", async value => {
+    await render();
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-opens="section:kids"]')!.click());
+    await typeInto(container.querySelector<HTMLInputElement>('[aria-label="Section name"]')!, value);
+    await act(async () => {
+      const dialog = container.querySelector("dialog")!;
+      dialog.dispatchEvent(new Event("cancel", { cancelable: false }));
+      dialog.close();
+      dialog.dispatchEvent(new Event("close"));
+    });
+    expect(props.onClose).toHaveBeenCalledTimes(1);
+    if (value === "Family") expect(saved.at(-1)!.sections[1].name).toBe("Family");
+    else expect(saved).toHaveLength(0);
+  });
+
   it("explains pinned members and stops adding at the section limit", async () => {
     props.boot.preferences = { ...props.boot.preferences, favorites: ["ranch"], sections: Array.from({ length: 30 }, (_, n) => ({ id: `s${n}`, name: `Section ${n}`, botIds: n ? [] : ["ranch", "kitchen"] })) };
     await render();
-    expect(container.querySelector(".section-open small")?.textContent).toBe("1 assistant in section · 1 pinned");
+    expect(container.querySelector(".section-open small")?.textContent).toBe("2 assistants · 1 pinned");
     expect(container.querySelector('[aria-label="New section name"]')).toBeNull();
     expect(container.textContent).toContain("most sections home can show (30)");
     expect(props.editPreferences).not.toHaveBeenCalled();
@@ -147,7 +176,7 @@ describe("following", () => {
   it("summarizes followed assistants in one row and edits them in one list, without losing quick taps", async () => {
     await render();
     expect(container.textContent).not.toContain("Follow all activity");
-    const row = button("Following 1 assistantAll their activity, not only shared tasks");
+    const row = button("Following 1 assistantChoose whose activity you want to follow");
     await act(async () => row.click());
     expect(title()).toBe("Following");
     expect(choice("Ranch hand").checked).toBe(true);

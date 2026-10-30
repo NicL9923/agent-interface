@@ -201,6 +201,11 @@ struct RootView: View {
       store.searchFocusPending = true
       destination = .find; path = [.search]; compactColumn = .detail
     case .stop: break
+    case .settings:
+      if store.bootstrap != nil {
+        if quickSwitcherOpen { quickSettingsRequested = true; quickSwitcherOpen = false }
+        else { preferencesOpen = true }
+      }
     case .quickSwitch: if store.bootstrap != nil { quickSwitcherOpen = true }
     }
   }
