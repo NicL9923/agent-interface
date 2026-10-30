@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { rankItems, scoreText, step, type PaletteItem } from "../src/app/palette";
-import { formatCombo, isTypingTarget, matchCombo, shortcuts } from "../src/app/shortcuts";
+import { applePlatform, formatCombo, isTypingTarget, matchCombo, shortcuts } from "../src/app/shortcuts";
 import { ownPrompts, recallStep, type Recall } from "../src/app/prompt-recall";
 import { LARGE_PASTE_BYTES, largePasteFile } from "../src/app/large-paste";
 import { sortDock, type DockItem } from "../src/app/StatusDock";
@@ -51,6 +51,23 @@ describe("palette ranking", () => {
 });
 
 describe("shortcut matching", () => {
+  it.each([
+    [{ userAgentData: { platform: "macOS" }, platform: "MacIntel" }, true],
+    [{ userAgentData: { platform: "Windows" }, platform: "Win32" }, false],
+    [{ userAgentData: { platform: "Linux" }, platform: "Linux aarch64" }, false],
+    [{ platform: "MacIntel" }, true],
+    [{ platform: "iPhone" }, true],
+    [{ platform: "", userAgent: "Mozilla/5.0 (iPad; CPU OS)" }, true],
+  ])("detects the shortcut modifier from platform data %j", (platform, apple) => {
+    vi.stubGlobal("navigator", platform);
+    try {
+      expect(applePlatform()).toBe(apple);
+      expect(formatCombo(shortcuts.palette)).toBe(apple ? "⌘K" : "Ctrl+K");
+      expect(matchCombo(new KeyboardEvent("keydown", { key: "k", metaKey: apple, ctrlKey: !apple }), shortcuts.palette)).toEqual({});
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
   const key = (init: KeyboardEventInit & { target?: EventTarget }) => {
     const event = new KeyboardEvent("keydown", init);
     if (init.target) Object.defineProperty(event, "target", { value: init.target });

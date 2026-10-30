@@ -78,14 +78,14 @@ References collected October 25, 2026. External artwork is reference material on
 | Logins and secure requests | Desktop/phone web and current iPhone logins captured | Complete | Combined whole-area rounds: 7.8, 8.8, 9.1 |
 | Search, saved items and automations | Desktop/phone web and current iPhone captures | Complete | Whole-area rounds: 8.2, 8.8, 9.0; final CSS and Back-state fixes applied directly |
 | Group chats and threads | Desktop/phone web and iPhone conversation captured | Complete | Whole-area rounds: 7.0, 8.6, 9.0; final scroll follow-ups applied directly |
-| Settings, following and home sections | Pending | Pending | Pending |
+| Settings, following and home sections | Desktop/phone web and current iPhone front captured | In progress | Whole-area round 1 pending |
 | Integrations | Desktop/phone web and current iPhone captured | Complete | Combined whole-area rounds: 7.8, 8.8, 9.1 |
 | Computer and terminal | Pending | Pending | Pending |
 | Hermes updates and recovery | Pending | Pending | Pending |
 | Sign-in and connection recovery | Pending | Pending | Pending |
-| Command palette and keyboard help | Pending | Pending | Pending |
+| Command palette and keyboard help | Desktop/phone web captured | In progress | Included in Settings round 1 |
 | Attachments, upload failures and large paste | Pending | Pending | Pending |
-| Find in conversation | Pending | Pending | Pending |
+| Find in conversation | Desktop/phone web captured and exercised | In progress | Included in Settings round 1 |
 | Voice recording and playback | Pending | Pending | Pending |
 | Status dock, connection notices and app updates | Pending | Pending | Pending |
 | Toasts, undo and stop confirmation | Pending | Pending | Pending |
@@ -668,3 +668,34 @@ Send at both web widths and Load more retains the reading position. Native
 compiled; its scroll behavior remains source-only. Repeated quotes in long
 single-thread runs and initial-position consistency remain optional polish.
 App settings and navigation are next. No fourth group review is planned.
+
+
+## Settings and navigation, round 1
+
+Nineteen of 25 grouped areas have passed. Learning and Routines are counted
+separately, correcting the earlier total of 24. Groups completed its third round
+at 9.0. Six areas remain, including event triggers.
+
+Settings now has desktop and phone web captures of its main page, Following,
+section membership, section ordering, keyboard help, the command palette and
+Find in chat. The agent toggled and restored Advanced details, followed and
+unfollowed an assistant, created and renamed a section, moved an assistant into
+it, reordered it, then deleted it. These operations used the loopback fixture.
+The agent also opened Settings through the filtered palette and moved between
+Find matches before closing Find with Escape.
+
+Using the Mac shortcuts exposed a platform-detection bug: Chromium reports
+`macOS`, which did not match the case-sensitive `Mac` check. Detection is now
+case-insensitive. The 26 shell-logic checks cover modern and fallback Apple
+platform strings, Windows and Linux, displayed shortcut hints and the actual
+modifier matching. The web build completed. All 16 capture interactions
+completed, and the agent inspected representative main-page and palette images.
+
+The iPhone capture shows the actual compiled Settings front through a Debug-only
+fixture route. The native build and the capture ran under the machine-wide lock;
+the simulator was shut down afterward. Following and section editing on native,
+Quick Switcher interaction, notification delivery, live account changes,
+VoiceOver, dark mode and large text remain unverified. Native and web fixture
+account names, update dates and start-page values differ by fixture setup.
+No product parity claim comes from those values. Both browser and preview
+server were closed after capture. The first whole-area review is pending.

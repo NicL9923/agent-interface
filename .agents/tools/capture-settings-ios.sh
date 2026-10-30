@@ -26,8 +26,10 @@ for tab in "$@"; do
   settings_tab=$tab
   discovery_tab=""
   group_capture=0
+  preferences_capture=0
   capture_delay=${NATIVE_CAPTURE_DELAY:-5}
   case "$tab" in
+    Preferences) settings_tab=""; preferences_capture=1 ;;
     Groups) settings_tab=""; group_capture=1; capture_delay=${NATIVE_CAPTURE_DELAY:-12} ;;
     Search) settings_tab=""; discovery_tab=search ;;
     History) settings_tab=""; discovery_tab=history ;;
@@ -40,6 +42,7 @@ for tab in "$@"; do
   SIMCTL_CHILD_AGENT_INTERFACE_UI_AUTOMATION=1 \
   SIMCTL_CHILD_AGENT_INTERFACE_UI_GROUP="$group_capture" \
   SIMCTL_CHILD_AGENT_INTERFACE_UI_CAPTURE_GROUP="$group_capture" \
+  SIMCTL_CHILD_AGENT_INTERFACE_UI_CAPTURE_PREFERENCES="$preferences_capture" \
   SIMCTL_CHILD_AGENT_INTERFACE_UI_CAPTURE_SETTINGS_TAB="$settings_tab" \
   SIMCTL_CHILD_AGENT_INTERFACE_UI_CAPTURE_DISCOVERY_TAB="$discovery_tab" \
     "$simctl" launch --terminate-running-process "$simulator" "$bundle"

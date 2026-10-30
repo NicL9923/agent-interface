@@ -133,6 +133,7 @@ struct RootView: View {
   }
   #if DEBUG
   private func capturePageIfAsked() {
+    if DebugFixtures.capturePreferencesPage { preferencesOpen = true; return }
     if DebugFixtures.captureGroupPage {
       destination = .groups; path = [.groups]; compactColumn = .detail; return
     }

@@ -21,6 +21,10 @@
         ["search", "saved", "automations", "history"].contains(tab) else { return nil }
       return tab
     }
+    static var capturePreferencesPage: Bool {
+      let environment = ProcessInfo.processInfo.environment
+      return environment["AGENT_INTERFACE_UI_FIXTURE"] == "1" && environment["AGENT_INTERFACE_UI_CAPTURE_PREFERENCES"] == "1"
+    }
     static var captureGroupPage: Bool {
       let environment = ProcessInfo.processInfo.environment
       return environment["AGENT_INTERFACE_UI_FIXTURE"] == "1" && environment["AGENT_INTERFACE_UI_CAPTURE_GROUP"] == "1"
