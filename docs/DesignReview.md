@@ -716,7 +716,9 @@ local with an inline error, and the Quick Switcher includes Settings. That
 action waits for the switcher sheet to dismiss before opening Settings. These
 subpage changes are source-only so far. The current iPhone front capture remains
 valid because its visible layout is unchanged. Native compilation and a refreshed
-front capture are queued together under the machine-wide lock.
+iPhone front capture completed under the machine-wide lock. The simulator
+was shut down by the capture command. Native unit execution and subpage
+interaction remain unverified.
 
 All 104 focused checks pass, including rename leave paths, cancellation and
 confirmation, pinned summaries, the section limit, platform-specific Find and
