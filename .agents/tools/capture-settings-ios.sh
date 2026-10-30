@@ -55,6 +55,7 @@ for tab in "$@"; do
     WidgetEmpty) settings_tab=""; survival_capture=widget-empty ;;
     Preferences) settings_tab=""; preferences_capture=1 ;;
     Notifications) settings_tab=""; notifications_capture=1 ;;
+    NotificationsAX3) settings_tab=""; notifications_capture=1; content_size=accessibility-extra-large ;;
     NotificationsBlocked) settings_tab=""; notifications_capture=1; notifications_blocked=1 ;;
     AppleDate) settings_tab=""; apple_capture=1; apple_date_capture=1 ;;
     Apple) settings_tab=""; apple_capture=1 ;;

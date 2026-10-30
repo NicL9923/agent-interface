@@ -375,7 +375,7 @@ struct GroupConversationView: View {
       draft = UserDefaults.standard.string(forKey: key + ":draft") ?? ""
       if let data = UserDefaults.standard.data(forKey: key) { pending = try? JSONDecoder().decode(GroupSend.self, from: data) }
       await load()
-      if !Task.isCancelled { scrollToLatest(proxy) }
+      if !Task.isCancelled && !more { scrollToLatest(proxy) }
     }
     // The server announces new events on the app event stream; this slow poll only covers a
     // stream that failed unnoticed, and the room's state.
