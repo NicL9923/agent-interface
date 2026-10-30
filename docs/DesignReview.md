@@ -74,7 +74,7 @@ References collected October 25, 2026. External artwork is reference material on
 | Work task editors | Shared before baseline; 16 web, 13 iPhone and 9 iPad after frames reviewed | Complete | Every frame 9 |
 | Work event triggers | Web and native comparisons available | In progress | Whole-screen round 1: 7.6. Fixes implemented; targeted native recapture pending. Six native large-text frames remain accepted |
 | Learning | Desktop/phone web and current iPhone views captured | Complete | Whole-screen rounds: 7.0, 8.5, 9.0 |
-| Routines and results | Pending | Pending | Pending |
+| Routines and results | Desktop/phone web and current iPhone views captured | In progress | Round 1: 7.2; round 2 requested after layout fixes |
 | Logins and secure requests | Pending | Pending | Pending |
 | Search, saved items and automations | Pending | Pending | Pending |
 | Group chats and threads | Pending | Pending | Pending |
@@ -458,3 +458,21 @@ were applied directly: the terminal newline no longer creates a blank diff row,
 and the native policy explanation is a section footer. These do not start a
 fourth review round. Native review-sheet interaction, clipboard and VoiceOver
 remain outside the screenshot coverage. Routines is next.
+
+
+## Routines and results
+
+[Round 1](evidence/design-review/routines-screen-review.md) scored 7.2.
+The next revision labels schedule and status, groups trial and inspection actions
+apart from routine management, and names the trial warning explicitly. Recipes
+have their own heading and focus the populated editor. Namespaced React keys fix
+the duplicate schedule preview when switching between an edit and a recipe.
+Results now name the routine, put the run selector before Refresh, and separate
+Save output from the saved content. Native recipe descriptions use the shared
+muted color and the trial explanation follows Try once.
+
+The agent exercised Edit, recipe selection and focus, schedule previews, and
+opening saved results at desktop and phone widths using synthetic data. A fresh
+iPhone capture covers the routine list, labels, recipe and trial explanation.
+Native editor and result interactions, VoiceOver, large text and live execution
+are outside these captures.

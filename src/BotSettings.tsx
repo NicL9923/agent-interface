@@ -678,6 +678,16 @@ function RoutineManager({
   actions: ReturnType<typeof useAction>;
 }) {
   const [editing, setEditing] = useState<string | null>(null);
+  const editor = useRef<HTMLFormElement>(null);
+  const nameInput = useRef<HTMLInputElement>(null);
+  const editorId = useId();
+  const [focusEditor, setFocusEditor] = useState(false);
+  useEffect(() => {
+    if (!focusEditor) return;
+    editor.current?.scrollIntoView({ block: "start" });
+    nameInput.current?.focus({ preventScroll: true });
+    setFocusEditor(false);
+  }, [focusEditor]);
   const [form, setForm] = useState<Omit<Routine, "id">>({
     botId,
     name: "",
@@ -701,22 +711,23 @@ function RoutineManager({
     await reload();
   });
   return (
-    <>
+    <div className="routine-manager">
       <p className="muted">
         Routines keep working when you are away. Choose notification recipients
         explicitly.
       </p>
+      <h3>Routine recipes</h3>
       <div className="routine-presets" aria-label="Routine recipes">{routinePresets.map(preset => <Button type="button" className="routine-preset" key={preset.id} disabled={busy || !supported}
-        onClick={() => { setEditing(null); setPreviewedSchedule(""); setForm({ botId, name: preset.name, prompt: preset.prompt, schedule: preset.schedule, enabled: false, recipientIds: [bootstrap.user.id], contextFrom: ["self"] }); }}>
+        onClick={() => { setEditing(null); setPreviewedSchedule(""); setFocusEditor(true); setForm({ botId, name: preset.name, prompt: preset.prompt, schedule: preset.schedule, enabled: false, recipientIds: [bootstrap.user.id], contextFrom: ["self"] }); }}>
         <strong>{preset.name}</strong><small>{preset.description}</small></Button>)}</div>
+      {routines.length > 0 && <h3>Saved routines</h3>}
       {routines.map((routine) => (
         <article className="routine-card" key={routine.id}>
-          <h3>{routine.name}</h3>
-          <p>{routine.schedule}</p>
-          <small>{routine.enabled ? "Active" : "Paused"}</small>
+          <h4>{routine.name}</h4>
+          <dl className="routine-meta"><div><dt>Schedule</dt><dd><code>{routine.schedule}</code></dd></div><div><dt>Status</dt><dd>{routine.enabled ? "Active" : "Paused"}</dd></div></dl>
           <p>{routine.prompt}</p>
           <RoutineEnhancements key={`${bootstrap.user.id}:${routine.id}`} routine={routine} userId={bootstrap.user.id} disabled={busy || !supported} onOpenResults={onOpenRoutine ? () => onOpenRoutine(botId, routine.id) : undefined} />
-          <div className="actions">
+          <div className="actions routine-management-actions">
             <Button
               disabled={busy}
               onClick={() =>
@@ -734,6 +745,7 @@ function RoutineManager({
             <Button
               onClick={() => {
                 setEditing(routine.id);
+                setFocusEditor(true);
                 setPreviewedSchedule("");
                 setForm(routine);
               }}
@@ -765,7 +777,7 @@ function RoutineManager({
           </div>
         </article>
       ))}
-      <form
+      <form ref={editor} aria-labelledby={`${editorId}-heading`}
         onSubmit={(e) => {
           e.preventDefault();
           if (previewedSchedule !== form.schedule) { actions.setError("Preview the schedule before saving this routine."); return; }
@@ -788,10 +800,10 @@ function RoutineManager({
           });
         }}
       >
-        <h3>{editing ? "Edit routine" : "New routine"}</h3>
+        <h3 id={`${editorId}-heading`}>{editing ? "Edit routine" : "New routine"}</h3>
         <label>
           Name
-          <Input
+          <Input ref={nameInput}
             required
             value={form.name}
             onChange={(e) => setForm({ ...form, name: e.target.value })}
@@ -815,8 +827,8 @@ function RoutineManager({
             placeholder="Hermes schedule expression"
           />
         </label>
-        <RoutineSchedulePreview key={editing || "new"} botId={botId} schedule={form.schedule} onReady={setPreviewedSchedule} />
-        <AdvancedRoutineFields key={editing ?? "new"} value={form} onChange={setForm} routines={routines} editing={editing} />
+        <RoutineSchedulePreview key={`schedule-${editing || "new"}`} botId={botId} schedule={form.schedule} onReady={setPreviewedSchedule} />
+        <AdvancedRoutineFields key={`advanced-${editing ?? "new"}`} value={form} onChange={setForm} routines={routines} editing={editing} />
         <label className="checkbox-label">
           <Input
             type="checkbox"
@@ -877,7 +889,7 @@ function RoutineManager({
           )}
         </div>
       </form>
-    </>
+    </div>
   );
 }
 

@@ -152,7 +152,10 @@ it("persists a trial admission before dispatch and checks an uncertain run witho
   const routine = { id: "r1", botId: "ranch", name: "Morning", schedule: "0 7 * * *", prompt: "Report", enabled: true };
   vi.mocked(write).mockImplementation(async (_path, value) => { expect(localStorage.getItem("agent-interface:routine-trial:one:r1")).toBe((value as { requestId: string }).requestId); throw new Error("Timed out"); });
   vi.mocked(api).mockRejectedValue(new ApiError("No receipt yet", 404));
-  await render(createElement(RoutineEnhancements, { routine, userId: "one" })); await click("Try once");
+  await render(createElement(RoutineEnhancements, { routine, userId: "one" }));
+  const trial = Array.from(container.querySelectorAll("button")).find(button => button.textContent === "Try once")!;
+  expect(document.getElementById(trial.getAttribute("aria-describedby")!)?.textContent).toContain("Try once runs this routine now.");
+  await click("Try once");
   const requestId = localStorage.getItem("agent-interface:routine-trial:one:r1"); expect(requestId).toBeTruthy(); expect(write).toHaveBeenCalledTimes(1);
   expect(Array.from(container.querySelectorAll("button")).some(button => button.textContent === "Try once")).toBe(false);
   await click("Check run status"); expect(api).toHaveBeenCalledWith(`/routines/r1/runs/${requestId}`); expect(write).toHaveBeenCalledTimes(1);

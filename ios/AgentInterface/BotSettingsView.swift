@@ -657,7 +657,7 @@ struct BotSettingsView: View {
     Section {
       unavailable(.routines)
       Text("Routines keep working when you are away. Choose notification recipients explicitly.")
-        .font(.footnote).foregroundStyle(.secondary)
+        .font(.footnote).foregroundStyle(Palette.muted)
     }
     if let bot {
       if !templates.isEmpty {
@@ -668,7 +668,7 @@ struct BotSettingsView: View {
             } label: {
               VStack(alignment: .leading, spacing: 2) {
                 Text(template.name).font(.headline).foregroundStyle(.primary)
-                Text(template.description).font(.caption).foregroundStyle(.secondary)
+                Text(template.description).font(.caption).foregroundStyle(Palette.muted)
               }
             }.disabled(!store.supports(.routines) || !store.connected).accessibilityIdentifier("routineTemplate.\(template.id)")
           }
@@ -676,8 +676,8 @@ struct BotSettingsView: View {
       }
       ForEach(routines) { routine in
         Section(routine.name) {
-          Text(routine.schedule).font(.subheadline)
-          Text(routine.enabled ? "Active" : "Paused").font(.caption).foregroundStyle(.secondary)
+          LabeledContent("Schedule") { Text(routine.schedule).font(.subheadline).monospaced().foregroundStyle(Palette.muted) }
+          LabeledContent("Status") { Text(routine.enabled ? "Active" : "Paused").foregroundStyle(Palette.muted) }
           Text(routine.prompt).font(.footnote).lineLimit(6)
           RoutineEnhancements(routine: routine, disabled: !store.supports(.routines))
           Button(routine.enabled ? "Pause" : "Resume") {

@@ -23,12 +23,22 @@ it('renders bot envelopes, multiline and legacy deliveries while preserving attr
   expect(container.textContent).toContain('Planner → Ranch hand');expect(container.textContent).toContain('Bring water');
 });
 it('reads a notification-selected routine history and displays the saved output',async()=>{
-  vi.mocked(api).mockImplementation(async(path)=>path.endsWith('/results')?[{id:'run-one',title:'Morning',previewOnly:false}]:{messages:[{id:'reply',role:'assistant',text:'The north gate battery needs replacing.'}],previewOnly:false});
+  vi.mocked(api).mockImplementation(async(path)=>path==='/routines'?[{id:'morning',botId:'ranch',name:'Morning check'}]:path.endsWith('/results')?[{id:'run-one',title:'Morning',previewOnly:false}]:{messages:[{id:'reply',role:'assistant',text:'The north gate battery needs replacing.'}],previewOnly:false});
   await act(async()=>root.render(createElement(RoutineResults,{botId:'ranch',routineId:'morning',userId:'one',onClose:vi.fn()})));
-  expect(api).toHaveBeenCalledWith('/bots/ranch/routines/morning/results/run-one',expect.anything());expect(container.textContent).toContain('north gate battery');
+  expect(api).toHaveBeenCalledWith('/bots/ranch/routines/morning/results/run-one',expect.anything());expect(container.textContent).toContain('north gate battery');expect(container.querySelector('h2')?.textContent).toBe('Morning check results');
+});
+it('keeps routine history readable when the routine-name lookup fails',async()=>{
+  vi.mocked(api).mockImplementation(async path=>{
+    if(path==='/routines')throw new Error('Names unavailable');
+    return path.endsWith('/results')?[{id:'run-one',title:'Morning',previewOnly:false}]:{messages:[{id:'reply',role:'assistant',text:'The gate is closed.'}],previewOnly:false};
+  });
+  await act(async()=>root.render(createElement(RoutineResults,{botId:'ranch',routineId:'morning',userId:'one',onClose:vi.fn()})));
+  expect(container.querySelector('h2')?.textContent).toBe('Routine results');
+  expect(container.textContent).toContain('The gate is closed.');
+  expect(container.querySelector('[role="alert"]')).toBeNull();
 });
 it('reports a saved routine output as a notice, not an error',async()=>{
-  vi.mocked(api).mockImplementation(async(path)=>path.endsWith('/results')?[{id:'run-one',title:'Morning',previewOnly:false}]:{messages:[{id:'reply',role:'assistant',text:'The north gate battery needs replacing.'}],previewOnly:false});
+  vi.mocked(api).mockImplementation(async(path)=>path==='/routines'?[{id:'morning',botId:'ranch',name:'Morning check'}]:path.endsWith('/results')?[{id:'run-one',title:'Morning',previewOnly:false}]:{messages:[{id:'reply',role:'assistant',text:'The north gate battery needs replacing.'}],previewOnly:false});
   vi.mocked(write).mockResolvedValueOnce({});
   await act(async()=>root.render(createElement(RoutineResults,{botId:'ranch',routineId:'morning',userId:'one',onClose:vi.fn()})));
   await click('Save output');

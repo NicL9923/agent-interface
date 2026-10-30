@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { ApiError, pollWhileVisible, request } from "../client-api";
 import type { RoutinePreview, RoutineRunReceipt } from "../shared/experience";
 import type { Routine } from "../shared/types";
@@ -36,6 +36,7 @@ export function RoutineSchedulePreview({ botId, schedule, onReady }: { botId: st
 
 export function RoutineEnhancements({ routine, userId, disabled, onOpenResults }: { routine: Routine; userId: string; disabled?: boolean; onOpenResults?: () => void }) {
   const key = routineTrialKey(userId, routine.id);
+  const trialHintId = useId();
   const [requestId, setRequestId] = useState(() => { try { return localStorage.getItem(key) || ""; } catch { return ""; } });
   const [receipt, setReceipt] = useState<RoutineRunReceipt | null>(null);
   const [busy, setBusy] = useState(false);
@@ -68,12 +69,15 @@ export function RoutineEnhancements({ routine, userId, disabled, onOpenResults }
     catch (e) { setError(`${(e as Error).message} Check this run's status before starting another.`); }
     finally { setBusy(false); }
   }
-  return <div className="routine-enhancements"><RoutineSchedulePreview botId={routine.botId} schedule={routine.schedule} />
-    {onOpenResults ? <button type="button" onClick={onOpenResults}>View results</button> : <a href={`/?bot=${encodeURIComponent(routine.botId)}&routine=${encodeURIComponent(routine.id)}`}>View results</a>}
-    <small className="muted">Runs now. Hermes may move the next run or finish a one-time routine. Paused recurring routines stay paused.</small>
-    <div className="actions">{canStart ? <button type="button" disabled={busy || disabled} onClick={() => void start()}>{busy ? "Starting..." : "Try once"}</button>
-      : <button type="button" disabled={busy || disabled} onClick={() => void check(requestId)}>{busy ? "Checking..." : "Check run status"}</button>}
-      {missing && <button type="button" disabled={busy || disabled} onClick={() => void start(requestId)}>Retry the same request</button>}</div>
+  return <div className="routine-enhancements">
+    <div className="routine-enhancement-actions">
+      {canStart ? <button type="button" aria-describedby={trialHintId} disabled={busy || disabled} onClick={() => void start()}>{busy ? "Starting..." : "Try once"}</button>
+        : <button type="button" disabled={busy || disabled} onClick={() => void check(requestId)}>{busy ? "Checking..." : "Check run status"}</button>}
+      {missing && <button type="button" aria-describedby={trialHintId} disabled={busy || disabled} onClick={() => void start(requestId)}>Retry the same request</button>}
+      <RoutineSchedulePreview botId={routine.botId} schedule={routine.schedule} />
+      {onOpenResults ? <button type="button" onClick={onOpenResults}>View results</button> : <a href={`/?bot=${encodeURIComponent(routine.botId)}&routine=${encodeURIComponent(routine.id)}`}>View results</a>}
+    </div>
+    <p id={trialHintId} className="routine-trial-note">Try once runs this routine now. Hermes may move the next run or finish a one-time routine. Paused recurring routines stay paused.</p>
     {receipt && <p className="routine-run-status" role="status">{receipt.status === "accepted" ? "Trial run started. Hermes will finish it even if you close this screen."
       : receipt.status === "completed" ? "Trial run completed."
       : receipt.status === "failed" ? "Trial run failed."

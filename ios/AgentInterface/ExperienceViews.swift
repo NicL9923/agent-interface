@@ -624,7 +624,13 @@ struct RoutineEnhancements: View {
   var body: some View {
     RoutineSchedulePreview(botId: routine.botId, schedule: routine.schedule)
     NavigationLink("View results") { RoutineResultsView(botId: routine.botId, routineId: routine.id) }
-    Text("Runs now. Hermes may move the next run or finish a one-time routine. Paused recurring routines stay paused.").font(.caption).foregroundStyle(.secondary)
+    if let receipt, !receipt.finished {
+      Button(busy ? "Checking…" : "Check run status") { checkRun(receipt.requestId) }.disabled(busy || disabled || !store.connected)
+    } else {
+      Button(busy ? "Starting…" : "Try once") { startRun() }.disabled(busy || disabled || !store.connected)
+    }
+    if retrySameRun { Button("Retry the same request") { runConfirm = true }.disabled(busy || disabled || !store.connected) }
+    Text("Try once runs this routine now. Hermes may move the next run or finish a one-time routine. Paused recurring routines stay paused.").font(.caption).foregroundStyle(Palette.muted)
       .task(id: "\(store.scope ?? ""):\(routine.id)") {
         receipt = UserDefaults.standard.data(forKey: receiptKey).flatMap { try? JSONDecoder().decode(RoutineRunReceipt.self, from: $0) }
       }
@@ -637,12 +643,6 @@ struct RoutineEnhancements: View {
       .confirmationDialog("The original request may still arrive. Retry using the same saved request ID?", isPresented: $runConfirm, titleVisibility: .visible) {
         Button("Retry same request") { startRun() }
       }
-    if let receipt, !receipt.finished {
-      Button(busy ? "Checking…" : "Check run status") { checkRun(receipt.requestId) }.disabled(busy || disabled || !store.connected)
-    } else {
-      Button(busy ? "Starting…" : "Try once") { startRun() }.disabled(busy || disabled || !store.connected)
-    }
-    if retrySameRun { Button("Retry the same request") { runConfirm = true }.disabled(busy || disabled || !store.connected) }
     if let receipt { Text(receipt.summary).font(.footnote) }
     if let error { ErrorBanner(message: error) }
   }

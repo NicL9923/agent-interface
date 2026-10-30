@@ -801,3 +801,24 @@ it("holds Memory navigation and Close while an accepted save is in flight", asyn
   await act(async () => finish({ ...memory, documents: [{ ...memory.documents[0], revision: "b".repeat(64), entries: [{ id: "2", text: "Edited fact" }] }] }));
   expect(close.disabled).toBe(false); await act(async () => close.click()); expect(onClose).toHaveBeenCalledTimes(1);
 });
+
+
+it("keeps one schedule preview and focuses the editor when editing or choosing a recipe", async () => {
+  const scroll = vi.fn();
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: scroll });
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [{ id: "r1", botId: bot.id, name: "Morning", prompt: "Check the gate", schedule: "0 7 * * *", enabled: true }] : { providers: [], provider: "", model: "" });
+  await click("routines");
+  const editor = () => container.querySelector<HTMLFormElement>(".routine-manager > form")!;
+  const name = () => editor().querySelector<HTMLInputElement>("input")!;
+  expect(editor().querySelectorAll(".routine-preview-control")).toHaveLength(1);
+  await click("Edit", container.querySelector(".routine-card")!);
+  expect(name().value).toBe("Morning");
+  expect(document.activeElement).toBe(name());
+  expect(editor().querySelectorAll(".routine-preview-control")).toHaveLength(1);
+  await act(async () => container.querySelector<HTMLButtonElement>(".routine-preset")!.click());
+  expect(name().value).toBe("Morning brief");
+  expect(document.activeElement).toBe(name());
+  expect(editor().querySelectorAll(".routine-preview-control")).toHaveLength(1);
+  expect(scroll).toHaveBeenCalledWith({ block: "start" });
+  expect(write).not.toHaveBeenCalled();
+});
