@@ -992,3 +992,45 @@ are closed. Only capture entry points changed; notification and Apple product
 behavior is unchanged. The first whole-area review is pending. Progress stays
 23 of 25 grouped areas. The final Connection prompt wording was also recaptured
 at both widths after its small text-size adjustment.
+
+## Notifications and Apple devices, round 2
+
+Round 1 scored 7.5. Device status now says On, Off or Blocked. Blocked guidance
+uses an attention color and icon. Device-only controls and account preferences
+have separate groups, with one device-status message. Batching always explains
+that decisions and failures skip it. Quiet-hours copy names the timezone in a
+sentence. Native orders Following before Quiet hours, matching web. The desktop
+install hint is gone; platform-specific guidance stays beside the device switch.
+
+The browser invitation is account-scoped and remembered only after Enable or
+Not now. It survives a reload before an answer. Another account can receive its
+own invitation even if browser permission was granted earlier. Neither account
+change nor invitation display requests permission or registers push by itself.
+Equal quiet-hour times are rejected locally with an inline explanation on both
+clients, preserving the last valid preferences instead of making a refused save.
+
+The native Apple catalog row is a link to the local selection screen. Web calls
+it On iPhone and omits a permanent unchecked status and empty action row. Server
+and fixture copy use Calendar & Reminders, Your iPhone and assistant/draft wording.
+The Apple form uses the household background and hides the undated-reminder
+option until access is allowed. The Add to draft button describes its action;
+small previews expand initially, show event ranges and reminder due dates, and
+the confirmation repeats counts and the selected dates. The footer includes
+calendar names among the shared fields.
+
+All 67 focused web checks and 11 Python checks pass. Both builds completed.
+The agent repeated simulated push enable/disable, Following and quiet-hours
+editing, including the equal-time error, at both widths. Native captures show
+ready and denied permission fixtures plus the Apple form and its date window.
+The agent caught and corrected a native footer layout that hid its timezone
+sentence, then recaptured both settings states. The browser, preview server and
+simulator are closed.
+
+Snapshot preview, its confirmation, real EventKit permissions/data and actual
+push delivery remain unverified in the app. The new snapshot UI is reviewed as
+source only. Apple's [due-date contract](https://developer.apple.com/documentation/eventkit/ekreminder/duedatecomponents)
+requires Gregorian components; its [date conversion](https://developer.apple.com/documentation/foundation/nsdatecomponents/date)
+needs a calendar. No data-filter change was made without a real-device finding.
+Dated-reminder inclusion remains a device coverage question. Native XCTest,
+VoiceOver, dark mode and large text are still unverified. Round 2 is pending;
+progress remains 23 of 25 grouped areas.

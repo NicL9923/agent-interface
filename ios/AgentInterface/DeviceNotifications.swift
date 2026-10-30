@@ -17,7 +17,7 @@ struct DeviceNotificationState: Equatable {
   static func ready(prompt: Bool) -> DeviceNotificationState {
     DeviceNotificationState(checking: false, canEnable: true, message: "Enable notifications for completed work and requests that need your attention.", prompt: prompt)
   }
-  static let enabledState = DeviceNotificationState(enabled: true, checking: false, canEnable: true, message: "Notifications are enabled for your account on this device.")
+  static let enabledState = DeviceNotificationState(enabled: true, checking: false, canEnable: true, message: "You'll get alerts here for finished work and requests that need you.")
   static let registering = DeviceNotificationState(enabled: true, checking: false, canEnable: true, message: "Registering this device…")
   static let disabledByChoice = DeviceNotificationState(checking: false, canEnable: true, message: "Notifications are disabled on this device. You can enable them here later.")
   static func failed(_ error: String) -> DeviceNotificationState {
@@ -54,7 +54,7 @@ struct NotificationOnboardingCard: View {
     if state.prompt {
       VStack(alignment: .leading, spacing: 10) {
         Text("Enable notifications on this device?").font(.headline)
-        Text("Get notified when work finishes or an assistant needs your attention. You can change this later in Settings > Notifications.")
+        Text("Get an alert when work finishes or an assistant needs you.")
           .font(.footnote)
         if !state.canEnable { Text(state.message).font(.footnote).foregroundStyle(Palette.muted) }
         if let error = state.error { Text(error).font(.footnote).foregroundStyle(Palette.danger) }
@@ -76,24 +76,27 @@ struct DeviceNotificationSettings: View {
   @Environment(AppStore.self) private var store
   var body: some View {
     let state = store.deviceNotifications
-    Toggle(isOn: Binding(
-      get: { state.enabled },
-      set: { on in Task { if on { await NotificationController.shared.enable() } else { await NotificationController.shared.disable() } } }
-    )) {
-      VStack(alignment: .leading, spacing: 2) {
-        Text("Notifications on this device")
-        Text(state.enabled ? "Enabled" : "Disabled").font(.caption).foregroundStyle(Palette.muted)
+    VStack(alignment: .leading, spacing: 8) {
+      Toggle(isOn: Binding(
+        get: { state.enabled },
+        set: { on in Task { if on { await NotificationController.shared.enable() } else { await NotificationController.shared.disable() } } }
+      )) {
+        VStack(alignment: .leading, spacing: 2) {
+          Text("Notifications on this device")
+          Text(state.blockedInSettings ? "Blocked" : state.enabled ? "On" : "Off").font(.caption).foregroundStyle(state.blockedInSettings ? Palette.attention : Palette.muted)
+        }
+      }.disabled(state.checking || state.busy || (!state.enabled && !state.canEnable) || store.sessionExpired)
+        .accessibilityIdentifier("deviceNotifications")
+      if state.blockedInSettings {
+        Label(state.message, systemImage: "exclamationmark.circle").font(.footnote).foregroundStyle(Palette.attention)
+      } else { Text(state.message).font(.footnote).foregroundStyle(Palette.muted) }
+      if state.busy { Text("Updating notifications…").font(.footnote).accessibilityIdentifier("notificationsBusy") }
+      if let error = state.error {
+        ErrorBanner(message: error)
+        Button("Retry checking notifications") { Task { await NotificationController.shared.retry() } }
+          .disabled(state.busy).accessibilityIdentifier("retryNotifications")
       }
-    }.disabled(state.checking || state.busy || (!state.enabled && !state.canEnable) || store.sessionExpired)
-      .accessibilityIdentifier("deviceNotifications")
-    Text(state.message).font(.footnote).foregroundStyle(Palette.muted)
-    if state.busy { Text("Updating notifications…").font(.footnote).accessibilityIdentifier("notificationsBusy") }
-    if let error = state.error {
-      ErrorBanner(message: error)
-      Button("Retry checking notifications") { Task { await NotificationController.shared.retry() } }
-        .disabled(state.busy).accessibilityIdentifier("retryNotifications")
-    }
-    if state.blockedInSettings, let url = URL(string: UIApplication.openSettingsURLString) { Link("Open iOS Settings", destination: url) }
-    Text("This setting applies to your account on this device.").font(.footnote).foregroundStyle(Palette.muted)
+      if state.blockedInSettings, let url = URL(string: UIApplication.openSettingsURLString) { Link("Open iOS Settings", destination: url) }
+    }.buttonStyle(.borderless)
   }
 }

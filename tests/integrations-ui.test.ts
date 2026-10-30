@@ -158,3 +158,15 @@ it.each([
   await act(async () => first.click());
   expect(write).toHaveBeenCalledExactlyOnceWith(`/integrations/workspace/${operation}`, { profile: "bot" });
 });
+
+it("presents Apple as a local iPhone handoff rather than an unchecked server account", async () => {
+  catalog.connections = [connection({ id: "apple", name: "Apple device calendars and reminders", category: "devices", owner: "This iPhone", status: "unsupported", detail: "The server has no Apple account grant.", actions: { connect: false, check: false, disconnect: false }, permissions: [], setup: [] })];
+  await render();
+  const card = container.querySelector(".integration-card")!;
+  expect(card.textContent).toContain("Apple Calendar & Reminders");
+  expect(card.textContent).toContain("On iPhone");
+  expect(card.textContent).toContain("assistant's draft");
+  expect(card.textContent).not.toContain("Last checked");
+  expect(card.textContent).not.toContain("Setup needed");
+  expect(card.querySelector(".actions")).toBeNull();
+});

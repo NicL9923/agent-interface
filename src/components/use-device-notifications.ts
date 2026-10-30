@@ -3,26 +3,25 @@ import { request } from "../client-api";
 import type { WebPushSubscription } from "../shared/api";
 import { notificationPromptKey as promptKey } from "../app/storage";
 
-let promptedInPage = false;
-function alreadyPrompted() {
-  try { return localStorage.getItem(promptKey) === "shown"; }
-  catch { return promptedInPage; }
+const promptedInPage = new Set<string>();
+function alreadyPrompted(userId: string) {
+  try { return localStorage.getItem(promptKey(userId)) === "shown"; }
+  catch { return promptedInPage.has(userId); }
 }
-function rememberPrompt() {
-  promptedInPage = true;
-  try { localStorage.setItem(promptKey, "shown"); } catch { /* Keep this page's decision when storage is unavailable. */ }
+function rememberPrompt(userId: string) {
+  promptedInPage.add(userId);
+  try { localStorage.setItem(promptKey(userId), "shown"); } catch { /* Keep this page's answer when storage is unavailable. */ }
 }
-function environmentMessage(vapid?: string) {
-  if (!vapid) return "Notifications are not configured on this installation.";
+function environmentIssue(vapid?: string): { message: string; blocked?: boolean } | undefined {
+  if (!vapid) return { message: "Notifications are not configured on this installation." };
   const ios = /iPad|iPhone|iPod/.test(navigator.userAgent) || navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1;
   const standalone = window.matchMedia?.("(display-mode: standalone)").matches || (navigator as Navigator & { standalone?: boolean }).standalone;
-  if (ios && !standalone) return "On iPhone or iPad, choose Share > Add to Home Screen, then open the installed app to enable notifications.";
+  if (ios && !standalone) return { message: "On iPhone or iPad, choose Share > Add to Home Screen, then open the installed app to enable notifications." };
   if (!window.isSecureContext || !("Notification" in window) || !("PushManager" in window) || !("serviceWorker" in navigator))
-    return "Notifications are unavailable in this browser. Open the app in a browser that supports Web Push over HTTPS.";
-  if (Notification.permission === "denied") return "Notifications are blocked for this app. Allow them in your browser or device settings, then return here.";
-  return "";
+    return { message: "Notifications are unavailable in this browser. Open the app in a browser that supports Web Push over HTTPS." };
+  if (Notification.permission === "denied") return { message: "Notifications are blocked for this app. Allow them in your browser or device settings, then return here.", blocked: true };
 }
-const initialState = { enabled: false, checking: true, busy: false, canEnable: false, message: "Checking notifications on this device…", error: "" };
+const initialState = { enabled: false, blocked: false, checking: true, busy: false, canEnable: false, message: "Checking notifications on this device…", error: "" };
 
 export function useDeviceNotifications(userId?: string, vapid?: string) {
   const [state, setState] = useState(initialState);
@@ -37,10 +36,10 @@ export function useDeviceNotifications(userId?: string, vapid?: string) {
     if (!userId || busy.current) return;
     const epoch = ++readEpoch.current;
     const current = () => epoch === readEpoch.current && user.current === userId;
-    const message = environmentMessage(vapid);
-    if (message) {
+    const issue = environmentIssue(vapid);
+    if (issue) {
       registration.current = undefined;
-      if (current()) setState({ ...initialState, checking: false, message });
+      if (current()) setState({ ...initialState, checking: false, ...issue });
       return;
     }
     setState((previous) => ({ ...previous, checking: true, error: "" }));
@@ -57,8 +56,8 @@ export function useDeviceNotifications(userId?: string, vapid?: string) {
       const result = subscription ? await request("POST /push/subscriptions/status", { body: { endpoint: subscription.endpoint } }) : { registered: false };
       if (!current()) return;
       const enabled = Notification.permission === "granted" && !!subscription && result.registered === true;
-      setState({ enabled, checking: false, busy: false, canEnable: true, error: "",
-        message: enabled ? "Notifications are enabled for your account on this device." : "Enable notifications for completed work and requests that need your attention." });
+      setState({ enabled, blocked: false, checking: false, busy: false, canEnable: true, error: "",
+        message: enabled ? "You'll get alerts here for finished work and requests that need you." : "Enable notifications for completed work and requests that need your attention." });
     } catch (error) {
       if (current()) setState({ ...initialState, checking: false, error: (error as Error).message,
         message: "Couldn't check notifications on this device. Retry before changing them." });
@@ -82,17 +81,16 @@ export function useDeviceNotifications(userId?: string, vapid?: string) {
     };
   }, [refresh]);
   useEffect(() => {
-    if (!userId || !vapid || state.checking || state.enabled || state.error || alreadyPrompted()) return;
-    if ("Notification" in window && Notification.permission !== "default") return;
-    rememberPrompt();
-    setPrompt(true);
-  }, [userId, vapid, state.checking, state.enabled, state.error]);
+    setPrompt(!!userId && !!vapid && state.canEnable && !state.checking && !state.enabled && !state.error
+      && !alreadyPrompted(userId) && "Notification" in window && Notification.permission !== "denied");
+  }, [userId, vapid, state.checking, state.enabled, state.error, state.canEnable]);
 
   const enable = async () => {
     if (!userId || busy.current || !state.canEnable) return;
     const account = userId;
     const worker = registration.current;
     if (!worker) return;
+    rememberPrompt(account); setPrompt(false);
     busy.current = true;
     ++readEpoch.current;
     setState((previous) => ({ ...previous, busy: true, error: "" }));
@@ -102,7 +100,7 @@ export function useDeviceNotifications(userId?: string, vapid?: string) {
       const permission = Notification.permission === "granted" ? "granted" : await Notification.requestPermission();
       if (user.current !== account) return;
       if (permission !== "granted") {
-        setState({ ...initialState, checking: false, message: permission === "denied"
+        setState({ ...initialState, checking: false, blocked: permission === "denied", message: permission === "denied"
           ? "Notifications are blocked for this app. Allow them in your browser or device settings, then return here."
           : "Notifications stay disabled. You can enable them later in Settings > Notifications.", canEnable: permission !== "denied" });
         return;
@@ -117,7 +115,7 @@ export function useDeviceNotifications(userId?: string, vapid?: string) {
       await request("POST /push/subscriptions", { body: subscription.toJSON() as WebPushSubscription });
       if (user.current === account) {
         setState({ ...initialState, checking: false, enabled: true, canEnable: true,
-          message: "Notifications are enabled for your account on this device." });
+          message: "You'll get alerts here for finished work and requests that need you." });
         setPrompt(false);
       }
     } catch (error) {
@@ -167,5 +165,5 @@ export function useDeviceNotifications(userId?: string, vapid?: string) {
       else void latestRefresh.current();
     }
   };
-  return { ...state, prompt, enable, disable, refresh, dismissPrompt: () => setPrompt(false) };
+  return { ...state, prompt, enable, disable, refresh, dismissPrompt: () => { if (user.current) rememberPrompt(user.current); setPrompt(false); } };
 }

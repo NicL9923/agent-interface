@@ -88,9 +88,11 @@ struct AppleDeviceConnectionsView: View {
   @State private var error: String?
   @State private var notice: String?
   @State private var confirmShare = false
+  @State private var previewExpanded = true
   private var botName: String { store.bootstrap?.bots.first { $0.id == botId }?.name ?? "this assistant" }
   private var sharedKey: String { "apple.lastShared.\(store.scope ?? "").\(botId)" }
   var body: some View {
+    ScrollViewReader { captureScroll in
     Form {
       Section {
         Label("On this iPhone", systemImage: "iphone").font(.headline)
@@ -114,13 +116,15 @@ struct AppleDeviceConnectionsView: View {
           Button("Allow reminders access") { perform { try await connection.requestReminders() } }
         }
         ForEach(connection.lists, id: \.calendarIdentifier) { list in Toggle(list.title, isOn: membership(list.calendarIdentifier, calendars: false)) }
-        Toggle("Include reminders with no due date", isOn: $undated).onChange(of: undated) { _, _ in snapshot = nil }
+        if connection.reminderStatus == .fullAccess {
+          Toggle("Include reminders with no due date", isOn: $undated).onChange(of: undated) { _, _ in snapshot = nil }
+        }
       }
       if connection.calendarStatus == .denied || connection.reminderStatus == .denied {
         Section { Button("Open iOS permission settings") { if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) } } }
       }
       Section {
-        DatePicker("From", selection: $start, displayedComponents: .date).onChange(of: start) { _, value in
+        DatePicker("From", selection: $start, displayedComponents: .date).id("appleDateWindow").onChange(of: start) { _, value in
           if end < value || end > Calendar.current.date(byAdding: .day, value: 89, to: value)! { end = Calendar.current.date(byAdding: .day, value: 14, to: value)! }
           snapshot = nil
         }
@@ -131,26 +135,36 @@ struct AppleDeviceConnectionsView: View {
             notice = nil
           }
         }.disabled(selectedCalendars.isEmpty && selectedLists.isEmpty)
-      } header: { Text("Date window") } footer: { Text("Choose up to 90 days. Only event titles, times, reminder titles, due dates, and selected list names are included. Completed reminders are omitted.") }
+      } header: { Text("Date window") } footer: { Text("Choose up to 90 days. Only event titles, times, reminder titles, due dates, and selected calendar and list names are included. Completed reminders are omitted.") }
       if let snapshot {
         Section("Review before sharing") {
           Text("\(snapshot.events.count) events · \(snapshot.reminders.count) reminders")
           Text("Refreshed \(snapshot.capturedAt.formatted(date: .abbreviated, time: .shortened))").font(.caption).foregroundStyle(.secondary)
-          DisclosureGroup("Preview snapshot") {
+          DisclosureGroup("Preview snapshot", isExpanded: $previewExpanded) {
             ForEach(Array(snapshot.events.enumerated()), id: \.offset) { _, event in
-              VStack(alignment: .leading) { Text(event.title); Text("\(event.calendar) · \(event.start.formatted(date: .abbreviated, time: .shortened))").font(.caption).foregroundStyle(.secondary) }
+              VStack(alignment: .leading) { Text(event.title); Text(event.calendar).font(.caption).foregroundStyle(.secondary); Text(event.allDay ? "All day: \(event.start.formatted(date: .abbreviated, time: .omitted)) to \(event.end.addingTimeInterval(-1).formatted(date: .abbreviated, time: .omitted))" : "\(event.start.formatted(date: .abbreviated, time: .shortened)) to \(event.end.formatted(date: .abbreviated, time: .shortened))").font(.caption).foregroundStyle(.secondary) }
             }
             ForEach(Array(snapshot.reminders.enumerated()), id: \.offset) { _, reminder in
-              VStack(alignment: .leading) { Text(reminder.title); Text(reminder.list).font(.caption).foregroundStyle(.secondary) }
+              VStack(alignment: .leading) { Text(reminder.title); Text(reminder.list).font(.caption).foregroundStyle(.secondary); Text(reminder.due.map { "Due \($0.formatted(date: .abbreviated, time: .shortened))" } ?? "No due date").font(.caption).foregroundStyle(.secondary) }
             }
           }
-          Button("Share with \(botName)") { confirmShare = true }.disabled(!store.connected || !store.supports(.uploads) || botId.isEmpty)
+          Button("Add to \(botName)'s draft…") { confirmShare = true }.disabled(!store.connected || !store.supports(.uploads) || botId.isEmpty)
         }
       }
       if let error { Section { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.red) } }
       if let notice { Section { Label(notice, systemImage: "checkmark.circle").foregroundStyle(Palette.accent) } }
-    }.navigationTitle("Calendar & Reminders").navigationBarTitleDisplayMode(.inline).disabled(busy)
-      .onAppear { connection.refreshAccess() }
+    }.householdListBackground().navigationTitle("Calendar & Reminders").navigationBarTitleDisplayMode(.inline).disabled(busy)
+      .onAppear {
+        connection.refreshAccess()
+        #if DEBUG
+        if DebugFixtures.captureApplePage && ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_CAPTURE_APPLE_DATE"] == "1" {
+          Task { try? await Task.sleep(for: .milliseconds(500)); captureScroll.scrollTo("appleDateWindow", anchor: .top) }
+        }
+        #endif
+      }
+      .onChange(of: snapshot?.capturedAt) { _, _ in
+        if let snapshot { previewExpanded = snapshot.events.count + snapshot.reminders.count <= 20 }
+      }
       .onChange(of: scenePhase) { _, phase in if phase == .active { connection.refreshAccess(); snapshot = nil } }
       .confirmationDialog("Add this selected snapshot to \(botName)'s draft?", isPresented: $confirmShare, titleVisibility: .visible) {
         Button("Add snapshot to draft") {
@@ -161,7 +175,12 @@ struct AppleDeviceConnectionsView: View {
             notice = "Snapshot added to \(botName)'s draft. Open the conversation and send it when you're ready."
           }
         }
-      } message: { Text("Everyone who can access this assistant can read the snapshot after you send it. Existing draft text is kept.") }
+      } message: {
+        if let snapshot {
+          Text("\(snapshot.events.count) events and \(snapshot.reminders.count) reminders, from \(snapshot.windowStart.formatted(date: .abbreviated, time: .omitted)) through \(snapshot.windowEnd.addingTimeInterval(-1).formatted(date: .abbreviated, time: .omitted)). Everyone who can access this assistant can read them after you send the draft. Existing draft text is kept.")
+        }
+      }
+    }
   }
   private func accessLabel(_ status: EKAuthorizationStatus) -> some View {
     Label(status == .fullAccess ? "Allowed on this iPhone" : status == .denied ? "Permission denied" : status == .restricted ? "Restricted by iOS" : "Not allowed yet", systemImage: status == .fullAccess ? "checkmark.circle" : "lock").font(.footnote).foregroundStyle(.secondary)

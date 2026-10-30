@@ -177,7 +177,7 @@
       }
       if environment["AGENT_INTERFACE_UI_PUSH"] == "1" {
         // iOS permission starts undecided; Enable grants it, as tapping Allow would.
-        var status = UNAuthorizationStatus.notDetermined
+        var status: UNAuthorizationStatus = environment["AGENT_INTERFACE_UI_PUSH_BLOCKED"] == "1" ? .denied : .notDetermined
         NotificationController.shared.useFixtureSystem(permissions: NotificationPermissions(
           status: { status }, request: { status = .authorized; return true }))
       }
@@ -931,6 +931,8 @@
             ]] as [String: Any]]
             : ["available": false, "state": ["title": "", "activeCount": 0, "attentionCount": 0, "updatedAt": now, "rows": []] as [String: Any]]
         }
+      } else if path == "/api/native/push/device" {
+        object = ["ok": true]
       } else if path == "/api/native/push/config" {
         object = ["available": ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_PUSH"] == "1", "environment": "sandbox"]
       } else if path.hasPrefix("/api/bots/"), path.split(separator: "/").count == 3, method == "DELETE",

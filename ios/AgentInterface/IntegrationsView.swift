@@ -172,11 +172,11 @@ struct IntegrationsView: View {
         }
       } else if busy { ProgressView("Loading connections…") }
       else if profile.isEmpty { Text("Create an assistant before connecting its services.") }
-      Section {
+      if catalog?.connections.contains(where: { $0.id == "apple" }) != true { Section {
         NavigationLink { AppleDeviceConnectionsView(botId: profile) } label: {
           Label("Apple Calendar & Reminders", systemImage: "calendar")
         }
-      } footer: { Text("Choose data on this iPhone and share it with an assistant. Sharing requires this app to be open.") }
+      } footer: { Text("Choose data on this iPhone and share it with an assistant. Sharing requires this app to be open.") } }
     }.navigationTitle("Integrations").navigationBarTitleDisplayMode(.inline)
       .disabled(store.sessionExpired)
       .refreshable { await refresh() }
@@ -237,6 +237,15 @@ struct IntegrationsView: View {
     }
   }
   @ViewBuilder private func connectionRow(_ connection: IntegrationConnection, canManage: Bool) -> some View {
+    if connection.id == "apple" {
+      NavigationLink { AppleDeviceConnectionsView(botId: profile) } label: {
+        VStack(alignment: .leading, spacing: 6) {
+          Label("Apple Calendar & Reminders", systemImage: "calendar").font(.headline)
+          Text("Choose and share from this iPhone").font(.subheadline)
+          Text("Review selected data, then add it to an assistant's draft.").font(.footnote).foregroundStyle(Palette.muted)
+        }.padding(.vertical, 8)
+      }.accessibilityIdentifier("appleDeviceConnection")
+    } else {
     VStack(alignment: .leading, spacing: 10) {
       HStack(alignment: .top) {
         Text(connection.name).font(.headline)
@@ -276,6 +285,7 @@ struct IntegrationsView: View {
         Button("Disconnect", role: .destructive) { disconnecting = connection; showDisconnect = true }.disabled(busy || !canManage)
       }
     }.padding(.vertical, 8).buttonStyle(.borderless)
+    }
   }
   @ViewBuilder private func flowSection(_ value: IntegrationFlow) -> some View {
     Section(value.heading) {

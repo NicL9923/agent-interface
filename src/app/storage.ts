@@ -60,7 +60,7 @@ export const groupSendKey = (user: string, room: string) => `agent-interface:gro
 export const routineTrialKey = (user: string, routine: string) => `agent-interface:routine-trial:${user}:${routine}`;
 /** In sessionStorage: retain an unclear approval decision across navigation and reloads. */
 export const approvalDecisionKey = (user: string, bot: string, approval: string) => `agent-interface:approval:${user}:${bot}:${approval}`;
-export const notificationPromptKey = "agent-interface:notifications-prompt:v1";
+export const notificationPromptKey = (user: string) => `agent-interface:notifications-prompt:v2:${user}`;
 export function localRead<T>(key: string): T | null {
   try {
     return JSON.parse(localStorage.getItem(key) || "null");

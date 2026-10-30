@@ -13,6 +13,7 @@ struct PreferencesView: View {
   @State private var loaded = false
   @State private var signOutConfirm = false
   @State private var changeServerConfirm = false
+  @State private var quietError: String?
   #if DEBUG
     @State private var captureComputerOpen = false
     @State private var captureUpgradeOpen = false
@@ -73,24 +74,33 @@ struct PreferencesView: View {
         }.disabled(store.sessionExpired)
         Section {
           DeviceNotificationSettings().id("captureNotifications")
+        } header: { Text("This device") }
+          .disabled(store.sessionExpired)
+        Section {
           Picker("Batching", selection: Binding(get: { preferences.notifications?.batchMinutes ?? 0 }, set: { value in
             var settings = notificationPreferences; settings.batchMinutes = value; preferences.notifications = settings
           })) {
             Text("As updates arrive").tag(0); Text("Every 5 minutes").tag(5); Text("Every 15 minutes").tag(15); Text("Hourly").tag(60)
           }
+          Text("Decisions and failures skip batching.").font(.footnote).foregroundStyle(Palette.muted)
+          if !bots.isEmpty { followRow }
           Toggle("Quiet hours", isOn: Binding(get: { preferences.notifications?.quietStart != nil }, set: { enabled in
+            quietError = nil
             var settings = notificationPreferences; settings.quietStart = enabled ? "22:00" : nil
             settings.quietEnd = enabled ? "07:00" : nil; preferences.notifications = settings
           }))
           if preferences.notifications?.quietStart != nil {
             DatePicker("From", selection: quietTime(start: true), displayedComponents: .hourAndMinute).environment(\.timeZone, TimeZone(identifier: notificationPreferences.timezone) ?? .current)
             DatePicker("Until", selection: quietTime(start: false), displayedComponents: .hourAndMinute).environment(\.timeZone, TimeZone(identifier: notificationPreferences.timezone) ?? .current)
+            if let quietError { Text(quietError).font(.footnote).foregroundStyle(.red).accessibilityIdentifier("quietHoursError") }
           }
-          if !bots.isEmpty { followRow }
-        } header: { Text("Notifications") } footer: {
-          if preferences.notifications?.quietStart != nil {
-            Text("\(notificationPreferences.timezone). Other notifications wait until quiet hours end; security alerts arrive right away. Decisions and failures skip batching outside quiet hours.")
-          }
+        } header: { Text("All your devices") } footer: {
+          VStack(alignment: .leading, spacing: 6) {
+            Text("These apply wherever you get notifications.")
+            if preferences.notifications?.quietStart != nil {
+              Text("Times are in \(notificationPreferences.timezone). During quiet hours, alerts wait until the end, except security alerts.")
+            }
+          }.fixedSize(horizontal: false, vertical: true)
         }.disabled(store.sessionExpired)
         if !bots.isEmpty {
           Section {
@@ -207,6 +217,8 @@ struct PreferencesView: View {
       let value = String(format: "%02d:%02d", calendar.component(.hour, from: date), calendar.component(.minute, from: date))
       var settings = notificationPreferences
       if start { settings.quietStart = value } else { settings.quietEnd = value }
+      guard settings.quietStart != settings.quietEnd else { quietError = "Choose an end time different from the start."; return }
+      quietError = nil
       preferences.notifications = settings
     })
   }

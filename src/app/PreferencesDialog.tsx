@@ -46,6 +46,12 @@ export function PreferencesDialog({ boot, connectionLost, offline, editPreferenc
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const notify = (update: Partial<NonNullable<Preferences["notifications"]>>) =>
     commit(value => ({ ...value, notifications: { timezone, batchMinutes: 0, ...value.notifications, ...update } }));
+  const [quietError, setQuietError] = useState("");
+  const changeQuietTime = (field: "quietStart" | "quietEnd", value: string) => {
+    const other = field === "quietStart" ? prefs.notifications?.quietEnd : prefs.notifications?.quietStart;
+    if (value === other) { setQuietError("Choose an end time different from the start."); return; }
+    setQuietError(""); notify({ [field]: value });
+  };
   const { version, revisionDate: builtOn } = boot.connection;
   const hermes = revisionDate(builtOn) ? `Hermes released ${revisionDate(builtOn)}` : version ? `Hermes ${hermesVersionLabel(version, undefined)}` : "";
   // Following and each home section open as their own page in the sheet, like a phone's settings.
@@ -132,26 +138,33 @@ export function PreferencesDialog({ boot, connectionLost, offline, editPreferenc
         <h3 className="settings-heading">Notifications</h3>
         <div className="settings-group">
           <div className="settings-row settings-notifications"><NotificationSettings notifications={notifications} title="This device" /></div>
+        </div>
+        <h3 className="settings-heading">All your devices</h3>
+        <div className="settings-group">
+          <div className="notification-batching">
           <label className="settings-row"><span className="row-label">Batching</span>
             <NativeSelect value={prefs.notifications?.batchMinutes || 0} onChange={event => notify({ batchMinutes: Number(event.target.value) })}>
               <option value={0}>As updates arrive</option><option value={5}>Every 5 minutes</option>
               <option value={15}>Every 15 minutes</option><option value={60}>Hourly</option>
             </NativeSelect></label>
+          <p className="settings-footnote">Decisions and failures skip batching.</p>
+          </div>
           {bots.length > 0 && <NavRow icon="bell" label={prefs.followBots.some(id => bots.some(bot => bot.id === id)) ? `Following ${assistants(bots.filter(bot => prefs.followBots.includes(bot.id)).length)}` : "Not following any assistants"}
             detail="Choose whose activity you want to follow" opens="following" onClick={() => go({ kind: "following" })} />}
           <Switch label="Quiet hours" checked={!!prefs.notifications?.quietStart}
-            onChange={checked => save({ notifications: { timezone, batchMinutes: prefs.notifications?.batchMinutes || 0,
-              ...(checked ? { quietStart: "22:00", quietEnd: "07:00" } : {}) } })} />
+            onChange={checked => { setQuietError(""); save({ notifications: { timezone, batchMinutes: prefs.notifications?.batchMinutes || 0,
+              ...(checked ? { quietStart: "22:00", quietEnd: "07:00" } : {}) } }); }} />
           {prefs.notifications?.quietStart && <>
             <label className="settings-row"><span className="row-label">From</span>
-              <Input type="time" value={prefs.notifications.quietStart} onChange={event => notify({ quietStart: event.target.value })} /></label>
+              <Input type="time" value={prefs.notifications.quietStart} onChange={event => changeQuietTime("quietStart", event.target.value)} /></label>
             <label className="settings-row"><span className="row-label">Until</span>
-              <Input type="time" value={prefs.notifications.quietEnd} onChange={event => notify({ quietEnd: event.target.value })} /></label>
+              <Input type="time" value={prefs.notifications.quietEnd} onChange={event => changeQuietTime("quietEnd", event.target.value)} /></label>
+            {quietError && <p className="settings-footnote danger" role="alert">{quietError}</p>}
           </>}
         </div>
+        <p className="settings-footnote">These apply wherever you get notifications.</p>
         {prefs.notifications?.quietStart && <p className="settings-footnote">
-          {prefs.notifications.timezone}. Other notifications wait until quiet hours end; security alerts arrive right away.
-          Decisions and failures skip batching outside quiet hours.</p>}
+          Times are in {prefs.notifications.timezone}. During quiet hours, alerts wait until the end, except security alerts.</p>}
 
         <h3 className="settings-heading">Home sections</h3>
         <SectionList preferences={prefs} bots={bots} commit={commit} onOpen={id => go({ kind: "section", id })} />
@@ -162,7 +175,6 @@ export function PreferencesDialog({ boot, connectionLost, offline, editPreferenc
           <Button type="button" className="settings-row danger" disabled={notifications.busy} onClick={() => void onSignOut()}>
             <span className="row-label">Sign out</span></Button>
         </div>
-        <p className="settings-footnote">On iPhone, choose Share, then Add to Home Screen. Install before enabling notifications.</p>
         {notice && <p className="settings-footnote" role="status">{notice}</p>}
         <footer className="settings-footer">
           <span className="brand-mark" aria-hidden="true">w.</span>

@@ -83,3 +83,5 @@ The `capture-settings-ios.sh` Updates and Connection modes capture synthetic upd
 - `capture-notifications.js` captures fixture notification onboarding, device settings, quiet hours and the Apple handoff card at desktop and phone widths. It uses a fake browser push system, never a real permission prompt or delivery.
 
 The `capture-settings-ios.sh` Notifications mode scrolls real Settings to the notification controls with the existing fake permission system. Apple opens the real Calendar and Reminders screen without requesting EventKit access.
+
+The notification capture also exercises account-scoped Following and equal-time validation. Native NotificationsBlocked uses denied fixture permission, and AppleDate scrolls the real Apple form to its date window.

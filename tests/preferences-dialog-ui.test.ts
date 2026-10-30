@@ -228,3 +228,15 @@ describe("keyboard shortcuts row", () => {
     expect(row().querySelector("small")?.textContent).toBe("Press Ctrl+K for the command palette");
   });
 });
+
+it.each(["quietStart", "quietEnd"] as const)("refuses an equal %s locally, then accepts a corrected quiet-hours value", async field => {
+  props.boot.preferences.notifications = { timezone: "America/Chicago", batchMinutes: 5, quietStart: "22:00", quietEnd: "07:00" };
+  await render();
+  const input = container.querySelectorAll<HTMLInputElement>('input[type="time"]')[field === "quietStart" ? 0 : 1];
+  await typeInto(input, field === "quietStart" ? "07:00" : "22:00");
+  expect(saved).toHaveLength(0);
+  expect(container.querySelector('[role="alert"]')?.textContent).toBe("Choose an end time different from the start.");
+  await typeInto(input, "08:00");
+  expect(saved.at(-1)?.notifications?.[field]).toBe("08:00");
+  expect(container.querySelector('[role="alert"]')).toBeNull();
+});
