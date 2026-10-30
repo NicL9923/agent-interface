@@ -80,7 +80,7 @@ References collected October 25, 2026. External artwork is reference material on
 | Group chats and threads | Desktop/phone web and iPhone conversation captured | Complete | Whole-area rounds: 7.0, 8.6, 9.0; final scroll follow-ups applied directly |
 | Settings, following and home sections | Desktop/phone web and current iPhone front captured | In progress | Whole-area round 1: 8.0; fixes implemented, round 2 pending |
 | Integrations | Desktop/phone web and current iPhone captured | Complete | Combined whole-area rounds: 7.8, 8.8, 9.1 |
-| Computer and terminal | Pending | Pending | Pending |
+| Computer and terminal | Desktop/phone web and current iPhone viewer captured | In progress | Whole-area round 1 pending |
 | Hermes updates and recovery | Pending | Pending | Pending |
 | Sign-in and connection recovery | Pending | Pending | Pending |
 | Command palette and keyboard help | Desktop/phone web captured | In progress | Included in Settings review, round 1: 8.0 |
@@ -730,3 +730,22 @@ its range lies within the transcript viewport. Browser and preview server are
 closed. The second review is pending. Palette links to deeper Settings pages
 remain optional navigation work; live saves, native subpage gestures, quiet-hour
 menus, Sign out, VoiceOver, dark mode and larger text are not newly verified.
+
+
+## Computer and terminal, round 1
+
+The agent captured the shared desktop and system terminal at both web widths.
+It took control and handed it back, opened the phone text-entry form, pasted
+fixture text into the terminal, sent Control+C, canceled End shell, then confirmed
+End shell. These use the preview's simulated RFB and WebSocket streams. No real
+shell command ran and no real remote desktop was contacted. The canvas contains
+explicit fixture graphics, not a live application.
+
+The actual compiled iPhone viewer is also captured using its existing Debug
+desktop transport. A small Debug-only navigation entry opens it directly from
+Settings for capture. The native build and capture completed under the machine
+lock, and the simulator shut down afterward. This frame shows Watching with
+Take over and the Safari and Terminal links. Native takeover and Safari gestures,
+identity confirmation, unavailable and reconnecting states, provider access,
+VoiceOver, dark mode and large text remain unverified. The browser and preview
+server are closed. This is a baseline for the first whole-area review.

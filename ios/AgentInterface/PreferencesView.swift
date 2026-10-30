@@ -13,6 +13,9 @@ struct PreferencesView: View {
   @State private var loaded = false
   @State private var signOutConfirm = false
   @State private var changeServerConfirm = false
+  #if DEBUG
+    @State private var captureComputerOpen = false
+  #endif
   var body: some View {
     NavigationStack {
       Form {
@@ -115,6 +118,10 @@ struct PreferencesView: View {
         }.listRowBackground(Palette.raised(scheme))
       }.listSectionSpacing(18).contentMargins(.top, 12, for: .scrollContent)
         .householdListBackground().navigationTitle("Settings").navigationBarTitleDisplayMode(.inline)
+        #if DEBUG
+        .navigationDestination(isPresented: $captureComputerOpen) { ComputerView() }
+        .onAppear { captureComputerOpen = DebugFixtures.captureComputerPage }
+        #endif
         .toolbar {
           ToolbarItem(placement: .cancellationAction) { Button("Close") { if saveFailed { discardConfirm = true } else { closeSheet() } } }
           ToolbarItem(placement: .status) {
