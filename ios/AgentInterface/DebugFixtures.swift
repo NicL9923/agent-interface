@@ -25,6 +25,14 @@
       ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_FIXTURE"] == "1"
         && ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_CAPTURE_TRIGGER_SECRET"] == "1"
     }
+    static var captureUpgradePage: Bool {
+      ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_FIXTURE"] == "1"
+        && ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_CAPTURE_UPGRADE"] == "1"
+    }
+    static var captureConnectionPage: Bool {
+      ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_FIXTURE"] == "1"
+        && ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_CAPTURE_CONNECTION"] == "1"
+    }
     static var captureComputerPage: Bool {
       ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_FIXTURE"] == "1"
         && ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_CAPTURE_COMPUTER"] == "1"
@@ -713,12 +721,13 @@
         }
         if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_UPGRADE_FAILED"] == "1", Self.upgradePhase == "idle" { Self.upgradePhase = "failed"; Self.upgradeOperation = "install" }
         let phase = Self.upgradePhase
-        let fixtureChecks: [[String: Any]] = phase == "idle" ? [] : [["id": "compatibility", "label": "App compatibility", "status": phase == "qualifying" ? "running" : "passed", "detail": "Explicit simulator fixture, not a real Hermes upgrade."]]
+        let fixtureChecks: [[String: Any]] = phase == "idle" ? [] : [["id": phase == "failed" ? "restart" : "compatibility", "label": phase == "failed" ? "Restart and verify Hermes" : "App compatibility", "status": phase == "failed" ? "failed" : phase == "qualifying" ? "running" : "passed", "detail": "Explicit simulator fixture, not a real Hermes upgrade."]]
         let fixtureMessage: String
         switch phase {
         case "idle": fixtureMessage = "Check the shared installation for a compatible update."
         case "succeeded": fixtureMessage = "Fixture update verified. Conversations are preserved."
         case "ready": fixtureMessage = "The candidate passed compatibility checks."
+        case "failed": fixtureMessage = "The update could not restart Hermes. Your conversations are saved. Restart Hermes to check and restore the connection."
         default: fixtureMessage = "The server is \(phase) the fixture installation."
         }
         // Real revisions are commit hashes with commit dates; the app leads with the date.

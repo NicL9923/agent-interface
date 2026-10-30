@@ -28,6 +28,9 @@ struct RootView: View {
   @State private var settingsBot: Bot?
   @State private var creatingBot = false
   @State private var preferencesOpen = false
+  #if DEBUG
+    @State private var captureConnectionOpen = false
+  #endif
   @State private var destination: HomeDestination = .conversation
   @State private var sharedCapture: SharedCapture?
   @Environment(\.scenePhase) private var scenePhase
@@ -54,6 +57,9 @@ struct RootView: View {
     }
     .homeSignals(haptic: store.haptic, command: store.keyboardCommand, run: run)
     .modifier(sheets)
+    #if DEBUG
+    .sheet(isPresented: $captureConnectionOpen) { ConnectionView().appStore(store) }
+    #endif
     .onAppear { checkShares() }
     #if DEBUG
     .onChange(of: store.bootstrap?.user.id, initial: true) { _, id in
@@ -136,7 +142,8 @@ struct RootView: View {
   }
   #if DEBUG
   private func capturePageIfAsked() {
-    if DebugFixtures.capturePreferencesPage || DebugFixtures.captureComputerPage { preferencesOpen = true; return }
+    if DebugFixtures.captureConnectionPage { captureConnectionOpen = true; return }
+    if DebugFixtures.capturePreferencesPage || DebugFixtures.captureComputerPage || DebugFixtures.captureUpgradePage { preferencesOpen = true; return }
     if DebugFixtures.captureGroupPage {
       destination = .groups; path = [.groups]; compactColumn = .detail; return
     }

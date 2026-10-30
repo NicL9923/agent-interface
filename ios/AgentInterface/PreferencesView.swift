@@ -15,6 +15,7 @@ struct PreferencesView: View {
   @State private var changeServerConfirm = false
   #if DEBUG
     @State private var captureComputerOpen = false
+    @State private var captureUpgradeOpen = false
   #endif
   var body: some View {
     NavigationStack {
@@ -120,7 +121,8 @@ struct PreferencesView: View {
         .householdListBackground().navigationTitle("Settings").navigationBarTitleDisplayMode(.inline)
         #if DEBUG
         .navigationDestination(isPresented: $captureComputerOpen) { ComputerView() }
-        .onAppear { captureComputerOpen = DebugFixtures.captureComputerPage }
+        .navigationDestination(isPresented: $captureUpgradeOpen) { HermesUpgradeView() }
+        .onAppear { captureComputerOpen = DebugFixtures.captureComputerPage; captureUpgradeOpen = DebugFixtures.captureUpgradePage }
         #endif
         .toolbar {
           ToolbarItem(placement: .cancellationAction) { Button("Close") { if saveFailed { discardConfirm = true } else { closeSheet() } } }

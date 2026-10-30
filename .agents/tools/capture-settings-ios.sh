@@ -29,9 +29,13 @@ for tab in "$@"; do
   preferences_capture=0
   computer_capture=0
   trigger_secret_capture=0
+  upgrade_capture=0
+  connection_capture=0
   capture_delay=${NATIVE_CAPTURE_DELAY:-5}
   case "$tab" in
     Preferences) settings_tab=""; preferences_capture=1 ;;
+    Updates) settings_tab=""; upgrade_capture=1; capture_delay=${NATIVE_CAPTURE_DELAY:-8} ;;
+    Connection) settings_tab=""; connection_capture=1; capture_delay=${NATIVE_CAPTURE_DELAY:-8} ;;
     TriggerSecret) settings_tab="Work"; trigger_secret_capture=1; capture_delay=${NATIVE_CAPTURE_DELAY:-10} ;;
     Computer) settings_tab=""; computer_capture=1; capture_delay=${NATIVE_CAPTURE_DELAY:-10} ;;
     Groups) settings_tab=""; group_capture=1; capture_delay=${NATIVE_CAPTURE_DELAY:-12} ;;
@@ -49,6 +53,9 @@ for tab in "$@"; do
   SIMCTL_CHILD_AGENT_INTERFACE_UI_CAPTURE_PREFERENCES="$preferences_capture" \
   SIMCTL_CHILD_AGENT_INTERFACE_UI_CAPTURE_COMPUTER="$computer_capture" \
   SIMCTL_CHILD_AGENT_INTERFACE_UI_CAPTURE_TRIGGER_SECRET="$trigger_secret_capture" \
+  SIMCTL_CHILD_AGENT_INTERFACE_UI_CAPTURE_UPGRADE="$upgrade_capture" \
+  SIMCTL_CHILD_AGENT_INTERFACE_UI_UPGRADE_FAILED="$upgrade_capture" \
+  SIMCTL_CHILD_AGENT_INTERFACE_UI_CAPTURE_CONNECTION="$connection_capture" \
   SIMCTL_CHILD_AGENT_INTERFACE_UI_CAPTURE_SETTINGS_TAB="$settings_tab" \
   SIMCTL_CHILD_AGENT_INTERFACE_UI_CAPTURE_DISCOVERY_TAB="$discovery_tab" \
     "$simctl" launch --terminate-running-process "$simulator" "$bundle"

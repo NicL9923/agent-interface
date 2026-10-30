@@ -75,3 +75,7 @@
 The `capture-settings-ios.sh` Computer mode opens the compiled native desktop viewer using its Debug-only simulated transport.
 
 The `capture-settings-ios.sh` TriggerSecret mode creates a synthetic event through the normal control, then dismisses its editor to capture secret-panel labels and opening position.
+
+The `capture-settings-ios.sh` Updates and Connection modes capture synthetic update recovery and the native sign-in view without invoking provider sign-in or a real update.
+
+- `capture-connection.js`: Capture fixture sign-in, setup, lost connection and update-recovery flows at desktop and phone widths without contacting providers.

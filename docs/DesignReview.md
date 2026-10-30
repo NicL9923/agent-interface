@@ -878,3 +878,23 @@ parity and the shared-shell scroll strip remain optional follow-ups in issue
 206. Native gestures, revealed-normal state, real clipboard behavior, VoiceOver
 and current large-text layout remain unverified. The six accepted native
 large-text frames remain accepted. Connection and update recovery are next.
+
+
+## Connection, sign-in and update recovery, round 1
+
+Baseline web captures cover sign-in, setup guidance, a lost Hermes connection,
+a failed update, Restart confirmation and recovery at 1440 and 390 pixels.
+The agent cancelled Restart once, then confirmed it against the preview fixture.
+No provider sign-in or Hermes installation was invoked. The capture uses a
+loopback-only isolated browser context and closes it afterward.
+
+The compiled iPhone Debug app shows the sign-in view with an existing server
+and the failed-update page. New fixture entry points are Debug-only. The address
+setup form, provider flow, native gestures and actual update recovery remain
+unverified. Native compilation and capture ran under the machine-wide lock,
+with shutdown in the capture trap. The build still reports the existing
+CoreSimulator/Xcode service-version mismatch, so these are direct app captures,
+not XCTest navigation or native unit-test coverage.
+
+The agent inspected the saved frames. The browser and preview server are closed.
+The first whole-area review is pending. Progress remains 22 of 25 grouped areas.
