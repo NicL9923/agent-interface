@@ -12,9 +12,9 @@
 .integration-card h4 { margin: 0; font-size: 0.9375rem; }
 .integration-status { font-size: 0.8125rem; color: var(--muted); border-radius: 6px; background: var(--rail); padding: 4px 7px; }
 .integration-card[data-status="connected"] .integration-status { color: var(--accent); background: var(--accent-soft); }
-.integration-card[data-status="expired"] .integration-status, .integration-card[data-status="missing_permission"] .integration-status, .integration-card[data-status="unavailable"] .integration-status { color: var(--danger); }
+.integration-card[data-status="expired"] .integration-status, .integration-card[data-status="missing_permission"] .integration-status, .integration-card[data-status="unavailable"] .integration-status { color: var(--attention); }
 .integration-card > p { font-size: 0.875rem; line-height: 1.6; color: var(--muted); overflow-wrap: anywhere; }
-.integration-card > .integration-account { font-size: 0.8125rem; color: var(--ink); margin-bottom: 4px; }
+.integration-card > .integration-account { font-size: 0.875rem; color: var(--ink); margin-bottom: 4px; }
 .integration-card dl { font-size: 0.8125rem; margin: 14px 0; }
 .integration-card dl > div { display: flex; gap: 10px; margin-block: 6px; }
 .integration-card dt { width: 80px; flex-shrink: 0; color: var(--muted); }
@@ -44,3 +44,7 @@
 .integration-code-row { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
 .integration-code-row p { margin: 0; }
 .integration-code-row button, .integration-flow > button { min-height: 44px; }
+
+.integration-card .actions { margin-bottom: 0; }
+.integration-confirmation { padding: 12px; border-radius: 10px; background: var(--rail); }
+.integration-confirmation > p { margin-top: 0; }

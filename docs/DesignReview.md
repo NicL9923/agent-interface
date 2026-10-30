@@ -75,11 +75,11 @@ References collected October 25, 2026. External artwork is reference material on
 | Work event triggers | Web and native comparisons available | In progress | Whole-screen round 1: 7.6. Fixes implemented; targeted native recapture pending. Six native large-text frames remain accepted |
 | Learning | Desktop/phone web and current iPhone views captured | Complete | Whole-screen rounds: 7.0, 8.5, 9.0 |
 | Routines and results | Desktop/phone web and current iPhone views captured | Complete | Whole-screen rounds: 7.2, 8.6, 9.1 |
-| Logins and secure requests | Desktop/phone web and current iPhone logins captured | In progress | Combined round 1: 7.8; round 2 requested after fixes |
+| Logins and secure requests | Desktop/phone web and current iPhone logins captured | In progress | Combined rounds: 7.8, 8.8; final round requested |
 | Search, saved items and automations | Pending | Pending | Pending |
 | Group chats and threads | Pending | Pending | Pending |
 | Settings, following and home sections | Pending | Pending | Pending |
-| Integrations | Desktop/phone web and current iPhone captured | In progress | Combined round 1: 7.8; round 2 requested after fixes |
+| Integrations | Desktop/phone web and current iPhone captured | In progress | Combined rounds: 7.8, 8.8; final round requested |
 | Computer and terminal | Pending | Pending | Pending |
 | Hermes updates and recovery | Pending | Pending | Pending |
 | Sign-in and connection recovery | Pending | Pending | Pending |
@@ -524,3 +524,20 @@ iPhone screenshot shows the native action emphasis and Expired tint. Existing
 secure-request and native Logins captures remain valid. Clipboard success/failure
 has a focused mock test; actual clipboard access, real provider sign-in, native
 forms/dialogs, VoiceOver, dark mode and large text were not exercised.
+
+
+[Round 2](evidence/design-review/security-integrations-screen-round2.md) scored
+8.8. The final revision puts the recommended connection action first on both
+clients, uses amber for recoverable web connection states, and matches account
+identifiers at 14px below the entry title. Source tags stay in a wrapping heading
+row. Inline confirmations have a light background, and action rows have less
+trailing space.
+
+Reload logins now stays in the top toolbar. An uncertain write focuses it and
+brings the error into view. A successful unlock focuses that source's Lock
+control; locking returns focus to Unlock. Focused tests cover those paths and
+recommended-action reading order. The agent also exercised an injected unlock
+failure and a successful unlock/lock cycle against the synthetic preview at both
+web widths. No real vault or provider was contacted. A fresh iPhone capture
+confirms the native action order. Clipboard and the previously unobserved native
+forms, VoiceOver, dark mode and large text remain outside runtime coverage.

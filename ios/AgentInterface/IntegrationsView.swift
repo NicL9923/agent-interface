@@ -257,18 +257,20 @@ struct IntegrationsView: View {
           }
         }.font(.footnote)
       }
-      if connection.actions.connect {
-        let connectButton = Button(["not_connected", "unsupported"].contains(connection.status) ? "Connect" : "Reconnect") {
-          fields = Dictionary(uniqueKeysWithValues: connection.setup.compactMap { field in field.defaultValue.map { (field.key, $0) } })
-          if connection.setup.isEmpty { Task { await operate(connection, "connect") } } else { editing = connection }
-        }.disabled(busy || !canManage || flow?.status == "pending")
-        if connection.recommendsConnect { connectButton.buttonStyle(.accentProminent) }
-        else { connectButton }
-      }
-      if connection.actions.check {
-        let checkButton = Button("Check connection") { Task { await operate(connection, "check") } }.disabled(busy)
-        if connection.recommendsCheck { checkButton.buttonStyle(.accentProminent) }
-        else { checkButton }
+      ForEach(connection.recommendsCheck ? ["check", "connect"] : ["connect", "check"], id: \.self) { operation in
+        if operation == "connect" && connection.actions.connect {
+          let connectButton = Button(["not_connected", "unsupported"].contains(connection.status) ? "Connect" : "Reconnect") {
+            fields = Dictionary(uniqueKeysWithValues: connection.setup.compactMap { field in field.defaultValue.map { (field.key, $0) } })
+            if connection.setup.isEmpty { Task { await operate(connection, "connect") } } else { editing = connection }
+          }.disabled(busy || !canManage || flow?.status == "pending")
+          if connection.recommendsConnect { connectButton.buttonStyle(.accentProminent) }
+          else { connectButton }
+        }
+        if operation == "check" && connection.actions.check {
+          let checkButton = Button("Check connection") { Task { await operate(connection, "check") } }.disabled(busy)
+          if connection.recommendsCheck { checkButton.buttonStyle(.accentProminent) }
+          else { checkButton }
+        }
       }
       if connection.actions.disconnect {
         Button("Disconnect", role: .destructive) { disconnecting = connection; showDisconnect = true }.disabled(busy || !canManage)

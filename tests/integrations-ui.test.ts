@@ -144,3 +144,17 @@ it("names a new device-code flow and copies only its displayed code with honest 
   expect(container.textContent).not.toContain("Sign-in code copied.");
   expect(write).toHaveBeenCalledOnce();
 });
+
+
+it.each([
+  ["configured", "Check connection", "check"],
+  ["unavailable", "Check connection", "check"],
+  ["expired", "Reconnect", "connect"],
+  ["not_connected", "Connect", "connect"],
+] as const)("puts the recommended %s action first in reading and keyboard order", async (status, label, operation) => {
+  catalog.connections = [connection({ status })]; await render();
+  const first = container.querySelector<HTMLButtonElement>(".integration-card .actions button")!;
+  expect(first.textContent).toBe(label);
+  await act(async () => first.click());
+  expect(write).toHaveBeenCalledExactlyOnceWith(`/integrations/workspace/${operation}`, { profile: "bot" });
+});

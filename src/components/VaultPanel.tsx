@@ -22,7 +22,11 @@ export function VaultPanel({ botId }: { botId: string }) {
   const returnToUnlock = useRef<VaultSourceName | null>(null);
   const returnToRemove = useRef<string | null>(null);
   const returnToAdd = useRef(false);
+  const returnToReload = useRef(false);
   const removePromptId = useId();
+  const errorId = useId();
+  const errorMessage = useRef<HTMLParagraphElement>(null);
+  const lockButtons = useRef(new Map<VaultSourceName, HTMLButtonElement>());
   const [uncertain, setUncertain] = useState(false);
   const [adding, setAdding] = useState(false);
   const [remove, setRemove] = useState<string | null>(null);
@@ -46,7 +50,7 @@ export function VaultPanel({ botId }: { botId: string }) {
     return () => { document.removeEventListener("visibilitychange", hidden); window.removeEventListener("pagehide", clear); };
   }, []);
   // Reloading is how a person reviews an uncertain change, so it retires that warning.
-  function reload() { setPassword(""); setMaster(""); action.setError(""); void vaultResource.reload(); }
+  function reload() { returnToReload.current = true; setPassword(""); setMaster(""); action.setError(""); void vaultResource.reload(); }
   async function mutate(work: () => Promise<unknown>, success: string) {
     if (loading || uncertain) return;
     setPassword(""); setMaster("");
@@ -62,6 +66,15 @@ export function VaultPanel({ botId }: { botId: string }) {
   const disabled = busy || loading || uncertain;
   useEffect(() => {
     if (busy || loading) return;
+    if (uncertain) {
+      if (!unlock) returnToUnlock.current = null;
+      reloadButton.current?.focus();
+      errorMessage.current?.scrollIntoView({ block: "nearest" });
+      return;
+    }
+    if (returnToReload.current) {
+      reloadButton.current?.focus(); returnToReload.current = false; return;
+    }
     if (remove) { keepButton.current?.focus(); return; }
     if (returnToRemove.current) {
       const trigger = removeButtons.current.get(returnToRemove.current);
@@ -69,7 +82,7 @@ export function VaultPanel({ botId }: { botId: string }) {
       returnToRemove.current = null;
     }
     if (!unlock && returnToUnlock.current) {
-      const trigger = unlockButtons.current.get(returnToUnlock.current);
+      const trigger = unlockButtons.current.get(returnToUnlock.current) || lockButtons.current.get(returnToUnlock.current);
       (trigger && !trigger.disabled ? trigger : reloadButton.current)?.focus();
       returnToUnlock.current = null;
     }
@@ -77,17 +90,17 @@ export function VaultPanel({ botId }: { botId: string }) {
       (!disabled ? addButton.current : reloadButton.current)?.focus();
       returnToAdd.current = false;
     }
-  }, [remove, adding, unlock, busy, loading, disabled]);
+  }, [remove, adding, unlock, busy, loading, disabled, uncertain]);
   return <section className="vault-panel">
-    <div className="vault-heading"><h2>Passwords &amp; logins</h2><button ref={addButton} type="button" aria-expanded={adding} disabled={disabled} onClick={() => {
+    <div className="vault-heading"><h2>Passwords &amp; logins</h2><div className="vault-heading-actions"><button ref={addButton} type="button" aria-expanded={adding} disabled={disabled} onClick={() => {
       returnToAdd.current = true; returnToUnlock.current = null; returnToRemove.current = null; setRemove(null);
       if (!adding) setForm({ label: "", origin: "", identifier: "", identifierType: "email" });
       setAdding(!adding); setPassword(""); setMaster(""); setUnlock(null);
-    }}>Add login</button></div>
+    }}>Add login</button><button ref={reloadButton} className="vault-reload" type="button" aria-describedby={uncertain ? errorId : undefined} disabled={busy || loading} onClick={reload}>Reload logins</button></div></div>
     <p className="muted">Manage this assistant's Hermes vault. Passwords stay out of your conversation and draft; usernames and labels are visible metadata.</p>
     {vault && <p className="capability-note"><strong>Profile: {vault.profile}.</strong> {vault.notice}</p>}
     {loading && <p role="status">Loading Hermes vault...</p>}
-    {error && <FormMessage tone="error">{error}</FormMessage>}{action.notice && <FormMessage tone="notice">{action.notice}</FormMessage>}
+    {error && <FormMessage ref={errorMessage} id={errorId} tone="error">{error}</FormMessage>}{action.notice && <FormMessage tone="notice">{action.notice}</FormMessage>}
     {adding && <form className="vault-form" autoComplete="off" onSubmit={event => {
       event.preventDefault();
       if (!validOrigin(form.origin)) { action.setError("Enter the website address through the hostname, such as https://example.com."); return; }
@@ -106,7 +119,7 @@ export function VaultPanel({ botId }: { botId: string }) {
     </form>}
     {vault && <><div><h3>Saved logins</h3>{!vault.items.length && <p className="muted">No saved logins in the enabled sources.</p>}
       {vault.items.map(item => <article className="vault-entry" key={item.id}><div className="vault-entry-heading"><h4>{item.label}</h4><small className="vault-source-tag">{item.backend === "local" ? "Hermes vault" : item.backend === "onepassword" ? "1Password" : "Bitwarden"}</small></div>
-        <p className="vault-origin">{item.origin}</p><p>{item.identifier}</p>{item.hasOtp && <small>Includes a saved authenticator secret.</small>}
+        <p className="vault-identifier">{item.identifier}</p><p className="vault-origin">{item.origin}</p>{item.hasOtp && <small>Includes a saved authenticator secret.</small>}
         {item.canRemove && (remove === item.id ? <div className="vault-remove-confirmation"><p id={removePromptId}>Remove {item.label} from Hermes?</p><div className="actions"><button aria-describedby={removePromptId} type="button" className="danger" disabled={disabled}
           onClick={() => void mutate(() => write(path + `/logins/${encodeURIComponent(item.id)}`, {}, "DELETE"), "Login removed from Hermes.")}>Remove login</button>
           <button ref={keepButton} type="button" aria-describedby={removePromptId} disabled={busy} onClick={() => setRemove(null)}>Keep login</button></div></div> : <button ref={node => { if (node) removeButtons.current.set(item.id, node); else removeButtons.current.delete(item.id); }} type="button" disabled={disabled} onClick={() => { returnToRemove.current = item.id; setRemove(item.id); }}>Remove...</button>)}
@@ -117,13 +130,12 @@ export function VaultPanel({ botId }: { botId: string }) {
           const enabled = event.target.checked; void mutate(() => write(path + `/sources/${source.name}`, { enabled }, "PUT"), enabled ? "Vault source enabled." : "Vault source disabled.");
         }} /> Use {source.displayName}</label>}
           {source.canUnlock && unlock !== source.name && <button ref={node => { if (node) unlockButtons.current.set(source.name, node); else unlockButtons.current.delete(source.name); }} type="button" disabled={disabled} onClick={() => { returnToAdd.current = false; returnToRemove.current = null; setRemove(null); returnToUnlock.current = source.name; setUnlock(source.name); setMaster(""); setPassword(""); setAdding(false); }}>Unlock</button>}
-          {source.canLock && <button type="button" disabled={disabled} onClick={() => void mutate(() => write(path + `/sources/${source.name}/lock`, {}), "Vault source locked.")}>Lock</button>}
+          {source.canLock && <button ref={node => { if (node) lockButtons.current.set(source.name, node); else lockButtons.current.delete(source.name); }} type="button" disabled={disabled} onClick={() => { returnToUnlock.current = source.name; void mutate(() => write(path + `/sources/${source.name}/lock`, {}), "Vault source locked."); }}>Lock</button>}
         </div></div>
           {unlock === source.name && <form className="vault-unlock-form" autoComplete="off" onSubmit={event => { event.preventDefault(); const value = master; void mutate(() => write(path + `/sources/${source.name}/unlock`, { password: value }), "Vault source unlocked for this profile."); }}>
             <label>Master password<input autoFocus required type="password" autoComplete="off" maxLength={4096} value={master} disabled={disabled} onChange={event => setMaster(event.target.value)} /></label>
             <div className="actions"><button className="primary" disabled={disabled || !master}>Unlock source</button><button type="button" disabled={busy} onClick={() => { setUnlock(null); setMaster(""); }}>Cancel</button></div>
           </form>}
       </div>)}</div></>}
-    <button ref={reloadButton} className="vault-reload" type="button" disabled={busy || loading} onClick={reload}>Reload logins</button>
   </section>;
 }

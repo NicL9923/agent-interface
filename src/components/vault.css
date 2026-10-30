@@ -16,7 +16,7 @@
 @media (max-width: 620px) {
   .credential-context { grid-template-columns: 1fr; }
   .credential-context dd { margin-bottom: .4rem; }
-  .vault-heading, .vault-entry-heading { align-items: flex-start; flex-direction: column; }
+  .vault-heading { align-items: flex-start; flex-direction: column; }
   .vault-heading .actions, .vault-source-actions { width: 100%; }
 }
 
@@ -35,3 +35,12 @@
 @media (max-width: 620px) {
   .vault-source-summary { flex-direction: column; align-items: flex-start; }
 }
+
+.vault-heading-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.vault-entry-heading { flex-wrap: wrap; }
+.vault-panel .vault-entry h4 { min-width: 0; overflow-wrap: anywhere; }
+.vault-entry .vault-identifier { font-size: .875rem; color: var(--ink); }
+.vault-unlock-form .actions { margin: 0; }
+.vault-remove-confirmation { margin: 12px 0; padding: 12px; border-radius: 10px; background: var(--rail); }
+.vault-remove-confirmation > p { margin: 0; font-size: .875rem; }
+.vault-remove-confirmation .actions { margin: 12px 0 0; }
