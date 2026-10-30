@@ -2240,11 +2240,11 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
         let start = calendar.date(from: DateComponents(year: 2026, month: 10, day: 1))!
         let nextDay = calendar.date(byAdding: .day, value: 1, to: start)!
-        XCTAssertTrue(AppleDeviceConnection.includesReminder(due: start, start: start, exclusiveEnd: nextDay, undated: false))
-        XCTAssertTrue(AppleDeviceConnection.includesReminder(due: nextDay.addingTimeInterval(-1), start: start, exclusiveEnd: nextDay, undated: false))
-        XCTAssertFalse(AppleDeviceConnection.includesReminder(due: nextDay, start: start, exclusiveEnd: nextDay, undated: false))
-        XCTAssertFalse(AppleDeviceConnection.includesReminder(due: nil, start: start, exclusiveEnd: nextDay, undated: false))
-        XCTAssertTrue(AppleDeviceConnection.includesReminder(due: nil, start: start, exclusiveEnd: nextDay, undated: true))
+        XCTAssertTrue(AppleSnapshotDates.includes(start, start: start, exclusiveEnd: nextDay, undated: false))
+        XCTAssertTrue(AppleSnapshotDates.includes(nextDay.addingTimeInterval(-1), start: start, exclusiveEnd: nextDay, undated: false))
+        XCTAssertFalse(AppleSnapshotDates.includes(nextDay, start: start, exclusiveEnd: nextDay, undated: false))
+        XCTAssertFalse(AppleSnapshotDates.includes(nil, start: start, exclusiveEnd: nextDay, undated: false))
+        XCTAssertTrue(AppleSnapshotDates.includes(nil, start: start, exclusiveEnd: nextDay, undated: true))
     }
 
     func testConditionalGetsReuseTheValidatedBodyOnlyForTheSamePathAndIdentity() async throws {

@@ -15,11 +15,11 @@ struct DeviceNotificationState: Equatable {
   static let unconfigured = DeviceNotificationState(checking: false, message: "Notifications are not configured on this installation.")
   static let blocked = DeviceNotificationState(checking: false, blockedInSettings: true, message: "Notifications are blocked for this app. Allow them in iOS Settings, then return here.")
   static func ready(prompt: Bool) -> DeviceNotificationState {
-    DeviceNotificationState(checking: false, canEnable: true, message: "Enable notifications for completed work and requests that need your attention.", prompt: prompt)
+    DeviceNotificationState(checking: false, canEnable: true, message: "Turn on to get alerts here for finished work and requests that need you.", prompt: prompt)
   }
   static let enabledState = DeviceNotificationState(enabled: true, checking: false, canEnable: true, message: "You'll get alerts here for finished work and requests that need you.")
   static let registering = DeviceNotificationState(enabled: true, checking: false, canEnable: true, message: "Registering this device…")
-  static let disabledByChoice = DeviceNotificationState(checking: false, canEnable: true, message: "Notifications are disabled on this device. You can enable them here later.")
+  static let disabledByChoice = DeviceNotificationState(checking: false, canEnable: true, message: "Off on this device. Turn on anytime.")
   static func failed(_ error: String) -> DeviceNotificationState {
     DeviceNotificationState(checking: false, message: "Couldn't check notifications on this device. Retry before changing them.", error: error)
   }
@@ -54,7 +54,7 @@ struct NotificationOnboardingCard: View {
     if state.prompt {
       VStack(alignment: .leading, spacing: 10) {
         Text("Enable notifications on this device?").font(.headline)
-        Text("Get an alert when work finishes or an assistant needs you.")
+        Text("Get alerts for finished work and requests that need you.")
           .font(.footnote)
         if !state.canEnable { Text(state.message).font(.footnote).foregroundStyle(Palette.muted) }
         if let error = state.error { Text(error).font(.footnote).foregroundStyle(Palette.danger) }
@@ -88,7 +88,10 @@ struct DeviceNotificationSettings: View {
       }.disabled(state.checking || state.busy || (!state.enabled && !state.canEnable) || store.sessionExpired)
         .accessibilityIdentifier("deviceNotifications")
       if state.blockedInSettings {
-        Label(state.message, systemImage: "exclamationmark.circle").font(.footnote).foregroundStyle(Palette.attention)
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+          Image(systemName: "exclamationmark.circle").accessibilityHidden(true)
+          Text(state.message)
+        }.font(.footnote).foregroundStyle(Palette.attention)
       } else { Text(state.message).font(.footnote).foregroundStyle(Palette.muted) }
       if state.busy { Text("Updating notifications…").font(.footnote).accessibilityIdentifier("notificationsBusy") }
       if let error = state.error {

@@ -28,8 +28,7 @@ export function NotificationOnboarding({ notifications }: { notifications: Notif
   if (!notifications.prompt) return null;
   return <section className="notification-onboarding" aria-labelledby="notification-onboarding-title">
     <div><h3 id="notification-onboarding-title">Enable notifications on this device?</h3>
-      <p>Get an alert when work finishes or an assistant needs you.</p>
-      {!notifications.canEnable && <p className="muted">{notifications.message}</p>}
+      <p>Get alerts for finished work and requests that need you.</p>
       {notifications.error && <FormMessage tone="error">{notifications.error}</FormMessage>}
     </div>
     <div className="actions">

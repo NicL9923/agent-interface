@@ -85,3 +85,5 @@ The `capture-settings-ios.sh` Updates and Connection modes capture synthetic upd
 The `capture-settings-ios.sh` Notifications mode scrolls real Settings to the notification controls with the existing fake permission system. Apple opens the real Calendar and Reminders screen without requesting EventKit access.
 
 The notification capture also exercises account-scoped Following and equal-time validation. Native NotificationsBlocked uses denied fixture permission, and AppleDate scrolls the real Apple form to its date window.
+
+- `bash .agents/tools/test-apple-snapshot.sh EXISTING_OUTPUT_DIRECTORY` compiles the production Foundation snapshot model with its standalone date, timezone, filtering, sorting, JSON and presentation checks under the Mac lock. It reads no EventKit data.

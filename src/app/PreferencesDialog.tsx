@@ -49,7 +49,7 @@ export function PreferencesDialog({ boot, connectionLost, offline, editPreferenc
   const [quietError, setQuietError] = useState("");
   const changeQuietTime = (field: "quietStart" | "quietEnd", value: string) => {
     const other = field === "quietStart" ? prefs.notifications?.quietEnd : prefs.notifications?.quietStart;
-    if (value === other) { setQuietError("Choose an end time different from the start."); return; }
+    if (value === other) { setQuietError("Start and end times can't match."); return; }
     setQuietError(""); notify({ [field]: value });
   };
   const { version, revisionDate: builtOn } = boot.connection;
@@ -139,7 +139,7 @@ export function PreferencesDialog({ boot, connectionLost, offline, editPreferenc
         <div className="settings-group">
           <div className="settings-row settings-notifications"><NotificationSettings notifications={notifications} title="This device" /></div>
         </div>
-        <h3 className="settings-heading">All your devices</h3>
+        <h3 className="settings-heading">Notifications on all your devices</h3>
         <div className="settings-group">
           <div className="notification-batching">
           <label className="settings-row"><span className="row-label">Batching</span>
@@ -159,7 +159,7 @@ export function PreferencesDialog({ boot, connectionLost, offline, editPreferenc
               <Input type="time" value={prefs.notifications.quietStart} onChange={event => changeQuietTime("quietStart", event.target.value)} /></label>
             <label className="settings-row"><span className="row-label">Until</span>
               <Input type="time" value={prefs.notifications.quietEnd} onChange={event => changeQuietTime("quietEnd", event.target.value)} /></label>
-            {quietError && <p className="settings-footnote danger" role="alert">{quietError}</p>}
+            {quietError && <p className="quiet-hours-error" role="alert">{quietError}</p>}
           </>}
         </div>
         <p className="settings-footnote">These apply wherever you get notifications.</p>

@@ -50,7 +50,7 @@ beforeEach(() => {
 it("remembers an answered invitation for its account without requesting permission for another account", async () => {
   await render();
   expect(container.textContent).toContain("Enable notifications on this device?");
-  expect(container.textContent).toContain("Get an alert when work finishes");
+  expect(container.textContent).toContain("Get alerts for finished work");
   expect(requestPermission).not.toHaveBeenCalled();
   await act(async () => container.querySelector<HTMLButtonElement>(".notification-onboarding button:last-child")!.click());
   await render("two");

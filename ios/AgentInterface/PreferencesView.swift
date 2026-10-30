@@ -74,15 +74,19 @@ struct PreferencesView: View {
         }.disabled(store.sessionExpired)
         Section {
           DeviceNotificationSettings().id("captureNotifications")
-        } header: { Text("This device") }
+        } header: { Text("Notifications") }
           .disabled(store.sessionExpired)
         Section {
-          Picker("Batching", selection: Binding(get: { preferences.notifications?.batchMinutes ?? 0 }, set: { value in
+          Picker(selection: Binding(get: { preferences.notifications?.batchMinutes ?? 0 }, set: { value in
             var settings = notificationPreferences; settings.batchMinutes = value; preferences.notifications = settings
           })) {
             Text("As updates arrive").tag(0); Text("Every 5 minutes").tag(5); Text("Every 15 minutes").tag(15); Text("Hourly").tag(60)
+          } label: {
+            VStack(alignment: .leading, spacing: 4) {
+              Text("Batching")
+              Text("Decisions and failures skip batching.").font(.caption).foregroundStyle(Palette.muted)
+            }.fixedSize(horizontal: false, vertical: true)
           }
-          Text("Decisions and failures skip batching.").font(.footnote).foregroundStyle(Palette.muted)
           if !bots.isEmpty { followRow }
           Toggle("Quiet hours", isOn: Binding(get: { preferences.notifications?.quietStart != nil }, set: { enabled in
             quietError = nil
@@ -92,9 +96,9 @@ struct PreferencesView: View {
           if preferences.notifications?.quietStart != nil {
             DatePicker("From", selection: quietTime(start: true), displayedComponents: .hourAndMinute).environment(\.timeZone, TimeZone(identifier: notificationPreferences.timezone) ?? .current)
             DatePicker("Until", selection: quietTime(start: false), displayedComponents: .hourAndMinute).environment(\.timeZone, TimeZone(identifier: notificationPreferences.timezone) ?? .current)
-            if let quietError { Text(quietError).font(.footnote).foregroundStyle(.red).accessibilityIdentifier("quietHoursError") }
+            if let quietError { Text(quietError).font(.footnote).foregroundStyle(Palette.danger).accessibilityIdentifier("quietHoursError") }
           }
-        } header: { Text("All your devices") } footer: {
+        } header: { Text("Notifications on all your devices") } footer: {
           VStack(alignment: .leading, spacing: 6) {
             Text("These apply wherever you get notifications.")
             if preferences.notifications?.quietStart != nil {
@@ -217,7 +221,7 @@ struct PreferencesView: View {
       let value = String(format: "%02d:%02d", calendar.component(.hour, from: date), calendar.component(.minute, from: date))
       var settings = notificationPreferences
       if start { settings.quietStart = value } else { settings.quietEnd = value }
-      guard settings.quietStart != settings.quietEnd else { quietError = "Choose an end time different from the start."; return }
+      guard settings.quietStart != settings.quietEnd else { quietError = "Start and end times can't match."; return }
       quietError = nil
       preferences.notifications = settings
     })

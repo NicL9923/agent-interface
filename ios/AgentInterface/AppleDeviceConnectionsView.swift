@@ -1,34 +1,6 @@
 import EventKit
 import SwiftUI
 
-struct AppleSnapshotEvent: Codable {
-  var calendar: String
-  var title: String
-  var start: Date
-  var end: Date
-  var allDay: Bool
-}
-struct AppleSnapshotReminder: Codable {
-  var list: String
-  var title: String
-  var due: Date?
-}
-struct AppleDeviceSnapshot: Codable {
-  var source = "Apple Calendar and Reminders, explicitly selected on this iPhone"
-  var capturedAt: Date
-  var windowStart: Date
-  var windowEnd: Date
-  var events: [AppleSnapshotEvent]
-  var reminders: [AppleSnapshotReminder]
-  var note = "This is a snapshot, not a live connection. Refresh and share again for current data. Notes, locations, attendees, and account identifiers are omitted."
-  func data() throws -> Data {
-    let encoder = JSONEncoder()
-    encoder.dateEncodingStrategy = .iso8601
-    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-    return try encoder.encode(self)
-  }
-}
-
 @MainActor @Observable final class AppleDeviceConnection {
   @ObservationIgnored private let eventStore = EKEventStore()
   var calendars: [EKCalendar] = []
@@ -43,11 +15,8 @@ struct AppleDeviceSnapshot: Codable {
   }
   func requestCalendar() async throws { _ = try await eventStore.requestFullAccessToEvents(); refreshAccess() }
   func requestReminders() async throws { _ = try await eventStore.requestFullAccessToReminders(); refreshAccess() }
-  nonisolated static func includesReminder(due: Date?, start: Date, exclusiveEnd: Date, undated: Bool) -> Bool {
-    guard let due else { return undated }
-    return due >= start && due < exclusiveEnd
-  }
   func snapshot(calendars selectedCalendars: Set<String>, lists selectedLists: Set<String>, start: Date, end: Date, undated: Bool) async throws -> AppleDeviceSnapshot {
+    let zone = TimeZone.current
     refreshAccess()
     guard start <= end, end <= Calendar.current.date(byAdding: .day, value: 90, to: start)! else { throw APIError(message: "Choose a date window of 90 days or less.", status: 400) }
     let allowedCalendars = calendars.filter { selectedCalendars.contains($0.calendarIdentifier) }
@@ -59,17 +28,18 @@ struct AppleDeviceSnapshot: Codable {
     if !allowedLists.isEmpty {
       let predicate = eventStore.predicateForReminders(in: allowedLists)
       // Read on EventKit's queue: the reminders themselves cannot cross to the main actor, their values can.
-      let fetched: [AppleSnapshotReminder] = await withCheckedContinuation { continuation in
+      let fetched: [AppleSnapshotDates.ReminderItem] = await withCheckedContinuation { continuation in
         // Explicitly Sendable: EventKit calls back on its own queue, never the main actor.
         eventStore.fetchReminders(matching: predicate) { @Sendable found in
-          continuation.resume(returning: (found ?? []).filter { reminder in
-            !reminder.isCompleted && Self.includesReminder(due: reminder.dueDateComponents?.date, start: start, exclusiveEnd: end, undated: undated)
-          }.map { AppleSnapshotReminder(list: $0.calendar.title, title: $0.title ?? "Untitled reminder", due: $0.dueDateComponents?.date) })
+          let items = (found ?? []).filter { !$0.isCompleted }.map {
+            AppleSnapshotDates.reminder(list: $0.calendar.title, title: $0.title ?? "Untitled reminder", components: $0.dueDateComponents, zone: zone)
+          }.filter { AppleSnapshotDates.includes($0.key, start: start, exclusiveEnd: end, undated: undated) }
+          continuation.resume(returning: items)
         }
       }
-      reminders = fetched.sorted { ($0.due ?? .distantFuture) < ($1.due ?? .distantFuture) }
+      reminders = AppleSnapshotDates.ordered(fetched)
     }
-    return AppleDeviceSnapshot(capturedAt: Date(), windowStart: start, windowEnd: end, events: events, reminders: reminders)
+    return AppleDeviceSnapshot(capturedAt: Date(), windowStart: start, windowEnd: end, events: events, reminders: reminders, timeZone: zone.identifier)
   }
 }
 
@@ -96,7 +66,7 @@ struct AppleDeviceConnectionsView: View {
     Form {
       Section {
         Label("On this iPhone", systemImage: "iphone").font(.headline)
-        Text("Choose calendars and reminder lists, preview a snapshot, then add it to \(botName)'s conversation.").foregroundStyle(.secondary)
+        Text("Choose calendars and reminder lists, preview a snapshot, then add it to \(botName)'s draft.").foregroundStyle(.secondary)
         if let time = UserDefaults.standard.object(forKey: sharedKey) as? Date {
           Text("Last added to draft \(time.formatted(date: .abbreviated, time: .shortened))").font(.caption).foregroundStyle(.secondary)
         }
@@ -135,17 +105,22 @@ struct AppleDeviceConnectionsView: View {
             notice = nil
           }
         }.disabled(selectedCalendars.isEmpty && selectedLists.isEmpty)
-      } header: { Text("Date window") } footer: { Text("Choose up to 90 days. Only event titles, times, reminder titles, due dates, and selected calendar and list names are included. Completed reminders are omitted.") }
+      } header: { Text("Date window") } footer: {
+        VStack(alignment: .leading, spacing: 6) {
+          if selectedCalendars.isEmpty && selectedLists.isEmpty { Text("Allow access and choose a calendar or list to preview.") }
+          Text("Choose up to 90 days. Only event titles, times, reminder titles, due dates, and selected calendar and list names, and the snapshot time zone are included. Completed reminders are omitted.")
+        }.fixedSize(horizontal: false, vertical: true)
+      }
       if let snapshot {
         Section("Review before sharing") {
-          Text("\(snapshot.events.count) events · \(snapshot.reminders.count) reminders")
-          Text("Refreshed \(snapshot.capturedAt.formatted(date: .abbreviated, time: .shortened))").font(.caption).foregroundStyle(.secondary)
+          Text(snapshot.itemSummary)
+          Text("Refreshed \(AppleSnapshotDates.instantLine(snapshot.capturedAt, zone: TimeZone(identifier: snapshot.timeZone) ?? .current))").font(.caption).foregroundStyle(.secondary)
           DisclosureGroup("Preview snapshot", isExpanded: $previewExpanded) {
             ForEach(Array(snapshot.events.enumerated()), id: \.offset) { _, event in
-              VStack(alignment: .leading) { Text(event.title); Text(event.calendar).font(.caption).foregroundStyle(.secondary); Text(event.allDay ? "All day: \(event.start.formatted(date: .abbreviated, time: .omitted)) to \(event.end.addingTimeInterval(-1).formatted(date: .abbreviated, time: .omitted))" : "\(event.start.formatted(date: .abbreviated, time: .shortened)) to \(event.end.formatted(date: .abbreviated, time: .shortened))").font(.caption).foregroundStyle(.secondary) }
+              VStack(alignment: .leading) { Text(event.title); Text(event.calendar).font(.caption).foregroundStyle(.secondary); Text(AppleSnapshotDates.eventLine(event, zone: TimeZone(identifier: snapshot.timeZone) ?? .current)).font(.caption).foregroundStyle(.secondary) }
             }
             ForEach(Array(snapshot.reminders.enumerated()), id: \.offset) { _, reminder in
-              VStack(alignment: .leading) { Text(reminder.title); Text(reminder.list).font(.caption).foregroundStyle(.secondary); Text(reminder.due.map { "Due \($0.formatted(date: .abbreviated, time: .shortened))" } ?? "No due date").font(.caption).foregroundStyle(.secondary) }
+              VStack(alignment: .leading) { Text(reminder.title); Text(reminder.list).font(.caption).foregroundStyle(.secondary); Text(AppleSnapshotDates.reminderLine(reminder, zone: TimeZone(identifier: snapshot.timeZone) ?? .current)).font(.caption).foregroundStyle(.secondary) }
             }
           }
           Button("Add to \(botName)'s draft…") { confirmShare = true }.disabled(!store.connected || !store.supports(.uploads) || botId.isEmpty)
@@ -177,7 +152,7 @@ struct AppleDeviceConnectionsView: View {
         }
       } message: {
         if let snapshot {
-          Text("\(snapshot.events.count) events and \(snapshot.reminders.count) reminders, from \(snapshot.windowStart.formatted(date: .abbreviated, time: .omitted)) through \(snapshot.windowEnd.addingTimeInterval(-1).formatted(date: .abbreviated, time: .omitted)). Everyone who can access this assistant can read them after you send the draft. Existing draft text is kept.")
+          Text("\(snapshot.itemSummary), from \(AppleSnapshotDates.dayLine(snapshot.windowStart, zone: TimeZone(identifier: snapshot.timeZone) ?? .current)) through \(AppleSnapshotDates.dayLine(snapshot.windowEnd.addingTimeInterval(-1), zone: TimeZone(identifier: snapshot.timeZone) ?? .current)), in \(snapshot.timeZone). Everyone who can access this assistant can read them after you send the draft. Existing draft text is kept.")
         }
       }
     }

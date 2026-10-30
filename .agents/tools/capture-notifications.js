@@ -65,11 +65,11 @@ async (page, { origin, outputDir }) => {
       await following.getByRole('button', { name: 'Back to settings', exact: true }).click();
       const until = settings.getByLabel('Until', { exact: true });
       await until.fill('22:00');
-      await settings.getByText('Choose an end time different from the start.', { exact: true }).waitFor();
+      await settings.getByText('Start and end times can\'t match.', { exact: true }).waitFor();
       await shot(`notification-quiet-error-${width}`);
       await save(() => until.fill('08:00'));
       await toggle.click();
-      await settings.getByText('Notifications are disabled on this device. You can enable them here later.', { exact: true }).waitFor();
+      await settings.getByText('Off on this device. Turn on anytime.', { exact: true }).waitFor();
       await tab.evaluate(() => window.fixturePermission('denied'));
       await settings.getByText('Notifications are blocked for this app. Allow them in your browser or device settings, then return here.', { exact: true }).waitFor();
       if (!await toggle.isDisabled()) throw new Error('Blocked notification toggle must be disabled');

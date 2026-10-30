@@ -1034,3 +1034,37 @@ needs a calendar. No data-filter change was made without a real-device finding.
 Dated-reminder inclusion remains a device coverage question. Native XCTest,
 VoiceOver, dark mode and large text are still unverified. Round 2 is pending;
 progress remains 23 of 25 grouped areas.
+
+
+## Notifications and Apple devices, round 3 preparation
+
+Round 2 scored 8.7. Quiet-hours errors now have their own spacing and explain
+that start and end times cannot match. Both notification groups name their scope.
+On, Off and invitation text describe the same alerts. Native blocked guidance
+aligns with its icon, batching help stays with its picker, and the Apple form
+explains why preview is disabled. The agent deliberately kept iPhone Safari's
+Add to Home Screen guidance in Settings instead of showing an invitation whose
+Enable action cannot work there.
+
+The Apple snapshot model now preserves date-only reminders as a YYYY-MM-DD
+`dueDate`, with no fabricated time. Timed reminders resolve floating components
+in the capture timezone. The snapshot records that timezone and encodes instants
+with its UTC offset. Preview and confirmation use the same zone. Event ranges
+collapse repeated dates, all-day ranges respect the exclusive end even across
+DST, and counts use singular or plural wording. Filtering uses the same converted
+date key as the payload, keeps the selected half-open window, and leaves undated
+inclusion under the existing toggle. Overdue reminders outside that window are
+not silently added.
+
+The production Foundation model passes standalone Swift 6 strict-concurrency
+checks for conversion, window boundaries, sorting, JSON and presentation,
+including Sydney offsets and the 25-hour fall-back day. All 32 affected web tests
+pass. Web and native builds completed, and the agent repeated the simulated
+notification interactions at both widths. Fresh captures show all eight web
+states per width and four compiled iPhone settings/Apple states. Native work ran
+under the machine lock. The browser, preview server and simulator are closed.
+
+The preview and sharing confirmation remain source-only observations. Real
+EventKit permissions/data, push delivery, native gestures, XCTest, VoiceOver,
+dark mode and large text remain unverified. Round 3 is the final review round;
+progress remains 23 of 25 grouped areas until its result.

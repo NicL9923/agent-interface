@@ -57,7 +57,7 @@ export function useDeviceNotifications(userId?: string, vapid?: string) {
       if (!current()) return;
       const enabled = Notification.permission === "granted" && !!subscription && result.registered === true;
       setState({ enabled, blocked: false, checking: false, busy: false, canEnable: true, error: "",
-        message: enabled ? "You'll get alerts here for finished work and requests that need you." : "Enable notifications for completed work and requests that need your attention." });
+        message: enabled ? "You'll get alerts here for finished work and requests that need you." : "Turn on to get alerts here for finished work and requests that need you." });
     } catch (error) {
       if (current()) setState({ ...initialState, checking: false, error: (error as Error).message,
         message: "Couldn't check notifications on this device. Retry before changing them." });
@@ -102,7 +102,7 @@ export function useDeviceNotifications(userId?: string, vapid?: string) {
       if (permission !== "granted") {
         setState({ ...initialState, checking: false, blocked: permission === "denied", message: permission === "denied"
           ? "Notifications are blocked for this app. Allow them in your browser or device settings, then return here."
-          : "Notifications stay disabled. You can enable them later in Settings > Notifications.", canEnable: permission !== "denied" });
+          : "Off on this device. Turn on anytime in Settings > Notifications.", canEnable: permission !== "denied" });
         return;
       }
       const existing = await worker.pushManager.getSubscription();
@@ -145,10 +145,10 @@ export function useDeviceNotifications(userId?: string, vapid?: string) {
         removed = true;
         if (user.current === account) setState((previous) => ({ ...previous, enabled: false }));
         const unsubscribed = await subscription.unsubscribe();
-        if (!unsubscribed) throw new Error("Notifications are disabled for your account, but this browser couldn't remove its subscription. Try turning them off again or use browser settings.");
+        if (!unsubscribed) throw new Error("Notifications are off for your account, but this browser couldn't remove its subscription. Try turning them off again or use browser settings.");
       }
       if (user.current === account) setState((previous) => ({ ...previous, enabled: false, busy: false,
-        message: "Notifications are disabled on this device. You can enable them here later." }));
+        message: "Off on this device. Turn on anytime." }));
     } catch (error) {
       // A failed DELETE response can still have removed the server registration.
       // Recheck its owner before reporting this device as enabled.

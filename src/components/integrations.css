@@ -7,6 +7,7 @@
 .integration-toolbar { margin: 16px 0; font-size: 0.875rem; }
 .integration-group > h3 { color: var(--muted); font-size: 0.875rem; font-weight: 600; margin: 26px 0 12px; }
 .integration-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 20rem), 1fr)); gap: 12px; }
+.integration-card > :last-child { margin-bottom: 0; }
 .integration-card { border: 1px solid var(--line); border-radius: 16px; padding: 18px; min-width: 0; }
 .integration-card-heading { align-items: flex-start; flex-wrap: wrap; }
 .integration-card h4 { margin: 0; font-size: 0.9375rem; }

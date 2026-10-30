@@ -235,7 +235,7 @@ it.each(["quietStart", "quietEnd"] as const)("refuses an equal %s locally, then 
   const input = container.querySelectorAll<HTMLInputElement>('input[type="time"]')[field === "quietStart" ? 0 : 1];
   await typeInto(input, field === "quietStart" ? "07:00" : "22:00");
   expect(saved).toHaveLength(0);
-  expect(container.querySelector('[role="alert"]')?.textContent).toBe("Choose an end time different from the start.");
+  expect(container.querySelector('[role="alert"]')?.textContent).toBe("Start and end times can't match.");
   await typeInto(input, "08:00");
   expect(saved.at(-1)?.notifications?.[field]).toBe("08:00");
   expect(container.querySelector('[role="alert"]')).toBeNull();
