@@ -162,6 +162,9 @@ it("persists a trial admission before dispatch and checks an uncertain run witho
   expect(document.getElementById(statusButton.getAttribute("aria-describedby")!)?.textContent).toContain("Checking does not run it again.");
   expect(container.textContent).not.toContain("Try once runs this routine now.");
   await click("Check run status"); expect(api).toHaveBeenCalledWith(`/routines/r1/runs/${requestId}`); expect(write).toHaveBeenCalledTimes(1);
+  const retry = Array.from(container.querySelectorAll("button")).find(button => button.textContent === "Retry the same request")!;
+  expect(document.getElementById(retry.getAttribute("aria-describedby")!)?.textContent).toContain("may run this routine");
+  expect(retry.getAttribute("aria-describedby")).not.toBe(statusButton.getAttribute("aria-describedby"));
   await click("Retry the same request"); expect(write).toHaveBeenLastCalledWith("/routines/r1/run", { requestId });
 });
 

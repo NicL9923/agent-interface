@@ -74,12 +74,12 @@ References collected October 25, 2026. External artwork is reference material on
 | Work task editors | Shared before baseline; 16 web, 13 iPhone and 9 iPad after frames reviewed | Complete | Every frame 9 |
 | Work event triggers | Web and native comparisons available | In progress | Whole-screen round 1: 7.6. Fixes implemented; targeted native recapture pending. Six native large-text frames remain accepted |
 | Learning | Desktop/phone web and current iPhone views captured | Complete | Whole-screen rounds: 7.0, 8.5, 9.0 |
-| Routines and results | Desktop/phone web and current iPhone views captured | In progress | Rounds 1 and 2: 7.2, 8.6; final round requested |
-| Logins and secure requests | Pending | Pending | Pending |
+| Routines and results | Desktop/phone web and current iPhone views captured | Complete | Whole-screen rounds: 7.2, 8.6, 9.1 |
+| Logins and secure requests | Desktop/phone web and current iPhone logins captured | In progress | Round 1 requested |
 | Search, saved items and automations | Pending | Pending | Pending |
 | Group chats and threads | Pending | Pending | Pending |
 | Settings, following and home sections | Pending | Pending | Pending |
-| Integrations | Pending | Pending | Pending |
+| Integrations | Desktop/phone web and current iPhone captured | In progress | Reviewed with secure requests, round 1 requested |
 | Computer and terminal | Pending | Pending | Pending |
 | Hermes updates and recovery | Pending | Pending | Pending |
 | Sign-in and connection recovery | Pending | Pending | Pending |
@@ -490,3 +490,13 @@ The agent checked the instruction size in Chromium, canceled an edit and checked
 focus, and paused and resumed the synthetic routine at both widths. Fresh native
 captures show the paused-state badge. Pending-run help and saved-edit focus have
 focused behavioral coverage; no live routine execution is claimed.
+
+
+[Round 3](evidence/design-review/routines-screen-round3.md) passed Routines
+and results at 9.1. The two small follow-ups were applied directly: native routine
+instructions use body text, and Retry has its own explanation that resending may
+run the routine. Recipient checkbox spacing remains a minor polish item in
+[issue 206](https://github.com/NicL9923/agent-interface/issues/206). Focus restoration
+currently relies on retaining the cards during reload; preserve that behavior if
+the loading presentation changes. Native editor/results interaction, VoiceOver,
+dark mode, large text and live routine execution remain outside the captures.

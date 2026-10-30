@@ -685,7 +685,7 @@ struct BotSettingsView: View {
                 .overlay(Capsule().strokeBorder(Palette.line))
             }
           }
-          Text(routine.prompt).font(.footnote).lineLimit(6)
+          Text(routine.prompt).font(.body).lineLimit(6)
           RoutineEnhancements(routine: routine, disabled: !store.supports(.routines))
           Button(routine.enabled ? "Pause" : "Resume") {
             action {

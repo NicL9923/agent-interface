@@ -629,7 +629,12 @@ struct RoutineEnhancements: View {
     } else {
       Button(busy ? "Starting…" : "Try once") { startRun() }.disabled(busy || disabled || !store.connected)
     }
-    if retrySameRun { Button("Retry the same request") { runConfirm = true }.disabled(busy || disabled || !store.connected) }
+    if retrySameRun {
+      Button("Retry the same request") { runConfirm = true }.disabled(busy || disabled || !store.connected)
+        .accessibilityHint("Sends the saved request again and may run this routine. Uses the same request ID.")
+      Text("Retry sends the saved request again and may run this routine. It uses the same request ID.")
+        .font(.caption).foregroundStyle(Palette.muted)
+    }
     Text(receipt.map { !$0.finished } == true
       ? "Check the saved run's status before starting another. Checking does not run it again."
       : "Try once runs this routine now. Hermes may move the next run or finish a one-time routine. Paused recurring routines stay paused.").font(.caption).foregroundStyle(Palette.muted)
