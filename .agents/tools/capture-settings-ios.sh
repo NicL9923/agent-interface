@@ -41,6 +41,7 @@ for tab in "$@"; do
   capture_delay=${NATIVE_CAPTURE_DELAY:-5}
   case "$tab" in
     ComposerAX3) settings_tab=""; survival_capture=composer; content_size=accessibility-extra-large ;;
+    ComposerAX3Focused) settings_tab=""; survival_capture=composer-ax-focused; content_size=accessibility-extra-large ;;
     ComposerDark) settings_tab=""; survival_capture=composer; appearance=dark ;;
     ComposerFocused) settings_tab=""; survival_capture=composer-focused ;;
     ComposerMultiline) settings_tab=""; survival_capture=composer-multiline ;;

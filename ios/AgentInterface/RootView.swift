@@ -78,7 +78,7 @@ struct RootView: View {
     .onChange(of:scenePhase) { _, phase in if phase == .active { checkShares() } }
     .onChange(of:store.scope) { _, scope in scopeChanged(scope) }
     // Initial too: a notification or Siri can ask before this view first appears.
-    .onChange(of: store.todayRequest, initial: true) { _, request in if request != nil { destination = .today; path = [.today]; compactColumn = .detail } }
+    .onChange(of: store.todayRequest, initial: true) { _, request in if request != nil { store.todayRequest = nil; destination = .today; path = [.today]; compactColumn = .detail } }
     .onChange(of: store.leftBotId, initial: true) { _, id in if let id { left(id) } }
     .onChange(of: store.conversationRequest, initial: true) { _, request in
       if request != nil {
@@ -89,7 +89,7 @@ struct RootView: View {
       }
     }
     .onChange(of: store.homeRequest, initial: true) { _, request in
-      if request != nil { destination = .conversation; path = []; compactColumn = .sidebar }
+      if request != nil { store.homeRequest = nil; destination = .conversation; path = []; compactColumn = .sidebar }
     }
     .onChange(of: store.bootstrap?.user.id) { old, new in if let old, old != new { accountChanged() } }
   }

@@ -22,12 +22,13 @@ async (page, {origin, outputDir}) => {
     shots.push({name,path,height:box.height,width:box.width});
   };
   try{
-    for(const width of [1440,390,320]){
+    for(const width of [1440,768,390,320]){
       await tab.setViewportSize({width,height:width===1440?1000:844});
       await tab.goto(origin+'/?view=conversation&bot=ranch');
       await tab.locator('#message').waitFor();await tab.locator('#message').fill('');
       await shot('idle-'+width);
       await tab.locator('#message').fill('Can you check the gate before dinner?');await shot('draft-'+width);
+      await tab.locator('#message').fill('A long single line '.repeat(8));await shot('long-line-'+width);
       await tab.locator('#message').fill('Please check the north gate.\nReview the battery history.\nCompare it with the other sensors.\nKeep the existing reminders.\nTell me what needs attention.');
       await shot('multiline-'+width);
     }

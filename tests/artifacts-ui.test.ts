@@ -217,11 +217,11 @@ describe("conversation artifacts", () => {
     await render(); await open();
     expect(container.textContent).toContain("No artifacts yet");
     await render(null);
-    expect(container.textContent).toContain("No artifacts yet");
+    expect(container.textContent).toContain("Artifacts are unavailable while this conversation reloads.");
     await render(null, true);
     expect(container.textContent).toContain("Files are unavailable until your assistant reconnects");
     await render({ ...conversation, botId: "another", files: [file("private", "another-bot.txt")] });
     expect(container.textContent).not.toContain("another-bot.txt");
-    expect(container.textContent).toContain("No artifacts yet");
+    expect(container.textContent).toContain("Artifacts are unavailable while this conversation reloads.");
   });
 });

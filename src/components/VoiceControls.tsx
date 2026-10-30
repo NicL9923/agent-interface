@@ -13,13 +13,14 @@ export interface VoiceControlsProps {
   botId: string;
   reply?: { id: string; text: string };
   disabled?: boolean;
+  hasDraft?: boolean;
   onTranscript(text: string): void;
   onStateChange?(state: VoiceState): void;
 }
 const labels: Record<VoiceState, string> = { idle: "", requesting: "Waiting for microphone permission…", recording: "Recording", transcribing: "Transcribing…", preparing: "Preparing spoken reply…", speaking: "Speaking" };
 const message = (error: unknown) => error instanceof Error ? error.message : "Voice could not be completed. Your draft is kept.";
 
-export function VoiceControls({ botId, reply, disabled = false, onTranscript, onStateChange, avatar, name }: VoiceControlsProps) {
+export function VoiceControls({ botId, reply, disabled = false, hasDraft = false, onTranscript, onStateChange, avatar, name }: VoiceControlsProps) {
   const [state, setState] = useState<VoiceState>("idle");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -60,6 +61,12 @@ export function VoiceControls({ botId, reply, disabled = false, onTranscript, on
     };
   }, [botId]);
   useEffect(() => { if (disabled && active.current !== "idle") cancel(); }, [disabled]);
+  useEffect(() => {
+    if (active.current === "preparing" || active.current === "speaking") {
+      generation.current++; request.current?.abort(); request.current = null; transition("idle");
+    }
+    releaseAudio(); setPlayable(false);
+  }, [reply?.id]);
 
   async function transcribe(blob: Blob) {
     const run = ++generation.current;
@@ -158,17 +165,16 @@ export function VoiceControls({ botId, reply, disabled = false, onTranscript, on
   }
   const busy = state !== "idle";
   const supported = typeof navigator.mediaDevices?.getUserMedia === "function" && typeof MediaRecorder !== "undefined";
-  return <div className="voice-controls" data-voice-state={state}>
+  return <div className="voice-controls" data-voice-state={state} data-has-draft={hasDraft || undefined}>
     <div className="voice-actions">
       {state === "recording" ? <button type="button" className="voice-recording" aria-label={`Stop recording, ${elapsed} seconds`} onClick={stopRecording}><span className="sr-only">Stop recording · </span><Icon name="stop" size={16} /><span>{elapsed}s</span></button>
         : <button type="button" aria-label="Record voice" disabled={disabled || busy} title={!supported ? "Microphone recording is unavailable in this browser. You can still type." : "Record up to two minutes. Review the transcript before sending."} onClick={() => void startRecording()}><Icon name="mic" size={18} /><span className="tool-label">Record voice</span></button>}
-      {reply && <button type="button" aria-label="Listen to reply" title="Listen to reply" disabled={disabled || busy} onClick={() => void speak()}><Icon name="speaker" size={18} /><span className="tool-label">Listen to reply</span></button>}
+      {reply && <button type="button" className="voice-listen" aria-label={playable ? "Play audio" : "Listen to reply"} title={playable ? "Play audio" : "Listen to reply"} disabled={disabled || busy} onClick={() => void (playable ? playAudio() : speak())}><Icon name="speaker" size={18} /><span className="tool-label">{playable ? "Play audio" : "Listen to reply"}</span></button>}
     </div>
     <div className="voice-panel">
       {busy && <span className={`voice-avatar voice-${state}`}><Avatar avatar={avatar} name={name} state="idle" size={24} reducedMotion /></span>}
       {busy && <button type="button" onClick={cancel}>{state === "speaking" ? "Stop speaking" : "Cancel voice"}</button>}
       {recording && !busy && <><button type="button" disabled={disabled} onClick={() => void transcribe(recording)}>Retry transcription</button><button type="button" onClick={() => { setRecording(null); setError(""); }}>Discard recording</button></>}
-      {playable && !busy && <button type="button" disabled={disabled} onClick={() => void playAudio()}>Play audio</button>}
     {(busy || notice) && <p className="voice-status" role="status">{busy ? labels[state] : notice}</p>}
     {error && <p className="voice-error" role="alert">{error}</p>}
     </div>

@@ -96,7 +96,7 @@ describe("command palette", () => {
     await key({ key: "Enter" }, paletteInput());
     expect(palette()).toBeNull();
     expect(new URL(location.href).searchParams.get("bot")).toBe("kitchen");
-    expect(mount.container.querySelector("#message")?.getAttribute("placeholder")).toBe("Message Kitchen companion…");
+    expect(mount.container.querySelector("#message")?.getAttribute("placeholder")).toBe("Message…");
   });
 
   it("closes with Escape or Ctrl+K and returns focus", async () => {

@@ -48,8 +48,8 @@ struct ComposerView: View {
       #if DEBUG
       .onChange(of: store.draftReady, initial: true) { _, ready in
         guard ready else { return }
-        if DebugFixtures.captureSurvival == "composer-focused" { focused = true }
-        if DebugFixtures.captureSurvival == "composer-multiline" {
+        if ["composer-focused", "composer-ax-focused"].contains(DebugFixtures.captureSurvival ?? "") { focused = true }
+        if ["composer-multiline", "composer-ax-focused"].contains(DebugFixtures.captureSurvival ?? "") {
           store.editComposer { $0.text = "Check the north gate.\nReview the battery history.\nCompare the other sensors.\nKeep the existing reminders.\nTell me what needs attention." }
         }
       }
@@ -98,7 +98,7 @@ struct ComposerView: View {
         }
         input
         HStack(spacing: 4) {
-          VoiceButtons(voice: voice, bot: bot, reply: store.active ? nil : store.latestReply, disabled: voiceDisabled)
+          VoiceButtons(voice: voice, bot: bot, reply: store.active || !store.composerDraft.text.isEmpty ? nil : store.latestReply, disabled: voiceDisabled)
           if focused { hideKeyboardButton }
           sendButton
         }
@@ -118,7 +118,7 @@ struct ComposerView: View {
       label: "Message \(bot.name)", editable: store.draftReady, readOnly: store.sendingDraft, focused: $focused,
       onReturn: { if store.canSend { send() } },
       onPasteImages: { images in Task { await store.uploads.attach(images: images, named: "Pasted image") } },
-      onArrow: recallArrow, onPasteLongText: attachLongPaste, maximumLines: verticalSizeClass == .compact ? 3 : 6
+      onArrow: recallArrow, onPasteLongText: attachLongPaste, maximumLines: verticalSizeClass == .compact || dynamicTypeSize.isAccessibilitySize ? 3 : 6
     )
     .overlay(alignment: .topLeading) {
       if store.composerDraft.text.isEmpty {
@@ -129,12 +129,12 @@ struct ComposerView: View {
     .opacity(store.draftReady ? 1 : 0.6)
   }
   private var placeholder: String {
-    store.sendingDraft ? "Sending…" : store.active ? "Guide \(bot.name) while they work…" : "Message \(bot.name)…"
+    store.sendingDraft ? "Sending…" : store.active ? "Guide…" : "Message…"
   }
   /// Always there while typing, so the keyboard can be put away without finding a spot to drag.
   private var hideKeyboardButton: some View {
     Button { focused = false } label: {
-      Image(systemName: "keyboard.chevron.compact.down").font(.body).frame(width: 44, height: 44)
+      Image(systemName: "keyboard.chevron.compact.down").font(.system(size: 20)).frame(width: 44, height: 44)
     }.foregroundStyle(Palette.muted).accessibilityLabel("Hide keyboard").accessibilityIdentifier("hideKeyboard")
       .transition(.opacity)
   }
@@ -147,7 +147,7 @@ struct ComposerView: View {
       }
       Button("Choose Files", systemImage: "folder") { importFiles = true }
     } label: {
-      Image(systemName: "paperclip").font(.body).frame(width: 44, height: 44)
+      Image(systemName: "paperclip").font(.system(size: 20)).frame(width: 44, height: 44)
     }.accessibilityLabel("Attach images, PDFs, or text").accessibilityIdentifier("composerAttach")
       .accessibilityHint(unavailable ?? "You can also paste or drop them here.")
       .disabled(unavailable != nil)

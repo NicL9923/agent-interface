@@ -68,7 +68,7 @@ function useComposerInput(text: string, botId: string, voiceState: VoiceState) {
       const send = form.querySelector<HTMLElement>(".send-button");
       const measure = form.querySelector<HTMLElement>(".composer-measure");
       const style = getComputedStyle(input);
-      if (measure) { measure.style.font = style.font; measure.textContent = input.value; }
+      if (measure) { measure.style.font = style.font; measure.textContent = input.value.slice(0, 201); }
       const available = form.clientWidth - 8 - (lead?.offsetWidth ?? 0) - (voice?.offsetWidth ?? 0) - (send?.offsetWidth ?? 44) - 12;
       form.dataset.layout = shouldStackComposer(input.value, available, measure?.getBoundingClientRect().width ?? 0) ? "stacked" : "inline";
     }
@@ -291,7 +291,36 @@ export const Composer = memo(function Composer({ boot, selected, botId, prompts,
           onRemove={id => setDraft(previous => ({ ...previous, dirty: true, attachments: previous.attachments.filter(file => file.id !== id) }))}
           onCancel={cancelUpload} onRetry={retryUpload} />
         </div>
-        <span className="composer-measure" aria-hidden="true" />
+        <div className="composer-tools">
+          {/* A real button opens a hidden picker. An invisible file input overlay
+              won iOS touch adjustment for taps meant for the model button beside it. */}
+          <button
+            type="button"
+            className="composer-tool"
+            aria-label="Attach images, PDFs, or text"
+            title={attachUnavailable || "Attach images, PDFs, or text. You can also paste or drop them here."}
+            disabled={!!attachUnavailable}
+            onClick={() => fileInput.current?.click()}
+          >
+            <Icon name="attach" size={18} />
+          </button>
+          <input
+            ref={fileInput}
+            hidden
+            type="file"
+            accept={UPLOAD_ACCEPT}
+            multiple
+            disabled={!!attachUnavailable}
+            onChange={(event) => {
+              addFiles(Array.from(event.target.files ?? []));
+              event.target.value = "";
+            }}
+          />
+          {advanced && <Loading loadingFallback={<ModelPickerPlaceholder model={selected.model} />}
+            errorFallback={<ModelPickerPlaceholder model={selected.model} failed />}><ComposerModelPicker bot={selected} bootstrap={boot}
+            disabled={connectionLost || sending} onSaved={refresh} /></Loading>}
+        </div>
+        <span className="composer-measure-box" aria-hidden="true"><span className="composer-measure" /></span>
         <label className="sr-only" htmlFor="message">
           Message {selected.name}
         </label>
@@ -302,8 +331,8 @@ export const Composer = memo(function Composer({ boot, selected, botId, prompts,
           placeholder={
             handedOff ? "Sending…"
               : active
-              ? `Guide ${selected.name} while they work…`
-              : `Message ${selected.name}…`
+              ? "Guide…"
+              : "Message…"
           }
           aria-describedby={pasteStatus ? "composer-paste-status" : undefined}
           // Read-only rather than disabled, so focus stays here for the next message.
@@ -374,37 +403,9 @@ export const Composer = memo(function Composer({ boot, selected, botId, prompts,
           rows={1}
           disabled={!draftReady || draft.botId !== botId}
         />
-        <div className="composer-tools">
-          {/* A real button opens a hidden picker. An invisible file input overlay
-              won iOS touch adjustment for taps meant for the model button beside it. */}
-          <button
-            type="button"
-            className="composer-tool"
-            aria-label="Attach images, PDFs, or text"
-            title={attachUnavailable || "Attach images, PDFs, or text. You can also paste or drop them here."}
-            disabled={!!attachUnavailable}
-            onClick={() => fileInput.current?.click()}
-          >
-            <Icon name="attach" size={18} />
-          </button>
-          <input
-            ref={fileInput}
-            hidden
-            type="file"
-            accept={UPLOAD_ACCEPT}
-            multiple
-            disabled={!!attachUnavailable}
-            onChange={(event) => {
-              addFiles(Array.from(event.target.files ?? []));
-              event.target.value = "";
-            }}
-          />
-          {advanced && <Loading loadingFallback={<ModelPickerPlaceholder model={selected.model} />}
-            errorFallback={<ModelPickerPlaceholder model={selected.model} failed />}><ComposerModelPicker bot={selected} bootstrap={boot}
-            disabled={connectionLost || sending} onSaved={refresh} /></Loading>}
-        </div>
+
             <VoiceControls avatar={selected.avatar} name={selected.name} key={`${boot.user.id}:${botId}`} botId={botId}
-              reply={voiceReply}
+              reply={voiceReply} hasDraft={!!shown.text}
               disabled={!draftReady || draft.botId !== botId || pending !== null || sending || connectionLost}
               onStateChange={setVoiceState} onTranscript={(text) => setDraft(previous => ({ ...previous, dirty: true,
                 text: previous.text.trim() ? `${previous.text}\n${text}` : text }))} />

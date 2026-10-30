@@ -65,7 +65,8 @@
     static var captureSurvival: String? {
       let environment = ProcessInfo.processInfo.environment
       guard environment["AGENT_INTERFACE_UI_FIXTURE"] == "1" else { return nil }
-      return environment["AGENT_INTERFACE_UI_CAPTURE_SURVIVAL"]
+      guard let mode = environment["AGENT_INTERFACE_UI_CAPTURE_SURVIVAL"], !mode.isEmpty else { return nil }
+      return mode
     }
     static func configure(_ store: AppStore) async -> Bool {
       let environment = ProcessInfo.processInfo.environment

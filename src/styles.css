@@ -725,6 +725,7 @@ a {
 @keyframes activity-breathe { 50% { opacity: .35; } }
 @media (prefers-reduced-motion: reduce) { .state-thinking .activity-dot, .state-working .activity-dot, .bot-activity::before { animation: none !important; } }
 .composer {
+  position: relative;
   background: var(--raised);
   border: 1px solid var(--line);
   box-shadow: 0 5px 18px #1b251a05;
@@ -761,7 +762,8 @@ a {
 }
 .composer-extras { grid-area: extras; min-width: 0; }
 .composer-extras:has(> :not(:empty)) { padding: 4px 8px; }
-.composer-measure { position: absolute; visibility: hidden; white-space: pre; pointer-events: none; }
+.composer-measure-box { position: absolute; inset: 0; overflow: hidden; visibility: hidden; pointer-events: none; }
+.composer-measure { display: inline-block; white-space: pre; }
 .composer-tools { grid-area: lead; display: flex; align-items: center; gap: 4px; justify-self: start; }
 .composer > .voice-controls { display: contents; }
 .composer .voice-actions { grid-area: voice; }
@@ -1149,10 +1151,7 @@ a {
     padding: 26px 28px;
   }
   .composer-area {
-    padding: 8px 22px max(15px, env(safe-area-inset-bottom));
-  }
-  .composer-hint {
-    display: none;
+    padding: 6px 12px max(8px, env(safe-area-inset-bottom));
   }
 }
 @media (max-width: 620px) {
@@ -1254,9 +1253,6 @@ a {
     overflow: hidden;
     clip: rect(0, 0, 0, 0);
     white-space: nowrap;
-  }
-  .composer-tools .send-button {
-    margin-left: auto;
   }
   .approval-card {
     padding: 16px;

@@ -31,7 +31,8 @@ async (page, {origin, outputDir}) => {
   await tab.route('**/api/bots/*/uploads',async route=>{
     if(failUpload){failUpload=false;return route.fulfill({status:503,json:{error:'Fixture upload is temporarily unavailable.'}});}
     const raw=route.request().postDataBuffer().toString();const name=/filename="([^"]+)"/.exec(raw)?.[1]??'pasted.txt';
-    await route.fulfill({json:{id:'fixture-upload-'+Date.now(),name,mime:'text/plain',size:38}});
+    const text=raw.split('\r\n\r\n')[1]?.split('\r\n--')[0]??'';
+    await route.fulfill({json:{id:'fixture-upload-'+Date.now(),name,mime:'text/plain',size:Buffer.byteLength(text)}});
   });
   const shot=async name=>{
     await tab.mouse.move(0,0);await tab.evaluate(async()=>{await document.fonts.ready;await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));});
@@ -46,7 +47,7 @@ async (page, {origin, outputDir}) => {
       await tab.getByRole('button',{name:/^Stop recording/}).click();await tab.getByRole('button',{name:'Retry transcription',exact:true}).waitFor();await shot('transcription-error-'+width);
       await tab.getByRole('button',{name:'Retry transcription',exact:true}).click();await tab.getByText('Added to your draft. Review it before sending.',{exact:true}).waitFor();
       if(!(await input.inputValue()).startsWith('Keep my existing draft.'))throw Error('Transcription replaced draft');await shot('transcribed-'+width);
-      await tab.getByRole('button',{name:'Listen to reply',exact:true}).click();await tab.getByRole('button',{name:'Stop speaking',exact:true}).waitFor();await shot('speaking-'+width);
+      await input.fill('');await tab.getByRole('button',{name:'Listen to reply',exact:true}).click();await tab.getByRole('button',{name:'Stop speaking',exact:true}).waitFor();await shot('speaking-'+width);
       await tab.evaluate(()=>window.__composerAudio.at(-1).onended?.());await tab.getByRole('button',{name:'Play audio',exact:true}).waitFor();await shot('audio-ready-'+width);
       await tab.locator('input[type=file]').setInputFiles({name:'gate-notes.txt',mimeType:'text/plain',buffer:Buffer.from('Check the north gate before dinner.')});
       await tab.getByRole('button',{name:/^Retry/}).waitFor();await shot('upload-error-'+width);
