@@ -832,3 +832,22 @@ it("collapses a reviewed skill change without fetching and reloads its revision 
   await click("Review change");
   expect(requests()).toHaveLength(2);
 });
+
+
+it.each(["approve", "reject"] as const)("clears old policy feedback when reviewing and reports %s specifically", async decision => {
+  const value = initial(); value.skills.approvalRequired = false;
+  vi.mocked(api).mockImplementation(async path => path.includes("/skills/pending/") ? { id: "aabbccdd", diff: "+Check water.", revision: "b".repeat(64), truncated: false } : value);
+  vi.mocked(write).mockImplementation(async path => {
+    if (path.endsWith("/policy")) value.skills.approvalRequired = true;
+    else value.skills.pending = [];
+    return { ok: true };
+  });
+  await act(async () => root.render(createElement(LearningPanel, { botId: "ranch" })));
+  await act(async () => container.querySelector<HTMLInputElement>('.automation-check input')!.click());
+  expect(container.querySelector(".form-notice")?.textContent).toBe("Approval is required before skill changes are saved.");
+  await click("Review change");
+  expect(container.querySelector(".form-notice")).toBeNull();
+  await click(decision === "approve" ? "Approve change" : "Reject change");
+  expect(container.querySelector(".form-notice")?.textContent).toBe(decision === "approve" ? "Approved the skill change." : "Rejected the skill change.");
+  expect(container.textContent).not.toContain("Saved in Hermes.");
+});

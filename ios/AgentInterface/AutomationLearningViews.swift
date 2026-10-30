@@ -41,6 +41,10 @@ import SwiftUI
   }
 }
 
+private func hermesSkillSource(_ origin: String) -> String {
+  "Source: " + (origin.isEmpty ? "Not reported" : origin.prefix(1).uppercased() + String(origin.dropFirst()))
+}
+
 struct HermesLearningView: View {
   let botId: String
   @Environment(AppStore.self) private var store
@@ -96,7 +100,7 @@ struct HermesLearningView: View {
         Button { pending = item } label: {
           VStack(alignment: .leading, spacing: 4) {
             Text(item.summary.isEmpty ? item.id : item.summary).foregroundStyle(Color.primary)
-            Text(item.origin).font(.caption).foregroundStyle(Palette.muted)
+            Text(hermesSkillSource(item.origin)).font(.caption).foregroundStyle(Palette.muted)
             Text("Review change").font(.subheadline)
           }.padding(.vertical, 4)
         }.disabled(control.busy).accessibilityIdentifier("automation.pendingSkill.\(item.id)")
@@ -171,7 +175,7 @@ private struct HermesSkillReview: View {
         HermesAutomationStatus(control: control)
         Section {
           Text(pending.summary.isEmpty ? pending.id : pending.summary).font(.headline)
-          Text(pending.origin).font(.caption).foregroundStyle(.secondary)
+          Text(hermesSkillSource(pending.origin)).font(.caption).foregroundStyle(Palette.muted)
           if loader.loading { ProgressView("Loading pending diff") }
           if let error = loader.error { ErrorBanner(message: error) }
           if !available { Text("This change is no longer pending. Refresh status to check the current list.").foregroundStyle(.secondary) }

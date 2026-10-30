@@ -2,12 +2,12 @@ import { useId } from "react";
 import { Dialog, type DialogFocusTarget } from "./ui/dialog";
 import { Button } from "./ui/button";
 
-export function SettingsConfirmation({ title, detail, confirmLabel, cancelLabel = "Keep editing", danger = false, busy, onConfirm, onCancel, fallbackFocus }: {
+export function SettingsConfirmation({ title, detail, confirmLabel, cancelLabel = "Keep editing", danger = false, busy, onConfirm, onCancel, fallbackFocus, className = "" }: {
   title: string; detail: string; confirmLabel: string; cancelLabel?: string; danger?: boolean; busy: boolean;
-  onConfirm(): void; onCancel(): void; fallbackFocus: DialogFocusTarget;
+  onConfirm(): void; onCancel(): void; fallbackFocus: DialogFocusTarget; className?: string;
 }) {
   const titleId = useId(), detailId = useId();
-  return <Dialog className="confirm-dialog settings-confirmation" role="alertdialog"
+  return <Dialog className={`confirm-dialog settings-confirmation ${className}`} role="alertdialog"
     aria-labelledby={titleId} aria-describedby={detailId} initialFocus="[data-confirm-default]" fallbackFocus={fallbackFocus}
     onCancel={event => { event.preventDefault(); event.stopPropagation(); onCancel(); }}
     onClose={event => { event.stopPropagation(); onCancel(); }}>

@@ -73,7 +73,7 @@ References collected October 25, 2026. External artwork is reference material on
 | Work task board and actions | 67 shared before frames; 19 web, 23 iPhone and 23 iPad after frames | Complete | Web refusal 9.5; remaining web states, iPhone and iPad 9 |
 | Work task editors | Shared before baseline; 16 web, 13 iPhone and 9 iPad after frames reviewed | Complete | Every frame 9 |
 | Work event triggers | Web and native comparisons available | In progress | Whole-screen round 1: 7.6. Fixes implemented; targeted native recapture pending. Six native large-text frames remain accepted |
-| Learning | Desktop/phone web and iPhone views captured | Round 1 fixes implemented | Whole-screen round 1: 7.0; round 2 pending |
+| Learning | Desktop/phone web and iPhone views captured | Final refinements implemented | Whole-screen rounds 1 and 2: 7.0, 8.5; final round pending |
 | Routines and results | Pending | Pending | Pending |
 | Logins and secure requests | Pending | Pending | Pending |
 | Search, saved items and automations | Pending | Pending | Pending |
@@ -436,3 +436,11 @@ tests cover confirmation, re-enabling approval, collapse and fresh revision load
 The native app compiles; its new introductory line still needs a fresh screenshot
 after the host CoreSimulator update. Round 2 reviews the changed web views and
 keeps that native visual limit explicit.
+
+[Learning round 2](evidence/design-review/learning-screen-round2.md) scored 8.5
+and confirmed the six original web findings fixed. The final refinement clears
+old success feedback before reading a change, names policy and review results
+specifically, fills complete diff lines with their change color, and stacks only
+this policy dialog's buttons. Native pending rows and review headers now label
+the source consistently. Round 3 is the final review for this screen. Any issues
+remaining below 9 will be recorded in the PR before moving on.

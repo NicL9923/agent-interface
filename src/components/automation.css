@@ -138,3 +138,9 @@
 
 .automation-learning .automation-learning-policy > p { margin: 4px 0 0 30px; }
 .automation-learning .automation-code > code { font: inherit; }
+
+.automation-learning > .form-notice { margin: 12px 0; font-size: .875rem; line-height: 1.6; }
+.automation-learning .automation-diff > code { display: block; white-space: normal; }
+.automation-diff-line { display: block; min-height: 1.6em; white-space: pre-wrap; }
+.settings-confirmation.learning-policy-confirmation .actions { flex-direction: column; align-items: stretch; }
+.settings-confirmation.learning-policy-confirmation .actions > button { flex: none; width: 100%; min-height: 44px; }

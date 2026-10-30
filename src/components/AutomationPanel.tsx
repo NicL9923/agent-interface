@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { Fragment, useEffect, useId, useRef, useState } from "react";
 import { ApiError, request } from "../client-api";
 import { useAction } from "../app/use-action";
 import { routeUrl } from "../shared/api";
@@ -20,7 +20,7 @@ function useAutomation(botId: string) {
   // A status someone loaded answers "Refresh status before trying again", so it retires that warning.
   const overview = useResource(path, { load: (_, signal) => request("GET /bots/:id/automation", { params: { id: botId }, signal }), onData: () => { setUncertain(false); action.setError(""); } });
   const { data: value, loading } = overview;
-  const change = <T,>(send: () => Promise<T>, onRefused?: () => void): Promise<T | undefined> => {
+  const change = <T,>(send: () => Promise<T>, onRefused?: () => void, successNotice = "Saved in Hermes."): Promise<T | undefined> => {
     if (uncertain || loading) return Promise.resolve(undefined);
     return action.run(async ({ current }) => {
       let result: T;
@@ -48,7 +48,7 @@ function useAutomation(botId: string) {
       // Fresher than any load still running, which is dropped.
       overview.setData(next);
       if (resume?.status === "rejected") action.setError(resume.message || "Hermes refused to start this goal. Review its status before resuming.");
-      else action.setNotice("Saved in Hermes.");
+      else action.setNotice(successNotice);
       return result;
     });
   };
@@ -80,7 +80,7 @@ function useAutomation(botId: string) {
   };
   const refresh = () => { setRefreshCount(count => count + 1); return overview.reload(); };
   return { value: value ?? undefined, botId, change, changeTask, refresh, refreshCount, busy: action.busy, disabled: action.busy || loading || uncertain, loading,
-    error: action.error || overview.error, notice: action.notice, uncertain };
+    error: action.error || overview.error, notice: action.notice, clearNotice: () => action.setNotice(""), uncertain };
 }
 type Controls = ReturnType<typeof useAutomation>;
 
@@ -98,7 +98,7 @@ function Status({ control, work = false }: { control: Controls; work?: boolean }
     {work && <><p className="sr-only" role="status" aria-label="Resume status" aria-live="polite" aria-atomic="true">{statusText}</p>
       <p className="sr-only" role="status" aria-label="Resume result" aria-live="polite" aria-atomic="true">{receiptAnnounced ? control.error : ""}</p></>}
     {control.error && !receiptAnnounced && <p className="form-error" role="alert">{control.error}</p>}
-    {control.notice && <p className={work ? "form-notice" : undefined} role="status">{control.notice}</p>}
+    {control.notice && <p className="form-notice" role="status">{control.notice}</p>}
     {!control.value && control.loading && <p role="status">Loading assistant controls...</p>}</>;
 }
 
@@ -533,7 +533,7 @@ function SkillDiffPreview({ text, id }: { text: string; id: string }) {
   const lines = (text || "No textual diff.").split("\n");
   return <pre id={id} className="automation-code automation-diff"><code>{lines.map((line, index) => {
     const kind = /^(diff |index |@@|---|\+\+\+)/.test(line) ? "meta" : line.startsWith("+") ? "added" : line.startsWith("-") ? "removed" : "context";
-    return <span key={index} className={`automation-diff-${kind}`}>{line}{index < lines.length - 1 ? "\n" : ""}</span>;
+    return <Fragment key={index}><span className={`automation-diff-line automation-diff-${kind}`}>{line}</span>{index < lines.length - 1 ? "\n" : ""}</Fragment>;
   })}</code></pre>;
 }
 
@@ -547,11 +547,13 @@ export function LearningPanel({ botId }: { botId: string }) {
   // Reading a skill or a pending change, one at a time.
   const reader = useAction();
   const { busy: reading, error: readError } = reader;
-  const read = <T,>(load: () => Promise<T>, accept: (value: T) => void) =>
-    reader.run(async ({ current }) => { const value = await load(); if (current()) accept(value); });
+  const read = <T,>(load: () => Promise<T>, accept: (value: T) => void) => {
+    control.clearNotice();
+    return reader.run(async ({ current }) => { const value = await load(); if (current()) accept(value); });
+  };
   const setPolicy = (approvalRequired: boolean) => {
     setAllowingWrites(false);
-    void control.change(() => request("PUT /bots/:id/automation/skills/policy", { params: { id: botId }, body: { approvalRequired } }));
+    void control.change(() => request("PUT /bots/:id/automation/skills/policy", { params: { id: botId }, body: { approvalRequired } }), undefined, approvalRequired ? "Approval is required before skill changes are saved." : "Skill changes can now be saved without review.");
   };
   const state = control.value?.skills;
   return <div className="automation-panel automation-learning"><h2>Skills & learning</h2><p className="muted">Inspect reusable instructions and review changes the assistant wants to save.</p><Status control={control} />
@@ -560,11 +562,11 @@ export function LearningPanel({ botId }: { botId: string }) {
       <section className="automation-section automation-learning-policy"><h3>Skill write policy</h3><label className="automation-check"><input ref={policyInput} type="checkbox" checked={state.approvalRequired} disabled={control.disabled || control.value?.canManageLearningPolicy === false} onChange={event => { if (event.target.checked) setPolicy(true); else setAllowingWrites(true); }} />Require approval before skill changes are saved</label><p className="muted">When enabled, Hermes stages new skills, edits and deletions for review.</p>{control.value?.canManageLearningPolicy === false && <p className="capability-note">Only an integration administrator can change the skill write policy.</p>}</section>
       <section className="automation-section"><h3>Pending changes ({state.pending.length})</h3>{!state.pending.length && <p className="muted">No skill changes waiting for review.</p>}
         {state.pending.map(item => <article className="automation-item" key={item.id}><h4>{item.summary || item.id}</h4><p className="muted">Source: {item.origin ? item.origin[0].toUpperCase() + item.origin.slice(1) : "Not reported"}</p><Button disabled={reading || control.disabled} aria-expanded={diff?.id === item.id} aria-controls={`${id}-diff-${item.id}`} onClick={() => { if (diff?.id === item.id) setDiff(undefined); else void read(() => request("GET /bots/:id/automation/skills/pending/:pendingId", { params: { id: botId, pendingId: item.id } }), value => { setDiff(value); setContent(undefined); }); }}>{diff?.id === item.id ? "Hide change" : "Review change"}</Button>
-          {diff?.id === item.id && <><SkillDiffPreview text={diff.diff} id={`${id}-diff-${item.id}`} />{diff.truncated && <p>The diff is truncated. Read the full change in Hermes before approving.</p>}<div className="actions"><Button className="primary" disabled={control.disabled || diff.truncated} onClick={async () => { if (await control.change(() => request("POST /bots/:id/automation/skills/pending/:pendingId", { params: { id: botId, pendingId: item.id }, body: { revision: diff.revision, decision: "approve" } }))) setDiff(undefined); }}>Approve change</Button><Button className="danger" disabled={control.disabled} onClick={async () => { if (await control.change(() => request("POST /bots/:id/automation/skills/pending/:pendingId", { params: { id: botId, pendingId: item.id }, body: { revision: diff.revision, decision: "reject" } }))) setDiff(undefined); }}>Reject change</Button></div></>}
+          {diff?.id === item.id && <><SkillDiffPreview text={diff.diff} id={`${id}-diff-${item.id}`} />{diff.truncated && <p>The diff is truncated. Read the full change in Hermes before approving.</p>}<div className="actions"><Button className="primary" disabled={control.disabled || diff.truncated} onClick={async () => { if (await control.change(() => request("POST /bots/:id/automation/skills/pending/:pendingId", { params: { id: botId, pendingId: item.id }, body: { revision: diff.revision, decision: "approve" } }), undefined, "Approved the skill change.")) setDiff(undefined); }}>Approve change</Button><Button className="danger" disabled={control.disabled} onClick={async () => { if (await control.change(() => request("POST /bots/:id/automation/skills/pending/:pendingId", { params: { id: botId, pendingId: item.id }, body: { revision: diff.revision, decision: "reject" } }), undefined, "Rejected the skill change.")) setDiff(undefined); }}>Reject change</Button></div></>}
         </article>)}
       </section>
       <section className="automation-section"><h3>Installed skills</h3>{!state.installed.length && <p className="muted">No installed skills reported.</p>}{state.installed.map(item => <article className="automation-item" key={item.name}><h4>{item.name}</h4><p>{item.description}</p><Button disabled={reading || control.disabled} onClick={() => void read(() => request("GET /bots/:id/automation/skills/content", { params: { id: botId }, query: { name: item.name } }), value => { setContent(value); setDiff(undefined); })}>Read skill</Button>{content?.name === item.name && <><pre className="automation-code">{content.content}</pre>{content.truncated && <p>Preview truncated. Open Hermes for the full skill.</p>}</>}</article>)}</section>
     </>)}
-    {allowingWrites && <SettingsConfirmation title="Allow skill changes without review?" detail="Hermes can save new skills, edits and deletions without asking for approval." confirmLabel="Allow changes without review" cancelLabel="Keep approval required" danger busy={control.disabled} fallbackFocus={policyInput} onCancel={() => setAllowingWrites(false)} onConfirm={() => setPolicy(false)} />}
+    {allowingWrites && <SettingsConfirmation className="learning-policy-confirmation" title="Allow skill changes without review?" detail="Hermes can save new skills, edits and deletions without asking for approval." confirmLabel="Allow changes without review" cancelLabel="Keep approval required" danger busy={control.disabled} fallbackFocus={policyInput} onCancel={() => setAllowingWrites(false)} onConfirm={() => setPolicy(false)} />}
   </div>;
 }
