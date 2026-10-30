@@ -74,7 +74,7 @@
 .routine-results-dialog > p.muted { margin: 8px 0 18px; font-size: .875rem; line-height: 1.6; }
 .routine-results-toolbar { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; }
 .routine-results-toolbar label { flex: 1; min-width: 180px; margin: 0; }
-.routine-results-toolbar > button { min-height: 44px; font-size: .875rem; }
+.routine-results-toolbar > button { min-height: 44px; }
 .routine-output-actions { margin-bottom: 20px; }
 .routine-output-actions > button { min-height: 44px; }
 .routine-output > article + article { margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--line); }

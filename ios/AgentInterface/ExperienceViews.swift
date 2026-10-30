@@ -630,7 +630,9 @@ struct RoutineEnhancements: View {
       Button(busy ? "Starting…" : "Try once") { startRun() }.disabled(busy || disabled || !store.connected)
     }
     if retrySameRun { Button("Retry the same request") { runConfirm = true }.disabled(busy || disabled || !store.connected) }
-    Text("Try once runs this routine now. Hermes may move the next run or finish a one-time routine. Paused recurring routines stay paused.").font(.caption).foregroundStyle(Palette.muted)
+    Text(receipt.map { !$0.finished } == true
+      ? "Check the saved run's status before starting another. Checking does not run it again."
+      : "Try once runs this routine now. Hermes may move the next run or finish a one-time routine. Paused recurring routines stay paused.").font(.caption).foregroundStyle(Palette.muted)
       .task(id: "\(store.scope ?? ""):\(routine.id)") {
         receipt = UserDefaults.standard.data(forKey: receiptKey).flatMap { try? JSONDecoder().decode(RoutineRunReceipt.self, from: $0) }
       }

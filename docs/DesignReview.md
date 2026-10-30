@@ -74,7 +74,7 @@ References collected October 25, 2026. External artwork is reference material on
 | Work task editors | Shared before baseline; 16 web, 13 iPhone and 9 iPad after frames reviewed | Complete | Every frame 9 |
 | Work event triggers | Web and native comparisons available | In progress | Whole-screen round 1: 7.6. Fixes implemented; targeted native recapture pending. Six native large-text frames remain accepted |
 | Learning | Desktop/phone web and current iPhone views captured | Complete | Whole-screen rounds: 7.0, 8.5, 9.0 |
-| Routines and results | Desktop/phone web and current iPhone views captured | In progress | Round 1: 7.2; round 2 requested after layout fixes |
+| Routines and results | Desktop/phone web and current iPhone views captured | In progress | Rounds 1 and 2: 7.2, 8.6; final round requested |
 | Logins and secure requests | Pending | Pending | Pending |
 | Search, saved items and automations | Pending | Pending | Pending |
 | Group chats and threads | Pending | Pending | Pending |
@@ -476,3 +476,17 @@ opening saved results at desktop and phone widths using synthetic data. A fresh
 iPhone capture covers the routine list, labels, recipe and trial explanation.
 Native editor and result interactions, VoiceOver, large text and live execution
 are outside these captures.
+
+
+[Round 2](evidence/design-review/routines-screen-round2.md) scored 8.6.
+The final revision fixes the instruction font cascade, makes the preview footnote
+muted, distinguishes Paused with a badge on both clients, restores focus to
+the edited card on Cancel and Save, and uses one results-button size. The trial
+explanation changes when Check run status replaces Try once. The schedule input
+now uses monospace. Preview fixtures use UTC so the examples do not suggest a
+seasonal schedule change.
+
+The agent checked the instruction size in Chromium, canceled an edit and checked
+focus, and paused and resumed the synthetic routine at both widths. Fresh native
+captures show the paused-state badge. Pending-run help and saved-edit focus have
+focused behavioral coverage; no live routine execution is claimed.

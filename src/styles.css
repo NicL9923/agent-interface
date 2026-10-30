@@ -1095,9 +1095,6 @@ a {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.routine-card small {
-  color: var(--accent);
-}
 .welcome {
   width: 100%;
   min-height: 100dvh;

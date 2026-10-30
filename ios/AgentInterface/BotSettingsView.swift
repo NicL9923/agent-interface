@@ -667,7 +667,7 @@ struct BotSettingsView: View {
               editingRoutine = Routine(id: "", botId: bot.id, name: template.name, prompt: template.prompt, schedule: template.schedule, enabled: false, recipientIds: [store.bootstrap?.user.id].compactMap { $0 })
             } label: {
               VStack(alignment: .leading, spacing: 2) {
-                Text(template.name).font(.headline).foregroundStyle(.primary)
+                Text(template.name).font(.headline)
                 Text(template.description).font(.caption).foregroundStyle(Palette.muted)
               }
             }.disabled(!store.supports(.routines) || !store.connected).accessibilityIdentifier("routineTemplate.\(template.id)")
@@ -677,7 +677,14 @@ struct BotSettingsView: View {
       ForEach(routines) { routine in
         Section(routine.name) {
           LabeledContent("Schedule") { Text(routine.schedule).font(.subheadline).monospaced().foregroundStyle(Palette.muted) }
-          LabeledContent("Status") { Text(routine.enabled ? "Active" : "Paused").foregroundStyle(Palette.muted) }
+          LabeledContent("Status") {
+            if routine.enabled { Text("Active").foregroundStyle(Palette.muted) }
+            else {
+              Text("Paused").font(.subheadline.weight(.semibold)).foregroundStyle(Palette.muted)
+                .padding(.horizontal, 8).padding(.vertical, 2)
+                .overlay(Capsule().strokeBorder(Palette.line))
+            }
+          }
           Text(routine.prompt).font(.footnote).lineLimit(6)
           RoutineEnhancements(routine: routine, disabled: !store.supports(.routines))
           Button(routine.enabled ? "Pause" : "Resume") {

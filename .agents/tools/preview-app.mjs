@@ -218,13 +218,13 @@ const fixtureWav = (() => {
 const schedulePreview = (botId, schedule) => {
   const match = /^(\d{1,2}) (\d{1,2}) \* \* (\*|[0-6])$/.exec(schedule);
   if (!match || Number(match[1]) > 59 || Number(match[2]) > 23) return null;
-  const runs = [], candidate = new Date(); candidate.setUTCHours(Number(match[2]) + 5, Number(match[1]), 0, 0);
-  // Stable preview uses UTC-05 fixture time. Native schedule parsing is tested separately.
+  const runs = [], candidate = new Date(); candidate.setUTCHours(Number(match[2]), Number(match[1]), 0, 0);
+  // Use an explicit UTC fixture so seasonal timezone changes cannot suggest schedule drift.
   for (let day = 0; day < 25 && runs.length < 3; day++, candidate.setUTCDate(candidate.getUTCDate() + 1)) {
-    const localDay = new Date(candidate.getTime() - 5 * 3600000).getUTCDay();
+    const localDay = candidate.getUTCDay();
     if (candidate > new Date() && (match[3] === '*' || localDay === Number(match[3]))) runs.push(candidate.toISOString());
   }
-  return { botId, schedule, timezone: 'America/Chicago', nextRuns: runs, kind: 'cron' };
+  return { botId, schedule, timezone: 'UTC', nextRuns: runs, kind: 'cron' };
 };
 const connections = [
   ['workspace', 'Google Workspace', 'productivity', 'connected', 'nic@example.invalid', 'Gmail, Drive, Calendar and Sheets access checked.'],

@@ -158,6 +158,9 @@ it("persists a trial admission before dispatch and checks an uncertain run witho
   await click("Try once");
   const requestId = localStorage.getItem("agent-interface:routine-trial:one:r1"); expect(requestId).toBeTruthy(); expect(write).toHaveBeenCalledTimes(1);
   expect(Array.from(container.querySelectorAll("button")).some(button => button.textContent === "Try once")).toBe(false);
+  const statusButton = Array.from(container.querySelectorAll("button")).find(button => button.textContent === "Check run status")!;
+  expect(document.getElementById(statusButton.getAttribute("aria-describedby")!)?.textContent).toContain("Checking does not run it again.");
+  expect(container.textContent).not.toContain("Try once runs this routine now.");
   await click("Check run status"); expect(api).toHaveBeenCalledWith(`/routines/r1/runs/${requestId}`); expect(write).toHaveBeenCalledTimes(1);
   await click("Retry the same request"); expect(write).toHaveBeenLastCalledWith("/routines/r1/run", { requestId });
 });

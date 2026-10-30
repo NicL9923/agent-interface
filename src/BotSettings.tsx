@@ -680,6 +680,12 @@ function RoutineManager({
   const [editing, setEditing] = useState<string | null>(null);
   const editor = useRef<HTMLFormElement>(null);
   const nameInput = useRef<HTMLInputElement>(null);
+  const editButtons = useRef(new Map<string, HTMLButtonElement>());
+  function focusRoutine(id: string) {
+    const button = editButtons.current.get(id);
+    button?.scrollIntoView({ block: "nearest" });
+    button?.focus({ preventScroll: true });
+  }
   const editorId = useId();
   const [focusEditor, setFocusEditor] = useState(false);
   useEffect(() => {
@@ -724,8 +730,8 @@ function RoutineManager({
       {routines.map((routine) => (
         <article className="routine-card" key={routine.id}>
           <h4>{routine.name}</h4>
-          <dl className="routine-meta"><div><dt>Schedule</dt><dd><code>{routine.schedule}</code></dd></div><div><dt>Status</dt><dd>{routine.enabled ? "Active" : "Paused"}</dd></div></dl>
-          <p>{routine.prompt}</p>
+          <dl className="routine-meta"><div><dt>Schedule</dt><dd><code>{routine.schedule}</code></dd></div><div><dt>Status</dt><dd><span className={routine.enabled ? "routine-status" : "routine-status paused"}>{routine.enabled ? "Active" : "Paused"}</span></dd></div></dl>
+          <p className="routine-prompt">{routine.prompt}</p>
           <RoutineEnhancements key={`${bootstrap.user.id}:${routine.id}`} routine={routine} userId={bootstrap.user.id} disabled={busy || !supported} onOpenResults={onOpenRoutine ? () => onOpenRoutine(botId, routine.id) : undefined} />
           <div className="actions routine-management-actions">
             <Button
@@ -742,7 +748,7 @@ function RoutineManager({
             >
               {routine.enabled ? "Pause" : "Resume"}
             </Button>
-            <Button
+            <Button ref={node => { if (node) editButtons.current.set(routine.id, node); else editButtons.current.delete(routine.id); }}
               onClick={() => {
                 setEditing(routine.id);
                 setFocusEditor(true);
@@ -786,6 +792,7 @@ function RoutineManager({
           void action(async () => {
             const body = { ...form, recipientIds: (form.recipientIds || []).filter((id) => recipients.some((user) => user.id === id)) };
             await (editing ? request("PUT /routines/:id", { params: { id: editing }, body }) : request("POST /routines", { body }));
+            if (editing) focusRoutine(editing);
             setEditing(null);
             setPreviewedSchedule("");
             setForm({
@@ -824,6 +831,7 @@ function RoutineManager({
             required
             value={form.schedule}
             onChange={(e) => setForm({ ...form, schedule: e.target.value })}
+            className="routine-schedule"
             placeholder="Hermes schedule expression"
           />
         </label>
@@ -871,6 +879,7 @@ function RoutineManager({
             <Button
               type="button"
               onClick={() => {
+                focusRoutine(editing);
                 setEditing(null);
                 setPreviewedSchedule("");
                 setForm({

@@ -815,10 +815,32 @@ it("keeps one schedule preview and focuses the editor when editing or choosing a
   expect(name().value).toBe("Morning");
   expect(document.activeElement).toBe(name());
   expect(editor().querySelectorAll(".routine-preview-control")).toHaveLength(1);
+  await click("Cancel edit");
+  expect(document.activeElement?.textContent).toBe("Edit");
+  expect(container.querySelector(".routine-card")!.contains(document.activeElement)).toBe(true);
+  await click("Edit", container.querySelector(".routine-card")!);
   await act(async () => container.querySelector<HTMLButtonElement>(".routine-preset")!.click());
   expect(name().value).toBe("Morning brief");
   expect(document.activeElement).toBe(name());
   expect(editor().querySelectorAll(".routine-preview-control")).toHaveLength(1);
   expect(scroll).toHaveBeenCalledWith({ block: "start" });
   expect(write).not.toHaveBeenCalled();
+});
+
+
+it("returns focus to the edited routine after saving the previewed schedule", async () => {
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: vi.fn() });
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [{ id: "r1", botId: bot.id, name: "Morning", prompt: "Check the gate", schedule: "0 7 * * *", enabled: true }] : { providers: [], provider: "", model: "" });
+  await click("routines");
+  const card = container.querySelector(".routine-card")!;
+  await click("Edit", card);
+  const editor = container.querySelector(".routine-manager > form")!;
+  vi.mocked(write).mockResolvedValueOnce({ botId: bot.id, schedule: "0 7 * * *", kind: "cron", timezone: "UTC", nextRuns: [] });
+  await click("Preview schedule", editor);
+  vi.mocked(write).mockResolvedValueOnce({});
+  await click("Save routine", editor);
+  expect(write).toHaveBeenLastCalledWith("/routines/r1", expect.objectContaining({ name: "Morning", schedule: "0 7 * * *" }), "PUT");
+  expect(document.activeElement?.textContent).toBe("Edit");
+  expect(card.contains(document.activeElement)).toBe(true);
+  expect(editor.querySelector("h3")?.textContent).toBe("New routine");
 });
