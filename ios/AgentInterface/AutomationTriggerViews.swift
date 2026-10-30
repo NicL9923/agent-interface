@@ -99,7 +99,10 @@ struct HermesTriggerSection: View {
   private func copied(_ message: String) { copyFeedback = message; AccessibilityNotification.Announcement(message).post() }
   private var secretSection: some View {
     Section {
-      if let triggerId = control.secret.triggerId { Text("\(triggerId) was created and starts disabled.") }
+      VStack(alignment: .leading, spacing: 8) {
+        Text("Save this signing secret now").font(.headline).accessibilityAddTraits(.isHeader)
+        if let triggerId = control.secret.triggerId { Text("\(triggerId) was created and starts disabled.").font(.subheadline).foregroundStyle(Palette.muted) }
+      }.id("automation.signingSecret")
       Text("Hermes shows it once. Configure the sending service with this URL and secret. Closing Work or leaving the app clears this display.").font(.footnote).foregroundStyle(Palette.muted)
       if let url = control.secret.url {
         VStack(alignment: .leading, spacing: 6) {
@@ -117,16 +120,17 @@ struct HermesTriggerSection: View {
         Button(control.secret.revealed ? "Hide secret" : "Show secret") { control.secret.reveal(!control.secret.revealed) }
         Button("Copy secret") { pasteboard.copySecret(secret); control.secret.markCopied(); copied("Copied. The clipboard clears it in 5 minutes.") }
         if let copyFeedback { Text(copyFeedback).font(.footnote).foregroundStyle(Palette.muted) }
-        Button("I've saved it") {
-          let triggerId = control.secret.triggerId
-          control.secret.clear()
-          copyFeedback = nil
-          if let triggerId { expanded.insert(triggerId); AccessibilityNotification.Announcement("\(triggerId) was created and starts disabled.").post() }
-        }.disabled(!control.secret.inspected)
-        if !control.secret.inspected { Text("Copy or show the secret first.").font(.footnote).foregroundStyle(Palette.muted) }
+        VStack(alignment: .leading, spacing: 6) {
+          Button("I've saved it") {
+            let triggerId = control.secret.triggerId
+            control.secret.clear()
+            copyFeedback = nil
+            if let triggerId { expanded.insert(triggerId); AccessibilityNotification.Announcement("\(triggerId) was created and starts disabled.").post() }
+          }.disabled(!control.secret.inspected)
+          if !control.secret.inspected { Text("Copy or show the secret first.").font(.footnote).foregroundStyle(Palette.muted) }
+        }
       }
-    } header: { Text("Save this signing secret now").foregroundStyle(Palette.muted) }
-      .id("automation.signingSecret")
+    }
       .privacySensitive().accessibilityIdentifier("automation.signingSecret")
       .onAppear { AccessibilityNotification.Announcement("Save this signing secret now. Hermes shows it once.").post() }
   }

@@ -421,6 +421,9 @@ struct HermesWorkView: View {
   @State private var pendingDeleteTrigger: HermesSubscription?
   @State private var expandedTriggers: Set<String> = []
   @State private var collapsedTaskStatuses: Set<String> = ["done"]
+  #if DEBUG
+    @State private var secretCaptureStarted = false
+  #endif
   init(botId: String) {
     self.botId = botId
     _control = State(initialValue: HermesAutomationControls(botId: botId))
@@ -444,6 +447,18 @@ struct HermesWorkView: View {
         control.restoreResumeIntent(key: store.key(.goalResume, botId))
         control.appear(foreground: scenePhase == .active)
         await control.refresh(store)
+        #if DEBUG
+        if DebugFixtures.captureTriggerSecret, !secretCaptureStarted {
+          secretCaptureStarted = true
+          // Exercise the normal presenter dismissal and secret-panel scrolling
+          // using only the installed synthetic transport, without XCTest navigation.
+          sheet = .createTrigger
+          try? await Task.sleep(for: .milliseconds(700))
+          let result: HermesTriggerResult? = await control.changeTrigger(store, triggerId: "fixture-event", "/triggers",
+            HermesTriggerInput(id: "fixture-event", description: "Fixture event", events: ["fixture.event"], routineId: "trial"), action: "create")
+          if result != nil { sheet = nil }
+        }
+        #endif
       }
       .task(id: control.value?.triggers.supported) {
         if control.value?.triggers.supported == true { await control.loadTriggerRoutines(store) }

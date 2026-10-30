@@ -72,7 +72,7 @@ References collected October 25, 2026. External artwork is reference material on
 | Work frame and standing goal | 21 web and 20 native before frames per device verified | Complete | Web, iPhone and iPad 9 |
 | Work task board and actions | 67 shared before frames; 19 web, 23 iPhone and 23 iPad after frames | Complete | Web refusal 9.5; remaining web states, iPhone and iPad 9 |
 | Work task editors | Shared before baseline; 16 web, 13 iPhone and 9 iPad after frames reviewed | Complete | Every frame 9 |
-| Work event triggers | Web and native comparisons available | In progress | Whole-screen round 1: 7.6. Fixes implemented; targeted native recapture pending. Six native large-text frames remain accepted |
+| Work event triggers | Web and native comparisons available | In progress | Whole-screen round 1: 7.6. Fixes captured on web, iPhone and iPad; round 2 pending. Six native large-text frames remain accepted |
 | Learning | Desktop/phone web and current iPhone views captured | Complete | Whole-screen rounds: 7.0, 8.5, 9.0 |
 | Routines and results | Desktop/phone web and current iPhone views captured | Complete | Whole-screen rounds: 7.2, 8.6, 9.1 |
 | Logins and secure requests | Desktop/phone web and current iPhone logins captured | Complete | Combined whole-area rounds: 7.8, 8.8, 9.1 |
@@ -843,3 +843,27 @@ cleanup is included. The watch-mode headline deliberately emphasizes local
 Watching, rather than account ownership; Take over to use it here explains the
 next action. All 40 focused checks and both builds pass. Native large-text
 rendering and gestures remain unverified. No fourth review is planned.
+
+
+## Event triggers, round 2
+
+The earlier web fixes and eight desktop/phone captures remain valid because
+their product UI has not changed. They explain why Edit is locked during a new
+trigger, tighten metadata and strengthen the secret heading. The compiled
+iPhone and iPad now also show the secret panel after the normal create-control
+and editor-dismissal paths, driven by a Debug-only synthetic transport. No
+XCTest navigation or real trigger was used.
+
+The targeted capture exposed that scrolling a Form section can hide its header.
+The safety heading is now part of the first row and the scroll target, so it
+stays visible. The acknowledgement and its disabled explanation share one row,
+which keeps the explanation inside the iPad sheet. Both field labels, the
+heading and actions are visible on both devices. API, lifecycle, reveal/copy
+and acknowledgement guards are unchanged. No clipboard or native gesture
+claim comes from the capture.
+
+All 64 automation UI checks pass. Native compilation and both captures completed
+inside one machine-lock command, with simulators booted and shut down in turn.
+The six accepted native large-text frames remain accepted. Their uncovered form
+tails, VoiceOver, real clipboard behavior and current large-text layout remain
+unverified. The second whole-screen review is pending.

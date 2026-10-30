@@ -73,3 +73,5 @@
 - `capture-computer.js`: Capture and exercise simulated desktop control and terminal actions at desktop and phone widths through Playwright CLI.
 
 The `capture-settings-ios.sh` Computer mode opens the compiled native desktop viewer using its Debug-only simulated transport.
+
+The `capture-settings-ios.sh` TriggerSecret mode creates a synthetic event through the normal control, then dismisses its editor to capture secret-panel labels and opening position.

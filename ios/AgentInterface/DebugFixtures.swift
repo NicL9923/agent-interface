@@ -21,6 +21,10 @@
         ["search", "saved", "automations", "history"].contains(tab) else { return nil }
       return tab
     }
+    static var captureTriggerSecret: Bool {
+      ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_FIXTURE"] == "1"
+        && ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_CAPTURE_TRIGGER_SECRET"] == "1"
+    }
     static var captureComputerPage: Bool {
       ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_FIXTURE"] == "1"
         && ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_CAPTURE_COMPUTER"] == "1"
