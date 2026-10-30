@@ -14,6 +14,11 @@ async (page, {origin, outputDir}) => {
     if(mode==='empty-chat') Object.assign(value,{messages:[],approvals:[],attention:[],toolCalls:[],activity:{state:'idle'},earlier:null});
     await route.fulfill({json:value});
   });
+  await tab.route('**/api/today*', async route => {
+    const response=await route.fetch();const value=await response.json();
+    if(mode==='empty-home') Object.assign(value,{items:[],events:[],upcoming:[],unavailableBots:[],hasMore:false});
+    await route.fulfill({json:value});
+  });
   const shot=async name=>{
     await tab.mouse.move(0,0);await tab.evaluate(async()=>{await document.fonts.ready;await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));});
     const path=outputDir+'/'+name+'.png';await tab.screenshot({path,animations:'disabled'});paths.push(path);
@@ -23,7 +28,7 @@ async (page, {origin, outputDir}) => {
     for(const width of [1440,390]) {
       await tab.setViewportSize({width,height:width===1440?1000:844});
       mode='empty-home';await tab.goto(origin);await tab.getByRole('button',{name:'Create an assistant',exact:true}).first().waitFor();await shot('empty-home-'+width);
-      mode='empty-chat';await tab.goto(origin+'/?view=conversation&bot=ranch');await tab.getByRole('heading',{name:"Let's discuss your role.",exact:true}).waitFor();await shot('empty-chat-'+width);
+      mode='empty-chat';await tab.goto(origin+'/?view=conversation&bot=ranch');await tab.getByRole('heading',{name:"Start with Ranch hand's role",exact:true}).waitFor();await shot('empty-chat-'+width);
       await tab.getByRole('button',{name:"Discuss Ranch hand's role",exact:true}).click();
       if(!await tab.locator('#message').inputValue()) throw Error('Empty-state action did not prepare a draft');
       await shot('empty-chat-draft-'+width);

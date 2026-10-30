@@ -39,6 +39,8 @@ for tab in "$@"; do
   capture_delay=${NATIVE_CAPTURE_DELAY:-5}
   case "$tab" in
     Empty) settings_tab=""; survival_capture=empty ;;
+    ShareOffline) settings_tab=""; survival_capture=share-offline ;;
+    ShareDiscard) settings_tab=""; survival_capture=share-discard ;;
     ShareDraft) settings_tab=""; survival_capture=share ;;
     Widget) settings_tab=""; survival_capture=widget ;;
     WidgetStale) settings_tab=""; survival_capture=widget-stale ;;

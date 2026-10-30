@@ -25,6 +25,7 @@ extension PrimitiveButtonStyle where Self == AccentProminentButtonStyle {
 struct RootView: View {
   @Environment(AppStore.self) private var store
   @Environment(\.colorScheme) private var scheme
+  private let reachability = NetworkReachability.shared
   @State private var settingsBot: Bot?
   @State private var creatingBot = false
   @State private var preferencesOpen = false
@@ -95,7 +96,7 @@ struct RootView: View {
       if case .available(let url) = store.appUpdate { AppUpdateBanner(url: url) }
       // Only while the roster itself is the saved copy; a saved chat says so in the chat.
       if let date = store.offlineSavedAt, !store.householdConnected {
-        Text("Saved on this device \(date.formatted(date: .abbreviated, time: .shortened)). Reconnecting…")
+        Text("Saved on this device \(date.formatted(date: .abbreviated, time: .shortened)). \(reachability.offline ? "Offline." : "Reconnecting…")")
           .font(.caption).foregroundStyle(.secondary).padding(8)
       }
       if UIDevice.current.userInterfaceIdiom == .phone { compactNavigation } else { splitNavigation }
@@ -496,7 +497,8 @@ struct BotListView: View {
         }
     } else {
       VStack(spacing: 12) {
-        Text("No assistants are available from Hermes yet.").foregroundStyle(.secondary)
+        Text("No assistants yet").font(.title3.bold())
+        Text("Create one to help your household plan, remember and get things done.").foregroundStyle(.secondary).multilineTextAlignment(.center)
         Button("Create an assistant", action: createOrExplain).buttonStyle(.accentProminent)
           .opacity(store.assistantSetupBlock == nil ? 1 : 0.4).accessibilityHint(store.assistantSetupBlock ?? "")
           .accessibilityIdentifier("createAssistant")

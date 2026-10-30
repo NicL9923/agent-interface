@@ -637,3 +637,6 @@ button.settings-row:hover:enabled { background: color-mix(in srgb, var(--accent-
 .section-name-help button { min-height: 44px; flex-shrink: 0; font-size: 0.8125rem; }
 .section-rename input[aria-invalid="true"]:focus-visible { outline-color: var(--danger); }
 .settings-footnote.form-error { color: var(--danger); border: 0; padding: 0; background: none; }
+
+.home-empty h2 { margin: 0; font-size: 20px; }
+.home-empty p { margin: 8px 0 16px; font-size: 14px; line-height: 1.5; }

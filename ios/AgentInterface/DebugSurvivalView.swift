@@ -5,6 +5,7 @@ import WidgetKit
 /// Direct captures use the production views with explicit sample data, not a WidgetKit host.
 struct DebugSurvivalView: View {
   var mode: String
+  @State private var captureId = UUID().uuidString
   @Environment(AppStore.self) private var store
   private var snapshot: WidgetSnapshot {
     WidgetSnapshot(scope: "design-preview", generatedAt: Date().addingTimeInterval(mode == "widget-stale" ? -3600 : 0), assistants: mode == "widget-empty" ? [] : [
@@ -14,8 +15,8 @@ struct DebugSurvivalView: View {
     ])
   }
   var body: some View {
-    if mode == "share" {
-      ShareCaptureView(capture: SharedCapture(id: "design-preview", scope: store.scope ?? "", botId: "ranch", text: "Please summarize this article for our weekend plans.\nhttps://example.invalid/trail-guide", files: [], createdAt: Date()))
+    if mode.hasPrefix("share") {
+      ShareCaptureView(capture: SharedCapture(id: captureId, scope: store.scope ?? "", botId: "ranch", text: "Please summarize this article for our weekend plans.\nhttps://example.invalid/trail-guide", files: [], createdAt: Date()))
     } else {
       NavigationStack {
         ScrollView {

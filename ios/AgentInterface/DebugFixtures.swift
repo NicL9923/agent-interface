@@ -448,6 +448,10 @@
           "capabilities": Dictionary(
             uniqueKeysWithValues: CapabilityKey.allCases.map { ($0.rawValue, ["supported": true]) }),
         ]
+        if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_CAPTURE_SURVIVAL"] == "share-offline", var bootstrap = object as? [String: Any] {
+          bootstrap["connection"] = ["connected": false, "code": "unreachable"]
+          object = bootstrap
+        }
         if Self.designFixture?["approvalSupported"] as? Bool == false {
           var bootstrap = object as! [String: Any]
           var capabilities = bootstrap["capabilities"] as! [String: Any]

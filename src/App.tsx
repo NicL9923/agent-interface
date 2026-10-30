@@ -235,7 +235,7 @@ export function App() {
         onSelectBot={selectBot} onView={showView} onNewBot={newBot} onSettings={openPreferences} onPin={togglePin}
         onBotSettings={botSettings} onMoveToSection={moveToSection} onNewSection={newSection} />
       <main className="conversation-panel" inert={mobile && railOpen}>
-        <ChatHeader view={view} selected={selected} avatarState={avatarState} railOpen={railOpen}
+        <ChatHeader offline={offline} view={view} selected={selected} avatarState={avatarState} railOpen={railOpen}
           onOpenRail={() => setRailOpen(true)}
           onDetails={bot => open({ kind: "details", botId: bot.id })} />
         {/* On a computer the rail is always beside this, so its notice is enough. In a chat it joins the composer's dock. */}

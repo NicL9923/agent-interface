@@ -15,10 +15,11 @@ export function botSummary(bot: Bot) {
  * Like a messaging app: a lone back button on phones, and the assistant itself as the
  * one control that opens its details, where pinning, artifacts and settings live.
  */
-export function ChatHeader({ view, selected, avatarState, railOpen, onOpenRail, onDetails }: {
+export function ChatHeader({ view, selected, avatarState, offline = false, railOpen, onOpenRail, onDetails }: {
   view: View;
   selected?: Bot;
   avatarState: ActivityState;
+  offline?: boolean;
   railOpen: boolean;
   onOpenRail(): void;
   onDetails(bot: Bot): void;
@@ -39,7 +40,7 @@ export function ChatHeader({ view, selected, avatarState, railOpen, onOpenRail, 
         <h1 className="chat-identity-heading">
           <button className="chat-identity" aria-haspopup="dialog" aria-label={selected.name}
             title="Details, pin, artifacts and settings" onClick={() => onDetails(selected)}>
-            <Avatar avatar={selected.avatar} state={avatarState === "blocked" ? "idle" : avatarState} size={42} name={selected.name} botId={selected.id} />
+            <Avatar avatar={selected.avatar} state={avatarState === "blocked" ? "idle" : avatarState} size={42} offline={offline} name={selected.name} botId={selected.id} />
             <span className="chat-title">
               <span className="chat-name">{selected.name}</span>
               <span className="chat-summary">{botSummary(selected)}</span>

@@ -10,23 +10,39 @@ struct ShareCaptureView: View {
   @State private var error: String?
   /// Add was pressed while a message to this assistant was still unsettled; it continues then.
   @State private var waitingForSend = false
+  @State private var confirmDiscard = false
+  @Environment(\.colorScheme) private var scheme
   private var held: Bool { !botId.isEmpty && store.holdsAdditions(botId) }
   var body: some View {
     NavigationStack {
       Form {
         Section("Shared draft") {
           Picker("Assistant",selection:$botId) { Text("Choose an assistant").tag("");ForEach(store.bootstrap?.bots ?? []) { bot in Text(bot.name).tag(bot.id) } }
-          TextEditor(text:$capture.text).frame(minHeight:120)
+          TextEditor(text:$capture.text).frame(minHeight:120).accessibilityLabel("Shared text")
           ForEach(capture.files,id:\.self) { Text($0) }
           Text("Add this to the assistant’s editable draft. Existing draft text and attachments are kept. Review before sending.").font(.footnote).foregroundStyle(.secondary)
         }
         if let error { ErrorBanner(message:error) }
         if waitingForSend { Text("Your last message to this assistant is still on its way. This is added to the draft once it settles.").font(.footnote).foregroundStyle(.secondary) }
+        Section {
         Button("Add to draft") { Task { await importDraft() } }.disabled(botId.isEmpty || busy || waitingForSend || !store.connected || !store.supports(.uploads) && !capture.files.isEmpty)
-        Button("Discard shared draft",role:.destructive) { ShareInbox.remove(capture);dismiss() }.disabled(busy)
+        if !store.connected { Text("Connect to add this. It stays saved here.").font(.footnote).foregroundStyle(.secondary) }
+        else if !store.supports(.uploads) && !capture.files.isEmpty { Text("This assistant can't receive files.").font(.footnote).foregroundStyle(.secondary) }
+        }
+        Section { Button("Discard shared draft",role:.destructive) { confirmDiscard = true }.disabled(busy) }
         if busy { ProgressView("Adding to draft…") }
-      }.navigationTitle("Review shared content").toolbar { ToolbarItem(placement:.cancellationAction) { Button("Later") { dismiss() }.disabled(busy) } }
-    }.onAppear { botId = store.bootstrap?.bots.contains(where:{$0.id==capture.botId}) == true ? capture.botId! : "" }
+      }.scrollContentBackground(.hidden).background(Palette.surface(scheme))
+      .navigationTitle("Review shared content").toolbar { ToolbarItem(placement:.cancellationAction) { Button("Later") { dismiss() }.disabled(busy) } }
+    }.alert("Discard this shared draft?", isPresented: $confirmDiscard) {
+      Button("Discard shared draft", role: .destructive) { ShareInbox.remove(capture); dismiss() }
+      Button("Keep draft", role: .cancel) { }
+    } message: { Text("The text and files you shared are deleted from this device.") }
+    .onAppear {
+      botId = store.bootstrap?.bots.contains(where:{$0.id==capture.botId}) == true ? capture.botId! : ""
+      #if DEBUG
+      confirmDiscard = DebugFixtures.captureSurvival == "share-discard"
+      #endif
+    }
       .onChange(of: held) { _, held in if !held && waitingForSend { waitingForSend = false; Task { await importDraft() } } }
       .onChange(of: botId) { _, _ in waitingForSend = false }
   }

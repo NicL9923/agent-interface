@@ -70,7 +70,7 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
   const detail = conversation?.activity.detail?.trim().replace(/[.…]+$/, "");
   const runningCall = connectionLost ? undefined : conversation?.toolCalls?.findLast(call => call.status === "running");
   const prop = avatarProp(runningCall?.name);
-  const action = !connectionLost && state === "working" && detail ? detail.charAt(0).toLowerCase() + detail.slice(1) : actions[state];
+  const action = offline ? "offline" : !connectionLost && state === "working" && detail ? detail.charAt(0).toLowerCase() + detail.slice(1) : actions[state];
   const running = !!conversation && activeStates.includes(conversation.activity.state);
   // The running turn's one live row: the current tool's receipt, and in Advanced, the latest reasoning line.
   const liveTool = runningCall ? `${receipt(runningCall).label} · ${runningCall.name}` : undefined;
@@ -213,7 +213,7 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
               name={selected.name}
               reducedMotion
             />
-            <h2>Let's discuss your role.</h2>
+            <h2>Start with {selected.name}'s role</h2>
             <p>{selected.description || `Tell ${selected.name} what you need help with.`}</p>
             <button type="button" onClick={() => onDraft(`Let's discuss your role${selected.description ? `: ${selected.description}` : ". Ask me what I need help with and how I like to work"}.`)}>Discuss {selected.name}'s role</button>
             {!boot.capabilities.chat.supported && (
@@ -224,7 +224,7 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
         {selected && showActivity && (
           <div className={`activity-status conversation-activity message-activity state-${state}${state === "failed" || state === "interrupted" ? " recovery-activity" : ""}`}>
             {/* Headers, home and lists keep avatars still; this one moves to show live work. */}
-            <Avatar avatar={selected.avatar} state={state === "blocked" ? "idle" : state} size={52} name={selected.name} botId={selected.id} prop={state === "working" ? prop : undefined} />
+            <Avatar avatar={selected.avatar} state={state === "blocked" ? "idle" : state} size={52} name={selected.name} botId={selected.id} offline={offline} prop={state === "working" ? prop : undefined} />
             <div className="activity-copy">
               <div role="status" aria-atomic="true">
                 {state === "failed" || state === "interrupted" ? <>

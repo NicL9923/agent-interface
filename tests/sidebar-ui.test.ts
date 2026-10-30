@@ -71,6 +71,9 @@ it("replaces stale working indicators during connection loss and restores them o
   await render();
   props = { ...props, connectionLost: true, offline: true };
   await render();
+  expect(statuses()).toEqual(["Offline", "Offline"]);
+  props = { ...props, offline: false };
+  await render();
   expect(statuses()).toEqual(["Reconnecting", "Reconnecting"]);
   expect(container.querySelector(".pinned-activity.state-working")).toBeNull();
   props = { ...props, connectionLost: false, offline: false };

@@ -423,7 +423,7 @@ struct ConversationView: View {
     } else if store.transcript?.messages.isEmpty == true && [.idle, .done].contains(store.activity) {
       VStack(spacing: 14) {
         AvatarView(avatar: bot.avatar ?? AvatarConfig(), size: 112, name: bot.name, forceReducedMotion: true)
-        Text("Let's discuss your role.").font(.title2.bold())
+        Text("Start with \(bot.name)'s role").font(.title2.bold())
         Text(bot.description?.isEmpty == false ? bot.description! : "Tell \(bot.name) what you need help with.").foregroundStyle(.secondary)
         Button("Discuss \(bot.name)'s role") {
           store.editComposer { $0.text = RoleDiscussion.draft(appendingTo: $0.text, description: bot.description) }

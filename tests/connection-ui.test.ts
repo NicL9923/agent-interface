@@ -266,6 +266,7 @@ describe('setup and recovery interface',()=>{
       await renderApp();const initial=reads();
       Object.defineProperty(navigator,'onLine',{configurable:true,value:false});
       await act(async()=>window.dispatchEvent(new Event('offline')));
+      expect(Array.from(container.querySelectorAll('button')).some(node=>node.textContent==='Reconnect now')).toBe(false);
       await returnTo();
       expect(reads()).toBe(initial);
       Object.defineProperty(navigator,'onLine',{configurable:true,value:true});

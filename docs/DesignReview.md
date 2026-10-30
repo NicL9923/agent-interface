@@ -1110,3 +1110,40 @@ and preview server are closed. This commit adds capture entry points rather than
 changing product behavior. Progress remains 24 of 25 grouped areas, with the
 first whole-area review pending. The final Notifications footer wording was
 also recaptured after its small follow-up.
+
+
+## Empty/offline content, shared drafts and widgets, round 2
+
+Round 1 scored 8.3. Shared-draft discard now has its own section and a system
+alert with a Keep draft choice. The form explains why adding is unavailable,
+labels its text editor for assistive tools and uses the household background.
+Share-extension Save stays disabled until preparation succeeds; shared links
+say Ready to save instead of reporting zero attachments. Failed preparation
+removes its temporary files. The inbox also prunes unsaved UUID directories
+older than one day while preserving current work and saved drafts.
+
+Offline web panels omit an unusable Reconnect button. Avatar captions and the
+conversation activity say Offline when the device has no network. The native
+saved-copy banner makes the same distinction. Empty assistant lists now have
+a heading and a useful next step; empty conversations name the assistant's role.
+Widgets distinguish signing in from creating a first assistant, and stale
+footers retain an age instead of only asking for a refresh.
+
+The review's proposed navigation fix was not applied. AppStore.select already
+sets conversationRequest by default, and RootView observes it to open the chat.
+The existing import calls that path. This is source evidence; the capture does
+not demonstrate a real import gesture or file transfer.
+
+All 89 affected web checks pass, including offline status and reconnect behavior.
+Both builds completed. Production share-inbox code also passes standalone Swift
+checks that remove old unsaved files and preserve fresh work, saved drafts,
+unrelated directories and symlinks. Fresh web captures repeat draft preservation
+through outage and reconnection at both widths. Empty desktop Today data now
+matches the empty roster. Compiled iPhone captures show the updated empty list,
+share form, offline guidance, discard alert and fresh/stale/empty widget views.
+The alert is opened by a Debug entry point, so no native tap is claimed.
+
+The browser, preview server and simulator are closed. Real share-sheet import,
+file transfer, cold-start offline reading, system-hosted widgets, VoiceOver,
+dark mode and large text remain unverified. Progress remains 24 of 25 grouped
+areas, pending the second whole-area review.
