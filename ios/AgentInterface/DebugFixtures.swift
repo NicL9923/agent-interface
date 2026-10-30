@@ -21,6 +21,10 @@
         ["search", "saved", "automations", "history"].contains(tab) else { return nil }
       return tab
     }
+    static var captureGroupPage: Bool {
+      let environment = ProcessInfo.processInfo.environment
+      return environment["AGENT_INTERFACE_UI_FIXTURE"] == "1" && environment["AGENT_INTERFACE_UI_CAPTURE_GROUP"] == "1"
+    }
     /// Test-only file selection. The normal importer stays unchanged without an explicit fixture.
     static func portraitUploadURL() throws -> URL? {
       let environment = ProcessInfo.processInfo.environment

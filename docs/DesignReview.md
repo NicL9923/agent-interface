@@ -76,8 +76,8 @@ References collected October 25, 2026. External artwork is reference material on
 | Learning | Desktop/phone web and current iPhone views captured | Complete | Whole-screen rounds: 7.0, 8.5, 9.0 |
 | Routines and results | Desktop/phone web and current iPhone views captured | Complete | Whole-screen rounds: 7.2, 8.6, 9.1 |
 | Logins and secure requests | Desktop/phone web and current iPhone logins captured | Complete | Combined whole-area rounds: 7.8, 8.8, 9.1 |
-| Search, saved items and automations | Desktop/phone web and current iPhone captures | 9.0, round 3 | Passed; small final CSS and Back-state fixes applied directly |
-| Group chats and threads | Pending | Pending | Pending |
+| Search, saved items and automations | Desktop/phone web and current iPhone captures | Complete | Whole-area rounds: 8.2, 8.8, 9.0; final CSS and Back-state fixes applied directly |
+| Group chats and threads | Desktop/phone web and iPhone conversation captured | In progress | Whole-area round 1 requested |
 | Settings, following and home sections | Pending | Pending | Pending |
 | Integrations | Desktop/phone web and current iPhone captured | Complete | Combined whole-area rounds: 7.8, 8.8, 9.1 |
 | Computer and terminal | Pending | Pending | Pending |
@@ -610,3 +610,18 @@ that clipped the tab strip or save notice before scrolling, and clear native
 history errors and notices on Back. The agent checked the header at scroll zero
 with a save notice and again at the end of history at both web widths. No fourth
 review is planned. Group conversations are next.
+
+
+## Group conversations
+
+Round 1 captures cover the conversation, mention suggestions, a thread reply and
+new-group form at desktop and phone web widths, plus an iPhone conversation.
+The agent selected a mention with Enter without sending, switched between a
+thread reply and a new topic, selected two assistants in the create form,
+cancelled while preserving the conversation draft, and sent one synthetic group
+message. The confirmed send cleared its draft and appeared in the transcript.
+The native capture renders the compiled app with a fixture-only startup shortcut.
+
+The examples use in-memory household data. Creating a real room, uncertain-send
+recovery, approvals, Stop, native interaction, VoiceOver, dark mode and large
+text were not exercised for this round. The first whole-area review is pending.

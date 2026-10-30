@@ -25,7 +25,10 @@ trap 'rm -f "$capture_tmp"; "$simctl" shutdown "$simulator" >/dev/null 2>&1 || t
 for tab in "$@"; do
   settings_tab=$tab
   discovery_tab=""
+  group_capture=0
+  capture_delay=${NATIVE_CAPTURE_DELAY:-5}
   case "$tab" in
+    Groups) settings_tab=""; group_capture=1; capture_delay=${NATIVE_CAPTURE_DELAY:-12} ;;
     Search) settings_tab=""; discovery_tab=search ;;
     History) settings_tab=""; discovery_tab=history ;;
     Saved) settings_tab=""; discovery_tab=saved ;;
@@ -35,10 +38,12 @@ for tab in "$@"; do
   esac
   SIMCTL_CHILD_AGENT_INTERFACE_UI_FIXTURE=1 \
   SIMCTL_CHILD_AGENT_INTERFACE_UI_AUTOMATION=1 \
+  SIMCTL_CHILD_AGENT_INTERFACE_UI_GROUP="$group_capture" \
+  SIMCTL_CHILD_AGENT_INTERFACE_UI_CAPTURE_GROUP="$group_capture" \
   SIMCTL_CHILD_AGENT_INTERFACE_UI_CAPTURE_SETTINGS_TAB="$settings_tab" \
   SIMCTL_CHILD_AGENT_INTERFACE_UI_CAPTURE_DISCOVERY_TAB="$discovery_tab" \
     "$simctl" launch --terminate-running-process "$simulator" "$bundle"
-  sleep "${NATIVE_CAPTURE_DELAY:-5}"
+  sleep "$capture_delay"
   # CoreSimulator cannot write directly to the external volume. Use its own
   # runtime temp directory, then copy this small screenshot to DevSSD.
   "$simctl" io "$simulator" screenshot --type=png "$capture_tmp"

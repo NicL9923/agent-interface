@@ -233,7 +233,12 @@ struct GroupChatsView: View {
   private func load() async {
     let id = UUID(); loadId = id
     let value: GroupCatalog? = await store.run(error: $error, current: { loadId == id }) { try await $0.api.get("/groups") }
-    if let value { catalog = value; error = nil }
+    if let value {
+      catalog = value; error = nil
+      #if DEBUG
+      if DebugFixtures.captureGroupPage, opened == nil { opened = value.rooms.first }
+      #endif
+    }
   }
 }
 struct GroupCreateView: View {

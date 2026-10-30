@@ -57,7 +57,7 @@ struct RootView: View {
       if id != nil, DebugFixtures.captureSettingsTab != nil, let bot = store.bootstrap?.bots.first {
         settingsBot = bot
       }
-      if id != nil { captureDiscoveryIfAsked() }
+      if id != nil { capturePageIfAsked() }
     }
     #endif
     .onChange(of:store.sessionExpired) { _,_ in checkShares() }
@@ -70,7 +70,7 @@ struct RootView: View {
       if request != nil {
         destination = .conversation; openChat(); compactColumn = .detail
         #if DEBUG
-        captureDiscoveryIfAsked()
+        capturePageIfAsked()
         #endif
       }
     }
@@ -128,11 +128,14 @@ struct RootView: View {
     path = today ? [.today] : []
     compactColumn = .sidebar
     #if DEBUG
-    captureDiscoveryIfAsked()
+    capturePageIfAsked()
     #endif
   }
   #if DEBUG
-  private func captureDiscoveryIfAsked() {
+  private func capturePageIfAsked() {
+    if DebugFixtures.captureGroupPage {
+      destination = .groups; path = [.groups]; compactColumn = .detail; return
+    }
     guard DebugFixtures.captureDiscoveryTab != nil else { return }
     destination = .find; path = [.search]; compactColumn = .detail
   }
