@@ -300,6 +300,8 @@ struct GroupConversationView: View {
   @State private var draft = ""
   @State private var threadId = ""
   @State private var replyToId = ""
+  @State private var sentScrollRequest: UUID?
+  @State private var followingLatest = false
   @FocusState private var composerFocused: Bool
   @State private var pending: GroupSend?
   @State private var error: String?
@@ -316,7 +318,7 @@ struct GroupConversationView: View {
   private var path: String { "/groups/\(APIClient.component(room.id))" }
   private var key: String { "group.send.\(store.scope ?? ""):\(room.id)" }
   private var status: String {
-    state?.driver_status?.blocked == true ? "Discussion needs attention." : state?.driver_status?.working == true ? "Assistants are discussing…" : draft.isEmpty ? "Type @ to address one assistant." : "Assistants are idle."
+    state?.driver_status?.blocked == true ? "Discussion needs attention." : state?.driver_status?.working == true ? "Assistants are discussing…" : "Type @ to address one assistant."
   }
   /// A group that disappeared keeps none of its name, members or messages on screen.
   static func identity(_ room: GroupRoom, missing: Bool) -> (title: String, members: String?) {
@@ -325,6 +327,7 @@ struct GroupConversationView: View {
   var body: some View {
     let identity = Self.identity(room, missing: missing)
     let roots = threadRoots
+    ScrollViewReader { proxy in
     List {
       if missing || error != nil || state == nil {
         Section {
@@ -334,7 +337,11 @@ struct GroupConversationView: View {
         }
       }
       Section {
-        ForEach(messages) { event in messageRow(event, root: event.payload.thread_id.flatMap { roots[$0] }) }
+        ForEach(messages) { event in
+          messageRow(event, root: event.payload.thread_id.flatMap { roots[$0] }).id(event.id)
+            .onAppear { if event.id == messages.last?.id { followingLatest = true } }
+            .onDisappear { if event.id == messages.last?.id { followingLatest = false } }
+        }
         if more { Button("Load more messages") { Task { await load() } }.listRowBackground(Color.clear) }
         if state != nil && !missing && messages.isEmpty {
           Text("Start a discussion. Use @handle to address an assistant.").font(.footnote).foregroundStyle(Palette.muted).listRowBackground(Color.clear)
@@ -359,7 +366,7 @@ struct GroupConversationView: View {
     .safeAreaInset(edge: .bottom) { composer }
     .navigationTitle(identity.title).refreshable { await load() }.task(id: "\(store.scope ?? ""):\(room.id)") {
       loadGeneration += 1
-      state = nil; events = []; cursor = 0; more = false; applied = nil; threadId = ""; replyToId = ""
+      state = nil; events = []; cursor = 0; more = false; applied = nil; threadId = ""; replyToId = ""; sentScrollRequest = nil; followingLatest = false
       draft = UserDefaults.standard.string(forKey: key + ":draft") ?? ""
       if let data = UserDefaults.standard.data(forKey: key) { pending = try? JSONDecoder().decode(GroupSend.self, from: data) }
       await load()
@@ -368,6 +375,13 @@ struct GroupConversationView: View {
     // stream that failed unnoticed, and the room's state.
     .watchingGroup(room.id) { if !missing { await load() } }
     .pollWhileActive(id: "\(store.scope ?? ""):\(room.id)", every: Self.fallbackInterval) { if !missing { await load() } }
+    .onChange(of: messages.last?.id) { _, _ in if followingLatest { scrollToLatest(proxy) } }
+    .onChange(of: sentScrollRequest) { _, request in if request != nil { scrollToLatest(proxy) } }
+    }
+  }
+  private func scrollToLatest(_ proxy: ScrollViewProxy) {
+    guard let id = messages.last?.id else { return }
+    Task { @MainActor in proxy.scrollTo(id, anchor: .bottom) }
   }
   private var composer: some View {
     VStack(alignment: .leading, spacing: 8) {
@@ -449,6 +463,8 @@ struct GroupConversationView: View {
           .font(.subheadline).buttonStyle(.borderless).frame(minHeight: 44).disabled(busy || pending != nil || !canSend)
           .accessibilityLabel("Reply in thread to \(context(event))")
       }
+    }.overlay(alignment: .leading) {
+      if replyToId == event.id { Rectangle().fill(Palette.accent).frame(width: 3).padding(.vertical, 6).offset(x: -8) }
     }.listRowBackground(replyToId == event.id ? Palette.accentSoft : event.kind == "message.user" && author(event) == "You" ? Palette.rail(scheme) : Palette.raised(scheme))
   }
   private func author(_ event: GroupEvent) -> String {
@@ -522,7 +538,7 @@ struct GroupConversationView: View {
       return receipt
     }
     guard receipt != nil else { return }
-    UserDefaults.standard.removeObject(forKey: key); UserDefaults.standard.removeObject(forKey: key + ":draft"); pending = nil; draft = ""; threadId = ""; replyToId = ""; await load()
+    UserDefaults.standard.removeObject(forKey: key); UserDefaults.standard.removeObject(forKey: key + ":draft"); pending = nil; draft = ""; threadId = ""; replyToId = ""; await load(); sentScrollRequest = UUID()
   }
   private func stop() async {
     let stopped: [String: Int]? = await store.run(busy: $busy, error: $error) { try await $0.api.write(path + "/stop", ["requestId": UUID().uuidString.lowercased()]) }

@@ -77,7 +77,7 @@ References collected October 25, 2026. External artwork is reference material on
 | Routines and results | Desktop/phone web and current iPhone views captured | Complete | Whole-screen rounds: 7.2, 8.6, 9.1 |
 | Logins and secure requests | Desktop/phone web and current iPhone logins captured | Complete | Combined whole-area rounds: 7.8, 8.8, 9.1 |
 | Search, saved items and automations | Desktop/phone web and current iPhone captures | Complete | Whole-area rounds: 8.2, 8.8, 9.0; final CSS and Back-state fixes applied directly |
-| Group chats and threads | Desktop/phone web and iPhone conversation captured | 7.0, round 2 pending | Thread context, speaker identity and approval labels implemented |
+| Group chats and threads | Desktop/phone web and iPhone conversation captured | 8.6, final round pending | Send scrolling, mention overlay and selection fixes implemented |
 | Settings, following and home sections | Pending | Pending | Pending |
 | Integrations | Desktop/phone web and current iPhone captured | Complete | Combined whole-area rounds: 7.8, 8.8, 9.1 |
 | Computer and terminal | Pending | Pending | Pending |
@@ -642,3 +642,18 @@ preservation, request identifiers on Deny and the selection limit. Existing
 uncertain-write, room-revocation, stream and background-poll checks still pass.
 Both clients compile. Native interaction and unit execution, real coordinator
 behavior, VoiceOver, dark mode and large text remain unverified. Round 2 is pending.
+
+Round 2 scored 8.6/10. The final pass scrolls a confirmed send above the sticky
+composer using its measured height and the scrollport padding. Incoming replies
+follow only while the reader is at the bottom. Native uses the List's reserved
+composer inset and a matching scroll request after confirmation. A stronger
+accent bar marks the reply selection. The desktop mention popup now covers the
+underlying link cleanly, disabled create rows dim together, and approval padding
+is balanced. The mention hint stays steady while typing.
+
+All 42 focused checks pass, including staying put while reading older replies,
+following at the bottom, revealing a confirmed send and preserving an uncertain
+send. The agent repeated the web interactions and checked that the sent message
+and its Reply control fit above the composer. Current desktop, phone and iPhone
+renders are captured. Native scroll behavior is source-only; the capture does
+not claim native interaction. The third and final review is pending.

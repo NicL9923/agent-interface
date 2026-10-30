@@ -24,6 +24,9 @@ export function GroupChats({ bootstrap }: { bootstrap: Bootstrap }) {
   const [pending, setPending] = useState<PendingMessage | null>(null);
   const [threadId, setThreadId] = useState('');
   const [replyToId, setReplyToId] = useState('');
+  const panel = useRef<HTMLDivElement>(null);
+  const lastMessage = useRef<HTMLElement>(null);
+  const scrollLatest = useRef(false);
   const [notice, setNotice] = useState('');
   const action = useAction();
   const { busy, error, setError } = action;
@@ -50,6 +53,10 @@ export function GroupChats({ bootstrap }: { bootstrap: Bootstrap }) {
       return { state, page: await api<GroupPage>(`${path}/log?since=${cursor.current}`, { signal }) };
     },
     onData: ({ page }) => {
+      // Measure before appending so a reader above the bottom stays put.
+      const view = panel.current;
+      const newMessage = page.events.some(event => event.seq > cursor.current && ['message.user', 'message.member'].includes(event.kind));
+      if (newMessage && view && view.scrollHeight - view.clientHeight - view.scrollTop < 48) scrollLatest.current = true;
       cursor.current = page.cursor;
       setEvents(current => [...new Map([...current, ...page.events].map(event => [event.event_id, event])).values()].sort((a, b) => a.seq - b.seq));
       setMore(page.has_more);
@@ -123,7 +130,7 @@ export function GroupChats({ bootstrap }: { bootstrap: Bootstrap }) {
     caret.current = null;
   }, [draft]);
   useEffect(() => {
-    cursor.current = 0; setEvents([]); setMore(false); setError(''); setThreadId(''); setReplyToId('');
+    cursor.current = 0; scrollLatest.current = false; setEvents([]); setMore(false); setError(''); setThreadId(''); setReplyToId('');
     setDraft(saved<string>(`${key}:draft`) || ''); setPending(saved<PendingMessage>(key));
   }, [roomId, key]);
   const create = () => {
@@ -143,7 +150,7 @@ export function GroupChats({ bootstrap }: { bootstrap: Bootstrap }) {
       const response = await write<{ accepted: boolean }>(`/groups/${encodeURIComponent(roomId)}/messages`, input);
       if (response.accepted !== true) throw new Error('Hermes did not confirm this message.');
       localStorage.removeItem(attemptKey); localStorage.removeItem(`${attemptKey}:draft`);
-      if (scope.current === attemptKey) { setPending(null); setDraft(''); setThreadId(''); setReplyToId(''); await room.reload(); }
+      if (scope.current === attemptKey) { setPending(null); setDraft(''); setThreadId(''); setReplyToId(''); scrollLatest.current = true; await room.reload(); }
     }, { onError: cause => scope.current === attemptKey ? `${(cause as Error).message} The message may have arrived. Retry the same saved message to check, without sending a duplicate.` : null });
   };
   // The room may change or leave the list while this runs. Its reload is then inert, and its error is not shown on another room.
@@ -181,8 +188,18 @@ export function GroupChats({ bootstrap }: { bootstrap: Bootstrap }) {
   </form>;
   // A saved uncertain request stays above the rooms so they remain readable until it is retried.
   const drafting = creating && !pendingCreate;
-  const status = state?.driver_status?.blocked ? 'Discussion needs attention.' : state?.driver_status?.working ? 'Assistants are discussing…' : draft.trim() ? 'Assistants are idle.' : 'Type @ to address one assistant.';
-  return <div className="group-panel">
+  const status = state?.driver_status?.blocked ? 'Discussion needs attention.' : state?.driver_status?.working ? 'Assistants are discussing…' : 'Type @ to address one assistant.';
+  useLayoutEffect(() => {
+    const target = lastMessage.current;
+    if (!scrollLatest.current || !target) return;
+    scrollLatest.current = false;
+    const composerHeight = field.current?.form?.getBoundingClientRect().height || 0;
+    // scrollIntoView aligns with the outer scrollport, including its padding.
+    const bottomPadding = panel.current ? parseFloat(getComputedStyle(panel.current).paddingBottom) || 0 : 0;
+    target.style.scrollMarginBottom = `${composerHeight + bottomPadding + 16}px`;
+    target.scrollIntoView?.({ block: 'end' });
+  }, [events, state, creating, pendingCreate]);
+  return <div className="group-panel" ref={panel}>
     {(groups.error || room.error) && <FormMessage tone="error">{groups.error || room.error} <button onClick={() => { void groups.reload(); void room.reload(); }}>Retry</button></FormMessage>}
     {error && <FormMessage tone="error">{error}</FormMessage>}
     {notice && <p className="capability-note" role="status">{notice}</p>}
@@ -197,7 +214,7 @@ export function GroupChats({ bootstrap }: { bootstrap: Bootstrap }) {
           const root = typeof event.payload.thread_id === 'string' ? threadRoots.get(event.payload.thread_id) : undefined;
           const inThread = root && root.event_id !== event.event_id;
           const member = memberFor(event.actor.id) || memberFor(event.payload.member_id);
-          return <article className={`group-message${replyToId === event.event_id ? ' selected' : ''}${event.kind === 'message.user' && (event.sender?.id || event.actor.id) === bootstrap.user.id ? ' own' : ''}`} key={event.event_id}>
+          return <article className={`group-message${replyToId === event.event_id ? ' selected' : ''}${event.kind === 'message.user' && (event.sender?.id || event.actor.id) === bootstrap.user.id ? ' own' : ''}`} key={event.event_id} ref={event === messages.at(-1) ? lastMessage : undefined}>
             <div className="message-attribution"><span className="group-speaker">{event.kind === 'message.member' && avatar(member?.member_id)}<strong>{author(event)}</strong></span><When value={event.created_at * 1000}/></div>
             {inThread && <p className="group-thread-context">In thread with {context(root)}</p>}
             <MessageMarkdown text={typeof event.payload.text === 'string' ? event.payload.text : ''}/>

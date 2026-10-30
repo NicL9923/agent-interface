@@ -62,6 +62,11 @@ async (page, { origin, outputDir }) => {
         await panel.locator('.group-message').filter({ hasText: '@ranch Can we keep the walk under an hour?' }).waitFor();
         await tab.waitForFunction(() => document.querySelector('#group-message')?.value === '');
         if (await composer.inputValue()) throw new Error('Confirmed send kept the draft');
+        await tab.waitForFunction(() => {
+          const last = [...document.querySelectorAll('.group-message')].at(-1)?.getBoundingClientRect();
+          const composer = document.querySelector('.group-composer')?.getBoundingClientRect();
+          return last && composer && last.bottom <= composer.top - 8;
+        });
         await shot(`group-sent-${width}`);
       }
     }
@@ -87,6 +92,9 @@ async (page, { origin, outputDir }) => {
       await shot(`group-approval-${width}`);
     }
     return { paths };
+  } catch (error) {
+    await tab.screenshot({ path: `${outputDir}/capture-failure.png` }).catch(() => {});
+    throw error;
   } finally {
     await context.close();
   }

@@ -24,7 +24,7 @@
 .group-heading button { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 .group-message { padding: 16px 12px; border-bottom: 1px solid var(--line); border-radius: 8px; }
 .group-message.own { background: var(--user); }
-.group-message.selected { background: var(--accent-soft); outline: 1px solid var(--accent); }
+.group-message.selected { background: var(--accent-soft); outline: 1px solid var(--accent); box-shadow: inset 3px 0 var(--accent); }
 .group-message .message-attribution { display: flex; justify-content: space-between; gap: 12px; font-size: .875rem; color: var(--ink); }
 .group-speaker, .group-requester { display: flex; align-items: center; gap: 8px; }
 .group-speaker { min-width: 0; }
@@ -45,6 +45,8 @@
 .group-create { max-width: 520px; padding: 20px; border: 1px solid var(--line); border-radius: 14px; background: var(--raised); }
 .group-create h3 { margin-bottom: 16px; }
 .group-create fieldset label { display: flex; flex-direction: row; align-items: center; gap: 10px; margin-bottom: 10px; }
+.group-create fieldset label:has(input:disabled) { opacity: .55; }
+.group-panel .approval-card .actions { margin-bottom: 0; }
 .group-create .actions { margin-bottom: 0; justify-content: flex-end; }
 @media (max-width: 620px) {
   .group-panel { padding: 16px; }
@@ -58,7 +60,7 @@
 /* Group chat @mentions: suggestions open above the composer. */
 .mention-list {
   position: absolute;
-  left: 12px;
+  left: 0;
   bottom: calc(100% + 6px);
   z-index: 5;
   min-width: 220px;
