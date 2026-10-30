@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { precachePlan } from './precache-plan.mjs';
+import { assertPopupLibraryIsLazy, precachePlan } from './precache-plan.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const output = join(root, 'dist/client');
@@ -27,10 +28,11 @@ hash.update(template);
 const version = hash.digest('hex').slice(0, 16);
 const names = files.map((file) => relative(output, file).split('\\').join('/'));
 const manifest = JSON.parse(await readFile(join(output, '.vite/manifest.json'), 'utf8'));
+assertPopupLibraryIsLazy(manifest, (file) => readFileSync(join(output, file), 'utf8'));
 const plan = precachePlan(manifest, names);
 // Nothing serves or needs it after this, so it does not ship.
 await rm(join(output, '.vite'), { recursive: true });
 const slash = (list) => JSON.stringify(list.map((name) => '/' + name));
-const worker = template.replace('__BUILD_ID__', version).replace('__PRECACHE__', slash(plan.precache)).replace('__ON_DEMAND__', slash(plan.onDemand));
+const worker = template.replace('__BUILD_ID__', version).replace('__PRECACHE__', slash(plan.install)).replace('__WARM__', slash(plan.warm)).replace('__ON_DEMAND__', slash(plan.onDemand));
 await writeFile(join(output, 'sw.js'), worker);
-console.log(`Built service worker ${version} with ${plan.precache.length} precached files and ${plan.onDemand.length} cached on first use.`);
+console.log(`Built service worker ${version} with ${plan.install.length} installed files, ${plan.warm.length} cached in the background and ${plan.onDemand.length} on first use.`);

@@ -12,6 +12,7 @@ import { Readable } from 'node:stream';
 import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
 import { gzipSync } from 'node:zlib';
 import { createHermesRuntime } from '../src/server/hermes.js';
+import { createHermesTransport } from '../src/server/hermes-transport.js';
 import type { Runtime, Submission } from '../src/shared/types.js';
 
 const realFetch=globalThis.fetch;
@@ -916,14 +917,39 @@ describe('Hermes transport liveness and diagnostics', () => {
     expect(sockets[1].readyState).toBe(WireSocket.CLOSED);
   });
 
-  it('rejects outstanding connection work immediately when the runtime is closed', async () => {
+  it('rejects a handshake waiting on its socket as soon as the runtime is closed', async () => {
     opening = 'hang';
     const status = runtime.status();
+    await vi.waitFor(() => expect(sockets).toHaveLength(1));
     await runtime.close();
     expect(await status).toMatchObject({connected: false, code: 'closed'});
+    expect(sockets[0].readyState).toBe(WireSocket.CLOSED);
     expect(await runtime.reconnect!()).toMatchObject({connected: false, code: 'closed'});
     expect(sockets).toHaveLength(1);
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('never opens a socket for a connection attempt that was still starting when the runtime closed', async () => {
+    const status = runtime.status();
+    await runtime.close();
+    expect(await status).toMatchObject({connected: false, code: 'closed'});
+    expect(sockets).toHaveLength(0);
+  });
+
+  it('aborts a pending service ticket request when the runtime is closed', async () => {
+    await runtime.close();
+    let aborted = false;
+    vi.stubGlobal('fetch', vi.fn((_url: unknown, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => { aborted = true; reject(new Error('aborted')); });
+    })));
+    runtime = createHermesRuntime({url: 'http://127.0.0.1:19119', token, authMode: 'service'});
+    const status = runtime.status();
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+    await runtime.close();
+    expect(await status).toMatchObject({connected: false, code: 'closed'});
+    expect(aborted).toBe(true);
+    expect(sockets).toHaveLength(0);
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 
   it('backs off repeated failed polls and automatically recovers after the retry deadline', async () => {
@@ -1008,6 +1034,49 @@ describe('Hermes transport liveness and diagnostics', () => {
     expect(await submitted).toMatchObject({requestId: 'request-one', status: 'uncertain'});
     expect(await runtime.status()).toMatchObject({connected: false, code: 'unreachable'});
     await runtime.reconnect!();
+    expect(calls.filter(call => call.method === 'agent-interface.submit')).toHaveLength(1);
+  });
+
+  it('fails all concurrent RPCs with the same timeout and removes old socket listeners', async () => {
+    vi.useFakeTimers();
+    const transport = createHermesTransport({url:'http://127.0.0.1:19119', token}, {
+      frame: () => {}, disconnected: () => {}, connected: () => {}, watching: () => false,
+    });
+    const connected = transport.connect();
+    await vi.advanceTimersByTimeAsync(0);
+    await connected;
+    const old = sockets[0];
+    const remove = vi.spyOn(old, 'removeEventListener');
+    deferredMethods.add('profiles.describe');
+    deferredMethods.add('agent-interface.submit');
+    const read = transport.rpc('profiles.describe').catch(error => error);
+    const mutation = transport.rpc('agent-interface.submit').catch(error => error);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(10_000);
+    const [first, second] = await Promise.all([read, mutation]);
+    expect(first).toBe(second);
+    expect(first.message).toContain('timed out');
+    expect(remove.mock.calls.map(call => call[0]).sort()).toEqual(['close', 'error', 'message', 'open']);
+    await transport.reconnect();
+    old.dispatchEvent(new Event('error'));
+    expect(transport.connection?.ws).toBe(sockets[1]);
+    transport.close();
+  });
+
+  it('settles concurrent pending calls on disconnect and does not resend a closed submission', async () => {
+    await runtime.status();
+    deferredMethods.add('agent-interface.submit');
+    deferredMethods.add('profiles.describe');
+    const submitted = runtime.submit(input());
+    const read = runtime.tools('shared');
+    const rejected = expect(read).rejects.toThrow('closed');
+    await vi.waitFor(() => {
+      expect(calls.some(call => call.method === 'agent-interface.submit')).toBe(true);
+      expect(calls.some(call => call.method === 'profiles.describe')).toBe(true);
+    });
+    await runtime.close();
+    await rejected;
+    expect(await submitted).toMatchObject({requestId: 'request-one', status: 'uncertain'});
     expect(calls.filter(call => call.method === 'agent-interface.submit')).toHaveLength(1);
   });
 

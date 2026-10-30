@@ -1,4 +1,6 @@
 import type { RuntimeStatus } from '../shared/types.js';
+import { Deferred, Effect, Exit, Fiber, Scope } from 'effect';
+import { cappedBackoff, fromPromise, toPromise } from './effect-support.js';
 import { httpError } from './http-error.js';
 import { isolatedQualification, qualifiedReceipt } from './hermes-qualification.js';
 
@@ -22,12 +24,14 @@ export type Connection = {
   verified: boolean;
   lastReceivedAt: number;
   rejectOpening?: (error: Error) => void;
+  removeListeners?: () => void;
+  scope?: Scope.Closeable;
+  closeReason?: Error;
 };
 type Pending = {
   connection: Connection;
-  resolve(value: Wire): void;
-  reject(error: Error): void;
-  timer: ReturnType<typeof setTimeout>;
+  deferred: Deferred.Deferred<Wire, Error>;
+  scope: Scope.Closeable;
 };
 /** What the verified add-on revision supports, learned on each connection. */
 export interface Contract {
@@ -68,6 +72,19 @@ export function createHermesTransport(options: HermesOptions, hooks: TransportHo
   let reconnecting: Promise<RuntimeStatus> | undefined;
   let serial = 0;
   let closed = false;
+  // Aborts the setup fetches that run before a socket exists, so close() does not wait on them.
+  const setupScope = Scope.makeUnsafe();
+  const setupFibers = new Set<Fiber.Fiber<Response, unknown>>();
+  Effect.runSync(Scope.addFinalizer(setupScope, Effect.sync(() => {
+    for (const fiber of setupFibers) fiber.interruptUnsafe();
+    setupFibers.clear();
+  })));
+  const setupFetch = (url: URL, init: RequestInit, ms: number): Promise<Response> => {
+    const fiber = Effect.runFork(fromPromise(signal => fetch(url, {...init, signal: AbortSignal.any([signal, AbortSignal.timeout(ms)])})));
+    setupFibers.add(fiber);
+    fiber.addObserver(() => setupFibers.delete(fiber));
+    return toPromise(Fiber.join(fiber), closedError);
+  };
   let failures = 0;
   let retryAt = 0;
   let lastConnectedAt: string | undefined;
@@ -118,7 +135,7 @@ export function createHermesTransport(options: HermesOptions, hooks: TransportHo
     if (closed) return;
     const failure = error instanceof TransportError ? error : unavailable();
     failures += 1;
-    retryAt = Date.now() + Math.min(30_000, 1_000 * 2 ** Math.min(failures - 1, 5));
+    retryAt = Date.now() + cappedBackoff(failures);
     diagnostic = {connected: false, code: failure.code, detail: failure.message};
   }
   function disconnect(current: Connection, error: Error, recordFailure = true): void {
@@ -126,12 +143,8 @@ export function createHermesTransport(options: HermesOptions, hooks: TransportHo
     connection = undefined;
     current.rejectOpening?.(error);
     current.rejectOpening = undefined;
-    for (const [id, item] of pending) {
-      if (item.connection !== current) continue;
-      clearTimeout(item.timer);
-      pending.delete(id);
-      item.reject(error);
-    }
+    current.closeReason = error;
+    if (current.scope) Effect.runSync(Scope.close(current.scope, Exit.void));
     reads.clear();
     contract.extension = false;
     contract.canonicalSubmit = false;
@@ -139,9 +152,6 @@ export function createHermesTransport(options: HermesOptions, hooks: TransportHo
     // A reconnected socket receives a session's frames only after reopening it. Watchers reload,
     // but failed attempts during an outage, which never carried frames, stay quiet.
     hooks.disconnected(current.verified);
-    if (current.ws.readyState < WebSocket.CLOSING) {
-      try { current.ws.close(); } catch { /* Already disconnected. */ }
-    }
     if (recordFailure && !connecting && !closed) markFailure(error);
   }
   async function diagnoseOpeningFailure(error: Error): Promise<Error> {
@@ -149,10 +159,9 @@ export function createHermesTransport(options: HermesOptions, hooks: TransportHo
     // distinguishes an expired token from an unavailable gateway without paid work.
     if (closed || !origin || !options.token || error instanceof TransportError && ['unauthorized', 'closed'].includes(error.code)) return error;
     try {
-      const response = await fetch(new URL(servicePath('/api/profiles'), origin), {
-        headers: authHeaders(),
-        signal: AbortSignal.timeout(5_000), redirect: 'error',
-      });
+      const response = await setupFetch(new URL(servicePath('/api/profiles'), origin), {
+        headers: authHeaders(), redirect: 'error',
+      }, 5_000);
       await response.body?.cancel();
       if (response.status === 401 || response.status === 403)
         return new TransportError('unauthorized', 'Hermes rejected the session token. Update the server-side token and reconnect.');
@@ -181,10 +190,10 @@ export function createHermesTransport(options: HermesOptions, hooks: TransportHo
     if (serviceAuth) {
       let response: Response;
       try {
-        response = await fetch(new URL('/api/agent-interface/service-ticket', origin), {
-          method: 'POST', headers: authHeaders(), signal: AbortSignal.timeout(5_000), redirect: 'error',
-        });
-      } catch { throw unavailable(); }
+        response = await setupFetch(new URL('/api/agent-interface/service-ticket', origin), {
+          method: 'POST', headers: authHeaders(), redirect: 'error',
+        }, 5_000);
+      } catch { throw closed ? closedError() : unavailable(); }
       if (!response.ok) {
         const refused = response.status === 401 || response.status === 403;
         throw new TransportError(refused ? 'unauthorized' : 'unreachable',
@@ -193,7 +202,6 @@ export function createHermesTransport(options: HermesOptions, hooks: TransportHo
       const body = await response.json() as Wire;
       if (typeof body.ticket !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(body.ticket))
         throw new TransportError('incompatible', 'Hermes returned an invalid service upgrade ticket.');
-      if (closed) throw closedError();
       url.searchParams.set('ticket', body.ticket);
     } else url.searchParams.set('token', options.token!);
     return url;
@@ -202,7 +210,22 @@ export function createHermesTransport(options: HermesOptions, hooks: TransportHo
   function adopt(url: URL): Connection {
     let ws: WebSocket;
     try { ws = new WebSocket(url); } catch { throw unavailable(); }
-    connection = {ws, verified: false, lastReceivedAt: Date.now()};
+    const scope = Scope.makeUnsafe();
+    connection = {ws, verified: false, lastReceivedAt: Date.now(), scope};
+    const owned = connection;
+    Effect.runSync(Scope.addFinalizer(scope, Effect.sync(() => {
+      for (const [id, item] of pending) {
+        if (item.connection !== owned) continue;
+        pending.delete(id);
+        Effect.runSync(Scope.close(item.scope, Exit.void));
+        Deferred.doneUnsafe(item.deferred, Effect.fail(owned.closeReason ?? unavailable()));
+      }
+      owned.removeListeners?.();
+      owned.removeListeners = undefined;
+      if (ws.readyState < WebSocket.CLOSING) {
+        try { ws.close(); } catch { /* Already disconnected. */ }
+      }
+    })));
     return connection;
   }
   async function opened(owned: Connection): Promise<void> {
@@ -223,14 +246,14 @@ export function createHermesTransport(options: HermesOptions, hooks: TransportHo
           settle(error);
           disconnect(owned, error);
         }, 10_000);
-        ws.addEventListener('open', () => { if (connection === owned) settle(); });
-        ws.addEventListener('error', () => {
+        const onOpen = () => { if (connection === owned) settle(); };
+        const onError = () => {
           if (connection !== owned) return;
           const error = unavailable();
           settle(error);
           disconnect(owned, error);
-        });
-        ws.addEventListener('close', event => {
+        };
+        const onClose = (event: Event) => {
           if (connection !== owned) return;
           const code = (event as CloseEvent).code;
           const error = [4401, 4403].includes(code) || code === 1008 && /auth|token|unauthor/i.test((event as CloseEvent).reason ?? '')
@@ -238,8 +261,18 @@ export function createHermesTransport(options: HermesOptions, hooks: TransportHo
             : new TransportError('unreachable', 'Hermes disconnected during the request. Its outcome may be uncertain.');
           settle(error);
           disconnect(owned, error);
-        });
-        ws.addEventListener('message', event => receive(owned, String((event as MessageEvent).data)));
+        };
+        const onMessage = (event: Event) => receive(owned, String((event as MessageEvent).data));
+        ws.addEventListener('open', onOpen);
+        ws.addEventListener('error', onError);
+        ws.addEventListener('close', onClose);
+        ws.addEventListener('message', onMessage);
+        owned.removeListeners = () => {
+          ws.removeEventListener('open', onOpen);
+          ws.removeEventListener('error', onError);
+          ws.removeEventListener('close', onClose);
+          ws.removeEventListener('message', onMessage);
+        };
       });
     } catch (error) {
       throw await diagnoseOpeningFailure(error instanceof Error ? error : unavailable());
@@ -261,7 +294,10 @@ export function createHermesTransport(options: HermesOptions, hooks: TransportHo
       try {
         if (!current || current.ws.readyState !== WebSocket.OPEN) {
           if (current) disconnect(current, unavailable(), false);
-          current = adopt(await socketUrl());
+          const url = await socketUrl();
+          // close() may have run while the URL was being prepared. Never open a socket after it.
+          if (closed) throw closedError();
+          current = adopt(url);
           await opened(current);
           announced = rawRpc(current, 'client.capabilities', {server_requests: true});
         }
@@ -317,7 +353,7 @@ export function createHermesTransport(options: HermesOptions, hooks: TransportHo
       if (typeof frame.id === 'number' && !frame.method) {
         const item = pending.get(frame.id);
         if (item?.connection === current) {
-          clearTimeout(item.timer);
+          Effect.runSync(Scope.close(item.scope, Exit.void));
           pending.delete(frame.id);
           if (frame.error) {
             const code = frame.error.code;
@@ -328,9 +364,9 @@ export function createHermesTransport(options: HermesOptions, hooks: TransportHo
                 : `Hermes refused the request (code ${typeof code === 'number' ? code : 'unknown'}). Review before retrying.`,
               typeof code === 'number' ? code : undefined,
               typeof frame.error.message === 'string' ? frame.error.message.slice(0, 500) : undefined);
-            item.reject(error);
+            Deferred.doneUnsafe(item.deferred, Effect.fail(error));
             if (unauthorized) disconnect(current, error);
-          } else item.resolve(frame.result ?? {});
+          } else Deferred.doneUnsafe(item.deferred, Effect.succeed(frame.result ?? {}));
         }
         continue;
       }
@@ -370,15 +406,17 @@ export function createHermesTransport(options: HermesOptions, hooks: TransportHo
     const timeout = readMethods.has(method) || method === 'client.capabilities' || method === 'image.generate' && params.probe === true
       ? 10_000
       : 45_000;
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        const error = new TransportError('unreachable', `Hermes ${method} timed out. Do not replay an uncertain submission.`);
-        disconnect(current, error);
-      }, timeout);
-      pending.set(id, {connection: current, resolve, reject, timer});
-      try { current.ws.send(JSON.stringify({jsonrpc: '2.0', id, method, params})); }
-      catch { disconnect(current, new TransportError('unreachable', 'Hermes disconnected while sending. Its outcome may be uncertain.')); }
-    });
+    const deferred = Deferred.makeUnsafe<Wire, Error>();
+    const scope = Scope.makeUnsafe();
+    const timer = Effect.runFork(Effect.gen(function* () {
+      yield* Effect.sleep(timeout);
+      disconnect(current, new TransportError('unreachable', `Hermes ${method} timed out. Do not replay an uncertain submission.`));
+    }));
+    Effect.runSync(Scope.addFinalizer(scope, Effect.sync(() => timer.interruptUnsafe())));
+    pending.set(id, {connection: current, deferred, scope});
+    try { current.ws.send(JSON.stringify({jsonrpc: '2.0', id, method, params})); }
+    catch { disconnect(current, new TransportError('unreachable', 'Hermes disconnected while sending. Its outcome may be uncertain.')); }
+    return toPromise(Deferred.await(deferred), closedError);
   }
   async function http(path: string, init: RequestInit = {}): Promise<Response> {
     if (closed) throw closedError();
@@ -447,6 +485,7 @@ export function createHermesTransport(options: HermesOptions, hooks: TransportHo
   }
   function close(): void {
     closed = true;
+    Effect.runSync(Scope.close(setupScope, Exit.void));
     clearInterval(heartbeat);
     retryAt = 0;
     diagnostic = {connected: false, code: 'closed', detail: 'The Hermes connection is closed.'};

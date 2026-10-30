@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RefObject } from "react";
 import type { FileRef, SavedDraft } from "../shared/types";
 import { routeUrl, type ApiResponse } from "../shared/api";
@@ -263,7 +263,9 @@ export function useDraft({ botId, userId, identityEpoch, setError }: {
   }, [draft, previews]);
   // A failed file still blocks sending, so a message never goes out quietly missing it.
   const uploading = uploads.some(item => item.botId === botId);
-  return { draft, setDraft, draftReady, uploads: uploads.filter(item => item.botId === botId), previews, uploading, upload, retryUpload, cancelUpload, clearUploads };
+  // One array per change, so the composer is not handed a new list every render.
+  const shownUploads = useMemo(() => uploads.filter(item => item.botId === botId), [uploads, botId]);
+  return { draft, setDraft, draftReady, uploads: shownUploads, previews, uploading, upload, retryUpload, cancelUpload, clearUploads };
 }
 export function useDraftPersistence({ draft, setDraft, draftReady, botId, userId, identityEpoch, offline, appUnavailable, pending }: {
   draft: Draft;

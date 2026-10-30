@@ -1,4 +1,5 @@
 import webpush from "web-push";
+import { fromPromise, makeJobs } from "./effect-support.js";
 import { allowedIdentity, type Config } from "./config.js";
 import { maxDeliveryAttempts, type Store } from "./store.js";
 import type { Runtime } from "../shared/types.js";
@@ -25,10 +26,8 @@ export const approvalPassBudget = 20000;
 type Job = "runtime" | "outbox" | "live" | "approvals";
 export class BackgroundWorker {
   private timer?: ReturnType<typeof setInterval>;
-  private jobs = new Map<Job, Promise<void>>();
-  private halt!: () => void;
-  // Settles on stop, so shutdown never waits on an approval read.
-  private halted = new Promise<void>(resolve => { this.halt = resolve; });
+  private jobs = makeJobs<Job>(error => this.loop.failure(error));
+  private outbox?: Promise<void>;
   private outboxRequested = false;
   private stopped = false;
   private stopping?: Promise<void>;
@@ -87,18 +86,18 @@ export class BackgroundWorker {
   }
   stop(): Promise<void> {
     this.stopped = true;
-    this.halt();
     if (this.timer) clearInterval(this.timer);
     return this.stopping ??= (async () => {
       // Recovery can request another delivery pass while shutdown is draining.
-      while (this.jobs.size) await Promise.allSettled(this.jobs.values());
+      await this.jobs.interrupt("approvals");
+      await this.jobs.drain();
       this.closeApns?.();
     })();
   }
   async tick() {
     if (this.stopped) return;
     await Promise.all(this.schedule());
-    await this.jobs.get("outbox");
+    await this.outbox;
   }
   private schedule() {
     const outbox = this.flushOutbox();
@@ -112,27 +111,15 @@ export class BackgroundWorker {
       try { await this.live.tick(); } catch (error) { this.live.push.failure(error); }
     });
     // Its own job, so a slow Hermes read never holds up discovery or receipt recovery.
-    const approvals = this.runJob("approvals", () => this.reconcileApprovals());
+    const approvals = this.jobs.run("approvals", fromPromise(signal => this.reconcileApprovals(signal)));
     return [outbox, runtime, live, approvals];
   }
   private runJob(name: Job, work: () => Promise<void>, rerun?: () => boolean) {
-    const running = this.jobs.get(name);
-    if (running) return running;
-    const job = Promise.resolve().then(async () => {
-      try {
-        do { await work(); } while (rerun?.());
-      } catch (error) {
-        this.loop.failure(error);
-      } finally {
-        this.jobs.delete(name);
-      }
-    });
-    this.jobs.set(name, job);
-    return job;
+    return this.jobs.run(name, fromPromise(() => work()), rerun);
   }
   private flushOutbox() {
     this.outboxRequested = true;
-    return this.runJob("outbox", async () => {
+    return this.outbox = this.runJob("outbox", async () => {
       this.outboxRequested = false;
       await this.processOutbox();
     }, () => this.outboxRequested);
@@ -191,7 +178,7 @@ export class BackgroundWorker {
    * Now and then, checks a few assistants with an approval still counted against Hermes's open
    * requests, so one answered outside the app stops counting even if nobody opens its chat.
    */
-  private async reconcileApprovals(now = Date.now()) {
+  private async reconcileApprovals(signal: AbortSignal, now = Date.now()) {
     if (now - this.approvalsCheckedAt < approvalCheckInterval) return;
     this.approvalsCheckedAt = now;
     const unresolved = this.store.unresolvedApprovalBots(now);
@@ -199,14 +186,18 @@ export class BackgroundWorker {
     const due = unresolved.sort((a, b) => (this.approvalChecks.get(a) ?? 0) - (this.approvalChecks.get(b) ?? 0)).slice(0, approvalChecksPerPass);
     let timer: ReturnType<typeof setTimeout> | undefined;
     const outOfTime = new Promise<undefined>(resolve => { timer = setTimeout(() => resolve(undefined), approvalPassBudget); });
+    const interrupted = new Promise<undefined>(resolve => {
+      if (signal.aborted) resolve(undefined);
+      else signal.addEventListener("abort", () => resolve(undefined), { once: true });
+    });
     try {
       for (const botId of due) {
         this.approvalChecks.set(botId, now);
         try {
           const readAt = Date.now();
           // A read that outlives the pass or the worker is never applied.
-          const conversation = await Promise.race([this.runtime.conversation(botId, { history: false }), outOfTime, this.halted]);
-          if (!conversation) return;
+          const conversation = await Promise.race([this.runtime.conversation(botId, { history: false }), outOfTime, interrupted]);
+          if (!conversation || signal.aborted) return;
           this.store.reconcileApprovals(botId, conversation.requestSessionId, conversation.approvals.map(approval => approval.id), readAt);
         } catch { /* Unreadable now; it stays counted and is checked again later. */ }
       }
