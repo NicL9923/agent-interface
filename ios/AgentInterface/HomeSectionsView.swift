@@ -52,7 +52,7 @@ struct FollowedAssistantsView: View {
           }
         }
       } footer: {
-        Text("Shared-task notifications already go to participants. Follow an assistant to receive all their activity.")
+        Text("Get a notification for every reply and update from these assistants. Shared tasks already notify the people in them.")
       }.disabled(store.sessionExpired)
     }.householdListBackground().navigationTitle("Following").navigationBarTitleDisplayMode(.inline)
   }
@@ -95,7 +95,7 @@ struct HomeSectionRows: View {
     HStack(spacing: 10) {
       Image(systemName: "plus.circle.fill").foregroundStyle(Palette.accent).accessibilityHidden(true)
       TextField("New section name", text: $newName, prompt: Text("New section").foregroundStyle(Palette.accent))
-        .submitLabel(.done).onSubmit(add).accessibilityIdentifier("newSectionName")
+        .submitLabel(.done).onSubmit(add).onChange(of: newName) { _, _ in addError = nil }.accessibilityIdentifier("newSectionName")
       if !trimmed.isEmpty {
         Button("Add", action: add).buttonStyle(.accentProminent).controlSize(.small).tint(Palette.accent)
           .accessibilityIdentifier("addSection")

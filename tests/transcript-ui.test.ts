@@ -546,6 +546,21 @@ describe("find in chat", () => {
     expect(count()).toBe("3 of 4");
   });
 
+  it("pins a replacement when an edited message no longer matches", async () => {
+    searchHits = [];
+    await render();
+    await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "f", metaKey: true, cancelable: true })));
+    await typeInto(find(), "gate");
+    await advance(300);
+    expect(count()).toBe("2 of 2");
+    conversation = { ...conversation, messages: conversation.messages.map(message => message.id === "a" ? answer("a", "No updates.") : message) };
+    await changed();
+    expect(count()).toBe("1 of 1");
+    conversation = { ...conversation, messages: [...conversation.messages, answer("newest", "Another gate update.")] };
+    await changed();
+    expect(count()).toBe("1 of 2");
+  });
+
   it("opens with Cmd+F, counts loaded matches, then merges unloaded history and opens it", async () => {
     await render();
     const before = labelled("Copy reply");

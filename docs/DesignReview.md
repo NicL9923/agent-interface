@@ -78,21 +78,21 @@ References collected October 25, 2026. External artwork is reference material on
 | Logins and secure requests | Desktop/phone web and current iPhone logins captured | Complete | Combined whole-area rounds: 7.8, 8.8, 9.1 |
 | Search, saved items and automations | Desktop/phone web and current iPhone captures | Complete | Whole-area rounds: 8.2, 8.8, 9.0; final CSS and Back-state fixes applied directly |
 | Group chats and threads | Desktop/phone web and iPhone conversation captured | Complete | Whole-area rounds: 7.0, 8.6, 9.0; final scroll follow-ups applied directly |
-| Settings, following and home sections | Desktop/phone web and current iPhone front captured | In progress | Whole-area rounds: 8.0, 8.5; final fixes implemented, round 3 pending |
+| Settings, following and home sections | Desktop/phone web and current iPhone front captured | Complete | Whole-area rounds: 8.0, 8.5, 9.0 |
 | Integrations | Desktop/phone web and current iPhone captured | Complete | Combined whole-area rounds: 7.8, 8.8, 9.1 |
 | Computer and terminal | Desktop/phone web and current iPhone viewer captured | In progress | Whole-area round 1 pending |
 | Hermes updates and recovery | Pending | Pending | Pending |
 | Sign-in and connection recovery | Pending | Pending | Pending |
-| Command palette and keyboard help | Desktop/phone web captured | In progress | Included in Settings review, round 1: 8.0 |
+| Command palette and keyboard help | Desktop/phone web captured | Complete | Included in Settings final whole-area score: 9.0 |
 | Attachments, upload failures and large paste | Pending | Pending | Pending |
-| Find in conversation | Desktop/phone web captured and exercised | In progress | Included in Settings review, round 1: 8.0 |
+| Find in conversation | Desktop/phone web captured and exercised | Complete | Included in Settings final whole-area score: 9.0 |
 | Voice recording and playback | Pending | Pending | Pending |
 | Status dock, connection notices and app updates | Pending | Pending | Pending |
 | Toasts, undo and stop confirmation | Pending | Pending | Pending |
 | Notification setup and settings | Pending | Pending | Pending |
 | Apple device connections | Pending | Pending | Pending |
 | Offline library | Pending | Pending | Pending |
-| iOS quick switcher | Pending | Pending | Pending |
+| iOS quick switcher | Source reviewed; gestures not captured | Complete in Settings scope | Settings whole-area score 9.0; native interaction remains unverified |
 | Empty conversation | Pending | Pending | Pending |
 | Empty household, app loading and load failure | Pending | Pending | Pending |
 | iOS share extension | Pending | Pending | Pending |
@@ -778,3 +778,16 @@ now restores its initial preferences even after failure. The completed capture
 contains both widths; the error frames were refreshed after their final CSS
 polish. Browser and preview server are closed. The third review is final; any
 remaining issues will be recorded in the PR and the review will move on.
+
+
+Settings finished its third and final round at 9.0/10, so 20 of 25 grouped areas
+have passed. The review confirmed all seven round-2 findings were addressed,
+with native interactions and incoming-Find behavior explicitly labeled as
+source or test evidence. Four small follow-ups were applied directly: align the
+rename help with its field, clear the native Add error as the name changes, use
+the same Following explanation, and pin a replacement Find result if its
+previous message stops matching. A regression edits the selected message then
+adds a new matching reply, checking that the replacement remains selected.
+All 109 focused checks and the web and native builds pass. Native gestures,
+VoiceOver, live saves, dark mode and large text remain unverified. No fourth
+Settings review is planned. Computer and terminal's first review is underway.

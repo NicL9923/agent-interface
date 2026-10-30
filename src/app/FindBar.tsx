@@ -57,8 +57,8 @@ export function FindBar({ botId, conversation, scroll, openMessage, onClose }: {
   const index = chosen >= 0 ? chosen : matches.length - 1;
   const current = matches[index];
   useEffect(() => {
-    if (current && selected === null) setSelected(current.messageId);
-  }, [current?.messageId, selected]);
+    if (current && chosen < 0) setSelected(current.messageId);
+  }, [current?.messageId, chosen]);
   useEffect(() => {
     if (current?.loaded && needle) openMessage(current.messageId, false, needle);
   }, [current?.messageId, current?.loaded, needle, openMessage]);

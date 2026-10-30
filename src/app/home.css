@@ -632,7 +632,7 @@ button.settings-row:hover:enabled { background: color-mix(in srgb, var(--accent-
 }
 
 .section-pinned-count { white-space: nowrap; }
-.section-name-help { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 4px 4px 12px; }
+.section-name-help { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 4px 16px 12px; }
 .section-name-help .settings-footnote { margin: 0; }
 .section-name-help button { min-height: 44px; flex-shrink: 0; font-size: 0.8125rem; }
 .section-rename input[aria-invalid="true"]:focus-visible { outline-color: var(--danger); }
