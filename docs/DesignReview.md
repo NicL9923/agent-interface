@@ -433,9 +433,10 @@ Learning adds a short introduction and uses the shared muted text color.
 The desktop and phone browser check exercised cancelling the policy confirmation,
 confirming the change, restoring required approval and opening a diff. Targeted
 tests cover confirmation, re-enabling approval, collapse and fresh revision loads.
-The native app compiles; its new introductory line still needs a fresh screenshot
-after the host CoreSimulator update. Round 2 reviews the changed web views and
-keeps that native visual limit explicit.
+The native app compiles. Round 2 used the changed web views and kept the native
+visual limit explicit. Direct captures of the compiled Debug app now run on the
+installed simulator without XCTest, so the current iPhone view is available for
+round 3, including its introduction, pending count and labeled source.
 
 [Learning round 2](evidence/design-review/learning-screen-round2.md) scored 8.5
 and confirmed the six original web findings fixed. The final refinement clears
@@ -444,3 +445,9 @@ specifically, fills complete diff lines with their change color, and stacks only
 this policy dialog's buttons. Native pending rows and review headers now label
 the source consistently. Round 3 is the final review for this screen. Any issues
 remaining below 9 will be recorded in the PR before moving on.
+
+The current native Learning capture shows a populated pending row and installed
+skill. The introduction sits in the first section header. Learning, Routines,
+Connections and Logins were captured in one locked iPhone batch, with shutdown
+before the command returned. This removes the visual-capture blocker; XCTest's
+platform update is still separate from these direct app captures.

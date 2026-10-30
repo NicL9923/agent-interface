@@ -58,9 +58,7 @@ struct HermesLearningView: View {
   }
   var body: some View {
     Form {
-      Text("Inspect reusable instructions and review changes the assistant wants to save.")
-        .font(.subheadline).foregroundStyle(Palette.muted).listRowBackground(Color.clear)
-      HermesAutomationStatus(control: control)
+      HermesAutomationStatus(control: control, introduction: "Inspect reusable instructions and review changes the assistant wants to save.")
       if let state = control.value?.skills {
         if !state.supported {
           Section { Text(state.reason ?? "Learning review is unavailable on this Hermes installation.").foregroundStyle(Palette.muted) }

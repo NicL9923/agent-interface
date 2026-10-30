@@ -6,6 +6,13 @@
   /// UI test transport only. Shipping Release builds contain no fixture transport.
   /// Simulator results validate native interaction, not Hermes or APNs execution.
   @MainActor enum DebugFixtures {
+    /// Direct simulator captures can open a settings page without XCTest navigation.
+    static var captureSettingsTab: String? {
+      let environment = ProcessInfo.processInfo.environment
+      guard environment["AGENT_INTERFACE_UI_FIXTURE"] == "1",
+        let tab = environment["AGENT_INTERFACE_UI_CAPTURE_SETTINGS_TAB"], !tab.isEmpty else { return nil }
+      return tab
+    }
     /// Test-only file selection. The normal importer stays unchanged without an explicit fixture.
     static func portraitUploadURL() throws -> URL? {
       let environment = ProcessInfo.processInfo.environment

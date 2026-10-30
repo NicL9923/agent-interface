@@ -330,6 +330,7 @@ struct HermesAutomationStatus: View {
   var work = false
   var showingReceipt = false
   var suppressRefreshFootnote = false
+  var introduction: String?
   @Environment(AppStore.self) private var store
   // The goal card owns the server receipt. Keep any distinct reconciliation guidance here.
   private var displayedError: String? {
@@ -346,14 +347,16 @@ struct HermesAutomationStatus: View {
   var body: some View {
     if !work && !compact {
       Section {
-        Text("Managed by Hermes").font(.caption).foregroundStyle(.secondary)
-        if !store.connected { Text("Connect to Hermes to make changes.").foregroundStyle(.secondary) }
+        Text("Managed by Hermes").font(.caption).foregroundStyle(Palette.muted)
+        if !store.connected { Text("Connect to Hermes to make changes.").foregroundStyle(Palette.muted) }
         if let error = control.error { ErrorBanner(message: error) }
         if let notice = control.notice { Text(notice).font(.footnote).accessibilityAddTraits(.updatesFrequently) }
         if control.loading { ProgressView("Refreshing assistant controls") }
         Button("Refresh status") { Task { await control.manualRefresh(store) } }
           .disabled(control.busy || control.loading).accessibilityIdentifier("automation.refresh")
         if control.needsRefresh { Text("Refresh and review the current status before making another change.").font(.footnote) }
+      } header: {
+        if let introduction { Text(introduction).font(.subheadline).foregroundStyle(Palette.muted).textCase(nil) }
       }
     } else if !compact || displayedError != nil || control.notice != nil || control.needsRefresh || control.loading || !store.connected {
       Section {

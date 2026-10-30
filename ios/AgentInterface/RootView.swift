@@ -52,6 +52,13 @@ struct RootView: View {
     .homeSignals(haptic: store.haptic, command: store.keyboardCommand, run: run)
     .modifier(sheets)
     .onAppear { checkShares() }
+    #if DEBUG
+    .onChange(of: store.bootstrap?.user.id, initial: true) { _, id in
+      if id != nil, DebugFixtures.captureSettingsTab != nil, let bot = store.bootstrap?.bots.first {
+        settingsBot = bot
+      }
+    }
+    #endif
     .onChange(of:store.sessionExpired) { _,_ in checkShares() }
     .onChange(of:scenePhase) { _, phase in if phase == .active { checkShares() } }
     .onChange(of:store.scope) { _, scope in scopeChanged(scope) }

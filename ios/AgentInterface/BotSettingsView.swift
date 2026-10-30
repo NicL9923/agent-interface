@@ -7,6 +7,9 @@ struct BotSettingsView: View {
   init(bot: Bot?, close: (() -> Void)? = nil) {
     initialBot = bot
     self.close = close
+    #if DEBUG
+    if let tab = DebugFixtures.captureSettingsTab, tabs.contains(tab) { _tab = State(initialValue: tab) }
+    #endif
   }
   /// Set when creation succeeded but the avatar did not save, turning the sheet into that
   /// assistant's settings so the chosen look can be retried instead of lost.
