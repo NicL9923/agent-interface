@@ -1,5 +1,5 @@
 #!/bin/bash
-# Capture already-built Debug settings pages using the installed simulator runtime.
+# Capture already-built Debug settings and discovery pages using the installed simulator runtime.
 set -euo pipefail
 if [[ $# -lt 4 ]]; then
   echo 'Usage: capture-settings-ios.sh APP_PATH SIMULATOR_UUID OUTPUT_DIR TAB [TAB...]' >&2
@@ -23,10 +23,19 @@ trap 'rm -f "$capture_tmp"; "$simctl" shutdown "$simulator" >/dev/null 2>&1 || t
 "$simctl" ui "$simulator" appearance light
 "$simctl" install "$simulator" "$app"
 for tab in "$@"; do
-  case "$tab" in Details|Avatar|Connections|Tools|Skills|Routines|Work|Learning|Memory|Logins) ;; *) echo "Unknown settings page: $tab" >&2; exit 2 ;; esac
+  settings_tab=$tab
+  discovery_tab=""
+  case "$tab" in
+    Search) settings_tab=""; discovery_tab=search ;;
+    Saved) settings_tab=""; discovery_tab=saved ;;
+    Automations) settings_tab=""; discovery_tab=automations ;;
+    Details|Avatar|Connections|Tools|Skills|Routines|Work|Learning|Memory|Logins) ;;
+    *) echo "Unknown capture page: $tab" >&2; exit 2 ;;
+  esac
   SIMCTL_CHILD_AGENT_INTERFACE_UI_FIXTURE=1 \
   SIMCTL_CHILD_AGENT_INTERFACE_UI_AUTOMATION=1 \
-  SIMCTL_CHILD_AGENT_INTERFACE_UI_CAPTURE_SETTINGS_TAB="$tab" \
+  SIMCTL_CHILD_AGENT_INTERFACE_UI_CAPTURE_SETTINGS_TAB="$settings_tab" \
+  SIMCTL_CHILD_AGENT_INTERFACE_UI_CAPTURE_DISCOVERY_TAB="$discovery_tab" \
     "$simctl" launch --terminate-running-process "$simulator" "$bundle"
   sleep "${NATIVE_CAPTURE_DELAY:-5}"
   # CoreSimulator cannot write directly to the external volume. Use its own

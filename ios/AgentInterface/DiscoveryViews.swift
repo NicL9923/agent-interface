@@ -45,6 +45,14 @@ struct DiscoveryView: View {
   /// The query the shown results answer, so a debounce after Enter does not search again.
   @State private var searchedQuery = ""
   @State private var searching = false
+  init() {
+    #if DEBUG
+    if let captureTab = DebugFixtures.captureDiscoveryTab {
+      _tab = State(initialValue: captureTab)
+      if captureTab == "search" { _query = State(initialValue: "dinner") }
+    }
+    #endif
+  }
   var body: some View {
     ScrollViewReader { proxy in
       list.onChange(of: scrollRequest) { _, _ in

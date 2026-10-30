@@ -57,6 +57,7 @@ struct RootView: View {
       if id != nil, DebugFixtures.captureSettingsTab != nil, let bot = store.bootstrap?.bots.first {
         settingsBot = bot
       }
+      if id != nil { captureDiscoveryIfAsked() }
     }
     #endif
     .onChange(of:store.sessionExpired) { _,_ in checkShares() }
@@ -66,7 +67,12 @@ struct RootView: View {
     .onChange(of: store.todayRequest, initial: true) { _, request in if request != nil { destination = .today; path = [.today]; compactColumn = .detail } }
     .onChange(of: store.leftBotId, initial: true) { _, id in if let id { left(id) } }
     .onChange(of: store.conversationRequest, initial: true) { _, request in
-      if request != nil { destination = .conversation; openChat(); compactColumn = .detail }
+      if request != nil {
+        destination = .conversation; openChat(); compactColumn = .detail
+        #if DEBUG
+        captureDiscoveryIfAsked()
+        #endif
+      }
     }
     .onChange(of: store.bootstrap?.user.id) { old, new in if let old, old != new { accountChanged() } }
   }
@@ -121,7 +127,16 @@ struct RootView: View {
     destination = today ? .today : .conversation
     path = today ? [.today] : []
     compactColumn = .sidebar
+    #if DEBUG
+    captureDiscoveryIfAsked()
+    #endif
   }
+  #if DEBUG
+  private func captureDiscoveryIfAsked() {
+    guard DebugFixtures.captureDiscoveryTab != nil else { return }
+    destination = .find; path = [.search]; compactColumn = .detail
+  }
+  #endif
   private func left(_ id: String) {
     if settingsBot?.id == id { settingsBot = nil }
     if store.routineResult?.botId == id { store.routineResult = nil }

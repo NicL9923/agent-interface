@@ -13,6 +13,14 @@
         let tab = environment["AGENT_INTERFACE_UI_CAPTURE_SETTINGS_TAB"], !tab.isEmpty else { return nil }
       return tab
     }
+    /// Direct captures of the discovery tabs use the same synthetic transport.
+    static var captureDiscoveryTab: String? {
+      let environment = ProcessInfo.processInfo.environment
+      guard environment["AGENT_INTERFACE_UI_FIXTURE"] == "1",
+        let tab = environment["AGENT_INTERFACE_UI_CAPTURE_DISCOVERY_TAB"],
+        ["search", "saved", "automations"].contains(tab) else { return nil }
+      return tab
+    }
     /// Test-only file selection. The normal importer stays unchanged without an explicit fixture.
     static func portraitUploadURL() throws -> URL? {
       let environment = ProcessInfo.processInfo.environment

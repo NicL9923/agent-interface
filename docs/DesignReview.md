@@ -76,7 +76,7 @@ References collected October 25, 2026. External artwork is reference material on
 | Learning | Desktop/phone web and current iPhone views captured | Complete | Whole-screen rounds: 7.0, 8.5, 9.0 |
 | Routines and results | Desktop/phone web and current iPhone views captured | Complete | Whole-screen rounds: 7.2, 8.6, 9.1 |
 | Logins and secure requests | Desktop/phone web and current iPhone logins captured | Complete | Combined whole-area rounds: 7.8, 8.8, 9.1 |
-| Search, saved items and automations | Pending | Pending | Pending |
+| Search, saved items and automations | Desktop/phone web plus current iPhone tabs captured | In progress | Whole-area round 1 requested |
 | Group chats and threads | Pending | Pending | Pending |
 | Settings, following and home sections | Pending | Pending | Pending |
 | Integrations | Desktop/phone web and current iPhone captured | Complete | Combined whole-area rounds: 7.8, 8.8, 9.1 |
@@ -557,3 +557,18 @@ web captures show the wider desktop cards. The existing native capture remains
 valid. Real clipboard, provider sign-in, native forms/dialogs, VoiceOver, full
 dark mode and large text remain outside the observed coverage. Search, Saved
 items and Automations are next.
+
+
+## Search, Saved items and Automations
+
+Baseline captures cover Search results, read-only conversation history, Saved
+items and Automations at desktop and phone web widths. The agent opened a search
+result, saved the conversation pointer, reopened it from Saved items, and paused
+then resumed the synthetic routine. Native captures render each discovery tab
+from the compiled Debug app. A fixture-only startup shortcut opens the requested
+tab without XCTest navigation; it is excluded from Release behavior.
+
+These are synthetic search/history/schedule/usage examples. Native interaction,
+real search providers, scheduling, notifications, VoiceOver, dark mode and large
+text have not been exercised for this area. Its first whole-area review is
+pending.
