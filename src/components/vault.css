@@ -1,5 +1,5 @@
 .vault-panel, .vault-form, .secure-request form { display: grid; gap: 1rem; }
-.vault-heading, .vault-entry-heading, .vault-source { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.vault-heading, .vault-entry-heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
 .vault-entry, .vault-source { padding: 1rem 0; border-bottom: 1px solid var(--line); }
 .vault-entry h3, .vault-source p { margin: 0; }
 .vault-entry p { margin: .4rem 0; overflow-wrap: anywhere; }
@@ -16,6 +16,22 @@
 @media (max-width: 620px) {
   .credential-context { grid-template-columns: 1fr; }
   .credential-context dd { margin-bottom: .4rem; }
-  .vault-heading, .vault-source, .vault-entry-heading { align-items: flex-start; flex-direction: column; }
+  .vault-heading, .vault-entry-heading { align-items: flex-start; flex-direction: column; }
   .vault-heading .actions, .vault-source-actions { width: 100%; }
+}
+
+.vault-panel .vault-entry h4 { margin: 0; font-size: .9375rem; line-height: 1.5; }
+.vault-entry .vault-origin { font-weight: 400; color: var(--muted); font-size: .875rem; }
+.vault-source-tag { padding: 3px 7px; border-radius: 6px; color: var(--muted); background: var(--rail); font-size: .8125rem; }
+.vault-source { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.vault-source-summary { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.vault-source-actions .checkbox-label { min-height: 44px; }
+.vault-unlock-form { display: grid; gap: 12px; padding: 14px; border-radius: 12px; background: var(--rail); }
+.vault-form label, .vault-unlock-form label { margin: 0; font-size: .875rem; }
+.vault-form > p.muted { margin: 0; font-size: .875rem; line-height: 1.6; }
+.vault-panel .actions { gap: 10px; flex-wrap: wrap; }
+.vault-panel button { min-height: 44px; }
+.vault-reload { justify-self: start; }
+@media (max-width: 620px) {
+  .vault-source-summary { flex-direction: column; align-items: flex-start; }
 }

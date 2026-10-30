@@ -75,11 +75,11 @@ References collected October 25, 2026. External artwork is reference material on
 | Work event triggers | Web and native comparisons available | In progress | Whole-screen round 1: 7.6. Fixes implemented; targeted native recapture pending. Six native large-text frames remain accepted |
 | Learning | Desktop/phone web and current iPhone views captured | Complete | Whole-screen rounds: 7.0, 8.5, 9.0 |
 | Routines and results | Desktop/phone web and current iPhone views captured | Complete | Whole-screen rounds: 7.2, 8.6, 9.1 |
-| Logins and secure requests | Desktop/phone web and current iPhone logins captured | In progress | Round 1 requested |
+| Logins and secure requests | Desktop/phone web and current iPhone logins captured | In progress | Combined round 1: 7.8; round 2 requested after fixes |
 | Search, saved items and automations | Pending | Pending | Pending |
 | Group chats and threads | Pending | Pending | Pending |
 | Settings, following and home sections | Pending | Pending | Pending |
-| Integrations | Desktop/phone web and current iPhone captured | In progress | Reviewed with secure requests, round 1 requested |
+| Integrations | Desktop/phone web and current iPhone captured | In progress | Combined round 1: 7.8; round 2 requested after fixes |
 | Computer and terminal | Pending | Pending | Pending |
 | Hermes updates and recovery | Pending | Pending | Pending |
 | Sign-in and connection recovery | Pending | Pending | Pending |
@@ -500,3 +500,27 @@ run the routine. Recipient checkbox spacing remains a minor polish item in
 currently relies on retaining the cards during reload; preserve that behavior if
 the loading presentation changes. Native editor/results interaction, VoiceOver,
 dark mode, large text and live routine execution remain outside the captures.
+
+
+## Secure requests, logins and integrations
+
+[Round 1](evidence/design-review/security-integrations-screen-review.md) scored
+this area 7.8. The follow-up gives vault unlock its own full-width form and one
+primary submit, labels source checkboxes by service, and separates item titles,
+website addresses and vault-source tags. Add login focuses its first field, and
+inline removal/disconnect confirmations focus the safe choice. Cancel returns to
+the trigger; after successful removal, focus moves to a surviving control.
+
+Both clients recommend checking configured or unavailable connections and
+reconnecting expired or permission-limited ones. Connection card text is larger.
+Expired uses one status name, with warning color on native. New sign-in flows name
+the service, align their cancel control and offer a copy-code button with explicit
+success or failure feedback.
+
+The agent used desktop and phone Chromium to open and cancel add/unlock forms,
+check focus recovery, open and cancel both confirmations, inspect recommended
+connection actions and open the synthetic GitHub sign-in flow. A new compiled
+iPhone screenshot shows the native action emphasis and Expired tint. Existing
+secure-request and native Logins captures remain valid. Clipboard success/failure
+has a focused mock test; actual clipboard access, real provider sign-in, native
+forms/dialogs, VoiceOver, dark mode and large text were not exercised.

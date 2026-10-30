@@ -83,7 +83,7 @@ it("preserves exact native environment values and labels their distinct storage"
 it("adds a login through the dedicated vault route and requires review after uncertainty", async () => {
   vi.mocked(api).mockResolvedValue(vault); vi.mocked(write).mockRejectedValue(new ApiError("password leaked upstream", 502));
   await render(createElement(VaultPanel, { botId: "ranch" })); await click("Add login");
-  await type("Label", "Ranch account"); await type("Website origin", "https://example.invalid"); await type("Username, email or phone", "ranch@example.invalid"); await type("Password", "private-password"); await submit();
+  await type("Label", "Ranch account"); await type("Website address", "https://example.invalid"); await type("Email", "ranch@example.invalid"); await type("Password", "private-password"); await submit();
   expect(write).toHaveBeenCalledWith("/bots/ranch/vault/logins", { label: "Ranch account", origin: "https://example.invalid", identifierType: "email", identifier: "ranch@example.invalid", password: "private-password" });
   expect(container.textContent).not.toContain("leaked upstream"); expect(container.querySelector<HTMLInputElement>('input[type="password"]')!.value).toBe("");
   await submit(); expect(write).toHaveBeenCalledOnce(); expect(container.textContent).toContain("Hermes could not confirm this change");
@@ -91,13 +91,20 @@ it("adds a login through the dedicated vault route and requires review after unc
   expect(container.textContent).not.toContain("Hermes could not confirm this change"); expect(button("Add login").disabled).toBe(false);
 });
 it("requires local deletion confirmation and leaves external entries to their owner", async () => {
-  vi.mocked(api).mockResolvedValue(vault); vi.mocked(write).mockResolvedValue({ removed: true }); await render(createElement(VaultPanel, { botId: "ranch" }));
+  vi.mocked(api).mockResolvedValue(vault);
+  vi.mocked(write).mockImplementation(async () => { vi.mocked(api).mockResolvedValue({ ...vault, items: vault.items.filter(item => item.id !== "local-login") }); return { removed: true }; });
+  await render(createElement(VaultPanel, { botId: "ranch" }));
   expect(container.querySelectorAll(".vault-entry button")).toHaveLength(1); await click("Remove..."); expect(write).not.toHaveBeenCalled();
+  expect(document.activeElement).toBe(button("Keep login"));
+  expect(document.getElementById(button("Keep login").getAttribute("aria-describedby")!)?.textContent).toContain("Local");
+  await click("Keep login"); expect(document.activeElement).toBe(button("Remove..."));
+  await click("Remove...");
   await click("Remove login"); expect(write).toHaveBeenCalledWith("/bots/ranch/vault/logins/local-login", {}, "DELETE");
+  expect(document.activeElement).toBe(button("Add login"));
 });
 it("keeps the password when a website page was entered instead of an origin", async () => {
   vi.mocked(api).mockResolvedValue(vault); await render(createElement(VaultPanel, { botId: "ranch" })); await click("Add login");
-  await type("Website origin", "https://example.invalid/login?next=account"); await type("Password", "preserved-password"); await submit();
+  await type("Website address", "https://example.invalid/login?next=account"); await type("Password", "preserved-password"); await submit();
   expect(write).not.toHaveBeenCalled(); expect(container.querySelector<HTMLInputElement>('input[type="password"]')!.value).toBe("preserved-password");
   expect(container.textContent).toContain("through the hostname");
 });
@@ -130,4 +137,29 @@ it("warns that an http destination does not use HTTPS and cancels without the de
   expect(container.textContent).toContain("This address does not use HTTPS.");
   await type("Password", "never-sent"); await click("Cancel request");
   expect(write).toHaveBeenCalledWith("/bots/patch/secure-requests/native-request", { epoch: "epoch", sessionId: "session", method: "vault.save_login", cancel: true });
+});
+
+
+it("focuses the add form, matches the identifier label, and returns to Add login on cancel", async () => {
+  vi.mocked(api).mockResolvedValue(vault); await render(createElement(VaultPanel, { botId: "ranch" }));
+  await click("Add login");
+  expect(button("Add login").getAttribute("aria-expanded")).toBe("true");
+  expect(document.activeElement?.getAttribute("placeholder")).toBe("Ranch supply account");
+  const select = container.querySelector("select")!;
+  await act(async () => { select.value = "phone"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+  await type("Phone", "555-0100");
+  await click("Cancel"); expect(document.activeElement).toBe(button("Add login"));
+  expect(button("Add login").getAttribute("aria-expanded")).toBe("false");
+});
+it("opens one source unlock form, clears its secret on cancel and restores focus", async () => {
+  const source = { name: "onepassword" as const, displayName: "1Password", enabled: true, needsUnlock: true, unlocked: false, installed: true, canToggle: true, canUnlock: true, canLock: false };
+  vi.mocked(api).mockResolvedValue({ ...vault, sources: [source] });
+  await render(createElement(VaultPanel, { botId: "ranch" })); await click("Unlock");
+  expect(Array.from(container.querySelectorAll("button")).some(item => item.textContent === "Unlock")).toBe(false);
+  const field = container.querySelector<HTMLInputElement>('input[type="password"]')!;
+  expect(document.activeElement).toBe(field);
+  await type("Master password", "do-not-retain"); await click("Cancel");
+  expect(document.activeElement).toBe(button("Unlock")); await click("Unlock");
+  expect(container.querySelector<HTMLInputElement>('input[type="password"]')!.value).toBe("");
+  expect(write).not.toHaveBeenCalled();
 });
