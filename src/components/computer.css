@@ -88,7 +88,7 @@
 
 /* Match the emulator theme in the remainder below its last whole text row. */
 .computer-terminal .xterm-viewport { background-color: #151c18; }
-.desktop-stage.is-controlling { box-shadow: inset 0 0 0 2px var(--accent); outline: 2px solid var(--accent); outline-offset: -2px; }
+.desktop-stage.is-controlling { outline: 2px solid var(--accent); outline-offset: 2px; }
 .terminal-tools [aria-expanded="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
 @media (max-width: 620px) {
   .desktop-stage { flex: 0 0 auto; min-height: 0; aspect-ratio: var(--desktop-aspect, 1.6); max-height: 60dvh; }

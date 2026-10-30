@@ -80,7 +80,7 @@ References collected October 25, 2026. External artwork is reference material on
 | Group chats and threads | Desktop/phone web and iPhone conversation captured | Complete | Whole-area rounds: 7.0, 8.6, 9.0; final scroll follow-ups applied directly |
 | Settings, following and home sections | Desktop/phone web and current iPhone front captured | Complete | Whole-area rounds: 8.0, 8.5, 9.0 |
 | Integrations | Desktop/phone web and current iPhone captured | Complete | Combined whole-area rounds: 7.8, 8.8, 9.1 |
-| Computer and terminal | Desktop/phone web and current iPhone viewer captured | In progress | Whole-area rounds: 7.6, 8.6; final fixes captured, round 3 pending |
+| Computer and terminal | Desktop/phone web and current iPhone viewer captured | Complete | Whole-area rounds: 7.6, 8.6, 9.0 |
 | Hermes updates and recovery | Pending | Pending | Pending |
 | Sign-in and connection recovery | Pending | Pending | Pending |
 | Command palette and keyboard help | Desktop/phone web captured | Complete | Included in Settings final whole-area score: 9.0 |
@@ -832,3 +832,14 @@ and inspected fresh control and Shell ended frames at both widths. The native
 Watching view was captured again; native after-takeover remains source-only.
 The browser, preview server and simulator are closed. The third review is final;
 remaining issues will go into the PR without a fourth review.
+
+
+Computer finished at 9.0 in its third and final round, bringing progress to
+21 of 25 grouped areas. The review confirmed the ended-shell warning is gone
+and no label obscures remote controls. Small follow-ups move the web outline
+outside the stage, test its connection to confirmed control and lost ownership,
+and let native browser links stack when their row cannot fit. Swift overlay
+cleanup is included. The watch-mode headline deliberately emphasizes local
+Watching, rather than account ownership; Take over to use it here explains the
+next action. All 40 focused checks and both builds pass. Native large-text
+rendering and gestures remain unverified. No fourth review is planned.

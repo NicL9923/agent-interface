@@ -88,10 +88,9 @@ struct ComputerView: View {
       toolbar
       if let message = error ?? desktop.error ?? status?.reason { notice(message) }
       screen.frame(maxWidth: .infinity, maxHeight: .infinity)
-        .overlay(alignment: .topTrailing) {
+        .overlay {
           if input {
             Rectangle().strokeBorder(Palette.accent, lineWidth: 2).allowsHitTesting(false)
-
           }
         }
       footer
@@ -179,14 +178,18 @@ struct ComputerView: View {
   private var footer: some View {
     VStack(alignment: .leading, spacing: 8) {
       if let url = try? store.api?.url("/?computer=1"), let terminalURL = try? store.api?.url("/?computer=1&computerTab=terminal") {
-        HStack(spacing: 16) {
-          Link(destination: url) { Label("Open in Safari", systemImage: "safari") }.accessibilityIdentifier("computerSafari")
-          Link(destination: terminalURL) { Label("Terminal in Safari", systemImage: "terminal") }.accessibilityIdentifier("computerTerminal")
-            .accessibilityHint("Opens the VPS terminal in Safari, with its own sign-in")
+        ViewThatFits(in: .horizontal) {
+          HStack(spacing: 16) { browserLinks(url, terminalURL) }.fixedSize(horizontal: true, vertical: false)
+          VStack(alignment: .leading, spacing: 12) { browserLinks(url, terminalURL) }
         }.font(.footnote)
       }
       Text("The desktop and browser logins stay on the server when you leave this screen.").font(.caption).foregroundStyle(.secondary)
     }.padding(12).frame(maxWidth: .infinity, alignment: .leading)
+  }
+  @ViewBuilder private func browserLinks(_ url: URL, _ terminalURL: URL) -> some View {
+    Link(destination: url) { Label("Open in Safari", systemImage: "safari") }.accessibilityIdentifier("computerSafari")
+    Link(destination: terminalURL) { Label("Terminal in Safari", systemImage: "terminal") }.accessibilityIdentifier("computerTerminal")
+      .accessibilityHint("Opens the VPS terminal in Safari, with its own sign-in")
   }
   /// The desktop's status every few seconds while this screen is open, as the web panel polls.
   private func watchStatus() async {

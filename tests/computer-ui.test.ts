@@ -142,6 +142,7 @@ describe("shared computer", () => {
     expect(write).toHaveBeenCalledWith("/computer/control", { action: "take", viewerId: "viewer-1" });
     expect(desktop.viewOnly).toBe(false);
     expect(container.textContent).toContain("Assistants are paused");
+    expect(container.querySelector(".desktop-stage")?.classList.contains("is-controlling")).toBe(true);
     await click("Hand back");
     expect(desktop.viewOnly).toBe(true);
   });
@@ -179,6 +180,7 @@ describe("shared computer", () => {
     await act(async () => vi.advanceTimersByTimeAsync(3000));
     expect(desktop.viewOnly).toBe(true);
     expect(container.textContent).toContain("Jordan has control");
+    expect(container.querySelector(".desktop-stage")?.classList.contains("is-controlling")).toBe(false);
     expect(container.textContent).toContain("Take over is available after they hand back.");
     expect(button("Take over").disabled).toBe(true);
   });
