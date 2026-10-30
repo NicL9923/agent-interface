@@ -20,6 +20,8 @@ beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true); vi.mocked(api).mockReset(); vi.mocked(write).mockReset();
   container = document.createElement("div"); document.body.append(container); root = createRoot(container);
   vi.mocked(api).mockImplementation(async path => path === "/routines" ? [{ id: "routine", botId: "ranch", name: "Morning check", enabled: true }] : initial());
+  Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: function(this: HTMLDialogElement) { this.open = true; } });
+  Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: function(this: HTMLDialogElement) { this.open = false; } });
 });
 afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.unstubAllGlobals(); });
 const button = (name: string) => Array.from(container.querySelectorAll("button")).find(item => item.textContent?.trim() === name)!;
@@ -238,7 +240,7 @@ it("approves the displayed diff revision and refuses truncated approval", async 
   vi.mocked(write).mockResolvedValue({ ok: true });
   await act(async () => root.render(createElement(LearningPanel, { botId: "ranch" })));
   await click("Review change"); expect(button("Approve change").disabled).toBe(true);
-  truncated = false; await click("Review change"); await click("Approve change");
+  truncated = false; await click("Hide change"); await click("Review change"); await click("Approve change");
   expect(write).toHaveBeenCalledWith("/bots/ranch/automation/skills/pending/aabbccdd", { revision: "b".repeat(64), decision: "approve" });
 });
 
@@ -775,4 +777,58 @@ it("explains a disabled platform beside the row and clears a secret on unmount",
   await click("New event trigger"); await input("Trigger ID", "new"); await input("Event names", "alert"); await submitTrigger(); await click("Show secret");
   await act(async () => root.render(createElement("div"))); expect(container.innerHTML).not.toContain("synthetic-secret");
   await work(); expect(container.innerHTML).not.toContain("synthetic-secret");
+});
+
+
+it("keeps skill approval enabled until disabling it is explicitly confirmed", async () => {
+  const value = initial();
+  vi.mocked(api).mockResolvedValue(value);
+  vi.mocked(write).mockImplementation(async () => { value.skills.approvalRequired = false; return { ok: true }; });
+  await act(async () => root.render(createElement(LearningPanel, { botId: "ranch" })));
+  const policy = container.querySelector<HTMLInputElement>('.automation-check input')!;
+  await act(async () => { policy.focus(); policy.click(); });
+  expect(policy.checked).toBe(true);
+  expect(write).not.toHaveBeenCalled();
+  expect(container.querySelector('[role="alertdialog"]')?.textContent).toContain("Hermes can save new skills, edits and deletions without asking for approval.");
+  expect(document.activeElement?.textContent).toBe("Keep approval required");
+  await click("Keep approval required");
+  expect(container.querySelector('[role="alertdialog"]')).toBeNull();
+  expect(document.activeElement).toBe(policy);
+  expect(write).not.toHaveBeenCalled();
+  await act(async () => policy.click());
+  await click("Allow changes without review");
+  expect(write).toHaveBeenCalledExactlyOnceWith("/bots/ranch/automation/skills/policy", { approvalRequired: false }, "PUT");
+  expect(policy.checked).toBe(false);
+});
+
+it("enables skill approval immediately without a confirmation", async () => {
+  const value = initial(); value.skills.approvalRequired = false;
+  vi.mocked(api).mockResolvedValue(value);
+  vi.mocked(write).mockImplementation(async () => { value.skills.approvalRequired = true; return { ok: true }; });
+  await act(async () => root.render(createElement(LearningPanel, { botId: "ranch" })));
+  const policy = container.querySelector<HTMLInputElement>('.automation-check input')!;
+  await act(async () => policy.click());
+  expect(container.querySelector('[role="alertdialog"]')).toBeNull();
+  expect(write).toHaveBeenCalledExactlyOnceWith("/bots/ranch/automation/skills/policy", { approvalRequired: true }, "PUT");
+  expect(policy.checked).toBe(true);
+});
+
+it("collapses a reviewed skill change without fetching and reloads its revision when reopened", async () => {
+  const text = "--- SKILL.md\n+++ SKILL.md\n@@ -1 +1 @@\n-old\n+<new>\n";
+  vi.mocked(api).mockImplementation(async path => path.includes("/skills/pending/") ? { id: "aabbccdd", diff: text, revision: "b".repeat(64), truncated: false } : initial());
+  await act(async () => root.render(createElement(LearningPanel, { botId: "ranch" })));
+  const requests = () => vi.mocked(api).mock.calls.filter(([path]) => path.includes("/skills/pending/"));
+  expect(button("Review change").getAttribute("aria-expanded")).toBe("false");
+  await click("Review change");
+  expect(button("Hide change").getAttribute("aria-expanded")).toBe("true");
+  const preview = document.getElementById(button("Hide change").getAttribute("aria-controls")!);
+  expect(preview?.textContent).toBe(text);
+  expect(preview?.querySelector("new")).toBeNull();
+  expect(requests()).toHaveLength(1);
+  await click("Hide change");
+  expect(container.querySelector(".automation-diff")).toBeNull();
+  expect(button("Review change").getAttribute("aria-expanded")).toBe("false");
+  expect(requests()).toHaveLength(1);
+  await click("Review change");
+  expect(requests()).toHaveLength(2);
 });

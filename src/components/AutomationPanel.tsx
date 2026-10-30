@@ -9,6 +9,7 @@ import type { AutomationOverview, AutomationTask, EventSubscription, SkillConten
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { NativeSelect } from "./ui/native-select";
+import { SettingsConfirmation } from "./SettingsConfirmation";
 import "./automation.css";
 
 function useAutomation(botId: string) {
@@ -528,26 +529,42 @@ function TriggerSection({ control, botId }: { control: Controls; botId: string }
   </section>;
 }
 
+function SkillDiffPreview({ text, id }: { text: string; id: string }) {
+  const lines = (text || "No textual diff.").split("\n");
+  return <pre id={id} className="automation-code automation-diff"><code>{lines.map((line, index) => {
+    const kind = /^(diff |index |@@|---|\+\+\+)/.test(line) ? "meta" : line.startsWith("+") ? "added" : line.startsWith("-") ? "removed" : "context";
+    return <span key={index} className={`automation-diff-${kind}`}>{line}{index < lines.length - 1 ? "\n" : ""}</span>;
+  })}</code></pre>;
+}
+
 export function LearningPanel({ botId }: { botId: string }) {
   const control = useAutomation(botId);
   const [content, setContent] = useState<SkillContent>();
   const [diff, setDiff] = useState<SkillDiff>();
+  const [allowingWrites, setAllowingWrites] = useState(false);
+  const policyInput = useRef<HTMLInputElement>(null);
+  const id = useId();
   // Reading a skill or a pending change, one at a time.
   const reader = useAction();
   const { busy: reading, error: readError } = reader;
   const read = <T,>(load: () => Promise<T>, accept: (value: T) => void) =>
     reader.run(async ({ current }) => { const value = await load(); if (current()) accept(value); });
+  const setPolicy = (approvalRequired: boolean) => {
+    setAllowingWrites(false);
+    void control.change(() => request("PUT /bots/:id/automation/skills/policy", { params: { id: botId }, body: { approvalRequired } }));
+  };
   const state = control.value?.skills;
-  return <div className="automation-panel"><h2>Skills & learning</h2><p className="muted">Inspect reusable instructions and review changes the assistant wants to save.</p><Status control={control} />
+  return <div className="automation-panel automation-learning"><h2>Skills & learning</h2><p className="muted">Inspect reusable instructions and review changes the assistant wants to save.</p><Status control={control} />
     {readError && <p className="form-error" role="alert">{readError}</p>}
     {state && (!state.supported ? <p className="capability-note">{state.reason || "Learning review is unavailable on this Hermes installation."}</p> : <>
-      <section className="automation-section"><h3>Skill write policy</h3><label className="automation-check"><input type="checkbox" checked={state.approvalRequired} disabled={control.disabled || control.value?.canManageLearningPolicy === false} onChange={event => void control.change(() => request("PUT /bots/:id/automation/skills/policy", { params: { id: botId }, body: { approvalRequired: event.target.checked } }))} />Require approval before skill changes are saved</label><p className="muted">When enabled, Hermes stages new skills, edits, and deletions for review.</p>{control.value?.canManageLearningPolicy === false && <p className="capability-note">Only an integration administrator can change the skill write policy.</p>}</section>
-      <section className="automation-section"><h3>Pending changes</h3>{!state.pending.length && <p className="muted">No skill changes waiting for review.</p>}
-        {state.pending.map(item => <article className="automation-item" key={item.id}><h4>{item.summary}</h4><p className="muted">{item.origin}</p><Button disabled={reading || control.disabled} onClick={() => void read(() => request("GET /bots/:id/automation/skills/pending/:pendingId", { params: { id: botId, pendingId: item.id } }), value => { setDiff(value); setContent(undefined); })}>Review change</Button>
-          {diff?.id === item.id && <><pre className="automation-code">{diff.diff || "No textual diff."}</pre>{diff.truncated && <p>The diff is truncated. Read the full change in Hermes before approving.</p>}<div className="actions"><Button className="primary" disabled={control.disabled || diff.truncated} onClick={async () => { if (await control.change(() => request("POST /bots/:id/automation/skills/pending/:pendingId", { params: { id: botId, pendingId: item.id }, body: { revision: diff.revision, decision: "approve" } }))) setDiff(undefined); }}>Approve change</Button><Button className="danger" disabled={control.disabled} onClick={async () => { if (await control.change(() => request("POST /bots/:id/automation/skills/pending/:pendingId", { params: { id: botId, pendingId: item.id }, body: { revision: diff.revision, decision: "reject" } }))) setDiff(undefined); }}>Reject change</Button></div></>}
+      <section className="automation-section automation-learning-policy"><h3>Skill write policy</h3><label className="automation-check"><input ref={policyInput} type="checkbox" checked={state.approvalRequired} disabled={control.disabled || control.value?.canManageLearningPolicy === false} onChange={event => { if (event.target.checked) setPolicy(true); else setAllowingWrites(true); }} />Require approval before skill changes are saved</label><p className="muted">When enabled, Hermes stages new skills, edits and deletions for review.</p>{control.value?.canManageLearningPolicy === false && <p className="capability-note">Only an integration administrator can change the skill write policy.</p>}</section>
+      <section className="automation-section"><h3>Pending changes ({state.pending.length})</h3>{!state.pending.length && <p className="muted">No skill changes waiting for review.</p>}
+        {state.pending.map(item => <article className="automation-item" key={item.id}><h4>{item.summary || item.id}</h4><p className="muted">Source: {item.origin ? item.origin[0].toUpperCase() + item.origin.slice(1) : "Not reported"}</p><Button disabled={reading || control.disabled} aria-expanded={diff?.id === item.id} aria-controls={`${id}-diff-${item.id}`} onClick={() => { if (diff?.id === item.id) setDiff(undefined); else void read(() => request("GET /bots/:id/automation/skills/pending/:pendingId", { params: { id: botId, pendingId: item.id } }), value => { setDiff(value); setContent(undefined); }); }}>{diff?.id === item.id ? "Hide change" : "Review change"}</Button>
+          {diff?.id === item.id && <><SkillDiffPreview text={diff.diff} id={`${id}-diff-${item.id}`} />{diff.truncated && <p>The diff is truncated. Read the full change in Hermes before approving.</p>}<div className="actions"><Button className="primary" disabled={control.disabled || diff.truncated} onClick={async () => { if (await control.change(() => request("POST /bots/:id/automation/skills/pending/:pendingId", { params: { id: botId, pendingId: item.id }, body: { revision: diff.revision, decision: "approve" } }))) setDiff(undefined); }}>Approve change</Button><Button className="danger" disabled={control.disabled} onClick={async () => { if (await control.change(() => request("POST /bots/:id/automation/skills/pending/:pendingId", { params: { id: botId, pendingId: item.id }, body: { revision: diff.revision, decision: "reject" } }))) setDiff(undefined); }}>Reject change</Button></div></>}
         </article>)}
       </section>
       <section className="automation-section"><h3>Installed skills</h3>{!state.installed.length && <p className="muted">No installed skills reported.</p>}{state.installed.map(item => <article className="automation-item" key={item.name}><h4>{item.name}</h4><p>{item.description}</p><Button disabled={reading || control.disabled} onClick={() => void read(() => request("GET /bots/:id/automation/skills/content", { params: { id: botId }, query: { name: item.name } }), value => { setContent(value); setDiff(undefined); })}>Read skill</Button>{content?.name === item.name && <><pre className="automation-code">{content.content}</pre>{content.truncated && <p>Preview truncated. Open Hermes for the full skill.</p>}</>}</article>)}</section>
     </>)}
+    {allowingWrites && <SettingsConfirmation title="Allow skill changes without review?" detail="Hermes can save new skills, edits and deletions without asking for approval." confirmLabel="Allow changes without review" cancelLabel="Keep approval required" danger busy={control.disabled} fallbackFocus={policyInput} onCancel={() => setAllowingWrites(false)} onConfirm={() => setPolicy(false)} />}
   </div>;
 }

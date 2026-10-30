@@ -73,7 +73,7 @@ References collected October 25, 2026. External artwork is reference material on
 | Work task board and actions | 67 shared before frames; 19 web, 23 iPhone and 23 iPad after frames | Complete | Web refusal 9.5; remaining web states, iPhone and iPad 9 |
 | Work task editors | Shared before baseline; 16 web, 13 iPhone and 9 iPad after frames reviewed | Complete | Every frame 9 |
 | Work event triggers | Web and native comparisons available | In progress | Whole-screen round 1: 7.6. Fixes implemented; targeted native recapture pending. Six native large-text frames remain accepted |
-| Learning | Pending | Pending | Pending |
+| Learning | Desktop/phone web and iPhone views captured | Round 1 fixes implemented | Whole-screen round 1: 7.0; round 2 pending |
 | Routines and results | Pending | Pending | Pending |
 | Logins and secure requests | Pending | Pending | Pending |
 | Search, saved items and automations | Pending | Pending | Pending |
@@ -420,3 +420,19 @@ tools; group conversations; app settings and navigation; computer and terminal;
 connection and update recovery; notifications and Apple devices; and empty states,
 offline content, share extensions and widgets. Use one whole-screen score per
 review, with at most three rounds for each screen within those areas.
+
+## Learning
+
+[Round 1](evidence/design-review/learning-screen-review.md) scored 7.0. The
+follow-up keeps the policy checkbox with its label, confirms before turning off
+required approval, adds readable diff colors and a collapse control, and reduces
+section spacing. Pending changes show a count and labeled source. The API does
+not provide the affected skill name, so the client does not invent one. Native
+Learning adds a short introduction and uses the shared muted text color.
+
+The desktop and phone browser check exercised cancelling the policy confirmation,
+confirming the change, restoring required approval and opening a diff. Targeted
+tests cover confirmation, re-enabling approval, collapse and fresh revision loads.
+The native app compiles; its new introductory line still needs a fresh screenshot
+after the host CoreSimulator update. Round 2 reviews the changed web views and
+keeps that native visual limit explicit.
