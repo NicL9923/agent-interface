@@ -966,3 +966,29 @@ question uses 14px text, and closed cards say Decision status. No fourth review.
 Notifications and Apple devices are next, followed by empty/offline states,
 share extensions and widgets. Native gestures, real providers, VoiceOver,
 dark mode and large-text gaps stay recorded.
+
+## Notifications and Apple devices, round 1
+
+Baseline captures cover the notification invitation, disabled and enabled device
+settings, five-minute batching with quiet hours, blocked permission guidance and
+the Apple Calendar/Reminders handoff at desktop and phone widths. The agent
+clicked Not now, enabled and disabled a fake browser subscription, saved batching
+and quiet-hours preferences, then checked the blocked switch. The service worker,
+permission and subscription objects are explicit browser fakes; the preview
+subscription endpoints are synthetic. No real permission prompt or push delivery
+was invoked. Fixture preferences are reset between widths.
+
+The compiled iPhone app shows its actual notification settings with the existing
+fake permission system. A Debug-only scroll entry point positions that section.
+The real Calendar and Reminders view is shown without requesting access or reading
+events. It is opened directly for capture, so the frame does not demonstrate the
+normal Integrations back-navigation path. Selection, snapshot preview, adding to
+a draft, native permission prompts and delivery remain unverified. The lower
+Apple date-window controls are not visible in the captured frame.
+
+Native compilation and both captures ran in one machine-lock command and shut
+the simulator down. Browser captures completed and the browser and preview server
+are closed. Only capture entry points changed; notification and Apple product
+behavior is unchanged. The first whole-area review is pending. Progress stays
+23 of 25 grouped areas. The final Connection prompt wording was also recaptured
+at both widths after its small text-size adjustment.

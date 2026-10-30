@@ -33,6 +33,14 @@
       ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_FIXTURE"] == "1"
         && ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_CAPTURE_CONNECTION"] == "1"
     }
+    static var captureNotificationsPage: Bool {
+      ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_FIXTURE"] == "1"
+        && ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_CAPTURE_NOTIFICATIONS"] == "1"
+    }
+    static var captureApplePage: Bool {
+      ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_FIXTURE"] == "1"
+        && ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_CAPTURE_APPLE"] == "1"
+    }
     static var captureComputerPage: Bool {
       ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_FIXTURE"] == "1"
         && ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_CAPTURE_COMPUTER"] == "1"
@@ -172,6 +180,9 @@
         var status = UNAuthorizationStatus.notDetermined
         NotificationController.shared.useFixtureSystem(permissions: NotificationPermissions(
           status: { status }, request: { status = .authorized; return true }))
+      }
+      if captureNotificationsPage {
+        FixtureProtocol.preferences["notifications"] = ["timezone": "America/Chicago", "batchMinutes": 5, "quietStart": "22:00", "quietEnd": "07:00"]
       }
       await store.refreshBootstrap()
       if environment["AGENT_INTERFACE_UI_HOME"] != "1" { await store.select(store.selectedBotId) }

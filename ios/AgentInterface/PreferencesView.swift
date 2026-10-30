@@ -19,6 +19,7 @@ struct PreferencesView: View {
   #endif
   var body: some View {
     NavigationStack {
+      ScrollViewReader { captureScroll in
       Form {
         Group {
         Section {
@@ -71,7 +72,7 @@ struct PreferencesView: View {
           defaultPicker
         }.disabled(store.sessionExpired)
         Section {
-          DeviceNotificationSettings()
+          DeviceNotificationSettings().id("captureNotifications")
           Picker("Batching", selection: Binding(get: { preferences.notifications?.batchMinutes ?? 0 }, set: { value in
             var settings = notificationPreferences; settings.batchMinutes = value; preferences.notifications = settings
           })) {
@@ -122,7 +123,12 @@ struct PreferencesView: View {
         #if DEBUG
         .navigationDestination(isPresented: $captureComputerOpen) { ComputerView() }
         .navigationDestination(isPresented: $captureUpgradeOpen) { HermesUpgradeView() }
-        .onAppear { captureComputerOpen = DebugFixtures.captureComputerPage; captureUpgradeOpen = DebugFixtures.captureUpgradePage }
+        .onAppear {
+          captureComputerOpen = DebugFixtures.captureComputerPage; captureUpgradeOpen = DebugFixtures.captureUpgradePage
+          if DebugFixtures.captureNotificationsPage {
+            Task { try? await Task.sleep(for: .milliseconds(500)); captureScroll.scrollTo("captureNotifications", anchor: .top) }
+          }
+        }
         #endif
         .toolbar {
           ToolbarItem(placement: .cancellationAction) { Button("Close") { if saveFailed { discardConfirm = true } else { closeSheet() } } }
@@ -149,6 +155,7 @@ struct PreferencesView: View {
         .confirmationDialog("Change the app server? Sign-out will revoke this device's session and notifications first.", isPresented: $changeServerConfirm, titleVisibility: .visible) {
           Button("Change server") { Task { await store.changeConnection(); if store.api == nil { closeSheet() } } }
         }
+      }
     }
   }
   /// The web panel polls the shared computer every few seconds while open; Settings checks while it is shown.

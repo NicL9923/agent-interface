@@ -79,3 +79,7 @@ The `capture-settings-ios.sh` TriggerSecret mode creates a synthetic event throu
 The `capture-settings-ios.sh` Updates and Connection modes capture synthetic update recovery and the native sign-in view without invoking provider sign-in or a real update.
 
 - `capture-connection.js`: Capture fixture sign-in, setup, lost connection and update-recovery flows at desktop and phone widths without contacting providers.
+
+- `capture-notifications.js` captures fixture notification onboarding, device settings, quiet hours and the Apple handoff card at desktop and phone widths. It uses a fake browser push system, never a real permission prompt or delivery.
+
+The `capture-settings-ios.sh` Notifications mode scrolls real Settings to the notification controls with the existing fake permission system. Apple opens the real Calendar and Reminders screen without requesting EventKit access.

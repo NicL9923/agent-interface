@@ -31,9 +31,13 @@ for tab in "$@"; do
   trigger_secret_capture=0
   upgrade_capture=0
   connection_capture=0
+  notifications_capture=0
+  apple_capture=0
   capture_delay=${NATIVE_CAPTURE_DELAY:-5}
   case "$tab" in
     Preferences) settings_tab=""; preferences_capture=1 ;;
+    Notifications) settings_tab=""; notifications_capture=1 ;;
+    Apple) settings_tab=""; apple_capture=1 ;;
     Updates) settings_tab=""; upgrade_capture=1; capture_delay=${NATIVE_CAPTURE_DELAY:-8} ;;
     Connection) settings_tab=""; connection_capture=1; capture_delay=${NATIVE_CAPTURE_DELAY:-8} ;;
     TriggerSecret) settings_tab="Work"; trigger_secret_capture=1; capture_delay=${NATIVE_CAPTURE_DELAY:-10} ;;
@@ -56,6 +60,9 @@ for tab in "$@"; do
   SIMCTL_CHILD_AGENT_INTERFACE_UI_CAPTURE_UPGRADE="$upgrade_capture" \
   SIMCTL_CHILD_AGENT_INTERFACE_UI_UPGRADE_FAILED="$upgrade_capture" \
   SIMCTL_CHILD_AGENT_INTERFACE_UI_CAPTURE_CONNECTION="$connection_capture" \
+  SIMCTL_CHILD_AGENT_INTERFACE_UI_CAPTURE_NOTIFICATIONS="$notifications_capture" \
+  SIMCTL_CHILD_AGENT_INTERFACE_UI_PUSH="$notifications_capture" \
+  SIMCTL_CHILD_AGENT_INTERFACE_UI_CAPTURE_APPLE="$apple_capture" \
   SIMCTL_CHILD_AGENT_INTERFACE_UI_CAPTURE_SETTINGS_TAB="$settings_tab" \
   SIMCTL_CHILD_AGENT_INTERFACE_UI_CAPTURE_DISCOVERY_TAB="$discovery_tab" \
     "$simctl" launch --terminate-running-process "$simulator" "$bundle"
