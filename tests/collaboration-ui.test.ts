@@ -8,9 +8,11 @@ import { GroupChats } from '../src/components/GroupChats';
 import { RoutineResults } from '../src/components/RoutineResults';
 import { AgentExchange } from '../src/components/AgentExchange';
 import { defaultPreferences, type Bootstrap } from '../src/shared/types';
-import { click, mountRoot } from './ui-harness';
+import { click, mountRoot, typeInto } from './ui-harness';
 import { FakeEventSource } from './fake-event-source';
 vi.mock('../src/client-api', async original => (await import("./helpers/request-mock")).withRequest(await (async original=>({...await original<typeof import('../src/client-api')>(),api:vi.fn(),write:vi.fn()}))(original)));
+// Avatar drawing is covered by its own suite; these tests exercise group interactions.
+vi.mock('../src/components/Avatar',()=>({Avatar:({botId}:{botId?:string})=>createElement('span',{'data-avatar':botId})}));
 let root:Root, container:HTMLDivElement;
 const bootstrap = { user:{id:'one'},bots:[{id:'ranch',name:'Ranch hand'},{id:'planner',name:'Planner'}],preferences:defaultPreferences,connection:{connected:true} } as Bootstrap;
 const room={room_id:'room',name:'Weekend plans',members:[{member_id:'ranch',profile:'ranch',handle:'ranch',display_name:'Ranch hand'},{member_id:'planner',profile:'planner',handle:'planner',display_name:'Planner'}]};
@@ -184,7 +186,7 @@ describe('group conversation',()=>{
       {event_id:'b',seq:2,kind:'message.user',actor:{kind:'user',id:'app'},payload:{text:'From somebody'},created_at:2},
     ]);
     await act(async()=>root.render(createElement(GroupChats,{bootstrap})));
-    expect([...container.querySelectorAll('.group-message strong')].map(name=>name.textContent)).toEqual(['Nicolas','Household member']);
+    expect([...container.querySelectorAll('.group-message strong')].map(name=>name.textContent)).toEqual(['You','Household member']);
   });
 
   it('offers members for @, and completes one with the arrows and Enter without sending',async()=>{
@@ -251,4 +253,51 @@ describe('group conversation',()=>{
     await act(async()=>finish());
     expect(reads()).toBe(before+3);
   });
+});
+
+it('shows thread context, focuses the composer and sends the selected thread ID',async()=>{
+  const events=[
+    {event_id:'root',seq:1,kind:'message.user',actor:{id:'one'},sender:{id:'one',name:'Nicolas'},payload:{text:'Plan a short walk',thread_id:'walk-thread'},created_at:1},
+    {event_id:'other',seq:2,kind:'message.member',actor:{id:'planner'},payload:{text:'A separate dinner topic',thread_id:'dinner-thread'},created_at:2},
+    {event_id:'reply',seq:3,kind:'message.member',actor:{id:'ranch'},payload:{text:'Bring water for the walk',thread_id:'walk-thread'},created_at:3},
+  ];
+  vi.mocked(api).mockImplementation(async path=>path==='/groups'?{supported:true,canSend:true,rooms:[room]}:path.includes('/log')?{events,cursor:3,has_more:false}:{room,driver_status:{working:false,blocked:false,pending_actions:[]}});
+  vi.mocked(write).mockResolvedValue({accepted:true});
+  await act(async()=>root.render(createElement(GroupChats,{bootstrap})));
+  const rows=[...container.querySelectorAll('.group-message')];
+  expect(rows[0].querySelector('.group-speaker')?.textContent).toBe('You');
+  expect(rows[2].querySelector('.group-thread-context')?.textContent).toBe('In thread with You: Plan a short walk');
+  expect(rows[1].querySelector('.group-thread-context')).toBeNull();
+  expect(rows[2].querySelector('[data-avatar]')?.getAttribute('data-avatar')).toBe('ranch');
+  const field=container.querySelector<HTMLTextAreaElement>('#group-message')!;
+  await typeInto(field,'Keep it under an hour');
+  await act(async()=>rows[0].querySelector<HTMLButtonElement>('.group-reply')!.click());
+  expect(document.activeElement).toBe(field);expect(rows[0].classList.contains('selected')).toBe(true);
+  expect(container.querySelector('.group-thread')?.textContent).toContain('You: Plan a short walk');
+  expect(rows[0].querySelector('.group-reply')?.getAttribute('aria-label')).toContain('You: Plan a short walk');
+  await click('New topic');expect(container.querySelector('.group-thread')).toBeNull();expect(field.value).toBe('Keep it under an hour');
+  await act(async()=>rows[0].querySelector<HTMLButtonElement>('.group-reply')!.click());
+  await act(async()=>field.form!.requestSubmit());
+  expect(write).toHaveBeenCalledWith('/groups/room/messages',expect.objectContaining({threadId:'walk-thread',text:'Keep it under an hour'}));
+  expect(field.value).toBe('');expect(container.querySelector('.group-message.selected')).toBeNull();
+});
+it('names the approving assistant without changing the decision identifiers',async()=>{
+  const action={kind:'approval',task_id:'task',member_id:'planner',execution_generation:4,request_id:'exact-approval-request',approval:{description:'Read the weather forecast'}};
+  vi.mocked(api).mockImplementation(async path=>path==='/groups'?{supported:true,canSend:true,rooms:[room]}:path.includes('/log')?{events:[],cursor:0,has_more:false}:{room,driver_status:{working:false,blocked:true,pending_actions:[action]}});
+  vi.mocked(write).mockResolvedValue({approved:true});
+  await act(async()=>root.render(createElement(GroupChats,{bootstrap})));
+  expect(container.querySelector('.group-requester')?.textContent).toBe('Planner requests approval');
+  await click('Deny');
+  expect(write).toHaveBeenCalledWith('/groups/room/approve',{taskId:'task',memberId:'planner',generation:4,requestId:'exact-approval-request',choice:'deny'});
+});
+it('explains the six-assistant selection limit and restores choices after deselection',async()=>{
+  vi.mocked(api).mockResolvedValue({supported:true,canSend:true,rooms:[]});
+  const many={...bootstrap,bots:Array.from({length:7},(_,i)=>({id:'bot-'+i,name:'Assistant '+i}))} as Bootstrap;
+  await act(async()=>root.render(createElement(GroupChats,{bootstrap:many})));
+  await click('New group');
+  const choices=[...container.querySelectorAll<HTMLInputElement>('.group-create input[type=checkbox]')];
+  for(const choice of choices.slice(0,6))await act(async()=>choice.click());
+  expect(container.querySelector('legend')?.textContent).toContain('6 chosen');expect(choices[6].disabled).toBe(true);
+  expect(container.textContent).toContain('Six assistants selected. Deselect one to choose another.');
+  await act(async()=>choices[0].click());expect(choices[6].disabled).toBe(false);
 });

@@ -9,12 +9,11 @@ import type { Bootstrap } from '../shared/types';
 import type { GroupCatalog, GroupEvent, GroupPage, GroupRoom, GroupState } from '../shared/collaboration';
 import { MessageMarkdown } from './MessageMarkdown';
 import { Icon } from './Icon';
+import { Avatar } from './Avatar';
 import { When } from './When';
 import './collaboration.css';
 type PendingMessage = { requestId: string; threadId: string; text: string };
 type RoomView = { state: GroupState; page: GroupPage };
-/** Who sent a human message, when the server knows. Older servers leave it out. */
-type Attributed = GroupEvent & { sender?: { id: string; name: string } };
 function saved<T>(key: string): T | null { try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch { return null; } }
 
 export function GroupChats({ bootstrap }: { bootstrap: Bootstrap }) {
@@ -24,6 +23,7 @@ export function GroupChats({ bootstrap }: { bootstrap: Bootstrap }) {
   const [draft, setDraft] = useState('');
   const [pending, setPending] = useState<PendingMessage | null>(null);
   const [threadId, setThreadId] = useState('');
+  const [replyToId, setReplyToId] = useState('');
   const [notice, setNotice] = useState('');
   const action = useAction();
   const { busy, error, setError } = action;
@@ -123,7 +123,7 @@ export function GroupChats({ bootstrap }: { bootstrap: Bootstrap }) {
     caret.current = null;
   }, [draft]);
   useEffect(() => {
-    cursor.current = 0; setEvents([]); setMore(false); setError(''); setThreadId('');
+    cursor.current = 0; setEvents([]); setMore(false); setError(''); setThreadId(''); setReplyToId('');
     setDraft(saved<string>(`${key}:draft`) || ''); setPending(saved<PendingMessage>(key));
   }, [roomId, key]);
   const create = () => {
@@ -143,7 +143,7 @@ export function GroupChats({ bootstrap }: { bootstrap: Bootstrap }) {
       const response = await write<{ accepted: boolean }>(`/groups/${encodeURIComponent(roomId)}/messages`, input);
       if (response.accepted !== true) throw new Error('Hermes did not confirm this message.');
       localStorage.removeItem(attemptKey); localStorage.removeItem(`${attemptKey}:draft`);
-      if (scope.current === attemptKey) { setPending(null); setDraft(''); setThreadId(''); await room.reload(); }
+      if (scope.current === attemptKey) { setPending(null); setDraft(''); setThreadId(''); setReplyToId(''); await room.reload(); }
     }, { onError: cause => scope.current === attemptKey ? `${(cause as Error).message} The message may have arrived. Retry the same saved message to check, without sending a duplicate.` : null });
   };
   // The room may change or leave the list while this runs. Its reload is then inert, and its error is not shown on another room.
@@ -155,16 +155,33 @@ export function GroupChats({ bootstrap }: { bootstrap: Bootstrap }) {
   };
   const writable = catalog?.canSend && bootstrap.connection.connected;
   const messages = events.filter(event => event.kind === 'message.user' || event.kind === 'message.member');
+  const memberFor = (id: unknown) => state?.room.members.find(member => member.member_id === id);
+  const memberName = (id: unknown) => { const member = memberFor(id);return member?.display_name || member?.profile || 'Assistant'; };
+  const author = (event: GroupEvent) => {
+    if (event.kind === 'message.user') return (event.sender?.id || event.actor.id) === bootstrap.user.id ? 'You' : event.sender?.name || 'Household member';
+    const member = memberFor(event.actor.id) || memberFor(event.payload.member_id);
+    return member?.display_name || member?.profile || event.actor.id || 'Assistant';
+  };
+  const snippet = (event: GroupEvent) => typeof event.payload.text === 'string' ? event.payload.text.replace(/\s+/g, ' ').trim().slice(0, 100) : 'Message';
+  const context = (event: GroupEvent) => `${author(event)}: ${snippet(event)}`;
+  // The first loaded message is context for the thread, not a claimed parent ID.
+  const threadRoots = new Map<string, GroupEvent>();
+  for (const event of messages) if (typeof event.payload.thread_id === 'string' && !threadRoots.has(event.payload.thread_id)) threadRoots.set(event.payload.thread_id, event);
+  const replyingTo = messages.find(event => event.event_id === replyToId) || threadRoots.get(threadId);
+  const avatar = (id: unknown) => { const bot = bootstrap.bots.find(bot => bot.id === id);return bot && <span aria-hidden="true"><Avatar avatar={bot.avatar} name={bot.name} botId={bot.id} size={24} reducedMotion/></span>; };
+  const newTopic = () => { setThreadId('');setReplyToId('');field.current?.focus(); };
+
   const newGroup = <button type="button" className="group-new" disabled={!writable || busy} aria-expanded={creating} onClick={() => setCreating(value => !value)}><Icon name="plus" size={16} />New group</button>;
   const createForm = (creating || pendingCreate) && <form className="group-create" onSubmit={event => { event.preventDefault(); void create(); }}><h3>{pendingCreate ? 'Finish creating group' : 'New group'}</h3>
     {pendingCreate ? <p>{pendingCreate.name} · {pendingCreate.botIds.length} assistants. The saved request will be checked with Hermes.</p> : <><label>Name<input value={name} maxLength={100} required onChange={event => setName(event.target.value)} /></label>
-      <fieldset><legend>Choose 2–6 assistants</legend>{bootstrap.bots.filter(bot => !['all', 'everyone'].includes(bot.id.toLowerCase())).map(bot => <label key={bot.id}><input type="checkbox" checked={members.includes(bot.id)} disabled={busy || members.length === 6 && !members.includes(bot.id)} onChange={event => setMembers(current => event.target.checked ? [...current, bot.id] : current.filter(id => id !== bot.id))} />{bot.name}</label>)}</fieldset>
+      <fieldset><legend>Choose 2–6 assistants <span role="status">· {members.length} chosen</span></legend>{bootstrap.bots.filter(bot => !['all', 'everyone'].includes(bot.id.toLowerCase())).map(bot => <label key={bot.id}><input type="checkbox" checked={members.includes(bot.id)} disabled={busy || members.length === 6 && !members.includes(bot.id)} onChange={event => setMembers(current => event.target.checked ? [...current, bot.id] : current.filter(id => id !== bot.id))} />{avatar(bot.id)}{bot.name}</label>)}</fieldset>
+      {members.length === 6 && <p className="muted" role="status">Six assistants selected. Deselect one to choose another.</p>}
       {members.some(id => bootstrap.bots.some(bot => bot.id === id && !bot.shared && bot.ownerId)) && <p className="muted">Only you will see this group, because it includes your personal assistant.</p>}</>}
     <div className="actions">{!pendingCreate && <button type="button" onClick={() => setCreating(false)}>Cancel</button>}<button type="submit" className="primary" disabled={busy || !writable || !pendingCreate && (members.length < 2 || !name.trim())}>{pendingCreate ? 'Retry saved group request' : 'Create group'}</button></div>
   </form>;
   // A saved uncertain request stays above the rooms so they remain readable until it is retried.
   const drafting = creating && !pendingCreate;
-  const status = state?.driver_status?.blocked ? 'Discussion needs attention.' : state?.driver_status?.working ? 'Assistants are discussing…' : 'Ready for a topic.';
+  const status = state?.driver_status?.blocked ? 'Discussion needs attention.' : state?.driver_status?.working ? 'Assistants are discussing…' : draft.trim() ? 'Assistants are idle.' : 'Type @ to address one assistant.';
   return <div className="group-panel">
     {(groups.error || room.error) && <FormMessage tone="error">{groups.error || room.error} <button onClick={() => { void groups.reload(); void room.reload(); }}>Retry</button></FormMessage>}
     {error && <FormMessage tone="error">{error}</FormMessage>}
@@ -176,19 +193,32 @@ export function GroupChats({ bootstrap }: { bootstrap: Bootstrap }) {
     {!!catalog?.rooms.length && <div className="group-layout"><nav className="group-rooms" aria-label="Group chats">{catalog.rooms.map(room => <button key={room.room_id} disabled={busy} aria-current={roomId === room.room_id && !drafting ? 'page' : undefined} onClick={() => { setCreating(false); setNotice(''); setRoomId(room.room_id); }}>{room.name}<small>{room.members.length} assistants</small></button>)}{newGroup}</nav>
       <section aria-label="Group conversation">{drafting ? createForm : (state ? <><div className="group-heading"><div><h3>{state.room.name}</h3>
         <p className="muted">{state.room.members.map(member => `${member.display_name || member.profile} (@${member.handle})`).join(' · ')}</p></div>{state.driver_status?.working && <button disabled={busy || !writable} onClick={() => void act('stop', { requestId: crypto.randomUUID() })}><Icon name="stop" size={14} /> Stop discussion</button>}</div>
-        {messages.map(event => { const member = state.room.members.find(member => member.member_id === event.actor.id || member.member_id === event.payload.member_id); return <article className="group-message" key={event.event_id}><div className="message-attribution"><strong>{event.kind === 'message.user' ? (event as Attributed).sender?.name || 'Household member' : member?.display_name || member?.profile || event.actor.id}</strong><When value={event.created_at * 1000} /></div><MessageMarkdown text={typeof event.payload.text === 'string' ? event.payload.text : ''} />
-          {typeof event.payload.thread_id === 'string' && <button className="group-reply" disabled={busy || !!pending || !writable} onClick={() => setThreadId(event.payload.thread_id as string)}>Reply in thread</button>}</article>; })}
+        {messages.map(event => {
+          const root = typeof event.payload.thread_id === 'string' ? threadRoots.get(event.payload.thread_id) : undefined;
+          const inThread = root && root.event_id !== event.event_id;
+          const member = memberFor(event.actor.id) || memberFor(event.payload.member_id);
+          return <article className={`group-message${replyToId === event.event_id ? ' selected' : ''}${event.kind === 'message.user' && (event.sender?.id || event.actor.id) === bootstrap.user.id ? ' own' : ''}`} key={event.event_id}>
+            <div className="message-attribution"><span className="group-speaker">{event.kind === 'message.member' && avatar(member?.member_id)}<strong>{author(event)}</strong></span><When value={event.created_at * 1000}/></div>
+            {inThread && <p className="group-thread-context">In thread with {context(root)}</p>}
+            <MessageMarkdown text={typeof event.payload.text === 'string' ? event.payload.text : ''}/>
+            {typeof event.payload.thread_id === 'string' && <button className="group-reply" aria-label={`Reply in thread to ${context(event)}`} disabled={busy || !!pending || !writable} onClick={() => { setThreadId(event.payload.thread_id as string);setReplyToId(event.event_id);field.current?.focus(); }}>Reply in thread</button>}
+          </article>;
+        })}
         {more && <button className="group-more" onClick={() => void room.reload()}>Load more messages</button>}
         {!messages.length && <p className="muted">Start a discussion. Use @handle to address an assistant.</p>}
-        {state.driver_status?.pending_actions.map(actionItem => actionItem.kind === 'approval' ? <div className="approval-card" key={actionItem.task_id}><strong>{actionItem.approval?.description || actionItem.approval?.command || 'An assistant needs approval'}</strong><div className="actions">{(['once', 'deny'] as const).map(choice => <button key={choice} disabled={busy || !writable} onClick={() => void act('approve', { taskId: actionItem.task_id, memberId: actionItem.member_id, generation: actionItem.execution_generation, requestId: actionItem.request_id || actionItem.approval?.request_id, choice })}>{choice === 'once' ? 'Allow once' : 'Deny'}</button>)}</div></div> : <p key={actionItem.task_id} className="capability-note">Hermes cannot confirm a member's last turn. Review it in the native group client before retrying.</p>)}
-        <form className="composer group-composer" onSubmit={event => { event.preventDefault(); void send(); }}>{threadId && <p className="group-thread">Replying in thread <button type="button" onClick={() => setThreadId('')}>New topic</button></p>}
+        {state.driver_status?.pending_actions.map(actionItem => actionItem.kind === 'approval' ? <div className="approval-card" key={actionItem.task_id}>
+          <div className="group-requester">{avatar(actionItem.member_id)}<strong>{memberName(actionItem.member_id)} requests approval</strong></div>
+          <p>{actionItem.approval?.description || actionItem.approval?.command || 'An assistant needs approval'}</p>
+          <div className="actions">{(['once', 'deny'] as const).map(choice => <button key={choice} disabled={busy || !writable} onClick={() => void act('approve', { taskId: actionItem.task_id, memberId: actionItem.member_id, generation: actionItem.execution_generation, requestId: actionItem.request_id || actionItem.approval?.request_id, choice })}>{choice === 'once' ? 'Allow once' : 'Deny'}</button>)}</div>
+        </div> : <p key={actionItem.task_id} className="capability-note">The last turn from {memberName(actionItem.member_id)} is unconfirmed. Open this group in Hermes to review it before retrying.</p>)}
+        <form className="composer group-composer" onSubmit={event => { event.preventDefault(); void send(); }}>{threadId && <div className="group-thread" role="status"><span><strong>Replying in thread</strong><small>{replyingTo ? context(replyingTo) : 'Earlier messages in this thread'}</small></span><button type="button" onClick={newTopic}>New topic</button></div>}
           <label className="sr-only" htmlFor="group-message">Message the group</label>
           {suggesting && <ul className="mention-list" id={mentionList} role="listbox" aria-label="Assistants in this group">
             {suggestions.map(member => <li key={member.member_id} id={`${mentionList}-${member.member_id}`} role="option" aria-selected={member === chosen}
               onPointerDown={event => event.preventDefault()} onClick={() => accept(member.handle)}>
               <strong>{member.display_name || member.profile}</strong><small>@{member.handle}</small></li>)}
           </ul>}
-          <textarea ref={field} id="group-message" rows={2} placeholder="Message the group… use @handle to address one assistant" value={pending?.text || draft} disabled={busy || !!pending || !writable} maxLength={16000}
+          <textarea ref={field} id="group-message" rows={2} placeholder="Message the group" aria-describedby="group-status" value={pending?.text || draft} disabled={busy || !!pending || !writable} maxLength={16000}
             aria-autocomplete="list" aria-controls={suggesting ? mentionList : undefined}
             aria-activedescendant={suggesting && chosen ? `${mentionList}-${chosen.member_id}` : undefined}
             onChange={event => { saveDraft(event.target.value); findMention(event.target); }}
@@ -205,7 +235,7 @@ export function GroupChats({ bootstrap }: { bootstrap: Bootstrap }) {
               }
               if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); if (!busy && writable && draft.trim()) event.currentTarget.form?.requestSubmit(); }
             }} />
-          <div className="composer-tools"><span role="status" className="group-status">{status}</span>
+          <div className="composer-tools"><span id="group-status" role="status" className="group-status">{status}</span>
             {pending ? <button type="submit" className="primary" disabled={busy || !writable}>Retry same saved message</button>
               : <button type="submit" className="send-button" aria-label={busy ? 'Sending…' : 'Send to group'} disabled={busy || !writable || !draft.trim()}><Icon name="send" size={19} /></button>}</div>
         </form></> : <p role="status" className="muted">Opening group conversation…</p>)}</section>

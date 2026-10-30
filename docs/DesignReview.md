@@ -77,7 +77,7 @@ References collected October 25, 2026. External artwork is reference material on
 | Routines and results | Desktop/phone web and current iPhone views captured | Complete | Whole-screen rounds: 7.2, 8.6, 9.1 |
 | Logins and secure requests | Desktop/phone web and current iPhone logins captured | Complete | Combined whole-area rounds: 7.8, 8.8, 9.1 |
 | Search, saved items and automations | Desktop/phone web and current iPhone captures | Complete | Whole-area rounds: 8.2, 8.8, 9.0; final CSS and Back-state fixes applied directly |
-| Group chats and threads | Desktop/phone web and iPhone conversation captured | In progress | Whole-area round 1 requested |
+| Group chats and threads | Desktop/phone web and iPhone conversation captured | 7.0, round 2 pending | Thread context, speaker identity and approval labels implemented |
 | Settings, following and home sections | Pending | Pending | Pending |
 | Integrations | Desktop/phone web and current iPhone captured | Complete | Combined whole-area rounds: 7.8, 8.8, 9.1 |
 | Computer and terminal | Pending | Pending | Pending |
@@ -625,3 +625,20 @@ The native capture renders the compiled app with a fixture-only startup shortcut
 The examples use in-memory household data. Creating a real room, uncertain-send
 recovery, approvals, Stop, native interaction, VoiceOver, dark mode and large
 text were not exercised for this round. The first whole-area review is pending.
+
+Round 1 scored 7.0/10. The follow-up names the selected message in the thread
+banner, highlights it and labels related replies. The UI uses the first loaded
+message as thread context; it does not invent a backend parent-message ID.
+Assistant avatars and larger speaker names distinguish participants, and the
+signed-in person's messages say You. Selecting Reply focuses the composer.
+Native members are a section header, and a short composer placeholder leaves
+the mention hint readable below it. Approval cards name the requesting assistant.
+The create form shows a selection count and explains the six-assistant limit.
+
+The agent repeated the web mention, thread, create/cancel and send interactions,
+checked the six-assistant limit, and captured a named pending approval at both
+widths. Focused tests cover the exact selected thread ID, composer focus, draft
+preservation, request identifiers on Deny and the selection limit. Existing
+uncertain-write, room-revocation, stream and background-poll checks still pass.
+Both clients compile. Native interaction and unit execution, real coordinator
+behavior, VoiceOver, dark mode and large text remain unverified. Round 2 is pending.
