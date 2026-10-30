@@ -1,17 +1,28 @@
 // Playwright CLI run-code function. Screenshots and a geometry report for a design gate.
-async (page, { outputDir = ".private/design-review", prefix = "current", screen = "today", stage = "after", workCase = "all", taskGate = null, fixture } = {}) => {
+async (page, { outputDir = ".private/design-review", prefix = "current", screen = "today", stage = "after", workCase = "all", taskGate = null, fixture, captureTriggers = null, contextTag = null } = {}) => {
+  if (contextTag !== null && (!["wildbots-design-work-triggers-after-w2-capture", "wildbots-design-work-triggers-after-w3-capture", "wildbots-design-work-triggers-after-w4-capture"].includes(contextTag) || screen !== "work" || workCase !== "triggers" || stage !== "after")) throw Error("Invalid owned W3 context tag");
   if (!["before", "after"].includes(stage)) throw Error("Unknown capture stage");
   if (taskGate !== null && !["a", "b"].includes(taskGate) || taskGate !== null && (screen !== "work" || workCase !== "tasks" || stage !== "after")) throw Error("Invalid task gate");
   if (screen === "work" && workCase === "tasks" && stage === "after" && !["a", "b"].includes(taskGate)) throw Error("Work tasks AFTER requires an explicit task gate a or b");
   if (!["today", "home", "conversation", "questions", "approvals", "recovery", "details", "settings", "avatar", "models", "memory", "work"].includes(screen)) throw Error(`Unsupported screen: ${screen}`);
-  if (!["all", "clear-confirmation", "tasks"].includes(workCase) || workCase === "clear-confirmation" && (screen !== "work" || stage !== "after") || workCase === "tasks" && screen !== "work") throw Error("Unknown or invalid Work capture case");
-  if (workCase === "tasks" ? fixture?.workFixture?.gate !== "W2-tasks" : fixture?.workFixture?.gate != null) throw Error("Wrong Work fixture gate");
+  if (!["all", "clear-confirmation", "tasks", "triggers"].includes(workCase) || workCase === "clear-confirmation" && (screen !== "work" || stage !== "after") || ["tasks", "triggers"].includes(workCase) && screen !== "work") throw Error("Unknown or invalid Work capture case");
+  if (workCase === "triggers" ? fixture?.workFixture?.gate !== "W3-triggers" : workCase === "tasks" ? fixture?.workFixture?.gate !== "W2-tasks" : fixture?.workFixture?.gate != null) throw Error("Wrong Work fixture gate");
   const origin = new URL(page.url());
   if (!["127.0.0.1", "localhost"].includes(origin.hostname)) throw Error("Use a loopback fixture.");
   const boot = await (await page.request.get(`${origin.origin}/api/bootstrap`)).json();
   if (boot.user?.email !== "preview@localhost.invalid") throw Error("Use the synthetic household preview.");
   const context = await page.context().browser().newContext({ serviceWorkers: "block", reducedMotion: "reduce", viewport: { width: 1440, height: 1000 } });
-  if (["models", "memory", "work"].includes(screen)) await context.addInitScript(screen => { window.name=`wildbots-design-${screen}-capture`; }, screen);
+  if (["models", "memory", "work"].includes(screen)) await context.addInitScript(name => { window.name=name; },
+    contextTag ?? (workCase === "triggers" ? `wildbots-design-work-triggers-${stage}-capture` : `wildbots-design-${screen}-capture`));
+  if (workCase === "triggers" && stage === "after") await context.addInitScript(() => {
+    // Synthetic audit copies remain in this page. Never read or write the host clipboard.
+    let copied = "";
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: Object.freeze({
+      syntheticWorkAudit: true,
+      writeText: async value => { copied = String(value); },
+      readText: async () => copied,
+    }) });
+  });
   const tab = await context.newPage();
   const browserErrors = [];
   if (["models", "memory", "work"].includes(screen)) tab.on("dialog", dialog => dialog.type() === "beforeunload" ? dialog.accept() : dialog.dismiss());
@@ -58,14 +69,20 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
     saved.charCount = [...texts.join(fixture.memoryFixture.delimiter)].length;
   };
   let work, workMode, workReads=0, workLoadingRelease, workReadStarted;
+  let workRoutinesLoadingRelease, workRoutineGets=0, workRoutineStarted, workRoutineWaitTimer;
   let workSubmissions=[], workChecks=[], workResumeIds=new Map(), workTaskIds=new Map(), workRoutes;
   const workRevision = async route => {
     const sort = value => Array.isArray(value) ? value.map(sort) : value && typeof value === "object" ? Object.fromEntries(Object.keys(value).sort().map(key => [key,sort(value[key])])) : value;
     return tab.evaluate(async text => [...new Uint8Array(await crypto.subtle.digest("SHA-256",new TextEncoder().encode(text)))].map(x=>x.toString(16).padStart(2,"0")).join(""), JSON.stringify(sort(route)));
   };
   if (screen === "work") {
-    await context.route("**/api/routines", route => {
+    await context.route("**/api/routines", async route => {
       if (route.request().method() !== "GET") throw Error("Unexpected Work routines method");
+      if (fixture.workFixture?.gate === "W3-triggers") {
+        workRoutineGets++;
+        workRoutineStarted?.();
+        if (workMode === "routines-loading") await new Promise(resolve => { workRoutinesLoadingRelease = resolve; });
+      }
       return workMode === "routines-error" ? route.fulfill({status:409,json:{error:"routines is unavailable"}}) : route.fulfill({json:workMode === "no-routines" ? [] : fixture.routines});
     });
     await context.route("**/api/bots/*/automation**", async route => {
@@ -177,7 +194,9 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
           const native={profile:"ranch",secret:fixture.workFixture.syntheticSecret,enabled:false,created_at:"2026-10-01T00:00:00Z",deliver:"log",description:body.description,events:body.events,cron_job:body.routineId};
           workRoutes[id]=native;
           const subscription={id,description:native.description,events:native.events,routineId:native.cron_job,enabled:false,url:`https://hooks.example.invalid/p/ranch/webhooks/${id}`,secretSet:true,revision:await workRevision(native)};
-          work.triggers.items.push(subscription); return route.fulfill({json:{subscription,secret:fixture.workFixture.syntheticSecret}});
+          work.triggers.items.push(subscription);
+          if (fixture.workFixture?.gate === "W3-triggers" && workMode === "trigger-create-uncertain") return reject(502,fixture.workMessages.catchAll);
+          return route.fulfill({json:{subscription,secret:fixture.workFixture.syntheticSecret}});
         }
         const native=workRoutes[id], subscription=work.triggers.items[index];
         if(method==="PATCH") {native.enabled=body.enabled; subscription.enabled=body.enabled;}
@@ -518,6 +537,22 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
         if(!bounds.fullyVisible) throw Error(`Work ${name} subject is clipped: ${JSON.stringify(bounds)}`);
         await shot(name,width,theme); geometry.at(-1).workSubject=bounds;
       };
+      if (workCase === "triggers") {
+        if (typeof captureTriggers !== "function") throw Error("Missing isolated trigger capture module");
+        return await captureTriggers({tab,panel,fixture,reset,capture,paths,geometry,workChecks,browserErrors,
+          getWork:()=>work,getReads:()=>workReads,getSubmissions:()=>workSubmissions,
+          externalTriggerEdit: workCase === "triggers" && stage === "after" ? async () => {
+            const subscription=work.triggers.items.find(item=>item.id==="freezer-alerts"), native=workRoutes["freezer-alerts"];
+            native.description=fixture.workFixture.externalTriggerEdit.description;
+            subscription.description=native.description; subscription.revision=await workRevision(native);
+            if(subscription.revision!==fixture.workFixture.externalTriggerEdit.revision) throw Error("External trigger revision mismatch");
+          } : undefined,
+          nextRoutineRequest:()=>new Promise((resolve,reject)=>{
+            workRoutineWaitTimer=setTimeout(()=>{workRoutineStarted=undefined;reject(Error("W3 routines request did not start"));},10000);
+            workRoutineStarted=()=>{clearTimeout(workRoutineWaitTimer);workRoutineStarted=undefined;resolve();};
+          }),
+          getRoutineGets:()=>workRoutineGets,releaseRoutines:()=>{workRoutinesLoadingRelease?.();workRoutinesLoadingRelease=undefined;}});
+      }
       if(workCase === "tasks" && taskGate === "a") {
         const section = panel.locator(".automation-tasks"), heading = section.getByRole("heading", {name:"Task board", exact:true});
         const items = fixture.work.tasks.items, subjects = fixture.workFixture.subjects;
@@ -1996,5 +2031,5 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
   } catch (error) {
     await tab.screenshot({path:`${outputDir}/${prefix}-${screen}-capture-error.png`,animations:"disabled"}).catch(() => {});
     throw new Error(`${error.message}\nBrowser errors: ${browserErrors.join("; ")}`);
-  } finally { workLoadingRelease?.(); releaseMemoryLoad?.(); releaseMemoryWrite?.(); await context.unrouteAll({behavior:"ignoreErrors"}); await context.close(); }
+  } finally { clearTimeout(workRoutineWaitTimer); workLoadingRelease?.(); workRoutinesLoadingRelease?.(); releaseMemoryLoad?.(); releaseMemoryWrite?.(); await context.unrouteAll({behavior:"ignoreErrors"}); await context.close(); }
 }

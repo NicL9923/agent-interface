@@ -902,7 +902,7 @@ a {
   border: 1px solid var(--line);
   border-radius: 20px;
   padding: 0;
-  overflow: hidden;
+  overflow: clip;
   width: 640px;
   max-width: calc(100vw - max(15px, env(safe-area-inset-left)) - max(15px, env(safe-area-inset-right)));
   max-height: calc(100dvh - 30px);

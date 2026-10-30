@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import XCTest
 @testable import AgentInterface
 
@@ -537,16 +538,16 @@ private final class AutomationFixtureServer: @unchecked Sendable {
     let control = HermesAutomationControls(botId: "ranch")
     control.appear(foreground: true)
     _ = await control.refresh(store)
-    let result: HermesTriggerResult? = await control.change(store, "/triggers",
-      HermesTriggerInput(id: "gate-event", description: "Gate alert", events: ["gate.open"], routineId: "routine-gate"))
+    let result: HermesTriggerResult? = await control.changeTrigger(store, triggerId: "gate-event", "/triggers",
+      HermesTriggerInput(id: "gate-event", description: "Gate alert", events: ["gate.open"], routineId: "routine-gate"), action: "create")
     XCTAssertNotNil(result)
     XCTAssertEqual(control.secret.value, "once-only-fixture")
     control.foreground(false)
     XCTAssertNil(control.secret.value)
     server.enqueue("POST", path + "/triggers", try JSONSerialization.data(withJSONObject: ["subscription": subscription, "secret": "background-fixture"]))
     server.enqueue("GET", path, try overview())
-    let _: HermesTriggerResult? = await control.change(store, "/triggers",
-      HermesTriggerInput(id: "other-event", description: "Gate alert", events: ["gate.open"], routineId: "routine-gate"))
+    let _: HermesTriggerResult? = await control.changeTrigger(store, triggerId: "gate-event", "/triggers",
+      HermesTriggerInput(id: "other-event", description: "Gate alert", events: ["gate.open"], routineId: "routine-gate"), action: "create")
     XCTAssertNil(control.secret.value)
     control.disappear(); XCTAssertNil(control.secret.url)
   }
@@ -597,8 +598,8 @@ private final class AutomationFixtureServer: @unchecked Sendable {
           : try JSONSerialization.data(withJSONObject: ["subscription": subscription, "secret": "must-never-display"])
         server.enqueue("POST", path + "/triggers", data, status: failing ? 503 : 200, gate: gate)
         let task = Task { () -> HermesTriggerResult? in
-          await control.change(store, "/triggers", HermesTriggerInput(id: "gate-event", description: "Gate alert",
-            events: ["gate.open"], routineId: "routine-gate"))
+          await control.changeTrigger(store, triggerId: "gate-event", "/triggers", HermesTriggerInput(id: "gate-event", description: "Gate alert",
+            events: ["gate.open"], routineId: "routine-gate"), action: "create")
         }
         try await until { server.requests.count == 2 }
         invalidate(reason, store: store, server: server, control: control)
@@ -609,7 +610,7 @@ private final class AutomationFixtureServer: @unchecked Sendable {
         XCTAssertNil(control.notice); XCTAssertNil(control.error)
         XCTAssertTrue(control.needsRefresh); XCTAssertFalse(control.busy)
         XCTAssertEqual(server.requests.count, 2, "No follow-up may start under \(reason)")
-        let replay: HermesTriggerResult? = await control.change(store, "/triggers", [String: String]())
+        let replay: HermesTriggerResult? = await control.changeTrigger(store, triggerId: "gate-event", "/triggers", [String: String](), action: "create")
         XCTAssertNil(replay); XCTAssertEqual(server.requests.count, 2)
       }
     }
@@ -636,7 +637,7 @@ private final class AutomationFixtureServer: @unchecked Sendable {
               await control.resume(store)
               return false
             }
-            let result: HermesTriggerResult? = await control.change(store, "/triggers", [String: String]())
+            let result: HermesTriggerResult? = await control.changeTrigger(store, triggerId: "gate-event", "/triggers", [String: String](), action: "create")
             return result != nil
           }
           try await until { server.requests.count == 3 }
@@ -767,14 +768,14 @@ private final class AutomationFixtureServer: @unchecked Sendable {
       server.enqueue("POST", path + "/triggers", try JSONSerialization.data(withJSONObject: [
         "subscription": subscription, "secret": "background-response-secret"]), gate: delayWrite ? gate : nil)
       server.enqueue("GET", path, try overview(), gate: delayWrite ? nil : gate)
-      let task = Task { () -> HermesTriggerResult? in await control.change(store, "/triggers", [String: String]()) }
+      let task = Task { () -> HermesTriggerResult? in await control.changeTrigger(store, triggerId: "gate-event", "/triggers", [String: String](), action: "create") }
       try await until { server.requests.count == (delayWrite ? 2 : 3) }
       control.foreground(false); control.foreground(true)
       gate.release()
       let result = await task.value
       XCTAssertNotNil(result, "A confirmed write still succeeds")
       XCTAssertNil(control.secret.value); XCTAssertNil(control.secret.url); XCTAssertFalse(control.secret.revealed)
-      XCTAssertEqual(control.notice, "Saved in Hermes.")
+      XCTAssertTrue(control.triggerFeedback?.message.contains("its signing secret was cleared when you left the app") == true)
     }
   }
 
@@ -827,6 +828,91 @@ private final class AutomationFixtureServer: @unchecked Sendable {
     await loader.load(store, control: control, suffix: "/skills/pending/deadbeef") { _ in }
     XCTAssertEqual(loader.value?.decision(.approve)?.revision, "reviewed-revision")
     XCTAssertNil(loader.error); XCTAssertFalse(loader.needsReload)
+  }
+
+  func testTriggerInputProblemsAndLikelyCreatedMatch() throws {
+    var input = HermesTriggerInput(id: "gate-event", description: "", events: ["gate.open"], routineId: "routine-gate")
+    XCTAssertTrue(input.valid); XCTAssertNil(input.idProblem); XCTAssertNil(input.eventsProblem)
+    input.id = "Gate!"; XCTAssertNotNil(input.idProblem); XCTAssertFalse(input.valid)
+    input.id = ""; XCTAssertNil(input.idProblem); XCTAssertFalse(input.valid)
+    input.id = "gate-event"; input.events = Array(repeating: "event", count: 21)
+    XCTAssertNotNil(input.eventsProblem); XCTAssertFalse(input.valid)
+    input.events = ["bad event"]; XCTAssertNotNil(input.eventsProblem)
+    input.events = ["issue.created", ""]; XCTAssertNil(input.eventsProblem); XCTAssertFalse(input.valid)
+    input.events = ["issue.created", "", "issue.closed"]; XCTAssertNotNil(input.eventsProblem); XCTAssertFalse(input.valid)
+    input.events = ["", ""]; XCTAssertNotNil(input.eventsProblem); XCTAssertFalse(input.valid)
+    let item = try JSONDecoder().decode(HermesSubscription.self, from: JSONSerialization.data(withJSONObject: subscription))
+    XCTAssertEqual(hermesLikelyCreatedTrigger([], item.id, [item])?.id, item.id)
+    XCTAssertNil(hermesLikelyCreatedTrigger([item.id], item.id, [item]))
+    XCTAssertNil(hermesLikelyCreatedTrigger([], "other", [item]))
+  }
+  func testTriggerSubtitleStates() throws {
+    var item = try JSONDecoder().decode(HermesSubscription.self, from: JSONSerialization.data(withJSONObject: subscription))
+    let routine = Routine(id: item.routineId, botId: "ranch", name: "Gate check", prompt: "", schedule: "", enabled: false)
+    item.enabled = true
+    XCTAssertEqual(hermesTriggerSubtitle(item, routines: [routine], loading: false, error: nil), "Enabled · Gate check (paused)")
+    item.enabled = false
+    XCTAssertEqual(hermesTriggerSubtitle(item, routines: [], loading: false, error: nil), "Disabled · Routine not found")
+    XCTAssertEqual(hermesTriggerSubtitle(item, routines: [], loading: true, error: nil), "Disabled · Routine loading…")
+    XCTAssertEqual(hermesTriggerSubtitle(item, routines: [], loading: false, error: "failed"), "Disabled · Routine ID: " + item.routineId)
+  }
+  func testTriggerPasteboardSecretOptionsAndAcknowledgement() {
+    var captured: (String, [UIPasteboard.OptionsKey: Any])?
+    let writer = HermesTriggerPasteboard { captured = ($0, $1) }
+    let now = Date(timeIntervalSince1970: 1000)
+    writer.copySecret("secret", now: now)
+    XCTAssertEqual(captured?.0, "secret")
+    XCTAssertEqual(captured?.1[.localOnly] as? Bool, true)
+    XCTAssertEqual(captured?.1[.expirationDate] as? Date, now.addingTimeInterval(300))
+    writer.copyURL("url")
+    XCTAssertEqual(captured?.0, "url"); XCTAssertTrue(captured?.1.isEmpty == true)
+  }
+  func testTriggerRefusalRefreshesWithoutLockingWork() async throws {
+    let server = AutomationFixtureServer(), store = try makeStore(client(server))
+    defer { AutomationFixtureProtocol.remove(server) }
+    let control = HermesAutomationControls(botId: "ranch")
+    server.enqueue("GET", path, try overview())
+    _ = await control.refresh(store)
+    server.enqueue("PATCH", path + "/triggers/gate-event", Data(#"{"error":"Revision changed"}"#.utf8), status: 409)
+    server.enqueue("GET", path, try overview())
+    let result: HermesTriggerResult? = await control.changeTrigger(store, triggerId: "gate-event", "/triggers/gate-event", HermesTriggerToggle(enabled: true, revision: "old"), method: "PATCH", action: "enable")
+    XCTAssertNil(result); XCTAssertFalse(control.needsRefresh); XCTAssertFalse(control.disabled)
+    XCTAssertTrue(control.triggerFeedback?.message.contains("Status refreshed.") == true)
+    XCTAssertNil(control.error)
+  }
+
+  func testSecretIdentitySurvivesAnotherTriggerAction() async throws {
+    let server = AutomationFixtureServer(), store = try makeStore(client(server))
+    defer { AutomationFixtureProtocol.remove(server) }
+    let control = HermesAutomationControls(botId: "ranch")
+    control.appear(foreground: true)
+    server.enqueue("GET", path, try overview()); _ = await control.refresh(store)
+    server.enqueue("POST", path + "/triggers", try JSONSerialization.data(withJSONObject: ["subscription": subscription, "secret": "received-secret"]))
+    server.enqueue("GET", path, try overview())
+    let _: HermesTriggerResult? = await control.changeTrigger(store, triggerId: "gate-event", "/triggers", [String: String](), action: "create")
+    XCTAssertEqual(control.secret.triggerId, "gate-event")
+    var other = subscription; other["id"] = "other-trigger"
+    server.enqueue("PATCH", path + "/triggers/other-trigger", try JSONSerialization.data(withJSONObject: ["subscription": other]))
+    server.enqueue("GET", path, try overview())
+    let _: HermesTriggerResult? = await control.changeTrigger(store, triggerId: "other-trigger", "/triggers/other-trigger", HermesTriggerToggle(enabled: false, revision: "old"), method: "PATCH", action: "disable")
+    XCTAssertEqual(control.triggerFeedback?.id, "other-trigger")
+    XCTAssertEqual(control.secret.triggerId, "gate-event"); XCTAssertEqual(control.secret.value, "received-secret")
+    control.secret.clear(); XCTAssertNil(control.secret.triggerId)
+  }
+
+  func testConfirmedCreateKeepsSecretWhenStatusReadFails() async throws {
+    let server = AutomationFixtureServer(), store = try makeStore(client(server))
+    defer { AutomationFixtureProtocol.remove(server) }
+    let control = HermesAutomationControls(botId: "ranch")
+    control.appear(foreground: true)
+    server.enqueue("GET", path, try overview()); _ = await control.refresh(store)
+    server.enqueue("POST", path + "/triggers", try JSONSerialization.data(withJSONObject: ["subscription": subscription, "secret": "received-secret"]))
+    server.enqueue("GET", path, Data(#"{"error":"Read failed"}"#.utf8), status: 503)
+    let result: HermesTriggerResult? = await control.changeTrigger(store, triggerId: "gate-event", "/triggers", [String: String](), action: "create")
+    XCTAssertNotNil(result); XCTAssertEqual(control.secret.value, "received-secret")
+    XCTAssertTrue(control.needsRefresh); XCTAssertTrue(control.disabled)
+    XCTAssertEqual(control.triggerFeedback?.message, "Saved. Status could not refresh. Use Refresh status above.")
+    XCTAssertEqual(server.requests.filter { $0.httpMethod == "POST" }.count, 1)
   }
 
 }

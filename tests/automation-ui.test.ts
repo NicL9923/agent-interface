@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 import { act, createElement } from "react";
+import { readFileSync } from "node:fs";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { api, ApiError, write } from "../src/client-api";
-import { AutomationPanel, LearningPanel, likelyCreatedTask } from "../src/components/AutomationPanel";
+import { AutomationPanel, LearningPanel, likelyCreatedTask, likelyCreatedTrigger } from "../src/components/AutomationPanel";
 import type { AutomationOverview } from "../src/shared/automation";
 
 vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(await (async original => ({ ...await original<typeof import("../src/client-api")>(), api: vi.fn(), write: vi.fn() }))(original)));
@@ -24,7 +25,7 @@ afterEach(async () => { await act(async () => root.unmount()); container.remove(
 const button = (name: string) => Array.from(container.querySelectorAll("button")).find(item => item.textContent?.trim() === name)!;
 async function click(name: string) { expect(button(name)).toBeDefined(); await act(async () => button(name).click()); }
 async function input(label: string, value: string) {
-  const element = Array.from(container.querySelectorAll("label")).find(row => row.firstChild?.textContent === label)!.querySelector("input,textarea") as HTMLInputElement;
+  const element = Array.from(container.querySelectorAll("label")).find(row => row.firstChild?.textContent === label)!.control as HTMLInputElement;
   await act(async () => { Object.getOwnPropertyDescriptor(element.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype, "value")!.set!.call(element, value); element.dispatchEvent(new Event("input", { bubbles: true })); });
 }
 async function submit() { await act(async () => container.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }))); }
@@ -215,16 +216,19 @@ it("keeps task instructions and request ID through an uncertain create, without 
 
 it("shows a new signing secret once and creates a disabled trigger", async () => {
   vi.mocked(write).mockResolvedValueOnce({ subscription: { id: "fence-alert", url: "https://hermes.example.test/hooks/fence-alert" }, secret: "synthetic-secret" });
-  await work(); await click("New event trigger"); await input("Trigger ID", "fence-alert"); await input("Description", "Fence alerts"); await input("Event names, separated by commas", "alert, recovery"); await submit();
+  await work(); await click("New event trigger"); await input("Trigger ID", "fence-alert"); await input("Description (optional)", "Fence alerts"); await input("Event names", "alert, recovery"); await submit();
   expect(write).toHaveBeenCalledWith("/bots/ranch/automation/triggers", { id: "fence-alert", description: "Fence alerts", events: ["alert", "recovery"], routineId: "routine" });
-  expect(container.querySelector<HTMLInputElement>('input[type="password"]')?.value).toBe("synthetic-secret");
+  expect(container.innerHTML).not.toContain("synthetic-secret");
+  expect(document.activeElement?.textContent).toBe("Save this signing secret now");
+  expect(button("I've saved it").disabled).toBe(true);
+  await click("Show secret"); expect(container.textContent).toContain("synthetic-secret");
   expect(localStorage.length).toBe(0); expect(sessionStorage.length).toBe(0);
   await click("I've saved it"); expect(container.querySelector('input[type="password"]')).toBeNull();
 });
 
 it("makes event controls read-only for a non-administrator", async () => {
   vi.mocked(api).mockImplementation(async path => path === "/routines" ? [{ id: "routine", botId: "ranch", name: "Morning check" }] : { ...initial(), canManageTriggers: false });
-  await work(); expect(button("New event trigger").disabled).toBe(true);
+  await work(); expect(button("New event trigger")).toBeUndefined();
   expect(container.textContent).toContain("Only an integration administrator"); expect(write).not.toHaveBeenCalled();
 });
 
@@ -553,4 +557,219 @@ it("locks an uncertain create when a likely match appears and closes without ano
   expect(card.querySelector('.automation-task-feedback')?.textContent).toBe('"Fence" appeared on the board. Hermes may have saved it.');
   expect(container.querySelector('[aria-label="Task result"]')?.textContent).toBe('"Fence" appeared on the board. Hermes may have saved it.');
   expect(write).toHaveBeenCalledTimes(1);
+});
+
+const trigger = (id = "gate", routineId = "routine") => ({ id, description: "Gate alert", events: ["alert"], routineId, enabled: false, revision: "a".repeat(64), url: "https://example.test/trigger", secretSet: true });
+it("keeps the settings shell clipped and styles disabled trigger text fields", () => {
+  const settings = readFileSync("src/styles.css", "utf8");
+  const automation = readFileSync("src/components/automation.css", "utf8");
+  expect(settings.match(/\.settings-dialog\s*\{([^}]*)\}/)?.[1]).toMatch(/overflow:\s*clip\s*;/);
+  expect(settings.match(/\.settings-content\s*\{([^}]*)\}/)?.[1]).toMatch(/overflow:\s*auto\s*;/);
+  expect(automation).toMatch(/\.automation-triggers \.automation-form input:not\(\[type=checkbox\]\):disabled,\s*\.automation-triggers \.automation-form textarea:disabled\s*\{[^}]*color:\s*var\(--muted\);[^}]*-webkit-text-fill-color:\s*var\(--muted\);[^}]*background:\s*transparent;/);
+});
+async function submitTrigger() { await act(async () => container.querySelector<HTMLFormElement>(".automation-triggers form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }))); }
+
+it("keeps exact trigger field labels separate from hints and controlled textarea text", async () => {
+  const value = initial(); value.triggers.items = [trigger()];
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [{ id: "routine", botId: "ranch", name: "Morning", enabled: true }] : value);
+  await work(); await click("New event trigger");
+  for (const name of ["Trigger ID", "Description (optional)", "Event names"]) {
+    const labels = [...container.querySelectorAll<HTMLLabelElement>(".automation-triggers label")].filter(label => label.textContent === name);
+    expect(labels).toHaveLength(1); expect(labels[0].control).not.toBeNull();
+    if (name !== "Description (optional)") expect(document.getElementById(labels[0].control!.getAttribute("aria-describedby")!)?.textContent).toBeTruthy();
+  }
+  await click("Cancel"); await click("Edit trigger");
+  const label = [...container.querySelectorAll<HTMLLabelElement>(".automation-triggers label")].find(label => label.textContent === "Description (optional)")!;
+  expect((label.control as HTMLTextAreaElement).value).toBe("Gate alert");
+});
+
+it("preserves a received trigger secret when only its status refresh fails", async () => {
+  await work(); await click("New event trigger"); await input("Trigger ID", "new"); await input("Event names", "alert");
+  vi.mocked(write).mockResolvedValueOnce({ subscription: trigger("new"), secret: "received-secret" });
+  vi.mocked(api).mockRejectedValueOnce(new Error("Read failed"));
+  const scroll = vi.fn(); const focus = vi.spyOn(HTMLElement.prototype, "focus");
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: scroll });
+  await submitTrigger();
+  const panel = container.querySelector(".automation-secret")!; const heading = panel.querySelector("h4")!;
+  expect(scroll).toHaveBeenCalledWith({ block: "start" });
+  expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+  expect(scroll.mock.invocationCallOrder[0]).toBeLessThan(focus.mock.invocationCallOrder.at(-1)!);
+  expect(document.activeElement).toBe(heading); focus.mockRestore(); delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
+  expect(panel.querySelector("code")?.textContent).not.toBe("Hidden");
+  expect(container.querySelector(".automation-secret")?.textContent).toContain("new was created");
+  expect(container.innerHTML).not.toContain("received-secret");
+  expect(button("Resume goal").disabled).toBe(true);
+  await click("Show secret"); expect(container.querySelector(".automation-secret")?.textContent).toContain("received-secret");
+  expect(container.textContent).not.toContain("never received its signing secret"); expect(write).toHaveBeenCalledTimes(1);
+  await click("I've saved it"); expect(container.textContent).toContain("new was created. Refresh status to see its current settings.");
+});
+
+it("preserves the new trigger draft while another row cannot enter edit", async () => {
+  const value = initial(); value.triggers.items = [trigger()];
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [{ id: "routine", botId: "ranch", name: "Morning", enabled: true }] : value);
+  await work(); await click("New event trigger"); await input("Trigger ID", "my-draft");
+  expect(button("Edit trigger").disabled).toBe(true); await click("Edit trigger");
+  const label = [...container.querySelectorAll<HTMLLabelElement>(".automation-triggers label")].find(label => label.textContent === "Trigger ID")!;
+  expect((label.control as HTMLInputElement).value).toBe("my-draft");
+  expect(button("Save trigger")).toBeUndefined();
+  await click("Cancel"); expect(button("Edit trigger").disabled).toBe(false);
+});
+
+it("retires old trigger refusals before reopening edit or cancelling create", async () => {
+  const value = initial(); value.triggers.items = [trigger()];
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [{ id: "routine", botId: "ranch", name: "Morning", enabled: true }] : value);
+  await work(); await click("Edit trigger"); vi.mocked(write).mockRejectedValueOnce(new ApiError("Old refusal.", 409)); await submitTrigger();
+  expect(container.textContent).toContain("Old refusal."); await click("Cancel"); await click("Edit trigger");
+  expect(container.querySelector(".automation-triggers form")?.textContent).not.toContain("Old refusal.");
+  await click("Cancel"); await click("New event trigger"); await input("Trigger ID", "invalid"); await input("Event names", "alert");
+  vi.mocked(write).mockRejectedValueOnce(new ApiError("Create refused.", 400)); await submitTrigger();
+  expect(container.textContent).toContain("Create refused."); await input("Trigger ID", "corrected");
+  expect(container.textContent).not.toContain("Create refused.");
+  vi.mocked(write).mockRejectedValueOnce(new ApiError("Second refusal.", 400)); await submitTrigger(); await click("Cancel");
+  expect(container.textContent).not.toContain("Second refusal.");
+  expect(container.querySelector('.automation-trigger-removed[data-trigger-id="invalid"]')).toBeNull();
+});
+
+it("keeps another trigger's result while typing through its ID in a new draft", async () => {
+  let value = initial(); value.triggers.items = [trigger()];
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [{ id: "routine", botId: "ranch", name: "Morning", enabled: true }] : value);
+  await work(); vi.mocked(write).mockResolvedValueOnce({ subscription: { ...trigger(), enabled: true } });
+  value = { ...value, triggers: { ...value.triggers, items: [{ ...trigger(), enabled: true }] } };
+  await click("Enable trigger"); expect(container.querySelector('article[data-trigger-id="gate"] .automation-trigger-feedback')?.classList.contains("form-notice")).toBe(true);
+  await click("Delete trigger…"); expect(container.querySelector('article[data-trigger-id="gate"] .automation-trigger-feedback')).toBeNull();
+  expect(container.querySelectorAll(".automation-confirm .actions button")).toHaveLength(2); await click("Keep trigger");
+  value = { ...value, triggers: { ...value.triggers, items: [trigger()] } }; vi.mocked(write).mockResolvedValueOnce({ subscription: trigger() }); await click("Disable trigger");
+  value = { ...value, triggers: { ...value.triggers, items: [{ ...trigger(), enabled: true }] } }; vi.mocked(write).mockResolvedValueOnce({ subscription: { ...trigger(), enabled: true } }); await click("Enable trigger");
+  await click("New event trigger"); await input("Trigger ID", "gate"); await input("Trigger ID", "gate-2");
+  expect(container.querySelector('article[data-trigger-id="gate"] .automation-trigger-feedback')?.textContent).toBe("Enabled.");
+  await click("Cancel"); expect(container.querySelector('article[data-trigger-id="gate"] .automation-trigger-feedback')?.textContent).toBe("Enabled.");
+});
+
+it("keeps a newer row result after a duplicate-create refusal for the same ID", async () => {
+  let value = initial(); value.triggers.items = [trigger()];
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [{ id: "routine", botId: "ranch", name: "Morning", enabled: true }] : value);
+  await work(); await click("New event trigger"); await input("Trigger ID", "gate"); await input("Event names", "alert");
+  vi.mocked(write).mockRejectedValueOnce(new ApiError("Duplicate ID.", 409)); await submitTrigger();
+  expect(container.querySelector(".automation-triggers form")?.textContent).toContain("Duplicate ID.");
+  value = { ...value, triggers: { ...value.triggers, items: [{ ...trigger(), enabled: true }] } };
+  vi.mocked(write).mockResolvedValueOnce({ subscription: { ...trigger(), enabled: true } }); await click("Enable trigger");
+  await input("Trigger ID", "gate-2");
+  expect(container.querySelector('article[data-trigger-id="gate"] .automation-trigger-feedback')?.textContent).toBe("Enabled.");
+  expect(container.querySelector('[aria-label="Trigger result"]')?.textContent).toBe("Enabled.");
+  expect(container.querySelector(".automation-triggers form")?.textContent).not.toContain("Duplicate ID.");
+});
+
+it("focuses the matching removed notice after a second trigger deletion", async () => {
+  let value = initial(); value.triggers.items = [trigger("first"), { ...trigger("second"), description: "Second alert" }];
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [{ id: "routine", botId: "ranch", name: "Morning", enabled: true }] : value);
+  await work();
+  for (const id of ["first", "second"]) {
+    await act(async () => container.querySelector<HTMLElement>(`article[data-trigger-id="${id}"]`)!.querySelectorAll("button")[2].click());
+    value = { ...value, triggers: { ...value.triggers, items: value.triggers.items.filter(item => item.id !== id) } };
+    vi.mocked(write).mockResolvedValueOnce({ ok: true }); await click("Delete trigger");
+    expect(document.activeElement).toBe(container.querySelector(`.automation-trigger-removed[data-trigger-id="${id}"]`));
+  }
+});
+
+it("matches only a newly appearing trigger ID", () => {
+  expect(likelyCreatedTrigger([], "gate", [trigger()])?.id).toBe("gate");
+  expect(likelyCreatedTrigger(["gate"], "gate", [trigger()])).toBeUndefined();
+  expect(likelyCreatedTrigger([], "other", [trigger()])).toBeUndefined();
+});
+
+it("keeps trigger refusals local and edit cancel available", async () => {
+  let value = initial(); value.triggers.items = [trigger()];
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [{ id: "routine", botId: "ranch", name: "Morning", enabled: true }] : value);
+  await work(); await click("Edit trigger");
+  expect(document.activeElement).toBe(container.querySelector(".automation-triggers textarea"));
+  vi.mocked(write).mockRejectedValueOnce(new ApiError("Stale.", 409));
+  value = { ...value, triggers: { ...value.triggers, items: [{ ...trigger(), revision: "b".repeat(64) }] } };
+  await submitTrigger();
+  const stale = container.querySelectorAll("form .automation-trigger-feedback");
+  expect(stale).toHaveLength(1); expect(document.activeElement).toBe(stale[0]);
+  expect(stale[0].textContent).toContain("This trigger changed.");
+  expect(container.querySelector('[aria-label="Trigger result"]')?.textContent).toBe(stale[0].textContent);
+  expect(container.textContent).not.toContain("Stale. Status refreshed.");
+  expect(button("Save trigger").disabled).toBe(true); expect(button("Cancel").disabled).toBe(false);
+  expect(button("Resume goal").disabled).toBe(false); expect(container.querySelector('.automation-panel > [role="alert"]')).toBeNull();
+  await click("Cancel"); expect(document.activeElement).toBe(button("Edit trigger"));
+  expect(container.textContent).not.toContain("Stale. Status refreshed.");
+  vi.mocked(write).mockRejectedValueOnce(new ApiError("Toggle refused.", 409)); await click("Enable trigger");
+  expect(document.activeElement?.textContent).toContain("Toggle refused. Status refreshed."); expect(document.activeElement?.classList.contains("form-error")).toBe(true); expect(button("Resume goal").disabled).toBe(false);
+});
+
+it.each([true, false])("reviews an uncertain trigger create before retry (found=%s)", async found => {
+  let value = initial(); vi.mocked(api).mockImplementation(async path => path === "/routines" ? [{ id: "routine", botId: "ranch", name: "Morning", enabled: true }] : value);
+  vi.mocked(write).mockRejectedValueOnce(new ApiError("Lost", 502));
+  await work(); await click("New event trigger"); await input("Trigger ID", "gate"); await input("Event names", "alert"); await submitTrigger();
+  const payload = vi.mocked(write).mock.calls[0][1];
+  expect(document.activeElement?.textContent).toContain("Hermes may have created this trigger"); expect(write).toHaveBeenCalledTimes(1);
+  if (found) value = { ...value, triggers: { ...value.triggers, items: [trigger()] } };
+  await click("Refresh status");
+  if (found) {
+    expect(button("Create trigger")).toBeUndefined(); expect(button("Close")).toBeDefined();
+    expect(container.textContent).toContain("never received its signing secret"); await click("Close");
+    expect(document.activeElement?.textContent).toContain("never received its signing secret"); expect(write).toHaveBeenCalledTimes(1);
+  } else {
+    expect(document.activeElement?.textContent).toContain("sends the same request again");
+    vi.mocked(write).mockRejectedValueOnce(new ApiError("Duplicate", 409)); await submitTrigger();
+    expect(vi.mocked(write).mock.calls[1][1]).toEqual(payload);
+  }
+});
+
+it("labels orphan and paused routines, blocks orphan enable, and focuses delete feedback", async () => {
+  let value = initial(); value.triggers.items = [trigger("gate", "missing"), { ...trigger("other"), description: "Other" }];
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [{ id: "routine", botId: "ranch", name: "Morning", enabled: false }] : value);
+  await work(); expect(container.textContent).toContain("Routine: missing · Not found"); expect(container.textContent).toContain("Routine: Morning · Paused");
+  const orphan = container.querySelector<HTMLElement>('[data-trigger-id="gate"]')!;
+  expect(orphan.querySelector<HTMLButtonElement>("button")!.disabled).toBe(true); expect(write).not.toHaveBeenCalled();
+  await act(async () => [...orphan.querySelectorAll("button")].find(b => b.textContent === "Delete trigger…")!.click());
+  value = { ...value, triggers: { ...value.triggers, items: [trigger("other")] } }; vi.mocked(write).mockResolvedValueOnce({ ok: true }); await click("Delete trigger");
+  expect(document.activeElement?.textContent).toBe("Deleted gate.");
+});
+
+it.each([false, undefined])("hides trigger write controls when manage permission is %s", async permission => {
+  const value = initial(); value.canManageTriggers = permission; value.triggers.items = [trigger()];
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value); await work();
+  expect(container.querySelectorAll(".automation-triggers button")).toHaveLength(0); expect(write).not.toHaveBeenCalled();
+});
+
+it("copies the secret only on request and reports clipboard failure", async () => {
+  const writeText = vi.fn().mockRejectedValueOnce(new Error("denied")).mockResolvedValueOnce(undefined);
+  vi.stubGlobal("navigator", { clipboard: { writeText } });
+  vi.mocked(write).mockResolvedValueOnce({ subscription: { id: "gate", url: "https://example.test" }, secret: "synthetic-secret" });
+  await work(); await click("New event trigger"); await input("Trigger ID", "gate"); await input("Event names", "alert"); await submitTrigger();
+  const fields = container.querySelectorAll(".automation-secret-field");
+  expect(fields).toHaveLength(2); expect(fields[0].textContent).toContain("Webhook URL");
+  expect(fields[1].textContent).toContain("Signing secret"); expect(fields[1].querySelector("code")).toBeNull();
+  expect(button("Copy secret").closest(".actions")).not.toBe(button("I've saved it").closest(".actions"));
+  expect(container.innerHTML).not.toContain("synthetic-secret"); await click("Copy secret");
+  expect(container.textContent).toContain("Couldn't copy. Try again."); expect(button("I've saved it").disabled).toBe(true);
+  await click("Copy secret"); expect(writeText).toHaveBeenCalledWith("synthetic-secret");
+  expect(container.textContent).toContain("Copied."); expect(button("I've saved it").disabled).toBe(false);
+  expect(localStorage.length).toBe(0); expect(sessionStorage.length).toBe(0);
+});
+
+it("shows routine loading and retries a failed request once", async () => {
+  let resolve!: (value: unknown) => void;
+  vi.mocked(api).mockImplementation(path => path === "/routines" ? new Promise(done => { resolve = done; }) : Promise.resolve(initial()));
+  await work(); expect(container.textContent).toContain("Loading routines…"); expect(container.textContent).not.toContain("Create a routine in"); expect(button("New event trigger").disabled).toBe(true);
+  await act(async () => resolve([]));
+  vi.mocked(api).mockImplementation(async path => { if (path === "/routines") throw Error("Offline"); return initial(); });
+  // Remount to exercise the failed initial request.
+  await act(async () => root.render(createElement("div")));
+  await work(); expect(container.textContent).toContain("Couldn't load routines"); expect(container.textContent).not.toContain("Create a routine in");
+  const calls = vi.mocked(api).mock.calls.filter(([path]) => path === "/routines").length;
+  await click("Retry routines"); expect(vi.mocked(api).mock.calls.filter(([path]) => path === "/routines")).toHaveLength(calls + 1);
+});
+
+it("explains a disabled platform beside the row and clears a secret on unmount", async () => {
+  const value = initial(); value.triggers.platformEnabled = false; value.triggers.items = [trigger()];
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [{ id: "routine", botId: "ranch", name: "Morning", enabled: true }] : value);
+  await work(); const row = container.querySelector('[data-trigger-id="gate"]')!;
+  expect(row.textContent).toContain("Can't enable until the installer turns on Hermes's webhook channel."); expect(button("Enable trigger").disabled).toBe(true);
+  vi.mocked(write).mockResolvedValueOnce({ subscription: { id: "new", url: "https://example.test" }, secret: "synthetic-secret" });
+  await click("New event trigger"); await input("Trigger ID", "new"); await input("Event names", "alert"); await submitTrigger(); await click("Show secret");
+  await act(async () => root.render(createElement("div"))); expect(container.innerHTML).not.toContain("synthetic-secret");
+  await work(); expect(container.innerHTML).not.toContain("synthetic-secret");
 });

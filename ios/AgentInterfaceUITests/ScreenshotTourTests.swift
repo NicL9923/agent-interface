@@ -1,4 +1,5 @@
 import XCTest
+import CryptoKit
 
 /// Captures a repeatable PNG tour of the Debug fixture for visual before/after review.
 /// Skipped unless the runner sets AGENT_INTERFACE_SCREENSHOT_DIR, which xcodebuild forwards
@@ -1453,6 +1454,913 @@ import XCTest
       }
       print("DESIGN_WORK_TASK_VARIANT \(variant) complete"); app.terminate()
     }
+  }
+
+  func testWorkTriggerDesignReview() throws {
+    let environment = ProcessInfo.processInfo.environment
+    let source = environment["AGENT_INTERFACE_DESIGN_WORK_TRIGGERS_PATH"] ?? ""
+    try XCTSkipUnless(!source.isEmpty, "Set AGENT_INTERFACE_DESIGN_WORK_TRIGGERS_PATH to the W3 fixture.")
+    let original = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: source))) as? [String: Any])
+    let config = try XCTUnwrap(original["workFixture"] as? [String: Any])
+    guard config["gate"] as? String == "W3-triggers", environment["AGENT_INTERFACE_DESIGN_STAGE"] == "before",
+      let device = environment["AGENT_INTERFACE_DESIGN_DEVICE"], ["ios", "ipad"].contains(device) else {
+      XCTFail("W3 requires its fixture gate, BEFORE stage, and an explicit ios or ipad device."); return
+    }
+    let pad = device == "ipad"
+    let phoneVariants = ["trigger-list", "trigger-list-dark", "trigger-list-large-text", "trigger-readonly", "trigger-platform-off", "trigger-routines-error", "trigger-first-use", "trigger-unsupported", "trigger-create", "trigger-create-dark", "trigger-create-large-text", "trigger-edit-stale", "trigger-toggle-delete", "trigger-create-uncertain"]
+    let padVariants = ["trigger-list", "trigger-list-dark", "trigger-list-large-text", "trigger-readonly", "trigger-create", "trigger-create-large-text", "trigger-edit-stale", "trigger-toggle-delete"]
+    let variant = environment["AGENT_INTERFACE_DESIGN_VARIANT"] ?? ""
+    guard (pad ? padVariants : phoneVariants).contains(variant) else { XCTFail("Unknown W3 variant for \(device): \(variant)"); return }
+    guard try FileManager.default.contentsOfDirectory(atPath: directory.path).isEmpty else { XCTFail("W3 requires a fresh empty capture directory."); return }
+    let auditURL = directory.appendingPathComponent("\(variant)-requests.jsonl")
+    guard FileManager.default.createFile(atPath: auditURL.path, contents: Data()) else { XCTFail("Cannot create fresh W3 audit."); return }
+    let work = try XCTUnwrap(original["work"] as? [String: Any])
+    let triggers = try XCTUnwrap((work["triggers"] as? [String: Any])?["items"] as? [[String: Any]])
+    let freezer = try XCTUnwrap(triggers.first { $0["id"] as? String == "freezer-alerts" })
+    let gate = try XCTUnwrap(triggers.first { $0["id"] as? String == "gate-left-open" })
+    let newTrigger = try XCTUnwrap(config["newTrigger"] as? [String: Any])
+    let secret = try XCTUnwrap(config["syntheticSecret"] as? String)
+    guard secret.contains("SYNTHETIC"), secret.range(of: "^[A-Za-z0-9_-]{43}$", options: .regularExpression) != nil else { XCTFail("W3 requires the synthetic secret."); return }
+    var fixture = original
+    switch variant {
+    case "trigger-readonly": fixture["mode"] = "readonly"
+    case "trigger-platform-off": fixture["mode"] = "trigger-platform-off"
+    case "trigger-routines-error": fixture["mode"] = "routines-error"
+    case "trigger-first-use": fixture["mode"] = "no-routines"
+    case "trigger-unsupported": fixture["mode"] = "sections-unsupported"
+    case "trigger-edit-stale": fixture["mode"] = "trigger-external-change"
+    case "trigger-create-uncertain": fixture["mode"] = "trigger-create-uncertain"
+    default: fixture["mode"] = "loaded"
+    }
+    let app = launch(textSize: variant.contains("large-text") ? "UICTContentSizeCategoryAccessibilityXL" : "UICTContentSizeCategoryL", environment: [
+      "AGENT_INTERFACE_UI_THEME": variant.contains("dark") ? "dark" : "light",
+      "AGENT_INTERFACE_UI_DESIGN_FIXTURE": String(decoding: try JSONSerialization.data(withJSONObject: fixture), as: UTF8.self),
+      "AGENT_INTERFACE_UI_WORK_AUDIT_PATH": auditURL.path,
+    ])
+    defer { app.terminate() }
+    XCTAssertTrue(app.textViews["messageComposer"].waitForExistence(timeout: 15))
+    app.openAssistantSettings("Ranch hand"); app.selectSettingsTab("Work")
+    let form = app.collectionViews["automation.work"]
+    XCTAssertTrue(form.waitForExistence(timeout: 10))
+    func events() throws -> [[String: Any]] {
+      try String(contentsOf: auditURL, encoding: .utf8).split(separator: "\n").map { try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any]) }
+    }
+    func reads() throws -> Int { try events().filter { $0["method"] as? String == "GET" }.count }
+    func waitReads(_ count: Int) throws {
+      let deadline = Date().addingTimeInterval(10)
+      while Date() < deadline { if try reads() >= count { return }; usleep(100_000) }
+      XCTFail("Expected \(count) Work overview reads")
+    }
+    func unique(_ query: XCUIElementQuery, _ name: String) -> XCUIElement {
+      let first = query.firstMatch
+      XCTAssertTrue(first.waitForExistence(timeout: 10), "Missing \(name)")
+      XCTAssertEqual(query.count, 1, "Expected exactly one \(name)")
+      return first
+    }
+    func reveal(_ element: XCUIElement, _ container: XCUIElement, up: Bool = true) { revealModels(element, in: container, app: app, up: up) }
+    func press(_ query: XCUIElementQuery, _ name: String, in container: XCUIElement, up: Bool = true) {
+      reveal(query.firstMatch, container, up: up); let element = unique(query, name)
+      XCTAssertTrue(element.wait(until: "enabled == true"), name); XCTAssertTrue(element.waitUntilHittable(), name); element.tapWhenReady()
+    }
+    func landing(_ name: String, _ element: XCUIElement, in container: XCUIElement) {
+      let present = element.exists, frame = present && element.hasFrame ? String(describing: element.frame) : "unmaterialized"
+      let intersects = present && element.hasFrame && element.frame.intersects(container.frame)
+      print("DESIGN_WORK_TRIGGER_LANDING \(name) exists=\(present) frame=\(frame) viewport=\(container.frame) intersects=\(intersects) hittable=\(present && element.isHittable)")
+    }
+    func shot(_ name: String) throws {
+      guard name.hasPrefix("trigger-"), !FileManager.default.fileExists(atPath: directory.appendingPathComponent("\(name).png").path) else { XCTFail("Invalid or duplicate W3 image name"); return }
+      let editor = app.collectionViews["automation.triggerEditor"]
+      print("DESIGN_WORK_TRIGGER_VIEWPORT \(name) screen=\(app.frame) work=\(form.frame) editor=\(editor.exists ? String(describing: editor.frame) : "absent")")
+      try capture(name)
+    }
+    func row(_ label: String) -> XCUIElement {
+      let query = form.buttons.matching(NSPredicate(format: "label == %@", label))
+      reveal(query.firstMatch, form); return unique(query, label)
+    }
+    func expand(_ label: String) { let element = row(label); reveal(element, form); XCTAssertTrue(element.waitUntilHittable()); element.tapWhenReady() }
+    func openEditor() -> XCUIElement {
+      press(form.buttons.matching(identifier: "New event trigger"), "New event trigger", in: form)
+      let editor = app.collectionViews["automation.triggerEditor"]; XCTAssertTrue(editor.waitForExistence(timeout: 10)); return editor
+    }
+    func field(_ placeholder: String, in editor: XCUIElement) -> XCUIElement {
+      let predicate = NSPredicate(format: "(placeholderValue == %@ OR label == %@) AND elementType IN %@", placeholder, placeholder, [XCUIElement.ElementType.textField.rawValue, XCUIElement.ElementType.textView.rawValue])
+      let query = editor.descendants(matching: .any).matching(predicate)
+      reveal(query.firstMatch, editor); return unique(query, "trigger field \(placeholder)")
+    }
+    func rowValue(_ value: String) -> XCUIElement {
+      let element = form.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", value, value)).firstMatch
+      reveal(element, form); XCTAssertTrue(element.waitForExistence(timeout: 5)); return element
+    }
+    func chooseRoutine(_ label: String, excluding excluded: String) {
+      let query = app.buttons.matching(NSPredicate(format: "label == %@", label))
+      XCTAssertTrue(query.firstMatch.waitForExistence(timeout: 5))
+      XCTAssertEqual(app.buttons.matching(NSPredicate(format: "label == %@", excluded)).count, 0, "Routine menu must hide \(excluded)")
+      for _ in 0..<10 {
+        let visible = query.allElementsBoundByIndex.filter { $0.isHittable }
+        if visible.count == 1 { visible[0].tapWhenReady(); return }
+        usleep(100_000)
+      }
+      XCTFail("Expected exactly one hittable routine menu item: \(label)")
+    }
+    func fill(_ editor: XCUIElement) throws {
+      let id = unique(editor.textFields.matching(identifier: "automation.triggerID"), "trigger ID")
+      let description = field("Description", in: editor), names = field("Event names, separated by commas", in: editor)
+      for (element, value) in [(id, try XCTUnwrap(newTrigger["id"] as? String)), (description, try XCTUnwrap(newTrigger["description"] as? String)), (names, try XCTUnwrap((newTrigger["events"] as? [String])?.joined(separator: ", ")))] {
+        reveal(element, editor); XCTAssertTrue(element.waitUntilHittable()); element.tapWhenReady(); XCTAssertTrue(element.waitForKeyboardFocus()); element.waitForKeyboardLayout(); element.typeWhenFocused(value)
+      }
+      let pickerQuery = editor.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Routine"))
+      reveal(pickerQuery.firstMatch, editor)
+      let picker = unique(pickerQuery, "routine picker")
+      XCTAssertTrue(picker.waitUntilHittable()); picker.tapWhenReady()
+      chooseRoutine("Freezer alert check", excluding: "Garden check")
+      print("DESIGN_WORK_TRIGGER_KEYBOARD after-routine visible=\(app.keyboards.firstMatch.exists)")
+    }
+    func toolbar(_ name: String, title: String) -> XCUIElement {
+      unique(app.navigationBars[title].buttons.matching(identifier: name), "\(title) \(name)")
+    }
+    func create(_ editor: XCUIElement) {
+      let button = toolbar("Create disabled", title: "New event trigger")
+      print("DESIGN_WORK_TRIGGER_CREATE_FRAME \(button.frame)")
+      XCTAssertTrue(button.wait(until: "enabled == true")); XCTAssertTrue(button.waitUntilHittable()); button.tapWhenReady()
+    }
+    func revealSecret() {
+      let hidden = form.staticTexts["Signing secret hidden"]
+      XCTAssertTrue(hidden.waitForExistence(timeout: 10)); reveal(hidden, form, up: false)
+      press(form.buttons.matching(identifier: "Show secret"), "Show secret", in: form)
+      XCTAssertTrue(form.buttons["Hide secret"].waitForExistence(timeout: 10))
+      XCTAssertTrue(form.staticTexts.matching(NSPredicate(format: "label == %@", "Signing secret: " + secret)).firstMatch.exists)
+    }
+    let heading = form.staticTexts["Event triggers"]
+    reveal(heading, form); XCTAssertTrue(heading.waitForExistence(timeout: 10))
+    try waitReads(1); XCTAssertEqual(try reads(), 1); XCTAssertFalse(try events().contains { $0["method"] as? String != "GET" })
+    switch variant {
+    case "trigger-list", "trigger-list-dark", "trigger-list-large-text":
+      let first = row(try XCTUnwrap(freezer["description"] as? String))
+      XCTAssertTrue(first.isHittable, "Collapsed trigger list must show its first row before capture")
+      if variant == "trigger-list" { try shot("trigger-list") }
+      if variant == "trigger-list-dark" && !pad { try shot("trigger-list-dark") }
+      if variant == "trigger-list-large-text" { try shot("trigger-list-large-text") }
+      expand(try XCTUnwrap(freezer["description"] as? String))
+      let action = form.buttons["Disable trigger"]; reveal(action, form)
+      XCTAssertEqual(form.buttons.matching(identifier: "Disable trigger").count, 1)
+      try shot(variant == "trigger-list" ? "trigger-list-expanded" : variant == "trigger-list-dark" ? "trigger-list-dark-expanded" : "trigger-list-large-text-actions")
+    case "trigger-readonly":
+      expand(try XCTUnwrap(freezer["description"] as? String))
+      for label in ["New event trigger", "Enable trigger", "Disable trigger", "Edit trigger", "Delete trigger"] { XCTAssertEqual(form.buttons.matching(identifier: label).count, 0) }
+      try shot("trigger-readonly")
+    case "trigger-platform-off":
+      expand("gate-left-open"); reveal(form.buttons["Enable trigger"], form); let enable = unique(form.buttons.matching(identifier: "Enable trigger"), "Enable trigger"); XCTAssertFalse(enable.isEnabled); try shot("trigger-platform-off")
+    case "trigger-routines-error":
+      let retry = form.buttons["Retry routines"]; reveal(retry, form); _ = unique(form.buttons.matching(identifier: "Retry routines"), "Retry routines"); try shot("trigger-routines-error")
+      expand(try XCTUnwrap(freezer["description"] as? String)); _ = rowValue("routine-freezer")
+    case "trigger-first-use":
+      let empty = form.staticTexts["No event triggers yet."]; reveal(empty, form); XCTAssertTrue(empty.waitForExistence(timeout: 10)); try shot("trigger-first-use")
+    case "trigger-unsupported":
+      let reason = form.staticTexts.matching(NSPredicate(format: "label == %@", "This Hermes revision cannot expose triggers. Update and qualify its integration."))
+      reveal(reason.firstMatch, form); _ = unique(reason, "unsupported trigger reason"); try shot("trigger-unsupported")
+    case "trigger-create", "trigger-create-dark", "trigger-create-large-text", "trigger-create-uncertain":
+      let editor = openEditor()
+      if variant == "trigger-create" && !pad { try shot("trigger-create-empty") }
+      try fill(editor)
+      if variant == "trigger-create" { try shot("trigger-create-filled") }
+      if variant == "trigger-create-dark" { try shot("trigger-create-dark") }
+      if variant == "trigger-create-large-text" {
+        let id = editor.textFields["automation.triggerID"]; reveal(id, editor, up: false); try shot("trigger-create-large-text-top")
+        if !pad { let pickerQuery = editor.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Routine")); reveal(pickerQuery.firstMatch, editor); _ = unique(pickerQuery, "routine picker"); try shot("trigger-create-large-text-bottom") }
+      }
+      create(editor)
+      if variant == "trigger-create-uncertain" {
+        let error = editor.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "We couldn't confirm this change.")).firstMatch
+        landing("uncertain-error", error, in: editor); reveal(error, editor, up: false); XCTAssertTrue(error.waitForExistence(timeout: 10)); try shot("trigger-create-uncertain")
+        let cancel = toolbar("Cancel", title: "New event trigger"); XCTAssertTrue(cancel.waitUntilHittable()); cancel.tapWhenReady(); XCTAssertTrue(editor.waitForDisappearance(timeout: 10))
+        press(form.buttons.matching(identifier: "automation.refresh"), "Work refresh", in: form, up: false); try waitReads(2)
+        let created = row(try XCTUnwrap(newTrigger["description"] as? String)); reveal(created, form); created.tapWhenReady()
+        _ = rowValue("Configured"); XCTAssertFalse(form.staticTexts["Signing secret hidden"].exists); try shot("trigger-create-uncertain-refreshed")
+      } else {
+        XCTAssertTrue(editor.waitForDisappearance(timeout: 10)); try waitReads(2)
+        let hidden = form.staticTexts["Signing secret hidden"], header = form.staticTexts["Save this signing secret now"], notice = form.staticTexts["Saved in Hermes."]
+        landing("secret-header", header, in: form); landing("notice-after-create", notice, in: form)
+        if variant == "trigger-create" { try shot("trigger-secret-landing") }
+        reveal(hidden, form, up: false)
+        if variant == "trigger-create" && !pad { try shot("trigger-secret-hidden") }
+        revealSecret()
+        try shot(variant == "trigger-create" ? "trigger-secret-revealed" : variant == "trigger-create-dark" ? "trigger-secret-dark" : "trigger-secret-large-text")
+        if variant == "trigger-create-dark" {
+          XCTAssertEqual(try reads(), 2); app.selectSettingsTab("Learning"); XCTAssertTrue(app.collectionViews["automation.learning"].waitForExistence(timeout: 10)); try waitReads(3)
+          app.selectSettingsTab("Work"); XCTAssertTrue(form.waitForExistence(timeout: 10)); try waitReads(4); XCTAssertFalse(form.buttons["Hide secret"].exists); XCTAssertFalse(form.staticTexts["Signing secret hidden"].exists)
+        } else {
+          press(form.buttons.matching(identifier: "I've saved it"), "I've saved it", in: form); XCTAssertFalse(form.buttons["Show secret"].exists); XCTAssertFalse(form.buttons["Hide secret"].exists)
+          if variant == "trigger-create" { let created = row(try XCTUnwrap(newTrigger["description"] as? String)); created.tapWhenReady(); let enable = form.buttons["Enable trigger"]; reveal(enable, form); XCTAssertTrue(enable.isEnabled); _ = rowValue("Disabled"); try shot("trigger-created") }
+        }
+      }
+    case "trigger-edit-stale":
+      expand(try XCTUnwrap(freezer["description"] as? String)); press(form.buttons.matching(identifier: "Edit trigger"), "Edit trigger", in: form)
+      let editor = app.collectionViews["automation.triggerEditor"]; XCTAssertTrue(editor.waitForExistence(timeout: 10)); if !pad { try shot("trigger-edit") }
+      XCTAssertEqual(try reads(), 1); press(editor.buttons.matching(identifier: "automation.refresh"), "editor refresh", in: editor, up: false); try waitReads(2); XCTAssertEqual(try reads(), 2)
+      let stale = editor.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "This trigger changed.")).firstMatch
+      XCTAssertTrue(stale.waitForExistence(timeout: 10)); reveal(stale, editor, up: false); XCTAssertFalse(toolbar("Save trigger", title: "Edit event trigger").isEnabled); try shot("trigger-edit-stale")
+    case "trigger-toggle-delete":
+      expand("gate-left-open"); press(form.buttons.matching(identifier: "Enable trigger"), "Enable trigger", in: form); try waitReads(2)
+      XCTAssertTrue(form.buttons["Disable trigger"].wait(until: "enabled == true"))
+      let notice = form.staticTexts["Saved in Hermes."]; landing("notice-after-toggle", notice, in: form); if !pad { try shot("trigger-toggled") }
+      press(form.buttons.matching(identifier: "Delete trigger"), "row Delete trigger", in: form)
+      XCTAssertTrue(app.staticTexts["Delete this event trigger?"].waitForExistence(timeout: 10)); let confirm = unique(app.sheets.buttons.matching(identifier: "Delete trigger"), "sheet Delete trigger"); try shot("trigger-delete-confirm"); XCTAssertTrue(confirm.waitUntilHittable()); confirm.tapWhenReady(); try waitReads(3)
+      XCTAssertTrue(form.buttons["gate-left-open"].waitForDisappearance(timeout: 10)); landing("notice-after-delete", form.staticTexts["Saved in Hermes."], in: form)
+    default: XCTFail("Unknown W3 variant")
+    }
+    let recorded = try events(), writes = recorded.filter { $0["method"] as? String != "GET" }
+    let readCount = recorded.filter { $0["method"] as? String == "GET" }.count
+    if variant == "trigger-create-dark" { XCTAssertEqual(readCount, 4) }
+    else if variant.hasPrefix("trigger-create") || variant == "trigger-edit-stale" { XCTAssertEqual(readCount, 2) }
+    else if variant == "trigger-toggle-delete" { XCTAssertEqual(readCount, 3) }
+    else { XCTAssertEqual(readCount, 1) }
+    XCTAssertFalse(writes.contains { ($0["path"] as? String) == "/triggers/barn-door-sensor" && ($0["method"] as? String) == "PATCH" })
+    if variant.hasPrefix("trigger-create") {
+      XCTAssertEqual(writes.count, 1); let write = try XCTUnwrap(writes.first); XCTAssertEqual(write["method"] as? String, "POST"); XCTAssertEqual(write["path"] as? String, "/triggers")
+      let body = try XCTUnwrap(write["body"] as? [String: Any]); XCTAssertEqual(Set(body.keys), Set(["id", "description", "events", "routineId"]))
+      for key in ["id", "description", "routineId"] { XCTAssertEqual(body[key] as? String, newTrigger[key] as? String) }; XCTAssertEqual(body["events"] as? [String], newTrigger["events"] as? [String])
+    } else if variant == "trigger-toggle-delete" {
+      XCTAssertEqual(writes.count, 2); let toggle = writes[0], delete = writes[1]
+      XCTAssertEqual(toggle["method"] as? String, "PATCH"); XCTAssertEqual(toggle["path"] as? String, "/triggers/gate-left-open")
+      let toggleBody = try XCTUnwrap(toggle["body"] as? [String: Any]); XCTAssertEqual(Set(toggleBody.keys), Set(["enabled", "revision"])); XCTAssertEqual(toggleBody["enabled"] as? Bool, true); XCTAssertEqual(toggleBody["revision"] as? String, gate["revision"] as? String)
+      XCTAssertEqual(delete["method"] as? String, "DELETE"); XCTAssertEqual(delete["path"] as? String, "/triggers/gate-left-open")
+      let deleteBody = try XCTUnwrap(delete["body"] as? [String: Any]); XCTAssertEqual(Set(deleteBody.keys), Set(["revision"])); XCTAssertEqual(deleteBody["revision"] as? String, "4f77ac20ca7285adb3f2ea7eabd5d90579b9cedee4de95fab111d654cefcf63c")
+    } else { XCTAssertTrue(writes.isEmpty) }
+    print("DESIGN_WORK_TRIGGER_VARIANT \(variant) complete")
+  }
+
+  func testWorkTriggerAfterDesignReview() throws {
+    let environment = ProcessInfo.processInfo.environment
+    let source = environment["AGENT_INTERFACE_DESIGN_WORK_TRIGGERS_PATH"] ?? ""
+    try XCTSkipUnless(!source.isEmpty, "Set AGENT_INTERFACE_DESIGN_WORK_TRIGGERS_PATH to the W3 fixture.")
+    let fixtureData = try Data(contentsOf: URL(fileURLWithPath: source))
+    guard SHA256.hash(data: fixtureData).map({ String(format: "%02x", $0) }).joined() == "5ed79b279e92aec72374303ef45c340560ca753524187cff9e78637f17e97e9d" else { XCTFail("Wrong W3 fixture."); return }
+    let original = try XCTUnwrap(JSONSerialization.jsonObject(with: fixtureData) as? [String: Any])
+    let config = try XCTUnwrap(original["workFixture"] as? [String: Any])
+    guard config["gate"] as? String == "W3-triggers", environment["AGENT_INTERFACE_DESIGN_STAGE"] == "after",
+      let device = environment["AGENT_INTERFACE_DESIGN_DEVICE"], ["ios", "ipad"].contains(device) else {
+      XCTFail("W3 requires its fixture gate, AFTER stage, and an explicit ios or ipad device."); return
+    }
+    guard directory.lastPathComponent == device, directory.deletingLastPathComponent().lastPathComponent == "after" else { XCTFail("W3 AFTER requires an after/device capture directory."); return }
+    let pad = device == "ipad"
+    let phoneVariants = ["trigger-list", "trigger-list-dark", "trigger-list-large-text", "trigger-readonly", "trigger-platform-off", "trigger-routines-error", "trigger-first-use", "trigger-unsupported", "trigger-create", "trigger-create-dark", "trigger-create-large-text", "trigger-create-large-text-hidden", "trigger-edit-stale", "trigger-toggle-delete", "trigger-create-uncertain"]
+    let padVariants = ["trigger-list", "trigger-list-dark", "trigger-list-large-text", "trigger-readonly", "trigger-create", "trigger-create-large-text", "trigger-edit-stale", "trigger-toggle-delete"]
+    let variant = environment["AGENT_INTERFACE_DESIGN_VARIANT"] ?? ""
+    guard (pad ? padVariants : phoneVariants).contains(variant) else { XCTFail("Unknown W3 variant for \(device): \(variant)"); return }
+    guard try FileManager.default.contentsOfDirectory(atPath: directory.path).isEmpty else { XCTFail("W3 requires a fresh empty capture directory."); return }
+    let auditURL = directory.appendingPathComponent("\(variant)-requests.jsonl")
+    guard FileManager.default.createFile(atPath: auditURL.path, contents: Data()) else { XCTFail("Cannot create fresh W3 audit."); return }
+    let work = try XCTUnwrap(original["work"] as? [String: Any])
+    let triggers = try XCTUnwrap((work["triggers"] as? [String: Any])?["items"] as? [[String: Any]])
+    let freezer = try XCTUnwrap(triggers.first { $0["id"] as? String == "freezer-alerts" })
+    let gate = try XCTUnwrap(triggers.first { $0["id"] as? String == "gate-left-open" })
+    let newTrigger = try XCTUnwrap(config["newTrigger"] as? [String: Any])
+    let secret = try XCTUnwrap(config["syntheticSecret"] as? String)
+    guard secret.contains("SYNTHETIC"), secret.range(of: "^[A-Za-z0-9_-]{43}$", options: .regularExpression) != nil else { XCTFail("W3 requires the synthetic secret."); return }
+    var fixture = original
+    switch variant {
+    case "trigger-readonly": fixture["mode"] = "readonly"
+    case "trigger-platform-off": fixture["mode"] = "trigger-platform-off"
+    case "trigger-routines-error": fixture["mode"] = "routines-error"
+    case "trigger-first-use": fixture["mode"] = "no-routines"
+    case "trigger-unsupported": fixture["mode"] = "sections-unsupported"
+    case "trigger-edit-stale": fixture["mode"] = "trigger-external-change"
+    case "trigger-create-uncertain": fixture["mode"] = "trigger-create-uncertain"
+    default: fixture["mode"] = "loaded"
+    }
+    let app = launch(textSize: variant.contains("large-text") ? "UICTContentSizeCategoryAccessibilityXL" : "UICTContentSizeCategoryL", environment: [
+      "AGENT_INTERFACE_UI_THEME": variant.contains("dark") ? "dark" : "light",
+      "AGENT_INTERFACE_UI_DESIGN_FIXTURE": String(decoding: try JSONSerialization.data(withJSONObject: fixture), as: UTF8.self),
+      "AGENT_INTERFACE_UI_WORK_AUDIT_PATH": auditURL.path,
+    ])
+    defer { app.terminate() }
+    XCTAssertTrue(app.textViews["messageComposer"].waitForExistence(timeout: 15))
+    app.openAssistantSettings("Ranch hand"); app.selectSettingsTab("Work")
+    let form = app.collectionViews["automation.work"]
+    XCTAssertTrue(form.waitForExistence(timeout: 10))
+    func events() throws -> [[String: Any]] {
+      try String(contentsOf: auditURL, encoding: .utf8).split(separator: "\n").map { try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any]) }
+    }
+    func reads() throws -> Int { try events().filter { $0["method"] as? String == "GET" }.count }
+    func waitReads(_ count: Int) throws {
+      let deadline = Date().addingTimeInterval(10)
+      while Date() < deadline { if try reads() >= count { return }; usleep(100_000) }
+      XCTFail("Expected \(count) Work overview reads")
+    }
+    func unique(_ query: XCUIElementQuery, _ name: String) -> XCUIElement {
+      let first = query.firstMatch
+      XCTAssertTrue(first.waitForExistence(timeout: 10), "Missing \(name)")
+      XCTAssertEqual(query.count, 1, "Expected exactly one \(name)")
+      return first
+    }
+    func settled(_ element: XCUIElement) -> Bool {
+      let deadline = Date().addingTimeInterval(2)
+      var last = CGRect.null
+      var unchanged = 0
+      while Date() < deadline {
+        let frame = element.exists ? element.frame : .null
+        let current = frame.isEmpty ? .null : frame
+        unchanged = !current.isNull && current == last ? unchanged + 1 : 0
+        last = current
+        if unchanged >= 3 { return true }
+        usleep(100_000)
+      }
+      return false
+    }
+    func focusState(_ container: XCUIElement) -> String {
+      let id = container.textFields["automation.triggerID"]
+      let description = container.descendants(matching: .any).matching(identifier: "automation.triggerDescription").firstMatch
+      return "id=\(id.exists && id.waitForKeyboardFocus(true, timeout: 0)) description=\(description.exists && description.waitForKeyboardFocus(true, timeout: 0))"
+    }
+    func band(_ container: XCUIElement, target: XCUIElement) -> (top: CGFloat, bottom: CGFloat, occluderTop: CGFloat?, details: String)? {
+      let keyboard = app.keyboards.firstMatch
+      let predictions = app.otherElements["SystemInputAssistantView"]
+      let hide = app.buttons["automation.triggerEditor.hideKeyboard"]
+      let toolbar = app.toolbars.containing(.button, identifier: "automation.triggerEditor.hideKeyboard").firstMatch
+      let navigationBottom = app.navigationBars.allElementsBoundByIndex
+        .filter { $0.hasFrame && $0.frame.intersects(container.frame) }.map { $0.frame.maxY }.max() ?? container.frame.minY
+      let top = max(container.frame.minY, navigationBottom) + 12
+      var occluders: [CGFloat] = []
+      var frames: [String] = []
+      for (name, element) in [("keyboard", keyboard), ("predictions", predictions)] where element.hasFrame && element.frame.intersects(container.frame) {
+        occluders.append(element.frame.minY)
+        frames.append("\(name)=\(element.frame)")
+      }
+      if toolbar.hasFrame && toolbar.frame.intersects(container.frame) {
+        guard toolbar.frame.height <= 80, toolbar.frame.minY > top,
+          !keyboard.hasFrame || toolbar.frame.maxY <= keyboard.frame.minY + 2 else {
+          XCTFail("DESIGN_W3 invalid-toolbar frame=\(toolbar.frame) keyboard=\(keyboard.hasFrame ? String(describing: keyboard.frame) : "absent") bandTop=\(top)"); return nil
+        }
+        occluders.append(toolbar.frame.minY)
+        frames.append("toolbar=\(toolbar.frame)")
+      } else if hide.hasFrame && hide.frame.intersects(container.frame) {
+        occluders.append(hide.frame.minY)
+        frames.append("hide-button=\(hide.frame)")
+      }
+      let occluderTop = occluders.min()
+      let bottom = min(container.frame.maxY - 12, occluderTop.map { $0 - 8 } ?? container.frame.maxY - 12)
+      let details = "band=\(top)...\(bottom) occluderTop=\(String(describing: occluderTop)) \(frames.joined(separator: " ")) keyboardPresent=\(keyboard.exists) \(focusState(container))"
+      guard bottom > top, !target.hasFrame || bottom - top >= target.frame.height else {
+        XCTFail("DESIGN_W3 invalid-band target=\(target.hasFrame ? String(describing: target.frame) : "none") \(details)"); return nil
+      }
+      return (top, bottom, occluderTop, details)
+    }
+    @discardableResult
+    func reveal(_ element: XCUIElement, _ container: XCUIElement, up: Bool = true) -> Bool {
+      func cells() -> [String] {
+        container.cells.allElementsBoundByIndex.filter { $0.hasFrame && $0.frame.intersects(container.frame) }.map {
+          "\($0.label.prefix(64)):\(String(describing: $0.frame))"
+        }
+      }
+      let keyboardAtStart = app.keyboards.firstMatch.exists
+      var previousDirection: Bool?
+      var directionFlips = 0
+      for attempt in 0...12 {
+        guard let viewport = band(container, target: element) else { return false }
+        if keyboardAtStart && !app.keyboards.firstMatch.exists { print("DESIGN_W3 keyboard-disappeared attempt=\(attempt)") }
+        print("DESIGN_W3_REVEAL target=\(element) attempt=\(attempt) frame=\(element.hasFrame ? String(describing: element.frame) : "none") \(viewport.details)")
+        if element.hasFrame && element.frame.minY >= viewport.top && element.frame.maxY <= viewport.bottom {
+          guard settled(element), let final = band(container, target: element),
+            element.hasFrame && element.frame.minY >= final.top && element.frame.maxY <= final.bottom else {
+            XCTFail("DESIGN_W3 fit-did-not-settle \(element) \(viewport.details)"); return false
+          }
+          guard element.waitUntilHittable() else {
+            let latest = band(container, target: element)
+            XCTFail("DESIGN_W3 fit-not-hittable target=\(element.exists ? String(describing: element.frame) : "absent") \(latest?.details ?? viewport.details)"); return false
+          }
+          guard let afterWait = band(container, target: element), element.hasFrame && element.frame.minY >= afterWait.top && element.frame.maxY <= afterWait.bottom else {
+            XCTFail("DESIGN_W3 fit-moved-during-hittable-wait \(element) \(viewport.details)"); return false
+          }
+          return true
+        }
+        if attempt == 12 { break }
+        let upward = element.hasFrame ? element.frame.maxY > viewport.bottom : up
+        if let previousDirection, previousDirection != upward { directionFlips += 1 }
+        guard directionFlips <= 1 else { XCTFail("DESIGN_W3 oscillation \(element) \(viewport.details)"); return false }
+        previousDirection = upward
+        let beforeCells = cells()
+        let beforeFrame = element.hasFrame ? element.frame : .null
+        let height = max(40, viewport.bottom - viewport.top)
+        let distance: CGFloat
+        if element.hasFrame {
+          let desiredTop = viewport.top + (height - element.frame.height) / 2
+          distance = min(height * 0.38, max(12, abs(element.frame.minY - desiredTop)))
+        } else { distance = height * 0.38 }
+        let start = container.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 8, dy: (upward ? viewport.top + height * 0.72 : viewport.top + height * 0.28) - container.frame.minY))
+        let end = start.withOffset(CGVector(dx: 0, dy: distance * (upward ? -1 : 1)))
+        start.press(forDuration: 0.3, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.2)
+        if !beforeFrame.isNull {
+          guard settled(element), element.hasFrame else { XCTFail("DESIGN_W3 drag-did-not-settle \(element) \(viewport.details)"); return false }
+          let progress = (element.frame.minY - beforeFrame.minY) * (upward ? -1 : 1)
+          if progress < 4 {
+            let latest = band(container, target: element)
+            let scrollbar = container.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "Vertical scroll bar")).firstMatch
+            XCTFail("DESIGN_W3 no-progress target=\(element.frame) scrollBar=\(scrollbar.exists ? String(describing: scrollbar.value) : "absent") \(latest?.details ?? viewport.details)"); return false
+          }
+        } else if !beforeCells.isEmpty && beforeCells == cells() {
+          XCTFail("DESIGN_W3 no-progress unmaterialized \(element) \(viewport.details)"); return false
+        }
+      }
+      let latest = band(container, target: element)
+      XCTFail("DESIGN_W3 did-not-fit \(element) \(latest?.details ?? "invalid band")"); return false
+    }
+    func fitSpan(_ headerQuery: XCUIElementQuery, _ enableQuery: XCUIElementQuery, in container: XCUIElement) -> Bool {
+      for attempt in 0..<3 {
+        let header = unique(headerQuery, "created trigger header")
+        let enable = unique(enableQuery, "created Enable trigger")
+        guard header.hasFrame, enable.hasFrame, let viewport = band(container, target: header) else {
+          XCTFail("DESIGN_W3 created-span-unmaterialized"); return false
+        }
+        guard header.frame.maxY <= enable.frame.minY else {
+          XCTFail("DESIGN_W3 created-span-infeasible order"); return false
+        }
+        guard enable.frame.maxY - header.frame.minY <= viewport.bottom - viewport.top else {
+          XCTFail("DESIGN_W3 created-span-too-tall"); return false
+        }
+        if header.frame.minY >= viewport.top && enable.frame.maxY <= viewport.bottom {
+          guard settled(header), settled(enable),
+            let afterSettling = band(container, target: header), header.hasFrame, enable.hasFrame,
+            header.frame.minY >= afterSettling.top, enable.frame.maxY <= afterSettling.bottom,
+            header.frame.maxY <= enable.frame.minY else {
+            XCTFail("DESIGN_W3 created-span-did-not-settle"); return false
+          }
+          guard enable.waitUntilHittable() else {
+            XCTFail("DESIGN_W3 created-span-not-hittable"); return false
+          }
+          guard let afterWait = band(container, target: header), header.hasFrame, enable.hasFrame,
+            header.frame.minY >= afterWait.top, enable.frame.maxY <= afterWait.bottom,
+            header.frame.maxY <= enable.frame.minY else {
+            XCTFail("DESIGN_W3 created-span-moved-during-hittable-wait"); return false
+          }
+          return true
+        }
+        if attempt == 2 { break }
+        let minimumShift = viewport.top - header.frame.minY
+        let maximumShift = viewport.bottom - enable.frame.maxY
+        guard minimumShift <= maximumShift else {
+          XCTFail("DESIGN_W3 created-span-infeasible interval"); return false
+        }
+        let shift = (minimumShift + maximumShift) / 2
+        let distance = max(12, abs(shift))
+        let height = viewport.bottom - viewport.top
+        guard shift != 0, distance <= height - 16 else {
+          XCTFail("DESIGN_W3 created-span-infeasible gesture"); return false
+        }
+        let signedDistance = shift > 0 ? distance : -distance
+        let middle = (viewport.top + viewport.bottom) / 2
+        let beforeY = header.frame.minY
+        let start = container.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 8, dy: middle - signedDistance / 2 - container.frame.minY))
+        let end = start.withOffset(CGVector(dx: 0, dy: signedDistance))
+        start.press(forDuration: 0.3, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.2)
+        guard settled(header), settled(enable), header.hasFrame, enable.hasFrame else {
+          XCTFail("DESIGN_W3 created-span-drag-did-not-settle"); return false
+        }
+        let progress = (header.frame.minY - beforeY) * (shift > 0 ? 1 : -1)
+        guard progress >= 4 else {
+          XCTFail("DESIGN_W3 created-span-no-progress"); return false
+        }
+      }
+      XCTFail("DESIGN_W3 created-span-did-not-fit"); return false
+    }
+    func press(_ query: XCUIElementQuery, _ name: String, in container: XCUIElement, up: Bool = true) {
+      reveal(query.firstMatch, container, up: up); let element = unique(query, name)
+      XCTAssertTrue(element.wait(until: "enabled == true"), name); XCTAssertTrue(element.waitUntilHittable(), name); element.tapWhenReady()
+    }
+    func landing(_ name: String, _ element: XCUIElement, in container: XCUIElement) {
+      let present = element.exists, frame = present && element.hasFrame ? String(describing: element.frame) : "unmaterialized"
+      let intersects = present && element.hasFrame && element.frame.intersects(container.frame)
+      print("DESIGN_WORK_TRIGGER_AFTER_LANDING \(name) exists=\(present) frame=\(frame) viewport=\(container.frame) intersects=\(intersects) hittable=\(present && element.isHittable)")
+    }
+    func shot(_ name: String) throws {
+      guard name.hasPrefix("trigger-"), !FileManager.default.fileExists(atPath: directory.appendingPathComponent("\(name).png").path) else { XCTFail("Invalid or duplicate W3 image name"); return }
+      let editor = app.collectionViews["automation.triggerEditor"]
+      print("DESIGN_WORK_TRIGGER_AFTER_VIEWPORT \(name) screen=\(app.frame) work=\(form.frame) editor=\(editor.exists ? String(describing: editor.frame) : "absent")")
+      try capture(name)
+    }
+    func row(_ label: String) -> XCUIElement {
+      let id = triggers.first { ($0["description"] as? String == label) || ($0["id"] as? String == label) }?["id"] as? String ?? (newTrigger["id"] as? String ?? label)
+      let query = form.buttons.matching(identifier: "automation.trigger.\(id)")
+      reveal(query.firstMatch, form); return unique(query, label)
+    }
+    func expand(_ label: String) { let element = row(label); reveal(element, form); XCTAssertTrue(element.waitUntilHittable()); element.tapWhenReady() }
+    func openEditor() -> XCUIElement {
+      press(form.buttons.matching(identifier: "New event trigger"), "New event trigger", in: form)
+      let editor = app.collectionViews["automation.triggerEditor"]; XCTAssertTrue(editor.waitForExistence(timeout: 10)); return editor
+    }
+    func field(_ placeholder: String, in editor: XCUIElement) -> XCUIElement {
+      let predicate = NSPredicate(format: "(placeholderValue == %@ OR label == %@) AND elementType IN %@", placeholder, placeholder, [XCUIElement.ElementType.textField.rawValue, XCUIElement.ElementType.textView.rawValue])
+      let query = editor.descendants(matching: .any).matching(predicate)
+      reveal(query.firstMatch, editor); return unique(query, "trigger field \(placeholder)")
+    }
+    func rowValue(_ value: String) -> XCUIElement {
+      let element = form.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", value, value)).firstMatch
+      reveal(element, form); XCTAssertTrue(element.waitForExistence(timeout: 5)); return element
+    }
+    var selectionProof: [[String: String]] = []
+    func textHash(_ text: String) -> String { SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined() }
+    func rectProof(_ rect: CGRect) -> [String: Double] {
+      ["x": Double(rect.minX), "y": Double(rect.minY), "width": Double(rect.width), "height": Double(rect.height)]
+    }
+    func exactText(_ container: XCUIElement, _ text: String) -> XCUIElementQuery { container.staticTexts.matching(NSPredicate(format: "label == %@", text)) }
+    func labeledText(_ container: XCUIElement, _ label: String) -> XCUIElementQuery {
+      container.descendants(matching: .any).matching(NSPredicate(format: "label == %@ AND elementType IN %@", label, [XCUIElement.ElementType.textView.rawValue, XCUIElement.ElementType.staticText.rawValue]))
+    }
+    func fieldsQueries(_ editor: XCUIElement) -> [(String, XCUIElementQuery, String)] {
+      [("descriptionLabel", exactText(editor, "Description (optional)"), "Description (optional)"),
+       ("descriptionField", editor.descendants(matching: .any).matching(identifier: "automation.triggerDescription"), newTrigger["description"] as? String ?? ""),
+       ("eventsLabel", exactText(editor, "Event names"), "Event names"),
+       ("eventsField", editor.descendants(matching: .any).matching(identifier: "automation.triggerEvents"), (newTrigger["events"] as? [String] ?? []).joined(separator: ", "))]
+    }
+    func hiddenQueries() -> [(String, XCUIElementQuery, String)] {
+      let id = newTrigger["id"] as? String ?? ""
+      let url = "https://hooks.example.invalid/p/ranch/webhooks/" + id
+      return [("header", exactText(form, "Save this signing secret now"), "Save this signing secret now"),
+        ("created", exactText(form, id + " was created and starts disabled."), id + " was created and starts disabled."),
+        ("warning", exactText(form, "Hermes shows it once. Configure the sending service with this URL and secret. Closing Work or leaving the app clears this display."), "Hermes shows it once. Configure the sending service with this URL and secret. Closing Work or leaving the app clears this display."),
+        ("url", labeledText(form, "New trigger webhook URL: " + url), "New trigger webhook URL: " + url),
+        ("copyURL", form.buttons.matching(identifier: "Copy URL"), "Copy URL"),
+        ("hidden", exactText(form, "Hidden"), "Hidden"),
+        ("show", form.buttons.matching(identifier: "Show secret"), "Show secret"),
+        ("copySecret", form.buttons.matching(identifier: "Copy secret"), "Copy secret"),
+        ("ack", form.buttons.matching(identifier: "I've saved it"), "I've saved it"),
+        ("hint", exactText(form, "Copy or show the secret first."), "Copy or show the secret first.")]
+    }
+    func supplementSnapshot(_ queries: [(String, XCUIElementQuery, String)], in container: XCUIElement) throws -> [String: Any] {
+      let target = try XCTUnwrap(queries.first).1.firstMatch
+      let viewport = try XCTUnwrap(band(container, target: target))
+      var elements: [String: Any] = [:]
+      for (key, query, expected) in queries {
+        let count = query.count
+        XCTAssertLessThanOrEqual(count, 1, "Duplicate supplement element: \(key)")
+        let element = query.firstMatch
+        var entry: [String: Any] = ["count": count, "rect": NSNull(), "textSHA256": NSNull(), "enabled": NSNull()]
+        if count == 1 && element.exists {
+          let frame = element.frame
+          XCTAssertTrue(frame.origin.x.isFinite && frame.origin.y.isFinite && frame.width.isFinite && frame.height.isFinite)
+          if !frame.isEmpty { entry["rect"] = rectProof(frame) }
+          let text = key.hasSuffix("Field") ? (element.value as? String ?? "") : element.label
+          XCTAssertEqual(text, expected, "Supplement text mismatch: \(key)")
+          entry["textSHA256"] = textHash(text); entry["enabled"] = element.isEnabled
+        }
+        elements[key] = entry
+      }
+      let names = container.descendants(matching: .any).matching(identifier: "automation.triggerEvents").firstMatch
+      let description = container.descendants(matching: .any).matching(identifier: "automation.triggerDescription").firstMatch
+      let recorded = try events()
+      return ["band": rectProof(CGRect(x: container.frame.minX, y: viewport.top, width: container.frame.width, height: viewport.bottom - viewport.top)),
+        "screen": rectProof(app.frame), "elements": elements,
+        "keyboard": app.keyboards.firstMatch.exists,
+        "eventsFocused": names.exists && names.waitForKeyboardFocus(true, timeout: 0),
+        "descriptionFocused": description.exists && description.waitForKeyboardFocus(true, timeout: 0),
+        "hideCount": form.buttons.matching(identifier: "Hide secret").count,
+        "secretValueCount": labeledText(form, "Signing secret: " + secret).count,
+        "overviewReads": recorded.filter { $0["method"] as? String == "GET" && $0["path"] as? String == "" }.count,
+        "writes": recorded.filter { $0["method"] as? String != "GET" }.count]
+    }
+    func visibleKeys(_ snapshot: [String: Any]) throws -> Set<String> {
+      let viewport = try XCTUnwrap(snapshot["band"] as? [String: Double])
+      let rect = CGRect(x: viewport["x"]!, y: viewport["y"]!, width: viewport["width"]!, height: viewport["height"]!)
+      let elements = try XCTUnwrap(snapshot["elements"] as? [String: [String: Any]])
+      return Set(elements.compactMap { key, entry in
+        guard let value = entry["rect"] as? [String: Double] else { return nil }
+        let item = CGRect(x: value["x"]!, y: value["y"]!, width: value["width"]!, height: value["height"]!)
+        return rect.insetBy(dx: -0.5, dy: -0.5).contains(item) ? key : nil
+      })
+    }
+    func positionSpan(_ queries: [(String, XCUIElementQuery, String)], in container: XCUIElement, alignTop: Bool = false, up: Bool, keyboardRequired: Bool) throws {
+      var lastDirection: Bool?, flips = 0
+      for attempt in 0...12 {
+        if keyboardRequired { XCTAssertTrue(app.keyboards.firstMatch.exists, "Supplement keyboard disappeared") }
+        let target = try XCTUnwrap(queries.first).1.firstMatch
+        let viewport = try XCTUnwrap(band(container, target: target))
+        let frames = queries.compactMap { (_, query, _) -> CGRect? in
+          let element = query.firstMatch
+          return query.count == 1 && element.hasFrame ? element.frame : nil
+        }
+        let span = frames.reduce(CGRect.null) { $0.union($1) }
+        let materialized = frames.count == queries.count
+        if materialized {
+          XCTAssertLessThanOrEqual(span.height, viewport.bottom - viewport.top + 0.5, "Supplement span exceeds band")
+          if span.minY >= viewport.top - 0.5 && span.maxY <= viewport.bottom + 0.5 && (!alignTop || span.minY <= viewport.top + 8.5) {
+            for (_, query, _) in queries { XCTAssertTrue(settled(query.firstMatch), "Supplement span did not settle") }
+            let final = try supplementSnapshot(queries, in: container)
+            XCTAssertEqual(try visibleKeys(final), Set(queries.map { $0.0 }), "Supplement span moved before capture")
+            return
+          }
+        }
+        guard attempt < 12 else { XCTFail("Supplement span did not fit after12drags"); return }
+        let upward = materialized ? (alignTop ? span.minY > viewport.top + 4 : span.maxY > viewport.bottom) : up
+        if let lastDirection, lastDirection != upward { flips += 1 }
+        XCTAssertLessThanOrEqual(flips, 1, "Supplement span oscillation")
+        lastDirection = upward
+        let height = viewport.bottom - viewport.top
+        let offset = materialized ? abs(span.minY - (alignTop ? viewport.top + 4 : viewport.top + (height - span.height) / 2)) : height * 0.38
+        // AX4 drags lost about 10 points before the list moved. Leave at least 4.5 points of expected movement.
+        let distance = min(height * 0.38, max(14.5, offset + 10))
+        XCTAssertGreaterThanOrEqual(distance - 10, 4.5, "Supplement drag cannot clear pan hysteresis")
+        let marker = queries.map { $0.1.firstMatch }.first { $0.hasFrame }
+        let before = marker?.frame
+        let beforeCells = container.cells.allElementsBoundByIndex.filter { $0.hasFrame && $0.frame.intersects(container.frame) }.map { $0.frame }
+        let start = container.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 8, dy: (upward ? viewport.top + height * 0.72 : viewport.top + height * 0.28) - container.frame.minY))
+        let end = start.withOffset(CGVector(dx: 0, dy: distance * (upward ? -1 : 1)))
+        start.press(forDuration: 0.3, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.2)
+        if let marker, let before, marker.hasFrame {
+          XCTAssertTrue(settled(marker), "Supplement drag did not settle")
+          let progress = (marker.frame.minY - before.minY) * (upward ? -1 : 1)
+          XCTAssertGreaterThanOrEqual(progress, 4, "Supplement no-progress: \(container.debugDescription)")
+        } else if !beforeCells.isEmpty {
+          let afterCells = container.cells.allElementsBoundByIndex.filter { $0.hasFrame && $0.frame.intersects(container.frame) }.map { $0.frame }
+          XCTAssertNotEqual(beforeCells, afterCells, "Supplement unmaterialized no-progress")
+        }
+      }
+    }
+    func supplementFrame(_ name: String, queries: [(String, XCUIElementQuery, String)], in container: XCUIElement) throws -> [String: Any] {
+      let before = try supplementSnapshot(queries, in: container)
+      try shot(name)
+      let after = try supplementSnapshot(queries, in: container)
+      return ["name": name, "before": before, "after": after]
+    }
+    func saveSupplement(_ kind: String, frames: [[String: Any]], revealed: [String: Int]? = nil) throws {
+      let path = directory.appendingPathComponent("\(variant)-\(kind)-coverage.json")
+      XCTAssertFalse(FileManager.default.fileExists(atPath: path.path))
+      var proof: [String: Any] = ["version": 1, "kind": kind, "variant": variant, "device": device,
+        "textSize": "UICTContentSizeCategoryAccessibilityXL", "coordinateUnit": "point",
+        "fixtureSHA256": SHA256.hash(data: fixtureData).map { String(format: "%02x", $0) }.joined(),
+        "selection": selectionProof, "frames": frames]
+      if let revealed { proof["revealedAfterCoverage"] = revealed }
+      try JSONSerialization.data(withJSONObject: proof, options: [.sortedKeys]).write(to: path, options: .withoutOverwriting)
+    }
+    func fieldsSupplements(_ editor: XCUIElement) throws {
+      XCTAssertFalse(pad)
+      let queries = fieldsQueries(editor)
+      try positionSpan(Array(queries[0...1]), in: editor, up: true, keyboardRequired: true)
+      let first = try supplementFrame("trigger-create-large-text-fields-description", queries: queries, in: editor)
+      try positionSpan(Array(queries[1...3]), in: editor, up: true, keyboardRequired: true)
+      let second = try supplementFrame("trigger-create-large-text-fields-events", queries: queries, in: editor)
+      let firstVisible = try visibleKeys(try XCTUnwrap(first["before"] as? [String: Any]))
+      let secondVisible = try visibleKeys(try XCTUnwrap(second["before"] as? [String: Any]))
+      XCTAssertEqual(firstVisible.union(secondVisible), Set(queries.map { $0.0 }))
+      XCTAssertFalse(firstVisible.intersection(secondVisible).isEmpty, "Fields supplements need a whole overlapping element")
+      for frame in [first, second] {
+        for key in ["before", "after"] {
+          let snapshot = try XCTUnwrap(frame[key] as? [String: Any])
+          XCTAssertEqual(snapshot["keyboard"] as? Bool, true)
+          XCTAssertEqual(snapshot["eventsFocused"] as? Bool, true)
+          XCTAssertEqual(snapshot["descriptionFocused"] as? Bool, false)
+          XCTAssertEqual(snapshot["writes"] as? Int, 0)
+          XCTAssertEqual(snapshot["overviewReads"] as? Int, 1)
+        }
+      }
+      try saveSupplement("fields", frames: [first, second])
+    }
+    func hiddenSupplements() throws {
+      XCTAssertFalse(pad)
+      let queries = hiddenQueries()
+      var covered = Set<String>(), frames: [[String: Any]] = []
+      var anchor = queries[0]
+      for number in 1...3 {
+        try positionSpan([anchor], in: form, alignTop: true, up: number != 1, keyboardRequired: false)
+        let frame = try supplementFrame("trigger-secret-large-text-hidden-\(number)", queries: queries, in: form)
+        let snapshot = try XCTUnwrap(frame["before"] as? [String: Any])
+        let visible = try visibleKeys(snapshot)
+        XCTAssertTrue(visible.contains(anchor.0), "Hidden overlap anchor not visible")
+        XCTAssertFalse(visible.subtracting(covered).isEmpty, "Hidden coverage made no progress")
+        for phase in ["before", "after"] {
+          let row = try XCTUnwrap(frame[phase] as? [String: Any])
+          XCTAssertEqual(row["keyboard"] as? Bool, false)
+          XCTAssertEqual(row["hideCount"] as? Int, 0)
+          XCTAssertEqual(row["secretValueCount"] as? Int, 0)
+          XCTAssertEqual(row["writes"] as? Int, 1)
+          XCTAssertEqual(row["overviewReads"] as? Int, 2)
+          let elements = try XCTUnwrap(row["elements"] as? [String: [String: Any]])
+          if let ack = elements["ack"], ack["count"] as? Int == 1 { XCTAssertEqual(ack["enabled"] as? Bool, false) }
+        }
+        frames.append(frame); covered.formUnion(visible)
+        if covered == Set(queries.map { $0.0 }) { break }
+        anchor = try XCTUnwrap(queries.last { visible.contains($0.0) })
+      }
+      XCTAssertEqual(covered, Set(queries.map { $0.0 }), "Hidden panel needs more than3frames or has an uncovered element")
+      XCTAssertTrue((2...3).contains(frames.count))
+      revealSecret()
+      let revealed = ["hideCount": form.buttons.matching(identifier: "Hide secret").count,
+        "secretValueCount": labeledText(form, "Signing secret: " + secret).count]
+      XCTAssertEqual(revealed["hideCount"], 1); XCTAssertEqual(revealed["secretValueCount"], 1)
+      try saveSupplement("hidden", frames: frames, revealed: revealed)
+    }
+    func chooseRoutine(_ label: String, excluding excluded: String) {
+      let query = app.buttons.matching(NSPredicate(format: "label == %@", label))
+      XCTAssertTrue(query.firstMatch.waitForExistence(timeout: 5))
+      XCTAssertEqual(app.buttons.matching(NSPredicate(format: "label == %@", excluded)).count, 0, "Routine menu must hide \(excluded)")
+      for _ in 0..<10 {
+        let visible = query.allElementsBoundByIndex.filter { $0.isHittable }
+        if visible.count == 1 { visible[0].tapWhenReady(); return }
+        usleep(100_000)
+      }
+      XCTFail("Expected exactly one hittable routine menu item: \(label)")
+    }
+    func confirmRoutine(_ title: String, _ picker: XCUIElement) {
+      let option = app.buttons.matching(NSPredicate(format: "label == %@", title))
+      XCTAssertTrue(option.firstMatch.waitForDisappearance(), "Routine menu must close after choosing \(title)")
+      let rendered = unique(picker.staticTexts, "routine picker title")
+      let shown = rendered.wait(until: "label == %@", title)
+      let value = picker.exists ? picker.value as? String : nil
+      let scalars = value.map { $0.unicodeScalars.map { String($0.value, radix: 16) }.joined(separator: " ") } ?? "none"
+      print("DESIGN_W3_ROUTINE_AX title=\(String(reflecting: rendered.label)) value=\(String(reflecting: value)) scalars=\(scalars)")
+      XCTAssertTrue(shown, "Routine picker must show \(title)")
+      selectionProof.append(["expected": title, "renderedTitle": rendered.label])
+    }
+    func fill(_ editor: XCUIElement) throws {
+      let id = unique(editor.textFields.matching(identifier: "automation.triggerID"), "trigger ID")
+      let description = unique(editor.descendants(matching: .any).matching(identifier: "automation.triggerDescription"), "description"), names = unique(editor.descendants(matching: .any).matching(identifier: "automation.triggerEvents"), "events")
+      var previous: XCUIElement?
+      for (element, value) in [(id, try XCTUnwrap(newTrigger["id"] as? String)), (description, try XCTUnwrap(newTrigger["description"] as? String)), (names, try XCTUnwrap((newTrigger["events"] as? [String])?.joined(separator: ", ")))] {
+        print("DESIGN_W3_STAGE field=\(element) reveal")
+        XCTAssertTrue(reveal(element, editor), "Field must fit before tapping: \(element)")
+        XCTAssertTrue(element.waitUntilHittable(), "Field must be hittable before tapping: \(element)")
+        print("DESIGN_W3_STAGE field=\(element) tap")
+        element.tapWhenReady()
+        XCTAssertTrue(element.waitForKeyboardFocus(), "Tapped field must gain focus: \(element)")
+        if let previous { XCTAssertTrue(previous.waitForKeyboardFocus(false), "Previous field must lose focus: \(previous)") }
+        element.waitForKeyboardLayout()
+        XCTAssertTrue(settled(element), "Focused field layout must settle: \(element)")
+        if let viewport = band(editor, target: element) {
+          print("DESIGN_W3_FOCUSED name=\(element) frame=\(element.frame) occluded=\(element.frame.minY < viewport.top || element.frame.maxY > viewport.bottom) \(viewport.details)")
+        }
+        print("DESIGN_W3_STAGE field=\(element) type")
+        element.typeWhenFocused(value)
+        XCTAssertTrue(element.wait(until: "value CONTAINS %@", value), "Typed value must be present: \(element)")
+        previous = element
+      }
+      let pickerQuery = editor.buttons.matching(identifier: "automation.triggerRoutine")
+      print("DESIGN_W3_STAGE routine-picker reveal")
+      reveal(pickerQuery.firstMatch, editor)
+      let picker = unique(pickerQuery, "routine picker")
+      XCTAssertTrue(picker.waitUntilHittable()); picker.tapWhenReady()
+      if !pad && variant.contains("large-text") {
+        chooseRoutine("Weekly house walk (paused)", excluding: "Garden check")
+        confirmRoutine("Weekly house walk (paused)", picker)
+        reveal(picker, editor)
+        XCTAssertTrue(picker.waitUntilHittable()); picker.tapWhenReady()
+      }
+      chooseRoutine("Freezer alert check", excluding: "Garden check")
+      if !pad && variant.contains("large-text") {
+        confirmRoutine("Freezer alert check", picker)
+      }
+      print("DESIGN_WORK_TRIGGER_AFTER_KEYBOARD after-routine visible=\(app.keyboards.firstMatch.exists)")
+    }
+    func toolbar(_ name: String, title: String) -> XCUIElement {
+      unique(app.navigationBars[title].buttons.matching(identifier: name), "\(title) \(name)")
+    }
+    func create(_ editor: XCUIElement) {
+      let button = toolbar("Create", title: "New trigger")
+      print("DESIGN_WORK_TRIGGER_AFTER_CREATE_FRAME \(button.frame)")
+      XCTAssertTrue(button.wait(until: "enabled == true")); XCTAssertTrue(button.waitUntilHittable()); button.tapWhenReady()
+    }
+    func revealSecret() {
+      let hidden = form.staticTexts["Hidden"]
+      XCTAssertTrue(hidden.waitForExistence(timeout: 10)); reveal(hidden, form, up: false)
+      press(form.buttons.matching(identifier: "Show secret"), "Show secret", in: form)
+      XCTAssertTrue(form.buttons["Hide secret"].waitForExistence(timeout: 10))
+      XCTAssertTrue(form.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Signing secret: " + secret)).firstMatch.exists)
+    }
+    let heading = form.staticTexts["Event triggers"]
+    reveal(heading, form); XCTAssertTrue(heading.waitForExistence(timeout: 10))
+    try waitReads(1); XCTAssertEqual(try reads(), 1); XCTAssertFalse(try events().contains { $0["method"] as? String != "GET" })
+    switch variant {
+    case "trigger-list", "trigger-list-dark", "trigger-list-large-text":
+      let first = row(try XCTUnwrap(freezer["description"] as? String))
+      XCTAssertTrue(first.isHittable, "Collapsed trigger list must show its first row before capture")
+      if variant == "trigger-list" {
+        for trigger in triggers {
+          let id = try XCTUnwrap(trigger["id"] as? String)
+          let item = form.buttons["automation.trigger.\(id)"]
+          XCTAssertTrue(item.exists && item.isHittable && form.frame.contains(item.frame), "All three trigger rows must be fully visible: \(id)")
+          XCTAssertGreaterThanOrEqual(item.frame.height, 44)
+        }
+        try shot("trigger-list")
+      }
+      if variant == "trigger-list-dark" && !pad { try shot("trigger-list-dark") }
+      if variant == "trigger-list-large-text" { try shot("trigger-list-large-text") }
+      expand(try XCTUnwrap(freezer["description"] as? String))
+      let action = form.buttons["Disable trigger"]; reveal(action, form)
+      XCTAssertEqual(form.buttons.matching(identifier: "Disable trigger").count, 1)
+      try shot(variant == "trigger-list" ? "trigger-list-expanded" : variant == "trigger-list-dark" ? "trigger-list-dark-expanded" : "trigger-list-large-text-actions")
+      if variant == "trigger-list" && !pad {
+        expand("barn-door-sensor"); let reason = form.staticTexts["Its routine is no longer available. Edit the trigger to choose another routine before enabling it."]; reveal(reason, form); XCTAssertTrue(reason.waitForExistence(timeout: 10)); try shot("trigger-list-orphan-expanded")
+      }
+    case "trigger-readonly":
+      expand(try XCTUnwrap(freezer["description"] as? String))
+      for label in ["New event trigger", "Enable trigger", "Disable trigger", "Edit trigger", "Delete trigger…"] { XCTAssertEqual(form.buttons.matching(identifier: label).count, 0) }
+      try shot("trigger-readonly")
+    case "trigger-platform-off":
+      expand("gate-left-open"); reveal(form.buttons["Enable trigger"], form); let enable = unique(form.buttons.matching(identifier: "Enable trigger"), "Enable trigger"); XCTAssertFalse(enable.isEnabled); try shot("trigger-platform-off")
+    case "trigger-routines-error":
+      let retry = form.buttons["Retry routines"]; reveal(retry, form); _ = unique(form.buttons.matching(identifier: "Retry routines"), "Retry routines"); try shot("trigger-routines-error")
+      expand(try XCTUnwrap(freezer["description"] as? String)); _ = rowValue("routine-freezer")
+    case "trigger-first-use":
+      let empty = form.staticTexts["No event triggers yet."]; reveal(empty, form); XCTAssertTrue(empty.waitForExistence(timeout: 10)); try shot("trigger-first-use")
+    case "trigger-unsupported":
+      let reason = form.staticTexts.matching(NSPredicate(format: "label == %@", "This Hermes revision cannot expose triggers. Update and qualify its integration."))
+      reveal(reason.firstMatch, form); _ = unique(reason, "unsupported trigger reason"); try shot("trigger-unsupported")
+    case "trigger-create", "trigger-create-dark", "trigger-create-large-text", "trigger-create-large-text-hidden", "trigger-create-uncertain":
+      let editor = openEditor()
+      if variant == "trigger-create" && !pad { try shot("trigger-create-empty") }
+      try fill(editor)
+      if variant == "trigger-create" { try shot("trigger-create-filled") }
+      if variant == "trigger-create-dark" { try shot("trigger-create-dark") }
+      if variant == "trigger-create-large-text" {
+        let id = editor.textFields["automation.triggerID"]; reveal(id, editor, up: false); try shot("trigger-create-large-text-top")
+        if !pad { try fieldsSupplements(editor) }
+        let pickerQuery = editor.buttons.matching(identifier: "automation.triggerRoutine")
+        print("DESIGN_W3_STAGE AX-bottom routine-picker reveal")
+        reveal(pickerQuery.firstMatch, editor); let picker = unique(pickerQuery, "routine picker")
+        XCTAssertTrue(picker.isHittable); XCTAssertTrue(app.keyboards.firstMatch.exists, "The AX editor capture must include the keyboard.")
+        try shot("trigger-create-large-text-bottom")
+      }
+      create(editor)
+      if variant == "trigger-create-uncertain" {
+        let error = editor.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Hermes may have created this trigger.")).firstMatch
+        landing("uncertain-error", error, in: editor); reveal(error, editor, up: false); XCTAssertTrue(error.waitForExistence(timeout: 10)); try shot("trigger-create-uncertain")
+        press(editor.buttons.matching(identifier: "automation.refresh"), "editor refresh", in: editor, up: false); try waitReads(2)
+        let explanation = editor.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "never received its signing secret")).firstMatch
+        reveal(explanation, editor, up: false); XCTAssertTrue(explanation.waitForExistence(timeout: 10)); try shot("trigger-create-uncertain-refreshed")
+        let close = toolbar("Close", title: "New trigger"); XCTAssertTrue(close.waitUntilHittable()); close.tapWhenReady(); XCTAssertTrue(editor.waitForDisappearance(timeout: 10))
+      } else {
+        XCTAssertTrue(editor.waitForDisappearance(timeout: 10)); try waitReads(2)
+        let hidden = form.staticTexts["Hidden"], header = form.staticTexts["Save this signing secret now"], notice = form.staticTexts["Saved in Hermes."]
+        landing("secret-header", header, in: form); landing("notice-after-create", notice, in: form)
+        if variant == "trigger-create" { try shot("trigger-secret-landing") }
+        if variant == "trigger-create-large-text-hidden" {
+          try hiddenSupplements()
+        } else {
+          reveal(hidden, form, up: false)
+          if variant == "trigger-create" && !pad { try shot("trigger-secret-hidden") }
+          revealSecret()
+          try shot(variant == "trigger-create" ? "trigger-secret-revealed" : variant == "trigger-create-dark" ? "trigger-secret-dark" : "trigger-secret-large-text")
+        }
+        if variant == "trigger-create" {
+          press(form.buttons.matching(identifier: "Copy secret"), "Copy secret", in: form)
+          let copied = form.staticTexts["Copied. The clipboard clears it in 5 minutes."]; reveal(copied, form); XCTAssertTrue(copied.waitForExistence(timeout: 10)); try shot("trigger-secret-copied")
+        }
+        if variant == "trigger-create-dark" {
+          XCTAssertEqual(try reads(), 2); app.selectSettingsTab("Learning"); XCTAssertTrue(app.collectionViews["automation.learning"].waitForExistence(timeout: 10)); try waitReads(3)
+          app.selectSettingsTab("Work"); XCTAssertTrue(form.waitForExistence(timeout: 10)); try waitReads(4); XCTAssertFalse(form.buttons["Hide secret"].exists); XCTAssertFalse(form.staticTexts["Hidden"].exists)
+        } else {
+          press(form.buttons.matching(identifier: "I've saved it"), "I've saved it", in: form); XCTAssertFalse(form.buttons["Show secret"].exists); XCTAssertFalse(form.buttons["Hide secret"].exists)
+          if variant == "trigger-create" {
+            let createdID = "automation.trigger." + (try XCTUnwrap(newTrigger["id"] as? String))
+            let actions = ["Enable trigger", "Disable trigger", "Edit trigger", "Delete trigger…"]
+            let headerQuery = form.buttons.matching(NSPredicate(format: "identifier == %@ AND NOT (label IN %@)", createdID, actions))
+            let enableQuery = form.buttons.matching(NSPredicate(format: "identifier == %@ AND label == %@", createdID, "Enable trigger"))
+            reveal(headerQuery.firstMatch, form); let header = unique(headerQuery, "created trigger row")
+            XCTAssertTrue(header.label.contains("Disabled") || (header.value as? String ?? "").contains("Disabled"), "Created trigger must start disabled")
+            reveal(enableQuery.firstMatch, form); let enable = unique(enableQuery, "created Enable trigger"); XCTAssertTrue(enable.isEnabled)
+            XCTAssertEqual(form.buttons.matching(NSPredicate(format: "identifier == %@ AND label == %@", createdID, "Disable trigger")).count, 0)
+            guard fitSpan(headerQuery, enableQuery, in: form) else { return }
+            try shot("trigger-created")
+          }
+        }
+      }
+    case "trigger-edit-stale":
+      expand(try XCTUnwrap(freezer["description"] as? String)); press(form.buttons.matching(identifier: "Edit trigger"), "Edit trigger", in: form)
+      let editor = app.collectionViews["automation.triggerEditor"]; XCTAssertTrue(editor.waitForExistence(timeout: 10)); if !pad { try shot("trigger-edit") }
+      XCTAssertEqual(try reads(), 1); press(editor.buttons.matching(identifier: "automation.refresh"), "editor refresh", in: editor, up: false); try waitReads(2); XCTAssertEqual(try reads(), 2)
+      let stale = editor.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "This trigger changed.")).firstMatch
+      XCTAssertTrue(stale.waitForExistence(timeout: 10)); reveal(stale, editor, up: false); XCTAssertFalse(toolbar("Save", title: "Edit trigger").isEnabled); try shot("trigger-edit-stale")
+    case "trigger-toggle-delete":
+      expand("gate-left-open"); press(form.buttons.matching(identifier: "Enable trigger"), "Enable trigger", in: form); try waitReads(2)
+      XCTAssertTrue(form.buttons["Disable trigger"].wait(until: "enabled == true"))
+      let notice = form.staticTexts["Enabled."]; reveal(notice, form); XCTAssertTrue(notice.waitForExistence(timeout: 10)); landing("notice-after-toggle", notice, in: form); if !pad { try shot("trigger-toggled") }
+      press(form.buttons.matching(identifier: "Delete trigger…"), "row Delete trigger", in: form)
+      XCTAssertTrue(app.staticTexts["Delete this event trigger?"].waitForExistence(timeout: 10))
+      let keep = unique(app.buttons.matching(identifier: "confirmationKeep"), "sheet Keep trigger")
+      XCTAssertTrue(keep.waitUntilHittable()); keep.tapWhenReady()
+      XCTAssertFalse(try events().contains { $0["method"] as? String == "DELETE" }, "Keep must not send a DELETE")
+      press(form.buttons.matching(identifier: "Delete trigger…"), "row Delete trigger", in: form)
+      XCTAssertTrue(app.staticTexts["Delete this event trigger?"].waitForExistence(timeout: 10))
+      let confirm = unique(app.buttons.matching(identifier: "confirmationAccept"), "sheet Delete trigger"); try shot("trigger-delete-confirm"); XCTAssertTrue(confirm.waitUntilHittable()); XCTAssertGreaterThanOrEqual(confirm.frame.height, 44); confirm.tapWhenReady(); try waitReads(3)
+      XCTAssertTrue(form.buttons["automation.trigger.gate-left-open"].waitForDisappearance(timeout: 10)); let deleted = form.staticTexts["Deleted gate-left-open."]; reveal(deleted, form, up: false); XCTAssertTrue(deleted.waitForExistence(timeout: 10)); if !pad { try shot("trigger-deleted") }
+    default: XCTFail("Unknown W3 variant")
+    }
+    let recorded = try events(), writes = recorded.filter { $0["method"] as? String != "GET" }
+    let readCount = recorded.filter { $0["method"] as? String == "GET" }.count
+    if variant == "trigger-create-dark" { XCTAssertEqual(readCount, 4) }
+    else if variant.hasPrefix("trigger-create") || variant == "trigger-edit-stale" { XCTAssertEqual(readCount, 2) }
+    else if variant == "trigger-toggle-delete" { XCTAssertEqual(readCount, 3) }
+    else { XCTAssertEqual(readCount, 1) }
+    XCTAssertFalse(writes.contains { ($0["path"] as? String) == "/triggers/barn-door-sensor" && ($0["method"] as? String) == "PATCH" })
+    if variant.hasPrefix("trigger-create") {
+      XCTAssertEqual(writes.count, 1); let write = try XCTUnwrap(writes.first); XCTAssertEqual(write["method"] as? String, "POST"); XCTAssertEqual(write["path"] as? String, "/triggers")
+      let body = try XCTUnwrap(write["body"] as? [String: Any]); XCTAssertEqual(Set(body.keys), Set(["id", "description", "events", "routineId"]))
+      for key in ["id", "description", "routineId"] { XCTAssertEqual(body[key] as? String, newTrigger[key] as? String) }; XCTAssertEqual(body["events"] as? [String], newTrigger["events"] as? [String])
+    } else if variant == "trigger-toggle-delete" {
+      XCTAssertEqual(writes.count, 2); let toggle = writes[0], delete = writes[1]
+      XCTAssertEqual(toggle["method"] as? String, "PATCH"); XCTAssertEqual(toggle["path"] as? String, "/triggers/gate-left-open")
+      let toggleBody = try XCTUnwrap(toggle["body"] as? [String: Any]); XCTAssertEqual(Set(toggleBody.keys), Set(["enabled", "revision"])); XCTAssertEqual(toggleBody["enabled"] as? Bool, true); XCTAssertEqual(toggleBody["revision"] as? String, gate["revision"] as? String)
+      XCTAssertEqual(delete["method"] as? String, "DELETE"); XCTAssertEqual(delete["path"] as? String, "/triggers/gate-left-open")
+      let deleteBody = try XCTUnwrap(delete["body"] as? [String: Any]); XCTAssertEqual(Set(deleteBody.keys), Set(["revision"])); XCTAssertEqual(deleteBody["revision"] as? String, "4f77ac20ca7285adb3f2ea7eabd5d90579b9cedee4de95fab111d654cefcf63c")
+    } else { XCTAssertTrue(writes.isEmpty) }
+    print("DESIGN_WORK_TRIGGER_AFTER_VARIANT \(variant) complete")
   }
 
   func testMemoryDesignReview() throws {

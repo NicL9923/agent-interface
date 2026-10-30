@@ -2,9 +2,21 @@
 
 This pass covers the web client at desktop and phone widths and the native iOS
 client. Nicolas requested a separate Claude Opus 5.5 review at High effort for
-each screen. A screen must score at least 9/10 with no obvious remaining issues
-before implementation moves to the next screen. Scores are reviewer judgments,
+each screen. Review each screen as a whole, with one score and annotated issues.
+Allow at most three review rounds. If it remains below 9/10 after round three,
+record the remaining issues in the PR and continue. Scores are reviewer judgments,
 not objective measurements of design quality.
+
+Fourteen screen areas have passed. Ship these changes in a draft PR and add
+subsequent screens in separate commits. Reuse screenshots where the product UI
+has not changed. Capture-script changes do not invalidate screenshots or reviews.
+Capture web at desktop and phone widths, and native on one iPhone plus iPad only
+where its layout differs. Run native work through `~/.agents/tools/mac-heavy-lock.sh`
+with simulator boot and shutdown inside the locked command. Keep one Playwright
+browser open at a time and close it after capture.
+
+The previous cross-thread coordination and capture-proof workflow is retired.
+Capture tools need ordinary debugging and checks, not independent design reviews.
 
 ## Direction
 
@@ -60,7 +72,7 @@ References collected October 25, 2026. External artwork is reference material on
 | Work frame and standing goal | 21 web and 20 native before frames per device verified | Complete | Web, iPhone and iPad 9 |
 | Work task board and actions | 67 shared before frames; 19 web, 23 iPhone and 23 iPad after frames | Complete | Web refusal 9.5; remaining web states, iPhone and iPad 9 |
 | Work task editors | Shared before baseline; 16 web, 13 iPhone and 9 iPad after frames reviewed | Complete | Every frame 9 |
-| Work event triggers | Pending | Next | Pending |
+| Work event triggers | Web and native comparisons available | In progress | Web after views reviewed at 9; six native large-text frames accepted at 9, three each on iPhone and iPad. Remaining screen review pending |
 | Learning | Pending | Pending | Pending |
 | Routines and results | Pending | Pending | Pending |
 | Logins and secure requests | Pending | Pending | Pending |
@@ -374,3 +386,30 @@ effect and is also retained for that pass.
 These are synthetic fixtures and simulator images. Enlarged native text is AX3;
 web 200% uses root-font scaling. Physical devices, VoiceOver, hardware keyboards,
 AX5, iOS 17 and compact iPad widths remain unverified. Work event triggers are next.
+
+## Work event triggers
+
+The finished product changes improve signing-secret readability and copying,
+place results beside the affected trigger, explain routine availability, label
+editors and handle an uncertain create without resending it. The native routine
+menu wraps its selected name at large text sizes.
+
+Six native large-text frames remain accepted at 9/10, three each on iPhone and
+iPad. Reviews 173 and 178 accepted the create top, create bottom and revealed
+secret frames. Review 174 also accepted three hidden-secret supplements. The
+later tour-script repair does not change that product UI or its acceptance.
+The web after views were reviewed at 9/10 in review 151.
+
+The phone create hint middle and footer tail, the iPad create-form tail,
+VoiceOver and clipboard behavior still need coverage. These limits do not erase
+accepted screenshots or prevent work on other screens. Normal-size native
+captures and the remaining whole-screen review continue under the bounded loop.
+
+## Remaining review areas
+
+Group the remaining screen details above into ten working areas: event triggers;
+Learning and routines; secure requests and integrations; search and conversation
+tools; group conversations; app settings and navigation; computer and terminal;
+connection and update recovery; notifications and Apple devices; and empty states,
+offline content, share extensions and widgets. Use one whole-screen score per
+review, with at most three rounds for each screen within those areas.

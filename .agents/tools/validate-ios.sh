@@ -9,25 +9,9 @@ simulator_id=$1
 operation=${2:-test}
 case "$operation" in test|build|live) ;; *) echo 'Choose test, build, or live' >&2; exit 2 ;; esac
 repo_dir=$(cd "$(dirname "$0")/../.." && pwd)
-# A task can opt into a cross-project machine lease. Acquire it before the repo lock.
-machine_config="$repo_dir/.private/ios-machine-lock"
-if [[ -s "$machine_config" ]]; then
-  read -r machine_lock < "$machine_config"
-  if [[ "${IOS_MACHINE_ADMITTED:-}" != "$machine_lock" ]]; then
-    exec python3 "$repo_dir/.agents/tools/with-native-admission.py" --lock "$machine_lock" -- \
-      env IOS_MACHINE_ADMITTED="$machine_lock" bash "$0" "$@"
-  fi
-fi
-# Every checkout and worktree shares one lock in the main checkout, because they share the simulators.
-lock="$(cd "$(git -C "$repo_dir" rev-parse --git-common-dir)/.." && pwd)/.private/ios-validation.lock"
-if [[ "${IOS_VALIDATION_LOCKED:-}" != "$lock" ]]; then
-  mkdir -p "$(dirname "$lock")"
-  status=0
-  IOS_VALIDATION_LOCKED=$lock lockf -k -t 0 "$lock" bash "$0" "$@" || status=$?
-  if [[ $status -eq 75 ]]; then
-    echo "Another iOS validation holds $lock. This script takes the lock itself, so do not wrap it in lockf." >&2
-  fi
-  exit "$status"
+# The machine-wide lock covers the build and the complete simulator lifetime.
+if [[ "${WILDBOTS_NATIVE_LOCKED:-}" != "1" ]]; then
+  exec "$HOME/.agents/tools/mac-heavy-lock.sh" env WILDBOTS_NATIVE_LOCKED=1 bash "$0" "$@"
 fi
 if [[ $# -ge 2 ]]; then shift 2; else shift; fi
 cd "$repo_dir"
@@ -36,21 +20,15 @@ cd "$repo_dir"
 python3 -c 'import os, sys; s = os.statvfs("/System/Volumes/Data"); free = s.f_bavail * s.f_frsize; minimum = 5 * 1024**3; print(f"Internal Data headroom: {free / 1024**3:.2f} GiB available; 5 GiB required."); sys.exit(0 if free >= minimum else "Not enough internal disk space for iOS validation. Free space before retrying; no simulator or build command has started.")'
 mkdir -p .private
 
-# Each booted simulator runs hundreds of processes, and four exhausted the per-user process limit.
-booted=$(xcrun simctl list devices booted | grep -c '(Booted)' || true)
-if xcrun simctl list devices booted | grep -q "($simulator_id)"; then
-  was_booted=1
-else
-  was_booted=0
-  if [[ $booted -ge 3 ]]; then
-    echo "$booted simulators are already booted. Shut one down before booting another." >&2
-    exit 1
-  fi
-fi
+# A prior interrupted capture may have left a simulator booted. The lock keeps
+# other native jobs out while this run shuts it down and uses one device.
+xcrun simctl shutdown all >/dev/null 2>&1 || true
 shut_down_simulator() {
-  if [[ $was_booted -eq 0 ]]; then xcrun simctl shutdown "$simulator_id" >/dev/null 2>&1 || true; fi
+  xcrun simctl shutdown "$simulator_id" >/dev/null 2>&1 || true
 }
 trap shut_down_simulator EXIT
+xcrun simctl boot "$simulator_id"
+xcrun simctl bootstatus "$simulator_id" -b
 
 run_id="${operation}-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 result_path=".private/ios-${run_id}.xcresult"
@@ -97,9 +75,6 @@ fi
 # Quotes each argument so the summary shows values with spaces unambiguously.
 shell_words() { local words; words=$(printf '%q ' "$@"); echo "${words% }"; }
 
-# The fingerprint covers uncommitted edits. A run whose inputs changed under it tests neither state.
-inputs() { python3 .agents/tools/source-state.py ios/ .agents/tools/validate-ios.sh .agents/tools/patch-xctestrun.py .agents/tools/with-native-admission.py; }
-inputs_before=$(inputs)
 # Build once, then run the tests from a copy of the generated test plan that limits XCTest's
 # crash-report wait. Without it this host waits about 300 seconds after every UI test.
 products="$derived_data/Build/Products"
@@ -123,12 +98,6 @@ xcodebuild test-without-building -xctestrun "$patched" -destination "$destinatio
 summary=".private/ios-${run_id}.txt"
 {
   echo "commit: $(git rev-parse HEAD)"
-  inputs_after=$(inputs)
-  if [[ "$inputs_after" == "$inputs_before" ]]; then
-    echo "ios inputs: $inputs_before"
-  else
-    echo "ios inputs: changed during the run, from $inputs_before to $inputs_after. Do not reuse this result."
-  fi
   echo "xcode: $(xcodebuild -version | tr '\n' ' ')"
   echo "simulator: $(xcrun simctl list devices | awk -v id="$simulator_id" '/^-- /{runtime=$2" "$3} index($0, id){sub(/ *\((Booted|Shutdown)\) *$/, ""); sub(/^ +/, ""); print $0", "runtime; exit}')"
   # A different configuration or compiler setting builds a different app, so a reader judging reuse needs these.

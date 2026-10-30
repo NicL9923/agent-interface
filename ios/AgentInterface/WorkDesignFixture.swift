@@ -196,6 +196,7 @@ struct WorkDesignFixture {
         routes[id] = native
         let subscription: [String: Any] = ["id": id, "description": body["description"]!, "events": body["events"]!, "routineId": body["routineId"]!, "enabled": false, "url": "https://hooks.example.invalid/p/ranch/webhooks/" + id, "secretSet": true, "revision": digest(native)]
         triggers.append(subscription); triggerSection["items"] = triggers; overview["triggers"] = triggerSection
+        if config["gate"] as? String == "W3-triggers" && mode == "trigger-create-uncertain" { return error("catchAll", 502) }
         return (200, ["subscription": subscription, "secret": config["syntheticSecret"]!])
       }
       var native = routes[id]!, subscription = triggers[index!]

@@ -9,6 +9,7 @@ import SwiftUI
   var notice: String?
   var needsRefresh = false
   var taskFeedback: HermesTaskFeedback?
+  var triggerFeedback: HermesTriggerFeedback?
   var secret = HermesTransientSecret()
   var resumeIntent = HermesGoalResumeIntent()
   var triggerRoutines: [Routine] = []
@@ -121,7 +122,6 @@ import SwiftUI
     busy = true; error = nil; notice = nil
     // Invalidate before dispatch. Cancellation must still require reconciliation before retry.
     needsRefresh = true
-    let secretStarted = secretGeneration
     defer { busy = false }
     let outcome = await attempt(store, current: current) { context -> T in
       let result: T = try await context.api.write(self.path + suffix, input, method: method)
@@ -160,11 +160,6 @@ import SwiftUI
         }
       } else {
         self.notice = refreshed ? "Saved in Hermes." : "The change was saved. Refresh status before making another change."
-      }
-      // Backgrounding invalidates this response's secret even if Work becomes active again
-      // before the response arrives. Do not publish a returned secret until the follow-up is current.
-      if let trigger = result as? HermesTriggerResult, self.acceptsSecrets, self.secretGeneration == secretStarted {
-        self.secret.receive(trigger)
       }
       return result
     }
@@ -231,6 +226,63 @@ import SwiftUI
       return nil
     case nil: return nil
     }
+  }
+  func changeTrigger<T: Decodable & SendableMetatype, V: Encodable>(
+    _ store: AppStore, triggerId: String, _ suffix: String, _ input: V, method: String = "POST",
+    action: String, current: @escaping @MainActor () -> Bool = { true }
+  ) async -> T? {
+    guard !disabled, isCurrent(store), current() else { return nil }
+    busy = true; error = nil; notice = nil; triggerFeedback = nil; needsRefresh = true
+    let secretStarted = secretGeneration
+    defer { busy = false }
+    let outcome = await attempt(store, current: current) { context -> T? in
+      let result: T
+      do { result = try await context.api.write(self.path + suffix, input, method: method) }
+      catch let refusal as APIError where refusal.status > 0 && refusal.status < 500 {
+        try context.checkCurrent()
+        let refreshed = await self.refresh(store, current: context.isCurrent)
+        try context.checkCurrent()
+        if refreshed { self.publishTriggerFeedback(triggerId, refusal.message + " Status refreshed.", true, action) }
+        else {
+          self.error = refusal.message + " Refresh status before trying again."
+          self.publishTriggerFeedback(triggerId, "Status could not be refreshed. Use Refresh status above.", true, action)
+        }
+        return nil
+      }
+      try context.checkCurrent()
+      let refreshed = await self.refresh(store, current: context.isCurrent)
+      try context.checkCurrent()
+      if let trigger = result as? HermesTriggerResult, self.acceptsSecrets, self.secretGeneration == secretStarted {
+        self.secret.receive(trigger)
+      }
+      let lostSecret = action == "create" && (result as? HermesTriggerResult)?.secret != nil && (!self.acceptsSecrets || self.secretGeneration != secretStarted)
+      if refreshed {
+        let message = lostSecret ? "\(triggerId) was created, but its signing secret was cleared when you left the app. To get a secret, delete \(triggerId) and create it again."
+          : action == "delete" ? "Deleted \(triggerId)." : action == "enable" ? "Enabled." : action == "disable" ? "Disabled." : "Saved in Hermes."
+        self.publishTriggerFeedback(triggerId, message, false, action)
+      } else {
+        let confirmed = action == "delete" ? "Deleted \(triggerId)." : action == "enable" ? "Enabled." : action == "disable" ? "Disabled." : "Saved."
+        let message = lostSecret ? "\(triggerId) was created, but its signing secret was cleared when you left the app. To get a secret, delete \(triggerId) and create it again. Status could not refresh. Use Refresh status above."
+          : confirmed + " Status could not refresh. Use Refresh status above."
+        self.publishTriggerFeedback(triggerId, message, false, action)
+      }
+      return result
+    }
+    switch outcome {
+    case .success(let result)?: return result
+    case .failure(let failure)?:
+      needsRefresh = true
+      error = "We couldn't confirm this change. Refresh status and review it before trying again. Nothing will be sent again automatically."
+      let message = action == "create" ? "Not confirmed. Hermes may have created this trigger. Use Refresh status above before trying again." : "Not confirmed. Use Refresh status above."
+      publishTriggerFeedback(triggerId, message, true, action)
+      _ = failure
+      return nil
+    case nil: return nil
+    }
+  }
+  private func publishTriggerFeedback(_ id: String, _ message: String, _ isError: Bool, _ action: String) {
+    triggerFeedback = HermesTriggerFeedback(id: id, message: message, isError: isError, action: action)
+    AccessibilityNotification.Announcement(message).post()
   }
   private func publishTaskFeedback(_ taskId: String, edit: Bool, message: String, isError: Bool) {
     taskFeedback = HermesTaskFeedback(taskId: taskId, message: message, isError: isError, edit: edit)
@@ -341,6 +393,7 @@ private enum HermesWorkSheet: Identifiable {
   case taskDetail(HermesTask)
   case createTrigger
   case editTrigger(HermesSubscription)
+  case deleteTrigger(HermesSubscription)
   var id: String {
     switch self {
     case .goalEditor: return "goal-editor"
@@ -350,6 +403,7 @@ private enum HermesWorkSheet: Identifiable {
     case .taskDetail(let task): return "task:\(task.id)"
     case .createTrigger: return "create-trigger"
     case .editTrigger(let trigger): return "trigger:\(trigger.id)"
+    case .deleteTrigger(let trigger): return "delete-trigger:\(trigger.id)"
     }
   }
 }
@@ -361,12 +415,15 @@ struct HermesWorkView: View {
   @State private var control: HermesAutomationControls
   @State private var sheet: HermesWorkSheet?
   @State private var pendingClearGoal = false
+  @State private var pendingDeleteTrigger: HermesSubscription?
+  @State private var expandedTriggers: Set<String> = []
   @State private var collapsedTaskStatuses: Set<String> = ["done"]
   init(botId: String) {
     self.botId = botId
     _control = State(initialValue: HermesAutomationControls(botId: botId))
   }
   var body: some View {
+    ScrollViewReader { proxy in
     Form {
       HermesAutomationStatus(control: control, work: true)
       if let value = control.value {
@@ -375,8 +432,9 @@ struct HermesWorkView: View {
           startNewAttempt: { sheet = .newResumeAttempt }, clear: { sheet = .clearGoal })
         HermesTaskSection(control: control, state: value.tasks, collapsedStatuses: $collapsedTaskStatuses,
           create: { sheet = .createTask }, open: { sheet = .taskDetail($0) })
-        HermesTriggerSection(control: control, state: value.triggers,
-          create: { sheet = .createTrigger }, edit: { sheet = .editTrigger($0) })
+        HermesTriggerSection(control: control, state: value.triggers, expanded: $expandedTriggers,
+          create: { sheet = .createTrigger }, edit: { sheet = .editTrigger($0) }, delete: { sheet = .deleteTrigger($0) })
+          .id("automation.triggers")
       }
     }.householdListBackground().accessibilityIdentifier("automation.work")
       .task {
@@ -390,15 +448,23 @@ struct HermesWorkView: View {
       // Child page sheets keep Work mounted. This ends ownership when Work closes; a future
       // full-screen cover would need a lifecycle that keeps the shared controls alive beneath it.
       .onDisappear { control.disappear() }
+      .onChange(of: control.triggerFeedback?.message) { _, _ in
+        if control.triggerFeedback?.action == "delete" { proxy.scrollTo("automation.triggers", anchor: .top) }
+      }
       .onChange(of: scenePhase) { _, phase in control.foreground(phase == .active) }
       // Form sections are lazy. Keep the presenter and its state on the enclosing form so
       // recycling rows cannot tear down a presented editor or its parent sheet.
       .sheet(item: $sheet, onDismiss: {
+        if let trigger = pendingDeleteTrigger {
+          pendingDeleteTrigger = nil
+          Task { let _: EmptyResponse? = await control.changeTrigger(store, triggerId: trigger.id, "/triggers/\(APIClient.component(trigger.id))", HermesRevisionInput(revision: trigger.revision), method: "DELETE", action: "delete") }
+        }
         if pendingClearGoal {
           pendingClearGoal = false
           Task { _ = await control.changeOK(store, "/goal/clear", [String: String]()) }
         }
       }) { destination in workDestination(destination) }
+    }
   }
   @ViewBuilder private func workDestination(_ destination: HermesWorkSheet) -> some View {
     switch destination {
@@ -410,8 +476,12 @@ struct HermesWorkView: View {
         accept: { pendingClearGoal = true; sheet = nil }, keep: { sheet = nil })
     case .createTask: HermesTaskEditor(control: control, task: nil, revealTaskGroup: { collapsedTaskStatuses.remove($0) })
     case .taskDetail(let task): HermesTaskDetail(control: control, initial: task)
-    case .createTrigger: HermesTriggerEditor(control: control, trigger: nil)
-    case .editTrigger(let trigger): HermesTriggerEditor(control: control, trigger: trigger)
+    case .createTrigger: HermesTriggerEditor(control: control, trigger: nil, reveal: { expandedTriggers.insert($0) })
+    case .editTrigger(let trigger): HermesTriggerEditor(control: control, trigger: trigger, reveal: { expandedTriggers.insert($0) })
+    case .deleteTrigger(let trigger):
+      AssistantConfirmationSheet(title: "Delete this event trigger?", message: "\(trigger.description.isEmpty ? trigger.id : trigger.description) will be removed. Its routine stays saved.",
+        acceptLabel: "Delete trigger", keepLabel: "Keep trigger", destructive: true,
+        accept: { pendingDeleteTrigger = trigger; sheet = nil }, keep: { sheet = nil })
     }
   }
 }
@@ -660,6 +730,10 @@ private struct HermesGoalEditor: View {
       if await control.changeOK(store, "/goal", HermesGoalInput(title: title, maxTurns: maxTurns), method: "PUT", current: current) { dismiss() }
     }
   }
+}
+
+struct HermesTriggerFeedback {
+  var id: String; var message: String; var isError: Bool; var action: String
 }
 
 struct HermesTaskFeedback {
