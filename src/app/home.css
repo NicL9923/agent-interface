@@ -625,3 +625,8 @@ button.settings-row:hover:enabled { background: color-mix(in srgb, var(--accent-
 }
 
 .bot-details .row-text small { font-size: 0.875rem; line-height: 1.5; }
+
+.section-rename.settings-group { border-radius: 20px; }
+@media (any-pointer: coarse), (max-width: 620px) {
+  .section-order .icon-button { width: 44px; height: 44px; }
+}

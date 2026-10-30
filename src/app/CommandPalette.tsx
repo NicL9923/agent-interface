@@ -18,7 +18,7 @@ export function paletteBots(boot: Bootstrap) {
   return [...pinned, ...boot.bots.filter(bot => !pinned.includes(bot))];
 }
 
-const themes: [Preferences["theme"], string][] = [["light", "Light"], ["dark", "Dark"], ["system", "System"]];
+const themes: [Preferences["theme"], string][] = [["light", "Light"], ["dark", "Dark"], ["system", "Follow device"]];
 
 export function CommandPalette({ boot, botId, shownBotId, readThrough, connectionLost, onClose, onSelectBot, onView, onSearch, onSettings, onNewBot, onTheme, onShortcuts, onFind }: {
   boot: Bootstrap;

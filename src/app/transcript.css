@@ -203,3 +203,6 @@
 .recovery-activity .retry-turn:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
 
 .conversation-activity .retry-turn.primary { border-color: var(--accent); }
+
+/* Keep Find's single explicit Close control and avoid the browser's blue clear icon. */
+.find-bar input::-webkit-search-cancel-button { appearance: none; }

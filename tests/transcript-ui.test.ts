@@ -488,6 +488,7 @@ describe("reply actions", () => {
 
 describe("find in chat", () => {
   beforeEach(() => {
+    vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
     conversation = { ...conversation, earlier: 4, messages: [prompt("q", "Is the north gate shut?"), answer("a", "The gate is shut."), answer("b", "Barn is fine.")] } as Conversation;
     searchHits = [
       { botId: "shared", botName: "Shared", sessionId: "live", title: "", snippet: "", messageId: "old", offset: 2 },
@@ -497,6 +498,42 @@ describe("find in chat", () => {
   });
   const find = () => container.querySelector<HTMLInputElement>('.find-bar input')!;
   const count = () => container.querySelector(".find-count")?.textContent;
+
+  it("leaves Control+F alone on Mac and uses it on non-Apple platforms", async () => {
+    await render();
+    const press = () => {
+      const event = new KeyboardEvent("keydown", { key: "f", ctrlKey: true, cancelable: true });
+      window.dispatchEvent(event); return event;
+    };
+    let event!: KeyboardEvent;
+    await act(async () => { event = press(); });
+    expect(event.defaultPrevented).toBe(false);
+    expect(container.querySelector(".find-bar")).toBeNull();
+    vi.spyOn(navigator, "platform", "get").mockReturnValue("Linux x86_64");
+    await act(async () => { event = press(); });
+    expect(event.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(find());
+  });
+
+  it("scrolls to the matching text inside a long message", async () => {
+    vi.spyOn(Element.prototype, "clientHeight", "get").mockReturnValue(400);
+    const previous = Object.getOwnPropertyDescriptor(Range.prototype, "getBoundingClientRect");
+    const rect = vi.fn(function (this: Range) {
+      expect(this.toString().toLowerCase()).toBe("gate");
+      return { top: 800 - (container.querySelector<HTMLElement>(".transcript")?.scrollTop ?? 0) };
+    });
+    Object.defineProperty(Range.prototype, "getBoundingClientRect", { configurable: true, value: rect });
+    try {
+      await render();
+      await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "f", metaKey: true, cancelable: true })));
+      await typeInto(find(), "gate");
+      expect(rect).toHaveBeenCalled();
+      expect(container.querySelector<HTMLElement>(".transcript")!.scrollTop).toBe(700);
+    } finally {
+      if (previous) Object.defineProperty(Range.prototype, "getBoundingClientRect", previous);
+      else Reflect.deleteProperty(Range.prototype, "getBoundingClientRect");
+    }
+  });
 
   it("opens with Cmd+F, counts loaded matches, then merges unloaded history and opens it", async () => {
     await render();
@@ -552,7 +589,7 @@ describe("find in chat", () => {
       : path === "/bootstrap?roster=lean" ? bootstrap : path === "/bots/shared/draft" ? savedDraft
       : path.startsWith("/search?") ? { hits: [], unavailableBots: [] } : conversation) as T);
     await render();
-    await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "f", ctrlKey: true, cancelable: true })));
+    await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "f", metaKey: true, cancelable: true })));
     await typeInto(find(), "ga");
     await advance(300);
     await typeInto(find(), "gate");

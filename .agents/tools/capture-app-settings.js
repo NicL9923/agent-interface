@@ -33,7 +33,7 @@ async (page, { origin, outputDir }) => {
       await save(() => advanced.setChecked(true));
       await save(() => advanced.setChecked(false));
 
-      await sheet.getByRole('button', { name: /^Following \d+ assistants?/ }).click();
+      await sheet.getByRole('button', { name: /^(Following \d+ assistants?|Not following any assistants)/ }).click();
       const following = tab.getByRole('dialog', { name: 'Following', exact: true });
       const ranch = following.getByRole('checkbox', { name: /Ranch hand/ });
       await save(() => ranch.check());
@@ -55,7 +55,20 @@ async (page, { origin, outputDir }) => {
       await sheet.getByRole('heading', { name: 'Home sections', exact: true }).scrollIntoViewIfNeeded();
       await shot(`settings-sections-${width}`);
       await sheet.getByRole('button', { name: /^Weekend plans/ }).click();
-      await save(() => tab.getByRole('button', { name: 'Delete section', exact: true }).click());
+      await tab.getByRole('button', { name: 'Delete section', exact: true }).click();
+      let confirmation = tab.getByRole('alertdialog', { name: 'Delete Weekend plans?', exact: true });
+      await shot(`settings-delete-${width}`);
+      await confirmation.getByRole('button', { name: 'Keep section', exact: true }).click();
+      await section.getByRole('textbox', { name: 'Section name', exact: true }).fill('Around the house');
+      await section.getByRole('button', { name: 'Back to settings', exact: true }).click();
+      await section.getByRole('alert').waitFor();
+      await shot(`settings-rename-error-${width}`);
+      await section.getByRole('textbox', { name: 'Section name', exact: true }).fill('Weekend restored');
+      await save(() => section.getByRole('button', { name: 'Back to settings', exact: true }).click());
+      await sheet.getByRole('button', { name: /^Weekend restored/ }).click();
+      await tab.getByRole('button', { name: 'Delete section', exact: true }).click();
+      confirmation = tab.getByRole('alertdialog', { name: 'Delete Weekend restored?', exact: true });
+      await save(() => confirmation.getByRole('button', { name: 'Delete section', exact: true }).click());
 
       await sheet.getByRole('button', { name: /^Keyboard shortcuts/ }).click();
       const help = tab.getByRole('dialog', { name: 'Keyboard shortcuts', exact: true });
@@ -82,6 +95,16 @@ async (page, { origin, outputDir }) => {
       await tab.waitForFunction(() => document.querySelector('.find-count')?.textContent.includes(' of '));
       await shot(`settings-find-chat-${width}`);
       await tab.getByRole('button', { name: 'Older match', exact: true }).click();
+      await shot(`settings-find-older-${width}`);
+      const current = await tab.evaluate(() => {
+        const highlights = CSS.highlights.get('find-current');
+        const range = highlights && [...highlights][0];
+        if (!range) return null;
+        const box = range.getBoundingClientRect();
+        const view = document.querySelector('.transcript').getBoundingClientRect();
+        return { top: box.top, bottom: box.bottom, viewTop: view.top, viewBottom: view.bottom };
+      });
+      if (!current || current.top < current.viewTop || current.bottom > current.viewBottom) throw new Error('Selected Find text is not visible: ' + JSON.stringify(current));
       await find.press('Escape');
       if (await find.count()) throw new Error('Escape did not close Find');
     }

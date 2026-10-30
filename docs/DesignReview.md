@@ -78,14 +78,14 @@ References collected October 25, 2026. External artwork is reference material on
 | Logins and secure requests | Desktop/phone web and current iPhone logins captured | Complete | Combined whole-area rounds: 7.8, 8.8, 9.1 |
 | Search, saved items and automations | Desktop/phone web and current iPhone captures | Complete | Whole-area rounds: 8.2, 8.8, 9.0; final CSS and Back-state fixes applied directly |
 | Group chats and threads | Desktop/phone web and iPhone conversation captured | Complete | Whole-area rounds: 7.0, 8.6, 9.0; final scroll follow-ups applied directly |
-| Settings, following and home sections | Desktop/phone web and current iPhone front captured | In progress | Whole-area round 1 pending |
+| Settings, following and home sections | Desktop/phone web and current iPhone front captured | In progress | Whole-area round 1: 8.0; fixes implemented, round 2 pending |
 | Integrations | Desktop/phone web and current iPhone captured | Complete | Combined whole-area rounds: 7.8, 8.8, 9.1 |
 | Computer and terminal | Pending | Pending | Pending |
 | Hermes updates and recovery | Pending | Pending | Pending |
 | Sign-in and connection recovery | Pending | Pending | Pending |
-| Command palette and keyboard help | Desktop/phone web captured | In progress | Included in Settings round 1 |
+| Command palette and keyboard help | Desktop/phone web captured | In progress | Included in Settings review, round 1: 8.0 |
 | Attachments, upload failures and large paste | Pending | Pending | Pending |
-| Find in conversation | Desktop/phone web captured and exercised | In progress | Included in Settings round 1 |
+| Find in conversation | Desktop/phone web captured and exercised | In progress | Included in Settings review, round 1: 8.0 |
 | Voice recording and playback | Pending | Pending | Pending |
 | Status dock, connection notices and app updates | Pending | Pending | Pending |
 | Toasts, undo and stop confirmation | Pending | Pending | Pending |
@@ -699,3 +699,32 @@ VoiceOver, dark mode and large text remain unverified. Native and web fixture
 account names, update dates and start-page values differ by fixture setup.
 No product parity claim comes from those values. Both browser and preview
 server were closed after capture. The first whole-area review is pending.
+
+
+Settings round 1 scored 8.0. Find now shares its text-range lookup with the
+highlight renderer and reveals the actual match inside a long message. It uses
+the shared platform matcher, so Control+F remains a text-editing key on Mac.
+Web section deletion asks first with Keep section focused. A valid rename saves
+on Back or Escape; an invalid name keeps the page open with its error. Section
+summaries distinguish assistants in the section from pinned members. The web
+add row stops at 30 sections, touch reorder buttons are 44px, and the rename
+card is rounded. Find has one explicit close button, and Appearance and Following
+wording now agree with native.
+
+Native section summaries also explain pinned members, invalid rename text stays
+local with an inline error, and the Quick Switcher includes Settings. That
+action waits for the switcher sheet to dismiss before opening Settings. These
+subpage changes are source-only so far. The current iPhone front capture remains
+valid because its visible layout is unchanged. Native compilation and a refreshed
+front capture are queued together under the machine-wide lock.
+
+All 104 focused checks pass, including rename leave paths, cancellation and
+confirmation, pinned summaries, the section limit, platform-specific Find and
+text-range scrolling. The web build completed. The agent repeated the web
+interactions at both widths, canceled a deletion, tried a duplicate rename,
+returned with a valid unsent rename, then deleted the temporary section. Both
+initial and Older-match captures show selected text; the capture also checks
+its range lies within the transcript viewport. Browser and preview server are
+closed. The second review is pending. Palette links to deeper Settings pages
+remain optional navigation work; live saves, native subpage gestures, quiet-hour
+menus, Sign out, VoiceOver, dark mode and larger text are not newly verified.

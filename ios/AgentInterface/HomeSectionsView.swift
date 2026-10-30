@@ -69,7 +69,7 @@ struct HomeSectionRows: View {
       NavigationLink {
         HomeSectionView(preferences: $preferences, sectionId: section.id, bots: bots)
       } label: {
-        LabeledContent(section.displayName, value: HomeSummary.assistants(bots.filter { section.botIds.contains($0.id) }.count))
+        LabeledContent(section.displayName, value: sectionSummary(section))
       }.accessibilityIdentifier("homeSection.\(section.id)")
     }.onDelete { offsets in
       for id in offsets.map({ preferences.sections[$0].id }) { preferences = preferences.removingSection(id) }
@@ -81,6 +81,11 @@ struct HomeSectionRows: View {
     if preferences.canAddSection { addRow } else {
       Text("You have the most sections home can show (\(Preferences.sectionLimit)).").font(.footnote).foregroundStyle(.secondary)
     }
+  }
+  private func sectionSummary(_ section: BotSection) -> String {
+    let members = bots.filter { section.botIds.contains($0.id) }
+    let pinned = members.filter { preferences.favorites.contains($0.id) }.count
+    return "\(HomeSummary.assistants(members.count - pinned)) in section" + (pinned > 0 ? " · \(pinned) pinned" : "")
   }
   /// Reads as an action, not a dimmed field: an accent plus and prompt, and Add appears once
   /// there is a name to add. An always-visible but disabled Add made the row look switched off.
@@ -121,13 +126,23 @@ struct HomeSectionView: View {
   @Environment(AppStore.self) private var store
   @Environment(\.dismiss) private var dismiss
   @State private var deleteConfirm = false
+  @State private var name = ""
+  @State private var nameError: String?
   private var section: BotSection? { preferences.sections.first { $0.id == sectionId } }
   var body: some View {
     Form {
       if let section {
         Section("Name") {
-          TextField("Section name", text: Binding(get: { section.name }, set: { preferences = preferences.renamingSection(sectionId, to: $0) }))
+          TextField("Section name", text: $name)
+            .onChange(of: name) { _, value in
+              let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+              if trimmed.isEmpty { nameError = "Enter a section name. The previous name is still saved." }
+              else if trimmed.count > Preferences.sectionNameLimit { nameError = "Use 100 characters or fewer. The previous name is still saved." }
+              else if preferences.sections.contains(where: { $0.id != sectionId && $0.name.localizedCaseInsensitiveCompare(trimmed) == .orderedSame }) { nameError = "A section with that name already exists. The previous name is still saved." }
+              else { nameError = nil; preferences = preferences.renamingSection(sectionId, to: trimmed) }
+            }
             .accessibilityIdentifier("sectionName")
+          if let nameError { Text(nameError).foregroundStyle(Palette.danger).font(.footnote).accessibilityAddTraits(.updatesFrequently) }
         }
         Section {
           ForEach(bots) { bot in
@@ -143,7 +158,7 @@ struct HomeSectionView: View {
           Button("Delete section", role: .destructive) { deleteConfirm = true }.accessibilityIdentifier("deleteSection")
         } footer: { Text("Its assistants move back to More assistants on home.") }
       }
-    }.disabled(store.sessionExpired).householdListBackground()
+    }.onAppear { name = section?.name ?? "" }.disabled(store.sessionExpired).householdListBackground()
       .navigationTitle(section?.displayName ?? "Section").navigationBarTitleDisplayMode(.inline)
       .confirmationDialog("Delete \(section?.displayName ?? "this section")?", isPresented: $deleteConfirm, titleVisibility: .visible) {
         Button("Delete section", role: .destructive) {

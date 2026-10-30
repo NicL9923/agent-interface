@@ -1,3 +1,4 @@
+import { matchCombo, shortcuts } from "./shortcuts";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode, RefCallback, RefObject } from "react";
 import type { ActivityState, Approval, Bootstrap, Bot, FileRef, Message, ToolCall } from "../shared/types";
@@ -108,7 +109,7 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
   useEffect(() => {
     if (!findable) return;
     const open = (event: KeyboardEvent) => {
-      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey || event.key.toLowerCase() !== "f") return;
+      if (event.defaultPrevented || !matchCombo(event, shortcuts.find)) return;
       const view = scroll.current;
       if (!view || view.closest("[inert]") || document.querySelector("dialog[open]")) return;
       event.preventDefault();

@@ -1,3 +1,4 @@
+import { matchRanges } from "./find-ranges";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ApiError, cachedResponse, changeStream, pollWhileVisible, request } from "../client-api";
 import { routeUrl, type ApiQuery } from "../shared/api";
@@ -309,9 +310,11 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
     if (next !== reserve) space.style.height = next ? `${next}px` : "";
   };
   // Brings the opened message into view, a little below the top, and marks it briefly.
-  const showFound = (item: HTMLElement, mark = true) => {
+  const showFound = (item: HTMLElement, mark = true, needle?: string) => {
     const element = scroll.current!;
-    element.scrollTop += item.getBoundingClientRect().top - element.getBoundingClientRect().top - Math.min(120, element.clientHeight / 4);
+    const range = needle ? matchRanges(item, needle)[0] : undefined;
+    const top = range?.getBoundingClientRect?.().top ?? item.getBoundingClientRect().top;
+    element.scrollTop += top - element.getBoundingClientRect().top - Math.min(120, element.clientHeight / 4);
     mode.current = "free";
     holdPlace();
     if (!mark) return;
@@ -455,12 +458,12 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
     if (sendAnchor.current?.requestId === requestId && !sendAnchor.current.id) sendAnchor.current.messageId = messageId;
   }, []);
   /** Shows a message of this conversation, loading the history window from it when it is not loaded. */
-  const openMessage = useCallback((messageId: string, mark = true) => {
+  const openMessage = useCallback((messageId: string, mark = true, needle?: string) => {
     setAtAttention(null);
     const element = scroll.current;
     const item = element ? messageElement(element, messageId) : undefined;
     if (item) {
-      showFound(item, mark);
+      showFound(item, mark, needle);
       setAtLatest(distanceToEnd(element!) < LATEST_DISTANCE);
     } else requestStart.current(messageId);
   }, []);

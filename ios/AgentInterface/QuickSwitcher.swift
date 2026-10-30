@@ -2,7 +2,7 @@ import SwiftUI
 
 /// A place the quick switcher can open.
 enum QuickSwitchTarget: Hashable {
-  case bot(String), today, groups, search
+  case bot(String), today, groups, search, settings
 }
 
 /// What the quick switcher lists for a query: matching assistants, pinned first, then the
@@ -18,6 +18,7 @@ enum QuickSwitch {
     Entry(target: .today, title: "Today", symbol: "calendar"),
     Entry(target: .groups, title: "Group chats", symbol: "bubble.left.and.bubble.right"),
     Entry(target: .search, title: "Search & saved", symbol: "magnifyingglass"),
+    Entry(target: .settings, title: "Settings", symbol: "gearshape"),
   ]
   static func entries(query: String, bots: [Bot], pinned: [String]) -> [Entry] {
     let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -78,6 +79,7 @@ struct QuickSwitcher: View {
     case .today: "quickSwitch.today"
     case .groups: "quickSwitch.groups"
     case .search: "quickSwitch.search"
+    case .settings: "quickSwitch.settings"
     }
   }
 }

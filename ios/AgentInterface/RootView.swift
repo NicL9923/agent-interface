@@ -36,6 +36,7 @@ struct RootView: View {
   @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
   @State private var compactColumn: NavigationSplitViewColumn = .sidebar
   @State private var quickSwitcherOpen = false
+  @State private var quickSettingsRequested = false
   var body: some View {
     Group {
       if store.bootstrap == nil {
@@ -46,7 +47,9 @@ struct RootView: View {
     }
     .background(Palette.surface(scheme))
     .background { AppBadgeSync() }
-    .sheet(isPresented: $quickSwitcherOpen) {
+    .sheet(isPresented: $quickSwitcherOpen, onDismiss: {
+      if quickSettingsRequested { quickSettingsRequested = false; preferencesOpen = true }
+    }) {
       QuickSwitcher(choose: go).appStore(store).coveringChat(store)
     }
     .homeSignals(haptic: store.haptic, command: store.keyboardCommand, run: run)
@@ -210,6 +213,7 @@ struct RootView: View {
       destination = .conversation
       if phone { path = [.chat] } else { compactColumn = .detail }
       Task { await store.select(id) }
+    case .settings: quickSettingsRequested = true
     case .today: destination = .today; path = [.today]; compactColumn = .detail
     case .groups: destination = .groups; path = [.groups]; compactColumn = .detail
     case .search: store.searchFocusPending = true; destination = .find; path = [.search]; compactColumn = .detail
