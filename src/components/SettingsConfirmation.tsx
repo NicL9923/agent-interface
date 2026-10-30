@@ -19,4 +19,3 @@ export function SettingsConfirmation({ title, detail, confirmLabel, cancelLabel 
     </div>
   </Dialog>;
 }
-
