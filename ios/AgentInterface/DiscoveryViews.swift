@@ -218,7 +218,7 @@ struct DiscoveryView: View {
   }
   private func historyToolbar(_ page: HistoryPage) -> some View {
     VStack(alignment: .leading, spacing: 4) {
-      Button { self.page = nil; historyRequest = nil } label: { Label("Back to results", systemImage: "chevron.left") }
+      Button { self.page = nil; historyRequest = nil; error = nil; notice = nil } label: { Label("Back to results", systemImage: "chevron.left") }
         .buttonStyle(.bordered).controlSize(.regular)
       Text(pageTitle).font(.headline).lineLimit(2)
       Text("\(name(page.botId)) · Read-only history").font(.caption).foregroundStyle(Palette.muted)

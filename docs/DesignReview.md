@@ -76,7 +76,7 @@ References collected October 25, 2026. External artwork is reference material on
 | Learning | Desktop/phone web and current iPhone views captured | Complete | Whole-screen rounds: 7.0, 8.5, 9.0 |
 | Routines and results | Desktop/phone web and current iPhone views captured | Complete | Whole-screen rounds: 7.2, 8.6, 9.1 |
 | Logins and secure requests | Desktop/phone web and current iPhone logins captured | Complete | Combined whole-area rounds: 7.8, 8.8, 9.1 |
-| Search, saved items and automations | Desktop/phone web and current iPhone captures | 8.8, final round pending | Pinned history, title formatting and error fixes implemented |
+| Search, saved items and automations | Desktop/phone web and current iPhone captures | 9.0, round 3 | Passed; small final CSS and Back-state fixes applied directly |
 | Group chats and threads | Pending | Pending | Pending |
 | Settings, following and home sections | Pending | Pending | Pending |
 | Integrations | Desktop/phone web and current iPhone captured | Complete | Combined whole-area rounds: 7.8, 8.8, 9.1 |
@@ -602,3 +602,11 @@ visible, then retried and saved successfully. All 28 focused checks cover these
 changes and the prior discovery behavior. New web and native captures are ready
 for the third and final whole-area review. Native unit execution, live providers,
 VoiceOver, dark mode and large text remain unverified.
+
+The third and final review passed at 9.0/10. It confirmed the visible history
+errors, clean title formatting, pinned top edge and neutral native Save controls.
+Two small follow-ups were applied directly: remove the negative header margin
+that clipped the tab strip or save notice before scrolling, and clear native
+history errors and notices on Back. The agent checked the header at scroll zero
+with a save notice and again at the end of history at both web widths. No fourth
+review is planned. Group conversations are next.

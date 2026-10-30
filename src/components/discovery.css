@@ -36,7 +36,7 @@
   .discovery-panel button:not(.today-row) { min-height: 44px; }
 }
 
-.history-heading { position: sticky; top: calc(-1 * var(--discovery-padding)); z-index: 3; padding: calc(8px + var(--discovery-padding)) 0 12px; margin-top: calc(-1 * var(--discovery-padding)); margin-bottom: 12px; background: var(--surface); border-bottom: 1px solid var(--line); }
+.history-heading { position: sticky; top: calc(-1 * var(--discovery-padding)); z-index: 3; padding: calc(8px + var(--discovery-padding)) 0 12px; margin-bottom: 12px; background: var(--surface); border-bottom: 1px solid var(--line); }
 .discovery-panel .history-heading h2 { margin: 6px 0; font-size: 1.0625rem; }
 .history-heading > p:not(.form-error) { margin: 0; color: var(--muted); font-size: .875rem; }
 .discovery-panel button.history-save { min-height: 44px; border: 1px solid var(--line); color: var(--ink); background: var(--raised); padding: 8px 12px; }
