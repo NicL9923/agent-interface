@@ -77,7 +77,7 @@ References collected October 25, 2026. External artwork is reference material on
 | Routines and results | Desktop/phone web and current iPhone views captured | Complete | Whole-screen rounds: 7.2, 8.6, 9.1 |
 | Logins and secure requests | Desktop/phone web and current iPhone logins captured | Complete | Combined whole-area rounds: 7.8, 8.8, 9.1 |
 | Search, saved items and automations | Desktop/phone web and current iPhone captures | Complete | Whole-area rounds: 8.2, 8.8, 9.0; final CSS and Back-state fixes applied directly |
-| Group chats and threads | Desktop/phone web and iPhone conversation captured | 8.6, final round pending | Send scrolling, mention overlay and selection fixes implemented |
+| Group chats and threads | Desktop/phone web and iPhone conversation captured | Complete | Whole-area rounds: 7.0, 8.6, 9.0; final scroll follow-ups applied directly |
 | Settings, following and home sections | Pending | Pending | Pending |
 | Integrations | Desktop/phone web and current iPhone captured | Complete | Combined whole-area rounds: 7.8, 8.8, 9.1 |
 | Computer and terminal | Pending | Pending | Pending |
@@ -657,3 +657,14 @@ send. The agent repeated the web interactions and checked that the sent message
 and its Reply control fit above the composer. Current desktop, phone and iPhone
 renders are captured. Native scroll behavior is source-only; the capture does
 not claim native interaction. The third and final review is pending.
+
+The third and final Group conversations review passed at 9.0/10. It confirmed
+that sent cards clear the composer, the mention popup leaves no glyph fragment,
+and selected replies have an accent bar. Two source follow-ups were applied
+directly: follow the conversation end, including decisions after the messages,
+and suppress following while loading the next oldest history page. All 43
+focused checks pass. The agent confirmed trailing approvals stay visible after
+Send at both web widths and Load more retains the reading position. Native
+compiled; its scroll behavior remains source-only. Repeated quotes in long
+single-thread runs and initial-position consistency remain optional polish.
+App settings and navigation are next. No fourth group review is planned.

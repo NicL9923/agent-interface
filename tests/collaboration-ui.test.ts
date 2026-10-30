@@ -302,35 +302,30 @@ it('explains the six-assistant selection limit and restores choices after desele
   await act(async()=>choices[0].click());expect(choices[6].disabled).toBe(false);
 });
 
-it('follows new replies only at the bottom and reveals a confirmed send above the composer',async()=>{
-  const original=Object.getOwnPropertyDescriptor(HTMLElement.prototype,'scrollIntoView');
-  const scroll=vi.fn();Object.defineProperty(HTMLElement.prototype,'scrollIntoView',{configurable:true,value:scroll});
-  try {
-    const event=(seq:number)=>({event_id:'event-'+seq,seq,kind:'message.member',actor:{id:'ranch'},payload:{text:'Reply '+seq,thread_id:'walk'},created_at:seq});
-    let rows=[event(1)];
-    vi.mocked(api).mockImplementation(async path=>path==='/groups'?{supported:true,canSend:true,rooms:[room]}:path.includes('/log')?{events:rows,cursor:rows.length,has_more:false}:{room,driver_status:{working:false,blocked:false,pending_actions:[]}});
-    await act(async()=>root.render(createElement(GroupChats,{bootstrap})));
-    const panel=container.querySelector<HTMLElement>('.group-panel')!;
-    panel.style.paddingBottom='24px';
-    Object.defineProperties(panel,{scrollHeight:{configurable:true,value:1000},clientHeight:{configurable:true,value:400}});
-    panel.scrollTop=0;scroll.mockClear();
-    rows=[...rows,event(2)];await act(async()=>vi.advanceTimersByTimeAsync(30000));
-    expect(scroll).not.toHaveBeenCalled();
-    panel.scrollTop=600;rows=[...rows,event(3)];await act(async()=>vi.advanceTimersByTimeAsync(30000));
-    expect(scroll).toHaveBeenLastCalledWith({block:'end'});
-    expect(scroll.mock.contexts.at(-1)).toBe(container.querySelector('.group-message:last-of-type'));
-    const field=container.querySelector<HTMLTextAreaElement>('#group-message')!;
-    vi.spyOn(field.form!,'getBoundingClientRect').mockReturnValue({height:140} as DOMRect);
-    panel.scrollTop=0;scroll.mockClear();
-    vi.mocked(write).mockImplementationOnce(async()=>{rows=[...rows,event(4)];return{accepted:true};});
-    await typeInto(field,'A new group message');await act(async()=>field.form!.requestSubmit());
-    const last=[...container.querySelectorAll<HTMLElement>('.group-message')].at(-1)!;
-    expect(scroll.mock.contexts.at(-1)).toBe(last);expect(last.style.scrollMarginBottom).toBe('180px');
-    scroll.mockClear();vi.mocked(write).mockRejectedValueOnce(new Error('Connection lost'));
-    await typeInto(field,'Uncertain send');await act(async()=>field.form!.requestSubmit());
-    expect(scroll).not.toHaveBeenCalled();expect(field.value).toBe('Uncertain send');
-  } finally {
-    if(original)Object.defineProperty(HTMLElement.prototype,'scrollIntoView',original);
-    else delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
-  }
+it('follows the conversation end without moving readers above the bottom or on uncertain sends',async()=>{
+  const event=(seq:number)=>({event_id:'event-'+seq,seq,kind:'message.member',actor:{id:'ranch'},payload:{text:'Reply '+seq,thread_id:'walk'},created_at:seq});
+  let rows=[event(1)];
+  vi.mocked(api).mockImplementation(async path=>path==='/groups'?{supported:true,canSend:true,rooms:[room]}:path.includes('/log')?{events:rows,cursor:rows.length,has_more:false}:{room,driver_status:{working:false,blocked:false,pending_actions:[{kind:'approval',task_id:'weather',member_id:'ranch',approval:{description:'Read the weather'}}]}});
+  await act(async()=>root.render(createElement(GroupChats,{bootstrap})));
+  const panel=container.querySelector<HTMLElement>('.group-panel')!;
+  Object.defineProperties(panel,{scrollHeight:{configurable:true,value:1000},clientHeight:{configurable:true,value:400}});
+  panel.scrollTop=0;
+  rows=[...rows,event(2)];await act(async()=>vi.advanceTimersByTimeAsync(30000));expect(panel.scrollTop).toBe(0);
+  panel.scrollTop=600;rows=[...rows,event(3)];await act(async()=>vi.advanceTimersByTimeAsync(30000));expect(panel.scrollTop).toBe(1000);
+  expect(container.querySelector('.approval-card')?.textContent).toContain('Read the weather');
+  const field=container.querySelector<HTMLTextAreaElement>('#group-message')!;
+  panel.scrollTop=0;
+  vi.mocked(write).mockImplementationOnce(async()=>{rows=[...rows,event(4)];return{accepted:true};});
+  await typeInto(field,'A new group message');await act(async()=>field.form!.requestSubmit());expect(panel.scrollTop).toBe(1000);
+  panel.scrollTop=0;vi.mocked(write).mockRejectedValueOnce(new Error('Connection lost'));
+  await typeInto(field,'Uncertain send');await act(async()=>field.form!.requestSubmit());expect(panel.scrollTop).toBe(0);expect(field.value).toBe('Uncertain send');
+});
+it('keeps the next oldest page at the reader position when Load more is pressed',async()=>{
+  let count=1,more=true;
+  vi.mocked(api).mockImplementation(async path=>path==='/groups'?{supported:true,canSend:true,rooms:[room]}:path.includes('/log')?{events:Array.from({length:count},(_,i)=>({event_id:'page-'+i,seq:i+1,kind:'message.user',actor:{id:'one'},payload:{text:'History '+i},created_at:i+1})),cursor:count,has_more:more}:{room,driver_status:{working:false,blocked:false,pending_actions:[]}});
+  await act(async()=>root.render(createElement(GroupChats,{bootstrap})));
+  const panel=container.querySelector<HTMLElement>('.group-panel')!;
+  Object.defineProperties(panel,{scrollHeight:{configurable:true,value:1000},clientHeight:{configurable:true,value:400}});panel.scrollTop=600;
+  count=4;more=false;await click('Load more messages');expect(panel.scrollTop).toBe(600);
+  expect(container.textContent).toContain('History 3');
 });

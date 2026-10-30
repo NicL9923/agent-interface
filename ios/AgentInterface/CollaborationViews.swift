@@ -302,6 +302,7 @@ struct GroupConversationView: View {
   @State private var replyToId = ""
   @State private var sentScrollRequest: UUID?
   @State private var followingLatest = false
+  @State private var suppressPageFollow = false
   @FocusState private var composerFocused: Bool
   @State private var pending: GroupSend?
   @State private var error: String?
@@ -339,8 +340,6 @@ struct GroupConversationView: View {
       Section {
         ForEach(messages) { event in
           messageRow(event, root: event.payload.thread_id.flatMap { roots[$0] }).id(event.id)
-            .onAppear { if event.id == messages.last?.id { followingLatest = true } }
-            .onDisappear { if event.id == messages.last?.id { followingLatest = false } }
         }
         if more { Button("Load more messages") { Task { await load() } }.listRowBackground(Color.clear) }
         if state != nil && !missing && messages.isEmpty {
@@ -361,12 +360,16 @@ struct GroupConversationView: View {
           }
         }
       }
+      if state != nil {
+        Color.clear.frame(height: 1).id("group-end").listRowInsets(EdgeInsets()).listRowSeparator(.hidden).listRowBackground(Color.clear)
+          .onAppear { followingLatest = true }.onDisappear { followingLatest = false }
+      }
     }
     .householdListBackground()
     .safeAreaInset(edge: .bottom) { composer }
     .navigationTitle(identity.title).refreshable { await load() }.task(id: "\(store.scope ?? ""):\(room.id)") {
       loadGeneration += 1
-      state = nil; events = []; cursor = 0; more = false; applied = nil; threadId = ""; replyToId = ""; sentScrollRequest = nil; followingLatest = false
+      state = nil; events = []; cursor = 0; more = false; applied = nil; threadId = ""; replyToId = ""; sentScrollRequest = nil; followingLatest = false; suppressPageFollow = false
       draft = UserDefaults.standard.string(forKey: key + ":draft") ?? ""
       if let data = UserDefaults.standard.data(forKey: key) { pending = try? JSONDecoder().decode(GroupSend.self, from: data) }
       await load()
@@ -375,13 +378,12 @@ struct GroupConversationView: View {
     // stream that failed unnoticed, and the room's state.
     .watchingGroup(room.id) { if !missing { await load() } }
     .pollWhileActive(id: "\(store.scope ?? ""):\(room.id)", every: Self.fallbackInterval) { if !missing { await load() } }
-    .onChange(of: messages.last?.id) { _, _ in if followingLatest { scrollToLatest(proxy) } }
+    .onChange(of: messages.last?.id) { _, _ in if followingLatest && !suppressPageFollow { scrollToLatest(proxy) } }
     .onChange(of: sentScrollRequest) { _, request in if request != nil { scrollToLatest(proxy) } }
     }
   }
   private func scrollToLatest(_ proxy: ScrollViewProxy) {
-    guard let id = messages.last?.id else { return }
-    Task { @MainActor in proxy.scrollTo(id, anchor: .bottom) }
+    Task { @MainActor in proxy.scrollTo("group-end", anchor: .bottom) }
   }
   private var composer: some View {
     VStack(alignment: .leading, spacing: 8) {
@@ -526,6 +528,7 @@ struct GroupConversationView: View {
     }
   }
   private func apply(_ value: GroupState, _ page: GroupPage) {
+    suppressPageFollow = more || page.has_more
     state = value; error = nil; let known = Set(events.map(\.id)); events += page.events.filter { !known.contains($0.id) }; events.sort { $0.seq < $1.seq }; cursor = page.cursor; more = page.has_more
   }
   private func send() async {

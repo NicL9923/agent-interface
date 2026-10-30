@@ -25,7 +25,6 @@ export function GroupChats({ bootstrap }: { bootstrap: Bootstrap }) {
   const [threadId, setThreadId] = useState('');
   const [replyToId, setReplyToId] = useState('');
   const panel = useRef<HTMLDivElement>(null);
-  const lastMessage = useRef<HTMLElement>(null);
   const scrollLatest = useRef(false);
   const [notice, setNotice] = useState('');
   const action = useAction();
@@ -56,7 +55,7 @@ export function GroupChats({ bootstrap }: { bootstrap: Bootstrap }) {
       // Measure before appending so a reader above the bottom stays put.
       const view = panel.current;
       const newMessage = page.events.some(event => event.seq > cursor.current && ['message.user', 'message.member'].includes(event.kind));
-      if (newMessage && view && view.scrollHeight - view.clientHeight - view.scrollTop < 48) scrollLatest.current = true;
+      if (!more && !page.has_more && newMessage && view && view.scrollHeight - view.clientHeight - view.scrollTop < 48) scrollLatest.current = true;
       cursor.current = page.cursor;
       setEvents(current => [...new Map([...current, ...page.events].map(event => [event.event_id, event])).values()].sort((a, b) => a.seq - b.seq));
       setMore(page.has_more);
@@ -190,14 +189,11 @@ export function GroupChats({ bootstrap }: { bootstrap: Bootstrap }) {
   const drafting = creating && !pendingCreate;
   const status = state?.driver_status?.blocked ? 'Discussion needs attention.' : state?.driver_status?.working ? 'Assistants are discussing…' : 'Type @ to address one assistant.';
   useLayoutEffect(() => {
-    const target = lastMessage.current;
-    if (!scrollLatest.current || !target) return;
+    const view = panel.current;
+    if (!scrollLatest.current || !view || creating) return;
     scrollLatest.current = false;
-    const composerHeight = field.current?.form?.getBoundingClientRect().height || 0;
-    // scrollIntoView aligns with the outer scrollport, including its padding.
-    const bottomPadding = panel.current ? parseFloat(getComputedStyle(panel.current).paddingBottom) || 0 : 0;
-    target.style.scrollMarginBottom = `${composerHeight + bottomPadding + 16}px`;
-    target.scrollIntoView?.({ block: 'end' });
+    // Include pending decisions and paging controls after the messages.
+    view.scrollTop = view.scrollHeight;
   }, [events, state, creating, pendingCreate]);
   return <div className="group-panel" ref={panel}>
     {(groups.error || room.error) && <FormMessage tone="error">{groups.error || room.error} <button onClick={() => { void groups.reload(); void room.reload(); }}>Retry</button></FormMessage>}
@@ -214,7 +210,7 @@ export function GroupChats({ bootstrap }: { bootstrap: Bootstrap }) {
           const root = typeof event.payload.thread_id === 'string' ? threadRoots.get(event.payload.thread_id) : undefined;
           const inThread = root && root.event_id !== event.event_id;
           const member = memberFor(event.actor.id) || memberFor(event.payload.member_id);
-          return <article className={`group-message${replyToId === event.event_id ? ' selected' : ''}${event.kind === 'message.user' && (event.sender?.id || event.actor.id) === bootstrap.user.id ? ' own' : ''}`} key={event.event_id} ref={event === messages.at(-1) ? lastMessage : undefined}>
+          return <article className={`group-message${replyToId === event.event_id ? ' selected' : ''}${event.kind === 'message.user' && (event.sender?.id || event.actor.id) === bootstrap.user.id ? ' own' : ''}`} key={event.event_id}>
             <div className="message-attribution"><span className="group-speaker">{event.kind === 'message.member' && avatar(member?.member_id)}<strong>{author(event)}</strong></span><When value={event.created_at * 1000}/></div>
             {inThread && <p className="group-thread-context">In thread with {context(root)}</p>}
             <MessageMarkdown text={typeof event.payload.text === 'string' ? event.payload.text : ''}/>
