@@ -111,6 +111,7 @@
 .automation-triggers .automation-secret { scroll-margin-top: 12px; }
 .automation-triggers .automation-secret-field { display: grid; gap: 6px; min-width: 0; }
 .automation-triggers .automation-secret-field > p { margin: 0; }
+.automation-triggers .automation-secret-field > p:first-child { font-size: 0.875rem; color: var(--muted); }
 .automation-triggers .automation-trigger-feedback:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .automation-triggers .automation-trigger-callout { padding: 16px; border: 1px solid var(--line); border-inline-start: 3px solid var(--attention); border-radius: 10px; }
 

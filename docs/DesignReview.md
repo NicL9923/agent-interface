@@ -72,7 +72,7 @@ References collected October 25, 2026. External artwork is reference material on
 | Work frame and standing goal | 21 web and 20 native before frames per device verified | Complete | Web, iPhone and iPad 9 |
 | Work task board and actions | 67 shared before frames; 19 web, 23 iPhone and 23 iPad after frames | Complete | Web refusal 9.5; remaining web states, iPhone and iPad 9 |
 | Work task editors | Shared before baseline; 16 web, 13 iPhone and 9 iPad after frames reviewed | Complete | Every frame 9 |
-| Work event triggers | Web and native comparisons available | In progress | Whole-screen round 1: 7.6. Fixes captured on web, iPhone and iPad; round 2 pending. Six native large-text frames remain accepted |
+| Work event triggers | Web, iPhone and iPad comparisons available | Complete | Whole-screen rounds: 7.6, 9.1. Six native large-text frames remain accepted |
 | Learning | Desktop/phone web and current iPhone views captured | Complete | Whole-screen rounds: 7.0, 8.5, 9.0 |
 | Routines and results | Desktop/phone web and current iPhone views captured | Complete | Whole-screen rounds: 7.2, 8.6, 9.1 |
 | Logins and secure requests | Desktop/phone web and current iPhone logins captured | Complete | Combined whole-area rounds: 7.8, 8.8, 9.1 |
@@ -867,3 +867,14 @@ inside one machine-lock command, with simulators booted and shut down in turn.
 The six accepted native large-text frames remain accepted. Their uncovered form
 tails, VoiceOver, real clipboard behavior and current large-text layout remain
 unverified. The second whole-screen review is pending.
+
+
+Event triggers passed at 9.1 in round 2, bringing progress to 22 of 25 grouped
+areas. The review confirmed all five principal findings were fixed. The web
+secret labels were then made small and muted to match the list and native;
+only those two web states were recaptured and inspected after the CSS change.
+No third review is needed. Native create-field label hierarchy, example-copy
+parity and the shared-shell scroll strip remain optional follow-ups in issue
+206. Native gestures, revealed-normal state, real clipboard behavior, VoiceOver
+and current large-text layout remain unverified. The six accepted native
+large-text frames remain accepted. Connection and update recovery are next.
