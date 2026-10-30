@@ -68,5 +68,12 @@ it('labels familiar routine results and keeps unfamiliar Hermes outcomes visible
 it('makes readable saved titles without changing identifiers inside them',()=>{
   expect(savedReplyTitle('## **Gate**')).toBe('Gate');
   expect(savedReplyTitle('`binary_sensor.north_gate`')).toBe('binary_sensor.north_gate');
-  expect(savedReplyTitle(' ** ')).toBe('Saved reply');expect(savedReplyTitle('a'.repeat(200))).toHaveLength(120);
+  expect(savedReplyTitle(' ** ')).toBe('Saved reply');expect(savedReplyTitle('a'.repeat(200))).toHaveLength(80);
+});
+
+it('makes saved reply titles from the first line without markdown or broken words',()=>{
+  expect(savedReplyTitle('\n - **Check** `binary_sensor.north_gate`.\n- A second item')).toBe('Check binary_sensor.north_gate.');
+  expect(savedReplyTitle('1. `freezer_door` is ready\nNext steps')).toBe('freezer_door is ready');
+  const title = savedReplyTitle('A useful gate maintenance plan '.repeat(8));
+  expect(title.length).toBeLessThanOrEqual(80);expect(title).toMatch(/(?:plan|gate|maintenance|useful|A)…$/);
 });

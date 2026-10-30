@@ -77,7 +77,7 @@ struct DiscoveryView: View {
   private var list: some View {
     List {
       Section { Picker("View", selection:$tab) { Text("Search").tag("search"); Text("Saved items").tag("saved"); Text("Automations").tag("automations") }.pickerStyle(.segmented) }
-      if let error { Section { ErrorBanner(message:error) } }
+      if page == nil, let error { Section { ErrorBanner(message:error) } }
       if let notice { Section { Text(notice) } }
       if busy { ProgressView() }
       if let page {
@@ -85,7 +85,7 @@ struct DiscoveryView: View {
           Text("Read from Hermes. This view does not change the assistant's active conversation.").font(.footnote).foregroundStyle(Palette.muted)
           Button(pinned.contains(bookmark(page)) ? "Saved" : "Save conversation") {
             savePointer(SavedPointer(botId: page.botId, kind: "session", sessionId: page.sessionId, title: knownConversationTitle(page.botId, page.sessionId)))
-          }.buttonStyle(.bordered).controlSize(.large).disabled(busy || pinned.contains(bookmark(page)))
+          }.buttonStyle(.bordered).tint(Palette.messageMetadata).controlSize(.regular).frame(minHeight: 44).disabled(busy || pinned.contains(bookmark(page)))
           ForEach(page.messages) { message in
             HistoryMessageRow(message: message, recipient: name(page.botId), userId: store.bootstrap?.user.id ?? "", saved: savedMessage == message.id,
               isPinned: pinned.contains(bookmark(page, message.id)),
@@ -153,7 +153,7 @@ struct DiscoveryView: View {
           if let overview, !overview.unavailableBots.isEmpty { Text("Usage unavailable for \(overview.unavailableBots.count) assistant(s).") }
         } header: { Text("Usage over 30 days") } footer: { Text("Recorded main-session usage. Estimates and provider invoices may differ. Auxiliary calls are not included.") }
       }
-    }.householdListBackground().viewHeader("Search & saved", "Past answers, saved items and usage")
+    }.householdListBackground().viewHeader("Search & saved", "Past answers, saved items and automations")
       .safeAreaInset(edge: .top, spacing: 0) { if let page { historyToolbar(page) } }
       .onAppear { Task {
         await load()
@@ -222,6 +222,7 @@ struct DiscoveryView: View {
         .buttonStyle(.bordered).controlSize(.regular)
       Text(pageTitle).font(.headline).lineLimit(2)
       Text("\(name(page.botId)) · Read-only history").font(.caption).foregroundStyle(Palette.muted)
+      if let error { ErrorBanner(message: error) }
     }.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 16).padding(.vertical, 8)
       .background(Palette.surface(scheme)).overlay(alignment: .bottom) { Divider() }
   }
@@ -268,8 +269,14 @@ struct DiscoveryView: View {
     return title.isEmpty ? "Saved conversation" : title
   }
   static func replyTitle(_ text:String)->String {
-    let title = String(text.replacingOccurrences(of:"[#*`]",with:" ",options:.regularExpression).trimmingCharacters(in:.whitespacesAndNewlines).prefix(120))
-    return title.isEmpty ? "Saved reply" : title
+    let first = text.components(separatedBy: .newlines).first { !$0.trimmingCharacters(in: .whitespaces).isEmpty } ?? ""
+    let title = first.replacingOccurrences(of: "^\\s*(?:#{1,6}\\s+|[-+*]\\s+|\\d+[.)]\\s+)", with: "", options: .regularExpression)
+      .replacingOccurrences(of: "[`*]", with: "", options: .regularExpression)
+      .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression).trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !title.isEmpty else { return "Saved reply" }
+    guard title.count > 80 else { return title }
+    let prefix = String(title.prefix(79))
+    return (prefix.lastIndex(of: " ").map { String(prefix[..<$0]) } ?? prefix) + "…"
   }
   private func notifyNames(_ row:Routine)->String {
     let names = (row.recipientIds ?? []).map { id in store.bootstrap?.household.first { $0.id == id }?.name ?? "Household member" }
@@ -359,7 +366,7 @@ struct HistoryMessageRow: View {
     VStack(alignment: .leading, spacing: 8) {
       HStack(spacing: 8) {
         if let label { Text(label).font(.caption).foregroundStyle(Palette.muted) }
-        if let save { Button(isPinned ? "Saved" : "Save reply", action: save).font(.subheadline).buttonStyle(.bordered).controlSize(.large).disabled(busy || isPinned) }
+        if let save { Button(isPinned ? "Saved" : "Save reply", action: save).font(.subheadline).buttonStyle(.bordered).tint(Palette.messageMetadata).controlSize(.regular).frame(minHeight: 44).disabled(busy || isPinned) }
       }
       content
       ForEach(message.files ?? []) { FileAttachmentView(file: $0) }

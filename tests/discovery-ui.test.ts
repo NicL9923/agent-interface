@@ -182,3 +182,28 @@ it('explains deliberate pause and preserves unknown and partial usage in the com
   expect(rows[0].textContent).toContain('Unknown');expect(rows[0].textContent).not.toContain('(partial)');
   expect(rows[1].textContent).toContain('$1.23 (partial)');expect(rows[1].textContent).toContain('Unknown');
 });
+
+it('keeps history save and paging errors in the pinned heading',async()=>{
+  const page={botId:'ranch',sessionId:'history',offset:0,hasMore:true,messages:[{id:'answer',role:'assistant',text:'Gate plan'}]};
+  vi.mocked(api).mockImplementation(async path=>path.startsWith('/search')?{hits:[archivedHit],unavailableBots:[]}:path.includes('offset=100')?Promise.reject(new Error('Could not load the next page')):page);
+  await act(async()=>root.render(createElement(DiscoveryPanel,{bootstrap:discoveryBoot,onRoutine:vi.fn(),search:{text:'gate',id:1}})));
+  await act(async()=>container.querySelector<HTMLButtonElement>('.discovery-results .today-row')!.click());
+  vi.mocked(write).mockRejectedValueOnce(new Error('Could not save this reply'));
+  await act(async()=>container.querySelector<HTMLButtonElement>('#history-answer .history-save')!.click());
+  expect(container.querySelector('.history-heading [role="alert"]')?.textContent).toBe('Could not save this reply');
+  await click('Next page');
+  expect(container.querySelector('.history-heading [role="alert"]')?.textContent).toBe('Could not load the next page');
+  expect(container.querySelectorAll('[role="alert"]')).toHaveLength(1);
+});
+it('clears Saving when leaving history before a save finishes',async()=>{
+  vi.mocked(api).mockImplementation(async path=>path.startsWith('/search')?{hits:[archivedHit],unavailableBots:[]}:{botId:'ranch',sessionId:'history',offset:0,hasMore:false,messages:[{id:'answer',role:'assistant',text:'Gate plan'}]});
+  let finish!:(value:unknown)=>void;vi.mocked(write).mockReturnValueOnce(new Promise(resolve=>{finish=resolve;}));
+  await act(async()=>root.render(createElement(DiscoveryPanel,{bootstrap:discoveryBoot,onRoutine:vi.fn(),search:{text:'gate',id:1}})));
+  await act(async()=>container.querySelector<HTMLButtonElement>('.discovery-results .today-row')!.click());
+  await act(async()=>container.querySelector<HTMLButtonElement>('#history-answer .history-save')!.click());
+  expect(container.textContent).toContain('Saving…');
+  await act(async()=>container.querySelector<HTMLButtonElement>('.discovery-back')!.click());
+  await act(async()=>finish({id:'saved'}));
+  await act(async()=>container.querySelector<HTMLButtonElement>('.discovery-results .today-row')!.click());
+  expect(container.querySelector('#history-answer .history-save')?.textContent).toBe('Save reply');
+});

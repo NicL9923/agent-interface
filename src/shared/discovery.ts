@@ -23,6 +23,14 @@ export function routineResultLabel(status: string): string {
   return Object.hasOwn(labels, status) ? labels[status] : status;
 }
 export function savedReplyTitle(text: string): string {
-  // Underscores can be part of identifiers such as binary_sensor.north_gate.
-  return text.replace(/[#*`]/g, " ").trim().slice(0, 120) || "Saved reply";
+  // Keep identifier underscores and punctuation next to inline code intact.
+  const first = text.split(/\r?\n/).find(line => line.trim()) || "";
+  const title = first.replace(/^\s*(?:#{1,6}\s+|[-+*]\s+|\d+[.)]\s+)/, "")
+    .replace(/[`*]/g, "").replace(/\s+/g, " ").trim();
+  if (!title) return "Saved reply";
+  const characters = Array.from(title);
+  if (characters.length <= 80) return title;
+  const prefix = characters.slice(0, 79).join("");
+  const boundary = prefix.lastIndexOf(" ");
+  return (boundary > 0 ? prefix.slice(0, boundary) : prefix) + "…";
 }

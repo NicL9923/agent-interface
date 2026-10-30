@@ -76,7 +76,7 @@ References collected October 25, 2026. External artwork is reference material on
 | Learning | Desktop/phone web and current iPhone views captured | Complete | Whole-screen rounds: 7.0, 8.5, 9.0 |
 | Routines and results | Desktop/phone web and current iPhone views captured | Complete | Whole-screen rounds: 7.2, 8.6, 9.1 |
 | Logins and secure requests | Desktop/phone web and current iPhone logins captured | Complete | Combined whole-area rounds: 7.8, 8.8, 9.1 |
-| Search, saved items and automations | Desktop/phone web and current iPhone captures | 8.2, round 2 pending | Context, save feedback and status fixes implemented |
+| Search, saved items and automations | Desktop/phone web and current iPhone captures | 8.8, final round pending | Pinned history, title formatting and error fixes implemented |
 | Group chats and threads | Pending | Pending | Pending |
 | Settings, following and home sections | Pending | Pending | Pending |
 | Integrations | Desktop/phone web and current iPhone captured | Complete | Combined whole-area rounds: 7.8, 8.8, 9.1 |
@@ -587,4 +587,18 @@ Automations and read-only history. Focused checks cover stale pagination after
 Back, save dedupe and removal, destination labels, sender names, exact message
 pointers, and unknown or partial usage costs. Native compiled, but its added
 unit cases were not executed because this host has an Xcode/CoreSimulator
-version mismatch. The direct simulator capture path works. Round 2 is pending.
+version mismatch. The direct simulator capture path works.
+
+Round 2 scored 8.8/10. The final pass covers the scrollport padding above the
+pinned history heading, keeps save and paging errors in that heading, and
+turns the first reply line into a clean saved title. Both clients retain
+identifier underscores, remove markdown markers and shorten at a word boundary.
+The subtitle names automations again. Native Save reply uses a neutral tone;
+web timestamps stay together and the last result has its own line. Leaving
+history clears Saving so a return trip cannot leave a stuck label.
+
+The agent triggered a failed save in both web widths, confirmed its error stayed
+visible, then retried and saved successfully. All 28 focused checks cover these
+changes and the prior discovery behavior. New web and native captures are ready
+for the third and final whole-area review. Native unit execution, live providers,
+VoiceOver, dark mode and large text remain unverified.

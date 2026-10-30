@@ -26,6 +26,9 @@ import XCTest
     XCTAssertEqual(DiscoveryView.replyTitle("a_b"), "a_b")
     XCTAssertEqual(DiscoveryView.replyTitle("`binary_sensor.north_gate`"), "binary_sensor.north_gate")
     XCTAssertEqual(DiscoveryView.replyTitle(" ** "), "Saved reply")
+    XCTAssertEqual(DiscoveryView.replyTitle("\n - **Check** `binary_sensor.north_gate`.\n- Another item"), "Check binary_sensor.north_gate.")
+    XCTAssertEqual(DiscoveryView.replyTitle("1. `freezer_door` is ready\nNext steps"), "freezer_door is ready")
+    XCTAssertLessThanOrEqual(DiscoveryView.replyTitle(String(repeating: "A useful gate maintenance plan ", count: 8)).count, 80)
   }
 
   // MARK: Launch and connection states
