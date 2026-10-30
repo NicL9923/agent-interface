@@ -7,7 +7,7 @@ Allow at most three review rounds. If it remains below 9/10 after round three,
 record the remaining issues in the PR and continue. Scores are reviewer judgments,
 not objective measurements of design quality.
 
-Fourteen screen areas have passed. Ship these changes in a draft PR and add
+Fifteen screen areas have passed. Ship these changes in a draft PR and add
 subsequent screens in separate commits. Reuse screenshots where the product UI
 has not changed. Capture-script changes do not invalidate screenshots or reviews.
 Capture web at desktop and phone widths, and native on one iPhone plus iPad only
@@ -73,7 +73,7 @@ References collected October 25, 2026. External artwork is reference material on
 | Work task board and actions | 67 shared before frames; 19 web, 23 iPhone and 23 iPad after frames | Complete | Web refusal 9.5; remaining web states, iPhone and iPad 9 |
 | Work task editors | Shared before baseline; 16 web, 13 iPhone and 9 iPad after frames reviewed | Complete | Every frame 9 |
 | Work event triggers | Web and native comparisons available | In progress | Whole-screen round 1: 7.6. Fixes implemented; targeted native recapture pending. Six native large-text frames remain accepted |
-| Learning | Desktop/phone web and iPhone views captured | Final refinements implemented | Whole-screen rounds 1 and 2: 7.0, 8.5; final round pending |
+| Learning | Desktop/phone web and current iPhone views captured | Complete | Whole-screen rounds: 7.0, 8.5, 9.0 |
 | Routines and results | Pending | Pending | Pending |
 | Logins and secure requests | Pending | Pending | Pending |
 | Search, saved items and automations | Pending | Pending | Pending |
@@ -451,3 +451,10 @@ skill. The introduction sits in the first section header. Learning, Routines,
 Connections and Logins were captured in one locked iPhone batch, with shutdown
 before the command returned. This removes the visual-capture blocker; XCTest's
 platform update is still separate from these direct app captures.
+
+[Learning round 3](evidence/design-review/learning-screen-round3.md) passed at
+9.0, closing the screen after its third and final round. Two small polish notes
+were applied directly: the terminal newline no longer creates a blank diff row,
+and the native policy explanation is a section footer. These do not start a
+fourth review round. Native review-sheet interaction, clipboard and VoiceOver
+remain outside the screenshot coverage. Routines is next.

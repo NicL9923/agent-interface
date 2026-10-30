@@ -78,7 +78,7 @@ struct HermesLearningView: View {
       } message: { Text("Hermes can save new skills, edits and deletions without asking for approval.") }
   }
   private func policy(_ state: HermesAutomationOverview.Skills) -> some View {
-    Section("Skill write policy") {
+    Section {
       Toggle("Require approval before skill changes are saved", isOn: Binding(
         get: { state.approvalRequired }, set: { enabled in
           if enabled { setPolicy(true) } else { allowingWrites = true }
@@ -88,8 +88,8 @@ struct HermesLearningView: View {
       if control.value?.canManageLearningPolicy == false {
         Text("Only an integration administrator can change the skill write policy.").font(.footnote).foregroundStyle(Palette.muted)
       }
-      Text("When enabled, Hermes stages new skills, edits and deletions for review.").font(.footnote).foregroundStyle(Palette.muted)
-    }
+    } header: { Text("Skill write policy") }
+      footer: { Text("When enabled, Hermes stages new skills, edits and deletions for review.").font(.footnote).foregroundStyle(Palette.muted) }
   }
   private func pendingChanges(_ state: HermesAutomationOverview.Skills) -> some View {
     Section("Pending changes (\(state.pending.count))") {

@@ -532,6 +532,7 @@ function TriggerSection({ control, botId }: { control: Controls; botId: string }
 function SkillDiffPreview({ text, id }: { text: string; id: string }) {
   const lines = (text || "No textual diff.").split("\n");
   return <pre id={id} className="automation-code automation-diff"><code>{lines.map((line, index) => {
+    if (index === lines.length - 1 && line === "") return null;
     const kind = /^(diff |index |@@|---|\+\+\+)/.test(line) ? "meta" : line.startsWith("+") ? "added" : line.startsWith("-") ? "removed" : "context";
     return <Fragment key={index}><span className={`automation-diff-line automation-diff-${kind}`}>{line}</span>{index < lines.length - 1 ? "\n" : ""}</Fragment>;
   })}</code></pre>;
