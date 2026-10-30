@@ -91,9 +91,7 @@ struct ComputerView: View {
         .overlay(alignment: .topTrailing) {
           if input {
             Rectangle().strokeBorder(Palette.accent, lineWidth: 2).allowsHitTesting(false)
-            Text("You have control").font(.caption.weight(.semibold)).foregroundStyle(.white)
-              .padding(.horizontal, 10).padding(.vertical, 6).background(Palette.accent, in: Capsule())
-              .padding(10).allowsHitTesting(false).accessibilityHidden(true)
+
           }
         }
       footer
@@ -133,7 +131,7 @@ struct ComputerView: View {
   private var controlHint: String {
     if desktop.held { return "Assistants are paused while you use the desktop." }
     if status?.control.kind == "human" {
-      return status?.control.mine == true ? "Take over to use this viewer." : "Take over is available after they hand back."
+      return status?.control.mine == true ? "Take over to use it here." : "Take over is available after they hand back."
     }
     return "Take over to use the mouse and keyboard."
   }
@@ -183,7 +181,7 @@ struct ComputerView: View {
       if let url = try? store.api?.url("/?computer=1"), let terminalURL = try? store.api?.url("/?computer=1&computerTab=terminal") {
         HStack(spacing: 16) {
           Link(destination: url) { Label("Open in Safari", systemImage: "safari") }.accessibilityIdentifier("computerSafari")
-          Link(destination: terminalURL) { Label("Terminal", systemImage: "terminal") }.accessibilityIdentifier("computerTerminal")
+          Link(destination: terminalURL) { Label("Terminal in Safari", systemImage: "terminal") }.accessibilityIdentifier("computerTerminal")
             .accessibilityHint("Opens the VPS terminal in Safari, with its own sign-in")
         }.font(.footnote)
       }

@@ -80,7 +80,7 @@ References collected October 25, 2026. External artwork is reference material on
 | Group chats and threads | Desktop/phone web and iPhone conversation captured | Complete | Whole-area rounds: 7.0, 8.6, 9.0; final scroll follow-ups applied directly |
 | Settings, following and home sections | Desktop/phone web and current iPhone front captured | Complete | Whole-area rounds: 8.0, 8.5, 9.0 |
 | Integrations | Desktop/phone web and current iPhone captured | Complete | Combined whole-area rounds: 7.8, 8.8, 9.1 |
-| Computer and terminal | Desktop/phone web and current iPhone viewer captured | In progress | Whole-area round 1: 7.6; round 2 pending |
+| Computer and terminal | Desktop/phone web and current iPhone viewer captured | In progress | Whole-area rounds: 7.6, 8.6; final fixes captured, round 3 pending |
 | Hermes updates and recovery | Pending | Pending | Pending |
 | Sign-in and connection recovery | Pending | Pending | Pending |
 | Command palette and keyboard help | Desktop/phone web captured | Complete | Included in Settings final whole-area score: 9.0 |
@@ -818,3 +818,17 @@ computer or shell was used. The compiled iPhone viewer was captured again.
 Native gestures, Safari interaction, VoiceOver, dark mode, large text, live
 hosts, identity confirmation and reconnecting-state pixels remain unverified.
 The browser, server and simulator are closed. Round 2 is pending.
+
+
+Computer round 2 scored 8.6. The final pass hides the persistent-shell warning
+when the shell has ended, with an assertion in the existing ended-shell test.
+The control badge no longer covers remote controls. The toolbar label and
+canvas outline show control on web and native, without adding a timer or motion.
+The hint says Take over to use it here, and the native link explicitly says
+Terminal in Safari. Two unused terminal-tool span rules were removed.
+
+All 40 focused checks and both builds pass. The agent repeated the web flows
+and inspected fresh control and Shell ended frames at both widths. The native
+Watching view was captured again; native after-takeover remains source-only.
+The browser, preview server and simulator are closed. The third review is final;
+remaining issues will go into the PR without a fourth review.

@@ -349,7 +349,7 @@ function DesktopView({ status, onStatus, viewerId }: {
   const heldElsewhere = status.control.kind === "human";
   const hint = controlling ? "Assistants are paused while you use the desktop."
     : heldElsewhere && !status.control.mine ? "Take over is available after they hand back."
-    : heldElsewhere ? "Take over to use this viewer." : "Take over to use the mouse and keyboard.";
+    : heldElsewhere ? "Take over to use it here." : "Take over to use the mouse and keyboard.";
   return <div className="computer-view">
     <div className="computer-toolbar">
       <div className="computer-ownership" role="status"><span className={`computer-state-dot ${connection === "connected" ? "ready" : ""}`} />
@@ -362,7 +362,6 @@ function DesktopView({ status, onStatus, viewerId }: {
     </div>
     {(error || status.reason) && <p className="computer-notice" role="status">{error || status.reason}</p>}
     <div className={`computer-screen-wrap desktop-stage${controlling ? " is-controlling" : ""}`} style={{ "--desktop-aspect": aspect } as CSSProperties}>
-      {controlling && <span className="desktop-control-badge" aria-hidden="true">You have control</span>}
       <div className="computer-screen" ref={screen} aria-label={controlling ? "Shared desktop. You have control." : "Shared desktop. Watching."} />
       {connection !== "connected" && <div className="computer-connection-overlay" role="status">
         <Icon name="computer" size={30} /><strong>{connection === "failed" ? "Desktop connection unavailable" : connection === "reconnecting" ? "Reconnecting desktop" : "Opening desktop"}</strong>
@@ -501,7 +500,7 @@ function TerminalView({ target, active, onReauthenticate }: { target: string; ac
   return <div className="computer-view">
     <div className="computer-toolbar">
       <div className="computer-ownership" role="status"><span className={`computer-state-dot ${connected ? "ready" : ""}`} />
-        <strong>{connection === "ended" ? "Shell ended" : connected ? "Your system terminal" : "Connecting to your terminal"}</strong><span>{target}</span><span className="terminal-persistence">Closing this panel keeps your shell running.</span></div>
+        <strong>{connection === "ended" ? "Shell ended" : connected ? "Your system terminal" : "Connecting to your terminal"}</strong><span>{target}</span>{connection !== "ended" && <span className="terminal-persistence">Closing this panel keeps your shell running.</span>}</div>
       <Button disabled={!sessionId.current || connection === "ended" || ending} onClick={() => setConfirmEnd(true)}>End shell</Button>
     </div>
     {confirmEnd && <div className="computer-end-confirmation" role="alert">

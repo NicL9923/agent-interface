@@ -142,7 +142,6 @@ describe("shared computer", () => {
     expect(write).toHaveBeenCalledWith("/computer/control", { action: "take", viewerId: "viewer-1" });
     expect(desktop.viewOnly).toBe(false);
     expect(container.textContent).toContain("Assistants are paused");
-    expect(container.querySelector(".desktop-control-badge")?.textContent).toBe("You have control");
     await click("Hand back");
     expect(desktop.viewOnly).toBe(true);
   });
@@ -181,7 +180,6 @@ describe("shared computer", () => {
     expect(desktop.viewOnly).toBe(true);
     expect(container.textContent).toContain("Jordan has control");
     expect(container.textContent).toContain("Take over is available after they hand back.");
-    expect(container.querySelector(".desktop-control-badge")).toBeNull();
     expect(button("Take over").disabled).toBe(true);
   });
 
@@ -297,6 +295,7 @@ describe("system terminal", () => {
     await act(async () => vi.advanceTimersByTimeAsync(6000));
     expect(Socket.instances).toHaveLength(1);
     expect(container.textContent).toContain("Your shell has ended");
+    expect(container.textContent).not.toContain("Closing this panel keeps your shell running.");
     await click("Start terminal");
     expect(Socket.instances).toHaveLength(2);
   });
