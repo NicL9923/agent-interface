@@ -87,3 +87,5 @@ The `capture-settings-ios.sh` Notifications mode scrolls real Settings to the no
 The notification capture also exercises account-scoped Following and equal-time validation. Native NotificationsBlocked uses denied fixture permission, and AppleDate scrolls the real Apple form to its date window.
 
 - `bash .agents/tools/test-apple-snapshot.sh EXISTING_OUTPUT_DIRECTORY` compiles the production Foundation snapshot model with its standalone date, timezone, filtering, sorting, JSON and presentation checks under the Mac lock. It reads no EventKit data.
+
+- `capture-survival.js` captures empty home/conversation states and checks offline draft preservation and reconnect at desktop and phone widths in the loopback fixture preview. Native `capture-settings-ios.sh` also supports Empty, ShareDraft and Widget/WidgetStale/WidgetEmpty, which render production views with sample data, not system-hosted widgets.

@@ -1084,3 +1084,29 @@ is recorded as a minor layout follow-up, especially for large text, rather than
 starting a fourth review. Real EventKit integration, push delivery, native
 preview/confirmation gestures, VoiceOver, dark mode and large text remain gaps.
 The final area is empty/offline content, share extensions and widgets.
+
+
+## Empty/offline content, shared drafts and widgets baseline
+
+The final area now has desktop and phone captures for an empty assistant list,
+an empty conversation, its draft-starting action, offline reading and the draft
+after reconnection. The agent typed a draft, disabled the fixture browser's
+network, checked that sending was disabled, then restored the network and
+confirmed the same draft remained. No message was sent. A capture selector first
+expected Send message after reconnection even though the working fixture exposes
+Send guidance. The script was corrected and the full capture completed.
+
+Compiled iPhone captures show the empty assistant list and the real shared-draft
+review form with sample text. Widget captures use the production small and medium
+views with fresh, stale and empty sample snapshots in a Debug-only app screen.
+They do not show a Home Screen host, actual WidgetKit timelines or widget taps.
+The share extension's system-hosted page and file import remain source-only.
+Native cold-start reading from the offline library, the real share-sheet flow,
+permission decisions, VoiceOver, dark mode and large text are not demonstrated.
+
+The existing service-worker suite passes 35 checks. Both builds completed; native
+build and captures used the machine lock and shut the simulator down. Browser
+and preview server are closed. This commit adds capture entry points rather than
+changing product behavior. Progress remains 24 of 25 grouped areas, with the
+first whole-area review pending. The final Notifications footer wording was
+also recaptured after its small follow-up.

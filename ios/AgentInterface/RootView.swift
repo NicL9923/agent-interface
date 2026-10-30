@@ -31,6 +31,7 @@ struct RootView: View {
   #if DEBUG
     @State private var captureConnectionOpen = false
     @State private var captureAppleOpen = false
+    @State private var captureSurvivalOpen = false
   #endif
   @State private var destination: HomeDestination = .conversation
   @State private var sharedCapture: SharedCapture?
@@ -60,6 +61,7 @@ struct RootView: View {
     .modifier(sheets)
     #if DEBUG
     .sheet(isPresented: $captureConnectionOpen) { ConnectionView().appStore(store) }
+    .sheet(isPresented: $captureSurvivalOpen) { DebugSurvivalView(mode: DebugFixtures.captureSurvival ?? "").appStore(store) }
     .sheet(isPresented: $captureAppleOpen) { NavigationStack { AppleDeviceConnectionsView(botId: store.bot?.id ?? store.bootstrap?.bots.first?.id ?? "").appStore(store) } }
     #endif
     .onAppear { checkShares() }
@@ -144,6 +146,7 @@ struct RootView: View {
   }
   #if DEBUG
   private func capturePageIfAsked() {
+    if let mode = DebugFixtures.captureSurvival, mode != "empty" { captureSurvivalOpen = true; return }
     if DebugFixtures.captureApplePage { captureAppleOpen = true; return }
     if DebugFixtures.captureConnectionPage { captureConnectionOpen = true; return }
     if DebugFixtures.capturePreferencesPage || DebugFixtures.captureComputerPage || DebugFixtures.captureUpgradePage || DebugFixtures.captureNotificationsPage { preferencesOpen = true; return }

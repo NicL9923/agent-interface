@@ -62,6 +62,11 @@
       try data.write(to: url, options: .atomic)
       return url
     }
+    static var captureSurvival: String? {
+      let environment = ProcessInfo.processInfo.environment
+      guard environment["AGENT_INTERFACE_UI_FIXTURE"] == "1" else { return nil }
+      return environment["AGENT_INTERFACE_UI_CAPTURE_SURVIVAL"]
+    }
     static func configure(_ store: AppStore) async -> Bool {
       let environment = ProcessInfo.processInfo.environment
       if environment["AGENT_INTERFACE_UI_RESET"] == "1" {
@@ -437,7 +442,7 @@
               "id": "native-test-two", "name": "Second test member",
               "email": "two@localhost.invalid",
             ],
-          ], "bots": Self.bots, "preferences": Self.preferences,
+          ], "bots": ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_CAPTURE_SURVIVAL"] == "empty" ? [] : Self.bots, "preferences": Self.preferences,
           "connection": ["connected": true, "code": "ready", "version": Self.currentRevision, "revisionDate": "2026-10-14T16:20:00Z"],
           "csrfToken": NSNull(),
           "capabilities": Dictionary(
