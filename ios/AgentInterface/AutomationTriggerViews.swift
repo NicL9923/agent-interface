@@ -102,12 +102,18 @@ struct HermesTriggerSection: View {
       if let triggerId = control.secret.triggerId { Text("\(triggerId) was created and starts disabled.") }
       Text("Hermes shows it once. Configure the sending service with this URL and secret. Closing Work or leaving the app clears this display.").font(.footnote).foregroundStyle(Palette.muted)
       if let url = control.secret.url {
-        HermesUnhyphenatedText(value: url, label: "New trigger webhook URL: \(url)", textStyle: .caption1)
+        VStack(alignment: .leading, spacing: 6) {
+          Text("Webhook URL").font(.subheadline).foregroundStyle(Palette.muted)
+          HermesUnhyphenatedText(value: url, label: "New trigger webhook URL: \(url)", textStyle: .caption1)
+        }
         Button("Copy URL") { pasteboard.copyURL(url); copied("URL copied.") }
       }
       if let secret = control.secret.value {
-        if control.secret.revealed { HermesUnhyphenatedText(value: secret, label: "Signing secret: \(secret)", selectable: false) }
-        else { Text("Hidden").foregroundStyle(Palette.muted) }
+        VStack(alignment: .leading, spacing: 6) {
+          Text("Signing secret").font(.subheadline).foregroundStyle(Palette.muted)
+          if control.secret.revealed { HermesUnhyphenatedText(value: secret, label: "Signing secret: \(secret)", selectable: false) }
+          else { Text("Hidden").foregroundStyle(Palette.muted) }
+        }
         Button(control.secret.revealed ? "Hide secret" : "Show secret") { control.secret.reveal(!control.secret.revealed) }
         Button("Copy secret") { pasteboard.copySecret(secret); control.secret.markCopied(); copied("Copied. The clipboard clears it in 5 minutes.") }
         if let copyFeedback { Text(copyFeedback).font(.footnote).foregroundStyle(Palette.muted) }
@@ -120,6 +126,7 @@ struct HermesTriggerSection: View {
         if !control.secret.inspected { Text("Copy or show the secret first.").font(.footnote).foregroundStyle(Palette.muted) }
       }
     } header: { Text("Save this signing secret now").foregroundStyle(Palette.muted) }
+      .id("automation.signingSecret")
       .privacySensitive().accessibilityIdentifier("automation.signingSecret")
       .onAppear { AccessibilityNotification.Announcement("Save this signing secret now. Hermes shows it once.").post() }
   }

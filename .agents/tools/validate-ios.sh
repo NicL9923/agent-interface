@@ -17,22 +17,18 @@ if [[ $# -ge 2 ]]; then shift 2; else shift; fi
 cd "$repo_dir"
 # Simulator state remains on the internal Data volume even when builds are on SSD.
 # Keep a conservative 5 GiB reserve and fail before any simulator or build command.
-python3 -c 'import os, sys; s = os.statvfs("/System/Volumes/Data"); free = s.f_bavail * s.f_frsize; minimum = 5 * 1024**3; print(f"Internal Data headroom: {free / 1024**3:.2f} GiB available; 5 GiB required."); sys.exit(0 if free >= minimum else "Not enough internal disk space for iOS validation. Free space before retrying; no simulator or build command has started.")'
+python3 -c 'import os, sys; s = os.statvfs("/System/Volumes/Data" if sys.platform == "darwin" else "/"); free = s.f_bavail * s.f_frsize; minimum = 5 * 1024**3; print(f"Internal Data headroom: {free / 1024**3:.2f} GiB available; 5 GiB required."); sys.exit(0 if free >= minimum else "Not enough internal disk space for iOS validation. Free space before retrying; no simulator or build command has started.")'
 mkdir -p .private
 
-# Xcode's simctl shim can stall in its first-launch version check. Use the
-# installed CoreSimulator tool directly when available.
-simctl=(/Library/Developer/PrivateFrameworks/CoreSimulator.framework/Versions/A/Resources/bin/simctl)
-if [[ ! -x "${simctl[0]}" ]]; then simctl=(xcrun simctl); fi
 # A prior interrupted capture may have left a simulator booted. The lock keeps
 # other native jobs out while this run shuts it down and uses one device.
-"${simctl[@]}" shutdown all >/dev/null 2>&1 || true
+xcrun simctl shutdown all >/dev/null 2>&1 || true
 shut_down_simulator() {
-  "${simctl[@]}" shutdown "$simulator_id" >/dev/null 2>&1 || true
+  xcrun simctl shutdown "$simulator_id" >/dev/null 2>&1 || true
 }
 trap shut_down_simulator EXIT
-"${simctl[@]}" boot "$simulator_id"
-"${simctl[@]}" bootstatus "$simulator_id" -b
+xcrun simctl boot "$simulator_id"
+xcrun simctl bootstatus "$simulator_id" -b
 
 run_id="${operation}-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 result_path=".private/ios-${run_id}.xcresult"
@@ -103,7 +99,7 @@ summary=".private/ios-${run_id}.txt"
 {
   echo "commit: $(git rev-parse HEAD)"
   echo "xcode: $(xcodebuild -version | tr '\n' ' ')"
-  echo "simulator: $("${simctl[@]}" list devices | awk -v id="$simulator_id" '/^-- /{runtime=$2" "$3} index($0, id){sub(/ *\((Booted|Shutdown)\) *$/, ""); sub(/^ +/, ""); print $0", "runtime; exit}')"
+  echo "simulator: $(xcrun simctl list devices | awk -v id="$simulator_id" '/^-- /{runtime=$2" "$3} index($0, id){sub(/ *\((Booted|Shutdown)\) *$/, ""); sub(/^ +/, ""); print $0", "runtime; exit}')"
   # A different configuration or compiler setting builds a different app, so a reader judging reuse needs these.
   echo "operation: $operation"
   echo "project: ios/AgentInterface.xcodeproj, scheme: AgentInterface"

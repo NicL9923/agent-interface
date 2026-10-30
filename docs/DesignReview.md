@@ -72,7 +72,7 @@ References collected October 25, 2026. External artwork is reference material on
 | Work frame and standing goal | 21 web and 20 native before frames per device verified | Complete | Web, iPhone and iPad 9 |
 | Work task board and actions | 67 shared before frames; 19 web, 23 iPhone and 23 iPad after frames | Complete | Web refusal 9.5; remaining web states, iPhone and iPad 9 |
 | Work task editors | Shared before baseline; 16 web, 13 iPhone and 9 iPad after frames reviewed | Complete | Every frame 9 |
-| Work event triggers | Web and native comparisons available | In progress | Web after views reviewed at 9; six native large-text frames accepted at 9, three each on iPhone and iPad. Remaining screen review pending |
+| Work event triggers | Web and native comparisons available | In progress | Whole-screen round 1: 7.6. Fixes implemented; targeted native recapture pending. Six native large-text frames remain accepted |
 | Learning | Pending | Pending | Pending |
 | Routines and results | Pending | Pending | Pending |
 | Logins and secure requests | Pending | Pending | Pending |
@@ -404,6 +404,13 @@ The phone create hint middle and footer tail, the iPad create-form tail,
 VoiceOver and clipboard behavior still need coverage. These limits do not erase
 accepted screenshots or prevent work on other screens. Normal-size native
 captures and the remaining whole-screen review continue under the bounded loop.
+
+[Whole-screen round 1](evidence/design-review/event-triggers-screen-review.md)
+scored 7.6. The follow-up explains why Edit is locked while creating another
+trigger, groups the web metadata more tightly and strengthens the secret heading.
+Native secret rows now have visible labels, and closing the create sheet scrolls
+the new secret panel to the top. The native app compiles. Targeted native capture
+is blocked by the host CoreSimulator update, so round 2 waits for those pixels.
 
 ## Remaining review areas
 

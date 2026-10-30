@@ -113,3 +113,9 @@
 .automation-triggers .automation-secret-field > p { margin: 0; }
 .automation-triggers .automation-trigger-feedback:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .automation-triggers .automation-trigger-callout { padding: 16px; border: 1px solid var(--line); border-inline-start: 3px solid var(--attention); border-radius: 10px; }
+
+.automation-triggers .automation-item > p { margin-block: 8px; }
+.automation-triggers .automation-item > .automation-trigger-label { margin-bottom: 4px; font-size: 0.875rem; color: var(--muted); }
+.automation-triggers .automation-item > .automation-url { margin-top: 0; }
+.automation-triggers .automation-secret > h4 { margin: 0; font-size: 1.125rem; line-height: 1.4; }
+.automation-triggers .automation-secret > p { margin: 0; }

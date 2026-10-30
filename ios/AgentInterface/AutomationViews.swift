@@ -455,6 +455,7 @@ struct HermesWorkView: View {
       // Form sections are lazy. Keep the presenter and its state on the enclosing form so
       // recycling rows cannot tear down a presented editor or its parent sheet.
       .sheet(item: $sheet, onDismiss: {
+        if control.secret.value != nil { proxy.scrollTo("automation.signingSecret", anchor: .top) }
         if let trigger = pendingDeleteTrigger {
           pendingDeleteTrigger = nil
           Task { let _: EmptyResponse? = await control.changeTrigger(store, triggerId: trigger.id, "/triggers/\(APIClient.component(trigger.id))", HermesRevisionInput(revision: trigger.revision), method: "DELETE", action: "delete") }

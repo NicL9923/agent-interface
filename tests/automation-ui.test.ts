@@ -604,15 +604,18 @@ it("preserves a received trigger secret when only its status refresh fails", asy
   await click("I've saved it"); expect(container.textContent).toContain("new was created. Refresh status to see its current settings.");
 });
 
-it("preserves the new trigger draft while another row cannot enter edit", async () => {
-  const value = initial(); value.triggers.items = [trigger()];
+it("preserves the new trigger draft and explains why an orphan cannot enter edit", async () => {
+  const value = initial(); value.triggers.items = [trigger("gate", "missing")];
   vi.mocked(api).mockImplementation(async path => path === "/routines" ? [{ id: "routine", botId: "ranch", name: "Morning", enabled: true }] : value);
   await work(); await click("New event trigger"); await input("Trigger ID", "my-draft");
-  expect(button("Edit trigger").disabled).toBe(true); await click("Edit trigger");
+  expect(button("Edit trigger").disabled).toBe(true);
+  expect(container.textContent).toContain("Its routine is no longer available. Finish or cancel the new trigger, then edit this trigger to choose another routine.");
+  await click("Edit trigger");
   const label = [...container.querySelectorAll<HTMLLabelElement>(".automation-triggers label")].find(label => label.textContent === "Trigger ID")!;
   expect((label.control as HTMLInputElement).value).toBe("my-draft");
   expect(button("Save trigger")).toBeUndefined();
   await click("Cancel"); expect(button("Edit trigger").disabled).toBe(false);
+  expect(container.textContent).toContain("Its routine is no longer available. Edit the trigger to choose another routine before enabling it.");
 });
 
 it("retires old trigger refusals before reopening edit or cancelling create", async () => {
