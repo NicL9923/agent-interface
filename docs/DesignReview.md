@@ -7,7 +7,7 @@ Allow at most three review rounds. If it remains below 9/10 after round three,
 record the remaining issues in the PR and continue. Scores are reviewer judgments,
 not objective measurements of design quality.
 
-Fifteen screen areas have passed. Ship these changes in a draft PR and add
+Twenty-three of 25 grouped screen areas have passed. Ship these changes in a draft PR and add
 subsequent screens in separate commits. Reuse screenshots where the product UI
 has not changed. Capture-script changes do not invalidate screenshots or reviews.
 Capture web at desktop and phone widths, and native on one iPhone plus iPad only
@@ -954,3 +954,15 @@ note and recovery section. The browser, preview server and simulator are closed.
 The third review is final. Any remaining issues go into issue 206, with no fourth
 round. Native interaction, real sign-in/update operations, VoiceOver, dark mode
 and large text remain unverified. Progress stays 22 of 25 until that review.
+
+
+Connection and update recovery finished at 9.0 in round 3, bringing progress to
+23 of 25 grouped areas. The final review confirmed the eight round-2 fixes.
+Its maintenance edge case is fixed directly: a definite first-request
+hermes_maintenance refusal permits a later decision, while a prior ambiguous
+choice remains fenced if its resend meets maintenance. Both cases have tests.
+All 48 transcript checks pass and the web build completed. The confirmation
+question uses 14px text, and closed cards say Decision status. No fourth review.
+Notifications and Apple devices are next, followed by empty/offline states,
+share extensions and widgets. Native gestures, real providers, VoiceOver,
+dark mode and large-text gaps stay recorded.

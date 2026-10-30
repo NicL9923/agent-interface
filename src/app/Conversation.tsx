@@ -513,10 +513,10 @@ function ApprovalCard({ approval, botId, userId, disconnected, supported, unavai
       const sent: ApprovalAttempt = { decision: value, state: "sent" };
       saved.save(sent); setAttempt(sent);
     } catch (error) {
-      if (error instanceof ApiError && error.status < 500 && error.status !== 409 && !previous) {
-        saved.save(undefined); setAttempt(undefined); report(error.message);
+      if (error instanceof ApiError && error.status < 500 && (error.status !== 409 || error.code === "hermes_maintenance") && !previous) {
+        saved.save(undefined); setAttempt(undefined); report(error.code === "hermes_maintenance" ? "Hermes is being updated. Try your decision again when the update finishes." : error.message);
       } else {
-        const retained: ApprovalAttempt = { decision: value, state: error instanceof ApiError && error.status === 409 ? "closed" : "unconfirmed" };
+        const retained: ApprovalAttempt = { decision: value, state: error instanceof ApiError && error.status === 409 && error.code !== "hermes_maintenance" ? "closed" : "unconfirmed" };
         saved.save(retained); setAttempt(retained);
         // Refreshes can remove a resolved card, but a still-pending read cannot
         // prove an earlier answer isn't still being processed. Never auto-send.
@@ -525,7 +525,7 @@ function ApprovalCard({ approval, botId, userId, disconnected, supported, unavai
     } finally { pending.current = false; setSending(false); }
   }
   return <article className="approval-card decision-card" aria-busy={sending} {...attentionAnchor("approval", approval.id)}>
-    <p className="eyebrow">Your decision needed</p><h2>{approval.title}</h2><p>{approval.detail}</p>
+    <p className="eyebrow">{attempt?.state === "closed" ? "Decision status" : "Your decision needed"}</p><h2>{approval.title}</h2><p>{approval.detail}</p>
     {approval.expiresAt && <small>Expires <When value={approval.expiresAt} inline /></small>}
     {attempt?.state !== "closed" && <div className="actions">{(["approved", "denied"] as const).map(value => <button key={value} type="button"
       className={value === "approved" ? "primary" : undefined}

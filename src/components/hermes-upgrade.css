@@ -55,6 +55,7 @@
 .upgrade-recovery p { color: var(--muted); font-size: 0.75rem; line-height: 1.6; }
 .upgrade-recovery .actions { display: grid; grid-template-columns: 1fr 1fr; align-items: stretch; gap: 10px; }
 .upgrade-recovery .actions > .primary { grid-column: 1 / -1; min-height: 46px; }
+.upgrade-confirmation > p { font-size: .875rem; }
 .upgrade-confirmation .actions { grid-template-columns: 1fr; margin-bottom: 0; }
 .upgrade-recovery:has(.upgrade-confirmation) + .upgrade-steps { margin-top: 0; }
 .upgrade-versions + .upgrade-checks { border-top: 0; }

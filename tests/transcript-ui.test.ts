@@ -498,6 +498,32 @@ describe("approval decisions", () => {
     expect(container.querySelector(".approval-card")).toBeNull();
   });
 
+  it("leaves an approval answerable after a definite maintenance refusal", async () => {
+    conversation = { ...conversation, approvals: [{ id: "maintenance-decision", title: "Open the gate?", detail: "", status: "pending" }] };
+    vi.mocked(write).mockRejectedValueOnce(new ApiError("Hermes is being upgraded.", 409, "hermes_maintenance"));
+    await render();
+    await act(async () => buttonText("Approve")!.click());
+    expect(buttonText("Approve")?.disabled).toBe(false);
+    expect(buttonText("Decline")?.disabled).toBe(false);
+    expect(container.textContent).toContain("Try your decision again when the update finishes.");
+    expect(container.textContent).not.toContain("no longer available to answer");
+    await act(async () => buttonText("Decline")!.click());
+    expect(buttonText("Declined")?.disabled).toBe(true);
+  });
+
+  it("retains an earlier unclear choice when a resend meets maintenance", async () => {
+    conversation = { ...conversation, approvals: [{ id: "uncertain-maintenance", title: "Open the gate?", detail: "", status: "pending" }] };
+    vi.mocked(write).mockRejectedValueOnce(new ApiError("Timed out", 504));
+    await render();
+    await act(async () => buttonText("Approve")!.click());
+    vi.mocked(write).mockRejectedValueOnce(new ApiError("Hermes is being upgraded.", 409, "hermes_maintenance"));
+    await act(async () => buttonText("Send approval again")!.click());
+    expect(buttonText("Send approval again")?.disabled).toBe(false);
+    expect(buttonText("Decline")?.disabled).toBe(true);
+    expect(container.textContent).not.toContain("no longer available to answer");
+    expect(vi.mocked(write).mock.calls.map(([, body]) => body)).toEqual([{ decision: "approved" }, { decision: "approved" }]);
+  });
+
 });
 
 describe("reply actions", () => {
