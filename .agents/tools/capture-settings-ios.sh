@@ -27,6 +27,7 @@ for tab in "$@"; do
   discovery_tab=""
   case "$tab" in
     Search) settings_tab=""; discovery_tab=search ;;
+    History) settings_tab=""; discovery_tab=history ;;
     Saved) settings_tab=""; discovery_tab=saved ;;
     Automations) settings_tab=""; discovery_tab=automations ;;
     Details|Avatar|Connections|Tools|Skills|Routines|Work|Learning|Memory|Logins) ;;

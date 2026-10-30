@@ -15,3 +15,14 @@ export function receipt(call: ToolCall) {
   const links = Object.entries(data).filter(([key, value]) => /^(url|html_url|web_url|link)$/.test(key) && typeof value === 'string' && /^https?:\/\//i.test(value)).map(([, value]) => String(value));
   return { label, failed, text, links };
 }
+
+
+/** Keep unfamiliar Hermes statuses visible rather than guessing their outcome. */
+export function routineResultLabel(status: string): string {
+  const labels: Record<string, string> = { ok: "Succeeded", success: "Succeeded", succeeded: "Succeeded", error: "Failed", failed: "Failed", delivery_failed: "Delivery failed", running: "Running", pending: "Pending", skipped: "Skipped", cancelled: "Canceled" };
+  return Object.hasOwn(labels, status) ? labels[status] : status;
+}
+export function savedReplyTitle(text: string): string {
+  // Underscores can be part of identifiers such as binary_sensor.north_gate.
+  return text.replace(/[#*`]/g, " ").trim().slice(0, 120) || "Saved reply";
+}

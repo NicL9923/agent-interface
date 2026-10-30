@@ -64,4 +64,4 @@
 - `capture-work-triggers.js` and `capture-work-triggers-after.js` provide synthetic event-trigger scenarios for `capture-design.py --work-case triggers`.
 - `node --import tsx .agents/tools/check-work-triggers-fixture.ts` checks the shared event-trigger fixture against the production schema.
 
-- `bash .agents/tools/capture-settings-ios.sh APP_PATH SIMULATOR_UUID OUTPUT_DIR TAB [TAB...]` captures compiled Debug settings or Search, Saved and Automations pages using the installed simulator, with synthetic data and the machine-wide lock. It boots one simulator, saves PNGs and shuts it down.
+- `bash .agents/tools/capture-settings-ios.sh APP_PATH SIMULATOR_UUID OUTPUT_DIR TAB [TAB...]` captures compiled Debug settings or Search, History, Saved and Automations pages using the installed simulator, with synthetic data and the machine-wide lock. It boots one simulator, saves PNGs and shuts it down.

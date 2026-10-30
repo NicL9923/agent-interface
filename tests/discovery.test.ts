@@ -2,7 +2,7 @@ import { capabilitiesFixture } from "./helpers/runtime-fixtures.js";
 import { afterEach, expect, it } from 'vitest';
 import { Store } from '../src/server/store.js';
 import { defaultPreferences, type ToolCall } from '../src/shared/types.js';
-import { receipt } from '../src/shared/discovery.js';
+import { receipt, routineResultLabel, savedReplyTitle } from '../src/shared/discovery.js';
 import { inQuietHours, BackgroundWorker } from '../src/server/notifications.js';
 import { loadConfig } from '../src/server/config.js';
 import { fakeRuntime } from "./helpers/server.js";
@@ -56,4 +56,17 @@ it('does not lose an accessible update when another member’s bot is revoked fr
   store.recordEvents([{id:'public',botId:'public',runId:'run',kind:'completed',title:'Public update',occurredAt:new Date().toISOString()},{id:'private',botId:'private',runId:'run',kind:'completed',title:'Private secret title',occurredAt:new Date().toISOString()}],'1');store.db.prepare("UPDATE outbox SET payload=json_set(payload,'$.queuedAt',?)").run(Date.now()-600000);store.deliveryGroups();store.savePresentation('private',{ownerId:'two',shared:false});
   store.subscribe('one',{endpoint:'https://push.test/one',keys:{p256dh:'key',auth:'key'}});const payloads:string[]=[];const runtime=fakeRuntime({capabilities:async()=>capabilitiesFixture({idempotency:{supported:false},durableEvents:{supported:false}})});
   const worker=new BackgroundWorker(store,runtime,loadConfig({HOUSEHOLD_EMAILS:'one@example.test'}),async(_,payload)=>{payloads.push(payload);});await worker.tick();expect(payloads).toHaveLength(1);expect(payloads[0]).toContain('Public update');expect(payloads[0]).not.toContain('Private secret title');expect(store.outbox()).toHaveLength(0);
+});
+
+
+it('labels familiar routine results and keeps unfamiliar Hermes outcomes visible',()=>{
+  expect(routineResultLabel('delivery_failed')).toBe('Delivery failed');
+  expect(routineResultLabel('ok')).toBe('Succeeded');expect(routineResultLabel('error')).toBe('Failed');
+  expect(routineResultLabel('waiting_for_device')).toBe('waiting_for_device');
+  expect(routineResultLabel('__proto__')).toBe('__proto__');
+});
+it('makes readable saved titles without changing identifiers inside them',()=>{
+  expect(savedReplyTitle('## **Gate**')).toBe('Gate');
+  expect(savedReplyTitle('`binary_sensor.north_gate`')).toBe('binary_sensor.north_gate');
+  expect(savedReplyTitle(' ** ')).toBe('Saved reply');expect(savedReplyTitle('a'.repeat(200))).toHaveLength(120);
 });

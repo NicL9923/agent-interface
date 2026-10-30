@@ -12,9 +12,19 @@ import XCTest
     XCTAssertEqual(DiscoveryView.conversationTitle(hits, "b").count, 120)
     XCTAssertEqual(DiscoveryView.conversationTitle(hits, "missing"), "Saved conversation")
   }
+  func testRoutineResultLabelsPreserveUnfamiliarStatuses() {
+    XCTAssertEqual(DiscoveryView.routineResultLabel("delivery_failed"), "Delivery failed")
+    XCTAssertEqual(DiscoveryView.routineResultLabel("success"), "Succeeded")
+    XCTAssertEqual(DiscoveryView.routineResultLabel("waiting_for_device"), "waiting_for_device")
+  }
+  func testSearchHitDecodesOptionalUpdateTime() throws {
+    let data = Data(#"{"botId":"ranch","botName":"Ranch","sessionId":"history","title":"Gate","snippet":"Plan","updatedAt":"2026-10-28T12:00:00Z"}"#.utf8)
+    XCTAssertEqual(try JSONDecoder().decode(SearchHit.self, from: data).updatedAt, "2026-10-28T12:00:00Z")
+  }
   func testSavedReplyTitleStripsMarkdownSymbolsLikeTheWeb() {
     XCTAssertEqual(DiscoveryView.replyTitle("## **Gate**"), "Gate")
-    XCTAssertEqual(DiscoveryView.replyTitle("a_b"), "a b")
+    XCTAssertEqual(DiscoveryView.replyTitle("a_b"), "a_b")
+    XCTAssertEqual(DiscoveryView.replyTitle("`binary_sensor.north_gate`"), "binary_sensor.north_gate")
     XCTAssertEqual(DiscoveryView.replyTitle(" ** "), "Saved reply")
   }
 

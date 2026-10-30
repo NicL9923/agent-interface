@@ -3,7 +3,7 @@ import { Avatar } from "../components/Avatar";
 import { Icon } from "../components/Icon";
 import type { View } from "./view";
 const titles: Record<Exclude<View, "conversation">, [string, string]> = {
-  find: ["Search & saved", "Past answers, saved items and automations"],
+  find: ["Search & saved", "Past answers, saved items and usage"],
   groups: ["Group chats", "Two to six assistants in one conversation"],
   today: ["Today", "Your assistants, at a glance"],
 };

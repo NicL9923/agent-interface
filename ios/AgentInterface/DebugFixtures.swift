@@ -18,7 +18,7 @@
       let environment = ProcessInfo.processInfo.environment
       guard environment["AGENT_INTERFACE_UI_FIXTURE"] == "1",
         let tab = environment["AGENT_INTERFACE_UI_CAPTURE_DISCOVERY_TAB"],
-        ["search", "saved", "automations"].contains(tab) else { return nil }
+        ["search", "saved", "automations", "history"].contains(tab) else { return nil }
       return tab
     }
     /// Test-only file selection. The normal importer stays unchanged without an explicit fixture.
@@ -366,7 +366,7 @@
         object = ["hits": hits, "unavailableBots": []]
       } else if path == "/api/search" {
         // The second hit is in Ranch hand's current conversation, so it opens the live chat.
-        object = ["hits":[["botId":"ranch","botName":"Ranch","sessionId":"history-1","title":"Saved dinner plan","snippet":"Five easy dinners and a grocery list.","messageId":"history-saved","offset":0],
+        object = ["hits":[["botId":"ranch","botName":"Ranch","sessionId":"history-1","title":"Saved dinner plan","snippet":"Five easy dinners and a grocery list.","updatedAt":"2026-10-28T12:00:00Z","messageId":"history-saved","offset":0],
           ["botId":"ranch","botName":"Ranch","sessionId":"ranch-canonical","title":"Your household assistant","snippet":"I can help with everyday questions.","messageId":"welcome","offset":0]],"unavailableBots":[]]
       } else if path.contains("/history/") {
         // A person's Markdown stays literal, an assistant's exchange is its card, and the saved
