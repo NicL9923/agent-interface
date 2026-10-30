@@ -75,11 +75,11 @@ References collected October 25, 2026. External artwork is reference material on
 | Work event triggers | Web and native comparisons available | In progress | Whole-screen round 1: 7.6. Fixes implemented; targeted native recapture pending. Six native large-text frames remain accepted |
 | Learning | Desktop/phone web and current iPhone views captured | Complete | Whole-screen rounds: 7.0, 8.5, 9.0 |
 | Routines and results | Desktop/phone web and current iPhone views captured | Complete | Whole-screen rounds: 7.2, 8.6, 9.1 |
-| Logins and secure requests | Desktop/phone web and current iPhone logins captured | In progress | Combined rounds: 7.8, 8.8; final round requested |
+| Logins and secure requests | Desktop/phone web and current iPhone logins captured | Complete | Combined whole-area rounds: 7.8, 8.8, 9.1 |
 | Search, saved items and automations | Pending | Pending | Pending |
 | Group chats and threads | Pending | Pending | Pending |
 | Settings, following and home sections | Pending | Pending | Pending |
-| Integrations | Desktop/phone web and current iPhone captured | In progress | Combined rounds: 7.8, 8.8; final round requested |
+| Integrations | Desktop/phone web and current iPhone captured | Complete | Combined whole-area rounds: 7.8, 8.8, 9.1 |
 | Computer and terminal | Pending | Pending | Pending |
 | Hermes updates and recovery | Pending | Pending | Pending |
 | Sign-in and connection recovery | Pending | Pending | Pending |
@@ -541,3 +541,19 @@ failure and a successful unlock/lock cycle against the synthetic preview at both
 web widths. No real vault or provider was contacted. A fresh iPhone capture
 confirms the native action order. Clipboard and the previously unobserved native
 forms, VoiceOver, dark mode and large text remain outside runtime coverage.
+
+
+[Round 3](evidence/design-review/security-integrations-screen-round3.md) passed
+the combined area at 9.1. The contrast miss was fixed directly after the final
+review. Amber chips use a darker adaptive mix, and gray chips use the existing
+metadata ink. Browser measurements of the inspected chips are at least 4.8:1 in
+light mode and 6.05:1 in dark mode. This is a chip contrast check, not a full dark
+mode review.
+
+The final polish also gives desktop cards a 20rem minimum column when space
+allows, uses one recommendation calculation per card, increases the source toggle
+label to 14px and folds duplicate CSS overrides into the original rules. New
+web captures show the wider desktop cards. The existing native capture remains
+valid. Real clipboard, provider sign-in, native forms/dialogs, VoiceOver, full
+dark mode and large text remain outside the observed coverage. Search, Saved
+items and Automations are next.

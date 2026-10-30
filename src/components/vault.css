@@ -20,12 +20,12 @@
   .vault-heading .actions, .vault-source-actions { width: 100%; }
 }
 
-.vault-panel .vault-entry h4 { margin: 0; font-size: .9375rem; line-height: 1.5; }
+.vault-panel .vault-entry h4 { margin: 0; font-size: .9375rem; line-height: 1.5; min-width: 0; overflow-wrap: anywhere; }
 .vault-entry .vault-origin { font-weight: 400; color: var(--muted); font-size: .875rem; }
-.vault-source-tag { padding: 3px 7px; border-radius: 6px; color: var(--muted); background: var(--rail); font-size: .8125rem; }
+.vault-source-tag { padding: 3px 7px; border-radius: 6px; color: var(--message-meta); background: var(--rail); font-size: .8125rem; }
 .vault-source { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
 .vault-source-summary { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-.vault-source-actions .checkbox-label { min-height: 44px; }
+.vault-source-actions .checkbox-label { min-height: 44px; font-size: .875rem; }
 .vault-unlock-form { display: grid; gap: 12px; padding: 14px; border-radius: 12px; background: var(--rail); }
 .vault-form label, .vault-unlock-form label { margin: 0; font-size: .875rem; }
 .vault-form > p.muted { margin: 0; font-size: .875rem; line-height: 1.6; }
@@ -38,7 +38,6 @@
 
 .vault-heading-actions { display: flex; flex-wrap: wrap; gap: 10px; }
 .vault-entry-heading { flex-wrap: wrap; }
-.vault-panel .vault-entry h4 { min-width: 0; overflow-wrap: anywhere; }
 .vault-entry .vault-identifier { font-size: .875rem; color: var(--ink); }
 .vault-unlock-form .actions { margin: 0; }
 .vault-remove-confirmation { margin: 12px 0; padding: 12px; border-radius: 10px; background: var(--rail); }
