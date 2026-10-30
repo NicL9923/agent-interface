@@ -53,9 +53,11 @@
 .upgrade-recovery { border-top: 1px solid var(--line); padding: 18px 0; }
 .upgrade-recovery h3 { margin: 0 0 8px; font-size: 0.9375rem; }
 .upgrade-recovery p { color: var(--muted); font-size: 0.75rem; line-height: 1.6; }
-.upgrade-recovery .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.upgrade-recovery .actions { display: grid; grid-template-columns: 1fr 1fr; align-items: stretch; gap: 10px; }
 .upgrade-recovery .actions > .primary { grid-column: 1 / -1; min-height: 46px; }
-.upgrade-confirmation .actions { grid-template-columns: 1fr; }
+.upgrade-confirmation .actions { grid-template-columns: 1fr; margin-bottom: 0; }
+.upgrade-recovery:has(.upgrade-confirmation) + .upgrade-steps { margin-top: 0; }
+.upgrade-versions + .upgrade-checks { border-top: 0; }
 .upgrade-confirmation .actions > button { min-height: 44px; }
 .upgrade-confirmation:focus { outline: 2px solid var(--accent); outline-offset: 3px; }
 .upgrade-notice { color: var(--muted); font-size: .875rem; }

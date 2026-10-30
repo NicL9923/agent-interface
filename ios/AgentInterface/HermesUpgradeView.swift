@@ -163,6 +163,7 @@ struct HermesUpgradeView: View {
           Button { confirm("restart_service") } label: {
             Text("Restart Hermes").frame(maxWidth: .infinity, minHeight: 32)
           }.buttonStyle(.borderedProminent).tint(Palette.accent).accessibilityIdentifier("restartHermesService")
+            .listRowSeparator(.hidden, edges: .bottom)
         }
         if status.canRetry == true && status.isInstall {
           Button("Check and try again") { control("retry") }.accessibilityIdentifier("retryHermesUpdate")

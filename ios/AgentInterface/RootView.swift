@@ -316,6 +316,7 @@ struct ConnectionView: View {
     }
     if store.authConfig?.localDevAuth == true {
       Text("This development server also offers local test accounts in the sign-in browser.")
+        .fixedSize(horizontal: false, vertical: true)
         .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
     }
     // The server, and the two ways to recover from a wrong or sleeping one, in one quiet line.

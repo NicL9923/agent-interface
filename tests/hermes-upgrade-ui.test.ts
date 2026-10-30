@@ -235,4 +235,34 @@ describe("Hermes updates", () => {
     expect(action().disabled).toBe(true);
   });
 
+  it.each(["phase", "permission"] as const)("retires a prompt when the same operation changes its %s, without bringing it back later", async change => {
+    status = { ...status, phase: "failed", operation: "install", operationId: "same-operation", canRestartService: true, canCancel: true };
+    await render();
+    await act(async () => button("Restart Hermes").click());
+    status = { ...status, ...(change === "phase" ? { phase: "recovering" } : { canRestartService: false }) };
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+    expect(container.querySelector(".upgrade-confirmation")).toBeNull();
+    expect(document.activeElement?.id).toBe("hermes-upgrade-title");
+    expect(container.textContent).toContain("The update changed on another device.");
+    expect(write).not.toHaveBeenCalled();
+    status = { ...status, phase: "failed", canRestartService: true };
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+    expect(container.querySelector(".upgrade-confirmation")).toBeNull();
+    expect(button("Restart Hermes").disabled).toBe(false);
+    await render(false); await render();
+    expect(container.textContent).not.toContain("The update changed on another device.");
+  });
+
+  it("clears a changed-operation notice when the status moves to another phase", async () => {
+    status = { ...status, phase: "failed", operation: "install", operationId: "old", canRestartService: true };
+    await render();
+    await act(async () => button("Restart Hermes").click());
+    status = { ...status, operationId: "new" };
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+    expect(container.textContent).toContain("The update changed on another device.");
+    status = { ...status, phase: "succeeded", canRestartService: false };
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+    expect(container.textContent).not.toContain("The update changed on another device.");
+  });
+
 });

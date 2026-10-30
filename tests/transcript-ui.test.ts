@@ -477,10 +477,25 @@ describe("approval decisions", () => {
     expect(write).toHaveBeenCalledTimes(1);
     vi.mocked(write).mockRejectedValueOnce(new ApiError("This approval is no longer pending", 409));
     await act(async () => buttonText("Send approval again")!.click());
-    expect([...container.querySelectorAll<HTMLButtonElement>(".approval-card button")].every(button => button.disabled)).toBe(true);
-    expect(container.querySelector(".approval-card")?.textContent).toContain("Refresh the conversation");
+    expect(container.querySelector(".approval-card button")).toBeNull();
+    expect(container.querySelector(".approval-card")?.textContent).toContain("Its status will update with the conversation.");
     const calls = vi.mocked(write).mock.calls.filter(([path]) => path === "/bots/shared/approvals/uncertain-decision");
     expect(calls.map(([, body]) => body)).toEqual([{ decision: "approved" }, { decision: "approved" }]);
+  });
+
+  it("retires an initially refused 409 decision while refreshing, without claiming it was sent", async () => {
+    conversation = { ...conversation, approvals: [{ id: "no-longer-available", title: "Open the gate?", detail: "", status: "pending" }] };
+    vi.mocked(write).mockRejectedValueOnce(new ApiError("This approval is no longer pending", 409));
+    await render();
+    await act(async () => buttonText("Approve")!.click());
+    const card = container.querySelector(".approval-card")!;
+    expect(card.querySelector("button")).toBeNull();
+    expect(card.textContent).toContain("This request is no longer available to answer.");
+    expect(card.textContent).not.toContain("Approval sent.");
+    expect(write).toHaveBeenCalledTimes(1);
+    conversation = { ...conversation, approvals: [] };
+    await changed();
+    expect(container.querySelector(".approval-card")).toBeNull();
   });
 
 });

@@ -513,10 +513,10 @@ function ApprovalCard({ approval, botId, userId, disconnected, supported, unavai
       const sent: ApprovalAttempt = { decision: value, state: "sent" };
       saved.save(sent); setAttempt(sent);
     } catch (error) {
-      if (error instanceof ApiError && error.status < 500 && !previous) {
+      if (error instanceof ApiError && error.status < 500 && error.status !== 409 && !previous) {
         saved.save(undefined); setAttempt(undefined); report(error.message);
       } else {
-        const retained: ApprovalAttempt = { decision: value, state: previous && error instanceof ApiError && error.status === 409 ? "closed" : "unconfirmed" };
+        const retained: ApprovalAttempt = { decision: value, state: error instanceof ApiError && error.status === 409 ? "closed" : "unconfirmed" };
         saved.save(retained); setAttempt(retained);
         // Refreshes can remove a resolved card, but a still-pending read cannot
         // prove an earlier answer isn't still being processed. Never auto-send.
@@ -527,21 +527,20 @@ function ApprovalCard({ approval, botId, userId, disconnected, supported, unavai
   return <article className="approval-card decision-card" aria-busy={sending} {...attentionAnchor("approval", approval.id)}>
     <p className="eyebrow">Your decision needed</p><h2>{approval.title}</h2><p>{approval.detail}</p>
     {approval.expiresAt && <small>Expires <When value={approval.expiresAt} inline /></small>}
-    <div className="actions">{(["approved", "denied"] as const).map(value => <button key={value} type="button"
+    {attempt?.state !== "closed" && <div className="actions">{(["approved", "denied"] as const).map(value => <button key={value} type="button"
       className={value === "approved" ? "primary" : undefined}
       disabled={!supported || disconnected || sending || !!attempt && (attempt.state !== "unconfirmed" || value !== attempt.decision)} onClick={() => void decide(value)}>
       {attempt?.decision === value && (sending || attempt.state === "sent") && <Icon name={sending ? "spinner" : "check"} className={sending ? "spin" : undefined} size={16} />}
       {attempt?.decision === value ? sending ? value === "approved" ? "Approving…" : "Declining…"
         : attempt.state === "sent" ? value === "approved" ? "Approved" : "Declined"
-        : attempt.state === "closed" ? "Decision unavailable"
         : value === "approved" ? "Send approval again" : "Send decline again"
         : value === "approved" ? "Approve" : "Decline"}
-    </button>)}</div>
+    </button>)}</div>}
     {!supported && <p className="approval-unavailable">{unavailableReason || "This Hermes connection does not support approval decisions. Open the official Hermes interface to answer."}</p>}
     {disconnected && !attempt && supported && <p className="decision-status" role="status">Reconnect to Hermes to answer.</p>}
     {attempt && <p className="decision-status" role="status">{sending ? "Sending decision…"
       : attempt.state === "sent" ? attempt.decision === "approved" ? "Approval sent." : "Decline sent."
-      : attempt.state === "closed" ? "Hermes could not accept this resend. Refresh the conversation to check its status."
+      : attempt.state === "closed" ? "This request is no longer available to answer. Its status will update with the conversation."
       : `Hermes hasn't confirmed your ${attempt.decision === "approved" ? "approval" : "decline"}. It may still go through, so the other choice stays off. After reconnecting, you can send the same decision again.`}</p>}
   </article>;
 }

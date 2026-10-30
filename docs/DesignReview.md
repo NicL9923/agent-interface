@@ -931,3 +931,26 @@ preview server and simulator are closed. Native gestures, the confirmation sheet
 real providers, actual installations, VoiceOver, dark mode and large text remain
 unverified. The existing CoreSimulator/Xcode mismatch still prevents XCTest
 coverage. Whole-area round 2 is pending; progress remains 22 of 25.
+
+## Connection and update recovery, round 3
+
+Round 2 scored 8.6. Web recovery confirmation now pins the phase as well as the
+operation, and dismisses itself when its action loses permission. Returning to a
+failed phase never resurrects the old prompt. The changed-status notice clears
+on close or a later phase. Tests cover phase changes, permission loss and notice
+lifetime. The agent also exercised the same-operation phase change and return
+in Chromium without sending the stale confirmation.
+
+The native dev-account note wraps again. Recovery buttons have equal heights,
+the duplicate web divider is gone, the native Restart separator is hidden, and
+confirmation padding is balanced. A 409 approval response removes the choices
+and explains that the request is no longer available to answer. Both initial and
+resend conflicts refresh the conversation, without claiming a decision succeeded.
+
+All 134 affected checks pass, and both builds completed. The other successful
+checks from round 2 are reused because their inputs did not change. Fresh web
+captures cover both widths, and the compiled iPhone frames show the restored
+note and recovery section. The browser, preview server and simulator are closed.
+The third review is final. Any remaining issues go into issue 206, with no fourth
+round. Native interaction, real sign-in/update operations, VoiceOver, dark mode
+and large text remain unverified. Progress stays 22 of 25 until that review.

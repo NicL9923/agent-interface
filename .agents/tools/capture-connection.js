@@ -46,6 +46,15 @@ async (page, { origin, outputDir }) => {
       await panel.getByRole('button',{name:'Not now',exact:true}).click();
       if(!await panel.getByRole('button',{name:'Restart Hermes',exact:true}).evaluate(node=>node===document.activeElement)) throw new Error('Cancel must restore Restart focus');
       await panel.getByRole('button',{name:'Restart Hermes',exact:true}).click();
+      // A second administrator can recover this same operation. Polling must
+      // dismiss the old prompt, and a later failure must not bring it back.
+      recoveryPhase='recovering';
+      await panel.getByRole('button',{name:'Restoring…',exact:true}).waitFor();
+      if(await panel.locator('.upgrade-confirmation').count()) throw new Error('Phase change must retire confirmation');
+      recoveryPhase='failed';
+      await panel.getByRole('button',{name:'Restart Hermes',exact:true}).waitFor();
+      if(await panel.locator('.upgrade-confirmation').count()) throw new Error('Old confirmation must not return');
+      await panel.getByRole('button',{name:'Restart Hermes',exact:true}).click();
       await panel.getByRole('button',{name:'Yes, restart Hermes',exact:true}).click();
       await panel.getByText('Waiting for a safe stopping point, then checking the connection.',{exact:true}).waitFor();
       await panel.getByRole('button',{name:'Restoring…',exact:true}).waitFor();
