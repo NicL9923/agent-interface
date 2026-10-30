@@ -580,7 +580,7 @@ async def inventory(profile):
                      "Read-only selected folder adapter is available to Hermes. Check verifies those folders." if roots else "Choose a server folder under an installer-approved base. Mounted NAS folders can use the same read-only adapter.",
                      setup=[dict(key="paths", label="Absolute server folder paths, one per line", kind="text", required=True)],
                      actions=dict(connect=True, check=bool(roots), disconnect=bool(roots)), capabilities=["List selected folders", "Read UTF-8 text files up to 100 KB"], account=", ".join(Path(p).name for p in roots)))
-    rows.append(card("apple", "Apple device calendars and reminders", "devices", profile, "unsupported", "Use the iOS app to choose calendars or reminder lists on this iPhone and share a snapshot with a bot. The server has no Apple account grant.", actions=dict(connect=False, check=False, disconnect=False), owner="This iPhone", capabilities=["User-selected calendar and reminder snapshots in iOS"]))
+    rows.append(card("apple", "Apple Calendar & Reminders", "devices", profile, "unsupported", "Open Integrations in the iPhone app to choose calendars and reminders, review a snapshot, then add it to an assistant's draft.", actions=dict(connect=False, check=False, disconnect=False), owner="Your iPhone", capabilities=["User-selected calendar and reminder snapshots in iOS"]))
     try:
         platforms = (await messaging.get_messaging_platforms(profile)).get("platforms", [])
         if isinstance(platforms, dict):

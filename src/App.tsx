@@ -183,7 +183,7 @@ export function App() {
     if (!boot) return items;
     if (connectionLost) items.push({ id: "connection", kind: "connection", node: <ConnectionPanel compact connection={boot.connection} offline={offline}
       appUnavailable={appUnavailable} busy={checkingConnection} retry={reconnect} /> });
-    if (decisions) items.push({ id: "decisions", kind: "decisions", node: <DecisionsNotice count={decisions} onReview={() => reviewFirstDecision()} /> });
+    if (decisions) items.push({ id: "decisions", kind: "decisions", node: <DecisionsNotice disconnected={connectionLost} count={decisions} onReview={() => reviewFirstDecision()} /> });
     if (mobile && update) items.push({ id: "update", kind: "update", node: <UpdateNotice update={update} /> });
     return items;
   }, [boot, connectionLost, offline, appUnavailable, checkingConnection, reconnect, decisions, mobile, update]);
@@ -235,7 +235,7 @@ export function App() {
         onSelectBot={selectBot} onView={showView} onNewBot={newBot} onSettings={openPreferences} onPin={togglePin}
         onBotSettings={botSettings} onMoveToSection={moveToSection} onNewSection={newSection} />
       <main className="conversation-panel" inert={mobile && railOpen}>
-        <ChatHeader view={view} selected={selected} avatarState={avatarState} railOpen={railOpen}
+        <ChatHeader offline={offline} view={view} selected={selected} avatarState={avatarState} railOpen={railOpen}
           onOpenRail={() => setRailOpen(true)}
           onDetails={bot => open({ kind: "details", botId: bot.id })} />
         {/* On a computer the rail is always beside this, so its notice is enough. In a chat it joins the composer's dock. */}
@@ -291,7 +291,7 @@ export function App() {
       )}
       {panel?.kind === "routine" && <Loading><RoutineResults key={`${boot.user.id}:${panel.botId}:${panel.routineId}`} botId={panel.botId} routineId={panel.routineId} userId={boot.user.id} resultId={panel.resultId} onClose={() => closePanels("routine")} /></Loading>}
       {panel?.kind === "integrations" && <Loading><IntegrationsPanel key={`integrations:${boot.user.id}`} bots={boot.bots} accountScope={boot.user.id} onClose={() => closePanels("integrations")} /></Loading>}
-      {computerLoaded && <Loading><ComputerPanel key={`computer:${boot.user.id}`} open={panel?.kind === "computer"} onClose={() => closePanels("computer")} /></Loading>}
+      {computerLoaded && <Loading><ComputerPanel key={`computer:${boot.user.id}`} initialTab={panel?.kind === "computer" ? panel.tab : undefined} open={panel?.kind === "computer"} onClose={() => closePanels("computer")} /></Loading>}
       {upgradeLoaded && <Loading><HermesUpgradePanel key={`upgrades:${boot.user.id}`} open={panel?.kind === "upgrade"} onClose={() => closePanels("upgrade")}
         bots={boot.bots} currentVersion={boot.connection.version} currentRevisionDate={boot.connection.revisionDate} /></Loading>}
       {panel?.kind === "preferences" && (

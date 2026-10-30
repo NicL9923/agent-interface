@@ -25,7 +25,7 @@ export const shortcuts: Record<ShortcutId, ShortcutInfo> = {
 };
 
 export const applePlatform = () => typeof navigator !== "undefined"
-  && /Mac|iPhone|iPad|iPod/.test((navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform || navigator.platform || navigator.userAgent);
+  && /Mac|iPhone|iPad|iPod/i.test((navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform || navigator.platform || navigator.userAgent);
 
 /** How a shortcut reads on this platform: ⌘K on a Mac, Ctrl+K elsewhere. */
 export function formatCombo(combo: Combo, apple = applePlatform()) {

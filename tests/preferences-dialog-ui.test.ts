@@ -81,8 +81,80 @@ describe("home sections", () => {
     // One section per assistant: choosing it here takes it out of the other.
     expect(saved.at(-1)!.sections).toEqual([{ id: "kids", name: "Kids", botIds: ["ranch"] }, { id: "house", name: "Around the house", botIds: ["kitchen"] }]);
     await act(async () => button("Delete section").click());
+    const confirm = container.querySelector('[role="alertdialog"]')!;
+    await act(async () => button("Delete section", confirm).click());
     expect(saved.at(-1)!.sections).toEqual([{ id: "house", name: "Around the house", botIds: ["kitchen"] }]);
     expect(title()).toBe("Settings");
+  });
+
+  it("keeps a section on cancel and only deletes after confirmation", async () => {
+    await render();
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-opens="section:kids"]')!.click());
+    await act(async () => button("Delete section").click());
+    expect(saved).toHaveLength(0);
+    expect(document.activeElement?.textContent).toBe("Keep section");
+    await act(async () => button("Keep section").click());
+    expect(title()).toBe("Kids");
+    expect(saved).toHaveLength(0);
+    expect(container.querySelector('[role="alertdialog"]')).toBeNull();
+  });
+
+  it.each(["back", "escape"])("saves a typed rename on %s, but keeps an invalid name open", async method => {
+    await render();
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-opens="section:kids"]')!.click());
+    const name = container.querySelector<HTMLInputElement>('[aria-label="Section name"]')!;
+    const leave = () => act(async () => {
+      if (method === "back") container.querySelector<HTMLButtonElement>('[aria-label="Back to settings"]')!.click();
+      else container.querySelector('dialog')!.dispatchEvent(new Event("cancel", { cancelable: true }));
+    });
+    await typeInto(name, "Around the house");
+    await leave();
+    expect(title()).toBe("Kids");
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("already have a section");
+    expect(saved).toHaveLength(0);
+    await typeInto(name, "Family");
+    await leave();
+    expect(title()).toBe("Settings");
+    expect(saved.at(-1)!.sections[1].name).toBe("Family");
+    expect(props.onClose).not.toHaveBeenCalled();
+  });
+
+  it("discards an invalid local rename without changing the saved section", async () => {
+    await render();
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-opens="section:kids"]')!.click());
+    const name = container.querySelector<HTMLInputElement>('[aria-label="Section name"]')!;
+    await typeInto(name, "Around the house");
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Back to settings"]')!.click());
+    await act(async () => button("Keep original name").click());
+    expect(name.value).toBe("Kids");
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Back to settings"]')!.click());
+    expect(title()).toBe("Settings");
+    expect(saved).toHaveLength(0);
+  });
+
+  it.each(["Around the house", "Family"])("finishes a forced native close with draft %s", async value => {
+    await render();
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-opens="section:kids"]')!.click());
+    await typeInto(container.querySelector<HTMLInputElement>('[aria-label="Section name"]')!, value);
+    await act(async () => {
+      const dialog = container.querySelector("dialog")!;
+      dialog.dispatchEvent(new Event("cancel", { cancelable: false }));
+      dialog.close();
+      dialog.dispatchEvent(new Event("close"));
+    });
+    expect(props.onClose).toHaveBeenCalledTimes(1);
+    if (value === "Family") expect(saved.at(-1)!.sections[1].name).toBe("Family");
+    else expect(saved).toHaveLength(0);
+  });
+
+  it("explains pinned members and stops adding at the section limit", async () => {
+    props.boot.preferences = { ...props.boot.preferences, favorites: ["ranch"], sections: Array.from({ length: 30 }, (_, n) => ({ id: `s${n}`, name: `Section ${n}`, botIds: n ? [] : ["ranch", "kitchen"] })) };
+    await render();
+    expect(container.querySelector(".section-open small")?.textContent).toBe("2 assistants · 1 pinned");
+    expect(container.querySelector('[aria-label="New section name"]')).toBeNull();
+    expect(container.textContent).toContain("most sections home can show (30)");
+    expect(props.editPreferences).not.toHaveBeenCalled();
   });
 
   it("renames a section and refuses a duplicate name", async () => {
@@ -104,7 +176,7 @@ describe("following", () => {
   it("summarizes followed assistants in one row and edits them in one list, without losing quick taps", async () => {
     await render();
     expect(container.textContent).not.toContain("Follow all activity");
-    const row = button("Following 1 assistantAll their activity, not only shared tasks");
+    const row = button("Following 1 assistantChoose whose activity you want to follow");
     await act(async () => row.click());
     expect(title()).toBe("Following");
     expect(choice("Ranch hand").checked).toBe(true);
@@ -155,4 +227,20 @@ describe("keyboard shortcuts row", () => {
     await render();
     expect(row().querySelector("small")?.textContent).toBe("Press Ctrl+K for the command palette");
   });
+});
+
+it.each(["quietStart", "quietEnd"] as const)("refuses an equal %s locally, then accepts a corrected quiet-hours value", async field => {
+  props.boot.preferences.notifications = { timezone: "America/Chicago", batchMinutes: 5, quietStart: "22:00", quietEnd: "07:00" };
+  await render();
+  const input = container.querySelectorAll<HTMLInputElement>('input[type="time"]')[field === "quietStart" ? 0 : 1];
+  await typeInto(input, field === "quietStart" ? "07:00" : "22:00");
+  expect(saved).toHaveLength(0);
+  expect(container.querySelector('[role="alert"]')?.textContent).toBe("Start and end times can't match.");
+  for (const input of container.querySelectorAll('input[type="time"]')) {
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+    expect(input.getAttribute("aria-describedby")).toBe("quiet-hours-error");
+  }
+  await typeInto(input, "08:00");
+  expect(saved.at(-1)?.notifications?.[field]).toBe("08:00");
+  expect(container.querySelector('[role="alert"]')).toBeNull();
 });

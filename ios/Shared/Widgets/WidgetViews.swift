@@ -232,7 +232,13 @@ struct AssistantsWidgetView: View {
   }
   private func footer(_ snapshot: WidgetSnapshot) -> some View {
     Group {
-      if stale { Text("Open WildBots to refresh") } else { Text("As of \(snapshot.generatedAt, style: .time)") }
+      if stale {
+        if family == .systemSmall {
+          Label { Text(snapshot.generatedAt, style: .relative) + Text(" ago") } icon: { Image(systemName: "clock.arrow.circlepath") }
+        } else {
+          (Text(snapshot.generatedAt, style: .relative) + Text(" ago · Open to refresh"))
+        }
+      } else { Text("As of \(snapshot.generatedAt, style: .time)") }
     }.font(.caption2).foregroundStyle(.secondary).lineLimit(1)
   }
   /// Like the Live Activity, an old snapshot does not claim work is still running.
@@ -336,7 +342,7 @@ struct AssistantsWidgetView: View {
           Text(message).font(.headline).lineLimit(2).fixedSize(horizontal: false, vertical: true)
           if family != .accessoryRectangular && family != .systemSmall {
             Spacer(minLength: 0)
-            Text("Your assistants appear here after you open the app.").font(.caption).foregroundStyle(.secondary)
+            Text(snapshot == nil ? "Your assistants appear here after you open the app." : "Create one in WildBots.").font(.caption).foregroundStyle(.secondary)
           }
         }.frame(maxWidth: .infinity, alignment: .leading)
       }

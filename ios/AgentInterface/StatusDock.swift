@@ -58,6 +58,7 @@ struct StatusDock: View {
   @Binding var discardConfirm: Bool
   @Environment(AppStore.self) private var store
   @Environment(\.colorScheme) private var scheme
+  @Environment(\.dynamicTypeSize) private var typeSize
   @State private var checkingConnection = false
   private let reachability = NetworkReachability.shared
 
@@ -100,12 +101,18 @@ struct StatusDock: View {
       Text("This submission was interrupted. Review its last actions before trying again.")
         .font(.footnote).foregroundStyle(Palette.attention).frame(maxWidth: .infinity, alignment: .leading)
     case .interruptionReview:
-      Toggle("I reviewed the interrupted task and its last actions before continuing.", isOn: Bindable(store).interruptionReviewed)
-        .toggleStyle(CheckboxStyle()).font(.footnote)
+      Toggle("I've reviewed the task's last actions.", isOn: Bindable(store).interruptionReviewed)
+        .toggleStyle(CheckboxStyle()).font(.subheadline).fixedSize(horizontal: false, vertical: true)
+        .accessibilityIdentifier("interruptionReview")
     case .decisions(let count):
-      HStack(spacing: 10) {
-        Image(systemName: "exclamationmark.bubble").foregroundStyle(Palette.attention).accessibilityHidden(true)
-        Text(DockItem.decisionsLabel(count)).font(.footnote.weight(.medium)).frame(maxWidth: .infinity, alignment: .leading)
+      let layout = typeSize.isAccessibilitySize
+        ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8)) : AnyLayout(HStackLayout(spacing: 10))
+      layout {
+        HStack(spacing: 10) {
+          Image(systemName: "exclamationmark.bubble").foregroundStyle(Palette.attention).accessibilityHidden(true)
+          Text(DockItem.decisionsLabel(count)).font(.footnote.weight(.medium))
+            .fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity, alignment: .leading)
+        }
         Button("Review") { store.attentionScrollRequest = UUID() }.font(.footnote.weight(.semibold))
           .buttonStyle(.bordered).controlSize(.small).accessibilityIdentifier("reviewDecisions")
           .accessibilityHint("Scrolls to the first one in the conversation")

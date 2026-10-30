@@ -1,6 +1,9 @@
 .hermes-upgrade-panel {
   width: min(470px, calc(100vw - max(16px, env(safe-area-inset-left)) - max(16px, env(safe-area-inset-right))));
-  max-height: calc(100dvh - 40px);
+  position: fixed;
+  inset-block-start: 24px;
+  margin-block: 0;
+  max-height: calc(100dvh - 48px);
   overflow: auto;
   color: var(--ink);
   background: var(--raised);
@@ -50,7 +53,15 @@
 .upgrade-recovery { border-top: 1px solid var(--line); padding: 18px 0; }
 .upgrade-recovery h3 { margin: 0 0 8px; font-size: 0.9375rem; }
 .upgrade-recovery p { color: var(--muted); font-size: 0.75rem; line-height: 1.6; }
-.upgrade-recovery .actions { flex-wrap: wrap; }
+.upgrade-recovery .actions { display: grid; grid-template-columns: 1fr 1fr; align-items: stretch; gap: 10px; }
+.upgrade-recovery .actions > .primary { grid-column: 1 / -1; min-height: 46px; }
+.upgrade-confirmation > p { font-size: .875rem; }
+.upgrade-confirmation .actions { grid-template-columns: 1fr; margin-bottom: 0; }
+.upgrade-recovery:has(.upgrade-confirmation) + .upgrade-steps { margin-top: 0; }
+.upgrade-versions + .upgrade-checks { border-top: 0; }
+.upgrade-confirmation .actions > button { min-height: 44px; }
+.upgrade-confirmation:focus { outline: 2px solid var(--accent); outline-offset: 3px; }
+.upgrade-notice { color: var(--muted); font-size: .875rem; }
 .upgrade-confirmation { padding: 12px; background: var(--rail); border-radius: 12px; }
 
 /* Find → Test → Install makes clear that a check never installs. */

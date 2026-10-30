@@ -52,9 +52,23 @@ struct HermesTask: Decodable, Identifiable {
   var id: String; var title: String; var body: String; var status: String; var priority: Int
   var assignee: String?; var owner: String; var dependencies: [String]; var blockedReason: String?
 }
+func hermesLikelyCreatedTask(_ knownIds: Set<String>, _ title: String, _ items: [HermesTask]) -> HermesTask? {
+  items.first { !knownIds.contains($0.id) && $0.title == title }
+}
 struct HermesSubscription: Decodable, Identifiable {
   var id: String; var description: String; var events: [String]; var routineId: String
   var enabled: Bool; var url: String; var secretSet: Bool; var revision: String
+}
+func hermesLikelyCreatedTrigger(_ knownIds: Set<String>, _ draftId: String, _ items: [HermesSubscription]) -> HermesSubscription? {
+  guard !knownIds.contains(draftId) else { return nil }
+  return items.first { $0.id == draftId }
+}
+func hermesTriggerSubtitle(_ trigger: HermesSubscription, routines: [Routine], loading: Bool, error: String?) -> String {
+  let status = trigger.enabled ? "Enabled" : "Disabled"
+  if loading { return status + " · Routine loading…" }
+  if error != nil { return status + " · Routine ID: " + trigger.routineId }
+  guard let routine = routines.first(where: { $0.id == trigger.routineId }) else { return status + " · Routine not found" }
+  return status + " · " + routine.name + (routine.enabled ? "" : " (paused)")
 }
 struct HermesInstalledSkill: Decodable, Identifiable {
   var name: String; var description: String
@@ -134,11 +148,23 @@ struct HermesTaskAction: Encodable {
 struct HermesDependencyInput: Encodable { var remove: Bool }
 struct HermesTriggerInput: Encodable {
   var id: String; var description: String; var events: [String]; var routineId: String
+  var idProblem: String? {
+    guard !id.isEmpty else { return nil }
+    return id.range(of: #"^[a-z0-9][a-z0-9_-]{0,79}$"#, options: .regularExpression) == nil
+      ? "Use 1 to 80 lowercase letters, digits, underscores or hyphens. Start with a letter or digit." : nil
+  }
+  var eventsProblem: String? {
+    let completed = events.last == "" ? Array(events.dropLast()) : events
+    guard !completed.isEmpty else { return nil }
+    if completed.count > 20 { return "Use at most 20 event names." }
+    if completed.contains(where: { $0.range(of: #"^[A-Za-z0-9_.*:-]{1,100}$"#, options: .regularExpression) == nil }) {
+      return "Each event name must use 1 to 100 letters, digits, _, ., *, : or -."
+    }
+    return nil
+  }
   var valid: Bool {
-    id.range(of: #"^[a-z0-9][a-z0-9_-]{0,79}$"#, options: .regularExpression) != nil
-      && description.utf16.count <= 1000 && !routineId.isEmpty
-      && (1...20).contains(events.count)
-      && events.allSatisfy { $0.range(of: #"^[A-Za-z0-9_.*:-]{1,100}$"#, options: .regularExpression) != nil }
+    !id.isEmpty && idProblem == nil && description.utf16.count <= 1000 && !routineId.isEmpty
+      && (1...20).contains(events.count) && events.allSatisfy { !$0.isEmpty } && eventsProblem == nil
   }
 }
 struct HermesTriggerUpdate: Encodable {
@@ -155,13 +181,16 @@ struct HermesTriggerResult: Decodable { var subscription: HermesSubscription; va
 
 /// Deliberately not Codable. Signing secrets exist only while the foreground Work tab is open.
 struct HermesTransientSecret {
+  private(set) var triggerId: String?
   private(set) var value: String?
   private(set) var url: String?
   private(set) var revealed = false
+  private(set) var inspected = false
   mutating func receive(_ result: HermesTriggerResult) {
     guard let secret = result.secret else { return }
-    value = secret; url = result.subscription.url; revealed = false
+    value = secret; url = result.subscription.url; triggerId = result.subscription.id; revealed = false; inspected = false
   }
-  mutating func reveal(_ show: Bool) { revealed = value != nil && show }
-  mutating func clear() { value = nil; url = nil; revealed = false }
+  mutating func reveal(_ show: Bool) { revealed = value != nil && show; if revealed { inspected = true } }
+  mutating func markCopied() { if value != nil { inspected = true } }
+  mutating func clear() { value = nil; url = nil; triggerId = nil; revealed = false; inspected = false }
 }

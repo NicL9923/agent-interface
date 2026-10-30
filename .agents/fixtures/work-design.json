@@ -1,0 +1,761 @@
+{
+  "bots": [
+    {
+      "id": "ranch",
+      "lastMessage": {
+        "text": "**Gate check complete.** Replace the north battery, then check the others next month.",
+        "at": "2026-10-26T13:00:00Z"
+      },
+      "name": "Ranch hand",
+      "shared": true,
+      "model": "daily-planner",
+      "provider": "custom:house",
+      "activity": "idle",
+      "description": "Weekly plans, shared reminders, and practical help around the house.",
+      "instructions": "Help our household plan the week. Keep replies concise and explain what needs a decision. Before changing shared plans, ask for confirmation. Use the connected calendar only when someone asks you to schedule a task.",
+      "avatar": {
+        "mode": "geometric",
+        "shape": "blob",
+        "color": "#1084FE",
+        "eyes": "oval",
+        "accessory": "none"
+      },
+      "enabledMcpServers": [
+        "existing-calendar"
+      ]
+    },
+    {
+      "id": "garden",
+      "lastMessage": {
+        "text": "**Gate check complete.** Replace the north battery, then check the others next month.",
+        "at": "2026-10-26T13:00:00Z"
+      },
+      "name": "Garden planner",
+      "shared": true,
+      "model": "daily-planner",
+      "provider": "custom:house",
+      "activity": "idle",
+      "description": "Garden plans and seasonal projects.",
+      "instructions": "Help our household plan the week. Keep replies concise and explain what needs a decision. Before changing shared plans, ask for confirmation. Use the connected calendar only when someone asks you to schedule a task.",
+      "avatar": {
+        "mode": "geometric",
+        "shape": "blob",
+        "color": "#1084FE",
+        "eyes": "oval",
+        "accessory": "none"
+      },
+      "enabledMcpServers": [
+        "existing-calendar"
+      ]
+    }
+  ],
+  "preferences": {
+    "startPage": "assistant",
+    "defaultBotId": "ranch",
+    "favorites": [],
+    "sections": [],
+    "presentation": "advanced",
+    "modelFavorites": [
+      {
+        "provider": "custom:house",
+        "model": "daily-planner"
+      }
+    ]
+  },
+  "conversation": {
+    "botId": "ranch",
+    "sessionId": "ranch-canonical",
+    "messages": [],
+    "files": [],
+    "activity": {
+      "state": "idle"
+    },
+    "approvals": [],
+    "attention": [],
+    "draft": {
+      "text": "",
+      "attachments": []
+    },
+    "earlier": 0
+  },
+  "screen": "work",
+  "routines": [
+    {
+      "id": "routine-freezer",
+      "botId": "ranch",
+      "name": "Freezer alert check",
+      "prompt": "Check the freezer.",
+      "schedule": "0 7 * * *",
+      "enabled": true,
+      "recipientIds": []
+    },
+    {
+      "id": "routine-weekly",
+      "botId": "ranch",
+      "name": "Weekly house walk",
+      "prompt": "Walk around the house.",
+      "schedule": "0 7 * * *",
+      "enabled": false,
+      "recipientIds": []
+    }
+  ],
+  "work": {
+    "botId": "ranch",
+    "owner": "Hermes",
+    "canManageTriggers": true,
+    "canManageLearningPolicy": true,
+    "goals": {
+      "supported": true,
+      "goal": {
+        "title": "Get the house ready for winter: list repairs, order supplies after approval, and book the chimney sweep.",
+        "status": "paused",
+        "turnsUsed": 20,
+        "maxTurns": 20,
+        "pausedReason": "turn budget exhausted (20/20)"
+      },
+      "interruptionPending": false,
+      "resume": {
+        "requestId": "2e2e6e20-71cc-4af4-a6c5-906c6592a6d0",
+        "status": "accepted",
+        "runId": "fixture-run"
+      }
+    },
+    "tasks": {
+      "supported": true,
+      "items": [
+        {
+          "id": "t_00000001",
+          "title": "Buy furnace filters and weatherstripping",
+          "body": "",
+          "status": "done",
+          "priority": 0,
+          "assignee": "garden",
+          "owner": "ranch",
+          "dependencies": []
+        },
+        {
+          "id": "t_00000002",
+          "title": "Replace the furnace filter",
+          "body": "",
+          "status": "ready",
+          "priority": 0,
+          "assignee": "ranch",
+          "owner": "ranch",
+          "dependencies": [
+            "t_00000001"
+          ]
+        },
+        {
+          "id": "t_00000003",
+          "title": "Draft the winter checklist",
+          "body": "",
+          "status": "review",
+          "priority": 0,
+          "assignee": "garden",
+          "owner": "ranch",
+          "dependencies": []
+        },
+        {
+          "id": "t_00000004",
+          "title": "Check attic insulation",
+          "body": "",
+          "status": "blocked",
+          "priority": 0,
+          "assignee": "ranch",
+          "owner": "ranch",
+          "dependencies": [],
+          "blockedReason": "Need the attic measurements from you."
+        },
+        {
+          "id": "t_00000005",
+          "title": "Schedule the chimney sweep",
+          "body": "",
+          "status": "blocked",
+          "priority": 0,
+          "assignee": "ranch",
+          "owner": "ranch",
+          "dependencies": [
+            "t_00000003"
+          ]
+        },
+        {
+          "id": "t_00000006",
+          "title": "Compare snow tire prices",
+          "body": "Compare prices and availability for the family car, including installation and any seasonal rebates. Summarize the best options before ordering.",
+          "status": "running",
+          "priority": 0,
+          "assignee": "ranch",
+          "owner": "ranch",
+          "dependencies": []
+        }
+      ],
+      "truncated": false,
+      "limit": 100
+    },
+    "triggers": {
+      "supported": true,
+      "platformEnabled": true,
+      "items": [
+        {
+          "id": "freezer-alerts",
+          "description": "Check the freezer when it reports a temperature alert",
+          "events": [
+            "freezer.alert",
+            "freezer.recovered"
+          ],
+          "routineId": "routine-freezer",
+          "enabled": true,
+          "url": "https://hooks.example.invalid/p/ranch/webhooks/freezer-alerts",
+          "secretSet": true,
+          "revision": "8f44d63732f5b1f03c75234fe656e7b3d08ae1f291e937c6d59523d15584f384"
+        },
+        {
+          "id": "gate-left-open",
+          "description": "",
+          "events": [
+            "gate.open"
+          ],
+          "routineId": "routine-weekly",
+          "enabled": false,
+          "url": "https://hooks.example.invalid/p/ranch/webhooks/gate-left-open",
+          "secretSet": true,
+          "revision": "edb6374de96cbcb1d33fc336343b447572f8d95375203037cc9abb7a69c0a7b1"
+        }
+      ]
+    },
+    "skills": {
+      "supported": true,
+      "installed": [],
+      "pending": [],
+      "approvalRequired": true
+    }
+  },
+  "workStates": {
+    "empty": {
+      "botId": "ranch",
+      "owner": "Hermes",
+      "canManageTriggers": true,
+      "canManageLearningPolicy": true,
+      "goals": {
+        "supported": true,
+        "goal": null,
+        "interruptionPending": false
+      },
+      "tasks": {
+        "supported": true,
+        "items": [],
+        "truncated": false,
+        "limit": 100
+      },
+      "triggers": {
+        "supported": true,
+        "platformEnabled": true,
+        "items": []
+      },
+      "skills": {
+        "supported": true,
+        "installed": [],
+        "pending": [],
+        "approvalRequired": true
+      }
+    },
+    "sections-unsupported": {
+      "botId": "ranch",
+      "owner": "Hermes",
+      "canManageTriggers": true,
+      "canManageLearningPolicy": true,
+      "goals": {
+        "supported": false,
+        "reason": "This Hermes revision cannot expose goals. Update and qualify its integration.",
+        "goal": null
+      },
+      "tasks": {
+        "supported": false,
+        "reason": "This Hermes revision cannot expose tasks. Update and qualify its integration.",
+        "items": [],
+        "truncated": false,
+        "limit": 100
+      },
+      "triggers": {
+        "supported": false,
+        "reason": "This Hermes revision cannot expose triggers. Update and qualify its integration.",
+        "items": [],
+        "platformEnabled": false
+      },
+      "skills": {
+        "supported": true,
+        "installed": [],
+        "pending": [],
+        "approvalRequired": true
+      }
+    },
+    "readonly": {
+      "botId": "ranch",
+      "owner": "Hermes",
+      "canManageTriggers": false,
+      "canManageLearningPolicy": false,
+      "goals": {
+        "supported": true,
+        "goal": {
+          "title": "Get the house ready for winter: list repairs, order supplies after approval, and book the chimney sweep.",
+          "status": "paused",
+          "turnsUsed": 20,
+          "maxTurns": 20,
+          "pausedReason": "turn budget exhausted (20/20)"
+        },
+        "interruptionPending": false,
+        "resume": {
+          "requestId": "2e2e6e20-71cc-4af4-a6c5-906c6592a6d0",
+          "status": "accepted",
+          "runId": "fixture-run"
+        }
+      },
+      "tasks": {
+        "supported": true,
+        "items": [
+          {
+            "id": "t_00000001",
+            "title": "Buy furnace filters and weatherstripping",
+            "body": "",
+            "status": "done",
+            "priority": 0,
+            "assignee": "garden",
+            "owner": "ranch",
+            "dependencies": []
+          },
+          {
+            "id": "t_00000002",
+            "title": "Replace the furnace filter",
+            "body": "",
+            "status": "ready",
+            "priority": 0,
+            "assignee": "ranch",
+            "owner": "ranch",
+            "dependencies": [
+              "t_00000001"
+            ]
+          },
+          {
+            "id": "t_00000003",
+            "title": "Draft the winter checklist",
+            "body": "",
+            "status": "review",
+            "priority": 0,
+            "assignee": "garden",
+            "owner": "ranch",
+            "dependencies": []
+          },
+          {
+            "id": "t_00000004",
+            "title": "Check attic insulation",
+            "body": "",
+            "status": "blocked",
+            "priority": 0,
+            "assignee": "ranch",
+            "owner": "ranch",
+            "dependencies": [],
+            "blockedReason": "Need the attic measurements from you."
+          },
+          {
+            "id": "t_00000005",
+            "title": "Schedule the chimney sweep",
+            "body": "",
+            "status": "blocked",
+            "priority": 0,
+            "assignee": "ranch",
+            "owner": "ranch",
+            "dependencies": [
+              "t_00000003"
+            ]
+          },
+          {
+            "id": "t_00000006",
+            "title": "Compare snow tire prices",
+            "body": "Compare prices and availability for the family car, including installation and any seasonal rebates. Summarize the best options before ordering.",
+            "status": "running",
+            "priority": 0,
+            "assignee": "ranch",
+            "owner": "ranch",
+            "dependencies": []
+          }
+        ],
+        "truncated": false,
+        "limit": 100
+      },
+      "triggers": {
+        "supported": true,
+        "platformEnabled": false,
+        "items": [
+          {
+            "id": "freezer-alerts",
+            "description": "Check the freezer when it reports a temperature alert",
+            "events": [
+              "freezer.alert",
+              "freezer.recovered"
+            ],
+            "routineId": "routine-freezer",
+            "enabled": true,
+            "url": "https://hooks.example.invalid/p/ranch/webhooks/freezer-alerts",
+            "secretSet": true,
+            "revision": "8f44d63732f5b1f03c75234fe656e7b3d08ae1f291e937c6d59523d15584f384"
+          },
+          {
+            "id": "gate-left-open",
+            "description": "",
+            "events": [
+              "gate.open"
+            ],
+            "routineId": "routine-weekly",
+            "enabled": false,
+            "url": "https://hooks.example.invalid/p/ranch/webhooks/gate-left-open",
+            "secretSet": true,
+            "revision": "edb6374de96cbcb1d33fc336343b447572f8d95375203037cc9abb7a69c0a7b1"
+          }
+        ]
+      },
+      "skills": {
+        "supported": true,
+        "installed": [],
+        "pending": [],
+        "approvalRequired": true
+      }
+    },
+    "interrupted": {
+      "botId": "ranch",
+      "owner": "Hermes",
+      "canManageTriggers": true,
+      "canManageLearningPolicy": true,
+      "goals": {
+        "supported": true,
+        "goal": {
+          "title": "Get the house ready for winter: list repairs, order supplies after approval, and book the chimney sweep.",
+          "status": "paused",
+          "turnsUsed": 20,
+          "maxTurns": 20,
+          "pausedReason": "turn budget exhausted (20/20)"
+        },
+        "interruptionPending": true,
+        "resume": {
+          "requestId": "2e2e6e20-71cc-4af4-a6c5-906c6592a6d0",
+          "status": "accepted",
+          "runId": "fixture-run"
+        }
+      },
+      "tasks": {
+        "supported": true,
+        "items": [
+          {
+            "id": "t_00000001",
+            "title": "Buy furnace filters and weatherstripping",
+            "body": "",
+            "status": "done",
+            "priority": 0,
+            "assignee": "garden",
+            "owner": "ranch",
+            "dependencies": []
+          },
+          {
+            "id": "t_00000002",
+            "title": "Replace the furnace filter",
+            "body": "",
+            "status": "ready",
+            "priority": 0,
+            "assignee": "ranch",
+            "owner": "ranch",
+            "dependencies": [
+              "t_00000001"
+            ]
+          },
+          {
+            "id": "t_00000003",
+            "title": "Draft the winter checklist",
+            "body": "",
+            "status": "review",
+            "priority": 0,
+            "assignee": "garden",
+            "owner": "ranch",
+            "dependencies": []
+          },
+          {
+            "id": "t_00000004",
+            "title": "Check attic insulation",
+            "body": "",
+            "status": "blocked",
+            "priority": 0,
+            "assignee": "ranch",
+            "owner": "ranch",
+            "dependencies": [],
+            "blockedReason": "Need the attic measurements from you."
+          },
+          {
+            "id": "t_00000005",
+            "title": "Schedule the chimney sweep",
+            "body": "",
+            "status": "blocked",
+            "priority": 0,
+            "assignee": "ranch",
+            "owner": "ranch",
+            "dependencies": [
+              "t_00000003"
+            ]
+          },
+          {
+            "id": "t_00000006",
+            "title": "Compare snow tire prices",
+            "body": "Compare prices and availability for the family car, including installation and any seasonal rebates. Summarize the best options before ordering.",
+            "status": "running",
+            "priority": 0,
+            "assignee": "ranch",
+            "owner": "ranch",
+            "dependencies": []
+          }
+        ],
+        "truncated": false,
+        "limit": 100
+      },
+      "triggers": {
+        "supported": true,
+        "platformEnabled": true,
+        "items": [
+          {
+            "id": "freezer-alerts",
+            "description": "Check the freezer when it reports a temperature alert",
+            "events": [
+              "freezer.alert",
+              "freezer.recovered"
+            ],
+            "routineId": "routine-freezer",
+            "enabled": true,
+            "url": "https://hooks.example.invalid/p/ranch/webhooks/freezer-alerts",
+            "secretSet": true,
+            "revision": "8f44d63732f5b1f03c75234fe656e7b3d08ae1f291e937c6d59523d15584f384"
+          },
+          {
+            "id": "gate-left-open",
+            "description": "",
+            "events": [
+              "gate.open"
+            ],
+            "routineId": "routine-weekly",
+            "enabled": false,
+            "url": "https://hooks.example.invalid/p/ranch/webhooks/gate-left-open",
+            "secretSet": true,
+            "revision": "edb6374de96cbcb1d33fc336343b447572f8d95375203037cc9abb7a69c0a7b1"
+          }
+        ]
+      },
+      "skills": {
+        "supported": true,
+        "installed": [],
+        "pending": [],
+        "approvalRequired": true
+      }
+    },
+    "goal-done": {
+      "botId": "ranch",
+      "owner": "Hermes",
+      "canManageTriggers": true,
+      "canManageLearningPolicy": true,
+      "goals": {
+        "supported": true,
+        "goal": {
+          "title": "Get the house ready for winter: list repairs, order supplies after approval, and book the chimney sweep.",
+          "status": "done",
+          "turnsUsed": 20,
+          "maxTurns": 20
+        },
+        "interruptionPending": false,
+        "resume": {
+          "requestId": "2e2e6e20-71cc-4af4-a6c5-906c6592a6d0",
+          "status": "accepted",
+          "runId": "fixture-run"
+        }
+      },
+      "tasks": {
+        "supported": true,
+        "items": [
+          {
+            "id": "t_00000001",
+            "title": "Buy furnace filters and weatherstripping",
+            "body": "",
+            "status": "done",
+            "priority": 0,
+            "assignee": "garden",
+            "owner": "ranch",
+            "dependencies": []
+          },
+          {
+            "id": "t_00000002",
+            "title": "Replace the furnace filter",
+            "body": "",
+            "status": "ready",
+            "priority": 0,
+            "assignee": "ranch",
+            "owner": "ranch",
+            "dependencies": [
+              "t_00000001"
+            ]
+          },
+          {
+            "id": "t_00000003",
+            "title": "Draft the winter checklist",
+            "body": "",
+            "status": "review",
+            "priority": 0,
+            "assignee": "garden",
+            "owner": "ranch",
+            "dependencies": []
+          },
+          {
+            "id": "t_00000004",
+            "title": "Check attic insulation",
+            "body": "",
+            "status": "blocked",
+            "priority": 0,
+            "assignee": "ranch",
+            "owner": "ranch",
+            "dependencies": [],
+            "blockedReason": "Need the attic measurements from you."
+          },
+          {
+            "id": "t_00000005",
+            "title": "Schedule the chimney sweep",
+            "body": "",
+            "status": "blocked",
+            "priority": 0,
+            "assignee": "ranch",
+            "owner": "ranch",
+            "dependencies": [
+              "t_00000003"
+            ]
+          },
+          {
+            "id": "t_00000006",
+            "title": "Compare snow tire prices",
+            "body": "Compare prices and availability for the family car, including installation and any seasonal rebates. Summarize the best options before ordering.",
+            "status": "running",
+            "priority": 0,
+            "assignee": "ranch",
+            "owner": "ranch",
+            "dependencies": []
+          }
+        ],
+        "truncated": false,
+        "limit": 100
+      },
+      "triggers": {
+        "supported": true,
+        "platformEnabled": true,
+        "items": [
+          {
+            "id": "freezer-alerts",
+            "description": "Check the freezer when it reports a temperature alert",
+            "events": [
+              "freezer.alert",
+              "freezer.recovered"
+            ],
+            "routineId": "routine-freezer",
+            "enabled": true,
+            "url": "https://hooks.example.invalid/p/ranch/webhooks/freezer-alerts",
+            "secretSet": true,
+            "revision": "8f44d63732f5b1f03c75234fe656e7b3d08ae1f291e937c6d59523d15584f384"
+          },
+          {
+            "id": "gate-left-open",
+            "description": "",
+            "events": [
+              "gate.open"
+            ],
+            "routineId": "routine-weekly",
+            "enabled": false,
+            "url": "https://hooks.example.invalid/p/ranch/webhooks/gate-left-open",
+            "secretSet": true,
+            "revision": "edb6374de96cbcb1d33fc336343b447572f8d95375203037cc9abb7a69c0a7b1"
+          }
+        ]
+      },
+      "skills": {
+        "supported": true,
+        "installed": [],
+        "pending": [],
+        "approvalRequired": true
+      }
+    }
+  },
+  "workFixture": {
+    "newGoal": {
+      "title": "Prepare the garden for spring.",
+      "maxTurns": 12
+    },
+    "newTask": {
+      "title": "Plan the winter supplies",
+      "body": "Review the checklist before ordering.",
+      "priority": 2,
+      "assignee": "garden",
+      "dependencies": [
+        "t_00000004",
+        "t_00000003"
+      ]
+    },
+    "editTaskAssignee": null,
+    "newTrigger": {
+      "id": "freezer-door",
+      "description": "Check the freezer door",
+      "events": [
+        "freezer.door"
+      ],
+      "routineId": "routine-freezer"
+    },
+    "triggerRoutes": [
+      {
+        "profile": "ranch",
+        "secret": "SYNTHETICaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "enabled": true,
+        "created_at": "2026-10-01T00:00:00Z",
+        "deliver": "log",
+        "description": "Check the freezer when it reports a temperature alert",
+        "events": [
+          "freezer.alert",
+          "freezer.recovered"
+        ],
+        "cron_job": "routine-freezer"
+      },
+      {
+        "profile": "ranch",
+        "secret": "SYNTHETICaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "enabled": false,
+        "created_at": "2026-10-01T00:00:00Z",
+        "deliver": "log",
+        "description": "",
+        "events": [
+          "gate.open"
+        ],
+        "cron_job": "routine-weekly"
+      }
+    ],
+    "externalTriggerEdit": {
+      "description": "Check the freezer and notify the household when it reports an alert.",
+      "revision": "17838125686f8229a008766662cc7e9f08fac607148690fc28a49f3823e33681"
+    },
+    "syntheticSecret": "SYNTHETICaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "revisionRule": "sha256(sorted-json route)",
+    "writeDelayMs": 2000
+  },
+  "workMessages": {
+    "noRuntime": "Update and qualify the Hermes integration to use goals, tasks, event triggers and learned skill review.",
+    "maintenance": "Hermes is being upgraded. Automation changes are paused.",
+    "triggerNonAdmin": "Only an integration administrator can change event triggers and view a new signing secret.",
+    "catchAll": "Hermes could not confirm this automation operation. Refresh native status before trying again.",
+    "refusedTransition": "Hermes refused this transition in the task's current state.",
+    "claimedTask": "A native worker owns this task. Wait for its claim to settle before changing it.",
+    "blockReason": "Explain what blocks this task.",
+    "triggerCAS": "This event trigger changed. Refresh before changing it.",
+    "duplicateTrigger": "This native event trigger name is already used. Refresh before creating another.",
+    "platformDisabled": "Enable the native webhook platform in Hermes before activating this trigger.",
+    "interruption": "Review the interrupted work in this assistant's conversation, then explicitly confirm that review before resuming.",
+    "uncertainResume": "Hermes could not confirm continuation admission. Review the canonical conversation before another resume.",
+    "rejectedResume": "Hermes refused this goal continuation. Review the assistant's conversation before trying again.",
+    "resumeNotConfirmed": "Goal continuation was not confirmed. Review its admission before resuming.",
+    "createdPaused": "Created paused in WildBots. Resume explicitly to continue."
+  }
+}

@@ -1,0 +1,155 @@
+{
+  "bots": [
+    {
+      "id": "ranch",
+      "lastMessage": {
+        "text": "I found two short routes. Choose what works for everyone before I put the plan together.",
+        "at": "2026-10-25T19:01:00Z"
+      },
+      "name": "Ranch hand",
+      "shared": true,
+      "model": "configured-model",
+      "provider": "openrouter",
+      "activity": "waiting",
+      "description": "Everyday household help",
+      "instructions": "Explicit fixture instructions.",
+      "avatar": {
+        "mode": "geometric",
+        "shape": "blob",
+        "color": "#1084FE",
+        "eyes": "oval",
+        "accessory": "none"
+      }
+    }
+  ],
+  "preferences": {
+    "startPage": "assistant",
+    "defaultBotId": "ranch",
+    "favorites": [],
+    "sections": [],
+    "presentation": "simple"
+  },
+  "screen": "approvals",
+  "conversation": {
+    "botId": "ranch",
+    "sessionId": "ranch-canonical",
+    "messages": [
+      {
+        "id": "reminder-prompt",
+        "role": "user",
+        "text": "Remind both of us to check the gate batteries next month.",
+        "sender": {
+          "id": "preview",
+          "name": "Nicolas"
+        },
+        "createdAt": "2026-10-26T13:00:00Z"
+      },
+      {
+        "id": "reminder-plan",
+        "role": "assistant",
+        "text": "I can add one reminder to your shared calendar. Please review the details before I notify both of you.",
+        "createdAt": "2026-10-26T13:01:00Z"
+      }
+    ],
+    "activity": {
+      "state": "waiting",
+      "detail": "Waiting for your approval"
+    },
+    "attention": [],
+    "approvals": [
+      {
+        "id": "fixture-approval",
+        "title": "Add a shared reminder for both of you?",
+        "detail": "Create \"Check gate batteries\" for November 1 at 9:00 AM, and notify Nicolas and Jordan.",
+        "status": "pending",
+        "expiresAt": "2026-10-27T18:00:00Z"
+      }
+    ],
+    "files": [],
+    "draft": {
+      "text": "",
+      "attachments": []
+    },
+    "earlier": 0
+  },
+  "decisionError": "Could not send your decision. Try again.",
+  "unsupportedReason": "This Hermes connection does not support approval decisions. Open the official Hermes interface to answer.",
+  "afterApproved": {
+    "botId": "ranch",
+    "sessionId": "ranch-canonical",
+    "messages": [
+      {
+        "id": "reminder-prompt",
+        "role": "user",
+        "text": "Remind both of us to check the gate batteries next month.",
+        "sender": {
+          "id": "preview",
+          "name": "Nicolas"
+        },
+        "createdAt": "2026-10-26T13:00:00Z"
+      },
+      {
+        "id": "reminder-plan",
+        "role": "assistant",
+        "text": "I can add one reminder to your shared calendar. Please review the details before I notify both of you.",
+        "createdAt": "2026-10-26T13:01:00Z"
+      },
+      {
+        "id": "decision-approved",
+        "role": "assistant",
+        "text": "Your approval was received. I will add the shared reminder.",
+        "createdAt": "2026-10-26T13:02:00Z"
+      }
+    ],
+    "activity": {
+      "state": "idle"
+    },
+    "attention": [],
+    "approvals": [],
+    "files": [],
+    "draft": {
+      "text": "",
+      "attachments": []
+    },
+    "earlier": 0
+  },
+  "afterDenied": {
+    "botId": "ranch",
+    "sessionId": "ranch-canonical",
+    "messages": [
+      {
+        "id": "reminder-prompt",
+        "role": "user",
+        "text": "Remind both of us to check the gate batteries next month.",
+        "sender": {
+          "id": "preview",
+          "name": "Nicolas"
+        },
+        "createdAt": "2026-10-26T13:00:00Z"
+      },
+      {
+        "id": "reminder-plan",
+        "role": "assistant",
+        "text": "I can add one reminder to your shared calendar. Please review the details before I notify both of you.",
+        "createdAt": "2026-10-26T13:01:00Z"
+      },
+      {
+        "id": "decision-denied",
+        "role": "assistant",
+        "text": "Your decision was received. I will leave the shared calendar unchanged.",
+        "createdAt": "2026-10-26T13:02:00Z"
+      }
+    ],
+    "activity": {
+      "state": "idle"
+    },
+    "attention": [],
+    "approvals": [],
+    "files": [],
+    "draft": {
+      "text": "",
+      "attachments": []
+    },
+    "earlier": 0
+  }
+}

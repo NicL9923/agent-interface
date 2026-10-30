@@ -86,6 +86,19 @@ final class ExperienceTests: XCTestCase {
     let decoded = try JSONDecoder().decode(RoutineRunReceipt.self, from: JSONEncoder().encode(receipt))
     XCTAssertEqual(decoded.requestId, receipt.requestId); XCTAssertEqual(decoded.status, "uncertain")
   }
+  func testMemoryDraftSizeMatchesHermesUnicodeScalarsAndKnownSeparatorOverhead() {
+    let document = MemoryDocument(target: "memory", label: "Assistant notes", revision: "rev", enabled: true,
+      entries: [MemoryEntry(id: "1", text: "🧑‍🌾"), MemoryEntry(id: "2", text: "élève")], charLimit: 2200, charCount: 11)
+    let edited = [MemoryEntry(id: "1", text: " 🧑‍🌾 "), MemoryEntry(id: "2", text: "🍏")].map(MemoryDraft.init)
+    XCTAssertEqual(document.draftSize(edited), 7)
+    XCTAssertEqual(document.draftSize([]), 0)
+    var unknown = document
+    unknown.entries = [MemoryEntry(id: "1", text: "First")]; unknown.charCount = 5
+    XCTAssertNil(unknown.draftSize(edited), "A single saved entry cannot reveal the delimiter width")
+    unknown = document; unknown.charCount = 1
+    XCTAssertNil(unknown.draftSize(edited), "Inconsistent server counts cannot produce an exact draft counter")
+  }
+
   func testSavingOneMemoryDocumentPreservesUnsavedRevisionForCAS() {
     let document = MemoryDocument(target: "memory", label: "Memory", revision: "original-memory", enabled: true, entries: [], charLimit: 2200, charCount: 0)
     var original = ProfileMemory(botId: "ranch", profile: "default", scope: "profile", owner: "Hermes", documents: [document, MemoryDocument(target: "user", label: "About you", revision: "original-user", enabled: true, entries: [], charLimit: 1400, charCount: 0)], notice: "")

@@ -2,7 +2,7 @@ import { Dialog } from "./ui/dialog";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { NativeSelect } from "./ui/native-select";
-import { useEffect, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { api, ApiError, write } from "../client-api";
 import { useAction } from "../app/use-action";
 import { useResource } from "../app/use-resource";
@@ -16,7 +16,7 @@ import { When } from "./When";
 
 const statusLabels: Record<IntegrationConnection["status"], string> = {
   connected: "Connected", configured: "Configured · not checked", not_connected: "Not connected",
-  expired: "Sign in again", missing_permission: "Permission needed", unavailable: "Unavailable", unsupported: "Setup needed",
+  expired: "Expired", missing_permission: "Permission needed", unavailable: "Unavailable", unsupported: "Setup needed",
 };
 const categoryLabels: Record<string, string> = { productivity: "Accounts & productivity", development: "Development & infrastructure", files: "Files & storage", home: "Home", devices: "On your devices", providers: "Models, search & images", messaging: "Messaging", custom: "Custom connections" };
 function authorizationUrl(value?: string) {
@@ -35,6 +35,12 @@ export function IntegrationsPanel({ bots, accountScope, onClose }: { bots: Bot[]
 }
 
 export function IntegrationList({ profile, bots, accountScope = "" }: { profile: string; bots: Bot[]; accountScope?: string }) {
+  const disconnectButtons = useRef(new Map<string, HTMLButtonElement>());
+  const keepConnected = useRef<HTMLButtonElement>(null);
+  const refreshButton = useRef<HTMLButtonElement>(null);
+  const returnToDisconnect = useRef<string | null>(null);
+  const disconnectPromptId = useId();
+  const [flowService, setFlowService] = useState("");
   const [editing, setEditing] = useState<IntegrationConnection>();
   const [fields, setFields] = useState<Record<string, string>>({});
   const [disconnect, setDisconnect] = useState("");
@@ -46,7 +52,18 @@ export function IntegrationList({ profile, bots, accountScope = "" }: { profile:
   const connections = useResource<IntegrationCatalog>(`/integrations?profile=${encodeURIComponent(profile)}`, { wake: true });
   const { data: catalog, loading, reload: refresh } = connections;
   const action = useAction();
+  const copyCode = useAction();
   const { busy } = action;
+  useEffect(() => {
+    if (busy || loading) return;
+    if (disconnect) { keepConnected.current?.focus(); return; }
+    if (returnToDisconnect.current) {
+      const trigger = disconnectButtons.current.get(returnToDisconnect.current);
+      (trigger && !trigger.disabled ? trigger : refreshButton.current)?.focus();
+      returnToDisconnect.current = null;
+    }
+  }, [disconnect, busy, loading]);
+  useEffect(() => { copyCode.reset(); }, [flow?.flowId, flow?.userCode]);
   // Which control started the work, to label it "Working…".
   const [working, setWorking] = useState("");
   // A pending sign-in is checked until it finishes. A check that lands after the flow changed is dropped.
@@ -66,7 +83,8 @@ export function IntegrationList({ profile, bots, accountScope = "" }: { profile:
     try { saved = sessionStorage.getItem(flowKey); } catch { /* Private browsing can disable storage. */ }
     if (saved) setFlow({ flowId: saved, kind: "instructions", status: "pending", message: "Restoring the sign-in status…" });
   }, [flowKey]);
-  const acceptFlow = (next: IntegrationFlow) => {
+  const acceptFlow = (next: IntegrationFlow, service = "") => {
+    setFlowService(service);
     setFlow(next);
     if (next.flowId && next.status === "pending") try { sessionStorage.setItem(flowKey, next.flowId); } catch {}
     const url = authorizationUrl(next.url);
@@ -80,7 +98,7 @@ export function IntegrationList({ profile, bots, accountScope = "" }: { profile:
     const next = await write<IntegrationFlow>(`/integrations/${encodeURIComponent(id)}/${operation}`, payload);
     if (!current()) return;
     if (operation === "connect") {
-      setFields({}); setEditing(undefined); acceptFlow(next);
+      setFields({}); setEditing(undefined); acceptFlow(next, catalog?.connections.find(item => item.id === id)?.name);
     }
     setDisconnect(""); await refresh();
   }, { onError: cause => actionError(cause, operation === "check") });
@@ -99,13 +117,14 @@ export function IntegrationList({ profile, bots, accountScope = "" }: { profile:
   };
   const categories = [...new Set(catalog?.connections.map(item => item.category))];
   return <div className="integration-list">
-    <div className="integration-toolbar"><span className="muted">{catalog ? `${catalog.connections.filter(c => c.status === "connected").length} connected` : "Checking connections…"}</span><Button disabled={loading || busy} onClick={refreshStatus}>{loading ? "Refreshing…" : "Refresh status"}</Button></div>
+    <div className="integration-toolbar"><span className="muted">{catalog ? `${catalog.connections.filter(c => c.status === "connected").length} connected` : "Checking connections…"}</span><Button ref={refreshButton} disabled={loading || busy} onClick={refreshStatus}>{loading ? "Refreshing…" : "Refresh status"}</Button></div>
     {error && <FormMessage tone="error">{error}</FormMessage>}
     {!catalog && !loading && error && <Button onClick={refreshStatus}>Try again</Button>}
     {flow && <section className="integration-flow" aria-label="Connection sign-in" role="status">
-      <strong>{flow.status === "approved" || flow.kind === "connected" ? "Connection ready" : flow.status === "pending" ? "Finish connecting your account" : "Sign-in status"}</strong>
+      <strong>{flow.status === "approved" || flow.kind === "connected" ? `Connection ready${flowService ? ` for ${flowService}` : ""}` : flow.status === "pending" ? `Finish connecting ${flowService || "your account"}` : `Sign-in status${flowService ? ` for ${flowService}` : ""}`}</strong>
       <p>{flow.message}</p>
-      {flow.userCode && <p>Enter this code: <code className="integration-code">{flow.userCode}</code></p>}
+      {flow.userCode && <div className="integration-code-row"><p>Enter this code: <code className="integration-code">{flow.userCode}</code></p><Button disabled={copyCode.busy} onClick={() => void copyCode.run(() => navigator.clipboard.writeText(flow.userCode!), { success: "Sign-in code copied.", onError: () => "Could not copy the code. Select and copy it instead." })}>Copy code</Button></div>}
+      {copyCode.notice && <FormMessage tone="notice">{copyCode.notice}</FormMessage>}{copyCode.error && <FormMessage tone="error">{copyCode.error}</FormMessage>}
       {flow.status === "pending" && authorizationUrl(flow.url) && <a href={authorizationUrl(flow.url)} target="_blank" rel="noopener noreferrer">Open sign-in <Icon name="external" size={15} /></a>}
       {flow.callbackInput && flow.status === "pending" && <form onSubmit={e => { e.preventDefault(); void finishFlow(); }}><label>Returned address<Input type="url" required value={callback} onChange={e => setCallback(e.target.value)} placeholder="Paste the full browser address after sign-in" autoComplete="off" /></label><Button type="submit" disabled={busy}>Finish connection</Button></form>}
       {flow.status === "pending" ? <Button disabled={busy} onClick={() => void finishFlow(true)}>Cancel sign-in</Button> : <Button onClick={() => setFlow(undefined)}>Dismiss</Button>}
@@ -115,24 +134,29 @@ export function IntegrationList({ profile, bots, accountScope = "" }: { profile:
       {editing.setup.map(field => <label key={field.key}>{field.label}{field.options ? <NativeSelect required={field.required} value={fields[field.key] || ""} onChange={e => setFields({ ...fields, [field.key]: e.target.value })}>{!fields[field.key] && <option value="">Choose a sign-in method</option>}{field.options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</NativeSelect> : <Input required={field.required} type={field.kind === "secret" ? "password" : field.kind === "url" ? "url" : "text"} autoComplete="off" value={fields[field.key] || ""} onChange={e => setFields({ ...fields, [field.key]: e.target.value })} />}</label>)}
       <div className="actions"><Button type="submit" className="primary" disabled={busy}>{busy ? "Connecting…" : "Connect"}</Button><Button type="button" disabled={busy} onClick={() => { setEditing(undefined); setFields({}); }}>Cancel</Button></div>
     </form>}
-    {categories.map(category => <section className="integration-group" key={category}><h3>{categoryLabels[category] || category}</h3><div className="integration-cards">{catalog!.connections.filter(item => item.category === category).map(item => <article className="integration-card" key={item.id} data-status={item.status}>
-      <div className="integration-card-heading"><h4>{item.name}</h4><span className="integration-status">{statusLabels[item.status]}</span></div>
-      {item.account && <p className="integration-account">{item.account}</p>}<p>{item.detail}</p>{item.uses && <p className="muted">{item.uses}</p>}
-      <dl><div><dt>Managed by</dt><dd>{item.owner}</dd></div><div><dt>Assistants</dt><dd>{item.botIds.length ? item.botIds.map(id => bots.find(bot => bot.id === id)?.name || id).join(", ") : "This assistant"}</dd></div><div><dt>Last checked</dt><dd>{item.checkedAt ? <When value={item.checkedAt} /> : "Not checked yet"}</dd></div></dl>
+    {categories.map(category => <section className="integration-group" key={category}><h3>{categoryLabels[category] || category}</h3><div className="integration-cards">{catalog!.connections.filter(item => item.category === category).map(item => {
+      const localApple = item.id === "apple";
+      const recommendsCheck = ["configured", "unavailable"].includes(item.status);
+      const recommendsConnect = ["not_connected", "unsupported", "expired", "missing_permission"].includes(item.status);
+      return <article className="integration-card" key={item.id} data-status={item.status}>
+      <div className="integration-card-heading"><h4>{localApple ? "Apple Calendar & Reminders" : item.name}</h4><span className="integration-status">{localApple ? "On iPhone" : statusLabels[item.status]}</span></div>
+      {item.account && <p className="integration-account">{item.account}</p>}<p>{localApple ? "Open Integrations in the iPhone app to choose calendars and reminders, review a snapshot, then add it to an assistant's draft." : item.detail}</p>{item.uses && <p className="muted">{item.uses}</p>}
+      <dl><div><dt>Managed by</dt><dd>{localApple ? "Your iPhone" : item.owner}</dd></div><div><dt>Assistants</dt><dd>{item.botIds.length ? item.botIds.map(id => bots.find(bot => bot.id === id)?.name || id).join(", ") : "This assistant"}</dd></div>{!localApple && <div><dt>Last checked</dt><dd>{item.checkedAt ? <When value={item.checkedAt} /> : "Not checked yet"}</dd></div>}</dl>
       {item.permissions.length > 0 && <details><summary>Access & permissions</summary><ul>{item.permissions.map(permission => <li key={permission.id}>{permission.name}<span>{permission.granted === true ? "Granted" : permission.granted === false ? "Missing" : "Not checked"}</span></li>)}</ul></details>}
-      {disconnect === item.id ? <div className="integration-confirmation"><p>Disconnect {item.name}? Assistants using it will lose access.</p><div className="actions"><Button className="danger" disabled={busy} onClick={() => void act(item.id, "disconnect")}>Disconnect</Button><Button disabled={busy} onClick={() => setDisconnect("")}>Keep connected</Button></div></div> : <div className="actions">
-        {item.actions.connect && <Button className={item.status !== "connected" ? "primary" : ""} disabled={busy || !catalog!.canManage || flow?.status === "pending"} onClick={() => { if (item.setup.length) { setEditing(item); setFields(Object.fromEntries(item.setup.filter(field => field.defaultValue !== undefined).map(field => [field.key, field.defaultValue!]))); } else void act(item.id, "connect"); }}>{busy && working === item.id ? "Working…" : item.status === "not_connected" || item.status === "unsupported" ? "Connect" : "Reconnect"}</Button>}
-        {item.actions.check && <Button disabled={busy} onClick={() => void act(item.id, "check")}>Check connection</Button>}
-        {item.actions.disconnect && <Button disabled={busy || !catalog!.canManage} onClick={() => setDisconnect(item.id)}>Disconnect</Button>}
-      </div>}
-    </article>)}</div></section>)}
+      {(item.actions.connect || item.actions.check || item.actions.disconnect) && (disconnect === item.id ? <div className="integration-confirmation"><p id={disconnectPromptId}>Disconnect {item.name}? Assistants using it will lose access.</p><div className="actions"><Button aria-describedby={disconnectPromptId} className="danger" disabled={busy} onClick={() => void act(item.id, "disconnect")}>Disconnect</Button><Button ref={keepConnected} aria-describedby={disconnectPromptId} disabled={busy} onClick={() => setDisconnect("")}>Keep connected</Button></div></div> : <div className="actions">
+        {(recommendsCheck ? ["check", "connect"] : ["connect", "check"]).map(operation =>
+          operation === "connect" ? item.actions.connect && <Button key={operation} className={recommendsConnect ? "primary" : ""} disabled={busy || !catalog!.canManage || flow?.status === "pending"} onClick={() => { if (item.setup.length) { setEditing(item); setFields(Object.fromEntries(item.setup.filter(field => field.defaultValue !== undefined).map(field => [field.key, field.defaultValue!]))); } else void act(item.id, "connect"); }}>{busy && working === item.id ? "Working…" : item.status === "not_connected" || item.status === "unsupported" ? "Connect" : "Reconnect"}</Button> :
+          item.actions.check && <Button key={operation} className={recommendsCheck ? "primary" : ""} disabled={busy} onClick={() => void act(item.id, "check")}>Check connection</Button>)}
+        {item.actions.disconnect && <Button ref={node => { if (node) disconnectButtons.current.set(item.id, node); else disconnectButtons.current.delete(item.id); }} disabled={busy || !catalog!.canManage} onClick={() => { returnToDisconnect.current = item.id; setDisconnect(item.id); }}>Disconnect</Button>}
+      </div>)}
+    </article>; })}</div></section>)}
     {catalog && catalog.connections.length === 0 && <p className="muted">Hermes has not reported any connections for this assistant.</p>}
     {catalog?.canManage && <section className="integration-custom"><Button aria-expanded={custom} onClick={() => setCustom(!custom)}><Icon name="plus" size={18} /> Add custom MCP connection</Button>{custom && <form onSubmit={e => {
       e.preventDefault();
       void action.run(async ({ current }) => {
         const next = await write<IntegrationFlow | IntegrationConnection>("/integrations/mcp", { profile, ...mcp, token: mcp.auth === "bearer" ? mcp.token : undefined });
         if (!current()) return;
-        if ("kind" in next) acceptFlow(next);
+        if ("kind" in next) acceptFlow(next, mcp.name);
         setMcp({ name: "", url: "", auth: "none", token: "" }); setCustom(false); await refresh();
       }, { onError: cause => actionError(cause) });
     }}><label>Connection name<Input required pattern="[A-Za-z0-9_-]{1,80}" title="Use letters, numbers, underscores, or hyphens, up to 80 characters" value={mcp.name} onChange={e => setMcp({ ...mcp, name: e.target.value })} /></label><label>Server address<Input required type="url" placeholder="https://" value={mcp.url} onChange={e => setMcp({ ...mcp, url: e.target.value })} /></label><label>Sign-in method<NativeSelect value={mcp.auth} onChange={e => setMcp({ ...mcp, auth: e.target.value, token: "" })}><option value="none">No sign-in</option><option value="oauth">Sign in with browser</option><option value="bearer">Access token</option></NativeSelect></label>{mcp.auth === "bearer" && <label>Access token<Input required type="password" autoComplete="off" value={mcp.token} onChange={e => setMcp({ ...mcp, token: e.target.value })} /></label>}<Button type="submit" className="primary" disabled={busy}>Add connection</Button></form>}</section>}

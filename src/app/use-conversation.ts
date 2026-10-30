@@ -1,3 +1,4 @@
+import { matchRanges } from "./find-ranges";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ApiError, cachedResponse, changeStream, pollWhileVisible, request } from "../client-api";
 import { routeUrl, type ApiQuery } from "../shared/api";
@@ -50,6 +51,7 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
   const [reviewed, setReviewed] = useState(false);
   useEffect(() => setReviewed(false), [conversation?.activity.state, conversation?.activity.runId]);
   const [atLatest, setAtLatest] = useState(true);
+  const [atAttention, setAtAttention] = useState<string | null>(null);
   const [unseen, setUnseen] = useState(0);
   const [earlier, setEarlier] = useState({ loading: false, failed: false });
   // The latest settled reply, worded for a screen reader's live region.
@@ -109,6 +111,7 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
     reveal.current = null;
     seen.current = new Set();
     setAtLatest(!opening);
+    setAtAttention(null);
     setUnseen(0);
     setEarlier({ loading: false, failed: false });
     setReply(null);
@@ -307,9 +310,11 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
     if (next !== reserve) space.style.height = next ? `${next}px` : "";
   };
   // Brings the opened message into view, a little below the top, and marks it briefly.
-  const showFound = (item: HTMLElement, mark = true) => {
+  const showFound = (item: HTMLElement, mark = true, needle?: string) => {
     const element = scroll.current!;
-    element.scrollTop += item.getBoundingClientRect().top - element.getBoundingClientRect().top - Math.min(120, element.clientHeight / 4);
+    const range = needle ? matchRanges(item, needle)[0] : undefined;
+    const top = range?.getBoundingClientRect?.().top ?? item.getBoundingClientRect().top;
+    element.scrollTop += top - element.getBoundingClientRect().top - Math.min(120, element.clientHeight / 4);
     mode.current = "free";
     holdPlace();
     if (!mark) return;
@@ -335,10 +340,15 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
   useLayoutEffect(() => {
     const element = scroll.current;
     if (!element || !conversation || conversation.botId !== botId) return;
+    if (atAttention && ![...element.querySelectorAll<HTMLElement>('[data-attention-kind="clarify"], [data-attention-kind="approval"]')].some(card => card.id === atAttention)) {
+      setAtAttention(null);
+      mode.current = "follow";
+    }
     const request = reveal.current;
     reveal.current = null;
     const card = request ? [...element.querySelectorAll<HTMLElement>(".secure-request")]
-      .find(item => item.dataset.requestId === request) : undefined;
+      .find(item => item.dataset.requestId === request) : !restored.current && !target.current
+        ? element.querySelector<HTMLElement>('[data-attention-kind="clarify"], [data-attention-kind="approval"]') : undefined;
     // The message asked for opens once its own page arrived, not on a render of an older one.
     const opening = target.current?.botId === botId && target.current.ready ? target.current.messageId : undefined;
     const opened = opening ? messageElement(element, opening) : undefined;
@@ -348,6 +358,7 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
       element.scrollTop += card.getBoundingClientRect().top - element.getBoundingClientRect().top;
       mode.current = "free";
       holdPlace();
+      setAtAttention(card.dataset.attentionKind === "approval" || card.dataset.attentionKind === "clarify" ? card.id : null);
     } else {
       // A message that could not be found leaves the reader at the latest one.
       if (opening) mode.current = "follow";
@@ -367,6 +378,7 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
   // A reader's own input ends following or an anchor at once. Scroll events alone cannot tell the
   // reader from growth, so wheel, touch, keys and the scroll bar are heard directly.
   const intend = (intent: Intent) => {
+    setAtAttention(null);
     const next = afterIntent(mode.current, intent);
     if (next === mode.current) return;
     mode.current = next;
@@ -413,6 +425,7 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
     return () => { observer.disconnect(); stop?.(); };
   }, []);
   const jumpToLatest = useCallback(() => {
+    setAtAttention(null);
     const element = scroll.current;
     mode.current = "follow";
     setAtLatest(true);
@@ -431,6 +444,7 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
    * the view and the reply grows below it, instead of the view chasing the end.
    */
   const anchorSend = useCallback((requestId?: string) => {
+    setAtAttention(null);
     jumping.current = 0;
     sendAnchor.current = { requestId, known: new Set(current.current?.messages.map(message => message.id)) };
     mode.current = "anchored";
@@ -444,11 +458,12 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
     if (sendAnchor.current?.requestId === requestId && !sendAnchor.current.id) sendAnchor.current.messageId = messageId;
   }, []);
   /** Shows a message of this conversation, loading the history window from it when it is not loaded. */
-  const openMessage = useCallback((messageId: string, mark = true) => {
+  const openMessage = useCallback((messageId: string, mark = true, needle?: string) => {
+    setAtAttention(null);
     const element = scroll.current;
     const item = element ? messageElement(element, messageId) : undefined;
     if (item) {
-      showFound(item, mark);
+      showFound(item, mark, needle);
       setAtLatest(distanceToEnd(element!) < LATEST_DISTANCE);
     } else requestStart.current(messageId);
   }, []);
@@ -510,6 +525,7 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
     complete: conversation?.earlier === 0,
     ...earlier,
     atLatest,
+    atAttention,
     unseen,
     loadEarlier,
     jumpToLatest,

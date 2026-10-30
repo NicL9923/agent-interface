@@ -11,7 +11,7 @@ const explanations: Record<string, { title: string; detail: string; setup?: bool
   incompatible: { title: "Hermes and this app need matching versions", detail: "Run the connection check on the app's computer for the required version and update instructions.", setup: true },
   connecting: { title: "Connecting to Hermes", detail: "Checking the connection and restoring your assistants." },
   reconnecting: { title: "Reconnecting to Hermes", detail: "Your draft is kept. Existing work stays with Hermes, and messages won't be resent automatically." },
-  unreachable: { title: "Hermes is temporarily unavailable", detail: "Your draft is kept. We'll reconnect automatically when Hermes is reachable again." },
+  unreachable: { title: "Reconnecting to Hermes", detail: "Hermes is temporarily unavailable. Your draft is kept. We'll reconnect automatically." },
   closed: { title: "The connection is restarting", detail: "Your draft is kept. We'll reconnect automatically." },
 };
 
@@ -43,7 +43,7 @@ export function ConnectionPanel({ connection, offline = false, appUnavailable = 
     : appUnavailable ? { title: "Reconnecting to the app", detail: "Your conversation stays here and your draft is kept. We'll check again automatically." }
     : explanations[connection.code || "unreachable"] || explanations.unreachable!;
   return <section className={compact ? "connection-panel compact" : "connection-panel setup"} aria-label="Hermes connection">
-    {!compact && <Avatar size={84} state="disconnected" />}
+    {!compact && <Avatar size={84} state="disconnected" offline={offline} />}
     <div className="connection-copy">
       {!compact && <p className="eyebrow">Your household workspace</p>}
       <h2>{copy.title}</h2>
@@ -55,11 +55,11 @@ export function ConnectionPanel({ connection, offline = false, appUnavailable = 
           <li><span aria-hidden="true">3</span><div><strong>Pick up with your assistants</strong><small>Their existing conversations stay in Hermes.</small></div></li>
         </ol>
       </>}
-      <div className="connection-actions">
-        <button className={!compact ? "primary" : ""} disabled={busy || offline} onClick={retry}>
+      {!offline && <div className="connection-actions">
+        <button className={!compact ? "primary" : ""} disabled={busy} onClick={retry}>
           {busy ? "Checking connection…" : copy.setup ? "Check connection" : "Reconnect now"}
         </button>
-      </div>
+      </div>}
       <details className="connection-help">
         <summary>{copy.setup ? "Set up this installation" : "Connection details"}</summary>
         {connection.address && <p>Hermes address: <code>{connection.address}</code></p>}

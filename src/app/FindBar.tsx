@@ -6,35 +6,11 @@ import { Icon } from "../components/Icon";
 import type { SavedConversation } from "./storage";
 import { localMatches, mergeFindMatches } from "./transcript-logic";
 import type { FindMatch } from "./transcript-logic";
+import { shownMessages, matchRanges } from "./find-ranges";
 
 /** Server search waits for a pause in typing, and needs at least this many characters. */
 const SEARCH_DELAY = 300;
 const SEARCH_MIN = 2;
-const readable = ".message-markdown, .message-text";
-/** The words each shown message reads, without names, times or tool output. */
-function shownMessages(container: HTMLElement) {
-  return [...container.querySelectorAll<HTMLElement>("article[data-message-id]")].map(item => ({
-    id: item.dataset.messageId!,
-    text: [...item.querySelectorAll(readable)].map(node => node.textContent ?? "").join("\n"),
-  }));
-}
-/** Text ranges of each match inside a message, for the CSS highlight registry. */
-function matchRanges(item: HTMLElement, needle: string) {
-  const ranges: Range[] = [];
-  for (const block of item.querySelectorAll(readable)) {
-    const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
-    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-      const text = (node.textContent ?? "").toLocaleLowerCase();
-      for (let at = text.indexOf(needle); at >= 0 && at + needle.length <= (node.textContent ?? "").length; at = text.indexOf(needle, at + needle.length)) {
-        const range = document.createRange();
-        range.setStart(node, at);
-        range.setEnd(node, at + needle.length);
-        ranges.push(range);
-      }
-    }
-  }
-  return ranges;
-}
 const highlights = () => typeof CSS !== "undefined" && "highlights" in CSS && typeof Highlight !== "undefined" ? CSS.highlights : undefined;
 
 /**
@@ -46,28 +22,21 @@ export function FindBar({ botId, conversation, scroll, openMessage, onClose }: {
   botId: string;
   conversation: SavedConversation | null;
   scroll: RefObject<HTMLDivElement | null>;
-  openMessage(messageId: string, mark?: boolean): void;
+  openMessage(messageId: string, mark?: boolean, needle?: string): void;
   onClose(): void;
 }) {
   const input = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
-  const [local, setLocal] = useState<FindMatch[]>([]);
+  const [localResult, setLocal] = useState<{ needle: string; matches: FindMatch[] }>({ needle: "", matches: [] });
   const [remote, setRemote] = useState<{ query: string; hits: SearchHit[] } | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const needle = query.trim().toLocaleLowerCase();
   useEffect(() => { input.current?.focus(); input.current?.select(); }, []);
   // Loaded matches follow what is on screen, including replies still arriving. A new query brings
   // its newest loaded match into view, without loading anything.
-  const scrolledFor = useRef("");
   useEffect(() => {
-    const found = scroll.current ? localMatches(shownMessages(scroll.current), query) : [];
-    setLocal(found);
-    const newest = found.at(-1)?.messageId;
-    if (needle && newest && needle !== scrolledFor.current) {
-      scrolledFor.current = needle;
-      openMessage(newest, false);
-    }
-  }, [query, needle, conversation, scroll, openMessage]);
+    setLocal({ needle, matches: scroll.current ? localMatches(shownMessages(scroll.current), query) : [] });
+  }, [query, needle, conversation, scroll]);
   // Only the latest query's response counts; an older one that lands late is dropped.
   const latest = useRef(0);
   useEffect(() => {
@@ -80,12 +49,19 @@ export function FindBar({ botId, conversation, scroll, openMessage, onClose }: {
     }, SEARCH_DELAY);
     return () => clearTimeout(timer);
   }, [query, botId]);
+  const local = useMemo(() => localResult.needle === needle ? localResult.matches : [], [localResult, needle]);
   const matches = useMemo(() => mergeFindMatches(local, remote?.query === query.trim() ? remote.hits : [], {
     botId, sessionId: conversation?.sessionId, loadedIds: new Set(conversation?.messages.map(message => message.id)),
   }), [local, remote, query, botId, conversation]);
   const chosen = selected ? matches.findIndex(match => match.messageId === selected) : -1;
   const index = chosen >= 0 ? chosen : matches.length - 1;
   const current = matches[index];
+  useEffect(() => {
+    if (current && chosen < 0) setSelected(current.messageId);
+  }, [current?.messageId, chosen]);
+  useEffect(() => {
+    if (current?.loaded && needle) openMessage(current.messageId, false, needle);
+  }, [current?.messageId, current?.loaded, needle, openMessage]);
   useEffect(() => {
     const registry = highlights(), container = scroll.current;
     if (!registry || !container || !needle) return;
@@ -101,7 +77,7 @@ export function FindBar({ botId, conversation, scroll, openMessage, onClose }: {
     if (!matches.length) return;
     const next = matches[(index + delta + matches.length) % matches.length];
     setSelected(next.messageId);
-    openMessage(next.messageId);
+    openMessage(next.messageId, true, needle);
   };
   const searching = query.trim().length >= SEARCH_MIN && remote?.query !== query.trim();
   const status = !needle ? "" : matches.length ? `${index + 1} of ${matches.length}` : searching ? "Searching…" : "No matches";

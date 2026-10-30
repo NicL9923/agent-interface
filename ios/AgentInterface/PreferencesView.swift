@@ -13,8 +13,14 @@ struct PreferencesView: View {
   @State private var loaded = false
   @State private var signOutConfirm = false
   @State private var changeServerConfirm = false
+  @State private var quietError: String?
+  #if DEBUG
+    @State private var captureComputerOpen = false
+    @State private var captureUpgradeOpen = false
+  #endif
   var body: some View {
     NavigationStack {
+      ScrollViewReader { captureScroll in
       Form {
         Group {
         Section {
@@ -67,25 +73,38 @@ struct PreferencesView: View {
           defaultPicker
         }.disabled(store.sessionExpired)
         Section {
-          DeviceNotificationSettings()
-          Picker("Batching", selection: Binding(get: { preferences.notifications?.batchMinutes ?? 0 }, set: { value in
+          DeviceNotificationSettings().id("captureNotifications")
+        } header: { Text("Notifications") }
+          .disabled(store.sessionExpired)
+        Section {
+          Picker(selection: Binding(get: { preferences.notifications?.batchMinutes ?? 0 }, set: { value in
             var settings = notificationPreferences; settings.batchMinutes = value; preferences.notifications = settings
           })) {
             Text("As updates arrive").tag(0); Text("Every 5 minutes").tag(5); Text("Every 15 minutes").tag(15); Text("Hourly").tag(60)
+          } label: {
+            VStack(alignment: .leading, spacing: 4) {
+              Text("Batching")
+              Text("Decisions and failures skip batching.").font(.caption).foregroundStyle(Palette.muted)
+            }.fixedSize(horizontal: false, vertical: true)
           }
+          if !bots.isEmpty { followRow }
           Toggle("Quiet hours", isOn: Binding(get: { preferences.notifications?.quietStart != nil }, set: { enabled in
+            quietError = nil
             var settings = notificationPreferences; settings.quietStart = enabled ? "22:00" : nil
             settings.quietEnd = enabled ? "07:00" : nil; preferences.notifications = settings
           }))
           if preferences.notifications?.quietStart != nil {
             DatePicker("From", selection: quietTime(start: true), displayedComponents: .hourAndMinute).environment(\.timeZone, TimeZone(identifier: notificationPreferences.timezone) ?? .current)
             DatePicker("Until", selection: quietTime(start: false), displayedComponents: .hourAndMinute).environment(\.timeZone, TimeZone(identifier: notificationPreferences.timezone) ?? .current)
+            if let quietError { Text(quietError).font(.footnote).foregroundStyle(Palette.danger).accessibilityIdentifier("quietHoursError") }
           }
-          if !bots.isEmpty { followRow }
-        } header: { Text("Notifications") } footer: {
-          if preferences.notifications?.quietStart != nil {
-            Text("\(notificationPreferences.timezone). Other notifications wait until quiet hours end; security alerts arrive right away. Decisions and failures skip batching outside quiet hours.")
-          }
+        } header: { Text("Notifications on all your devices") } footer: {
+          VStack(alignment: .leading, spacing: 6) {
+            Text("These apply wherever you get notifications.")
+            if preferences.notifications?.quietStart != nil {
+              Text("Times are in \(notificationPreferences.timezone). During quiet hours, alerts wait until the end, except security alerts.")
+            }
+          }.fixedSize(horizontal: false, vertical: true)
         }.disabled(store.sessionExpired)
         if !bots.isEmpty {
           Section {
@@ -115,6 +134,16 @@ struct PreferencesView: View {
         }.listRowBackground(Palette.raised(scheme))
       }.listSectionSpacing(18).contentMargins(.top, 12, for: .scrollContent)
         .householdListBackground().navigationTitle("Settings").navigationBarTitleDisplayMode(.inline)
+        #if DEBUG
+        .navigationDestination(isPresented: $captureComputerOpen) { ComputerView() }
+        .navigationDestination(isPresented: $captureUpgradeOpen) { HermesUpgradeView() }
+        .onAppear {
+          captureComputerOpen = DebugFixtures.captureComputerPage; captureUpgradeOpen = DebugFixtures.captureUpgradePage
+          if DebugFixtures.captureNotificationsPage {
+            Task { try? await Task.sleep(for: .milliseconds(500)); captureScroll.scrollTo("captureNotifications", anchor: .top) }
+          }
+        }
+        #endif
         .toolbar {
           ToolbarItem(placement: .cancellationAction) { Button("Close") { if saveFailed { discardConfirm = true } else { closeSheet() } } }
           ToolbarItem(placement: .status) {
@@ -140,6 +169,7 @@ struct PreferencesView: View {
         .confirmationDialog("Change the app server? Sign-out will revoke this device's session and notifications first.", isPresented: $changeServerConfirm, titleVisibility: .visible) {
           Button("Change server") { Task { await store.changeConnection(); if store.api == nil { closeSheet() } } }
         }
+      }
     }
   }
   /// The web panel polls the shared computer every few seconds while open; Settings checks while it is shown.
@@ -191,6 +221,8 @@ struct PreferencesView: View {
       let value = String(format: "%02d:%02d", calendar.component(.hour, from: date), calendar.component(.minute, from: date))
       var settings = notificationPreferences
       if start { settings.quietStart = value } else { settings.quietEnd = value }
+      guard settings.quietStart != settings.quietEnd else { quietError = "Start and end times can't match."; return }
+      quietError = nil
       preferences.notifications = settings
     })
   }
@@ -202,7 +234,7 @@ struct PreferencesView: View {
     } label: {
       VStack(alignment: .leading, spacing: 4) {
         Text(HomeSummary.following(bots.filter { preferences.isFollowing($0.id) }.count))
-        Text("All of their activity, not just shared tasks").font(.caption).foregroundStyle(.secondary)
+        Text("Choose whose activity you want to follow").font(.caption).foregroundStyle(.secondary)
       }
     }.accessibilityIdentifier("followedAssistants")
   }

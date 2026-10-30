@@ -14,6 +14,7 @@ struct ComposerView: View {
   @Environment(AppStore.self) private var store
   @Environment(\.colorScheme) private var scheme
   @Environment(\.scenePhase) private var scenePhase
+  @ScaledMetric(relativeTo: .headline) private var sendGlyphSize = 18.0
   @State private var voice = VoiceController()
   @State private var importFiles = false
   @State private var importPhotos = false
@@ -31,7 +32,7 @@ struct ComposerView: View {
     VStack(alignment: .leading, spacing: 8) {
       StatusDock(botId: bot.id, discardConfirm: $discardConfirm)
       card
-    }.padding(12).frame(maxWidth: 850).frame(maxWidth: .infinity).background(Palette.surface(scheme))
+    }.padding(12).frame(maxWidth: 752).frame(maxWidth: .infinity).background(Palette.surface(scheme))
       .overlay(alignment: .top) { Rectangle().fill(Palette.line).frame(height: 1) }
       .onDrop(of: [.item], isTargeted: $dropTargeted) { providers in
         drop(providers)
@@ -95,7 +96,7 @@ struct ComposerView: View {
     )
     .overlay(alignment: .topLeading) {
       if store.composerDraft.text.isEmpty {
-        Text(placeholder).foregroundStyle(.tertiary).allowsHitTesting(false).accessibilityHidden(true)
+        Text(placeholder).foregroundStyle(Palette.muted).allowsHitTesting(false).accessibilityHidden(true)
       }
     }
     .padding(12).background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 16))
@@ -149,7 +150,7 @@ struct ComposerView: View {
     } label: {
       Group {
         if store.sending || store.pending != nil || (stopVisible && stopping) { ProgressView().tint(Palette.muted) }
-        else { Image(systemName: stopVisible ? "stop.fill" : "arrow.up").font(.headline) }
+        else { Image(systemName: stopVisible ? "stop.fill" : "arrow.up").font(.system(size: min(sendGlyphSize, 24), weight: .semibold)) }
       }.frame(width: 44, height: 44)
         .foregroundStyle(enabled ? Palette.raised(scheme) : Palette.muted)
         .background(enabled ? Palette.accent : Palette.line, in: Circle())
@@ -160,7 +161,7 @@ struct ComposerView: View {
   }
   @ViewBuilder private var footnotes: some View {
     if let pasteNotice {
-      Label(pasteNotice, systemImage: "doc.text").font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("pasteNotice")
+      Label(pasteNotice, systemImage: "doc.text").font(.caption).foregroundStyle(Palette.muted).accessibilityIdentifier("pasteNotice")
     }
     if store.uploads.uploading && !store.uploads.items.contains(where: { $0.botId == bot.id }) {
       ProgressView("Uploading…").font(.caption)
@@ -169,10 +170,10 @@ struct ComposerView: View {
     }
     // A loading draft already shows as a dimmed message box, and a send as its spinning button.
     if let reason = store.attachUnavailable(bot.id), reason != "Your draft is still loading.", reason != AppStore.attachWhileSending {
-      Text(reason).font(.caption).foregroundStyle(.secondary)
+      Text(reason).font(.caption).foregroundStyle(Palette.muted)
     }
     if !store.supports(.chat) {
-      Text(store.reason(.chat)).font(.caption).foregroundStyle(.secondary)
+      Text(store.reason(.chat)).font(.caption).foregroundStyle(Palette.muted)
     }
   }
   // An in-flight send keeps its spinning send button even if the draft is cleared meanwhile.

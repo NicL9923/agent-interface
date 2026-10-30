@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 import { act, createElement } from "react";
+import { readFileSync } from "node:fs";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { api, ApiError, write } from "../src/client-api";
-import { AutomationPanel, LearningPanel } from "../src/components/AutomationPanel";
+import { AutomationPanel, LearningPanel, likelyCreatedTask, likelyCreatedTrigger } from "../src/components/AutomationPanel";
 import type { AutomationOverview } from "../src/shared/automation";
 
 vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(await (async original => ({ ...await original<typeof import("../src/client-api")>(), api: vi.fn(), write: vi.fn() }))(original)));
@@ -19,12 +20,14 @@ beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true); vi.mocked(api).mockReset(); vi.mocked(write).mockReset();
   container = document.createElement("div"); document.body.append(container); root = createRoot(container);
   vi.mocked(api).mockImplementation(async path => path === "/routines" ? [{ id: "routine", botId: "ranch", name: "Morning check", enabled: true }] : initial());
+  Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: function(this: HTMLDialogElement) { this.open = true; } });
+  Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: function(this: HTMLDialogElement) { this.open = false; } });
 });
 afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.unstubAllGlobals(); });
 const button = (name: string) => Array.from(container.querySelectorAll("button")).find(item => item.textContent?.trim() === name)!;
 async function click(name: string) { expect(button(name)).toBeDefined(); await act(async () => button(name).click()); }
 async function input(label: string, value: string) {
-  const element = Array.from(container.querySelectorAll("label")).find(row => row.firstChild?.textContent === label)!.querySelector("input,textarea") as HTMLInputElement;
+  const element = Array.from(container.querySelectorAll("label")).find(row => row.firstChild?.textContent === label)!.control as HTMLInputElement;
   await act(async () => { Object.getOwnPropertyDescriptor(element.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype, "value")!.set!.call(element, value); element.dispatchEvent(new Event("input", { bubbles: true })); });
 }
 async function submit() { await act(async () => container.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }))); }
@@ -87,13 +90,99 @@ it("retires a refused cross-goal request without silently reporting a successful
 
 it("requires an explicit whole-goal replacement before discarding native goal details", async () => {
   vi.mocked(write).mockResolvedValue(initial());
-  await work(); await click("Replace goal...");
+  await work(); await click("Replace goal…");
   expect(container.textContent).toContain("removes its native subgoals, completion contracts and verification gates");
   expect(button("Replace with paused goal").disabled).toBe(true);
   await submit(); expect(write).not.toHaveBeenCalled();
   await act(async () => [...container.querySelectorAll("label")].find(row => row.textContent?.includes("Replace the entire standing goal"))!.querySelector("input")!.click());
   await submit();
   expect(write).toHaveBeenCalledWith("/bots/ranch/automation/goal", { title: "Prepare the fall ranch plan", maxTurns: 20 }, "PUT");
+});
+
+it("keeps an uncertain receipt's server message visible after refresh", async () => {
+  const value = initial();
+  const message = "Admission is still being checked in the canonical conversation.";
+  value.goals.resume = { requestId: crypto.randomUUID(), status: "uncertain", message };
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value);
+  await work();
+  expect(container.textContent).toContain(message);
+  const announcement = container.querySelector('[role="status"][aria-label="Resume status"]');
+  expect(announcement?.textContent).toBe(message);
+  expect([...container.querySelectorAll("p")].filter(node => node.textContent === message && node !== announcement)).toHaveLength(1);
+  await click("Refresh status");
+  expect(container.querySelector('[role="status"][aria-label="Resume status"]')).toBe(announcement);
+  expect([...container.querySelectorAll("p")].filter(node => node.textContent === message && node !== announcement)).toHaveLength(1);
+  expect(button("Resume goal").disabled).toBe(true);
+  expect(write).not.toHaveBeenCalled();
+});
+
+it("shows a rejected receipt loaded from status without a preceding write", async () => {
+  const value = initial();
+  const message = "The scheduler refused this continuation for a specific reason.";
+  value.goals.resume = { requestId: crypto.randomUUID(), status: "rejected", message };
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value);
+  await work(); expect(container.textContent).toContain(message);
+  await click("Refresh status"); expect(container.textContent).toContain(message);
+  expect(write).not.toHaveBeenCalled();
+});
+
+it("announces a newly rejected resume without a second visible error", async () => {
+  let value = initial();
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value);
+  await work();
+  const announcement = container.querySelector('[role="status"][aria-label="Resume result"]');
+  const message = "The scheduler refused the continuation.";
+  value = { ...value, goals: { ...value.goals, resume: { requestId: crypto.randomUUID(), status: "rejected", message } } };
+  vi.mocked(write).mockResolvedValueOnce(value);
+  await click("Resume goal");
+  expect(container.querySelector('[role="status"][aria-label="Resume result"]')).toBe(announcement);
+  expect(announcement?.textContent).toBe(message);
+  expect(container.querySelector('[role="alert"]')).toBeNull();
+  expect([...container.querySelectorAll("p")].filter(node => node.textContent === message && node !== announcement)).toHaveLength(1);
+  await click("Refresh status");
+  expect(container.querySelector('[role="status"][aria-label="Resume status"]')?.textContent).toBe("");
+  expect(announcement?.textContent).toBe("");
+  value = { ...value, goals: { ...value.goals, resume: { requestId: crypto.randomUUID(), status: "rejected", message: "A later continuation was refused." } } };
+  vi.mocked(write).mockResolvedValueOnce(value); await click("Resume goal");
+  expect(announcement?.textContent).toBe("A later continuation was refused.");
+  expect(container.querySelector('[role="status"][aria-label="Resume status"]')?.textContent).toBe("");
+});
+
+it("moves clear confirmation focus to Keep and restores it after Keep or Clear", async () => {
+  let value = initial(); vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value);
+  await work(); const opener = button("Clear goal…");
+  await click("Clear goal…"); expect(document.activeElement).toBe(button("Keep goal"));
+  await click("Keep goal"); expect(document.activeElement).toBe(opener);
+  await click("Clear goal…"); value = { ...value, goals: { ...value.goals, goal: null } }; vi.mocked(write).mockResolvedValueOnce(value);
+  await click("Clear goal"); expect(document.activeElement).toBe(button("Set a goal"));
+});
+
+it("focuses the replacement objective and restores the opener on Cancel", async () => {
+  await work(); const opener = button("Replace goal…");
+  await click("Replace goal…"); expect(document.activeElement).toBe(container.querySelector("textarea"));
+  expect(button("Resume goal").disabled).toBe(true); expect(button("Clear goal…").disabled).toBe(true);
+  await click("Cancel"); expect(document.activeElement).toBe(opener); expect(button("Resume goal").disabled).toBe(false);
+});
+
+it("does not announce an accepted receipt on load", async () => {
+  const value = initial();
+  value.goals.resume = { requestId: crypto.randomUUID(), status: "accepted", runId: "run-1" };
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value);
+  await work();
+  expect(container.textContent).not.toContain("Resume not confirmed");
+  expect(container.textContent).not.toContain("Resume rejected");
+  expect(container.querySelector('[role="status"][aria-label="Resume status"]')?.textContent).toBe("");
+  expect(container.querySelector('[role="status"][aria-label="Resume result"]')?.textContent).toBe("");
+  expect(container.querySelector('[role="alert"]')).toBeNull();
+});
+
+it("preserves an unknown native goal status and offers no resume for a done goal", async () => {
+  let value = initial(); value.goals.goal!.status = "constructor";
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value);
+  await work(); expect(container.textContent).toContain("constructor"); expect(button("Resume goal").disabled).toBe(true);
+  value = { ...value, goals: { ...value.goals, goal: { ...value.goals.goal!, status: "done" } } }; await click("Refresh status");
+  expect(button("Resume goal")).toBeUndefined();
+  expect(container.textContent).toContain("Done");
 });
 
 it("clears task assignment explicitly and shows when the board is truncated", async () => {
@@ -111,28 +200,37 @@ it("clears task assignment explicitly and shows when the board is truncated", as
 
 it("keeps task instructions and request ID through an uncertain create, without auto retry", async () => {
   vi.mocked(write).mockRejectedValueOnce(new ApiError("Lost response", 502));
-  await work(); await click("New task"); await input("Task title", "Check the east fence"); await input("Instructions", "Read the last inspection report first."); await submit();
+  await work(); await click("New task"); await input("Task title", "Check the east fence"); await input("Instructions (optional)", "Read the last inspection report first."); await submit();
   const payload = vi.mocked(write).mock.calls[0][1];
   expect(payload).toMatchObject({ title: "Check the east fence", body: "Read the last inspection report first.", assignee: "ranch", requestId: expect.any(String) });
   expect(button("Create task").disabled).toBe(true);
+  expect(document.activeElement?.textContent).toContain("Not confirmed. Hermes may have created this task.");
   expect(container.querySelector("textarea")!.value).toBe("Read the last inspection report first.");
   expect(write).toHaveBeenCalledTimes(1);
-  await click("Refresh status"); vi.mocked(write).mockResolvedValueOnce({ ok: true }); await submit();
+  await click("Refresh status");
+  expect(document.activeElement?.textContent).toContain("No new task with this title is visible.");
+  expect(container.querySelector('[aria-label="Task result"]')?.textContent).toContain("Create task sends the same request again.");
+  vi.mocked(write).mockResolvedValueOnce({ ok: true }); await submit();
   expect(vi.mocked(write).mock.calls[1][1]).toEqual(payload);
+  await act(async () => new Promise<void>(resolve => requestAnimationFrame(() => resolve())));
+  expect(document.activeElement).toBe(button("New task"));
 });
 
 it("shows a new signing secret once and creates a disabled trigger", async () => {
   vi.mocked(write).mockResolvedValueOnce({ subscription: { id: "fence-alert", url: "https://hermes.example.test/hooks/fence-alert" }, secret: "synthetic-secret" });
-  await work(); await click("New event trigger"); await input("Trigger ID", "fence-alert"); await input("Description", "Fence alerts"); await input("Event names, separated by commas", "alert, recovery"); await submit();
+  await work(); await click("New event trigger"); await input("Trigger ID", "fence-alert"); await input("Description (optional)", "Fence alerts"); await input("Event names", "alert, recovery"); await submit();
   expect(write).toHaveBeenCalledWith("/bots/ranch/automation/triggers", { id: "fence-alert", description: "Fence alerts", events: ["alert", "recovery"], routineId: "routine" });
-  expect(container.querySelector<HTMLInputElement>('input[type="password"]')?.value).toBe("synthetic-secret");
+  expect(container.innerHTML).not.toContain("synthetic-secret");
+  expect(document.activeElement?.textContent).toBe("Save this signing secret now");
+  expect(button("I've saved it").disabled).toBe(true);
+  await click("Show secret"); expect(container.textContent).toContain("synthetic-secret");
   expect(localStorage.length).toBe(0); expect(sessionStorage.length).toBe(0);
   await click("I've saved it"); expect(container.querySelector('input[type="password"]')).toBeNull();
 });
 
 it("makes event controls read-only for a non-administrator", async () => {
   vi.mocked(api).mockImplementation(async path => path === "/routines" ? [{ id: "routine", botId: "ranch", name: "Morning check" }] : { ...initial(), canManageTriggers: false });
-  await work(); expect(button("New event trigger").disabled).toBe(true);
+  await work(); expect(button("New event trigger")).toBeUndefined();
   expect(container.textContent).toContain("Only an integration administrator"); expect(write).not.toHaveBeenCalled();
 });
 
@@ -142,7 +240,7 @@ it("approves the displayed diff revision and refuses truncated approval", async 
   vi.mocked(write).mockResolvedValue({ ok: true });
   await act(async () => root.render(createElement(LearningPanel, { botId: "ranch" })));
   await click("Review change"); expect(button("Approve change").disabled).toBe(true);
-  truncated = false; await click("Review change"); await click("Approve change");
+  truncated = false; await click("Hide change"); await click("Review change"); await click("Approve change");
   expect(write).toHaveBeenCalledWith("/bots/ranch/automation/skills/pending/aabbccdd", { revision: "b".repeat(64), decision: "approve" });
 });
 
@@ -163,4 +261,593 @@ it("retires a failed status refresh once a change and its follow-up status succe
   expect(container.textContent).toContain("Saved in Hermes.");
   expect(container.textContent).not.toContain("Hermes is restarting.");
   expect(container.querySelector('[role="alert"]')).toBeNull();
+});
+
+const task = (id: string, status: string, dependencies: string[] = []) => ({ id, title: `Task ${id}`, body: "Instructions", status, priority: 0, assignee: null, owner: "ranch", dependencies });
+async function openTask(id: string) {
+  const summary = [...container.querySelectorAll(".automation-task > summary")].find(item => item.textContent?.includes(`Task ${id}`)) as HTMLElement;
+  expect(summary).toBeDefined(); await act(async () => summary.click());
+}
+it("groups task statuses, preserves unknown statuses, and keeps running tasks read-only", async () => {
+  const value = initial(); value.tasks.items = [task("done", "done"), task("todo", "todo"), task("unknown", "future_state"), task("running", "running", ["todo"])];
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value);
+  await work();
+  expect([...container.querySelectorAll(".automation-task-group-toggle")].map(item => item.textContent)).toEqual(["Running · 1", "To do · 1", "Future State · 1", "Done · 1"]);
+  await openTask("running");
+  const card = [...container.querySelectorAll(".automation-task")].find(item => item.textContent?.includes("Task running"))!;
+  expect(card.textContent).toContain("Task todo · To do");
+  expect(card.textContent).toContain("A Hermes worker is running this task");
+  expect(card.querySelectorAll("button")).toHaveLength(0);
+});
+
+it("reconciles a task refusal locally and preserves goal controls and partial updates", async () => {
+  let value = initial(); value.tasks.items = [task("one", "blocked")];
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value);
+  await work(); await openTask("one");
+  value = { ...value, tasks: { ...value.tasks, items: [{ ...task("one", "ready"), body: "Updated before refusal" }] } };
+  vi.mocked(write).mockRejectedValueOnce(new ApiError("Exact server refusal.", 409));
+  await click("Start task");
+  expect(container.textContent).toContain("Updated before refusal");
+  const card = container.querySelector<HTMLDetailsElement>(".automation-task")!;
+  expect(card.open).toBe(true); expect(card.textContent).toContain("Exact server refusal. Status refreshed.");
+  expect(document.activeElement).toBe(card.querySelector(".automation-task-feedback"));
+  expect(container.querySelector('[aria-label="Task result"]')?.textContent).toContain("Exact server refusal.");
+  expect(button("Resume goal").disabled).toBe(false); expect(button("Replace goal…").disabled).toBe(false); expect(button("Clear goal…").disabled).toBe(false);
+  expect(vi.mocked(api).mock.calls.filter(([path]) => path === "/bots/ranch/automation")).toHaveLength(2);
+  await click("Refresh status"); expect(card.textContent).not.toContain("Exact server refusal.");
+});
+
+it("locks changes when task refusal reconciliation fails", async () => {
+  const value = initial(); value.tasks.items = [task("one", "blocked")];
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value);
+  await work(); await openTask("one");
+  vi.mocked(write).mockRejectedValueOnce(new ApiError("Refused", 409));
+  vi.mocked(api).mockRejectedValueOnce(new Error("Offline"));
+  await click("Start task");
+  expect(button("Resume goal").disabled).toBe(true);
+  expect(container.textContent).toContain("status could not refresh");
+  expect(container.textContent).toContain("Not confirmed. Use Refresh status");
+});
+
+it("keeps a moved task open, focused and announced and sends only chosen action fields", async () => {
+  let value = initial(); value.tasks.items = [task("one", "blocked")];
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value);
+  await work(); await openTask("one");
+  value = { ...value, tasks: { ...value.tasks, items: [task("one", "ready")] } };
+  vi.mocked(write).mockResolvedValueOnce(value.tasks.items[0]); await click("Start task");
+  expect(vi.mocked(write).mock.calls[0][1]).toEqual({ action: "start" });
+  const card = container.querySelector<HTMLDetailsElement>(".automation-task")!;
+  expect(card.open).toBe(true); expect(card.textContent).toContain("Moved to Ready."); expect(document.activeElement).toBe(card.querySelector(".automation-task-feedback"));
+  expect(container.querySelector('[aria-label="Task result"]')?.textContent).toBe("Moved to Ready.");
+  await click("Block task…"); expect(container.textContent).toContain("What is blocking this task?");
+  await click("Request review…"); expect(container.textContent).not.toContain("What is blocking this task?"); expect(container.textContent).toContain("Notes for the reviewer (optional)");
+});
+
+it("sends an optional start note and sends a reviewer only with a review request", async () => {
+  const value = initial(); value.tasks.items = [task("one", "blocked")];
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value);
+  vi.mocked(write).mockResolvedValue(value.tasks.items[0]);
+  await work(); await openTask("one"); await input("Start note", "Start after lunch"); await click("Start task");
+  expect(vi.mocked(write).mock.calls[0][1]).toEqual({ action: "start", reason: "Start after lunch" });
+  await click("Request review…");
+  const select = [...container.querySelectorAll("label")].find(row => row.firstChild?.textContent === "Reviewer")!.querySelector("select")!;
+  await act(async () => { select.value = "ranch"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+  await input("Notes for the reviewer (optional)", "Check the gate"); await click("Request review");
+  expect(vi.mocked(write).mock.calls[1][1]).toEqual({ action: "request_review", reviewer: "ranch", reason: "Check the gate" });
+});
+
+
+it("reveals a moved task in a previously collapsed status group", async () => {
+  let value = initial(); value.tasks.items = [task("one", "blocked"), task("two", "ready")];
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value);
+  await work(); await click("Ready · 1"); await openTask("one");
+  value = { ...value, tasks: { ...value.tasks, items: [task("one", "ready"), task("two", "ready")] } };
+  vi.mocked(write).mockResolvedValueOnce(value.tasks.items[0]); await click("Start task");
+  expect(button("Ready · 2").getAttribute("aria-expanded")).toBe("true");
+  const card = container.querySelector<HTMLDetailsElement>('[data-task-id="one"]')!;
+  expect(card.open).toBe(true); expect(document.activeElement).toBe(card.querySelector(".automation-task-feedback"));
+});
+
+it("retires a task refusal when another task closes its card", async () => {
+  const value = initial(); value.tasks.items = [task("one", "blocked"), task("two", "ready")];
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value);
+  await work(); await openTask("one"); vi.mocked(write).mockRejectedValueOnce(new ApiError("Old task refusal.", 409));
+  await click("Start task"); expect(container.textContent).toContain("Old task refusal.");
+  await openTask("two"); await openTask("one");
+  expect(container.textContent).not.toContain("Old task refusal.");
+});
+
+it("does not send review notes with a different Start action", async () => {
+  const value = initial(); value.tasks.items = [task("one", "blocked")];
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value);
+  vi.mocked(write).mockResolvedValue(value.tasks.items[0]);
+  await work(); await openTask("one"); await click("Request review…");
+  await input("Notes for the reviewer (optional)", "Review this first"); await click("Start task");
+  expect(vi.mocked(write).mock.calls[0][1]).toEqual({ action: "start" });
+});
+
+
+it("shows vanished-task feedback at the board heading and focuses that heading", async () => {
+  let value = initial(); value.tasks.items = [task("one", "blocked")];
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value);
+  await work(); await openTask("one"); value = { ...value, tasks: { ...value.tasks, items: [] } };
+  vi.mocked(write).mockRejectedValueOnce(new ApiError("Task not found.", 404)); await click("Start task");
+  expect(container.querySelector(".automation-tasks > .automation-task-feedback")?.textContent).toContain("Task one: Task not found. Status refreshed.");
+  expect(document.activeElement).toBe(container.querySelector(".automation-tasks > h3"));
+});
+
+it("keeps dependency results beside their controls and focuses the result", async () => {
+  let value = initial(); value.tasks.items = [task("one", "blocked"), task("two", "ready")];
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value);
+  vi.mocked(write).mockResolvedValue({});
+  await work(); await openTask("one");
+  const select = container.querySelector<HTMLSelectElement>(".automation-task-add select")!;
+  await act(async () => { select.value = "two"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+  value = { ...value, tasks: { ...value.tasks, items: [task("one", "blocked", ["two"]), task("two", "ready")] } };
+  await click("Add dependency");
+  const card = container.querySelector<HTMLDetailsElement>('[data-task-id="one"]')!;
+  expect(card.querySelector(".automation-task-dependencies .automation-task-feedback")?.textContent).toBe("Saved in Hermes.");
+  expect(card.querySelector(".automation-task-move .automation-task-feedback")).toBeNull();
+  expect(document.activeElement).toBe(card.querySelector(".automation-task-feedback"));
+  value = { ...value, tasks: { ...value.tasks, items: [task("one", "blocked"), task("two", "ready")] } };
+  await act(async () => card.querySelector<HTMLButtonElement>('[aria-label="Remove dependency on Task two"]')!.click());
+  expect(card.querySelector(".automation-task-dependencies .automation-task-feedback")?.textContent).toBe("Saved in Hermes.");
+  expect(card.querySelector(".automation-task-move .automation-task-feedback")).toBeNull();
+  expect(document.activeElement).toBe(card.querySelector(".automation-task-feedback"));
+});
+
+it("returns focus to the chosen task action when its form is cancelled", async () => {
+  const value = initial(); value.tasks.items = [task("one", "blocked")];
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value);
+  await work(); await openTask("one");
+  for (const name of ["Block task…", "Request review…"]) {
+    await click(name); expect(button(name).getAttribute("aria-expanded")).toBe("true");
+    button("Cancel").focus(); await click("Cancel");
+    expect(document.activeElement).toBe(button(name)); expect(button(name).getAttribute("aria-expanded")).toBe("false");
+  }
+});
+
+it("does not reopen a task or steal focus when its late result arrives", async () => {
+  let value = initial(); value.tasks.items = [task("one", "blocked"), task("two", "ready")];
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value);
+  let complete!: (result: unknown) => void; vi.mocked(write).mockReturnValueOnce(new Promise(resolve => { complete = resolve; }));
+  await work(); await openTask("one"); await click("Start task"); await openTask("two");
+  const second = container.querySelector<HTMLDetailsElement>('[data-task-id="two"]')!; second.querySelector<HTMLElement>("summary")!.focus();
+  value = { ...value, tasks: { ...value.tasks, items: [task("one", "ready"), task("two", "ready")] } };
+  await act(async () => complete(value.tasks.items[0]));
+  expect(second.open).toBe(true); expect(document.activeElement).toBe(second.querySelector("summary"));
+  expect(container.querySelector<HTMLDetailsElement>('[data-task-id="one"]')?.open).toBe(false);
+});
+
+
+it("matches only a new task with the exact submitted title", () => {
+  const items = [task("known", "blocked"), { ...task("new", "blocked"), title: "Fence" }];
+  expect(likelyCreatedTask(["known"], "Fence", items)?.id).toBe("new");
+  expect(likelyCreatedTask(["known", "new"], "Fence", items)).toBeUndefined();
+  expect(likelyCreatedTask([], "fence", items)).toBeUndefined();
+  expect(likelyCreatedTask([], "Fence ", items)).toBeUndefined();
+});
+
+it("focuses the create title and returns focus on cancel", async () => {
+  await work(); await click("New task");
+  expect(document.activeElement).toBe(container.querySelector('form[aria-labelledby="new-task-heading"] input'));
+  await click("Cancel"); await act(async () => new Promise<void>(resolve => requestAnimationFrame(() => resolve())));
+  expect(document.activeElement).toBe(button("New task"));
+});
+
+it("locks edit fields during a pending save and reports success beside edit", async () => {
+  let value = initial(); value.tasks.items = [task("one", "blocked")];
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value);
+  let complete!: (value: unknown) => void;
+  vi.mocked(write).mockReturnValueOnce(new Promise(resolve => { complete = resolve; }));
+  await work(); await openTask("one"); await click("Edit task"); await input("Task title", "Edited title");
+  await submit();
+  const form = container.querySelector<HTMLFormElement>('form[aria-labelledby^="edit-task-"]')!;
+  expect([...form.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>("input, textarea, select")].every(field => field.disabled)).toBe(true);
+  expect(button("Saving…").disabled).toBe(true);
+  value = { ...value, tasks: { ...value.tasks, items: [{ ...task("one", "blocked"), title: "Edited title" }] } };
+  await act(async () => complete(value.tasks.items[0]));
+  const feedback = container.querySelector<HTMLElement>('.automation-task-feedback')!;
+  expect(form.isConnected).toBe(false); expect(feedback.textContent).toBe("Saved in Hermes.");
+  expect(document.activeElement).toBe(feedback); expect(container.querySelector('[aria-label="Task result"]')?.textContent).toBe("Saved in Hermes.");
+});
+
+it("keeps an edit draft after a local refusal and reconciles a running task", async () => {
+  let value = initial(); value.tasks.items = [task("one", "blocked"), task("two", "ready")];
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value);
+  await work(); await openTask("one"); await click("Edit task"); await input("Task title", "Draft title");
+  vi.mocked(write).mockRejectedValueOnce(new ApiError("Refused.", 409)); await submit();
+  expect(container.querySelector<HTMLInputElement>('form[aria-labelledby^="edit-task-"] input')?.value).toBe("Draft title");
+  expect(container.querySelector('.automation-task-feedback')?.textContent).toContain("Refused. Status refreshed.");
+  expect(button("Resume goal").disabled).toBe(false); expect(button("Start task").disabled).toBe(false);
+  value = { ...value, tasks: { ...value.tasks, items: [task("one", "running"), task("two", "ready")] } };
+  vi.mocked(write).mockRejectedValueOnce(new ApiError("Worker owns it.", 409)); await submit();
+  expect(container.querySelector('form[aria-labelledby^="edit-task-"]')).toBeNull();
+  expect(container.textContent).toContain("A Hermes worker is running this task");
+  expect(container.querySelector('.automation-task-move .automation-task-feedback')?.textContent).toContain("Worker owns it.");
+  expect(button("Resume goal").disabled).toBe(false);
+  value = { ...value, tasks: { ...value.tasks, items: [task("one", "ready"), task("two", "ready")] } };
+  await click("Refresh status");
+  expect(container.querySelector('form[aria-labelledby^="edit-task-"]')).toBeNull();
+  expect(button("Edit task")).toBeDefined();
+});
+
+it("keeps other actions out of a reviewed create attempt and its busy labels", async () => {
+  const value = initial(); value.tasks.items = [task("one", "blocked")];
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value);
+  vi.mocked(write).mockRejectedValueOnce(new ApiError("Lost create response", 502));
+  await work(); await click("New task"); await input("Task title", "A new fence"); await submit();
+  await click("Refresh status");
+  expect(document.activeElement?.textContent).toContain("No new task with this title is visible.");
+  await openTask("one"); await click("Edit task");
+  let fail!: (error: Error) => void;
+  vi.mocked(write).mockReturnValueOnce(new Promise((_, reject) => { fail = reject; }));
+  await click("Start task");
+  expect(button("Create task").disabled).toBe(true); expect(button("Creating…")).toBeUndefined();
+  expect(button("Save task").disabled).toBe(true); expect(button("Saving…")).toBeUndefined();
+  await act(async () => fail(new ApiError("Lost move response", 502)));
+  const form = container.querySelector('form[aria-labelledby="new-task-heading"]')!;
+  expect(form.querySelector('.automation-task-callout')).toBeNull();
+  expect(form.textContent).not.toContain("Hermes may have created this task");
+  expect(document.activeElement?.textContent).not.toContain("Hermes may have created this task");
+  expect(write).toHaveBeenCalledTimes(2);
+});
+
+it("waits for the create review result before moving focus from Refresh status", async () => {
+  const value = initial();
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value);
+  vi.mocked(write).mockRejectedValueOnce(new ApiError("Lost create response", 502));
+  await work(); await click("New task"); await input("Task title", "A new fence"); await submit();
+  let finish!: (result: AutomationOverview) => void;
+  vi.mocked(api).mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+  const refresh = button("Refresh status"); refresh.focus(); await click("Refresh status");
+  expect(document.activeElement).toBe(refresh);
+  await act(async () => finish(value));
+  expect(document.activeElement?.textContent).toContain("No new task with this title is visible.");
+  expect(write).toHaveBeenCalledTimes(1);
+});
+
+it.each([false, true])("keeps a successful move focused after create review (match=%s)", async match => {
+  let value = initial(); value.tasks.items = [task("one", "blocked")];
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value);
+  vi.mocked(write).mockRejectedValueOnce(new ApiError("Lost create response", 502));
+  await work(); await click("New task"); await input("Task title", "A new fence"); await submit();
+  const appeared = { ...task("new", "blocked"), title: "A new fence" };
+  if (match) value = { ...value, tasks: { ...value.tasks, items: [...value.tasks.items, appeared] } };
+  await click("Refresh status");
+  expect(document.activeElement?.textContent).toContain(match ? "A task with this title appeared" : "No new task with this title");
+  await openTask("one");
+  let complete!: (result: unknown) => void;
+  vi.mocked(write).mockReturnValueOnce(new Promise(resolve => { complete = resolve; }));
+  await click("Start task");
+  value = { ...value, tasks: { ...value.tasks, items: [task("one", "ready"), ...(match ? [appeared] : [])] } };
+  await act(async () => complete({ ok: true }));
+  const feedback = container.querySelector<HTMLElement>('[data-task-id="one"] .automation-task-feedback')!;
+  expect(feedback.textContent).toBe("Moved to Ready.");
+  expect(document.activeElement).toBe(feedback);
+  expect(container.querySelector('[aria-label="Task result"]')?.textContent).toBe("Moved to Ready.");
+  expect(write).toHaveBeenCalledTimes(2);
+});
+
+it("creates, opens and announces the new task and resets the next draft", async () => {
+  let value = initial(); vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value);
+  await work(); await click("New task"); await input("Task title", "Fence");
+  const created = { ...task("new", "blocked"), title: "Fence" };
+  value = { ...value, tasks: { ...value.tasks, items: [created] } }; vi.mocked(write).mockResolvedValueOnce(created);
+  await submit(); const first = vi.mocked(write).mock.calls[0][1] as { requestId: string };
+  const card = container.querySelector<HTMLDetailsElement>('[data-task-id="new"]')!;
+  expect(card.open).toBe(true); expect(document.activeElement).toBe(card.querySelector('.automation-task-feedback'));
+  expect(container.querySelector('[aria-label="Task result"]')?.textContent).toBe('Created. "Fence" stays blocked until you start it.');
+  await click("New task"); expect(container.querySelector<HTMLInputElement>('form[aria-labelledby="new-task-heading"] input')?.value).toBe("");
+  await input("Task title", "Another"); vi.mocked(write).mockResolvedValueOnce(created); await submit();
+  expect((vi.mocked(write).mock.calls[1][1] as { requestId: string }).requestId).not.toBe(first.requestId);
+});
+
+it("locks an uncertain create when a likely match appears and closes without another POST", async () => {
+  let value = initial(); vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value);
+  vi.mocked(write).mockRejectedValueOnce(new ApiError("Lost", 502));
+  await work(); await click("New task"); await input("Task title", "Fence"); await submit();
+  value = { ...value, tasks: { ...value.tasks, items: [{ ...task("new", "blocked"), title: "Fence" }] } };
+  await click("Refresh status");
+  expect(container.textContent).toContain("A task with this title appeared on the board.");
+  expect(document.activeElement?.textContent).toContain("A task with this title appeared on the board.");
+  expect(container.querySelector('[aria-label="Task result"]')?.textContent).toContain("Hermes may have saved it.");
+  expect(container.querySelector<HTMLInputElement>('form[aria-labelledby="new-task-heading"] input')?.disabled).toBe(true);
+  expect(button("Create task")).toBeUndefined(); expect(container.querySelector('.automation-task-choices input')).toBeNull();
+  await click("Close"); const card = container.querySelector<HTMLDetailsElement>('[data-task-id="new"]')!;
+  expect(card.open).toBe(true); expect(document.activeElement).toBe(card.querySelector('.automation-task-feedback'));
+  expect(card.querySelector('.automation-task-feedback')?.textContent).toBe('"Fence" appeared on the board. Hermes may have saved it.');
+  expect(container.querySelector('[aria-label="Task result"]')?.textContent).toBe('"Fence" appeared on the board. Hermes may have saved it.');
+  expect(write).toHaveBeenCalledTimes(1);
+});
+
+const trigger = (id = "gate", routineId = "routine") => ({ id, description: "Gate alert", events: ["alert"], routineId, enabled: false, revision: "a".repeat(64), url: "https://example.test/trigger", secretSet: true });
+it("keeps the settings shell clipped and styles disabled trigger text fields", () => {
+  const settings = readFileSync("src/styles.css", "utf8");
+  const automation = readFileSync("src/components/automation.css", "utf8");
+  expect(settings.match(/\.settings-dialog\s*\{([^}]*)\}/)?.[1]).toMatch(/overflow:\s*clip\s*;/);
+  expect(settings.match(/\.settings-content\s*\{([^}]*)\}/)?.[1]).toMatch(/overflow:\s*auto\s*;/);
+  expect(automation).toMatch(/\.automation-triggers \.automation-form input:not\(\[type=checkbox\]\):disabled,\s*\.automation-triggers \.automation-form textarea:disabled\s*\{[^}]*color:\s*var\(--muted\);[^}]*-webkit-text-fill-color:\s*var\(--muted\);[^}]*background:\s*transparent;/);
+});
+async function submitTrigger() { await act(async () => container.querySelector<HTMLFormElement>(".automation-triggers form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }))); }
+
+it("keeps exact trigger field labels separate from hints and controlled textarea text", async () => {
+  const value = initial(); value.triggers.items = [trigger()];
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [{ id: "routine", botId: "ranch", name: "Morning", enabled: true }] : value);
+  await work(); await click("New event trigger");
+  for (const name of ["Trigger ID", "Description (optional)", "Event names"]) {
+    const labels = [...container.querySelectorAll<HTMLLabelElement>(".automation-triggers label")].filter(label => label.textContent === name);
+    expect(labels).toHaveLength(1); expect(labels[0].control).not.toBeNull();
+    if (name !== "Description (optional)") expect(document.getElementById(labels[0].control!.getAttribute("aria-describedby")!)?.textContent).toBeTruthy();
+  }
+  await click("Cancel"); await click("Edit trigger");
+  const label = [...container.querySelectorAll<HTMLLabelElement>(".automation-triggers label")].find(label => label.textContent === "Description (optional)")!;
+  expect((label.control as HTMLTextAreaElement).value).toBe("Gate alert");
+});
+
+it("preserves a received trigger secret when only its status refresh fails", async () => {
+  await work(); await click("New event trigger"); await input("Trigger ID", "new"); await input("Event names", "alert");
+  vi.mocked(write).mockResolvedValueOnce({ subscription: trigger("new"), secret: "received-secret" });
+  vi.mocked(api).mockRejectedValueOnce(new Error("Read failed"));
+  const scroll = vi.fn(); const focus = vi.spyOn(HTMLElement.prototype, "focus");
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: scroll });
+  await submitTrigger();
+  const panel = container.querySelector(".automation-secret")!; const heading = panel.querySelector("h4")!;
+  expect(scroll).toHaveBeenCalledWith({ block: "start" });
+  expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+  expect(scroll.mock.invocationCallOrder[0]).toBeLessThan(focus.mock.invocationCallOrder.at(-1)!);
+  expect(document.activeElement).toBe(heading); focus.mockRestore(); delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
+  expect(panel.querySelector("code")?.textContent).not.toBe("Hidden");
+  expect(container.querySelector(".automation-secret")?.textContent).toContain("new was created");
+  expect(container.innerHTML).not.toContain("received-secret");
+  expect(button("Resume goal").disabled).toBe(true);
+  await click("Show secret"); expect(container.querySelector(".automation-secret")?.textContent).toContain("received-secret");
+  expect(container.textContent).not.toContain("never received its signing secret"); expect(write).toHaveBeenCalledTimes(1);
+  await click("I've saved it"); expect(container.textContent).toContain("new was created. Refresh status to see its current settings.");
+});
+
+it("preserves the new trigger draft and explains why an orphan cannot enter edit", async () => {
+  const value = initial(); value.triggers.items = [trigger("gate", "missing")];
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [{ id: "routine", botId: "ranch", name: "Morning", enabled: true }] : value);
+  await work(); await click("New event trigger"); await input("Trigger ID", "my-draft");
+  expect(button("Edit trigger").disabled).toBe(true);
+  expect(container.textContent).toContain("Its routine is no longer available. Finish or cancel the new trigger, then edit this trigger to choose another routine.");
+  await click("Edit trigger");
+  const label = [...container.querySelectorAll<HTMLLabelElement>(".automation-triggers label")].find(label => label.textContent === "Trigger ID")!;
+  expect((label.control as HTMLInputElement).value).toBe("my-draft");
+  expect(button("Save trigger")).toBeUndefined();
+  await click("Cancel"); expect(button("Edit trigger").disabled).toBe(false);
+  expect(container.textContent).toContain("Its routine is no longer available. Edit the trigger to choose another routine before enabling it.");
+});
+
+it("retires old trigger refusals before reopening edit or cancelling create", async () => {
+  const value = initial(); value.triggers.items = [trigger()];
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [{ id: "routine", botId: "ranch", name: "Morning", enabled: true }] : value);
+  await work(); await click("Edit trigger"); vi.mocked(write).mockRejectedValueOnce(new ApiError("Old refusal.", 409)); await submitTrigger();
+  expect(container.textContent).toContain("Old refusal."); await click("Cancel"); await click("Edit trigger");
+  expect(container.querySelector(".automation-triggers form")?.textContent).not.toContain("Old refusal.");
+  await click("Cancel"); await click("New event trigger"); await input("Trigger ID", "invalid"); await input("Event names", "alert");
+  vi.mocked(write).mockRejectedValueOnce(new ApiError("Create refused.", 400)); await submitTrigger();
+  expect(container.textContent).toContain("Create refused."); await input("Trigger ID", "corrected");
+  expect(container.textContent).not.toContain("Create refused.");
+  vi.mocked(write).mockRejectedValueOnce(new ApiError("Second refusal.", 400)); await submitTrigger(); await click("Cancel");
+  expect(container.textContent).not.toContain("Second refusal.");
+  expect(container.querySelector('.automation-trigger-removed[data-trigger-id="invalid"]')).toBeNull();
+});
+
+it("keeps another trigger's result while typing through its ID in a new draft", async () => {
+  let value = initial(); value.triggers.items = [trigger()];
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [{ id: "routine", botId: "ranch", name: "Morning", enabled: true }] : value);
+  await work(); vi.mocked(write).mockResolvedValueOnce({ subscription: { ...trigger(), enabled: true } });
+  value = { ...value, triggers: { ...value.triggers, items: [{ ...trigger(), enabled: true }] } };
+  await click("Enable trigger"); expect(container.querySelector('article[data-trigger-id="gate"] .automation-trigger-feedback')?.classList.contains("form-notice")).toBe(true);
+  await click("Delete trigger…"); expect(container.querySelector('article[data-trigger-id="gate"] .automation-trigger-feedback')).toBeNull();
+  expect(container.querySelectorAll(".automation-confirm .actions button")).toHaveLength(2); await click("Keep trigger");
+  value = { ...value, triggers: { ...value.triggers, items: [trigger()] } }; vi.mocked(write).mockResolvedValueOnce({ subscription: trigger() }); await click("Disable trigger");
+  value = { ...value, triggers: { ...value.triggers, items: [{ ...trigger(), enabled: true }] } }; vi.mocked(write).mockResolvedValueOnce({ subscription: { ...trigger(), enabled: true } }); await click("Enable trigger");
+  await click("New event trigger"); await input("Trigger ID", "gate"); await input("Trigger ID", "gate-2");
+  expect(container.querySelector('article[data-trigger-id="gate"] .automation-trigger-feedback')?.textContent).toBe("Enabled.");
+  await click("Cancel"); expect(container.querySelector('article[data-trigger-id="gate"] .automation-trigger-feedback')?.textContent).toBe("Enabled.");
+});
+
+it("keeps a newer row result after a duplicate-create refusal for the same ID", async () => {
+  let value = initial(); value.triggers.items = [trigger()];
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [{ id: "routine", botId: "ranch", name: "Morning", enabled: true }] : value);
+  await work(); await click("New event trigger"); await input("Trigger ID", "gate"); await input("Event names", "alert");
+  vi.mocked(write).mockRejectedValueOnce(new ApiError("Duplicate ID.", 409)); await submitTrigger();
+  expect(container.querySelector(".automation-triggers form")?.textContent).toContain("Duplicate ID.");
+  value = { ...value, triggers: { ...value.triggers, items: [{ ...trigger(), enabled: true }] } };
+  vi.mocked(write).mockResolvedValueOnce({ subscription: { ...trigger(), enabled: true } }); await click("Enable trigger");
+  await input("Trigger ID", "gate-2");
+  expect(container.querySelector('article[data-trigger-id="gate"] .automation-trigger-feedback')?.textContent).toBe("Enabled.");
+  expect(container.querySelector('[aria-label="Trigger result"]')?.textContent).toBe("Enabled.");
+  expect(container.querySelector(".automation-triggers form")?.textContent).not.toContain("Duplicate ID.");
+});
+
+it("focuses the matching removed notice after a second trigger deletion", async () => {
+  let value = initial(); value.triggers.items = [trigger("first"), { ...trigger("second"), description: "Second alert" }];
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [{ id: "routine", botId: "ranch", name: "Morning", enabled: true }] : value);
+  await work();
+  for (const id of ["first", "second"]) {
+    await act(async () => container.querySelector<HTMLElement>(`article[data-trigger-id="${id}"]`)!.querySelectorAll("button")[2].click());
+    value = { ...value, triggers: { ...value.triggers, items: value.triggers.items.filter(item => item.id !== id) } };
+    vi.mocked(write).mockResolvedValueOnce({ ok: true }); await click("Delete trigger");
+    expect(document.activeElement).toBe(container.querySelector(`.automation-trigger-removed[data-trigger-id="${id}"]`));
+  }
+});
+
+it("matches only a newly appearing trigger ID", () => {
+  expect(likelyCreatedTrigger([], "gate", [trigger()])?.id).toBe("gate");
+  expect(likelyCreatedTrigger(["gate"], "gate", [trigger()])).toBeUndefined();
+  expect(likelyCreatedTrigger([], "other", [trigger()])).toBeUndefined();
+});
+
+it("keeps trigger refusals local and edit cancel available", async () => {
+  let value = initial(); value.triggers.items = [trigger()];
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [{ id: "routine", botId: "ranch", name: "Morning", enabled: true }] : value);
+  await work(); await click("Edit trigger");
+  expect(document.activeElement).toBe(container.querySelector(".automation-triggers textarea"));
+  vi.mocked(write).mockRejectedValueOnce(new ApiError("Stale.", 409));
+  value = { ...value, triggers: { ...value.triggers, items: [{ ...trigger(), revision: "b".repeat(64) }] } };
+  await submitTrigger();
+  const stale = container.querySelectorAll("form .automation-trigger-feedback");
+  expect(stale).toHaveLength(1); expect(document.activeElement).toBe(stale[0]);
+  expect(stale[0].textContent).toContain("This trigger changed.");
+  expect(container.querySelector('[aria-label="Trigger result"]')?.textContent).toBe(stale[0].textContent);
+  expect(container.textContent).not.toContain("Stale. Status refreshed.");
+  expect(button("Save trigger").disabled).toBe(true); expect(button("Cancel").disabled).toBe(false);
+  expect(button("Resume goal").disabled).toBe(false); expect(container.querySelector('.automation-panel > [role="alert"]')).toBeNull();
+  await click("Cancel"); expect(document.activeElement).toBe(button("Edit trigger"));
+  expect(container.textContent).not.toContain("Stale. Status refreshed.");
+  vi.mocked(write).mockRejectedValueOnce(new ApiError("Toggle refused.", 409)); await click("Enable trigger");
+  expect(document.activeElement?.textContent).toContain("Toggle refused. Status refreshed."); expect(document.activeElement?.classList.contains("form-error")).toBe(true); expect(button("Resume goal").disabled).toBe(false);
+});
+
+it.each([true, false])("reviews an uncertain trigger create before retry (found=%s)", async found => {
+  let value = initial(); vi.mocked(api).mockImplementation(async path => path === "/routines" ? [{ id: "routine", botId: "ranch", name: "Morning", enabled: true }] : value);
+  vi.mocked(write).mockRejectedValueOnce(new ApiError("Lost", 502));
+  await work(); await click("New event trigger"); await input("Trigger ID", "gate"); await input("Event names", "alert"); await submitTrigger();
+  const payload = vi.mocked(write).mock.calls[0][1];
+  expect(document.activeElement?.textContent).toContain("Hermes may have created this trigger"); expect(write).toHaveBeenCalledTimes(1);
+  if (found) value = { ...value, triggers: { ...value.triggers, items: [trigger()] } };
+  await click("Refresh status");
+  if (found) {
+    expect(button("Create trigger")).toBeUndefined(); expect(button("Close")).toBeDefined();
+    expect(container.textContent).toContain("never received its signing secret"); await click("Close");
+    expect(document.activeElement?.textContent).toContain("never received its signing secret"); expect(write).toHaveBeenCalledTimes(1);
+  } else {
+    expect(document.activeElement?.textContent).toContain("sends the same request again");
+    vi.mocked(write).mockRejectedValueOnce(new ApiError("Duplicate", 409)); await submitTrigger();
+    expect(vi.mocked(write).mock.calls[1][1]).toEqual(payload);
+  }
+});
+
+it("labels orphan and paused routines, blocks orphan enable, and focuses delete feedback", async () => {
+  let value = initial(); value.triggers.items = [trigger("gate", "missing"), { ...trigger("other"), description: "Other" }];
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [{ id: "routine", botId: "ranch", name: "Morning", enabled: false }] : value);
+  await work(); expect(container.textContent).toContain("Routine: missing · Not found"); expect(container.textContent).toContain("Routine: Morning · Paused");
+  const orphan = container.querySelector<HTMLElement>('[data-trigger-id="gate"]')!;
+  expect(orphan.querySelector<HTMLButtonElement>("button")!.disabled).toBe(true); expect(write).not.toHaveBeenCalled();
+  await act(async () => [...orphan.querySelectorAll("button")].find(b => b.textContent === "Delete trigger…")!.click());
+  value = { ...value, triggers: { ...value.triggers, items: [trigger("other")] } }; vi.mocked(write).mockResolvedValueOnce({ ok: true }); await click("Delete trigger");
+  expect(document.activeElement?.textContent).toBe("Deleted gate.");
+});
+
+it.each([false, undefined])("hides trigger write controls when manage permission is %s", async permission => {
+  const value = initial(); value.canManageTriggers = permission; value.triggers.items = [trigger()];
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value); await work();
+  expect(container.querySelectorAll(".automation-triggers button")).toHaveLength(0); expect(write).not.toHaveBeenCalled();
+});
+
+it("copies the secret only on request and reports clipboard failure", async () => {
+  const writeText = vi.fn().mockRejectedValueOnce(new Error("denied")).mockResolvedValueOnce(undefined);
+  vi.stubGlobal("navigator", { clipboard: { writeText } });
+  vi.mocked(write).mockResolvedValueOnce({ subscription: { id: "gate", url: "https://example.test" }, secret: "synthetic-secret" });
+  await work(); await click("New event trigger"); await input("Trigger ID", "gate"); await input("Event names", "alert"); await submitTrigger();
+  const fields = container.querySelectorAll(".automation-secret-field");
+  expect(fields).toHaveLength(2); expect(fields[0].textContent).toContain("Webhook URL");
+  expect(fields[1].textContent).toContain("Signing secret"); expect(fields[1].querySelector("code")).toBeNull();
+  expect(button("Copy secret").closest(".actions")).not.toBe(button("I've saved it").closest(".actions"));
+  expect(container.innerHTML).not.toContain("synthetic-secret"); await click("Copy secret");
+  expect(container.textContent).toContain("Couldn't copy. Try again."); expect(button("I've saved it").disabled).toBe(true);
+  await click("Copy secret"); expect(writeText).toHaveBeenCalledWith("synthetic-secret");
+  expect(container.textContent).toContain("Copied."); expect(button("I've saved it").disabled).toBe(false);
+  expect(localStorage.length).toBe(0); expect(sessionStorage.length).toBe(0);
+});
+
+it("shows routine loading and retries a failed request once", async () => {
+  let resolve!: (value: unknown) => void;
+  vi.mocked(api).mockImplementation(path => path === "/routines" ? new Promise(done => { resolve = done; }) : Promise.resolve(initial()));
+  await work(); expect(container.textContent).toContain("Loading routines…"); expect(container.textContent).not.toContain("Create a routine in"); expect(button("New event trigger").disabled).toBe(true);
+  await act(async () => resolve([]));
+  vi.mocked(api).mockImplementation(async path => { if (path === "/routines") throw Error("Offline"); return initial(); });
+  // Remount to exercise the failed initial request.
+  await act(async () => root.render(createElement("div")));
+  await work(); expect(container.textContent).toContain("Couldn't load routines"); expect(container.textContent).not.toContain("Create a routine in");
+  const calls = vi.mocked(api).mock.calls.filter(([path]) => path === "/routines").length;
+  await click("Retry routines"); expect(vi.mocked(api).mock.calls.filter(([path]) => path === "/routines")).toHaveLength(calls + 1);
+});
+
+it("explains a disabled platform beside the row and clears a secret on unmount", async () => {
+  const value = initial(); value.triggers.platformEnabled = false; value.triggers.items = [trigger()];
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [{ id: "routine", botId: "ranch", name: "Morning", enabled: true }] : value);
+  await work(); const row = container.querySelector('[data-trigger-id="gate"]')!;
+  expect(row.textContent).toContain("Can't enable until the installer turns on Hermes's webhook channel."); expect(button("Enable trigger").disabled).toBe(true);
+  vi.mocked(write).mockResolvedValueOnce({ subscription: { id: "new", url: "https://example.test" }, secret: "synthetic-secret" });
+  await click("New event trigger"); await input("Trigger ID", "new"); await input("Event names", "alert"); await submitTrigger(); await click("Show secret");
+  await act(async () => root.render(createElement("div"))); expect(container.innerHTML).not.toContain("synthetic-secret");
+  await work(); expect(container.innerHTML).not.toContain("synthetic-secret");
+});
+
+
+it("keeps skill approval enabled until disabling it is explicitly confirmed", async () => {
+  const value = initial();
+  vi.mocked(api).mockResolvedValue(value);
+  vi.mocked(write).mockImplementation(async () => { value.skills.approvalRequired = false; return { ok: true }; });
+  await act(async () => root.render(createElement(LearningPanel, { botId: "ranch" })));
+  const policy = container.querySelector<HTMLInputElement>('.automation-check input')!;
+  await act(async () => { policy.focus(); policy.click(); });
+  expect(policy.checked).toBe(true);
+  expect(write).not.toHaveBeenCalled();
+  expect(container.querySelector('[role="alertdialog"]')?.textContent).toContain("Hermes can save new skills, edits and deletions without asking for approval.");
+  expect(document.activeElement?.textContent).toBe("Keep approval required");
+  await click("Keep approval required");
+  expect(container.querySelector('[role="alertdialog"]')).toBeNull();
+  expect(document.activeElement).toBe(policy);
+  expect(write).not.toHaveBeenCalled();
+  await act(async () => policy.click());
+  await click("Allow changes without review");
+  expect(write).toHaveBeenCalledExactlyOnceWith("/bots/ranch/automation/skills/policy", { approvalRequired: false }, "PUT");
+  expect(policy.checked).toBe(false);
+});
+
+it("enables skill approval immediately without a confirmation", async () => {
+  const value = initial(); value.skills.approvalRequired = false;
+  vi.mocked(api).mockResolvedValue(value);
+  vi.mocked(write).mockImplementation(async () => { value.skills.approvalRequired = true; return { ok: true }; });
+  await act(async () => root.render(createElement(LearningPanel, { botId: "ranch" })));
+  const policy = container.querySelector<HTMLInputElement>('.automation-check input')!;
+  await act(async () => policy.click());
+  expect(container.querySelector('[role="alertdialog"]')).toBeNull();
+  expect(write).toHaveBeenCalledExactlyOnceWith("/bots/ranch/automation/skills/policy", { approvalRequired: true }, "PUT");
+  expect(policy.checked).toBe(true);
+});
+
+it("collapses a reviewed skill change without fetching and reloads its revision when reopened", async () => {
+  const text = "--- SKILL.md\n+++ SKILL.md\n@@ -1 +1 @@\n-old\n+<new>\n";
+  vi.mocked(api).mockImplementation(async path => path.includes("/skills/pending/") ? { id: "aabbccdd", diff: text, revision: "b".repeat(64), truncated: false } : initial());
+  await act(async () => root.render(createElement(LearningPanel, { botId: "ranch" })));
+  const requests = () => vi.mocked(api).mock.calls.filter(([path]) => path.includes("/skills/pending/"));
+  expect(button("Review change").getAttribute("aria-expanded")).toBe("false");
+  await click("Review change");
+  expect(button("Hide change").getAttribute("aria-expanded")).toBe("true");
+  const preview = document.getElementById(button("Hide change").getAttribute("aria-controls")!);
+  expect(preview?.textContent).toBe(text);
+  expect(preview?.querySelector("new")).toBeNull();
+  expect(requests()).toHaveLength(1);
+  await click("Hide change");
+  expect(container.querySelector(".automation-diff")).toBeNull();
+  expect(button("Review change").getAttribute("aria-expanded")).toBe("false");
+  expect(requests()).toHaveLength(1);
+  await click("Review change");
+  expect(requests()).toHaveLength(2);
+});
+
+
+it.each(["approve", "reject"] as const)("clears old policy feedback when reviewing and reports %s specifically", async decision => {
+  const value = initial(); value.skills.approvalRequired = false;
+  vi.mocked(api).mockImplementation(async path => path.includes("/skills/pending/") ? { id: "aabbccdd", diff: "+Check water.", revision: "b".repeat(64), truncated: false } : value);
+  vi.mocked(write).mockImplementation(async path => {
+    if (path.endsWith("/policy")) value.skills.approvalRequired = true;
+    else value.skills.pending = [];
+    return { ok: true };
+  });
+  await act(async () => root.render(createElement(LearningPanel, { botId: "ranch" })));
+  await act(async () => container.querySelector<HTMLInputElement>('.automation-check input')!.click());
+  expect(container.querySelector(".form-notice")?.textContent).toBe("Approval is required before skill changes are saved.");
+  await click("Review change");
+  expect(container.querySelector(".form-notice")).toBeNull();
+  await click(decision === "approve" ? "Approve change" : "Reject change");
+  expect(container.querySelector(".form-notice")?.textContent).toBe(decision === "approve" ? "Approved the skill change." : "Rejected the skill change.");
+  expect(container.textContent).not.toContain("Saved in Hermes.");
 });

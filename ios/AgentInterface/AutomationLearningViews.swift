@@ -41,6 +41,10 @@ import SwiftUI
   }
 }
 
+private func hermesSkillSource(_ origin: String) -> String {
+  "Source: " + (origin.isEmpty ? "Not reported" : origin.prefix(1).uppercased() + String(origin.dropFirst()))
+}
+
 struct HermesLearningView: View {
   let botId: String
   @Environment(AppStore.self) private var store
@@ -54,10 +58,10 @@ struct HermesLearningView: View {
   }
   var body: some View {
     Form {
-      HermesAutomationStatus(control: control)
+      HermesAutomationStatus(control: control, introduction: "Inspect reusable instructions and review changes the assistant wants to save.")
       if let state = control.value?.skills {
         if !state.supported {
-          Section { Text(state.reason ?? "Learning review is unavailable on this Hermes installation.").foregroundStyle(.secondary) }
+          Section { Text(state.reason ?? "Learning review is unavailable on this Hermes installation.").foregroundStyle(Palette.muted) }
         } else {
           policy(state)
           pendingChanges(state)
@@ -74,7 +78,7 @@ struct HermesLearningView: View {
       } message: { Text("Hermes can save new skills, edits and deletions without asking for approval.") }
   }
   private func policy(_ state: HermesAutomationOverview.Skills) -> some View {
-    Section("Skill write policy") {
+    Section {
       Toggle("Require approval before skill changes are saved", isOn: Binding(
         get: { state.approvalRequired }, set: { enabled in
           if enabled { setPolicy(true) } else { allowingWrites = true }
@@ -82,19 +86,19 @@ struct HermesLearningView: View {
         .disabled(control.disabled || !store.connected || control.value?.canManageLearningPolicy == false)
         .accessibilityIdentifier("automation.learningPolicy")
       if control.value?.canManageLearningPolicy == false {
-        Text("Only an integration administrator can change the skill write policy.").font(.footnote).foregroundStyle(.secondary)
+        Text("Only an integration administrator can change the skill write policy.").font(.footnote).foregroundStyle(Palette.muted)
       }
-      Text("When enabled, Hermes stages new skills, edits and deletions for review.").font(.footnote).foregroundStyle(.secondary)
-    }
+    } header: { Text("Skill write policy") }
+      footer: { Text("When enabled, Hermes stages new skills, edits and deletions for review.").font(.footnote).foregroundStyle(Palette.muted) }
   }
   private func pendingChanges(_ state: HermesAutomationOverview.Skills) -> some View {
-    Section("Pending changes") {
-      if state.pending.isEmpty { Text("No skill changes waiting for review.").foregroundStyle(.secondary) }
+    Section("Pending changes (\(state.pending.count))") {
+      if state.pending.isEmpty { Text("No skill changes waiting for review.").foregroundStyle(Palette.muted) }
       ForEach(state.pending) { item in
         Button { pending = item } label: {
           VStack(alignment: .leading, spacing: 4) {
             Text(item.summary.isEmpty ? item.id : item.summary).foregroundStyle(Color.primary)
-            Text(item.origin).font(.caption).foregroundStyle(.secondary)
+            Text(hermesSkillSource(item.origin)).font(.caption).foregroundStyle(Palette.muted)
             Text("Review change").font(.subheadline)
           }.padding(.vertical, 4)
         }.disabled(control.busy).accessibilityIdentifier("automation.pendingSkill.\(item.id)")
@@ -103,12 +107,12 @@ struct HermesLearningView: View {
   }
   private func installedSkills(_ state: HermesAutomationOverview.Skills) -> some View {
     Section("Installed skills") {
-      if state.installed.isEmpty { Text("No installed skills reported.").foregroundStyle(.secondary) }
+      if state.installed.isEmpty { Text("No installed skills reported.").foregroundStyle(Palette.muted) }
       ForEach(state.installed) { item in
         Button { installed = item } label: {
           VStack(alignment: .leading, spacing: 4) {
             Text(item.name).foregroundStyle(Color.primary)
-            if !item.description.isEmpty { Text(item.description).font(.caption).foregroundStyle(.secondary) }
+            if !item.description.isEmpty { Text(item.description).font(.caption).foregroundStyle(Palette.muted) }
             Text("Read skill").font(.subheadline)
           }.padding(.vertical, 4)
         }.disabled(control.busy).accessibilityIdentifier("automation.installedSkill.\(item.id)")
@@ -169,7 +173,7 @@ private struct HermesSkillReview: View {
         HermesAutomationStatus(control: control)
         Section {
           Text(pending.summary.isEmpty ? pending.id : pending.summary).font(.headline)
-          Text(pending.origin).font(.caption).foregroundStyle(.secondary)
+          Text(hermesSkillSource(pending.origin)).font(.caption).foregroundStyle(Palette.muted)
           if loader.loading { ProgressView("Loading pending diff") }
           if let error = loader.error { ErrorBanner(message: error) }
           if !available { Text("This change is no longer pending. Refresh status to check the current list.").foregroundStyle(.secondary) }

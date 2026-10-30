@@ -201,7 +201,7 @@ describe('setup and recovery interface',()=>{
     await act(async()=>root.render(createElement(SignIn,{onSuccess:vi.fn()})));
     expect(container.textContent).toContain('npm run setup');
     expect(container.textContent).toContain('Start on the computer running this app');
-    const button=Array.from(container.querySelectorAll('button')).find(node=>node.textContent==='Check setup again')!;
+    const button=Array.from(container.querySelectorAll('button')).find(node=>node.textContent==='Check now')!;
     expect(button).toBeDefined();expect(googleScript()).toBeNull();
     authConfig={localDevAuth:true};await act(async()=>button.click());
     expect(container.textContent).toContain('Enter local workspace');
@@ -234,7 +234,7 @@ describe('setup and recovery interface',()=>{
     expect(container.querySelector('textarea')?.value).toBe('My unsent draft');
     expect(container.querySelector('.transcript')?.textContent).toContain('Existing canonical answer');
     expect(container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')?.disabled).toBe(true);
-    expect(container.textContent).toContain('Hermes is temporarily unavailable');
+    expect(container.textContent).toContain('Reconnecting to Hermes');
     expect(JSON.parse(localStorage.getItem('agent-interface:draft:one:shared')!).text).toBe('My unsent draft');
   });
 
@@ -266,6 +266,7 @@ describe('setup and recovery interface',()=>{
       await renderApp();const initial=reads();
       Object.defineProperty(navigator,'onLine',{configurable:true,value:false});
       await act(async()=>window.dispatchEvent(new Event('offline')));
+      expect(Array.from(container.querySelectorAll('button')).some(node=>node.textContent==='Reconnect now')).toBe(false);
       await returnTo();
       expect(reads()).toBe(initial);
       Object.defineProperty(navigator,'onLine',{configurable:true,value:true});

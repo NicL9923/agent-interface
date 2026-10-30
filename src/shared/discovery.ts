@@ -15,3 +15,22 @@ export function receipt(call: ToolCall) {
   const links = Object.entries(data).filter(([key, value]) => /^(url|html_url|web_url|link)$/.test(key) && typeof value === 'string' && /^https?:\/\//i.test(value)).map(([, value]) => String(value));
   return { label, failed, text, links };
 }
+
+
+/** Keep unfamiliar Hermes statuses visible rather than guessing their outcome. */
+export function routineResultLabel(status: string): string {
+  const labels: Record<string, string> = { ok: "Succeeded", success: "Succeeded", succeeded: "Succeeded", error: "Failed", failed: "Failed", delivery_failed: "Delivery failed", running: "Running", pending: "Pending", skipped: "Skipped", cancelled: "Canceled" };
+  return Object.hasOwn(labels, status) ? labels[status] : status;
+}
+export function savedReplyTitle(text: string): string {
+  // Keep identifier underscores and punctuation next to inline code intact.
+  const first = text.split(/\r?\n/).find(line => line.trim()) || "";
+  const title = first.replace(/^\s*(?:#{1,6}\s+|[-+*]\s+|\d+[.)]\s+)/, "")
+    .replace(/[`*]/g, "").replace(/\s+/g, " ").trim();
+  if (!title) return "Saved reply";
+  const characters = Array.from(title);
+  if (characters.length <= 80) return title;
+  const prefix = characters.slice(0, 79).join("");
+  const boundary = prefix.lastIndexOf(" ");
+  return (boundary > 0 ? prefix.slice(0, boundary) : prefix) + "…";
+}

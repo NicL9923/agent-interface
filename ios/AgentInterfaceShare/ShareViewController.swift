@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 final class ShareViewController: UIViewController {
   private let status = UILabel()
   private let picker = UIButton(type:.system)
+  private let save = UIButton(type:.system)
   private var selectedBotId: String?
   private var context: ShareContext?
   private var text = ""
@@ -16,7 +17,8 @@ final class ShareViewController: UIViewController {
     status.numberOfLines = 0
     status.text = "Preparing a draft…"
     let title = UILabel(); title.text = "Share with an assistant"; title.font = .preferredFont(forTextStyle: .title2)
-    let save = UIButton(type: .system); save.setTitle("Save draft", for: .normal); save.addTarget(self, action: #selector(saveDraft), for: .touchUpInside)
+    save.isEnabled = false
+    save.setTitle("Save draft", for: .normal); save.addTarget(self, action: #selector(saveDraft), for: .touchUpInside)
     let cancel = UIButton(type: .system); cancel.setTitle("Cancel", for: .normal); cancel.addTarget(self, action: #selector(cancelShare), for: .touchUpInside)
     let stack = UIStackView(arrangedSubviews: [title, status, picker, save, cancel]); stack.axis = .vertical; stack.spacing = 20; stack.translatesAutoresizingMaskIntoConstraints = false
     view.addSubview(stack)
@@ -59,8 +61,13 @@ final class ShareViewController: UIViewController {
       }
       guard text.count <= 50000 else { throw CocoaError(.fileReadTooLarge) }
       loading = false
-      status.text = "\(files.count) attachment(s) ready. Save, then open WildBots to review your draft. Nothing is sent automatically."
-    } catch { status.text = context == nil ? "Open WildBots and sign in before sharing." : "Could not prepare this share. Use a webpage, photo, PDF, or text, up to 10 items and 20 MB per file." }
+      save.isEnabled = true
+      let ready = files.isEmpty ? "Ready to save." : "\(files.count) \(files.count == 1 ? "attachment" : "attachments") ready."
+      status.text = "\(ready) Save, then open WildBots to review your draft. Nothing is sent automatically."
+    } catch {
+      if let root = ShareInbox.root { try? FileManager.default.removeItem(at: root.appendingPathComponent(captureId, isDirectory: true)) }
+      save.isEnabled = false
+      status.text = context == nil ? "Open WildBots and sign in before sharing." : "Could not prepare this share. Use a webpage, photo, PDF, or text, up to 10 items and 20 MB per file." }
   }
   /// A shared item as plain values, read where the provider delivers it: the item itself cannot cross to the main actor.
   private enum Loaded: Sendable { case url(URL), text(String), png(Data), data(Data) }
@@ -78,7 +85,11 @@ final class ShareViewController: UIViewController {
     } }
   }
   @objc private func saveDraft() {
-    guard !loading, let context, ShareInbox.context()?.scope == context.scope, let root = ShareInbox.root else { return }
+    guard !loading, let context, ShareInbox.context()?.scope == context.scope, let root = ShareInbox.root else {
+      status.text = "Open WildBots and sign in again before saving this share."
+      save.isEnabled = false
+      return
+    }
     let capture = SharedCapture(id:captureId,scope:context.scope,botId:selectedBotId,text:text,files:files,createdAt:Date())
     do { try JSONEncoder().encode(capture).write(to:root.appendingPathComponent(captureId + ".json"),options:.atomic);extensionContext?.completeRequest(returningItems:nil) }
     catch { status.text = "Could not save this draft. Try again." }

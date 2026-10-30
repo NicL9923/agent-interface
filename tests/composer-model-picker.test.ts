@@ -5,7 +5,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { ComposerModelPicker } from "../src/components/ComposerModelPicker";
 import { ApiError, api, write } from "../src/client-api";
 import type { Bootstrap, Bot, ModelCatalog } from "../src/shared/types";
-import { click, mountRoot } from "./ui-harness";
+import { click, mountRoot, typeInto } from "./ui-harness";
 
 vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(await (async original => ({ ...await original<typeof import("../src/client-api")>(), api: vi.fn(), write: vi.fn() }))(original)));
 const catalog: ModelCatalog = { provider: "house", model: "saved-model", providers: [
@@ -20,6 +20,16 @@ const bootstrap = { capabilities: { botConfiguration: { supported: true } }, pre
 let container: HTMLDivElement, root: Root;
 const onSaved = vi.fn();
 beforeEach(() => {
+  Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
+    configurable: true, value: function (this: HTMLDialogElement) { this.open = true; },
+  });
+  Object.defineProperty(HTMLDialogElement.prototype, "close", {
+    configurable: true, value: function (this: HTMLDialogElement) {
+      if (!this.open) return;
+      this.open = false;
+      queueMicrotask(() => this.dispatchEvent(new Event("close")));
+    },
+  });
   vi.clearAllMocks(); vi.mocked(api).mockImplementation(async <T>(path: string) => (path.endsWith("/inference") ? { reasoning: "high", speed: "normal" } : path === "/bots/ranch" ? bot : catalog) as T);
   ({ container, root } = mountRoot());
 });
@@ -44,9 +54,71 @@ it("asks before retrying a model Hermes wants confirmed", async () => {
   await render(); await openPicker();
   await press("New model");
   expect(document.body.textContent).toContain("This model is expensive."); expect(onSaved).not.toHaveBeenCalled();
-  await press("Confirm this model");
+  await press("Use this model");
   expect(write).toHaveBeenLastCalledWith("/bots/ranch", expect.objectContaining({ model: "new-model", confirmModel: true }), "PATCH");
   expect(onSaved).toHaveBeenCalledOnce();
+  await settleFocus(); expect(document.activeElement).toBe(trigger());
+});
+
+it("opens by touch without focusing the search field", async () => {
+  await render();
+  await act(async () => {
+    for (const type of ["pointerdown", "pointerup", "click"]) trigger().dispatchEvent(new PointerEvent(type, {
+      bubbles: true, pointerType: "touch", button: 0, isPrimary: true, detail: 1,
+    }));
+  });
+  await settleFocus();
+  const popup = document.body.querySelector(".model-popover");
+  expect(popup).not.toBeNull();
+  expect(document.activeElement).toBe(popup);
+  expect(document.activeElement).not.toBe(document.body.querySelector("input[type=search]"));
+});
+
+it("keeps keyboard focus on a visible error after a model write fails", async () => {
+  vi.mocked(write).mockRejectedValueOnce(new Error("Model request failed"));
+  await render(); await openPicker(); await press("New model");
+  const error = document.body.querySelector('[role="alert"]');
+  expect(error?.textContent).toContain("Model request failed");
+  expect(document.activeElement).toBe(error);
+  expect(document.body.querySelector(".model-popover")).not.toBeNull();
+  expect(onSaved).not.toHaveBeenCalled();
+  await act(async () => document.body.querySelector<HTMLButtonElement>('[aria-label="Close model picker"]')!.click());
+  await openPicker();
+  expect(document.body.textContent).not.toContain("Model request failed");
+  expect(document.activeElement).toBe(document.body.querySelector("input[type=search]"));
+});
+
+it("keeps search focus and input when background inference loading fails", async () => {
+  let fail!: (error: Error) => void;
+  vi.mocked(api).mockImplementation(<T>(path: string) => path.endsWith("/inference")
+    ? new Promise<T>((_, reject) => { fail = reject; })
+    : Promise.resolve((path === "/bots/ranch" ? bot : catalog) as T));
+  await render(); await openPicker();
+  const search = document.body.querySelector<HTMLInputElement>("input[type=search]")!;
+  expect(document.activeElement).toBe(search);
+  await typeInto(search, "House");
+  await act(async () => fail(new Error("Unreadable inference settings")));
+  expect(document.body.textContent).toContain("Unreadable inference settings");
+  expect(document.activeElement).toBe(search);
+  expect(search.value).toBe("House");
+});
+
+it("keeps the picker open and restores choice focus after cancelling model confirmation", async () => {
+  vi.mocked(write).mockRejectedValueOnce(new ApiError("This model is expensive.", 409, "MODEL_CONFIRMATION_REQUIRED", true));
+  await render(); await openPicker();
+  const choice = [...document.body.querySelectorAll<HTMLButtonElement>(".model-choice")].find(button => button.textContent === "New model")!;
+  choice.focus(); await press("New model");
+  const confirmation = document.body.querySelector<HTMLDialogElement>('[role="alertdialog"]')!;
+  expect(confirmation.textContent).toContain("This model is expensive.");
+  expect(document.activeElement?.textContent).toBe("Cancel");
+  expect(document.body.querySelector('[data-slot="form-message"]')).toBeNull();
+  const escape = new Event("cancel", {cancelable:true});
+  await act(async () => confirmation.dispatchEvent(escape)); await settleFocus();
+  expect(escape.defaultPrevented).toBe(true);
+  expect(document.body.querySelector('[role="alertdialog"]')).toBeNull();
+  expect(document.body.querySelector(".model-popover")).not.toBeNull();
+  expect(document.activeElement).toBe(choice);
+  expect(write).toHaveBeenCalledTimes(1);
 });
 
 it("fetches detail before saving when roster instructions are omitted", async () => {
@@ -65,7 +137,7 @@ it("drops a late confirmation request after switching assistants", async () => {
   await render({ ...bot, id: "kitchen", name: "Kitchen companion" });
   await act(async () => reject(new ApiError("This model is expensive.", 409, "MODEL_CONFIRMATION_REQUIRED", true)));
   await openPicker();
-  expect(document.body.textContent).not.toContain("Confirm this model");
+  expect(document.body.textContent).not.toContain("Use this model");
   expect(document.body.textContent).not.toContain("This model is expensive.");
 });
 
@@ -99,6 +171,7 @@ it("saves conversation reasoning and restores the saved value after an unsupport
   expect(checked("Reasoning")).toBe("Ultra"); expect(document.body.querySelector(".model-popover")).not.toBeNull();
   await act(async () => segment("Speed", "Fast").click());
   expect(checked("Speed")).toBe("Normal"); expect(document.body.textContent).toContain("Fast mode is unavailable");
+  expect(document.activeElement).toBe(document.body.querySelector('[role="alert"]'));
 });
 
 it("moves and saves reasoning with the arrow keys, keeping focus in the group while it saves", async () => {
@@ -121,12 +194,12 @@ it("moves and saves reasoning with the arrow keys, keeping focus in the group wh
 });
 
 it("blocks expensive-model confirmation while inference settings are saving", async () => {
-  vi.mocked(write).mockRejectedValueOnce(new ApiError("Confirm this model", 409, "MODEL_CONFIRMATION_REQUIRED", true));
+  vi.mocked(write).mockRejectedValueOnce(new ApiError("Use this model", 409, "MODEL_CONFIRMATION_REQUIRED", true));
   await render(); await openPicker(); await press("New model");
   let finish!: (value: unknown) => void;
   vi.mocked(write).mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
   await act(async () => segment("Reasoning", "Ultra").click());
-  const confirm = [...document.body.querySelectorAll("button")].find(button => button.textContent === "Confirm this model")!;
+  const confirm = [...document.body.querySelectorAll("button")].find(button => button.textContent === "Use this model")!;
   expect(confirm.disabled).toBe(true); await act(async () => confirm.click()); expect(write).toHaveBeenCalledTimes(2);
   await act(async () => finish({ reasoning: "ultra", speed: "normal" })); expect(confirm.disabled).toBe(false);
 });

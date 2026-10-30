@@ -61,8 +61,8 @@ export function SignIn({ onSuccess }: { onSuccess: () => void }) {
           <p>Open the WildBots project folder and run the guided setup:</p>
           <SetupCommand />
           <p>It checks Hermes and saves your connection privately. Choose Google sign-in for the household, or local test accounts for development.</p>
-          <p className="muted">After saving, restart the app. This page will pick up the new settings automatically.</p>
-          <Button className="primary" onClick={() => setAttempt(value => value + 1)}>Check setup again</Button>
+          <p className="muted">After saving, restart the app server. This page checks again automatically.</p>
+          <Button onClick={() => setAttempt(value => value + 1)}>Check now</Button>
         </div>}
         <div ref={google} className="google-sign-in" aria-busy={googleLoading || busy} />
         {googleLoading && <p className="sign-in-status" role="status">Loading Google sign-in…</p>}

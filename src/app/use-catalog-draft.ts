@@ -4,7 +4,8 @@ import type { Skill, Tool } from "../shared/types";
 
 export type CatalogKind = "tools" | "skills";
 type CatalogItem = Tool | Skill;
-const enabledKey = (items: CatalogItem[]) => items.filter(item => item.enabled).map(item => item.id).sort().join("\n");
+const enabled = (item: CatalogItem) => item.enabled || "required" in item && !!item.required;
+const enabledKey = (items: CatalogItem[]) => items.filter(enabled).map(item => item.id).sort().join("\n");
 
 /**
  * The enabled tools or skills of one assistant. Choices wait for their own Save button, so the
@@ -58,7 +59,7 @@ export function useCatalogDraft(kind: CatalogKind, { botId, active, supported, r
     /** Saves the enabled choices and makes them the new baseline. */
     async save(id: string) {
       const submitted = items;
-      await request(`PUT /bots/:id/${kind}`, { params: { id }, body: { ids: submitted.filter(item => item.enabled).map(item => item.id) } });
+      await request(`PUT /bots/:id/${kind}`, { params: { id }, body: { ids: submitted.filter(enabled).map(item => item.id) } });
       setBaseline(enabledKey(submitted));
     },
   };

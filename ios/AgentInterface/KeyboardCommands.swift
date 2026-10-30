@@ -3,7 +3,7 @@ import SwiftUI
 /// A hardware keyboard shortcut, delivered to whichever screen owns it. Home opens pinned
 /// assistants and Search; the open chat finds and stops. The number keeps repeats distinct.
 struct KeyboardCommand: Equatable {
-  enum Kind: Equatable { case pinned(Int), find, stop, quickSwitch }
+  enum Kind: Equatable { case pinned(Int), find, stop, quickSwitch, settings }
   var number: Int
   var kind: Kind
 }
@@ -29,6 +29,8 @@ struct AssistantCommands: Commands {
           .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .command)
       }
       if !store.pinnedForShortcuts.isEmpty { Divider() }
+      Button("Settings") { store.command(.settings) }.keyboardShortcut(",", modifiers: .command)
+        .disabled(store.bootstrap == nil)
       Button("Go to…") { store.command(.quickSwitch) }.keyboardShortcut("k", modifiers: .command)
         .disabled(store.bootstrap == nil)
       Button("Find") { store.command(.find) }.keyboardShortcut("f", modifiers: .command)

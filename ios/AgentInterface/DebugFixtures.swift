@@ -1,10 +1,72 @@
 #if DEBUG
   import Foundation
+  import CryptoKit
   import UserNotifications
 
   /// UI test transport only. Shipping Release builds contain no fixture transport.
   /// Simulator results validate native interaction, not Hermes or APNs execution.
   @MainActor enum DebugFixtures {
+    /// Direct simulator captures can open a settings page without XCTest navigation.
+    static var captureSettingsTab: String? {
+      let environment = ProcessInfo.processInfo.environment
+      guard environment["AGENT_INTERFACE_UI_FIXTURE"] == "1",
+        let tab = environment["AGENT_INTERFACE_UI_CAPTURE_SETTINGS_TAB"], !tab.isEmpty else { return nil }
+      return tab
+    }
+    /// Direct captures of the discovery tabs use the same synthetic transport.
+    static var captureDiscoveryTab: String? {
+      let environment = ProcessInfo.processInfo.environment
+      guard environment["AGENT_INTERFACE_UI_FIXTURE"] == "1",
+        let tab = environment["AGENT_INTERFACE_UI_CAPTURE_DISCOVERY_TAB"],
+        ["search", "saved", "automations", "history"].contains(tab) else { return nil }
+      return tab
+    }
+    static var captureTriggerSecret: Bool {
+      ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_FIXTURE"] == "1"
+        && ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_CAPTURE_TRIGGER_SECRET"] == "1"
+    }
+    static var captureUpgradePage: Bool {
+      ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_FIXTURE"] == "1"
+        && ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_CAPTURE_UPGRADE"] == "1"
+    }
+    static var captureConnectionPage: Bool {
+      ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_FIXTURE"] == "1"
+        && ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_CAPTURE_CONNECTION"] == "1"
+    }
+    static var captureNotificationsPage: Bool {
+      ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_FIXTURE"] == "1"
+        && ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_CAPTURE_NOTIFICATIONS"] == "1"
+    }
+    static var captureApplePage: Bool {
+      ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_FIXTURE"] == "1"
+        && ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_CAPTURE_APPLE"] == "1"
+    }
+    static var captureComputerPage: Bool {
+      ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_FIXTURE"] == "1"
+        && ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_CAPTURE_COMPUTER"] == "1"
+    }
+    static var capturePreferencesPage: Bool {
+      let environment = ProcessInfo.processInfo.environment
+      return environment["AGENT_INTERFACE_UI_FIXTURE"] == "1" && environment["AGENT_INTERFACE_UI_CAPTURE_PREFERENCES"] == "1"
+    }
+    static var captureGroupPage: Bool {
+      let environment = ProcessInfo.processInfo.environment
+      return environment["AGENT_INTERFACE_UI_FIXTURE"] == "1" && environment["AGENT_INTERFACE_UI_CAPTURE_GROUP"] == "1"
+    }
+    /// Test-only file selection. The normal importer stays unchanged without an explicit fixture.
+    static func portraitUploadURL() throws -> URL? {
+      let environment = ProcessInfo.processInfo.environment
+      guard environment["AGENT_INTERFACE_UI_FIXTURE"] == "1",
+        let encoded = environment["AGENT_INTERFACE_UI_DESIGN_UPLOAD"], let data = Data(base64Encoded: encoded) else { return nil }
+      let url = FileManager.default.temporaryDirectory.appendingPathComponent("fixture-uploaded-portrait.png")
+      try data.write(to: url, options: .atomic)
+      return url
+    }
+    static var captureSurvival: String? {
+      let environment = ProcessInfo.processInfo.environment
+      guard environment["AGENT_INTERFACE_UI_FIXTURE"] == "1" else { return nil }
+      return environment["AGENT_INTERFACE_UI_CAPTURE_SURVIVAL"]
+    }
     static func configure(_ store: AppStore) async -> Bool {
       let environment = ProcessInfo.processInfo.environment
       if environment["AGENT_INTERFACE_UI_RESET"] == "1" {
@@ -12,6 +74,8 @@
         store.host = ""
       }
       guard environment["AGENT_INTERFACE_UI_FIXTURE"] == "1" else { return false }
+      precondition(!(environment["AGENT_INTERFACE_UI_AUTOMATION"] == "1" && FixtureProtocol.designFixture?["screen"] as? String == "work"),
+        "The Work design fixture cannot be combined with the automation flow fixture.")
       VoiceController.fixtureRecording = true
       let config = URLSessionConfiguration.ephemeral
       config.protocolClasses = [FixtureProtocol.self]
@@ -31,6 +95,22 @@
       }
       // Seeded under the lock its requests take, so no request reads it half written.
       FixtureProtocol.lock.withLock {
+        if let preferences = FixtureProtocol.designFixture?["preferences"] as? [String: Any] {
+          FixtureProtocol.preferences.merge(preferences) { _, new in new }
+        }
+        if FixtureProtocol.designFixture?["screen"] as? String == "work" {
+          let fixture = FixtureProtocol.designFixture!
+          FixtureProtocol.routines = fixture["routines"] as? [[String: Any]] ?? []
+          FixtureProtocol.workDesign = WorkDesignFixture(fixture)
+        }
+        if FixtureProtocol.designFixture?["screen"] as? String == "models" {
+          for kind in ["tools", "skills"] {
+            FixtureProtocol.designCatalogs[kind] = FixtureProtocol.designFixture?[kind] as? [[String: Any]] ?? []
+          }
+          if let inference = FixtureProtocol.designFixture?["inference"] as? [String: Any] {
+            FixtureProtocol.inference = inference
+          }
+        }
         if environment["AGENT_INTERFACE_UI_AUTOMATION"] == "1" {
           FixtureProtocol.automation = AutomationDebugFixture()
           FixtureProtocol.routines = [["id": "trial", "botId": "ranch", "name": "Morning brief trial",
@@ -102,9 +182,12 @@
       }
       if environment["AGENT_INTERFACE_UI_PUSH"] == "1" {
         // iOS permission starts undecided; Enable grants it, as tapping Allow would.
-        var status = UNAuthorizationStatus.notDetermined
+        var status: UNAuthorizationStatus = environment["AGENT_INTERFACE_UI_PUSH_BLOCKED"] == "1" ? .denied : .notDetermined
         NotificationController.shared.useFixtureSystem(permissions: NotificationPermissions(
           status: { status }, request: { status = .authorized; return true }))
+      }
+      if captureNotificationsPage {
+        FixtureProtocol.preferences["notifications"] = ["timezone": "America/Chicago", "batchMinutes": 5, "quietStart": "22:00", "quietEnd": "07:00"]
       }
       await store.refreshBootstrap()
       if environment["AGENT_INTERFACE_UI_HOME"] != "1" { await store.select(store.selectedBotId) }
@@ -115,6 +198,7 @@
   private final class FixtureProtocol: URLProtocol, @unchecked Sendable {
     static let lock = NSLock()
     nonisolated(unsafe) static var automation = AutomationDebugFixture()
+    nonisolated(unsafe) static var workDesign: WorkDesignFixture?
     // The fixture server's state. Unchecked because `lock` guards every access: requests read and
     // write it only inside `startLoading`, and `configure` seeds it under the same lock.
     nonisolated(unsafe) static var messages: [[String: Any]] = [
@@ -127,12 +211,15 @@
     ]
     nonisolated(unsafe) static var receipts: [String: [String: Any]] = [:]
     nonisolated(unsafe) static var questionAnswered = false
+    nonisolated(unsafe) static var questionFailed = false
+    nonisolated(unsafe) static var approvalFailed = false
+    nonisolated(unsafe) static var approvalChoice: String?
     nonisolated(unsafe) static var retried = false
     nonisolated(unsafe) static var retryClaim: [String: Any]?
     nonisolated(unsafe) static var draft: [String: Any] = ["text": "", "attachments": []]
     nonisolated(unsafe) static var readPosition: [String: Any] = [:]
     nonisolated(unsafe) static var preferences: [String: Any] = [
-      "startPage": "assistant", "presentation": "simple", "theme": "system", "favorites": [], "sections": [],
+      "startPage": "assistant", "presentation": "simple", "theme": ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_THEME"] ?? "system", "favorites": [], "sections": [],
       "followBots": [],
     ]
     nonisolated(unsafe) static var items: [[String: Any]] = [
@@ -145,6 +232,8 @@
         "enabled": false,
       ],
     ]
+    nonisolated(unsafe) static var designCatalogs: [String: [[String: Any]]] = [:]
+    nonisolated(unsafe) static var designFailures: Set<String> = []
     nonisolated(unsafe) static var routines: [[String: Any]] = ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_EXPERIENCE"] == "1" ? [["id": "trial", "botId": "ranch", "name": "Morning brief trial", "prompt": "Report today's tasks. Do not modify anything.", "schedule": "0 7 * * *", "enabled": false, "recipientIds": []]] : []
     nonisolated(unsafe) static var trialRequestId: String?
     nonisolated(unsafe) static var trialCount = 0
@@ -156,11 +245,13 @@
     nonisolated(unsafe) static var computerControl: [String: Any] = ["kind": "bot", "name": "Ranch hand"]
     nonisolated(unsafe) static var desktopTickets = 0
     static var groupState: [String: Any] { ["room": groupRooms.first ?? [:], "driver_status": ["working": false, "blocked": false, "pending_actions": []]] }
+    nonisolated(unsafe) static var designMemory: [String: Any]?
     nonisolated(unsafe) static var memoryEntries: [[String: Any]] = [["id": "m1", "text": "Weeknight dinners under 30 minutes"]]
     nonisolated(unsafe) static var vaultItems: [[String: Any]] = [["id": "fixture-login", "kind": "login", "label": "Fixture school portal", "origin": "https://school.example.test", "createdAt": "2026-10-02T12:00:00Z", "identifier": "fixture.parent@example.test", "identifierType": "email", "hasOtp": false, "backend": "local", "canRemove": true]]
     nonisolated(unsafe) static var secureIndex = 0
     nonisolated(unsafe) static var vaultUnlocked = false
     nonisolated(unsafe) static var sourceEnabled = true
+    nonisolated(unsafe) static var todayReads = 0
     nonisolated(unsafe) static var todayFrontier = "0"
     nonisolated(unsafe) static var todaySince = "2026-09-30T13:30:00Z"
     nonisolated(unsafe) static var cardState: [String: Any] = ["checkedIds": [], "notes": [:]]
@@ -174,6 +265,12 @@
     ]
     /// Assistants made through New assistant, and how many of their avatar saves should fail.
     nonisolated(unsafe) static var createdBots: [[String: Any]] = []
+    nonisolated(unsafe) static var settingsOverrides: [String: [String: Any]] = [:]
+    nonisolated(unsafe) static var settingsLoadFailed = false
+    nonisolated(unsafe) static var settingsSaveFailed = false
+    nonisolated(unsafe) static var deletedSettingsBotIds: Set<String> = []
+    nonisolated(unsafe) static var uploadedPortraits: [String: Data] = [:]
+    nonisolated(unsafe) static var designAvatarSaveFailed = false
     nonisolated(unsafe) static var avatarFailures = ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_AVATAR_FAILURE"] == "1" ? 1 : 0
     static let currentRevision = "3f9c2a71b0d4e8f6a5c3b2d1e0f9a8b7c6d5e4f3"
     static let candidateRevision = "8e1d4c7b2a9f6e3d0c5b8a7f4e1d2c3b6a9f0e8d"
@@ -182,8 +279,16 @@
     nonisolated(unsafe) static var ranchModel = (provider: "openrouter", model: "configured-model")
     /// Fixed, so opening the unread chat reads it until a newer reply arrives.
     static let personalReplyAt = ISO8601DateFormatter().string(from: Date().addingTimeInterval(-600))
+    // Immutable JSON, read only by requests while FixtureProtocol.lock is held.
+    nonisolated(unsafe) static let designFixture = (ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_DESIGN_FIXTURE"] ?? ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_TODAY_DESIGN"])
+      .flatMap { $0.data(using: .utf8) }
+      .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
     static var bots: [[String: Any]] {
-      [
+      if let bots = designFixture?["bots"] as? [[String: Any]] {
+        return (bots.map { settingsOverrides[$0["id"] as? String ?? ""] ?? $0 } + createdBots)
+          .filter { !deletedSettingsBotIds.contains($0["id"] as? String ?? "") }
+      }
+      return [
         [
           "id": "ranch", "name": "Ranch hand", "description": "Everyday household help",
           "model": ranchModel.model,
@@ -216,10 +321,33 @@
       Self.lock.lock()
       defer { Self.lock.unlock() }
       let path = request.url!.path
+      if let data = Self.uploadedPortraits[path] {
+        client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "image/png"])!, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: data); client?.urlProtocolDidFinishLoading(self); return
+      }
+      if let encoded = (Self.designFixture?["images"] as? [String: String])?[path], let data = Data(base64Encoded: encoded) {
+        client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "image/png"])!, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: data)
+        client?.urlProtocolDidFinishLoading(self)
+        return
+      }
+      if let file = (Self.designFixture?["fileResponses"] as? [String: [String: Any]])?[path], let body = file["body"] as? String {
+        print("DESIGN_FILE_RESPONSE \(path)")
+        client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: file["status"] as? Int ?? 200, httpVersion: nil, headerFields: ["Content-Type": file["mime"] as? String ?? "text/plain"])!, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data(body.utf8)); client?.urlProtocolDidFinishLoading(self); return
+      }
+      if Self.designFixture?["screen"] as? String == "details", path.hasSuffix("/files") {
+        let failed = Self.designFixture?["earlierFilesError"] as? Bool == true
+        let payload: [String: Any] = failed ? ["error": "Earlier files unavailable."] : ["messages": []]
+        let data = try! JSONSerialization.data(withJSONObject: payload)
+        client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: failed ? 503 : 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: data); client?.urlProtocolDidFinishLoading(self); return
+      }
       let method = request.httpMethod ?? "GET"
       var object: Any = ["ok": true]
       var status = 200
       let body: [String: Any]
+      var requestData = request.httpBody ?? Data()
       if let data = request.httpBody {
         body = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
       } else if let stream = request.httpBodyStream {
@@ -232,9 +360,14 @@
           if count <= 0 { break }
           data.append(buffer, count: count)
         }
+        requestData = data
         body = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
       } else {
         body = [:]
+      }
+      if requestData.isEmpty { requestData = URLProtocol.property(forKey: "fixtureUploadBody", in: request) as? Data ?? Data() }
+      if Self.designFixture?["screen"] as? String == "work", path.hasPrefix("/api/bots/"), path.contains("/automation"), !requestData.isEmpty {
+        precondition((try? JSONSerialization.jsonObject(with: requestData)) is [String: Any], "Work request body must be a JSON object")
       }
       if path == "/api/events", let room = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "group" })?.value {
         // A watching stream: one notice when an assistant answered, then the stream ends and the
@@ -255,7 +388,15 @@
         respond(raw: Self.silence(seconds: 10), type: "audio/wav")
         return
       }
-      if let fixture = Self.automation.response(path: path, method: method, body: body, url: request.url!) {
+      if Self.designFixture?["screen"] as? String == "work", path.hasPrefix("/api/bots/"), path.contains("/automation") {
+        precondition(path.hasPrefix("/api/bots/ranch/automation"), "Unexpected assistant in Work design request: \(path)")
+        let result = Self.workDesign!.response(path: path, method: method, body: body)!
+        if method == "GET", path == "/api/bots/ranch/automation", Self.designFixture?["mode"] as? String == "loading" { return }
+        if method != "GET", Self.designFixture?["mode"] as? String == "write-delay", let config = Self.designFixture?["workFixture"] as? [String: Any], let delay = config["writeDelayMs"] as? Double {
+          Self.lock.unlock(); Thread.sleep(forTimeInterval: delay / 1000); Self.lock.lock()
+        }
+        status = result.status; object = result.object
+      } else if let fixture = Self.automation.response(path: path, method: method, body: body, url: request.url!) {
         status = fixture.status; object = fixture.object
       } else if path.hasSuffix("/voice/transcribe") {
         object = ["text": "Fixture transcript: check the north gate."]
@@ -265,7 +406,7 @@
         object = ["hits": hits, "unavailableBots": []]
       } else if path == "/api/search" {
         // The second hit is in Ranch hand's current conversation, so it opens the live chat.
-        object = ["hits":[["botId":"ranch","botName":"Ranch","sessionId":"history-1","title":"Saved dinner plan","snippet":"Five easy dinners and a grocery list.","messageId":"history-saved","offset":0],
+        object = ["hits":[["botId":"ranch","botName":"Ranch","sessionId":"history-1","title":"Saved dinner plan","snippet":"Five easy dinners and a grocery list.","updatedAt":"2026-10-28T12:00:00Z","messageId":"history-saved","offset":0],
           ["botId":"ranch","botName":"Ranch","sessionId":"ranch-canonical","title":"Your household assistant","snippet":"I can help with everyday questions.","messageId":"welcome","offset":0]],"unavailableBots":[]]
       } else if path.contains("/history/") {
         // A person's Markdown stays literal, an assistant's exchange is its card, and the saved
@@ -301,12 +442,49 @@
               "id": "native-test-two", "name": "Second test member",
               "email": "two@localhost.invalid",
             ],
-          ], "bots": Self.bots, "preferences": Self.preferences,
+          ], "bots": ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_CAPTURE_SURVIVAL"] == "empty" ? [] : Self.bots, "preferences": Self.preferences,
           "connection": ["connected": true, "code": "ready", "version": Self.currentRevision, "revisionDate": "2026-10-14T16:20:00Z"],
           "csrfToken": NSNull(),
           "capabilities": Dictionary(
             uniqueKeysWithValues: CapabilityKey.allCases.map { ($0.rawValue, ["supported": true]) }),
         ]
+        if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_CAPTURE_SURVIVAL"] == "share-offline", var bootstrap = object as? [String: Any] {
+          bootstrap["connection"] = ["connected": false, "code": "unreachable"]
+          object = bootstrap
+        }
+        if Self.designFixture?["approvalSupported"] as? Bool == false {
+          var bootstrap = object as! [String: Any]
+          var capabilities = bootstrap["capabilities"] as! [String: Any]
+          capabilities["approvals"] = ["supported": false, "reason": Self.designFixture?["unsupportedReason"] ?? "Approval decisions are unavailable."]
+          bootstrap["capabilities"] = capabilities; object = bootstrap
+        }
+        if Self.designFixture?["retrySupported"] as? Bool == false {
+          var bootstrap = object as! [String: Any]
+          var capabilities = bootstrap["capabilities"] as! [String: Any]
+          capabilities["idempotency"] = ["supported": false, "reason": "This Hermes connection cannot look up requests."]
+          bootstrap["capabilities"] = capabilities; object = bootstrap
+        }
+        if Self.designFixture?["settingsSupported"] as? Bool == false {
+          var bootstrap = object as! [String: Any]
+          var capabilities = bootstrap["capabilities"] as! [String: Any]
+          capabilities["botConfiguration"] = ["supported": false, "reason": Self.designFixture?["unsupportedReason"] ?? "Assistant configuration is unavailable."]
+          bootstrap["capabilities"] = capabilities; object = bootstrap
+        }
+        if Self.designFixture?["catalogUnsupported"] as? Bool == true {
+          var bootstrap = object as! [String: Any]
+          var capabilities = bootstrap["capabilities"] as! [String: Any]
+          for kind in ["tools", "skills"] {
+            capabilities[kind] = ["supported": false, "reason": Self.designFixture?["capabilityUnsupportedReason"] ?? "This catalog is unavailable."]
+          }
+          bootstrap["capabilities"] = capabilities; object = bootstrap
+        }
+        if Self.designFixture?["portraitUnsupported"] as? Bool == true {
+          var bootstrap = object as! [String: Any]
+          var capabilities = bootstrap["capabilities"] as! [String: Any]
+          capabilities["uploads"] = ["supported": false, "reason": Self.designFixture?["uploadsReason"] ?? "Portrait uploads are unavailable."]
+          capabilities["portraitGeneration"] = ["supported": false, "reason": Self.designFixture?["generationReason"] ?? "Portrait generation is unavailable."]
+          bootstrap["capabilities"] = capabilities; object = bootstrap
+        }
         // A distributed build newer than any local build, so the update banner shows.
         if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_APP_UPDATE"] == "1" {
           object = (object as! [String: Any]).merging(["nativeApp": ["latestBuild": 999, "updateUrl": "https://testflight.apple.com/join/FIXTURE"]]) { $1 }
@@ -323,6 +501,19 @@
           "activity": ["state": "idle"], "approvals": [], "files": [], "attention": [],
           "draft": Self.draft, "readPosition": Self.readPosition,
         ]
+        if let conversation = Self.designFixture?["conversation"] as? [String: Any] {
+          object = Self.questionAnswered && Self.designFixture?["screen"] as? String == "questions"
+            ? Self.designFixture?["afterAnswer"] ?? conversation : conversation
+          if Self.designFixture?["screen"] as? String == "approvals", Self.designFixture?["holdDecision"] as? Bool != true, let choice = Self.approvalChoice {
+            object = Self.designFixture?[choice == "approved" ? "afterApproved" : "afterDenied"] ?? conversation
+          }
+        }
+        if Self.designFixture?["screen"] as? String == "recovery" {
+          var value = (Self.retried ? Self.designFixture?["afterRetry"] : Self.designFixture?["conversation"]) as! [String: Any]
+          value["draft"] = Self.draft
+          if let claim = Self.retryClaim { value["retry"] = claim }
+          object = value
+        }
         if let questions = ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_QUESTION"] {
           // "2" asks three questions: one choice, several choices, and a written answer.
           let asked: [[String: Any]] = questions == "2" ? TranscriptFixtures.questions : [["id": "plan", "prompt": "Your plan", "options": ["First", "Second"]]]
@@ -391,13 +582,24 @@
           ["name": "onepassword", "displayName": "1Password", "enabled": false, "needsUnlock": true, "unlocked": false, "installed": false, "canToggle": false, "canUnlock": false, "canLock": false],
           ["name": "bitwarden", "displayName": "Bitwarden fixture", "enabled": Self.sourceEnabled, "needsUnlock": true, "unlocked": Self.vaultUnlocked, "installed": true, "canToggle": true, "canUnlock": Self.sourceEnabled && !Self.vaultUnlocked, "canLock": Self.vaultUnlocked]
         ]]
+      } else if path.hasSuffix("/approvals/fixture-approval"), method == "POST", Self.designFixture?["screen"] as? String == "approvals" {
+        if let error = Self.designFixture?["decisionError"] as? String, !Self.approvalFailed {
+          Self.approvalFailed = true; status = 503; object = ["error": error]
+        } else {
+          Self.approvalChoice = body["decision"] as? String
+          object = ["ok": true]
+        }
       } else if path.hasSuffix("/requests/fixture-question"), method == "POST" {
-        Self.questionAnswered = true
-        let answers = body["answers"] as? [String: String] ?? [:]
-        Self.messages = [["id": "answer-received", "role": "assistant", "text": answers.count > 1
-          ? answers.keys.sorted().map { "\($0): \(answers[$0] ?? "")" }.joined(separator: "; ")
-          : "Received plan: \(answers["plan"] ?? "")"]]
-        object = ["ok": true]
+        if let error = Self.designFixture?["answerError"] as? String, !Self.questionFailed {
+          Self.questionFailed = true; status = 503; object = ["error": error]
+        } else {
+          Self.questionAnswered = true
+          let answers = body["answers"] as? [String: String] ?? [:]
+          Self.messages = [["id": "answer-received", "role": "assistant", "text": answers.count > 1
+            ? answers.keys.sorted().map { "\($0): \(answers[$0] ?? "")" }.joined(separator: "; ")
+            : "Received plan: \(answers["plan"] ?? "")"]]
+          object = ["ok": true]
+        }
       } else if path.hasSuffix("/vault/logins"), method == "POST" {
         Self.vaultItems.append(["id": "added-login", "kind": "login", "label": body["label"] ?? "", "origin": body["origin"] ?? "", "createdAt": "2026-10-02T12:00:00Z", "identifier": body["identifier"] ?? "", "identifierType": body["identifierType"] ?? "username", "hasOtp": false, "backend": "local", "canRemove": true])
         if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_VAULT_ADD_CANCELLED"] == "1" {
@@ -441,6 +643,13 @@
         object = [["id": "fixture-run", "title": "Morning brief", "startedAt": "2026-10-02T12:00:00Z", "previewOnly": false]]
       } else if path.contains("/routines/") && path.contains("/results/") {
         object = ["messages": [["id": "fixture-output", "role": "assistant", "text": "Fixture saved routine output: the pasture gate is closed."]], "previewOnly": false]
+      } else if path == "/api/today", let overview = Self.designFixture?["overview"] {
+        // Design-only transport states. A pending response lets the tour capture real loading UI.
+        if Self.designFixture?["mode"] as? String == "loading" { return }
+        Self.todayReads += 1
+        if Self.designFixture?["mode"] as? String == "stale", Self.todayReads > 1 {
+          status = 503; object = ["error": "Fixture connection interrupted."]
+        } else { object = overview }
       } else if path == "/api/today" {
         let events: [[String: Any]] = Self.todayFrontier == "0" ? [["id": "fixture-completed", "botId": "ranch", "kind": "completed", "title": "Fixture routine completed", "occurredAt": "2026-10-01T13:00:00Z"]] : Self.todayFrontier == "1" ? [["id": "fixture-late-import", "botId": "ranch", "kind": "completed", "title": "Fixture late imported completion", "occurredAt": "2026-09-28T13:00:00Z"]] : []
         object = ["generatedAt": "2026-10-01T13:30:00Z", "since": Self.todaySince, "frontier": Self.todayFrontier == "0" ? "1" : "2", "hasMore": Self.todayFrontier == "0", "items": [["botId": "ranch", "botName": "Ranch hand", "activity": ["state": "done"], "approvals": [], "attention": [], "files": [], "latestMessage": ["id": "fixture-today", "text": "Fixture: pasture inspection finished.", "createdAt": "2026-10-01T13:00:00Z"]]], "events": events, "unavailableBots": []]
@@ -449,6 +658,15 @@
         if body["frontier"] as? String != expectedFrontier || body["seenAt"] as? String != "2026-10-01T13:30:00Z" {
           status = 400; object = ["error": "Acknowledge the exact returned snapshot frontier and time"]
         } else { Self.todayFrontier = expectedFrontier; Self.todaySince = body["seenAt"] as? String ?? Self.todaySince }
+      } else if Self.designFixture?["screen"] as? String == "memory", path.hasPrefix("/api/bots/ranch/memory") {
+        if method == "GET", Self.designFixture?["mode"] as? String == "loading" {
+          return // Dedicated loading capture: no response until this fixture process terminates.
+        }
+        let result = Self.memoryResponse(path: path, method: method, body: body)
+        if method != "GET", result.status == 200, let delay = Self.designFixture?["memoryWriteDelayMs"] as? Double {
+          Self.lock.unlock(); Thread.sleep(forTimeInterval: delay / 1000); Self.lock.lock()
+        }
+        status = result.status; object = result.object
       } else if path.hasSuffix("/memory") || path.hasSuffix("/memory/memory") {
         if method == "PATCH" { Self.memoryEntries = (body["entries"] as? [[String: Any]] ?? []).enumerated().map { index, entry in var entry = entry; if entry["id"] == nil { entry["id"] = "m-new-\(index)" }; return entry } }
         if method == "DELETE" { Self.memoryEntries.removeAll { $0["id"] as? String == body["entryId"] as? String } }
@@ -523,12 +741,13 @@
         }
         if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_UPGRADE_FAILED"] == "1", Self.upgradePhase == "idle" { Self.upgradePhase = "failed"; Self.upgradeOperation = "install" }
         let phase = Self.upgradePhase
-        let fixtureChecks: [[String: Any]] = phase == "idle" ? [] : [["id": "compatibility", "label": "App compatibility", "status": phase == "qualifying" ? "running" : "passed", "detail": "Explicit simulator fixture, not a real Hermes upgrade."]]
+        let fixtureChecks: [[String: Any]] = phase == "idle" ? [] : [["id": phase == "failed" ? "restart" : "compatibility", "label": phase == "failed" ? "Restart and verify Hermes" : "App compatibility", "status": phase == "failed" ? "failed" : phase == "qualifying" ? "running" : "passed", "detail": "Explicit simulator fixture, not a real Hermes upgrade."]]
         let fixtureMessage: String
         switch phase {
         case "idle": fixtureMessage = "Check the shared installation for a compatible update."
         case "succeeded": fixtureMessage = "Fixture update verified. Conversations are preserved."
         case "ready": fixtureMessage = "The candidate passed compatibility checks."
+        case "failed": fixtureMessage = "The update could not restart Hermes. Your conversations are saved. Restart Hermes to check and restore the connection."
         default: fixtureMessage = "The server is \(phase) the fixture installation."
         }
         // Real revisions are commit hashes with commit dates; the app leads with the date.
@@ -560,11 +779,14 @@
         // A retry repeats the person's message and, this time, the assistant answers. The draft stays.
         let id = body["requestId"] as? String ?? UUID().uuidString
         // "refused": Hermes refuses the retry, which the conversation then records as its claim.
-        if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_RETRY"] == "refused" {
+        if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_RETRY"] == "refused" || Self.designFixture?["retryMode"] as? String == "refused" {
           let receipt: [String: Any] = ["requestId": id, "status": "rejected", "message": "The gate service is offline."]
           Self.retryClaim = receipt.merging(["retryOf": retryOf]) { $1 }
           Self.receipts[id] = receipt
           object = receipt
+        } else if Self.designFixture?["retryMode"] as? String == "checking" {
+          let receipt: [String: Any] = ["requestId": id, "status": "uncertain"]
+          Self.retryClaim = receipt.merging(["retryOf": retryOf]) { $1 }; Self.receipts[id] = receipt; object = receipt
         } else {
           Self.retried = true
           Self.messages += [["id": id, "role": "user", "text": body["text"] ?? "", "sender": ["id": "native-test", "name": "Local test member"]],
@@ -589,7 +811,31 @@
             "requestId": request.url!.lastPathComponent, "status": "uncertain",
           ]
       } else if path.hasSuffix("/tools") || path.hasSuffix("/skills") {
-        if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_CATALOG_FAILURE"] == "1",
+        if Self.designFixture?["screen"] as? String == "models" {
+          let kind = request.url!.lastPathComponent
+          if method == "PUT" { print("DESIGN_CATALOG_PUT \(kind) \((body["ids"] as? [String] ?? []).sorted())") }
+          let failureKey = "\(method == "GET" ? "load" : "save")-\(kind)"
+          if Self.designFixture?["failCapability"] as? String == failureKey,
+            Self.designFailures.insert(failureKey).inserted {
+            status = 503
+            let errorKey = method == "GET" ? "capabilityLoadError" : kind == "skills" ? "skillSaveError" : "capabilitySaveError"
+            object = ["error": Self.designFixture?[errorKey] ?? "Catalog request failed."]
+          } else if method == "GET" {
+            object = Self.designCatalogs[kind] ?? []
+          } else {
+            let ids = body["ids"] as? [String] ?? []
+            let items = Self.designCatalogs[kind] ?? []
+            let known = Set(items.compactMap { $0["id"] as? String })
+            if !Set(ids).isSubset(of: known) {
+              status = 422; object = ["error": "Unknown catalog choice."]
+            } else {
+              Self.designCatalogs[kind] = items.map { item in
+                var value = item; value["enabled"] = ids.contains(item["id"] as? String ?? ""); return value
+              }
+              object = ["ok": true]
+            }
+          }
+        } else if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_CATALOG_FAILURE"] == "1",
           method == "GET"
         {
           status = 503
@@ -605,17 +851,57 @@
           }
         }
       } else if path == "/api/preferences/models" {
-        Self.preferences["modelFavorites"] = body["modelFavorites"]
-        object = ["modelFavorites": Self.preferences["modelFavorites"] ?? []]
+        if Self.designFixture?["screen"] as? String == "models" { print("DESIGN_FAVORITES_PUT \(body)") }
+        if Self.designFixture?["failFavorite"] as? Bool == true, Self.designFailures.insert("favorite").inserted {
+          status = 503; object = ["error": Self.designFixture?["favoriteError"] ?? "Favorites could not be saved."]
+        } else {
+          Self.preferences["modelFavorites"] = body["modelFavorites"]
+          object = ["modelFavorites": Self.preferences["modelFavorites"] ?? []]
+        }
       } else if path.hasSuffix("/inference") {
-        if method == "PATCH" { for (key, value) in body { Self.inference[key] = value } }
-        object = Self.inference
+        if method == "PATCH", body["reasoning"] as? String == "ultra", Self.designFixture?["failInference"] as? Bool == true,
+          Self.designFailures.insert("inference").inserted {
+          status = 503; object = ["error": Self.designFixture?["inferenceError"] ?? "The conversation setting could not be saved."]
+        } else {
+          if method == "PATCH" { for (key, value) in body { Self.inference[key] = value } }
+          object = Self.inference
+        }
       } else if path == "/api/preferences" {
         if method == "PATCH" && Self.preferencesFailures > 0 {
           Self.preferencesFailures -= 1; status = 503; object = ["error": "Fixture settings save failed"]
         } else {
           if method == "PATCH" { let favorites = Self.preferences["modelFavorites"]; Self.preferences = body; Self.preferences["modelFavorites"] = favorites }
           object = Self.preferences
+        }
+      } else if path.hasSuffix("/uploads"), method == "POST", Self.designFixture?["screen"] as? String == "avatar" {
+        if let start = requestData.range(of: Data("\r\n\r\n".utf8)),
+          let end = requestData.range(of: Data("\r\n--".utf8), options: .backwards), start.upperBound <= end.lowerBound,
+          String(decoding: requestData[..<start.lowerBound], as: UTF8.self).contains("image/png")
+        {
+          let data = requestData.subdata(in: start.upperBound..<end.lowerBound)
+          let id = "fixture-upload-\(Self.uploadedPortraits.count + 1)"
+          Self.uploadedPortraits["/api/files/\(id)"] = data
+          object = ["id": id, "name": "fixture-uploaded-portrait.png", "mime": "image/png", "size": data.count, "url": "/api/files/\(id)"]
+          print("DESIGN_PORTRAIT_UPLOAD \(id) \(data.count)")
+        } else {
+          print("DESIGN_PORTRAIT_UPLOAD_EMPTY body=\(request.httpBody?.count ?? -1) stream=\(request.httpBodyStream != nil) bytes=\(requestData.count)")
+          status = 400; object = ["error": "Fixture expected a PNG multipart upload."]
+        }
+      } else if path.hasSuffix("/portrait"), method == "POST", Self.designFixture?["screen"] as? String == "avatar" {
+        print("DESIGN_PORTRAIT_PROMPT \(body["prompt"] as? String ?? "")")
+        if let delay = Self.designFixture?["portraitDelayMs"] as? Double {
+          Self.lock.unlock(); Thread.sleep(forTimeInterval: delay / 1000); Self.lock.lock()
+        }
+        object = ["id": "fixture-generated-portrait", "name": "ranch-portrait.png", "mime": "image/png", "url": "/api/files/fixture-generated-portrait"]
+      } else if path.hasSuffix("/avatar"), method == "PUT", Self.designFixture?["screen"] as? String == "avatar",
+        let bot = Self.bots.first(where: { path == "/api/bots/\($0["id"] as? String ?? "")/avatar" }), let id = bot["id"] as? String
+      {
+        if let error = Self.designFixture?["failAvatarSave"] as? String, !Self.designAvatarSaveFailed {
+          Self.designAvatarSaveFailed = true; status = 503; object = ["error": error]
+          print("DESIGN_AVATAR_PUT_FAILED \(id)")
+        } else {
+          Self.settingsOverrides[id] = bot.merging(["avatar": body]) { $1 }; object = body
+          print("DESIGN_AVATAR_PUT \(id) \(String(data: try! JSONSerialization.data(withJSONObject: body, options: [.sortedKeys]), encoding: .utf8)!)")
         }
       } else if path.hasSuffix("/avatar"), let index = Self.createdBots.firstIndex(where: { path.hasPrefix("/api/bots/\($0["id"] as? String ?? "")/") }) {
         if Self.avatarFailures > 0 {
@@ -627,6 +913,10 @@
       } else if path.hasSuffix("/avatar") {
         Self.avatar = body
         object = body
+      } else if path == "/api/routines", method == "GET", Self.designFixture?["screen"] as? String == "work", Self.designFixture?["mode"] as? String == "routines-error" {
+        status = 409; object = ["error": "routines is unavailable"]
+      } else if path == "/api/routines", method == "GET", Self.designFixture?["screen"] as? String == "work", Self.designFixture?["mode"] as? String == "no-routines" {
+        object = []
       } else if path == "/api/routines", method == "GET" {
         object = Self.routines
       } else if path == "/api/routines" || path.hasPrefix("/api/routines/") {
@@ -650,8 +940,16 @@
             ]] as [String: Any]]
             : ["available": false, "state": ["title": "", "activeCount": 0, "attentionCount": 0, "updatedAt": now, "rows": []] as [String: Any]]
         }
+      } else if path == "/api/native/push/device" {
+        object = ["ok": true]
       } else if path == "/api/native/push/config" {
         object = ["available": ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_PUSH"] == "1", "environment": "sandbox"]
+      } else if path.hasPrefix("/api/bots/"), path.split(separator: "/").count == 3, method == "DELETE",
+        Self.designFixture?["screen"] as? String == "settings" {
+        let id = request.url!.lastPathComponent
+        Self.deletedSettingsBotIds.insert(id)
+        Self.settingsOverrides.removeValue(forKey: id)
+        object = ["ok": true]
       } else if path.hasPrefix("/api/bots/"), path.split(separator: "/").count == 3, method == "GET" {
         var detail = Self.bots.first { $0["id"] as? String == path.components(separatedBy: "/").last } ?? Self.bots[0]
         detail["instructions"] = detail["instructions"] ?? "Be clear and useful."
@@ -659,6 +957,10 @@
         detail["enabledTools"] = ["terminal"]
         detail["enabledSkills"] = []
         object = detail
+        if Self.designFixture?["settingsLoadError"] as? Bool == true, (!Self.settingsLoadFailed || Self.designFixture?["settingsLoadAlways"] as? Bool == true) {
+          Self.settingsLoadFailed = true; status = 503
+          object = ["error": Self.designFixture?["loadError"] ?? "Settings could not be loaded."]
+        }
       } else if path == "/api/bots", method == "POST" {
         var bot = body
         bot["id"] = "created-\(Self.createdBots.count + 1)"
@@ -667,13 +969,23 @@
         Self.createdBots.append(bot)
         object = bot
       } else if path == "/api/models" {
-        object = ["provider": "openrouter", "model": Self.ranchModel.model, "providers": [
+        if Self.designFixture?["failModels"] as? Bool == true, Self.designFailures.insert("models").inserted {
+          status = 503; object = ["error": Self.designFixture?["catalogError"] ?? "Models could not be loaded."]
+        } else if let catalog = Self.designFixture?["catalog"] as? [String: Any] {
+          object = catalog
+        } else {
+          object = ["provider": "openrouter", "model": Self.ranchModel.model, "providers": [
           ["id": "openrouter", "name": "OpenRouter", "authenticated": true, "models": [
             ["id": "configured-model", "name": "Configured model", "available": true],
             ["id": "fixture-fast", "name": "Fixture fast model", "available": true],
           ]],
-        ]]
+          ]]
+        }
+        if Self.designFixture?["screen"] as? String == "models" { print("DESIGN_MODELS_GET \(status == 200 ? "ok" : "failed")") }
       } else if path.hasPrefix("/api/bots/"), method == "PATCH" {
+        if Self.designFixture?["screen"] as? String == "models" {
+          print("DESIGN_MODEL_PATCH \(body["provider"] ?? "") \(body["model"] ?? "") \(body["confirmModel"] ?? false)")
+        }
         if request.url!.lastPathComponent == "ranch", let model = body["model"] as? String {
           Self.ranchModel = (body["provider"] as? String ?? Self.ranchModel.provider, model)
         }
@@ -681,6 +993,17 @@
         bot["id"] = request.url!.lastPathComponent
         bot["activity"] = "idle"
         object = bot
+        if ["settings", "models"].contains(Self.designFixture?["screen"] as? String ?? "") {
+          if Self.designFixture?["settingsModelError"] as? Bool == true, body["confirmModel"] as? Bool != true {
+            status = 409; object = ["error": Self.designFixture?["modelWarning"] ?? "Confirm this model before saving.", "confirmRequired": true]
+          } else if Self.designFixture?["settingsSaveError"] as? Bool == true, !Self.settingsSaveFailed {
+            Self.settingsSaveFailed = true; status = 503
+            object = ["error": Self.designFixture?["saveError"] ?? "Settings could not be saved."]
+          } else {
+            let id = request.url!.lastPathComponent
+            Self.settingsOverrides[id] = (Self.bots.first { $0["id"] as? String == id } ?? [:]).merging(bot) { _, new in new }
+          }
+        }
       }
       let data =
         (try? JSONSerialization.data(withJSONObject: object, options: [.fragmentsAllowed]))
@@ -691,6 +1014,59 @@
       client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
       client?.urlProtocol(self, didLoad: data)
       client?.urlProtocolDidFinishLoading(self)
+    }
+    /// Design-only Memory transport. Mutations use the same whole-document revision contract as Hermes.
+    /// Called under the fixture lock; the legacy experience fixture remains separate.
+    private static func memoryResponse(path: String, method: String, body: [String: Any]) -> (status: Int, object: [String: Any]) {
+      let fixture = designFixture!, mode = fixture["mode"] as? String ?? "loaded"
+      let messages = fixture["memoryMessages"] as! [String: String]
+      let config = fixture["memoryFixture"] as! [String: String]
+      if designMemory == nil {
+        designMemory = (fixture["memoryStates"] as? [String: [String: Any]])?[mode] ?? fixture["memory"] as? [String: Any]
+      }
+      func reject(_ code: Int, _ key: String) -> (Int, [String: Any]) { (code, ["error": messages[key] ?? key]) }
+      if method == "GET" {
+        guard path == "/api/bots/ranch/memory" else { return reject(400, "Unexpected memory read") }
+        if mode == "load-error", designFailures.insert("memory-read").inserted { return reject(409, "loadError") }
+        if mode == "reload-error", designFailures.contains("memory-write"), designFailures.insert("memory-reload").inserted { return reject(409, "loadError") }
+        return (200, designMemory!)
+      }
+      guard ["PATCH", "DELETE"].contains(method), let target = path.split(separator: "/").last.map(String.init), ["memory", "user"].contains(target),
+        path == "/api/bots/ranch/memory/" + target,
+        var documents = designMemory?["documents"] as? [[String: Any]], let index = documents.firstIndex(where: { $0["target"] as? String == target }),
+        let revision = body["revision"] as? String, revision.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil else { return reject(400, "Invalid memory mutation") }
+      let document = documents[index], entries = document["entries"] as! [[String: String]], profile = designMemory!["profile"] as! String
+      guard revision == document["revision"] as? String else { return reject(409, "conflict") }
+      guard document["enabled"] as? Bool == true else { return reject(409, "disabled") }
+      func digest(_ parts: [Any]) -> String {
+        let data = try! JSONSerialization.data(withJSONObject: parts, options: [.withoutEscapingSlashes])
+        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+      }
+      func replace(_ texts: [String]) {
+        documents[index]["entries"] = texts.map { ["id": digest([profile, target, $0]), "text": $0] }
+        documents[index]["revision"] = digest([profile, target, texts])
+        documents[index]["charCount"] = texts.joined(separator: config["delimiter"]!).unicodeScalars.count
+        designMemory!["documents"] = documents
+      }
+      if ["conflict", "paused", "reload-error"].contains(mode), designFailures.insert("memory-write").inserted {
+        if mode == "conflict" { replace(entries.map { $0["text"]! } + [config["externalEntry"]!]) }
+        return reject(409, mode == "conflict" ? "conflict" : "paused")
+      }
+      let texts: [String]
+      if method == "DELETE" {
+        guard Set(body.keys) == ["entryId", "revision"], let id = body["entryId"] as? String, entries.contains(where: { $0["id"] == id }) else { return reject(400, "Invalid memory deletion") }
+        texts = entries.filter { $0["id"] != id }.map { $0["text"]! }
+      } else {
+        guard Set(body.keys) == ["entries", "revision"], let replacements = body["entries"] as? [[String: String]], replacements.count <= 100,
+          replacements.allSatisfy({ entry in Set(entry.keys).isSubset(of: ["id", "text"]) && !(entry["text"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && (entry["id"] == nil || entries.contains { $0["id"] == entry["id"] }) }) else { return reject(400, "Invalid memory replacement") }
+        texts = replacements.map { $0["text"]!.trimmingCharacters(in: .whitespacesAndNewlines) }
+        guard Set(texts).count == texts.count else { return reject(400, "Memory entries must be unique.") }
+        guard texts.joined(separator: config["delimiter"]!).unicodeScalars.count <= document["charLimit"] as! Int else { return reject(400, "tooLong") }
+      }
+      replace(texts)
+      designMemory!["refresh"] = ["revision": config["refreshRevision"]!, "state": "next_turn", "busy": false, "message": messages["nextTurn"]!]
+      print("DESIGN_MEMORY_WRITE method=\(method) target=\(target) revision=\(revision) entries=\(texts.count)")
+      return (200, designMemory!)
     }
     override func stopLoading() {}
     private func respond(raw data: Data, type: String) {

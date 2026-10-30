@@ -46,6 +46,8 @@ export function ModelSelector({ value, profile, favorites: initialFavorites, dis
   }, [profile, retry]);
 
   const favoriteKeys = new Set(favorites.map(identity));
+  const sameProvider = (left: string, right: string) => left === right || !!catalog?.providers.some(provider =>
+    matchesProvider(provider, left) && matchesProvider(provider, right));
   const query = search.trim().toLowerCase();
   const selectedProvider = catalog?.providers.find((provider) => matchesProvider(provider, value.provider));
   const selectedName = selectedProvider?.name || value.provider;
@@ -59,6 +61,11 @@ export function ModelSelector({ value, profile, favorites: initialFavorites, dis
     return provider && model && `${provider.name} ${model.name}`.toLowerCase().includes(query)
       ? [{ choice, provider, model }] : [];
   });
+  const resultCount = providers.reduce((count, provider) => count + provider.models.length, 0);
+  const emptyMessage = !loading && !error && providers.length === 0
+    ? query ? "No models match your search." : "No connected models were reported. Connect a provider in Hermes, then retry." : "";
+  const statusMessage = loading ? "Loading models from Hermes…" : error ? "" : emptyMessage
+    || `${resultCount} ${resultCount === 1 ? "model" : "models"} ${query ? "match your search" : "available"}.`;
   const toggleFavorite = async (choice: ModelChoice) => {
     if (savingFavorite) return;
     const key = identity(choice);
@@ -73,34 +80,32 @@ export function ModelSelector({ value, profile, favorites: initialFavorites, dis
     finally { setSavingFavorite(false); }
   };
   const row = (choice: ModelChoice, name: string, available: boolean, providerName?: string) => {
-    const selected = value.model === choice.model && (value.provider === choice.provider ||
-      !!catalog?.providers.find((provider) => provider.id === choice.provider && matchesProvider(provider, value.provider)));
-    const favorite = favoriteKeys.has(identity(choice)) || favorites.some((item) => item.model === choice.model &&
-      !!catalog?.providers.find((provider) => provider.id === choice.provider && matchesProvider(provider, item.provider)));
+    const selected = value.model === choice.model && sameProvider(value.provider, choice.provider);
+    const savedFavorite = favorites.find(item => item.model === choice.model && sameProvider(item.provider, choice.provider));
+    const favorite = !!savedFavorite;
     // Keep an existing provider alias until the user explicitly chooses another model.
-    const favoriteChoice = favorite ? favorites.find((item) => item.model === choice.model &&
-      (item.provider === choice.provider || !!catalog?.providers.find((provider) => provider.id === choice.provider && matchesProvider(provider, item.provider))))! : choice;
+    const favoriteChoice = savedFavorite || choice;
     return <div className="model-option" key={identity(choice)}>
-      <Button className="model-choice" aria-pressed={selected} disabled={disabled || !available}
+      <Button className="model-choice" aria-pressed={selected} data-unavailable={!available || undefined} disabled={disabled || !available}
         onClick={() => onChange(choice)}>
         <span><span className="model-name">{name}</span>{providerName && <small>{providerName}</small>}
           {!available && <small>Reconnect in Hermes to use this model</small>}</span>
         {selected && <Icon name="check" size={18} />}
       </Button>
-      <Button className="model-favorite" aria-label={`${favorite ? "Remove" : "Add"} ${name} ${favorite ? "from" : "to"} favorites`}
-        aria-pressed={favorite} disabled={savingFavorite || favorites.length >= 100 && !favorite}
+      <Button className="model-favorite" data-favorite={favorite || undefined} aria-label={`${favorite ? "Remove" : "Add"} ${name} ${favorite ? "from" : "to"} favorites`}
+        disabled={savingFavorite || favorites.length >= 100 && !favorite}
         onClick={() => void toggleFavorite(favoriteChoice)}>
         <Icon name="star" size={18} filled={favorite} />
       </Button>
     </div>;
   };
   const content = <div className="model-picker-content">
-        <div className="model-search-row"><label className="model-search"><span className="sr-only">Search models</span><Input type="search" value={search} placeholder="Find a model or provider"
+        <div className="model-search-row"><label className="model-search"><span className="sr-only">Search models</span><Input type="search" value={search} placeholder="Search models"
           onChange={(event) => setSearch(event.target.value)} /></label>
         {!error && !!catalog?.providers.length && <Button className="model-refresh" aria-label="Refresh models" title="Refresh models" disabled={loading}
           onClick={() => setRetry((n) => n + 1)}><Icon name="refresh" size={18} className={loading ? "spin" : undefined} /></Button>}
         </div>
-        {loading && <p className="muted" role="status">Loading models from Hermes…</p>}
+        <p className={loading || emptyMessage ? "muted model-status" : "sr-only"} role="status" aria-atomic="true">{statusMessage}</p>
         {error && <div className="model-load-error"><p role="alert">{error}</p><Button onClick={() => setRetry((n) => n + 1)}>Retry loading models</Button></div>}
         {favoriteError && <FormMessage tone="error">{favoriteError}</FormMessage>}
         {favoriteChoices.length > 0 && <div className="model-favorites"><h3>Favorites</h3>
@@ -111,7 +116,6 @@ export function ModelSelector({ value, profile, favorites: initialFavorites, dis
           {provider.models.map((model) => row({ provider: provider.id, model: model.id }, model.name, model.available))}
           {provider.models.length === 0 && <p className="muted model-warning">No models reported. Check this connection in Hermes.</p>}
         </details>)}
-        {!loading && !error && providers.length === 0 && <p className="muted">{query ? "No models match your search." : "No connected models were reported. Connect a provider in Hermes, then retry."}</p>}
         {!loading && !error && (catalog?.providers.length || 0) === 0 && <Button onClick={() => setRetry((n) => n + 1)}>Retry loading models</Button>}
       </div>;
   if (inline) return <section className="model-selector inline" aria-label="Choose a model">{content}</section>;

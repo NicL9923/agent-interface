@@ -47,14 +47,14 @@ beforeEach(() => {
   ({ container, root } = mountRoot());
 });
 
-it("asks a new device once without requesting browser permission, including across remounts and account changes", async () => {
+it("remembers an answered invitation for its account without requesting permission for another account", async () => {
   await render();
   expect(container.textContent).toContain("Enable notifications on this device?");
-  expect(container.textContent).toContain("Settings > Notifications");
+  expect(container.textContent).toContain("Get alerts for finished work");
   expect(requestPermission).not.toHaveBeenCalled();
   await act(async () => container.querySelector<HTMLButtonElement>(".notification-onboarding button:last-child")!.click());
   await render("two");
-  expect(container.querySelector(".notification-onboarding")).toBeNull();
+  expect(container.querySelector(".notification-onboarding")).not.toBeNull();
   await act(async () => { root.unmount(); root.render(createElement(Harness)); });
   expect(container.querySelector(".notification-onboarding")).toBeNull();
 });
@@ -77,7 +77,7 @@ it("does not claim enabled when permission is granted but no browser subscriptio
   await render();
   expect(toggle().checked).toBe(false);
   expect(write).not.toHaveBeenCalled();
-  expect(container.querySelector(".notification-onboarding")).toBeNull();
+  expect(container.querySelector(".notification-onboarding")).not.toBeNull();
 });
 
 it("requests permission directly from the enable gesture and registers before checking the switch", async () => {
@@ -98,6 +98,8 @@ it("respects denied permission and explains how to unblock it without asking aga
   await render();
   expect(toggle().checked).toBe(false); expect(toggle().disabled).toBe(true);
   expect(container.textContent).toContain("browser or device settings");
+  expect(container.querySelector(".notification-toggle")?.textContent).toBe("Blocked");
+  expect(container.querySelector(".notification-attention")).not.toBeNull();
   expect(container.querySelector(".notification-onboarding")).toBeNull();
   expect(requestPermission).not.toHaveBeenCalled();
 });
@@ -187,4 +189,27 @@ it("refreshes the new account after a pending permission operation settles witho
   expect(notifications.checking).toBe(false);
   expect(toggle().disabled).toBe(false); expect(toggle().checked).toBe(false);
   expect(subscribe).not.toHaveBeenCalled(); expect(write).not.toHaveBeenCalled();
+});
+
+it("keeps an unanswered invitation through a reload and records an Enable answer", async () => {
+  await render();
+  await act(async () => root.unmount());
+  await render();
+  expect(container.querySelector(".notification-onboarding")).not.toBeNull();
+  requestPermission.mockImplementationOnce(async () => "default");
+  await act(async () => container.querySelector<HTMLButtonElement>(".notification-onboarding .primary")!.click());
+  await act(async () => root.unmount());
+  await render();
+  expect(container.querySelector(".notification-onboarding")).toBeNull();
+});
+
+it("offers another account its own invitation when browser permission was already granted", async () => {
+  permission = "granted"; subscription = fakeSubscription(); registered = true;
+  await render("one");
+  expect(container.querySelector(".notification-onboarding")).toBeNull();
+  registered = false;
+  await render("two");
+  expect(container.querySelector(".notification-onboarding")).not.toBeNull();
+  expect(requestPermission).not.toHaveBeenCalled();
+  expect(write).not.toHaveBeenCalledWith("/push/subscriptions", expect.anything());
 });

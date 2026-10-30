@@ -5,6 +5,7 @@ import type { Preferences } from "../shared/types";
 
 export type Section = Preferences["sections"][number];
 export const sectionNameLimit = 100;
+export const sectionLimit = 30;
 
 /** The section a bot sits in on home, if any. */
 export function sectionOf(preferences: Preferences, botId: string): Section | undefined {

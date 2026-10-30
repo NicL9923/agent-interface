@@ -255,7 +255,7 @@ export const Composer = memo(function Composer({ boot, selected, botId, prompts,
   </div> });
   if (state === "interrupted") notices.push({ id: "interrupted", kind: "interrupted", node: <label className="interruption-review">
     <input type="checkbox" checked={reviewed} onChange={(event) => setReviewed(event.target.checked)} />{" "}
-    I reviewed the interrupted task and its last actions before continuing.
+    I've reviewed the task's last actions.
   </label> });
   return (
     <footer className="composer-area" ref={footer}>

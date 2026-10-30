@@ -952,7 +952,7 @@ describe("conversation state", () => {
     expect(approve.textContent).toBe("Approving…"); expect(approve.querySelector(".spin")).not.toBeNull();
     expect(approve.disabled).toBe(true); expect(decline.disabled).toBe(true);
     await act(async () => decline.click()); expect(write).toHaveBeenCalledOnce();
-    await act(async () => reject(new Error("Could not send decision")));
+    await act(async () => reject(new ApiError("Could not send decision", 400)));
     expect(approve.disabled).toBe(false); expect(decline.disabled).toBe(false);
     expect(container.textContent).toContain("Could not send decision");
     vi.mocked(write).mockResolvedValueOnce({}); await act(async () => decline.click());

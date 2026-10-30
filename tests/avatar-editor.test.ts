@@ -97,4 +97,12 @@ describe("avatar editor", () => {
     expect(working.getAttribute("aria-pressed")).toBe("true");
     expect(current).toBe(before);
   });
+  it("names each eye tuning slider even though the label contains an output", () => {
+    for (const range of container.querySelectorAll<HTMLInputElement>('input[type="range"]')) {
+      expect(range.labels?.length).toBe(1);
+      expect(range.labels![0].control).toBe(range);
+      expect(range.labels![0].textContent).toMatch(/Eye (width|height|spacing)/);
+    }
+  });
+
 });

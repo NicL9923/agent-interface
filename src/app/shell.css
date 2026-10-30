@@ -154,6 +154,9 @@ kbd {
 }
 .status-dock .connection-panel.compact .connection-actions { margin: 6px 0 2px; }
 .status-dock .interruption-review {
+  font-size: 0.875rem;
+  min-height: 44px;
+  gap: 10px;
   margin: 0;
   padding: 10px 12px;
   border-radius: 12px;
@@ -212,11 +215,11 @@ kbd {
 
 /* Assistant details: sized to its content, with facts that make the space useful. */
 .bot-details-facts { margin: 0 0 22px; }
-.bot-details-facts .settings-row { justify-content: space-between; min-height: 48px; border-bottom: 1px solid var(--line); }
+.bot-details-facts .settings-row { display: grid; gap: 6px; align-items: start; min-height: 48px; border-bottom: 1px solid var(--line); }
 .bot-details-facts .settings-row:last-child { border-bottom: 0; }
-.bot-details-facts dt { flex-shrink: 0; }
-.bot-details-facts dd { display: grid; justify-items: end; gap: 2px; min-width: 0; margin: 0; color: var(--muted); font-size: 0.875rem; text-align: right; overflow-wrap: anywhere; }
-.bot-details-facts dd small { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.75rem; }
+.bot-details-facts dt { font-size: 0.875rem; font-weight: 600; }
+.bot-details-facts dd { display: grid; justify-items: start; gap: 4px; min-width: 0; margin: 0; color: var(--muted); font-size: 0.875rem; line-height: 1.55; text-align: start; overflow-wrap: anywhere; }
+.bot-details-facts dd small { max-width: 100%; font-size: 0.875rem; line-height: 1.55; }
 .bot-details-facts .bot-activity { color: var(--accent); }
 .settings-sheet.bot-details .sheet-body { padding-bottom: 8px; }
 @media (max-width: 620px) {
@@ -226,9 +229,16 @@ kbd {
     max-height: calc(100dvh - max(10px, env(safe-area-inset-top)));
     padding-bottom: env(safe-area-inset-bottom);
   }
-  .bot-details-facts dd small { max-width: 180px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .command-palette[open], .dock-item, .toast { animation: none; }
 }
+
+.bot-details-facts .bot-activity.state-failed { color: var(--danger); }
+.bot-details-facts .bot-activity.state-blocked { color: var(--attention); }
+.bot-details-facts .bot-activity.state-waiting,
+.bot-details-facts .bot-activity.state-interrupted { color: var(--muted); }
+
+.bot-details-facts dd.bot-activity { display: flex; align-items: center; gap: 6px; }
+.bot-details-facts dd.bot-activity::before { margin-right: 0; }

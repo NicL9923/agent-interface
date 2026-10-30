@@ -58,11 +58,20 @@ describe("integration connections", () => {
     expect(sessionStorage.getItem("integration-flow:bot")).toBe("oauth");
   });
   it("requires confirmation before disconnecting a shared account", async () => {
+    vi.mocked(write).mockImplementation(async () => {
+      catalog.connections = [connection({ status: "not_connected", actions: { connect: true, check: true, disconnect: false } })];
+      return { kind: "connected", status: "approved", message: "Connection removed." };
+    });
     await render(); await click("Disconnect");
     expect(write).not.toHaveBeenCalled();
     expect(container.textContent).toContain("Assistants using it will lose access");
+    expect(document.activeElement).toBe(button("Keep connected"));
+    expect(document.getElementById(button("Keep connected").getAttribute("aria-describedby")!)?.textContent).toContain("Google Workspace");
+    await click("Keep connected"); expect(document.activeElement).toBe(button("Disconnect"));
+    await click("Disconnect");
     await click("Disconnect");
     expect(write).toHaveBeenCalledExactlyOnceWith("/integrations/workspace/disconnect", { profile: "bot" });
+    expect(document.activeElement).toBe(button("Refresh status"));
   });
   it("does not offer connection mutations to a member without management access", async () => {
     catalog.canManage = false;
@@ -117,4 +126,47 @@ describe("integration connections", () => {
     expect(container.textContent).toContain("Approve access.");
     expect(container.textContent).not.toContain("Hermes is restarting.");
   });
+});
+
+
+it("names a new device-code flow and copies only its displayed code with honest failure feedback", async () => {
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+  vi.mocked(write).mockResolvedValue({ kind: "device_code", status: "pending", flowId: "oauth", userCode: "RANCH-42", message: "Approve access." });
+  vi.mocked(api).mockImplementation(async path => path.includes("flows") ? { kind: "device_code", status: "pending", flowId: "oauth", userCode: "RANCH-42", message: "Approve access." } as never : catalog as never);
+  await render(); await click("Reconnect");
+  expect(container.textContent).toContain("Finish connecting Google Workspace");
+  await click("Copy code"); expect(writeText).toHaveBeenCalledWith("RANCH-42");
+  expect(container.querySelector('[role="status"].form-notice')?.textContent).toBe("Sign-in code copied.");
+  writeText.mockRejectedValueOnce(new Error("Permission denied"));
+  await click("Copy code");
+  expect(container.textContent).toContain("Select and copy it instead.");
+  expect(container.textContent).not.toContain("Sign-in code copied.");
+  expect(write).toHaveBeenCalledOnce();
+});
+
+
+it.each([
+  ["configured", "Check connection", "check"],
+  ["unavailable", "Check connection", "check"],
+  ["expired", "Reconnect", "connect"],
+  ["not_connected", "Connect", "connect"],
+] as const)("puts the recommended %s action first in reading and keyboard order", async (status, label, operation) => {
+  catalog.connections = [connection({ status })]; await render();
+  const first = container.querySelector<HTMLButtonElement>(".integration-card .actions button")!;
+  expect(first.textContent).toBe(label);
+  await act(async () => first.click());
+  expect(write).toHaveBeenCalledExactlyOnceWith(`/integrations/workspace/${operation}`, { profile: "bot" });
+});
+
+it("presents Apple as a local iPhone handoff rather than an unchecked server account", async () => {
+  catalog.connections = [connection({ id: "apple", name: "Apple device calendars and reminders", category: "devices", owner: "This iPhone", status: "unsupported", detail: "The server has no Apple account grant.", actions: { connect: false, check: false, disconnect: false }, permissions: [], setup: [] })];
+  await render();
+  const card = container.querySelector(".integration-card")!;
+  expect(card.textContent).toContain("Apple Calendar & Reminders");
+  expect(card.textContent).toContain("On iPhone");
+  expect(card.textContent).toContain("assistant's draft");
+  expect(card.textContent).not.toContain("Last checked");
+  expect(card.textContent).not.toContain("Setup needed");
+  expect(card.querySelector(".actions")).toBeNull();
 });

@@ -23,14 +23,36 @@ enum ShareInbox {
     if let value, let data = try? JSONEncoder().encode(value) { try? data.write(to: root.appendingPathComponent("context.json"), options: .atomic) }
     else { try? FileManager.default.removeItem(at: root.appendingPathComponent("context.json")) }
   }
+  static func save(_ capture: SharedCapture, in directory: URL? = Self.root) throws {
+    guard valid(capture) else { throw CocoaError(.fileWriteInvalidFileName) }
+    guard let directory else { throw CocoaError(.fileNoSuchFile) }
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    try JSONEncoder().encode(capture).write(to: directory.appendingPathComponent(capture.id + ".json"), options: .atomic)
+  }
   static func pending(scope: String) -> [SharedCapture] {
     guard let root else { return [] }
+    pruneOrphans(in: root)
     let files = (try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? []
     return files.filter { $0.pathExtension == "json" && $0.lastPathComponent != "context.json" }.compactMap { url in
       guard let data = try? Data(contentsOf: url), let capture = try? JSONDecoder().decode(SharedCapture.self, from: data), valid(capture) else { return nil }
       if capture.scope != scope || Date().timeIntervalSince(capture.createdAt) > 86400 * 7 { remove(capture); return nil }
       return capture
     }.sorted { $0.createdAt < $1.createdAt }
+  }
+  /// An interrupted extension can leave files without a saved draft. Keep current
+  /// work and any directory owned by a JSON capture; prune only old UUID folders.
+  static func pruneOrphans(in directory: URL, now: Date = Date()) {
+    let manager = FileManager.default
+    let entries = (try? manager.contentsOfDirectory(at: directory,
+      includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey, .creationDateKey])) ?? []
+    for entry in entries where UUID(uuidString: entry.lastPathComponent) != nil {
+      guard let values = try? entry.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey, .creationDateKey]),
+        values.isDirectory == true, values.isSymbolicLink != true,
+        let created = values.creationDate, now.timeIntervalSince(created) > 86400,
+        !manager.fileExists(atPath: directory.appendingPathComponent(entry.lastPathComponent + ".json").path)
+      else { continue }
+      try? manager.removeItem(at: entry)
+    }
   }
   static func valid(_ value: SharedCapture) -> Bool {
     UUID(uuidString: value.id) != nil && value.files.count <= 10 && value.text.count <= 50000 && value.files.allSatisfy { !$0.isEmpty && !$0.contains("/") && !$0.contains("\\") && $0 != "." && $0 != ".." }

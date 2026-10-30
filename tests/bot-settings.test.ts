@@ -92,6 +92,23 @@ describe.each(["tools", "skills"])("%s configuration", (tab) => {
   });
 });
 
+it("keeps required skills enabled when Hermes reports them disabled", async () => {
+  vi.mocked(api).mockResolvedValueOnce([
+    { id: "required", name: "required", description: "Required by Hermes", required: true, enabled: false },
+    { id: "optional", name: "optional", description: "Hermes profile skill", enabled: false },
+  ]);
+  await click("skills");
+  const required = container.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+  expect(required.checked).toBe(true);
+  expect(required.disabled).toBe(true);
+  expect(container.textContent?.match(/Required by Hermes/g)).toHaveLength(1);
+  vi.mocked(write).mockResolvedValueOnce({});
+  await click("Save skills");
+  expect(write).toHaveBeenCalledExactlyOnceWith("/bots/shared/skills", { ids: ["required"] }, "PUT");
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Close assistant settings"]')!.click());
+  expect(onClose).toHaveBeenCalledOnce();
+});
+
 
 describe("assistant deletion", () => {
   it("opens and cancels confirmation without submitting the settings form", async () => {
@@ -132,6 +149,8 @@ describe("making an assistant personal", () => {
     await submit();
     await click("Make it personal");
     expect(write).toHaveBeenCalledExactlyOnceWith("/bots/shared", expect.objectContaining({ shared: false, confirmPrivate: true }), "PATCH");
+    expect(container.textContent).toContain("Assistant saved.");
+    expect(container.textContent).not.toContain("Changes saved for both household members.");
   });
 
   it("asks when the server reports the assistant is still visible to others", async () => {
@@ -143,6 +162,80 @@ describe("making an assistant personal", () => {
     expect(write).toHaveBeenCalledExactlyOnceWith("/bots/mine", expect.not.objectContaining({ confirmPrivate: true }), "PATCH");
     await click("Make it personal");
     expect(write).toHaveBeenLastCalledWith("/bots/mine", expect.objectContaining({ shared: false, confirmPrivate: true }), "PATCH");
+  });
+
+  it("asks again after the assistant is re-shared instead of reusing old consent", async () => {
+    await uncheckShared(); await submit(); await click("Make it personal");
+    await uncheckShared(); await submit();
+    expect(write).toHaveBeenLastCalledWith("/bots/shared", expect.objectContaining({ shared: true }), "PATCH");
+    expect(vi.mocked(write).mock.calls.at(-1)?.[1]).not.toHaveProperty("confirmPrivate");
+    vi.mocked(write).mockClear();
+    await uncheckShared(); await submit();
+    expect(container.querySelector('[role="alertdialog"]')?.textContent).toContain("Make Shared personal?");
+    expect(write).not.toHaveBeenCalled();
+  });
+});
+
+describe("settings confirmations", () => {
+  const prompt = () => container.querySelector<HTMLDialogElement>('[role="alertdialog"]')!;
+  const save = () => container.querySelector<HTMLButtonElement>("[data-settings-save]")!;
+  const askPersonal = async () => {
+    await act(async () => container.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click());
+    save().focus();
+    await click("Save changes");
+  };
+
+  it("focuses the safe choice and keeps Escape inside the confirmation", async () => {
+    await askPersonal();
+    expect(prompt().textContent).toContain("It will disappear for the rest of the household");
+    expect(document.activeElement?.textContent).toBe("Keep editing");
+    await act(async () => prompt().dispatchEvent(new Event("cancel", { bubbles: true, cancelable: true })));
+    expect(prompt()).toBeNull();
+    expect(container.querySelector(".settings-dialog")?.hasAttribute("open")).toBe(true);
+    expect(container.textContent).not.toContain("Discard your unsaved changes?");
+    expect(document.activeElement).toBe(save());
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it("keeps a confirmation close event away from the unsaved editor guard", async () => {
+    await askPersonal();
+    await act(async () => { prompt().open = false; prompt().dispatchEvent(new Event("close", { bubbles: true })); });
+    expect(prompt()).toBeNull();
+    expect(container.querySelector<HTMLDialogElement>(".settings-dialog")!.open).toBe(true);
+    expect(container.textContent).not.toContain("Discard your unsaved changes?");
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it("puts the server's model warning inside the confirmation without a second banner", async () => {
+    vi.mocked(write).mockRejectedValueOnce(new ApiError("This model has a higher price", 409, "MODEL_CONFIRMATION_REQUIRED", true));
+    await click("Save changes");
+    expect(prompt().textContent).toContain("This model has a higher price");
+    expect(container.querySelector('[data-slot="form-message"]')).toBeNull();
+    expect(document.activeElement?.textContent).toBe("Keep editing");
+    await click("Keep editing");
+    expect(document.activeElement).toBe(save());
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns focus to Delete assistant after keeping it", async () => {
+    const trigger = Array.from(container.querySelectorAll("button")).find(button => button.textContent === "Delete assistant")!;
+    trigger.focus();
+    await click("Delete assistant");
+    expect(document.activeElement?.textContent).toBe("Keep assistant");
+    await click("Keep assistant");
+    expect(document.activeElement).toBe(trigger);
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it("confirms a model only after the explicit action", async () => {
+    vi.mocked(write).mockRejectedValueOnce(new ApiError("This model has a higher price", 409, "MODEL_CONFIRMATION_REQUIRED", true));
+    await click("Save changes");
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(write).toHaveBeenLastCalledWith("/bots/shared", expect.objectContaining({confirmModel:false}), "PATCH");
+    await click("Confirm this model");
+    expect(prompt()).toBeNull();
+    expect(write).toHaveBeenCalledTimes(2);
+    expect(write).toHaveBeenLastCalledWith("/bots/shared", expect.objectContaining({confirmModel:true}), "PATCH");
   });
 });
 
@@ -156,6 +249,7 @@ it("clears expensive-model confirmation when a different model is selected", asy
   vi.mocked(write).mockRejectedValueOnce(new ApiError("This model has a higher price", 409, "MODEL_CONFIRMATION_REQUIRED", true));
   await act(async () => container.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
   expect(container.textContent).toContain("Confirm this model");
+  await click("Keep editing");
   await click("Other model");
   expect(container.textContent).not.toContain("Confirm this model");
   expect(container.textContent).not.toContain("This model has a higher price");
@@ -165,7 +259,7 @@ it("clears expensive-model confirmation when a different model is selected", asy
 
 describe("closing with unsaved edits", () => {
   const dialog = () => container.querySelector("dialog")!;
-  const instructions = () => container.querySelector<HTMLTextAreaElement>("textarea")!;
+  const instructions = () => container.querySelector<HTMLTextAreaElement>("#assistant-instructions")!;
   const escape = async () => {
     const event = new Event("cancel", { cancelable: true });
     await act(async () => dialog().dispatchEvent(event));
@@ -215,6 +309,19 @@ describe("closing with unsaved edits", () => {
     await escape();
     expect(container.textContent).not.toContain("Discard your unsaved changes?");
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the saved name in the heading and confirmations after a rename", async () => {
+    const heading = () => container.querySelector("#assistant-settings-title")!.textContent;
+    await typeInto(container.querySelector<HTMLInputElement>('form input[maxlength="100"]')!, "Garden companion");
+    expect(heading()).toBe("Shared");
+    vi.mocked(write).mockRejectedValueOnce(new Error("Gateway unavailable"));
+    await click("Save changes");
+    expect(heading()).toBe("Shared");
+    await click("Save changes");
+    expect(heading()).toBe("Garden companion");
+    await click("Delete assistant");
+    expect(container.querySelector('[role="alertdialog"]')?.textContent).toContain("Delete Garden companion?");
   });
 
   it("keeps the baseline when a save fails", async () => {
@@ -485,7 +592,7 @@ it("loads roster detail before showing a writable settings form", async () => {
   await act(async()=>root.render(createElement(BotSettings,{bot:{...bot,instructions:undefined},bootstrap,onClose,onSaved})));
   expect(container.querySelector("form")).toBeNull();
   await act(async()=>finish({...bot,instructions:"Saved instructions",enabledMcpServers:["calendar"]}));
-  expect(container.querySelector("textarea")!.value).toBe("Saved instructions");
+  expect(container.querySelector<HTMLTextAreaElement>("#assistant-instructions")!.value).toBe("Saved instructions");
 });
 
 
@@ -512,7 +619,7 @@ describe("lean roster settings", () => {
     expect(dialog.querySelector("#assistant-settings-title")).toBe(heading);
     expect(dialog.querySelector('[aria-label="Close assistant settings"]')).toBe(close);
     expect(document.activeElement).toBe(heading);
-    expect((container.querySelector("textarea") as HTMLTextAreaElement).value).toBe("Keep this saved SOUL");
+    expect((container.querySelector("#assistant-instructions") as HTMLTextAreaElement).value).toBe("Keep this saved SOUL");
     vi.mocked(api).mockClear();
     await act(async () => root.render(createElement(BotSettings, { bot: { ...lean, activity: "working" }, bootstrap, onClose, onSaved })));
     expect(api).not.toHaveBeenCalled();
@@ -527,7 +634,7 @@ describe("lean roster settings", () => {
 describe("creating an assistant", () => {
   const created: Bot = { id: "ranch-hand", name: "Ranch hand", shared: true, model: "test", activity: "idle", instructions: "" };
   // Unlike the shared button helper, a missing button is a valid answer here.
-  const button = (text: string) => Array.from(container.querySelectorAll("button")).find(item => item.textContent === text);
+  const button = (text: string) => Array.from(container.querySelectorAll("button")).find(item => (item.getAttribute("aria-label") || item.textContent) === text);
   const title = () => container.querySelector("#assistant-settings-title")?.textContent;
   const type = (value: string) => typeInto(container.querySelector<HTMLInputElement>("#create-name")!, value);
   const choose = (label: string) => act(async () => Array.from(container.querySelectorAll("label"))
@@ -592,4 +699,148 @@ describe("creating an assistant", () => {
     expect(container.querySelector(".avatar-failure")).toBeNull();
     expect(container.querySelector('[role="status"]')?.textContent).toBe("Avatar saved");
   });
+});
+
+
+describe("existing assistant portraits", () => {
+  const choose = async (name: string) => {
+    const label = [...container.querySelectorAll("label")].find(item => item.textContent?.trim() === name)!;
+    await act(async () => label.querySelector("input")!.click());
+  };
+  beforeEach(async () => {
+    const supported = { ...bootstrap, capabilities: { ...bootstrap.capabilities, uploads: { supported: true }, portraitGeneration: { supported: true } } };
+    await act(async () => root.render(createElement(BotSettings, { bot, bootstrap: supported, onClose, onSaved })));
+    await click("avatar"); await choose("Portrait"); vi.mocked(api).mockClear();
+  });
+  const upload = async (file: File) => {
+    const input = container.querySelector<HTMLInputElement>('input[type="file"]')!;
+    Object.defineProperty(input, "files", { configurable: true, value: [file] });
+    Object.defineProperty(input, "value", { configurable: true, writable: true, value: "C:\\fakepath\\portrait.png" });
+    await act(async () => input.dispatchEvent(new Event("change", { bubbles: true })));
+    return input;
+  };
+  it.each([new File(["bad"], "portrait.txt", { type: "text/plain" }), new File([new Uint8Array(2_000_001)], "portrait.png", { type: "image/png" })])("rejects invalid files without submitting or enabling Save", async file => {
+    await upload(file);
+    expect(api).not.toHaveBeenCalled();
+    expect(container.textContent).toContain("Choose a PNG, JPEG, or WebP portrait no larger than 2 MB.");
+    expect([...container.querySelectorAll("button")].find(button => button.textContent === "Save avatar")!.disabled).toBe(true);
+  });
+  it("clears the file input after failure so choosing the same file can retry", async () => {
+    vi.mocked(api).mockRejectedValueOnce(new Error("Upload interrupted."));
+    const file = new File(["png"], "portrait.png", { type: "image/png" });
+    const input = await upload(file);
+    expect(input.value).toBe("");
+    expect(container.textContent).toContain("Upload interrupted.");
+    vi.mocked(api).mockResolvedValueOnce({ id: "portrait-1" });
+    await upload(file); await click("Save avatar");
+    expect(write).toHaveBeenLastCalledWith("/bots/shared/avatar", { mode: "portrait", src: "/api/files/portrait-1", origin: "uploaded" }, "PUT");
+  });
+  it("generates from the prompt, shows progress and saves the resulting draft", async () => {
+    let finish!: (value: unknown) => void;
+    vi.mocked(write).mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+    await typeInto(container.querySelector<HTMLTextAreaElement>('textarea')!, "A friendly ranch companion");
+    await click("Generate portrait");
+    expect([...container.querySelectorAll('.avatar-operation[role="status"]')].some(region => region.textContent?.includes("Generating portrait…"))).toBe(true);
+    expect(write).toHaveBeenCalledWith("/bots/shared/portrait", { prompt: "A friendly ranch companion" });
+    await act(async () => finish({ id: "generated-1" }));
+    await click("Save avatar");
+    expect(write).toHaveBeenLastCalledWith("/bots/shared/avatar", { mode: "portrait", src: "/api/files/generated-1", origin: "generated" }, "PUT");
+  });
+  it("explains unavailable portrait operations and disables them even with a prompt", async () => {
+    const unsupported = { ...bootstrap, capabilities: { ...bootstrap.capabilities, uploads: { supported: false, reason: "Uploads unavailable." }, portraitGeneration: { supported: false, reason: "Generation unavailable." } } };
+    await act(async () => root.render(createElement(BotSettings, { bot, bootstrap: unsupported, onClose, onSaved })));
+    await typeInto(container.querySelector<HTMLTextAreaElement>('textarea')!, "A friendly ranch companion");
+    expect(container.querySelector<HTMLInputElement>('input[type="file"]')!.disabled).toBe(true);
+    await click("Generate portrait");
+    expect(write).not.toHaveBeenCalled();
+    expect(container.textContent).toContain("Uploads unavailable.");
+    expect(container.textContent).toContain("Generation unavailable.");
+    expect(container.textContent).toContain("Choose Geometric or Mascot.");
+  });
+  it("blocks a description over the server limit while keeping it editable", async () => {
+    await typeInto(container.querySelector<HTMLTextAreaElement>('textarea')!, "x".repeat(2001));
+    await click("Generate portrait");
+    expect(api).not.toHaveBeenCalled();
+    expect(container.querySelector('textarea')?.getAttribute("aria-invalid")).toBe("true");
+    expect(container.textContent).toContain("The description is 1 character over the 2,000 limit. Shorten the text to generate a portrait.");
+  });
+});
+
+async function openMemoryForEditing() {
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: vi.fn() });
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { callback(0); return 0; });
+  const memory = { botId: "shared", profile: "shared", scope: "profile" as const, owner: "Hermes", notice: "Shared profile.", documents: [
+    { target: "memory" as const, label: "Assistant notes", revision: "a".repeat(64), enabled: true, charLimit: 2200, charCount: 5, entries: [{ id: "1", text: "First" }] },
+  ] };
+  vi.mocked(api).mockResolvedValue(memory); await click("memory");
+  await typeInto(container.querySelector<HTMLTextAreaElement>(".memory-panel textarea")!, "Edited fact");
+  return memory;
+}
+it("keeps Memory drafts on Close and tab cancellation, and leaves only after explicit discard", async () => {
+  await openMemoryForEditing();
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Close assistant settings"]')!.click());
+  expect(onClose).not.toHaveBeenCalled(); expect(container.textContent).toContain("Discard your unsaved changes?");
+  await click("Keep editing"); expect(container.querySelector<HTMLTextAreaElement>(".memory-panel textarea")!.value).toBe("Edited fact");
+  await click("details"); expect(container.textContent).toContain("Leave memory without saving?");
+  await click("Keep editing"); expect(container.querySelector<HTMLTextAreaElement>(".memory-panel textarea")!.value).toBe("Edited fact");
+  await click("details"); await click("Discard edits and leave");
+  expect(container.querySelector(".memory-panel")).toBeNull(); expect(onClose).not.toHaveBeenCalled();
+});
+it("holds Memory navigation and Close while an accepted save is in flight", async () => {
+  const memory = await openMemoryForEditing();
+  let finish!: (value: typeof memory) => void;
+  vi.mocked(write).mockReturnValueOnce(new Promise<typeof memory>(resolve => { finish = resolve; }));
+  await click("Save memories");
+  const close = container.querySelector<HTMLButtonElement>('[aria-label="Close assistant settings"]')!;
+  expect(close.disabled).toBe(true); await click("details"); expect(container.querySelector(".memory-panel")).not.toBeNull();
+  expect(container.textContent).not.toContain("Leave memory without saving?");
+  const cancel = new Event("cancel", { cancelable: true, bubbles: true });
+  await act(async () => { container.querySelector(".settings-dialog")!.dispatchEvent(cancel); });
+  expect(cancel.defaultPrevented).toBe(true); expect(onClose).not.toHaveBeenCalled();
+  expect(container.textContent).not.toContain("Discard your unsaved changes?");
+  await act(async () => finish({ ...memory, documents: [{ ...memory.documents[0], revision: "b".repeat(64), entries: [{ id: "2", text: "Edited fact" }] }] }));
+  expect(close.disabled).toBe(false); await act(async () => close.click()); expect(onClose).toHaveBeenCalledTimes(1);
+});
+
+
+it("keeps one schedule preview and focuses the editor when editing or choosing a recipe", async () => {
+  const scroll = vi.fn();
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: scroll });
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [{ id: "r1", botId: bot.id, name: "Morning", prompt: "Check the gate", schedule: "0 7 * * *", enabled: true }] : { providers: [], provider: "", model: "" });
+  await click("routines");
+  const editor = () => container.querySelector<HTMLFormElement>(".routine-manager > form")!;
+  const name = () => editor().querySelector<HTMLInputElement>("input")!;
+  expect(editor().querySelectorAll(".routine-preview-control")).toHaveLength(1);
+  await click("Edit", container.querySelector(".routine-card")!);
+  expect(name().value).toBe("Morning");
+  expect(document.activeElement).toBe(name());
+  expect(editor().querySelectorAll(".routine-preview-control")).toHaveLength(1);
+  await click("Cancel edit");
+  expect(document.activeElement?.textContent).toBe("Edit");
+  expect(container.querySelector(".routine-card")!.contains(document.activeElement)).toBe(true);
+  await click("Edit", container.querySelector(".routine-card")!);
+  await act(async () => container.querySelector<HTMLButtonElement>(".routine-preset")!.click());
+  expect(name().value).toBe("Morning brief");
+  expect(document.activeElement).toBe(name());
+  expect(editor().querySelectorAll(".routine-preview-control")).toHaveLength(1);
+  expect(scroll).toHaveBeenCalledWith({ block: "start" });
+  expect(write).not.toHaveBeenCalled();
+});
+
+
+it("returns focus to the edited routine after saving the previewed schedule", async () => {
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: vi.fn() });
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [{ id: "r1", botId: bot.id, name: "Morning", prompt: "Check the gate", schedule: "0 7 * * *", enabled: true }] : { providers: [], provider: "", model: "" });
+  await click("routines");
+  const card = container.querySelector(".routine-card")!;
+  await click("Edit", card);
+  const editor = container.querySelector(".routine-manager > form")!;
+  vi.mocked(write).mockResolvedValueOnce({ botId: bot.id, schedule: "0 7 * * *", kind: "cron", timezone: "UTC", nextRuns: [] });
+  await click("Preview schedule", editor);
+  vi.mocked(write).mockResolvedValueOnce({});
+  await click("Save routine", editor);
+  expect(write).toHaveBeenLastCalledWith("/routines/r1", expect.objectContaining({ name: "Morning", schedule: "0 7 * * *" }), "PUT");
+  expect(document.activeElement?.textContent).toBe("Edit");
+  expect(card.contains(document.activeElement)).toBe(true);
+  expect(editor.querySelector("h3")?.textContent).toBe("New routine");
 });

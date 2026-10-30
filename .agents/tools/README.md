@@ -1,5 +1,13 @@
 # Repository tools
 
+
+- `check-home-touch.js` is a Playwright CLI run-code function that uses real Chromium touch input to long-press an assistant, checks that the menu backdrop intercepts outside taps, and confirms dismissal keeps home open.
+
+- `capture-design.js` is a Playwright CLI run-code function that captures Today, assistants home, conversation, questions, approvals, failed/interrupted turns, assistant details and artifacts, assistant creation/settings, the Avatar editor, models/tools/skills, or profile Memory at desktop, tablet and phone widths. Pass `{ outputDir, prefix, screen, fixture }` with a matching `.agents/fixtures/*-design.json` to use the same populated data as the native design tour. It covers dark and large text, screen-specific empty and failure states, viewport overflow, conversation draft, clipboard and keyboard focus, and question answers or approval decisions with failure and retry. Recovery captures check draft preservation, refused and unconfirmed retries, request ID reuse and the interruption review gate.
+- `npm exec tsx .agents/tools/check-memory-fixture.ts` verifies every Memory design fixture state against the production schema, digest rules and declared synthetic character-count delimiter.
+- `python3 .agents/tools/capture-design.py SCREEN before|after --root ARTIFACT_DIRECTORY --origin LOOPBACK_ORIGIN --session OWNED_SESSION` runs `capture-design.js` with the matching shared fixture and saves its screenshots and JSON report. Use `--report NAME` to retain separate revision reports. It rejects incomplete conversation fixtures before browser launch, uses the installed CLI or pinned 0.1.22, and preserves the last good report if a run fails. Failed browser runs retain a diagnostic screenshot and page-error messages. Put the CLI that opened the session on PATH when reusing an npx-cached installation. Use `work after --work-case clear-confirmation` for the single-frame Clear spacing recheck. It verifies focus before the screenshot helper blurs it and requires zero writes. Use `work before --work-case tasks` for the full W2 BEFORE set. Use `work after --work-case tasks --task-gate a` for the W2a-only AFTER set, with the `work-tasks-a-after` report and its own screenshot directory. Use `work after --work-case tasks --task-gate b` for the separate 16-frame W2b task-editor tour. Each gate requires its own new `--report work-tasks-a-...` or `work-tasks-b-...` basename and refuses existing output. Combined W2 AFTER capture is not supported.
+- `python3 .agents/tools/annotate-design.py SPEC.json OUTPUT.png` combines before/after screenshots with numbered pointers and matching notes. Requires Pillow. The specification has a `title` and `before`/`after` objects with `image` and `notes`, each note supplying `point` in pixels or `fraction` of image width/height, `text`, and an optional `offset`. `--batch MANIFEST.json` regenerates only listed comparisons, with relative `spec` and `output` paths under the manifest directory.
+
 - `automation-preview.mjs` supplies synthetic Work and Learning interactions to the existing loopback preview, including one-time signing-secret display. It never contacts Hermes.
 - `check-automation-browser.js` exercises goals, task creation/start and skill-diff review in the synthetic port-3021 preview at desktop and phone widths.
 
@@ -22,7 +30,7 @@
 - `node --env-file=PRIVATE_APP_ENV --import tsx .agents/tools/accept-household-experience.mjs PRIVATE_RECEIPT_PATH` runs with the deployed release as its working directory to check authenticated Today, native profile memory, vault metadata, schedule previews and synthetic speech through loopback services; refuses maintenance, verifies conversations stay unchanged, and removes its temporary app session. The helper may be uploaded outside the release and invoked by absolute path.
 
 - `python3 .agents/tools/source-state.py` prints the source fingerprint used by the validation ledger, excluding the ledger (`docs/ledger/` and the archive `docs/ValidationLedger.md`) and ignored build/runtime files; optional path-prefix arguments restrict the fingerprint to a component.
-- `python3 .agents/tools/review-collage.py output.png 'Label=screenshot.png' ...` combines screenshots at a common height with labels and preserved aspect ratios; requires Pillow.
+- `python3 .agents/tools/review-collage.py output.png 'Label=screenshot.png' ...` combines screenshots at a common height with labels sized for that height and preserved aspect ratios; requires Pillow 10.1 or newer. Use short labels that fit each panel.
 - `python3 .agents/tools/archive-spike-evidence.py SOURCE_DIRECTORY DESTINATION_DIRECTORY` archives successful disposable qualification receipts with a content manifest and refuses to replace historical evidence or publish raw home paths. `--isolated-host-home ABSOLUTE_PATH` redacts the disposable staged HOME before hashing public receipts.
 - `python3 .agents/tools/archive-app-qualification.py NAME DESTINATION_DIRECTORY` fetches a completed release qualification into ignored private storage, checks its marked stage ownership and archives sanitized receipts with the existing evidence tool.
 - `python3 .agents/tools/deploy-app-release.py --config PRIVATE_ABSOLUTE_JSON` bootstraps upgrade guards with a built release using native retirement/drain, verifies Google and guarded gateway recovery, and retains private rollback copies.
@@ -46,3 +54,40 @@
 
 - `node .agents/tools/preview-app.mjs` serves the built web client on loopback port 3000 with explicit household, conversation, avatar-state, model catalog, artifact files, account/status and update-recovery fixtures. Attachment uploads take four seconds so progress is visible, and a file name containing `fail` exercises Retry. Kitchen companion has a 64-turn history for paging earlier messages, Kitchen companion and Trail guide show as unread on home, and `PREVIEW_ARRIVALS=1` adds a kitchen reply every eight seconds for the new-message control, announced on the conversation change stream as the app server does. `PREVIEW_CLIENT_DIR` serves a saved client build for before/after comparisons, and `PREVIEW_PORT` selects a separate loopback port. `PREVIEW_THEME` and `PREVIEW_PRESENTATION` set the initial preferences; `PREVIEW_HOST` can select a trusted LAN address when the collaborative browser runs on another machine. `PREVIEW_COORDINATION=1` shows synthetic scheduled answers with bot, subagent, process and diagnostic activity for disclosure review. `PREVIEW_SECURE_REQUEST=login|code|unlock|secret` adds a synthetic inline credential request; `PREVIEW_SECURE_FAILURE=1` exercises uncertain settlement without storing secrets. `PREVIEW_SIGNED_OUT=1` and `PREVIEW_DISCONNECTED=1` exercise entry/recovery pages; `PREVIEW_PUSH_CONFIGURED=1 PREVIEW_NOTIFICATION_PROMPT=1` shows the notification invitation on an insecure LAN for visual review only, with push still unsupported. Creating an assistant adds it to the fixture, and `PREVIEW_AVATAR_FAILURE=1` fails its first avatar save so the retry path can be checked. Hermes revisions carry commit dates. `PREVIEW_TERMINAL=confirm|restricted` shows the terminal's sign-in confirmation or non-administrator state. It serves the app's real Content-Security-Policy and prints any violation report to stderr. It never contacts Hermes or account providers, except that `PREVIEW_GOOGLE_CLIENT_ID` loads Google's real sign-in button.
 - The preview's transcript fixtures: Trail guide has a failed turn whose Retry answers after a moment, Ledger asks one single-choice and one multiple-choice question, Trail scout shows a finished turn with timed tool work and a reply with code in several languages and a table, and `/search?botId=` matches every saved message of a fixture with a session (Kitchen companion, for find in chat across unloaded history).
+
+- `validate-ios.sh` runs native validation through `~/.agents/tools/mac-heavy-lock.sh`, including simulator boot and shutdown. It keeps build output on DevSSD.
+
+- `node --import tsx .agents/tools/check-work-fixture.ts` checks the offline Work design fixture against the automation decoder and documented native assumptions.
+- `node --import tsx .agents/tools/check-work-tasks-fixture.ts` validates the W2 task fixture and its documented adapter assumptions.
+
+
+- `capture-work-triggers.js` and `capture-work-triggers-after.js` provide synthetic event-trigger scenarios for `capture-design.py --work-case triggers`.
+- `node --import tsx .agents/tools/check-work-triggers-fixture.ts` checks the shared event-trigger fixture against the production schema.
+
+- `bash .agents/tools/capture-settings-ios.sh APP_PATH SIMULATOR_UUID OUTPUT_DIR TAB [TAB...]` captures compiled Debug settings or Search, History, Saved, Automations, Groups and app Preferences pages using the installed simulator, with synthetic data and the machine-wide lock. It boots one simulator, saves PNGs and shuts it down.
+
+- `capture-groups.js` captures desktop and phone group conversations, mention suggestions, thread selection, the create limit and named pending approval cards in an existing Playwright CLI browser. It checks draft preservation and one synthetic send, then closes its isolated context.
+
+- `capture-app-settings.js` captures app settings, Following, home section editing, keyboard help, command palette and find-in-chat at desktop and phone widths, with reversible fixture preference edits. It closes its isolated browser context.
+
+- `capture-computer.js`: Capture and exercise simulated desktop control and terminal actions at desktop and phone widths through Playwright CLI.
+
+The `capture-settings-ios.sh` Computer mode opens the compiled native desktop viewer using its Debug-only simulated transport.
+
+The `capture-settings-ios.sh` TriggerSecret mode creates a synthetic event through the normal control, then dismisses its editor to capture secret-panel labels and opening position.
+
+The `capture-settings-ios.sh` Updates and Connection modes capture synthetic update recovery and the native sign-in view without invoking provider sign-in or a real update.
+
+- `capture-connection.js`: Capture fixture sign-in, setup, lost connection and update-recovery flows at desktop and phone widths without contacting providers.
+
+- `capture-notifications.js` captures fixture notification onboarding, device settings, quiet hours and the Apple handoff card at desktop and phone widths. It uses a fake browser push system, never a real permission prompt or delivery.
+
+The `capture-settings-ios.sh` Notifications mode scrolls real Settings to the notification controls with the existing fake permission system. Apple opens the real Calendar and Reminders screen without requesting EventKit access.
+
+The notification capture also exercises account-scoped Following and equal-time validation. Native NotificationsBlocked uses denied fixture permission, and AppleDate scrolls the real Apple form to its date window.
+
+- `bash .agents/tools/test-apple-snapshot.sh EXISTING_OUTPUT_DIRECTORY` compiles the production Foundation snapshot model with its standalone date, timezone, filtering, sorting, JSON and presentation checks under the Mac lock. It reads no EventKit data.
+
+- `capture-survival.js` captures empty home/conversation states and checks offline draft preservation and reconnect at desktop and phone widths in the loopback fixture preview. Native `capture-settings-ios.sh` also supports Empty, ShareDraft and Widget/WidgetStale/WidgetEmpty, which render production views with sample data, not system-hosted widgets.
+
+- `test-share-inbox.sh EXISTING_OUTPUT_DIRECTORY` compiles the production Foundation inbox code and checks saved edits and failed writes, plus orphan cleanup that preserves recent work, saved drafts, unrelated folders and symlinks. No account data or simulator is used.

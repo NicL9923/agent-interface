@@ -103,7 +103,7 @@ struct LaunchStateView: View {
         Task { await store.restore() }
       } label: {
         Text(store.restoring ? "Checking connection…" : "Try again").frame(maxWidth: 260)
-      }.buttonStyle(.borderedProminent).controlSize(.large).disabled(store.restoring).accessibilityIdentifier("retryConnection")
+      }.buttonStyle(.accentProminent).controlSize(.large).disabled(store.restoring).accessibilityIdentifier("retryConnection")
       ChangeServerButton()
     }
   }
@@ -119,14 +119,21 @@ enum WelcomeCopy {
   static let checkingSignIn = "Checking sign-in…"
 }
 
-/// Leaves this server. If the server cannot confirm the sign-out, asks before forgetting it locally.
+/// Confirms before leaving this server, with a second choice if sign-out cannot be confirmed.
 struct ChangeServerButton: View {
   @Environment(AppStore.self) private var store
   @State private var offline = false
+  @State private var confirm = false
   var body: some View {
-    Button("Change server") {
-      Task { if !(await store.changeConnection()) { offline = true } }
+    Button { confirm = true } label: {
+      Text("Change server").frame(minHeight: 44).contentShape(Rectangle())
     }.disabled(store.signingIn).accessibilityIdentifier("changeServer")
+      .confirmationDialog("Change server? This signs this device out of its current household.", isPresented: $confirm, titleVisibility: .visible) {
+        Button("Change server", role: .destructive) {
+          Task { if !(await store.changeConnection()) { offline = true } }
+        }
+        Button("Stay here", role: .cancel) {}
+      }
       .confirmationDialog(
         "The server didn't confirm sign-out, so it may be unreachable. If you change servers anyway, this device forgets its sign-in, but the session stays valid on the server until it expires.",
         isPresented: $offline, titleVisibility: .visible
@@ -158,7 +165,7 @@ struct HermesConnectionPanel: View {
       if copy.setup { steps }
       Button(action: retry) {
         Text(busy ? "Checking connection…" : copy.setup ? "Check connection" : "Reconnect now").frame(maxWidth: 260)
-      }.buttonStyle(.borderedProminent).controlSize(.large).disabled(busy || offline).accessibilityIdentifier("reconnectNow")
+      }.buttonStyle(.accentProminent).controlSize(.large).disabled(busy || offline).accessibilityIdentifier("reconnectNow")
       details
     }.frame(maxWidth: 520).frame(maxWidth: .infinity).accessibilityElement(children: .contain).accessibilityLabel("Hermes connection")
       .accessibilityIdentifier("connectionPanel")
@@ -229,7 +236,7 @@ struct HomeEmptyDetail: View {
       AvatarView(avatar: AvatarConfig(), size: 100, name: "Assistant", forceReducedMotion: true).accessibilityHidden(true)
       Text("A little less to carry.").font(.title2.bold())
       Text("Return to the same assistants, with the context and conversations you share.").foregroundStyle(.secondary).multilineTextAlignment(.center)
-      Button("Create an assistant", action: create).buttonStyle(.borderedProminent).controlSize(.large)
+      Button("Create an assistant", action: create).buttonStyle(.accentProminent).controlSize(.large)
         .disabled(store.assistantSetupBlock != nil).accessibilityIdentifier("createAssistant")
       if let reason = store.assistantSetupBlock { Text(reason).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center) }
     }.frame(maxWidth: 520).frame(maxWidth: .infinity)

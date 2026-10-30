@@ -42,11 +42,18 @@ struct IntegrationConnection: Codable, Identifiable {
   func assistantsLabel(name: (String) -> String?) -> String {
     botIds.isEmpty ? "This assistant" : botIds.map { name($0) ?? $0 }.joined(separator: ", ")
   }
+  var recommendsConnect: Bool { ["not_connected", "unsupported", "expired", "missing_permission"].contains(status) }
+  var recommendsCheck: Bool { ["configured", "unavailable"].contains(status) }
+  var statusTint: Color {
+    if status == "connected" { return Palette.accent }
+    if ["expired", "missing_permission", "unavailable"].contains(status) { return Palette.attention }
+    return Palette.muted
+  }
   var statusLabel: String {
     switch status {
     case "connected": "Connected"
     case "configured": "Configured · not checked"
-    case "expired": "Sign in again"
+    case "expired": "Expired"
     case "missing_permission": "Permission needed"
     case "unavailable": "Unavailable"
     case "unsupported": "Setup needed"
@@ -165,11 +172,11 @@ struct IntegrationsView: View {
         }
       } else if busy { ProgressView("Loading connections…") }
       else if profile.isEmpty { Text("Create an assistant before connecting its services.") }
-      Section {
+      if catalog?.connections.contains(where: { $0.id == "apple" }) != true { Section {
         NavigationLink { AppleDeviceConnectionsView(botId: profile) } label: {
           Label("Apple Calendar & Reminders", systemImage: "calendar")
         }
-      } footer: { Text("Choose data on this iPhone and share it with an assistant. Sharing requires this app to be open.") }
+      } footer: { Text("Choose data on this iPhone and share it with an assistant. Sharing requires this app to be open.") } }
     }.navigationTitle("Integrations").navigationBarTitleDisplayMode(.inline)
       .disabled(store.sessionExpired)
       .refreshable { await refresh() }
@@ -230,19 +237,28 @@ struct IntegrationsView: View {
     }
   }
   @ViewBuilder private func connectionRow(_ connection: IntegrationConnection, canManage: Bool) -> some View {
+    if connection.id == "apple" {
+      NavigationLink { AppleDeviceConnectionsView(botId: profile) } label: {
+        VStack(alignment: .leading, spacing: 6) {
+          Label("Apple Calendar & Reminders", systemImage: "calendar").font(.headline)
+          Text("Choose and share from this iPhone").font(.subheadline)
+          Text("Review selected data, then add it to an assistant's draft.").font(.footnote).foregroundStyle(Palette.muted)
+        }.padding(.vertical, 8)
+      }.accessibilityIdentifier("appleDeviceConnection")
+    } else {
     VStack(alignment: .leading, spacing: 10) {
       HStack(alignment: .top) {
         Text(connection.name).font(.headline)
         Spacer()
-        Text(connection.statusLabel).font(.caption).foregroundStyle(connection.status == "connected" ? Palette.accent : .secondary)
+        Text(connection.statusLabel).font(.caption).foregroundStyle(connection.statusTint)
       }
       if let account = connection.account { Text(account).font(.subheadline).textSelection(.enabled) }
-      Text(connection.detail).font(.footnote).foregroundStyle(.secondary)
-      if let uses = connection.uses { Text(uses).font(.footnote).foregroundStyle(.secondary) }
-      Text("Managed by \(connection.owner)").font(.caption).foregroundStyle(.secondary)
-      Text("Assistants: \(connection.assistantsLabel { id in store.bootstrap?.bots.first { $0.id == id }?.name })").font(.caption).foregroundStyle(.secondary)
-      if let date = connection.checkedAt.flatMap(ServerDate.parse) { Text("Last checked \(date.formatted(date: .abbreviated, time: .shortened))").font(.caption).foregroundStyle(.secondary) }
-      else { Text("Not checked yet").font(.caption).foregroundStyle(.secondary) }
+      Text(connection.detail).font(.footnote).foregroundStyle(Palette.muted)
+      if let uses = connection.uses { Text(uses).font(.footnote).foregroundStyle(Palette.muted) }
+      Text("Managed by \(connection.owner)").font(.caption).foregroundStyle(Palette.muted)
+      Text("Assistants: \(connection.assistantsLabel { id in store.bootstrap?.bots.first { $0.id == id }?.name })").font(.caption).foregroundStyle(Palette.muted)
+      if let date = connection.checkedAt.flatMap(ServerDate.parse) { Text("Last checked \(date.formatted(date: .abbreviated, time: .shortened))").font(.caption).foregroundStyle(Palette.muted) }
+      else { Text("Not checked yet").font(.caption).foregroundStyle(Palette.muted) }
       if !connection.permissions.isEmpty {
         DisclosureGroup("Access & permissions") {
           ForEach(connection.permissions) { permission in
@@ -250,17 +266,26 @@ struct IntegrationsView: View {
           }
         }.font(.footnote)
       }
-      if connection.actions.connect {
-        Button(["not_connected", "unsupported"].contains(connection.status) ? "Connect" : "Reconnect") {
-          fields = Dictionary(uniqueKeysWithValues: connection.setup.compactMap { field in field.defaultValue.map { (field.key, $0) } })
-          if connection.setup.isEmpty { Task { await operate(connection, "connect") } } else { editing = connection }
-        }.disabled(busy || !canManage || flow?.status == "pending")
+      ForEach(connection.recommendsCheck ? ["check", "connect"] : ["connect", "check"], id: \.self) { operation in
+        if operation == "connect" && connection.actions.connect {
+          let connectButton = Button(["not_connected", "unsupported"].contains(connection.status) ? "Connect" : "Reconnect") {
+            fields = Dictionary(uniqueKeysWithValues: connection.setup.compactMap { field in field.defaultValue.map { (field.key, $0) } })
+            if connection.setup.isEmpty { Task { await operate(connection, "connect") } } else { editing = connection }
+          }.disabled(busy || !canManage || flow?.status == "pending")
+          if connection.recommendsConnect { connectButton.buttonStyle(.accentProminent) }
+          else { connectButton }
+        }
+        if operation == "check" && connection.actions.check {
+          let checkButton = Button("Check connection") { Task { await operate(connection, "check") } }.disabled(busy)
+          if connection.recommendsCheck { checkButton.buttonStyle(.accentProminent) }
+          else { checkButton }
+        }
       }
-      if connection.actions.check { Button("Check connection") { Task { await operate(connection, "check") } }.disabled(busy) }
       if connection.actions.disconnect {
         Button("Disconnect", role: .destructive) { disconnecting = connection; showDisconnect = true }.disabled(busy || !canManage)
       }
     }.padding(.vertical, 8).buttonStyle(.borderless)
+    }
   }
   @ViewBuilder private func flowSection(_ value: IntegrationFlow) -> some View {
     Section(value.heading) {

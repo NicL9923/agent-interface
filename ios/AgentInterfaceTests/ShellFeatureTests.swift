@@ -279,9 +279,10 @@ import XCTest
   func testQuickSwitcherListsPinnedAssistantsFirstThenMatchingViews() throws {
     let bots = try [bot("alpha"), bot("kitchen"), bot("ranch")]
     let all = QuickSwitch.entries(query: "", bots: bots, pinned: ["ranch", "kitchen"])
-    XCTAssertEqual(all.map(\.target), [.bot("ranch"), .bot("kitchen"), .bot("alpha"), .today, .groups, .search])
+    XCTAssertEqual(all.map(\.target), [.bot("ranch"), .bot("kitchen"), .bot("alpha"), .today, .groups, .search, .settings])
     XCTAssertEqual(QuickSwitch.entries(query: "kit", bots: bots, pinned: []).map(\.target), [.bot("kitchen")])
     XCTAssertEqual(QuickSwitch.entries(query: "group", bots: bots, pinned: []).map(\.target), [.groups])
+    XCTAssertEqual(QuickSwitch.entries(query: "settings", bots: bots, pinned: []).map(\.target), [.settings])
     XCTAssertEqual(QuickSwitch.entries(query: "zzz", bots: bots, pinned: []), [])
   }
   func testAShortOptionListIsSegmentedAndALongOneStaysAMenu() {

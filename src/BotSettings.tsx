@@ -16,6 +16,7 @@ import { useAction } from "./app/use-action";
 import { useCatalogDraft } from "./app/use-catalog-draft";
 import { useResource } from "./app/use-resource";
 import { CatalogEditor } from "./components/CatalogEditor";
+import { SettingsConfirmation } from "./components/SettingsConfirmation";
 import { FormMessage } from "./components/ui/form-message";
 import { IntegrationList } from "./components/IntegrationsPanel";
 import { Icon } from "./components/Icon";
@@ -81,6 +82,10 @@ function LoadedBotSettings({
   const [step, setStep] = useState<"look" | "role">("look");
   const [avatarFailure, setAvatarFailure] = useState("");
   const [tab, setTab] = useState<SettingsTab>("details");
+  const [memoryDirty, setMemoryDirty] = useState(false);
+  const [memorySaving, setMemorySaving] = useState(false);
+  const [pendingMemoryTab, setPendingMemoryTab] = useState<SettingsTab | null>(null);
+  useEffect(() => { if (!memoryDirty) setPendingMemoryTab(null); }, [memoryDirty]);
   const compactSettings = useCompactSettings();
   const overflowMenu = useRef<HTMLDetailsElement>(null);
   const overflowTrigger = useRef<HTMLElement>(null);
@@ -90,6 +95,7 @@ function LoadedBotSettings({
     form: formFromBot(existing, bootstrap.bots[0]),
     avatar: existing?.avatar || defaultAvatar,
   }));
+  const savedName = baseline.form.name || existing?.name || "";
   // The dialog stays mounted while detail loads; only authoritative detail seeds the form.
   const wasLoading = useRef(!!loading);
   useEffect(() => {
@@ -109,7 +115,7 @@ function LoadedBotSettings({
   const toolsDraft = useCatalogDraft("tools", catalogOptions("tools"));
   const skillsDraft = useCatalogDraft("skills", catalogOptions("skills"));
   const unsaved = JSON.stringify([form, avatar]) !== JSON.stringify([baseline.form, baseline.avatar])
-    || toolsDraft.staged || skillsDraft.staged;
+    || toolsDraft.staged || skillsDraft.staged || memoryDirty;
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const keepEditing = useRef<HTMLButtonElement>(null);
   const beforePrompt = useRef<HTMLElement | null>(null);
@@ -127,15 +133,23 @@ function LoadedBotSettings({
   };
   useEffect(() => { if (!unsaved) setConfirmDiscard(false); }, [unsaved]);
   // Escape and the close button both land here, so nothing is discarded without asking.
-  const requestClose = () => unsaved ? setConfirmDiscard(true) : onClose();
+  const requestClose = () => memorySaving ? undefined : unsaved ? setConfirmDiscard(true) : onClose();
   const routinesResource = useResource(existing && tab === "routines" && bootstrap.capabilities.routines.supported ? routeUrl("GET /routines", {}) : null, { load: (_, signal) => request("GET /routines", { signal }) });
   const routines = (routinesResource.data || []).filter(routine => routine.botId === existing?.id);
-  const [confirmModel, setConfirmModel] = useState(false);
+  const [confirmModel, setConfirmModel] = useState<string | null>(null);
   // Making a shared or ownerless assistant personal hides it from everyone else, so it asks first.
   const [confirmPersonal, setConfirmPersonal] = useState(false);
   const [personalConfirmed, setPersonalConfirmed] = useState(false);
   const shownError = error || routinesResource.error;
   const [prompt, setPrompt] = useState("");
+  const [portraitOperation, setPortraitOperation] = useState<"upload" | "generate" | null>(null);
+  const portraitNotice = tab === "avatar" && notice?.startsWith("Portrait ") ? notice : "";
+  const portraitNextStep = bootstrap.capabilities.uploads?.supported
+    ? bootstrap.capabilities.portraitGeneration?.supported ? "Upload or generate a portrait before saving." : "Upload a portrait before saving."
+    : bootstrap.capabilities.portraitGeneration?.supported ? "Generate a portrait before saving." : "Portraits are unavailable. Choose Geometric or Mascot.";
+  const portraitPromptLimit = prompt.length > 2000
+    ? `The description is ${(prompt.length - 2000).toLocaleString()} character${prompt.length - 2000 === 1 ? "" : "s"} over the ${(2000).toLocaleString()} limit. Shorten the text to generate a portrait.`
+    : prompt.length >= 1800 ? `${prompt.length.toLocaleString()} of ${(2000).toLocaleString()} characters` : "";
   // The banner sits above the fold on phones, so each save button reports its own progress.
   const [saving, setSaving] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
@@ -158,8 +172,8 @@ function LoadedBotSettings({
   }, {
     success,
     onError: cause => {
-      if (cause instanceof ApiError && cause.confirmRequired) setConfirmModel(true);
       if (cause instanceof ApiError && cause.code === "private_confirmation_required") { setConfirmPersonal(true); return null; }
+      if (cause instanceof ApiError && cause.confirmRequired) { setConfirmModel(cause.message); return null; }
     },
   });
   const createBot = (submitted: BotInput, confirmed: boolean) => actions.run(async () => {
@@ -167,7 +181,7 @@ function LoadedBotSettings({
     let saved: Bot;
     try {
       saved = await request("POST /bots", { body: { ...submitted, confirmModel: confirmed } });
-      setConfirmModel(false);
+      setConfirmModel(null);
     } finally { setSaving(null); }
     const chosen = avatar;
     // Portraits are stored with the assistant, so a portrait is added once it exists.
@@ -184,7 +198,7 @@ function LoadedBotSettings({
     setTab("avatar");
     if (failure) setAvatarFailure(failure);
     else setNotice(`${saved.name} is ready. Upload or generate its portrait here, then save it.`);
-  }, { onError: cause => { if (cause instanceof ApiError && cause.confirmRequired) setConfirmModel(true); } });
+  }, { onError: cause => { if (cause instanceof ApiError && cause.confirmRequired) { setConfirmModel(cause.message); return null; } } });
   const saveAvatar = () => void run(async () => {
     const submitted = avatar;
     await request("PUT /bots/:id/avatar", { params: { id: existing!.id }, body: submitted });
@@ -194,6 +208,7 @@ function LoadedBotSettings({
   const saveBot = (confirmed = false, personal = personalConfirmed) => {
     if (loading) return;
     const submitted = form;
+    personal = personal && !submitted.shared;
     if (!existing) return createBot(submitted, confirmed);
     if (existing && !submitted.shared && !(existing.shared === false && existing.ownerId) && !personal) {
       setConfirmPersonal(true);
@@ -207,10 +222,10 @@ function LoadedBotSettings({
           params: { id: existing.id },
           body: { ...submitted, confirmModel: confirmed, ...(personal ? { confirmPrivate: true } : {}) },
         });
-        setConfirmModel(false);
+        setConfirmModel(null);
         setBaseline((current) => ({ ...current, form: submitted }));
       },
-      existing.shared
+      submitted.shared
         ? "Changes saved for both household members."
         : "Assistant saved.",
       "details",
@@ -222,7 +237,8 @@ function LoadedBotSettings({
       setError("Choose a PNG, JPEG, or WebP portrait no larger than 2 MB.");
       return;
     }
-    await run(async () => {
+    setPortraitOperation("upload");
+    try { await run(async () => {
       const data = new FormData();
       data.append("file", file);
       // Multipart, so the mapped route is posted with a form body instead of through request().
@@ -235,7 +251,17 @@ function LoadedBotSettings({
         src: result.url || `/api/files/${encodeURIComponent(result.id)}`,
         origin: "uploaded",
       });
-    }, "Portrait uploaded. Save avatar to apply it.");
+    }, "Portrait ready to save."); } finally { setPortraitOperation(null); }
+  };
+  const generatePortrait = async () => {
+    if (!existing || !prompt.trim() || prompt.length > 2000) return;
+    setPortraitOperation("generate");
+    try {
+      await run(async () => {
+        const result = await request("POST /bots/:id/portrait", { params: { id: existing.id }, body: { prompt } });
+        setAvatar({ mode: "portrait", src: result.url || `/api/files/${encodeURIComponent(result.id)}`, origin: "generated" });
+      }, "Portrait ready to save.");
+    } finally { setPortraitOperation(null); }
   };
   const unavailable = (
     key:
@@ -252,7 +278,13 @@ function LoadedBotSettings({
           "This capability is unavailable from the connected Hermes installation."}
       </p>
     ) : null;
-  const selectTab = (section: SettingsTab, fromOverflow = false) => {
+  const selectTab = (section: SettingsTab, fromOverflow = false, discardMemory = false) => {
+    if (memorySaving) return;
+    if (tab === "memory" && section !== tab && memoryDirty && !discardMemory) {
+      if (overflowMenu.current) overflowMenu.current.open = false;
+      if (fromOverflow) overflowTrigger.current?.focus();
+      setPendingMemoryTab(section); return;
+    }
     setTab(section);
     setError("");
     setNotice("");
@@ -268,6 +300,7 @@ function LoadedBotSettings({
       className="settings-dialog"
       aria-labelledby="assistant-settings-title"
       onCancel={(event) => {
+        if (memorySaving) { event.preventDefault(); return; }
         if (!unsaved) return onClose();
         event.preventDefault();
         setConfirmDiscard(true);
@@ -275,6 +308,7 @@ function LoadedBotSettings({
       onClose={() => {
         // Closing and reopening in one pass, as Strict Mode does, queues an event for a dialog that is open.
         if (dialog.current?.open) return;
+        if (memorySaving) { dialog.current?.showModal(); return; }
         // A second Escape can close the dialog without a cancelable event, so put it back.
         if (!unsaved) return onClose();
         dialog.current?.showModal();
@@ -284,23 +318,24 @@ function LoadedBotSettings({
       <header>
         <div>
           <p className="eyebrow">{existing ? "Assistant settings" : `New assistant · Step ${step === "look" ? 1 : 2} of 2`}</p>
-          <h2 id="assistant-settings-title" tabIndex={-1}>{existing?.name || (step === "look" ? "Name and look" : "Role and model")}</h2>
+          <h2 id="assistant-settings-title" tabIndex={-1}>{existing ? savedName : step === "look" ? "Name and look" : "Role and model"}</h2>
         </div>
         <Button
           className="icon-button"
           aria-label="Close assistant settings"
           onClick={requestClose}
+          disabled={memorySaving}
         >
           <Icon name="close" />
         </Button>
       </header>
-      {loading ? <>
+      {loading ? <div className="settings-content settings-load-state">
         <p role={loading.error ? "alert" : "status"}>{loading.error || "Loading assistant settings…"}</p>
         {loading.error && <Button onClick={() => {
           dialog.current?.querySelector<HTMLElement>("#assistant-settings-title")?.focus();
           loading.retry();
         }}>Retry settings</Button>}
-      </> : <>
+      </div> : <>
       {/* Sections that need the assistant to exist appear once it does. */}
       {existing && <nav className={`settings-tabs${compactSettings ? " settings-tabs-mobile" : ""}`} aria-label="Settings sections">
         {(compactSettings ? settingsSections.slice(0, 2) : settingsSections).map((t) => (
@@ -308,6 +343,7 @@ function LoadedBotSettings({
             type="button"
             aria-current={tab === t ? "page" : undefined}
             key={t}
+            disabled={memorySaving}
             onClick={() => selectTab(t)}
           >
             {t}
@@ -327,14 +363,14 @@ function LoadedBotSettings({
             <span>{settingsSections.slice(2).includes(tab) ? tab : "More"}</span><Icon name="chevron" size={16} />
           </summary>
           <div className="settings-more-menu" id={overflowMenuId}>
-            {settingsSections.slice(2).map((section) => <Button type="button" key={section}
+            {settingsSections.slice(2).map((section) => <Button type="button" key={section} disabled={memorySaving}
               aria-current={tab === section ? "page" : undefined} onClick={() => selectTab(section, true)}>{section}</Button>)}
           </div>
         </details>}
       </nav>}
       <div className="settings-content">
         {shownError && <FormMessage tone="error" ref={errorBanner}>{shownError}</FormMessage>}
-        {notice && <FormMessage tone="notice">{notice}</FormMessage>}
+        {notice && !portraitNotice && <FormMessage tone="notice">{notice}</FormMessage>}
         {confirmDiscard && (
           <div className="capability-note" role="alert">
             <p>Discard your unsaved changes?</p>
@@ -344,38 +380,24 @@ function LoadedBotSettings({
             </div>
           </div>
         )}
-        {confirmPersonal && existing && (
-          <div className="capability-note" role="alert">
-            <p>
-              Make {existing.name} your personal assistant? It will disappear for the
-              rest of the household, along with its conversation, routines and group chats.
-            </p>
-            <div className="actions">
-              <Button type="button" className="danger" disabled={busy} onClick={() => void saveBot(false, true)}>
-                Make it personal
-              </Button>
-              <Button type="button" onClick={() => setConfirmPersonal(false)}>
-                Keep editing
-              </Button>
-            </div>
-          </div>
-        )}
-        {confirmModel && (
-          <div className="capability-note">
-            <p>
-              Hermes requires confirmation for this provider and model. Review
-              the reported warning above before continuing.
-            </p>
-            <div className="actions">
-              <Button disabled={busy} onClick={() => void saveBot(true)}>
-                Confirm this model
-              </Button>
-              <Button onClick={() => setConfirmModel(false)}>
-                Keep editing
-              </Button>
-            </div>
-          </div>
-        )}
+        {pendingMemoryTab && <SettingsConfirmation title="Leave memory without saving?"
+          detail="Your unsaved memory edits will be lost. Save them before leaving if you want to keep them."
+          confirmLabel="Discard edits and leave" danger busy={false}
+          fallbackFocus={() => dialog.current?.querySelector<HTMLElement>("#assistant-settings-title") ?? null}
+          onCancel={() => setPendingMemoryTab(null)}
+          onConfirm={() => { const section = pendingMemoryTab; setPendingMemoryTab(null); setMemoryDirty(false); selectTab(section, false, true); }} />}
+        {confirmPersonal && existing && <SettingsConfirmation
+          title={`Make ${savedName} personal?`}
+          detail="It will disappear for the rest of the household, along with its conversation, routines and group chats."
+          confirmLabel="Make it personal" danger busy={busy}
+          fallbackFocus={() => dialog.current?.querySelector<HTMLElement>("[data-settings-save]:not(:disabled)") ?? dialog.current?.querySelector<HTMLElement>("#assistant-settings-title") ?? null}
+          onCancel={() => setConfirmPersonal(false)}
+          onConfirm={() => { setConfirmPersonal(false); void saveBot(false, true); }} />}
+        {confirmModel && <SettingsConfirmation
+          title="Use this model?" detail={confirmModel} confirmLabel="Confirm this model" busy={busy}
+          fallbackFocus={() => dialog.current?.querySelector<HTMLElement>("[data-settings-save]:not(:disabled)") ?? dialog.current?.querySelector<HTMLElement>("#assistant-settings-title") ?? null}
+          onCancel={() => setConfirmModel(null)}
+          onConfirm={() => { setConfirmModel(null); void saveBot(true); }} />}
         {avatarFailure && existing && (
           <div className="capability-note avatar-failure" role="alert">
             <p>{existing.name} was created, but its avatar didn't save: {avatarFailure} Your choice is still here.</p>
@@ -407,8 +429,8 @@ function LoadedBotSettings({
             <AvatarEditor avatar={avatar} onChange={setAvatar} name={form.name.trim() || "New assistant"}
               portraitControls={avatar.mode === "portrait" && <p className="muted">
                 Portraits are stored with the assistant, so you'll upload or generate one right after you create it.</p>} />
-            <div className="actions sticky-actions">
-              <Button type="submit" className="primary" disabled={!bootstrap.capabilities.botConfiguration.supported}>Next: role and model</Button>
+            <div className="actions sticky-actions settings-save-actions">
+              <Button type="submit" className="primary" aria-label="Next: role and model" disabled={!bootstrap.capabilities.botConfiguration.supported}>Next</Button>
             </div>
           </form>
         )}
@@ -429,18 +451,18 @@ function LoadedBotSettings({
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
               />
             </label>}
-            <label>
-              Description
-              <Input
+            <label htmlFor="assistant-description">
+              <span id="assistant-description-label">Description</span>
+              <Textarea id="assistant-description" aria-labelledby="assistant-description-label" rows={2}
                 value={form.description}
                 onChange={(e) =>
                   setForm({ ...form, description: e.target.value })
                 }
               />
             </label>
-            <label>
-              Instructions
-              <Textarea
+            <label htmlFor="assistant-instructions">
+              <span id="assistant-instructions-label">Instructions</span>
+              <Textarea id="assistant-instructions" aria-labelledby="assistant-instructions-label"
                 rows={7}
                 value={form.instructions}
                 onChange={(e) =>
@@ -460,7 +482,7 @@ function LoadedBotSettings({
               disabled={busy || !bootstrap.capabilities.botConfiguration.supported}
               onChange={({ provider, model }) => {
                 setForm({ ...form, provider, model });
-                setConfirmModel(false);
+                setConfirmModel(null);
                 setError("");
               }}
               onFavoritesSaved={onSaved}
@@ -497,24 +519,26 @@ function LoadedBotSettings({
             <p className="muted">
               Only existing Hermes connections can be configured here.
             </p>
-            <div className="actions">
+            <div className="actions sticky-actions settings-save-actions">
+              {!existing && <Button type="button" disabled={busy} onClick={() => {
+                setStep("look"); setError(""); setConfirmModel(null);
+                dialog.current?.querySelector<HTMLElement>("#assistant-settings-title")?.focus();
+              }}>Back</Button>}
               <Button
-                type="submit"
+                type="submit" data-settings-save
+                aria-label={existing ? undefined : busy ? "Creating assistant" : "Create assistant"}
                 className="primary with-progress"
                 disabled={
                   busy || !form.model || !bootstrap.capabilities.botConfiguration.supported
                 }
               >
                 {existing ? <SaveProgress state={progress("details")} label="Save changes" />
-                  : busy ? <><Icon name="spinner" className="spin" size={16} />Creating…</> : "Create assistant"}
+                  : busy ? <><Icon name="spinner" className="spin" size={16} />Creating…</> : "Create"}
               </Button>
-              {!existing && <Button type="button" disabled={busy} onClick={() => {
-                setStep("look"); setError(""); setConfirmModel(false);
-                dialog.current?.querySelector<HTMLElement>("#assistant-settings-title")?.focus();
-              }}>Back</Button>}
-              {existing && (
+            </div>
+              {existing && <div className="settings-danger-zone">
                 <DeleteBot
-                  bot={existing}
+                  bot={{...existing, name:savedName}}
                   busy={busy}
                   supported={bootstrap.capabilities.botConfiguration.supported}
                   remove={() =>
@@ -525,64 +549,64 @@ function LoadedBotSettings({
                     }, "Assistant deleted")
                   }
                 />
-              )}
-            </div>
+              </div>}
           </form>
         )}
         {existing && tab === "avatar" && (
           <>
             <AvatarEditor
+              compactPreview
               avatar={avatar}
               onChange={setAvatar}
-              name={existing?.name}
+              name={savedName}
               portraitControls={avatar.mode === "portrait" && (
-                <>
+                <div className="avatar-portrait-group">
                   <p className="muted">
                     Portraits stay still. Activity appears in a separate state
                     indicator.
                   </p>
+                  <fieldset className="avatar-portrait-group"><legend>Upload a portrait</legend>
                   <label>
-                    Upload portrait
+                    Image file
                     <Input
                       type="file"
                       accept="image/png,image/jpeg,image/webp"
                       disabled={busy || !bootstrap.capabilities.uploads.supported}
-                      onChange={(e) => void uploadPortrait(e.target.files?.[0])}
+                      onChange={(e) => { const file = e.currentTarget.files?.[0]; e.currentTarget.value = ""; void uploadPortrait(file); }}
                     />
                   </label>
                   <p className="muted">PNG, JPEG, or WebP, up to 2 MB.</p>
                   {unavailable("uploads")}
+                  </fieldset>
+                  <fieldset className="avatar-portrait-group"><legend>Generate a portrait</legend>
                   <label>
-                    Generate a portrait
+                    Describe a portrait
                     <Textarea
                       rows={3}
+                      aria-describedby={portraitPromptLimit ? "portrait-prompt-count" : undefined}
+                      aria-invalid={prompt.length > 2000 || undefined}
                       value={prompt}
                       onChange={(e) => setPrompt(e.target.value)}
                       placeholder="Describe the portrait you want…"
                     />
                   </label>
+                  {portraitPromptLimit && <p className="portrait-prompt-limit" data-invalid={prompt.length > 2000} id="portrait-prompt-count">{portraitPromptLimit}</p>}
                   <Button
-                    disabled={busy || !prompt.trim() || !bootstrap.capabilities.portraitGeneration.supported}
-                    onClick={() =>
-                      void run(async () => {
-                        const result = await request("POST /bots/:id/portrait", { params: { id: existing.id }, body: { prompt } });
-                        setAvatar({
-                          mode: "portrait",
-                          src:
-                            result.url ||
-                            `/api/files/${encodeURIComponent(result.id)}`,
-                          origin: "generated",
-                        });
-                      }, "Portrait generated. Save avatar to apply it.")
-                    }
+                    disabled={busy || !prompt.trim() || prompt.length > 2000 || !bootstrap.capabilities.portraitGeneration.supported}
+                    onClick={() => void generatePortrait()}
                   >
                     Generate portrait
                   </Button>
                   {unavailable("portraitGeneration")}
-                </>
+                  </fieldset>
+                </div>
               )}
             />
-            <div className="actions sticky-actions">
+            {avatar.mode === "portrait" && !avatar.src && <p className="muted">{portraitNextStep}</p>}
+            <div className="actions sticky-actions avatar-save-actions">
+              <p className="avatar-operation" role="status">{portraitOperation
+                ? <><Icon name="spinner" className="spin" size={16} />{portraitOperation === "upload" ? "Uploading portrait…" : "Generating portrait…"}</>
+                : portraitNotice}</p>
               <Button
                 className="primary with-progress"
                 disabled={busy || (avatar.mode === "portrait" && !avatar.src)}
@@ -602,7 +626,7 @@ function LoadedBotSettings({
         {existing && tab === "connections" && <IntegrationList profile={existing.id} bots={bootstrap.bots} accountScope={bootstrap.user.id} />}
         {existing && tab === "work" && <AutomationPanel key={existing.id} botId={existing.id} bots={bootstrap.bots} accountScope={bootstrap.user.id} />}
         {existing && tab === "learning" && <LearningPanel key={existing.id} botId={existing.id} />}
-        {existing && tab === "memory" && <MemoryPanel key={existing.id} botId={existing.id} />}
+        {existing && tab === "memory" && <MemoryPanel key={existing.id} botId={existing.id} onDirtyChange={setMemoryDirty} onSavingChange={setMemorySaving} />}
         {existing && tab === "logins" && <VaultPanel key={existing.id} botId={existing.id} />}
         {existing && tab === "routines" && (
           <>
@@ -622,36 +646,20 @@ function LoadedBotSettings({
     </Dialog>
   );
 }
-function DeleteBot({
-  bot,
-  busy,
-  supported,
-  remove,
-}: {
-  bot: Bot;
-  busy: boolean;
-  supported: boolean;
-  remove: () => void;
+
+function DeleteBot({ bot, busy, supported, remove }: {
+  bot: Bot; busy: boolean; supported: boolean; remove(): void;
 }) {
   const [confirm, setConfirm] = useState(false);
-  return confirm ? (
-    <>
-      <span>Delete {bot.name}?</span>
-      <Button type="button" className="danger" disabled={busy} onClick={remove}>
-        Yes, delete
-      </Button>
-      <Button type="button" onClick={() => setConfirm(false)}>Keep assistant</Button>
-    </>
-  ) : (
-    <Button
-      type="button"
-      className="danger"
-      disabled={busy || !supported}
-      onClick={() => setConfirm(true)}
-    >
-      Delete assistant
-    </Button>
-  );
+  const trigger = useRef<HTMLButtonElement>(null);
+  return <>
+    <Button ref={trigger} className="danger" disabled={busy || !supported} onClick={() => setConfirm(true)}>Delete assistant</Button>
+    {confirm && <SettingsConfirmation title={`Delete ${bot.name}?`}
+      detail="This deletes the assistant in Hermes and removes its settings from WildBots."
+      confirmLabel="Yes, delete" cancelLabel="Keep assistant" danger busy={busy}
+      fallbackFocus={() => trigger.current && !trigger.current.disabled ? trigger.current : document.getElementById("assistant-settings-title")}
+      onCancel={() => setConfirm(false)} onConfirm={() => { setConfirm(false); remove(); }} />}
+  </>;
 }
 function RoutineManager({
   onOpenRoutine,
@@ -670,6 +678,22 @@ function RoutineManager({
   actions: ReturnType<typeof useAction>;
 }) {
   const [editing, setEditing] = useState<string | null>(null);
+  const editor = useRef<HTMLFormElement>(null);
+  const nameInput = useRef<HTMLInputElement>(null);
+  const editButtons = useRef(new Map<string, HTMLButtonElement>());
+  function focusRoutine(id: string) {
+    const button = editButtons.current.get(id);
+    button?.scrollIntoView({ block: "nearest" });
+    button?.focus({ preventScroll: true });
+  }
+  const editorId = useId();
+  const [focusEditor, setFocusEditor] = useState(false);
+  useEffect(() => {
+    if (!focusEditor) return;
+    editor.current?.scrollIntoView({ block: "start" });
+    nameInput.current?.focus({ preventScroll: true });
+    setFocusEditor(false);
+  }, [focusEditor]);
   const [form, setForm] = useState<Omit<Routine, "id">>({
     botId,
     name: "",
@@ -693,22 +717,23 @@ function RoutineManager({
     await reload();
   });
   return (
-    <>
+    <div className="routine-manager">
       <p className="muted">
         Routines keep working when you are away. Choose notification recipients
         explicitly.
       </p>
+      <h3>Routine recipes</h3>
       <div className="routine-presets" aria-label="Routine recipes">{routinePresets.map(preset => <Button type="button" className="routine-preset" key={preset.id} disabled={busy || !supported}
-        onClick={() => { setEditing(null); setPreviewedSchedule(""); setForm({ botId, name: preset.name, prompt: preset.prompt, schedule: preset.schedule, enabled: false, recipientIds: [bootstrap.user.id], contextFrom: ["self"] }); }}>
+        onClick={() => { setEditing(null); setPreviewedSchedule(""); setFocusEditor(true); setForm({ botId, name: preset.name, prompt: preset.prompt, schedule: preset.schedule, enabled: false, recipientIds: [bootstrap.user.id], contextFrom: ["self"] }); }}>
         <strong>{preset.name}</strong><small>{preset.description}</small></Button>)}</div>
+      {routines.length > 0 && <h3>Saved routines</h3>}
       {routines.map((routine) => (
         <article className="routine-card" key={routine.id}>
-          <h3>{routine.name}</h3>
-          <p>{routine.schedule}</p>
-          <small>{routine.enabled ? "Active" : "Paused"}</small>
-          <p>{routine.prompt}</p>
+          <h4>{routine.name}</h4>
+          <dl className="routine-meta"><div><dt>Schedule</dt><dd><code>{routine.schedule}</code></dd></div><div><dt>Status</dt><dd><span className={routine.enabled ? "routine-status" : "routine-status paused"}>{routine.enabled ? "Active" : "Paused"}</span></dd></div></dl>
+          <p className="routine-prompt">{routine.prompt}</p>
           <RoutineEnhancements key={`${bootstrap.user.id}:${routine.id}`} routine={routine} userId={bootstrap.user.id} disabled={busy || !supported} onOpenResults={onOpenRoutine ? () => onOpenRoutine(botId, routine.id) : undefined} />
-          <div className="actions">
+          <div className="actions routine-management-actions">
             <Button
               disabled={busy}
               onClick={() =>
@@ -723,9 +748,10 @@ function RoutineManager({
             >
               {routine.enabled ? "Pause" : "Resume"}
             </Button>
-            <Button
+            <Button ref={node => { if (node) editButtons.current.set(routine.id, node); else editButtons.current.delete(routine.id); }}
               onClick={() => {
                 setEditing(routine.id);
+                setFocusEditor(true);
                 setPreviewedSchedule("");
                 setForm(routine);
               }}
@@ -757,7 +783,7 @@ function RoutineManager({
           </div>
         </article>
       ))}
-      <form
+      <form ref={editor} aria-labelledby={`${editorId}-heading`}
         onSubmit={(e) => {
           e.preventDefault();
           if (previewedSchedule !== form.schedule) { actions.setError("Preview the schedule before saving this routine."); return; }
@@ -766,6 +792,7 @@ function RoutineManager({
           void action(async () => {
             const body = { ...form, recipientIds: (form.recipientIds || []).filter((id) => recipients.some((user) => user.id === id)) };
             await (editing ? request("PUT /routines/:id", { params: { id: editing }, body }) : request("POST /routines", { body }));
+            if (editing) focusRoutine(editing);
             setEditing(null);
             setPreviewedSchedule("");
             setForm({
@@ -780,10 +807,10 @@ function RoutineManager({
           });
         }}
       >
-        <h3>{editing ? "Edit routine" : "New routine"}</h3>
+        <h3 id={`${editorId}-heading`}>{editing ? "Edit routine" : "New routine"}</h3>
         <label>
           Name
-          <Input
+          <Input ref={nameInput}
             required
             value={form.name}
             onChange={(e) => setForm({ ...form, name: e.target.value })}
@@ -804,11 +831,12 @@ function RoutineManager({
             required
             value={form.schedule}
             onChange={(e) => setForm({ ...form, schedule: e.target.value })}
+            className="routine-schedule"
             placeholder="Hermes schedule expression"
           />
         </label>
-        <RoutineSchedulePreview key={editing || "new"} botId={botId} schedule={form.schedule} onReady={setPreviewedSchedule} />
-        <AdvancedRoutineFields key={editing ?? "new"} value={form} onChange={setForm} routines={routines} editing={editing} />
+        <RoutineSchedulePreview key={`schedule-${editing || "new"}`} botId={botId} schedule={form.schedule} onReady={setPreviewedSchedule} />
+        <AdvancedRoutineFields key={`advanced-${editing ?? "new"}`} value={form} onChange={setForm} routines={routines} editing={editing} />
         <label className="checkbox-label">
           <Input
             type="checkbox"
@@ -851,6 +879,7 @@ function RoutineManager({
             <Button
               type="button"
               onClick={() => {
+                focusRoutine(editing);
                 setEditing(null);
                 setPreviewedSchedule("");
                 setForm({
@@ -869,7 +898,7 @@ function RoutineManager({
           )}
         </div>
       </form>
-    </>
+    </div>
   );
 }
 

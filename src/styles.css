@@ -14,6 +14,8 @@
   --raised: #fffdf7;
   --ink: #282c27;
   --muted: #697268;
+  --message-meta: #5f685e;
+  --font-mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
   --line: #d9ded2;
   --accent: #246f59;
   --accent-soft: #dce9df;
@@ -28,6 +30,7 @@
   --raised: #222c25;
   --ink: #f1efdf;
   --muted: #a6b4a7;
+  --message-meta: #a6b4a7;
   --line: #3a483d;
   --accent: #8bd2b2;
   --accent-soft: #2a4435;
@@ -43,6 +46,7 @@
     --raised: #222c25;
     --ink: #f1efdf;
     --muted: #a6b4a7;
+    --message-meta: #a6b4a7;
     --line: #3a483d;
     --accent: #8bd2b2;
     --accent-soft: #2a4435;
@@ -420,7 +424,7 @@ a {
   min-height: 0;
   overflow: auto;
   flex: 1;
-  padding: 30px max(32px, calc((100% - 760px) / 2));
+  padding: 30px max(32px, calc((100% - 720px) / 2));
   scrollbar-gutter: stable;
   outline-offset: -4px;
   /* The app holds the reader's place itself; browser anchoring would move it twice. */
@@ -546,16 +550,16 @@ a {
   overflow-wrap: anywhere;
   align-items: center;
   gap: 12px;
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   font-weight: 600;
-  color: var(--muted);
+  color: var(--message-meta);
   margin-bottom: 9px;
 }
 .message-continued {
   margin-top: -16px;
 }
 .message-attribution time {
-  font-size: 0.625rem;
+  font-size: 0.6875rem;
   font-weight: 400;
 }
 /* A sent message rises into the transcript at once, faint until Hermes accepts it. */
@@ -570,11 +574,8 @@ a {
   opacity: 0.66;
 }
 .message-delivery {
-  font-size: 0.625rem;
+  font-size: 0.6875rem;
   font-weight: 400;
-}
-.message-unconfirmed .message-delivery {
-  color: var(--attention);
 }
 @keyframes message-send {
   from {
@@ -590,7 +591,7 @@ a {
 .message-text {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  font-size: 0.9375rem;
+  font-size: 1rem;
   line-height: 1.7;
 }
 .message-system {
@@ -655,6 +656,13 @@ a {
   line-height: 1.5;
   color: var(--muted);
 }
+/* The approval decision layout is separate from the shared request-card shell. */
+.decision-card { display: grid; gap: 12px; font-size: 1rem; }
+.decision-card > p, .decision-card > h2 { margin: 0; }
+.decision-card .eyebrow { font-size: 0.6875rem; letter-spacing: 0.06em; }
+.decision-card .actions { margin: 4px 0 0; }
+.decision-card small, .decision-card .approval-unavailable, .decision-status { font-size: 0.875rem; line-height: 1.5; color: var(--muted); }
+.decision-card .actions button { min-height: 44px; }
 .actions {
   display: flex;
   align-items: center;
@@ -664,7 +672,7 @@ a {
 }
 .composer-area {
   flex-shrink: 0;
-  padding: 8px max(28px, calc((100% - 780px) / 2)) max(15px, env(safe-area-inset-bottom));
+  padding: 8px max(28px, calc((100% - 752px) / 2)) max(15px, env(safe-area-inset-bottom));
 }
 .activity-status {
   display: flex;
@@ -728,9 +736,9 @@ a {
   background: transparent;
   padding: 0;
   resize: none;
-  min-height: 48px;
+  min-height: 3rem;
   max-height: 200px;
-  font-size: 0.9375rem;
+  font-size: 1rem;
   line-height: 1.55;
 }
 .composer textarea:focus-visible {
@@ -894,7 +902,7 @@ a {
   border: 1px solid var(--line);
   border-radius: 20px;
   padding: 0;
-  overflow: hidden;
+  overflow: clip;
   width: 640px;
   max-width: calc(100vw - max(15px, env(safe-area-inset-left)) - max(15px, env(safe-area-inset-right)));
   max-height: calc(100dvh - 30px);
@@ -936,7 +944,7 @@ a {
   grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 .settings-tabs button {
-  font-size: 0.75rem;
+  font-size: 0.875rem;
   text-transform: capitalize;
   border: 0;
   border-radius: 0;
@@ -951,11 +959,13 @@ a {
 .settings-tabs-mobile {
   position: relative;
   z-index: 1;
+  flex-wrap: wrap;
 }
 .settings-tabs-overflow {
   position: relative;
   min-width: 0;
   margin-left: auto;
+  flex-shrink: 0;
 }
 .settings-more-trigger {
   display: flex;
@@ -965,7 +975,7 @@ a {
   min-height: 46px;
   padding: 14px 12px;
   border-bottom: 2px solid transparent;
-  font-size: 0.75rem;
+  font-size: 0.875rem;
   text-transform: capitalize;
   cursor: pointer;
   list-style: none;
@@ -974,9 +984,6 @@ a {
   display: none;
 }
 .settings-more-trigger > span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 .settings-more-trigger[aria-current="page"] {
@@ -1018,7 +1025,23 @@ a {
   overflow: auto;
   min-height: 0;
   flex: 1;
+  scroll-padding-bottom: calc(3rem + 44px);
 }
+.settings-load-state { display: flex; flex-direction: column; align-items: flex-start; gap: 16px; }
+.settings-load-state > p { margin: 0; }
+.settings-content .muted,
+.settings-content > .form-error,
+.settings-content > .form-notice,
+.settings-content > .capability-note { font-size: 0.875rem; line-height: 1.55; }
+.settings-dialog .settings-save-actions { justify-content: flex-end; margin-bottom: 0; z-index: 1; }
+.settings-save-actions > .primary { min-width: 6rem; min-height: 44px; }
+.settings-dialog .checkbox-label { min-height: 44px; }
+.settings-danger-zone { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--line); }
+.settings-confirmation { max-height: calc(100dvh - 32px); overflow: auto; }
+.settings-confirmation h2 { overflow-wrap: anywhere; }
+.settings-confirmation p { line-height: 1.55; overflow-wrap: anywhere; }
+.settings-confirmation .actions { flex-wrap: wrap; }
+.settings-confirmation .actions > button { flex: 1 1 9rem; min-height: 44px; }
 .form-row {
   display: flex;
   gap: 16px;
@@ -1071,9 +1094,6 @@ a {
   font-size: 0.8125rem;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-}
-.routine-card small {
-  color: var(--accent);
 }
 .welcome {
   width: 100%;
@@ -1196,9 +1216,6 @@ a {
   }
   .empty-state h2 {
     font-size: 1.5625rem;
-  }
-  .message-text {
-    font-size: 0.875rem;
   }
   .composer-area {
     padding: 8px 14px max(12px, env(safe-area-inset-bottom));

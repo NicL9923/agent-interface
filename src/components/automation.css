@@ -14,7 +14,7 @@
 .automation-item > summary { cursor: pointer; font-weight: 600; }
 .automation-item > summary small { display: block; margin-top: 5px; font-weight: 400; color: var(--muted); }
 .automation-item > p { white-space: pre-wrap; }
-.automation-check, .automation-form .automation-check { display: flex; align-items: flex-start; gap: 10px; padding: 8px 0; }
+.automation-check, .automation-form .automation-check { display: flex; flex-direction: row; align-items: flex-start; gap: 10px; min-height: 44px; margin: 0; padding: 8px 0; }
 .automation-check input { width: 20px; height: 20px; flex: 0 0 auto; accent-color: var(--accent); }
 .automation-code { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 420px; overflow-y: auto; padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--raised); font-size: 0.75rem; }
 .automation-confirm, .automation-secret { padding: 16px; margin-top: 12px; border: 1px solid var(--line); border-radius: 10px; }
@@ -22,3 +22,126 @@
 .automation-url { display: block; overflow-wrap: anywhere; font-size: 0.75rem; margin: 10px 0; }
 .automation-dependency { margin-bottom: 10px; }
 @media (max-width: 620px) { .automation-section .actions > label { flex-basis: 100%; } .automation-section button { min-height: 44px; } }
+
+/* Work panel header and standing goal. Task, trigger and Learning styles stay scoped separately. */
+.automation-work > h2 { margin: 0 0 6px; font-size: 1.375rem; line-height: 1.35; }
+.automation-work > p.muted { margin: 0 0 20px; font-size: .875rem; line-height: 1.6; }
+.automation-work > .form-error, .automation-work > .form-notice { margin: 12px 0 0; font-size: .875rem; line-height: 1.6; }
+.automation-work > .automation-toolbar > button { min-height: 44px; }
+.automation-goal { font-size: 1rem; line-height: 1.55; }
+.automation-goal h3 { font-size: 1.0625rem; line-height: 1.5; }
+.automation-goal-card { min-width: 0; overflow-wrap: anywhere; }
+.automation-goal-title { margin: 0 0 10px; font-size: 1.0625rem; font-weight: 600; line-height: 1.5; white-space: pre-wrap; }
+.automation-goal-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0; color: var(--muted); font-size: .875rem; line-height: 1.5; font-variant-numeric: tabular-nums; }
+.automation-goal-status { padding: 3px 9px; border-radius: 999px; background: var(--rail); color: var(--ink); font-size: .8125rem; font-weight: 600; }
+.automation-goal-status.is-active { background: var(--accent-soft); color: var(--accent); }
+.automation-goal-reason { margin: 8px 0 0; color: var(--muted); font-size: .875rem; line-height: 1.6; white-space: pre-wrap; }
+.automation-goal-callout, .automation-goal .automation-confirm { margin-top: 12px; padding: 16px; border: 1px solid var(--line); border-radius: 10px; }
+.automation-goal .automation-goal-callout { border-inline-start: 3px solid var(--attention); }
+.automation-goal .automation-goal-callout.is-danger { border-inline-start-color: var(--danger); }
+.automation-goal-callout strong { display: block; margin-bottom: 6px; font-size: .9375rem; }
+.automation-goal-callout p, .automation-goal .automation-confirm p { margin: 0; font-size: 1rem; line-height: 1.55; white-space: pre-wrap; }
+.automation-goal .automation-check, .automation-goal .automation-form .automation-check { display: flex; flex-direction: row; align-items: flex-start; gap: 10px; min-height: 44px; padding: 8px 0; margin: 0; font-size: 1rem; line-height: 1.55; }
+.automation-goal .automation-check input { width: 20px; height: 20px; flex: 0 0 20px; margin: 2px 0 0; padding: 0; }
+.automation-goal button { min-height: 44px; }
+.automation-goal-actions .automation-goal-clear { margin-inline-start: auto; }
+.automation-goal .automation-form label:not(.automation-check) { margin: 0; font-size: .875rem; line-height: 1.5; }
+.automation-goal .automation-form textarea { font-size: 1rem; line-height: 1.55; }
+.automation-goal .automation-form input[type=number] { width: min(100%, 10ch); }
+.automation-goal .automation-form > p.muted { margin: 0; font-size: .875rem; line-height: 1.6; }
+.automation-goal .automation-form > .automation-confirm { margin-top: 0; }
+.automation-goal .automation-confirm > .actions { margin-bottom: 0; }
+.automation-goal .automation-form > .actions { margin-top: 0; }
+@media (max-width: 620px) {
+  .automation-goal-actions > button:first-child { flex-basis: 100%; }
+  .automation-goal-actions .automation-goal-clear { margin-inline-start: 0; }
+}
+
+/* Task board and detail. */
+.automation-tasks { line-height: 1.55; }
+.automation-task-group { margin: 18px 0; }
+.automation-task-group h4 { margin: 0; }
+.automation-task-group-toggle { min-height: 44px; padding: 6px 0; border: 0; background: transparent; color: var(--ink); font: inherit; font-weight: 600; text-align: left; cursor: pointer; }
+.automation-task-group-toggle:focus-visible, .automation-task summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.automation-task > summary { min-height: 44px; }
+.automation-task[open] { padding: 16px; margin: 8px 0; border: 1px solid var(--line); border-radius: 10px; background: var(--raised); }
+.automation-task[open] > summary small { display: none; }
+.automation-task-feedback:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.automation-task-feedback--edit,
+.automation-tasks form.automation-form > p[tabindex="-1"] { scroll-margin-block: 12px; }
+.automation-task-detail { padding-top: 12px; }
+.automation-task-detail > p { white-space: pre-wrap; }
+.automation-task-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; color: var(--muted); font-size: .875rem; }
+.automation-task-status { padding: 3px 9px; border-radius: 999px; background: var(--rail); color: var(--ink); font-weight: 600; }
+.automation-task-callout { margin: 12px 0; padding: 16px; border: 1px solid var(--line); border-inline-start: 3px solid var(--attention); border-radius: 10px; }
+.automation-task-callout strong { display: block; margin-bottom: 6px; }
+.automation-task-callout p { margin: 0; white-space: pre-wrap; }
+.automation-task button, .automation-task input, .automation-task select, .automation-task-note > summary { min-height: 44px; }
+.automation-task-dependencies, .automation-task-move { margin-top: 24px; }
+.automation-task-dependencies > p, .automation-task-move > p { margin: 8px 0; }
+.automation-task-add { display: flex; align-items: end; flex-wrap: wrap; gap: 10px; }
+.automation-task-add label, .automation-task-note label { display: grid; gap: 6px; min-width: 0; }
+.automation-task-add label, .automation-task-move label, .automation-task-note label { margin-bottom: 0; }
+.automation-task-add label { flex: 1 1 200px; }
+.automation-task-add select, .automation-task-note input { width: 100%; }
+.automation-task-note { margin-top: 12px; }
+.automation-task-note > summary { cursor: pointer; display: list-item; padding-block: 9px; color: var(--ink); }
+.automation-task-move > .actions [aria-expanded="true"] { border-color: var(--accent); background: var(--accent-soft); }
+.automation-task-note label { margin-top: 8px; }
+
+.automation-task-dependencies > h5, .automation-task-move > h5 { margin: 0 0 8px; font-size: 1em; }
+.automation-task-uncertain { color: var(--muted); }
+
+.automation-tasks form.automation-form > h4, .automation-tasks form.automation-form > p { margin: 0; }
+.automation-tasks form.automation-form > label { margin: 0; }
+.automation-tasks form.automation-form fieldset { margin: 0; min-width: 0; }
+.automation-tasks form.automation-form .automation-check { flex-direction: row; min-height: 44px; margin: 0; }
+.automation-tasks form.automation-form .automation-check input { margin: 2px 0 0; }
+.automation-tasks form.automation-form .automation-task-choices.is-bounded { max-height: 288px; overflow-y: auto; }
+.automation-tasks form.automation-form > .actions { margin-top: 0; }
+
+.automation-triggers .automation-trigger-status { display: inline-block; border-radius: 999px; padding: 0.2rem 0.65rem; background: var(--rail); color: var(--ink); font-size: 0.875rem; font-weight: 600; }
+.automation-triggers .automation-form input:not([type=checkbox]):disabled, .automation-triggers .automation-form textarea:disabled { color: var(--muted); -webkit-text-fill-color: var(--muted); background: transparent; opacity: 1; }
+.automation-triggers .automation-secret-value, .automation-triggers .automation-url { display: block; overflow-wrap: anywhere; word-break: normal; hyphens: none; font-size: 0.875rem; }
+.automation-triggers .automation-trigger-feedback { margin-block: 0.75rem; }
+.automation-triggers .automation-trigger-field { display: grid; gap: 6px; min-width: 0; }
+.automation-triggers .automation-trigger-field > label, .automation-triggers .automation-trigger-field > p { margin: 0; }
+.automation-triggers .automation-trigger-field > p { font-size: 0.875rem; }
+
+.automation-triggers .automation-secret { scroll-margin-top: 12px; }
+.automation-triggers .automation-secret-field { display: grid; gap: 6px; min-width: 0; }
+.automation-triggers .automation-secret-field > p { margin: 0; }
+.automation-triggers .automation-secret-field > p:first-child { font-size: 0.875rem; color: var(--muted); }
+.automation-triggers .automation-trigger-feedback:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.automation-triggers .automation-trigger-callout { padding: 16px; border: 1px solid var(--line); border-inline-start: 3px solid var(--attention); border-radius: 10px; }
+
+.automation-triggers .automation-item > p { margin-block: 8px; }
+.automation-triggers .automation-item > .automation-trigger-label { margin-bottom: 4px; font-size: 0.875rem; color: var(--muted); }
+.automation-triggers .automation-item > .automation-url { margin-top: 0; }
+.automation-triggers .automation-secret > h4 { margin: 0; font-size: 1.125rem; line-height: 1.4; }
+.automation-triggers .automation-secret > p { margin: 0; }
+
+/* Learning uses the shared settings type scale, with compact review sections. */
+.automation-learning > h2 { margin: 0 0 6px; font-size: 1.375rem; line-height: 1.35; }
+.automation-learning > p.muted { margin: 0 0 16px; font-size: .875rem; line-height: 1.6; }
+.automation-learning .automation-section { padding: 18px 0; margin-top: 12px; }
+.automation-learning .automation-section h3 { font-size: 1.0625rem; line-height: 1.4; }
+.automation-learning .automation-item { padding: 12px 0; }
+.automation-learning .automation-item h4 { margin-bottom: 4px; font-size: 1rem; font-weight: 600; line-height: 1.5; }
+.automation-learning .automation-item > p { margin: 6px 0 12px; font-size: .875rem; line-height: 1.5; }
+.automation-learning .automation-section > p { margin: 8px 0 0; font-size: .875rem; line-height: 1.6; }
+.automation-learning .automation-check { font-size: 1rem; line-height: 1.5; }
+.automation-learning .automation-check input { margin-top: 2px; }
+.automation-learning .automation-code { margin: 12px 0; padding: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .8125rem; line-height: 1.6; }
+.automation-diff-meta { color: var(--muted); }
+.automation-diff-added { color: var(--accent); background: var(--accent-soft); }
+.automation-diff-removed { color: var(--danger); background: color-mix(in srgb, var(--danger) 9%, var(--raised)); }
+
+.automation-learning .automation-learning-policy > p { margin: 4px 0 0 30px; }
+.automation-learning .automation-code > code { font: inherit; }
+
+.automation-learning > .form-notice { margin: 12px 0; font-size: .875rem; line-height: 1.6; }
+.automation-learning .automation-diff > code { display: block; white-space: normal; }
+.automation-diff-line { display: block; min-height: 1.6em; white-space: pre-wrap; }
+.settings-confirmation.learning-policy-confirmation .actions { flex-direction: column; align-items: stretch; }
+.settings-confirmation.learning-policy-confirmation .actions > button { flex: none; width: 100%; min-height: 44px; }

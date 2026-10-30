@@ -4,9 +4,9 @@ import "./shell.css";
 
 /**
  * The notices above the composer, most pressing first: a send whose outcome is unknown, an
- * interrupted task to review before continuing, decisions waiting, the connection, then an update.
+ * interrupted task to review before continuing, the connection, decisions waiting, then an update.
  */
-export const dockPriority = { send: 0, interrupted: 1, decisions: 2, connection: 3, update: 4 } as const;
+export const dockPriority = { send: 0, interrupted: 1, connection: 2, decisions: 3, update: 4 } as const;
 export type DockKind = keyof typeof dockPriority;
 export type DockItem = { id: string; kind: DockKind; node: ReactNode };
 
@@ -24,11 +24,11 @@ export function StatusDock({ items }: { items: readonly DockItem[] }) {
 }
 
 /** Waiting approvals, questions and secure requests in the open chat. */
-export function DecisionsNotice({ count, onReview }: { count: number; onReview(): void }) {
+export function DecisionsNotice({ count, onReview, disconnected = false }: { count: number; onReview(): void; disconnected?: boolean }) {
   return <div className="dock-row dock-decisions-row">
     <Icon name="bell" size={17} />
     <span><strong>{count === 1 ? "1 decision waiting" : `${count} decisions waiting`}</strong></span>
-    <button type="button" className="primary" onClick={onReview}>Review</button>
+    <button type="button" className={disconnected ? undefined : "primary"} onClick={onReview}>Review</button>
   </div>;
 }
 

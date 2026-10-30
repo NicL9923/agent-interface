@@ -27,9 +27,9 @@ struct BotProfileView: View {
           Toggle("Notify me about all activity", isOn: follow).disabled(!store.homeCanOrganize).accessibilityIdentifier("followBot")
           HomeSectionPicker(botId: bot.id) { sectionFor = bot }
         } footer: {
-          Text("Shared tasks you're part of always notify you. Turn this on to hear about everything \(bot.name) does.")
+          Text("Shared tasks you're part of always notify you. Turn this on to hear about everything \(bot.name) does.").foregroundStyle(Palette.muted)
         }
-      }.householdListBackground().listSectionSpacing(.compact)
+      }.householdListBackground().listSectionSpacing(.compact).accessibilityIdentifier("botProfileList")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() }.accessibilityIdentifier("closeBotProfile") } }
         .newSectionAlert(for: $sectionFor)
@@ -41,20 +41,20 @@ struct BotProfileView: View {
     VStack(spacing: 8) {
       AvatarView(avatar: bot.avatar ?? AvatarConfig(), state: state, size: 88, name: bot.name, botId: bot.id)
       Text(bot.name).font(.title2.bold()).multilineTextAlignment(.center).accessibilityAddTraits(.isHeader)
-      Text(Self.roleLine(bot)).font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
-        .lineLimit(3).accessibilityIdentifier("profileRole")
+      Text(Self.roleLine(bot)).font(.subheadline).foregroundStyle(Palette.muted).multilineTextAlignment(.center)
+        .fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("profileRole")
     }.frame(maxWidth: .infinity).padding(.top, 4).padding(.horizontal, 16).padding(.bottom, 14)
   }
   /// Who it works for, the model it runs on and when it last spoke, as rows that read at a glance.
   @ViewBuilder private var details: some View {
     LabeledContent("Model") {
-      Text(bot.provider.map { "\($0) · \(bot.model)" } ?? bot.model).lineLimit(2).multilineTextAlignment(.trailing)
+      Text(bot.provider.map { "\($0) · \(bot.model)" } ?? bot.model).foregroundStyle(Palette.muted).lineLimit(typeSize.isAccessibilitySize ? nil : 2).multilineTextAlignment(.trailing)
     }.accessibilityIdentifier("profileModel")
     LabeledContent("Last activity") {
       if state != .idle && state != .done { ActivityLabel(state: state) }
-      else { Text(Self.lastActivity(bot, now: clock.now)) }
+      else { Text(Self.lastActivity(bot, now: clock.now)).foregroundStyle(Palette.muted) }
     }.accessibilityIdentifier("profileLastActivity")
-    LabeledContent("Who sees it", value: Self.audience(bot))
+    LabeledContent("Who sees it") { Text(Self.audience(bot)).foregroundStyle(Palette.muted) }
   }
   /// Four equal tiles in a row; at the largest text sizes, two rows of two.
   private var actions: some View {
@@ -100,18 +100,19 @@ private struct ProfileActionTile: View {
   var action: () -> Void
   @Environment(\.colorScheme) private var scheme
   @Environment(\.isEnabled) private var enabled
+  @ScaledMetric(relativeTo: .title3) private var glyphHeight: CGFloat = 26
   var body: some View {
     Button(action: action) {
       VStack(spacing: 6) {
-        Image(systemName: symbol).font(.title3).frame(height: 26)
+        Image(systemName: symbol).font(.title3).frame(height: glyphHeight)
           .overlay(alignment: .topTrailing) {
             if badge > 0 {
-              Text("\(badge)").font(.caption2.weight(.semibold)).monospacedDigit().foregroundStyle(.white)
+              Text("\(badge)").font(.caption2.weight(.semibold)).monospacedDigit().foregroundStyle(Palette.onAccent)
                 .padding(.horizontal, 5).frame(minWidth: 18, minHeight: 18).background(Palette.accent, in: Capsule())
                 .offset(x: 12, y: -6).accessibilityHidden(true)
             }
           }
-        Text(title).font(.caption.weight(.medium)).lineLimit(1).minimumScaleFactor(0.8)
+        Text(title).font(.subheadline.weight(.medium)).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
       }.frame(maxWidth: .infinity, minHeight: 64).padding(.vertical, 4)
         .foregroundStyle(enabled ? Palette.accent : Palette.muted)
         .background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 14))

@@ -18,10 +18,12 @@ extension Color {
 /// The web client's design tokens (src/styles.css), light and dark.
 enum Palette {
   static let accent = Color.adaptive(light: "#246F59", dark: "#8BD2B2")
+  static let onAccent = Color.adaptive(light: "#FFFDF7", dark: "#1B211E")
   static let accentSoft = Color.adaptive(light: "#DCE9DF", dark: "#2A4435")
   static let attention = Color.adaptive(light: "#9B6733", dark: "#EBC188")
   static let danger = Color.adaptive(light: "#A33C32", dark: "#FAAFA0")
   static let muted = Color.adaptive(light: "#697268", dark: "#A6B4A7")
+  static let messageMetadata = Color.adaptive(light: "#5F685E", dark: "#A6B4A7")
   static let line = Color.adaptive(light: "#D9DED2", dark: "#3A483D")
   static func surface(_ scheme: ColorScheme) -> Color {
     Color(hex: scheme == .dark ? "#1B211E" : "#FAF8F2")

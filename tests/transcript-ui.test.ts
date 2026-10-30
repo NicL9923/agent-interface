@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
 import { ApiError, api, write } from "../src/client-api";
 import { defaultPreferences } from "../src/shared/types";
-import type { Bootstrap, Conversation, Message } from "../src/shared/types";
+import type { AttentionRequest, Bootstrap, Conversation, Message } from "../src/shared/types";
 import { useConversation } from "../src/app/use-conversation";
 import { useTurnRetry } from "../src/app/use-turn-retry";
 import { retryRequestId } from "../src/shared/retry-id";
@@ -90,6 +90,29 @@ describe("retry a failed turn", () => {
     conversation = { ...conversation, activity: { state: "failed", runId: "run-1" },
       messages: [prompt("q1", "Check the gate", { files: [file] })] };
   });
+  it("shows the failure reason and explains what Retry sends before the person acts", async () => {
+    conversation.activity.detail = "The gate service did not answer.";
+    await render();
+    const recovery = container.querySelector(".recovery-activity")!;
+    expect(recovery.textContent).toContain("Shared couldn't finish.");
+    expect(recovery.textContent).toContain("The gate service did not answer.");
+    expect(recovery.textContent).toContain("Retry sends your last message again. Your draft stays as it is.");
+    expect(messagesWritten()).toHaveLength(0);
+  });
+
+  it("updates the mounted activity status with the failure title and reason", async () => {
+    conversation.activity = { state: "working", runId: "run-1" };
+    await render();
+    const live = container.querySelector('.activity-copy > [role="status"]')!;
+    expect(live.textContent).toContain("Shared is working");
+    conversation = { ...conversation, activity: { state: "failed", runId: "run-1", detail: "The gate service did not answer." } };
+    await changed();
+    expect(container.querySelector('.activity-copy > [role="status"]')).toBe(live);
+    expect(live.textContent).toContain("Shared couldn't finish.");
+    expect(live.textContent).toContain("The gate service did not answer.");
+    expect(live.getAttribute("aria-atomic")).toBe("true");
+  });
+
   // The ID every device derives for retrying q1 after run-1 failed.
   const turnId = () => retryRequestId("shared", "q1", "run-1");
   // The ID is derived with Web Crypto, which settles outside fake timers.
@@ -327,7 +350,7 @@ describe("questions", () => {
     await act(async () => second.dispatchEvent(new KeyboardEvent("keydown", { key: "3", bubbles: true })));
     await act(async () => boxes[0].click());
     await act(async () => boxes[3].click());
-    await typeInto(second.querySelector<HTMLInputElement>('[aria-label="Your answer: Anything else?"]')!, "fresh greens");
+    await typeInto(second.querySelector<HTMLTextAreaElement>('[aria-label="Your answer: Anything else?"]')!, "fresh greens");
     expect(submit.disabled).toBe(false);
     await act(async () => submit.click());
     expect(write).toHaveBeenCalledWith("/bots/shared/requests/ask", { answers: { feed: "Pellets", extras: "Water, Treats, fresh greens" } });
@@ -349,7 +372,7 @@ describe("questions", () => {
   it("keeps a free-text field for a question without options", async () => {
     conversation = { ...conversation, attention: [{ id: "ask", kind: "clarify", title: "Name", detail: "", questions: [{ id: "name", prompt: "Gate name?" }] }] };
     await render();
-    await typeInto(container.querySelector<HTMLInputElement>('[aria-label="Gate name?"]')!, "North");
+    await typeInto(container.querySelector<HTMLTextAreaElement>('[aria-label="Gate name?"]')!, "North");
     await act(async () => container.querySelector<HTMLButtonElement>('[data-attention-id="ask"] button[type="submit"]')!.click());
     expect(write).toHaveBeenCalledWith("/bots/shared/requests/ask", { answers: { name: "North" } });
   });
@@ -359,6 +382,148 @@ describe("questions", () => {
     await render();
     expect(container.querySelector('[data-attention-id="gate"]')?.id).toBe("attention-approval-gate");
   });
+
+  it("keeps line breaks and number keys in a written answer without selecting another option", async () => {
+    conversation = { ...conversation, attention: [{ id: "ask", kind: "clarify", title: "Packing", detail: "", questions: [
+      { id: "items", prompt: "What should come along?", options: ["Water", "Snacks"], multiple: true },
+    ] }] };
+    await render();
+    const boxes = [...container.querySelectorAll<HTMLInputElement>('.question input[type="checkbox"]')];
+    await act(async () => boxes[2].click());
+    const field = container.querySelector<HTMLTextAreaElement>('[aria-label="Your answer: What should come along?"]')!;
+    await typeInto(field, "2 bottles of water\nA warm layer");
+    await act(async () => field.dispatchEvent(new KeyboardEvent("keydown", { key: "2", bubbles: true })));
+    expect(boxes[1].checked).toBe(false);
+    await act(async () => container.querySelector<HTMLButtonElement>('.attention-card button[type="submit"]')!.click());
+    expect(write).toHaveBeenCalledWith("/bots/shared/requests/ask", { answers: { items: "2 bottles of water\nA warm layer" } });
+    await act(async () => container.querySelector<HTMLFormElement>('.attention-card form')!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+    expect(vi.mocked(write).mock.calls.filter(([path]) => path === "/bots/shared/requests/ask")).toHaveLength(1);
+    expect(container.querySelector<HTMLButtonElement>('.attention-card button[type="submit"]')?.textContent).toBe("Answers sent");
+  });
+
+  it("keeps written answers after a failure and clears the old error when retrying", async () => {
+    conversation = { ...conversation, attention: [{ id: "ask", kind: "clarify", title: "Plan", detail: "", questions: [{ id: "note", prompt: "Your plan?" }] }] };
+    vi.mocked(write).mockRejectedValueOnce(new Error("The connection was interrupted."));
+    await render();
+    const field = container.querySelector<HTMLTextAreaElement>('[aria-label="Your plan?"]')!;
+    await typeInto(field, "A slow morning\nBring water");
+    const submit = container.querySelector<HTMLButtonElement>('.attention-card button[type="submit"]')!;
+    await act(async () => submit.click());
+    expect(container.querySelector(".notice.error")?.textContent).toContain("The connection was interrupted.");
+    expect(field.value).toBe("A slow morning\nBring water");
+    await act(async () => submit.click());
+    expect(container.querySelector(".notice.error")).toBeNull();
+    const payloads = vi.mocked(write).mock.calls.filter(([path]) => path === "/bots/shared/requests/ask");
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0][1]).toEqual(payloads[1][1]);
+    expect(submit.disabled).toBe(true);
+  });
+});
+
+describe("approval decisions", () => {
+  for (const decision of ["approved", "denied"] as const) {
+    it(`retries a failed ${decision} decision, clears the error and prevents another send`, async () => {
+      conversation = { ...conversation, approvals: [{ id: "gate", title: "Create the reminder?", detail: "Notify both household members.", status: "pending" }] };
+      vi.mocked(write).mockRejectedValueOnce(new ApiError("Could not send your decision.", 400));
+      await render();
+      const card = container.querySelector(".approval-card")!;
+      const buttons = [...card.querySelectorAll<HTMLButtonElement>("button")];
+      const button = buttons[decision === "approved" ? 0 : 1];
+      await act(async () => button.click());
+      expect(container.querySelector(".notice.error")?.textContent).toContain("Could not send your decision.");
+      expect(button.disabled).toBe(false);
+      await act(async () => button.click());
+      expect(container.querySelector(".notice.error")).toBeNull();
+      expect(button.disabled).toBe(true);
+      expect(button.textContent).toContain(decision === "approved" ? "Approved" : "Declined");
+      expect(card.querySelector('[role="status"]')?.textContent).toBe(decision === "approved" ? "Approval sent." : "Decline sent.");
+      expect(card.querySelector(".decision-status.sr-only")).toBeNull();
+      await act(async () => button.click());
+      const calls = vi.mocked(write).mock.calls.filter(([path]) => path === "/bots/shared/approvals/gate");
+      expect(calls).toHaveLength(2);
+      expect(calls.map(([, body]) => body)).toEqual([{ decision }, { decision }]);
+    });
+  }
+  it("blocks disconnected decisions and puts reconnection before the Review action", async () => {
+    conversation = { ...conversation, approvals: [{ id: "offline-decision", title: "Open the gate?", detail: "", status: "pending" }] };
+    const original = bootstrap.connection;
+    try {
+      await render();
+      bootstrap.connection = { connected: false, code: "unreachable" };
+      await advance(45_000);
+      const buttons = [...container.querySelectorAll<HTMLButtonElement>(".approval-card button")];
+      expect(buttons.every(button => button.disabled)).toBe(true);
+      expect(container.querySelector(".approval-card")?.textContent).toContain("Reconnect to Hermes to answer.");
+      expect(container.querySelector(".status-dock")?.firstElementChild?.className).toContain("dock-connection");
+      await act(async () => buttons[0].click());
+      expect(write).not.toHaveBeenCalled();
+    } finally { bootstrap.connection = original; }
+  });
+
+  it("keeps an unclear approval across reload, never resends automatically and fences an opposite decision", async () => {
+    conversation = { ...conversation, approvals: [{ id: "uncertain-decision", title: "Open the gate?", detail: "", status: "pending" }] };
+    vi.mocked(write).mockRejectedValueOnce(new ApiError("Timed out", 504));
+    await render();
+    await act(async () => buttonText("Approve")!.click());
+    expect(buttonText("Decline")?.disabled).toBe(true);
+    expect(buttonText("Send approval again")?.disabled).toBe(false);
+    expect(container.querySelector(".approval-card")?.getAttribute("aria-busy")).toBe("false");
+    expect(container.querySelector(".approval-card")?.textContent).toContain("It may still go through");
+    // A fresh read still showing pending does not prove the first POST stopped.
+    await changed();
+    await act(async () => root.unmount());
+    await render();
+    expect(buttonText("Decline")?.disabled).toBe(true);
+    expect(write).toHaveBeenCalledTimes(1);
+    vi.mocked(write).mockRejectedValueOnce(new ApiError("This approval is no longer pending", 409));
+    await act(async () => buttonText("Send approval again")!.click());
+    expect(container.querySelector(".approval-card button")).toBeNull();
+    expect(container.querySelector(".approval-card")?.textContent).toContain("Its status will update with the conversation.");
+    const calls = vi.mocked(write).mock.calls.filter(([path]) => path === "/bots/shared/approvals/uncertain-decision");
+    expect(calls.map(([, body]) => body)).toEqual([{ decision: "approved" }, { decision: "approved" }]);
+  });
+
+  it("retires an initially refused 409 decision while refreshing, without claiming it was sent", async () => {
+    conversation = { ...conversation, approvals: [{ id: "no-longer-available", title: "Open the gate?", detail: "", status: "pending" }] };
+    vi.mocked(write).mockRejectedValueOnce(new ApiError("This approval is no longer pending", 409));
+    await render();
+    await act(async () => buttonText("Approve")!.click());
+    const card = container.querySelector(".approval-card")!;
+    expect(card.querySelector("button")).toBeNull();
+    expect(card.textContent).toContain("This request is no longer available to answer.");
+    expect(card.textContent).not.toContain("Approval sent.");
+    expect(write).toHaveBeenCalledTimes(1);
+    conversation = { ...conversation, approvals: [] };
+    await changed();
+    expect(container.querySelector(".approval-card")).toBeNull();
+  });
+
+  it("leaves an approval answerable after a definite maintenance refusal", async () => {
+    conversation = { ...conversation, approvals: [{ id: "maintenance-decision", title: "Open the gate?", detail: "", status: "pending" }] };
+    vi.mocked(write).mockRejectedValueOnce(new ApiError("Hermes is being upgraded.", 409, "hermes_maintenance"));
+    await render();
+    await act(async () => buttonText("Approve")!.click());
+    expect(buttonText("Approve")?.disabled).toBe(false);
+    expect(buttonText("Decline")?.disabled).toBe(false);
+    expect(container.textContent).toContain("Try your decision again when the update finishes.");
+    expect(container.textContent).not.toContain("no longer available to answer");
+    await act(async () => buttonText("Decline")!.click());
+    expect(buttonText("Declined")?.disabled).toBe(true);
+  });
+
+  it("retains an earlier unclear choice when a resend meets maintenance", async () => {
+    conversation = { ...conversation, approvals: [{ id: "uncertain-maintenance", title: "Open the gate?", detail: "", status: "pending" }] };
+    vi.mocked(write).mockRejectedValueOnce(new ApiError("Timed out", 504));
+    await render();
+    await act(async () => buttonText("Approve")!.click());
+    vi.mocked(write).mockRejectedValueOnce(new ApiError("Hermes is being upgraded.", 409, "hermes_maintenance"));
+    await act(async () => buttonText("Send approval again")!.click());
+    expect(buttonText("Send approval again")?.disabled).toBe(false);
+    expect(buttonText("Decline")?.disabled).toBe(true);
+    expect(container.textContent).not.toContain("no longer available to answer");
+    expect(vi.mocked(write).mock.calls.map(([, body]) => body)).toEqual([{ decision: "approved" }, { decision: "approved" }]);
+  });
+
 });
 
 describe("reply actions", () => {
@@ -403,6 +568,7 @@ describe("reply actions", () => {
 
 describe("find in chat", () => {
   beforeEach(() => {
+    vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
     conversation = { ...conversation, earlier: 4, messages: [prompt("q", "Is the north gate shut?"), answer("a", "The gate is shut."), answer("b", "Barn is fine.")] } as Conversation;
     searchHits = [
       { botId: "shared", botName: "Shared", sessionId: "live", title: "", snippet: "", messageId: "old", offset: 2 },
@@ -412,6 +578,68 @@ describe("find in chat", () => {
   });
   const find = () => container.querySelector<HTMLInputElement>('.find-bar input')!;
   const count = () => container.querySelector(".find-count")?.textContent;
+
+  it("leaves Control+F alone on Mac and uses it on non-Apple platforms", async () => {
+    await render();
+    const press = () => {
+      const event = new KeyboardEvent("keydown", { key: "f", ctrlKey: true, cancelable: true });
+      window.dispatchEvent(event); return event;
+    };
+    let event!: KeyboardEvent;
+    await act(async () => { event = press(); });
+    expect(event.defaultPrevented).toBe(false);
+    expect(container.querySelector(".find-bar")).toBeNull();
+    vi.spyOn(navigator, "platform", "get").mockReturnValue("Linux x86_64");
+    await act(async () => { event = press(); });
+    expect(event.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(find());
+  });
+
+  it("scrolls to the matching text inside a long message", async () => {
+    vi.spyOn(Element.prototype, "clientHeight", "get").mockReturnValue(400);
+    const previous = Object.getOwnPropertyDescriptor(Range.prototype, "getBoundingClientRect");
+    const rect = vi.fn(function (this: Range) {
+      expect(this.toString().toLowerCase()).toBe("gate");
+      return { top: 800 - (container.querySelector<HTMLElement>(".transcript")?.scrollTop ?? 0) };
+    });
+    Object.defineProperty(Range.prototype, "getBoundingClientRect", { configurable: true, value: rect });
+    try {
+      await render();
+      await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "f", metaKey: true, cancelable: true })));
+      await typeInto(find(), "gate");
+      expect(rect).toHaveBeenCalled();
+      expect(container.querySelector<HTMLElement>(".transcript")!.scrollTop).toBe(700);
+    } finally {
+      if (previous) Object.defineProperty(Range.prototype, "getBoundingClientRect", previous);
+      else Reflect.deleteProperty(Range.prototype, "getBoundingClientRect");
+    }
+  });
+
+  it("keeps the selected match when a new matching reply arrives", async () => {
+    await render();
+    await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "f", metaKey: true, cancelable: true })));
+    await typeInto(find(), "gate");
+    await advance(300);
+    expect(count()).toBe("3 of 3");
+    conversation = { ...conversation, messages: [...conversation.messages, answer("newest", "Another gate update.")] };
+    await changed();
+    expect(count()).toBe("3 of 4");
+  });
+
+  it("pins a replacement when an edited message no longer matches", async () => {
+    searchHits = [];
+    await render();
+    await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "f", metaKey: true, cancelable: true })));
+    await typeInto(find(), "gate");
+    await advance(300);
+    expect(count()).toBe("2 of 2");
+    conversation = { ...conversation, messages: conversation.messages.map(message => message.id === "a" ? answer("a", "No updates.") : message) };
+    await changed();
+    expect(count()).toBe("1 of 1");
+    conversation = { ...conversation, messages: [...conversation.messages, answer("newest", "Another gate update.")] };
+    await changed();
+    expect(count()).toBe("1 of 2");
+  });
 
   it("opens with Cmd+F, counts loaded matches, then merges unloaded history and opens it", async () => {
     await render();
@@ -467,7 +695,7 @@ describe("find in chat", () => {
       : path === "/bootstrap?roster=lean" ? bootstrap : path === "/bots/shared/draft" ? savedDraft
       : path.startsWith("/search?") ? { hits: [], unavailableBots: [] } : conversation) as T);
     await render();
-    await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "f", ctrlKey: true, cancelable: true })));
+    await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "f", metaKey: true, cancelable: true })));
     await typeInto(find(), "ga");
     await advance(300);
     await typeInto(find(), "gate");
@@ -519,6 +747,86 @@ describe("turn work", () => {
 });
 
 describe("scroll intent", () => {
+  const attentionLayout = () => {
+    vi.spyOn(Element.prototype, "scrollHeight", "get").mockReturnValue(2600);
+    vi.spyOn(Element.prototype, "clientHeight", "get").mockReturnValue(400);
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      const id = (this as HTMLElement).dataset.attentionId;
+      const offset = id === "first" ? 500 : id === "ask" ? 1000 : id === "gate" ? 1400 : (this as HTMLElement).dataset.messageId ? 200 : 0;
+      const top = offset ? offset - (this.closest(".transcript")?.scrollTop ?? 0) : 0;
+      return { top, bottom: top + 60, left: 0, right: 400, width: 400, height: 60, x: 0, y: top, toJSON() {} };
+    });
+  };
+  it("opens a pending approval without a jump and follows after it is removed", async () => {
+    attentionLayout();
+    conversation = { ...conversation, approvals: [{ id: "gate", title: "Create the reminder?", detail: "Notify both members.", status: "pending" }] };
+    await render();
+    const transcript = container.querySelector<HTMLElement>(".transcript")!;
+    expect(transcript.scrollTop).toBe(1400);
+    expect(container.querySelector(".jump-latest")).toBeNull();
+    conversation = { ...conversation, approvals: [], messages: [...conversation.messages, answer("after-approval", "Your decision was received.")] };
+    await changed();
+    expect(transcript.scrollTop).toBe(2600);
+    expect(container.querySelector(".jump-latest")).toBeNull();
+  });
+  for (const kind of ["official", "secure"] as const) {
+    it(kind === "secure" ? "preserves the explicit secure-request reveal ahead of a question" : "opens the question when an official card is listed before it", async () => {
+      attentionLayout();
+      const first: AttentionRequest = { id: "first", kind, title: "Earlier request", detail: "Still waiting." };
+      if (kind === "secure") first.secure = { epoch: "fixture", sessionId: "live", method: "vault.code" };
+      conversation = { ...conversation, attention: [first,
+        { id: "ask", kind: "clarify", title: "A plan", detail: "", questions: [{ id: "plan", prompt: "Your plan?" }] },
+      ] };
+      await render();
+      if (kind === "secure") expect(container.querySelector(".secure-request")).not.toBeNull();
+      expect(container.querySelector<HTMLElement>(".transcript")!.scrollTop).toBe(kind === "secure" ? 500 : 1000);
+      if (kind === "official") expect(container.querySelector(".jump-latest")).toBeNull();
+    });
+  }
+
+  it("opens a pending question at its beginning and preserves the reader's position on refresh", async () => {
+    vi.spyOn(Element.prototype, "scrollHeight", "get").mockReturnValue(2600);
+    vi.spyOn(Element.prototype, "clientHeight", "get").mockReturnValue(400);
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      const offset = this.matches(".attention-card") ? 1000 : (this as HTMLElement).dataset.messageId ? 200 : 0;
+      const top = offset ? offset - (this.closest(".transcript")?.scrollTop ?? 0) : 0;
+      return { top, bottom: top + 60, left: 0, right: 400, width: 400, height: 60, x: 0, y: top, toJSON() {} };
+    });
+    conversation = { ...conversation, activity: { state: "blocked" }, attention: [
+      { id: "ask", kind: "clarify", title: "A plan", detail: "", questions: [{ id: "plan", prompt: "Your plan?" }] },
+    ] };
+    await render();
+    const transcript = container.querySelector<HTMLElement>(".transcript")!;
+    expect(transcript.scrollTop).toBe(1000);
+    expect(container.querySelector(".jump-latest")).toBeNull();
+    await act(async () => { transcript.dispatchEvent(new WheelEvent("wheel", { deltaY: -40 })); });
+    expect(container.querySelector(".jump-latest")).not.toBeNull();
+    transcript.scrollTop = 850;
+    conversation = { ...conversation, activity: { state: "blocked", detail: "Still waiting" } };
+    await changed();
+    expect(transcript.scrollTop).toBe(850);
+  });
+
+  it("follows the reply when the opened question is removed", async () => {
+    vi.spyOn(Element.prototype, "scrollHeight", "get").mockReturnValue(2600);
+    vi.spyOn(Element.prototype, "clientHeight", "get").mockReturnValue(400);
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      const offset = this.matches(".attention-card") ? 1000 : (this as HTMLElement).dataset.messageId ? 200 : 0;
+      const top = offset ? offset - (this.closest(".transcript")?.scrollTop ?? 0) : 0;
+      return { top, bottom: top + 60, left: 0, right: 400, width: 400, height: 60, x: 0, y: top, toJSON() {} };
+    });
+    conversation = { ...conversation, activity: { state: "blocked" }, attention: [
+      { id: "ask", kind: "clarify", title: "A plan", detail: "", questions: [{ id: "plan", prompt: "Your plan?" }] },
+    ] };
+    await render();
+    const transcript = container.querySelector<HTMLElement>(".transcript")!;
+    expect(transcript.scrollTop).toBe(1000);
+    conversation = { ...conversation, attention: [], messages: [...conversation.messages, answer("after-question", "Here is the plan.")] };
+    await changed();
+    expect(transcript.scrollTop).toBe(2600);
+    expect(container.querySelector(".jump-latest")).toBeNull();
+  });
+
   it("stops following the end at once when the reader wheels up", async () => {
     const height = vi.spyOn(Element.prototype, "scrollHeight", "get").mockImplementation(function (this: Element) { return this.classList.contains("transcript") ? 2000 : 0; });
     const view = vi.spyOn(Element.prototype, "clientHeight", "get").mockImplementation(function (this: Element) { return this.classList.contains("transcript") ? 300 : 0; });

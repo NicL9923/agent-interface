@@ -66,6 +66,10 @@ struct ConversationView: View {
   @State private var highlighted: String?
   /// The found message kept in view while the chat lays out around it, until the reader drags.
   @State private var held: String?
+  /// Initial card placement follows layout until it lands or the reader takes over.
+  @State private var openingCard: String?
+  /// Opening at a decision is a useful reading position, not unread history.
+  @State private var attentionPosition: String?
   /// After Send, the next message on its way is held near the top while its reply grows below.
   @State private var anchorNext = false
   @State private var anchorScrollPending = false
@@ -108,6 +112,9 @@ struct ConversationView: View {
     .onAppear { if !visible { store.conversationShown(bot.id, true) }; visible = true }
     .onDisappear { if visible { store.conversationShown(bot.id, false) }; visible = false }
     .onChange(of: findQuery) { _, _ in findTarget = nil }
+    .onChange(of: store.error) { _, error in
+      if visible, let error { AccessibilityNotification.Announcement(error).post() }
+    }
     .task(id: "\(findOpen):\(findQuery)") { await searchHistory() }
     .findShortcut(botId: bot.id, open: openFind)
   }
@@ -150,7 +157,7 @@ struct ConversationView: View {
     Button { profileOpen = true } label: {
       // The avatar's shape sits inside its frame with room to move, so no extra gap is needed.
       VStack(spacing: 0) {
-        AvatarView(avatar: bot.avatar ?? AvatarConfig(), state: headerState, size: 40, name: bot.name, botId: bot.id)
+        AvatarView(avatar: bot.avatar ?? AvatarConfig(), state: headerState == .blocked ? .idle : headerState, size: 40, name: bot.name, botId: bot.id)
         Text(bot.name).font(.caption.weight(.semibold)).foregroundStyle(.primary).lineLimit(1)
       }.frame(maxWidth: 220).contentShape(Rectangle())
       // The bar does not grow with text, so the name stops at a size the bar can hold.
@@ -220,6 +227,10 @@ struct ConversationView: View {
     let after = matches.count
     if after != before { AccessibilityNotification.Announcement(after == 1 ? "1 match" : "\(after) matches").post() }
   }
+  private var pendingCardIDs: [String] {
+    (store.conversation?.attention?.map { "attention-" + $0.id } ?? [])
+      + (store.conversation?.approvals.filter { $0.status == "pending" }.map { "approval-" + $0.id } ?? [])
+  }
   private var transcript: some View {
     ScrollViewReader { proxy in
       transcriptScroll(proxy)
@@ -231,13 +242,36 @@ struct ConversationView: View {
         placed = false
         unseen = 0
         visibleMessage = nil
+        openingCard = nil
+        attentionPosition = nil
         earlierFailed = false
         sentAnchor = nil; anchorNext = false
-        if store.focusedMessage?.botId == id { showFocus(proxy) } else { scrollToLatest(proxy) }
+        if store.focusedMessage?.botId == id { showFocus(proxy) }
+        else if let request = store.conversation?.attention?.first, request.kind == "clarify" {
+          following = false
+          openingCard = "attention-" + request.id
+          attentionPosition = openingCard
+          placeOpeningCard(proxy)
+        }
+        else if let approval = store.conversation?.approvals.first(where: { $0.status == "pending" }) {
+          following = false
+          openingCard = "approval-" + approval.id
+          attentionPosition = openingCard
+          placeOpeningCard(proxy)
+        }
+        else { scrollToLatest(proxy) }
       }
       .onChange(of: store.focusedMessage, initial: true) { _, _ in showFocus(proxy) }
       .onChange(of: store.transcript?.messages.count) { _, _ in if store.focusedMessage != nil { showFocus(proxy) } }
       .onChange(of: store.attentionScrollRequest) { _, request in if request != nil { showAttention(proxy) } }
+      .onChange(of: pendingCardIDs) { _, ids in
+        if let attentionPosition, !ids.contains(attentionPosition) {
+          self.openingCard = nil
+          self.attentionPosition = nil
+          following = true
+          scrollToLatest(proxy)
+        }
+      }
       .onChange(of: store.outgoing?.id) { _, id in
         guard anchorNext, let id else { return }
         anchorNext = false
@@ -256,7 +290,7 @@ struct ConversationView: View {
       .onChange(of: store.receipt) { _, receipt in
         if let receipt, receipt.requestId == sentAnchor, let id = receipt.messageId { sentAnchorMessage = id }
       }
-      .overlay(alignment: .bottom) { if !following && !atEnd && store.conversation != nil { jumpButton(proxy) } }
+      .overlay(alignment: .bottom) { if !following && !atEnd && attentionPosition == nil && store.conversation != nil { jumpButton(proxy) } }
       .animation(.easeOut(duration: 0.15), value: following)
       .refreshable {
         await store.refreshConversation()
@@ -271,9 +305,9 @@ struct ConversationView: View {
       }
       // After Send, the new message is held near the top and its reply grows below it, instead of
       // the transcript pinning to the bottom. Following resumes once the reader reaches the end.
-      .onChange(of: latestTrigger) { _, _ in following = false; anchorNext = true }
+      .onChange(of: latestTrigger) { _, _ in openingCard = nil; attentionPosition = nil; following = false; anchorNext = true }
       .onChange(of: findTarget) { _, id in
-        if let id { following = false; proxy.scrollTo(id, anchor: .top) }
+        if let id { openingCard = nil; attentionPosition = nil; following = false; proxy.scrollTo(id, anchor: .top) }
       }
       // VoiceOver reads each settled reply once, as the web's live region does.
       .onChange(of: store.replyAnnouncement) { _, reply in
@@ -289,11 +323,13 @@ struct ConversationView: View {
     ScrollView {
       // Not lazy: like the web's page, every loaded turn has a real height, so the latest
       // message and a held place can be scrolled to exactly.
-      transcriptRows(proxy).scrollTargetLayout().padding(16).frame(maxWidth: 850, alignment: .leading).frame(maxWidth: .infinity)
+      transcriptRows(proxy).scrollTargetLayout().padding(16).coordinateSpace(name: OpeningCardMetrics.contentSpace)
+        .frame(maxWidth: 752, alignment: .leading).frame(maxWidth: .infinity)
         .environment(\.transcriptConnected, store.connected)
         .environment(\.transcriptRecipient, bot.name)
         .environment(\.sentAnchor, anchoredMessage)
         .environment(\.scrollTranscript, { id in
+          openingCard = nil
           if reduceMotion { proxy.scrollTo(id, anchor: .center) } else { withAnimation(.easeOut(duration: 0.3)) { proxy.scrollTo(id, anchor: .center) } }
         })
         .onPreferenceChange(SentAnchorTop.self) { anchorTop = $0 }
@@ -311,16 +347,19 @@ struct ConversationView: View {
       // The keyboard or a rotation resizes the view; a follower stays at the end, and a found
       // message stays in view.
       if following { scrollToLatest(proxy) } else if let held { Task { @MainActor in proxy.scrollTo(held, anchor: .top) } }
+      else { placeOpeningCard(proxy) }
     }
-    .modifier(OnDrag {
+    .modifier(OnDrag(action: {
+      openingCard = nil
+      attentionPosition = nil
       if following { following = false }
       if held != nil { held = nil }
       if !placed && store.conversation != nil { placed = true }
-    })
+    }, beganScrolling: { openingCard = nil; attentionPosition = nil }))
     .scrollDismissesKeyboard(.interactively)
     // A short chat cannot be dragged, so a tap anywhere on the transcript puts the keyboard away
     // too. It runs beside the transcript's own buttons and links rather than instead of them.
-    .simultaneousGesture(TapGesture().onEnded { if composerFocused { composerFocused = false } })
+    .simultaneousGesture(TapGesture().onEnded { openingCard = nil; if composerFocused { composerFocused = false } })
     .accessibilityIdentifier("conversationTranscript")
   }
   private func transcriptRows(_ proxy: ScrollViewProxy) -> some View {
@@ -328,7 +367,7 @@ struct ConversationView: View {
       if (store.conversation?.earlier ?? 0) > 0 { earlierButton(proxy) }
       // The transcript includes a message still on its way.
       if store.conversation != nil && (store.conversation?.earlier ?? 0) == 0 && store.transcript?.messages.isEmpty == false {
-        Text("This is the start of your conversation with \(bot.name).").font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity)
+        Text("This is the start of your conversation with \(bot.name).").font(.caption).foregroundStyle(Palette.muted).frame(maxWidth: .infinity)
       }
       emptyState
       TranscriptTurns(turns: store.turns, advanced: advanced, delivery: store.outgoing,
@@ -337,10 +376,22 @@ struct ConversationView: View {
       if ![.idle, .done].contains(store.activity) { liveActivity }
       // Questions and secure requests come before approvals, as on the web.
       ForEach(store.conversation?.attention ?? []) { request in
-        AttentionView(request: request, botId: bot.id).id("attention-" + request.id)
+        let target = "attention-" + request.id
+        AttentionView(request: request, botId: bot.id, interacted: {
+          openingCard = nil
+          if atEnd { following = true }
+        }, sendStarted: {
+          openingCard = nil; attentionPosition = nil
+          following = true
+          scrollToLatest(proxy)
+        }).id(target)
+          .onGeometryChange(for: OpeningCardMetrics?.self) { OpeningCardMetrics($0) } action: { openingCardMoved($0, target, proxy) }
       }
       ForEach(store.conversation?.approvals.filter { $0.status == "pending" } ?? []) {
-        approval in approvalCard(approval).id("approval-" + approval.id)
+        approval in
+        let target = "approval-" + approval.id
+        approvalCard(approval, proxy).id(target)
+          .onGeometryChange(for: OpeningCardMetrics?.self) { OpeningCardMetrics($0) } action: { openingCardMoved($0, target, proxy) }
       }
       // The end of the real content, then room for a sent message to sit at the top.
       Color.clear.frame(height: 0)
@@ -372,7 +423,7 @@ struct ConversationView: View {
     } else if store.transcript?.messages.isEmpty == true && [.idle, .done].contains(store.activity) {
       VStack(spacing: 14) {
         AvatarView(avatar: bot.avatar ?? AvatarConfig(), size: 112, name: bot.name, forceReducedMotion: true)
-        Text("Let's discuss your role.").font(.title2.bold())
+        Text("Start with \(bot.name)'s role").font(.title2.bold())
         Text(bot.description?.isEmpty == false ? bot.description! : "Tell \(bot.name) what you need help with.").foregroundStyle(.secondary)
         Button("Discuss \(bot.name)'s role") {
           store.editComposer { $0.text = RoleDiscussion.draft(appendingTo: $0.text, description: bot.description) }
@@ -386,7 +437,8 @@ struct ConversationView: View {
     let label = unseen == 0 ? "Jump to latest" : "\(unseen) new \(unseen == 1 ? "message" : "messages")"
     return Button { jumpToLatest(proxy) } label: {
       Label(label, systemImage: "arrow.down").font(.subheadline).padding(.horizontal, 16).padding(.vertical, 10).background(.regularMaterial, in: Capsule())
-    }.accessibilityLabel(unseen == 0 ? label : label + ", jump to latest").padding(12).transition(.opacity)
+    }.accessibilityLabel(unseen == 0 ? label : label + ", jump to latest")
+      .accessibilityIdentifier("jumpToLatest").padding(12).transition(.opacity)
   }
   /// Content grew or the reader scrolled. Growth keeps a follower at the end; a scroll decides
   /// whether the reader is following, as the web's scroll handler does.
@@ -403,12 +455,13 @@ struct ConversationView: View {
       if following { scrollToLatest(proxy) }
       // A reloaded window can finish its layout after the scroll to the found message.
       else if let held { Task { @MainActor in proxy.scrollTo(held, anchor: .top) } }
+      else { placeOpeningCard(proxy) }
       return
     }
     // Leaving the end stops following; it starts again only at the true end, and not while a sent
     // message is held at the top with room still below it.
     if following { if !atLatest && Date() >= jumpingUntil { following = false } }
-    else if distance < 24 && anchorRoom == 0 { following = true }
+    else if distance < 24 && anchorRoom == 0 && openingCard == nil { following = true }
     if atLatest { unseen = 0; jumpingUntil = .distantPast }
   }
   /// Puts the sent message at the top of the transcript.
@@ -423,6 +476,8 @@ struct ConversationView: View {
     guard let focus = store.focusedMessage, focus.botId == bot.id,
       store.transcript?.messages.contains(where: { $0.id == focus.messageId }) == true
     else { return }
+    openingCard = nil
+    attentionPosition = nil
     store.focusedMessage = nil
     following = false
     // Earlier history waits for the reader's own scroll (or Show earlier messages), so a page added
@@ -447,6 +502,8 @@ struct ConversationView: View {
   }
   /// Brings the first card waiting on the person into view, as the composer's status dock asks.
   private func showAttention(_ proxy: ScrollViewProxy) {
+    openingCard = nil
+    attentionPosition = nil
     store.attentionScrollRequest = nil
     let target = store.conversation?.attention?.first.map { "attention-" + $0.id }
       ?? store.conversation?.approvals.first { $0.status == "pending" }.map { "approval-" + $0.id }
@@ -456,11 +513,29 @@ struct ConversationView: View {
       if reduceMotion { proxy.scrollTo(target, anchor: .top) } else { withAnimation(.easeOut(duration: 0.3)) { proxy.scrollTo(target, anchor: .top) } }
     }
   }
+  private func openingCardMoved(_ metrics: OpeningCardMetrics?, _ target: String, _ proxy: ScrollViewProxy) {
+    guard openingCard == target, let metrics else { return }
+    // All values come from one layout pass. Only landing at the top or the true end
+    // completes placement; a card fitting a stale viewport can cancel the scroll too early.
+    if abs(metrics.top) <= 1 || metrics.contentEnd <= metrics.viewport + 1 {
+      openingCard = nil
+      following = metrics.contentEnd - metrics.viewport < 100
+    } else { placeOpeningCard(proxy) }
+  }
+  private func placeOpeningCard(_ proxy: ScrollViewProxy) {
+    guard let target = openingCard else { return }
+    Task { @MainActor in
+      guard openingCard == target else { return }
+      proxy.scrollTo(target, anchor: .top)
+    }
+  }
   /// Waits for the layout pass that changed the content, then shows its end.
   private func scrollToLatest(_ proxy: ScrollViewProxy) {
     Task { @MainActor in proxy.scrollTo("latest", anchor: .bottom) }
   }
   private func jumpToLatest(_ proxy: ScrollViewProxy) {
+    openingCard = nil
+    attentionPosition = nil
     following = anchorRoom == 0
     unseen = 0
     // A short trip glides; a long one jumps rather than scrolling through pages of history.
@@ -494,18 +569,30 @@ struct ConversationView: View {
   private var liveActivity: some View {
     let live = LiveWork(turn: store.turns.last, toolCalls: store.conversation?.toolCalls)
     let working = store.connected && [.thinking, .working].contains(store.activity)
-    return HStack(alignment: .center, spacing: 12) {
-      AvatarView(avatar: bot.avatar ?? AvatarConfig(), state: store.activity, size: 52, name: bot.name, botId: bot.id,
+    let recovering = store.activity == .failed || store.activity == .interrupted
+    return HStack(alignment: recovering ? .top : .center, spacing: 12) {
+      AvatarView(avatar: bot.avatar ?? AvatarConfig(), state: store.activity == .blocked ? .idle : store.activity, size: 52, name: bot.name, botId: bot.id,
         prop: store.connected ? AvatarProp.from(toolCalls: store.conversation?.toolCalls) : nil)
       VStack(alignment: .leading, spacing: 4) {
-        ShimmerText(
-          text: ActivitySentence.text(name: bot.name, state: store.activity, detail: store.conversation?.activity.detail, connectionLost: !store.connected),
-          moving: [.thinking, .working, .waiting].contains(store.activity))
+        if recovering {
+          Text(store.activity == .failed ? "\(bot.name) couldn't finish." : "\(bot.name)'s task was interrupted.")
+            .font(.body.weight(.semibold)).accessibilityIdentifier("recoveryTitle")
+          if let detail = store.conversation?.activity.detail?.trimmingCharacters(in: .whitespacesAndNewlines), !detail.isEmpty {
+            Text(detail).font(.subheadline).foregroundStyle(Palette.muted).padding(.top, 4).accessibilityIdentifier("recoveryDetail")
+          }
+          if store.activity == .interrupted {
+            Text("Review the last actions above before continuing.").font(.subheadline).foregroundStyle(Palette.muted).padding(.top, 4)
+          }
+        } else {
+          ShimmerText(
+            text: ActivitySentence.text(name: bot.name, state: store.activity, detail: store.conversation?.activity.detail, connectionLost: !store.connected, offline: reachability.offline),
+            moving: [.thinking, .working, .waiting].contains(store.activity))
+        }
         if working, let receipt = live.receipt {
-          Text(receipt).font(.caption).foregroundStyle(.secondary).lineLimit(1).accessibilityIdentifier("liveReceipt")
+          Text(receipt).font(.caption).foregroundStyle(Palette.muted).lineLimit(1).accessibilityIdentifier("liveReceipt")
         }
         if working && advanced, let line = live.reasoning {
-          Text(line).font(.caption).italic().foregroundStyle(.secondary).lineLimit(2).accessibilityIdentifier("liveReasoning")
+          Text(line).font(.caption).italic().foregroundStyle(Palette.muted).lineLimit(2).accessibilityIdentifier("liveReasoning")
         }
         if let offer = store.retryOffer { retryControls(offer) }
         if let refusal = store.retryRefusal { refusedRetry(refusal) }
@@ -515,7 +602,7 @@ struct ConversationView: View {
   }
   /// A retry Hermes refused, which stays refused: the reason, and the message back in the composer.
   @ViewBuilder private func refusedRetry(_ refusal: AppStore.RetryRefusal) -> some View {
-    Text(refusal.text).font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("retryRefused")
+    Text(refusal.text).font(.subheadline).foregroundStyle(Palette.muted).padding(.top, 4).accessibilityIdentifier("retryRefused")
     Button("Put my message in the message box") {
       guard let left = store.putRetriedMessageInDraft(refusal.message) else {
         AccessibilityNotification.Announcement("Your message is still sending. Try again once it has gone.").post()
@@ -525,22 +612,25 @@ struct ConversationView: View {
       AccessibilityNotification.Announcement(left > 0
         ? "Your message is in the message box, without \(left) of its files: a message can carry only \(UploadRules.maxAttachments)."
         : "Your message is in the message box.").post()
-    }.buttonStyle(.bordered).font(.subheadline)
+    }.buttonStyle(.accentProminent).controlSize(.large).font(.subheadline).padding(.top, 8)
       .disabled(store.sendingDraft || !store.draftReady)
       .accessibilityIdentifier("retryPutBack")
   }
   /// Retry for a failed turn, and while its outcome is unknown, what is being done about it.
   @ViewBuilder private func retryControls(_ offer: AppStore.RetryOffer) -> some View {
     if offer.checking {
-      Text(offer.resendable ? RetryTurn.checkingNotice : RetryTurn.unconfirmedNotice).font(.caption).foregroundStyle(.secondary)
-        .accessibilityIdentifier("retryChecking")
+      Text(offer.resendable ? "Checking whether the retry arrived… Retry sends the same request again, so it can't run twice." : RetryTurn.unconfirmedNotice)
+        .font(.subheadline).foregroundStyle(Palette.muted).padding(.top, 4).accessibilityIdentifier("retryChecking")
+    } else {
+      Text("Retry sends your last message again. Your draft stays as it is.")
+        .font(.subheadline).foregroundStyle(Palette.muted).padding(.top, 4)
     }
     Button { Task { await store.retry() } } label: {
       HStack(spacing: 6) {
         if offer.busy { ProgressView().controlSize(.small) } else { Image(systemName: "arrow.clockwise").accessibilityHidden(true) }
         Text(offer.busy ? "Retrying…" : "Retry")
       }
-    }.buttonStyle(.bordered).font(.subheadline)
+    }.buttonStyle(.accentProminent).controlSize(.large).font(.subheadline).padding(.top, 8)
       .disabled(!offer.enabled || !store.connected || !store.supports(.chat))
       .accessibilityHint(offer.checking ? "Sends the same request again, so it can't run twice. Your draft stays as it is."
         : "Sends your last message again. Your draft stays as it is.")
@@ -565,8 +655,12 @@ struct ConversationView: View {
       else if let anchor, !following { proxy.scrollTo(anchor, anchor: .top) }
     }
   }
-  private func approvalCard(_ approval: Approval) -> some View {
-    ApprovalDecisionView(approval: approval, botId: bot.id)
+  private func approvalCard(_ approval: Approval, _ proxy: ScrollViewProxy) -> some View {
+    ApprovalDecisionView(approval: approval, botId: bot.id, sendStarted: {
+      openingCard = nil; attentionPosition = nil
+      following = true
+      scrollToLatest(proxy)
+    })
   }
 }
 /// A conversation row. Tool calls and reasoning render in the turn's groups, not here.
@@ -612,9 +706,8 @@ struct MessageView: View {
       if !label.isEmpty { Text(label).font(.caption.weight(.semibold)) }
       if let delivery {
         Text(delivery == .sending ? "Sending…" : "Not confirmed yet").font(.caption2)
-          .foregroundStyle(delivery == .unconfirmed ? AnyShapeStyle(Palette.attention) : AnyShapeStyle(.secondary))
       } else if let date = message.createdAt { WhenText(value: date).font(.caption2) }
-    }.foregroundStyle(.secondary)
+    }.foregroundStyle(Palette.messageMetadata)
   }
   private var label: String {
     message.presentationOrigin?.kind == "scheduled" && !message.isInternalActivity ? "Scheduled" : message.sender?.name
@@ -663,7 +756,7 @@ struct AgentExchangeView: View {
         DisclosureGroup(handoff.summary) {
           VStack(alignment: .leading, spacing: 8) {
             if !handoff.body.isEmpty { Text(handoff.body).textSelection(.enabled) }
-            Text(handoff.response).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+            Text(handoff.response).font(.caption.monospaced()).textSelection(.enabled)
           }.frame(maxWidth: .infinity, alignment: .leading).padding(.top, 4)
         }.font(.subheadline)
       }
@@ -704,14 +797,14 @@ struct ToolActivityView: View {
     message.toolCall?.result ?? (message.toolResult.isEmpty ? nil : message.toolResult)
   }
   @ViewBuilder private func times(_ call: ToolCall) -> some View {
-    LabeledContent("Call") { Text(call.id).font(.system(.caption, design: .monospaced)) }.font(.caption).textSelection(.enabled)
+    LabeledContent("Call") { Text(call.id).font(.caption.monospaced()) }.font(.caption).textSelection(.enabled)
     if let date = call.startedAt, !When.format(date).isEmpty { LabeledContent("Started") { WhenText(value: date) }.font(.caption) }
     if let date = call.completedAt, !When.format(date).isEmpty { LabeledContent("Finished") { WhenText(value: date) }.font(.caption) }
   }
   private func section(_ title: String, _ text: String, danger: Bool = false) -> some View {
     VStack(alignment: .leading, spacing: 4) {
       Text(title).font(.caption.bold()).accessibilityAddTraits(.isHeader)
-      ToolOutputView(text: text, label: "\(title) for \(message.displayToolName)").font(.system(.caption, design: .monospaced))
+      ToolOutputView(text: text, label: "\(title) for \(message.displayToolName)").font(.caption)
     }.foregroundStyle(danger ? Palette.danger : Color.primary)
   }
   static func status(_ status: String, connected: Bool) -> String {
@@ -727,10 +820,11 @@ struct ToolActivityView: View {
 struct ToolOutputView: View {
   var text: String
   var label: String = "Tool output"
+  @Environment(\.font) private var font
   @State private var contentHeight: CGFloat = 1
   var body: some View {
     ScrollView(.vertical) {
-      Text(text).textSelection(.enabled)
+      Text(text).font((font ?? .body).monospaced()).textSelection(.enabled)
         .frame(maxWidth: .infinity, alignment: .leading)
         .fixedSize(horizontal: false, vertical: true)
         .background(GeometryReader { geometry in
@@ -752,11 +846,14 @@ private struct ToolOutputHeight: PreferenceKey {
 struct AttentionView: View {
   var request: Attention
   var botId: String
+  var interacted: () -> Void = {}
+  var sendStarted: () -> Void = {}
   @Environment(AppStore.self) private var store
   @Environment(\.colorScheme) private var scheme
   @Environment(\.scrollTranscript) private var scrollTranscript
   @State private var answers = QuestionAnswers()
   @State private var busy = false
+  @State private var settled = false
   @FocusState private var focusedQuestion: String?
   private var secure: Bool { request.kind == "secure" && request.secure?.supported == true }
   private var questions: [Question] { request.questions ?? [] }
@@ -767,21 +864,27 @@ struct AttentionView: View {
       Text(request.title).font(.headline)
       Text(request.detail).textSelection(.enabled)
       if request.kind == "clarify" {
-        ForEach(questions) { question in questionView(question).id(questionAnchor(question)) }
-        Button(busy ? "Sending answers…" : "Send answers", action: sendAnswers).buttonStyle(.borderedProminent)
-          .disabled(busy || !store.connected || !answers.complete(questions))
+        ForEach(questions) { question in questionView(question).id(questionAnchor(question)).disabled(settled) }
+        Text(settled ? "Answers sent." : answers.complete(questions) ? "Ready to send." : "Answer every question to send.")
+          .font(.footnote).foregroundStyle(Palette.muted)
+        Button(busy ? "Sending answers…" : settled ? "Answers sent" : "Send answers", action: sendAnswers).buttonStyle(.accentProminent)
+          .controlSize(.large)
+          .disabled(busy || settled || !store.connected || !answers.complete(questions))
           .id("answers-" + request.id)
       } else if secure, let value = request.secure {
         SecureAttentionView(request: request, botId: botId)
           .id(request.id + value.binding)
       } else {
         Text("Open the official Hermes interface to handle this request. Return here when it is complete.").font(.footnote)
-          .foregroundStyle(.secondary)
+          .foregroundStyle(Palette.muted)
       }
     }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
       .background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 14))
       .overlay(alignment: .leading) { UnevenRoundedRectangle(topLeadingRadius: 14, bottomLeadingRadius: 14).fill(Palette.attention).frame(width: 4) }
       .sensoryFeedback(.selection, trigger: answers.choices)
+      .onChange(of: answers.choices) { _, _ in interacted() }
+      .onChange(of: answers.writing) { _, _ in interacted() }
+      .onChange(of: focusedQuestion) { _, value in if value != nil { interacted() } }
   }
   private func questionAnchor(_ question: Question) -> String { "question-\(request.id)-\(question.id)" }
   @ViewBuilder private func questionView(_ question: Question) -> some View {
@@ -789,7 +892,7 @@ struct AttentionView: View {
     let multiple = question.multiple == true
     VStack(alignment: .leading, spacing: 8) {
       Text(question.prompt).font(.subheadline.weight(.semibold)).accessibilityAddTraits(.isHeader)
-      if multiple && !options.isEmpty { Text("Choose any that apply.").font(.caption).foregroundStyle(.secondary) }
+      if multiple && !options.isEmpty { Text("Choose any that apply.").font(.caption).foregroundStyle(Palette.muted) }
       if !options.isEmpty {
         VStack(spacing: 6) {
           ForEach(options.indices, id: \.self) { index in
@@ -804,8 +907,13 @@ struct AttentionView: View {
         }
       }
       if options.isEmpty || answers.writing.contains(question.id) {
-        TextField(question.prompt, text: Binding(get: { answers.text[question.id] ?? "" }, set: { answers.text[question.id] = $0 }), axis: .vertical)
-          .textFieldStyle(.roundedBorder).labelsHidden().focused($focusedQuestion, equals: question.id)
+        TextField(question.prompt, text: Binding(get: { answers.text[question.id] ?? "" }, set: { answers.text[question.id] = $0 }),
+          prompt: Text("Your answer").foregroundStyle(Palette.muted), axis: .vertical)
+          .textFieldStyle(.plain).labelsHidden().focused($focusedQuestion, equals: question.id)
+          .lineLimit(2...5)
+          .padding(12).frame(minHeight: 44)
+          .background(Palette.surface(scheme), in: RoundedRectangle(cornerRadius: 10))
+          .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(focusedQuestion == question.id ? Palette.accent : Palette.line))
           .accessibilityLabel(options.isEmpty ? question.prompt : "Your answer: \(question.prompt)")
           .accessibilityIdentifier("questionAnswer-\(question.id)")
       }
@@ -823,6 +931,9 @@ struct AttentionView: View {
     if next.options?.isEmpty != false { focusedQuestion = next.id }
   }
   private func sendAnswers() {
+    guard !busy && !settled else { return }
+    sendStarted()
+    store.dismissError()
     busy = true
     let scope = store.scope
     Task {
@@ -832,6 +943,8 @@ struct AttentionView: View {
           "/bots/\(APIClient.component(botId))/requests/\(APIClient.component(request.id))",
           ["answers": answers.payload(questions)])
         guard scope == store.scope else { return }
+        settled = true
+        AccessibilityNotification.Announcement("Answers sent.").post()
         store.buzz(.decided)
         await store.refreshConversation()
       } catch { if scope == store.scope { store.buzz(.failed); store.report(error) } }
@@ -851,7 +964,7 @@ private struct QuestionOption: View {
         Image(systemName: multiple ? selected ? "checkmark.square.fill" : "square" : selected ? "largecircle.fill.circle" : "circle")
           .foregroundStyle(selected ? Palette.accent : Palette.muted).accessibilityHidden(true)
         Text(text).multilineTextAlignment(.leading).frame(maxWidth: .infinity, alignment: .leading)
-      }.padding(.horizontal, 12).padding(.vertical, 10).contentShape(RoundedRectangle(cornerRadius: 10))
+      }.padding(.horizontal, 12).padding(.vertical, 10).frame(minHeight: 44).contentShape(RoundedRectangle(cornerRadius: 10))
         .background(selected ? Palette.accentSoft : Palette.surface(scheme), in: RoundedRectangle(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(selected ? Palette.accent : Palette.line))
     }.buttonStyle(.plain)
@@ -918,7 +1031,8 @@ enum ActivitySentence {
     .idle: "ready", .thinking: "thinking", .working: "working", .waiting: "waiting for approval",
     .blocked: "waiting for your input", .done: "done", .failed: "having trouble", .interrupted: "stopped", .disconnected: "reconnecting",
   ]
-  static func text(name: String, state: ActivityState, detail: String?, connectionLost: Bool) -> String {
+  static func text(name: String, state: ActivityState, detail: String?, connectionLost: Bool, offline: Bool = false) -> String {
+    if offline { return "\(name) is offline." }
     let step = (detail ?? "").trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: #"[.…]+$"#, with: "", options: .regularExpression)
     if !connectionLost && state == .working && !step.isEmpty { return "\(name) is \(step.prefix(1).lowercased() + step.dropFirst())..." }
     // A state from a newer server has no web verb yet.
@@ -992,7 +1106,7 @@ struct ShimmerText: View {
   var body: some View {
     let label = Text(text).font(.footnote)
     if moving && !reduceMotion {
-      label.foregroundStyle(.secondary).overlay {
+      label.foregroundStyle(Palette.muted).overlay {
         // A footnote's sweep reads the same at 30 frames a second, at a fraction of the redraws.
         TimelineView(.animation(minimumInterval: 1 / 30)) { context in
           let progress = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 2.8) / 2.8
@@ -1005,7 +1119,7 @@ struct ShimmerText: View {
         }.accessibilityHidden(true)
       }
     } else {
-      label.foregroundStyle(moving ? .secondary : .primary)
+      label.foregroundStyle(moving ? Palette.muted : .primary)
     }
   }
 }
@@ -1042,12 +1156,26 @@ struct CheckboxStyle: ToggleStyle {
       HStack(alignment: .firstTextBaseline, spacing: 8) {
         Image(systemName: configuration.isOn ? "checkmark.square.fill" : "square").foregroundStyle(configuration.isOn ? Palette.accent : Palette.muted)
         configuration.label.multilineTextAlignment(.leading).frame(maxWidth: .infinity, alignment: .leading)
-      }
+      }.padding(.vertical, 6).frame(minHeight: 44).contentShape(Rectangle())
     }.buttonStyle(.plain).accessibilityAddTraits(.isToggle).accessibilityValue(configuration.isOn ? "1" : "0")
   }
 }
 
 /// Where the transcript's content sits in its scroll view, for following and holding a place.
+private struct OpeningCardMetrics: Equatable {
+  static let contentSpace = "paddedTranscript"
+  var top: CGFloat
+  var viewport: CGFloat
+  var contentEnd: CGFloat
+  init?(_ geometry: GeometryProxy) {
+    guard let viewport = geometry.bounds(of: .named("transcript")),
+      let content = geometry.bounds(of: .named(Self.contentSpace)) else { return nil }
+    top = geometry.frame(in: .named("transcript")).minY
+    self.viewport = viewport.height
+    contentEnd = top + content.maxY
+  }
+}
+
 struct TranscriptMetrics: Equatable {
   var top: CGFloat = 0
   var height: CGFloat = 0
@@ -1142,9 +1270,13 @@ extension EnvironmentValues {
 /// phase; there the transcript's position decides, as before.
 private struct OnDrag: ViewModifier {
   var action: () -> Void
+  var beganScrolling: () -> Void = {}
   func body(content: Content) -> some View {
     if #available(iOS 18.0, *) {
-      content.onScrollPhaseChange { _, phase in if phase == .interacting { action() } }
+      content.onScrollPhaseChange { _, phase in
+        if phase == .tracking || phase == .interacting || phase == .animating { beganScrolling() }
+        if phase == .interacting { action() }
+      }
     } else { content }
   }
 }

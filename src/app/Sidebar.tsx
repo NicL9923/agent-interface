@@ -57,11 +57,12 @@ export const Sidebar = memo(function Sidebar({ boot, botId, shownBotId, readThro
         onMove={sectionId => onMoveToSection(bot, sectionId)} onNewSection={() => onNewSection(bot)}>
         <Button className={`bot-item bot-row${current(bot) ? " selected" : ""}${unread(bot) ? " unread" : ""}`} aria-current={current(bot) ? "page" : undefined}
           onClick={() => onSelectBot(bot.id)}>
-          <Avatar avatar={bot.avatar} state={botState === "done" ? "idle" : botState} size={mobile ? 52 : 44} name={bot.name} reducedMotion />
+          <span className="home-row-avatar" aria-hidden="true"><Avatar avatar={bot.avatar} state={botState === "done" || botState === "blocked" ? "idle" : botState} size={mobile ? 52 : 44} name={bot.name} reducedMotion /></span>
           <span className="bot-row-text">
-            <span className="bot-row-top"><strong>{bot.name}</strong>
-              {unread(bot) && <UnreadMark />}
-              {bot.lastMessage?.at && <ListDate value={bot.lastMessage.at} />}</span>
+            <span className="bot-row-top"><span className="bot-row-name"><strong>{bot.name}</strong></span>
+              {(unread(bot) || bot.lastMessage?.at) && <span className="bot-row-meta">
+                {unread(bot) && <UnreadMark />}{bot.lastMessage?.at && <ListDate value={bot.lastMessage.at} />}
+              </span>}</span>
             <small className={working ? `bot-activity state-${botState}` : undefined}>
               {working ? stateLabels[botState] : bot.lastMessage?.text || (bot.shared ? "Shared assistant" : "Personal assistant")}
             </small>
@@ -98,15 +99,15 @@ export const Sidebar = memo(function Sidebar({ boot, botId, shownBotId, readThro
                 onMove={sectionId => onMoveToSection(bot, sectionId)} onNewSection={() => onNewSection(bot)}>
                 <Button className={`bot-item pinned-bot${current(bot) ? " selected" : ""}${unread(bot) ? " unread" : ""}`} aria-current={current(bot) ? "page" : undefined}
                   onClick={() => onSelectBot(bot.id)}>
-                  <span className="pinned-avatar">
+                  <span className="pinned-avatar" aria-hidden="true">
                     {/* Pinned assistants are few and featured, so they stay alive; the system Reduce Motion setting still applies. */}
-                    <Avatar avatar={bot.avatar} state={botState === "done" ? "idle" : botState} size={mobile ? 92 : 60} name={bot.name} botId={bot.id} />
+                    <Avatar avatar={bot.avatar} state={botState === "done" || botState === "blocked" ? "idle" : botState} size={mobile ? 92 : 60} name={bot.name} botId={bot.id} offline={offline} />
                     <span className="pin-badge" aria-hidden="true"><Icon name="pin" size={mobile ? 13 : 11} /></span>
                   </span>
                   <span className="pinned-copy">
                     <span className="pinned-name">{unread(bot) && <UnreadMark />}{bot.name}</span>
                     <small className={`pinned-activity${showActivity ? ` bot-activity state-${botState}` : ""}`}>
-                      {showActivity ? stateLabels[botState] : null}
+                      {showActivity ? offline ? "Offline" : stateLabels[botState] : null}
                     </small>
                   </span>
                 </Button>
@@ -130,7 +131,8 @@ export const Sidebar = memo(function Sidebar({ boot, botId, shownBotId, readThro
           <ul className="home-list">{rest.map(row)}</ul>
         </section>}
         {!boot.bots.length && <div className="home-empty">
-          <p className="muted">No assistants are available from Hermes yet.</p>
+          <h2>No assistants yet</h2>
+          <p className="muted">Create one to help your household plan, remember and get things done.</p>
           <Button className="primary" onClick={onNewBot}>Create an assistant</Button>
         </div>}
       </div>

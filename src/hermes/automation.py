@@ -456,7 +456,7 @@ def task_operation(data, visible):
             else:
                 raise AutomationError("Unknown human task action.")
             if not ok:
-                raise AutomationError("Hermes refused this transition in the task's current state. Refresh it before trying again.", 409)
+                raise AutomationError("Hermes refused this transition in the task's current state.", 409)
         else:
             raise AutomationError("Unknown task operation.")
         task = task_owned(kb, conn, task_id, profile, visible)

@@ -152,19 +152,24 @@ struct FileAttachmentView: View {
 }
 struct FilePreview: UIViewControllerRepresentable {
   var file: PreviewFile
-  func makeCoordinator() -> Coordinator { Coordinator(url: file.url) }
-  func makeUIViewController(context: Context) -> QLPreviewController {
+  @Environment(\.dismiss) private var dismiss
+  func makeCoordinator() -> Coordinator { Coordinator(url: file.url, close: { dismiss() }) }
+  func makeUIViewController(context: Context) -> UINavigationController {
     let controller = QLPreviewController()
     controller.dataSource = context.coordinator
-    return controller
+    controller.navigationItem.leftBarButtonItem = UIBarButtonItem(barButtonSystemItem: .done,
+      target: context.coordinator, action: #selector(Coordinator.closePreview))
+    return UINavigationController(rootViewController: controller)
   }
-  func updateUIViewController(_ uiViewController: QLPreviewController, context: Context) {}
+  func updateUIViewController(_ uiViewController: UINavigationController, context: Context) {}
   static func dismantleUIViewController(
-    _ uiViewController: QLPreviewController, coordinator: Coordinator
+    _ uiViewController: UINavigationController, coordinator: Coordinator
   ) { try? FileManager.default.removeItem(at: coordinator.url.deletingLastPathComponent()) }
   class Coordinator: NSObject, QLPreviewControllerDataSource {
     var url: URL
-    init(url: URL) { self.url = url }
+    let close: () -> Void
+    init(url: URL, close: @escaping () -> Void) { self.url = url; self.close = close }
+    @objc func closePreview() { close() }
     func numberOfPreviewItems(in controller: QLPreviewController) -> Int { 1 }
     func previewController(_ controller: QLPreviewController, previewItemAt index: Int)
       -> QLPreviewItem
@@ -331,6 +336,8 @@ struct MarkdownTableView: View {
 }
 /// A code block with the web's header: the language or "Code", and a copy button with a status.
 struct MarkdownCodeBlock: View {
+  // Apply the design to the Font value so the app's rounded design cannot replace it.
+  static let codeFont: Font = .footnote.monospaced()
   var code: String
   var language: String?
   @Environment(\.colorScheme) private var scheme
@@ -339,7 +346,7 @@ struct MarkdownCodeBlock: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
       HStack(spacing: 12) {
-        Text(language ?? "Code").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+        Text(language ?? "Code").font(.caption).foregroundStyle(Palette.muted).lineLimit(1)
         Spacer()
         Button("Copy code", systemImage: "doc.on.doc", action: copy).font(.caption)
       }.padding(.horizontal, 12).padding(.vertical, 8)
@@ -350,10 +357,10 @@ struct MarkdownCodeBlock: View {
           if let colored = MarkdownCache.shared.highlighted(code, language: language, settled: settled, style: CodeTheme.style) {
             Text(colored)
           } else { Text(code) }
-        }.font(.system(.footnote, design: .monospaced)).textSelection(.enabled).padding(14)
+        }.font(Self.codeFont).textSelection(.enabled).padding(14)
       }.accessibilityLabel(language.map { "\($0) code block" } ?? "Code block")
       if copied {
-        Text("Code copied.").font(.caption).foregroundStyle(.secondary).padding([.horizontal, .bottom], 14)
+        Text("Code copied.").font(.caption).foregroundStyle(Palette.muted).padding([.horizontal, .bottom], 14)
       }
     }.background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 12))
       .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Palette.line))

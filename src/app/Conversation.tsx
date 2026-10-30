@@ -1,7 +1,9 @@
+import { approvalAttempt, type ApprovalAttempt } from "./approval-attempt";
+import { matchCombo, shortcuts } from "./shortcuts";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode, RefCallback, RefObject } from "react";
 import type { ActivityState, Approval, Bootstrap, Bot, FileRef, Message, ToolCall } from "../shared/types";
-import { request as apiRequest } from "../client-api";
+import { ApiError, request as apiRequest } from "../client-api";
 import { Avatar } from "../components/Avatar";
 import { avatarProp } from "../components/avatar-motion";
 import { MessageMarkdown, StreamingMarkdown } from "../components/MessageMarkdown";
@@ -68,7 +70,7 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
   const detail = conversation?.activity.detail?.trim().replace(/[.…]+$/, "");
   const runningCall = connectionLost ? undefined : conversation?.toolCalls?.findLast(call => call.status === "running");
   const prop = avatarProp(runningCall?.name);
-  const action = !connectionLost && state === "working" && detail ? detail.charAt(0).toLowerCase() + detail.slice(1) : actions[state];
+  const action = offline ? "offline" : !connectionLost && state === "working" && detail ? detail.charAt(0).toLowerCase() + detail.slice(1) : actions[state];
   const running = !!conversation && activeStates.includes(conversation.activity.state);
   // The running turn's one live row: the current tool's receipt, and in Advanced, the latest reasoning line.
   const liveTool = runningCall ? `${receipt(runningCall).label} · ${runningCall.name}` : undefined;
@@ -108,7 +110,7 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
   useEffect(() => {
     if (!findable) return;
     const open = (event: KeyboardEvent) => {
-      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey || event.key.toLowerCase() !== "f") return;
+      if (event.defaultPrevented || !matchCombo(event, shortcuts.find)) return;
       const view = scroll.current;
       if (!view || view.closest("[inert]") || document.querySelector("dialog[open]")) return;
       event.preventDefault();
@@ -211,7 +213,7 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
               name={selected.name}
               reducedMotion
             />
-            <h2>Let's discuss your role.</h2>
+            <h2>Start with {selected.name}'s role</h2>
             <p>{selected.description || `Tell ${selected.name} what you need help with.`}</p>
             <button type="button" onClick={() => onDraft(`Let's discuss your role${selected.description ? `: ${selected.description}` : ". Ask me what I need help with and how I like to work"}.`)}>Discuss {selected.name}'s role</button>
             {!boot.capabilities.chat.supported && (
@@ -220,21 +222,30 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
           </div>
         ) : null}
         {selected && showActivity && (
-          <div className={`activity-status conversation-activity message-activity state-${state}`}>
+          <div className={`activity-status conversation-activity message-activity state-${state}${state === "failed" || state === "interrupted" ? " recovery-activity" : ""}`}>
             {/* Headers, home and lists keep avatars still; this one moves to show live work. */}
-            <Avatar avatar={selected.avatar} state={state} size={52} name={selected.name} botId={selected.id} prop={state === "working" ? prop : undefined} />
+            <Avatar avatar={selected.avatar} state={state === "blocked" ? "idle" : state} size={52} name={selected.name} botId={selected.id} offline={offline} prop={state === "working" ? prop : undefined} />
             <div className="activity-copy">
-              <div role="status"><Shimmer text={`${selected.name} is ${action}...`} /></div>
+              <div role="status" aria-atomic="true">
+                {state === "failed" || state === "interrupted" ? <>
+                  <p className="recovery-title">{state === "failed" ? `${selected.name} couldn't finish.` : `${selected.name}'s task was interrupted.`}</p>
+                  {conversation?.activity.detail?.trim() && <p className="recovery-detail">{conversation.activity.detail}</p>}
+                  {state === "interrupted" && <p className="recovery-guidance">Review the last actions above before continuing.</p>}
+                </> : <Shimmer text={`${selected.name} is ${action}...`} />}
+              </div>
               {running && (liveTool || liveThought) && <div className="activity-live">
                 {liveTool && <p className="activity-live-tool">{liveTool}</p>}
                 {liveThought && <p className="activity-live-thought">{liveThought}</p>}
               </div>}
-              {retry.message && retry.checking && <p className="muted" role="status">Checking whether the retry arrived…</p>}
+              {retry.message && <p className="recovery-guidance" role={retry.checking ? "status" : undefined}>{retry.checking
+                ? retry.resendable ? "Checking whether the retry arrived… Retry sends the same request again, so it can't run twice."
+                  : "Hermes hasn't confirmed the retry yet. It's being checked and won't be sent again. If it never arrives, send the message again from the message box."
+                : "Retry sends your last message again. Your draft stays as it is."}</p>}
               {retry.refusal && <div className="retry-refused">
                 <p role="status">{retry.refusal.text}</p>
-                <button type="button" className="retry-turn" onClick={() => putBack(retry.refusal!.message)}>Put my message in the message box</button>
+                <button type="button" className="primary retry-turn" onClick={() => putBack(retry.refusal!.message)}>Put my message in the message box</button>
               </div>}
-              {retry.message && <button type="button" className="with-progress retry-turn" disabled={retry.busy || retry.checking && !retry.resendable}
+              {retry.message && <button type="button" className="primary with-progress retry-turn" disabled={retry.busy || retry.checking && !retry.resendable}
                 title={retry.checking ? retry.resendable ? "Sends the same request again, so it can't run twice" : boot.capabilities.idempotency.reason : undefined}
                 onClick={() => void retry.run(retry.message!)}>
                 {retry.busy ? <Icon name="spinner" className="spin" size={16} /> : <Icon name="refresh" size={16} />}
@@ -257,14 +268,14 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
         ))}
         {conversation?.approvals
           .filter((approval) => approval.status === "pending")
-          .map((approval) => <ApprovalCard key={`${botId}:${approval.id}`} approval={approval} botId={botId}
-            supported={boot.capabilities.approvals.supported} report={setError} />)}
+          .map((approval) => <ApprovalCard key={`${boot.user.id}:${botId}:${approval.id}`} approval={approval} botId={botId} userId={boot.user.id} disconnected={connectionLost}
+            supported={boot.capabilities.approvals.supported} unavailableReason={boot.capabilities.approvals.reason} report={setError} />)}
       </div>
       {/* Room for a message just sent to sit near the top while its reply grows; see use-conversation. */}
       <div className="transcript-end-space" ref={endSpace} aria-hidden="true" />
       </div>
       <QuoteSelection frame={frame} scroll={scroll} />
-      {selected && conversation && !history.atLatest && (
+      {selected && conversation && !history.atLatest && !history.atAttention && (
         <button type="button" className={`jump-latest${history.unseen ? " has-new" : ""}`} onClick={() => {
           history.jumpToLatest();
           // The button disappears, so keyboard focus continues from the transcript.
@@ -480,26 +491,57 @@ function Reasoning({ parts }: { parts: string[] }) {
     <div className="tool-calls-content">{parts.map((part, index) => <p className="reasoning-part" key={index}>{part}</p>)}</div>
   </details>;
 }
-function ApprovalCard({ approval, botId, supported, report }: { approval: Approval; botId: string; supported: boolean; report(message: string): void }) {
-  const [decision, setDecision] = useState<"approved" | "denied" | null>(null);
-  const [settled, setSettled] = useState(false);
+function ApprovalCard({ approval, botId, userId, disconnected, supported, unavailableReason, report }: {
+  approval: Approval; botId: string; userId: string; disconnected: boolean; supported: boolean; unavailableReason?: string; report(message: string): void;
+}) {
+  const saved = approvalAttempt(userId, botId, approval.id);
+  const [attempt, setAttempt] = useState<ApprovalAttempt | undefined>(() => saved.read());
+  const [sending, setSending] = useState(false);
+  const pending = useRef(false);
   async function decide(value: "approved" | "denied") {
-    if (decision) return;
-    setDecision(value);
+    const previous = saved.read();
+    if (!supported || disconnected || pending.current || previous && (previous.state !== "unconfirmed" || previous.decision !== value)) return;
+    report("");
+    pending.current = true;
+    setSending(true);
+    const next: ApprovalAttempt = { decision: value, state: "unconfirmed" };
+    // Save before sending: leaving this chat while the POST is in flight must
+    // never offer the opposite decision when the person returns.
+    saved.save(next); setAttempt(next);
     try {
       await apiRequest("POST /bots/:id/approvals/:approvalId", { params: { id: botId, approvalId: approval.id }, body: { decision: value } });
-      setSettled(true);
-    } catch (error) { setDecision(null); report((error as Error).message); }
+      const sent: ApprovalAttempt = { decision: value, state: "sent" };
+      saved.save(sent); setAttempt(sent);
+    } catch (error) {
+      if (error instanceof ApiError && error.status < 500 && (error.status !== 409 || error.code === "hermes_maintenance") && !previous) {
+        saved.save(undefined); setAttempt(undefined); report(error.code === "hermes_maintenance" ? "Hermes is being updated. Try your decision again when the update finishes." : error.message);
+      } else {
+        const retained: ApprovalAttempt = { decision: value, state: error instanceof ApiError && error.status === 409 && error.code !== "hermes_maintenance" ? "closed" : "unconfirmed" };
+        saved.save(retained); setAttempt(retained);
+        // Refreshes can remove a resolved card, but a still-pending read cannot
+        // prove an earlier answer isn't still being processed. Never auto-send.
+        window.dispatchEvent(new Event("agent-interface:reconnect"));
+      }
+    } finally { pending.current = false; setSending(false); }
   }
-  return <article className="approval-card" aria-busy={!!decision && !settled} {...attentionAnchor("approval", approval.id)}>
-    <p className="eyebrow">Your decision needed</p><h2>{approval.title}</h2><p>{approval.detail}</p>
+  return <article className="approval-card decision-card" aria-busy={sending} {...attentionAnchor("approval", approval.id)}>
+    <p className="eyebrow">{attempt?.state === "closed" ? "Decision status" : "Your decision needed"}</p><h2>{approval.title}</h2><p>{approval.detail}</p>
     {approval.expiresAt && <small>Expires <When value={approval.expiresAt} inline /></small>}
-    <div className="actions">{(["approved", "denied"] as const).map(value => <button key={value} type="button"
-      className={value === "approved" ? "primary" : undefined} disabled={!supported || !!decision} onClick={() => void decide(value)}>
-      {decision === value && <Icon name={settled ? "check" : "spinner"} className={settled ? undefined : "spin"} size={16} />}
-      {decision === value ? settled ? value === "approved" ? "Approved" : "Declined" : value === "approved" ? "Approving…" : "Declining…" : value === "approved" ? "Approve" : "Decline"}
-    </button>)}</div>
-    {decision && <span className="sr-only" role="status">{settled ? "Decision sent" : "Sending decision"}</span>}
+    {attempt?.state !== "closed" && <div className="actions">{(["approved", "denied"] as const).map(value => <button key={value} type="button"
+      className={value === "approved" ? "primary" : undefined}
+      disabled={!supported || disconnected || sending || !!attempt && (attempt.state !== "unconfirmed" || value !== attempt.decision)} onClick={() => void decide(value)}>
+      {attempt?.decision === value && (sending || attempt.state === "sent") && <Icon name={sending ? "spinner" : "check"} className={sending ? "spin" : undefined} size={16} />}
+      {attempt?.decision === value ? sending ? value === "approved" ? "Approving…" : "Declining…"
+        : attempt.state === "sent" ? value === "approved" ? "Approved" : "Declined"
+        : value === "approved" ? "Send approval again" : "Send decline again"
+        : value === "approved" ? "Approve" : "Decline"}
+    </button>)}</div>}
+    {!supported && <p className="approval-unavailable">{unavailableReason || "This Hermes connection does not support approval decisions. Open the official Hermes interface to answer."}</p>}
+    {disconnected && !attempt && supported && <p className="decision-status" role="status">Reconnect to Hermes to answer.</p>}
+    {attempt && <p className="decision-status" role="status">{sending ? "Sending decision…"
+      : attempt.state === "sent" ? attempt.decision === "approved" ? "Approval sent." : "Decline sent."
+      : attempt.state === "closed" ? "This request is no longer available to answer. Its status will update with the conversation."
+      : `Hermes hasn't confirmed your ${attempt.decision === "approved" ? "approval" : "decline"}. It may still go through, so the other choice stays off. After reconnecting, you can send the same decision again.`}</p>}
   </article>;
 }
 function ToolCalls({ messages, advanced, disconnected, recipient }: { messages: Message[]; advanced: boolean; disconnected: boolean; recipient: string }): ReactNode {

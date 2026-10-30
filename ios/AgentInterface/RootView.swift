@@ -5,12 +5,35 @@ enum HomeDestination { case conversation, today, groups, find }
 /// A screen pushed over home on iPhone. Home is the stack's root; everything else is one push away.
 enum HomeRoute: Hashable { case chat, today, groups, search }
 
+/// Keeps the system prominent control while pairing its label with the app's accent color.
+struct AccentProminentButtonStyle: PrimitiveButtonStyle {
+  func makeBody(configuration: Configuration) -> some View { AccentProminentButton(configuration: configuration) }
+}
+private struct AccentProminentButton: View {
+  let configuration: PrimitiveButtonStyleConfiguration
+  @Environment(\.isEnabled) private var enabled
+  var body: some View {
+    Button(role: configuration.role, action: configuration.trigger) {
+      if enabled { configuration.label.foregroundStyle(Palette.onAccent) } else { configuration.label }
+    }.buttonStyle(.borderedProminent)
+  }
+}
+extension PrimitiveButtonStyle where Self == AccentProminentButtonStyle {
+  static var accentProminent: AccentProminentButtonStyle { AccentProminentButtonStyle() }
+}
+
 struct RootView: View {
   @Environment(AppStore.self) private var store
   @Environment(\.colorScheme) private var scheme
+  private let reachability = NetworkReachability.shared
   @State private var settingsBot: Bot?
   @State private var creatingBot = false
   @State private var preferencesOpen = false
+  #if DEBUG
+    @State private var captureConnectionOpen = false
+    @State private var captureAppleOpen = false
+    @State private var captureSurvivalOpen = false
+  #endif
   @State private var destination: HomeDestination = .conversation
   @State private var sharedCapture: SharedCapture?
   @Environment(\.scenePhase) private var scenePhase
@@ -19,6 +42,7 @@ struct RootView: View {
   @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
   @State private var compactColumn: NavigationSplitViewColumn = .sidebar
   @State private var quickSwitcherOpen = false
+  @State private var quickSettingsRequested = false
   var body: some View {
     Group {
       if store.bootstrap == nil {
@@ -29,12 +53,27 @@ struct RootView: View {
     }
     .background(Palette.surface(scheme))
     .background { AppBadgeSync() }
-    .sheet(isPresented: $quickSwitcherOpen) {
+    .sheet(isPresented: $quickSwitcherOpen, onDismiss: {
+      if quickSettingsRequested { quickSettingsRequested = false; preferencesOpen = true }
+    }) {
       QuickSwitcher(choose: go).appStore(store).coveringChat(store)
     }
     .homeSignals(haptic: store.haptic, command: store.keyboardCommand, run: run)
     .modifier(sheets)
+    #if DEBUG
+    .sheet(isPresented: $captureConnectionOpen) { ConnectionView().appStore(store) }
+    .sheet(isPresented: $captureSurvivalOpen) { DebugSurvivalView(mode: DebugFixtures.captureSurvival ?? "").appStore(store) }
+    .sheet(isPresented: $captureAppleOpen) { NavigationStack { AppleDeviceConnectionsView(botId: store.bot?.id ?? store.bootstrap?.bots.first?.id ?? "").appStore(store) } }
+    #endif
     .onAppear { checkShares() }
+    #if DEBUG
+    .onChange(of: store.bootstrap?.user.id, initial: true) { _, id in
+      if id != nil, DebugFixtures.captureSettingsTab != nil, let bot = store.bootstrap?.bots.first {
+        settingsBot = bot
+      }
+      if id != nil { capturePageIfAsked() }
+    }
+    #endif
     .onChange(of:store.sessionExpired) { _,_ in checkShares() }
     .onChange(of:scenePhase) { _, phase in if phase == .active { checkShares() } }
     .onChange(of:store.scope) { _, scope in scopeChanged(scope) }
@@ -42,7 +81,12 @@ struct RootView: View {
     .onChange(of: store.todayRequest, initial: true) { _, request in if request != nil { destination = .today; path = [.today]; compactColumn = .detail } }
     .onChange(of: store.leftBotId, initial: true) { _, id in if let id { left(id) } }
     .onChange(of: store.conversationRequest, initial: true) { _, request in
-      if request != nil { destination = .conversation; openChat(); compactColumn = .detail }
+      if request != nil {
+        destination = .conversation; openChat(); compactColumn = .detail
+        #if DEBUG
+        capturePageIfAsked()
+        #endif
+      }
     }
     .onChange(of: store.bootstrap?.user.id) { old, new in if let old, old != new { accountChanged() } }
   }
@@ -52,7 +96,7 @@ struct RootView: View {
       if case .available(let url) = store.appUpdate { AppUpdateBanner(url: url) }
       // Only while the roster itself is the saved copy; a saved chat says so in the chat.
       if let date = store.offlineSavedAt, !store.householdConnected {
-        Text("Saved on this device \(date.formatted(date: .abbreviated, time: .shortened)). Reconnecting…")
+        Text("Saved on this device \(date.formatted(date: .abbreviated, time: .shortened)). \(reachability.offline ? "Offline." : "Reconnecting…")")
           .font(.caption).foregroundStyle(.secondary).padding(8)
       }
       if UIDevice.current.userInterfaceIdiom == .phone { compactNavigation } else { splitNavigation }
@@ -97,7 +141,23 @@ struct RootView: View {
     destination = today ? .today : .conversation
     path = today ? [.today] : []
     compactColumn = .sidebar
+    #if DEBUG
+    capturePageIfAsked()
+    #endif
   }
+  #if DEBUG
+  private func capturePageIfAsked() {
+    if let mode = DebugFixtures.captureSurvival, mode != "empty" { captureSurvivalOpen = true; return }
+    if DebugFixtures.captureApplePage { captureAppleOpen = true; return }
+    if DebugFixtures.captureConnectionPage { captureConnectionOpen = true; return }
+    if DebugFixtures.capturePreferencesPage || DebugFixtures.captureComputerPage || DebugFixtures.captureUpgradePage || DebugFixtures.captureNotificationsPage { preferencesOpen = true; return }
+    if DebugFixtures.captureGroupPage {
+      destination = .groups; path = [.groups]; compactColumn = .detail; return
+    }
+    guard DebugFixtures.captureDiscoveryTab != nil else { return }
+    destination = .find; path = [.search]; compactColumn = .detail
+  }
+  #endif
   private func left(_ id: String) {
     if settingsBot?.id == id { settingsBot = nil }
     if store.routineResult?.botId == id { store.routineResult = nil }
@@ -155,6 +215,11 @@ struct RootView: View {
       store.searchFocusPending = true
       destination = .find; path = [.search]; compactColumn = .detail
     case .stop: break
+    case .settings:
+      if store.bootstrap != nil {
+        if quickSwitcherOpen { quickSettingsRequested = true; quickSwitcherOpen = false }
+        else { preferencesOpen = true }
+      }
     case .quickSwitch: if store.bootstrap != nil { quickSwitcherOpen = true }
     }
   }
@@ -167,6 +232,7 @@ struct RootView: View {
       destination = .conversation
       if phone { path = [.chat] } else { compactColumn = .detail }
       Task { await store.select(id) }
+    case .settings: quickSettingsRequested = true
     case .today: destination = .today; path = [.today]; compactColumn = .detail
     case .groups: destination = .groups; path = [.groups]; compactColumn = .detail
     case .search: store.searchFocusPending = true; destination = .find; path = [.search]; compactColumn = .detail
@@ -257,6 +323,7 @@ struct ConnectionView: View {
     }
     if store.authConfig?.localDevAuth == true {
       Text("This development server also offers local test accounts in the sign-in browser.")
+        .fixedSize(horizontal: false, vertical: true)
         .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
     }
     // The server, and the two ways to recover from a wrong or sleeping one, in one quiet line.
@@ -268,6 +335,7 @@ struct ConnectionView: View {
           HStack(spacing: 6) {
             if store.restoring { ProgressView().controlSize(.mini) }
             Text(store.restoring ? "Checking…" : "Retry connection")
+              .frame(minHeight: 44).contentShape(Rectangle())
           }
         }.disabled(store.restoring || store.signingIn).accessibilityIdentifier("retryConnection")
         ChangeServerButton()
@@ -280,7 +348,7 @@ struct ConnectionView: View {
         if busy { ProgressView().tint(.white) }
         Text(title).fontWeight(.semibold)
       }.frame(maxWidth: .infinity, minHeight: 30)
-    }.buttonStyle(.borderedProminent).controlSize(.large).buttonBorderShape(.capsule).tint(Palette.accent)
+    }.buttonStyle(.accentProminent).controlSize(.large).buttonBorderShape(.capsule).tint(Palette.accent)
   }
   private var hostEmpty: Bool { store.host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
   private func connect() {
@@ -297,10 +365,11 @@ struct ErrorBanner: View {
       Text(message).font(.footnote).frame(maxWidth: .infinity, alignment: .leading).textSelection(
         .enabled)
       if let dismiss {
-        Button(action: dismiss) { Image(systemName: "xmark") }.accessibilityLabel("Dismiss error")
+        Button(action: dismiss) { Image(systemName: "xmark").frame(width: 44, height: 44).contentShape(Rectangle()) }
+          .accessibilityLabel("Dismiss error")
       }
-    }.foregroundStyle(.red).padding(12).background(
-      Color.red.opacity(0.07), in: RoundedRectangle(cornerRadius: 10)
+    }.foregroundStyle(Palette.danger).padding(12).background(
+      Palette.danger.opacity(0.07), in: RoundedRectangle(cornerRadius: 10)
     ).accessibilityElement(children: .contain)
   }
 }
@@ -325,6 +394,8 @@ struct BotListView: View {
   @Environment(AppStore.self) private var store
   @Environment(\.colorScheme) private var scheme
   @Environment(\.horizontalSizeClass) private var sizeClass
+  @Environment(\.dynamicTypeSize) private var typeSize
+  @ScaledMetric(relativeTo: .subheadline) private var pinColumn: CGFloat = 100
   var destination: HomeDestination
   var openPreferences: () -> Void
   var edit: (Bot) -> Void
@@ -340,6 +411,7 @@ struct BotListView: View {
   /// Undo for the last pin or section move made from a row here.
   @State private var undo = UndoQueue()
   @ScaledMetric(relativeTo: .caption2) private var pinBadge: CGFloat = 11
+  private var pinnedMinimum: CGFloat { sizeClass == .compact ? pinColumn : pinColumn * 0.76 }
   private var lost: Bool { store.householdConnectionLost(offline: reachability.offline) }
   private var selectionVisible: Bool { sizeClass != .compact }
   private var homeBackground: Color { sizeClass == .compact ? Palette.surface(scheme) : Palette.rail(scheme) }
@@ -364,9 +436,9 @@ struct BotListView: View {
         if let bootstrap = store.bootstrap {
           let pinned = bootstrap.preferences.pinnedAssistants(bootstrap.bots)
           if !pinned.isEmpty {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: sizeClass == .compact ? 100 : 76), spacing: 8)], alignment: .center, spacing: 12) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: pinnedMinimum), spacing: 8, alignment: .top)], alignment: .center, spacing: 12) {
               ForEach(pinned) { bot in pinnedTile(bot) }
-            }.frame(maxWidth: CGFloat(min(pinned.count, sizeClass == .compact ? 3 : 2)) * (sizeClass == .compact ? 112 : 86))
+            }.frame(maxWidth: CGFloat(min(pinned.count, sizeClass == .compact ? 3 : 2)) * (pinnedMinimum + 12))
               .frame(maxWidth: .infinity)
               .accessibilityElement(children: .contain).accessibilityLabel("Pinned assistants")
           }
@@ -377,7 +449,7 @@ struct BotListView: View {
           ForEach(bootstrap.preferences.assistantGroups(bootstrap.bots)) { group in
             VStack(alignment: .leading, spacing: 4) {
               if !group.title.isEmpty {
-                Text(group.title).font(.caption2.weight(.semibold)).tracking(1.1).textCase(.uppercase)
+                Text(group.title).font(.caption.weight(.semibold)).tracking(1.1).textCase(.uppercase)
                   .foregroundStyle(Palette.muted).padding(.horizontal, 10).padding(.bottom, 8).accessibilityAddTraits(.isHeader)
               }
               LazyVStack(spacing: 2) { ForEach(group.bots) { bot in row(bot) } }
@@ -386,7 +458,7 @@ struct BotListView: View {
           if bootstrap.bots.isEmpty { emptyHome }
         }
       }.padding(16)
-    }.background(homeBackground)
+    }.background(homeBackground).accessibilityIdentifier("assistantHome")
       .navigationTitle("Your assistants").navigationBarTitleDisplayMode(.inline).homeTitleHidden()
       .toolbarBackground(homeBackground, for: .navigationBar)
       .bareToolbarItem(.topBarLeading) { accountButton }
@@ -425,8 +497,9 @@ struct BotListView: View {
         }
     } else {
       VStack(spacing: 12) {
-        Text("No assistants are available from Hermes yet.").foregroundStyle(.secondary)
-        Button("Create an assistant", action: createOrExplain).buttonStyle(.borderedProminent)
+        Text("No assistants yet").font(.title3.bold())
+        Text("Create one to help your household plan, remember and get things done.").foregroundStyle(.secondary).multilineTextAlignment(.center)
+        Button("Create an assistant", action: createOrExplain).buttonStyle(.accentProminent)
           .opacity(store.assistantSetupBlock == nil ? 1 : 0.4).accessibilityHint(store.assistantSetupBlock ?? "")
           .accessibilityIdentifier("createAssistant")
         if let reason = store.assistantSetupBlock { Text(reason).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center) }
@@ -461,16 +534,17 @@ struct BotListView: View {
     let unread = store.unread(bot)
     return Button { open(bot) } label: {
       VStack(spacing: 8) {
-        AvatarView(avatar: bot.avatar ?? AvatarConfig(), state: activity == .done ? .idle : activity,
+        AvatarView(avatar: bot.avatar ?? AvatarConfig(), state: activity == .done || activity == .blocked ? .idle : activity,
           size: sizeClass == .compact ? 92 : 60, name: bot.name, botId: bot.id)
           .overlay(alignment: .bottomTrailing) {
-            Image(systemName: "pin.fill").font(.system(size: pinBadge)).padding(5)
+            Image(systemName: "pin.fill").font(.system(size: min(pinBadge, 13))).padding(5)
               .background(Palette.raised(scheme), in: Circle()).foregroundStyle(Palette.accent)
-          }
-        HStack(spacing: 5) {
+          }.accessibilityHidden(true)
+        HStack(alignment: .firstTextBaseline, spacing: 5) {
           if unread { UnreadDot() }
-          Text(bot.name).font(.subheadline.weight(unread ? .bold : .semibold)).foregroundStyle(.primary)
-            .lineLimit(2).multilineTextAlignment(.center)
+          let label = Text(bot.name).font(.subheadline.weight(unread ? .bold : .semibold)).foregroundStyle(.primary)
+            .multilineTextAlignment(.center)
+          if typeSize.isAccessibilitySize { label } else { label.lineLimit(2, reservesSpace: true) }
         }
         if activity != .idle && activity != .done { ActivityLabel(state: activity) }
       }.frame(maxWidth: .infinity).padding(.vertical, 10).padding(.horizontal, 4)
@@ -486,24 +560,32 @@ struct BotListView: View {
     let unread = store.unread(bot)
     return Button { open(bot) } label: {
       HStack(spacing: 12) {
-        AvatarView(avatar: bot.avatar ?? AvatarConfig(), state: activity == .done ? .idle : activity,
-          size: 52, name: bot.name, forceReducedMotion: true)
+        AvatarView(avatar: bot.avatar ?? AvatarConfig(), state: activity == .done || activity == .blocked ? .idle : activity,
+          size: 52, name: bot.name, forceReducedMotion: true).accessibilityHidden(true)
         VStack(alignment: .leading, spacing: 5) {
-          HStack(alignment: .firstTextBaseline) {
-            HStack(spacing: 6) {
+          if typeSize.isAccessibilitySize {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
               if unread { UnreadDot() }
-              Text(bot.name).font(.subheadline.weight(unread ? .bold : .semibold)).foregroundStyle(.primary).lineLimit(1)
+              Text(bot.name).font(.body.weight(unread ? .bold : .semibold)).foregroundStyle(.primary)
             }
-            Spacer(minLength: 8)
             if let at = bot.lastMessage?.at, let date = ServerDate.parse(at) { AssistantListDate(date: date) }
+          } else {
+            HStack(alignment: .firstTextBaseline) {
+              HStack(spacing: 6) {
+                if unread { UnreadDot() }
+                Text(bot.name).font(.body.weight(unread ? .bold : .semibold)).foregroundStyle(.primary).lineLimit(2)
+              }
+              Spacer(minLength: 8)
+              if let at = bot.lastMessage?.at, let date = ServerDate.parse(at) { AssistantListDate(date: date) }
+            }
           }
           if activity != .idle && activity != .done { ActivityLabel(state: activity) }
           else {
             Text(bot.lastMessage?.text.isEmpty == false ? bot.lastMessage!.text : bot.shared ? "Shared assistant" : "Personal assistant")
               .font(unread ? .subheadline.weight(.medium) : .subheadline)
-              .foregroundStyle(unread ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary)).lineLimit(1)
+              .foregroundStyle(unread ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary)).lineLimit(typeSize.isAccessibilitySize ? 3 : 2)
           }
-        }
+        }.frame(maxWidth: .infinity, alignment: .leading)
       }.padding(.horizontal, 10).padding(.vertical, 12).contentShape(Rectangle())
     }.buttonStyle(.plain).accessibilityValue(unread ? "Unread" : "")
       .background(selectionVisible && destination == .conversation && bot.id == store.selectedBotId ? Palette.accentSoft : Color.clear, in: RoundedRectangle(cornerRadius: 16))
@@ -531,8 +613,9 @@ struct BotListView: View {
 }
 /// A chat with a reply this person has not read yet. VoiceOver hears "Unread" from its row instead.
 private struct UnreadDot: View {
+  @ScaledMetric(relativeTo: .body) private var diameter: CGFloat = 8
   var body: some View {
-    Circle().fill(Palette.accent).frame(width: 8, height: 8).accessibilityHidden(true)
+    Circle().fill(Palette.accent).frame(width: min(diameter, 12), height: min(diameter, 12)).accessibilityHidden(true)
   }
 }
 private struct HomeLinkStyle: ButtonStyle {

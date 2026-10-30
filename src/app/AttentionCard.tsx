@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import type { AttentionRequest } from "../shared/types";
 import { request as apiRequest } from "../client-api";
@@ -19,6 +19,8 @@ export function answerText(question: Question, draft: Draft = empty) {
 export function AttentionCard({ request, botId, report }: { request: AttentionRequest; botId: string; report(message: string): void }) {
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [busy, setBusy] = useState(false);
+  const [settled, setSettled] = useState(false);
+  const guidance = useId();
   const questions = request.questions ?? [];
   const answers = Object.fromEntries(questions.map(question => [question.id, answerText(question, drafts[question.id])]));
   const card = useRef<HTMLElement>(null);
@@ -34,12 +36,12 @@ export function AttentionCard({ request, botId, report }: { request: AttentionRe
       if (!root) return;
       const target = following === undefined
         ? root.querySelector<HTMLElement>("button[type=submit]")
-        : root.querySelector<HTMLElement>(`[data-question="${following}"] input:checked, [data-question="${following}"] input`);
+        : root.querySelector<HTMLElement>(`[data-question="${following}"] input:checked, [data-question="${following}"] input, [data-question="${following}"] textarea`);
       target?.focus();
     });
   };
   const field = (index: number) => requestAnimationFrame(() =>
-    card.current?.querySelector<HTMLInputElement>(`[data-question="${index}"] input[type=text]`)?.focus());
+    card.current?.querySelector<HTMLTextAreaElement>(`[data-question="${index}"] textarea`)?.focus());
   // Choosing "Write my own answer" goes to its field. A single choice moves on to the next question.
   const choose = (question: Question, index: number, option: string | null, moveOn: boolean) => {
     const draft = drafts[question.id] ?? empty;
@@ -54,7 +56,7 @@ export function AttentionCard({ request, botId, report }: { request: AttentionRe
   };
   const keys = (question: Question, index: number) => (event: KeyboardEvent) => {
     pointer.current = false;
-    if (event.target instanceof HTMLInputElement && event.target.type === "text") return;
+    if (event.target instanceof HTMLTextAreaElement) return;
     if (event.altKey || event.ctrlKey || event.metaKey) return;
     const options = question.options ?? [];
     const pick = optionForKey(event.key, options.length + 1);
@@ -71,8 +73,11 @@ export function AttentionCard({ request, botId, report }: { request: AttentionRe
       {request.kind === "clarify" && (
         <form aria-busy={busy || undefined} onSubmit={(event) => {
           event.preventDefault();
+          if (busy || settled) return;
           setBusy(true);
+          report("");
           void apiRequest("POST /bots/:id/requests/:approvalId", { params: { id: botId, approvalId: request.id }, body: { answers } })
+            .then(() => setSettled(true))
             .catch((error) => report(error.message))
             .finally(() => setBusy(false));
         }}>
@@ -82,12 +87,12 @@ export function AttentionCard({ request, botId, report }: { request: AttentionRe
             // Every question carries its index, so moving on can focus a free-text one too.
             if (!options.length) return <label className="question-field" key={question.id} data-question={index}>
               {question.prompt}
-              <input required aria-label={question.prompt} maxLength={10000} value={draft.text}
+              <textarea rows={2} required disabled={settled} aria-label={question.prompt} placeholder="Your answer" maxLength={10000} value={draft.text}
                 onChange={(event) => update(question, current => ({ ...current, text: event.target.value }))} />
             </label>;
             const kind = question.multiple ? "checkbox" : "radio";
             const name = `${request.id}:${question.id}`;
-            return <fieldset className="question" key={question.id} data-question={index} onKeyDown={keys(question, index)}
+            return <fieldset className="question" key={question.id} disabled={settled} data-question={index} onKeyDown={keys(question, index)}
               onPointerDown={() => { pointer.current = true; }}>
               <legend>{question.prompt}{question.multiple && <span className="muted"> Choose any that apply.</span>}</legend>
               <div className="option-cards">
@@ -105,13 +110,14 @@ export function AttentionCard({ request, botId, report }: { request: AttentionRe
                   </label>;
                 })}
               </div>
-              {draft.own && <input type="text" className="own-answer" required aria-label={`Your answer: ${question.prompt}`} maxLength={10000}
+              {draft.own && <textarea rows={2} className="own-answer" required aria-label={`Your answer: ${question.prompt}`} placeholder="Your answer" maxLength={10000}
                 value={draft.text} onChange={(event) => update(question, current => ({ ...current, text: event.target.value }))} />}
             </fieldset>;
           })}
-          <button type="submit" className="primary with-progress" disabled={busy || questions.some(question => !answers[question.id]?.trim())}>
+          <p className="question-guidance" id={guidance} role="status">{settled ? "Answers sent." : questions.some(question => !answers[question.id]?.trim()) ? "Answer every question to send." : "Ready to send."}</p>
+          <button type="submit" className="primary with-progress" aria-describedby={guidance} disabled={busy || settled || questions.some(question => !answers[question.id]?.trim())}>
             {busy && <Icon name="spinner" className="spin" size={16} />}
-            {busy ? "Sending answers…" : "Send answers"}
+            {busy ? "Sending answers…" : settled ? "Answers sent" : "Send answers"}
           </button>
         </form>
       )}

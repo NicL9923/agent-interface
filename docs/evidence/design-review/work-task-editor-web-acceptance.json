@@ -1,0 +1,49 @@
+{
+  "gate": "Work W2b task editors, web only",
+  "accepted": true,
+  "fullW2bAccepted": true,
+  "nextScreenAllowed": true,
+  "source": "sha256:eb880a85d2aa8af9930815ba8dcdc2134a863a36b4550ed0d9066ec2263f729b (226 source files)",
+  "fixtureSHA256": "e8fee514b68e3f33b42b1b5fe166e6629d2fbb87679f87810aa778f0c072e744",
+  "review": "98-work-task-editor-web-and-keyboard-recheck",
+  "reviewer": {
+    "provider": "Anthropic",
+    "model": "Claude Opus 5.5",
+    "effort": "high"
+  },
+  "evidence": "/Volumes/DevSSD/scratch/wildbots-design-review/work-w2b-web-after-r5-evidence-v3.json",
+  "receipt": "/Volumes/DevSSD/scratch/wildbots-design-review/work-w2b-web-after-r5-heavy-release.json",
+  "frameCount": 16,
+  "scores": {
+    "task-create-desktop": 9,
+    "task-create-dark": 9,
+    "task-create-phone-top": 9,
+    "task-create-phone-bottom": 9,
+    "task-create-narrow": 9,
+    "task-create-large-text-top": 9,
+    "task-create-large-text-bottom": 9,
+    "task-create-saved": 9,
+    "task-create-uncertain-form": 9,
+    "task-create-uncertain-alert": 9,
+    "task-create-refreshed-form": 9,
+    "task-create-uncertain-closed": 9,
+    "task-edit-desktop": 9,
+    "task-edit-phone": 9,
+    "task-edit-large-text": 9,
+    "task-edit-saved": 9
+  },
+  "annotations": "/Volumes/DevSSD/scratch/wildbots-design-review/work-w2b-web-annotations-r5/manifest.json",
+  "checks": {
+    "webUiTests": 41,
+    "typecheck": "Passed",
+    "productionBuild": "Passed",
+    "capture": "Passed, zero browser errors and no horizontal overflow",
+    "bindingTests": "Seven passed with the default macOS temp folder"
+  },
+  "followup": "The binder path-alias finding in review98 is fixed directly. v3 binds the identical raw captures using the corrected tool; no recapture was needed.",
+  "limits": [
+    "200% is root font scaling, not browser zoom",
+    "Synthetic fixtures only"
+  ],
+  "closingEvidence": "work-task-editor-acceptance.json"
+}

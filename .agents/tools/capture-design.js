@@ -1,0 +1,2035 @@
+// Playwright CLI run-code function. Screenshots and a geometry report for a design gate.
+async (page, { outputDir = ".private/design-review", prefix = "current", screen = "today", stage = "after", workCase = "all", taskGate = null, fixture, captureTriggers = null, contextTag = null } = {}) => {
+  if (contextTag !== null && (!["wildbots-design-work-triggers-after-w2-capture", "wildbots-design-work-triggers-after-w3-capture", "wildbots-design-work-triggers-after-w4-capture"].includes(contextTag) || screen !== "work" || workCase !== "triggers" || stage !== "after")) throw Error("Invalid owned W3 context tag");
+  if (!["before", "after"].includes(stage)) throw Error("Unknown capture stage");
+  if (taskGate !== null && !["a", "b"].includes(taskGate) || taskGate !== null && (screen !== "work" || workCase !== "tasks" || stage !== "after")) throw Error("Invalid task gate");
+  if (screen === "work" && workCase === "tasks" && stage === "after" && !["a", "b"].includes(taskGate)) throw Error("Work tasks AFTER requires an explicit task gate a or b");
+  if (!["today", "home", "conversation", "questions", "approvals", "recovery", "details", "settings", "avatar", "models", "memory", "work"].includes(screen)) throw Error(`Unsupported screen: ${screen}`);
+  if (!["all", "clear-confirmation", "tasks", "triggers"].includes(workCase) || workCase === "clear-confirmation" && (screen !== "work" || stage !== "after") || ["tasks", "triggers"].includes(workCase) && screen !== "work") throw Error("Unknown or invalid Work capture case");
+  if (workCase === "triggers" ? fixture?.workFixture?.gate !== "W3-triggers" : workCase === "tasks" ? fixture?.workFixture?.gate !== "W2-tasks" : fixture?.workFixture?.gate != null) throw Error("Wrong Work fixture gate");
+  const origin = new URL(page.url());
+  if (!["127.0.0.1", "localhost"].includes(origin.hostname)) throw Error("Use a loopback fixture.");
+  const boot = await (await page.request.get(`${origin.origin}/api/bootstrap`)).json();
+  if (boot.user?.email !== "preview@localhost.invalid") throw Error("Use the synthetic household preview.");
+  const context = await page.context().browser().newContext({ serviceWorkers: "block", reducedMotion: "reduce", viewport: { width: 1440, height: 1000 } });
+  if (["models", "memory", "work"].includes(screen)) await context.addInitScript(name => { window.name=name; },
+    contextTag ?? (workCase === "triggers" ? `wildbots-design-work-triggers-${stage}-capture` : `wildbots-design-${screen}-capture`));
+  if (workCase === "triggers" && stage === "after") await context.addInitScript(() => {
+    // Synthetic audit copies remain in this page. Never read or write the host clipboard.
+    let copied = "";
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: Object.freeze({
+      syntheticWorkAudit: true,
+      writeText: async value => { copied = String(value); },
+      readText: async () => copied,
+    }) });
+  });
+  const tab = await context.newPage();
+  const browserErrors = [];
+  if (["models", "memory", "work"].includes(screen)) tab.on("dialog", dialog => dialog.type() === "beforeunload" ? dialog.accept() : dialog.dismiss());
+  tab.on("pageerror", error => browserErrors.push(error.message));
+  const pointer = ["questions", "approvals"].includes(screen) ? await context.newCDPSession(tab) : undefined;
+  const fontSession = ["details", "conversation"].includes(screen) ? await context.newCDPSession(tab) : undefined;
+  if (fontSession) { await fontSession.send("DOM.enable"); await fontSession.send("CSS.enable"); }
+  const paths = [], geometry = [];
+  let state = "loaded";
+  let checked = false;
+  let releaseLoading;
+  let questionConversation = structuredClone(fixture?.conversation);
+  let approvalConversation = structuredClone(fixture?.conversation);
+  const approvalSubmissions = [];
+  let approvalFailed = false;
+  let recoveryConversation = structuredClone(fixture?.conversation);
+  let recoveryDraft = { text: "", attachments: [] };
+  let recoveryMode = "accepted";
+  const recoverySubmissions = [];
+  let recoveryReceipt;
+  const questionSubmissions = [];
+  let questionFailed = false;
+  let settingsBots = structuredClone(fixture?.bots || []);
+  let settingsSaveFailed = false;
+  let settingsLoadFailed = false;
+  const modelWarning = fixture?.modelWarning || "This model may cost more than your current model. Confirm the choice before saving.";
+  const settingsSubmissions = [];
+  const avatarSubmissions = [], portraitPrompts = [];
+  let modelFavorites = structuredClone(fixture?.preferences?.modelFavorites || []);
+  let inference = structuredClone(fixture?.inference || {});
+  let catalogs = {tools: structuredClone(fixture?.tools || []), skills: structuredClone(fixture?.skills || [])};
+  const modelFailures = new Set(), modelSubmissions = [];
+  let memory = structuredClone(fixture?.memory);
+  const memoryFailures = new Set(), memorySubmissions = [], memoryChecks = [];
+  let releaseMemoryLoad, releaseMemoryWrite, memoryWriteReady, memoryWriteStarted;
+  const memoryDigest = parts => tab.evaluate(async parts => {
+    const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(parts)));
+    return [...new Uint8Array(bytes)].map(byte => byte.toString(16).padStart(2,"0")).join("");
+  }, parts);
+  const memoryDocument = async (target, texts) => {
+    const saved = memory.documents.find(document => document.target === target);
+    saved.entries = await Promise.all(texts.map(async text => ({id:await memoryDigest([memory.profile,target,text]),text})));
+    saved.revision = await memoryDigest([memory.profile,target,texts]);
+    saved.charCount = [...texts.join(fixture.memoryFixture.delimiter)].length;
+  };
+  let work, workMode, workReads=0, workLoadingRelease, workReadStarted;
+  let workRoutinesLoadingRelease, workRoutineGets=0, workRoutineStarted, workRoutineWaitTimer;
+  let workSubmissions=[], workChecks=[], workResumeIds=new Map(), workTaskIds=new Map(), workRoutes;
+  const workRevision = async route => {
+    const sort = value => Array.isArray(value) ? value.map(sort) : value && typeof value === "object" ? Object.fromEntries(Object.keys(value).sort().map(key => [key,sort(value[key])])) : value;
+    return tab.evaluate(async text => [...new Uint8Array(await crypto.subtle.digest("SHA-256",new TextEncoder().encode(text)))].map(x=>x.toString(16).padStart(2,"0")).join(""), JSON.stringify(sort(route)));
+  };
+  if (screen === "work") {
+    await context.route("**/api/routines", async route => {
+      if (route.request().method() !== "GET") throw Error("Unexpected Work routines method");
+      if (fixture.workFixture?.gate === "W3-triggers") {
+        workRoutineGets++;
+        workRoutineStarted?.();
+        if (workMode === "routines-loading") await new Promise(resolve => { workRoutinesLoadingRelease = resolve; });
+      }
+      return workMode === "routines-error" ? route.fulfill({status:409,json:{error:"routines is unavailable"}}) : route.fulfill({json:workMode === "no-routines" ? [] : fixture.routines});
+    });
+    await context.route("**/api/bots/*/automation**", async route => {
+      const req=route.request(), method=req.method(), url=new URL(req.url()), prefix="/api/bots/ranch/automation", path=url.pathname;
+      if (!path.startsWith(prefix) || url.search) throw Error(`Unexpected Work route ${method} ${path}`);
+      const suffix=path.slice(prefix.length), reject=(status,error)=>route.fulfill({status,json:{error}});
+      if (!suffix && method === "GET") {
+        workReads++; workReadStarted?.();
+        if (workMode === "loading") await new Promise(resolve=>{workLoadingRelease=resolve;});
+        if (workMode === "load-error") return reject(409,fixture.workMessages.noRuntime);
+        if (workMode === "trigger-external-change" && workReads === 2) {
+          const subscription=work.triggers.items.find(item=>item.id==="freezer-alerts"), native=workRoutes["freezer-alerts"];
+          native.description=fixture.workFixture.externalTriggerEdit.description;
+          subscription.description=native.description; subscription.revision=await workRevision(native);
+          if(subscription.revision!==fixture.workFixture.externalTriggerEdit.revision) throw Error("External trigger revision mismatch");
+        }
+        return route.fulfill({json:work});
+      }
+      if (method === "GET") {
+        const match=suffix.match(/^\/tasks\/(t_[0-9a-f]{8})$/);
+        const task=match && work.tasks.items.find(item=>item.id===match[1]);
+        if (!task) throw Error(`Unexpected Work GET ${suffix}`);
+        return route.fulfill({json:task});
+      }
+      const body=req.postDataJSON() || {};
+      if (!body || Array.isArray(body) || typeof body !== "object") throw Error(`Invalid Work body ${suffix}`);
+      const keys=(required,optional=[])=>{
+        const actual=Object.keys(body); if(required.some(k=>!actual.includes(k)) || actual.some(k=>!required.includes(k)&&!optional.includes(k))) throw Error(`Unexpected Work keys ${method} ${suffix}: ${actual.sort()}`);
+      };
+      const uuid=id=>typeof id==="string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id);
+      workSubmissions.push({mode:workMode,method,path:suffix,body:structuredClone(body)});
+      if (workMode === "write-delay") await new Promise(resolve=>setTimeout(resolve,fixture.workFixture.writeDelayMs));
+      const goals=work.goals;
+      if (suffix==="/goal" && method==="PUT") {
+        keys(["title","maxTurns"]); if(typeof body.title!=="string" || !body.title.trim() || body.title.trim().length>10000 || !Number.isInteger(body.maxTurns) || body.maxTurns<1 || body.maxTurns>1000) throw Error("Invalid goal input");
+        goals.goal={title:body.title.trim(),status:"paused",turnsUsed:0,maxTurns:body.maxTurns,pausedReason:fixture.workMessages.createdPaused}; delete goals.resume; workResumeIds.clear();
+        return route.fulfill({json:work});
+      }
+      if (["/goal/pause","/goal/clear"].includes(suffix) && method==="POST") {
+        keys([]); if(!goals.goal) throw Error("Missing goal");
+        if(suffix.endsWith("clear")) { goals.goal=null; delete goals.resume; workResumeIds.clear(); } else goals.goal.status="paused";
+        return route.fulfill({json:work});
+      }
+      if (suffix==="/goal/resume" && method==="POST") {
+        keys(["requestId"],["reviewedInterruption"]); if(!uuid(body.requestId) || ("reviewedInterruption" in body && typeof body.reviewedInterruption!=="boolean")) throw Error("Invalid resume input");
+        if(workResumeIds.has(body.requestId)) return route.fulfill({json:work});
+        if(goals.interruptionPending && body.reviewedInterruption!==true) return reject(409,fixture.workMessages.interruption);
+        if(!goals.goal || goals.goal.status!=="paused") throw Error("Resume requires paused goal");
+        const status=workMode==="resume-uncertain" && !workResumeIds.size ? "uncertain" : workMode==="resume-rejected" ? "rejected" : "accepted";
+        goals.resume={requestId:body.requestId,status,...(status==="uncertain" ? {message:fixture.workMessages.uncertainResume} : status==="rejected" ? {message:fixture.workMessages.rejectedResume} : {runId:"fixture-run"})};
+        if(status==="accepted") { goals.goal.status="active"; goals.goal.turnsUsed=0; delete goals.goal.pausedReason; goals.interruptionPending=false; }
+        else { goals.goal.turnsUsed=0; goals.goal.pausedReason=fixture.workMessages.resumeNotConfirmed; }
+        workResumeIds.set(body.requestId,structuredClone(work));
+        return route.fulfill({json:work});
+      }
+      const taskMatch=suffix.match(/^\/tasks\/(t_[0-9a-f]{8})(?:\/(actions|dependencies\/([A-Za-z0-9_-]+)))?$/);
+      if (suffix==="/tasks" && method==="POST") {
+        keys(["requestId","title"],["body","priority","assignee","dependencies"]);
+        if(!uuid(body.requestId) || typeof body.title!=="string" || !body.title.trim() || body.title.trim().length>500 || (body.body!==undefined && (typeof body.body!=="string" || body.body.length>20000)) || (body.priority!==undefined && (!Number.isInteger(body.priority)||body.priority < -100 || body.priority > 100)) || (body.assignee != null && !fixture.bots.some(bot=>bot.id===body.assignee)) || (body.dependencies!==undefined && (!Array.isArray(body.dependencies)||body.dependencies.length>20||body.dependencies.some(id=>!work.tasks.items.some(task=>task.id===id))))) throw Error("Invalid task input");
+        if(workTaskIds.has(body.requestId)) return route.fulfill({json:work.tasks.items.find(task=>task.id===workTaskIds.get(body.requestId).id)});
+        const task={id:`t_${(work.tasks.items.length+1).toString(16).padStart(8,"0")}`,title:body.title.trim(),body:body.body || "",priority:body.priority ?? 0,assignee:body.assignee===undefined ? "ranch" : body.assignee,owner:"ranch",dependencies:body.dependencies || [],status:"blocked"};
+        if(fixture.workFixture.taskOrder==="newest-first") work.tasks.items.unshift(task); else work.tasks.items.push(task); workTaskIds.set(body.requestId,structuredClone(task));
+        if(workMode==="task-create-uncertain") return reject(502,fixture.workMessages.catchAll);
+        return route.fulfill({json:task});
+      }
+      if(taskMatch) {
+        const task=work.tasks.items.find(item=>item.id===taskMatch[1]); if(!task) throw Error("Unknown Work task");
+        if(task.status==="running") return reject(409,fixture.workMessages.claimedTask);
+        if(!taskMatch[2] && method==="PATCH") {
+          keys([], ["title","body","priority","assignee"]); if(!Object.keys(body).length) throw Error("Empty task patch");
+          if((body.title!==undefined && (typeof body.title!=="string" || !body.title.trim() || body.title.trim().length>500)) || (body.body!==undefined && (typeof body.body!=="string"||body.body.length>20000)) || (body.priority!==undefined && (!Number.isInteger(body.priority)||body.priority < -100||body.priority > 100)) || (body.assignee!=null && !fixture.bots.some(bot=>bot.id===body.assignee))) throw Error("Invalid task patch");
+          Object.assign(task,body); if(body.title!==undefined) task.title=body.title.trim(); return route.fulfill({json:task});
+        }
+        if(taskMatch[2]==="actions" && method==="POST") {
+          keys(["action"],["reason","reviewer"]); if(!["start","block","unblock","request_review"].includes(body.action) || (body.reason!==undefined && (typeof body.reason!=="string"||!body.reason.trim()||body.reason.trim().length>2000)) || (body.reviewer!==undefined && !fixture.bots.some(bot=>bot.id===body.reviewer))) throw Error("Invalid task action");
+          if(body.action==="block") { if(!body.reason) return reject(400,fixture.workMessages.blockReason); task.status="blocked"; task.blockedReason=body.reason.trim(); }
+          else {
+            if ((["start","unblock"].includes(body.action) && !["todo","blocked"].includes(task.status)) || task.dependencies.some(id=>work.tasks.items.find(row=>row.id===id)?.status!=="done")) return reject(409,fixture.workMessages.refusedTransition);
+            if(body.action==="request_review") { if(!body.reviewer) throw Error("Review requires reviewer"); task.status="review"; task.assignee=body.reviewer; }
+            else task.status="ready";
+            delete task.blockedReason;
+          }
+          return route.fulfill({json:task});
+        }
+        if(taskMatch[2]?.startsWith("dependencies/") && method==="PUT") {
+          keys(["remove"]); if(typeof body.remove!=="boolean" || !work.tasks.items.some(item=>item.id===taskMatch[3]) || task.id===taskMatch[3]) throw Error("Invalid dependency");
+          task.dependencies=task.dependencies.filter(id=>id!==taskMatch[3]); if(!body.remove) task.dependencies.push(taskMatch[3]); return route.fulfill({json:task});
+        }
+      }
+      const triggerMatch=suffix.match(/^\/triggers(?:\/([a-z0-9][a-z0-9_-]{0,79}))?$/);
+      if(triggerMatch) {
+        if(!work.canManageTriggers) return reject(403,fixture.workMessages.triggerNonAdmin);
+        const id=triggerMatch[1] || body.id, index=work.triggers.items.findIndex(item=>item.id===id);
+        if(method==="POST" && !triggerMatch[1]) {
+          keys(["id","description","events","routineId"]);
+          if(index!==-1) return reject(409,fixture.workMessages.duplicateTrigger);
+          if(!/^[a-z0-9][a-z0-9_-]{0,79}$/.test(id)) throw Error("Invalid trigger ID");
+        } else if(index<0) throw Error("Unknown Work trigger");
+        if((method==="POST" && !triggerMatch[1]) || (method==="PUT" && triggerMatch[1])) {
+          if(method==="PUT") keys(["description","events","routineId","revision"]);
+          if(typeof body.description!=="string" || body.description.length>1000 || !Array.isArray(body.events) || body.events.length<1 || body.events.length>20 || body.events.some(event=>typeof event!=="string" || !/^[A-Za-z0-9_.*:-]{1,100}$/.test(event)) || !fixture.routines.some(r=>r.id===body.routineId && r.botId==="ranch")) throw Error("Invalid trigger fields");
+        } else if(method==="PATCH" && triggerMatch[1]) { keys(["enabled","revision"]); if(typeof body.enabled!=="boolean") throw Error("Invalid trigger toggle"); }
+        else if(method==="DELETE" && triggerMatch[1]) keys(["revision"]);
+        else throw Error(`Unsupported trigger method ${method}`);
+        if(method!=="POST" && (!/^[a-f0-9]{64}$/.test(body.revision) || body.revision!==work.triggers.items[index].revision)) return reject(409,fixture.workMessages.triggerCAS);
+        if(method==="DELETE") { work.triggers.items.splice(index,1); delete workRoutes[id]; return route.fulfill({json:{ok:true}}); }
+        if(method==="PATCH" && body.enabled && !work.triggers.platformEnabled) return reject(409,fixture.workMessages.platformDisabled);
+        if(method==="POST") {
+          const native={profile:"ranch",secret:fixture.workFixture.syntheticSecret,enabled:false,created_at:"2026-10-01T00:00:00Z",deliver:"log",description:body.description,events:body.events,cron_job:body.routineId};
+          workRoutes[id]=native;
+          const subscription={id,description:native.description,events:native.events,routineId:native.cron_job,enabled:false,url:`https://hooks.example.invalid/p/ranch/webhooks/${id}`,secretSet:true,revision:await workRevision(native)};
+          work.triggers.items.push(subscription);
+          if (fixture.workFixture?.gate === "W3-triggers" && workMode === "trigger-create-uncertain") return reject(502,fixture.workMessages.catchAll);
+          return route.fulfill({json:{subscription,secret:fixture.workFixture.syntheticSecret}});
+        }
+        const native=workRoutes[id], subscription=work.triggers.items[index];
+        if(method==="PATCH") {native.enabled=body.enabled; subscription.enabled=body.enabled;}
+        else {Object.assign(native,{description:body.description,events:body.events,cron_job:body.routineId}); Object.assign(subscription,{description:body.description,events:body.events,routineId:body.routineId});}
+        subscription.revision=await workRevision(native); return route.fulfill({json:{subscription}});
+      }
+      throw Error(`Unsupported Work write ${method} ${suffix}`);
+    });
+  }
+  if (screen === "memory") await context.route("**/api/bots/*/memory**", async route => {
+    const request=route.request(), method=request.method(), url=new URL(request.url());
+    if (!/^\/api\/bots\/ranch\/memory(?:\/(memory|user))?$/.test(url.pathname)) throw Error("Unexpected Memory route");
+    if (method === "GET") {
+      if (state === "memory-loading") await new Promise(resolve => { releaseMemoryLoad=resolve; });
+      if (state === "memory-load-error" && !memoryFailures.has("read")) {
+        memoryFailures.add("read"); return route.fulfill({status:409,json:{error:fixture.memoryMessages.loadError}});
+      }
+      if (state === "memory-reload-error" && memoryFailures.has("write") && !memoryFailures.has("reload")) {
+        memoryFailures.add("reload"); return route.fulfill({status:409,json:{error:fixture.memoryMessages.loadError}});
+      }
+      return route.fulfill({json:memory});
+    }
+    if (!["PATCH","DELETE"].includes(method)) throw Error("Unexpected Memory write method");
+    const target=url.pathname.split("/").at(-1), document=memory.documents.find(row=>row.target===target);
+    const body=request.postDataJSON(); memorySubmissions.push({method,target,body});
+    const reject=(status,error)=>route.fulfill({status,json:{error}});
+    if (!document || !/^[a-f0-9]{64}$/.test(body.revision)) throw Error("Memory write must use a real target and revision");
+    if (body.revision!==document.revision) return reject(409,fixture.memoryMessages.conflict);
+    if (!document.enabled) return reject(409,fixture.memoryMessages.disabled);
+    if (["memory-conflict","memory-paused","memory-reload-error"].includes(state) && !memoryFailures.has("write")) {
+      memoryFailures.add("write");
+      if (state === "memory-conflict") await memoryDocument(target,[...document.entries.map(entry=>entry.text),fixture.memoryFixture.externalEntry]);
+      return reject(409,fixture.memoryMessages[state === "memory-conflict" ? "conflict" : "paused"]);
+    }
+    let texts;
+    if (method === "DELETE") {
+      if (Object.keys(body).sort().join()!=="entryId,revision" || !document.entries.some(entry=>entry.id===body.entryId)) throw Error("Forget must name one current entry");
+      texts=document.entries.filter(entry=>entry.id!==body.entryId).map(entry=>entry.text);
+    } else {
+      if (Object.keys(body).sort().join()!=="entries,revision" || !Array.isArray(body.entries) || body.entries.length>100) throw Error("Invalid Memory replacement payload");
+      if (body.entries.some(entry=>Object.keys(entry).some(key=>!["id","text"].includes(key)) || typeof entry.text!=="string" || !entry.text.trim() || (entry.id && !document.entries.some(saved=>saved.id===entry.id)))) throw Error("Memory entries must retain their current IDs");
+      texts=body.entries.map(entry=>entry.text.trim());
+      if (new Set(texts).size!==texts.length) return reject(400,"Memory entries must be unique.");
+      if ([...texts.join(fixture.memoryFixture.delimiter)].length>document.charLimit) return reject(400,fixture.memoryMessages.tooLong);
+    }
+    if (state === "memory-busy") await new Promise(resolve => { releaseMemoryWrite=resolve; memoryWriteReady?.(); });
+    await memoryDocument(target,texts);
+    memory.refresh={revision:fixture.memoryFixture.refreshRevision,state:"next_turn",busy:false,message:fixture.memoryMessages.nextTurn};
+    return route.fulfill({json:memory});
+  });
+  let avatarSaveFailed = false;
+  for (const [path, encoded] of Object.entries(fixture?.images || {})) {
+    await context.route(`**${path}`, route => route.fulfill({ contentType: "image/png", body: Buffer.from(encoded, "base64") }));
+  }
+  await context.route("**/api/bots/*/conversation*", async route => {
+    if (!["conversation", "questions", "approvals", "recovery", "details", "settings", "avatar", "models", "memory", "work"].includes(screen) || !fixture?.conversation) return route.continue();
+    if (screen === "details") {
+      const conversation = structuredClone(fixture.conversation);
+      conversation.earlierFiles = state === "earlier-error" ? 1 : 0;
+      if (state === "files-empty") {
+        conversation.files = [];
+        conversation.messages = conversation.messages.map(message => ({...message, files:[]}));
+      }
+      if (state === "failed-profile") conversation.activity = {state:"failed", detail:"The gate service did not answer."};
+      if (state === "blocked-profile") conversation.activity = {state:"blocked", detail:"Waiting for your decision."};
+      return route.fulfill({json:conversation});
+    }
+    return route.fulfill({ json: screen === "questions" ? questionConversation : screen === "approvals" ? approvalConversation : screen === "recovery" ? { ...recoveryConversation, draft: recoveryDraft } : fixture.conversation });
+  });
+  if (screen === "questions") await context.route("**/api/bots/*/requests/fixture-question", async route => {
+    questionSubmissions.push(route.request().postDataJSON());
+    if (fixture.answerError && !questionFailed) {
+      questionFailed = true;
+      return route.fulfill({ status: 503, json: { error: fixture.answerError } });
+    }
+    questionConversation = structuredClone(fixture.afterAnswer);
+    return route.fulfill({ json: { ok: true } });
+  });
+  if (screen === "approvals") await context.route("**/api/bots/*/approvals/fixture-approval", async route => {
+    const submission = route.request().postDataJSON();
+    approvalSubmissions.push(submission);
+    await new Promise(resolve => setTimeout(resolve, 300));
+    if (fixture.decisionError && !approvalFailed) {
+      approvalFailed = true;
+      return route.fulfill({ status: 503, json: { error: fixture.decisionError } });
+    }
+    approvalConversation = structuredClone(submission.decision === "approved" ? fixture.afterApproved : fixture.afterDenied);
+    return route.fulfill({ json: { ok: true } });
+  });
+  if (screen === "recovery") {
+    await context.route("**/api/bots/*/draft", route => {
+      if (route.request().method() === "PUT") recoveryDraft = route.request().postDataJSON();
+      return route.fulfill({ json: recoveryDraft });
+    });
+    await context.route("**/api/bots/*/messages", async route => {
+      const body = route.request().postDataJSON(); recoverySubmissions.push(body);
+      if (!body.retryOf || "draftBaseRevision" in body) throw Error("A retry must name its turn and leave the draft alone.");
+      recoveryReceipt = { requestId: body.requestId, status: recoveryMode === "refused" ? "rejected" : recoveryMode === "checking" ? "uncertain" : "accepted",
+        ...(recoveryMode === "refused" ? { message: fixture.refusalReason } : {}) };
+      if (recoveryMode === "accepted") recoveryConversation = structuredClone(fixture.afterRetry);
+      else recoveryConversation.retry = { ...recoveryReceipt, retryOf: body.retryOf };
+      return route.fulfill({ json: recoveryReceipt });
+    });
+    await context.route("**/api/submissions/*", route => route.fulfill({ json: recoveryReceipt || { requestId: "fixture", status: "uncertain" } }));
+  }
+  if (screen === "details") {
+    await context.route("**/api/files/*", route => {
+      const path = new URL(route.request().url()).pathname;
+      if (fixture.images?.[path]) return route.fulfill({contentType:"image/png",body:Buffer.from(fixture.images[path],"base64")});
+      const response = fixture.fileResponses?.[path];
+      return response ? route.fulfill({status:response.status || 200,contentType:response.mime,body:response.body}) : route.continue();
+    });
+    await context.route("**/api/bots/*/files*", route => state === "earlier-error" ? route.fulfill({status:503,json:{error:"Earlier files unavailable."}}) : route.fulfill({json:{messages:[]}}));
+  }
+  if (["settings", "avatar", "models", "memory", "work"].includes(screen)) {
+    await context.route("**/api/bots/*", route => {
+      const id = decodeURIComponent(new URL(route.request().url()).pathname.split("/").at(-1));
+      const bot = settingsBots.find(item => item.id === id);
+      if (route.request().method() === "GET") {
+        if (state === "load-error" && !settingsLoadFailed) {
+          settingsLoadFailed = true;
+          return route.fulfill({status:503, json:{error:fixture.loadError}});
+        }
+        return route.fulfill({json:bot});
+      }
+      const body = route.request().postDataJSON();
+      settingsSubmissions.push({method:route.request().method(), id, body});
+      if (["model-confirm", "composer-confirm"].includes(state) && !body.confirmModel) return route.fulfill({status:409,json:{error:modelWarning,confirmRequired:true}});
+      if (screen === "models" && state === "model-save-error" && !settingsSaveFailed) { settingsSaveFailed=true; return route.fulfill({status:503,json:{}}); }
+      if (state === "save-error" && !settingsSaveFailed) {
+        settingsSaveFailed = true;
+        return route.fulfill({status:503, json:{error:fixture.saveError}});
+      }
+      Object.assign(bot, body);
+      return route.fulfill({json:bot});
+    });
+    await context.route("**/api/bots", route => {
+      if (route.request().method() !== "POST") return route.continue();
+      const body = route.request().postDataJSON();
+      settingsSubmissions.push({method:"POST",body});
+      const bot = {...body,id:"created-1",activity:"idle"}; settingsBots.push(bot);
+      return route.fulfill({json:bot});
+    });
+    await context.route("**/api/bots/*/avatar", route => {
+      const body = route.request().postDataJSON();
+      const id = new URL(route.request().url()).pathname.split("/").at(-2);
+      const failed = state === "save-error" && !avatarSaveFailed;
+      avatarSubmissions.push({id,body,failed});
+      if (failed) { avatarSaveFailed=true; return route.fulfill({status:503,json:{error:fixture.avatarSaveError}}); }
+      Object.assign(settingsBots.find(bot => bot.id === id), {avatar:body});
+      return route.fulfill({json:body});
+    });
+  }
+  if (screen === "avatar") await context.route("**/api/bots/*/portrait", async route => {
+    portraitPrompts.push(route.request().postDataJSON().prompt);
+    await new Promise(resolve => setTimeout(resolve,1500));
+    return route.fulfill({json:{id:"fixture-generated-portrait",name:"ranch-portrait.png",mime:"image/png",url:"/api/files/fixture-generated-portrait"}});
+  });
+  if (screen === "models") {
+    const failOnce = key => !modelFailures.has(key) && (modelFailures.add(key), true);
+    await context.route("**/api/models*", route => {
+      if (state === "models-error" && failOnce(state)) return route.fulfill({status:503,json:{error:fixture.catalogError}});
+      const catalog = structuredClone(fixture.catalog);
+      if (state === "catalog-empty") catalog.providers = [];
+      return route.fulfill({json:catalog});
+    });
+    await context.route("**/api/preferences/models", route => {
+      const body = route.request().postDataJSON();
+      const failed = state === "favorite-error" && failOnce(state);
+      modelSubmissions.push({kind:"favorites",body,failed});
+      if (failed) return route.fulfill({status:503,json:{error:fixture.favoriteError}});
+      modelFavorites = body.modelFavorites;
+      return route.fulfill({json:{modelFavorites}});
+    });
+    await context.route("**/api/bots/*/inference", route => {
+      if (route.request().method() === "PATCH") {
+        const body = route.request().postDataJSON(), failed = state === "inference-error" && body.reasoning === "ultra" && failOnce(state);
+        modelSubmissions.push({kind:"inference",body,failed});
+        if (failed) return route.fulfill({status:503,json:{error:fixture.inferenceError}});
+        Object.assign(inference,body);
+      }
+      return route.fulfill({json:inference});
+    });
+    for (const kind of ["tools", "skills"]) await context.route(`**/api/bots/*/${kind}`, route => {
+      if (route.request().method() === "GET") {
+        if (state === "capabilities-load-error" && failOnce(`load-${kind}`)) return route.fulfill({status:503,json:{error:fixture.capabilityLoadError}});
+        return route.fulfill({json:state === "capabilities-empty" ? [] : catalogs[kind]});
+      }
+      const body = route.request().postDataJSON(), failed = state === "capabilities-save-error" && failOnce(`save-${kind}`);
+      modelSubmissions.push({kind,body,failed});
+      if (failed) return route.fulfill({status:503,json:{error:(kind==="skills"?fixture.skillSaveError:fixture.capabilitySaveError)}});
+      const ids = new Set(body.ids), known = new Set(catalogs[kind].map(item => item.id));
+      if (body.ids.some(id => !known.has(id)) ) throw Error("Unknown catalog choice.");
+      catalogs[kind] = catalogs[kind].map(item => ({...item,enabled:ids.has(item.id)}));
+      return route.fulfill({json:{ok:true}});
+    });
+  }
+  await context.route("**/api/today", async route => {
+    if (!fixture?.overview || screen !== "today") return route.continue();
+    const value = structuredClone(fixture.overview);
+    if (state === "loading") await new Promise(resolve => { releaseLoading = resolve; });
+    if (state === "error" && checked) return route.fulfill({ status: 503, json: { error: "The connection was interrupted." } });
+    if (state === "all-clear") { value.items = []; value.events = []; value.upcoming = []; }
+    if (state === "partial") {
+      const item = value.items.find(item => item.botId === "guide") || value.items[0];
+      item.activity = { state: "disconnected" };
+      item.error = "Could not read this Hermes conversation. Open it to reconnect.";
+      item.approvals = []; item.attention = [];
+      value.unavailableBots = [item.botId];
+    }
+    if (state === "paged") value.hasMore = true;
+    checked = true;
+    return route.fulfill({ json: value });
+  });
+  await context.route("**/api/bootstrap*", async route => {
+    const response = await route.fetch();
+    const value = await response.json();
+    if (fixture) value.bots = state === "empty" ? [] : fixture.bots;
+    if (["settings", "avatar", "models", "memory", "work"].includes(screen)) {
+      value.bots = settingsBots.map(({instructions, enabledMcpServers, ...roster}) => roster);
+      if (state === "unsupported") value.capabilities.botConfiguration = {supported:false,reason:fixture.unsupportedReason};
+    }
+    if (screen === "avatar" && state === "portrait-unavailable") {
+      value.capabilities.uploads={supported:false,reason:fixture.uploadsReason};
+      value.capabilities.portraitGeneration={supported:false,reason:fixture.generationReason};
+    }
+    if (screen === "recovery" && state === "unsupported-retry") value.capabilities.idempotency = { supported: false, reason: "This Hermes connection cannot look up requests." };
+    if (screen === "approvals" && state === "unsupported") value.capabilities.approvals = { supported: false, reason: fixture.unsupportedReason };
+    if (fixture?.preferences) value.preferences = { ...value.preferences, ...fixture.preferences };
+    if (screen === "models") {
+      value.preferences.modelFavorites = modelFavorites;
+      if (state === "capabilities-unavailable") for (const kind of ["tools", "skills"]) value.capabilities[kind] = {supported:false, reason:fixture.capabilityUnsupportedReason};
+    }
+    if (screen === "avatar" && state === "composer-regression") value.preferences.presentation = "advanced";
+    if (screen === "home" && state === "three-pins") value.preferences.favorites = ["ranch", "garden", "kitchen"];
+    if (screen === "home" && state === "no-pins") value.preferences.favorites = [];
+    return route.fulfill({ response, json: value });
+  });
+  const capture = async (name, width, height, theme = "light", preserveFocus = false) => {
+    await tab.setViewportSize({ width, height });
+    if (pointer) await pointer.send("Emulation.setTouchEmulationEnabled", { enabled: width <= 620, maxTouchPoints: 1 });
+    await tab.emulateMedia({ colorScheme: theme });
+    // Await the React media-query update, fonts and at least two painted frames.
+    await tab.evaluate(async ({ theme, width, height }) => {
+      document.documentElement.dataset.theme = theme;
+      await document.fonts.ready;
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      if (innerWidth !== width || innerHeight !== height) throw Error("Viewport did not settle.");
+    }, { theme, width, height });
+    if (!preserveFocus && !/menu|focus/.test(name)) {
+      await tab.mouse.move(width - 1, height - 1);
+      await tab.evaluate(() => { if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); });
+    }
+    const path = `${outputDir}/${prefix}-${screen}-${name}.png`;
+    if (screen === "home" && name.startsWith("desktop") && !name.includes("menu")) {
+      await tab.locator(".bot-rail").screenshot({ path, animations: "disabled" });
+    } else { await tab.screenshot({ path, animations: "disabled" }); }
+    paths.push(path);
+    geometry.push({ name, width, height, ...await tab.evaluate(() => ({
+      overflow: document.documentElement.scrollWidth > innerWidth,
+      column: document.querySelector(".today-content")?.getBoundingClientRect().width,
+      attention: [...document.querySelectorAll(".today-attention-list .today-row")].map(row => {
+        const { top, bottom } = row.getBoundingClientRect();
+        return { top, bottom, label: row.textContent };
+      }),
+    })) });
+    if (screen === "details") geometry.at(-1).details = await tab.evaluate(() => {
+      const selected = document.querySelector(".artifact-item.selected");
+      const metadata = selected?.querySelector("small");
+      const preview = document.querySelector(".artifact-text-preview pre");
+      const status = document.querySelector(".bot-details-facts .bot-activity");
+      const icon = document.querySelector(".bot-details-actions .artifacts-button-icon .icon");
+      const badge = document.querySelector(".bot-details-actions .artifacts-count");
+      const bounds = element => element && ({x:element.getBoundingClientRect().x, y:element.getBoundingClientRect().y, width:element.getBoundingClientRect().width, height:element.getBoundingClientRect().height});
+      return {
+        metadata: metadata && {color:getComputedStyle(metadata).color, background:getComputedStyle(selected).backgroundColor},
+        previewFont: preview && getComputedStyle(preview).fontFamily,
+        status: status && {label:status.textContent, classes:status.className, color:getComputedStyle(status).color},
+        icon:bounds(icon), badge:bounds(badge),
+        list:bounds(document.querySelector(".artifacts-list")),
+        rows:[...document.querySelectorAll(".artifact-item")].slice(0, 2).map(bounds),
+      };
+    });
+    if (fontSession) {
+      const {root} = await fontSession.send("DOM.getDocument");
+      const selector = screen === "details" ? ".artifact-text-preview pre" : ".message-markdown pre code";
+      const {nodeId} = await fontSession.send("DOM.querySelector", {nodeId:root.nodeId, selector});
+      if (nodeId) geometry.at(-1).renderedCodeFonts = (await fontSession.send("CSS.getPlatformFontsForNode", {nodeId})).fonts;
+    }
+  };
+  try {
+    if (screen === "work") {
+      const dialog=tab.locator(".settings-dialog"), panel=dialog.locator(".automation-panel");
+      const after=stage==="after", goalCard=()=>panel.locator(after?".automation-goal-card":".automation-item").first();
+      const goalTitle=()=>panel.locator(after?".automation-goal-title":".automation-item > strong");
+      const reset=async ({width=390,theme="light",large=false,mode="loaded"}={})=>{
+        workLoadingRelease?.(); workLoadingRelease=undefined;
+        // Destroy the previous scenario before replacing its transport state.
+        await tab.goto("about:blank");
+        const readStarted=new Promise(resolve=>{workReadStarted=resolve;});
+        workMode=mode; work=structuredClone(fixture.workStates[mode] || fixture.work);
+        workReads=0; workResumeIds=new Map(); workTaskIds=new Map(); workRoutes=Object.fromEntries(fixture.work.triggers.items.map((row,index)=>[row.id,structuredClone(fixture.workFixture.triggerRoutes[index])]));
+        settingsBots=structuredClone(fixture.bots);
+        await tab.setViewportSize({width,height:width>1000?1000:844});
+        await tab.emulateMedia({colorScheme:theme});
+        await tab.goto(`${origin.origin}/?bot=ranch`);
+        await tab.evaluate(({large,theme})=>{localStorage.clear();sessionStorage.clear();document.documentElement.style.fontSize=large?"200%":"";document.documentElement.dataset.theme=theme;},{large,theme});
+        const initialWrites=workSubmissions.length;
+        await tab.locator('.chat-header [title="Details, pin, artifacts and settings"]').click();
+        await tab.locator(".bot-details").getByRole("button",{name:"Settings",exact:true}).click();
+        await dialog.waitFor();
+        const overflow=dialog.locator(".settings-tabs-overflow"); if(await overflow.count()) await overflow.locator("summary").click();
+        await dialog.getByRole("button",{name:"work",exact:true}).click();
+        await panel.waitFor();
+        let readTimeout;
+        try { await Promise.race([readStarted,new Promise((_,reject)=>{readTimeout=setTimeout(()=>reject(Error("Work overview request did not start")),10000);})]); }
+        finally { clearTimeout(readTimeout); }
+        if(mode === "loading") await panel.getByText("Loading assistant controls...",{exact:true}).waitFor();
+        else if(mode === "load-error") await panel.getByRole("alert").waitFor();
+        else await panel.getByRole("heading",{name:"Standing goal"}).waitFor();
+        if(workReads!==1 || workSubmissions.length!==initialWrites) throw Error(`Work ${mode} initial load expected one GET and zero writes, got ${workReads} GETs`);
+        workChecks.push({mode,check:"initial-load",reads:workReads,writes:0});
+      };
+      const shot=async(name,width=390,theme="light")=>{
+        await capture(`goal-${name}`,width,width>1000?1000:844,theme);
+        if(after) geometry.at(-1).workPresentation=await panel.evaluate(node=>{
+          const describe=element=>{const style=getComputedStyle(element),rect=element.getBoundingClientRect();return {text:element.textContent.trim(),fontSize:style.fontSize,lineHeight:style.lineHeight,color:style.color,background:style.backgroundColor,width:rect.width,height:rect.height,flexDirection:style.flexDirection};};
+          return {title:[...node.querySelectorAll('.automation-goal-title')].map(describe),status:[...node.querySelectorAll('.automation-goal-status')].map(describe),buttons:[...node.querySelectorAll('.automation-goal button')].map(describe),checks:[...node.querySelectorAll('.automation-goal .automation-check')].map(describe)};
+        });
+      };
+      const subjectShot=async(name,target,width=390,theme="light")=>{
+        await target.scrollIntoViewIfNeeded();
+        const bounds=await target.evaluate(node=>{
+          const rect=element=>{const r=element.getBoundingClientRect();return {top:r.top,bottom:r.bottom,height:r.height};};
+          const subject=rect(node),view=rect(node.closest('.settings-content'));
+          return {subject,view,fullyVisible:subject.top>=Math.max(0,view.top)&&subject.bottom<=Math.min(innerHeight,view.bottom)};
+        });
+        if(!bounds.fullyVisible) throw Error(`Work ${name} subject is clipped: ${JSON.stringify(bounds)}`);
+        await shot(name,width,theme); geometry.at(-1).workSubject=bounds;
+      };
+      if (workCase === "triggers") {
+        if (typeof captureTriggers !== "function") throw Error("Missing isolated trigger capture module");
+        return await captureTriggers({tab,panel,fixture,reset,capture,paths,geometry,workChecks,browserErrors,
+          getWork:()=>work,getReads:()=>workReads,getSubmissions:()=>workSubmissions,
+          externalTriggerEdit: workCase === "triggers" && stage === "after" ? async () => {
+            const subscription=work.triggers.items.find(item=>item.id==="freezer-alerts"), native=workRoutes["freezer-alerts"];
+            native.description=fixture.workFixture.externalTriggerEdit.description;
+            subscription.description=native.description; subscription.revision=await workRevision(native);
+            if(subscription.revision!==fixture.workFixture.externalTriggerEdit.revision) throw Error("External trigger revision mismatch");
+          } : undefined,
+          nextRoutineRequest:()=>new Promise((resolve,reject)=>{
+            workRoutineWaitTimer=setTimeout(()=>{workRoutineStarted=undefined;reject(Error("W3 routines request did not start"));},10000);
+            workRoutineStarted=()=>{clearTimeout(workRoutineWaitTimer);workRoutineStarted=undefined;resolve();};
+          }),
+          getRoutineGets:()=>workRoutineGets,releaseRoutines:()=>{workRoutinesLoadingRelease?.();workRoutinesLoadingRelease=undefined;}});
+      }
+      if(workCase === "tasks" && taskGate === "a") {
+        const section = panel.locator(".automation-tasks"), heading = section.getByRole("heading", {name:"Task board", exact:true});
+        const items = fixture.work.tasks.items, subjects = fixture.workFixture.subjects;
+        const task = id => items.find(item => item.id === id);
+        const card = id => section.locator(`details.automation-task[data-task-id="${id}"]`);
+        const live = section.getByRole("status", {name:"Task result"});
+        let width=390, theme="light", large=false;
+        const setup = async (opts={}) => {
+          width=opts.width || 390; theme=opts.theme || "light"; large=!!opts.large;
+          await reset(opts);
+          await live.evaluate(node => { window.__taskResultRegion = node; });
+        };
+        const open = async id => {
+          const row=card(id);
+          if (await row.count() !== 1) throw Error(`Task ${id} missing from its expanded group`);
+          await row.locator(":scope > summary").click();
+          if (await row.getAttribute("open") === null) throw Error(`Task ${id} did not open`);
+          return row;
+        };
+        const assertOverflow = async name => {
+          const info=await section.evaluate(node=>({document:document.documentElement.scrollWidth>innerWidth,section:node.scrollWidth>node.clientWidth,scroller:node.closest('.settings-content').scrollWidth>node.closest('.settings-content').clientWidth}));
+          if (Object.values(info).some(Boolean)) throw Error(`Task ${name} overflow: ${JSON.stringify(info)}`);
+          if (browserErrors.length) throw Error(`Browser errors: ${browserErrors.join('; ')}`);
+          return info;
+        };
+        const shot = async (name, preserveFocus=false) => {
+          const overflow=await assertOverflow(name);
+          await tab.mouse.move(0,0);
+          await capture(`task-${name}`,width,width>1000?1000:844,theme,preserveFocus);
+          if(geometry.at(-1).overflow) throw Error(`Task ${name} document overflow after capture`);
+          geometry.at(-1).taskOverflow=overflow;
+          geometry.at(-1).rootFontScaling=large ? "200% root font size, not browser zoom" : "default";
+        };
+        const rects = async targets => section.evaluate((node,selectors)=>{
+          const view=node.closest('.settings-content');
+          const rect=el=>{if(!el)return null;const r=el.getBoundingClientRect();return {top:r.top,bottom:r.bottom,left:r.left,right:r.right,width:r.width,height:r.height};};
+          const viewport=rect(view), bounds={top:Math.max(0,viewport.top),bottom:Math.min(innerHeight,viewport.bottom),left:Math.max(0,viewport.left),right:Math.min(innerWidth,viewport.right)};
+          const result=Object.fromEntries(Object.entries(selectors).map(([key,selector])=>{const r=rect(node.querySelector(selector));return [key,r&&{...r,fullyVisible:r.top>=bounds.top&&r.bottom<=bounds.bottom&&r.left>=bounds.left&&r.right<=bounds.right}];}));
+          return {viewport,bounds,targets:result};
+        },targets);
+        const anchorShot = async (name,target,preserveFocus=false) => {
+          const info=await target.evaluate(node=>{
+            const view=node.closest('.settings-content'), r=node.getBoundingClientRect(), v=view.getBoundingClientRect();
+            view.scrollTop+=r.top-v.top-16;
+            const a=node.getBoundingClientRect(), b=view.getBoundingClientRect();
+            return {anchor:{top:a.top,bottom:a.bottom,height:a.height},viewport:{top:b.top,bottom:b.bottom},viewportHeight:innerHeight};
+          });
+          if(info.anchor.top < Math.max(0,info.viewport.top)+15 || info.anchor.top >= Math.min(info.viewportHeight,info.viewport.bottom)) throw Error(`Task ${name} anchor clipped: ${JSON.stringify(info)}`);
+          await shot(name,preserveFocus); geometry.at(-1).taskAnchor=info;
+        };
+        const subjectShot = async (name,target) => {
+          await target.scrollIntoViewIfNeeded();
+          const info=await target.evaluate(node=>{const r=node.getBoundingClientRect(),v=node.closest('.settings-content').getBoundingClientRect();return {top:r.top,bottom:r.bottom,viewTop:v.top,viewBottom:v.bottom,fullyVisible:r.top>=Math.max(0,v.top)&&r.bottom<=Math.min(innerHeight,v.bottom)};});
+          if(!info.fullyVisible) throw Error(`Task ${name} subject clipped: ${JSON.stringify(info)}`);
+          await shot(name); geometry.at(-1).taskSubject=info;
+        };
+        const checkReads = (id,body,before) => {
+          const writes=workSubmissions.slice(before);
+          if(workReads!==2 || writes.length!==1 || writes[0].method!=="POST" || writes[0].path!==`/tasks/${id}/actions` || JSON.stringify(writes[0].body)!==JSON.stringify(body)) throw Error(`Task request/reconcile mismatch: ${JSON.stringify({reads:workReads,writes})}`);
+        };
+        const waitResult = async (id,text) => {
+          const feedback=card(id).locator('.automation-task-feedback');
+          await feedback.waitFor();
+          if(await feedback.textContent()!==text) throw Error(`Task feedback mismatch for ${id}`);
+          await tab.waitForFunction(({id,text})=>{
+            const row=document.querySelector(`.automation-task[data-task-id="${id}"]`), region=document.querySelector('[aria-label="Task result"]');
+            return row?.open && row.querySelector('.automation-task-feedback') === document.activeElement && region === window.__taskResultRegion && region.textContent === text;
+          },{id,text});
+        };
+        const checkGroups = async () => {
+          const groups=await section.locator('.automation-task-group-toggle').allTextContents();
+          const expected=['Blocked · 2','Running · 1','In review · 1','Ready · 1','To do · 1','Done · 1'];
+          if(JSON.stringify(groups)!==JSON.stringify(expected)) throw Error(`Task groups mismatch: ${JSON.stringify(groups)}`);
+          const done=section.getByRole('button',{name:'Done · 1',exact:true});
+          if(await done.getAttribute('aria-expanded')!=='false') throw Error('Done should start collapsed');
+        };
+        const checkParents = async row => {
+          const expected=task(subjects.detail).dependencies.map(id=>{const parent=task(id),label={review:'In review',ready:'Ready',todo:'To do',blocked:'Blocked',running:'Running',done:'Done'}[parent.status] || parent.status;return `${parent.title} · ${label}`;});
+          const actual=await row.locator('.automation-dependency span').allTextContents();
+          if(JSON.stringify(actual)!==JSON.stringify(expected)) throw Error(`Dependency status mismatch: ${JSON.stringify(actual)}`);
+        };
+        for(const [name,w,t,big] of [['board-desktop',1440,'light',false],['board-phone',390,'light',false],['board-large-text',390,'light',true]]) {
+          await setup({width:w,theme:t,large:big}); await checkGroups(); await anchorShot(name,heading);
+        }
+        for(const [name,w,t,big,which] of [['detail-desktop',1440,'light',false,'summary'],['detail-dark',1440,'dark',false,'summary'],['detail-phone-top',390,'light',false,'summary'],['detail-phone-actions',390,'light',false,'move'],['detail-narrow-actions',320,'light',false,'move'],['detail-large-text-top',390,'light',true,'summary'],['detail-large-text-actions',390,'light',true,'move']]) {
+          await setup({width:w,theme:t,large:big}); const row=await open(subjects.detail); await checkParents(row);
+          if(await row.locator('.automation-task-status').textContent()!=='Blocked') throw Error('Detail status mismatch');
+          if(await row.getByRole('combobox',{name:/^Reviewer/}).count() || await row.getByLabel('What is blocking this task?').count()) throw Error('Action fields shown before selection');
+          await anchorShot(name,which==='summary' ? row.locator(':scope > summary') : row.locator('.automation-task-move h5'));
+        }
+        const refusal = async (big,record) => {
+          await setup({large:big}); const id=subjects.refusedStart, row=await open(id), before=workSubmissions.length;
+          await row.getByRole('button',{name:'Start task',exact:true}).focus();
+          await tab.keyboard.press('Tab'); await tab.keyboard.press('Shift+Tab'); await tab.keyboard.press('Enter');
+          const message=fixture.workMessages.refusedTransition+' Status refreshed.';
+          await waitResult(id,message); checkReads(id,{action:'start'},before);
+          if(!await row.locator('.automation-task-feedback').evaluate(node=>node.matches(':focus-visible'))) throw Error('Task result must show keyboard focus');
+          const geometryNow=await rects({feedback:`[data-task-id="${id}"] .automation-task-feedback`,actions:`[data-task-id="${id}"] .automation-task-move > .actions`,start:`[data-task-id="${id}"] .automation-task-move > .actions button:first-child`});
+          if(record) { await shot('refused-card',true); geometry.at(-1).taskLanding=geometryNow; }
+          workChecks.push({check:big?'refusal-200-percent-landing':'refusal-landing',geometry:geometryNow,reads:workReads,writes:1});
+          if(Object.values(geometryNow.targets).some(value=>!value?.fullyVisible)) throw Error(`Refusal landing is clipped: ${JSON.stringify(geometryNow)}`);
+          if(await panel.getByRole('alert').count()) throw Error('Task refusal duplicated in global alert');
+          for(const name of ['Resume goal','Replace goal…','Clear goal…']) if(await panel.getByRole('button',{name,exact:true}).isDisabled()) throw Error(`Goal ${name} remained disabled after refusal`);
+          if(record) await subjectShot('refused-goal-controls',panel.locator('.automation-goal-actions'));
+        };
+        await refusal(false,true); await refusal(true,false);
+        for(const [name,id] of [['running',subjects.running],['review',subjects.review]]) {
+          await setup(); const row=await open(id);
+          if(name==='running') {
+            if(await row.locator('button, input, select, textarea').count() || !await row.getByText('A Hermes worker is running this task. You can change it after the run finishes.',{exact:true}).count()) throw Error('Running task exposes mutation controls');
+            await anchorShot(name,row.locator(':scope > summary'));
+          } else await anchorShot(name,row.locator('.automation-task-move h5'));
+        }
+        for(const [name,mode] of [['empty','empty'],['unsupported','sections-unsupported']]) { await setup({mode}); await anchorShot(name,heading); }
+        await setup(); let id=subjects.start, row=await open(id), before=workSubmissions.length;
+        await row.getByRole('button',{name:'Start task',exact:true}).click(); await waitResult(id,'Moved to Ready.'); checkReads(id,{action:'start'},before);
+        const started=await rects({feedback:`[data-task-id="${id}"] .automation-task-feedback`,actions:`[data-task-id="${id}"] .automation-task-move > .actions`});
+        await shot('started-phone',true); geometry.at(-1).taskLanding=started;
+        if(Object.values(started.targets).some(value=>!value?.fullyVisible)) throw Error(`Started landing is clipped: ${JSON.stringify(started)}`);
+        workChecks.push({check:'start-regroup',geometry:started,reads:workReads,writes:1});
+        await setup(); row=await open(subjects.detail);
+        await row.getByRole('button',{name:'Block task…',exact:true}).click();
+        if(await row.getByRole('button',{name:'Block task…',exact:true}).getAttribute('aria-expanded')!=='true' || await row.getByRole('combobox',{name:/^Reviewer/}).count()) throw Error('Block disclosure mismatch');
+        await row.getByLabel('What is blocking this task?').waitFor();
+        await tab.keyboard.press('Tab');
+        if(!await row.getByRole('button',{name:'Request review…',exact:true}).evaluate(node=>node===document.activeElement && node.matches(':focus-visible'))) throw Error('Keyboard focus ring not established');
+        await anchorShot('block-form-phone',row.locator('.automation-task-move > .actions'),true);
+        if(!await row.getByRole('button',{name:'Request review…',exact:true}).evaluate(node=>{const r=node.getBoundingClientRect(),v=node.closest('.settings-content').getBoundingClientRect();return node===document.activeElement&&r.top>=v.top&&r.bottom<=Math.min(innerHeight,v.bottom);})) throw Error('Focused disclosure button is clipped');
+        await row.getByLabel('What is blocking this task?').fill('Waiting for supplies');
+        before=workSubmissions.length; await row.getByRole('button',{name:'Block task',exact:true}).click();
+        await waitResult(subjects.detail,'Moved to Blocked.'); checkReads(subjects.detail,{action:'block',reason:'Waiting for supplies'},before);
+        await setup({large:true}); row=await open(subjects.start);
+        await row.getByRole('button',{name:'Block task…',exact:true}).click();
+        await row.getByRole('button',{name:'Request review…',exact:true}).click();
+        if(await row.getByLabel('What is blocking this task?').count() || await row.getByRole('button',{name:'Request review…',exact:true}).getAttribute('aria-expanded')!=='true') throw Error('Review disclosure mismatch');
+        await anchorShot('review-form-large-text',row.locator('.automation-task-move > .actions'),true);
+        if(!await row.getByRole('button',{name:'Request review…',exact:true}).evaluate(node=>{const r=node.getBoundingClientRect(),v=node.closest('.settings-content').getBoundingClientRect();return node===document.activeElement&&r.top>=v.top&&r.bottom<=Math.min(innerHeight,v.bottom);})) throw Error('Review disclosure button is clipped');
+        await row.getByRole('combobox',{name:/^Reviewer/}).selectOption(fixture.bots[0].id); await row.getByLabel('Notes for the reviewer (optional)').fill('Please check the gate');
+        before=workSubmissions.length; await row.getByRole('button',{name:'Request review',exact:true}).click();
+        await waitResult(subjects.start,'Moved to In review.'); checkReads(subjects.start,{action:'request_review',reason:'Please check the gate',reviewer:fixture.bots[0].id},before);
+        await setup(); id=subjects.start; row=await open(id); await row.locator('.automation-task-note summary').click(); await row.getByLabel('Start note').fill('Start after lunch');
+        before=workSubmissions.length; await row.getByRole('button',{name:'Start task',exact:true}).click(); await waitResult(id,'Moved to Ready.'); checkReads(id,{action:'start',reason:'Start after lunch'},before);
+        workChecks.push({check:'optional-start-note-and-review-payload',passed:true});
+        if(browserErrors.length) throw Error(`Browser errors: ${browserErrors.join('; ')}`);
+        if(paths.length!==19) throw Error(`Expected 19 W2a shots, got ${paths.length}`);
+        return {title:'Work W2a tasks AFTER',paths,geometry,workSubmissions,workChecks,browserErrors,workCase,taskGate};
+      }
+      if(workCase === "tasks" && taskGate === "b") {
+        const section=panel.locator('.automation-tasks'), newTask=fixture.workFixture.newTask;
+        const items=fixture.work.tasks.items, subject=id=>items.find(item=>item.id===id);
+        const card=id=>section.locator(`details.automation-task[data-task-id="${id}"]`);
+        const createForm=()=>section.getByRole('form',{name:'New task',exact:true});
+        const assignedAssistant=form=>form.getByRole('combobox',{name:/^Assigned assistant\b/});
+        let width=390,theme='light';
+        const setup=async(opts={})=>{width=opts.width||390;theme=opts.theme||'light';await reset(opts);};
+        const bounds=async target=>target.evaluate(node=>{
+          const r=node.getBoundingClientRect(),v=node.closest('.settings-content').getBoundingClientRect();
+          return {top:r.top,bottom:r.bottom,viewTop:v.top,viewBottom:v.bottom,focused:node===document.activeElement,
+            fullyVisible:r.top>=Math.max(0,v.top)&&r.bottom<=Math.min(innerHeight,v.bottom)};
+        });
+        const shot=async(name,preserveFocus=false)=>{
+          const overflow=await section.evaluate(node=>({document:document.documentElement.scrollWidth>innerWidth,
+            section:node.scrollWidth>node.clientWidth,scroller:node.closest('.settings-content').scrollWidth>node.closest('.settings-content').clientWidth}));
+          if(Object.values(overflow).some(Boolean)||browserErrors.length) throw Error(`Editor ${name}: ${JSON.stringify({overflow,browserErrors})}`);
+          await capture(`task-${name}`,width,width>1000?1000:844,theme,preserveFocus);
+          geometry.at(-1).editorOverflow=overflow;
+        };
+        const anchorShot=async(name,target)=>{
+          await target.evaluate(node=>{const view=node.closest('.settings-content');view.scrollTop+=node.getBoundingClientRect().top-view.getBoundingClientRect().top;});
+          const info=await bounds(target);
+          if(info.top<Math.max(0,info.viewTop)-1||info.top>=Math.min(width>1000?1000:844,info.viewBottom)) throw Error(`Editor ${name} anchor clipped: ${JSON.stringify(info)}`);
+          await shot(name);geometry.at(-1).editorAnchor=info;
+        };
+        const subjectShot=async(name,target)=>{
+          await target.scrollIntoViewIfNeeded();const info=await bounds(target);
+          if(!info.fullyVisible) throw Error(`Editor ${name} subject clipped: ${JSON.stringify(info)}`);
+          await shot(name);geometry.at(-1).editorSubject=info;
+        };
+        const landingShot=async(name,target)=>{
+          await target.waitFor();
+          await target.evaluate(async node=>{
+            const deadline=performance.now()+5000;
+            let last;
+            while(performance.now()<deadline){
+              const r=node.getBoundingClientRect(),v=node.closest('.settings-content').getBoundingClientRect();
+              last={focused:node===document.activeElement,top:r.top,bottom:r.bottom,viewTop:v.top,viewBottom:v.bottom,
+                viewportHeight:innerHeight,activeElement:document.activeElement?.outerHTML.slice(0,600)};
+              if(last.focused&&r.top>=Math.max(0,v.top)&&r.bottom<=Math.min(innerHeight,v.bottom))return;
+              await new Promise(resolve=>requestAnimationFrame(resolve));
+            }
+            throw Error(`Editor result did not receive visible focus: ${JSON.stringify(last)}`);
+          });
+          const info=await bounds(target);
+          if(!info.focused||!info.fullyVisible) throw Error(`Editor ${name} did not focus a visible result: ${JSON.stringify(info)}`);
+          await shot(name,true);geometry.at(-1).editorLanding=info;
+        };
+        const fill=async(full=true)=>{
+          await section.getByRole('button',{name:'New task',exact:true}).click();const form=createForm();
+          if(!await form.getByLabel('Task title',{exact:true}).evaluate(node=>node===document.activeElement)) throw Error('Create title did not receive focus');
+          await form.getByLabel('Task title',{exact:true}).fill(newTask.title);
+          await form.getByLabel('Instructions (optional)',{exact:true}).fill(newTask.body);
+          if(full){
+            await assignedAssistant(form).selectOption(newTask.assignee);
+            await form.getByLabel('Priority',{exact:true}).fill(String(newTask.priority));
+            for(const id of newTask.dependencies) await form.getByRole('checkbox',{name:subject(id).title}).check();
+          }
+          return form;
+        };
+        const verifyCreate=(entry,full=true)=>{
+          const expected={title:newTask.title,body:newTask.body,assignee:full?newTask.assignee:'ranch',priority:full?newTask.priority:0,dependencies:full?newTask.dependencies:[]};
+          if(entry?.method!=='POST'||entry.path!=='/tasks'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(entry.body?.requestId)||
+            JSON.stringify(Object.keys(entry.body).sort())!==JSON.stringify(['requestId',...Object.keys(expected)].sort())||
+            Object.keys(expected).some(key=>JSON.stringify(entry.body[key])!==JSON.stringify(expected[key]))) throw Error(`Editor create payload mismatch: ${JSON.stringify(entry)}`);
+        };
+        const createdTask=()=>{
+          const found=work.tasks.items.filter(item=>item.title===newTask.title&&!items.some(old=>old.id===item.id));
+          if(found.length!==1||found[0].status!=='blocked') throw Error('Expected exactly one new blocked task');
+          return found[0];
+        };
+        for(const [name,w,t,large,anchor] of [
+          ['create-desktop',1440,'light',false,'top'],['create-dark',1440,'dark',false,'top'],
+          ['create-phone-top',390,'light',false,'top'],['create-phone-bottom',390,'light',false,'bottom'],
+          ['create-narrow',320,'light',false,'top'],['create-large-text-top',390,'light',true,'top'],
+          ['create-large-text-bottom',390,'light',true,'actions']]){
+          await setup({width:w,theme:t,large});const form=await fill();
+          if(w===390&&!large){
+            const rows=await form.locator('.automation-check').evaluateAll(nodes=>nodes.map(node=>{
+              const box=node.querySelector('input').getBoundingClientRect(),label=node.querySelector('span').getBoundingClientRect(),r=node.getBoundingClientRect();
+              return {height:r.height,firstLineOffset:Math.abs(box.top-label.top),text:node.textContent};
+            }));
+            if(rows.some(row=>row.firstLineOffset>8||row.height<44)) throw Error(`Dependency checkbox alignment/target mismatch: ${JSON.stringify(rows)}`);
+            workChecks.push({check:'editor-dependency-row-layout',rows});
+          }
+          if(anchor==='bottom'){
+            await form.locator('.automation-task-choices').evaluate(node=>node.scrollTop=node.scrollHeight);
+            await anchorShot(name,form.locator('fieldset'));
+            if(!(await bounds(form.locator('.actions'))).fullyVisible) throw Error('Create help/actions must fit below the bounded dependency list');
+          }else if(anchor==='actions') await subjectShot(name,form.locator('.actions'));
+          else await anchorShot(name,form.getByRole('heading',{name:'New task',exact:true}));
+        }
+        await setup();let form=await fill(),before=workSubmissions.length;
+        await form.getByRole('button',{name:'Create task',exact:true}).click();
+        await section.getByRole('button',{name:'New task',exact:true}).waitFor();
+        let writes=workSubmissions.slice(before);if(writes.length!==1)throw Error('Create must send exactly one POST');verifyCreate(writes[0]);
+        let created=createdTask(),row=card(created.id),feedback=row.locator('.automation-task-feedback');
+        if(await row.getAttribute('open')===null||!await section.getByRole('status',{name:'Task result'}).textContent().then(text=>text.includes('Created.'))) throw Error('Created task not opened/announced');
+        await landingShot('create-saved',feedback);
+        await setup({mode:'task-create-uncertain'});form=await fill(false);before=workSubmissions.length;
+        await form.getByRole('button',{name:'Create task',exact:true}).click();
+        await panel.getByRole('alert').waitFor();
+        const message=form.locator('.automation-task-callout[tabindex="-1"]');
+        await landingShot('create-uncertain-form',message);
+        if(!await form.getByLabel('Task title',{exact:true}).isDisabled())throw Error('Unconfirmed draft must be locked');
+        await subjectShot('create-uncertain-alert',panel.getByRole('alert'));
+        const reads=workReads;await panel.getByRole('button',{name:'Refresh status',exact:true}).click();
+        await form.getByRole('button',{name:'Close',exact:true}).waitFor();
+        if(workReads!==reads+1||workSubmissions.length!==before+1||await form.getByRole('button',{name:'Create task',exact:true}).count())throw Error('Uncertain-create refresh/write guard failed');
+        if(!await form.getByLabel('Task title',{exact:true}).isDisabled())throw Error('Likely-match draft must stay locked');
+        await landingShot('create-refreshed-form',message);
+        await form.getByRole('button',{name:'Close',exact:true}).click();
+        await section.getByRole('button',{name:'New task',exact:true}).waitFor();created=createdTask();row=card(created.id);
+        writes=workSubmissions.slice(before);if(writes.length!==1)throw Error('Close sent a second create');verifyCreate(writes[0],false);
+        if(await row.getAttribute('open')===null)throw Error('Likely-created task did not open');
+        await landingShot('create-uncertain-closed',row.locator('.automation-task-feedback'));
+        workChecks.push({check:'uncertain-create-close',posts:1,refreshReads:1,postCloseWrites:0,uniqueCreated:1});
+        for(const [name,w,large] of [['edit-desktop',1440,false],['edit-phone',390,false],['edit-large-text',390,true]]){
+          await setup({width:w,large});row=card(fixture.workFixture.subjects.edit);await row.locator(':scope > summary').click();
+          await row.getByRole('button',{name:'Edit task',exact:true}).click();form=row.getByRole('form',{name:'Edit task',exact:true});
+          if(!await form.getByLabel('Task title',{exact:true}).evaluate(node=>node===document.activeElement))throw Error('Edit title did not receive focus');
+          await assignedAssistant(form).selectOption('');
+          if(large)await subjectShot(name,form.locator('.actions'));else await anchorShot(name,form.getByRole('heading',{name:'Edit task',exact:true}));
+        }
+        await setup();row=card(fixture.workFixture.subjects.edit);await row.locator(':scope > summary').click();await row.getByRole('button',{name:'Edit task',exact:true}).click();
+        form=row.getByRole('form',{name:'Edit task',exact:true});await assignedAssistant(form).selectOption('');before=workSubmissions.length;
+        await form.getByRole('button',{name:'Save task',exact:true}).click();await row.getByRole('button',{name:'Edit task',exact:true}).waitFor();
+        writes=workSubmissions.slice(before);const original=subject(fixture.workFixture.subjects.edit);
+        const expected={title:original.title,body:original.body,priority:original.priority,assignee:null};
+        if(writes.length!==1||writes[0].method!=='PATCH'||writes[0].path!==`/tasks/${original.id}`||JSON.stringify(writes[0].body)!==JSON.stringify(expected)||!(await row.locator(':scope > summary').textContent()).includes('Unassigned'))throw Error('Editor PATCH/null assignment mismatch');
+        await landingShot('edit-saved',row.locator('.automation-task-feedback'));
+        if(paths.length!==16||browserErrors.length)throw Error(`W2b expected16 clean frames, got${paths.length}: ${browserErrors}`);
+        return {title:'Work W2b task editors AFTER',paths,geometry,workSubmissions,workChecks,browserErrors,workCase,taskGate};
+      }
+      if(workCase==="tasks") {
+        const section=panel.locator("section.automation-section").filter({has:tab.getByRole("heading",{name:"Task board",exact:true})});
+        const heading=section.getByRole("heading",{name:"Task board",exact:true});
+        const items=fixture.work.tasks.items, subject=id=>items.find(row=>row.id===id);
+        const card=id=>section.locator("details.automation-item").filter({has:tab.locator("summary > span").filter({hasText:subject(id).title})});
+        const open=async id=>{const row=card(id); await row.locator("summary").click(); return row;};
+        let width=390,theme="light";
+        const setup=async(opts={})=>{width=opts.width||390;theme=opts.theme||"light";await reset(opts);};
+        const taskShot=async name=>{
+          await capture(`task-${name}`,width,width>1000?1000:844,theme);
+          geometry.at(-1).taskPresentation=await section.evaluate(node=>{
+            const describe=el=>{const r=el.getBoundingClientRect(),s=getComputedStyle(el);return {text:el.textContent.trim(),top:r.top,bottom:r.bottom,width:r.width,height:r.height,fontSize:s.fontSize,lineHeight:s.lineHeight};};
+            return {summaries:[...node.querySelectorAll('summary')].map(describe),buttons:[...node.querySelectorAll('button')].map(describe),scrollWidth:node.scrollWidth,clientWidth:node.clientWidth};
+          });
+        };
+        const taskAnchorShot=async(name,target)=>{
+          const info=await target.evaluate(node=>{
+            const view=node.closest('.settings-content'); if(!view) throw Error('Missing settings scroller');
+            view.scrollTop+=node.getBoundingClientRect().top-view.getBoundingClientRect().top;
+            const rect=el=>{if(!el)return null;const r=el.getBoundingClientRect();return {top:r.top,bottom:r.bottom,width:r.width,height:r.height};};
+            const anchor=rect(node),viewport=rect(view),visible=el=>{const r=rect(el);return r.top>=Math.max(0,viewport.top)&&r.bottom<=Math.min(innerHeight,viewport.bottom);};
+            return {anchor,viewport,viewportHeight:innerHeight,lastFullyVisibleCard:[...view.querySelectorAll('details.automation-item')].filter(visible).at(-1)?.querySelector('summary span')?.textContent.trim()||null,alert:rect(view.querySelector('[role=alert]')),notice:rect(view.querySelector('[role=status]'))};
+          });
+          if(info.anchor.top<Math.max(0,info.viewport.top)-1||info.anchor.top>=Math.min(info.viewportHeight,info.viewport.bottom)) throw Error(`Task ${name} anchor clipped: ${JSON.stringify(info)}`);
+          await taskShot(name); geometry.at(-1).taskAnchor=info;
+        };
+        const taskSubjectShot=async(name,target)=>{await target.scrollIntoViewIfNeeded();const info=await target.evaluate(node=>{const r=node.getBoundingClientRect(),v=node.closest('.settings-content').getBoundingClientRect();return {top:r.top,bottom:r.bottom,viewTop:v.top,viewBottom:v.bottom,fullyVisible:r.top>=Math.max(0,v.top)&&r.bottom<=Math.min(innerHeight,v.bottom)};});if(!info.fullyVisible)throw Error(`Task ${name} subject clipped: ${JSON.stringify(info)}`);await taskShot(name);geometry.at(-1).taskSubject=info;};
+        const checkOrder=async()=>{const rows=await section.locator('details.automation-item summary span').allTextContents();if(JSON.stringify(rows)!==JSON.stringify(items.map(item=>item.title)))throw Error('Task order mismatch');};
+        const actionForm=row=>row.locator('div.automation-form');
+        const createForm=()=>section.locator('form.automation-form');
+        const newTask=fixture.workFixture.newTask;
+        const fillCreate=async(full=true)=>{await section.getByRole('button',{name:'New task',exact:true}).click();const form=createForm();await form.getByLabel('Task title').fill(newTask.title);await form.getByLabel('Instructions').fill(newTask.body);if(full){await form.getByLabel('Assigned assistant').selectOption(newTask.assignee);await form.getByLabel('Priority').fill(String(newTask.priority));for(const id of newTask.dependencies)await form.getByLabel(subject(id).title).check();}return form;};
+        const verifyCreate=entry=>{const body=entry.body, expected={...newTask,requestId:body.requestId};if(entry.method!=='POST'||entry.path!=='/tasks'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(body.requestId)||JSON.stringify(Object.keys(body).sort())!==JSON.stringify(Object.keys(expected).sort())||Object.keys(expected).some(k=>JSON.stringify(body[k])!==JSON.stringify(expected[k])))throw Error(`Create payload mismatch ${JSON.stringify(body)}`);};
+        for(const [name,w,t,large] of [['board-desktop',1440,'light',false],['board-phone',390,'light',false],['board-large-text',390,'light',true]]){await setup({width:w,theme:t,large});await checkOrder();await taskAnchorShot(name,heading);}
+        for(const [name,w,t,large,anchor] of [['detail-desktop',1440,'light',false,'summary'],['detail-dark',1440,'dark',false,'summary'],['detail-phone-top',390,'light',false,'summary'],['detail-phone-actions',390,'light',false,'form'],['detail-narrow-actions',320,'light',false,'form'],['detail-large-text-top',390,'light',true,'summary'],['detail-large-text-actions',390,'light',true,'actions']]){await setup({width:w,theme:t,large});const row=await open(fixture.workFixture.subjects.detail);const form=actionForm(row);await taskAnchorShot(name,anchor==='summary'?row.locator('summary'):anchor==='form'?form:form.locator('.actions'));if(w===320)workChecks.push({check:'detail-320-overflow',overflow:await section.evaluate(n=>n.scrollWidth>n.clientWidth)});}
+        await setup();let row=await open(fixture.workFixture.subjects.refusedStart);let before=workSubmissions.length;await row.getByRole('button',{name:'Start task',exact:true}).click();await panel.getByRole('alert').waitFor();let writes=workSubmissions.slice(before);if(writes.length!==1||writes[0].path!=='/tasks/t_00000005/actions'||JSON.stringify(writes[0].body)!=='{"action":"start"}'||!await panel.getByRole('alert').textContent().then(s=>s.includes(fixture.workMessages.refusedTransition)))throw Error('Refusal mismatch');await taskAnchorShot('refused-card',actionForm(row));workChecks.push({check:'refusal',disabledTaskButtons:await section.locator('button:disabled').count(),alertInViewportWhileCardVisible:await panel.evaluate(n=>{const a=n.querySelector('[role=alert]')?.getBoundingClientRect(),c=[...n.querySelectorAll('details')].find(x=>x.open)?.getBoundingClientRect(),v=n.closest('.settings-content').getBoundingClientRect();return !!a&&!!c&&a.top>=v.top&&a.bottom<=v.bottom&&c.top<v.bottom&&c.bottom>v.top;})});await panel.locator('xpath=ancestor::*[contains(concat(" ",normalize-space(@class)," ")," settings-content ")]').evaluate(n=>n.scrollTop=0);await taskSubjectShot('refused-alert',panel.getByRole('alert'));
+        for(const [name,id,anchor] of [['running',fixture.workFixture.subjects.running,'summary'],['review',fixture.workFixture.subjects.review,'form']]){await setup();row=await open(id);await taskAnchorShot(name,anchor==='summary'?row.locator('summary'):actionForm(row));}
+        for(const [name,mode] of [['empty','empty'],['unsupported','sections-unsupported']]){await setup({mode});await taskAnchorShot(name,heading);}
+        for(const [name,w,t,large,anchor] of [['create-desktop',1440,'light',false,'form'],['create-dark',1440,'dark',false,'form'],['create-phone-top',390,'light',false,'form'],['create-phone-bottom',390,'light',false,'fieldset'],['create-narrow',320,'light',false,'form'],['create-large-text-bottom',390,'light',true,'actions']]){await setup({width:w,theme:t,large});const form=await fillCreate();await taskAnchorShot(name,anchor==='form'?form:anchor==='fieldset'?form.locator('fieldset'):form.locator('.actions'));if(w===320||large)workChecks.push({check:`create-${w}${large?'-large':''}-overflow`,overflow:await form.evaluate(n=>n.scrollWidth>n.clientWidth)});}
+        // One ordinary create verifies the complete request and newest-first result.
+        before=workSubmissions.length;await createForm().getByRole('button',{name:'Create task',exact:true}).click();await section.getByRole('button',{name:'New task',exact:true}).waitFor();writes=workSubmissions.slice(before);if(writes.length!==1)throw Error('Expected one create');verifyCreate(writes[0]);if(work.tasks.items[0].title!==newTask.title||work.tasks.items[0].status!=='blocked')throw Error('Created task order/status mismatch');if(await section.locator('details.automation-item summary span').first().textContent()!==newTask.title)throw Error('Created task is not first in the DOM');
+        await setup({mode:'task-create-uncertain'});let form=await fillCreate(false);before=workSubmissions.length;await form.getByRole('button',{name:'Create task',exact:true}).click();await panel.getByRole('alert').waitFor();await taskAnchorShot('create-uncertain-form',form.locator('.actions'));await panel.locator('xpath=ancestor::*[contains(concat(" ",normalize-space(@class)," ")," settings-content ")]').evaluate(n=>n.scrollTop=0);await taskSubjectShot('create-uncertain-alert',panel.getByRole('alert'));let read=workReads;await panel.getByRole('button',{name:'Refresh status',exact:true}).click();await panel.getByRole('alert').waitFor({state:'hidden'});if(workReads!==read+1||workSubmissions.length!==before+1)throw Error('Refresh did not make exactly one read and zero writes');await taskAnchorShot('create-refreshed',heading);await form.getByRole('button',{name:'Create task',exact:true}).click();await section.getByRole('button',{name:'New task',exact:true}).waitFor();writes=workSubmissions.slice(before);if(writes.length!==2||JSON.stringify(writes[0].body)!==JSON.stringify(writes[1].body)||work.tasks.items.filter(t=>t.title===newTask.title).length!==1||work.tasks.items[0].status!=='blocked')throw Error('Uncertain create retry mismatch');if((await section.locator('details.automation-item summary span').allTextContents()).filter(t=>t===newTask.title).length!==1)throw Error('Retried task is not unique in the DOM');await taskAnchorShot('create-retried',heading);
+        await setup({width:1440});row=await open(fixture.workFixture.subjects.edit);await row.getByRole('button',{name:'Edit task',exact:true}).click();form=row.locator('form');await form.getByLabel('Assigned assistant').selectOption('');await taskAnchorShot('edit-desktop',form);before=workSubmissions.length;await form.getByRole('button',{name:'Save task',exact:true}).click();await row.getByRole('button',{name:'Edit task',exact:true}).waitFor();writes=workSubmissions.slice(before);const edited=subject(fixture.workFixture.subjects.edit);if(writes.length!==1||writes[0].method!=='PATCH'||writes[0].path!==`/tasks/${edited.id}`||JSON.stringify(writes[0].body)!==JSON.stringify({title:edited.title,body:edited.body,priority:edited.priority,assignee:null})||!(await row.locator('summary').textContent()).includes('Unassigned'))throw Error('Edit mismatch');
+        await setup();row=await open(fixture.workFixture.subjects.start);before=workSubmissions.length;await row.getByRole('button',{name:'Start task',exact:true}).click();await row.locator('summary').getByText(/ready ·/).waitFor();await panel.getByRole('status').filter({hasText:'Saved in Hermes.'}).waitFor();if(workSubmissions.length!==before+1)throw Error('Start mismatch');workChecks.push({check:'start',noticeInViewportWhileCardVisible:await panel.evaluate(n=>{const a=[...n.querySelectorAll('[role=status]')].find(x=>x.textContent.includes('Saved in Hermes.'))?.getBoundingClientRect(),c=[...n.querySelectorAll('details')].find(x=>x.open)?.getBoundingClientRect(),v=n.closest('.settings-content').getBoundingClientRect();return !!a&&!!c&&a.top>=v.top&&a.bottom<=v.bottom&&c.top<v.bottom&&c.bottom>v.top;})});
+        if(browserErrors.length)throw Error(`Browser errors: ${browserErrors.join('; ')}`);
+        if(paths.length!==27)throw Error(`Expected 27 shots, got ${paths.length}`);
+        return {title:'Work W2 tasks',paths,geometry,workSubmissions,workChecks,browserErrors,workCase};
+      }
+      if(workCase==="clear-confirmation") {
+        await reset(); await panel.getByRole("button",{name:"Clear goal…",exact:true}).click();
+        const keep=panel.getByRole("button",{name:"Keep goal",exact:true});
+        if(!await keep.evaluate(node=>node===document.activeElement)) throw Error("Keep goal did not receive focus");
+        // The shared screenshot helper deliberately blurs non-focus captures.
+        await subjectShot("clear-confirmation",panel.locator(".automation-confirm"));
+        if(workSubmissions.length || browserErrors.length) throw Error("Clear-only recheck changed data or raised a browser error");
+        workChecks.push({check:"clear-confirmation-focus",focused:"Keep goal",writes:0});
+        return {title:"Work clear confirmation scoped recheck",paths,geometry,workSubmissions,workChecks,browserErrors,workCase};
+      }
+      for(const [name,width,theme,large] of [["desktop",1440,"light",false],["tablet",768,"light",false],["phone",390,"light",false],["narrow",320,"light",false],["dark",1440,"dark",false],["large-text",390,"light",true]]) {
+        await reset({width,theme,large}); await shot(name,width,theme);
+        if(large) {
+          if(after) await subjectShot("large-text-goal",goalTitle(),width,theme);
+          await subjectShot("large-text-bottom",goalCard().locator(":scope > .actions"),width,theme);
+        }
+        if(name==="phone") {
+          const before=workSubmissions.length; await panel.getByRole("button",{name:"Refresh status"}).click();
+          await tab.waitForFunction(()=>!document.querySelector('.automation-toolbar button')?.disabled);
+          if(workReads!==2 || workSubmissions.length!==before) throw Error("Refresh must issue exactly one read and no writes");
+          workChecks.push({check:"refresh",reads:workReads,writes:0});
+        }
+      }
+      for(const mode of ["loading","load-error","sections-unsupported","empty","goal-done"]) {
+        await reset({mode}); await shot(mode);
+      }
+      await reset({mode:"empty"});
+      await panel.getByRole("button",{name:"Set a goal"}).click(); await subjectShot("set-form",panel.locator(".automation-form"));
+      await panel.getByLabel("Objective").fill(fixture.workFixture.newGoal.title);
+      await panel.getByLabel("Continuation turn budget").fill(String(fixture.workFixture.newGoal.maxTurns));
+      await panel.getByRole("button",{name:"Save paused goal"}).click();
+      await goalTitle().filter({hasText:fixture.workFixture.newGoal.title}).waitFor();
+      await panel.getByRole("status").filter({hasText:"Saved in Hermes."}).waitFor();
+      if(work.goals.goal.status!=="paused" || work.goals.resume) throw Error("Goal set must save paused without a receipt");
+      workChecks.push({check:"transport-set-goal",goal:structuredClone(work.goals.goal)});
+      await reset(); await panel.getByRole("button",{name:after?"Replace goal…":"Replace goal..."}).click();
+      if(await panel.getByRole("button",{name:"Replace with paused goal"}).isEnabled()) throw Error("Replacement enabled before whole-goal confirmation");
+      await subjectShot("replace-confirmation",panel.locator(".automation-confirm"));
+      await panel.getByLabel("Replace the entire standing goal.").check();
+      await panel.getByLabel("Objective").fill(fixture.workFixture.newGoal.title);
+      await panel.getByRole("button",{name:"Replace with paused goal"}).click();
+      await goalTitle().filter({hasText:fixture.workFixture.newGoal.title}).waitFor();
+      await panel.getByRole("status").filter({hasText:"Saved in Hermes."}).waitFor();
+      if(work.goals.resume) throw Error("Replacement retained a resume receipt");
+      workChecks.push({check:"transport-replace-clears-receipt"});
+      await reset(); await panel.getByRole("button",{name:after?"Clear goal…":"Clear goal..."}).click(); await subjectShot("clear-confirmation",panel.locator(".automation-confirm"));
+      await panel.getByRole("button",{name:"Clear goal",exact:true}).click(); await panel.getByText(/^No standing goal/).waitFor();
+      if(work.goals.goal!==null) throw Error("Clear did not persist"); workChecks.push({check:"transport-clear-goal"});
+      await reset({width:1440,mode:"interrupted"});
+      const review=panel.getByLabel("I've reviewed the interrupted work in this conversation.");
+      const resume=panel.getByRole("button",{name:"Resume goal"}); if(await resume.isEnabled()) throw Error("Resume enabled before interruption review");
+      await subjectShot("interrupted",panel.locator(".automation-confirm"),1440); await review.check(); if(!await resume.isEnabled()) throw Error("Resume disabled after review"); await subjectShot("interrupted-reviewed",panel.locator(".automation-confirm"),1440);
+      const before=workSubmissions.length; await resume.click(); await panel.getByRole("button",{name:"Pause goal"}).waitFor();
+      const submitted=workSubmissions.slice(before); if(submitted.length!==1 || submitted[0].body.reviewedInterruption!==true) throw Error("Interruption review did not send one reviewed resume");
+      workChecks.push({check:"interruption-gate",submission:submitted[0]});
+      for(const [name,width] of [["uncertain-desktop",1440],["uncertain-phone",390]]) {
+        await reset({width,mode:"resume-uncertain"}); await panel.getByRole("button",{name:"Resume goal"}).click();
+        await panel.getByRole("alert").filter({hasText:"The goal's start is uncertain."}).waitFor();
+        const writesBeforeRefresh=workSubmissions.length;
+        await panel.getByRole("button",{name:"Refresh status"}).click();
+        await panel.getByText(/previous attempt may have started work/i).waitFor();
+        if(workSubmissions.length!==writesBeforeRefresh) throw Error("Uncertain refresh resent a write");
+        workChecks.push({check:"uncertain-refresh",writes:0});
+        await subjectShot(name,panel.locator(".automation-confirm"),width);
+        if(await panel.getByRole("button",{name:"Resume goal"}).isEnabled()) throw Error("An uncertain receipt must block ordinary resume");
+        if(name==="uncertain-desktop") {
+          await panel.getByLabel("I've reviewed the conversation and want to start a new attempt.").check(); await subjectShot("new-attempt-review",panel.locator(".automation-confirm"),width);
+          const records=workSubmissions.filter(row=>row.mode==="resume-uncertain" && row.path==="/goal/resume"); const first=records.at(-1);
+          await panel.getByRole("button",{name:"Start a new attempt"}).click(); await panel.getByRole("button",{name:"Pause goal"}).waitFor();
+          const last=workSubmissions.at(-1); if(last.body.requestId===first.body.requestId) throw Error("New attempt needs a fresh UUID");
+          workChecks.push({check:"new-attempt",first:first.body.requestId,second:last.body.requestId,reviewedInterruption:last.body.reviewedInterruption ?? false});
+        }
+      }
+      await reset({mode:"resume-rejected"}); await panel.getByRole("button",{name:"Resume goal"}).click();
+      await (after?panel.locator(".automation-goal-callout.is-danger"):panel.getByRole("alert")).filter({hasText:fixture.workMessages.rejectedResume}).waitFor();
+      const rejectedResume=panel.getByRole("button",{name:"Resume goal"});
+      await rejectedResume.waitFor({state:"visible"});
+      await tab.waitForFunction(()=>[...document.querySelectorAll('.automation-panel button')].some(button=>button.textContent.trim()==="Resume goal"&&!button.disabled));
+      await subjectShot("rejected",after?panel.locator(".automation-goal-callout.is-danger"):panel.getByRole("alert"));
+      if(after) {
+        await panel.getByRole("button",{name:"Refresh status"}).click();
+        await panel.locator(".automation-goal-callout.is-danger").getByText(fixture.workMessages.rejectedResume,{exact:true}).waitFor();
+        await tab.waitForFunction(()=>!document.querySelector('.automation-toolbar button')?.disabled);
+        await subjectShot("rejected-refreshed",panel.locator(".automation-goal-callout.is-danger"));
+        workChecks.push({check:"rejection-persists-after-refresh",message:fixture.workMessages.rejectedResume});
+      }
+      if(work.goals.goal.status!=="paused") throw Error("Rejected goal must stay paused");
+      workChecks.push({check:"transport-rejected-paused",resumeRendered:true,resumeEnabled:true});
+      if(after) {
+        await reset({width:320,mode:"interrupted"});
+        await subjectShot("interrupted-narrow",panel.locator(".automation-confirm"),320);
+        await reset({width:320,mode:"resume-uncertain"});
+        await panel.getByRole("button",{name:"Resume goal"}).click();
+        await panel.getByRole("alert").filter({hasText:"The goal's start is uncertain."}).waitFor();
+        await panel.getByRole("button",{name:"Refresh status"}).click();
+        await panel.locator(".automation-goal-callout").getByText(fixture.workMessages.uncertainResume,{exact:true}).waitFor();
+        await subjectShot("uncertain-narrow",panel.locator(".automation-goal-attempt"),320);
+        await reset({width:320}); await panel.getByRole("button",{name:"Replace goal…"}).click();
+        await subjectShot("replace-narrow",panel.locator(".automation-confirm"),320);
+        for(const [name,mode] of [["uncertain-dark","resume-uncertain"],["rejected-dark","resume-rejected"]]) {
+          await reset({width:390,theme:"dark",mode});
+          await panel.getByRole("button",{name:"Resume goal"}).click();
+          if(mode==="resume-uncertain") {
+            await panel.getByRole("alert").filter({hasText:"The goal's start is uncertain."}).waitFor();
+            await panel.getByRole("button",{name:"Refresh status"}).click();
+          }
+          await panel.locator(".automation-goal-callout").waitFor();
+          await subjectShot(name,panel.locator(".automation-goal-callout"),390,"dark");
+        }
+        await reset(); const writes=workSubmissions.length;
+        const overflow=dialog.locator(".settings-tabs-overflow");if(await overflow.count()) await overflow.locator("summary").click();
+        await dialog.getByRole("button",{name:"learning",exact:true}).click();
+        await panel.getByRole("heading",{name:"Skills & learning"}).waitFor();
+        await panel.getByRole("checkbox",{name:"Require approval before skill changes are saved"}).waitFor();
+        if(workSubmissions.length!==writes) throw Error("Learning regression smoke made a write");
+        await shot("learning-smoke");workChecks.push({check:"learning-read-only-smoke",writes:0,scored:false});
+      }
+      if(workSubmissions.some(row=>row.path==="/goal/resume" && !/^[0-9a-f-]{36}$/i.test(row.body.requestId))) throw Error("Invalid resume UUID");
+      if(browserErrors.length) throw Error(`Work browser errors: ${browserErrors.join("; ")}`);
+      return {title:"Work frame and standing goal",paths,geometry,workSubmissions,workChecks,browserErrors};
+    }
+    if (screen === "memory") {
+      const dialog=tab.locator(".settings-dialog"), panel=dialog.locator(".memory-panel");
+      const doc=target=>panel.locator(`[data-memory-target="${target}"]`);
+      const save=target=>doc(target).getByRole("button",{name:"Save memories",exact:true});
+      const reload=()=>panel.getByRole("button",{name:/^(Reload profile memory|Try loading again)$/});
+      const reloadMemory=async (capturePrompt=false)=>{
+        const response=tab.waitForResponse(response=>response.request().method()==="GET" && new URL(response.url()).pathname==="/api/bots/ranch/memory");
+        await reload().click();
+        if(stage==="after") {
+          const prompt=tab.getByRole("alertdialog",{name:"Reload profile memory?"});
+          await prompt.waitFor();
+          if(capturePrompt) await shot("reload-confirmation");
+          await prompt.getByRole("button",{name:"Reload and discard edits",exact:true}).click();
+        }
+        await response;
+      };
+      const reset=async ({width=390,theme="light",large=false,mode="loaded"}={})=>{
+        releaseMemoryLoad?.(); releaseMemoryLoad=undefined; releaseMemoryWrite?.(); releaseMemoryWrite=undefined;
+        state=`memory-${mode}`; memory=structuredClone(fixture.memoryStates?.[mode] || fixture.memory);
+        memoryFailures.clear(); settingsBots=structuredClone(fixture.bots);
+        await tab.setViewportSize({width,height:width>1000?1000:844});
+        await tab.emulateMedia({colorScheme:theme});
+        await tab.goto(`${origin.origin}/?bot=ranch`);
+        await tab.evaluate(({large,theme})=>{document.documentElement.style.fontSize=large?"200%":"";document.documentElement.dataset.theme=theme;},{large,theme});
+        await tab.locator('.chat-header [title="Details, pin, artifacts and settings"]').click();
+        await tab.locator(".bot-details").getByRole("button",{name:"Settings",exact:true}).click();
+        await dialog.waitFor();
+        const overflow=dialog.locator(".settings-tabs-overflow");
+        if(await overflow.count()) await overflow.locator("summary").click();
+        await dialog.getByRole("button",{name:"memory",exact:true}).click();
+        await panel.waitFor();
+        if(!["loading","load-error"].includes(mode)) await doc("memory").waitFor();
+      };
+      const shot=async (name,width=390,theme="light")=>{
+        await capture(name,width,width>1000?1000:844,theme);
+        geometry.at(-1).memory=await panel.evaluate(el=>{
+          const rect=node=>{const r=node.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height};};
+          return {panel:rect(el),documents:[...el.querySelectorAll('[data-memory-target]')].map(section=>({target:section.dataset.memoryTarget,...rect(section),
+            fields:[...section.querySelectorAll('textarea')].map(field=>({disabled:field.disabled,readOnly:field.readOnly,value:field.value,...rect(field)}))})),
+            errors:[...el.querySelectorAll('[role="alert"]')].map(node=>({text:node.textContent,...rect(node)})),
+            statuses:[...el.querySelectorAll('[role="status"]')].map(node=>node.textContent)};
+        });
+      };
+      const failure=()=>panel.getByRole("alert").filter({hasText:memoryFailures.has("write") && ["memory-paused","memory-reload-error"].includes(state) ? fixture.memoryMessages.paused : fixture.memoryMessages.conflict});
+      const visibleError=async (name,focused=false)=>{
+        const bounds=()=>tab.evaluate(()=>{
+          const error=document.querySelector('[data-memory-target="memory"] [role="alert"]'),view=document.querySelector('.settings-content');
+          const rect=el=>{const r=el?.getBoundingClientRect();return r&&{top:r.top,bottom:r.bottom,height:r.height};};
+          return {error:rect(error),view:rect(view),scrollTop:view?.scrollTop,focusedError:document.activeElement===error,
+            active:document.activeElement?.outerHTML.slice(0,180),scrollMarginTop:error&&getComputedStyle(error).scrollMarginTop};
+        });
+        try {
+          await tab.waitForFunction(focused=>{
+            const error=document.querySelector('[data-memory-target="memory"] [role="alert"]'),view=document.querySelector('.settings-content');
+            const box=error?.getBoundingClientRect(),area=view?.getBoundingClientRect();
+            return box&&area&&box.top>=area.top&&box.bottom<=area.bottom&&(!focused||document.activeElement===error);
+          },focused,{timeout:5000});
+        } catch(cause) {
+          await tab.screenshot({path:`${outputDir}/${prefix}-${screen}-${name}.failed.png`}).catch(()=>{});
+          throw Error(`${name}: error is not fully visible: ${JSON.stringify(await bounds())}`,{cause});
+        }
+        memoryChecks.push({name,...await bounds()});
+      };
+      const fillFirst=async target=>doc(target).locator("textarea").first().fill(fixture.memoryFixture.editEntry);
+      for(const [name,width,theme,large] of [
+        ["desktop",1440,"light",false],["phone",390,"light",false],["narrow",320,"light",false],
+        ["tablet",768,"light",false],["dark",390,"dark",false],["large-text",390,"light",true],
+      ]) {
+        await reset({width,theme,large}); await shot(name,width,theme);
+        if(name==="desktop") {
+          const savedNoticeVisible=await panel.getByText(fixture.memory.refresh.message,{exact:true}).isVisible();
+          memoryChecks.push({name:"initial-refresh",savedNoticeVisible});
+          if(stage==="after" && savedNoticeVisible) throw Error("Initial Memory read announces an unsolicited save.");
+        }
+        if(stage==="after" && ["phone","narrow","dark","large-text"].includes(name)) {
+          const long=doc("memory").locator("textarea").nth(2);
+          await long.scrollIntoViewIfNeeded(); await shot(`${name}-long-entry`,width,theme);
+          const sizing=await long.evaluate(el=>({height:el.clientHeight,content:el.scrollHeight}));
+          if(sizing.content>sizing.height+1 && !await doc("memory").getByText("Scroll within this entry to read more.",{exact:true}).count()) throw Error("Long memory is clipped without a scroll cue.");
+          memoryChecks.push({name:`${name}-long-entry`,sizing});
+          if(name==="large-text") {
+            await save("memory").scrollIntoViewIfNeeded(); await shot("large-text-actions",width,theme);
+          }
+        }
+      }
+      await reset({mode:"loading"});
+      await panel.getByText("Loading profile memory...",{exact:true}).waitFor(); await shot("loading");
+      if(!releaseMemoryLoad) throw Error("Memory loading response was not held.");
+      state="memory-loaded"; releaseMemoryLoad(); releaseMemoryLoad=undefined;
+      await doc("memory").waitFor();
+      await reset({mode:"load-error"});
+      await panel.getByText(fixture.memoryMessages.loadError,{exact:true}).waitFor(); await shot("load-error");
+      await panel.getByRole("button",{name:"Try loading again",exact:true}).click();
+      await doc("memory").waitFor(); await shot("retried");
+      for(const width of [1440,320]) {
+        await reset({width}); await fillFirst("memory");
+        await doc("memory").getByRole("button",{name:"Add memory",exact:true}).click();
+        if(stage==="after") await tab.waitForFunction(()=>document.querySelector('[data-memory-target="memory"] textarea:last-of-type') && [...document.querySelectorAll('[data-memory-target="memory"] textarea')].at(-1)===document.activeElement);
+        await doc("memory").locator("textarea").last().fill(fixture.memoryFixture.newEntry);
+        await shot(`dirty-${width}`,width);
+      }
+      await reset();
+      const otherRevision=memory.documents[1].revision;
+      const otherDraft=`${memory.documents[1].entries[0].text} Keep this draft.`;
+      await doc("user").locator("textarea").first().fill(otherDraft);
+      await fillFirst("memory");
+      await doc("memory").getByRole("button",{name:"Add memory",exact:true}).click();
+      await doc("memory").locator("textarea").last().fill(fixture.memoryFixture.newEntry);
+      const savedRevision=memory.documents[0].revision;
+      if(stage==="after") {
+        await dialog.getByRole("button",{name:"Close assistant settings",exact:true}).click();
+        await dialog.getByText("Discard your unsaved changes?",{exact:true}).waitFor(); await shot("close-confirmation");
+        await dialog.getByRole("button",{name:"Keep editing",exact:true}).click();
+        await dialog.getByRole("button",{name:"details",exact:true}).click();
+        const leave=tab.getByRole("alertdialog",{name:"Leave memory without saving?"}); await leave.waitFor(); await shot("leave-confirmation");
+        await leave.getByRole("button",{name:"Keep editing",exact:true}).click();
+        if(await doc("user").locator("textarea").first().inputValue()!==otherDraft) throw Error("Keep editing lost the other draft.");
+        state="memory-busy"; memoryWriteStarted=new Promise(resolve=>{memoryWriteReady=resolve;});
+      }
+      await save("memory").click();
+      if(stage==="after") {
+        await memoryWriteStarted;
+        await panel.getByText("Saving memories in Hermes...",{exact:true}).waitFor();
+        await tab.waitForFunction(()=>document.querySelector('.memory-panel > button')?.disabled && document.querySelector('[aria-label="Close assistant settings"]')?.disabled,undefined,{timeout:5000});
+        if(!releaseMemoryWrite) throw Error("Memory write interception was not held.");
+        await shot("saving"); state="memory-loaded"; releaseMemoryWrite(); releaseMemoryWrite=undefined;
+      }
+      await panel.getByText(fixture.memoryMessages.nextTurn,{exact:true}).waitFor();
+      if(memory.documents[0].revision===savedRevision || !memory.documents[0].entries.some(entry=>entry.text===fixture.memoryFixture.newEntry)) throw Error("Memory save did not persist.");
+      if(await doc("user").locator("textarea").first().inputValue()!==otherDraft || memory.documents[1].revision!==otherRevision) throw Error("Saving one document lost the other draft.");
+      memoryChecks.push({name:"independent-drafts",preserved:true,otherRevision});
+      await shot("saved");
+      await reset();
+      const beforeDelete=memory.documents[1].entries[0];
+      await doc("user").getByRole("button",{name:"Forget...",exact:true}).first().click();
+      await shot("forget-confirmation");
+      const deleteCount=memorySubmissions.filter(row=>row.method==="DELETE").length;
+      await doc("user").getByRole("button",{name:"Keep it",exact:true}).click();
+      if(memorySubmissions.filter(row=>row.method==="DELETE").length!==deleteCount) throw Error("Keep submitted a deletion.");
+      await doc("user").getByRole("button",{name:"Forget...",exact:true}).first().click();
+      await doc("user").getByRole("button",{name:"Forget entry",exact:true}).click();
+      await tab.waitForFunction(text=>![...document.querySelectorAll('[data-memory-target="user"] textarea')].some(field=>field.value===text),beforeDelete.text);
+      if(memory.documents[1].entries.some(entry=>entry.id===beforeDelete.id)) throw Error("Forgotten entry remains in transport state.");
+      memoryChecks.push({name:"forget",keptWithoutWrite:true,deletedEntryId:beforeDelete.id});
+      for(const width of [1440,320]) {
+        await reset({width,mode:"conflict"}); await fillFirst("memory"); await save("memory").click(); await failure().waitFor();
+        await shot(`conflict-${width}`,width);
+        const field=doc("memory").locator("textarea").first();
+        const selection=await field.evaluate(el=>{el.focus();if(!el.disabled)el.setSelectionRange(0,el.value.length);return {disabled:el.disabled,readOnly:el.readOnly,focused:document.activeElement===el,selectionStart:el.selectionStart,selectionEnd:el.selectionEnd};});
+        memoryChecks.push({name:`conflict-${width}`,selection});
+        if(stage==="after") {
+          if(selection.disabled || !selection.readOnly || !selection.focused || selection.selectionEnd<=selection.selectionStart) throw Error("Conflicted draft cannot be selected.");
+          await shot(`conflict-draft-focus-${width}`,width);
+        }
+        await reloadMemory();
+        await doc("memory").locator("textarea").last().waitFor();
+        await tab.waitForFunction(text=>[...document.querySelectorAll('[data-memory-target="memory"] textarea')].some(field=>field.value===text),fixture.memoryFixture.externalEntry);
+      }
+      await reset({mode:"paused"}); await fillFirst("memory"); await save("memory").click(); await failure().waitFor();
+      await reloadMemory(stage==="after");
+      await tab.waitForFunction(()=>!document.querySelector('.memory-panel')?.textContent.includes('Loading profile memory...'));
+      memoryChecks.push({name:"same-revision-reload",fieldDisabled:await doc("memory").locator("textarea").first().isDisabled(),fieldReadOnly:await doc("memory").locator("textarea").first().evaluate(el=>el.readOnly),draft:await doc("memory").locator("textarea").first().inputValue()});
+      await shot("same-revision-reload");
+      await reset({mode:"paused"}); await fillFirst("memory"); await save("memory").click(); await failure().waitFor();
+      await doc("memory").getByRole("button",{name:"Discard edits",exact:true}).click();
+      memoryChecks.push({name:"conflict-discard",fieldDisabled:await doc("memory").locator("textarea").first().isDisabled()});
+      if(stage==="after") {
+        await visibleError("discard-lock-reason");
+      }
+      await shot("conflict-discard");
+      for(const mode of ["disabled","empty","too-long"]) {
+        await reset({mode});
+        if(mode==="too-long") {
+          const field=doc("memory").locator("textarea").first();
+          await field.fill(`${await field.inputValue()}${fixture.memoryFixture.limitEditSuffix}`);
+          if(stage==="after") {
+            if(!await save("memory").isDisabled()) throw Error("An over-limit document can be saved.");
+            const limit=doc("memory").locator(".memory-limit"); await limit.waitFor(); await limit.scrollIntoViewIfNeeded();
+          } else { await save("memory").click(); await panel.getByText(fixture.memoryMessages.tooLong,{exact:true}).waitFor(); }
+        }
+        if(stage==="after" && mode==="disabled") await doc("user").locator("h3").scrollIntoViewIfNeeded();
+        await shot(mode);
+      }
+      if(stage==="after") {
+        for(const [name,theme,large] of [["dark-conflict","dark",false],["large-text-conflict","light",true]]) {
+          await reset({theme,large,mode:"conflict"}); await fillFirst("memory"); await save("memory").click(); await failure().waitFor();
+          await visibleError(name,true);
+          await shot(name,390,theme);
+        }
+        await reset({mode:"reload-error"}); await fillFirst("memory"); await save("memory").click(); await failure().waitFor();
+        await reloadMemory(); await panel.getByText(fixture.memoryMessages.loadError,{exact:true}).waitFor();
+        if(await doc("memory").locator("textarea").first().inputValue()!==fixture.memoryFixture.editEntry) throw Error("Failed reload lost the draft.");
+        await shot("reload-failed"); await reloadMemory();
+        await tab.waitForFunction(text=>document.querySelector('[data-memory-target="memory"] textarea')?.value===text,fixture.memory.documents[0].entries[0].text);
+        await shot("reload-recovered");
+      }
+      if(browserErrors.length || geometry.some(row=>row.overflow)) throw Error(`Memory capture failed: ${JSON.stringify({browserErrors,overflow:geometry.filter(row=>row.overflow)})}`);
+      return {paths,geometry,memorySubmissions,memoryChecks,browserErrors};
+    }
+    if (screen === "models") {
+      const dialog = tab.locator(".settings-dialog");
+      const modelChecks = [];
+      const reset = async ({width=390,theme="light",large=false,savedUnavailable=false,denseTools=false}={}) => {
+        settingsSaveFailed=false; settingsBots=structuredClone(fixture.bots); modelFavorites=structuredClone(fixture.preferences.modelFavorites || []);
+        if(savedUnavailable) Object.assign(settingsBots[0],{provider:"field",model:"field-planner"});
+        inference=structuredClone(fixture.inference); catalogs={tools:structuredClone(fixture.tools),skills:structuredClone(fixture.skills)};
+        if(denseTools) catalogs.tools=structuredClone(fixture.longTools);
+        modelFailures.clear();
+        await tab.setViewportSize({width,height:width>1000?1000:844});
+        await tab.emulateMedia({colorScheme:theme});
+        await tab.goto(`${origin.origin}/?bot=ranch`);
+        await tab.evaluate(({large,theme}) => {document.documentElement.style.fontSize=large?"200%":"";document.documentElement.dataset.theme=theme;},{large,theme});
+      };
+      const settings = async kind => {
+        await tab.locator('.chat-header [title="Details, pin, artifacts and settings"]').click();
+        await tab.locator(".bot-details").getByRole("button",{name:"Settings",exact:true}).click();
+        await dialog.waitFor();
+        if (kind !== "models") {
+          const overflow=dialog.locator(".settings-tabs-overflow");
+          if (await overflow.count()) await overflow.locator("summary").click();
+          await dialog.getByRole("button",{name:kind,exact:true}).click();
+        } else {
+          await dialog.locator(".model-picker > summary").click();
+          await dialog.getByRole("searchbox",{name:"Search models"}).waitFor();
+        }
+      };
+      const composer = async () => {
+        await tab.getByRole("button",{name:/^Model: /}).click();
+        await tab.getByRole("dialog",{name:"Choose a model"}).waitFor();
+      };
+      const shot = async (name,width=390,theme="light") => {
+        await capture(name,width,width>1000?1000:844,theme);
+        geometry.at(-1).models=await tab.evaluate(()=>{
+          const pane=document.querySelector(".model-popover");
+          const rect=element=>{const r=element.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height};};
+          return {popup:pane&&rect(pane),popupOverflowX:pane&&pane.scrollWidth>pane.clientWidth,
+            targets:pane?[...pane.querySelectorAll('.model-choice,.model-favorite,.model-refresh,.model-search input,[role="radio"],.icon-button')].map(el=>({label:el.getAttribute("aria-label")||el.textContent,...rect(el)})).filter(r=>r.width>0):[],
+            confirmation:[...document.querySelectorAll('[role="alertdialog"][open] button')].map(el=>({label:el.textContent,...rect(el)}))};
+        });
+        if(stage==="after" && geometry.at(-1).models.popupOverflowX) throw Error("Model popup overflows horizontally.");
+        if(stage==="after" && geometry.at(-1).models.targets.some(target=>target.width<43.9||target.height<43.9)) throw Error("A model control is smaller than 44 pixels.");
+      };
+      for (const [name,width,theme,large] of [
+        ["desktop",1440,"light",false],["phone",390,"light",false],["dark",390,"dark",false],["large-text",390,"light",true],
+      ]) {
+        state="loaded";
+        for (const kind of ["models","tools","skills"]) {
+          await reset({width,theme,large}); await settings(kind);
+          await (kind==="models" ? dialog.getByRole("button",{name:"daily-planner",exact:true}).first() : dialog.locator(".capability-item").first()).waitFor();
+          await shot(`${kind}-${name}`,width,theme);
+          if (kind === "skills") {
+            const required=dialog.getByRole("checkbox").first();
+            if (!await required.isChecked() || await required.isEnabled()) throw Error("Required skill must remain checked and disabled.");
+          }
+        }
+        await reset({width,theme,large}); await composer();
+        await tab.locator(".inference-controls").getByRole("radiogroup",{name:"Reasoning",exact:true}).waitFor();
+        await shot(`composer-${name}`,width,theme);
+        if(large && stage==="after") { await tab.getByRole("radio",{name:"Ultrafast",exact:true}).scrollIntoViewIfNeeded(); await shot("composer-settings-large-text",width,theme); }
+      }
+      for (const width of [320,768]) { state="loaded"; await reset({width}); await composer(); await shot(`composer-width-${width}`,width); }
+      state="loaded"; await reset(); await settings("models");
+      await dialog.locator(".model-provider").filter({hasText:"Household provider"}).getByRole("button",{name:"daily-planner",exact:true}).click();
+      const aliasSelectedRows=await dialog.locator('.model-choice[aria-pressed="true"]').count();
+      modelChecks.push({aliasSelectedRows});
+      if(stage==="after" && aliasSelectedRows!==2) throw Error("Alias favorite lost its selected state.");
+      const search=dialog.getByRole("searchbox",{name:"Search models"});
+      await search.fill("field"); await shot("model-search");
+      await search.fill("no such model"); await dialog.getByText("No models match your search.",{exact:true}).waitFor(); await shot("model-no-results");
+      await search.fill("field");
+      const offline=dialog.locator(".model-choice").filter({hasText:"field-planner"});
+      if(await offline.isEnabled()) throw Error("Unavailable model can be selected.");
+      await offline.scrollIntoViewIfNeeded(); await shot("model-unavailable");
+      await search.fill("");
+      state="favorite-error"; const star=dialog.getByRole("button",{name:"Add quick-reply to favorites",exact:true});
+      await star.click(); await dialog.getByText(fixture.favoriteError,{exact:true}).waitFor(); await shot("favorite-error");
+      if(await star.getAttribute("aria-label")!=="Add quick-reply to favorites") throw Error("Failed favorite write changed selection.");
+      await star.click(); await dialog.getByRole("button",{name:"Remove quick-reply from favorites",exact:true}).first().waitFor();
+      await dialog.locator(".model-picker-content").evaluate(el=>{el.scrollTop=0;}); await shot("favorite-saved");
+      for(const mode of ["models-error","catalog-empty"]) {
+        state=mode; await reset(); await composer();
+        await tab.getByText(mode==="models-error"?fixture.catalogError:"No connected models were reported. Connect a provider in Hermes, then retry.",{exact:true}).waitFor();
+        await shot(mode);
+        if(mode==="models-error") {
+          await tab.getByRole("button",{name:"Retry loading models",exact:true}).click();
+          await tab.getByRole("button",{name:"daily-planner",exact:true}).first().waitFor(); await shot("models-retried");
+        }
+      }
+      state="inference-error"; await reset(); await composer();
+      await tab.getByRole("radio",{name:"Ultra",exact:true}).click();
+      await tab.getByText(fixture.inferenceError,{exact:true}).waitFor(); await shot("inference-error");
+      if(inference.reasoning!==fixture.inference.reasoning) throw Error("Failed inference write changed saved value.");
+      await tab.getByRole("radio",{name:"Fast",exact:true}).click();
+      await tab.waitForFunction(()=>[...document.querySelectorAll('.inference-controls [role="radio"]')].some(el=>el.textContent==="Fast"&&el.getAttribute("aria-checked")==="true"));
+      if(inference.speed!=="fast") throw Error("Inference retry was not saved.");
+      await shot("inference-saved");
+      state="composer-confirm"; await tab.getByRole("button",{name:"quick-reply",exact:true}).first().click();
+      await tab.getByRole("button",{name:stage==="before"?"Confirm this model":"Use this model",exact:true}).waitFor(); await shot("composer-confirm");
+      const writesBeforeCancel=settingsSubmissions.length;
+      await tab.getByRole("button",{name:"Cancel",exact:true}).click();
+      if(settingsSubmissions.length!==writesBeforeCancel || settingsBots[0].model!==fixture.bots[0].model) throw Error("Cancel wrote a model.");
+      await tab.getByRole("button",{name:"quick-reply",exact:true}).first().click();
+      await tab.getByRole("button",{name:stage==="before"?"Confirm this model":"Use this model",exact:true}).click();
+      await tab.getByRole("dialog",{name:"Choose a model"}).waitFor({state:"hidden"});
+      if(settingsBots[0].model!=="quick-reply") throw Error("Confirmed model did not persist.");
+      modelChecks.push({confirmedModel:settingsBots[0].model,provider:settingsBots[0].provider});
+      if(stage==="after") { state="loaded"; await reset({savedUnavailable:true}); await composer(); await tab.getByRole("searchbox",{name:"Search models"}).fill("field"); await shot("current-unavailable"); }
+      if(stage==="after") {
+        for(const width of [1440,390]) {
+          state="inference-error"; await reset({width}); await composer();
+          await tab.getByRole("radio",{name:"Ultra",exact:true}).click();
+          await tab.waitForFunction(message=>[...document.querySelectorAll('.model-popover [role="alert"]')].some(el=>{const p=el.closest('.model-popover').getBoundingClientRect(),r=el.getBoundingClientRect(),h=el.closest('.model-popover').querySelector('header').getBoundingClientRect();return el.textContent.includes(message)&&r.top>=h.bottom&&r.bottom<=p.bottom&&document.activeElement===el;}),fixture.inferenceError);
+          await shot(`inference-error-visible-${width}`,width);
+          state="model-save-error"; await reset({width}); await composer();
+          await tab.getByRole("button",{name:"quick-reply",exact:true}).first().click();
+          await tab.waitForFunction(message=>[...document.querySelectorAll('.model-popover [role="alert"]')].some(el=>{const p=el.closest('.model-popover').getBoundingClientRect(),r=el.getBoundingClientRect(),h=el.closest('.model-popover').querySelector('header').getBoundingClientRect();return el.textContent.includes(message)&&r.top>=h.bottom&&r.bottom<=p.bottom&&document.activeElement===el;}),fixture.modelSaveError);
+          await shot(`model-error-visible-${width}`,width);
+          state="loaded"; await reset({width,denseTools:true}); await settings("tools");
+          await dialog.locator('.capability-item').nth(11).waitFor();
+          if(await dialog.locator('.capability-item').count()!==12) throw Error("Dense catalog fixture did not load twelve tools.");
+          await dialog.locator('.settings-content').evaluate(el=>{el.scrollTop=el.scrollHeight;});
+          await shot(`tools-long-bottom-${width}`,width);
+        }
+      }
+      for(const mode of ["capabilities-load-error","capabilities-save-error","capabilities-empty","capabilities-unavailable"]) {
+        state=mode; await reset(); const kind=mode==="capabilities-save-error"||mode==="capabilities-empty"?"skills":"tools"; await settings(kind);
+        if(mode==="capabilities-load-error") {
+          await dialog.getByText(fixture.capabilityLoadError,{exact:true}).waitFor(); await shot(mode);
+          if(await dialog.getByRole("button",{name:"Save tools",exact:true}).isEnabled()) throw Error("Unloaded catalog can be saved.");
+          await dialog.getByRole("button",{name:"Retry loading tools",exact:true}).click();
+          await dialog.locator(".capability-item").first().waitFor(); await shot("capabilities-retried");
+        } else if(mode==="capabilities-save-error") {
+          await dialog.getByRole("checkbox").last().check();
+          await dialog.getByRole("button",{name:"Save skills",exact:true}).click();
+          await dialog.getByText(fixture.skillSaveError,{exact:true}).waitFor(); await shot(mode);
+          if(!await dialog.getByRole("checkbox").last().isChecked()) throw Error("Failure lost catalog draft.");
+          await dialog.getByRole("button",{name:"Save skills",exact:true}).click();
+          await tab.waitForFunction(()=>[...document.querySelectorAll("button")].some(el=>el.textContent.trim()==="Saved"));
+          await shot("capabilities-saved");
+          if(!catalogs.skills.find(item=>item.id==="packing-list")?.enabled) throw Error("Catalog retry did not persist.");
+          const skillWrites=modelSubmissions.filter(item=>item.kind==="skills");
+          const requiredSkillIncluded=skillWrites.every(item=>item.body.ids.includes("weekly-plan"));
+          modelChecks.push({requiredSkillIncluded});
+          if(stage==="after" && !requiredSkillIncluded) throw Error("Required skill was omitted from save.");
+        } else {
+          await dialog.getByText(mode==="capabilities-empty"?"No skills were reported by Hermes.":fixture.capabilityUnsupportedReason,{exact:true}).waitFor();
+          await shot(mode);
+        }
+      }
+      if(browserErrors.length) throw Error(`Browser errors: ${browserErrors.join("; ")}`);
+      return {paths,geometry,modelSubmissions,settingsSubmissions,modelChecks,browserErrors};
+    }
+    if (screen === "avatar") {
+      const keyboardChecks=[];
+      const dialog=tab.locator(".settings-dialog");
+      const content=dialog.locator(".settings-content");
+      const top=()=>content.evaluate(el=>{el.scrollTop=0;});
+      const bottom=()=>content.evaluate(el=>{el.scrollTop=el.scrollHeight;});
+      const save=()=>dialog.getByRole("button",{name:"Save avatar",exact:true});
+      const previewState=async state=>{
+        const select=dialog.locator(".avatar-stage select");
+        if(await select.count()) await select.selectOption(state);
+        else await dialog.getByRole("button",{name:({idle:"Ready",thinking:"Thinking",working:"Working",waiting:"Waiting",blocked:"Needs your help",done:"Done"})[state],exact:true}).click();
+      };
+      const choose=async name=>dialog.getByRole("radio",{name,exact:true}).locator("..").click();
+      const tune=async()=>{const slider=dialog.locator('input[type="range"]').first();await slider.focus();await slider.press("Home");for(let i=0;i<12;i++)await slider.press("ArrowRight");};
+      const open=async ({reset=true,width=390,theme="light",large=false}={})=>{
+        if(reset) settingsBots=structuredClone(fixture.bots);
+        await tab.setViewportSize({width,height:width===1440?1000:844});
+        await tab.emulateMedia({colorScheme:theme});
+        await tab.goto(`${origin.origin}/?bot=ranch`);
+        await tab.evaluate(({large,theme})=>{document.documentElement.style.fontSize=large?"200%":"";document.documentElement.dataset.theme=theme;},{large,theme});
+        await tab.locator('.chat-header [title="Details, pin, artifacts and settings"]').click();
+        await tab.locator(".bot-details").getByRole("button",{name:"Settings",exact:true}).click();
+        await dialog.getByRole("button",{name:"avatar",exact:true}).click();
+        await dialog.locator(".avatar-stage").waitFor();
+      };
+      const checkAccessoryKeyboard=async compact=>{
+        await dialog.getByRole("radio",{name:"Oval",exact:true}).focus();
+        await tab.keyboard.press("Tab");
+        await tab.keyboard.press("ArrowRight");
+        await tab.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+        const result=await dialog.evaluate((root,compact)=>{
+          const content=root.querySelector(".settings-content").getBoundingClientRect();
+          const header=root.querySelector(":scope > header").getBoundingClientRect();
+          const stage=root.querySelector(".avatar-stage").getBoundingClientRect();
+          const footer=root.querySelector(compact?".avatar-save-actions":".settings-save-actions").getBoundingClientRect();
+          const input=document.activeElement;
+          const group=input.closest("fieldset")?.querySelector("legend")?.textContent;
+          const tile=input.closest("label")?.querySelector(".choice-art")?.getBoundingClientRect();
+          const visibleTop=Math.max(content.top,compact?stage.bottom:content.top);
+          const visibleBottom=Math.min(content.bottom,footer.top);
+          return {compact,group,focused:input?.type,headerVisible:header.top>=root.getBoundingClientRect().top-1,
+            visibleTop,visibleBottom,tile:tile&&{top:tile.top,bottom:tile.bottom},
+            tileVisible:!!tile&&tile.top>=visibleTop-1&&tile.bottom<=visibleBottom+1};
+        },compact);
+        keyboardChecks.push(result);
+        if(result.group!=="Accessory"||!result.tileVisible||!result.headerVisible) throw Error(`Keyboard focus is obscured: ${JSON.stringify(result)}`);
+      };
+      const shot=async(name,width=390,theme="light")=>{
+        await capture(name,width,width===1440?1000:844,theme);
+        geometry.at(-1).avatar=await dialog.evaluate(root=>{
+          const bounds=el=>{if(!el)return null;const r=el.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height};};
+          return {scrollTop:root.querySelector('.settings-content').scrollTop, outerScrollTop:root.scrollTop,
+            controls:[...root.querySelectorAll('.swatch,.choice,.avatar-stage-states button')].map(el=>({label:el.textContent||el.title||el.querySelector('input')?.getAttribute('aria-label'),...bounds(el)})),
+            preview:bounds(root.querySelector('.avatar-stage')),
+            footer:bounds(root.querySelector('.avatar-save-actions')),
+            promptLimit:(()=>{const el=root.querySelector('.portrait-prompt-limit');return el&&{text:el.textContent,color:getComputedStyle(el).color,fontSize:getComputedStyle(el).fontSize,...bounds(el)};})(),
+            portrait:[...root.querySelectorAll('img.avatar-portrait')].map(el=>({src:el.getAttribute('src'),loaded:el.complete&&el.naturalWidth>0}))};
+        });
+      };
+      for(const v of [{name:"geo-desktop",width:1440},{name:"geo-desktop-dark",width:1440,theme:"dark"},{name:"geo-phone"},{name:"geo-large",large:true}]){
+        await open(v);await shot(v.name,v.width,v.theme);
+      }
+      await open({width:1440});
+      const first=dialog.getByRole("radio",{name:"Blob",exact:true});
+      await first.focus();await tab.keyboard.press("ArrowRight");
+      await shot("tile-keyboard-focus",1440);
+      if(stage === "after") { await checkAccessoryKeyboard(true); await shot("accessory-keyboard-focus",1440); }
+      await open();
+      await choose("Mascot");
+      await choose("Pumpkin");
+      await top();await previewState("blocked");
+      await shot("mascot-seasonal-phone");
+      if(stage === "after") await previewState("idle");
+      await choose("Cowboy hat");
+      await shot("choices-phone");
+      const range=dialog.locator('input[type="range"]').first();
+      await tune();await bottom();await shot("tune-bottom-phone");
+      const draft=await dialog.getByRole("radio",{name:"Pumpkin",exact:true}).isChecked();
+      if(!draft)throw Error("Seasonal draft was lost while tuning.");
+      // Persist through a deliberate failure, retry, and a fresh bootstrap.
+      if(stage === "after") await previewState("working");
+      state="save-error";await save().click();await dialog.getByText(fixture.avatarSaveError,{exact:true}).waitFor();
+      await shot("save-error-phone");
+      const failedBody=structuredClone(avatarSubmissions.at(-1).body);
+      await save().click();await dialog.getByText("Avatar saved",{exact:true}).waitFor();
+      if(JSON.stringify(avatarSubmissions.at(-1).body)!==JSON.stringify(failedBody))throw Error("Retry changed the draft.");
+      await open({reset:false});
+      if(!await dialog.getByRole("radio",{name:"Pumpkin",exact:true}).isChecked())throw Error("Saved avatar reverted on reopen.");
+      const select=dialog.locator(".avatar-stage select");
+      const previewIdle=await select.count()?await select.inputValue()==="idle":await dialog.getByRole("button",{name:"Ready",exact:true}).getAttribute("aria-pressed")==="true";
+      if(!previewIdle)throw Error("Preview state was persisted.");
+      await top();await shot("saved-reopen-phone");
+      await open({large:true});await tune();await bottom();await shot("tune-bottom-large");
+      await open();await choose("Portrait");await bottom();await shot("portrait-empty-phone");
+      if(await save().isEnabled())throw Error("Empty portrait can be saved.");
+      const input=dialog.locator('input[type="file"]');
+      const uploadFinished=tab.waitForResponse(r=>r.url().endsWith("/uploads")&&r.request().method()==="POST");
+      await input.setInputFiles({name:"ranch-portrait.png",mimeType:"image/png",buffer:Buffer.from(fixture.uploadPortrait,"base64")});
+      if(stage === "after") await dialog.getByText("Uploading portrait…",{exact:true}).waitFor();
+      await shot("portrait-busy-phone");
+      const uploaded=await (await uploadFinished).json();
+      await dialog.getByText(stage === "before" ? "Portrait uploaded. Save avatar to apply it." : "Portrait ready to save.",{exact:true}).waitFor();
+      await top();await dialog.locator("img.avatar-portrait").evaluate(el=>el.decode());
+      await shot("portrait-uploaded-phone-dark",390,"dark");
+      await bottom();await save().click();await dialog.getByText("Avatar saved",{exact:true}).waitFor();
+      if(settingsBots[0].avatar.src!==`/api/files/${uploaded.id}`||settingsBots[0].avatar.origin!=="uploaded")throw Error("Upload was not persisted.");
+      for(const width of [1440,390]){
+        await open({width});await choose("Portrait");
+        await dialog.getByPlaceholder("Describe the portrait you want…",{exact:true}).fill(fixture.portraitPrompt);
+        await dialog.getByRole("button",{name:"Generate portrait",exact:true}).click();
+        await dialog.getByText(stage === "before" ? "Portrait generated. Save avatar to apply it." : "Portrait ready to save.",{exact:true}).waitFor();
+        await top();await dialog.locator("img.avatar-portrait").evaluate(el=>el.decode());
+        await shot(width===1440?"portrait-generated-desktop":"portrait-generated-phone",width);
+      }
+      if(stage === "after") {
+        await open();await choose("Portrait");
+        const prompt=dialog.getByPlaceholder("Describe the portrait you want…",{exact:true});
+        await prompt.fill("x".repeat(1900));await bottom();await shot("portrait-limit-near-phone");
+        await prompt.fill("x".repeat(2001));await bottom();await shot("portrait-limit-over-phone");
+        if(await dialog.getByRole("button",{name:"Generate portrait",exact:true}).isEnabled())throw Error("An over-limit prompt can be generated.");
+        await open({large:true});await choose("Portrait");
+        await dialog.getByPlaceholder("Describe the portrait you want…",{exact:true}).fill(fixture.portraitPrompt);
+        await dialog.getByRole("button",{name:"Generate portrait",exact:true}).click();
+        await dialog.getByText("Portrait ready to save.",{exact:true}).waitFor();
+        await bottom();await shot("portrait-status-large");
+        if(geometry.at(-1).avatar.preview.height>160)throw Error("The large-text pinned preview exceeds160px.");
+      }
+      state="portrait-unavailable";await open();await choose("Portrait");await bottom();
+      await shot("portrait-unavailable-phone");
+      if(stage === "after") {
+        state="creation-regression";settingsBots=structuredClone(fixture.bots);
+        await tab.setViewportSize({width:1440,height:1000});await tab.goto(origin.origin);
+        await tab.getByRole("button",{name:"New assistant",exact:true}).click();
+        await dialog.getByRole("heading",{name:"Name and look",exact:true}).waitFor();
+        await checkAccessoryKeyboard(false);await shot("creation-keyboard-focus",1440);
+        await choose("Portrait");await top();await shot("creation-portrait-phone");
+      }
+      state="composer-regression";await open({width:1440});
+      await dialog.getByRole("button",{name:"Close assistant settings",exact:true}).click();
+      await tab.getByRole("button",{name:/^Model:/}).click();
+      await tab.locator(".model-popover").waitFor();
+      await capture("composer-after-avatar-css",1440,1000);
+      const modelSegments=await tab.locator(".model-popover .segmented").evaluateAll(rows=>rows.map(row=>({padding:getComputedStyle(row).padding,wrap:getComputedStyle(row).flexWrap})));
+      if(avatarSubmissions.some(({body})=>"state" in body))throw Error("Preview state leaked into a saved avatar.");
+
+      return {paths,geometry,avatarSubmissions,portraitPrompts,uploaded,modelSegments,keyboardChecks,readback:{drawn:failedBody,upload:`/api/files/${uploaded.id}`},browserErrors};
+    }
+    if (screen === "settings") {
+      await tab.addInitScript(() => document.addEventListener("DOMContentLoaded", () => {
+        if (sessionStorage.getItem("design-large-text") === "true") document.documentElement.style.fontSize = "200%";
+      }));
+      const dialog = tab.locator(".settings-dialog");
+      const bottom = () => dialog.locator(".settings-content").evaluate(el => { el.scrollTop=el.scrollHeight; });
+      const openNew = async () => {
+        settingsBots=structuredClone(fixture.bots);
+        await tab.goto(origin.origin);
+        await tab.getByRole("button", {name:"New assistant",exact:true}).click();
+        await dialog.getByRole("heading", {name:"Name and look",exact:true}).waitFor();
+      };
+      const openEdit = async () => {
+        settingsBots=structuredClone(fixture.bots);
+        await tab.goto(`${origin.origin}/?bot=ranch`);
+        await tab.locator('.chat-header [title="Details, pin, artifacts and settings"]').click();
+        await tab.locator(".bot-details").getByRole("button",{name:"Settings",exact:true}).click();
+        await dialog.waitFor();
+      };
+      const closeDirty = async () => {
+        if (await dialog.locator('[role="alertdialog"][open]').count()) await tab.keyboard.press("Escape");
+        await dialog.getByRole("button",{name:"Close assistant settings",exact:true}).click();
+        if (await dialog.getByRole("button",{name:"Discard changes",exact:true}).count()) await dialog.getByRole("button",{name:"Discard changes",exact:true}).click();
+        await dialog.waitFor({state:"hidden"});
+      };
+      await tab.goto(origin.origin);
+      for (const [name,width,height,theme] of [
+        ["desktop",1440,1000,"light"],["desktop-dark",1440,1000,"dark"],["phone",390,844,"light"],
+        ["phone-dark",390,844,"dark"],["narrow",320,720,"light"],["tablet",768,1024,"light"],["large-text",390,844,"light"],
+      ]) {
+        state="loaded";
+        await tab.setViewportSize({width,height}); await tab.emulateMedia({colorScheme:theme});
+        await tab.evaluate(large => sessionStorage.setItem("design-large-text", String(large)),name==="large-text");
+        await openNew(); await capture("create-look-"+name,width,height,theme);
+        await dialog.getByLabel("Name",{exact:true}).fill(fixture.createdName); await bottom(); await capture("create-look-bottom-"+name,width,height,theme);
+        await dialog.getByRole("button",{name:"Next: role and model",exact:true}).click();
+        await dialog.getByRole("heading",{name:"Role and model",exact:true}).waitFor();
+        await capture("create-role-"+name,width,height,theme); await bottom(); await capture("create-role-bottom-"+name,width,height,theme);
+        await dialog.getByRole("button",{name:"Back",exact:true}).click();
+        if (await dialog.getByLabel("Name",{exact:true}).inputValue()!==fixture.createdName) throw Error("Back lost the assistant name.");
+        await closeDirty(); await openEdit(); await dialog.getByLabel("Name",{exact:true}).waitFor();
+        await capture("edit-"+name,width,height,theme); await bottom(); await capture("edit-bottom-"+name,width,height,theme);
+      }
+      await tab.evaluate(() => sessionStorage.removeItem("design-large-text"));
+      await tab.setViewportSize({width:390,height:844}); await tab.emulateMedia({colorScheme:"light"});
+      await openNew(); await dialog.getByRole("button",{name:"Next: role and model",exact:true}).click();
+      await dialog.getByText("Give your assistant a name.",{exact:true}).waitFor(); await capture("create-name-required",390,844);
+      await dialog.getByLabel("Name",{exact:true}).fill(fixture.bots[0].name);
+      await dialog.getByRole("button",{name:"Next: role and model",exact:true}).click();
+      await dialog.getByText("An assistant with this name already exists. Choose another name.",{exact:true}).waitFor(); await capture("create-name-taken",390,844);
+      await closeDirty(); await openEdit(); await dialog.getByLabel("Name",{exact:true}).waitFor();
+      await dialog.getByLabel("Description",{exact:true}).fill("Keep this edited description.");
+      await dialog.getByRole("button",{name:"Close assistant settings",exact:true}).click();
+      await dialog.getByRole("button",{name:"Keep editing",exact:true}).waitFor(); await capture("edit-discard",390,844);
+      await dialog.getByRole("button",{name:"Keep editing",exact:true}).click();
+      state="save-error";settingsSaveFailed=false;
+      await dialog.getByRole("button",{name:"Save changes",exact:true}).click();
+      await dialog.getByText(fixture.saveError,{exact:true}).waitFor(); await capture("edit-save-error",390,844);
+      if (await dialog.getByLabel("Description",{exact:true}).inputValue()!=="Keep this edited description.") throw Error("A failed save lost the edited description.");
+      await dialog.getByRole("button",{name:"Save changes",exact:true}).click();
+      await dialog.getByText("Changes saved for both household members.",{exact:true}).waitFor(); await capture("edit-saved",390,844);
+      state="loaded";await closeDirty();await openEdit(); await dialog.getByLabel("Name",{exact:true}).waitFor();
+      await dialog.getByRole("checkbox",{name:"Shared with your household",exact:true}).uncheck();
+      await dialog.getByRole("button",{name:"Save changes",exact:true}).click();
+      await dialog.getByRole("button",{name:"Make it personal",exact:true}).waitFor(); await capture("edit-personal-confirmation",390,844);
+      await dialog.getByRole("button",{name:"Keep editing",exact:true}).click(); await closeDirty();
+      await openEdit();await dialog.getByLabel("Name",{exact:true}).waitFor();
+      await dialog.getByRole("button",{name:"Delete assistant",exact:true}).click(); await capture("edit-delete-confirmation",390,844);
+      await closeDirty(); state="load-error";settingsLoadFailed=false;await openEdit();
+      await dialog.getByRole("button",{name:"Retry settings",exact:true}).waitFor(); await capture("edit-load-error",390,844);
+      await dialog.getByRole("button",{name:"Retry settings",exact:true}).click();await dialog.getByLabel("Name",{exact:true}).waitFor();
+      await closeDirty();state="unsupported";await openEdit();await dialog.getByText(fixture.unsupportedReason,{exact:true}).waitFor();await capture("edit-unsupported",390,844);
+      await closeDirty();state="loaded";await openNew();await dialog.getByLabel("Name",{exact:true}).fill(fixture.createdName);
+      await dialog.getByRole("button",{name:"Next: role and model",exact:true}).click();await dialog.getByRole("button",{name:"Create assistant",exact:true}).click();await dialog.waitFor({state:"hidden"});
+      const confirmations = [];
+      const keyboardFocus = [];
+      for (const [name,width,height,theme,large] of [["desktop",1440,1000,"light",false],["phone",390,844,"light",false],["phone-dark",390,844,"dark",false],["large-text",390,844,"light",true]]) {
+        await tab.setViewportSize({width,height});await tab.emulateMedia({colorScheme:theme});
+        await tab.evaluate(value => sessionStorage.setItem("design-large-text",String(value)),large);
+        for (const kind of ["personal","delete","model"]) {
+          state="loaded";await openEdit();await dialog.getByLabel("Name",{exact:true}).waitFor();
+          if (stage!=="before" && kind==="personal") {
+            await dialog.getByLabel("Name",{exact:true}).focus();
+            for (let index=0;index<8;index++) {
+              await tab.keyboard.press("Tab");
+              const check=await tab.evaluate(() => {
+                const focused=document.activeElement, bounds=focused.getBoundingClientRect();
+                const footer=document.querySelector(".settings-save-actions").getBoundingClientRect();
+                return {label:focused.getAttribute("aria-label") || focused.textContent?.trim() || focused.getAttribute("placeholder") || focused.tagName,
+                  obscured:!focused.closest(".settings-save-actions") && bounds.top<footer.bottom && bounds.bottom>footer.top};
+              });
+              if (check.obscured) throw Error(`Sticky actions obscure keyboard focus: ${check.label}`);
+              keyboardFocus.push({name,...check});
+            }
+          }
+          if (kind==="personal") {
+            await dialog.getByRole("checkbox",{name:"Shared with your household",exact:true}).uncheck();
+            await dialog.getByRole("button",{name:"Save changes",exact:true}).click();
+            await dialog.getByRole("button",{name:"Make it personal",exact:true}).waitFor();
+          } else if (kind==="delete") {
+            await dialog.getByRole("button",{name:"Delete assistant",exact:true}).click();
+            await dialog.getByRole("button",{name:"Keep assistant",exact:true}).waitFor();
+          } else {
+            state="model-confirm";await dialog.getByLabel("Description",{exact:true}).fill("Preserve this description while reviewing the model.");
+            await dialog.getByRole("button",{name:"Save changes",exact:true}).click();
+            await dialog.getByRole("button",{name:"Confirm this model",exact:true}).waitFor();
+          }
+          const prompt = dialog.getByRole("alertdialog");
+          if (stage!=="before") {
+            await prompt.waitFor();
+            const safe = prompt.getByRole("button",{name:kind==="delete"?"Keep assistant":"Keep editing",exact:true});
+            if (!await safe.evaluate(element=>element===document.activeElement)) throw Error("The confirmation's safe action did not receive focus.");
+            await tab.keyboard.press("Tab");await tab.keyboard.press("Shift+Tab");
+          }
+          await capture(`edit-${kind}-confirmation-${name}-focus`,width,height,theme);
+          confirmations.push({kind,name,modal:await prompt.count(),...await tab.evaluate(()=>({focused:document.activeElement?.textContent?.trim(),confirmationBounds:document.querySelector('[role="alertdialog"]')?.getBoundingClientRect().toJSON()}))});
+          if (stage!=="before") {
+            const writes=settingsSubmissions.length;await tab.keyboard.press("Escape");await prompt.waitFor({state:"hidden"});
+            if (!await dialog.isVisible() || await dialog.getByText("Discard your unsaved changes?",{exact:true}).count()) throw Error("Confirmation Escape reached the unsaved editor guard.");
+            if (settingsSubmissions.length!==writes) throw Error("Cancelling a confirmation submitted a write.");
+          } else await dialog.getByRole("button",{name:kind==="delete"?"Keep assistant":"Keep editing",exact:true}).click();
+          await closeDirty();
+        }
+      }
+      return {paths,geometry,settingsSubmissions,confirmations,keyboardFocus,backPreservesName:true,failedSavePreservesDraft:true,loadRetry:true};
+    }
+    if (screen === "details") {
+      await tab.addInitScript(() => document.addEventListener("DOMContentLoaded", () => {
+        if (sessionStorage.getItem("design-large-text") === "true") document.documentElement.style.fontSize = "200%";
+      }));
+      const profile = tab.locator(".bot-details"), artifacts = tab.locator(".artifacts-dialog");
+      const openProfile = async () => {
+        await tab.goto(`${origin.origin}/?bot=ranch`);
+        await tab.locator('.chat-header [title="Details, pin, artifacts and settings"]').click(); await profile.waitFor();
+      };
+      const openFiles = async () => { await profile.getByRole("button",{name:/^Artifacts/}).click(); await artifacts.waitFor(); };
+      for (const [name,width,height,theme] of [
+        ["desktop",1440,1000,"light"],["desktop-dark",1440,1000,"dark"],
+        ["phone",390,844,"light"],["phone-dark",390,844,"dark"],["narrow",320,720,"light"],["tablet",768,1024,"light"],
+      ]) {
+        await tab.setViewportSize({width,height}); await tab.emulateMedia({colorScheme:theme}); await openProfile();
+        await capture("profile-"+name,width,height,theme); await openFiles(); await artifacts.locator(".artifact-text-preview pre").waitFor();
+        await capture("artifacts-"+name,width,height,theme);
+      }
+      if (stage !== "before") {
+        state="failed-profile"; await openProfile(); await profile.locator(".bot-activity.state-failed").waitFor(); await capture("profile-failed",390,844);
+        state="blocked-profile"; await openProfile(); await profile.locator(".bot-activity.state-blocked").waitFor(); await capture("profile-blocked",390,844);
+        state="loaded";
+      }
+      await tab.setViewportSize({width:390,height:844}); await tab.evaluate(() => sessionStorage.setItem("design-large-text","true"));
+      await openProfile(); await capture("profile-large-text",390,844);
+      await profile.locator(".sheet-body").evaluate(el=>{el.scrollTop=el.scrollHeight;}); await capture("profile-large-text-bottom",390,844);
+      await openFiles(); await capture("artifacts-large-text",390,844);
+      await artifacts.locator(".artifact-detail").evaluate(el=>{el.scrollTop=el.scrollHeight;}); await capture("artifacts-large-text-bottom",390,844);
+      await tab.evaluate(()=>sessionStorage.removeItem("design-large-text")); await openProfile();
+      const pin = profile.getByRole("button",{name:"Pin",exact:true}); await pin.click(); await profile.getByRole("button",{name:"Unpin",exact:true}).waitFor();
+      await profile.getByRole("switch").check(); if (!await profile.getByRole("switch").isChecked()) throw Error("Following did not turn on.");
+      await capture("profile-pinned-following",390,844); await openFiles();
+      const search = artifacts.getByRole("searchbox",{name:"Search files"}); await search.fill("no-matching-file");
+      await artifacts.getByText("No matching files",{exact:true}).waitFor(); await capture("artifacts-no-results",390,844);
+      await artifacts.getByRole("button",{name:"Clear filters",exact:true}).click();
+      for (const [id,name] of [["design-photo","image"],["design-survey","document"],["design-external","external"],["design-unsupported","unsupported"],["design-unavailable","failed-preview"]]) {
+        const filename=fixture.conversation.files.find(file=>file.id===id).name;
+        await artifacts.locator(".artifact-item").filter({hasText:filename}).click();
+        if (id==="design-photo") await artifacts.locator(".artifact-preview img").waitFor();
+        if (id==="design-unavailable") await artifacts.getByRole("button",{name:"Retry preview",exact:true}).waitFor();
+        await capture("artifacts-"+name,390,844);
+      }
+      await artifacts.getByRole("button",{name:"Retry preview",exact:true}).click(); await artifacts.getByRole("button",{name:"Retry preview",exact:true}).waitFor();
+      state="files-empty"; await openProfile(); await openFiles(); await artifacts.getByText("No artifacts yet",{exact:true}).waitFor(); await capture("artifacts-empty",390,844);
+      state="earlier-error"; await openProfile(); await openFiles();
+      await artifacts.getByText("Files from earlier in the conversation could not be loaded. Close and reopen this list to try again.",{exact:true}).waitFor();
+      await capture("artifacts-earlier-error",390,844);
+      return {paths,geometry,pinAndFollow:true,clearFilters:true,previewRetry:true};
+    }
+    if (screen === "recovery") {
+      await tab.addInitScript(() => document.addEventListener("DOMContentLoaded", () => {
+        if (sessionStorage.getItem("design-large-text") === "true") document.documentElement.style.fontSize = "200%";
+      }));
+      const retry = tab.getByRole("button", { name: "Retry", exact: true });
+      const open = async () => { await tab.goto(`${origin.origin}/?bot=ranch`); await tab.locator("#message").waitFor(); };
+      for (const [name, width, height, theme] of [
+        ["failed-desktop",1440,1000,"light"], ["failed-desktop-dark",1440,1000,"dark"],
+        ["failed-phone",390,844,"light"], ["failed-phone-dark",390,844,"dark"],
+        ["failed-narrow",320,720,"light"], ["failed-tablet",768,1024,"light"],
+      ]) { await tab.setViewportSize({width,height}); await open(); await retry.waitFor();
+        if (stage !== "before") {
+          await tab.locator(".recovery-detail").filter({hasText:fixture.conversation.activity.detail}).waitFor();
+          if (await retry.evaluate(el => el.getBoundingClientRect().height) < 44) throw Error("Retry target is smaller than 44px.");
+        }
+        await capture(name,width,height,theme); }
+      await tab.evaluate(() => sessionStorage.setItem("design-large-text", "true")); await open(); await retry.waitFor();
+      await capture("failed-large-text",390,844); await tab.evaluate(() => sessionStorage.removeItem("design-large-text"));
+      const composer = tab.locator("#message");
+      for (const mode of ["accepted", "refused", "checking", "unsupported"]) {
+        state = mode === "unsupported" ? "unsupported-retry" : "loaded";
+        recoveryMode = mode === "unsupported" ? "checking" : mode; recoveryConversation = structuredClone(fixture.conversation); recoveryDraft = {text:"",attachments:[]};
+        await open(); await retry.waitFor();
+        const saved = tab.waitForResponse(response => response.url().endsWith("/draft") && response.request().method() === "PUT");
+        await composer.fill("Keep this draft"); await saved;
+        if (mode === "accepted") {
+          await retry.focus(); await tab.keyboard.press("Shift+Tab"); await tab.keyboard.press("Tab");
+          if (!await retry.evaluate(el => el.matches(":focus-visible"))) throw Error("Retry keyboard focus missing.");
+          await capture("retry-focus",390,844);
+        }
+        await retry.click();
+        if (mode === "refused") {
+          await tab.getByText(`Hermes didn't take the retry. ${fixture.refusalReason}`, {exact:true}).waitFor();
+          await capture("retry-refused",390,844);
+          await tab.getByRole("button", {name:"Put my message in the message box",exact:true}).click();
+          if (await composer.inputValue() !== "Keep this draft\n\nIs the north gate closed?") throw Error("Put back lost the existing draft.");
+          await capture("retry-put-back",390,844);
+        } else if (mode === "checking" || mode === "unsupported") {
+          await (stage === "before" ? tab.getByText("Checking whether the retry arrived…", {exact:true}) : tab.locator(".recovery-guidance").filter({hasText:mode === "unsupported" ? "Hermes hasn't confirmed the retry yet." : "Checking whether the retry arrived…"})).waitFor(); await capture(mode === "unsupported" ? "retry-unsupported" : "retry-checking",390,844);
+          if (mode === "unsupported") {
+            if (await retry.isEnabled()) throw Error("Unsupported retry must not resend.");
+            continue;
+          }
+          await retry.click();
+          const last = recoverySubmissions.slice(-2);
+          if (last[0].requestId !== last[1].requestId || last[1].reviewedUncertain !== true) throw Error("Unconfirmed retry must keep its request ID.");
+        } else {
+          // The private snapshot cannot emit SSE. Reload to inspect the accepted server snapshot.
+          await tab.waitForFunction(() => ![...document.querySelectorAll("button")].some(el => el.textContent === "Retrying…"));
+          await tab.reload(); await tab.getByText(fixture.answer, {exact:true}).waitFor();
+          if (await composer.inputValue() !== "Keep this draft") throw Error("Retry changed the saved draft.");
+          await capture("retry-accepted",390,844);
+        }
+      }
+      state = "loaded"; recoveryConversation = structuredClone(fixture.interrupted); recoveryDraft = {text:"",attachments:[]}; await open();
+      const review = tab.getByRole("checkbox", {name:stage === "before" ? "I reviewed the interrupted task and its last actions before continuing." : "I've reviewed the task's last actions.",exact:true});
+      await review.waitFor(); await composer.fill("Continue with the east gate.");
+      if (await tab.getByRole("button", {name:"Send message",exact:true}).isEnabled()) throw Error("Interruption review must gate Send.");
+      await capture("interrupted-phone",390,844); await capture("interrupted-desktop",1440,1000); await capture("interrupted-dark",390,844,"dark");
+      await tab.evaluate(() => sessionStorage.setItem("design-large-text", "true")); await open(); await review.waitFor();
+      await capture("interrupted-large-text",390,844);
+      await tab.locator(".transcript").evaluate(el => { el.scrollTop = 0; }); await capture("interrupted-large-text-top",390,844); await tab.evaluate(() => sessionStorage.removeItem("design-large-text")); await open(); await review.waitFor();
+      await review.check(); if (!await tab.getByRole("button",{name:"Send message",exact:true}).isEnabled()) throw Error("Reviewed task must allow continuation.");
+      await capture("interrupted-reviewed",390,844);
+      return {paths,geometry,recoverySubmissions,draftPreserved:true,reviewGate:true};
+    }
+    if (screen === "approvals") {
+      await tab.addInitScript(() => {
+        document.addEventListener("DOMContentLoaded", () => {
+          if (sessionStorage.getItem("design-large-text") === "true") document.documentElement.style.fontSize = "200%";
+        });
+      });
+      await tab.goto(`${origin.origin}/?bot=ranch`);
+      const card = tab.locator('[data-attention-kind="approval"]');
+      await card.waitFor();
+      const expiryFontSize = await card.locator("small").evaluate(el => parseFloat(getComputedStyle(el).fontSize));
+      if (stage !== "before" && expiryFontSize < 14) throw Error("Approval expiry text is too small.");
+      for (const [name, width, height, theme] of [
+        ["desktop", 1440, 1000, "light"], ["desktop-dark", 1440, 1000, "dark"],
+        ["phone", 390, 844, "light"], ["phone-dark", 390, 844, "dark"],
+        ["narrow", 320, 720, "light"], ["tablet", 768, 1024, "light"],
+      ]) {
+        await tab.setViewportSize({ width, height });
+        await pointer.send("Emulation.setTouchEmulationEnabled", { enabled: width <= 620, maxTouchPoints: 1 });
+        await tab.emulateMedia({ colorScheme: theme });
+        await tab.goto(`${origin.origin}/?bot=ranch`);
+        await card.waitFor(); await capture(name, width, height, theme);
+      }
+      await tab.setViewportSize({ width: 390, height: 844 });
+      await tab.evaluate(() => sessionStorage.setItem("design-large-text", "true"));
+      await tab.reload(); await card.waitFor();
+      await capture("large-text", 390, 844);
+      await tab.locator(".transcript").evaluate(el => { el.scrollTop = el.scrollHeight; });
+      await capture("large-text-bottom", 390, 844);
+      await tab.evaluate(() => sessionStorage.removeItem("design-large-text"));
+      state = "unsupported";
+      await tab.goto(`${origin.origin}/?bot=ranch`); await card.waitFor();
+      if (await card.getByRole("button", { name: "Approve", exact: true }).isEnabled()) throw Error("Unsupported decisions must be disabled.");
+      if (stage !== "before") await card.getByText(fixture.unsupportedReason, { exact: true }).waitFor();
+      await capture("unsupported", 390, 844);
+      state = "loaded";
+      const confirmations = [];
+      for (const choice of ["approved", "denied"]) {
+        approvalConversation = structuredClone(fixture.conversation); approvalFailed = false;
+        await tab.goto(`${origin.origin}/?bot=ranch`); await card.waitFor();
+        const action = card.getByRole("button", { name: choice === "approved" ? "Approve" : "Decline", exact: true });
+        if (choice === "approved") {
+          await action.focus(); await tab.keyboard.press("Shift+Tab"); await tab.keyboard.press("Tab");
+          if (!await action.evaluate(el => el.matches(":focus-visible"))) throw Error("Approval needs keyboard focus.");
+          await capture("keyboard-focus", 390, 844);
+        }
+        await action.click();
+        await tab.getByText(fixture.decisionError, { exact: true }).waitFor();
+        await capture(choice + "-error", 390, 844);
+        await action.click();
+        await card.getByRole("button", { name: choice === "approved" ? "Approved" : "Declined", exact: true }).waitFor();
+        if (stage !== "before" && await tab.getByText(fixture.decisionError, { exact: true }).count()) throw Error("Accepted decision kept its old error.");
+        if (stage !== "before") {
+          const status = card.getByRole("status");
+          const expected = choice === "approved" ? "Approval sent." : "Decline sent.";
+          await status.getByText(expected, { exact: true }).waitFor();
+          const style = await status.evaluate(el => ({ fontSize: parseFloat(getComputedStyle(el).fontSize), opacity: getComputedStyle(el).opacity, color: getComputedStyle(el).color }));
+          if (style.fontSize < 14 || style.opacity !== "1") throw Error("The confirmation needs readable, undimmed text.");
+          confirmations.push({ choice, text: expected, ...style });
+        }
+        await capture(choice + "-sent", 390, 844);
+        await tab.reload(); await card.waitFor({ state: "hidden" });
+        await capture(choice, 390, 844);
+      }
+      if (approvalSubmissions.length !== 4 || approvalSubmissions.some((item, i) => item.decision !== (i < 2 ? "approved" : "denied"))) throw Error("Decision retry payload changed.");
+      return { paths, geometry, approvalSubmissions, submittedAfterReload: true, expiryFontSize, confirmations };
+    }
+    if (screen === "questions") {
+      await tab.addInitScript(() => {
+        document.addEventListener("DOMContentLoaded", () => {
+          if (sessionStorage.getItem("design-large-text") === "true") document.documentElement.style.fontSize = "200%";
+        });
+      });
+      await tab.goto(`${origin.origin}/?bot=ranch`);
+      const card = tab.locator(".attention-card");
+      const openings = [];
+      const open = async (name, width, height, theme = "light", large = false) => {
+        await tab.setViewportSize({ width, height });
+        await pointer.send("Emulation.setTouchEmulationEnabled", { enabled: width <= 620, maxTouchPoints: 1 });
+        await tab.emulateMedia({ colorScheme: theme });
+        await tab.evaluate(large => sessionStorage.setItem("design-large-text", String(large)), large);
+        await tab.goto(`${origin.origin}/?bot=ranch`);
+        await card.waitFor();
+        await capture(name, width, height, theme);
+        const firstChoiceVisible = await card.locator(".option-card").first().evaluate(el => {
+          const choice = el.getBoundingClientRect(), viewport = document.querySelector(".transcript").getBoundingClientRect();
+          const header = document.querySelector(".chat-header").getBoundingClientRect();
+          return choice.top >= Math.max(viewport.top, header.bottom) - 1 && choice.bottom <= viewport.bottom + 1;
+        });
+        const jumpVisible = await tab.locator(".jump-latest").count() > 0;
+        openings.push({ name, firstChoiceVisible, jumpVisible });
+        if (stage !== "before" && (jumpVisible || (!large && !firstChoiceVisible))) throw Error(`Question opening failed at ${name}.`);
+      };
+      await open("initial-phone", 390, 844);
+      const initialChoiceVisible = openings[0].firstChoiceVisible;
+      for (const [name, width, height, theme] of [
+        ["desktop", 1440, 1000, "light"], ["desktop-dark", 1440, 1000, "dark"],
+        ["phone", 390, 844, "light"], ["phone-dark", 390, 844, "dark"],
+        ["narrow", 320, 720, "light"], ["tablet", 768, 1024, "light"],
+      ]) {
+        await open(name, width, height, theme);
+        await tab.locator(".transcript").evaluate(el => { el.scrollTop = el.scrollHeight; });
+        await capture(name + "-bottom", width, height, theme);
+      }
+      await open("large-text", 390, 844, "light", true);
+      await tab.locator(".transcript").evaluate(el => { el.scrollTop = el.scrollHeight; });
+      await capture("large-text-bottom", 390, 844);
+      await tab.evaluate(() => sessionStorage.removeItem("design-large-text"));
+      await tab.goto(`${origin.origin}/?bot=ranch`);
+      await card.waitFor();
+      const route = card.locator("fieldset").first();
+      await route.getByText("Write my own answer", { exact: true }).click();
+      await route.getByRole("textbox").fill("A shaded loop under two miles, with a place to rest.");
+      await card.getByText("A picnic packing list", { exact: true }).click();
+      await card.getByText("An offline route map", { exact: true }).click();
+      await card.getByRole("textbox", { name: "Anything else I should know?", exact: true }).fill("One child tires easily. Plan a slow morning.");
+      const submit = card.getByRole("button", { name: "Send answers", exact: true });
+      if (!await submit.isEnabled()) throw Error("Complete answers did not enable Send.");
+      await capture("answers", 390, 844);
+      await route.getByRole("textbox").focus();
+      await capture("own-answer-focus", 390, 844);
+      await submit.click();
+      await tab.getByText(fixture.answerError, { exact: true }).waitFor();
+      if (await route.getByRole("textbox").inputValue() !== "A shaded loop under two miles, with a place to rest.") throw Error("A failed submission lost the answer.");
+      await capture("submit-error", 390, 844);
+      const errorFontSize = await tab.locator(".notice.error").evaluate(el => parseFloat(getComputedStyle(el).fontSize));
+      if (stage !== "before" && errorFontSize < 14) throw Error("The error recovery text is too small.");
+      await capture("submit-error-narrow", 320, 720);
+      await tab.setViewportSize({ width: 390, height: 844 });
+      const accepted = tab.waitForResponse(response => response.url().endsWith("/requests/fixture-question") && response.status() === 200);
+      await submit.click();
+      await accepted;
+      if (stage !== "before") {
+        const settled = card.getByRole("button", { name: "Answers sent", exact: true });
+        await settled.waitFor();
+        if (await settled.isEnabled() || await tab.getByText(fixture.answerError, { exact: true }).count()) throw Error("An accepted answer kept a stale error or allowed duplicate submission.");
+      }
+      await capture("answers-sent", 390, 844);
+      // The synthetic server cannot push an event for this context's private fixture snapshot.
+      await tab.reload();
+      await card.waitFor({ state: "hidden", timeout: 15000 });
+      await capture("submitted", 390, 844);
+      if (questionSubmissions.length !== 2 || JSON.stringify(questionSubmissions[0]) !== JSON.stringify(questionSubmissions[1])) throw Error("Retry changed the question answers.");
+      return { paths, geometry, questionSubmissions, answersPreserved: true, submittedAfterReload: true, initialChoiceVisible, openings, errorFontSize,
+        touchMedia: await tab.evaluate(() => matchMedia("(pointer: coarse)").matches) };
+    }
+    if (screen === "conversation") {
+      await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+      await tab.goto(`${origin.origin}/?bot=ranch`);
+      await tab.locator(".message-markdown").last().waitFor();
+      const metadataContrast = [];
+      const checkMetadata = async name => {
+        const ratio = await tab.locator(".message-user .message-attribution").first().evaluate(el => {
+          const luminance = color => {
+            const channels = color.match(/[\d.]+/g).slice(0, 3).map(Number).map(value => value / 255)
+              .map(value => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4);
+            return channels.reduce((total, value, index) => total + value * [0.2126, 0.7152, 0.0722][index], 0);
+          };
+          const values = [getComputedStyle(el).color, getComputedStyle(el.closest(".message-user")).backgroundColor].map(luminance).sort((a, b) => a - b);
+          return (values[1] + 0.05) / (values[0] + 0.05);
+        });
+        if (stage !== "before" && ratio < 4.5) throw Error(`Message metadata contrast ${ratio.toFixed(2)}:1 in ${name}`);
+        metadataContrast.push({ name, ratio });
+      };
+      const edge = async end => tab.locator(".transcript").evaluate((el, end) => { el.scrollTop = end ? el.scrollHeight : 0; }, end);
+      for (const [name, width, height, theme] of [
+        ["desktop", 1440, 1000, "light"], ["desktop-dark", 1440, 1000, "dark"],
+        ["phone", 390, 844, "light"], ["phone-dark", 390, 844, "dark"],
+        ["narrow", 320, 720, "light"], ["tablet", 768, 1024, "light"],
+      ]) {
+        await tab.setViewportSize({ width, height });
+        await edge(false); await capture(name, width, height, theme);
+        await checkMetadata(name);
+        await edge(true); await capture(name + "-latest", width, height, theme);
+      }
+      await tab.setViewportSize({ width: 390, height: 844 });
+      await tab.locator(".composer textarea").fill("Make the picnic vegetarian. Keep the walk under two miles.");
+      await capture("draft", 390, 844);
+      if (!await tab.getByRole("button", { name: "Send message", exact: true }).isEnabled()) throw Error("A draft did not enable Send.");
+      await tab.locator(".composer textarea").focus();
+      await capture("composer-focus", 390, 844);
+      await tab.locator(".composer textarea").fill("");
+      await edge(true);
+      await tab.getByRole("button", { name: "Copy code", exact: true }).click();
+      await tab.getByText("Code copied.", { exact: true }).waitFor();
+      const copied = await tab.evaluate(() => navigator.clipboard.readText());
+      if (!copied.includes("for gate in north east barn")) throw Error("Copy code lost content.");
+      await capture("copied-code", 390, 844);
+      await tab.getByRole("button", { name: "Copy code", exact: true }).focus();
+      await tab.keyboard.press("Shift+Tab");
+      await tab.keyboard.press("Tab");
+      if (!await tab.getByRole("button", { name: "Copy code", exact: true }).evaluate(el => el.matches(":focus-visible"))) throw Error("Copy code did not show keyboard focus.");
+      await capture("code-focus", 390, 844);
+      await tab.evaluate(() => { document.documentElement.style.fontSize = "200%"; });
+      await edge(false); await capture("large-text", 390, 844);
+      await edge(true); await capture("large-text-latest", 390, 844);
+      return { paths, geometry, metadataContrast, codeCopied: true, draftEnabledSend: true, codeKeyboardFocus: true };
+    }
+    if (screen === "home") {
+      await tab.goto(`${origin.origin}/?bot=ranch`);
+      await tab.locator(".pinned-bot").first().waitFor();
+      await capture("desktop", 1440, 1000);
+      await capture("desktop-dark", 1440, 1000, "dark");
+      await tab.locator(".pinned-bot").first().focus();
+      await tab.keyboard.press("Shift+F10");
+      await tab.getByRole("menu", { name: "Ranch hand", exact: true }).waitFor();
+      await capture("desktop-menu", 1440, 1000);
+      await tab.getByRole("menuitem", { name: "Move to section" }).hover();
+      await tab.getByRole("menu", { name: "Home section", exact: true }).waitFor();
+      await capture("desktop-submenu", 1440, 1000);
+      await tab.keyboard.press("Escape");
+      await tab.keyboard.press("Escape");
+      await tab.setViewportSize({ width: 390, height: 844 });
+      await tab.goto(origin.origin);
+      await tab.locator(".bot-rail.open").waitFor();
+      await capture("phone", 390, 844);
+      await capture("phone-dark", 390, 844, "dark");
+      for (const variant of ["three-pins", "no-pins"]) {
+        state = variant;
+        await tab.goto(origin.origin);
+        await tab.locator(".bot-rail.open").waitFor();
+        await tab.getByRole("button", { name: "Settings", exact: true }).waitFor();
+        await capture(variant, 390, 844);
+      }
+      state = "loaded";
+      await tab.goto(origin.origin);
+      await tab.locator(".pinned-bot").first().waitFor();
+      await capture("narrow", 320, 720);
+      await tab.locator(".pinned-bot").first().click({ button: "right" });
+      await tab.getByRole("menu", { name: "Ranch hand", exact: true }).waitFor();
+      await capture("phone-menu", 390, 844);
+      await tab.keyboard.press("Escape");
+      await tab.evaluate(() => { document.documentElement.style.fontSize = "200%"; });
+      await capture("large-text", 390, 844);
+      await tab.locator(".home-scroll").evaluate(el => { el.scrollTop = el.scrollHeight; });
+      await capture("large-text-scrolled", 390, 844);
+      await tab.evaluate(() => { document.documentElement.style.removeProperty("font-size"); });
+      state = "empty";
+      await tab.goto(origin.origin);
+      await tab.locator(".bot-rail").getByRole("button", { name: "Create an assistant", exact: true }).waitFor();
+      await capture("empty", 390, 844);
+      return { paths, geometry };
+    }
+    await tab.goto(`${origin.origin}/?view=today`);
+    await tab.getByRole("heading", { name: /Needs your attention|Since you were away/ }).first().waitFor();
+    await capture("desktop", 1440, 1000);
+    await capture("desktop-dark", 1440, 1000, "dark");
+    await capture("phone", 390, 844);
+    await capture("phone-dark", 390, 844, "dark");
+    await capture("narrow", 320, 720);
+    await capture("tablet", 768, 1024);
+    if (fixture) {
+      for (const variant of ["all-clear", "partial", "paged"]) {
+        state = variant;
+        await tab.reload();
+        await tab.getByRole("button", { name: /Mark.*caught up/ }).waitFor();
+        await capture(variant, 390, 844);
+        if (variant === "partial" && await tab.locator(".today-attention-list").count()) {
+          await tab.locator(".today-attention-list .today-row").filter({ hasText: "Disconnected" }).click();
+          await tab.waitForURL(url => url.searchParams.get("bot") === "guide" && !url.searchParams.has("view"));
+          await tab.goto(`${origin.origin}/?view=today`);
+          await tab.getByRole("heading", { name: /Needs your attention/ }).waitFor();
+        }
+      }
+      state = "error";
+      await tab.getByRole("button", { name: "Refresh", exact: true }).click();
+      await tab.getByRole("alert").waitFor();
+      await capture("stale-error", 390, 844);
+      state = "loading";
+      await tab.reload({ waitUntil: "domcontentloaded" });
+      await tab.getByText("Checking your assistants...", { exact: true }).waitFor();
+      await capture("loading", 390, 844);
+      releaseLoading();
+      await tab.getByRole("heading", { name: /Needs your attention/ }).waitFor();
+      if (!await tab.locator(".today-content").count()) return { paths, geometry };
+      await tab.getByRole("button", { name: "Refresh", exact: true }).focus();
+      await tab.keyboard.press("Tab");
+      if (!await tab.locator(".today-attention-list .today-row").first().evaluate(el => el === document.activeElement)) {
+        throw Error("Tab did not reach the first request.");
+      }
+      await capture("keyboard-focus", 1440, 1000);
+      await tab.keyboard.press("Enter");
+      await tab.waitForURL(url => url.searchParams.get("bot") === "ranch" && !url.searchParams.has("view"));
+    }
+    return { paths, geometry };
+  } catch (error) {
+    await tab.screenshot({path:`${outputDir}/${prefix}-${screen}-capture-error.png`,animations:"disabled"}).catch(() => {});
+    throw new Error(`${error.message}\nBrowser errors: ${browserErrors.join("; ")}`);
+  } finally { clearTimeout(workRoutineWaitTimer); workLoadingRelease?.(); workRoutinesLoadingRelease?.(); releaseMemoryLoad?.(); releaseMemoryWrite?.(); await context.unrouteAll({behavior:"ignoreErrors"}); await context.close(); }
+}

@@ -233,7 +233,12 @@ struct GroupChatsView: View {
   private func load() async {
     let id = UUID(); loadId = id
     let value: GroupCatalog? = await store.run(error: $error, current: { loadId == id }) { try await $0.api.get("/groups") }
-    if let value { catalog = value; error = nil }
+    if let value {
+      catalog = value; error = nil
+      #if DEBUG
+      if DebugFixtures.captureGroupPage, opened == nil { opened = value.rooms.first }
+      #endif
+    }
   }
 }
 struct GroupCreateView: View {
@@ -254,10 +259,16 @@ struct GroupCreateView: View {
         TextField("Group name", text: Binding(get: { name }, set: { name = GroupLimits.clip($0, to: GroupLimits.name) }))
         Section {
           ForEach((store.bootstrap?.bots ?? []).filter { !["all", "everyone"].contains($0.id.lowercased()) }) { bot in
-            Toggle(bot.name, isOn: Binding(get: { botIds.contains(bot.id) }, set: { if $0 { if !botIds.contains(bot.id) { botIds.append(bot.id) } } else { botIds.removeAll { $0 == bot.id } } }))
+            Toggle(isOn: Binding(get: { botIds.contains(bot.id) }, set: { if $0 { if !botIds.contains(bot.id) { botIds.append(bot.id) } } else { botIds.removeAll { $0 == bot.id } } })) {
+              HStack(spacing: 8) {
+                AvatarView(avatar: bot.avatar ?? AvatarConfig(), size: 24, name: bot.name, botId: bot.id, forceReducedMotion: true).accessibilityHidden(true)
+                Text(bot.name)
+              }
+            }
               .disabled(busy || botIds.count >= 6 && !botIds.contains(bot.id))
           }
-        } header: { Text("Choose 2–6 assistants") } footer: {
+        } header: { Text("Choose 2–6 assistants · \(botIds.count) chosen") } footer: {
+          if botIds.count == 6 { Text("Six assistants selected. Deselect one to choose another.") }
           if (store.bootstrap?.bots ?? []).contains(where: { botIds.contains($0.id) && !$0.shared && $0.ownerId != nil }) {
             Text("Only you will see this group, because it includes your personal assistant.")
           }
@@ -288,6 +299,11 @@ struct GroupConversationView: View {
   @State private var more = false
   @State private var draft = ""
   @State private var threadId = ""
+  @State private var replyToId = ""
+  @State private var sentScrollRequest: UUID?
+  @State private var followingLatest = false
+  @State private var suppressPageFollow = false
+  @FocusState private var composerFocused: Bool
   @State private var pending: GroupSend?
   @State private var error: String?
   @State private var busy = false
@@ -303,7 +319,7 @@ struct GroupConversationView: View {
   private var path: String { "/groups/\(APIClient.component(room.id))" }
   private var key: String { "group.send.\(store.scope ?? ""):\(room.id)" }
   private var status: String {
-    state?.driver_status?.blocked == true ? "Discussion needs attention." : state?.driver_status?.working == true ? "Assistants are discussing…" : "Ready for a topic."
+    state?.driver_status?.blocked == true ? "Discussion needs attention." : state?.driver_status?.working == true ? "Assistants are discussing…" : "Type @ to address one assistant."
   }
   /// A group that disappeared keeps none of its name, members or messages on screen.
   static func identity(_ room: GroupRoom, missing: Bool) -> (title: String, members: String?) {
@@ -311,46 +327,49 @@ struct GroupConversationView: View {
   }
   var body: some View {
     let identity = Self.identity(room, missing: missing)
+    let roots = threadRoots
+    ScrollViewReader { proxy in
     List {
-      Section { if let members = identity.members { Text(members).font(.caption).foregroundStyle(.secondary) }
-        if missing { Text("That group chat is no longer available to you.").font(.footnote) }
-        else if let error { ErrorBanner(message: error) }
-        if state == nil && error == nil && !missing { ProgressView("Opening group…") }
-      }
-      ForEach(events.filter { ["message.user", "message.member"].contains($0.kind) }) { event in
-        VStack(alignment: .leading, spacing: 6) {
-          HStack(alignment: .firstTextBaseline) {
-            Text(author(event)).font(.caption.bold())
-            Spacer()
-            Text(When.format(Date(timeIntervalSince1970: event.created_at))).font(.caption2).foregroundStyle(.secondary)
-          }
-          MarkdownView(text: event.payload.text ?? "")
-          if let thread = event.payload.thread_id {
-            Button("Reply in thread") { threadId = thread }.font(.caption).buttonStyle(.borderless).disabled(pending != nil || !canSend)
-          }
+      if missing || error != nil || state == nil {
+        Section {
+          if missing { Text("That group chat is no longer available to you.").font(.footnote) }
+          else if let error { ErrorBanner(message: error) }
+          if state == nil && error == nil && !missing { ProgressView("Opening group…") }
         }
       }
-      if more { Button("Load more messages") { Task { await load() } }.listRowBackground(Color.clear) }
-      if state != nil && !missing && events.allSatisfy({ !["message.user", "message.member"].contains($0.kind) }) {
-        Text("Start a discussion. Use @handle to address an assistant.").font(.footnote).foregroundStyle(.secondary).listRowBackground(Color.clear)
+      Section {
+        ForEach(messages) { event in
+          messageRow(event, root: event.payload.thread_id.flatMap { roots[$0] }).id(event.id)
+        }
+        if more { Button("Load more messages") { Task { await load() } }.listRowBackground(Color.clear) }
+        if state != nil && !missing && messages.isEmpty {
+          Text("Start a discussion. Use @handle to address an assistant.").font(.footnote).foregroundStyle(Palette.muted).listRowBackground(Color.clear)
+        }
+      } header: {
+        if let members = identity.members { Text(members).textCase(nil).font(.footnote).foregroundStyle(Palette.muted) }
       }
       if state?.driver_status?.working == true || !(state?.driver_status?.pending_actions.isEmpty ?? true) {
         Section {
           if state?.driver_status?.working == true { Button("Stop discussion", role: .destructive) { Task { await stop() } }.disabled(busy || !canSend || !store.connected) }
           ForEach(state?.driver_status?.pending_actions ?? []) { action in
             if action.kind == "approval" {
+              HStack(spacing: 8) { assistantAvatar(action.member_id); Text("\(requester(action)) requests approval").font(.subheadline.bold()) }
               Text(action.approval?.description ?? action.approval?.command ?? "An assistant needs approval")
               HStack { Button("Allow once") { Task { await decide(action, "once") } }; Button("Deny") { Task { await decide(action, "deny") } } }.buttonStyle(.bordered).disabled(busy || !canSend || !store.connected)
-            } else { Text("Hermes cannot confirm a member's last turn. Review it in the native group client before retrying.").font(.footnote) }
+            } else { Text("The last turn from \(requester(action)) is unconfirmed. Open this group in Hermes to review it before retrying.").font(.footnote) }
           }
         }
+      }
+      if state != nil {
+        Color.clear.frame(height: 1).id("group-end").listRowInsets(EdgeInsets()).listRowSeparator(.hidden).listRowBackground(Color.clear)
+          .onAppear { followingLatest = true }.onDisappear { followingLatest = false }
       }
     }
     .householdListBackground()
     .safeAreaInset(edge: .bottom) { composer }
     .navigationTitle(identity.title).refreshable { await load() }.task(id: "\(store.scope ?? ""):\(room.id)") {
       loadGeneration += 1
-      state = nil; events = []; cursor = 0; more = false; applied = nil
+      state = nil; events = []; cursor = 0; more = false; applied = nil; threadId = ""; replyToId = ""; sentScrollRequest = nil; followingLatest = false; suppressPageFollow = false
       draft = UserDefaults.standard.string(forKey: key + ":draft") ?? ""
       if let data = UserDefaults.standard.data(forKey: key) { pending = try? JSONDecoder().decode(GroupSend.self, from: data) }
       await load()
@@ -359,16 +378,29 @@ struct GroupConversationView: View {
     // stream that failed unnoticed, and the room's state.
     .watchingGroup(room.id) { if !missing { await load() } }
     .pollWhileActive(id: "\(store.scope ?? ""):\(room.id)", every: Self.fallbackInterval) { if !missing { await load() } }
+    .onChange(of: messages.last?.id) { _, _ in if followingLatest && !suppressPageFollow { scrollToLatest(proxy) } }
+    .onChange(of: sentScrollRequest) { _, request in if request != nil { scrollToLatest(proxy) } }
+    }
+  }
+  private func scrollToLatest(_ proxy: ScrollViewProxy) {
+    Task { @MainActor in proxy.scrollTo("group-end", anchor: .bottom) }
   }
   private var composer: some View {
     VStack(alignment: .leading, spacing: 8) {
       if !threadId.isEmpty {
-        HStack { Text("Replying in thread").font(.caption).foregroundStyle(.secondary); Button("New topic") { threadId = "" }.font(.caption) }
+        HStack(alignment: .top, spacing: 12) {
+          VStack(alignment: .leading, spacing: 4) {
+            Text("Replying in thread").font(.subheadline.bold())
+            Text(replyingTo.map(context) ?? "Earlier messages in this thread").font(.footnote).foregroundStyle(Palette.muted).lineLimit(2)
+          }.frame(maxWidth: .infinity, alignment: .leading)
+          Button("New topic") { threadId = ""; replyToId = ""; composerFocused = true }.font(.subheadline)
+        }
+
       }
       if let pending {
         Text(pending.text).font(.footnote).textSelection(.enabled)
         Text("This message may have arrived. Retry the same saved message to check without sending a duplicate.").font(.caption).foregroundStyle(.secondary)
-        Button("Retry same saved message") { Task { await send() } }.buttonStyle(.borderedProminent).disabled(busy || !canSend || !store.connected)
+        Button("Retry same saved message") { Task { await send() } }.buttonStyle(.accentProminent).disabled(busy || !canSend || !store.connected)
       } else {
         if let query = GroupMentions.query(in: draft), canSend {
           let members = GroupMentions.suggestions(for: query, members: room.members)
@@ -380,9 +412,9 @@ struct GroupConversationView: View {
           }
         }
         HStack(alignment: .bottom, spacing: 10) {
-          TextField("Message the group… use @handle to address one assistant", text: Binding(get: { draft }, set: { draft = GroupLimits.clip($0, to: GroupLimits.message) }), axis: .vertical).lineLimit(1...6)
+          TextField("Message the group", text: Binding(get: { draft }, set: { draft = GroupLimits.clip($0, to: GroupLimits.message) }), axis: .vertical).lineLimit(1...6)
             .padding(12).background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 14))
-            .accessibilityIdentifier("groupComposer").onChange(of: draft) { _, value in UserDefaults.standard.set(value, forKey: key + ":draft") }
+            .accessibilityLabel("Message the group").focused($composerFocused).accessibilityIdentifier("groupComposer").onChange(of: draft) { _, value in UserDefaults.standard.set(value, forKey: key + ":draft") }
           // A draft saved before the input limit existed can be longer; it stays editable but cannot send.
           let ready = !busy && canSend && store.connected && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && GroupLimits.fits(draft, GroupLimits.message)
           Button { Task { await send() } } label: {
@@ -393,11 +425,52 @@ struct GroupConversationView: View {
         }
       }
       if !GroupLimits.fits(draft, GroupLimits.message) { Text("Messages can contain up to 16,000 characters.").font(.caption).foregroundStyle(Palette.danger) }
-      Text(status).font(.caption).foregroundStyle(.secondary)
+      Text(status).font(.footnote).foregroundStyle(Palette.muted)
     }.padding(12).background(.regularMaterial)
   }
+  private var messages: [GroupEvent] { events.filter { ["message.user", "message.member"].contains($0.kind) } }
+  private var threadRoots: [String: GroupEvent] {
+    var roots: [String: GroupEvent] = [:]
+    for event in messages { if let thread = event.payload.thread_id, roots[thread] == nil { roots[thread] = event } }
+    return roots
+  }
+  private var replyingTo: GroupEvent? { messages.first { $0.id == replyToId } ?? threadRoots[threadId] }
+  private func context(_ event: GroupEvent) -> String {
+    "\(author(event)): " + String((event.payload.text ?? "Message").replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression).prefix(100))
+  }
+  @ViewBuilder private func assistantAvatar(_ id: String?) -> some View {
+    if let bot = store.bootstrap?.bots.first(where: { $0.id == id }) {
+      AvatarView(avatar: bot.avatar ?? AvatarConfig(), size: 24, name: bot.name, botId: bot.id, forceReducedMotion: true).accessibilityHidden(true)
+    }
+  }
+  private func requester(_ action: GroupAction) -> String {
+    let member = room.members.first { $0.member_id == action.member_id }
+    return member?.display_name ?? member?.profile ?? "Assistant"
+  }
+  private func messageRow(_ event: GroupEvent, root: GroupEvent?) -> some View {
+    VStack(alignment: .leading, spacing: 8) {
+      HStack(alignment: .center, spacing: 8) {
+        if event.kind == "message.member" { assistantAvatar(event.payload.member_id ?? event.actor?.id) }
+        Text(author(event)).font(.subheadline.bold())
+        Spacer()
+        Text(When.format(Date(timeIntervalSince1970: event.created_at))).font(.caption).foregroundStyle(Palette.muted)
+      }
+      if let root, root.id != event.id {
+        Text("In thread with \(context(root))").font(.footnote).foregroundStyle(Palette.muted)
+          .padding(.leading, 8).overlay(alignment: .leading) { Rectangle().fill(Palette.accent).frame(width: 2) }
+      }
+      MarkdownView(text: event.payload.text ?? "")
+      if let thread = event.payload.thread_id {
+        Button("Reply in thread") { threadId = thread; replyToId = event.id; composerFocused = true }
+          .font(.subheadline).buttonStyle(.borderless).frame(minHeight: 44).disabled(busy || pending != nil || !canSend)
+          .accessibilityLabel("Reply in thread to \(context(event))")
+      }
+    }.overlay(alignment: .leading) {
+      if replyToId == event.id { Rectangle().fill(Palette.accent).frame(width: 3).padding(.vertical, 6).offset(x: -8) }
+    }.listRowBackground(replyToId == event.id ? Palette.accentSoft : event.kind == "message.user" && author(event) == "You" ? Palette.rail(scheme) : Palette.raised(scheme))
+  }
   private func author(_ event: GroupEvent) -> String {
-    if event.kind == "message.user" { return Self.memberName(event) }
+    if event.kind == "message.user" { return (event.sender?.id ?? event.actor?.id) == store.bootstrap?.user.id ? "You" : Self.memberName(event) }
     return Self.assistantName(event, in: room)
   }
   /// While the room is watched, new events arrive by notice; this poll is the fallback.
@@ -455,6 +528,7 @@ struct GroupConversationView: View {
     }
   }
   private func apply(_ value: GroupState, _ page: GroupPage) {
+    suppressPageFollow = more || page.has_more
     state = value; error = nil; let known = Set(events.map(\.id)); events += page.events.filter { !known.contains($0.id) }; events.sort { $0.seq < $1.seq }; cursor = page.cursor; more = page.has_more
   }
   private func send() async {
@@ -467,7 +541,7 @@ struct GroupConversationView: View {
       return receipt
     }
     guard receipt != nil else { return }
-    UserDefaults.standard.removeObject(forKey: key); UserDefaults.standard.removeObject(forKey: key + ":draft"); pending = nil; draft = ""; threadId = ""; await load()
+    UserDefaults.standard.removeObject(forKey: key); UserDefaults.standard.removeObject(forKey: key + ":draft"); pending = nil; draft = ""; threadId = ""; replyToId = ""; await load(); sentScrollRequest = UUID()
   }
   private func stop() async {
     let stopped: [String: Int]? = await store.run(busy: $busy, error: $error) { try await $0.api.write(path + "/stop", ["requestId": UUID().uuidString.lowercased()]) }

@@ -2,6 +2,7 @@
 import { act, createElement, StrictMode } from "react";
 import type { Root } from "react-dom/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { initialPanel } from "../src/app/view";
 import { ComputerPanel } from "../src/components/ComputerPanel";
 import { api, ApiError, write } from "../src/client-api";
 import type { ComputerStatus } from "../src/shared/computer";
@@ -68,8 +69,8 @@ beforeEach(() => {
   });
   ({ container, root } = mountRoot());
 });
-async function render(open = true, key = "same-user") {
-  await act(async () => { root.render(createElement(ComputerPanel, { open, onClose, key })); });
+async function render(open = true, key = "same-user", initialTab?: "desktop" | "terminal") {
+  await act(async () => { root.render(createElement(ComputerPanel, { open, onClose, key, initialTab })); });
 }
 async function connectedDesktop() {
   await render();
@@ -84,6 +85,35 @@ async function connectedTerminal() {
 }
 
 describe("shared computer", () => {
+  it("opens a terminal link directly and attaches the desktop only when visited", async () => {
+    history.replaceState(null, "", "/?computer=1&computerTab=terminal");
+    try {
+      const panel = initialPanel();
+      expect(panel).toEqual({ kind: "computer", tab: "terminal" });
+      await render(true, "terminal-link", panel?.kind === "computer" ? panel.tab : undefined);
+      expect(button("Terminal").getAttribute("aria-selected")).toBe("true");
+      expect(document.activeElement).toBe(button("Terminal"));
+      expect(Socket.instances).toHaveLength(1);
+      expect(mocks.desktops).toHaveLength(0);
+      await click("Desktop");
+      expect(mocks.desktops).toHaveLength(1);
+    } finally { history.replaceState(null, "", "/"); }
+  });
+
+  it("uses the remote framebuffer shape and follows resolution changes", async () => {
+    await render();
+    const canvas = document.createElement("canvas");
+    canvas.width = 1600; canvas.height = 900;
+    await act(async () => {
+      container.querySelector(".computer-screen")!.append(canvas);
+      mocks.desktops.at(-1)!.dispatchEvent(new Event("connect"));
+    });
+    const stage = container.querySelector<HTMLElement>(".desktop-stage")!;
+    expect(Number(stage.style.getPropertyValue("--desktop-aspect"))).toBe(1600 / 900);
+    await act(async () => { canvas.height = 1200; });
+    expect(Number(stage.style.getPropertyValue("--desktop-aspect"))).toBe(1600 / 1200);
+  });
+
   it("provides Unicode desktop text and navigation keys only after takeover and clears text on lost control", async () => {
     const desktop = await connectedDesktop();
     expect(button("Type text").disabled).toBe(true);
@@ -112,6 +142,7 @@ describe("shared computer", () => {
     expect(write).toHaveBeenCalledWith("/computer/control", { action: "take", viewerId: "viewer-1" });
     expect(desktop.viewOnly).toBe(false);
     expect(container.textContent).toContain("Assistants are paused");
+    expect(container.querySelector(".desktop-stage")?.classList.contains("is-controlling")).toBe(true);
     await click("Hand back");
     expect(desktop.viewOnly).toBe(true);
   });
@@ -129,6 +160,7 @@ describe("shared computer", () => {
     await act(async () => replacement.dispatchEvent(new Event("connect")));
     expect(button("Take over").disabled).toBe(false);
     expect(button("Hand back").disabled).toBe(false);
+    expect(container.textContent).toContain("Watching your desktop session");
   });
 
   it("does not enable an old desktop if takeover finishes after its socket disconnects", async () => {
@@ -148,6 +180,8 @@ describe("shared computer", () => {
     await act(async () => vi.advanceTimersByTimeAsync(3000));
     expect(desktop.viewOnly).toBe(true);
     expect(container.textContent).toContain("Jordan has control");
+    expect(container.querySelector(".desktop-stage")?.classList.contains("is-controlling")).toBe(false);
+    expect(container.textContent).toContain("Take over is available after they hand back.");
     expect(button("Take over").disabled).toBe(true);
   });
 
@@ -263,6 +297,7 @@ describe("system terminal", () => {
     await act(async () => vi.advanceTimersByTimeAsync(6000));
     expect(Socket.instances).toHaveLength(1);
     expect(container.textContent).toContain("Your shell has ended");
+    expect(container.textContent).not.toContain("Closing this panel keeps your shell running.");
     await click("Start terminal");
     expect(Socket.instances).toHaveLength(2);
   });

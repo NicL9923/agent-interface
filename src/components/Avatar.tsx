@@ -61,7 +61,7 @@ export const stateLabels: Record<ActivityState, string> = {
   waiting: "Waiting",
   blocked: "Needs your help",
   done: "Done",
-  disconnected: "Connection lost",
+  disconnected: "Reconnecting",
   failed: "Failed",
   interrupted: "Interrupted",
 };
@@ -255,6 +255,7 @@ export function Avatar({
   botId,
   reducedMotion = false,
   showState = false,
+  offline = false,
   prop,
 }: {
   avatar?: AvatarConfig;
@@ -266,6 +267,7 @@ export function Avatar({
   botId?: string;
   reducedMotion?: boolean;
   showState?: boolean;
+  offline?: boolean;
   /** A tool to hold while working, such as a magnifying glass during a search. */
   prop?: AvatarProp;
 }) {
@@ -282,6 +284,7 @@ export function Avatar({
   const reduce = useReducedMotion(reducedMotion);
   const id = useId().replace(/:/g, "");
   const label = name ?? "Assistant";
+  const statusLabel = state === "disconnected" && offline ? "Offline" : stateLabels[state];
   // The conductor keeps different bots from gesturing alike; an unnamed avatar is its own bot.
   const owner = motionOwner(botId, name, id);
   const [, setFrame] = useState(0);
@@ -614,7 +617,7 @@ export function Avatar({
       data-family={mascot?.family}
       data-reduced-motion={reduce}
       role="img"
-      aria-label={`${label}: ${stateLabels[state]}`}
+      aria-label={`${label}: ${statusLabel}`}
     >
       {avatar.mode === "portrait" ? (
         <>
@@ -679,7 +682,7 @@ export function Avatar({
         </span>
       )}
       {showState && (
-        <span className="avatar-caption">{stateLabels[state]}</span>
+        <span className="avatar-caption">{statusLabel}</span>
       )}
     </span>
   );

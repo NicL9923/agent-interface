@@ -1,6 +1,7 @@
 import { Dialog } from "./ui/dialog";
 import { Button } from "./ui/button";
 import { Textarea } from "./ui/textarea";
+import type { CSSProperties } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type RFB from "@novnc/novnc";
 import type { Terminal } from "@xterm/xterm";
@@ -106,15 +107,16 @@ function useReconnecting(connect: (attachment: Attachment) => Promise<void>, { f
 function ownerLabel(status: ComputerStatus | null, controlling: boolean) {
   if (controlling) return "You have control";
   if (status?.control.kind === "human") return status.control.mine
-    ? "Watching. Take over to control the desktop."
+    ? "Watching your desktop session"
     : `${status.control.name || "A household member"} has control`;
   if (status?.control.kind === "bot") return `${status.control.name || "An assistant"} is using the computer`;
-  return "Watching. Assistants can use this computer.";
+  return "Watching the shared desktop";
 }
 
-export function ComputerPanel({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const [tab, setTab] = useState<Tab>("desktop");
-  const [terminalOpened, setTerminalOpened] = useState(false);
+export function ComputerPanel({ open, onClose, initialTab = "desktop" }: { open: boolean; onClose: () => void; initialTab?: Tab }) {
+  const [tab, setTab] = useState<Tab>(initialTab);
+  const [desktopOpened, setDesktopOpened] = useState(initialTab === "desktop");
+  const [terminalOpened, setTerminalOpened] = useState(initialTab === "terminal");
   // Chosen once, so an open shell is not replaced when its confirmation ages past two hours.
   const [terminalStep, setTerminalStep] = useState<"confirm" | "shell" | null>(null);
   const [status, setStatus] = useState<ComputerStatus | null>(null);
@@ -164,9 +166,10 @@ export function ComputerPanel({ open, onClose }: { open: boolean; onClose: () =>
   const changeTab = (next: Tab) => {
     setTab(next);
     if (next === "terminal") setTerminalOpened(true);
+    else setDesktopOpened(true);
   };
 
-  return <Dialog open={open}
+  return <Dialog open={open} initialFocus='[role="tab"][aria-selected="true"]'
     fallbackFocus={() => document.querySelector<HTMLElement>(".bot-rail:not([inert]) [aria-label='Settings']")
       ?? document.querySelector<HTMLElement>("[aria-label='Back to assistants']")} className="computer-panel" aria-labelledby="computer-title"
     onCancel={event => { event.preventDefault(); onClose(); }}>
@@ -174,7 +177,7 @@ export function ComputerPanel({ open, onClose }: { open: boolean; onClose: () =>
       <div>
         <p className="eyebrow">Shared workspace</p>
         <h2 id="computer-title">Computer</h2>
-        <p className="computer-subtitle">One desktop for your assistants. Your own persistent shell.</p>
+        <p className="computer-subtitle">Shared desktop. Your persistent shell.</p>
       </div>
       <Button className="icon-button" aria-label="Close computer" onClick={onClose}><Icon name="close" /></Button>
     </header>
@@ -192,7 +195,7 @@ export function ComputerPanel({ open, onClose }: { open: boolean; onClose: () =>
     </div>
     {statusError && <p role="status" className="computer-notice">{statusError}</p>}
     <section id="computer-desktop" role="tabpanel" aria-labelledby="computer-tab-desktop" hidden={tab !== "desktop"}>
-      {open && status?.available ? <DesktopView status={status} onStatus={setStatus} viewerId={viewerId} />
+      {open && desktopOpened && status?.available ? <DesktopView status={status} onStatus={setStatus} viewerId={viewerId} />
         : <Unavailable icon="computer" title={!status ? "Connecting to the computer" : "Desktop unavailable"}
           detail={status?.reason || (!status ? "Checking the shared desktop on the Hermes host." : "The shared desktop needs to be started on the Hermes host.")} />}
     </section>
@@ -258,6 +261,7 @@ function DesktopView({ status, onStatus, viewerId }: {
   const screen = useRef<HTMLDivElement>(null);
   const rfb = useRef<RFB | null>(null);
   const [controlling, setControlling] = useState(false);
+  const [aspect, setAspect] = useState(1.6);
   const [submitting, setSubmitting] = useState(false);
   const [textOpen, setTextOpen] = useState(false);
   const [typedText, setTypedText] = useState("");
@@ -284,7 +288,16 @@ function DesktopView({ status, onStatus, viewerId }: {
     client.viewOnly = true;
     client.scaleViewport = true;
     client.resizeSession = false;
-    client.addEventListener("connect", connected);
+    // noVNC's canvas keeps the remote framebuffer dimensions even when its CSS
+    // viewport scales. Observe resolution changes without polling the desktop.
+    const measure = () => {
+      const canvas = screen.current?.querySelector("canvas");
+      if (canvas && canvas.width > 0 && canvas.height > 0) setAspect(canvas.width / canvas.height);
+    };
+    const observer = new MutationObserver(measure);
+    observer.observe(screen.current, { subtree: true, childList: true, attributes: true, attributeFilter: ["width", "height"] });
+    onCleanup(() => observer.disconnect());
+    client.addEventListener("connect", () => { measure(); connected(); });
     client.addEventListener("disconnect", () => retry("Desktop disconnected. Reconnecting in watch mode."));
     client.addEventListener("securityfailure", () => retry("The desktop connection was rejected. Reconnecting in watch mode."));
   }, {
@@ -333,10 +346,14 @@ function DesktopView({ status, onStatus, viewerId }: {
     } finally { setSubmitting(false); }
   };
 
+  const heldElsewhere = status.control.kind === "human";
+  const hint = controlling ? "Assistants are paused while you use the desktop."
+    : heldElsewhere && !status.control.mine ? "Take over is available after they hand back."
+    : heldElsewhere ? "Take over to use it here." : "Take over to use the mouse and keyboard.";
   return <div className="computer-view">
     <div className="computer-toolbar">
       <div className="computer-ownership" role="status"><span className={`computer-state-dot ${connection === "connected" ? "ready" : ""}`} />
-        <strong>{ownerLabel(status, controlling)}</strong><span>{controlling ? "Assistants are paused while you use the desktop." : "Take over to use the mouse and keyboard."}</span></div>
+        <strong>{ownerLabel(status, controlling)}</strong><span>{hint}</span></div>
       <div className="computer-control-actions">
         {!controlling && status.control.kind === "human" && status.control.mine && <Button disabled={connection !== "connected" || submitting} onClick={() => void control("release")}>Hand back</Button>}
         <Button className={controlling ? "" : "primary"} disabled={connection !== "connected" || submitting || status.control.kind === "human" && !status.control.mine}
@@ -344,7 +361,7 @@ function DesktopView({ status, onStatus, viewerId }: {
       </div>
     </div>
     {(error || status.reason) && <p className="computer-notice" role="status">{error || status.reason}</p>}
-    <div className="computer-screen-wrap">
+    <div className={`computer-screen-wrap desktop-stage${controlling ? " is-controlling" : ""}`} style={{ "--desktop-aspect": aspect } as CSSProperties}>
       <div className="computer-screen" ref={screen} aria-label={controlling ? "Shared desktop. You have control." : "Shared desktop. Watching."} />
       {connection !== "connected" && <div className="computer-connection-overlay" role="status">
         <Icon name="computer" size={30} /><strong>{connection === "failed" ? "Desktop connection unavailable" : connection === "reconnecting" ? "Reconnecting desktop" : "Opening desktop"}</strong>
@@ -367,7 +384,7 @@ function DesktopView({ status, onStatus, viewerId }: {
       setTypedText(""); setTextOpen(false); rfb.current?.focus();
     }}><label htmlFor="desktop-text-input">Type into the selected desktop field</label>
       <Textarea id="desktop-text-input" autoFocus autoCapitalize="none" autoComplete="off" autoCorrect="off" spellCheck={false} maxLength={8192} rows={2} value={typedText} onChange={event => setTypedText(event.target.value)} />
-      <div className="actions"><small>Click a field on the desktop first. Text is cleared after sending.</small><Button type="submit" disabled={!controlling || !typedText}>Send text</Button></div>
+      <div className="actions"><small>Select a field on the desktop first. Text is cleared after sending.</small><Button type="submit" disabled={!controlling || !typedText}>Send text</Button></div>
     </form>}
     <p className="computer-footnote">The desktop and browser logins stay on the server when you close this panel.</p>
   </div>;
@@ -483,7 +500,7 @@ function TerminalView({ target, active, onReauthenticate }: { target: string; ac
   return <div className="computer-view">
     <div className="computer-toolbar">
       <div className="computer-ownership" role="status"><span className={`computer-state-dot ${connected ? "ready" : ""}`} />
-        <strong>{connection === "ended" ? "Shell ended" : connected ? "Your system terminal" : "Connecting to your terminal"}</strong><span>{target}</span></div>
+        <strong>{connection === "ended" ? "Shell ended" : connected ? "Your system terminal" : "Connecting to your terminal"}</strong><span>{target}</span>{connection !== "ended" && <span className="terminal-persistence">Closing this panel keeps your shell running.</span>}</div>
       <Button disabled={!sessionId.current || connection === "ended" || ending} onClick={() => setConfirmEnd(true)}>End shell</Button>
     </div>
     {confirmEnd && <div className="computer-end-confirmation" role="alert">
@@ -503,7 +520,6 @@ function TerminalView({ target, active, onReauthenticate }: { target: string; ac
       <Button disabled={!connected} onClick={() => terminal.current?.focus()}>Keyboard</Button>
       <Button disabled={!connected} aria-label="Send Ctrl+C" onClick={() => send({ type: "input", data: "\u0003" })}>Ctrl+C</Button>
       <Button disabled={!connected} aria-expanded={pasteOpen} aria-controls="terminal-paste" onClick={() => setPasteOpen(value => !value)}>Paste text</Button>
-      <span>Closing this panel keeps your shell running.</span>
     </div>
     {pasteOpen && <form id="terminal-paste" className="terminal-paste" onSubmit={event => {
       event.preventDefault();

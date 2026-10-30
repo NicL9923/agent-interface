@@ -14,11 +14,16 @@ struct HermesUpgradeView: View {
   private var status: UpgradeStatus? { store.upgrade.status }
   /// Everything that must not be tapped while a request or recovery is unresolved.
   private var locked: Bool { store.upgrade.busy || store.sessionExpired || store.upgrade.installUncertain }
+  private var recoveryFirst: Bool { status?.showsRecovery == true && status?.inProgress != true }
   var body: some View {
     Form {
       summarySection
-      actionSection
-      recoverySection
+      if recoveryFirst { recoverySection }
+      versionSection
+      if !recoveryFirst {
+        actionSection
+        recoverySection
+      }
       errorSection
       detailsSection
     }.navigationTitle("Hermes updates").navigationBarTitleDisplayMode(.inline)
@@ -50,7 +55,7 @@ struct HermesUpgradeView: View {
           guard let action = recoveryAction, let operationId = recoveryOperation else { return }
           Task { await store.upgrade.control(action, operationId: operationId) }
         }
-        Button("Keep current state", role: .cancel) {}
+        Button("Not now", role: .cancel) {}
       }
   }
 
@@ -59,13 +64,21 @@ struct HermesUpgradeView: View {
   private var summarySection: some View {
     Section {
       VStack(alignment: .leading, spacing: 12) {
-        Label(status?.title ?? "Hermes updates", systemImage: statusSymbol)
+        Label {
+          Text(status?.title ?? "Hermes updates")
+        } icon: {
+          Image(systemName: statusSymbol).foregroundStyle(status?.phase == "failed" || status?.phase == "blocked" ? Color.red : Palette.accent)
+        }
           .font(.title3.bold()).accessibilityAddTraits(.isHeader)
         Text(status?.description(loading: store.upgrade.busy) ?? placeholder).foregroundStyle(.secondary)
         if store.upgrade.submitting || store.upgrade.installUncertain || status?.inProgress == true {
           ProgressView().accessibilityLabel(status?.title ?? "Working")
         }
       }.padding(.vertical, 8)
+    }
+  }
+  private var versionSection: some View {
+    Section {
       if let status, status.phase != "idle" { stepList(status) }
       if let current = status?.current {
         revisionRow("Running now", title: current.displayVersion, detail: current.displayDetail)
@@ -146,11 +159,14 @@ struct HermesUpgradeView: View {
   @ViewBuilder private var recoverySection: some View {
     if let status, status.showsRecovery {
       Section {
+        if status.canRestartService == true {
+          Button { confirm("restart_service") } label: {
+            Text("Restart Hermes").frame(maxWidth: .infinity, minHeight: 32)
+          }.buttonStyle(.borderedProminent).tint(Palette.accent).accessibilityIdentifier("restartHermesService")
+            .listRowSeparator(.hidden, edges: .bottom)
+        }
         if status.canRetry == true && status.isInstall {
           Button("Check and try again") { control("retry") }.accessibilityIdentifier("retryHermesUpdate")
-        }
-        if status.canRestartService == true {
-          Button("Restart Hermes") { confirm("restart_service") }.accessibilityIdentifier("restartHermesService")
         }
         if status.canCancel == true && status.isInstall {
           Button("Cancel update", role: .destructive) { confirm("cancel") }.accessibilityIdentifier("cancelHermesUpdate")
@@ -189,7 +205,7 @@ struct HermesUpgradeView: View {
           }
         } label: {
           HStack {
-            Text("Test details")
+            Text("Check details")
             Spacer()
             Text("\(status.checksPassed) of \(status.checks.count) passed").font(.caption).foregroundStyle(.secondary)
           }

@@ -1,0 +1,583 @@
+{
+  "gate": "Work W2b task creation and editing",
+  "accepted": true,
+  "nextScreenAllowed": true,
+  "nextScreen": "Work W3 event triggers",
+  "sourceByClient": {
+    "web": "sha256:eb880a85d2aa8af9930815ba8dcdc2134a863a36b4550ed0d9066ec2263f729b (226 source files)",
+    "iphone": "sha256:8b416af9bff992bd2af8f9a9f8aff25c7028157dc45cf609625e20b4dccd5cb7 (243 source files)",
+    "ipad": "sha256:35bc7afbf17954a05a03a8b7950978ee4ac3f6ec18a63dfc8697db8d9b98b477 (243 source files)"
+  },
+  "fixtureSHA256": "e8fee514b68e3f33b42b1b5fe166e6629d2fbb87679f87810aa778f0c072e744",
+  "reviewer": {
+    "provider": "Anthropic",
+    "model": "Claude Opus 5.5",
+    "effort": "high"
+  },
+  "reports": {
+    "baseline": "work-task-editor-baseline-review.md",
+    "web": "work-task-editor-web-review.md",
+    "iphone": "work-task-editor-iphone-review.md",
+    "ipad": "work-task-editor-ipad-review.md",
+    "scrollHelper": "work-task-editor-scroll-prep-review.md"
+  },
+  "frameCount": 38,
+  "uniqueImageHashes": 38,
+  "counts": {
+    "web": 16,
+    "iphone": 13,
+    "ipad": 9
+  },
+  "scores": {
+    "web": 9,
+    "iphone": 9,
+    "ipad": 9
+  },
+  "scoreBasis": "Every actual frame scored 9. No averaging or projection.",
+  "frames": [
+    {
+      "name": "task-create-desktop",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-w2b-after-web-captures-r5/work-tasks-b-after/web-work-task-create-desktop.png",
+      "sha256": "b9d5ba22186e0b3e1cea2fa0f0139dcd523759a448418e38d6d1eec72582110b",
+      "dimensions": [
+        1440,
+        1000
+      ],
+      "client": "web",
+      "source": "sha256:eb880a85d2aa8af9930815ba8dcdc2134a863a36b4550ed0d9066ec2263f729b (226 source files)",
+      "review": 98,
+      "score": 9
+    },
+    {
+      "name": "task-create-dark",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-w2b-after-web-captures-r5/work-tasks-b-after/web-work-task-create-dark.png",
+      "sha256": "0a3c3fdd3ccafd20c1fd7101b53e436a7a0cfda991f3893ab61ba7cc7bbd1ffc",
+      "dimensions": [
+        1440,
+        1000
+      ],
+      "client": "web",
+      "source": "sha256:eb880a85d2aa8af9930815ba8dcdc2134a863a36b4550ed0d9066ec2263f729b (226 source files)",
+      "review": 98,
+      "score": 9
+    },
+    {
+      "name": "task-create-phone-top",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-w2b-after-web-captures-r5/work-tasks-b-after/web-work-task-create-phone-top.png",
+      "sha256": "a1aa5d63b6f85407591ecbcf2fe4350852371d6fcbba5a8476606286b4d01f86",
+      "dimensions": [
+        390,
+        844
+      ],
+      "client": "web",
+      "source": "sha256:eb880a85d2aa8af9930815ba8dcdc2134a863a36b4550ed0d9066ec2263f729b (226 source files)",
+      "review": 98,
+      "score": 9
+    },
+    {
+      "name": "task-create-phone-bottom",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-w2b-after-web-captures-r5/work-tasks-b-after/web-work-task-create-phone-bottom.png",
+      "sha256": "4b4a6a9e49cee3470d5401078b94c7b85326ac181a8636a6d959a3faa85405a8",
+      "dimensions": [
+        390,
+        844
+      ],
+      "client": "web",
+      "source": "sha256:eb880a85d2aa8af9930815ba8dcdc2134a863a36b4550ed0d9066ec2263f729b (226 source files)",
+      "review": 98,
+      "score": 9
+    },
+    {
+      "name": "task-create-narrow",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-w2b-after-web-captures-r5/work-tasks-b-after/web-work-task-create-narrow.png",
+      "sha256": "c7925cdc2294a198317bc72de9187e92c61f8f6df8fe4981ce3475ca656ab235",
+      "dimensions": [
+        320,
+        844
+      ],
+      "client": "web",
+      "source": "sha256:eb880a85d2aa8af9930815ba8dcdc2134a863a36b4550ed0d9066ec2263f729b (226 source files)",
+      "review": 98,
+      "score": 9
+    },
+    {
+      "name": "task-create-large-text-top",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-w2b-after-web-captures-r5/work-tasks-b-after/web-work-task-create-large-text-top.png",
+      "sha256": "f0a1d3131ad052a184071c88f5d9fe42f7968dde6f3db3436e8d2e3b626528ba",
+      "dimensions": [
+        390,
+        844
+      ],
+      "client": "web",
+      "source": "sha256:eb880a85d2aa8af9930815ba8dcdc2134a863a36b4550ed0d9066ec2263f729b (226 source files)",
+      "review": 98,
+      "score": 9
+    },
+    {
+      "name": "task-create-large-text-bottom",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-w2b-after-web-captures-r5/work-tasks-b-after/web-work-task-create-large-text-bottom.png",
+      "sha256": "e18927f470cafee8c8624c2d1efc12057b9f84c5768c9eca68900aa3f2d3988f",
+      "dimensions": [
+        390,
+        844
+      ],
+      "client": "web",
+      "source": "sha256:eb880a85d2aa8af9930815ba8dcdc2134a863a36b4550ed0d9066ec2263f729b (226 source files)",
+      "review": 98,
+      "score": 9
+    },
+    {
+      "name": "task-create-saved",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-w2b-after-web-captures-r5/work-tasks-b-after/web-work-task-create-saved.png",
+      "sha256": "114099f0cf8ae9822e779a5952b8246fa28d2ae831515c5196921fbed4fb3607",
+      "dimensions": [
+        390,
+        844
+      ],
+      "client": "web",
+      "source": "sha256:eb880a85d2aa8af9930815ba8dcdc2134a863a36b4550ed0d9066ec2263f729b (226 source files)",
+      "review": 98,
+      "score": 9
+    },
+    {
+      "name": "task-create-uncertain-form",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-w2b-after-web-captures-r5/work-tasks-b-after/web-work-task-create-uncertain-form.png",
+      "sha256": "6c8072302d6ffe551078e9d4aa549fc486c67c2d858035c2f422ca397d77f446",
+      "dimensions": [
+        390,
+        844
+      ],
+      "client": "web",
+      "source": "sha256:eb880a85d2aa8af9930815ba8dcdc2134a863a36b4550ed0d9066ec2263f729b (226 source files)",
+      "review": 98,
+      "score": 9
+    },
+    {
+      "name": "task-create-uncertain-alert",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-w2b-after-web-captures-r5/work-tasks-b-after/web-work-task-create-uncertain-alert.png",
+      "sha256": "9e5f4526f53dfef7e8e370f60068243704e941e52a362cbba9e2e15d80d57aef",
+      "dimensions": [
+        390,
+        844
+      ],
+      "client": "web",
+      "source": "sha256:eb880a85d2aa8af9930815ba8dcdc2134a863a36b4550ed0d9066ec2263f729b (226 source files)",
+      "review": 98,
+      "score": 9
+    },
+    {
+      "name": "task-create-refreshed-form",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-w2b-after-web-captures-r5/work-tasks-b-after/web-work-task-create-refreshed-form.png",
+      "sha256": "6c45cc4000d7bfe274c639feea446327ab531e0e7d0814c89d189b8a0b6ff891",
+      "dimensions": [
+        390,
+        844
+      ],
+      "client": "web",
+      "source": "sha256:eb880a85d2aa8af9930815ba8dcdc2134a863a36b4550ed0d9066ec2263f729b (226 source files)",
+      "review": 98,
+      "score": 9
+    },
+    {
+      "name": "task-create-uncertain-closed",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-w2b-after-web-captures-r5/work-tasks-b-after/web-work-task-create-uncertain-closed.png",
+      "sha256": "bfe20788ce333330b68172a998d60316523cfe873880ecf397883133123acca9",
+      "dimensions": [
+        390,
+        844
+      ],
+      "client": "web",
+      "source": "sha256:eb880a85d2aa8af9930815ba8dcdc2134a863a36b4550ed0d9066ec2263f729b (226 source files)",
+      "review": 98,
+      "score": 9
+    },
+    {
+      "name": "task-edit-desktop",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-w2b-after-web-captures-r5/work-tasks-b-after/web-work-task-edit-desktop.png",
+      "sha256": "e21b16c3adb7f0dfb7750fec42badf55b5fd7881087978ed01d2964085a43321",
+      "dimensions": [
+        1440,
+        1000
+      ],
+      "client": "web",
+      "source": "sha256:eb880a85d2aa8af9930815ba8dcdc2134a863a36b4550ed0d9066ec2263f729b (226 source files)",
+      "review": 98,
+      "score": 9
+    },
+    {
+      "name": "task-edit-phone",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-w2b-after-web-captures-r5/work-tasks-b-after/web-work-task-edit-phone.png",
+      "sha256": "6fa32cab7e93b0ea82a79d137cb9f989124020ce25d97e203f2922cb516c24cf",
+      "dimensions": [
+        390,
+        844
+      ],
+      "client": "web",
+      "source": "sha256:eb880a85d2aa8af9930815ba8dcdc2134a863a36b4550ed0d9066ec2263f729b (226 source files)",
+      "review": 98,
+      "score": 9
+    },
+    {
+      "name": "task-edit-large-text",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-w2b-after-web-captures-r5/work-tasks-b-after/web-work-task-edit-large-text.png",
+      "sha256": "8791cfd4e23182edc389a4c0c353a861da2c87c01a2ad3207081fda1d23f747b",
+      "dimensions": [
+        390,
+        844
+      ],
+      "client": "web",
+      "source": "sha256:eb880a85d2aa8af9930815ba8dcdc2134a863a36b4550ed0d9066ec2263f729b (226 source files)",
+      "review": 98,
+      "score": 9
+    },
+    {
+      "name": "task-edit-saved",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-w2b-after-web-captures-r5/work-tasks-b-after/web-work-task-edit-saved.png",
+      "sha256": "347780c8fbe836fcbe05bc3160e6de065edac4e2894679c112120ea2d33ad592",
+      "dimensions": [
+        390,
+        844
+      ],
+      "client": "web",
+      "source": "sha256:eb880a85d2aa8af9930815ba8dcdc2134a863a36b4550ed0d9066ec2263f729b (226 source files)",
+      "review": 98,
+      "score": 9
+    },
+    {
+      "name": "task-create-large-text-keyboard",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w2b-after-phone-r6-task-create-large-text-captures/after/ios/task-create-large-text-keyboard.png",
+      "sha256": "d7e9157abf47d9c6e31da62cec09d5c17496d1f8e4ce9d627e6f4a6989f61cee",
+      "dimensions": [
+        1206,
+        2622
+      ],
+      "client": "iphone",
+      "source": "sha256:8b416af9bff992bd2af8f9a9f8aff25c7028157dc45cf609625e20b4dccd5cb7 (243 source files)",
+      "review": 100,
+      "score": 9
+    },
+    {
+      "name": "task-create-large-text-top",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w2b-after-phone-r6-task-create-large-text-captures/after/ios/task-create-large-text-top.png",
+      "sha256": "5211640feb05e538db114308726d5639d99b599246efc006b881526c9534fd03",
+      "dimensions": [
+        1206,
+        2622
+      ],
+      "client": "iphone",
+      "source": "sha256:8b416af9bff992bd2af8f9a9f8aff25c7028157dc45cf609625e20b4dccd5cb7 (243 source files)",
+      "review": 100,
+      "score": 9
+    },
+    {
+      "name": "task-create-large-text-middle",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w2b-after-phone-r6-task-create-large-text-captures/after/ios/task-create-large-text-middle.png",
+      "sha256": "a5b5892bd32e3e0f74ba2ba2c025813186e4401a202e1d9d2e55e7ce4e0c4764",
+      "dimensions": [
+        1206,
+        2622
+      ],
+      "client": "iphone",
+      "source": "sha256:8b416af9bff992bd2af8f9a9f8aff25c7028157dc45cf609625e20b4dccd5cb7 (243 source files)",
+      "review": 100,
+      "score": 9
+    },
+    {
+      "name": "task-create-large-text-bottom",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w2b-after-phone-r6-task-create-large-text-captures/after/ios/task-create-large-text-bottom.png",
+      "sha256": "df25fb1295e1e9baa1004ac93a7d2b4151d39e1d3851b3610f4d1f4d77fb9c9a",
+      "dimensions": [
+        1206,
+        2622
+      ],
+      "client": "iphone",
+      "source": "sha256:8b416af9bff992bd2af8f9a9f8aff25c7028157dc45cf609625e20b4dccd5cb7 (243 source files)",
+      "review": 100,
+      "score": 9
+    },
+    {
+      "name": "task-create-empty",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w2b-after-phone-r7-task-create-captures/after/ios/task-create-empty.png",
+      "sha256": "708714300940a60228b0e0f6941a0fb9aadff5c48137a0712b06eccab8eb775e",
+      "dimensions": [
+        1206,
+        2622
+      ],
+      "client": "iphone",
+      "source": "sha256:8b416af9bff992bd2af8f9a9f8aff25c7028157dc45cf609625e20b4dccd5cb7 (243 source files)",
+      "review": 100,
+      "score": 9
+    },
+    {
+      "name": "task-create-filled",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w2b-after-phone-r7-task-create-captures/after/ios/task-create-filled.png",
+      "sha256": "33321d51e0649eb1721f684515db7339f409ac71e41302e1f282b558b70f5d89",
+      "dimensions": [
+        1206,
+        2622
+      ],
+      "client": "iphone",
+      "source": "sha256:8b416af9bff992bd2af8f9a9f8aff25c7028157dc45cf609625e20b4dccd5cb7 (243 source files)",
+      "review": 100,
+      "score": 9
+    },
+    {
+      "name": "task-create-saved",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w2b-after-phone-r7-task-create-captures/after/ios/task-create-saved.png",
+      "sha256": "db01003458793d0e647d1391fb3aa2f0266282d4464b7423b7e9feaee81e695c",
+      "dimensions": [
+        1206,
+        2622
+      ],
+      "client": "iphone",
+      "source": "sha256:8b416af9bff992bd2af8f9a9f8aff25c7028157dc45cf609625e20b4dccd5cb7 (243 source files)",
+      "review": 100,
+      "score": 9
+    },
+    {
+      "name": "task-create-dark",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w2b-after-phone-r7-task-create-dark-captures/after/ios/task-create-dark.png",
+      "sha256": "7be3b3dfd034b76a004415f2c88557af375456e4a9c7d6835daeae7c5f4fe978",
+      "dimensions": [
+        1206,
+        2622
+      ],
+      "client": "iphone",
+      "source": "sha256:8b416af9bff992bd2af8f9a9f8aff25c7028157dc45cf609625e20b4dccd5cb7 (243 source files)",
+      "review": 100,
+      "score": 9
+    },
+    {
+      "name": "task-edit",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w2b-after-phone-r7-task-edit-captures/after/ios/task-edit.png",
+      "sha256": "8d0e4f0a20216774d2515266eb9e743702d88cf8867a1c0e1d6afa6553cb44f5",
+      "dimensions": [
+        1206,
+        2622
+      ],
+      "client": "iphone",
+      "source": "sha256:8b416af9bff992bd2af8f9a9f8aff25c7028157dc45cf609625e20b4dccd5cb7 (243 source files)",
+      "review": 100,
+      "score": 9
+    },
+    {
+      "name": "task-edit-saved",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w2b-after-phone-r7-task-edit-captures/after/ios/task-edit-saved.png",
+      "sha256": "90eb4996973d0e54cd3f8b27df6ec4993886bf1cb0328bdfa1f8fb18ba767cbe",
+      "dimensions": [
+        1206,
+        2622
+      ],
+      "client": "iphone",
+      "source": "sha256:8b416af9bff992bd2af8f9a9f8aff25c7028157dc45cf609625e20b4dccd5cb7 (243 source files)",
+      "review": 100,
+      "score": 9
+    },
+    {
+      "name": "task-create-uncertain",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w2b-after-phone-r7-task-create-uncertain-captures/after/ios/task-create-uncertain.png",
+      "sha256": "270a9221136f05defbb1bea69c252d9222eb3da4ae2a19b644534ad0878ee986",
+      "dimensions": [
+        1206,
+        2622
+      ],
+      "client": "iphone",
+      "source": "sha256:8b416af9bff992bd2af8f9a9f8aff25c7028157dc45cf609625e20b4dccd5cb7 (243 source files)",
+      "review": 100,
+      "score": 9
+    },
+    {
+      "name": "task-create-refreshed",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w2b-after-phone-r7-task-create-uncertain-captures/after/ios/task-create-refreshed.png",
+      "sha256": "e0ef58a9893d5f4ff44c06647dc45513769b8069b8820c0cf3d550076ed4b251",
+      "dimensions": [
+        1206,
+        2622
+      ],
+      "client": "iphone",
+      "source": "sha256:8b416af9bff992bd2af8f9a9f8aff25c7028157dc45cf609625e20b4dccd5cb7 (243 source files)",
+      "review": 100,
+      "score": 9
+    },
+    {
+      "name": "task-create-closed",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w2b-after-phone-r7-task-create-uncertain-captures/after/ios/task-create-closed.png",
+      "sha256": "1ce2e77fdd1b72bb361dce4febfc93313f46e709fb030f85e521e48b6fbd7b0b",
+      "dimensions": [
+        1206,
+        2622
+      ],
+      "client": "iphone",
+      "source": "sha256:8b416af9bff992bd2af8f9a9f8aff25c7028157dc45cf609625e20b4dccd5cb7 (243 source files)",
+      "review": 100,
+      "score": 9
+    },
+    {
+      "name": "task-create-large-text-keyboard",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w2b-after-pad-r2-task-create-large-text-captures/after/ipad/task-create-large-text-keyboard.png",
+      "sha256": "c4ea94d357ce294fd14944a74252f8b161ca4dd73a5bb56ac9e2a1252add276d",
+      "dimensions": [
+        1668,
+        2420
+      ],
+      "client": "ipad",
+      "source": "sha256:35bc7afbf17954a05a03a8b7950978ee4ac3f6ec18a63dfc8697db8d9b98b477 (243 source files)",
+      "review": 102,
+      "score": 9
+    },
+    {
+      "name": "task-create-large-text-top",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w2b-after-pad-r2-task-create-large-text-captures/after/ipad/task-create-large-text-top.png",
+      "sha256": "41a01c68a39f50eb0d913ba2d7762ce0e2f365d101fca39ef6c28231dddd13ee",
+      "dimensions": [
+        1668,
+        2420
+      ],
+      "client": "ipad",
+      "source": "sha256:35bc7afbf17954a05a03a8b7950978ee4ac3f6ec18a63dfc8697db8d9b98b477 (243 source files)",
+      "review": 102,
+      "score": 9
+    },
+    {
+      "name": "task-create-large-text-middle",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w2b-after-pad-r2-task-create-large-text-captures/after/ipad/task-create-large-text-middle.png",
+      "sha256": "9d1aeb024be7165846650295b2b5381f180ced030e3e69ae88e733b9265ca025",
+      "dimensions": [
+        1668,
+        2420
+      ],
+      "client": "ipad",
+      "source": "sha256:35bc7afbf17954a05a03a8b7950978ee4ac3f6ec18a63dfc8697db8d9b98b477 (243 source files)",
+      "review": 102,
+      "score": 9
+    },
+    {
+      "name": "task-create-large-text-bottom",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w2b-after-pad-r2-task-create-large-text-captures/after/ipad/task-create-large-text-bottom.png",
+      "sha256": "e8b9dc13fad5e6540bf1ab4634dd6ee9cd0d609e939659e3723300206d2cb58c",
+      "dimensions": [
+        1668,
+        2420
+      ],
+      "client": "ipad",
+      "source": "sha256:35bc7afbf17954a05a03a8b7950978ee4ac3f6ec18a63dfc8697db8d9b98b477 (243 source files)",
+      "review": 102,
+      "score": 9
+    },
+    {
+      "name": "task-edit",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w2b-after-pad-r2-task-edit-captures/after/ipad/task-edit.png",
+      "sha256": "22716a0eece2156df8fc0d75756596f719df7a333f5afb4c09aff2647d49409d",
+      "dimensions": [
+        1668,
+        2420
+      ],
+      "client": "ipad",
+      "source": "sha256:35bc7afbf17954a05a03a8b7950978ee4ac3f6ec18a63dfc8697db8d9b98b477 (243 source files)",
+      "review": 102,
+      "score": 9
+    },
+    {
+      "name": "task-edit-saved",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w2b-after-pad-r2-task-edit-captures/after/ipad/task-edit-saved.png",
+      "sha256": "ce961cf2ed3633581a1e7b13f6a66dbc02e8b8360bd4921dec192bf22ff23be6",
+      "dimensions": [
+        1668,
+        2420
+      ],
+      "client": "ipad",
+      "source": "sha256:35bc7afbf17954a05a03a8b7950978ee4ac3f6ec18a63dfc8697db8d9b98b477 (243 source files)",
+      "review": 102,
+      "score": 9
+    },
+    {
+      "name": "task-create-refreshed",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w2b-after-pad-r2-task-create-refreshed-captures/after/ipad/task-create-refreshed.png",
+      "sha256": "7fe4bd9449c0b4f99c7f84f9c37b217f8db1c160925248955d8f4601fd73f94b",
+      "dimensions": [
+        1668,
+        2420
+      ],
+      "client": "ipad",
+      "source": "sha256:35bc7afbf17954a05a03a8b7950978ee4ac3f6ec18a63dfc8697db8d9b98b477 (243 source files)",
+      "review": 102,
+      "score": 9
+    },
+    {
+      "name": "task-create-dark",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w2b-after-pad-r2-task-create-dark-captures/after/ipad/task-create-dark.png",
+      "sha256": "24dd4789cd3b41aa0545fb4bf2a713f590411eefe969d566fe09fc14bba5cf9c",
+      "dimensions": [
+        1668,
+        2420
+      ],
+      "client": "ipad",
+      "source": "sha256:35bc7afbf17954a05a03a8b7950978ee4ac3f6ec18a63dfc8697db8d9b98b477 (243 source files)",
+      "review": 102,
+      "score": 9
+    },
+    {
+      "name": "task-create-filled",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w2b-after-pad-r2-task-create-captures/after/ipad/task-create-filled.png",
+      "sha256": "a388893837f9391351273fdff201753c80a5c92e9f6b5fd78b8d25a0615b9584",
+      "dimensions": [
+        1668,
+        2420
+      ],
+      "client": "ipad",
+      "source": "sha256:35bc7afbf17954a05a03a8b7950978ee4ac3f6ec18a63dfc8697db8d9b98b477 (243 source files)",
+      "review": 102,
+      "score": 9
+    }
+  ],
+  "baselineSelection": "/Volumes/DevSSD/scratch/wildbots-design-review/work-w2b-before-selection.json",
+  "afterSelection": "/Volumes/DevSSD/scratch/wildbots-design-review/work-w2b-final-after-selection.json",
+  "annotations": "/Volumes/DevSSD/scratch/wildbots-design-review/work-w2b-final-annotations.json",
+  "annotatedComparisons": 6,
+  "sourceCarry": "/Volumes/DevSSD/scratch/wildbots-design-review/work-w2b-phone-to-pad-r2-carry-proof.json",
+  "checks": {
+    "webUi": {
+      "passed": 41,
+      "log": "/Volumes/DevSSD/scratch/wildbots-design-review/work-w2b-web-tests-r6.log"
+    },
+    "typecheck": "Passed",
+    "productionBuild": "Passed",
+    "browserCapture": "All 16 frames passed, zero browser errors and no horizontal overflow",
+    "webBinder": "Seven tests passed with the default macOS temp directory",
+    "nativeBinder": "Five tests passed, including gate isolation",
+    "nativeFunctional": {
+      "uniqueTestsPassed": 38,
+      "failed": 0,
+      "skipped": 0,
+      "source": "d02d096f030bc874f39c84f59c1aae43be516fba92e57bf7ee0b17a73a4144f2",
+      "summary": ".private/ios-test-20261028T212503Z-40708.txt",
+      "affectedTaskUiRepeated": 2,
+      "repeatedSource": "9a33d969f3b03a3d38477ea397c5b41d4f02b1cde220e97879fc3a024640cc29",
+      "repeatedSummary": ".private/ios-test-20261028T221506Z-57129.txt",
+      "carry": "Later changes affect the keyboard hit target and test helper only. Original check bindings are retained."
+    },
+    "nativeCapture": "Five phone tours and five iPad tours each passed one test with zero skips",
+    "keyboardTarget": "44 by 44 points, exact minimum guard unchanged"
+  },
+  "releaseReceipts": [
+    "/Volumes/DevSSD/scratch/wildbots-design-review/work-w2b-web-after-r5-heavy-release.json",
+    "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w2b-after-phone-r6-heavy-release.json",
+    "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w2b-after-phone-r7-heavy-release.json",
+    "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w2b-after-pad-r2-heavy-release.json"
+  ],
+  "disclosures": [
+    "R7 relay was delayed by parent interruption. Persisted terminal and release records prove the earlier event; no live foreground drain is claimed.",
+    "Failed runtime attempts are preserved and excluded from the accepted matrix.",
+    "The iPad keyboard frame proves the Hide button only. On-screen key-grid layout remains unverified and belongs to the whole-app pass.",
+    "Native enlarged text is AX3; web 200% is root-font scaling, not browser zoom.",
+    "Synthetic fixtures and simulators only. No physical device, VoiceOver, hardware keyboard, AX5, iOS17 or compact iPad verification.",
+    "Production Hermes 41dfcf2c behavior remains unavailable. Fixture assumptions do not establish production behavior.",
+    "The standalone port3021 browser smoke was not run; the gate-b browser capture was run."
+  ],
+  "wholeAppFollowups": [
+    "Capture an iPad editor with the on-screen key grid visible.",
+    "Locate the Invalid frame dimension warning recorded with the keyboard toolbar; no visible defect was observed.",
+    "Review platform-default disabled cues and the duplicated Cancel/Close dismissal actions in matched-create state.",
+    "Review app-wide small iPad sheets and navigation-bar glass ghosting."
+  ]
+}

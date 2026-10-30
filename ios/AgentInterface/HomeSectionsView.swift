@@ -52,9 +52,9 @@ struct FollowedAssistantsView: View {
           }
         }
       } footer: {
-        Text("Shared-task notifications already go to participants. Follow an assistant to receive all their activity.")
+        Text("Get a notification for every reply and update from these assistants. Shared tasks already notify the people in them.")
       }.disabled(store.sessionExpired)
-    }.householdListBackground().navigationTitle("Follow all activity").navigationBarTitleDisplayMode(.inline)
+    }.householdListBackground().navigationTitle("Following").navigationBarTitleDisplayMode(.inline)
   }
 }
 
@@ -63,13 +63,14 @@ struct HomeSectionRows: View {
   @Binding var preferences: Preferences
   var bots: [Bot]
   @State private var newName = ""
+  @State private var addError: String?
   private var trimmed: String { newName.trimmingCharacters(in: .whitespacesAndNewlines) }
   var body: some View {
     ForEach(preferences.sections) { section in
       NavigationLink {
         HomeSectionView(preferences: $preferences, sectionId: section.id, bots: bots)
       } label: {
-        LabeledContent(section.displayName, value: HomeSummary.assistants(bots.filter { section.botIds.contains($0.id) }.count))
+        LabeledContent(section.displayName, value: sectionSummary(section))
       }.accessibilityIdentifier("homeSection.\(section.id)")
     }.onDelete { offsets in
       for id in offsets.map({ preferences.sections[$0].id }) { preferences = preferences.removingSection(id) }
@@ -78,9 +79,15 @@ struct HomeSectionRows: View {
       NavigationLink("Reorder sections") { ReorderSectionsView(preferences: $preferences) }
         .accessibilityIdentifier("reorderSections")
     }
+    if let addError { Text(addError).font(.footnote).foregroundStyle(Palette.danger) }
     if preferences.canAddSection { addRow } else {
       Text("You have the most sections home can show (\(Preferences.sectionLimit)).").font(.footnote).foregroundStyle(.secondary)
     }
+  }
+  private func sectionSummary(_ section: BotSection) -> String {
+    let members = bots.filter { section.botIds.contains($0.id) }
+    let pinned = members.filter { preferences.favorites.contains($0.id) }.count
+    return HomeSummary.assistants(members.count) + (pinned > 0 ? (pinned == members.count ? " · All pinned" : " · \(pinned) pinned") : "")
   }
   /// Reads as an action, not a dimmed field: an accent plus and prompt, and Add appears once
   /// there is a name to add. An always-visible but disabled Add made the row look switched off.
@@ -88,14 +95,20 @@ struct HomeSectionRows: View {
     HStack(spacing: 10) {
       Image(systemName: "plus.circle.fill").foregroundStyle(Palette.accent).accessibilityHidden(true)
       TextField("New section name", text: $newName, prompt: Text("New section").foregroundStyle(Palette.accent))
-        .submitLabel(.done).onSubmit(add).accessibilityIdentifier("newSectionName")
+        .submitLabel(.done).onSubmit(add).onChange(of: newName) { _, _ in addError = nil }.accessibilityIdentifier("newSectionName")
       if !trimmed.isEmpty {
-        Button("Add", action: add).buttonStyle(.borderedProminent).controlSize(.small).tint(Palette.accent)
+        Button("Add", action: add).buttonStyle(.accentProminent).controlSize(.small).tint(Palette.accent)
           .accessibilityIdentifier("addSection")
       }
     }
   }
   private func add() {
+    if preferences.sections.contains(where: { $0.name.localizedCaseInsensitiveCompare(trimmed) == .orderedSame }) {
+      addError = "A section with that name already exists."
+      AccessibilityNotification.Announcement(addError!).post()
+      return
+    }
+    addError = nil
     guard let next = preferences.addingSection(named: newName) else { return }
     preferences = next
     newName = ""
@@ -121,18 +134,29 @@ struct HomeSectionView: View {
   @Environment(AppStore.self) private var store
   @Environment(\.dismiss) private var dismiss
   @State private var deleteConfirm = false
+  @State private var name = ""
+  @State private var nameError: String?
   private var section: BotSection? { preferences.sections.first { $0.id == sectionId } }
   var body: some View {
     Form {
       if let section {
         Section("Name") {
-          TextField("Section name", text: Binding(get: { section.name }, set: { preferences = preferences.renamingSection(sectionId, to: $0) }))
+          TextField("Section name", text: $name)
+            .onChange(of: name) { _, value in
+              let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+              if trimmed.isEmpty { nameError = "Enter a section name. The previous name is still saved." }
+              else if trimmed.count > Preferences.sectionNameLimit { nameError = "Use 100 characters or fewer. The previous name is still saved." }
+              else if preferences.sections.contains(where: { $0.id != sectionId && $0.name.localizedCaseInsensitiveCompare(trimmed) == .orderedSame }) { nameError = "A section with that name already exists. The previous name is still saved." }
+              else { nameError = nil; preferences = preferences.renamingSection(sectionId, to: trimmed) }
+            }
             .accessibilityIdentifier("sectionName")
+          if let nameError { Text(nameError).foregroundStyle(Palette.danger).font(.footnote).accessibilityAddTraits(.updatesFrequently) }
         }
         Section {
           ForEach(bots) { bot in
             let other = preferences.section(of: bot.id).flatMap { $0.id == sectionId ? nil : $0 }
-            AssistantCheckRow(bot: bot, selected: section.botIds.contains(bot.id), note: other.map { "In \($0.displayName)" }) {
+            let note = [other.map { "In \($0.displayName)" }, preferences.favorites.contains(bot.id) ? "Pinned on home" : nil].compactMap { $0 }.joined(separator: " · ")
+            AssistantCheckRow(bot: bot, selected: section.botIds.contains(bot.id), note: note.isEmpty ? nil : note) {
               preferences = preferences.moving(bot: bot.id, toSection: section.botIds.contains(bot.id) ? nil : sectionId)
             }
           }
@@ -143,7 +167,9 @@ struct HomeSectionView: View {
           Button("Delete section", role: .destructive) { deleteConfirm = true }.accessibilityIdentifier("deleteSection")
         } footer: { Text("Its assistants move back to More assistants on home.") }
       }
-    }.disabled(store.sessionExpired).householdListBackground()
+    }.onChange(of: nameError) { old, error in
+      if let error, old == nil { AccessibilityNotification.Announcement(error).post() }
+    }.onAppear { name = section?.name ?? "" }.disabled(store.sessionExpired).householdListBackground()
       .navigationTitle(section?.displayName ?? "Section").navigationBarTitleDisplayMode(.inline)
       .confirmationDialog("Delete \(section?.displayName ?? "this section")?", isPresented: $deleteConfirm, titleVisibility: .visible) {
         Button("Delete section", role: .destructive) {

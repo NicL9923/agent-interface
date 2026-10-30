@@ -1,21 +1,42 @@
-.today-panel { overflow-y: auto; padding: 18px clamp(16px, 5vw, 64px) 30px; flex: 1; }
-.today-intro, .memory-heading, .reply-card-heading { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
-.today-intro { padding-bottom: 18px; border-bottom: 1px solid var(--line); }
-.today-intro > p { margin: 0; }
-.today-intro > button { font-size: 0.8125rem; padding: 7px 12px; flex-shrink: 0; }
-.today-counts { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 28px; }
-.today-counts span { color: var(--muted); }
-.today-counts strong { font-size: 1.375rem; color: var(--ink); margin-right: 6px; }
-.today-section { padding: 20px 0; border-bottom: 1px solid var(--line); }
-.today-section h3 { margin: 0 0 12px; font-size: 1.125rem; }
-.today-row { display: flex; text-align: left; align-items: center; gap: 14px; width: 100%; border: 0; border-radius: 12px; padding: 13px 8px; }
+/* Today keeps decisions prominent and result text within a comfortable reading width. */
+.chat-header.chat-header-today { padding-inline: max(32px, calc((100% - 720px) / 2)); }
+.chat-header-today .chat-title h1 { font-size: 1.5rem; font-weight: 600; }
+.chat-header-today .chat-title p { font-size: 0.8125rem; }
+.today-panel { overflow-y: auto; padding: 24px 32px 48px; flex: 1; min-height: 0; }
+.today-content { width: 100%; max-width: 720px; margin-inline: auto; }
+.today-status, .memory-heading, .reply-card-heading { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.today-status { gap: 12px; margin-bottom: 20px; }
+.today-timestamp { margin: 0; font-size: 0.75rem; line-height: 1.5; }
+.today-status > button { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; font-size: 0.8125rem; padding: 7px 10px; flex-shrink: 0; }
+.today-summary { display: flex; flex-wrap: wrap; gap: 8px 20px; align-items: center; margin-bottom: 28px; font-size: 0.8125rem; line-height: 1.5; color: var(--muted); }
+.today-summary strong { color: var(--ink); font-variant-numeric: tabular-nums; font-weight: 650; }
+.today-clear { display: inline-flex; align-items: center; gap: 6px; color: var(--accent); font-weight: 600; }
+.today-section { margin-top: 28px; }
+.today-section h3 { margin: 0; color: var(--muted); font-size: 0.75rem; line-height: 1.5; letter-spacing: .07em; text-transform: uppercase; font-weight: 650; }
+.today-section h3 > span { margin-left: 4px; font-variant-numeric: tabular-nums; }
+.today-section-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 16px; }
+.today-section-heading button { border: 0; color: var(--accent); font-size: 0.8125rem; padding: 8px 0; min-height: 36px; text-align: left; }
+.today-section-note { margin: 4px 0 12px; color: var(--muted); font-size: 0.75rem; line-height: 1.5; }
+.today-section > h3 { margin-bottom: 12px; }
+.today-attention-list { border: 1px solid var(--line); border-radius: 16px; padding: 0 11px; background: var(--raised); }
+.today-row { display: flex; text-align: left; align-items: center; gap: 12px; width: 100%; border: 0; border-radius: 10px; padding: 14px 12px; min-height: 72px; }
+.today-attention-list .today-row { position: relative; padding: 16px 0; border-radius: 0; }
+.today-attention-list .today-row + .today-row::before { content: ""; position: absolute; top: 0; left: 48px; right: 0; height: 1px; background: var(--line); }
+.today-attention-list .today-row:focus-visible { outline-offset: -3px; border-radius: 10px; }
+.today-attention-list .today-row:hover:enabled { background: color-mix(in srgb, var(--accent-soft) 45%, var(--raised)); }
 .today-row-copy { flex: 1; min-width: 0; }
-.today-row > .avatar-wrap { flex: 0 0 auto; }
-.today-row strong, .today-row small { display: block; overflow-wrap: anywhere; }
-.today-row small { color: var(--muted); margin-top: 5px; }
-.today-row > span:last-child:not(:first-child) { font-size: 1.125rem; color: var(--muted); }
-.today-timestamp { font-size: 0.75rem; }
-.today-section > button:not(.today-row) { font-size: 0.8125rem; padding: 7px 12px; margin-top: 8px; }
+.today-avatar { display: flex; flex: 0 0 36px; width: 36px; height: 36px; }
+.today-row strong { display: block; overflow-wrap: anywhere; font-size: 0.9375rem; font-weight: 600; line-height: 1.5; }
+.today-row small { display: block; overflow-wrap: anywhere; color: var(--muted); margin-top: 4px; font-size: 0.8125rem; line-height: 1.5; }
+.today-row > .icon { color: var(--muted); }
+.today-row-action { flex: 0 0 auto; border-radius: 999px; padding: 5px 9px; font-size: 0.75rem; line-height: 1.5; font-weight: 600; color: var(--accent); background: var(--accent-soft); }
+.today-reason { color: var(--attention); }
+.today-reason.failed { color: var(--danger); }
+.today-empty { color: var(--muted); font-size: 0.875rem; line-height: 1.6; margin: 16px 0; }
+.today-more { margin: 8px 12px 0 60px; }
+.today-file-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.today-file { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; border: 1px solid var(--line); border-radius: 6px; padding: 4px 7px; font-size: 0.8125rem; overflow-wrap: anywhere; }
+.today-file .icon { flex-shrink: 0; color: var(--muted); }
 .memory-document { border-top: 1px solid var(--line); padding: 18px 0; }
 .memory-heading { flex-wrap: wrap; }
 .memory-heading h3 { margin: 0; }
@@ -64,4 +85,74 @@
 .voice-avatar.voice-recording::after, .voice-avatar.voice-speaking::after { content: ""; position: absolute; inset: -4px; border: 2px solid var(--accent); border-radius: 50%; animation: voice-pulse 1.4s ease-in-out infinite; }
 @keyframes voice-pulse { 50% { opacity: .3; transform: scale(1.1); } }
 @media (prefers-reduced-motion: reduce) { .voice-avatar::after { animation: none !important; } }
-@media (max-width: 620px) { .today-panel { padding: 22px 16px; } .today-intro { align-items: flex-start; } .today-counts { gap: 14px; } .today-counts span { font-size: 0.8125rem; } .today-counts strong { font-size: 1.3125rem; } .reply-card { padding: 14px; } }
+@media (max-width: 620px) {
+  .chat-header.chat-header-today { padding-inline: 12px; }
+  .today-panel { padding: 20px 16px 36px; }
+  .today-status { align-items: center; margin-bottom: 16px; }
+  .today-status > button { min-height: 44px; }
+  .today-summary { gap: 8px 16px; margin-bottom: 24px; }
+  .today-attention-list { padding-inline: 7px; }
+  .today-attention-list .today-row { gap: 12px; }
+  .today-row { padding-inline: 8px; }
+  .today-section-heading button { min-height: 44px; }
+  .today-more { margin-left: 56px; }
+  .reply-card { padding: 14px; }
+}
+
+/* Scoped to Memory; Today and reply cards retain their existing spacing. */
+.memory-panel { max-width: 720px; margin-inline: auto; }
+.memory-intro { margin-bottom: 20px; }
+.memory-intro h2 { margin: 0 0 6px; font-size: 1.375rem; line-height: 1.35; }
+.memory-intro p, .memory-scope p, .memory-note, .memory-empty { margin: 0; color: var(--muted); font-size: .875rem; line-height: 1.6; }
+.memory-scope { margin-bottom: 24px; border-left: 3px solid var(--line); padding-left: 14px; }
+.memory-scope strong { display: block; font-size: .875rem; line-height: 1.6; margin-bottom: 4px; }
+.memory-scope p + p { margin-top: 6px; }
+.memory-document { padding: 24px 0; }
+.memory-heading { align-items: baseline; gap: 6px 16px; margin-bottom: 16px; }
+.memory-heading h3 { font-size: 1.0625rem; line-height: 1.5; }
+.memory-heading small { font-size: .875rem; line-height: 1.5; font-variant-numeric: tabular-nums; }
+.memory-entry { margin: 0 0 20px; }
+.memory-entry label { gap: 8px; font-size: .875rem; line-height: 1.5; }
+.memory-entry textarea { font-size: 1rem; line-height: 1.55; min-height: 112px; max-height: min(32rem, 50dvh); padding: 12px; }
+.memory-entry textarea[readonly] { color: var(--ink); cursor: text; background: var(--rail); border-style: dashed; resize: none; }
+.memory-scroll-hint { color: var(--muted); font-size: .875rem; line-height: 1.5; }
+.memory-panel .memory-heading + .form-error { margin: 0 0 16px; }
+.memory-entry-action { color: var(--muted); font-size: .875rem; }
+.memory-empty, .memory-note { margin-bottom: 16px; }
+.memory-forget { margin-top: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; }
+.memory-forget p { margin: 0 0 8px; font-size: .875rem; line-height: 1.5; }
+.memory-actions { gap: 8px; }
+.memory-actions > button { min-height: 44px; }
+.memory-actions > button:first-child { display: inline-flex; align-items: center; gap: 6px; }
+.memory-panel .form-error, .memory-panel .form-notice, .memory-limit { font-size: .875rem; line-height: 1.6; margin: 12px 0 0; }
+.memory-panel .form-error { scroll-margin-top: 12px; }
+.memory-heading .memory-count-over, .memory-limit { color: var(--danger); }
+.memory-limit { margin-bottom: 12px; }
+
+.memory-progress { margin: 0; font-size: .875rem; line-height: 1.6; color: var(--muted); }
+.memory-progress:not(:empty) { margin-top: 12px; }
+
+.memory-load-error { display: grid; justify-items: start; gap: 10px; margin-bottom: 24px; }
+.memory-load-error > button { min-height: 44px; }
+
+.routine-manager > h3 { margin: 20px 0 12px; font-size: 1.0625rem; }
+.routine-manager > p.muted { font-size: .875rem; line-height: 1.6; }
+.routine-manager .routine-presets { margin-bottom: 24px; }
+.routine-manager > form { margin-top: 24px; scroll-margin-top: 12px; }
+.routine-card h4 { margin: 0 0 12px; font-size: 1.0625rem; line-height: 1.4; }
+.routine-card > p.routine-prompt { margin: 12px 0; font-size: .9375rem; line-height: 1.6; }
+.routine-meta { display: grid; gap: 6px; margin: 0; font-size: .875rem; line-height: 1.5; }
+.routine-meta > div { display: flex; flex-wrap: wrap; gap: 6px 12px; }
+.routine-meta dt { min-width: 5rem; color: var(--muted); }
+.routine-meta dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.routine-meta code { font-family: var(--font-mono); font-size: inherit; }
+.routine-enhancement-actions { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 10px; }
+.routine-enhancement-actions > .routine-preview-control { display: contents; }
+.routine-enhancement-actions .routine-preview-control > :not(button) { flex-basis: 100%; order: 1; }
+.routine-card .routine-trial-note { margin: 10px 0 0; color: var(--muted); font-size: .875rem; line-height: 1.6; }
+.routine-card .routine-management-actions { gap: 10px; margin: 16px 0 0; padding-top: 16px; border-top: 1px solid var(--line); }
+.routine-enhancements button, .routine-manager > form button { min-height: 44px; }
+
+.routine-preview small { color: var(--muted); }
+.routine-status.paused { display: inline-block; padding: 1px 8px; border: 1px solid var(--line); border-radius: 999px; background: var(--rail); color: var(--muted); font-weight: 600; }
+.routine-manager .routine-schedule { font-family: var(--font-mono); }

@@ -68,7 +68,7 @@ extension XCUIElement {
   /// again as typing ends, and the layout moves with it. A tap aimed at a button's frame from the
   /// keyboard-less layout then lands beside the button. Waits for the keyboard and for this element
   /// to stop moving. A hardware keyboard shows no software keyboard; the wait ends after 3 seconds.
-  private func waitForKeyboardLayout() {
+  func waitForKeyboardLayout() {
     guard XCUIApplication().keyboards.firstMatch.waitForExistence(timeout: 3) else { return }
     // Reading a missing element's frame fails the test, so a field that went away reads as null.
     var last = exists ? frame : .null
@@ -117,7 +117,18 @@ extension XCUIApplication {
       // hittable then fails the test outright, so wait for a real frame first.
       let deadline = Date().addingTimeInterval(5)
       while Date() < deadline, !(item.exists && item.frame.minX.isFinite && !item.frame.isEmpty) { usleep(100_000) }
-      guard item.exists, item.frame.minX.isFinite, !item.frame.isEmpty, item.isHittable else { continue }
+      guard item.exists else { continue }
+      if !item.canTap {
+        XCTContext.runActivity(named: "Offscreen settings choice: \(title)") { activity in
+          let screenshot = XCTAttachment(screenshot: self.screenshot())
+          screenshot.name = "settings-menu-before-AX-scroll"
+          screenshot.lifetime = .keepAlways; activity.add(screenshot)
+          let hierarchy = XCTAttachment(string: self.debugDescription)
+          hierarchy.name = "settings-menu-before-AX-scroll-hierarchy"
+          hierarchy.lifetime = .keepAlways; activity.add(hierarchy)
+        }
+      }
+      // XCUITest first asks the containing scroll view to reveal an offscreen choice.
       item.tap()
       let selected = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", title), object: more)
       if XCTWaiter.wait(for: [selected], timeout: 2) == .completed { return }

@@ -66,7 +66,7 @@ it("persists favorites separately from household preferences and reports failed 
   const favorite = container.querySelector<HTMLButtonElement>('[aria-label="Add New model to favorites"]')!;
   vi.mocked(write).mockRejectedValueOnce(new Error("Connection lost"));
   await act(async () => favorite.click());
-  expect(favorite.getAttribute("aria-pressed")).toBe("false");
+  expect(favorite.getAttribute("aria-label")).toBe("Add New model to favorites");
   expect(container.textContent).toContain("Connection lost");
   expect(onFavoritesSaved).not.toHaveBeenCalled();
   vi.mocked(write).mockResolvedValueOnce({ modelFavorites: [{ provider: "house", model: "new-model" }] });
@@ -80,8 +80,24 @@ it("persists favorites separately from household preferences and reports failed 
   expect(write).toHaveBeenLastCalledWith("/preferences/models", { modelFavorites: [] }, "PUT");
 });
 
+it("marks an alias favorite selected after choosing the canonical provider", async () => {
+  await act(async () => root.render(createElement(ModelSelector, {
+    value: { provider: "house", model: "saved-model" }, profile: "shared",
+    favorites: [{ provider: "custom:house", model: "saved-model" }], disabled: false,
+    onChange, onFavoritesSaved,
+  })));
+  const selected = container.querySelectorAll('.model-choice[aria-pressed="true"]');
+  expect(selected).toHaveLength(2);
+  expect([...selected].every(row => row.textContent?.includes("Saved model"))).toBe(true);
+  vi.mocked(write).mockResolvedValueOnce({ modelFavorites: [] });
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Remove Saved model from favorites"]')!.click());
+  expect(write).toHaveBeenCalledExactlyOnceWith("/preferences/models", { modelFavorites: [] }, "PUT");
+  expect(onChange).not.toHaveBeenCalled();
+});
+
 it("filters provider groups by search and shows an empty search result", async () => {
   await render();
+  const status = container.querySelector('[role="status"]');
   const input = container.querySelector<HTMLInputElement>('input[type="search"]')!;
   await typeInto(input, "new model");
   expect(container.querySelectorAll("details.model-provider")).toHaveLength(1);
@@ -89,6 +105,8 @@ it("filters provider groups by search and shows an empty search result", async (
   expect(button("New model")).toBeDefined();
   await typeInto(input, "missing");
   expect(container.textContent).toContain("No models match your search.");
+  expect(container.querySelector('[role="status"]')).toBe(status);
+  expect(status?.textContent).toBe("No models match your search.");
 });
 
 it("keeps a saved model after a catalog failure and retries without replacing the selection", async () => {

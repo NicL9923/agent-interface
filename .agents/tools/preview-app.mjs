@@ -163,9 +163,9 @@ if (process.env.PREVIEW_LONG_TOOL === '1') {
   ] };
   conversations.kitchen.sessionId = 'fixture-kitchen';
 }
-const previewRoom = { room_id: 'fixture-group', name: 'Weekend at the ranch', members: ['ranch', 'planner'].map(id => ({ member_id: id, profile: id, handle: id, display_name: bots.find(bot => bot.id === id)?.name || id })) };
+const previewRoom = { room_id: 'fixture-group', name: 'Weekend at the ranch', members: ['ranch', 'garden'].map(id => ({ member_id: id, profile: id, handle: id, display_name: bots.find(bot => bot.id === id)?.name || id })) };
 const groupRooms = [previewRoom];
-const groupEvents = [{ event_id: 'group-user', seq: 1, kind: 'message.user', actor: { kind: 'user', id: 'desktop' }, payload: { text: 'Can we fit a short nature walk around the gate repair? Explicit preview fixture.', thread_id: 'a624af77-b3de-46f9-a583-626018476e41' }, created_at: Date.now() / 1000 }, { event_id: 'group-reply', seq: 2, kind: 'message.member', actor: { kind: 'member', id: 'ranch' }, payload: { member_id: 'ranch', text: 'Replace the battery before breakfast, then take the shady trail. Bring water and check the weather before leaving.', thread_id: 'a624af77-b3de-46f9-a583-626018476e41' }, created_at: Date.now() / 1000 }];
+const groupEvents = [{ event_id: 'group-user', seq: 1, kind: 'message.user', actor: { kind: 'user', id: 'preview' }, sender: { id: 'preview', name: 'Nicolas' }, payload: { text: 'Can we fit a short nature walk around the gate repair? Explicit preview fixture.', thread_id: 'a624af77-b3de-46f9-a583-626018476e41' }, created_at: Date.now() / 1000 }, { event_id: 'group-reply', seq: 2, kind: 'message.member', actor: { kind: 'member', id: 'ranch' }, payload: { member_id: 'ranch', text: 'Replace the battery before breakfast, then take the shady trail. Bring water and check the weather before leaving.', thread_id: 'a624af77-b3de-46f9-a583-626018476e41' }, created_at: Date.now() / 1000 }];
 const groupRequests = new Set();
 const conversationFor = (id) => ({ botId: id, messages: [], approvals: [], files: [], activity: { state: bots.find(item => item.id === id)?.activity || 'idle' }, ...conversations[id] });
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -218,13 +218,13 @@ const fixtureWav = (() => {
 const schedulePreview = (botId, schedule) => {
   const match = /^(\d{1,2}) (\d{1,2}) \* \* (\*|[0-6])$/.exec(schedule);
   if (!match || Number(match[1]) > 59 || Number(match[2]) > 23) return null;
-  const runs = [], candidate = new Date(); candidate.setUTCHours(Number(match[2]) + 5, Number(match[1]), 0, 0);
-  // Stable preview uses UTC-05 fixture time. Native schedule parsing is tested separately.
+  const runs = [], candidate = new Date(); candidate.setUTCHours(Number(match[2]), Number(match[1]), 0, 0);
+  // Use an explicit UTC fixture so seasonal timezone changes cannot suggest schedule drift.
   for (let day = 0; day < 25 && runs.length < 3; day++, candidate.setUTCDate(candidate.getUTCDate() + 1)) {
-    const localDay = new Date(candidate.getTime() - 5 * 3600000).getUTCDay();
+    const localDay = candidate.getUTCDay();
     if (candidate > new Date() && (match[3] === '*' || localDay === Number(match[3]))) runs.push(candidate.toISOString());
   }
-  return { botId, schedule, timezone: 'America/Chicago', nextRuns: runs, kind: 'cron' };
+  return { botId, schedule, timezone: 'UTC', nextRuns: runs, kind: 'cron' };
 };
 const connections = [
   ['workspace', 'Google Workspace', 'productivity', 'connected', 'nic@example.invalid', 'Gmail, Drive, Calendar and Sheets access checked.'],
@@ -236,12 +236,12 @@ const connections = [
   ['cloudflare', 'Cloudflare', 'development', 'unavailable', undefined, 'Cloudflare did not respond. Check again when the service is available.'],
   ['vps', 'VPS', 'development', 'connected', 'Hermes host', 'The configured server is reachable.'],
   ['homeassistant', 'Home Assistant', 'home', 'not_connected', undefined, 'Connect your Home Assistant server to use home tools.'],
-  ['apple', 'Apple Calendar & Reminders', 'devices', 'unsupported', undefined, 'Open Integrations in the iPhone app to choose and share data from this device.'],
+  ['apple', 'Apple Calendar & Reminders', 'devices', 'unsupported', undefined, 'Open Integrations in the iPhone app to choose calendars and reminders, review a snapshot, then add it to an assistant\'s draft.'],
   ['openrouter', 'Model provider', 'providers', 'configured', undefined, 'Provider credentials are present. Model execution has not been checked.'],
   ['search', 'Web search', 'providers', 'not_connected', undefined, 'Configure a search provider for current information.'],
   ['images', 'Image generation', 'providers', 'configured', undefined, 'An image provider is configured. Generation has not been checked.'],
-].map(([id, name, category, status, account, detail]) => ({ id, name, category, status, account, detail, owner: category === 'devices' ? 'This iPhone' : 'Hermes', profile: 'ranch', botIds: ['ranch'], setup: id === 'homeassistant' ? [{ key: 'url', label: 'Server address', kind: 'url', required: true }, { key: 'token', label: 'Access token', kind: 'secret', required: true }] : [], permissions: id === 'workspace' ? [{ id: 'drive', name: 'Drive files', granted: true }, { id: 'gmail', name: 'Gmail', granted: true }] : [], capabilities: [], checkedAt: ['connected', 'expired', 'unavailable', 'missing_permission'].includes(status) ? '2026-10-01T17:00:00Z' : undefined, actions: { connect: !['files', 'apple', 'vps'].includes(id), check: !['files', 'apple'].includes(id), disconnect: status === 'connected' } }));
-let upgrade = { available: true, phase: 'failed', current: { revision: '5c1d0e7a9b3f4c2d8e6a1b0c9d8e7f6a5b4c3d2e', committedAt: '2026-09-18T16:20:00Z' }, candidate: { revision: '9f8e7d6c5b4a39281706f5e4d3c2b1a098765432', committedAt: '2026-10-20T15:05:00Z', notesUrl: 'https://example.invalid/hermes/notes' }, message: 'The update could not restart Hermes. Your conversations are saved. Restart Hermes to check and restore the connection.', operationId: 'fixture-operation', checks: [{ id: 'restart', label: 'Restart and verify Hermes', status: 'failed', detail: 'Explicit preview fixture. No real Hermes upgrade was attempted.' }], canCheck: false, canInstall: false, canRetry: true, canCancel: true, canRestartService: true, busyBots: [], checkedAt: '2026-10-01T17:00:00Z' };
+].map(([id, name, category, status, account, detail]) => ({ id, name, category, status, account, detail, owner: category === 'devices' ? 'Your iPhone' : 'Hermes', profile: 'ranch', botIds: ['ranch'], setup: id === 'homeassistant' ? [{ key: 'url', label: 'Server address', kind: 'url', required: true }, { key: 'token', label: 'Access token', kind: 'secret', required: true }] : [], permissions: id === 'workspace' ? [{ id: 'drive', name: 'Drive files', granted: true }, { id: 'gmail', name: 'Gmail', granted: true }] : [], capabilities: [], checkedAt: ['connected', 'expired', 'unavailable', 'missing_permission'].includes(status) ? '2026-10-01T17:00:00Z' : undefined, actions: { connect: !['files', 'apple', 'vps'].includes(id), check: !['files', 'apple'].includes(id), disconnect: status === 'connected' } }));
+let upgrade = { available: true, phase: 'failed', operation: 'install', current: { revision: '5c1d0e7a9b3f4c2d8e6a1b0c9d8e7f6a5b4c3d2e', committedAt: '2026-09-18T16:20:00Z' }, candidate: { revision: '9f8e7d6c5b4a39281706f5e4d3c2b1a098765432', committedAt: '2026-10-20T15:05:00Z', notesUrl: 'https://example.invalid/hermes/notes' }, message: 'The update could not restart Hermes. Your conversations are saved. Restart Hermes to check and restore the connection.', operationId: 'fixture-operation', checks: [{ id: 'restart', label: 'Restart and verify Hermes', status: 'failed', detail: 'Explicit preview fixture. No real Hermes upgrade was attempted.' }], canCheck: false, canInstall: false, canRetry: true, canCancel: true, canRestartService: true, busyBots: [], checkedAt: '2026-10-01T17:00:00Z' };
 const flows = new Map();
 const pushRegistrations = new Set();
 // Computer fixture streams are simulations. They never open a shell or contact a desktop.
@@ -299,7 +299,15 @@ const server = createServer(async (request, response) => {
     }
     if (path === '/search') return json(response,{hits:[{botId:'ranch',botName:'Ranch',sessionId:'fixture-history',title:'Gate battery plan',snippet:'Replace the north gate battery and check the others next month.',messageId:'m2',offset:0}],unavailableBots:[]});
     if (/\/history\//.test(path)) return json(response,{botId:'ranch',sessionId:'fixture-history',messages:ranchMessages,offset:0,hasMore:false});
-    if (path === '/saved') { if(request.method==='POST'){const item={...body,id:randomUUID(),createdAt:new Date().toISOString()};savedItems.push(item);return json(response,item);}return json(response,savedItems); }
+    if (path === '/saved') {
+      if(request.method==='POST'){
+        const keys=['kind','botId','sessionId','routineId','resultId','messageId'];
+        const existing=savedItems.find(item=>keys.every(key=>(item[key]??null)===(body[key]??null)));
+        if(existing)return json(response,existing);
+        const item={...body,id:randomUUID(),createdAt:new Date().toISOString()};savedItems.push(item);return json(response,item);
+      }
+      return json(response,savedItems);
+    }
     if(path.startsWith('/saved/')) { const index=savedItems.findIndex(item=>item.id===path.split('/').at(-1));if(index>=0)savedItems.splice(index,1);return json(response,{ok:true}); }
     if(path.endsWith('/starters')) return json(response,[{id:'meals',title:'Plan dinners',prompt:'Help me plan five easy dinners. Ask about our preferences and budget first.'},{id:'document',title:'Explain a document',prompt:'Help me understand the document I attach. Summarize the key points.'},{id:'server',title:'Check a server',prompt:'Review my server health. Confirm the server and connection first; inspect only.'}]);
     if(path==='/automations') return json(response,{routines:routines.map(row=>({...row,nextRunAt:new Date(Date.now()+3600000).toISOString(),lastStatus:'delivery_failed',lastDeliveryError:'Fixture: recipient destination unavailable'})),usage:bots.map(bot=>({botId:bot.id,days:30,sessions:4,inputTokens:1200,outputTokens:400,actualCost:null,estimatedCost:0.02,partial:true})),unavailableBots:[]});
@@ -429,7 +437,7 @@ const server = createServer(async (request, response) => {
     const groupMatch = /^\/groups\/([^/]+)(?:\/(log|messages|stop|approve))?$/.exec(path);
     if (groupMatch) {
       const room = groupRooms.find(room => room.room_id === groupMatch[1]); if (!room) return json(response, { error: 'Fixture room not found.' }, 404);
-      if (groupMatch[2] === 'messages') { if (!groupRequests.has(body.requestId)) { groupRequests.add(body.requestId); groupEvents.push({ event_id: body.requestId, seq: groupEvents.length + 1, kind: 'message.user', actor: { kind: 'user', id: 'desktop' }, payload: { text: body.text, thread_id: body.threadId }, created_at: Date.now() / 1000 }); } return json(response, { accepted: true }); }
+      if (groupMatch[2] === 'messages') { if (!groupRequests.has(body.requestId)) { groupRequests.add(body.requestId); groupEvents.push({ event_id: body.requestId, seq: groupEvents.length + 1, kind: 'message.user', actor: { kind: 'user', id: 'preview' }, sender: { id: 'preview', name: 'Nicolas' }, payload: { text: body.text, thread_id: body.threadId }, created_at: Date.now() / 1000 }); } return json(response, { accepted: true }); }
       if (groupMatch[2] === 'log') return json(response, { events: groupEvents.filter(event => event.seq > Number(url.searchParams.get('since') || 0)), cursor: groupEvents.length, latest_seq: groupEvents.length, has_more: false });
       if (groupMatch[2]) return json(response, { cancelled: 0, approved: true });
       return json(response, { room, driver_status: { running: true, working: false, blocked: false, pending_actions: [] } });
