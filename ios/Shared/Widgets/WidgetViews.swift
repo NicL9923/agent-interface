@@ -346,6 +346,6 @@ struct AssistantsWidgetView: View {
           }
         }.frame(maxWidth: .infinity, alignment: .leading)
       }
-    }.widgetURL(DeepLink.today)
+    }.widgetURL(DeepLink.home)
   }
 }

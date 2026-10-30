@@ -672,7 +672,7 @@ a {
 }
 .composer-area {
   flex-shrink: 0;
-  padding: 8px max(28px, calc((100% - 752px) / 2)) max(15px, env(safe-area-inset-bottom));
+  padding: 6px max(12px, calc((100% - 752px) / 2)) max(8px, env(safe-area-inset-bottom));
 }
 .activity-status {
   display: flex;
@@ -728,19 +728,27 @@ a {
   background: var(--raised);
   border: 1px solid var(--line);
   box-shadow: 0 5px 18px #1b251a05;
-  border-radius: 20px;
-  padding: 14px 16px 12px;
+  border-radius: 26px;
+  padding: 4px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  grid-template-areas: "extras extras extras extras" "lead input voice send" "panel panel panel panel";
+  align-items: end;
+  column-gap: 4px;
 }
 .composer textarea {
   border: 0;
   background: transparent;
-  padding: 0;
+  padding: 10px 6px;
+  grid-area: input;
   resize: none;
-  min-height: 3rem;
-  max-height: 200px;
+  min-width: 0;
+  min-height: 44px;
+  max-height: min(200px, 30vh);
   font-size: 1rem;
-  line-height: 1.55;
+  line-height: 1.5;
 }
+.composer textarea::placeholder { white-space: nowrap; }
 .composer textarea:focus-visible {
   outline: none;
 }
@@ -748,24 +756,17 @@ a {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent), 0 5px 18px #1b251a08;
 }
-.composer-tools {
-  display: flex;
-  align-items: center;
-  /* Room between controls keeps iOS touch adjustment from picking a neighbor. */
-  gap: 8px;
-  justify-content: space-between;
-  margin: 4px 0 0 -8px;
+.composer[data-layout="stacked"] {
+  grid-template-areas: "extras extras extras extras" "input input input input" "lead . voice send" "panel panel panel panel";
 }
-.composer-hint {
-  font-size: 0.625rem;
-  color: var(--muted);
-  flex: 1;
-  min-width: 0;
-  text-align: right;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
+.composer-extras { grid-area: extras; min-width: 0; }
+.composer-extras:has(> :not(:empty)) { padding: 4px 8px; }
+.composer-measure { position: absolute; visibility: hidden; white-space: pre; pointer-events: none; }
+.composer-tools { grid-area: lead; display: flex; align-items: center; gap: 4px; justify-self: start; }
+.composer > .voice-controls { display: contents; }
+.composer .voice-actions { grid-area: voice; }
+.composer .voice-panel { grid-area: panel; }
+.composer > .send-button { grid-area: send; }
 .composer-tool {
   display: flex;
   align-items: center;
@@ -786,8 +787,8 @@ a {
   background: var(--accent);
   color: var(--surface);
   border: 0;
-  width: 36px;
-  height: 36px;
+  width: 44px;
+  height: 44px;
   border-radius: 50%;
   padding: 0;
 }
@@ -921,6 +922,9 @@ a {
   overflow-wrap: anywhere;
 }
 .settings-dialog > header {
+  position: relative;
+  z-index: 1;
+  background: var(--surface);
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -932,6 +936,9 @@ a {
   margin: 0;
 }
 .settings-tabs {
+  position: relative;
+  z-index: 1;
+  background: var(--surface);
   display: flex;
   padding: 0 24px;
   border-bottom: 1px solid var(--line);
@@ -1218,11 +1225,11 @@ a {
     font-size: 1.5625rem;
   }
   .composer-area {
-    padding: 8px 14px max(12px, env(safe-area-inset-bottom));
+    padding: 6px 12px max(8px, env(safe-area-inset-bottom));
   }
   .composer {
-    padding: 13px;
-    border-radius: 17px;
+    padding: 4px;
+    border-radius: 26px;
   }
   .composer textarea {
     font-size: max(16px, 1rem);
@@ -1430,7 +1437,7 @@ dialog[open]::backdrop {
 
 /* Compact chat activity and controls. */
 .composer-tools .tool-label { display: none; }
-.composer-tools .send-button { margin-left: auto; flex-shrink: 0; }
+.composer .send-button { flex-shrink: 0; }
 .activity-shimmer { position: relative; display: inline-block; font-size: 0.8125rem; line-height: 1.6; overflow-wrap: anywhere; }
 .shimmer-band { display: none; }
 /* The highlight is a second copy of the text in full ink, seen through a soft-edged window that slides across.
@@ -1453,3 +1460,7 @@ dialog[open]::backdrop {
   .spin { animation: none; }
 }
 button.with-progress { display: inline-flex; align-items: center; justify-content: center; gap: 7px; }
+
+@media (max-width: 359px) {
+  .composer { grid-template-areas: "extras extras extras extras" "input input input input" "lead . voice send" "panel panel panel panel"; }
+}

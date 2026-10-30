@@ -24,6 +24,8 @@ trap 'rm -f "$capture_tmp"; "$simctl" shutdown "$simulator" >/dev/null 2>&1 || t
 "$simctl" install "$simulator" "$app"
 for tab in "$@"; do
   settings_tab=$tab
+  content_size=large
+  appearance=light
   survival_capture=""
   discovery_tab=""
   group_capture=0
@@ -38,6 +40,11 @@ for tab in "$@"; do
   apple_capture=0
   capture_delay=${NATIVE_CAPTURE_DELAY:-5}
   case "$tab" in
+    ComposerAX3) settings_tab=""; survival_capture=composer; content_size=accessibility-extra-large ;;
+    ComposerDark) settings_tab=""; survival_capture=composer; appearance=dark ;;
+    ComposerFocused) settings_tab=""; survival_capture=composer-focused ;;
+    ComposerMultiline) settings_tab=""; survival_capture=composer-multiline ;;
+    Composer) settings_tab=""; survival_capture=composer ;;
     Empty) settings_tab=""; survival_capture=empty ;;
     ShareOffline) settings_tab=""; survival_capture=share-offline ;;
     ShareDiscard) settings_tab=""; survival_capture=share-discard ;;
@@ -62,6 +69,8 @@ for tab in "$@"; do
     Details|Avatar|Connections|Tools|Skills|Routines|Work|Learning|Memory|Logins) ;;
     *) echo "Unknown capture page: $tab" >&2; exit 2 ;;
   esac
+  "$simctl" ui "$simulator" content_size "$content_size"
+  "$simctl" ui "$simulator" appearance "$appearance"
   SIMCTL_CHILD_AGENT_INTERFACE_UI_CAPTURE_SURVIVAL="$survival_capture" \
   SIMCTL_CHILD_AGENT_INTERFACE_UI_FIXTURE=1 \
   SIMCTL_CHILD_AGENT_INTERFACE_UI_AUTOMATION=1 \
@@ -89,3 +98,5 @@ for tab in "$@"; do
   rm -f "$capture_tmp"
   "$simctl" terminate "$simulator" "$bundle"
 done
+"$simctl" ui "$simulator" content_size large
+"$simctl" ui "$simulator" appearance light

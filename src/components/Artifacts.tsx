@@ -81,6 +81,8 @@ export function ArtifactsButton({ bot, conversation, unavailable = false }: {
   const [earlier, setEarlier] = useState<{ session?: string; before?: string; messages?: EarlierFiles["messages"]; loading?: boolean; failed?: boolean }>({});
   const request = useRef(0);
   const current = conversation?.botId === bot.id ? conversation : undefined;
+  const hadConversation = useRef(false);
+  if (current) hadConversation.current = true;
   const session = current?.sessionId ?? "", before = current?.messages[0]?.id;
   const fetched = !!current && earlier.session === session
     && (!earlier.before || current.messages.some(message => message.id === earlier.before));
@@ -109,7 +111,7 @@ export function ArtifactsButton({ bot, conversation, unavailable = false }: {
       </span>
       <span className="artifacts-button-label">Artifacts</span>
     </Button>
-    {open && <ArtifactsView bot={bot} artifacts={artifacts} loading={!current && !unavailable}
+    {open && <ArtifactsView bot={bot} artifacts={artifacts} loading={!current && !unavailable && !hadConversation.current}
       earlier={!fetched ? undefined : earlier.loading ? "loading" : earlier.failed ? "failed" : undefined}
       unavailable={unavailable} onClose={() => setOpen(false)} />}
   </>;

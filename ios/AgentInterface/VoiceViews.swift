@@ -407,13 +407,12 @@ struct VoiceButtons: View {
   var reply: Message?
   var disabled: Bool
   var body: some View {
-    if voice.state != .idle {
-      AvatarView(avatar: bot.avatar ?? AvatarConfig(), size: 24, name: bot.name, forceReducedMotion: true)
-        .accessibilityHidden(true)
-    }
     if voice.state == .recording {
-      Button("Stop recording · \(voice.elapsed)s") { voice.stopRecording() }
-        .font(.footnote.weight(.semibold)).foregroundStyle(Palette.danger).frame(minHeight: 44)
+      Button { voice.stopRecording() } label: {
+        HStack(spacing: 4) { Image(systemName: "stop.fill"); Text("\(voice.elapsed)s").monospacedDigit() }
+      }.accessibilityLabel("Stop recording · \(voice.elapsed) seconds")
+        .font(.footnote.weight(.semibold)).foregroundStyle(Palette.danger).frame(minWidth: 44, minHeight: 44)
+        .dynamicTypeSize(...DynamicTypeSize.accessibility2)
     } else {
       Button { Task { await voice.startRecording() } } label: {
         Image(systemName: "mic").frame(width: 44, height: 44)
@@ -433,10 +432,12 @@ struct VoiceButtons: View {
 struct VoicePanel: View {
   var voice: VoiceController
   var disabled: Bool
+  var bot: Bot? = nil
   var body: some View {
     let busy = voice.state != .idle
     if busy || voice.recording != nil || voice.playable || !voice.notice.isEmpty || !voice.error.isEmpty {
       VStack(alignment: .leading, spacing: 6) {
+        if busy, let bot { AvatarView(avatar: bot.avatar ?? AvatarConfig(), size: 24, name: bot.name, forceReducedMotion: true).accessibilityHidden(true) }
         actions(busy: busy)
         if busy || !voice.notice.isEmpty {
           Text(busy ? voice.state.label : voice.notice).font(.caption).foregroundStyle(.secondary)

@@ -260,6 +260,7 @@ it('shows thread context, focuses the composer and sends the selected thread ID'
     {event_id:'root',seq:1,kind:'message.user',actor:{id:'one'},sender:{id:'one',name:'Nicolas'},payload:{text:'Plan a short walk',thread_id:'walk-thread'},created_at:1},
     {event_id:'other',seq:2,kind:'message.member',actor:{id:'planner'},payload:{text:'A separate dinner topic',thread_id:'dinner-thread'},created_at:2},
     {event_id:'reply',seq:3,kind:'message.member',actor:{id:'ranch'},payload:{text:'Bring water for the walk',thread_id:'walk-thread'},created_at:3},
+    {event_id:'reply2',seq:4,kind:'message.member',actor:{id:'planner'},payload:{text:'Wear boots',thread_id:'walk-thread'},created_at:4},
   ];
   vi.mocked(api).mockImplementation(async path=>path==='/groups'?{supported:true,canSend:true,rooms:[room]}:path.includes('/log')?{events,cursor:3,has_more:false}:{room,driver_status:{working:false,blocked:false,pending_actions:[]}});
   vi.mocked(write).mockResolvedValue({accepted:true});
@@ -268,6 +269,7 @@ it('shows thread context, focuses the composer and sends the selected thread ID'
   expect(rows[0].querySelector('.group-speaker')?.textContent).toBe('You');
   expect(rows[2].querySelector('.group-thread-context')?.textContent).toBe('In thread with You: Plan a short walk');
   expect(rows[1].querySelector('.group-thread-context')).toBeNull();
+  expect(rows[3].querySelector('.group-thread-context')).toBeNull();
   expect(rows[2].querySelector('[data-avatar]')?.getAttribute('data-avatar')).toBe('ranch');
   const field=container.querySelector<HTMLTextAreaElement>('#group-message')!;
   await typeInto(field,'Keep it under an hour');

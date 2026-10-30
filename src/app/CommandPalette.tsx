@@ -30,7 +30,7 @@ export function CommandPalette({ boot, botId, shownBotId, readThrough, connectio
   onSelectBot(id: string): void;
   onView(view: View): void;
   onSearch(query: string): void;
-  onSettings(): void;
+  onSettings(destination?: { kind: "following" } | { kind: "section"; id: string } | { kind: "signout" }): void;
   onNewBot(): void;
   onTheme(theme: Preferences["theme"]): void;
   onShortcuts(): void;
@@ -67,6 +67,9 @@ export function CommandPalette({ boot, botId, shownBotId, readThrough, connectio
       ...onFind ? [{ id: "action:find", group: "Actions", label: "Find in chat", keywords: ["search this chat"], icon: icon("search"), hint: formatCombo(shortcuts.find), run: onFind }] : [],
       { id: "action:new", group: "Actions", label: "New assistant", keywords: ["create", "add"], icon: icon("plus"), run: onNewBot },
       { id: "action:settings", group: "Actions", label: "Settings", keywords: ["preferences", "account", "notifications"], icon: icon("gear"), run: onSettings },
+      { id: "settings:following", group: "Settings", label: "Following", icon: icon("gear"), run: () => onSettings({ kind: "following" }) },
+      ...boot.preferences.sections.map(section => ({ id: `settings:section:${section.id}`, group: "Settings", label: `Home section: ${section.name}`, icon: icon("gear"), run: () => onSettings({ kind: "section", id: section.id }) })),
+      { id: "settings:signout", group: "Settings", label: "Sign out", icon: icon("gear"), run: () => onSettings({ kind: "signout" }) },
       { id: "action:shortcuts", group: "Actions", label: "Keyboard shortcuts", keywords: ["keys", "help"], icon: icon("keyboard"), hint: formatCombo(shortcuts.help), run: onShortcuts },
       ...themes.map(([theme, name]): Command => ({
         id: `theme:${theme}`, group: "Appearance", label: `Appearance: ${name}`, keywords: [name, "theme", `${name} mode`],

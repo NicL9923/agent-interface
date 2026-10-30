@@ -262,6 +262,7 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
           /> : <AttentionCard
             key={request.id}
             request={request}
+            disconnected={connectionLost}
             botId={botId}
             report={setError}
           />

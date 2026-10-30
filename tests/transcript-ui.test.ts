@@ -401,6 +401,24 @@ describe("questions", () => {
     expect(container.querySelector<HTMLButtonElement>('.attention-card button[type="submit"]')?.textContent).toBe("Answers sent");
   });
 
+  it("keeps answers editable while disconnected and sends only after reconnect", async () => {
+    const { AttentionCard } = await import("../src/app/AttentionCard");
+    const question = { id: "ask", kind: "clarify" as const, title: "Plan", detail: "", questions: [{ id: "note", prompt: "Your plan?" }] };
+    const report = vi.fn();
+    await act(async () => root.render(createElement(AttentionCard, { request: question, botId: "shared", report, disconnected: true })));
+    const field = container.querySelector<HTMLTextAreaElement>('textarea')!;
+    await typeInto(field, "Bring water");
+    expect(container.textContent).toContain("Reconnect before sending");
+    expect(container.querySelector<HTMLButtonElement>('button[type="submit"]')!.disabled).toBe(true);
+    await act(async () => container.querySelector('form')!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+    expect(write).not.toHaveBeenCalled();
+    await act(async () => root.render(createElement(AttentionCard, { request: question, botId: "shared", report, disconnected: false })));
+    expect(field.value).toBe("Bring water");
+    expect(write).not.toHaveBeenCalled();
+    await act(async () => container.querySelector<HTMLButtonElement>('button[type="submit"]')!.click());
+    expect(write).toHaveBeenCalledWith("/bots/shared/requests/ask", { answers: { note: "Bring water" } });
+  });
+
   it("keeps written answers after a failure and clears the old error when retrying", async () => {
     conversation = { ...conversation, attention: [{ id: "ask", kind: "clarify", title: "Plan", detail: "", questions: [{ id: "note", prompt: "Your plan?" }] }] };
     vi.mocked(write).mockRejectedValueOnce(new Error("The connection was interrupted."));

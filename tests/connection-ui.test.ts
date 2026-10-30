@@ -473,6 +473,7 @@ it('lets the next sign-in send after signing out while a send was unanswered',as
   await act(async()=>container.querySelector<HTMLButtonElement>('[aria-label="Settings"]')!.click());
   await loaded();
   await act(async()=>button('Sign out').click());
+  await act(async()=>container.querySelector<HTMLButtonElement>('.settings-confirmation .danger')!.click());
   expect(container.querySelector('.sign-in')).not.toBeNull();
   await act(async()=>button('Enter local workspace').click());
   await advance(2500);

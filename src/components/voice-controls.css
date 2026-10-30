@@ -1,5 +1,5 @@
 .voice-controls { min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; }
-.voice-actions { display: flex; gap: 2px; align-items: center; flex-wrap: wrap; }
+.voice-actions { display: flex; gap: 4px; align-items: center; flex-wrap: nowrap; }
 .voice-actions button { display: flex; align-items: center; gap: 6px; border: 0; padding: 8px; font-size: 0.75rem; color: var(--muted); }
 .voice-actions button:hover:enabled { color: var(--ink); }
 .voice-actions .voice-recording { color: var(--danger); }
@@ -7,3 +7,10 @@
 .voice-status { color: var(--muted); }
 .voice-error { color: var(--danger); }
 @media (max-width: 620px) { .voice-actions button { min-height: 44px; min-width: 44px; justify-content: center; } }
+
+.voice-actions button { min-height: 44px; min-width: 44px; justify-content: center; }
+.voice-actions .tool-label { display: none; }
+.voice-panel { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; min-width: 0; padding: 6px 8px; }
+.voice-panel:empty { display: none; }
+.voice-panel button { min-height: 44px; font-size: .8125rem; }
+.voice-panel .voice-status, .voice-panel .voice-error { flex-basis: 100%; }

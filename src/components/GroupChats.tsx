@@ -55,7 +55,7 @@ export function GroupChats({ bootstrap }: { bootstrap: Bootstrap }) {
       // Measure before appending so a reader above the bottom stays put.
       const view = panel.current;
       const newMessage = page.events.some(event => event.seq > cursor.current && ['message.user', 'message.member'].includes(event.kind));
-      if (!more && !page.has_more && newMessage && view && view.scrollHeight - view.clientHeight - view.scrollTop < 48) scrollLatest.current = true;
+      if (!more && !page.has_more && newMessage && view && (cursor.current === 0 || view.scrollHeight - view.clientHeight - view.scrollTop < 48)) scrollLatest.current = true;
       cursor.current = page.cursor;
       setEvents(current => [...new Map([...current, ...page.events].map(event => [event.event_id, event])).values()].sort((a, b) => a.seq - b.seq));
       setMore(page.has_more);
@@ -206,13 +206,13 @@ export function GroupChats({ bootstrap }: { bootstrap: Bootstrap }) {
     {!!catalog?.rooms.length && <div className="group-layout"><nav className="group-rooms" aria-label="Group chats">{catalog.rooms.map(room => <button key={room.room_id} disabled={busy} aria-current={roomId === room.room_id && !drafting ? 'page' : undefined} onClick={() => { setCreating(false); setNotice(''); setRoomId(room.room_id); }}>{room.name}<small>{room.members.length} assistants</small></button>)}{newGroup}</nav>
       <section aria-label="Group conversation">{drafting ? createForm : (state ? <><div className="group-heading"><div><h3>{state.room.name}</h3>
         <p className="muted">{state.room.members.map(member => `${member.display_name || member.profile} (@${member.handle})`).join(' · ')}</p></div>{state.driver_status?.working && <button disabled={busy || !writable} onClick={() => void act('stop', { requestId: crypto.randomUUID() })}><Icon name="stop" size={14} /> Stop discussion</button>}</div>
-        {messages.map(event => {
+        {messages.map((event, index) => {
           const root = typeof event.payload.thread_id === 'string' ? threadRoots.get(event.payload.thread_id) : undefined;
           const inThread = root && root.event_id !== event.event_id;
           const member = memberFor(event.actor.id) || memberFor(event.payload.member_id);
           return <article className={`group-message${replyToId === event.event_id ? ' selected' : ''}${event.kind === 'message.user' && (event.sender?.id || event.actor.id) === bootstrap.user.id ? ' own' : ''}`} key={event.event_id}>
             <div className="message-attribution"><span className="group-speaker">{event.kind === 'message.member' && avatar(member?.member_id)}<strong>{author(event)}</strong></span><When value={event.created_at * 1000}/></div>
-            {inThread && <p className="group-thread-context">In thread with {context(root)}</p>}
+            {inThread && messages[index - 1]?.payload.thread_id !== event.payload.thread_id && <p className="group-thread-context">In thread with {context(root)}</p>}
             <MessageMarkdown text={typeof event.payload.text === 'string' ? event.payload.text : ''}/>
             {typeof event.payload.thread_id === 'string' && <button className="group-reply" aria-label={`Reply in thread to ${context(event)}`} disabled={busy || !!pending || !writable} onClick={() => { setThreadId(event.payload.thread_id as string);setReplyToId(event.event_id);field.current?.focus(); }}>Reply in thread</button>}
           </article>;

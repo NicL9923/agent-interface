@@ -14,6 +14,8 @@ struct ComposerView: View {
   @Environment(AppStore.self) private var store
   @Environment(\.colorScheme) private var scheme
   @Environment(\.scenePhase) private var scenePhase
+  @Environment(\.verticalSizeClass) private var verticalSizeClass
+  @Environment(\.dynamicTypeSize) private var dynamicTypeSize
   @ScaledMetric(relativeTo: .headline) private var sendGlyphSize = 18.0
   @State private var voice = VoiceController()
   @State private var importFiles = false
@@ -31,9 +33,9 @@ struct ComposerView: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
       StatusDock(botId: bot.id, discardConfirm: $discardConfirm)
-      card
-    }.padding(12).frame(maxWidth: 752).frame(maxWidth: .infinity).background(Palette.surface(scheme))
-      .overlay(alignment: .top) { Rectangle().fill(Palette.line).frame(height: 1) }
+      card.fixedSize(horizontal: false, vertical: true)
+    }.padding(.horizontal, 12).padding(.top, 6).padding(.bottom, 8)
+      .frame(maxWidth: 752).frame(maxWidth: .infinity).background(Palette.surface(scheme))
       .onDrop(of: [.item], isTargeted: $dropTargeted) { providers in
         drop(providers)
         return true
@@ -43,6 +45,15 @@ struct ComposerView: View {
         bot: bot, importFiles: $importFiles, importPhotos: $importPhotos, takePhoto: $takePhoto, photos: $photos,
         discardConfirm: $discardConfirm, modelOpen: $modelOpen))
       .onAppear { configureVoice() }
+      #if DEBUG
+      .onChange(of: store.draftReady, initial: true) { _, ready in
+        guard ready else { return }
+        if DebugFixtures.captureSurvival == "composer-focused" { focused = true }
+        if DebugFixtures.captureSurvival == "composer-multiline" {
+          store.editComposer { $0.text = "Check the north gate.\nReview the battery history.\nCompare the other sensors.\nKeep the existing reminders.\nTell me what needs attention." }
+        }
+      }
+      #endif
       .onChange(of: store.listenRequest, initial: true) { startRequestedRecording() }
       .onChange(of: voiceDisabled) { startRequestedRecording() }
       .stopShortcut(bot: bot, canStop: stopVisible && !stopDisabled, stop: stop)
@@ -69,18 +80,33 @@ struct ComposerView: View {
         }
       }
   }
+  private var inputLineHeight: CGFloat {
+    let _ = dynamicTypeSize
+    return max(44, UIFont.preferredFont(forTextStyle: .body).lineHeight + 22)
+  }
   private var card: some View {
-    VStack(alignment: .leading, spacing: 10) {
+    VStack(alignment: .leading, spacing: 6) {
       if !store.uploads.notice.isEmpty {
         AttachNoticeView(problems: store.uploads.notice) { store.uploads.notice = [] }
       }
       AttachmentTrayView(botId: bot.id)
-      input
-      tools
-      VoicePanel(voice: voice, disabled: voiceDisabled)
+      ComposerRowLayout(singleLine: inputLineHeight,
+        forceStack: dynamicTypeSize.isAccessibilitySize || store.composerDraft.text.contains("\n")) {
+        HStack(spacing: 4) {
+          attachMenu
+          if store.bootstrap?.preferences.presentation == "advanced" { modelButton }
+        }
+        input
+        HStack(spacing: 4) {
+          VoiceButtons(voice: voice, bot: bot, reply: store.active ? nil : store.latestReply, disabled: voiceDisabled)
+          if focused { hideKeyboardButton }
+          sendButton
+        }
+      }
+      VoicePanel(voice: voice, disabled: voiceDisabled, bot: bot)
       footnotes
-    }.padding(12).background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 20))
-      .overlay(RoundedRectangle(cornerRadius: 20).stroke(Palette.line, lineWidth: 1))
+    }.padding(4).background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+      .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).stroke(Palette.line, lineWidth: 1))
   }
   private var input: some View {
     // While a message is on its way the transcript shows it, so the box reads empty and is
@@ -92,28 +118,18 @@ struct ComposerView: View {
       label: "Message \(bot.name)", editable: store.draftReady, readOnly: store.sendingDraft, focused: $focused,
       onReturn: { if store.canSend { send() } },
       onPasteImages: { images in Task { await store.uploads.attach(images: images, named: "Pasted image") } },
-      onArrow: recallArrow, onPasteLongText: attachLongPaste
+      onArrow: recallArrow, onPasteLongText: attachLongPaste, maximumLines: verticalSizeClass == .compact ? 3 : 6
     )
     .overlay(alignment: .topLeading) {
       if store.composerDraft.text.isEmpty {
-        Text(placeholder).foregroundStyle(Palette.muted).allowsHitTesting(false).accessibilityHidden(true)
+        Text(placeholder).lineLimit(1).foregroundStyle(Palette.muted).allowsHitTesting(false).accessibilityHidden(true)
       }
     }
-    .padding(12).background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 16))
+    .padding(.vertical, 11).padding(.horizontal, 6).frame(minHeight: 44)
     .opacity(store.draftReady ? 1 : 0.6)
   }
   private var placeholder: String {
     store.sendingDraft ? "Sending…" : store.active ? "Guide \(bot.name) while they work…" : "Message \(bot.name)…"
-  }
-  private var tools: some View {
-    HStack(alignment: .center, spacing: 8) {
-      attachMenu
-      if store.bootstrap?.preferences.presentation == "advanced" { modelButton }
-      VoiceButtons(voice: voice, bot: bot, reply: store.active ? nil : store.latestReply, disabled: voiceDisabled)
-      Spacer(minLength: 0)
-      if focused { hideKeyboardButton }
-      sendButton
-    }
   }
   /// Always there while typing, so the keyboard can be put away without finding a spot to drag.
   private var hideKeyboardButton: some View {
@@ -440,5 +456,45 @@ struct CameraPicker: UIViewControllerRepresentable {
       parent.isPresented = false
     }
     func imagePickerControllerDidCancel(_ picker: UIImagePickerController) { parent.isPresented = false }
+  }
+}
+
+/// Keeps the same text-view identity while arranging its fixed controls beside or below it.
+private struct ComposerRowLayout: Layout {
+  var singleLine: CGFloat
+  var forceStack: Bool
+  private struct Sizes {
+    var width: CGFloat
+    var lead: CGSize
+    var input: CGSize
+    var trail: CGSize
+    var stacked: Bool
+    var height: CGFloat { stacked ? input.height + max(lead.height, trail.height) + 4 : max(input.height, lead.height, trail.height) }
+  }
+  private func sizes(_ proposal: ProposedViewSize, _ subviews: Subviews) -> Sizes {
+    let width = max(0, proposal.width ?? 320)
+    let lead = subviews[0].sizeThatFits(.unspecified)
+    let trail = subviews[2].sizeThatFits(.unspecified)
+    let slot = max(0, width - lead.width - trail.width - 8)
+    let inline = subviews[1].sizeThatFits(ProposedViewSize(width: slot, height: nil))
+    let stacked = forceStack || slot < 120 || inline.height > singleLine + 1
+    let input = stacked ? subviews[1].sizeThatFits(ProposedViewSize(width: width, height: nil)) : inline
+    return Sizes(width: width, lead: lead, input: input, trail: trail, stacked: stacked)
+  }
+  func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+    let value = sizes(proposal, subviews)
+    return CGSize(width: value.width, height: value.height)
+  }
+  func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+    let value = sizes(ProposedViewSize(width: bounds.width, height: nil), subviews)
+    let controlsY = bounds.maxY - max(value.lead.height, value.trail.height) / 2
+    subviews[0].place(at: CGPoint(x: bounds.minX, y: controlsY), anchor: .leading, proposal: ProposedViewSize(value.lead))
+    subviews[2].place(at: CGPoint(x: bounds.maxX, y: controlsY), anchor: .trailing, proposal: ProposedViewSize(value.trail))
+    if value.stacked {
+      subviews[1].place(at: bounds.origin, proposal: ProposedViewSize(width: bounds.width, height: value.input.height))
+    } else {
+      subviews[1].place(at: CGPoint(x: bounds.minX + value.lead.width + 4, y: bounds.midY), anchor: .leading,
+        proposal: ProposedViewSize(width: max(0, bounds.width - value.lead.width - value.trail.width - 8), height: value.input.height))
+    }
   }
 }

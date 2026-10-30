@@ -63,6 +63,7 @@ import os
     let kitchen = AssistantEntity(id: "kitchen", name: "Kitchen")
     XCTAssertEqual(DeepLink.relativePath(for: OpenAssistantIntent(assistant: kitchen).destination), "/?bot=kitchen")
     XCTAssertEqual(DeepLink.relativePath(for: OpenTodayIntent().destination), "/?view=today")
+    XCTAssertEqual(DeepLink.relativePath(for: DeepLink.home), "/?view=home")
     // An id with characters a URL treats specially survives the round trip.
     let odd = AssistantEntity(id: "a b&c=d", name: "Odd")
     XCTAssertEqual(DeepLink.relativePath(for: OpenAssistantIntent(assistant: odd).destination).flatMap { URLComponents(string: $0)?.queryItems?.first?.value }, "a b&c=d")

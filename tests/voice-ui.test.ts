@@ -5,6 +5,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { VoiceControls } from "../src/components/VoiceControls.js";
 import type { VoiceState } from "../src/shared/voice.js";
 import { mountRoot } from "./ui-harness";
+vi.mock("../src/components/Avatar", () => ({ Avatar: () => null }));
 const requestApi = vi.hoisted(() => vi.fn());
 vi.mock("../src/client-api.js", async original => (await import("./helpers/request-mock")).withRequest(await (() => ({ api: requestApi }))()));
 let container: HTMLDivElement, root: Root;
@@ -68,7 +69,10 @@ it("reports silence without changing the draft, and explains unsupported recordi
   requestApi.mockResolvedValue({ text: "" }); await render(); await click("Record voice"); await click("Stop recording");
   expect(container.textContent).toContain("No speech detected"); expect(transcript).not.toHaveBeenCalled();
   Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: undefined }); await render();
-  expect(container.textContent).toContain("unavailable in this browser"); expect([...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Record voice")?.disabled).toBe(true);
+  expect(container.textContent).not.toContain("unavailable in this browser");
+  await click("Record voice");
+  expect(container.textContent).toContain("Recording needs a browser with microphone support");
+  expect(transcript).not.toHaveBeenCalled();
 });
 it("uses canonical server reply audio, reports speaking only during playback and stops it", async () => {
   requestApi.mockResolvedValue({ url: "/api/voice/audio/01234567-0123-4123-8123-012345678901", mime: "audio/mpeg", expiresAt: "future" });

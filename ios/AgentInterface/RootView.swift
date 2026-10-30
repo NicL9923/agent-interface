@@ -88,6 +88,9 @@ struct RootView: View {
         #endif
       }
     }
+    .onChange(of: store.homeRequest, initial: true) { _, request in
+      if request != nil { destination = .conversation; path = []; compactColumn = .sidebar }
+    }
     .onChange(of: store.bootstrap?.user.id) { old, new in if let old, old != new { accountChanged() } }
   }
   /// Above the split view, not a safe-area inset: an inset would sit over its navigation bars.
@@ -147,6 +150,11 @@ struct RootView: View {
   }
   #if DEBUG
   private func capturePageIfAsked() {
+    if DebugFixtures.captureSurvival?.hasPrefix("composer") == true {
+      destination = .conversation; path = [.chat]; compactColumn = .detail
+      if store.selectedBotId != "ranch" { Task { await store.select("ranch") } }
+      return
+    }
     if let mode = DebugFixtures.captureSurvival, mode != "empty" { captureSurvivalOpen = true; return }
     if DebugFixtures.captureApplePage { captureAppleOpen = true; return }
     if DebugFixtures.captureConnectionPage { captureConnectionOpen = true; return }

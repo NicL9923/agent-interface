@@ -240,6 +240,8 @@ describe("undo toast", () => {
     await act(async () => mount.container.querySelector<HTMLButtonElement>('[aria-label="Settings"]')!.click());
     await loaded();
     await act(async () => [...mount.container.querySelectorAll("button")].find(button => button.textContent?.trim() === "Sign out")!.click());
+    expect(write).not.toHaveBeenCalledWith("/auth/logout", {});
+    await act(async () => document.querySelector<HTMLDialogElement>('[role="alertdialog"]')!.querySelector<HTMLButtonElement>(".danger")!.click());
     expect(write).toHaveBeenCalledWith("/auth/logout", {});
     expect(toast()).toBeNull();
     await advance(0);

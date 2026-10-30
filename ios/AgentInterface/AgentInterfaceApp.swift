@@ -390,6 +390,12 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
       for reply in replies { store.addNotificationReply(reply.text, botId: reply.botId, account: reply.account) }
     }
     if let pendingURL, let origin = store?.api?.baseURL, store?.bootstrap != nil {
+      if let url = URL(string: pendingURL, relativeTo: origin)?.absoluteURL,
+        url.scheme == origin.scheme, url.host == origin.host, url.port == origin.port, url.path == "/",
+        URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "view" })?.value == "home" {
+        store?.homeRequest = UUID(); self.pendingURL = nil; pendingBotId = nil; pendingRoutineId = nil; pendingListen = false
+        return
+      }
       if let url=URL(string:pendingURL,relativeTo:origin)?.absoluteURL,url.scheme==origin.scheme,url.host==origin.host,url.port==origin.port,url.path=="/",URLComponents(url:url,resolvingAgainstBaseURL:false)?.queryItems?.first(where:{$0.name=="view"})?.value=="today" {
         guard let store,store.bootstrap != nil else { return }
         store.todayRequest=UUID();self.pendingURL=nil;pendingBotId=nil;pendingRoutineId=nil;return

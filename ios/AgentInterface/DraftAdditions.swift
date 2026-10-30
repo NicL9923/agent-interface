@@ -8,7 +8,9 @@ import Foundation
 /// - They join in the order they arrived, as one edit.
 /// - Only once the assistant's draft is loaded and no send to it is unsettled: until Hermes answers,
 ///   a draft and its send are told apart by content, so the draft must stay the sent copy.
-/// They are saved per account, so a relaunch keeps them. One drain at a time delivers them, after
+/// They are saved per account, so a relaunch keeps them. Shared text joins once per share: a receipt is
+/// saved before it leaves the queue, and a share already queued or received is taken again without
+/// adding it. One drain at a time delivers them, after
 /// the operation that made them deliverable has finished, never from inside a property observer:
 /// a discarded send restores its draft first, and held text joins on top.
 struct DraftAddition: Codable, Equatable, Identifiable {
@@ -21,6 +23,8 @@ struct DraftAddition: Codable, Equatable, Identifiable {
   var at = Date()
   /// The chat still opens for it, as it does once for an Ask.
   var opens = false
+  /// The Share inbox share this text came from, so retrying that share adds it once.
+  var capture: String? = nil
   func lapsed(at now: Date) -> Bool { source == .ask && now.timeIntervalSince(at) >= AskRequest.patience }
 }
 
@@ -68,12 +72,22 @@ extension AppStore {
     }
     return true
   }
-  /// The Share inbox's text for the open assistant.
-  func holdShared(_ text: String, botId: String) -> Bool {
-    guard let scope else { return false }
-    return hold(DraftAddition(source: .share, botId: botId, text: text, scope: scope))
+  /// A share's text for an assistant's draft. Returns false when the share was saved for another
+  /// account. A share whose text already joined, or waits to, is taken without adding it again: the
+  /// app may have stopped before the emptied share was saved.
+  func holdShared(_ capture: SharedCapture, botId: String) -> Bool {
+    guard let scope, capture.scope == scope else { return false }
+    if sharedTextAdded(capture) { return true }
+    return hold(DraftAddition(source: .share, botId: botId, text: capture.text, scope: scope, capture: capture.id))
+  }
+  /// Whether this share's text is already in a draft or waiting for one, for this account.
+  func sharedTextAdded(_ capture: SharedCapture) -> Bool {
+    guard scope == capture.scope, !capture.text.isEmpty else { return false }
+    return savedAdditions().contains { $0.capture == capture.id && $0.text == capture.text }
+      || sharedTextReceipts().contains { $0.matches(capture) }
   }
   func savedAdditions() -> [DraftAddition] { read(key(.draftAdditions)) ?? [] }
+  private func sharedTextReceipts() -> [SharedTextReceipt] { read(key(.sharedTextReceipts)) ?? [] }
   private func storeAdditions(_ value: [DraftAddition]) {
     save(value.isEmpty ? nil : value, key(.draftAdditions))
     if additions != value { additions = value }
@@ -128,6 +142,11 @@ extension AppStore {
     if saved.contains(where: { $0.lapsed(at: now) }) { storeAdditions(saved.filter { !$0.lapsed(at: now) }) }
     let ready = Array(savedAdditions().filter { $0.botId == id }.prefix { !$0.opens })
     guard !ready.isEmpty, addShared(text: ready.map(\.text).joined(separator: "\n\n"), botId: id) else { return }
+    // Saved in this order, the text is never only in memory: the draft, then a receipt for each share,
+    // then the queue without them. Stopping between them can add the text twice, never lose it.
+    persistDraft()
+    let shared = ready.compactMap { addition in addition.capture.map { SharedTextReceipt(capture: $0, text: addition.text) } }
+    if !shared.isEmpty { save(SharedTextReceipt.recording(shared, in: sharedTextReceipts()), key(.sharedTextReceipts)) }
     storeAdditions(savedAdditions().filter { addition in !ready.contains { $0.id == addition.id } })
   }
 }

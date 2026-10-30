@@ -3,7 +3,8 @@ import type { Bot, Preferences } from "../shared/types";
 export type View = "conversation" | "today" | "groups" | "find";
 // Modal overlays. Only one can be interactive at a time.
 export type Panel =
-  | { kind: "preferences" | "integrations" | "upgrade" }
+  | { kind: "preferences"; destination?: { kind: "following" } | { kind: "section"; id: string } | { kind: "signout" } }
+  | { kind: "integrations" | "upgrade" }
   | { kind: "computer"; tab?: "desktop" | "terminal" }
   | { kind: "settings"; bot: Bot | "new" }
   | { kind: "details"; botId: string; newSection?: boolean }

@@ -338,8 +338,10 @@ struct GroupConversationView: View {
         }
       }
       Section {
-        ForEach(messages) { event in
-          messageRow(event, root: event.payload.thread_id.flatMap { roots[$0] }).id(event.id)
+        ForEach(Array(messages.enumerated()), id: \.element.id) { index, event in
+          let previousThread = index > 0 ? messages[index - 1].payload.thread_id : nil
+          let startsThreadRun = event.payload.thread_id != previousThread
+          messageRow(event, root: startsThreadRun ? event.payload.thread_id.flatMap { roots[$0] } : nil).id(event.id)
         }
         if more { Button("Load more messages") { Task { await load() } }.listRowBackground(Color.clear) }
         if state != nil && !missing && messages.isEmpty {
@@ -373,6 +375,7 @@ struct GroupConversationView: View {
       draft = UserDefaults.standard.string(forKey: key + ":draft") ?? ""
       if let data = UserDefaults.standard.data(forKey: key) { pending = try? JSONDecoder().decode(GroupSend.self, from: data) }
       await load()
+      if !Task.isCancelled { scrollToLatest(proxy) }
     }
     // The server announces new events on the app event stream; this slow poll only covers a
     // stream that failed unnoticed, and the room's state.

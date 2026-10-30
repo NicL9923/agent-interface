@@ -305,8 +305,19 @@ it("locks changes when task refusal reconciliation fails", async () => {
   vi.mocked(api).mockRejectedValueOnce(new Error("Offline"));
   await click("Start task");
   expect(button("Resume goal").disabled).toBe(true);
-  expect(container.textContent).toContain("status could not refresh");
-  expect(container.textContent).toContain("Not confirmed. Use Refresh status");
+  expect(container.textContent).toContain("Refused Status could not refresh.");
+  expect(container.querySelector(".automation-task-feedback.form-error")?.textContent).toContain("Refused");
+});
+
+it("reports a refused task create when its status refresh fails", async () => {
+  await work(); await click("New task"); await input("Task title", "Repair fence");
+  vi.mocked(write).mockRejectedValueOnce(new ApiError("Task refused.", 403));
+  vi.mocked(api).mockRejectedValueOnce(new Error("Offline"));
+  await submit();
+  expect(container.textContent).toContain("Task refused. Status could not refresh.");
+  expect(container.textContent).not.toContain("Hermes may have created this task");
+  expect(button("Create task").disabled).toBe(true);
+  expect(write).toHaveBeenCalledTimes(1);
 });
 
 it("keeps a moved task open, focused and announced and sends only chosen action fields", async () => {
@@ -680,6 +691,18 @@ it("matches only a newly appearing trigger ID", () => {
   expect(likelyCreatedTrigger([], "gate", [trigger()])?.id).toBe("gate");
   expect(likelyCreatedTrigger(["gate"], "gate", [trigger()])).toBeUndefined();
   expect(likelyCreatedTrigger([], "other", [trigger()])).toBeUndefined();
+});
+
+it("styles trigger edit refusal by its result, even when the server message begins Not confirmed", async () => {
+  const value = initial(); value.triggers.items = [trigger()];
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [{ id: "routine", botId: "ranch", name: "Morning", enabled: true }] : value);
+  await work(); await click("Edit trigger");
+  vi.mocked(write).mockRejectedValueOnce(new ApiError("Not confirmed. Request refused.", 400));
+  await submitTrigger();
+  const feedback = container.querySelector("form .automation-trigger-feedback")!;
+  expect(feedback.textContent).toContain("Request refused.");
+  expect(feedback.classList.contains("form-error")).toBe(true);
+  expect(document.activeElement).toBe(feedback);
 });
 
 it("keeps trigger refusals local and edit cancel available", async () => {
