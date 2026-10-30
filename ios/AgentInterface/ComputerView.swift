@@ -88,6 +88,14 @@ struct ComputerView: View {
       toolbar
       if let message = error ?? desktop.error ?? status?.reason { notice(message) }
       screen.frame(maxWidth: .infinity, maxHeight: .infinity)
+        .overlay(alignment: .topTrailing) {
+          if input {
+            Rectangle().strokeBorder(Palette.accent, lineWidth: 2).allowsHitTesting(false)
+            Text("You have control").font(.caption.weight(.semibold)).foregroundStyle(.white)
+              .padding(.horizontal, 10).padding(.vertical, 6).background(Palette.accent, in: Capsule())
+              .padding(10).allowsHitTesting(false).accessibilityHidden(true)
+          }
+        }
       footer
     }.background(Palette.surface(scheme))
       .navigationTitle("Computer").navigationBarTitleDisplayMode(.inline)
@@ -111,7 +119,7 @@ struct ComputerView: View {
           Circle().fill(phase == .connected ? Palette.accent : Palette.muted).frame(width: 8, height: 8).accessibilityHidden(true)
           Text(ownerLabel).font(.subheadline.weight(.semibold))
         }
-        Text(desktop.held ? "Assistants are paused while you use the desktop." : "Take over to use the mouse and keyboard.")
+        Text(controlHint)
           .font(.caption).foregroundStyle(.secondary)
       }.frame(maxWidth: .infinity, alignment: .leading).accessibilityElement(children: .combine)
         .accessibilityIdentifier("computerStatus")
@@ -122,8 +130,16 @@ struct ComputerView: View {
         .accessibilityIdentifier("computerControl")
     }.padding(12)
   }
+  private var controlHint: String {
+    if desktop.held { return "Assistants are paused while you use the desktop." }
+    if status?.control.kind == "human" {
+      return status?.control.mine == true ? "Take over to use this viewer." : "Take over is available after they hand back."
+    }
+    return "Take over to use the mouse and keyboard."
+  }
   private var ownerLabel: String {
     if desktop.held { return "You have control" }
+    if status?.control.kind == "human", status?.control.mine == true { return "Watching your desktop session" }
     return status.map(\.detail) ?? "Connecting to the computer"
   }
   private func notice(_ message: String) -> some View {
@@ -164,10 +180,10 @@ struct ComputerView: View {
   }
   private var footer: some View {
     VStack(alignment: .leading, spacing: 8) {
-      if let url = try? store.api?.url("/?computer=1") {
+      if let url = try? store.api?.url("/?computer=1"), let terminalURL = try? store.api?.url("/?computer=1&computerTab=terminal") {
         HStack(spacing: 16) {
           Link(destination: url) { Label("Open in Safari", systemImage: "safari") }.accessibilityIdentifier("computerSafari")
-          Link(destination: url) { Label("Terminal", systemImage: "terminal") }.accessibilityIdentifier("computerTerminal")
+          Link(destination: terminalURL) { Label("Terminal", systemImage: "terminal") }.accessibilityIdentifier("computerTerminal")
             .accessibilityHint("Opens the VPS terminal in Safari, with its own sign-in")
         }.font(.footnote)
       }

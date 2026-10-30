@@ -31,7 +31,7 @@
 .computer-control-actions { display: flex; flex-shrink: 0; gap: 6px; }
 .computer-ownership { display: grid; grid-template-columns: 8px minmax(0, 1fr); align-items: center; gap: 5px 9px; min-width: 0; font-size: 0.8125rem; }
 .computer-ownership strong { font-weight: 600; overflow-wrap: anywhere; }
-.computer-ownership > span:last-child { grid-column: 2; color: var(--muted); font-size: 0.6875rem; overflow-wrap: anywhere; }
+.computer-ownership > span:not(.computer-state-dot) { grid-column: 2; color: var(--muted); font-size: 0.75rem; overflow-wrap: anywhere; }
 .computer-state-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
 .computer-state-dot.ready { background: var(--accent); }
 .computer-notice { margin: 0; padding: 10px 24px; font-size: 0.75rem; line-height: 1.5; color: var(--attention); background: var(--rail); overflow-wrap: anywhere; flex-shrink: 0; }
@@ -41,7 +41,7 @@
 .computer-connection-overlay strong { font-weight: 500; }
 .computer-connection-overlay button { color: #f1efdf; border-color: #3a483d; }
 .computer-connection-overlay button:hover { background: #2a4435; }
-.computer-footnote { margin: 12px 24px 16px; color: var(--muted); font-size: 0.6875rem; flex-shrink: 0; }
+.computer-footnote { margin: 12px 24px 16px; color: var(--muted); font-size: 0.75rem; flex-shrink: 0; }
 .computer-unavailable { margin: auto; padding: 36px 24px; max-width: 480px; text-align: center; overflow-wrap: anywhere; }
 .computer-empty-icon { display: inline-grid; place-items: center; width: 70px; height: 70px; border-radius: 20px; background: var(--accent-soft); color: var(--accent); margin-bottom: 8px; }
 .computer-unavailable h3 { font-size: 1.25rem; font-weight: 600; margin: 18px 0 10px; }
@@ -51,11 +51,11 @@
 .computer-terminal .xterm { height: 100%; }
 .terminal-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 12px 20px 16px; flex-shrink: 0; }
 .terminal-tools button { min-height: 40px; font-size: 0.75rem; padding: 8px 12px; }
-.terminal-tools > span { margin-left: auto; font-size: 0.6875rem; color: var(--muted); }
+.terminal-tools > span { margin-left: auto; font-size: 0.75rem; color: var(--muted); }
 .terminal-paste { margin: 0 20px 16px; flex-shrink: 0; }
 .terminal-paste > label { font-size: 0.75rem; margin-bottom: 6px; }
 .terminal-paste .actions { margin-top: 8px; justify-content: space-between; gap: 12px; }
-.terminal-paste small { font-size: 0.6875rem; color: var(--muted); }
+.terminal-paste small { font-size: 0.75rem; color: var(--muted); }
 .terminal-paste button { min-height: 44px; font-size: 0.75rem; flex-shrink: 0; }
 .computer-end-confirmation { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 0.75rem; padding: 10px 24px; background: var(--rail); flex-shrink: 0; }
 .computer-end-confirmation > span { flex: 1; min-width: 180px; }
@@ -66,7 +66,7 @@
   .computer-panel h2 { font-size: 1.3125rem; }
   .computer-subtitle { font-size: 0.75rem; line-height: 1.5; }
   .computer-tabs { padding: 0 10px; }
-  .computer-host { font-size: 0.625rem; max-width: 38%; }
+  .computer-host { font-size: 0.6875rem; max-width: 38%; }
   .computer-toolbar { padding: 12px 14px; gap: 8px; }
   .computer-ownership { font-size: 0.75rem; }
   .computer-toolbar > button, .computer-control-actions > button { font-size: 0.75rem; padding-inline: 10px; }
@@ -87,3 +87,16 @@
 .computer-google { max-width: 100%; min-height: 0; }
 .computer-confirm-error { display: flex; flex-direction: column; align-items: center; gap: 10px; }
 .computer-confirm-error p { color: var(--attention); }
+
+/* Match the emulator theme in the remainder below its last whole text row. */
+.computer-terminal .xterm-viewport { background-color: #151c18; }
+.desktop-stage.is-controlling { box-shadow: inset 0 0 0 2px var(--accent); outline: 2px solid var(--accent); outline-offset: -2px; }
+.desktop-control-badge { position: absolute; top: 10px; right: 10px; z-index: 1; padding: 5px 10px; border-radius: 999px; background: var(--accent); color: white; font-size: 0.75rem; font-weight: 600; pointer-events: none; }
+.terminal-tools [aria-expanded="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+@media (max-width: 620px) {
+  .desktop-stage { flex: 0 0 auto; min-height: 0; aspect-ratio: var(--desktop-aspect, 1.6); max-height: 60dvh; }
+  .computer-end-confirmation > span { flex-basis: 100%; min-width: 0; }
+  .computer-end-confirmation button { flex: 1; }
+  .terminal-paste .actions { flex-wrap: wrap; justify-content: flex-end; }
+  .terminal-paste .actions small { flex-basis: 100%; }
+}

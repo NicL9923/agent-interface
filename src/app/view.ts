@@ -3,7 +3,8 @@ import type { Bot, Preferences } from "../shared/types";
 export type View = "conversation" | "today" | "groups" | "find";
 // Modal overlays. Only one can be interactive at a time.
 export type Panel =
-  | { kind: "preferences" | "integrations" | "upgrade" | "computer" }
+  | { kind: "preferences" | "integrations" | "upgrade" }
+  | { kind: "computer"; tab?: "desktop" | "terminal" }
   | { kind: "settings"; bot: Bot | "new" }
   | { kind: "details"; botId: string; newSection?: boolean }
   | { kind: "routine"; botId: string; routineId: string; resultId?: string };
@@ -14,7 +15,7 @@ export function initialView(): View {
 }
 export function initialPanel(): Panel | null {
   const query = new URLSearchParams(location.search);
-  if (query.get("computer") === "1") return { kind: "computer" };
+  if (query.get("computer") === "1") return query.get("computerTab") === "terminal" ? { kind: "computer", tab: "terminal" } : { kind: "computer" };
   return query.get("routine") && query.get("bot")
     ? { kind: "routine", botId: query.get("bot")!, routineId: query.get("routine")! }
     : null;

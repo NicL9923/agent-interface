@@ -21,7 +21,7 @@ async (page, { origin, outputDir }) => {
       await panel.locator('.computer-screen canvas').waitFor();
       await shot(`computer-watching-${width}`);
       await take.click();
-      await panel.getByText('You have control', { exact: true }).waitFor();
+      await panel.locator('.computer-ownership strong').filter({ hasText: 'You have control' }).waitFor();
       await shot(`computer-control-${width}`);
       if (width === 390) {
         await panel.getByRole('button', { name: 'Type text', exact: true }).click();
@@ -31,6 +31,19 @@ async (page, { origin, outputDir }) => {
       }
       await panel.getByRole('button', { name: 'Hand back', exact: true }).click();
       await take.waitFor();
+      if (width === 390) {
+        await tab.route('**/api/computer', async route => {
+          const response = await route.fetch();
+          const status = await response.json();
+          await route.fulfill({ json: { ...status, control: { kind: 'human', name: 'Jordan', mine: false } } });
+        });
+        await tab.evaluate(() => window.dispatchEvent(new Event('focus')));
+        await panel.getByText('Jordan has control', { exact: true }).waitFor();
+        if (await take.isEnabled()) throw new Error('Another member can be interrupted');
+        await shot(`computer-other-member-${width}`);
+        await tab.unroute('**/api/computer');
+        await tab.evaluate(() => window.dispatchEvent(new Event('focus')));
+      }
       await panel.getByRole('tab', { name: 'Terminal', exact: true }).click();
       await panel.getByText('Your system terminal', { exact: true }).waitFor();
       await panel.locator('.xterm-rows').waitFor();
@@ -48,8 +61,17 @@ async (page, { origin, outputDir }) => {
       await panel.getByRole('button', { name: 'End shell', exact: true }).click();
       await panel.getByRole('button', { name: 'End this shell', exact: true }).click();
       await panel.getByText('Your shell has ended', { exact: true }).waitFor();
+      await shot(`computer-shell-ended-${width}`);
       await panel.getByRole('button', { name: 'Close computer', exact: true }).click();
     }
+    await tab.goto(`${origin}/?computer=1&computerTab=terminal`);
+    const terminalPanel = tab.getByRole('dialog', { name: 'Computer', exact: true });
+    await terminalPanel.getByText('Your system terminal', { exact: true }).waitFor();
+    if (await terminalPanel.getByRole('tab', { name: 'Terminal', exact: true }).getAttribute('aria-selected') !== 'true') throw new Error('Terminal link opened the wrong tab');
+    await shot('computer-terminal-link-390');
+    await terminalPanel.getByRole('button', { name: 'End shell', exact: true }).click();
+    await terminalPanel.getByRole('button', { name: 'End this shell', exact: true }).click();
+    await terminalPanel.getByText('Your shell has ended', { exact: true }).waitFor();
     return { paths };
   } catch (error) {
     await tab.screenshot({ path: `${outputDir}/capture-failure.png` }).catch(() => {});

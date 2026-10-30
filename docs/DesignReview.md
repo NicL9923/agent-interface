@@ -80,7 +80,7 @@ References collected October 25, 2026. External artwork is reference material on
 | Group chats and threads | Desktop/phone web and iPhone conversation captured | Complete | Whole-area rounds: 7.0, 8.6, 9.0; final scroll follow-ups applied directly |
 | Settings, following and home sections | Desktop/phone web and current iPhone front captured | Complete | Whole-area rounds: 8.0, 8.5, 9.0 |
 | Integrations | Desktop/phone web and current iPhone captured | Complete | Combined whole-area rounds: 7.8, 8.8, 9.1 |
-| Computer and terminal | Desktop/phone web and current iPhone viewer captured | In progress | Whole-area round 1 pending |
+| Computer and terminal | Desktop/phone web and current iPhone viewer captured | In progress | Whole-area round 1: 7.6; round 2 pending |
 | Hermes updates and recovery | Pending | Pending | Pending |
 | Sign-in and connection recovery | Pending | Pending | Pending |
 | Command palette and keyboard help | Desktop/phone web captured | Complete | Included in Settings final whole-area score: 9.0 |
@@ -791,3 +791,30 @@ adds a new matching reply, checking that the replacement remains selected.
 All 109 focused checks and the web and native builds pass. Native gestures,
 VoiceOver, live saves, dark mode and large text remain unverified. No fourth
 Settings review is planned. Computer and terminal's first review is underway.
+
+
+Computer round 1 scored 7.6. The phone desktop stage now follows the remote
+canvas dimensions, including resolution changes. An accent border and badge
+show confirmed local control. Another member's lease has a matching disabled
+Take over explanation on both clients. A signed-in member's lease alone is not
+proof that it belongs to another window, so the watch-mode copy says Watching
+your desktop session instead. Reconnect still disables input until another
+explicit takeover.
+
+The terminal viewport matches its canvas background, secondary text is larger,
+and the persistent-shell warning sits next to the terminal status. The end
+confirmation keeps both choices on one row on phone. Expanded text tools show
+their state, and their submit buttons align consistently. Initial focus goes to
+the selected tab rather than Close. The native Terminal link now names Terminal
+in the app URL; opening it attaches only the terminal until Desktop is visited.
+
+All 40 focused computer, API, chunk-failure and native-viewer checks pass. They
+include direct terminal routing, lazy desktop attachment, framebuffer geometry
+and resolution changes, lease fencing and reconnect behavior. Web and native
+builds completed under the applicable lock. The agent repeated the web flows,
+captured another member in control and Shell ended, and verified the terminal
+link opens the selected Terminal tab. These remain simulated streams; no real
+computer or shell was used. The compiled iPhone viewer was captured again.
+Native gestures, Safari interaction, VoiceOver, dark mode, large text, live
+hosts, identity confirmation and reconnecting-state pixels remain unverified.
+The browser, server and simulator are closed. Round 2 is pending.
