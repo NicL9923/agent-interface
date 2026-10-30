@@ -198,4 +198,41 @@ describe("Hermes updates", () => {
     expect(container.textContent).toContain("Checking the restarted service.");
     expect(container.textContent).not.toContain("before we could confirm the request");
   });
+  it("leads failed-install recovery with Restart and restores keyboard focus after cancellation", async () => {
+    status = { ...status, phase: "failed", operation: "install", operationId: "failed", canCheck: false, canRestartService: true, canRetry: true, canCancel: true };
+    await render();
+    expect(container.querySelector(".primary")?.textContent).toBe("Restart Hermes");
+    expect(container.querySelector(".upgrade-action")).toBeNull();
+    button("Restart Hermes").focus();
+    await act(async () => button("Restart Hermes").click());
+    expect(document.activeElement).toBe(container.querySelector(".upgrade-confirmation"));
+    await act(async () => button("Not now").click());
+    expect(document.activeElement).toBe(button("Restart Hermes"));
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it("dismisses a stale confirmation rather than recovering another device's newer operation", async () => {
+    status = { ...status, phase: "failed", operation: "install", operationId: "old-operation", canRestartService: true };
+    await render();
+    await act(async () => button("Restart Hermes").click());
+    status = { ...status, operationId: "new-operation" };
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+    expect(container.querySelector(".upgrade-confirmation")).toBeNull();
+    expect(container.textContent).toContain("The update changed on another device.");
+    expect(document.activeElement?.id).toBe("hermes-upgrade-title");
+    expect(write).not.toHaveBeenCalled();
+    await act(async () => button("Restart Hermes").click());
+    vi.mocked(write).mockResolvedValue({ ...status, phase: "recovering", canRestartService: false });
+    await act(async () => button("Yes, restart Hermes").click());
+    expect(write).toHaveBeenCalledExactlyOnceWith("/hermes/upgrade/control", { action: "restart_service", operationId: "new-operation", requestId: expect.any(String) });
+    expect(document.activeElement?.id).toBe("hermes-upgrade-title");
+  });
+
+  it.each([["recovering", "Restoring…"], ["verifying", "Checking Hermes…"]] as const)("names the %s phase without claiming another install", async (phase, label) => {
+    status = { ...status, phase, operation: "install", canCheck: false };
+    await render();
+    expect(action().textContent).toBe(label);
+    expect(action().disabled).toBe(true);
+  });
+
 });

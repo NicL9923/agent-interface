@@ -327,6 +327,7 @@ struct ConnectionView: View {
           HStack(spacing: 6) {
             if store.restoring { ProgressView().controlSize(.mini) }
             Text(store.restoring ? "Checking…" : "Retry connection")
+              .frame(minHeight: 44).contentShape(Rectangle())
           }
         }.disabled(store.restoring || store.signingIn).accessibilityIdentifier("retryConnection")
         ChangeServerButton()

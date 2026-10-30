@@ -738,6 +738,8 @@ extension UpgradeStatus {
   func actionLabel(submitting: Bool, uncertain: Bool) -> String {
     if submitting { return installsNext ? "Starting the install…" : "Starting the check…" }
     if uncertain { return "Checking update status…" }
+    if phase == "recovering" { return "Restoring…" }
+    if phase == "verifying" { return "Checking Hermes…" }
     if inProgress { return isInstall ? "Installing…" : "Testing…" }
     return installsNext ? "Install update" : stopped && !isInstall ? "Check again" : "Check for an update"
   }

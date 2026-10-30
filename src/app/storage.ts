@@ -58,6 +58,8 @@ export const integrationFlowKey = (user: string, profile: string) => `integratio
 export const groupCreateKey = (user: string) => `agent-interface:group-create:${user}`;
 export const groupSendKey = (user: string, room: string) => `agent-interface:group-send:${user}:${room}`;
 export const routineTrialKey = (user: string, routine: string) => `agent-interface:routine-trial:${user}:${routine}`;
+/** In sessionStorage: retain an unclear approval decision across navigation and reloads. */
+export const approvalDecisionKey = (user: string, bot: string, approval: string) => `agent-interface:approval:${user}:${bot}:${approval}`;
 export const notificationPromptKey = "agent-interface:notifications-prompt:v1";
 export function localRead<T>(key: string): T | null {
   try {

@@ -61,7 +61,7 @@ export const stateLabels: Record<ActivityState, string> = {
   waiting: "Waiting",
   blocked: "Needs your help",
   done: "Done",
-  disconnected: "Connection lost",
+  disconnected: "Reconnecting",
   failed: "Failed",
   interrupted: "Interrupted",
 };

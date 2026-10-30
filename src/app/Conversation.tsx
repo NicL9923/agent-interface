@@ -1,8 +1,9 @@
+import { approvalAttempt, type ApprovalAttempt } from "./approval-attempt";
 import { matchCombo, shortcuts } from "./shortcuts";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode, RefCallback, RefObject } from "react";
 import type { ActivityState, Approval, Bootstrap, Bot, FileRef, Message, ToolCall } from "../shared/types";
-import { request as apiRequest } from "../client-api";
+import { ApiError, request as apiRequest } from "../client-api";
 import { Avatar } from "../components/Avatar";
 import { avatarProp } from "../components/avatar-motion";
 import { MessageMarkdown, StreamingMarkdown } from "../components/MessageMarkdown";
@@ -267,7 +268,7 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
         ))}
         {conversation?.approvals
           .filter((approval) => approval.status === "pending")
-          .map((approval) => <ApprovalCard key={`${botId}:${approval.id}`} approval={approval} botId={botId}
+          .map((approval) => <ApprovalCard key={`${boot.user.id}:${botId}:${approval.id}`} approval={approval} botId={botId} userId={boot.user.id} disconnected={connectionLost}
             supported={boot.capabilities.approvals.supported} unavailableReason={boot.capabilities.approvals.reason} report={setError} />)}
       </div>
       {/* Room for a message just sent to sit near the top while its reply grows; see use-conversation. */}
@@ -490,28 +491,58 @@ function Reasoning({ parts }: { parts: string[] }) {
     <div className="tool-calls-content">{parts.map((part, index) => <p className="reasoning-part" key={index}>{part}</p>)}</div>
   </details>;
 }
-function ApprovalCard({ approval, botId, supported, unavailableReason, report }: { approval: Approval; botId: string; supported: boolean; unavailableReason?: string; report(message: string): void }) {
-  const [decision, setDecision] = useState<"approved" | "denied" | null>(null);
-  const [settled, setSettled] = useState(false);
+function ApprovalCard({ approval, botId, userId, disconnected, supported, unavailableReason, report }: {
+  approval: Approval; botId: string; userId: string; disconnected: boolean; supported: boolean; unavailableReason?: string; report(message: string): void;
+}) {
+  const saved = approvalAttempt(userId, botId, approval.id);
+  const [attempt, setAttempt] = useState<ApprovalAttempt | undefined>(() => saved.read());
+  const [sending, setSending] = useState(false);
+  const pending = useRef(false);
   async function decide(value: "approved" | "denied") {
-    if (decision) return;
+    const previous = saved.read();
+    if (!supported || disconnected || pending.current || previous && (previous.state !== "unconfirmed" || previous.decision !== value)) return;
     report("");
-    setDecision(value);
+    pending.current = true;
+    setSending(true);
+    const next: ApprovalAttempt = { decision: value, state: "unconfirmed" };
+    // Save before sending: leaving this chat while the POST is in flight must
+    // never offer the opposite decision when the person returns.
+    saved.save(next); setAttempt(next);
     try {
       await apiRequest("POST /bots/:id/approvals/:approvalId", { params: { id: botId, approvalId: approval.id }, body: { decision: value } });
-      setSettled(true);
-    } catch (error) { setDecision(null); report((error as Error).message); }
+      const sent: ApprovalAttempt = { decision: value, state: "sent" };
+      saved.save(sent); setAttempt(sent);
+    } catch (error) {
+      if (error instanceof ApiError && error.status < 500 && !previous) {
+        saved.save(undefined); setAttempt(undefined); report(error.message);
+      } else {
+        const retained: ApprovalAttempt = { decision: value, state: previous && error instanceof ApiError && error.status === 409 ? "closed" : "unconfirmed" };
+        saved.save(retained); setAttempt(retained);
+        // Refreshes can remove a resolved card, but a still-pending read cannot
+        // prove an earlier answer isn't still being processed. Never auto-send.
+        window.dispatchEvent(new Event("agent-interface:reconnect"));
+      }
+    } finally { pending.current = false; setSending(false); }
   }
-  return <article className="approval-card decision-card" aria-busy={!!decision && !settled} {...attentionAnchor("approval", approval.id)}>
+  return <article className="approval-card decision-card" aria-busy={sending} {...attentionAnchor("approval", approval.id)}>
     <p className="eyebrow">Your decision needed</p><h2>{approval.title}</h2><p>{approval.detail}</p>
     {approval.expiresAt && <small>Expires <When value={approval.expiresAt} inline /></small>}
     <div className="actions">{(["approved", "denied"] as const).map(value => <button key={value} type="button"
-      className={value === "approved" ? "primary" : undefined} disabled={!supported || !!decision} onClick={() => void decide(value)}>
-      {decision === value && <Icon name={settled ? "check" : "spinner"} className={settled ? undefined : "spin"} size={16} />}
-      {decision === value ? settled ? value === "approved" ? "Approved" : "Declined" : value === "approved" ? "Approving…" : "Declining…" : value === "approved" ? "Approve" : "Decline"}
+      className={value === "approved" ? "primary" : undefined}
+      disabled={!supported || disconnected || sending || !!attempt && (attempt.state !== "unconfirmed" || value !== attempt.decision)} onClick={() => void decide(value)}>
+      {attempt?.decision === value && (sending || attempt.state === "sent") && <Icon name={sending ? "spinner" : "check"} className={sending ? "spin" : undefined} size={16} />}
+      {attempt?.decision === value ? sending ? value === "approved" ? "Approving…" : "Declining…"
+        : attempt.state === "sent" ? value === "approved" ? "Approved" : "Declined"
+        : attempt.state === "closed" ? "Decision unavailable"
+        : value === "approved" ? "Send approval again" : "Send decline again"
+        : value === "approved" ? "Approve" : "Decline"}
     </button>)}</div>
     {!supported && <p className="approval-unavailable">{unavailableReason || "This Hermes connection does not support approval decisions. Open the official Hermes interface to answer."}</p>}
-    {decision && <p className="decision-status" role="status">{settled ? decision === "approved" ? "Approval sent." : "Decline sent." : "Sending decision…"}</p>}
+    {disconnected && !attempt && supported && <p className="decision-status" role="status">Reconnect to Hermes to answer.</p>}
+    {attempt && <p className="decision-status" role="status">{sending ? "Sending decision…"
+      : attempt.state === "sent" ? attempt.decision === "approved" ? "Approval sent." : "Decline sent."
+      : attempt.state === "closed" ? "Hermes could not accept this resend. Refresh the conversation to check its status."
+      : `Hermes hasn't confirmed your ${attempt.decision === "approved" ? "approval" : "decline"}. It may still go through, so the other choice stays off. After reconnecting, you can send the same decision again.`}</p>}
   </article>;
 }
 function ToolCalls({ messages, advanced, disconnected, recipient }: { messages: Message[]; advanced: boolean; disconnected: boolean; recipient: string }): ReactNode {

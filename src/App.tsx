@@ -183,7 +183,7 @@ export function App() {
     if (!boot) return items;
     if (connectionLost) items.push({ id: "connection", kind: "connection", node: <ConnectionPanel compact connection={boot.connection} offline={offline}
       appUnavailable={appUnavailable} busy={checkingConnection} retry={reconnect} /> });
-    if (decisions) items.push({ id: "decisions", kind: "decisions", node: <DecisionsNotice count={decisions} onReview={() => reviewFirstDecision()} /> });
+    if (decisions) items.push({ id: "decisions", kind: "decisions", node: <DecisionsNotice disconnected={connectionLost} count={decisions} onReview={() => reviewFirstDecision()} /> });
     if (mobile && update) items.push({ id: "update", kind: "update", node: <UpdateNotice update={update} /> });
     return items;
   }, [boot, connectionLost, offline, appUnavailable, checkingConnection, reconnect, decisions, mobile, update]);

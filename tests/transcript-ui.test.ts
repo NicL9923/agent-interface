@@ -424,7 +424,7 @@ describe("approval decisions", () => {
   for (const decision of ["approved", "denied"] as const) {
     it(`retries a failed ${decision} decision, clears the error and prevents another send`, async () => {
       conversation = { ...conversation, approvals: [{ id: "gate", title: "Create the reminder?", detail: "Notify both household members.", status: "pending" }] };
-      vi.mocked(write).mockRejectedValueOnce(new Error("Could not send your decision."));
+      vi.mocked(write).mockRejectedValueOnce(new ApiError("Could not send your decision.", 400));
       await render();
       const card = container.querySelector(".approval-card")!;
       const buttons = [...card.querySelectorAll<HTMLButtonElement>("button")];
@@ -444,6 +444,45 @@ describe("approval decisions", () => {
       expect(calls.map(([, body]) => body)).toEqual([{ decision }, { decision }]);
     });
   }
+  it("blocks disconnected decisions and puts reconnection before the Review action", async () => {
+    conversation = { ...conversation, approvals: [{ id: "offline-decision", title: "Open the gate?", detail: "", status: "pending" }] };
+    const original = bootstrap.connection;
+    try {
+      await render();
+      bootstrap.connection = { connected: false, code: "unreachable" };
+      await advance(45_000);
+      const buttons = [...container.querySelectorAll<HTMLButtonElement>(".approval-card button")];
+      expect(buttons.every(button => button.disabled)).toBe(true);
+      expect(container.querySelector(".approval-card")?.textContent).toContain("Reconnect to Hermes to answer.");
+      expect(container.querySelector(".status-dock")?.firstElementChild?.className).toContain("dock-connection");
+      await act(async () => buttons[0].click());
+      expect(write).not.toHaveBeenCalled();
+    } finally { bootstrap.connection = original; }
+  });
+
+  it("keeps an unclear approval across reload, never resends automatically and fences an opposite decision", async () => {
+    conversation = { ...conversation, approvals: [{ id: "uncertain-decision", title: "Open the gate?", detail: "", status: "pending" }] };
+    vi.mocked(write).mockRejectedValueOnce(new ApiError("Timed out", 504));
+    await render();
+    await act(async () => buttonText("Approve")!.click());
+    expect(buttonText("Decline")?.disabled).toBe(true);
+    expect(buttonText("Send approval again")?.disabled).toBe(false);
+    expect(container.querySelector(".approval-card")?.getAttribute("aria-busy")).toBe("false");
+    expect(container.querySelector(".approval-card")?.textContent).toContain("It may still go through");
+    // A fresh read still showing pending does not prove the first POST stopped.
+    await changed();
+    await act(async () => root.unmount());
+    await render();
+    expect(buttonText("Decline")?.disabled).toBe(true);
+    expect(write).toHaveBeenCalledTimes(1);
+    vi.mocked(write).mockRejectedValueOnce(new ApiError("This approval is no longer pending", 409));
+    await act(async () => buttonText("Send approval again")!.click());
+    expect([...container.querySelectorAll<HTMLButtonElement>(".approval-card button")].every(button => button.disabled)).toBe(true);
+    expect(container.querySelector(".approval-card")?.textContent).toContain("Refresh the conversation");
+    const calls = vi.mocked(write).mock.calls.filter(([path]) => path === "/bots/shared/approvals/uncertain-decision");
+    expect(calls.map(([, body]) => body)).toEqual([{ decision: "approved" }, { decision: "approved" }]);
+  });
+
 });
 
 describe("reply actions", () => {

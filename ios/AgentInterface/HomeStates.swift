@@ -119,14 +119,21 @@ enum WelcomeCopy {
   static let checkingSignIn = "Checking sign-in…"
 }
 
-/// Leaves this server. If the server cannot confirm the sign-out, asks before forgetting it locally.
+/// Confirms before leaving this server, with a second choice if sign-out cannot be confirmed.
 struct ChangeServerButton: View {
   @Environment(AppStore.self) private var store
   @State private var offline = false
+  @State private var confirm = false
   var body: some View {
-    Button("Change server") {
-      Task { if !(await store.changeConnection()) { offline = true } }
+    Button { confirm = true } label: {
+      Text("Change server").frame(minHeight: 44).contentShape(Rectangle())
     }.disabled(store.signingIn).accessibilityIdentifier("changeServer")
+      .confirmationDialog("Change server? This signs this device out of its current household.", isPresented: $confirm, titleVisibility: .visible) {
+        Button("Change server", role: .destructive) {
+          Task { if !(await store.changeConnection()) { offline = true } }
+        }
+        Button("Stay here", role: .cancel) {}
+      }
       .confirmationDialog(
         "The server didn't confirm sign-out, so it may be unreachable. If you change servers anyway, this device forgets its sign-in, but the session stays valid on the server until it expires.",
         isPresented: $offline, titleVisibility: .visible

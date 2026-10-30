@@ -898,3 +898,36 @@ not XCTest navigation or native unit-test coverage.
 
 The agent inspected the saved frames. The browser and preview server are closed.
 The first whole-area review is pending. Progress remains 22 of 25 grouped areas.
+
+## Connection and update recovery, round 2
+
+Round 1 scored 7.0. Failed-install recovery now leads with Restart Hermes on
+both clients. The disabled check button and its unrelated hint are hidden in
+that state. Native recovery precedes the stepper and versions, so all three
+actions fit on the first screen. Failed and blocked native icons use red.
+Restoring and verification use their own action labels. Check details includes
+restart checks without calling them staged-copy tests.
+
+The web confirmation pins the operation shown when it opens. A newer operation
+dismisses the old prompt with a notice. Opening focuses the prompt, Not now
+returns focus to its trigger, and confirmation focuses the status title. The
+choices have distinct styling and stack on phone. The dialog keeps its top
+position across state changes. Native uses Not now too. Sign-in recovery links
+have 44-point targets, and changing servers always asks before signing out.
+
+Disconnected approvals stay disabled with local guidance. The connection notice
+precedes the decision notice, whose Review button becomes secondary. An unclear
+approval failure retains the attempted choice in tab-scoped, account-specific
+storage across navigation and reloads. Only an explicit resend of that same
+choice is allowed. A still-pending read never unlocks the opposite choice.
+Definite initial refusals still allow correction. A refused resend keeps the
+opposite choice locked. No approval is resent automatically.
+
+All 289 focused web checks pass, including outage, ambiguous decision, remount,
+confirmation focus and operation-change cases. Web and native builds completed.
+The agent repeated the web flows at both widths and checked focus in Chromium.
+Fresh iPhone captures show the recovery actions and sign-in view. The browser,
+preview server and simulator are closed. Native gestures, the confirmation sheet,
+real providers, actual installations, VoiceOver, dark mode and large text remain
+unverified. The existing CoreSimulator/Xcode mismatch still prevents XCTest
+coverage. Whole-area round 2 is pending; progress remains 22 of 25.

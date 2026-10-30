@@ -31,6 +31,8 @@ async (page, { origin, outputDir }) => {
       await shot('signin-setup-'+width);
       mode='disconnected';await tab.goto(origin+'/?view=conversation&bot=ranch');
       const connection=tab.getByRole('region',{name:'Hermes connection',exact:true});await connection.waitFor();
+      const approvals=tab.locator('.approval-card .actions button');await approvals.first().waitFor();
+      if(await approvals.count()!==2||await approvals.evaluateAll(nodes=>nodes.some(node=>!node.disabled))) throw new Error('Disconnected decisions must stay disabled');
       await shot('connection-lost-'+width);
       mode='healthy';await tab.goto(origin+'/?view=conversation&bot=ranch');await tab.locator('article[data-message-id]').first().waitFor();
       if(width===390) await tab.getByRole('button',{name:'Back to assistants',exact:true}).click();
@@ -38,11 +40,16 @@ async (page, { origin, outputDir }) => {
       await tab.getByRole('button',{name:/^Hermes and updates/}).click();
       const panel=tab.locator('dialog.hermes-upgrade-panel');
       await panel.getByRole('button',{name:'Restart Hermes',exact:true}).waitFor();await shot('update-failed-'+width);
-      await panel.getByRole('button',{name:'Restart Hermes',exact:true}).click();await shot('update-restart-confirm-'+width);
-      await panel.getByRole('button',{name:'Keep current state',exact:true}).click();
+      await panel.getByRole('button',{name:'Restart Hermes',exact:true}).click();
+      if(!await panel.locator('.upgrade-confirmation').evaluate(node=>node===document.activeElement)) throw new Error('Confirmation must receive focus');
+      await shot('update-restart-confirm-'+width);
+      await panel.getByRole('button',{name:'Not now',exact:true}).click();
+      if(!await panel.getByRole('button',{name:'Restart Hermes',exact:true}).evaluate(node=>node===document.activeElement)) throw new Error('Cancel must restore Restart focus');
       await panel.getByRole('button',{name:'Restart Hermes',exact:true}).click();
       await panel.getByRole('button',{name:'Yes, restart Hermes',exact:true}).click();
-      await panel.getByText('Waiting for a safe stopping point, then checking the connection.',{exact:true}).waitFor();await shot('update-recovering-'+width);
+      await panel.getByText('Waiting for a safe stopping point, then checking the connection.',{exact:true}).waitFor();
+      await panel.getByRole('button',{name:'Restoring…',exact:true}).waitFor();
+      await shot('update-recovering-'+width);
       await panel.getByRole('button',{name:'Close Hermes updates',exact:true}).click();
 
     }

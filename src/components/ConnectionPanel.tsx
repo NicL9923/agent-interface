@@ -11,7 +11,7 @@ const explanations: Record<string, { title: string; detail: string; setup?: bool
   incompatible: { title: "Hermes and this app need matching versions", detail: "Run the connection check on the app's computer for the required version and update instructions.", setup: true },
   connecting: { title: "Connecting to Hermes", detail: "Checking the connection and restoring your assistants." },
   reconnecting: { title: "Reconnecting to Hermes", detail: "Your draft is kept. Existing work stays with Hermes, and messages won't be resent automatically." },
-  unreachable: { title: "Hermes is temporarily unavailable", detail: "Your draft is kept. We'll reconnect automatically when Hermes is reachable again." },
+  unreachable: { title: "Reconnecting to Hermes", detail: "Hermes is temporarily unavailable. Your draft is kept. We'll reconnect automatically." },
   closed: { title: "The connection is restarting", detail: "Your draft is kept. We'll reconnect automatically." },
 };
 

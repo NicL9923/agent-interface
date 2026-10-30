@@ -157,7 +157,7 @@ describe("status dock", () => {
     const item = (id: string, kind: DockItem["kind"]): DockItem => ({ id, kind, node: null });
     const order = sortDock([item("update", "update"), item("connection", "connection"), item("decisions", "decisions"),
       item("rejected", "send"), item("interrupted", "interrupted"), item("uncertain", "send")]).map(entry => entry.id);
-    expect(order).toEqual(["rejected", "uncertain", "interrupted", "decisions", "connection", "update"]);
+    expect(order).toEqual(["rejected", "uncertain", "interrupted", "connection", "decisions", "update"]);
   });
 });
 
