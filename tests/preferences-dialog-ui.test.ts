@@ -236,6 +236,10 @@ it.each(["quietStart", "quietEnd"] as const)("refuses an equal %s locally, then 
   await typeInto(input, field === "quietStart" ? "07:00" : "22:00");
   expect(saved).toHaveLength(0);
   expect(container.querySelector('[role="alert"]')?.textContent).toBe("Start and end times can't match.");
+  for (const input of container.querySelectorAll('input[type="time"]')) {
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+    expect(input.getAttribute("aria-describedby")).toBe("quiet-hours-error");
+  }
   await typeInto(input, "08:00");
   expect(saved.at(-1)?.notifications?.[field]).toBe("08:00");
   expect(container.querySelector('[role="alert"]')).toBeNull();

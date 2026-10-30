@@ -145,7 +145,7 @@ export function useDeviceNotifications(userId?: string, vapid?: string) {
         removed = true;
         if (user.current === account) setState((previous) => ({ ...previous, enabled: false }));
         const unsubscribed = await subscription.unsubscribe();
-        if (!unsubscribed) throw new Error("Notifications are off for your account, but this browser couldn't remove its subscription. Try turning them off again or use browser settings.");
+        if (!unsubscribed) throw new Error("Notifications are off on this device, but this browser couldn't remove its subscription. Try turning them off again or use browser settings.");
       }
       if (user.current === account) setState((previous) => ({ ...previous, enabled: false, busy: false,
         message: "Off on this device. Turn on anytime." }));

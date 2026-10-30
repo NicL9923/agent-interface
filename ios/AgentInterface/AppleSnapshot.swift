@@ -22,7 +22,7 @@ struct AppleDeviceSnapshot: Codable, Sendable {
   var events: [AppleSnapshotEvent]
   var reminders: [AppleSnapshotReminder]
   var timeZone = TimeZone.current.identifier
-  var note = "This is a snapshot, not a live connection. Refresh and share again for current data. Event notes and locations, attendees, and account identifiers are omitted. Date-only reminders use dueDate as YYYY-MM-DD and have no due time."
+  var note = "This is a snapshot, not a live connection. Refresh and share again for current data. Event notes and locations, attendees, and account identifiers are omitted. Date-only reminders use dueDate as YYYY-MM-DD and have no due time. windowStart is inclusive; windowEnd and every event end are exclusive. An all-day event ending at midnight does not include that ending day."
   var itemSummary: String { "\(AppleSnapshotDates.count(events.count, "event")) · \(AppleSnapshotDates.count(reminders.count, "reminder"))" }
   func data() throws -> Data {
     guard let zone = TimeZone(identifier: timeZone) else {

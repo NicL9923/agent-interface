@@ -107,8 +107,11 @@ struct AppleDeviceConnectionsView: View {
         }.disabled(selectedCalendars.isEmpty && selectedLists.isEmpty)
       } header: { Text("Date window") } footer: {
         VStack(alignment: .leading, spacing: 6) {
-          if selectedCalendars.isEmpty && selectedLists.isEmpty { Text("Allow access and choose a calendar or list to preview.") }
-          Text("Choose up to 90 days. Only event titles, times, reminder titles, due dates, and selected calendar and list names, and the snapshot time zone are included. Completed reminders are omitted.")
+          if selectedCalendars.isEmpty && selectedLists.isEmpty {
+            Text(connection.calendarStatus == .fullAccess || connection.reminderStatus == .fullAccess
+              ? "Choose a calendar or list to preview." : "Allow access and choose a calendar or list to preview.")
+          }
+          Text("Choose up to 90 days. The snapshot includes event titles and times, reminder titles and due dates, selected calendar and list names, and its time zone. Completed reminders and reminders due outside your dates are omitted.")
         }.fixedSize(horizontal: false, vertical: true)
       }
       if let snapshot {

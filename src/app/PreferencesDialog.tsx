@@ -156,10 +156,10 @@ export function PreferencesDialog({ boot, connectionLost, offline, editPreferenc
               ...(checked ? { quietStart: "22:00", quietEnd: "07:00" } : {}) } }); }} />
           {prefs.notifications?.quietStart && <>
             <label className="settings-row"><span className="row-label">From</span>
-              <Input type="time" value={prefs.notifications.quietStart} onChange={event => changeQuietTime("quietStart", event.target.value)} /></label>
+              <Input type="time" aria-invalid={!!quietError} aria-describedby={quietError ? "quiet-hours-error" : undefined} value={prefs.notifications.quietStart} onChange={event => changeQuietTime("quietStart", event.target.value)} /></label>
             <label className="settings-row"><span className="row-label">Until</span>
-              <Input type="time" value={prefs.notifications.quietEnd} onChange={event => changeQuietTime("quietEnd", event.target.value)} /></label>
-            {quietError && <p className="quiet-hours-error" role="alert">{quietError}</p>}
+              <Input type="time" aria-invalid={!!quietError} aria-describedby={quietError ? "quiet-hours-error" : undefined} value={prefs.notifications.quietEnd} onChange={event => changeQuietTime("quietEnd", event.target.value)} /></label>
+            {quietError && <p id="quiet-hours-error" className="quiet-hours-error" role="alert">{quietError}</p>}
           </>}
         </div>
         <p className="settings-footnote">These apply wherever you get notifications.</p>

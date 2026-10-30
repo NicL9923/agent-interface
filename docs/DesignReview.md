@@ -1068,3 +1068,19 @@ The preview and sharing confirmation remain source-only observations. Real
 EventKit permissions/data, push delivery, native gestures, XCTest, VoiceOver,
 dark mode and large text remain unverified. Round 3 is the final review round;
 progress remains 23 of 25 grouped areas until its result.
+
+
+## Notifications and Apple devices complete
+
+Round 3 scored 9.1 with no blockers. Progress is 24 of 25 grouped areas.
+The final review confirmed the quiet-hours spacing, scope labels and date model.
+Small follow-ups connect both web time fields to the error for assistive tools,
+fix device-only failure wording, clarify the native selection footer and document
+exclusive range ends in the shared snapshot. The existing ISO fields remain
+unambiguous without a second representation of event dates.
+
+Native batching still places its selected value below the captioned label. This
+is recorded as a minor layout follow-up, especially for large text, rather than
+starting a fourth review. Real EventKit integration, push delivery, native
+preview/confirmation gestures, VoiceOver, dark mode and large text remain gaps.
+The final area is empty/offline content, share extensions and widgets.
