@@ -72,6 +72,13 @@ def claim_idle(computer, held, error):
     return True
 
 
+def keep_desktop_alive(runtime):
+    """The supervisor owns this screen; a dead supervisor stops renewing its activity."""
+    if not runtime.status().running:
+        raise RuntimeError("The household desktop exited; its supervisor will restart it.")
+    runtime.touch_activity()
+
+
 def sibling_module(name):
     """Load src/hermes/NAME.py once per process, under its one canonical module name.
 
@@ -100,6 +107,8 @@ def main():
         raise SystemExit("The household computer is not configured.")
     home, endpoint = setting
     from tools.bot_desktop import runtime, lease, browser
+    if not callable(getattr(runtime, "touch_activity", None)):
+        raise RuntimeError("Native desktop activity updates require qualification.")
     source = Path(runtime.__file__).resolve().parents[2]
     loaded = loaded_code(source)
     hermes_home = os.environ["HERMES_HOME"]
@@ -148,8 +157,7 @@ def main():
             if child.poll() is not None:
                 raise RuntimeError("The household browser exited; its supervisor will restart it.")
             with module.resource_scope(home):
-                if not runtime.status().running:
-                    raise RuntimeError("The household desktop exited; its supervisor will restart it.")
+                keep_desktop_alive(runtime)
             if time.monotonic() >= next_check:
                 next_check = time.monotonic() + CODE_CHECK_SECONDS
                 try:

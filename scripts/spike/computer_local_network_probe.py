@@ -36,7 +36,15 @@ os.environ.update(HERMES_AGENT_INTERFACE_COMPUTER_HOME=str(resource),
 (home / "config.yaml").write_text(json.dumps({"plugins": {"enabled": []}}))
 
 from hermes_constants import set_hermes_home_override, reset_hermes_home_override
-from tools import browser_tool as bt, browser_tool_cloud as cloud, browser_tool_cdp as cdp, browser_use_cli
+from tools import browser_use_cli
+try:
+    from tools import browser_url_policy as bt, browser_session_cloud as cloud, browser_session_cdp as cdp
+    modern_browser = True
+except ImportError:
+    from tools import browser_tool as bt, browser_tool_cloud as cloud, browser_tool_cdp as cdp
+    modern_browser = False
+cdp_name = "get_cdp_override_raw" if modern_browser else "_get_cdp_override_raw"
+local_name = "is_local_backend" if modern_browser else "_is_local_backend"
 from tools.bot_desktop import runtime
 from tools.registry import registry
 from tools.browser_supervisor import SUPERVISOR_REGISTRY
@@ -72,7 +80,7 @@ def blocked(url=private):
     return error["error"]
 
 def write_receipt(status):
-    source = Path(bt.__file__).resolve().parents[1]
+    source = Path(browser_use_cli.__file__).resolve().parents[1]
     result = {"status": status, "checks": checks, "decisions": decisions,
         "desktopHardware": "native desktop start fixture; actual disposable Chrome and native policy/dispatch",
         "revision": subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip(),
@@ -120,7 +128,7 @@ try:
         for url in (private, kvm):
             assert bt.evaluate_url_safety(url) is None
             assert browser_use_cli._code_url_verdict(f'goto_url("{url}")').blocked is None
-        assert not cloud._allow_private_urls()
+        assert not getattr(cloud, "allow_private_urls" if modern_browser else "_allow_private_urls")()
         decisions["authorized_owned_local_browser"] = "admitted by real native URL and browser_exec preflight"
         for url in ("http://169.254.169.254/latest/meta-data", "http://169.254.170.2",
                     "http://metadata.google.internal"):
@@ -136,17 +144,20 @@ try:
             result = json.loads(registry.dispatch(name, args, task_id="metadata-literal-probe"))
             assert not result["success"] and "metadata" in result["error"], result
         checks["dispatch_console_and_cdp_metadata_literals_blocked"] = True
-        from tools import browser_tool_eval_policy
-        assert not browser_tool_eval_policy._eval_ssrf_guard_active("metadata-literal-probe")
+        if modern_browser:
+            assert not bt.eval_ssrf_guard_active()
+        else:
+            from tools import browser_tool_eval_policy
+            assert not browser_tool_eval_policy._eval_ssrf_guard_active("metadata-literal-probe")
         checks["native_local_current_page_guard_gap_confirmed"] = True
-        original_override = cdp._get_cdp_override_raw
+        original_override = getattr(cdp, cdp_name)
         try:
             for arbitrary in ("http://external.example:9222", "http://127.0.0.1:1"):
-                cdp._get_cdp_override_raw = lambda _url=arbitrary: _url
-                assert not cloud._is_local_backend()
+                setattr(cdp, cdp_name, lambda _url=arbitrary: _url)
+                assert not getattr(cloud, local_name)()
                 blocked()
         finally:
-            cdp._get_cdp_override_raw = original_override
+            setattr(cdp, cdp_name, original_override)
         checks["arbitrary_remote_and_loopback_cdp_untrusted"] = True
     for name in ("other", "patch-disabled", "other-again"):
         with profile(name):
