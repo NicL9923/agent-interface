@@ -68,7 +68,7 @@ function useComposerInput(text: string, botId: string, voiceState: VoiceState) {
       const send = form.querySelector<HTMLElement>(".send-button");
       const measure = form.querySelector<HTMLElement>(".composer-measure");
       const style = getComputedStyle(input);
-      if (measure) { measure.style.font = style.font; measure.textContent = input.value.slice(0, 201); }
+      if (measure) { measure.style.font = style.font; measure.style.letterSpacing = style.letterSpacing; measure.textContent = input.value.slice(0, 201); }
       const available = form.clientWidth - 8 - (lead?.offsetWidth ?? 0) - (voice?.offsetWidth ?? 0) - (send?.offsetWidth ?? 44) - 12;
       form.dataset.layout = shouldStackComposer(input.value, available, measure?.getBoundingClientRect().width ?? 0) ? "stacked" : "inline";
     }

@@ -770,6 +770,8 @@ a {
 .composer .voice-panel { grid-area: panel; }
 .composer > .send-button { grid-area: send; }
 .composer-tool {
+  min-width: 44px;
+  min-height: 44px;
   display: flex;
   align-items: center;
   gap: 6px;

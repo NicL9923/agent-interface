@@ -37,6 +37,7 @@ export function VoiceControls({ botId, reply, disabled = false, hasDraft = false
   const generation = useRef(0);
   const discarded = useRef(false);
   const active = useRef<VoiceState>("idle");
+  const latestReply = useRef(reply?.id);
   const transition = (next: VoiceState) => { active.current = next; setState(next); callbacks.current.onStateChange?.(next); };
   const releaseMic = () => {
     if (timer.current) clearInterval(timer.current); timer.current = null;
@@ -62,6 +63,8 @@ export function VoiceControls({ botId, reply, disabled = false, hasDraft = false
   }, [botId]);
   useEffect(() => { if (disabled && active.current !== "idle") cancel(); }, [disabled]);
   useEffect(() => {
+    if (!reply?.id || reply.id === latestReply.current) return;
+    latestReply.current = reply.id;
     if (active.current === "preparing" || active.current === "speaking") {
       generation.current++; request.current?.abort(); request.current = null; transition("idle");
     }

@@ -38,7 +38,7 @@ requestApi.mockReset(); recorders.length = 0; players.length = 0;
   ({ container, root } = mountRoot());
   transcript = vi.fn(); state = vi.fn();
 });
-async function render(disabled = false, replyId = "reply") { await act(async () => root.render(createElement(VoiceControls, { botId: "ranch", onTranscript: transcript, onStateChange: state, reply: { id: replyId, text: "Here is your list." }, disabled }))); }
+async function render(disabled = false, replyId: string | null = "reply") { await act(async () => root.render(createElement(VoiceControls, { botId: "ranch", onTranscript: transcript, onStateChange: state, reply: replyId ? { id: replyId, text: "Here is your list." } : undefined, disabled }))); }
 async function click(label: string) { const button = [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent?.startsWith(label))!; expect(button).toBeTruthy(); await act(async () => button.click()); }
 it("records only after a gesture, stops the microphone and adds a transcript for review", async () => {
   requestApi.mockResolvedValue({ text: "Pick up milk" }); await render(); expect(getUserMedia).not.toHaveBeenCalled();
@@ -88,6 +88,8 @@ it("replays in the existing speaker control and discards audio when the reply ch
   await act(async () => players[0]!.onended?.());
   expect(container.querySelector('.voice-panel')?.childElementCount).toBe(0);
   expect(container.querySelector('.voice-actions [aria-label="Play audio"]')).not.toBeNull();
+  await render(false, null); expect(players[0]!.pause).not.toHaveBeenCalled();
+  await render(); expect(container.querySelector('[aria-label="Play audio"]')).not.toBeNull();
   await click("Play audio"); expect(players[0]!.play).toHaveBeenCalledTimes(2);
   expect(requestApi).toHaveBeenCalledTimes(1);
   await render(false, "new-reply");

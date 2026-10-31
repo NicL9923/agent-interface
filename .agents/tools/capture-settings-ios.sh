@@ -12,7 +12,7 @@ app=$1
 simulator=$2
 output=$3
 shift 3
-simctl=/Library/Developer/PrivateFrameworks/CoreSimulator.framework/Versions/A/Resources/bin/simctl
+simctl=$(xcrun --find simctl)
 bundle=$(/usr/bin/plutil -extract CFBundleIdentifier raw "$app/Info.plist")
 mkdir -p "$output"
 "$simctl" shutdown all >/dev/null 2>&1 || true
@@ -95,7 +95,7 @@ for tab in "$@"; do
   sleep "$capture_delay"
   # CoreSimulator cannot write directly to the external volume. Use its own
   # runtime temp directory, then copy this small screenshot to DevSSD.
-  "$simctl" io "$simulator" screenshot --type=png "$capture_tmp"
+  "$simctl" io "$simulator" screenshot --display="${SIMULATOR_CAPTURE_DISPLAY:-1}" --type=png "$capture_tmp"
   cp "$capture_tmp" "$output/native-$tab.png"
   rm -f "$capture_tmp"
   "$simctl" terminate "$simulator" "$bundle"
