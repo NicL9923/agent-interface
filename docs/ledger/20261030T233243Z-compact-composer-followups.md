@@ -1,6 +1,6 @@
 # October 30 compact composer and design follow-ups
 
-Implementation commits `b630d93` and `452ddfe` on `nic/design-followups-compact-composer`, based on
+Implementation commits through `ff566f9` on `nic/design-followups-compact-composer`, based on
 the merge of PR #207 at `3812a91`. These changes address product follow-ups in
 [#206](https://github.com/NicL9923/agent-interface/issues/206). They do not close
 the device and service coverage gaps in that issue.
@@ -12,16 +12,23 @@ The earlier run found one test that still expected Sign out to skip the new
 confirmation; that expectation is corrected. The web production build and its
 pinned no-emit typecheck completed successfully.
 
-The native app and its extension targets built with the simulator SDK under
+The native app and its extension targets built with the iOS 27.2 simulator SDK under
 `mac-heavy-lock.sh`. The shared-inbox implementation agent also ran the
 production Foundation checks under the lock and typechecked the app and all
-XCTest sources with Swift 6 strict concurrency. The new relaunch regression
-typechecks but has not executed.
+XCTest sources with Swift 6 strict concurrency. The two focused XCTest cases
+subsequently executed on iOS 27.1: shared-text recovery after a failed inbox
+save, and the widget/intent navigation links. Both passed, with zero failures
+and zero skips. The full native suite and UI navigation tests were not run.
 
-XCTest remains blocked by the installed CoreSimulator service mismatch:
-1174.9.2 is installed while the selected Xcode expects 1174.21.0. The existing
-simulator capture tool can boot, install and capture the built app. Each capture
-run shut down its simulator inside the same lock command.
+Earlier checks encountered a CoreSimulator/Xcode service mismatch. The current
+toolchain builds the app, but the iOS 27.0 simulator runtime cannot create or
+boot a device despite appearing available in its metadata. Final captures use
+an iPhone Duo profile on the installed iOS 27.1 runtime. Display 3 produced black
+frames; display 1 produced the app renders checked below. The black frames were
+discarded. Each completed capture run shut down its simulator inside the lock.
+A low-disk guard later stopped the first focused XCTest attempt before launch.
+The owner deleted both temporary simulators and unavailable simulators, then
+retried with the normal 15 GiB guard. The two selected tests passed.
 
 ## Agent use and visual checks
 
@@ -38,13 +45,19 @@ textarea and focus survive layout changes and that Enter during Japanese IME
 composition sends no message. The run recorded zero message submissions. A
 150-character single line also stays within the page at each width.
 
-Initial native iPhone captures cover the idle composer, multiline draft, focused input
-with keyboard, dark appearance, and accessibility text. The accessibility
+Native iPhone captures cover the idle composer, multiline draft, focused input,
+dark appearance, accessibility text, and accessibility text with the keyboard. The accessibility
 capture caught a compressed control row. Keeping the card's full vertical size
 and stacking accessibility text fixed it in the next capture. The reviewer
 caught incorrect Groups and Notifications capture entry points; those images
 showed the widget preview and are not evidence for either change. The entry
-point is corrected, and new native captures are queued under the machine lock.
+point is corrected. Fresh captures show Groups and notification settings.
+The owner inspected the rebuilt idle, focused, dark, multiline, accessibility,
+and accessibility-with-keyboard composer states. The icons do not touch, and
+the three-line input and controls fit above the visible keyboard. Notification
+batching keeps its value aligned with the label at accessibility text size.
+The normal focused frame does not show a software keyboard; the explicit
+keyboard evidence is the accessibility frame.
 Web settings were captured after scrolling at desktop and phone widths.
 
 Saved captures are under
@@ -74,8 +87,20 @@ disappears. Its defensive standalone reload state now reports unavailable
 instead of claiming there are no files. Routine cards already stay mounted
 during reload through the existing resource loader and focus-return check.
 
-The final native icon and accessibility-keyboard captures, followed by the
-second composer rating, are pending. The follow-up PR remains draft meanwhile.
+[Round 2](../evidence/design-review/compact-composer-round2.md) scored the
+composer 9.1/10 with no blockers, conditional on the owner's check of the new
+native renders. That check is complete as described above. The reviewer did
+not see those later native images. Final small fixes give desktop Attach a
+44-pixel target, preserve cached audio across a temporarily missing reply and
+copy letter spacing into text measurement. All 29 affected web checks and the
+production build passed after those changes.
+
+Forward-paged Groups now open at the beginning on both clients; single-page
+rooms open at the latest loaded messages. Nonblocking review notes remain:
+native iPad Listen hides while typing, fixed-size native glyphs lack a large
+content viewer, and a defensive Artifacts state could repeat its status copy
+if a future caller supplies both reload and outage. The current caller does
+not do that.
 
 ## Still needs a device or service
 

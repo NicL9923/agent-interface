@@ -1192,7 +1192,9 @@ when arranging those controls and stacks accessibility text.
 
 The first whole-composer review scored 7.6/10. Its findings led to clipped,
 bounded text measurement, inline replay, shorter placeholders, fewer controls
-while typing on mobile and capped native icon sizes. The second rating and
-final native captures are pending. This follow-up does not change the 25-area
+while typing on mobile and capped native icon sizes. Round 2 scored 9.1/10
+with no blockers. The owner then checked the rebuilt native renders, including
+accessibility text with the keyboard, and confirmed the review conditions.
+This follow-up does not change the 25-area
 results above or claim new physical-device coverage. See the
 [follow-up validation entry](ledger/20261030T233243Z-compact-composer-followups.md).
