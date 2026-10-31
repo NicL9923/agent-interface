@@ -12,18 +12,22 @@ struct ShareCaptureView: View {
   @State private var waitingForSend = false
   @State private var confirmDiscard = false
   @State private var savedText = ""
+  @State private var savedBotId = ""
+  @State private var needsCaptureSave = false
+  @State private var notice: String?
   @Environment(\.colorScheme) private var scheme
   private var held: Bool { !botId.isEmpty && store.holdsAdditions(botId) }
   var body: some View {
     NavigationStack {
       Form {
         Section("Shared draft") {
-          Picker("Assistant",selection:$botId) { Text("Choose an assistant").tag("");ForEach(store.bootstrap?.bots ?? []) { bot in Text(bot.name).tag(bot.id) } }
-          TextEditor(text:$capture.text).frame(minHeight:120).accessibilityLabel("Shared text").disabled(busy || waitingForSend)
+          Picker("Assistant",selection:$botId) { Text("Choose an assistant").tag("");ForEach(store.bootstrap?.bots ?? []) { bot in Text(bot.name).tag(bot.id) } }.disabled(needsCaptureSave)
+          TextEditor(text:$capture.text).frame(minHeight:120).accessibilityLabel("Shared text").disabled(busy || waitingForSend || needsCaptureSave)
           ForEach(capture.files,id:\.self) { Text($0) }
           Text("Add this to the assistant’s editable draft. Existing draft text and attachments are kept. Review before sending.").font(.footnote).foregroundStyle(.secondary)
         }
         if let error { ErrorBanner(message:error) }
+        if let notice { Text(notice).font(.footnote).foregroundStyle(.secondary) }
         if waitingForSend { Text("Your last message to this assistant is still on its way. This is added to the draft once it settles.").font(.footnote).foregroundStyle(.secondary) }
         Section {
         Button("Add to draft") { Task { await importDraft() } }.disabled(botId.isEmpty || busy || waitingForSend || !store.connected || !store.supports(.uploads) && !capture.files.isEmpty)
@@ -34,7 +38,7 @@ struct ShareCaptureView: View {
         if busy { ProgressView("Adding to draft…") }
       }.scrollContentBackground(.hidden).background(Palette.surface(scheme))
       .navigationTitle("Review shared content").toolbar { ToolbarItem(placement:.cancellationAction) { Button("Later") { saveForLater() }.disabled(busy) } }
-    }.interactiveDismissDisabled(busy || capture.text != savedText)
+    }.interactiveDismissDisabled(busy || needsCaptureSave || capture.text != savedText || botId != savedBotId)
     .alert("Discard this shared draft?", isPresented: $confirmDiscard) {
       Button("Discard shared draft", role: .destructive) { ShareInbox.remove(capture); dismiss() }
       Button("Keep draft", role: .cancel) { }
@@ -42,6 +46,15 @@ struct ShareCaptureView: View {
     .onAppear {
       savedText = capture.text
       botId = store.bootstrap?.bots.contains(where:{$0.id==capture.botId}) == true ? capture.botId! : ""
+      savedBotId = botId
+      // The app stopped after taking this text but before saving the emptied share: finish that save,
+      // or, with no files left to add, remove the share. Its text is in the draft or waiting for it.
+      if store.sharedTextAdded(capture) {
+        capture.text = ""
+        if capture.files.isEmpty { ShareInbox.remove(capture); Task { dismiss() }; return }
+        needsCaptureSave = true; notice = "Its text was already added to the draft."
+        do { try persist() } catch { self.error = "Could not update this shared draft. Keep this screen open and try again." }
+      }
       #if DEBUG
       confirmDiscard = DebugFixtures.captureSurvival == "share-discard"
       #endif
@@ -53,23 +66,35 @@ struct ShareCaptureView: View {
     guard store.scope == capture.scope else { throw APIError(message: "Sign in to the account that saved this draft.", status: 409) }
     try ShareInbox.save(capture)
     savedText = capture.text
+    savedBotId = botId
+    needsCaptureSave = false
   }
   private func saveForLater() {
     capture.botId = botId.isEmpty ? nil : botId
     do { try persist(); dismiss() }
-    catch { self.error = "Could not save your edits. Keep this screen open and try Later again." }
+    catch { self.error = capture.text.count > 50_000 ? "Shared text can contain up to 50,000 characters. Shorten it before saving." : "Could not save your edits. Keep this screen open and try Later again." }
   }
   private func importDraft() async {
+    guard capture.text.count <= 50_000 else { error="Shared text can contain up to 50,000 characters. Shorten it before adding.";return }
     guard let api=store.api,let scope=store.scope,scope==capture.scope,ShareInbox.valid(capture),store.bootstrap?.bots.contains(where:{$0.id==botId})==true else { error="Sign in to the account that saved this draft.";return }
     busy=true;defer { busy=false }
+    if needsCaptureSave {
+      do { try persist() } catch { self.error="Could not save the imported text update. Keep this screen open and try again."; return }
+    }
     await store.select(botId)
     guard scope==store.scope,store.selectedBotId==botId,store.draftReady else { error="Reconnect before importing this draft.";return }
     guard store.draft.attachments.count + capture.files.count <= 10,store.draft.text.utf16.count + capture.text.utf16.count + 2 <= AppStore.maxMessageLength else { error="The combined draft is too large. Keep up to 10 attachments and 50,000 characters.";return }
     do {
       if !capture.text.isEmpty {
         // Held with Siri's and notification text: it joins once a send on its way settles.
-        guard store.holdShared(capture.text,botId:botId) else { error="Sign in to the account that saved this draft.";return }
-        capture.text="";try persist()
+        capture.botId = botId
+        needsCaptureSave = true
+        let accepted = try ShareInbox.transferText(&capture, hold: { store.holdShared($0, botId: botId) }, save: { value in
+          guard store.scope == value.scope else { throw APIError(message: "Sign in to the account that saved this draft.", status: 409) }
+          try ShareInbox.save(value)
+        })
+        if !accepted { needsCaptureSave = false; error="Sign in to the account that saved this draft.";return }
+        savedText = capture.text; savedBotId = botId; needsCaptureSave = false
       }
       // Files upload here, and wait in the inbox while a message is still on its way.
       while let name=capture.files.first {
@@ -86,6 +111,6 @@ struct ShareCaptureView: View {
         capture.files.removeFirst();try persist()
       }
       ShareInbox.remove(capture);dismiss()
-    } catch { self.error=error.localizedDescription }
+    } catch { self.error = needsCaptureSave ? "Could not save the imported text update. Keep this screen open and try again." : error.localizedDescription }
   }
 }

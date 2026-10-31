@@ -129,6 +129,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   /// The wall clock sign-in expiry is measured on. Tests substitute one they set by hand.
   @ObservationIgnored var date: () -> Date = { Date() }
   var conversationRequest: UUID?
+  var homeRequest: UUID?
   var preferencesSaving = false
   var preferencesSaveFailed = false
   var preferencesDraft: Preferences?
@@ -298,7 +299,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   /// What the app keeps in UserDefaults per scope, optionally per assistant. `DeviceDefaults` holds
   /// the keys that outlive a scope.
   enum StorageKind: String {
-    case draft, draftAdditions, pending, recovered, selected, notifications, notificationPrompt, goalResume
+    case draft, draftAdditions, sharedTextReceipts, pending, recovered, selected, notifications, notificationPrompt, goalResume
   }
   func key(_ kind: StorageKind, _ bot: String? = nil) -> String? {
     scope.map { "native.\($0).\(kind.rawValue)\(bot.map { ".\($0)" } ?? "")" }
@@ -1124,9 +1125,9 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
       Task { try? await self.saveDraft(cached, botId: botId, retries: retries) }
     }
   }
-  /// Writes the open draft to this device now. Leaving, switching, signing out and every merge call
-  /// it, which also writes a typing pause's pending copy at once.
-  private func persistDraft() {
+  /// Writes the open draft to this device now. Leaving, switching, signing out, every merge and text
+  /// landing from outside the composer call it, which also writes a typing pause's pending copy at once.
+  func persistDraft() {
     draftPersistTask?.cancel()
     draftPersistTask = nil
     if draftReady, let botId = selectedBotId { save(draft, key(.draft, botId)) }

@@ -64,7 +64,7 @@
 - `capture-work-triggers.js` and `capture-work-triggers-after.js` provide synthetic event-trigger scenarios for `capture-design.py --work-case triggers`.
 - `node --import tsx .agents/tools/check-work-triggers-fixture.ts` checks the shared event-trigger fixture against the production schema.
 
-- `bash .agents/tools/capture-settings-ios.sh APP_PATH SIMULATOR_UUID OUTPUT_DIR TAB [TAB...]` captures compiled Debug settings or Search, History, Saved, Automations, Groups and app Preferences pages using the installed simulator, with synthetic data and the machine-wide lock. It boots one simulator, saves PNGs and shuts it down.
+- `bash .agents/tools/capture-settings-ios.sh APP_PATH SIMULATOR_UUID OUTPUT_DIR TAB [TAB...]` captures compiled Debug settings or Search, History, Saved, Automations, Groups and app Preferences pages using the installed simulator, with synthetic data and the machine-wide lock. It boots one simulator, saves PNGs and shuts it down. It resolves `simctl` through the selected Xcode; `SIMULATOR_CAPTURE_DISPLAY` selects a display and defaults to 1.
 
 - `capture-groups.js` captures desktop and phone group conversations, mention suggestions, thread selection, the create limit and named pending approval cards in an existing Playwright CLI browser. It checks draft preservation and one synthetic send, then closes its isolated context.
 
@@ -91,3 +91,6 @@ The notification capture also exercises account-scoped Following and equal-time 
 - `capture-survival.js` captures empty home/conversation states and checks offline draft preservation and reconnect at desktop and phone widths in the loopback fixture preview. Native `capture-settings-ios.sh` also supports Empty, ShareDraft and Widget/WidgetStale/WidgetEmpty, which render production views with sample data, not system-hosted widgets.
 
 - `test-share-inbox.sh EXISTING_OUTPUT_DIRECTORY` compiles the production Foundation inbox code and checks saved edits and failed writes, plus orphan cleanup that preserves recent work, saved drafts, unrelated folders and symlinks. No account data or simulator is used.
+
+- `capture-composer.js` captures idle, typed and multiline composer layouts at desktop and 390/320 phone widths in the loopback fixture preview, recording their rendered heights for before/after comparison.
+- `capture-composer-states.js` exercises voice and upload retries, long paste, IME composition and offline layouts with explicit media fixtures in the loopback preview.

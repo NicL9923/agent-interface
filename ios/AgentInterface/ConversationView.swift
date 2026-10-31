@@ -865,7 +865,7 @@ struct AttentionView: View {
       Text(request.detail).textSelection(.enabled)
       if request.kind == "clarify" {
         ForEach(questions) { question in questionView(question).id(questionAnchor(question)).disabled(settled) }
-        Text(settled ? "Answers sent." : answers.complete(questions) ? "Ready to send." : "Answer every question to send.")
+        Text(settled ? "Answers sent." : !store.connected ? "Connect to send your answers. Your answers stay here while this form is open." : answers.complete(questions) ? "Ready to send." : "Answer every question to send.")
           .font(.footnote).foregroundStyle(Palette.muted)
         Button(busy ? "Sending answers…" : settled ? "Answers sent" : "Send answers", action: sendAnswers).buttonStyle(.accentProminent)
           .controlSize(.large)

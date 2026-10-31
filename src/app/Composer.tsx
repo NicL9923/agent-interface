@@ -1,3 +1,4 @@
+import { shouldStackComposer } from "./composer-layout";
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { ActivityState, Bootstrap, Bot, Message, SubmissionReceipt } from "../shared/types";
@@ -54,27 +55,37 @@ function ModelPickerPlaceholder({ model, failed = false }: { model: string; fail
   </div>;
 }
 // Fits on mount too, so a restored multi-line draft is sized when returning from another view.
-function useComposerInput(text: string, botId: string) {
+function useComposerInput(text: string, botId: string, voiceState: VoiceState) {
   const composerInput = useRef<HTMLTextAreaElement>(null);
   const fitComposer = useCallback(() => {
     // Grow the composer with its draft up to the CSS max-height, then scroll.
     const input = composerInput.current;
     if (!input) return;
-    input.style.height = "auto";
-    input.style.height = `${input.scrollHeight}px`;
+    const form = input.closest<HTMLFormElement>("form");
+    if (form) {
+      const lead = form.querySelector<HTMLElement>(".composer-tools");
+      const voice = form.querySelector<HTMLElement>(".voice-actions");
+      const send = form.querySelector<HTMLElement>(".send-button");
+      const measure = form.querySelector<HTMLElement>(".composer-measure");
+      const style = getComputedStyle(input);
+      if (measure) { measure.style.font = style.font; measure.style.letterSpacing = style.letterSpacing; measure.textContent = input.value.slice(0, 201); }
+      const available = form.clientWidth - 8 - (lead?.offsetWidth ?? 0) - (voice?.offsetWidth ?? 0) - (send?.offsetWidth ?? 44) - 12;
+      form.dataset.layout = shouldStackComposer(input.value, available, measure?.getBoundingClientRect().width ?? 0) ? "stacked" : "inline";
+    }
+    input.style.height = input.value ? "auto" : "";
+    if (input.value) input.style.height = `${input.scrollHeight}px`;
   }, []);
-  useLayoutEffect(fitComposer, [text, botId, fitComposer]);
+  useLayoutEffect(fitComposer, [text, botId, voiceState, fitComposer]);
   const ref = useCallback((input: HTMLTextAreaElement | null) => {
     composerInput.current = input;
     if (!input || typeof ResizeObserver === "undefined") return;
-    // Rotation or a narrower window rewraps the same draft.
-    let width = input.clientWidth;
-    const observer = new ResizeObserver(() => {
-      if (input.clientWidth === width) return;
-      width = input.clientWidth;
-      fitComposer();
-    });
-    observer.observe(input);
+    // Observe the fixed controls and form, not the textarea width that stacking itself changes.
+    const observer = new ResizeObserver(fitComposer);
+    const form = input.closest("form");
+    if (form) {
+      observer.observe(form);
+      for (const controls of form.querySelectorAll(".composer-tools, .voice-actions")) observer.observe(controls);
+    }
     return () => {
       observer.disconnect();
       composerInput.current = null;
@@ -176,7 +187,7 @@ export const Composer = memo(function Composer({ boot, selected, botId, prompts,
   // The draft itself keeps the message until then, and is read-only so it stays the sent copy.
   const handedOff = sendingDraft(draft, pending, sending);
   const shown = draft.botId === botId && !handedOff ? draft : { text: "", attachments: [] };
-  const input = useComposerInput(shown.text, botId);
+  const input = useComposerInput(shown.text, botId, voiceState);
   const advanced = boot.preferences.presentation === "advanced";
   const fileInput = useRef<HTMLInputElement>(null);
   const slots = MAX_ATTACHMENTS - draft.attachments.length - uploads.length;
@@ -268,6 +279,7 @@ export const Composer = memo(function Composer({ boot, selected, botId, prompts,
           void send();
         }}
       >
+        <div className="composer-extras">
         {!!attachNotice.length && <div className="attachment-notice" role="alert">
           <Icon name="alert" size={15} />
           <div>{attachNotice.map(problem => <p key={problem}>{problem}</p>)}</div>
@@ -278,6 +290,37 @@ export const Composer = memo(function Composer({ boot, selected, botId, prompts,
           canOpen={boot.capabilities.generatedFiles.supported}
           onRemove={id => setDraft(previous => ({ ...previous, dirty: true, attachments: previous.attachments.filter(file => file.id !== id) }))}
           onCancel={cancelUpload} onRetry={retryUpload} />
+        </div>
+        <div className="composer-tools">
+          {/* A real button opens a hidden picker. An invisible file input overlay
+              won iOS touch adjustment for taps meant for the model button beside it. */}
+          <button
+            type="button"
+            className="composer-tool"
+            aria-label="Attach images, PDFs, or text"
+            title={attachUnavailable || "Attach images, PDFs, or text. You can also paste or drop them here."}
+            disabled={!!attachUnavailable}
+            onClick={() => fileInput.current?.click()}
+          >
+            <Icon name="attach" size={18} />
+          </button>
+          <input
+            ref={fileInput}
+            hidden
+            type="file"
+            accept={UPLOAD_ACCEPT}
+            multiple
+            disabled={!!attachUnavailable}
+            onChange={(event) => {
+              addFiles(Array.from(event.target.files ?? []));
+              event.target.value = "";
+            }}
+          />
+          {advanced && <Loading loadingFallback={<ModelPickerPlaceholder model={selected.model} />}
+            errorFallback={<ModelPickerPlaceholder model={selected.model} failed />}><ComposerModelPicker bot={selected} bootstrap={boot}
+            disabled={connectionLost || sending} onSaved={refresh} /></Loading>}
+        </div>
+        <span className="composer-measure-box" aria-hidden="true"><span className="composer-measure" /></span>
         <label className="sr-only" htmlFor="message">
           Message {selected.name}
         </label>
@@ -288,8 +331,8 @@ export const Composer = memo(function Composer({ boot, selected, botId, prompts,
           placeholder={
             handedOff ? "Sending…"
               : active
-              ? `Guide ${selected.name} while they work…`
-              : `Message ${selected.name}…`
+              ? "Guide…"
+              : "Message…"
           }
           aria-describedby={pasteStatus ? "composer-paste-status" : undefined}
           // Read-only rather than disabled, so focus stays here for the next message.
@@ -357,45 +400,15 @@ export const Composer = memo(function Composer({ boot, selected, botId, prompts,
                 void send();
             }
           }}
-          rows={2}
+          rows={1}
           disabled={!draftReady || draft.botId !== botId}
         />
-        <div className="composer-tools">
-          {/* A real button opens a hidden picker. An invisible file input overlay
-              won iOS touch adjustment for taps meant for the model button beside it. */}
-          <button
-            type="button"
-            className="composer-tool"
-            aria-label="Attach images, PDFs, or text"
-            title={attachUnavailable || "Attach images, PDFs, or text. You can also paste or drop them here."}
-            disabled={!!attachUnavailable}
-            onClick={() => fileInput.current?.click()}
-          >
-            <Icon name="attach" size={18} />
-          </button>
-          <input
-            ref={fileInput}
-            hidden
-            type="file"
-            accept={UPLOAD_ACCEPT}
-            multiple
-            disabled={!!attachUnavailable}
-            onChange={(event) => {
-              addFiles(Array.from(event.target.files ?? []));
-              event.target.value = "";
-            }}
-          />
-          {advanced && <Loading loadingFallback={<ModelPickerPlaceholder model={selected.model} />}
-            errorFallback={<ModelPickerPlaceholder model={selected.model} failed />}><ComposerModelPicker bot={selected} bootstrap={boot}
-            disabled={connectionLost || sending} onSaved={refresh} /></Loading>}
-          <div className="composer-voice">
-            {voiceState !== "idle" && <span className={`voice-avatar voice-${voiceState}`}><Avatar avatar={selected.avatar} state="idle" size={24} name={selected.name} reducedMotion /></span>}
-            <VoiceControls key={`${boot.user.id}:${botId}`} botId={botId}
-              reply={voiceReply}
+
+            <VoiceControls avatar={selected.avatar} name={selected.name} key={`${boot.user.id}:${botId}`} botId={botId}
+              reply={voiceReply} hasDraft={!!shown.text}
               disabled={!draftReady || draft.botId !== botId || pending !== null || sending || connectionLost}
               onStateChange={setVoiceState} onTranscript={(text) => setDraft(previous => ({ ...previous, dirty: true,
                 text: previous.text.trim() ? `${previous.text}\n${text}` : text }))} />
-          </div>
           {stopVisible ? <button type="button" className="send-button" aria-label="Stop response"
             disabled={stopping || connectionLost || !boot.capabilities.stop.supported}
             title={boot.capabilities.stop.reason || "Stop response"}
@@ -419,7 +432,6 @@ export const Composer = memo(function Composer({ boot, selected, botId, prompts,
           >
             <Icon name={submitting ? "spinner" : "send"} className={submitting ? "spin" : undefined} size={19} />
           </button>}
-        </div>
       </form>
     </footer>
   );

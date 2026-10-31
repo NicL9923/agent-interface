@@ -109,14 +109,14 @@ export function ArtifactsButton({ bot, conversation, unavailable = false }: {
       </span>
       <span className="artifacts-button-label">Artifacts</span>
     </Button>
-    {open && <ArtifactsView bot={bot} artifacts={artifacts} loading={!current && !unavailable}
+    {open && <ArtifactsView bot={bot} artifacts={artifacts} reloading={!current}
       earlier={!fetched ? undefined : earlier.loading ? "loading" : earlier.failed ? "failed" : undefined}
       unavailable={unavailable} onClose={() => setOpen(false)} />}
   </>;
 }
 
-function ArtifactsView({ bot, artifacts, loading, earlier, unavailable, onClose }: {
-  bot: Bot; artifacts: Artifact[]; loading: boolean; earlier?: "loading" | "failed"; unavailable: boolean; onClose: () => void;
+function ArtifactsView({ bot, artifacts, reloading, earlier, unavailable, onClose }: {
+  bot: Bot; artifacts: Artifact[]; reloading: boolean; earlier?: "loading" | "failed"; unavailable: boolean; onClose: () => void;
 }) {
   const titleId = useId();
   const searchId = useId();
@@ -146,7 +146,7 @@ function ArtifactsView({ bot, artifacts, loading, earlier, unavailable, onClose 
     {earlier && <p className="artifacts-notice" role="status">{earlier === "loading"
       ? "Loading files from earlier in the conversation…"
       : "Files from earlier in the conversation could not be loaded. Close and reopen this list to try again."}</p>}
-    {loading ? <div className="artifacts-empty" role="status">Loading your conversation’s files…</div>
+    {reloading ? <div className="artifacts-empty" role="status">Artifacts are unavailable while this conversation reloads.</div>
       : !artifacts.length ? <div className="artifacts-empty"><Icon name="file" size={36} />
         <h3>No artifacts yet</h3><p>Generated outputs and files shared in this conversation will appear here.</p></div>
       : !filtered.length ? <div className="artifacts-empty" role="status"><h3>No matching files</h3>

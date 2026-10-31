@@ -16,7 +16,7 @@ export function answerText(question: Question, draft: Draft = empty) {
   return draft.own ? draft.text : draft.selected[0] ?? "";
 }
 
-export function AttentionCard({ request, botId, report }: { request: AttentionRequest; botId: string; report(message: string): void }) {
+export function AttentionCard({ request, botId, report, disconnected = false }: { request: AttentionRequest; botId: string; report(message: string): void; disconnected?: boolean }) {
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [busy, setBusy] = useState(false);
   const [settled, setSettled] = useState(false);
@@ -73,7 +73,7 @@ export function AttentionCard({ request, botId, report }: { request: AttentionRe
       {request.kind === "clarify" && (
         <form aria-busy={busy || undefined} onSubmit={(event) => {
           event.preventDefault();
-          if (busy || settled) return;
+          if (disconnected || busy || settled) return;
           setBusy(true);
           report("");
           void apiRequest("POST /bots/:id/requests/:approvalId", { params: { id: botId, approvalId: request.id }, body: { answers } })
@@ -114,8 +114,8 @@ export function AttentionCard({ request, botId, report }: { request: AttentionRe
                 value={draft.text} onChange={(event) => update(question, current => ({ ...current, text: event.target.value }))} />}
             </fieldset>;
           })}
-          <p className="question-guidance" id={guidance} role="status">{settled ? "Answers sent." : questions.some(question => !answers[question.id]?.trim()) ? "Answer every question to send." : "Ready to send."}</p>
-          <button type="submit" className="primary with-progress" aria-describedby={guidance} disabled={busy || settled || questions.some(question => !answers[question.id]?.trim())}>
+          <p className="question-guidance" id={guidance} role="status">{settled ? "Answers sent." : disconnected ? "Reconnect before sending. Your answers remain here." : questions.some(question => !answers[question.id]?.trim()) ? "Answer every question to send." : "Ready to send."}</p>
+          <button type="submit" className="primary with-progress" aria-describedby={guidance} disabled={disconnected || busy || settled || questions.some(question => !answers[question.id]?.trim())}>
             {busy && <Icon name="spinner" className="spin" size={16} />}
             {busy ? "Sending answers…" : settled ? "Answers sent" : "Send answers"}
           </button>

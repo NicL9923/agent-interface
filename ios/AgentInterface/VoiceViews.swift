@@ -55,6 +55,7 @@ enum VoiceState: Equatable {
     if recording != nil { notice = "Recording kept. Transcribe it when you're ready, or discard it." }
   }
   private(set) var playable = false
+  private(set) var spokenReplyId: String?
   private(set) var elapsed = 0
   @ObservationIgnored var api: APIClient?
   @ObservationIgnored var botId = ""
@@ -318,6 +319,7 @@ enum VoiceState: Equatable {
         }
         player.delegate = self
         self.player = player
+        spokenReplyId = reply.id
         playable = true
         play()
       } catch {
@@ -407,24 +409,24 @@ struct VoiceButtons: View {
   var reply: Message?
   var disabled: Bool
   var body: some View {
-    if voice.state != .idle {
-      AvatarView(avatar: bot.avatar ?? AvatarConfig(), size: 24, name: bot.name, forceReducedMotion: true)
-        .accessibilityHidden(true)
-    }
     if voice.state == .recording {
-      Button("Stop recording · \(voice.elapsed)s") { voice.stopRecording() }
-        .font(.footnote.weight(.semibold)).foregroundStyle(Palette.danger).frame(minHeight: 44)
+      Button { voice.stopRecording() } label: {
+        HStack(spacing: 4) { Image(systemName: "stop.fill"); Text("\(voice.elapsed)s").monospacedDigit() }
+      }.accessibilityLabel("Stop recording · \(voice.elapsed) seconds")
+        .font(.footnote.weight(.semibold)).foregroundStyle(Palette.danger).frame(minWidth: 44, minHeight: 44)
+        .dynamicTypeSize(...DynamicTypeSize.accessibility2)
     } else {
       Button { Task { await voice.startRecording() } } label: {
-        Image(systemName: "mic").frame(width: 44, height: 44)
+        Image(systemName: "mic").font(.system(size: 20)).frame(width: 44, height: 44)
       }.accessibilityLabel("Record voice")
         .accessibilityHint("Record up to two minutes. Review the transcript before sending.")
         .disabled(disabled || voice.state != .idle || voice.recording != nil)
     }
     if let reply {
-      Button { voice.speak(reply) } label: {
-        Image(systemName: "speaker.wave.2").frame(width: 44, height: 44)
-      }.accessibilityLabel("Listen to reply").disabled(disabled || voice.state != .idle)
+      let replay = voice.playable && voice.spokenReplyId == reply.id
+      Button { if replay { voice.play() } else { voice.speak(reply) } } label: {
+        Image(systemName: "speaker.wave.2").font(.system(size: 20)).frame(width: 44, height: 44)
+      }.accessibilityLabel(replay ? "Play audio" : "Listen to reply").disabled(disabled || voice.state != .idle)
     }
   }
 }
@@ -433,10 +435,12 @@ struct VoiceButtons: View {
 struct VoicePanel: View {
   var voice: VoiceController
   var disabled: Bool
+  var bot: Bot? = nil
   var body: some View {
     let busy = voice.state != .idle
-    if busy || voice.recording != nil || voice.playable || !voice.notice.isEmpty || !voice.error.isEmpty {
+    if busy || voice.recording != nil || !voice.notice.isEmpty || !voice.error.isEmpty {
       VStack(alignment: .leading, spacing: 6) {
+        if busy, let bot { AvatarView(avatar: bot.avatar ?? AvatarConfig(), size: 24, name: bot.name, forceReducedMotion: true).accessibilityHidden(true) }
         actions(busy: busy)
         if busy || !voice.notice.isEmpty {
           Text(busy ? voice.state.label : voice.notice).font(.caption).foregroundStyle(.secondary)
@@ -456,10 +460,7 @@ struct VoicePanel: View {
         Button(voice.error.isEmpty ? "Transcribe recording" : "Retry transcription") { voice.transcribe(recording) }.disabled(disabled)
         Button("Discard recording") { voice.discardRecording() }
       }
-      if voice.playable && !busy {
-        Button("Play audio") { voice.play() }.disabled(disabled)
-      }
-    }.font(.footnote).frame(minHeight: busy || voice.recording != nil || voice.playable ? 32 : 0)
+    }.font(.footnote).frame(minHeight: busy || voice.recording != nil ? 32 : 0)
   }
 }
 

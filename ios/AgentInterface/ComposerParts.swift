@@ -19,6 +19,7 @@ struct ComposerTextView: UIViewRepresentable {
   var onArrow: (_ up: Bool) -> Bool = { _ in false }
   /// A paste too long for the message, which becomes an attachment instead.
   var onPasteLongText: (String) -> Void = { _ in }
+  var maximumLines = 6
 
   func makeUIView(context: Context) -> ComposerUITextView {
     let view = ComposerUITextView()
@@ -54,12 +55,12 @@ struct ComposerTextView: UIViewRepresentable {
       DispatchQueue.main.async { view.resignFirstResponder() }
     }
   }
-  /// Two to six lines, like the web's growing text area; longer drafts scroll.
+  /// A single line at rest; multiline drafts grow until they need to scroll.
   func sizeThatFits(_ proposal: ProposedViewSize, uiView: ComposerUITextView, context: Context) -> CGSize? {
     guard let width = proposal.width, width > 0 else { return nil }
     let line = uiView.font?.lineHeight ?? 22
     let fitted = uiView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude)).height
-    return CGSize(width: width, height: min(max(fitted, line * 2), line * 6).rounded(.up))
+    return CGSize(width: width, height: min(max(fitted, line), line * CGFloat(maximumLines)).rounded(.up))
   }
   func makeCoordinator() -> Coordinator { Coordinator(self) }
   final class Coordinator: NSObject, UITextViewDelegate {

@@ -296,7 +296,7 @@ export function App() {
         bots={boot.bots} currentVersion={boot.connection.version} currentRevisionDate={boot.connection.revisionDate} /></Loading>}
       {panel?.kind === "preferences" && (
         <Loading>
-          <PreferencesDialog boot={boot} connectionLost={connectionLost} offline={offline} editPreferences={session.editPreferences}
+          <PreferencesDialog destination={panel.destination} boot={boot} connectionLost={connectionLost} offline={offline} editPreferences={session.editPreferences}
             notifications={notifications} installEvent={installEvent} notice={notice}
             onClose={() => closePanels("preferences")} onSignOut={signOut}
             onComputer={() => open({ kind: "computer" })} onIntegrations={() => open({ kind: "integrations" })}
@@ -306,7 +306,7 @@ export function App() {
       {overlay === "palette" && <CommandPalette boot={boot} botId={botId} shownBotId={shownBotId} readThrough={readThrough}
         connectionLost={connectionLost} onClose={closeOverlay} onSelectBot={id => { setPanel(null); selectBot(id); }}
         onView={next => { setPanel(null); showView(next); }} onSearch={text => { setPanel(null); searchMessages(text); }}
-        onSettings={openPreferences} onNewBot={newBot} onTheme={setTheme} onShortcuts={showShortcuts}
+        onSettings={destination => setPanel({ kind: "preferences", destination })} onNewBot={newBot} onTheme={setTheme} onShortcuts={showShortcuts}
         onFind={selected && view === "conversation" ? () => findInChat(selected.id) : undefined} />}
       {overlay === "shortcuts" && <ShortcutsDialog onClose={closeOverlay} />}
       {overlay === "stop" && liveBot && <StopConfirm name={liveBot.name} onStop={stop} onClose={closeOverlay} />}

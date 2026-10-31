@@ -126,6 +126,7 @@ struct AssistantActivityState: Codable, Hashable {
 /// links notifications carry, so one path handles both.
 enum DeepLink {
   static let today = URL(string: "agentinterface://open?view=today")!
+  static let home = URL(string: "agentinterface://open?view=home")!
   /// `listen` also starts a voice message once the chat is open.
   static func bot(_ id: String, listen: Bool = false) -> URL {
     var components = URLComponents()
@@ -146,8 +147,8 @@ enum DeepLink {
     if let bot = items.first(where: { $0.name == "bot" })?.value, !bot.isEmpty {
       let listen = items.contains { $0.name == "listen" && $0.value == "1" }
       components.queryItems = [URLQueryItem(name: "bot", value: bot)] + (listen ? [URLQueryItem(name: "listen", value: "1")] : [])
-    } else if items.first(where: { $0.name == "view" })?.value == "today" {
-      components.queryItems = [URLQueryItem(name: "view", value: "today")]
+    } else if let view = items.first(where: { $0.name == "view" })?.value, ["today", "home"].contains(view) {
+      components.queryItems = [URLQueryItem(name: "view", value: view)]
     } else {
       return nil
     }

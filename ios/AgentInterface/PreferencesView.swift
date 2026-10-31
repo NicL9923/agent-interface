@@ -77,15 +77,14 @@ struct PreferencesView: View {
         } header: { Text("Notifications") }
           .disabled(store.sessionExpired)
         Section {
-          Picker(selection: Binding(get: { preferences.notifications?.batchMinutes ?? 0 }, set: { value in
-            var settings = notificationPreferences; settings.batchMinutes = value; preferences.notifications = settings
-          })) {
-            Text("As updates arrive").tag(0); Text("Every 5 minutes").tag(5); Text("Every 15 minutes").tag(15); Text("Hourly").tag(60)
-          } label: {
-            VStack(alignment: .leading, spacing: 4) {
-              Text("Batching")
-              Text("Decisions and failures skip batching.").font(.caption).foregroundStyle(Palette.muted)
-            }.fixedSize(horizontal: false, vertical: true)
+          VStack(alignment: .leading, spacing: 4) {
+            Picker("Batching", selection: Binding(get: { preferences.notifications?.batchMinutes ?? 0 }, set: { value in
+              var settings = notificationPreferences; settings.batchMinutes = value; preferences.notifications = settings
+            })) {
+              Text("As updates arrive").tag(0); Text("Every 5 minutes").tag(5); Text("Every 15 minutes").tag(15); Text("Hourly").tag(60)
+            }
+            Text("Decisions and failures skip batching.").font(.caption).foregroundStyle(Palette.muted)
+              .fixedSize(horizontal: false, vertical: true)
           }
           if !bots.isEmpty { followRow }
           Toggle("Quiet hours", isOn: Binding(get: { preferences.notifications?.quietStart != nil }, set: { enabled in

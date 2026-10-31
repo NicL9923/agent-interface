@@ -78,7 +78,7 @@ struct RootView: View {
     .onChange(of:scenePhase) { _, phase in if phase == .active { checkShares() } }
     .onChange(of:store.scope) { _, scope in scopeChanged(scope) }
     // Initial too: a notification or Siri can ask before this view first appears.
-    .onChange(of: store.todayRequest, initial: true) { _, request in if request != nil { destination = .today; path = [.today]; compactColumn = .detail } }
+    .onChange(of: store.todayRequest, initial: true) { _, request in if request != nil { store.todayRequest = nil; destination = .today; path = [.today]; compactColumn = .detail } }
     .onChange(of: store.leftBotId, initial: true) { _, id in if let id { left(id) } }
     .onChange(of: store.conversationRequest, initial: true) { _, request in
       if request != nil {
@@ -87,6 +87,9 @@ struct RootView: View {
         capturePageIfAsked()
         #endif
       }
+    }
+    .onChange(of: store.homeRequest, initial: true) { _, request in
+      if request != nil { store.homeRequest = nil; destination = .conversation; path = []; compactColumn = .sidebar }
     }
     .onChange(of: store.bootstrap?.user.id) { old, new in if let old, old != new { accountChanged() } }
   }
@@ -147,6 +150,11 @@ struct RootView: View {
   }
   #if DEBUG
   private func capturePageIfAsked() {
+    if DebugFixtures.captureSurvival?.hasPrefix("composer") == true {
+      destination = .conversation; path = [.chat]; compactColumn = .detail
+      if store.selectedBotId != "ranch" { Task { await store.select("ranch") } }
+      return
+    }
     if let mode = DebugFixtures.captureSurvival, mode != "empty" { captureSurvivalOpen = true; return }
     if DebugFixtures.captureApplePage { captureAppleOpen = true; return }
     if DebugFixtures.captureConnectionPage { captureConnectionOpen = true; return }

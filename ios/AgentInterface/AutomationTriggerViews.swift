@@ -278,21 +278,21 @@ struct HermesTriggerEditor: View {
       if let trigger { LabeledContent("Trigger ID", value: trigger.id) }
       else {
         VStack(alignment: .leading, spacing: 6) {
-          Text("Trigger ID")
+          Text("Trigger ID").font(.caption).foregroundStyle(Palette.muted)
           TextField("", text: $id, prompt: Text("lowercase-id").foregroundStyle(Palette.muted)).textInputAutocapitalization(.never).autocorrectionDisabled().focused($focused, equals: .id).accessibilityLabel("Trigger ID").accessibilityIdentifier("automation.triggerID")
         }
         Text("Use 1 to 80 lowercase letters, digits, underscores or hyphens. Start with a letter or digit.").font(.caption).foregroundStyle(Palette.muted)
         if let problem = input.idProblem { Text(problem).foregroundStyle(Palette.danger) }
       }
       VStack(alignment: .leading, spacing: 6) {
-        Text("Description (optional)")
+        Text("Description (optional)").font(.caption).foregroundStyle(Palette.muted)
         TextField("", text: $description, prompt: Text("What this trigger is for").foregroundStyle(Palette.muted), axis: .vertical).lineLimit(1...4).focused($focused, equals: .description).accessibilityLabel("Description (optional)").accessibilityIdentifier("automation.triggerDescription")
       }
       VStack(alignment: .leading, spacing: 6) {
-        Text("Event names")
+        Text("Event names").font(.caption).foregroundStyle(Palette.muted)
         TextField("", text: $eventNames, prompt: Text("issue.created, issue.closed").foregroundStyle(Palette.muted), axis: .vertical).textInputAutocapitalization(.never).autocorrectionDisabled().focused($focused, equals: .events).accessibilityLabel("Event names").accessibilityIdentifier("automation.triggerEvents")
       }
-      Text("Choose 1 to 20 event names, for example issue.created, issue.closed. Each name can contain letters, digits, _, ., *, : or -.").font(.caption).foregroundStyle(Palette.muted)
+      Text("Choose 1 to 20 event names, for example issue.created, issue.closed. Each name can contain 1 to 100 letters, digits, _, ., *, : or -.").font(.caption).foregroundStyle(Palette.muted)
       if let problem = input.eventsProblem { Text(problem).foregroundStyle(Palette.danger) }
       if eventNames.trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix(",") { Text("Remove the trailing comma before saving this trigger.").font(.caption).foregroundStyle(Palette.muted) }
       if dynamicTypeSize.isAccessibilitySize { VStack(alignment: .leading) { Text("Routine"); wrappingPicker } }

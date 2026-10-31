@@ -81,7 +81,6 @@
 .routine-preview, .routine-run-status { border-left: 3px solid var(--accent); padding: 10px 14px; margin: 12px 0; }
 .routine-preview ol { padding-left: 20px; }
 .voice-avatar { border-radius: 50%; position: relative; display: inline-flex; }
-.composer-voice { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .voice-avatar.voice-recording::after, .voice-avatar.voice-speaking::after { content: ""; position: absolute; inset: -4px; border: 2px solid var(--accent); border-radius: 50%; animation: voice-pulse 1.4s ease-in-out infinite; }
 @keyframes voice-pulse { 50% { opacity: .3; transform: scale(1.1); } }
 @media (prefers-reduced-motion: reduce) { .voice-avatar::after { animation: none !important; } }
@@ -156,3 +155,5 @@
 .routine-preview small { color: var(--muted); }
 .routine-status.paused { display: inline-block; padding: 1px 8px; border: 1px solid var(--line); border-radius: 999px; background: var(--rail); color: var(--muted); font-weight: 600; }
 .routine-manager .routine-schedule { font-family: var(--font-mono); }
+
+.routine-manager fieldset .checkbox-label { min-height: 44px; font-size: 1rem; }

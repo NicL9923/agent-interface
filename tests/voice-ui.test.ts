@@ -5,6 +5,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { VoiceControls } from "../src/components/VoiceControls.js";
 import type { VoiceState } from "../src/shared/voice.js";
 import { mountRoot } from "./ui-harness";
+vi.mock("../src/components/Avatar", () => ({ Avatar: () => null }));
 const requestApi = vi.hoisted(() => vi.fn());
 vi.mock("../src/client-api.js", async original => (await import("./helpers/request-mock")).withRequest(await (() => ({ api: requestApi }))()));
 let container: HTMLDivElement, root: Root;
@@ -37,7 +38,7 @@ requestApi.mockReset(); recorders.length = 0; players.length = 0;
   ({ container, root } = mountRoot());
   transcript = vi.fn(); state = vi.fn();
 });
-async function render(disabled = false) { await act(async () => root.render(createElement(VoiceControls, { botId: "ranch", onTranscript: transcript, onStateChange: state, reply: { id: "reply", text: "Here is your list." }, disabled }))); }
+async function render(disabled = false, replyId: string | null = "reply") { await act(async () => root.render(createElement(VoiceControls, { botId: "ranch", onTranscript: transcript, onStateChange: state, reply: replyId ? { id: replyId, text: "Here is your list." } : undefined, disabled }))); }
 async function click(label: string) { const button = [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent?.startsWith(label))!; expect(button).toBeTruthy(); await act(async () => button.click()); }
 it("records only after a gesture, stops the microphone and adds a transcript for review", async () => {
   requestApi.mockResolvedValue({ text: "Pick up milk" }); await render(); expect(getUserMedia).not.toHaveBeenCalled();
@@ -68,7 +69,10 @@ it("reports silence without changing the draft, and explains unsupported recordi
   requestApi.mockResolvedValue({ text: "" }); await render(); await click("Record voice"); await click("Stop recording");
   expect(container.textContent).toContain("No speech detected"); expect(transcript).not.toHaveBeenCalled();
   Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: undefined }); await render();
-  expect(container.textContent).toContain("unavailable in this browser"); expect([...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Record voice")?.disabled).toBe(true);
+  expect(container.textContent).not.toContain("unavailable in this browser");
+  await click("Record voice");
+  expect(container.textContent).toContain("Recording needs a browser with microphone support");
+  expect(transcript).not.toHaveBeenCalled();
 });
 it("uses canonical server reply audio, reports speaking only during playback and stops it", async () => {
   requestApi.mockResolvedValue({ url: "/api/voice/audio/01234567-0123-4123-8123-012345678901", mime: "audio/mpeg", expiresAt: "future" });
@@ -77,6 +81,22 @@ it("uses canonical server reply audio, reports speaking only during playback and
   expect(fetch).toHaveBeenCalledWith("/api/voice/audio/01234567-0123-4123-8123-012345678901", expect.objectContaining({ credentials: "same-origin", redirect: "error" }));
   expect(state).toHaveBeenLastCalledWith("speaking");
   await click("Stop speaking"); expect(players[0]!.pause).toHaveBeenCalled(); expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:voice-fixture"); expect(state).toHaveBeenLastCalledWith("idle");
+});
+it("replays in the existing speaker control and discards audio when the reply changes", async () => {
+  requestApi.mockResolvedValue({ url: "/api/voice/audio/01234567-0123-4123-8123-012345678901", mime: "audio/mpeg" });
+  await render(); await click("Listen to reply");
+  await act(async () => players[0]!.onended?.());
+  expect(container.querySelector('.voice-panel')?.childElementCount).toBe(0);
+  expect(container.querySelector('.voice-actions [aria-label="Play audio"]')).not.toBeNull();
+  await render(false, null); expect(players[0]!.pause).not.toHaveBeenCalled();
+  await render(); expect(container.querySelector('[aria-label="Play audio"]')).not.toBeNull();
+  await click("Play audio"); expect(players[0]!.play).toHaveBeenCalledTimes(2);
+  expect(requestApi).toHaveBeenCalledTimes(1);
+  await render(false, "new-reply");
+  expect(players[0]!.pause).toHaveBeenCalled();
+  expect(container.querySelector('[aria-label="Play audio"]')).toBeNull();
+  await click("Listen to reply");
+  expect(requestApi).toHaveBeenLastCalledWith("/bots/ranch/voice/speak", expect.objectContaining({ body: JSON.stringify({ messageId: "new-reply" }) }));
 });
 it("aborts a pending transcription when controls become unavailable and ignores its result", async () => {
   let resolve!: (value: { text: string }) => void;

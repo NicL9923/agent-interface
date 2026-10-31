@@ -233,6 +233,8 @@ describe("conversation state", () => {
     await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Settings"]')!.click());
     await loaded();
     await act(async () => Array.from(container.querySelectorAll("button")).find(button => button.textContent?.trim() === "Sign out")!.click());
+    expect(order).toEqual([]);
+    await act(async () => document.querySelector<HTMLButtonElement>('[role="alertdialog"] button.danger')!.click());
     expect(write).toHaveBeenCalledWith("/push/subscriptions", { endpoint }, "DELETE");
     expect(order).toEqual(["/push/subscriptions", "unsubscribe", "/auth/logout"]);
     expect(clearResponseCache).toHaveBeenCalledTimes(1);

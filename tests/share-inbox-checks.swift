@@ -42,10 +42,34 @@ import Foundation
     try Data().write(to: blocked)
     do { try ShareInbox.save(edited, in: blocked); preconditionFailure("A failed save was reported as successful") }
     catch { }
+    var importing = capture
+    var held: [String] = []
+    do {
+      _ = try ShareInbox.transferText(&importing, hold: { held.append($0.text); return true }, save: { try ShareInbox.save($0, in: blocked) })
+      preconditionFailure("A failed capture update was reported as successful")
+    } catch { }
+    precondition(importing.text.isEmpty && held == [capture.text], "Accepted text must be cleared even when saving fails")
+    try ShareInbox.save(importing, in: root)
+    _ = try ShareInbox.transferText(&importing, hold: { held.append($0.text); return true }, save: { try ShareInbox.save($0, in: root) })
+    let afterRetry = try JSONDecoder().decode(SharedCapture.self, from: Data(contentsOf: root.appendingPathComponent(capture.id + ".json")))
+    precondition(held == [capture.text] && afterRetry.text.isEmpty, "Retry must save the cleared capture without holding text twice")
+    var rejected = capture
+    let accepted = try ShareInbox.transferText(&rejected, hold: { _ in false }, save: { _ in preconditionFailure("Rejected text was saved") })
+    precondition(!accepted && rejected.text == capture.text, "Rejected text must remain in the capture")
+    // A receipt read back after a relaunch still knows its share's text, and only that share's text.
+    let receipt = SharedTextReceipt(capture: capture.id, text: capture.text, at: now)
+    let reread = try JSONDecoder().decode([SharedTextReceipt].self, from: JSONEncoder().encode([receipt]))
+    precondition(reread.first?.matches(capture) == true, "A saved receipt no longer matched its share")
+    precondition(!reread[0].matches(edited), "New words typed into a share matched the text it already added")
+    var twin = capture; twin.id = UUID().uuidString
+    precondition(!reread[0].matches(twin), "The same words from another share matched")
+    let stale = SharedTextReceipt(capture: twin.id, text: twin.text, at: now.addingTimeInterval(-ShareInbox.lifetime - 1))
+    let kept = SharedTextReceipt.recording([receipt], in: [stale], now: now)
+    precondition(kept == [receipt], "A receipt outlived the shares it can match, or a new one was dropped")
     var unsafe = capture; unsafe.files = ["../outside.txt"]
     precondition(!ShareInbox.valid(unsafe), "A file escaped its capture directory")
     do { try ShareInbox.save(unsafe, in: root); preconditionFailure("An invalid share was written") }
     catch { }
-    print("Share inbox edits, failed saves, orphan cleanup and file bounds checks passed.")
+    print("Share inbox edits, failed saves, text receipts, orphan cleanup and file bounds checks passed.")
   }
 }

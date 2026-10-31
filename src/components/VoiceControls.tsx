@@ -1,3 +1,5 @@
+import { Avatar } from "./Avatar";
+import type { Avatar as AvatarConfig } from "../shared/types";
 import { useEffect, useRef, useState } from "react";
 import { api } from "../client-api.js";
 import { Icon } from "./Icon.js";
@@ -6,16 +8,19 @@ import type { VoicePlayback, VoiceState, VoiceTranscript } from "../shared/voice
 import "./voice-controls.css";
 
 export interface VoiceControlsProps {
+  avatar?: AvatarConfig;
+  name?: string;
   botId: string;
   reply?: { id: string; text: string };
   disabled?: boolean;
+  hasDraft?: boolean;
   onTranscript(text: string): void;
   onStateChange?(state: VoiceState): void;
 }
 const labels: Record<VoiceState, string> = { idle: "", requesting: "Waiting for microphone permission…", recording: "Recording", transcribing: "Transcribing…", preparing: "Preparing spoken reply…", speaking: "Speaking" };
 const message = (error: unknown) => error instanceof Error ? error.message : "Voice could not be completed. Your draft is kept.";
 
-export function VoiceControls({ botId, reply, disabled = false, onTranscript, onStateChange }: VoiceControlsProps) {
+export function VoiceControls({ botId, reply, disabled = false, hasDraft = false, onTranscript, onStateChange, avatar, name }: VoiceControlsProps) {
   const [state, setState] = useState<VoiceState>("idle");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -32,6 +37,7 @@ export function VoiceControls({ botId, reply, disabled = false, onTranscript, on
   const generation = useRef(0);
   const discarded = useRef(false);
   const active = useRef<VoiceState>("idle");
+  const latestReply = useRef(reply?.id);
   const transition = (next: VoiceState) => { active.current = next; setState(next); callbacks.current.onStateChange?.(next); };
   const releaseMic = () => {
     if (timer.current) clearInterval(timer.current); timer.current = null;
@@ -56,6 +62,14 @@ export function VoiceControls({ botId, reply, disabled = false, onTranscript, on
     };
   }, [botId]);
   useEffect(() => { if (disabled && active.current !== "idle") cancel(); }, [disabled]);
+  useEffect(() => {
+    if (!reply?.id || reply.id === latestReply.current) return;
+    latestReply.current = reply.id;
+    if (active.current === "preparing" || active.current === "speaking") {
+      generation.current++; request.current?.abort(); request.current = null; transition("idle");
+    }
+    releaseAudio(); setPlayable(false);
+  }, [reply?.id]);
 
   async function transcribe(blob: Blob) {
     const run = ++generation.current;
@@ -154,17 +168,18 @@ export function VoiceControls({ botId, reply, disabled = false, onTranscript, on
   }
   const busy = state !== "idle";
   const supported = typeof navigator.mediaDevices?.getUserMedia === "function" && typeof MediaRecorder !== "undefined";
-  return <div className="voice-controls" data-voice-state={state}>
+  return <div className="voice-controls" data-voice-state={state} data-has-draft={hasDraft || undefined}>
     <div className="voice-actions">
-      {state === "recording" ? <button type="button" className="voice-recording" onClick={stopRecording}>Stop recording · {elapsed}s</button>
-        : <button type="button" aria-label="Record voice" disabled={disabled || busy || !supported} title={!supported ? "Microphone recording is unavailable in this browser. You can still type." : "Record up to two minutes. Review the transcript before sending."} onClick={() => void startRecording()}><Icon name="mic" size={18} /><span className="tool-label">Record voice</span></button>}
-      {reply && <button type="button" aria-label="Listen to reply" title="Listen to reply" disabled={disabled || busy} onClick={() => void speak()}><Icon name="speaker" size={18} /><span className="tool-label">Listen to reply</span></button>}
+      {state === "recording" ? <button type="button" className="voice-recording" aria-label={`Stop recording, ${elapsed} seconds`} onClick={stopRecording}><span className="sr-only">Stop recording · </span><Icon name="stop" size={16} /><span>{elapsed}s</span></button>
+        : <button type="button" aria-label="Record voice" disabled={disabled || busy} title={!supported ? "Microphone recording is unavailable in this browser. You can still type." : "Record up to two minutes. Review the transcript before sending."} onClick={() => void startRecording()}><Icon name="mic" size={18} /><span className="tool-label">Record voice</span></button>}
+      {reply && <button type="button" className="voice-listen" aria-label={playable ? "Play audio" : "Listen to reply"} title={playable ? "Play audio" : "Listen to reply"} disabled={disabled || busy} onClick={() => void (playable ? playAudio() : speak())}><Icon name="speaker" size={18} /><span className="tool-label">{playable ? "Play audio" : "Listen to reply"}</span></button>}
+    </div>
+    <div className="voice-panel">
+      {busy && <span className={`voice-avatar voice-${state}`}><Avatar avatar={avatar} name={name} state="idle" size={24} reducedMotion /></span>}
       {busy && <button type="button" onClick={cancel}>{state === "speaking" ? "Stop speaking" : "Cancel voice"}</button>}
       {recording && !busy && <><button type="button" disabled={disabled} onClick={() => void transcribe(recording)}>Retry transcription</button><button type="button" onClick={() => { setRecording(null); setError(""); }}>Discard recording</button></>}
-      {playable && !busy && <button type="button" disabled={disabled} onClick={() => void playAudio()}>Play audio</button>}
-    </div>
     {(busy || notice) && <p className="voice-status" role="status">{busy ? labels[state] : notice}</p>}
-    {!supported && <p className="voice-status">Voice recording is unavailable in this browser. You can still type.</p>}
     {error && <p className="voice-error" role="alert">{error}</p>}
+    </div>
   </div>;
 }

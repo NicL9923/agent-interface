@@ -24,8 +24,9 @@ type Commit = (edit: (value: Preferences) => Preferences) => void;
 const assistants = (count: number) => count === 1 ? "1 assistant" : `${count} assistants`;
 
 /** Account and app settings as grouped rows, opened from the home screen's account button. */
-export function PreferencesDialog({ boot, connectionLost, offline, editPreferences, notifications, installEvent, notice, onClose, onSignOut, onComputer, onIntegrations, onUpgrade, onShortcuts }: {
+export function PreferencesDialog({ boot, connectionLost, offline, editPreferences, notifications, installEvent, notice, destination, onClose, onSignOut, onComputer, onIntegrations, onUpgrade, onShortcuts }: {
   boot: Bootstrap;
+  destination?: { kind: "following" } | { kind: "section"; id: string } | { kind: "signout" };
   connectionLost: boolean;
   offline: boolean;
   editPreferences(edit: PreferenceEdit): Promise<void>;
@@ -47,6 +48,7 @@ export function PreferencesDialog({ boot, connectionLost, offline, editPreferenc
   const notify = (update: Partial<NonNullable<Preferences["notifications"]>>) =>
     commit(value => ({ ...value, notifications: { timezone, batchMinutes: 0, ...value.notifications, ...update } }));
   const [quietError, setQuietError] = useState("");
+  const [confirmSignOut, setConfirmSignOut] = useState(false);
   const changeQuietTime = (field: "quietStart" | "quietEnd", value: string) => {
     const other = field === "quietStart" ? prefs.notifications?.quietEnd : prefs.notifications?.quietStart;
     if (value === other) { setQuietError("Start and end times can't match."); return; }
@@ -55,7 +57,7 @@ export function PreferencesDialog({ boot, connectionLost, offline, editPreferenc
   const { version, revisionDate: builtOn } = boot.connection;
   const hermes = revisionDate(builtOn) ? `Hermes released ${revisionDate(builtOn)}` : version ? `Hermes ${hermesVersionLabel(version, undefined)}` : "";
   // Following and each home section open as their own page in the sheet, like a phone's settings.
-  const [page, setPage] = useState<Page>({ kind: "main" });
+  const [page, setPage] = useState<Page>(destination && destination.kind !== "signout" ? destination : { kind: "main" });
   const section = page.kind === "section" ? prefs.sections.find(item => item.id === page.id) : undefined;
   const shown: Page = page.kind === "section" && !section ? { kind: "main" } : page;
   const body = useRef<HTMLDivElement>(null);
@@ -77,7 +79,7 @@ export function PreferencesDialog({ boot, connectionLost, offline, editPreferenc
   }, [shown.kind, section?.id]);
   const title = shown.kind === "following" ? "Following" : shown.kind === "section" ? section!.name : "Settings";
   return (
-    <Dialog initialFocus="#settings-title" className="settings-sheet" aria-labelledby="settings-title" onClose={() => {
+    <Dialog initialFocus={destination?.kind === "signout" ? "#settings-signout" : "#settings-title"} className="settings-sheet" aria-labelledby="settings-title" onClose={() => {
         // Chromium can force a native close after repeated Escape presses. Always
         // clear the parent's panel state; an invalid local name keeps its saved value.
         beforeLeave.current?.(); onClose();
@@ -172,7 +174,7 @@ export function PreferencesDialog({ boot, connectionLost, offline, editPreferenc
         <div className="settings-group">
           {installEvent && <Button type="button" className="settings-row" onClick={() => void installEvent.prompt()}>
             <Icon name="download" size={18} /><span className="row-label">Install app</span></Button>}
-          <Button type="button" className="settings-row danger" disabled={notifications.busy} onClick={() => void onSignOut()}>
+          <Button id="settings-signout" type="button" className="settings-row danger" disabled={notifications.busy} onClick={() => setConfirmSignOut(true)}>
             <span className="row-label">Sign out</span></Button>
         </div>
         {notice && <p className="settings-footnote" role="status">{notice}</p>}
@@ -183,6 +185,8 @@ export function PreferencesDialog({ boot, connectionLost, offline, editPreferenc
         </footer>
         </>}
       </div>
+      {confirmSignOut && <SettingsConfirmation title="Sign out?" detail="You will need to sign in again to use this workspace." confirmLabel="Sign out" cancelLabel="Stay signed in" danger busy={notifications.busy}
+        fallbackFocus="#settings-signout" onCancel={() => setConfirmSignOut(false)} onConfirm={() => void onSignOut()} />}
     </Dialog>
   );
 }

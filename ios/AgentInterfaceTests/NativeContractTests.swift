@@ -966,7 +966,7 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
             try await server.waitForHeld(path)
             XCTAssertTrue(value.holdsAdditions("bot"))
             XCTAssertFalse(value.addShared(text: "Shared note", botId: "bot"))
-            XCTAssertTrue(value.holdShared("Shared text", botId: "bot"), "Shared text waits with Siri's and replies'")
+            XCTAssertTrue(value.holdShared(share("Shared text", for: value), botId: "bot"), "Shared text waits with Siri's and replies'")
             await value.deliverAdditions()
             XCTAssertEqual(value.draft.text, "Send this", "The sent copy is left exactly as sent")
             server.release(path); await operation.value
@@ -2529,10 +2529,65 @@ extension NativeContractTests {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
         value.queueAsk(AskRequest(botId: "bot", text: "First", scope: value.scope ?? "", at: Date()))
         XCTAssertTrue(value.addNotificationReply("Second", botId: "bot", account: one))
-        XCTAssertTrue(value.holdShared("Third", botId: "bot"))
+        XCTAssertTrue(value.holdShared(share("Third", for: value), botId: "bot"))
         await value.deliverAdditions()
         XCTAssertEqual(value.draft.text, "Send this\n\nFirst\n\nSecond\n\nThird")
         XCTAssertTrue(value.additions.isEmpty)
         value.suspend()
+    }
+
+    /// A share saved for the store's account, as the Share inbox keeps it.
+    fileprivate func share(_ text: String, for store: AppStore, id: String = UUID().uuidString) -> SharedCapture {
+        SharedCapture(id: id, scope: store.scope ?? "", botId: "bot", text: text, files: [], createdAt: Date())
+    }
+
+    /// Before this, the app could stop after a share's text was queued but before the emptied share was saved.
+    /// Added again after the relaunch, the text joined the draft twice.
+    func testASharedTextRetriedAfterARelaunchJoinsItsDraftOnce() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let blocked = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try Data().write(to: blocked); defer { try? FileManager.default.removeItem(at: blocked) }
+        // A send is unsettled, so the text waits in the queue. Saving the emptied share then fails.
+        value.pendings["bot"] = PendingSubmission(requestId: "request", botId: "bot", text: "Send this", attachments: [], reviewedInterruption: false)
+        let saved = share("Bring rope", for: value)
+        var importing = saved
+        XCTAssertThrowsError(try ShareInbox.transferText(&importing, hold: { value.holdShared($0, botId: "bot") }, save: { try ShareInbox.save($0, in: blocked) }))
+        XCTAssertEqual(value.savedAdditions().map(\.text), ["Bring rope"])
+        // The relaunch reads the share as last saved, text and all, and the person adds it again.
+        let relaunched = try store(server)
+        XCTAssertTrue(relaunched.sharedTextAdded(saved), "The share opens knowing its text was taken")
+        var retry = saved
+        XCTAssertTrue(try ShareInbox.transferText(&retry, hold: { relaunched.holdShared($0, botId: "bot") }, save: { _ in }))
+        XCTAssertEqual(relaunched.savedAdditions().map(\.text), ["Bring rope"], "Taken again without queuing it twice")
+        await relaunched.deliverAdditions()
+        XCTAssertEqual(relaunched.draft.text, "Send this\n\nBring rope")
+        let landed: Draft? = relaunched.read(relaunched.key(.draft, "bot"))
+        XCTAssertEqual(landed?.text, "Send this\n\nBring rope", "The draft on this device has the text before the queue lets it go")
+        XCTAssertTrue(relaunched.savedAdditions().isEmpty)
+        relaunched.suspend()
+        // Once it landed the queue is empty; a later relaunch still finds the share's receipt.
+        let later = try store(server)
+        XCTAssertTrue(later.sharedTextAdded(saved))
+        XCTAssertTrue(later.holdShared(saved, botId: "bot"))
+        XCTAssertTrue(later.savedAdditions().isEmpty)
+        await later.deliverAdditions()
+        XCTAssertEqual(later.draft.text, "Send this", "Nothing joins twice")
+        // Another share with the same words, and new words typed into this one, are new text.
+        XCTAssertTrue(later.holdShared(share("Bring rope", for: later), botId: "bot"))
+        var edited = saved; edited.text = "And a lantern"
+        XCTAssertFalse(later.sharedTextAdded(edited))
+        XCTAssertTrue(later.holdShared(edited, botId: "bot"))
+        await later.deliverAdditions()
+        XCTAssertEqual(later.draft.text, "Send this\n\nBring rope\n\nAnd a lantern")
+        // A share saved for another account is refused and never matches this account's receipts.
+        var other = saved; other.scope = Data((server.origin.absoluteString + "|two").utf8).base64URLEncoded
+        XCTAssertFalse(later.sharedTextAdded(other))
+        XCTAssertFalse(later.holdShared(other, botId: "bot"))
+        XCTAssertTrue(later.savedAdditions().isEmpty)
+        // The first copy's send settles: the text it held was taken by the relaunch, so nothing is left to add.
+        value.pendings["bot"] = nil
+        await value.deliverAdditions()
+        XCTAssertEqual(value.draft.text, "Send this")
+        later.suspend()
     }
 }

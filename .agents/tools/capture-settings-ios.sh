@@ -12,7 +12,7 @@ app=$1
 simulator=$2
 output=$3
 shift 3
-simctl=/Library/Developer/PrivateFrameworks/CoreSimulator.framework/Versions/A/Resources/bin/simctl
+simctl=$(xcrun --find simctl)
 bundle=$(/usr/bin/plutil -extract CFBundleIdentifier raw "$app/Info.plist")
 mkdir -p "$output"
 "$simctl" shutdown all >/dev/null 2>&1 || true
@@ -24,6 +24,8 @@ trap 'rm -f "$capture_tmp"; "$simctl" shutdown "$simulator" >/dev/null 2>&1 || t
 "$simctl" install "$simulator" "$app"
 for tab in "$@"; do
   settings_tab=$tab
+  content_size=large
+  appearance=light
   survival_capture=""
   discovery_tab=""
   group_capture=0
@@ -38,6 +40,12 @@ for tab in "$@"; do
   apple_capture=0
   capture_delay=${NATIVE_CAPTURE_DELAY:-5}
   case "$tab" in
+    ComposerAX3) settings_tab=""; survival_capture=composer; content_size=accessibility-extra-large ;;
+    ComposerAX3Focused) settings_tab=""; survival_capture=composer-ax-focused; content_size=accessibility-extra-large ;;
+    ComposerDark) settings_tab=""; survival_capture=composer; appearance=dark ;;
+    ComposerFocused) settings_tab=""; survival_capture=composer-focused ;;
+    ComposerMultiline) settings_tab=""; survival_capture=composer-multiline ;;
+    Composer) settings_tab=""; survival_capture=composer ;;
     Empty) settings_tab=""; survival_capture=empty ;;
     ShareOffline) settings_tab=""; survival_capture=share-offline ;;
     ShareDiscard) settings_tab=""; survival_capture=share-discard ;;
@@ -47,6 +55,7 @@ for tab in "$@"; do
     WidgetEmpty) settings_tab=""; survival_capture=widget-empty ;;
     Preferences) settings_tab=""; preferences_capture=1 ;;
     Notifications) settings_tab=""; notifications_capture=1 ;;
+    NotificationsAX3) settings_tab=""; notifications_capture=1; content_size=accessibility-extra-large ;;
     NotificationsBlocked) settings_tab=""; notifications_capture=1; notifications_blocked=1 ;;
     AppleDate) settings_tab=""; apple_capture=1; apple_date_capture=1 ;;
     Apple) settings_tab=""; apple_capture=1 ;;
@@ -62,6 +71,8 @@ for tab in "$@"; do
     Details|Avatar|Connections|Tools|Skills|Routines|Work|Learning|Memory|Logins) ;;
     *) echo "Unknown capture page: $tab" >&2; exit 2 ;;
   esac
+  "$simctl" ui "$simulator" content_size "$content_size"
+  "$simctl" ui "$simulator" appearance "$appearance"
   SIMCTL_CHILD_AGENT_INTERFACE_UI_CAPTURE_SURVIVAL="$survival_capture" \
   SIMCTL_CHILD_AGENT_INTERFACE_UI_FIXTURE=1 \
   SIMCTL_CHILD_AGENT_INTERFACE_UI_AUTOMATION=1 \
@@ -84,8 +95,10 @@ for tab in "$@"; do
   sleep "$capture_delay"
   # CoreSimulator cannot write directly to the external volume. Use its own
   # runtime temp directory, then copy this small screenshot to DevSSD.
-  "$simctl" io "$simulator" screenshot --type=png "$capture_tmp"
+  "$simctl" io "$simulator" screenshot --display="${SIMULATOR_CAPTURE_DISPLAY:-1}" --type=png "$capture_tmp"
   cp "$capture_tmp" "$output/native-$tab.png"
   rm -f "$capture_tmp"
   "$simctl" terminate "$simulator" "$bundle"
 done
+"$simctl" ui "$simulator" content_size large
+"$simctl" ui "$simulator" appearance light

@@ -52,7 +52,7 @@ function useAutomation(botId: string) {
       return result;
     });
   };
-  const changeTask = <T,>(send: () => Promise<T>): Promise<{ kind: "saved" | "refused"; message: string; overview: AutomationOverview; result?: T } | undefined> => {
+  const changeTask = <T,>(send: () => Promise<T>): Promise<{ kind: "saved" | "refused"; message: string; overview: AutomationOverview; refreshed?: boolean; result?: T } | undefined> => {
     if (uncertain || loading) return Promise.resolve(undefined);
     return action.run(async ({ current }) => {
       let refusal = "";
@@ -70,7 +70,8 @@ function useAutomation(botId: string) {
       let next: AutomationOverview;
       try { next = await request("GET /bots/:id/automation", { params: { id: botId } }); }
       catch {
-        if (current()) { setUncertain(true); action.setError("The change could not be confirmed because status could not refresh. Refresh status before making another change."); }
+        if (current()) { setUncertain(true); action.setError(refusal ? "Status could not refresh. Refresh status before making another change." : "The change could not be confirmed because status could not refresh. Refresh status before making another change."); }
+        if (refusal && value) return { kind: "refused" as const, message: `${refusal} Status could not refresh.`, overview: value, refreshed: false };
         return undefined;
       }
       if (!current()) return undefined;
@@ -231,7 +232,7 @@ function TaskSection({ control, bots, botId }: { control: Controls; bots: Bot[];
       return false;
     }
     const updated = result.overview.tasks.items.find(item => item.id === task.id);
-    const message = result.kind === "refused" ? `${result.message} Status refreshed.` : moved && updated ? `Moved to ${taskStatusLabel(updated.status)}.` : "Saved in Hermes.";
+    const message = result.kind === "refused" ? `${result.message}${result.refreshed === false ? "" : " Status refreshed."}` : moved && updated ? `Moved to ${taskStatusLabel(updated.status)}.` : "Saved in Hermes.";
     setFeedback(previous => ({ ...previous, [task.id]: { kind: result.kind, source: edit ? "edit" : moved ? "move" : "dependency", title: task.title, message } }));
     setAnnouncement(message);
     if (openTaskRef.current === task.id) {
@@ -283,7 +284,7 @@ function TaskSection({ control, bots, botId }: { control: Controls; bots: Bot[];
             setAttempt(previous => previous?.requestId === snapshot.requestId ? { ...previous, unconfirmed: true } : previous);
             return;
           }
-          if (result.kind === "refused") { setAttempt(null); setCreateFeedback(result.message + " Status refreshed."); return; }
+          if (result.kind === "refused") { setAttempt(null); setCreateFeedback(result.message + (result.refreshed === false ? "" : " Status refreshed.")); return; }
           const created = result.overview.tasks.items.find(item => item.id === result.result?.id) ?? likelyCreatedTask(snapshot.knownIds, snapshot.title, result.overview.tasks.items);
           resetCreate();
           if (created) revealCreated(created, `Created. "${created.title}" stays blocked until you start it.`);
@@ -450,7 +451,7 @@ function TriggerSection({ control, botId }: { control: Controls; botId: string }
   };
   const run = async (triggerId: string, send: () => Promise<unknown>, success: string) => {
     const result = await control.changeTask(send);
-    const message = !result ? "Not confirmed. Use Refresh status at the top of Work." : result.kind === "refused" ? `${result.message} Status refreshed.` : success;
+    const message = !result ? "Not confirmed. Use Refresh status at the top of Work." : result.kind === "refused" ? `${result.message}${result.refreshed === false ? "" : " Status refreshed."}` : success;
     publish(triggerId, message, !result ? "uncertain" : result.kind);
     return result?.kind === "saved";
   };
@@ -479,7 +480,7 @@ function TriggerSection({ control, botId }: { control: Controls; botId: string }
     }
     if (!result) { if (edit) publish(edit.id, "Not confirmed. Use Refresh status at the top of Work.", "uncertain"); return; }
     if (result.kind === "refused") {
-      const message = `${result.message} Status refreshed.`;
+      const message = `${result.message}${result.refreshed === false ? "" : " Status refreshed."}`;
       if (edit) {
         const refreshed = result.overview.triggers.items.find(item => item.id === edit.id);
         if (!refreshed || refreshed.revision !== edit.revision) clearFeedback(edit.id);
@@ -494,7 +495,7 @@ function TriggerSection({ control, botId }: { control: Controls; botId: string }
     <h4 id={`${id}-heading`}>{edit ? "Edit trigger" : "New event trigger"}</h4>
     {edit ? <p>Trigger ID: {edit.id}</p> : <div className="automation-trigger-field"><label htmlFor={`${id}-trigger-id`}>Trigger ID</label><Input id={`${id}-trigger-id`} autoFocus required pattern="[a-z0-9][a-z0-9_-]{0,79}" maxLength={80} aria-describedby={`${id}-id-hint`} value={draft.id} disabled={control.disabled || !!likely || reviewed} onChange={event => { clearCreateRefusal(); setDraft({ ...draft, id: event.target.value }); }} /><p id={`${id}-id-hint`} className="muted">Use lowercase letters, numbers, underscores or hyphens. Start with a letter or number, up to 80 characters.</p></div>}
     <div className="automation-trigger-field"><label htmlFor={`${id}-description`}>Description (optional)</label><textarea id={`${id}-description`} autoFocus={!!edit} rows={2} maxLength={1000} value={draft.description} disabled={control.disabled || !!likely || reviewed} onChange={event => setDraft({ ...draft, description: event.target.value })} /></div>
-    <div className="automation-trigger-field"><label htmlFor={`${id}-events`}>Event names</label><Input id={`${id}-events`} required aria-describedby={`${id}-events-hint`} value={events} disabled={control.disabled || !!likely || reviewed} onChange={event => setEvents(event.target.value)} placeholder="alert.created" /><p id={`${id}-events-hint`} className="muted">Separate names with commas. Up to 20. Use letters, numbers, underscores, periods, asterisks, colons or hyphens.</p></div>
+    <div className="automation-trigger-field"><label htmlFor={`${id}-events`}>Event names</label><Input id={`${id}-events`} required aria-describedby={`${id}-events-hint`} value={events} disabled={control.disabled || !!likely || reviewed} onChange={event => setEvents(event.target.value)} placeholder="issue.created, issue.closed" /><p id={`${id}-events-hint`} className="muted">Choose 1 to 20 event names, separated by commas. Each name can contain 1 to 100 letters, digits, _, ., *, : or -.</p></div>
     <label>Routine<NativeSelect required value={draft.routineId} disabled={control.disabled || !!likely || reviewed} onChange={event => setDraft({ ...draft, routineId: event.target.value })}><option value="">Choose a routine</option>{routines.map(row => <option key={row.id} value={row.id}>{row.name}{row.enabled ? "" : " (paused)"}</option>)}</NativeSelect></label>
     <p className="muted">{!edit && "New triggers start disabled. "}The selected routine must also be enabled to run.</p>
     {staleMessage && <p className="automation-trigger-feedback form-error" tabIndex={-1}>{staleMessage}</p>}
