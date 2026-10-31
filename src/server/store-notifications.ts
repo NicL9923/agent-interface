@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { notificationCopy } from "../shared/event-copy.js";
+import { digestCopy, notificationCopy } from "../shared/event-copy.js";
 import type { RuntimeEvent } from "../shared/types.js";
 import { httpError } from "./http-error.js";
 import type { AccountRepository } from "./store-accounts.js";
@@ -251,7 +251,7 @@ export class NotificationRepository {
       if (now < (payload.queuedAt ?? created?.created_at ?? 0) + minutes * 60000) continue;
       const items = ready.filter(row => row.user_id === item.user_id && !seen.has(row.id) && !this.db.prepare("SELECT 1 FROM notification_batch_items WHERE outbox_id=?").get(row.id) && !this.db.prepare('SELECT 1 FROM delivered WHERE outbox_id=?').get(row.id) && ['completed','activity','interrupted'].includes(JSON.parse(row.payload).kind));
       const batchId = randomUUID();
-      const digest = JSON.stringify({title:`${items.length} assistant update${items.length === 1 ? '' : 's'}`,body:items.slice(0,3).map(row=>JSON.parse(row.payload).title).join(' · '),url:'/?view=today',tag:batchId});
+      const digest = JSON.stringify({...digestCopy(items.map(row=>JSON.parse(row.payload))),url:'/?view=today',tag:batchId});
       this.database.transaction(() => {
         this.db.prepare("INSERT INTO notification_batches VALUES(?,?,?)").run(batchId,item.user_id,digest);
         for (const row of items) this.db.prepare("INSERT INTO notification_batch_items VALUES(?,?)").run(row.id,batchId);

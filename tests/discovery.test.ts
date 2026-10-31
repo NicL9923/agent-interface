@@ -33,7 +33,7 @@ it('keeps a fixed digest across retries and acknowledges each device independent
   store.db.prepare("UPDATE outbox SET payload=json_set(payload,'$.queuedAt',?)").run(Date.now()-600000);
   await worker.tick();expect(payloads).toHaveLength(2);const tag=JSON.parse(payloads[0].payload).tag;
   store.recordEvents([{id:'new',runId:'run',botId:'ranch',kind:'completed',title:'new',occurredAt:new Date().toISOString()}],'3');store.db.prepare('UPDATE outbox SET next_attempt=0').run();
-  await worker.tick();expect(payloads).toHaveLength(3);expect(JSON.parse(payloads[2].payload).tag).toBe(tag);expect(JSON.parse(payloads[2].payload).title).toBe('2 assistant updates');expect(store.outbox()).toHaveLength(1);
+  await worker.tick();expect(payloads).toHaveLength(3);expect(JSON.parse(payloads[2].payload).tag).toBe(tag);expect(JSON.parse(payloads[2].payload).title).toBe('2 updates from 2 assistants');expect(store.outbox()).toHaveLength(1);
 });
 it('defers approval notifications through quiet hours without marking them delivered',async()=>{
   const store=setup();const now=new Date();const time=new Intl.DateTimeFormat('en-GB',{timeZone:'UTC',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(now);

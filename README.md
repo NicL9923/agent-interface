@@ -257,7 +257,8 @@ requires an explicit start. Memory edits apply to the canonical conversation at
 the next safe turn boundary, with pending/applied status and preserved history.
 
 Use **View results** beside a routine to read its saved runs, including trials.
-Routine notifications open this history directly. Results stay within the selected
+Routine notifications name the routine and quote the start of its answer, or the
+error for a failed run, and open this history directly. Results stay within the selected
 Hermes profile; a run with only a saved preview says so.
 
 **Group chats** lets 2–6 local assistants discuss a task in one room. Create a

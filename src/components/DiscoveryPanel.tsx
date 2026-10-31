@@ -9,6 +9,7 @@ import { AgentExchange, isAgentExchange } from "./AgentExchange";
 import { ActionReceipt } from "./ActionReceipt";
 import { MessageMarkdown } from './MessageMarkdown';
 import { isActivityMessage, messageOrigin } from '../shared/message-origin';
+import { withoutBotTag } from '../shared/event-copy';
 import { Icon } from "./Icon";
 import { routineResultLabel, savedReplyTitle } from "../shared/discovery";
 import { When } from './When';
@@ -123,7 +124,7 @@ export function DiscoveryPanel({ bootstrap, search, onRoutine, onOpenMessage }: 
           {speaker(message)&&<small>{speaker(message)}</small>}
           {message.role==='assistant'&&!isActivityMessage(message)&&saveControl({kind:'session',botId:page.botId,sessionId:page.sessionId,messageId:message.id,offset:page.offset,title:savedReplyTitle(message.text)})}
         </div>}
-        {isActivityMessage(message)?<details><summary>{messageOrigin(message)?.title || "Activity details"}</summary><MessageMarkdown text={message.text}/></details>:isAgentExchange(message)?<AgentExchange message={message} recipient={name(page.botId)}/>:message.toolCall?<ActionReceipt call={message.toolCall}/>:<MessageMarkdown text={message.text}/>}
+        {isActivityMessage(message)?<details><summary>{withoutBotTag(messageOrigin(message)?.title ?? "") || "Activity details"}</summary><MessageMarkdown text={message.text}/></details>:isAgentExchange(message)?<AgentExchange message={message} recipient={name(page.botId)}/>:message.toolCall?<ActionReceipt call={message.toolCall}/>:<MessageMarkdown text={message.text}/>}
         {message.files?.map(file=><a key={file.id} href={`/api/files/${encodeURIComponent(file.id)}`} target="_blank" rel="noreferrer">{file.name}</a>)}
       </article>)}
       <div className="discovery-actions"><button disabled={busy||page.offset===0} onClick={()=>void history(page.botId,page.sessionId,Math.max(0,page.offset-100))}>Previous page</button><button disabled={busy||!page.hasMore} onClick={()=>void history(page.botId,page.sessionId,page.offset+100)}>Next page</button></div>

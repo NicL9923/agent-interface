@@ -17,6 +17,12 @@ final class ExperienceTests: XCTestCase {
     XCTAssertEqual(EventCopy.headline(result), "Done Check the gate.")
     XCTAssertEqual(EventCopy.excerpt(String(repeating: "word ", count: 100)).suffix(1), "…")
   }
+  func testRoutineHeadlinesDropTheOwnerTagAndSayWhenARunFailed() {
+    var routine = TodayEvent(id: "r", botId: "patch", kind: "completed", title: "[bot:patch] Daily AI news", body: "Three model launches.", occurredAt: "2026-10-01", routineId: "job")
+    XCTAssertEqual(EventCopy.headline(routine), "Daily AI news: Three model launches.")
+    routine.kind = "failed"; routine.body = "Provider rate limit"
+    XCTAssertEqual(EventCopy.headline(routine), "Daily AI news couldn't finish: Provider rate limit")
+  }
   func testInlineViewsRequireValidCompleteExplicitFences() {
     let json = #"{"version":1,"title":"Supply planner","html":"<button>Compare</button>"}"#
     let fence = "```wildbots-html\n" + json + "\n```"
