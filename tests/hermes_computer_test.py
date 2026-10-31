@@ -448,6 +448,7 @@ class LocalBrowserTests(ComputerFixture):
 
 
 class InstallToolsTests(ComputerFixture):
+    modern = False
     def setUp(self):
         super().setUp()
         noop = lambda *a, **k: None
@@ -460,8 +461,10 @@ class InstallToolsTests(ComputerFixture):
             TerminalPolicyUnavailable=ValueError)
         self.terminal = types.SimpleNamespace(_ensure_terminal_env_bridged=noop)
         self.registry = types.SimpleNamespace(dispatch=self.native_dispatch)
-        self.cdp = types.SimpleNamespace(_get_cdp_override_raw=noop)
-        self.cloud = types.SimpleNamespace(_is_local_backend=self.native_local)
+        self.cdp_name = "get_cdp_override_raw" if self.modern else "_get_cdp_override_raw"
+        self.local_name = "is_local_backend" if self.modern else "_is_local_backend"
+        self.cdp = types.SimpleNamespace(**{self.cdp_name: noop, "get_dialog_policy_config": noop})
+        self.cloud = types.SimpleNamespace(**{self.local_name: self.native_local})
         runtime = types.SimpleNamespace(start=noop, desktop_env=noop, stop_if_idle=noop)
         lease = TestLease()
         lease.human_holds = noop; lease.viewer_may_send_input = noop
@@ -470,15 +473,22 @@ class InstallToolsTests(ComputerFixture):
             "browser_tool_cloud": self.cloud,
             "browser_tool_session": types.SimpleNamespace(_run_browser_command=noop, _shares_bot_desktop_browser=noop),
             "browser_tool_lifecycle": types.SimpleNamespace(_cleanup_single_browser_session=noop),
-            "browser_use_cli": types.SimpleNamespace(_route_backend=noop, _set_cdp_env=noop, _run_cli_killing_process_group=noop),
+            "browser_use_cli": types.SimpleNamespace(_route_backend=noop, _set_cdp_env=noop, _run_cli_killing_process_group=noop,
+                _OWN_TAB_PREAMBLE="native", _BOT_DESKTOP_BROWSER_SENTINEL="_HERMES_BU_BOT_DESKTOP_BROWSER"),
             "browser_extension_router": types.SimpleNamespace(routed_browser_handler=noop),
             "browser_cdp_tool": types.SimpleNamespace(),
             "terminal_scope": self.terminal_scope, "terminal_tool": self.terminal,
             "url_safety": types.SimpleNamespace(is_always_blocked_url=Mock(return_value=False)),
             "browser_tool_eval_policy": types.SimpleNamespace(_JS_URL_LITERAL_RE=computer.re.compile(r"https?://[^\s'\"]+")),
         }
+        if self.modern:
+            modules = {key: value for key, value in modules.items() if not key.startswith("browser_tool") and key != "browser_extension_router"}
+            modules.update(browser_session=types.SimpleNamespace(shares_bot_desktop_browser=noop),
+                browser_session_cdp=self.cdp, browser_session_cloud=self.cloud,
+                browser_url_policy=types.SimpleNamespace(url_literals=lambda value: computer.re.findall(r"https?://[^\s'\"]+", value)))
         self.native_modules = modules
         fake_modules = {"tools": types.SimpleNamespace(**modules),
+            **({"tools.browser_session": modules["browser_session"]} if self.modern else {}),
             "tools.registry": types.SimpleNamespace(registry=self.registry),
             "tools.bot_desktop": types.SimpleNamespace(runtime=runtime, lease=lease, placement=types.SimpleNamespace()),
             "tools.browser_supervisor_dialogs": types.SimpleNamespace(
@@ -492,24 +502,28 @@ class InstallToolsTests(ComputerFixture):
     def test_matching_override_calls_profile_policy_other_overrides_preserve_native_result(self):
         installed = computer.install_tools()
         with patch.object(installed, "profile_local_browser", return_value=False) as policy:
-            self.assertIs(self.cloud._is_local_backend(), False)
+            self.assertIs(getattr(self.cloud, self.local_name)(), False)
             policy.assert_called_once_with()
             self.native_local.assert_not_called()
             policy.reset_mock()
             for override in (None, "", "http://127.0.0.1:1", "http://external.example:9222"):
-                with patch.object(self.cdp, "_get_cdp_override_raw", return_value=override):
-                    self.assertEqual(self.cloud._is_local_backend(), "native decision")
+                with patch.object(self.cdp, self.cdp_name, return_value=override):
+                    self.assertEqual(getattr(self.cloud, self.local_name)(), "native decision")
             policy.assert_not_called()
             self.assertEqual(self.native_local.call_count, 4)
 
     def test_missing_profile_policy_seams_refuse_install_before_mutating_native(self):
-        for module, name in ((self.config, "read_raw_config"), (self.constants, "get_hermes_home_override"),
-                             (self.terminal_scope, "get_terminal_scope"), (self.terminal_scope, "terminal_env"),
-                             (self.terminal_scope, "TerminalPolicyUnavailable"), (self.terminal, "_ensure_terminal_env_bridged")):
+        seams = [(self.config, "read_raw_config"), (self.constants, "get_hermes_home_override"),
+                 (self.terminal_scope, "get_terminal_scope"), (self.terminal_scope, "terminal_env"),
+                 (self.terminal_scope, "TerminalPolicyUnavailable"), (self.terminal, "_ensure_terminal_env_bridged")]
+        if self.modern:
+            seams += [(self.native_modules["browser_url_policy"], "url_literals"), (self.cdp, "get_dialog_policy_config"),
+                      (self.native_modules["browser_session"], "shares_bot_desktop_browser")]
+        for module, name in seams:
             with self.subTest(name=name), patch.object(module, name, None):
                 with self.assertRaisesRegex(computer.ComputerError, "require qualification"):
                     computer.install_tools()
-                self.assertIs(self.cloud._is_local_backend, self.native_local)
+                self.assertIs(getattr(self.cloud, self.local_name), self.native_local)
                 self.assertFalse(hasattr(self.registry, "_agent_interface_computer"))
 
     def test_metadata_dispatch_uses_native_matcher_and_keeps_private_literals_allowed(self):
@@ -527,6 +541,45 @@ class InstallToolsTests(ComputerFixture):
             self.native_dispatch.assert_not_called()
             self.assertEqual(self.registry.dispatch("browser_console", {"expression": 'fetch("https://100.100.0.5")'}), "native dispatch")
         self.assertIn(unittest.mock.call("https://100.100.0.5"), matcher.call_args_list)
+
+    def test_override_session_shares_human_control_fence(self):
+        computer.install_tools()
+        session = self.native_modules["browser_session" if self.modern else "browser_tool_session"]
+        shared = getattr(session, "shares_bot_desktop_browser" if self.modern else "_shares_bot_desktop_browser")
+        self.assertTrue(shared({"features": {"cdp_override": True}}))
+
+    def test_missing_harness_preamble_refuses_before_mutating_native(self):
+        del self.native_modules["browser_use_cli"]._OWN_TAB_PREAMBLE
+        with self.assertRaisesRegex(computer.ComputerError, "require qualification"):
+            computer.install_tools()
+        self.assertIs(getattr(self.cloud, self.local_name), self.native_local)
+        self.assertFalse(hasattr(self.registry, "_agent_interface_computer"))
+
+    def test_reload_preserves_pending_recovery_record(self):
+        installed = computer.install_tools()
+        pending = {"endpoint": "pending recovery"}
+        installed._write("computer-recovery.json", pending)
+        installed._run_harness_cli = Mock(return_value="reloaded")
+        result = self.native_modules["browser_use_cli"]._run_cli_killing_process_group(
+            ["python", "-m", "browser_harness", "--reload"], "", {}, 10)
+        self.assertEqual(result, "reloaded")
+        self.assertEqual(installed._read("computer-recovery.json", None), pending)
+        installed._run_harness_cli.assert_called_once_with(["python", "-m", "browser_harness", "--reload"], "", {}, 10)
+
+
+class ModernInstallToolsTests(InstallToolsTests):
+    modern = True
+
+
+class DesktopActivityTests(unittest.TestCase):
+    def test_running_supervisor_renews_activity_and_missing_desktop_does_not(self):
+        runtime = types.SimpleNamespace(status=Mock(return_value=types.SimpleNamespace(running=True)), touch_activity=Mock())
+        computer_host.keep_desktop_alive(runtime)
+        runtime.touch_activity.assert_called_once_with()
+        runtime.status.return_value.running = False
+        with self.assertRaisesRegex(RuntimeError, "desktop exited"):
+            computer_host.keep_desktop_alive(runtime)
+        runtime.touch_activity.assert_called_once_with()
 
 
 class SupervisorRestartTests(ComputerFixture):

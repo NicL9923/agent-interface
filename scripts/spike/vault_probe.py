@@ -408,6 +408,8 @@ def canonical_task(client, headers, journal, home, profile, call, canary):
     selected = chromium_executable()
     executable = Path(selected) if selected else None
     assert executable and executable.is_file() and os.access(executable,os.X_OK), 'An executable native Chromium is required for secure-fill acceptance'
+    if expected_browser := os.environ.get('AGENT_BROWSER_EXECUTABLE_PATH'):
+        assert executable.resolve() == Path(expected_browser).resolve(), 'Native Chromium selection differs from the qualification executable'
     browser_home=home/'runtime/vault-browser';browser_home.mkdir(parents=True,mode=0o700)
     import tempfile
     chrome_tmp=Path(tempfile.mkdtemp(prefix='agentui-vault-browser-',dir='/tmp'))

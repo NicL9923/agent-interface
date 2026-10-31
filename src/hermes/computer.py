@@ -531,26 +531,51 @@ def install_tools():
             raise ComputerError("The shared computer was already configured with another identity.")
         return existing
     from tools.bot_desktop import runtime, lease, placement
-    from tools import browser_tool as bt, browser_tool_cdp as cdp, browser_tool_session as session
-    from tools import browser_tool_lifecycle as lifecycle, browser_use_cli, browser_tool_cloud as cloud
-    from tools import browser_extension_router as router
+    from tools import browser_use_cli
+    # Support the installed revision during staging and rollback, and the current API after update.
+    try:
+        session = importlib.import_module("tools.browser_session")
+    except ModuleNotFoundError as exc:
+        if exc.name != "tools.browser_session":
+            raise
+        from tools import browser_tool as bt, browser_tool_cdp as cdp, browser_tool_session as session
+        from tools import browser_tool_lifecycle as lifecycle, browser_tool_cloud as cloud
+        from tools import browser_extension_router as router, browser_tool_eval_policy as browser_policy, browser_cdp_tool
+        modern = False
+    else:
+        from tools import browser_session_cdp as cdp, browser_session_cloud as cloud, browser_url_policy as browser_policy
+        modern = True
+    cdp_name = "get_cdp_override_raw" if modern else "_get_cdp_override_raw"
+    local_name = "is_local_backend" if modern else "_is_local_backend"
+    shared_name = "shares_bot_desktop_browser" if modern else "_shares_bot_desktop_browser"
+    dialog_name = "get_dialog_policy_config" if modern else "_get_dialog_policy_config"
     try:
         from hermes_cli import config
         import hermes_constants
-        from tools import terminal_scope, terminal_tool, url_safety, browser_tool_eval_policy
+        from tools import terminal_scope, terminal_tool, url_safety
+        from tools.browser_supervisor_dialogs import DialogSupervisionMixin
     except ImportError as exc:
         raise ComputerError("Shared computer native tool seams require qualification.") from exc
     required = ((registry, "dispatch"), (runtime, "start"), (runtime, "desktop_env"), (runtime, "stop_if_idle"),
                 (lease, "get"), (lease, "acquire"), (lease, "release"), (lease, "assert_agent_may_act"),
-                (cdp, "_get_cdp_override_raw"), (session, "_run_browser_command"),
-                (lifecycle, "_cleanup_single_browser_session"), (router, "routed_browser_handler"),
+                (cdp, cdp_name), (session, shared_name),
+                (DialogSupervisionMixin, "_dialog_timeout_expired"),
                 (config, "read_raw_config"), (hermes_constants, "get_hermes_home_override"),
                 (terminal_scope, "get_terminal_scope"), (terminal_scope, "terminal_env"),
                 (terminal_scope, "TerminalPolicyUnavailable"), (terminal_tool, "_ensure_terminal_env_bridged"),
                 (url_safety, "is_always_blocked_url"),
-                (browser_use_cli, "_route_backend"), (browser_use_cli, "_set_cdp_env"), (cloud, "_is_local_backend"))
+                (browser_use_cli, "_route_backend"), (browser_use_cli, "_set_cdp_env"),
+                (browser_use_cli, "_run_cli_killing_process_group"), (cloud, local_name))
+    if modern:
+        required += ((cdp, dialog_name), (browser_policy, "url_literals"))
+    else:
+        required += ((session, "_run_browser_command"), (lifecycle, "_cleanup_single_browser_session"),
+                     (router, "routed_browser_handler"))
+    literals = getattr(browser_policy, "url_literals", None) if modern else getattr(getattr(browser_policy, "_JS_URL_LITERAL_RE", None), "findall", None)
     if (any(not callable(getattr(module, name, None)) for module, name in required)
-            or not callable(getattr(getattr(browser_tool_eval_policy, "_JS_URL_LITERAL_RE", None), "findall", None))):
+            or not callable(literals)
+            or not isinstance(getattr(browser_use_cli, "_OWN_TAB_PREAMBLE", None), str)
+            or not isinstance(getattr(browser_use_cli, "_BOT_DESKTOP_BROWSER_SENTINEL", None), str)):
         raise ComputerError("Shared computer native tool seams require qualification.")
     computer = Computer(home, endpoint, runtime, lease)
     from types import SimpleNamespace
@@ -560,7 +585,7 @@ def install_tools():
     # Module-specific resource mapping. Conversational get_hermes_home remains unchanged.
     runtime.get_hermes_home = lambda: home
     placement.resolve = lambda: placement.Placement(placement.GATEWAY, "local", "Explicitly configured household computer")
-    runtime.stop_if_idle = lambda: False  # supervisor owns the shared computer's lifetime
+    runtime.stop_if_idle = lambda *a, **k: False  # supervisor owns the shared computer's lifetime
     for name in ("get", "acquire", "release", "human_holds", "viewer_may_send_input", "assert_agent_may_act"):
         original = getattr(lease, name)
         @functools.wraps(original)
@@ -570,18 +595,19 @@ def install_tools():
             kwargs.setdefault("profile_key", str(home))
             return _native(*args, **kwargs)
         setattr(lease, name, mapped)
-    cdp._get_cdp_override_raw = lambda: endpoint
+    setattr(cdp, cdp_name, lambda: endpoint)
     # Revision-qualified private seam: retain native navigation/site checks and
     # every other backend's classification. Only our registered browser can
     # acquire the active profile's explicit local-network authorization.
-    native_local_backend = cloud._is_local_backend
+    native_local_backend = getattr(cloud, local_name)
     @functools.wraps(native_local_backend)
     def local_backend():
-        if cdp._get_cdp_override_raw() != endpoint:
+        if getattr(cdp, cdp_name)() != endpoint:
             return native_local_backend()
         return computer.profile_local_browser()
-    cloud._is_local_backend = local_backend
-    bt._is_camofox_mode = lambda: False
+    setattr(cloud, local_name, local_backend)
+    if not modern:
+        bt._is_camofox_mode = lambda: False
     # Preserve Hermes's default browser_exec interface. Its named sessions get
     # distinct tabs in the SAME externally owned browser and cookie jar.
     # Native routing flags select a local sidecar or personal browser. This
@@ -607,6 +633,8 @@ def install_tools():
     computer._run_harness_cli = native_cli
     @functools.wraps(native_cli)
     def harness_cli(command, code, env, timeout):
+        if "--reload" in command:
+            return computer._run_harness_cli(command, code, env, timeout)
         routing_keys = ("HOME", "PYTHONPATH", "BU_NAME", "BH_HOME", "BH_CONFIG_DIR", "BH_RUNTIME_DIR", "BH_RUNTIME_DIR_SHARED", "BH_TMP_DIR", "BH_TMP_DIR_SHARED")
         record = {"python": command[0], "endpoint": endpoint, "targets": [],
                   "environment": {key: env[key] for key in routing_keys if key in env}}
@@ -630,21 +658,21 @@ def install_tools():
         return result
     browser_use_cli._run_cli_killing_process_group = harness_cli
     # An attached browser belongs to the supervisor, never a bot task's teardown.
-    native_command = session._run_browser_command
-    @functools.wraps(native_command)
-    def browser_command(task_id, command, *args, **kwargs):
-        if command == "close":
-            return {"success": True, "data": {}}
-        return native_command(task_id, command, *args, **kwargs)
-    session._run_browser_command = browser_command
-    native_shared_browser = session._shares_bot_desktop_browser
-    session._shares_bot_desktop_browser = lambda info: bool((info.get("features") or {}).get("cdp_override")) or native_shared_browser(info)
+    if not modern:
+        native_command = session._run_browser_command
+        @functools.wraps(native_command)
+        def browser_command(task_id, command, *args, **kwargs):
+            if command == "close":
+                return {"success": True, "data": {}}
+            return native_command(task_id, command, *args, **kwargs)
+        session._run_browser_command = browser_command
+    native_shared_browser = getattr(session, shared_name)
+    setattr(session, shared_name, lambda info: bool((info.get("features") or {}).get("cdp_override")) or native_shared_browser(info))
     # Native dialog watchdogs run outside the tool-dispatch thread. They must not
     # dismiss a human's prompt or overlap an admitted browser operation.
     import asyncio
-    from tools.browser_supervisor_dialogs import DialogSupervisionMixin
     native_watchdog = DialogSupervisionMixin._dialog_timeout_expired
-    cdp._get_dialog_policy_config = lambda: ("must_respond", 300.0)
+    setattr(cdp, dialog_name, lambda: ("must_respond", 300.0))
     async def guarded_watchdog(self, dialog_id):
         try:
             with computer.operation(timeout=0):
@@ -657,10 +685,10 @@ def install_tools():
                 1.0, lambda: asyncio.create_task(self._dialog_timeout_expired(dialog_id)))
     DialogSupervisionMixin._dialog_timeout_expired = guarded_watchdog
     # Force the fixed resource rather than an optional profile's browser-extension controller.
-    router.routed_browser_handler = lambda action, args, *, fallback, **kwargs: fallback()
-    bt.routed_browser_handler = router.routed_browser_handler
-    from tools import browser_cdp_tool
-    browser_cdp_tool.routed_browser_handler = router.routed_browser_handler
+    if not modern:
+        router.routed_browser_handler = lambda action, args, *, fallback, **kwargs: fallback()
+        bt.routed_browser_handler = router.routed_browser_handler
+        browser_cdp_tool.routed_browser_handler = router.routed_browser_handler
     native_dispatch = registry.dispatch
     @functools.wraps(native_dispatch)
     def dispatch(name, args, **kwargs):
@@ -689,8 +717,8 @@ def install_tools():
                         target = str(params.get("url") or "").strip()
                     elif args.get("method") == "Runtime.evaluate":
                         expression = params.get("expression", "")
-                literals = browser_tool_eval_policy._JS_URL_LITERAL_RE.findall(expression) if isinstance(expression, str) else []
-                urls = ([target] if target else []) + [literal.rstrip(".,;") for literal in literals]
+                found_literals = literals(expression) if isinstance(expression, str) else []
+                urls = ([target] if target else []) + [literal.rstrip(".,;") for literal in found_literals]
                 if any(url_safety.is_always_blocked_url(url) for url in urls):
                     return json.dumps({"success": False, "error": "Blocked: URL targets a cloud metadata endpoint"})
                 return native_dispatch(name, args, **kwargs)

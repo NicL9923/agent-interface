@@ -92,6 +92,53 @@ class UpdateLock:
         if self.acquired and self.path.exists() and self.path.read_text().splitlines()[0]==str(os.getpid()): self.path.unlink()
 '''
 
+class ChromiumTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.home = Path(self.temporary.name)
+        self.tools = self.home / "tools"
+        self.browser = self.tools / "chromium-1208/chrome-linux64/chrome"
+        self.browser.parent.mkdir(parents=True)
+        self.browser.write_text("#!/bin/sh\n")
+        self.browser.chmod(0o700)
+
+    def facts(self, package):
+        (self.tools / "facts.json").write_text(json.dumps({"packages": {"chromium": package}}))
+
+    def test_legacy_browser_env(self):
+        self.facts({"env": {"AGENT_BROWSER_EXECUTABLE_PATH": "{{store}}/chromium-1208/chrome-linux64/chrome"}})
+        self.assertEqual(worker.native_chromium(self.home), self.browser.resolve())
+
+    def test_new_browser_entry(self):
+        self.facts({"entry": "chromium-1208"})
+        self.assertEqual(worker.native_chromium(self.home), self.browser.resolve())
+
+    def test_browser_entry_requires_an_executable(self):
+        self.facts({"entry": "chromium-1208"})
+        self.browser.chmod(0o600)
+        with self.assertRaisesRegex(RuntimeError, "unavailable"):
+            worker.native_chromium(self.home)
+
+    def test_browser_entry_cannot_escape_store(self):
+        for entry in (None, "../outside", str(self.home), ".", ".."):
+            with self.subTest(entry=entry):
+                self.facts({"entry": entry})
+                with self.assertRaises(RuntimeError): worker.native_chromium(self.home)
+        self.facts({"entry": "linked"})
+        (self.tools / "linked").symlink_to(self.home, target_is_directory=True)
+        with self.assertRaises(RuntimeError): worker.native_chromium(self.home)
+
+    def test_browser_symlink_cannot_escape_entry(self):
+        outside = self.tools / "other/chrome"
+        outside.parent.mkdir()
+        self.browser.rename(outside)
+        self.browser.symlink_to(outside)
+        self.facts({"entry": "chromium-1208"})
+        with self.assertRaisesRegex(RuntimeError, "unavailable"):
+            worker.native_chromium(self.home)
+
+
 class RepairMergeTests(unittest.TestCase):
     def merge(self, base, ours, theirs):
         result = worker.merge_lines(*(text.splitlines(True) for text in (base, ours, theirs)))
