@@ -8,6 +8,7 @@ import { accountMarker, ApnsError, createApnsSender, type ApnsClearSender, type 
 import { FailureTracker, quietLog, safeError, type Log } from "./logging.js";
 import { LiveActivities, type LiveActivitySender } from "./live-activity.js";
 import { badgeFor, rosterOnce } from "./badge.js";
+import { digestCopy } from "../shared/event-copy.js";
 export type PushSender = (
   subscription: webpush.PushSubscription,
   payload: string,
@@ -224,7 +225,7 @@ export class BackgroundWorker {
         // Rebuild the frozen membership's display after revocation, preserving its
         // tag and each endpoint's delivery receipts without exposing removed titles.
         const original = JSON.parse(item.payload);
-        const display = original.url === '/?view=today' ? {...original,title:`${item.items.length} assistant update${item.items.length===1?'':'s'}`,body:item.items.slice(0,3).map(row=>JSON.parse(row.payload).title).join(' · ')} : original;
+        const display = original.url === '/?view=today' ? {...original,...digestCopy(item.items.map(row=>JSON.parse(row.payload)))} : original;
         // The person's app badge as of this delivery, including what it is about to tell them.
         const badge = badgeFor(await roster(), this.store, item.user_id, item.items.map(row => JSON.parse(row.payload)));
         const deliveryPayload = JSON.stringify(badge === undefined ? display : {...display, badge});

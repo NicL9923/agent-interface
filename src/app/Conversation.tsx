@@ -18,6 +18,7 @@ import { When } from "../components/When";
 import { receipt } from "../shared/discovery";
 import { MAX_ATTACHMENTS } from "../shared/uploads";
 import { isActivityMessage, messageOrigin, withMessageOrigins } from "../shared/message-origin";
+import { withoutBotTag } from "../shared/event-copy";
 import type { SavedConversation } from "./storage";
 import type { SentEcho } from "./sent-echo";
 import type { useConversation } from "./use-conversation";
@@ -552,7 +553,7 @@ function ToolCalls({ messages, advanced, disconnected, recipient }: { messages: 
     <div className="tool-calls-content">{group.items.map(message => <div key={message.id}>
       {isAgentExchange(message) ? <AgentExchange message={message} recipient={recipient} /> : message.toolCall
         ? advanced ? <ToolCallDetail call={message.toolCall} disconnected={disconnected} /> : <ActionReceipt call={message.toolCall} />
-        : <details className="message-detail"><summary>{messageOrigin(message)?.title || message.toolName || group.label}{message.createdAt && <> · <When value={message.createdAt} inline /></>}</summary><pre role="region" tabIndex={0} aria-label="Activity output">{message.text || "No result was exposed by Hermes."}</pre></details>}
+        : <details className="message-detail"><summary>{withoutBotTag(messageOrigin(message)?.title ?? "") || message.toolName || group.label}{message.createdAt && <> · <When value={message.createdAt} inline /></>}</summary><pre role="region" tabIndex={0} aria-label="Activity output">{message.text || "No result was exposed by Hermes."}</pre></details>}
       {message.files?.map(file => <FileLink key={file.id} file={file} />)}
     </div>)}</div>
   </details>);

@@ -29,12 +29,26 @@ enum EventCopy {
     return String(cut.prefix(max(lastSpace, Int(Double(limit) * 0.6))))
       .trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: ",;:.–-"))) + "…"
   }
+  /// A routine's name as people know it, without the "[bot:<id>] " owner tag Hermes keeps on it.
+  static func withoutBotTag(_ title: String) -> String {
+    title.replacingOccurrences(of: #"^\[bot:[^\]\s]+\]\s*"#, with: "", options: .regularExpression)
+  }
   static func headline(_ event: TodayEvent) -> String {
     // Avoid exposing commands or credentials in the overview, including custom approval titles.
     if event.kind == "approval" { return "Needs your approval to continue." }
     let body = excerpt(event.body)
     let generic = event.title.range(of: #"^(Hermes (completed|failed|interrupted)|Approval requested)$"#, options: .regularExpression) != nil
-    if !generic { return body.isEmpty ? excerpt(event.title) : excerpt(event.title, limit: 80) + ": " + body }
+    if !generic {
+      let title = excerpt(withoutBotTag(event.title), limit: 80)
+      // A routine's name alone reads as success, so a failed or stopped run says so.
+      if event.routineId != nil && event.kind == "failed" {
+        return body.isEmpty ? title + " couldn't finish. Open it to see what happened." : title + " couldn't finish: " + body
+      }
+      if event.routineId != nil && event.kind == "interrupted" {
+        return body.isEmpty ? title + " stopped before finishing." : title + " stopped: " + body
+      }
+      return body.isEmpty ? title : title + ": " + body
+    }
     switch event.kind {
     case "failed": return body.isEmpty ? "Couldn't finish. Open the chat to see what happened." : "Couldn't finish: " + body
     case "interrupted": return body.isEmpty ? "Stopped before finishing. Review it before retrying." : body

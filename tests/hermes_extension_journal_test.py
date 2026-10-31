@@ -822,6 +822,45 @@ class DiscoveryTests(unittest.TestCase):
                 discover("tick", {"full": True})
                 self.assertEqual(ledger.call_count, 5)
 
+    def test_routine_events_carry_what_each_run_said_read_once_per_run(self):
+        jobs = [{"id": "job", "name": "[bot:default] Daily AI news"}]
+        ledger = Mock(return_value=[{"id": "execution", "status": "completed", "claimed_at": "2026-10-31T07:00:00-05:00"}])
+        with FakeHermes([]) as hermes:
+            executions = types.ModuleType("cron.executions")
+            executions.list_executions, executions.EXECUTIONS_FILE = ledger, Path(hermes.directory.name) / "executions.db"
+            cron = types.ModuleType("cron")
+            cron.executions = executions
+            modules = {"hermes_cli.web_routers.cron": types.SimpleNamespace(_owner_home_scope=lambda _: contextlib.nullcontext(), _list_cron_jobs_sync=lambda _: jobs),
+                       "cron": cron, "cron.executions": executions}
+            body = Mock(return_value="Three model launches.")
+            with patch.dict(sys.modules, modules), patch.object(extension, "routine_run_body", body):
+                discover = hermes.methods["agent-interface.discover"]
+                events = discover("tick", {"cursor": "0", "full": True})["result"]["events"]
+                discover("tick", {"cursor": "0", "full": True})
+        self.assertEqual([(event["title"], event["body"], event["routineId"]) for event in events], [("[bot:default] Daily AI news", "Three model launches.", "job")])
+        body.assert_called_once_with("/home/default", "job", ledger.return_value[0])
+
+    def test_routine_run_body_quotes_the_runs_own_answer_or_error(self):
+        with tempfile.TemporaryDirectory() as home:
+            output = Path(home) / "cron" / "output" / "job"
+            output.mkdir(parents=True)
+            document = lambda answer: f"# Cron Job: Daily AI news\n\n**Job ID:** job\n\n## Prompt\n\nSummarize today's AI news.\n\n## Response\n\n{answer}\n"
+            (output / "2026-10-30_07-00-04.md").write_text(document("Yesterday's news."))
+            (output / "2026-10-31_07-00-09.md").write_text(document("**Three** model launches\nand a new benchmark."))
+            (output / "2026-10-31_09-00-02.md").write_text(document("A later run."))
+            run = {"status": "completed", "claimed_at": "2026-10-31T07:00:00.700-05:00", "finished_at": "2026-10-31T07:00:10-05:00"}
+            body = lambda execution, job="job": extension.routine_run_body(home, job, execution)
+            self.assertEqual(body(run), "**Three** model launches and a new benchmark.")
+            # A run whose document was pruned or never written must not borrow a later run's.
+            self.assertIsNone(body({**run, "claimed_at": "2026-10-31T08:00:00-05:00", "finished_at": "2026-10-31T08:00:05-05:00"}))
+            self.assertEqual(body({"status": "failed", "error": "Provider\n rate limit"}), "Provider rate limit")
+            self.assertIsNone(body({"status": "unknown"}))
+            self.assertIsNone(body(run, job="../job"))
+            self.assertIsNone(body({"status": "completed"}))
+            (output / "2026-10-31_07-00-09.md").unlink()
+            (output / "2026-10-31_07-00-09.md").symlink_to(output / "2026-10-30_07-00-04.md")
+            self.assertIsNone(body(run))
+
     def test_approval_events_name_their_native_request_for_notification_actions(self):
         with FakeHermes([]) as hermes:
             server = hermes.modules["tui_gateway.server"]

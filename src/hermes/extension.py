@@ -6,6 +6,7 @@ See docs/HermesCapabilityMatrix.md. Journal contains private runtime data, never
 """
 import argparse
 import contextvars
+import datetime
 import hashlib
 import json
 import logging
@@ -158,6 +159,10 @@ class Journal:
         # add-ons. A rollback may invalidate unnecessarily, but can never reuse stale rows.
         return getattr(self.db, "total_changes", None)
 
+    def has_event(self, event_key):
+        with self.lock:
+            return self.db.execute("SELECT 1 FROM events WHERE event_key=?", (event_key,)).fetchone() is not None
+
     def event(self, profile, sid, kind, title, run_id=None, body=None, event_key=None, routine_id=None):
         with self.lock, self.db:
             self.db.execute("INSERT OR IGNORE INTO events(profile,session_id,run_id,kind,title,body,occurred,epoch,event_key,routine_id) VALUES(?,?,?,?,?,?,?,?,?,?)", (profile, sid, run_id, kind, title, body, time.time(), self.epoch, event_key, routine_id))
@@ -259,6 +264,62 @@ def event_body(value):
         value = "" if value is None else str(value)
     text = " ".join(value.split())
     return text[:500] or None
+
+
+# A routine run saves its document after it is claimed and before Hermes records it finished.
+ROUTINE_OUTPUT_GRACE = datetime.timedelta(seconds=300)
+
+
+def routine_answer(document):
+    """The answer in a routine's saved output document, or None for a blank or silent run.
+
+    Documents of agent runs hold a header and the prompt before a "## Response" section.
+    Hermes's own reader validates its length frames and recognizes silent replies.
+    """
+    try:
+        from cron.scheduler_prompt import _archive_answer
+    except Exception:
+        _archive_answer = None
+    if _archive_answer is not None:
+        return _archive_answer(document)
+    if "## Response" not in document:
+        return None
+    return document.rpartition("## Response")[2].strip() or None
+
+
+def routine_run_body(home, job_id, execution):
+    """What a finished routine run said, for its notification: its error, or the answer it saved.
+
+    A preview is a courtesy. Anything missing or unreadable leaves the event without a body.
+    """
+    status = execution.get("status")
+    if status == "failed":
+        return event_body(execution.get("error"))
+    if status != "completed" or not re.fullmatch(r"[A-Za-z0-9_-]{1,200}", str(job_id)):
+        return None
+    try:
+        # Output documents are named for Hermes's wall clock, the same one the ledger stamps.
+        claimed = datetime.datetime.fromisoformat(execution["claimed_at"]).replace(tzinfo=None, microsecond=0)
+        finished = execution.get("finished_at")
+        latest = datetime.datetime.fromisoformat(finished).replace(tzinfo=None) + ROUTINE_OUTPUT_GRACE if finished else None
+        directory = Path(home).resolve() / "cron" / "output" / job_id
+        for path in sorted(directory.glob("*.md")):
+            try:
+                written = datetime.datetime.strptime(path.stem, "%Y-%m-%d_%H-%M-%S")
+            except ValueError:
+                continue
+            if written < claimed:
+                continue
+            if latest and written > latest:
+                return None
+            # The first document after the claim is this run's. Never follow a link out of the folder.
+            if path.is_symlink() or not path.is_file():
+                return None
+            with path.open(encoding="utf-8", errors="replace") as source:
+                return event_body(routine_answer(source.read(200000)))
+    except Exception:
+        logging.getLogger(__name__).debug("Could not read a routine run's output for its notification", exc_info=True)
+    return None
 
 
 class Keeper:
@@ -1127,7 +1188,12 @@ class Bridge:
                             execution_id = str(execution.get("execution_id") or execution.get("id") or execution.get("claimed_at"))
                             run_id = f"routine:{name}:{job_id}:{execution_id}"
                             kind = "completed" if status == "completed" else "failed" if status == "failed" else "interrupted"
-                            self.journal.event(name, str(execution.get("session_id") or ""), kind, job.get("name") or "Routine result", run_id, event_key=f"{run_id}:{status}", routine_id=job_id)
+                            event_key = f"{run_id}:{status}"
+                            # Each run is read once, when it is first seen, for its notification preview.
+                            if self.journal.has_event(event_key):
+                                continue
+                            body = routine_run_body(self.get_hermes_home(), job_id, execution)
+                            self.journal.event(name, str(execution.get("session_id") or ""), kind, job.get("name") or "Routine result", run_id, body=body, event_key=event_key, routine_id=job_id)
                         # Record only after the scan succeeds, so failed reads retry next tick.
                     self.routine_scans[name] = (signature, now)
             for key in list(self.routine_scans):
