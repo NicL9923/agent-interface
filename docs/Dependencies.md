@@ -22,7 +22,7 @@ Verified October 30, 2026. Direct dependencies use exact versions in
 | Tailwind CSS and Vite plugin | 4.3.3 | [Theme variables](https://tailwindcss.com/docs/theme), [registry](https://registry.npmjs.org/tailwindcss/4.3.3) |
 | clsx and tailwind-merge, shared control classes | 2.1.1 / 3.7.0 | [clsx](https://github.com/lukeed/clsx), [tailwind-merge](https://github.com/dcastil/tailwind-merge) |
 | highlight.js, reply code colors (lazy chunk, common grammars only), verified October 25, 2026 | 11.12.0 | [Official documentation](https://highlightjs.readthedocs.io/), [registry](https://registry.npmjs.org/highlight.js/11.12.0) |
-| SQLite | Bundled with Node | [Node SQLite API](https://nodejs.org/api/sqlite.html) and `SELECT sqlite_version()` |
+| SQLite | 3.53.4 in Node 24.22.2; 3.54.0 in Node 26.13.0 | [Node SQLite API](https://nodejs.org/api/sqlite.html) and `SELECT sqlite_version()` |
 
 Effect is confined to server code. Each Hermes socket owns its listeners and pending
 RPC cleanup through a scope. Worker jobs run in fibers; shutdown interrupts approval
@@ -42,7 +42,7 @@ The UI additions above were verified October 16, 2026. `components.json` configu
 shadcn's Base UI registry conventions; the customized components live in this
 repository. The shadcn CLI is development tooling rather than a runtime dependency.
 
-The previous app contract tests passed under Node 24.21.0 and Node 26.10.0. Integration and
+The app contract tests passed under Node 24.22.2 and Node 26.13.0. Integration and
 browser evidence records its actual runtime in the validation ledger (`docs/ledger/`). This does
 not claim that every accepted future patch release has been tested.
 
