@@ -62,7 +62,7 @@ the app and can only decline that one request.
 
 ## Run locally
 
-Use Node 24.21 or 26.10 and npm. `.node-version` selects the tested Node 24 LTS
+Use Node 24.22 or 26.13 and npm. `.node-version` selects the tested Node 24 LTS
 release. The lockfile pins application dependencies. See the
 [dependency record](docs/Dependencies.md) for versions and verification.
 

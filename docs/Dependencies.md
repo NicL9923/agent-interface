@@ -1,28 +1,28 @@
 # Dependencies and local runtime
 
-Verified September 29, 2026. Direct dependencies use exact versions in
+Verified October 30, 2026. Direct dependencies use exact versions in
 `package.json`; `package-lock.json` pins the transitive tree.
 
 | Component | Pin | Primary evidence |
 | --- | --- | --- |
-| Effect, server lifecycle, verified October 29, 2026 | 4.0.7 | [Registry](https://registry.npmjs.org/effect/4.0.7) |
-| React and React DOM | 19.3.0 | [React versions](https://react.dev/versions), [registry](https://registry.npmjs.org/react/19.3.0) |
+| Effect, server lifecycle | 4.1.1 | [Registry](https://registry.npmjs.org/effect/4.1.1) |
+| React and React DOM | 19.3.1 | [React versions](https://react.dev/versions), [registry](https://registry.npmjs.org/react/19.3.1) |
 | TypeScript, retained comparison and rollback compiler | 7.0.2 | [Microsoft release announcement](https://devblogs.microsoft.com/typescript/announcing-typescript-7-0/), [registry](https://registry.npmjs.org/typescript/7.0.2) |
-| Oxc tsrs, command-line type checking | 0.18.0-ts7.1.0-dev.20260929 | [Primary documentation](https://github.com/oxc-project/tsrs), [registry](https://registry.npmjs.org/tsrs/0.18.0-ts7.1.0-dev.20260929) |
-| Vite | 8.3.1 | [Vite 8 requirements](https://v8.vite.dev/guide/), [registry](https://registry.npmjs.org/vite/8.3.1) |
-| React Vite plugin | 6.1.1 | [Registry](https://registry.npmjs.org/@vitejs/plugin-react/6.1.1) |
-| Fastify | 5.12.5 | [Fastify v5 requirements](https://fastify.dev/docs/latest/Guides/Migration-Guide-V5/), [registry](https://registry.npmjs.org/fastify/5.12.5) |
-| Google auth library | 11.1.0 | [Registry and Node requirement](https://registry.npmjs.org/google-auth-library/11.1.0) |
+| Oxc tsrs, command-line type checking | 0.20.1-ts7.1.0-beta | [Primary documentation](https://github.com/oxc-project/tsrs), [registry](https://registry.npmjs.org/tsrs/0.20.1-ts7.1.0-beta) |
+| Vite | 8.3.5 | [Vite 8 requirements](https://v8.vite.dev/guide/), [registry](https://registry.npmjs.org/vite/8.3.5) |
+| React Vite plugin | 6.1.2 | [Registry](https://registry.npmjs.org/@vitejs/plugin-react/6.1.2) |
+| Fastify | 5.12.7 | [Fastify v5 requirements](https://fastify.dev/docs/latest/Guides/Migration-Guide-V5/), [registry](https://registry.npmjs.org/fastify/5.12.7) |
+| Google auth library | 11.3.2 | [Registry and Node requirement](https://registry.npmjs.org/google-auth-library/11.3.2) |
 | Web Push | 3.6.7 | [Registry](https://registry.npmjs.org/web-push/3.6.7) |
-| Vitest | 5.0.2 | [Registry and Node requirements](https://registry.npmjs.org/vitest/5.0.2) |
+| Vitest | 5.0.5 | [Registry and Node requirements](https://registry.npmjs.org/vitest/5.0.5) |
 | React Markdown | 10.1.0 | [Official documentation](https://github.com/remarkjs/react-markdown), [registry](https://registry.npmjs.org/react-markdown/10.1.0) |
 | remark-gfm | 4.0.1 | [Official documentation](https://github.com/remarkjs/remark-gfm), [registry](https://registry.npmjs.org/remark-gfm/4.0.1) |
-| jsdom, development DOM tests | 30.1.1 | [Official documentation](https://github.com/jsdom/jsdom), [registry](https://registry.npmjs.org/jsdom/30.1.1) |
+| jsdom, development DOM tests | 30.1.3 | [Official documentation](https://github.com/jsdom/jsdom), [registry](https://registry.npmjs.org/jsdom/30.1.3) |
 | Base UI, web context menus and popovers | 1.9.0 | [Official documentation](https://base-ui.com/react/overview/about), [registry](https://registry.npmjs.org/@base-ui/react/1.9.0) |
 | Tailwind CSS and Vite plugin | 4.3.3 | [Theme variables](https://tailwindcss.com/docs/theme), [registry](https://registry.npmjs.org/tailwindcss/4.3.3) |
 | clsx and tailwind-merge, shared control classes | 2.1.1 / 3.7.0 | [clsx](https://github.com/lukeed/clsx), [tailwind-merge](https://github.com/dcastil/tailwind-merge) |
 | highlight.js, reply code colors (lazy chunk, common grammars only), verified October 25, 2026 | 11.12.0 | [Official documentation](https://highlightjs.readthedocs.io/), [registry](https://registry.npmjs.org/highlight.js/11.12.0) |
-| SQLite | 3.53.4 in both tested Node binaries | [Node SQLite API](https://nodejs.org/api/sqlite.html) and `SELECT sqlite_version()` |
+| SQLite | Bundled with Node | [Node SQLite API](https://nodejs.org/api/sqlite.html) and `SELECT sqlite_version()` |
 
 Effect is confined to server code. Each Hermes socket owns its listeners and pending
 RPC cleanup through a scope. Worker jobs run in fibers; shutdown interrupts approval
@@ -30,12 +30,10 @@ reads and drains delivery before closing its dependencies. Public runtime method
 remain Promise-based. SQLite still owns notification retry state, and uncertain
 submissions are never replayed automatically.
 
-Effect 4.0.7 was selected on October 29, 2026. Version 4.1.0 had just shipped that
-day; this migration uses the previous stable patch without adding platform or test
-adapter packages.
+Effect 4.1.1 is the current stable release. The app does not add platform or test adapter packages.
 
-`.node-version` selects Node 24.21.0. The engine range also permits Node 26.10
-and later releases within major 26. Both tested versions satisfy the published
+`.node-version` selects Node 24.22.2. The engine range also permits Node 26.13
+and later releases within major 26. Both versions satisfy the published
 requirements of Vite, Fastify, Google auth, and Vitest. Odd Node majors are excluded.
 No third-party SQLite driver or native build is required. Node ships the database
 binding and engine. The SQLite engine version therefore follows the Node binary.
@@ -44,7 +42,7 @@ The UI additions above were verified October 16, 2026. `components.json` configu
 shadcn's Base UI registry conventions; the customized components live in this
 repository. The shadcn CLI is development tooling rather than a runtime dependency.
 
-The app contract tests passed under Node 24.21.0 and Node 26.10.0. Integration and
+The previous app contract tests passed under Node 24.21.0 and Node 26.10.0. Integration and
 browser evidence records its actual runtime in the validation ledger (`docs/ledger/`). This does
 not claim that every accepted future patch release has been tested.
 
