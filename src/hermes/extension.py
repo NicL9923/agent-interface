@@ -307,11 +307,13 @@ def routine_run_body(home, job_id, execution, executions=()):
     if status != "completed" or not re.fullmatch(r"[A-Za-z0-9_-]{1,200}", str(job_id)):
         return None
     try:
-        claimed_at = ledger_time(execution["claimed_at"])
+        # Claims are ordered by their real instants. A later claim whose wall clock went back, as
+        # when daylight saving ends, bounds the window before this claim, so no document matches.
+        instant = datetime.datetime.fromisoformat(execution["claimed_at"])
         # Document names keep whole seconds, so a claim counts from the start of its second.
-        claimed = claimed_at.replace(microsecond=0)
+        claimed = ledger_time(execution["claimed_at"]).replace(microsecond=0)
         bounds = [ledger_time(other["claimed_at"]).replace(microsecond=0) for other in executions
-                  if other is not execution and other.get("claimed_at") and ledger_time(other["claimed_at"]) > claimed_at]
+                  if other is not execution and other.get("claimed_at") and datetime.datetime.fromisoformat(other["claimed_at"]) > instant]
         if execution.get("finished_at"):
             bounds.append(ledger_time(execution["finished_at"]) + ROUTINE_OUTPUT_GRACE)
         latest = min(bounds, default=None)

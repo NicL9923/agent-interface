@@ -855,6 +855,10 @@ class DiscoveryTests(unittest.TestCase):
             pruned = {"status": "completed", "claimed_at": "2026-10-31T06:59:00-05:00", "finished_at": "2026-10-31T06:59:30-05:00"}
             self.assertIsNone(extension.routine_run_body(home, "job", pruned, [pruned, run]))
             self.assertIsNone(body({**run, "claimed_at": "2026-10-31T08:00:00-05:00", "finished_at": "2026-10-31T08:00:05-05:00"}))
+            # Nor across the hour daylight saving repeats, when the next claim's wall clock reads earlier.
+            (output / "2026-11-01_01-06-00.md").write_text(document("The next run's answer."))
+            before = {"status": "completed", "claimed_at": "2026-11-01T01:04:00-05:00", "finished_at": "2026-11-01T01:04:30-05:00"}
+            self.assertIsNone(extension.routine_run_body(home, "job", before, [before, {"claimed_at": "2026-11-01T01:02:00-06:00"}]))
             # Hermes's reader checks length frames over the whole document, so a long prompt still yields its answer.
             prompt = "context " * 40000
             (output / "2026-10-31_09-00-02.md").write_text(f"# Cron Job: Daily AI news\n\n## Prompt\n\n{prompt}\n\n## Response\n\nLong prompt, short answer.\n")
