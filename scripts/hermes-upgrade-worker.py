@@ -72,8 +72,24 @@ def native_chromium(home):
     """The live Hermes PM Chromium, for disposable browser probes. Qualification homes install
     only Python, so both release qualification and update checks borrow this executable."""
     tools = (Path(home) / "tools").resolve()
-    template = json.loads((tools / "facts.json").read_text())["packages"]["chromium"]["env"]["AGENT_BROWSER_EXECUTABLE_PATH"]
-    browser = Path(template.replace("{{store}}", str(tools))).resolve()
+    package = json.loads((tools / "facts.json").read_text())["packages"]["chromium"]
+    template = package.get("env", {}).get("AGENT_BROWSER_EXECUTABLE_PATH")
+    if template is not None:
+        browser = Path(template.replace("{{store}}", str(tools))).resolve()
+    else:
+        # New PM facts identify the installed entry without exporting browser env vars.
+        entry_name = package.get("entry")
+        if not isinstance(entry_name, str) or not entry_name or Path(entry_name).name != entry_name or entry_name in (".", ".."):
+            raise RuntimeError("The installed Hermes Chromium entry is invalid")
+        entry = (tools / entry_name).resolve()
+        if not entry.is_relative_to(tools) or not entry.is_dir():
+            raise RuntimeError("The installed Hermes Chromium entry escaped its tool store")
+        names = {"chrome", "chromium", "Google Chrome for Testing", "Chromium"}
+        browser = next((path.resolve() for path in sorted(entry.rglob("*"))
+            if path.name in names and path.resolve().is_relative_to(entry)
+            and path.is_file() and os.access(path, os.X_OK)), None)
+        if browser is None:
+            raise RuntimeError("The installed Hermes Chromium is unavailable for browser qualification")
     if "{{" in str(browser) or not browser.is_relative_to(tools) or not browser.is_file() or not os.access(browser, os.X_OK):
         raise RuntimeError("The installed Hermes Chromium is unavailable for browser qualification")
     return browser
