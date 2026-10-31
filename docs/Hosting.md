@@ -19,7 +19,13 @@ The shared desktop/browser and the administrators' VPS terminal are documented i
 [Shared computer](SharedComputer.md). Their supervisor is independent of chat
 sessions; its browser data stays in the private shared resource directory.
 
-The app has its own pinned Node 24.21.0 runtime, release directories, private
+The app's last recorded runtime pin is Node 24.21.0. Before the next production
+release, verify the app-specific host runtime and update it to Node 24.22.2 if
+needed. The release tool builds with that host binary, and 24.21.0 is outside
+the updated package engine range. Track this prerequisite in [issue #210](https://github.com/NicL9923/agent-interface/issues/210).
+This dependency update does not change the production host.
+
+The app has its own pinned runtime, release directories, private
 configuration and SQLite database under the host user's application directory.
 It listens on loopback behind Caddy. The host's global Node installation remains
 available to existing services. The app sends its own Content-Security-Policy,
