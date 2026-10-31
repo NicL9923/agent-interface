@@ -41,7 +41,9 @@ export function eventHeadline(event: Pick<RuntimeEvent, "kind" | "title" | "body
 
 /** Notification copy: a short title naming the assistant, and a specific body. */
 export function notificationCopy(event: Pick<RuntimeEvent, "kind" | "title" | "body" | "routineId">, botName?: string) {
-  return { title: botName || (generic.test(event.title) ? "Assistant" : excerpt(withoutBotTag(event.title), 60)), body: eventHeadline(event) };
+  // An approval's own title could quote its command, so it never stands in for the assistant's name.
+  const fallback = event.kind === "approval" || generic.test(event.title) ? "Assistant" : excerpt(withoutBotTag(event.title), 60);
+  return { title: botName || fallback, body: eventHeadline(event) };
 }
 
 /**

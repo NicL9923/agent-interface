@@ -268,6 +268,8 @@ def event_body(value):
 
 # A routine run saves its document after it is claimed and before Hermes records it finished.
 ROUTINE_OUTPUT_GRACE = datetime.timedelta(seconds=300)
+# Hermes validates a document's length frames, so it is read whole. Larger ones get no preview.
+ROUTINE_OUTPUT_LIMIT = 8 * 1024 * 1024
 
 
 def routine_answer(document):
@@ -287,10 +289,17 @@ def routine_answer(document):
     return document.rpartition("## Response")[2].strip() or None
 
 
-def routine_run_body(home, job_id, execution):
+def ledger_time(value):
+    """A ledger timestamp on Hermes's wall clock, which also names output documents."""
+    return datetime.datetime.fromisoformat(value).replace(tzinfo=None)
+
+
+def routine_run_body(home, job_id, execution, executions=()):
     """What a finished routine run said, for its notification: its error, or the answer it saved.
 
-    A preview is a courtesy. Anything missing or unreadable leaves the event without a body.
+    ``executions`` are the job's other ledger rows. A document written after another attempt
+    was claimed may be that attempt's, so it is never borrowed. A preview is a courtesy:
+    anything missing, ambiguous or unreadable leaves the event without a body.
     """
     status = execution.get("status")
     if status == "failed":
@@ -298,11 +307,18 @@ def routine_run_body(home, job_id, execution):
     if status != "completed" or not re.fullmatch(r"[A-Za-z0-9_-]{1,200}", str(job_id)):
         return None
     try:
-        # Output documents are named for Hermes's wall clock, the same one the ledger stamps.
-        claimed = datetime.datetime.fromisoformat(execution["claimed_at"]).replace(tzinfo=None, microsecond=0)
-        finished = execution.get("finished_at")
-        latest = datetime.datetime.fromisoformat(finished).replace(tzinfo=None) + ROUTINE_OUTPUT_GRACE if finished else None
+        claimed_at = ledger_time(execution["claimed_at"])
+        # Document names keep whole seconds, so a claim counts from the start of its second.
+        claimed = claimed_at.replace(microsecond=0)
+        bounds = [ledger_time(other["claimed_at"]).replace(microsecond=0) for other in executions
+                  if other is not execution and other.get("claimed_at") and ledger_time(other["claimed_at"]) > claimed_at]
+        if execution.get("finished_at"):
+            bounds.append(ledger_time(execution["finished_at"]) + ROUTINE_OUTPUT_GRACE)
+        latest = min(bounds, default=None)
+        # Never follow a link out of this profile's own output folder.
         directory = Path(home).resolve() / "cron" / "output" / job_id
+        if directory.resolve() != directory:
+            return None
         for path in sorted(directory.glob("*.md")):
             try:
                 written = datetime.datetime.strptime(path.stem, "%Y-%m-%d_%H-%M-%S")
@@ -310,13 +326,12 @@ def routine_run_body(home, job_id, execution):
                 continue
             if written < claimed:
                 continue
-            if latest and written > latest:
+            if latest and written >= latest:
                 return None
-            # The first document after the claim is this run's. Never follow a link out of the folder.
-            if path.is_symlink() or not path.is_file():
+            # The first document after the claim is this run's.
+            if path.is_symlink() or not path.is_file() or path.resolve().parent != directory or path.stat().st_size > ROUTINE_OUTPUT_LIMIT:
                 return None
-            with path.open(encoding="utf-8", errors="replace") as source:
-                return event_body(routine_answer(source.read(200000)))
+            return event_body(routine_answer(path.read_text(encoding="utf-8", errors="replace")))
     except Exception:
         logging.getLogger(__name__).debug("Could not read a routine run's output for its notification", exc_info=True)
     return None
@@ -1181,7 +1196,8 @@ class Bridge:
                         continue
                     for job in _list_cron_jobs_sync(name):
                         job_id = job.get("id") or job["job_id"]
-                        for execution in list_executions(job_id=job_id, limit=100):
+                        ledger_rows = list_executions(job_id=job_id, limit=100)
+                        for execution in ledger_rows:
                             status = execution.get("status")
                             if status not in ("completed", "failed", "unknown"):
                                 continue
@@ -1192,7 +1208,7 @@ class Bridge:
                             # Each run is read once, when it is first seen, for its notification preview.
                             if self.journal.has_event(event_key):
                                 continue
-                            body = routine_run_body(self.get_hermes_home(), job_id, execution)
+                            body = routine_run_body(self.get_hermes_home(), job_id, execution, ledger_rows)
                             self.journal.event(name, str(execution.get("session_id") or ""), kind, job.get("name") or "Routine result", run_id, body=body, event_key=event_key, routine_id=job_id)
                         # Record only after the scan succeeds, so failed reads retry next tick.
                     self.routine_scans[name] = (signature, now)

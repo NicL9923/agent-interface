@@ -33,7 +33,8 @@ it("names routines without their owner tag and says when a run did not finish", 
 });
 
 it("keeps custom approval titles out of notifications, as the chat does", () => {
-  expect(eventHeadline({ kind: "approval", title: "Run deploy --token SYNTHETIC_SECRET" })).toBe("Needs your approval to continue.");
+  expect(notificationCopy({ kind: "approval", title: "Run deploy --token SYNTHETIC_SECRET" }))
+    .toEqual({ title: "Assistant", body: "Needs your approval to continue." });
 });
 
 it("digests name one assistant once and several beside what each said", () => {

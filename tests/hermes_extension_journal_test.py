@@ -838,7 +838,7 @@ class DiscoveryTests(unittest.TestCase):
                 events = discover("tick", {"cursor": "0", "full": True})["result"]["events"]
                 discover("tick", {"cursor": "0", "full": True})
         self.assertEqual([(event["title"], event["body"], event["routineId"]) for event in events], [("[bot:default] Daily AI news", "Three model launches.", "job")])
-        body.assert_called_once_with("/home/default", "job", ledger.return_value[0])
+        body.assert_called_once_with("/home/default", "job", ledger.return_value[0], ledger.return_value)
 
     def test_routine_run_body_quotes_the_runs_own_answer_or_error(self):
         with tempfile.TemporaryDirectory() as home:
@@ -851,8 +851,14 @@ class DiscoveryTests(unittest.TestCase):
             run = {"status": "completed", "claimed_at": "2026-10-31T07:00:00.700-05:00", "finished_at": "2026-10-31T07:00:10-05:00"}
             body = lambda execution, job="job": extension.routine_run_body(home, job, execution)
             self.assertEqual(body(run), "**Three** model launches and a new benchmark.")
-            # A run whose document was pruned or never written must not borrow a later run's.
+            # A run whose document was pruned or never written must not borrow a later run's, even within the grace.
+            pruned = {"status": "completed", "claimed_at": "2026-10-31T06:59:00-05:00", "finished_at": "2026-10-31T06:59:30-05:00"}
+            self.assertIsNone(extension.routine_run_body(home, "job", pruned, [pruned, run]))
             self.assertIsNone(body({**run, "claimed_at": "2026-10-31T08:00:00-05:00", "finished_at": "2026-10-31T08:00:05-05:00"}))
+            # Hermes's reader checks length frames over the whole document, so a long prompt still yields its answer.
+            prompt = "context " * 40000
+            (output / "2026-10-31_09-00-02.md").write_text(f"# Cron Job: Daily AI news\n\n## Prompt\n\n{prompt}\n\n## Response\n\nLong prompt, short answer.\n")
+            self.assertEqual(body({"status": "completed", "claimed_at": "2026-10-31T09:00:00-05:00"}), "Long prompt, short answer.")
             self.assertEqual(body({"status": "failed", "error": "Provider\n rate limit"}), "Provider rate limit")
             self.assertIsNone(body({"status": "unknown"}))
             self.assertIsNone(body(run, job="../job"))
@@ -860,6 +866,12 @@ class DiscoveryTests(unittest.TestCase):
             (output / "2026-10-31_07-00-09.md").unlink()
             (output / "2026-10-31_07-00-09.md").symlink_to(output / "2026-10-30_07-00-04.md")
             self.assertIsNone(body(run))
+            # Nor may the job's folder link to another profile's output.
+            elsewhere = Path(home) / "private-profile"
+            elsewhere.mkdir()
+            (elsewhere / "2026-10-31_07-00-09.md").write_text(document("Private notes."))
+            (output.parent / "linked").symlink_to(elsewhere)
+            self.assertIsNone(body(run, job="linked"))
 
     def test_approval_events_name_their_native_request_for_notification_actions(self):
         with FakeHermes([]) as hermes:
