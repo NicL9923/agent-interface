@@ -660,4 +660,36 @@ class HistoryPointerTests(unittest.TestCase):
         self.assertNotIn("messageId", hits[0])
 
 
+class ModelNamesTests(unittest.TestCase):
+    def names(self, models, info):
+        calls = []
+        def get_model_info(provider, model, allow_network=None):
+            calls.append((provider, model, allow_network))
+            result = info(provider, model)
+            return None if result is None else types.SimpleNamespace(name=result)
+        module = types.SimpleNamespace(get_model_info=get_model_info)
+        with patch.dict(sys.modules, {'agent': types.SimpleNamespace(models_dev=module), 'agent.models_dev': module}):
+            return experience.model_names(dict(operation='model_names', profile='default', models=models)), calls
+
+    def test_reads_only_the_cache_and_asks_once_per_pair(self):
+        pairs = [dict(provider='anthropic', model='claude-opus-5-5')] * 2 + [dict(provider='openai', model='gpt-6.1-terra')]
+        result, calls = self.names(pairs, lambda provider, model: 'Claude Opus 5.5' if provider == 'anthropic' else None)
+        self.assertEqual(result['names'], [dict(provider='anthropic', model='claude-opus-5-5', name='Claude Opus 5.5')] * 2
+            + [dict(provider='openai', model='gpt-6.1-terra', name=None)])
+        self.assertEqual(calls, [('anthropic', 'claude-opus-5-5', False), ('openai', 'gpt-6.1-terra', False)])
+
+    def test_a_name_that_only_echoes_the_slug_or_fails_is_left_for_the_app_to_format(self):
+        def info(provider, model):
+            if model == 'broken': raise RuntimeError('cache unreadable')
+            return {'echo': 'echo', 'blank': '   '}.get(model)
+        result, _ = self.names([dict(provider='p', model=model) for model in ('echo', 'blank', 'broken')], info)
+        self.assertEqual([row['name'] for row in result['names']], [None, None, None])
+
+    def test_rejects_malformed_or_oversized_requests(self):
+        for models in ('x', [dict(provider='p')], [dict(provider='p', model='')], [dict(provider='p', model=3)],
+                       [dict(provider='p', model='m')] * (experience.MAX_MODEL_NAMES + 1)):
+            with self.subTest(models=str(models)[:40]), self.assertRaises(experience.ExperienceError):
+                experience.model_names(dict(models=models))
+
+
 if __name__ == '__main__': unittest.main()

@@ -59,6 +59,7 @@
   "src/server/inline-ui.ts",
   "src/server/integrations.ts",
   "src/server/live-activity.ts",
+  "src/server/model-names.ts",
   "src/server/notifications.ts",
   "src/server/push-routes.ts",
   "src/server/schemas.ts",

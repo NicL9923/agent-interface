@@ -27,8 +27,8 @@ Web assistant settings load model options from the connected Hermes profile.
 The selected provider starts expanded. Search the catalog, refresh it after
 changing connected providers, and star models to keep personal favorites. Shared assistants keep one shared model. Existing selections remain
 saved when a provider is unavailable, and Hermes model warnings still require
-confirmation. In Advanced presentation, the model button in the web and iOS composers switches
-the assistant's model from the same catalog without opening settings. Both pickers control reasoning effort and Normal/Fast/Ultrafast speed for the current
+confirmation. In Advanced presentation, the model chip under the assistant's name in the web and iOS chat headers, with the provider's mark and the model's display name, switches
+the assistant's model from the same catalog without opening settings. Simple presentation never shows the model. Display names come from Hermes's cached models.dev catalog through the add-on, and the server formats the identifier itself (`claude-opus-5-5` becomes Claude Opus 5.5) when the add-on is older or does not know the model. Both pickers control reasoning effort and Normal/Fast/Ultrafast speed for the current
 conversation. The native picker includes search, provider groups, refresh and model favorites. Hermes validates support for the selected model.
 
 An assistant is either shared with the household or personal. A personal assistant
@@ -211,7 +211,7 @@ unrecognized native errors keep the saved request ID for receipt checks.
 The app opens **Today** unless you choose an assistant start page or follow a notification. Today shows pending decisions, scheduled work, recent results and files
 across your assistants. **Mark caught up** shares your recap position between
 web and iOS. Voice messages are transcribed into a draft for review before you
-send. **Listen to reply** reads the latest reply with Hermes speech on web and iOS.
+send. The speaker button in any reply's action row reads that reply with Hermes speech on web and iOS, one reply at a time. Each message shows its time under its bubble beside its actions, and a reply made of several parts shows the time once, under the last. A name appears above a message only for another household member or a scheduled prompt. Copy is available on your own messages too.
 
 Hermes questions on web and iOS show each suggested answer as a card to tap, with
 **Write my own answer** last. A question that allows several answers shows checkboxes.

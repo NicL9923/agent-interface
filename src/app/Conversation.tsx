@@ -26,7 +26,8 @@ import { useStableCallback } from "./use-stable-callback";
 import { useTurnRetry } from "./use-turn-retry";
 import { AttentionCard } from "./AttentionCard";
 import { FindBar } from "./FindBar";
-import { QuoteSelection, ReplyActions, TranscriptTools } from "./ReplyActions";
+import { MessageMeta, QuoteSelection, TranscriptTools } from "./ReplyActions";
+import { useReplySpeech } from "./use-reply-speech";
 import { attentionAnchor, foldSummary, isHumanMessage, quoteBlock, turnDuration, workGroups } from "./transcript-logic";
 import "./transcript.css";
 const activeStates: ActivityState[] = ["thinking", "working", "waiting", "blocked"];
@@ -97,8 +98,9 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
     announce(left ? `Your message is in the message box, without ${left} of its files: a message can carry only ${MAX_ATTACHMENTS}.` : "Your message is in the message box.");
     requestAnimationFrame(() => document.getElementById("message")?.focus());
   });
-  const tools = useMemo<TranscriptTools>(() => ({ botId, sessionId: conversation?.sessionId, unavailable: connectionLost, quote, announce }),
-    [botId, conversation?.sessionId, connectionLost, quote, announce]);
+  const speech = useReplySpeech(botId, connectionLost);
+  const tools = useMemo<TranscriptTools>(() => ({ botId, sessionId: conversation?.sessionId, unavailable: connectionLost, quote, announce, speech }),
+    [botId, conversation?.sessionId, connectionLost, quote, announce, speech]);
   const frame = useRef<HTMLDivElement>(null);
   const retry = useTurnRetry({ botId, userId: boot.user.id, canonical, blocked: !!echo || connectionLost || !boot.capabilities.chat.supported,
     resendable: boot.capabilities.idempotency.supported, report: setError });
@@ -430,38 +432,44 @@ const TurnView = memo(function TurnView({ block, advanced, disconnected, name, b
   const foldAt = work.length ? block.replyAt : block.messages.find(message => message.role !== "user")?.id;
   // One keyed list, so the fold keeps its open state when finishing moves it above the reply.
   const rows = block.messages.flatMap((message, position) => {
-    // The conversation is with one assistant, so its replies need no name, and
-    // consecutive reply parts in a turn share the first part's timestamp.
-    const reply = message.role === "assistant" || messageOrigin(message)?.kind === "scheduled";
-    const continued = reply && block.messages[position - 1]?.role === "assistant" && message.id !== block.replyAt;
+    // The conversation is with one assistant, so its replies need no name. Consecutive reply parts
+    // in a turn read as one reply, with the time under the last part.
+    const reply = isReplyRow(message);
+    const joins = (earlier: Message | undefined, later: Message | undefined) => !!later && isReplyRow(later) && earlier?.role === "assistant" && later.id !== block.replyAt;
+    const continued = joins(block.messages[position - 1], message);
+    const endsRun = !joins(message, block.messages[position + 1]);
     const scheduled = messageOrigin(message)?.kind === "scheduled";
-    const label = scheduled ? "Scheduled" : message.role === "user" ? message.sender?.name || "User"
+    const own = message.role === "user" && !scheduled;
+    // A name goes above a message only where it tells the reader something: a scheduled prompt, or
+    // another member of the household. The person's own words and the assistant's replies need none.
+    const label = scheduled ? "Scheduled" : own ? message.sender && message.sender.id !== userId ? message.sender.name : ""
       : reply ? "" : message.toolName || message.role;
     // Accepted, it reads as any other message until Hermes's own copy takes its place.
     const delivery = outgoingId === message.id && outgoing !== "accepted" ? outgoing : undefined;
     const streaming = message.id.endsWith("-inflight");
+    const exchange = isAgentExchange(message);
+    let when = message.createdAt;
+    for (let at = position; !when && at > 0 && joins(block.messages[at - 1], block.messages[at]); at--) when = block.messages[at - 1].createdAt;
+    const files = message.files?.map(file => <FileLink file={file} key={file.id} />);
     const article = <article
-      className={`message message-${isAgentExchange(message) ? "agent" : message.role}${continued ? " message-continued" : ""}${delivery ? ` message-outgoing message-${delivery}` : ""}`}
+      className={`message message-${exchange ? "agent" : message.role}${continued ? " message-continued" : ""}${delivery ? ` message-outgoing message-${delivery}` : ""}`}
       key={message.id}
       data-message-id={message.id}
       aria-busy={delivery === "sending" || undefined}
     >
-      {!isAgentExchange(message) && !continued && (label || message.createdAt) && <div className="message-attribution">
-        {label}
-        {delivery ? <span className="message-delivery">{delivery === "sending" ? "Sending…" : "Not confirmed yet"}</span>
-          : message.createdAt && <When value={message.createdAt} />}
-      </div>}
-      {isAgentExchange(message) ? <AgentExchange message={message} recipient={name} /> : reply ? (
+      {!exchange && !continued && label && <div className="message-attribution">{label}</div>}
+      {/* Only a person's own message has a bubble, so its meta line can sit beneath it. */}
+      {exchange ? <AgentExchange message={message} recipient={name} /> : reply ? (
         streaming
           ? <StreamingMarkdown text={message.text} botId={botId} messageId={message.id} userId={userId} unavailable={disconnected} inlineUi={message.role === "assistant"} />
           : <MessageMarkdown text={message.text} botId={botId} messageId={message.id} userId={userId} unavailable={disconnected} inlineUi={message.role === "assistant"} />
       ) : message.role !== "tool" && (
-        <div className="message-text">{message.text}</div>
+        own ? <div className="message-bubble"><div className="message-text">{message.text}</div>{files}</div> : <div className="message-text">{message.text}</div>
       )}
-      {message.files?.map((file) => (
-        <FileLink file={file} key={file.id} />
-      ))}
-      {message.role === "assistant" && !streaming && !isAgentExchange(message) && !!message.text.trim() && <ReplyActions message={message} />}
+      {!own && files}
+      {!exchange && !streaming && (reply || own) && <MessageMeta message={message} own={own}
+        when={endsRun ? when : undefined} delivery={delivery}
+        actions={!!message.text.trim() && (message.role === "assistant" || own)} />}
     </article>;
     return message.id === foldAt && fold ? [fold, article] : [article];
   });
@@ -484,6 +492,7 @@ function TurnWork({ work, reasoning, messages, advanced, disconnected, recipient
     </div>
   </details>;
 }
+const isReplyRow = (message: Message) => message.role === "assistant" || messageOrigin(message)?.kind === "scheduled";
 function visibleMessage(message: Message) {
   return message.role !== "assistant" || isAgentExchange(message) || !!message.text.trim() || !!message.files?.length;
 }

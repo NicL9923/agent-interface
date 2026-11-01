@@ -321,6 +321,35 @@ describe('Hermes adapter trust and recovery boundary',()=>{
       {id:'lost',name:'Disconnected',aliases:[],authenticated:false,warning:'Reconnect this account',models:[{id:'saved',name:'saved',available:false}]},
     ]});
   });
+  describe('model display names',()=>{
+    const roster=()=>{beforeSend=(request,socket)=>{
+      if(request.method!=='profiles.list')return;
+      queueMicrotask(()=>socket.receive({jsonrpc:'2.0',id:request.id,result:{profiles:[
+        {name:'shared',model:'claude-opus-5-5',provider:'anthropic'},{name:'custom',model:'house-model-7',provider:'house'},{name:'bare',model:'gpt-6.1-terra'}]}}));
+    };};
+    it('fills each assistant\'s model name from the add-on in one batch, and formats what the cache lacks',async()=>{
+      const fetcher=vi.fn(async(_url:URL|string,init?:RequestInit)=>Response.json({names:(JSON.parse(init!.body as string).models as {provider:string;model:string}[])
+        .map(row=>({...row,name:row.provider==='anthropic'?'Claude Opus 5.5 (latest)':null}))}));
+      vi.stubGlobal('fetch',fetcher);roster();
+      const bots=await runtime.listBots();
+      expect(bots.map(row=>row.modelName)).toEqual(['Claude Opus 5.5 (latest)','house-model-7','GPT-6.1-Terra']);
+      expect(fetcher).toHaveBeenCalledOnce();
+      expect(JSON.parse(fetcher.mock.calls[0][1]!.body as string)).toEqual({operation:'model_names',profile:'default',models:[{provider:'anthropic',model:'claude-opus-5-5'},{provider:'house',model:'house-model-7'}]});
+      await runtime.listBots();
+      expect(fetcher).toHaveBeenCalledOnce();
+    });
+    it('formats the slug when the add-on is older, without failing the roster',async()=>{
+      vi.stubGlobal('fetch',vi.fn(async()=>Response.json({error:'Unknown experience operation.'},{status:400})));roster();
+      expect((await runtime.listBots()).map(row=>row.modelName)).toEqual(['Claude Opus 5.5','house-model-7','GPT-6.1-Terra']);
+    });
+    it('names catalog models with the add-on\'s names',async()=>{
+      vi.stubGlobal('fetch',vi.fn(async()=>Response.json({names:[{provider:'anthropic',model:'claude-opus-5-5',name:'Claude Opus 5.5 (latest)'},{provider:'anthropic',model:'claude-sonnet-5-5',name:null}]})));
+      beforeSend=(request,socket)=>{if(request.method==='model.options')queueMicrotask(()=>socket.receive({jsonrpc:'2.0',id:request.id,result:{provider:'anthropic',model:'claude-opus-5-5',
+        providers:[{slug:'anthropic',name:'Anthropic',authenticated:true,models:['claude-opus-5-5','claude-sonnet-5-5']}]}}));};
+      const result=await runtime.modelOptions!('shared');
+      expect(result.providers[0].models.map(model=>model.name)).toEqual(['Claude Opus 5.5 (latest)','Claude Sonnet 5.5']);
+    });
+  });
   it('exposes real streamed reasoning and keeps working while a tool is running', async () => {
     snapshot.info.running = true;
     await runtime.conversation('shared');

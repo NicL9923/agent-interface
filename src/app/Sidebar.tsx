@@ -102,7 +102,6 @@ export const Sidebar = memo(function Sidebar({ boot, botId, shownBotId, readThro
                   <span className="pinned-avatar" aria-hidden="true">
                     {/* Pinned assistants are few and featured, so they stay alive; the system Reduce Motion setting still applies. */}
                     <Avatar avatar={bot.avatar} state={botState === "done" || botState === "blocked" ? "idle" : botState} size={mobile ? 92 : 60} name={bot.name} botId={bot.id} offline={offline} />
-                    <span className="pin-badge" aria-hidden="true"><Icon name="pin" size={mobile ? 13 : 11} /></span>
                   </span>
                   <span className="pinned-copy">
                     <span className="pinned-name">{unread(bot) && <UnreadMark />}{bot.name}</span>

@@ -119,20 +119,6 @@
   position: relative;
   display: inline-flex;
 }
-.pin-badge {
-  position: absolute;
-  right: -3px;
-  bottom: -3px;
-  display: grid;
-  place-items: center;
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  background: var(--raised);
-  color: var(--accent);
-  box-shadow: 0 0 0 3px var(--rail);
-}
-.pin-badge .icon { stroke-width: 2.4; }
 .pinned-copy {
   display: grid;
   flex: 1;
@@ -583,7 +569,6 @@ button.settings-row:hover:enabled { background: color-mix(in srgb, var(--accent-
     transition: transform 240ms cubic-bezier(0.2, 0.8, 0.2, 1);
   }
   .home-status { box-shadow: 0 0 0 3px var(--surface); }
-  .pin-badge { width: 28px; height: 28px; box-shadow: 0 0 0 3px var(--surface); }
   .home-scroll { margin: 0 -18px; padding: 0 18px 24px; }
   .home-bar { padding-bottom: 20px; }
   .home-pinned { grid-template-columns: repeat(auto-fit, minmax(0, 6.5rem)); gap: 12px; padding: 8px 0 22px; }

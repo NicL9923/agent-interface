@@ -149,6 +149,8 @@ export interface Bot {
   description?: string;
   instructions?: string;
   model: string;
+  /** A readable name for the model, filled by the server. Clients show it as given. */
+  modelName?: string;
   provider?: string;
   enabledMcpServers?: string[];
   shared: boolean;

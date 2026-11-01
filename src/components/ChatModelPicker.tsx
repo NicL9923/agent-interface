@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { ApiError, request } from "../client-api";
 import type { Bootstrap, Bot, BotInput, InferenceSettings, ModelChoice } from "../shared/types";
 import { Icon } from "./Icon";
+import { ModelChipFace, modelChipTitle } from "./ModelChip";
 import { ModelSelector } from "./ModelSelector";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { Button } from "./ui/button";
@@ -17,8 +18,8 @@ const reasoningNames: Record<InferenceSettings["reasoning"], [string, string?]> 
 const reasoningOptions: SegmentOption<InferenceSettings["reasoning"]>[] = reasoningLevels.map(value => ({ value, label: reasoningNames[value][0], name: reasoningNames[value][1] }));
 const speedOptions: SegmentOption<InferenceSettings["speed"]>[] = serviceTiers.map(value => ({ value, label: value.charAt(0).toUpperCase() + value.slice(1) }));
 
-/** Advanced mode's quick model switch. Saves through the same assistant update as settings. */
-export function ComposerModelPicker({ bot, bootstrap, disabled, onSaved }: {
+/** Advanced mode's model chip in the chat header. Saves through the same assistant update as settings. */
+export function ChatModelPicker({ bot, bootstrap, disabled, onSaved }: {
   bot: Bot;
   bootstrap: Bootstrap;
   disabled: boolean;
@@ -103,16 +104,16 @@ export function ComposerModelPicker({ bot, bootstrap, disabled, onSaved }: {
       } else { setError((e as Error).message); setConfirm(null); }
     } finally { if (current.current === target) setBusy(false); }
   }
-  const label = bot.provider ? `${bot.provider} / ${bot.model}` : bot.model;
+  const title = modelChipTitle(bot);
   return <Popover open={open} onOpenChange={next => { if (!confirm) setOpen(next); }}>
-    <div className="composer-model">
-      <PopoverTrigger render={<Button ref={trigger} className="composer-tool"
-        aria-label={`Model: ${label}`} disabled={blocked}
-        title={unavailable ? bootstrap.capabilities.botConfiguration.reason || "Change this model in assistant settings." : label} />}>
-        <Icon name="robot" size={18} /><span className="tool-label composer-model-name">{bot.model}</span>
+    <div className="chat-model">
+      <PopoverTrigger render={<Button ref={trigger} className="model-chip"
+        aria-label={`Model: ${bot.modelName || bot.model}. Change the model, reasoning and speed.`} disabled={blocked}
+        title={unavailable ? bootstrap.capabilities.botConfiguration.reason || "Change this model in assistant settings." : title} />}>
+        <ModelChipFace bot={bot} />
       </PopoverTrigger>
-      <PopoverContent ref={popup} initialFocus={openType => openType === "touch" ? popup.current : popup.current?.querySelector("input[type=search]") || true} className="model-popover" aria-label="Choose a model" side="top" align="start" sideOffset={10}
-        positionerProps={{ collisionPadding: 12, anchor: () => trigger.current?.closest<HTMLElement>(".composer") || trigger.current }}>
+      <PopoverContent ref={popup} initialFocus={openType => openType === "touch" ? popup.current : popup.current?.querySelector("input[type=search]") || true} className="model-popover" aria-label="Choose a model" side="bottom" align="start" sideOffset={8}
+        positionerProps={{ collisionPadding: 12 }}>
         <header className="model-popover-header"><h2>Choose a model</h2>
           <Button className="icon-button" aria-label="Close model picker" onClick={() => setOpen(false)}><Icon name="close" size={20} /></Button>
         </header>

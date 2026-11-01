@@ -17,7 +17,7 @@ vi.mock("../src/components/Avatar", async original => ({
 // Find cannot load, as when its file was retired by a release; Groups is healthy.
 vi.mock("../src/components/DiscoveryPanel", () => ({ get DiscoveryPanel() { throw new TypeError("Failed to fetch dynamically imported module: /assets/DiscoveryPanel-OLD12345.js"); } }));
 vi.mock("../src/components/GroupChats", () => ({ GroupChats: () => createElement("p", { id: "groups-screen" }, "Group chats") }));
-vi.mock("../src/components/ComposerModelPicker", () => ({ get ComposerModelPicker() { throw new TypeError("Failed to fetch dynamically imported module: /assets/ComposerModelPicker-OLD12345.js"); } }));
+vi.mock("../src/components/ChatModelPicker", () => ({ get ChatModelPicker() { throw new TypeError("Failed to fetch dynamically imported module: /assets/ChatModelPicker-OLD12345.js"); } }));
 
 const bootstrap: Bootstrap = {
   user: { id: "one", name: "One", email: "one@example.test" },
@@ -44,14 +44,14 @@ beforeEach(() => {
 const loaded = () => act(async () => { await vi.dynamicImportSettled(); });
 
 describe("screens that fail to load", () => {
-  it("keeps the composer usable if the advanced model picker cannot load", async () => {
+  it("keeps the chat and composer usable if the advanced model picker cannot load", async () => {
     vi.mocked(api).mockImplementation(async <T>(path: string) => (path === "/bootstrap?roster=lean"
       ? { ...bootstrap, preferences: { ...bootstrap.preferences, presentation: "advanced" } } : null) as T);
     await act(async () => root.render(createElement(App)));
     await loaded();
     const unavailable = container.querySelector<HTMLButtonElement>('[aria-label="Model controls unavailable. Reload to try again."]');
     expect(unavailable?.disabled).toBe(true);
-    expect(unavailable?.closest(".composer-tools")).not.toBeNull();
+    expect(unavailable?.closest(".chat-model-slot")).not.toBeNull();
     const input = container.querySelector<HTMLTextAreaElement>(".composer textarea");
     expect(input).not.toBeNull();
     expect(input?.disabled).toBe(false);

@@ -9,6 +9,7 @@ import type { AutomationRequest, AutomationResult } from '../shared/automation.j
 import { formatBytes } from '../shared/uploads.js';
 import { IncompleteCreationError, interruptionPendingMessage } from '../shared/errors.js';
 import { httpError } from './http-error.js';
+import { createModelNames } from './model-names.js';
 import { createHermesTransport, TransportError, type Connection, type HermesOptions, type Wire } from './hermes-transport.js';
 import { fileSigner, safeStagedPath, type RegisteredFile } from './hermes-files.js';
 import { applyFrame, bot, emptyLiveState, exposedText, historyMessages, inflightMessage, openRequests, receipt, toolDetails, unbridged, type LiveState } from './hermes-mapping.js';
@@ -99,6 +100,16 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
   const {contract, connect, rpc, http} = transport;
   const {signFile, fileValue, artifacts} = fileSigner(options.token);
   const toBot = (row: Wire, detail?: Wire) => bot(row, transient.get(live.get(row.name) ?? '')?.state ?? 'idle', detail);
+  // Display names come from Hermes's models.dev cache through the add-on. An older add-on answers with an
+  // error, and the formatter in model-names.ts names the model instead.
+  const modelNames = createModelNames(() => async models => {
+    const response = await http('/api/agent-interface/experience', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({operation: 'model_names', profile: 'default', models})});
+    return decodeExperience('model_names', await readOperationJson(response, 'experience', 'model_names'), 'default', artifacts).names;
+  });
+  const named = async (bots: Bot[]) => {
+    await modelNames.load(bots);
+    return bots.map(row => ({...row, modelName: modelNames.name(row)}));
+  };
 
   function sessionFrame(frame: Wire, current: Connection): void {
     const params = frame.params ?? {};
@@ -393,6 +404,9 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
       // This native RPC already runs under authenticated profile scope.
       const result = await rpc('model.options', { ...(profile ? {profile} : {}), explicit_only: true });
       if (!Array.isArray(result.providers)) throw new Error('Hermes returned an unreadable model catalog.');
+      const slugs = (row: Wire): string[] => [...new Set<string>(row.models.filter((value: unknown): value is string => typeof value === 'string' && value.length > 0))];
+      await modelNames.load(result.providers.flatMap((row: Wire) => typeof row.slug === 'string' && row.slug && Array.isArray(row.models)
+        ? slugs(row).map(model => ({provider: row.slug, model})) : []));
       return {
         provider: typeof result.provider === 'string' ? result.provider : '',
         model: typeof result.model === 'string' ? result.model : '',
@@ -403,8 +417,7 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
             aliases: Array.isArray(row.aliases) ? row.aliases.filter((value: unknown) => typeof value === 'string') : [],
             authenticated: row.authenticated !== false,
             ...(typeof row.warning === 'string' ? { warning: row.warning } : {}),
-            models: [...new Set(row.models.filter((value: unknown): value is string => typeof value === 'string' && value.length > 0))]
-              .map(model => ({id: model as string, name: model as string, available: row.authenticated !== false && !unavailable.has(model)})),
+            models: slugs(row).map(model => ({id: model, name: modelNames.name({provider: row.slug, model}), available: row.authenticated !== false && !unavailable.has(model)})),
           }];
         }),
       };
@@ -451,7 +464,7 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
           const roster = await rpc('profiles.list', {include_sessions: true}, false);
           const names = new Set(roster.profiles.map((row: Wire) => row.name));
           for (const name of descriptions.keys()) if (!names.has(name)) descriptions.delete(name);
-          const bots = roster.profiles.map((row: Wire) => toBot(row));
+          const bots = await named(roster.profiles.map((row: Wire) => toBot(row)));
           if (rosterRequest === request) botCache = bots;
           return bots;
         } catch { return botCache.map(row => ({...row, activity: 'disconnected' as const})); }
@@ -467,7 +480,7 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
       const roster = await rpc('profiles.list', {include_sessions: true});
       const row = roster.profiles.find((row: Wire) => row.name === botId);
       if (!row) throw new Error('Unknown Hermes bot.');
-      return toBot(row, await describe(botId));
+      return (await named([toBot(row, await describe(botId))]))[0];
     },
     async saveBot(input: BotInput, id?: string) {
       await connect();
@@ -516,7 +529,7 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
         if (input.enabledTools) await this.setTools(name, input.enabledTools);
         const roster = await rpc('profiles.list', {include_sessions: true});
         edited(name);
-        return toBot(roster.profiles.find((x: Wire) => x.name === name), await describe(name, true));
+        return (await named([toBot(roster.profiles.find((x: Wire) => x.name === name), await describe(name, true))]))[0];
       } catch (error) {
         edited(name);
         if (created) {

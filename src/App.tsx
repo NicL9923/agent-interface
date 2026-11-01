@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { isConversationReply } from "./shared/message-origin";
 import type { ActivityState, Bot, Preferences } from "./shared/types";
 import { MAX_ATTACHMENTS } from "./shared/uploads";
 import { write } from "./client-api";
@@ -235,7 +234,7 @@ export function App() {
         onSelectBot={selectBot} onView={showView} onNewBot={newBot} onSettings={openPreferences} onPin={togglePin}
         onBotSettings={botSettings} onMoveToSection={moveToSection} onNewSection={newSection} />
       <main className="conversation-panel" inert={mobile && railOpen}>
-        <ChatHeader offline={offline} view={view} selected={selected} avatarState={avatarState} railOpen={railOpen}
+        <ChatHeader offline={offline} view={view} boot={boot} selected={selected} modelLocked={connectionLost || sending} onModelSaved={refreshSession} avatarState={avatarState} railOpen={railOpen}
           onOpenRail={() => setRailOpen(true)}
           onDetails={bot => open({ kind: "details", botId: bot.id })} />
         {/* On a computer the rail is always beside this, so its notice is enough. In a chat it joins the composer's dock. */}
@@ -258,14 +257,13 @@ export function App() {
             }}
             onCreate={() => setPanel({ kind: "settings", bot: "new" })} />
           {selected && <Composer key={`${boot.user.id}:${botId}`} boot={boot} selected={selected} botId={botId} prompts={prompts}
-            voiceReply={active ? undefined : ownConversation?.messages.findLast(isConversationReply)} state={state}
+            state={state}
             active={active} connectionLost={connectionLost} draft={draft} setDraft={setDraft}
             draftReady={draftReady} uploads={uploads} previews={previews} uploading={uploading} upload={uploadFiles}
             retryUpload={retryUploadFile} cancelUpload={cancelUploadFile} pending={pending} receipt={receipt}
             sending={sending} retry={retrySend} discard={discardSend}
             send={sendMessage} reviewed={reviewed} setReviewed={setReviewed}
-            stopping={stopping} onStop={stop} dock={dock}
-            refresh={refreshSession} />}
+            stopping={stopping} onStop={stop} dock={dock} />}
         </>}
       </main>
       {panel?.kind === "settings" && (
