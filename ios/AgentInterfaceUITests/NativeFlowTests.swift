@@ -189,20 +189,23 @@ import XCTest
     var app = app()
     let composer = app.textViews["messageComposer"]
     XCTAssertTrue(composer.waitForExistence(timeout: 10))
-    XCTAssertFalse(app.buttons["composerModel"].exists, "Simple mode keeps the model in settings")
+    XCTAssertFalse(app.buttons["chatModel"].exists, "Simple mode keeps the model in settings")
+    XCTAssertFalse(app.buttons["composerModel"].exists, "The composer no longer carries a model button")
     app.buttons["composerAttach"].tap()
     XCTAssertTrue(app.buttons["Photo Library"].waitForExistence(timeout: 5), app.debugDescription)
     XCTAssertTrue(app.buttons["Choose Files"].exists)
     app.terminate()
     app = self.app(liveActivity: true)
-    let model = app.buttons["composerModel"]
+    let model = app.buttons["chatModel"]
     XCTAssertTrue(model.waitForExistence(timeout: 10))
     XCTAssertTrue(model.isEnabled, "Lean roster bots have no instructions; capability enables the model picker")
-    XCTAssertLessThanOrEqual(model.frame.width, 50, "The composer shows only the model icon, as the web does at phone width")
+    XCTAssertLessThan(model.frame.maxY, app.textViews["messageComposer"].frame.minY, "The chip sits under the assistant's name, not in the composer")
+    XCTAssertGreaterThanOrEqual(model.frame.height, 44, "The chip's touch target reaches 44 points")
+    screenshot(app, "Advanced chat with the model chip")
     model.tap()
     let fast = app.buttons["Fixture fast model"]
     XCTAssertTrue(fast.waitForExistence(timeout: 5), app.debugDescription); fast.tap()
-    expectation(for: NSPredicate(format: "label == %@", "Model: fixture-fast"), evaluatedWith: app.buttons["composerModel"])
+    expectation(for: NSPredicate(format: "label == %@", "Model: fixture-fast"), evaluatedWith: app.buttons["chatModel"])
     waitForExpectations(timeout: 10)
   }
   func testCommandPeriodAsksBeforeStoppingActiveWork() {
@@ -220,7 +223,6 @@ import XCTest
     let app = app(liveActivity: true)
     XCTAssertTrue(app.staticTexts["Ranch hand is checking the latest forecast..."].waitForExistence(timeout: 10))
     XCTAssertEqual(app.buttons["sendMessage"].label, "Stop response")
-    XCTAssertFalse(app.buttons["Listen to reply"].exists, "Replies are offered aloud only while idle")
     // The live row beside the working avatar names the current tool and the latest reasoning line.
     XCTAssertTrue(app.staticTexts["liveReceipt"].waitForExistence(timeout: 5))
     XCTAssertEqual(app.staticTexts["liveReceipt"].label, "Action in progress · web_search")

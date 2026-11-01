@@ -47,7 +47,7 @@ async (page, {origin, outputDir}) => {
       await tab.getByRole('button',{name:/^Stop recording/}).click();await tab.getByRole('button',{name:'Retry transcription',exact:true}).waitFor();await shot('transcription-error-'+width);
       await tab.getByRole('button',{name:'Retry transcription',exact:true}).click();await tab.getByText('Added to your draft. Review it before sending.',{exact:true}).waitFor();
       if(!(await input.inputValue()).startsWith('Keep my existing draft.'))throw Error('Transcription replaced draft');await shot('transcribed-'+width);
-      await input.fill('');await tab.getByRole('button',{name:'Listen to reply',exact:true}).click();await tab.getByRole('button',{name:'Stop speaking',exact:true}).waitFor();await shot('speaking-'+width);
+      await input.fill('');await tab.getByRole('button',{name:'Listen to reply',exact:true}).last().click();await tab.getByRole('button',{name:'Stop speaking',exact:true}).waitFor();await shot('speaking-'+width);
       await tab.evaluate(()=>window.__composerAudio.at(-1).onended?.());await tab.getByRole('button',{name:'Play audio',exact:true}).waitFor();await shot('audio-ready-'+width);
       await tab.locator('input[type=file]').setInputFiles({name:'gate-notes.txt',mimeType:'text/plain',buffer:Buffer.from('Check the north gate before dinner.')});
       await tab.getByRole('button',{name:/^Retry/}).waitFor();await shot('upload-error-'+width);

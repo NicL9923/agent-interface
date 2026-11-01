@@ -2,7 +2,7 @@
 import { act, createElement } from "react";
 import type { Root } from "react-dom/client";
 import { beforeEach, expect, it, vi } from "vitest";
-import { ComposerModelPicker } from "../src/components/ComposerModelPicker";
+import { ChatModelPicker } from "../src/components/ChatModelPicker";
 import { ApiError, api, write } from "../src/client-api";
 import type { Bootstrap, Bot, ModelCatalog } from "../src/shared/types";
 import { click, mountRoot, typeInto } from "./ui-harness";
@@ -33,10 +33,10 @@ beforeEach(() => {
   vi.clearAllMocks(); vi.mocked(api).mockImplementation(async <T>(path: string) => (path.endsWith("/inference") ? { reasoning: "high", speed: "normal" } : path === "/bots/ranch" ? bot : catalog) as T);
   ({ container, root } = mountRoot());
 });
-const render = (value: Bot = bot, disabled = false) => act(async () => root.render(createElement(ComposerModelPicker, { bot: value, bootstrap, disabled, onSaved })));
+const render = (value: Bot = bot, disabled = false) => act(async () => root.render(createElement(ChatModelPicker, { bot: value, bootstrap, disabled, onSaved })));
 const settleFocus = () => act(async () => { await new Promise(resolve => setTimeout(resolve, 30)); });
 const openPicker = async () => { await act(async () => trigger().click()); await settleFocus(); };
-const trigger = () => container.querySelector<HTMLButtonElement>(".composer-model > button")!;
+const trigger = () => container.querySelector<HTMLButtonElement>(".chat-model > button")!;
 // The menu renders in a portal, outside the container.
 const press = (name: string) => click(name, document.body);
 

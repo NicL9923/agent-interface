@@ -278,7 +278,6 @@ import XCTest
     let finished = try decode(Self.conversation(state: "done", reply: "Checking the gate. Done.")) as Conversation
     let settled = await observedChanges(of: value) { value.conversation = finished }
     XCTAssertEqual(settled["activity"], 1)
-    XCTAssertEqual(value.latestReply?.text, "Checking the gate. Done.")
   }
 
   private static let streamedReplies = [

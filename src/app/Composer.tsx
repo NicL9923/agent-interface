@@ -6,8 +6,6 @@ import type { VoiceState } from "../shared/voice";
 import { Avatar } from "../components/Avatar";
 import { Icon } from "../components/Icon";
 import { VoiceControls } from "../components/VoiceControls";
-import { ComposerModelPicker, Loading } from "./panels";
-import { Button } from "../components/ui/button";
 import { request } from "../client-api";
 import { MAX_ATTACHMENTS, namePastedFile, pastedFiles, prepareUpload, UPLOAD_ACCEPT } from "../shared/uploads";
 import { AttachmentTray, DropOverlay } from "./AttachmentTray";
@@ -46,14 +44,6 @@ export function useOwnPrompts(messages: readonly Message[] | undefined, userId: 
   return kept.current;
 }
 
-function ModelPickerPlaceholder({ model, failed = false }: { model: string; failed?: boolean }) {
-  const description = failed ? "Model controls unavailable. Reload to try again." : "Loading model controls";
-  return <div className="composer-model" role={failed ? "status" : undefined}>
-    <Button className="composer-tool" disabled aria-label={description} title={description}>
-      <Icon name="robot" size={18} /><span className="tool-label composer-model-name">{model}</span>
-    </Button>
-  </div>;
-}
 // Fits on mount too, so a restored multi-line draft is sized when returning from another view.
 function useComposerInput(text: string, botId: string, voiceState: VoiceState) {
   const composerInput = useRef<HTMLTextAreaElement>(null);
@@ -145,14 +135,12 @@ function useFileDrop(footer: React.RefObject<HTMLElement | null>, onDrop: (files
   return { panel, over };
 }
 // Memoized with stable callbacks from App, so a streaming reply, which changes the conversation about four times a second, does not re-render it.
-export const Composer = memo(function Composer({ boot, selected, botId, prompts, voiceReply, state, active, connectionLost, draft, setDraft, draftReady, uploads, previews, uploading, upload, retryUpload, cancelUpload, pending, receipt, sending, send, retry, discard, reviewed, setReviewed, refresh, dock = [], stopping, onStop }: {
+export const Composer = memo(function Composer({ boot, selected, botId, prompts, state, active, connectionLost, draft, setDraft, draftReady, uploads, previews, uploading, upload, retryUpload, cancelUpload, pending, receipt, sending, send, retry, discard, reviewed, setReviewed, dock = [], stopping, onStop }: {
   boot: Bootstrap;
   selected: Bot;
   botId: string;
   /** This person's earlier messages in the chat, newest first, for Up and Down recall. */
   prompts: readonly string[];
-  /** The reply the voice controls read aloud: the latest one while no run is working. */
-  voiceReply?: Message;
   state: ActivityState;
   active: boolean;
   connectionLost: boolean;
@@ -174,7 +162,6 @@ export const Composer = memo(function Composer({ boot, selected, botId, prompts,
   discard(): void;
   reviewed: boolean;
   setReviewed(value: boolean): void;
-  refresh(): void;
   /** Notices from the rest of the app for the dock above the composer: connection, decisions, update. */
   dock?: DockItem[];
   stopping: boolean;
@@ -188,7 +175,6 @@ export const Composer = memo(function Composer({ boot, selected, botId, prompts,
   const handedOff = sendingDraft(draft, pending, sending);
   const shown = draft.botId === botId && !handedOff ? draft : { text: "", attachments: [] };
   const input = useComposerInput(shown.text, botId, voiceState);
-  const advanced = boot.preferences.presentation === "advanced";
   const fileInput = useRef<HTMLInputElement>(null);
   const slots = MAX_ATTACHMENTS - draft.attachments.length - uploads.length;
   const attachUnavailable = !boot.capabilities.uploads.supported
@@ -316,9 +302,6 @@ export const Composer = memo(function Composer({ boot, selected, botId, prompts,
               event.target.value = "";
             }}
           />
-          {advanced && <Loading loadingFallback={<ModelPickerPlaceholder model={selected.model} />}
-            errorFallback={<ModelPickerPlaceholder model={selected.model} failed />}><ComposerModelPicker bot={selected} bootstrap={boot}
-            disabled={connectionLost || sending} onSaved={refresh} /></Loading>}
         </div>
         <span className="composer-measure-box" aria-hidden="true"><span className="composer-measure" /></span>
         <label className="sr-only" htmlFor="message">
@@ -405,7 +388,6 @@ export const Composer = memo(function Composer({ boot, selected, botId, prompts,
         />
 
             <VoiceControls avatar={selected.avatar} name={selected.name} key={`${boot.user.id}:${botId}`} botId={botId}
-              reply={voiceReply} hasDraft={!!shown.text}
               disabled={!draftReady || draft.botId !== botId || pending !== null || sending || connectionLost}
               onStateChange={setVoiceState} onTranscript={(text) => setDraft(previous => ({ ...previous, dirty: true,
                 text: previous.text.trim() ? `${previous.text}\n${text}` : text }))} />

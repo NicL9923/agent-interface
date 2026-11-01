@@ -412,6 +412,37 @@ def run_outcome(row, attempts, ledger, job, newest, now=None):
         deliveryFailed=delivery_failed, error=error[:500] if error and status == "failed" else None)
 
 
+MAX_MODEL_NAMES = 4000
+
+
+def model_names(data):
+    """Display names for (provider, model) pairs, read only from Hermes's models.dev cache.
+
+    ``allow_network=False`` keeps this off the network and cheap enough for a roster read. A model the
+    cache does not know, or one it only echoes back as its own slug, gets ``name: None`` so the app
+    can format the slug itself. Nothing here is profile configuration, so no profile scope is needed.
+    """
+    models = data.get("models")
+    if not isinstance(models, list) or len(models) > MAX_MODEL_NAMES:
+        raise ExperienceError(f"Expected at most {MAX_MODEL_NAMES} models.")
+    pairs = []
+    for row in models:
+        if not isinstance(row, dict) or not all(isinstance(row.get(key), str) and 0 < len(row[key]) <= 300 for key in ("provider", "model")):
+            raise ExperienceError("Each model needs a provider and a model.")
+        pairs.append((row["provider"], row["model"]))
+    from agent.models_dev import get_model_info
+    found = {}
+    for provider, model in dict.fromkeys(pairs):
+        try:
+            info = get_model_info(provider, model, allow_network=False)
+            name = info.name.strip() if info is not None and isinstance(info.name, str) else ""
+        except Exception:
+            name = ""
+        found[(provider, model)] = name if name and name != model else None
+    names = [dict(provider=provider, model=model, name=found[(provider, model)]) for provider, model in pairs]
+    return dict(names=names)
+
+
 def routine_results(data):
     """Read only this profile's native run sessions and cron output documents.
 
@@ -894,6 +925,9 @@ def install(web, journal, projector):
                 result = await config_scoped_to_thread(profile, lambda: discovery(data, journal, projector))
             elif operation == "memory":
                 result = await config_scoped_to_thread(profile, lambda: profile_memory(profile, getattr(journal, "memory_refresh", None)))
+            elif operation == "model_names":
+                # Cache-only reads need no profile scope, and an earlier add-on answers "Unknown experience operation."
+                result = await asyncio.to_thread(model_names, data)
             elif operation == "preview":
                 result = await config_scoped_to_thread(profile, lambda: preview_schedule(profile, data.get("schedule")))
             elif operation in ("routine_results", "routine_output"):

@@ -189,7 +189,7 @@ struct ModelCatalogPage: View {
   }
 }
 
-struct ComposerModelSheet: View {
+struct ChatModelSheet: View {
   var botId: String
   @Environment(AppStore.self) private var store
   @Environment(\.dismiss) private var dismiss
@@ -229,7 +229,7 @@ struct ComposerModelSheet: View {
             disabled: busy || blocked, choose: { save($0) })
         }
         }.listRowBackground(Palette.raised(scheme))
-      }.accessibilityIdentifier("composerModelForm")
+      }.accessibilityIdentifier("chatModelForm")
         .listSectionSpacing(18).householdListBackground().navigationTitle("Choose a model").navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() }.disabled(busy) } }
         .task(id: store.scope) { await loadSettings() }

@@ -418,7 +418,6 @@ struct BotListView: View {
   @State private var sectionFor: Bot?
   /// Undo for the last pin or section move made from a row here.
   @State private var undo = UndoQueue()
-  @ScaledMetric(relativeTo: .caption2) private var pinBadge: CGFloat = 11
   private var pinnedMinimum: CGFloat { sizeClass == .compact ? pinColumn : pinColumn * 0.76 }
   private var lost: Bool { store.householdConnectionLost(offline: reachability.offline) }
   private var selectionVisible: Bool { sizeClass != .compact }
@@ -544,10 +543,7 @@ struct BotListView: View {
       VStack(spacing: 8) {
         AvatarView(avatar: bot.avatar ?? AvatarConfig(), state: activity == .done || activity == .blocked ? .idle : activity,
           size: sizeClass == .compact ? 92 : 60, name: bot.name, botId: bot.id)
-          .overlay(alignment: .bottomTrailing) {
-            Image(systemName: "pin.fill").font(.system(size: min(pinBadge, 13))).padding(5)
-              .background(Palette.raised(scheme), in: Circle()).foregroundStyle(Palette.accent)
-          }.accessibilityHidden(true)
+          .accessibilityHidden(true)
         HStack(alignment: .firstTextBaseline, spacing: 5) {
           if unread { UnreadDot() }
           let label = Text(bot.name).font(.subheadline.weight(unread ? .bold : .semibold)).foregroundStyle(.primary)

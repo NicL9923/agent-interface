@@ -14,7 +14,7 @@ async page => {
       const data = await response.json();
       await route.fulfill({ response, json: { ...data, preferences: { ...data.preferences, presentation: "advanced" } } });
     });
-    await context.route("**/ComposerModelPicker-*.js", async route => {
+    await context.route("**/ChatModelPicker-*.js", async route => {
       if (failed) await route.abort("failed");
       else { await ready; await route.continue(); }
     });
@@ -23,7 +23,7 @@ async page => {
       await tab.goto(`${origin.origin}/?bot=ranch`, { waitUntil: "domcontentloaded" });
       const label = failed ? "Model controls unavailable. Reload to try again." : "Loading model controls";
       await tab.getByRole("button", { name: label, exact: true }).waitFor();
-      const hitTests = await tab.evaluate(() => [".composer textarea", 'button[aria-label="Record voice"]'].map(selector => {
+      const hitTests = await tab.evaluate(() => [".composer textarea", 'button[aria-label="Record voice"]', ".chat-identity"].map(selector => {
         const element = document.querySelector(selector);
         if (!element) throw Error(`Missing ${selector}`);
         const rect = element.getBoundingClientRect();
@@ -36,7 +36,7 @@ async page => {
       results.push({ width, state: failed ? "failed" : "loading", hitTests, editable: true });
       if (!failed) {
         release();
-        await tab.getByRole("button", { name: "Model: openrouter / configured-model", exact: true }).waitFor();
+        await tab.getByRole("button", { name: /^Model: Claude Opus 5\.5\./ }).waitFor();
       }
     } finally {
       release();

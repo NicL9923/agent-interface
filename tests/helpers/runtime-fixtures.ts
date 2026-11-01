@@ -41,6 +41,7 @@ export function experienceRequester(handlers: ExperienceHandlers): ExperienceReq
       case 'memory': return configured(handlers.memory, input.operation)(input);
       case 'save_memory': return configured(handlers.save_memory, input.operation)(input);
       case 'delete_memory': return configured(handlers.delete_memory, input.operation)(input);
+      case 'model_names': return configured(handlers.model_names, input.operation)(input);
       case 'preview': return configured(handlers.preview, input.operation)(input);
       case 'run': return configured(handlers.run, input.operation)(input);
       case 'run_receipt': return configured(handlers.run_receipt, input.operation)(input);

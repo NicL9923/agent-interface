@@ -149,6 +149,8 @@ struct Bot: Codable, Identifiable, Equatable {
   var description: String?
   var instructions: String?
   var model: String
+  /// A readable name for the model that the server fills. Older servers omit it, so show `model` then.
+  var modelName: String? = nil
   var provider: String?
   var enabledMcpServers: [String]?
   var shared: Bool

@@ -53,6 +53,9 @@ struct ConversationView: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var fileSheetOpen = false
   @State private var profileOpen = false
+  @State private var modelOpen = false
+  /// Reads replies aloud, one at a time, from each reply's own row.
+  @State private var speech = SpeechController()
   @State private var profileAction: BotProfileAction?
   @State private var composerFocused = false
   @State private var visible = false
@@ -108,6 +111,7 @@ struct ConversationView: View {
   }
   var body: some View {
     VStack(spacing: 0) {
+      modelBar
       banners
       if findOpen { findBar }
       transcript
@@ -115,18 +119,35 @@ struct ConversationView: View {
     }.modifier(ReadingChat(botId: bot.id)).background(Palette.surface(scheme)).navigationTitle(bot.name)
     .navigationBarTitleDisplayMode(.inline)
     .bareToolbarItem(.principal) { header }
-    .onChange(of: bot.id) { _, _ in earlierFailed = false }
+    .onChange(of: bot.id) { _, _ in earlierFailed = false; speech.reset(); configureSpeech() }
+    .environment(speech)
+    .onAppear { configureSpeech() }
+    .onChange(of: store.scope) { _, _ in speech.reset(); configureSpeech() }
+    // Audio belongs to a reachable chat on screen, so it stops when the connection drops or the chat closes.
+    .onChange(of: store.connected) { _, connected in if !connected { speech.cancel() } }
+    .sheet(isPresented: $modelOpen) { ChatModelSheet(botId: bot.id).appStore(store) }
     .sheet(isPresented: $fileSheetOpen) { ConversationFilesView().appStore(store).coveringChat(store) }
     .sheet(isPresented: $profileOpen, onDismiss: profileClosed) { profileSheet }
     // On screen, even under a sheet, the conversation is polled and streamed; elsewhere it is not.
     .onAppear { if !visible { store.conversationShown(bot.id, true) }; visible = true }
-    .onDisappear { if visible { store.conversationShown(bot.id, false) }; visible = false }
+    .onDisappear { if visible { store.conversationShown(bot.id, false) }; visible = false; speech.reset() }
     .onChange(of: findQuery) { _, _ in findTarget = nil }
     .onChange(of: store.error) { _, error in
       if visible, let error { AccessibilityNotification.Announcement(error).post() }
     }
     .task(id: "\(findOpen):\(findQuery)") { await searchHistory() }
     .findShortcut(botId: bot.id, open: openFind)
+  }
+  private func configureSpeech() {
+    speech.api = store.api
+    speech.botId = bot.id
+  }
+  /// Advanced only: the model chip under the assistant's name. Simple never shows the model.
+  @ViewBuilder private var modelBar: some View {
+    if store.bootstrap?.preferences.presentation == "advanced" {
+      ModelChipButton(bot: bot, disabled: !store.supports(.botConfiguration) || !store.connected || store.sending) { modelOpen = true }
+        .frame(maxWidth: .infinity)
+    }
   }
   private var cardShown: Bool {
     !(store.offlineSavedAt != nil && store.householdConnected && !reachability.offline)
@@ -333,10 +354,11 @@ struct ConversationView: View {
     ScrollView {
       // Not lazy: like the web's page, every loaded turn has a real height, so the latest
       // message and a held place can be scrolled to exactly.
-      transcriptRows(proxy).scrollTargetLayout().padding(16).coordinateSpace(name: OpeningCardMetrics.contentSpace)
+      transcriptRows(proxy).scrollTargetLayout().padding(EdgeInsets(top: 16, leading: 16, bottom: 6, trailing: 16)).coordinateSpace(name: OpeningCardMetrics.contentSpace)
         .frame(maxWidth: 752, alignment: .leading).frame(maxWidth: .infinity)
         .environment(\.transcriptConnected, store.connected)
         .environment(\.transcriptRecipient, bot.name)
+        .environment(\.transcriptUserId, store.bootstrap?.user.id)
         .environment(\.sentAnchor, anchoredMessage)
         .environment(\.scrollTranscript, { id in
           openingCard = nil
@@ -691,30 +713,46 @@ struct ConversationView: View {
 struct MessageView: View {
   var message: Message
   var continued = false
+  /// False for a reply part that another part of the same reply follows, which has no time of its own.
+  var endsRun = true
+  /// The time shown under the message. Nil takes the message's own.
+  var when: String? = nil
   /// Set while the person's sent message is on its way: faint while sending, with its progress
   /// in place of the time.
   var delivery: SentEcho.Status? = nil
   @Environment(\.transcriptRecipient) private var recipient
+  @Environment(\.transcriptUserId) private var userId
   @Environment(\.colorScheme) private var scheme
   @Environment(\.foundMessage) private var foundMessage
   @Environment(\.sentAnchor) private var sentAnchor
+  private var bubble: Bool { message.role == "user" && !message.isAgentExchange }
+  private var scheduled: Bool { message.presentationOrigin?.kind == "scheduled" && !message.isInternalActivity }
+  /// The person's own words, which sit on the right with their time beneath.
+  private var own: Bool { message.role == "user" && !scheduled && !message.isInternalActivity }
   var body: some View {
-    VStack(alignment: .leading, spacing: 10) {
-      if !continued && !message.isAgentExchange && (!label.isEmpty || message.createdAt != nil) {
-        attribution
+    VStack(alignment: .leading, spacing: 4) {
+      VStack(alignment: .leading, spacing: 10) {
+        if !continued && !message.isAgentExchange && !label.isEmpty {
+          Text(label).font(.caption.weight(.semibold)).foregroundStyle(Palette.messageMetadata)
+        }
+        if message.isAgentExchange {
+          AgentExchangeView(message: message, recipient: recipient)
+        } else if !message.isToolActivity {
+          ReplyContentView(message: message)
+        }
+        ForEach(message.files ?? []) { FileAttachmentView(file: $0) }
+      }.padding(bubble ? 14 : 0).background(
+        bubble ? Palette.user(scheme) : Color.clear,
+        in: RoundedRectangle(cornerRadius: 14)
+      )
+        // The outline hugs the message itself, inside a person's indent.
+        .overlay { if foundMessage == message.id { RoundedRectangle(cornerRadius: 14).stroke(Palette.accent, lineWidth: 2) } }
+      if showsMeta {
+        MessageMetaRow(message: message, own: own, when: endsRun ? when ?? message.createdAt : nil, delivery: delivery,
+          actions: (message.role == "assistant" && !message.isInternalActivity || own) && !message.id.hasSuffix("-inflight")
+            && !message.text.isEmpty)
       }
-      if message.isAgentExchange {
-        AgentExchangeView(message: message, recipient: recipient)
-      } else if !message.isToolActivity {
-        ReplyContentView(message: message)
-      }
-      ForEach(message.files ?? []) { FileAttachmentView(file: $0) }
-    }.padding(message.role == "user" && !message.isAgentExchange ? 14 : 0).background(
-      message.role == "user" && !message.isAgentExchange ? Palette.user(scheme) : Color.clear,
-      in: RoundedRectangle(cornerRadius: 14)
-    )
-      // The outline hugs the message itself, inside a person's indent.
-      .overlay { if foundMessage == message.id { RoundedRectangle(cornerRadius: 14).stroke(Palette.accent, lineWidth: 2) } }
+    }
       .padding(.leading, message.role == "user" && !message.isInternalActivity ? 32 : 0)
       .modifier(SendingMessage(delivery: delivery))
       .background {
@@ -725,18 +763,22 @@ struct MessageView: View {
       .modifier(ReplyActions(message: message))
       .accessibilityElement(children: .contain)
   }
-  private var attribution: some View {
-    HStack(spacing: 12) {
-      if !label.isEmpty { Text(label).font(.caption.weight(.semibold)) }
-      if let delivery {
-        Text(delivery == .sending ? "Sending…" : "Not confirmed yet").font(.caption2)
-      } else if let date = message.createdAt { WhenText(value: date).font(.caption2) }
-    }.foregroundStyle(Palette.messageMetadata)
+  /// Replies and a person's own messages carry a time line. Streaming replies do not until they settle.
+  private var showsMeta: Bool {
+    !message.isAgentExchange && !message.isInternalActivity && !message.isToolActivity && message.role != "tool"
+      && !message.id.hasSuffix("-inflight") && (message.role == "assistant" || message.role == "user")
   }
+  /// A name goes above a message only where it tells the reader something: a scheduled prompt, or
+  /// another member of the household. The person's own words and the assistant's replies need none.
   private var label: String {
-    message.presentationOrigin?.kind == "scheduled" && !message.isInternalActivity ? "Scheduled" : message.sender?.name
-      ?? (message.isInternalActivity ? message.presentationOrigin?.title ?? message.activityGroup : message.role == "assistant"
-        ? "" : message.role == "tool" ? message.toolName ?? "Tool" : message.role.capitalized)
+    if scheduled { return "Scheduled" }
+    if message.isInternalActivity { return message.presentationOrigin?.title ?? message.activityGroup }
+    switch message.role {
+    case "assistant": return ""
+    case "user": return message.sender.flatMap { $0.id == userId ? nil : $0.name } ?? ""
+    case "tool": return message.toolName ?? "Tool"
+    default: return message.role.capitalized
+    }
   }
 }
 /// A sent message rises into the transcript at once, faint until Hermes accepts it, as on the web.

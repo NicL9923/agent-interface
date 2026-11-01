@@ -17,7 +17,7 @@
 
 - `PREVIEW_LONG_TOOL=1 node .agents/tools/preview-app.mjs` shows short, long and unstructured tool-output fixtures for scrolling checks; combine with `PREVIEW_PRESENTATION=advanced` for raw tool details.
 - `capture-ui-comparison.js` is a Playwright CLI run-code function that captures six desktop/phone states from the synthetic loopback preview. A wrapper can pass `{ outputDir, prefix }` as its second argument; defaults write to ignored `.private/ui-comparison`.
-- `check-model-picker-browser.js` is a Playwright CLI run-code function that delays or blocks the actual model-picker chunk and verifies that text and voice controls remain uncovered at desktop and phone widths.
+- `check-model-picker-browser.js` is a Playwright CLI run-code function that delays or blocks the actual model-picker chunk and verifies that the header's model chip stands in while its chunk loads or fails and that the chat header, text and voice controls remain uncovered at desktop and phone widths.
 
 - `node .agents/tools/publish-ios.mjs setup|prepare|status|archive VERSION BUILD|upload VERSION BUILD|distribute VERSION BUILD` registers Apple identifiers, checks App Store profiles, archives and verifies the exact signed IPA, uploads it once, and confirms internal TestFlight availability before producing update settings. Uses private Mac credentials in `~/.config/wildbots/apple/config.json`; see `ios/README.md`. `apple-api.mjs` supplies authenticated requests, bounded pagination, and distribution checks.
 

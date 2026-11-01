@@ -109,11 +109,15 @@ import XCTest
 
   func testListenToReplyPlaysServerAudioWithAnExplicitStop() {
     let app = launch()
-    XCTAssertTrue(app.buttons["Listen to reply"].waitForExistence(timeout: 10))
-    app.buttons["Listen to reply"].tap()
+    // Each reply carries its own speaker button, so the one nearest the composer is the latest reply's.
+    let listen = app.buttons.matching(identifier: "listenToReply")
+    XCTAssertTrue(listen.firstMatch.waitForExistence(timeout: 10))
+    capture(app, name: "Native reply action row")
+    listen.element(boundBy: listen.count - 1).tapWhenReady()
     XCTAssertTrue(app.buttons["Stop speaking"].waitForExistence(timeout: 3))
-    app.buttons["Stop speaking"].tap()
-    XCTAssertTrue(app.buttons["Listen to reply"].waitForExistence(timeout: 3))
+    capture(app, name: "Native reply speaking")
+    app.buttons["Stop speaking"].tapWhenReady()
+    XCTAssertTrue(app.buttons["Listen to reply"].firstMatch.waitForExistence(timeout: 3))
   }
   func testRoutineResultsAndGroupCreationMessaging() {
     var app = launch()

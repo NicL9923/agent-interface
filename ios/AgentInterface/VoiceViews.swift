@@ -3,7 +3,7 @@ import Speech
 import SwiftUI
 
 enum VoiceState: Equatable {
-  case idle, requesting, recording, transcribing, preparing, speaking
+  case idle, requesting, recording, transcribing
   /// The web's status line for each state.
   var label: String {
     switch self {
@@ -11,18 +11,15 @@ enum VoiceState: Equatable {
     case .requesting: return "Waiting for microphone permission…"
     case .recording: return "Recording"
     case .transcribing: return "Transcribing…"
-    case .preparing: return "Preparing spoken reply…"
-    case .speaking: return "Speaking"
     }
   }
 }
 
 /// The web's VoiceControls: a recording is transcribed as soon as it stops and its text joins the
-/// draft, and a reply is read aloud with the app server's configured voice.
-@MainActor @Observable final class VoiceController: NSObject, AVAudioPlayerDelegate, AVAudioRecorderDelegate {
+/// draft. Replies are read aloud by `SpeechController`, from each reply's own action row.
+@MainActor @Observable final class VoiceController: NSObject, AVAudioRecorderDelegate {
   static let maxRecordingSeconds = 120
   static let maxVoiceBytes = 8 * 1024 * 1024
-  static let maxSpokenText = 12_000
   #if DEBUG
     /// UI tests record a fixed clip instead of using the microphone.
     static var fixtureRecording = false
@@ -54,8 +51,6 @@ enum VoiceState: Equatable {
     recording = audio.flatMap { $0.count <= Self.maxVoiceBytes ? $0 : nil }
     if recording != nil { notice = "Recording kept. Transcribe it when you're ready, or discard it." }
   }
-  private(set) var playable = false
-  private(set) var spokenReplyId: String?
   private(set) var elapsed = 0
   @ObservationIgnored var api: APIClient?
   @ObservationIgnored var botId = ""
@@ -64,7 +59,6 @@ enum VoiceState: Equatable {
   @ObservationIgnored var localTranscriber: LocalTranscriber? = .system
   @ObservationIgnored private var recorder: AVAudioRecorder?
   @ObservationIgnored private var file: URL?
-  @ObservationIgnored private var player: AVAudioPlayer?
   @ObservationIgnored private var timer: Task<Void, Never>?
   @ObservationIgnored private var request: Task<Void, Never>?
   /// Bumped by every new action, so a late result from an earlier one is ignored.
@@ -108,8 +102,6 @@ enum VoiceState: Equatable {
     request?.cancel()
     request = nil
     releaseRecorder()
-    releaseAudio()
-    playable = false
     state = .idle
   }
   /// Clears everything, for another assistant or account.
@@ -129,8 +121,6 @@ enum VoiceState: Equatable {
     generation += 1
     let run = generation
     discarded = false
-    releaseAudio()
-    playable = false
     error = ""
     notice = ""
     elapsed = 0
@@ -279,92 +269,6 @@ enum VoiceState: Equatable {
     }
   }
 
-  /// Reads a reply aloud with the server's voice. Replies over 12,000 characters are refused, as
-  /// on the web and the server, instead of being cut short.
-  func speak(_ reply: Message) {
-    guard state == .idle, let api else { return }
-    guard reply.text.utf16.count <= Self.maxSpokenText else {
-      error = "This reply is too long to read aloud. Ask for a shorter summary."
-      return
-    }
-    generation += 1
-    let run = generation
-    let botId = botId
-    releaseAudio()
-    playable = false
-    error = ""
-    notice = ""
-    state = .preparing
-    request = Task {
-      defer { if generation == run { request = nil } }
-      do {
-        let playback: VoicePlayback = try await api.write(
-          "/bots/\(APIClient.component(botId))/voice/speak", ["messageId": reply.id])
-        guard generation == run else { return }
-        guard playback.url.range(of: #"^/api/voice/audio/[0-9a-f-]{36}$"#, options: .regularExpression) != nil else {
-          throw APIError(message: "The app returned an invalid audio link.", status: 0)
-        }
-        let data: Data
-        do { data = try await api.data(path: playback.url) } catch let failure as APIError where failure.code != "CONNECTION_UNAVAILABLE" {
-          throw APIError(message: "This audio reply expired. Select Listen to reply to prepare it again.", status: failure.status)
-        }
-        guard generation == run else { return }
-        guard !data.isEmpty, data.count <= Self.maxVoiceBytes else {
-          throw APIError(message: "The spoken reply could not be loaded.", status: 0)
-        }
-        guard let player = try? AVAudioPlayer(data: data, fileTypeHint: Self.fileType(playback.mime)) else {
-          state = .idle
-          error = "This device could not play the spoken reply."
-          return
-        }
-        player.delegate = self
-        self.player = player
-        spokenReplyId = reply.id
-        playable = true
-        play()
-      } catch {
-        if generation == run, !(error is CancellationError) {
-          state = .idle
-          self.error = Self.message(error)
-        }
-      }
-    }
-  }
-  /// Plays the prepared reply again, or for the first time.
-  func play() {
-    guard let player else { return }
-    error = ""
-    state = .preparing
-    let session = AVAudioSession.sharedInstance()
-    try? session.setCategory(.playback, mode: .spokenAudio)
-    try? session.setActive(true)
-    sessionActive = true
-    player.currentTime = 0
-    if player.play() {
-      state = .speaking
-    } else {
-      state = .idle
-      error = "Audio could not start. Select Play audio to try again."
-    }
-  }
-  nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
-    let finished = Sent(player)
-    Task { @MainActor in
-      guard self.player === finished.value, self.state == .speaking else { return }
-      self.state = .idle
-      self.deactivateSession()
-    }
-  }
-  nonisolated func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
-    let failed = Sent(player)
-    Task { @MainActor in
-      guard self.player === failed.value else { return }
-      self.releaseAudio()
-      self.playable = false
-      self.state = .idle
-      self.error = "This device could not play the spoken reply."
-    }
-  }
   private func releaseRecorder() {
     timer?.cancel()
     timer = nil
@@ -377,12 +281,6 @@ enum VoiceState: Equatable {
     file = nil
     deactivateSession()
   }
-  private func releaseAudio() {
-    player?.delegate = nil
-    player?.stop()
-    player = nil
-    deactivateSession()
-  }
   private func deactivateSession() {
     guard sessionActive else { return }
     sessionActive = false
@@ -391,23 +289,15 @@ enum VoiceState: Equatable {
   private static func message(_ error: Error) -> String {
     (error as? LocalizedError)?.errorDescription ?? "Voice could not be completed. Your draft is kept."
   }
-  private static func fileType(_ mime: String) -> String? {
-    switch mime {
-    case "audio/mpeg", "audio/mp3": return AVFileType.mp3.rawValue
-    case "audio/wav", "audio/wave", "audio/x-wav": return AVFileType.wav.rawValue
-    case "audio/mp4", "audio/m4a", "audio/x-m4a": return AVFileType.m4a.rawValue
-    case "audio/aac": return "public.aac-audio"
-    default: return nil
-    }
-  }
 }
 
-/// The record and listen buttons in the composer's tool row.
+/// The record button in the composer's tool row.
 struct VoiceButtons: View {
   var voice: VoiceController
   var bot: Bot
-  var reply: Message?
   var disabled: Bool
+  /// Stops any reply being read aloud before the microphone opens, so it never reaches the recording.
+  var beforeRecording: () -> Void = {}
   var body: some View {
     if voice.state == .recording {
       Button { voice.stopRecording() } label: {
@@ -416,17 +306,11 @@ struct VoiceButtons: View {
         .font(.footnote.weight(.semibold)).foregroundStyle(Palette.danger).frame(minWidth: 44, minHeight: 44)
         .dynamicTypeSize(...DynamicTypeSize.accessibility2)
     } else {
-      Button { Task { await voice.startRecording() } } label: {
+      Button { beforeRecording(); Task { await voice.startRecording() } } label: {
         Image(systemName: "mic").font(.system(size: 20)).frame(width: 44, height: 44)
       }.accessibilityLabel("Record voice")
         .accessibilityHint("Record up to two minutes. Review the transcript before sending.")
         .disabled(disabled || voice.state != .idle || voice.recording != nil)
-    }
-    if let reply {
-      let replay = voice.playable && voice.spokenReplyId == reply.id
-      Button { if replay { voice.play() } else { voice.speak(reply) } } label: {
-        Image(systemName: "speaker.wave.2").font(.system(size: 20)).frame(width: 44, height: 44)
-      }.accessibilityLabel(replay ? "Play audio" : "Listen to reply").disabled(disabled || voice.state != .idle)
     }
   }
 }
@@ -454,7 +338,7 @@ struct VoicePanel: View {
   @ViewBuilder private func actions(busy: Bool) -> some View {
     HStack(spacing: 14) {
       if busy {
-        Button(voice.state == .speaking ? "Stop speaking" : "Cancel voice") { voice.cancel() }
+        Button("Cancel voice") { voice.cancel() }
       }
       if let recording = voice.recording, !busy {
         Button(voice.error.isEmpty ? "Transcribe recording" : "Retry transcription") { voice.transcribe(recording) }.disabled(disabled)

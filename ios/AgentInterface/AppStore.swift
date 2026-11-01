@@ -50,7 +50,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     didSet {
       appliedConversationTag = nil
       if conversation != oldValue {
-        cachedArtifacts = nil; updateEcho(conversationChanged: true); updateActivity(); updateLatestReply(); updateRetryChecks()
+        cachedArtifacts = nil; updateEcho(conversationChanged: true); updateActivity(); updateRetryChecks()
       }
     }
   }
@@ -260,16 +260,6 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     if next != activity { activity = next }
   }
   var active: Bool { activity.active }
-  /// The newest reply in the conversation, the one the web's Listen to reply reads. Stored for the
-  /// same reason as `activity`; while a reply streams the composer does not read it.
-  private(set) var latestReply: Message?
-  private func updateLatestReply() {
-    let next = conversation?.messages.last {
-      $0.role == "assistant" && !$0.isInternalActivity
-        && (!$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !($0.files ?? []).isEmpty)
-    }.flatMap { $0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
-    if next != latestReply { latestReply = next }
-  }
   /// Chats read on this device since the roster last said otherwise; see `UnreadChats`.
   private(set) var readHere = UnreadChats()
   /// Whether home shows this assistant's chat as unread. The chat on screen never is.

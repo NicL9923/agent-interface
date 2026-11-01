@@ -71,6 +71,7 @@ function experienceSchemas(profile: string, artifacts: Artifacts): { [O in Exper
         ...(deliveryFailed ? { deliveryFailed } : {}), ...(error ? { error } : {}) }))),
     routine_output: z.object({ messages: z.array(message), previewOnly: flag }),
     memory, save_memory: memory, delete_memory: memory,
+    model_names: z.object({ names: z.array(z.object({ provider: text, model: text, name: text.nullable() })) }),
     preview: z.object({ botId: text, schedule: text, timezone: text, nextRuns: z.array(text), kind: z.enum(['once', 'interval', 'cron']) }),
     run: receipt, run_receipt: receipt,
   };

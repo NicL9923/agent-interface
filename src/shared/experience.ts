@@ -67,6 +67,7 @@ type ExperienceRequestUnion =
   | { operation: 'memory'; profile: string }
   | { operation: 'save_memory'; profile: string; target: 'memory' | 'user'; revision: string; entries: { id?: string; text: string }[] }
   | { operation: 'delete_memory'; profile: string; target: 'memory' | 'user'; revision: string; entryId: string }
+  | { operation: 'model_names'; profile: string; models: { provider: string; model: string }[] }
   | { operation: 'preview'; profile: string; schedule: string }
   | { operation: 'run'; profile: string; routineId: string; requestId: string; senderId: string }
   | { operation: 'run_receipt'; profile: string; routineId: string; requestId: string; senderId: string };
@@ -81,6 +82,8 @@ export interface ExperienceResults {
   save_memory: ProfileMemory;
   delete_memory: ProfileMemory;
   preview: RoutinePreview;
+  /** Hermes's cache-only display names, null where it has none. */
+  model_names: { names: { provider: string; model: string; name: string | null }[] };
   run: RoutineRunReceipt;
   run_receipt: RoutineRunReceipt;
 }
