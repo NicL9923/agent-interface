@@ -275,6 +275,25 @@ class ChatReplyTests(unittest.TestCase):
         thread.join(2)
         self.assertEqual(json.loads(done["result"])["error_type"], "user_replied_in_chat")
 
+    def test_waiting_members_match_whole_messages_in_order(self):
+        # A's "yes" drained; B's longer message that starts the same way is what waits.
+        self.vault.close_for_chat("live", "member-a", "yes")
+        self.vault.close_for_chat("live", "member-b", "yes, keep checking")
+        self.native.agent._pending_steer = "yes, keep checking"
+        self.assertEqual(self.vault.steer_waiting("live"), {"member-b"})
+        # Identical texts: the buffer holds one "ok", so only the newer sender's counts.
+        self.vault.close_for_chat("live", "member-a", "ok")
+        self.vault.close_for_chat("live", "member-c", "ok")
+        self.native.agent._pending_steer = "ok"
+        self.assertEqual(self.vault.steer_waiting("live"), {"member-c"})
+        # Native parts, when consistent with the buffer, decide exactly, including multi-line messages.
+        self.vault.close_for_chat("live", "member-a", "first line\nsecond line")
+        self.native.agent._pending_steer = "ok\nfirst line\nsecond line"
+        self.native.agent._pending_steer_parts = [(None, "ok"), (None, "first line\nsecond line")]
+        self.assertEqual(self.vault.steer_waiting("live"), {"member-c", "member-a"})
+        del self.native.agent._pending_steer_parts
+        self.assertEqual(self.vault.steer_waiting("live"), {"member-c", "member-a"})
+
     def test_only_another_members_waiting_reply_leaves_a_late_login_open(self):
         self.vault.close_for_chat("live", "member-b")
         self.native.agent._pending_steer = "Check the barn."

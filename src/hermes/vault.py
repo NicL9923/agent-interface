@@ -4,6 +4,7 @@ Secret-bearing input goes only to native vault handlers or a verified live
 server request. No payload is written to the application/add-on journal.
 """
 import contextlib
+import collections
 import functools
 import ipaddress
 import json
@@ -273,16 +274,56 @@ def steer_waiting(sid):
         from tui_gateway import server
         agent = (server._sessions.get(sid) or {}).get("agent")
         pending = getattr(agent, "_pending_steer", None) if agent is not None and hasattr(agent, "_pending_steer") else None
+        parts = vars(agent).get("_pending_steer_parts") if pending else None
     except Exception:
-        pending = None
+        pending, parts = None, None
     with _answer_lock:
         if not pending:
             _steered.pop(sid, None)
             return set()
+        held = buffered_messages(pending, parts)
+        # The buffer drains oldest first, so the newest entries with a text are the ones it still holds.
         # A message without its text on record can only be timed by the buffer emptying.
-        waiting = [(actor, text) for actor, text in _steered.get(sid, ()) if text is None or text in pending]
+        waiting = []
+        for actor, text in reversed(_steered.get(sid, ())):
+            if text is None:
+                waiting.append((actor, text))
+            elif held[text] > 0:
+                held[text] -= 1
+                waiting.append((actor, text))
+        waiting.reverse()
         _steered[sid] = waiting
         return {actor for actor, _ in waiting}
+
+
+def buffered_messages(pending, parts):
+    """How many times each whole message is in the native steer buffer.
+
+    Native ``steer`` stores each message's stripped text as one part and joins them with newlines.
+    Without consistent parts, a message counts only where it fills whole lines of the joined text,
+    so "yes" never matches inside "yes, keep checking".
+    """
+    if isinstance(parts, list) and "\n".join(str(part[1]) for part in parts if isinstance(part, tuple) and len(part) == 2) == pending:
+        return collections.Counter(text for _, text in parts)
+    return _LineCounts(pending)
+
+
+class _LineCounts(dict):
+    """Occurrences of a text as whole lines of ``pending``, counted on first lookup."""
+    def __init__(self, pending):
+        super().__init__()
+        self.lines = pending.split("\n")
+
+    def __missing__(self, text):
+        size = text.count("\n") + 1
+        found, index = 0, 0
+        while index + size <= len(self.lines):
+            if "\n".join(self.lines[index:index + size]) == text:
+                found, index = found + 1, index + size
+            else:
+                index += 1
+        self[text] = found
+        return found
 
 
 def close_if_steered(server_requests, request):
