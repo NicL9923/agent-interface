@@ -204,7 +204,19 @@ const memoryFor = botId => {
   return memories.get(botId);
 };
 const cardStates = new Map(), todaySeen = new Map(), routineReceipts = new Map(), fixtureAudio = new Map();
-const routines = [{ id: 'r1', botId: 'ranch', name: 'Morning check', prompt: 'Summarize overnight sensor alerts and the weather.', schedule: '0 6 * * *', enabled: true, recipientIds: ['preview'] }];
+const routines = [{ id: 'r1', botId: 'ranch', name: 'Morning check', prompt: 'Summarize overnight sensor alerts and the weather.', schedule: '0 6 * * *', enabled: true, recipientIds: ['preview'] },
+  { id: 'r2', botId: 'ranch', name: 'Certificate check', prompt: '', script: 'check_certs.py', noAgent: true, schedule: 'every 6h', enabled: true, recipientIds: [] },
+  { id: 'r3', botId: 'ranch', name: 'Feed inventory', prompt: 'Count feed on hand and draft an order if any bin is under a week.', schedule: '0 16 * * 1', enabled: true, recipientIds: ['preview'] }];
+// Routine runs shown among the Ranch hand's turns: succeeded before the first message, failed between
+// turns, and one still running at the end. Synthetic; no routine runs.
+const routineRunFixtures = [
+  { run: { id: 'run-morning', routineId: 'r1', routineName: 'Morning check', startedAt: '2026-10-01T15:58:00.000Z', finishedAt: '2026-10-01T15:59:10.000Z', status: 'succeeded', preview: 'Overnight: two north gate alerts, low of 41°F, no rain expected.', previewOnly: false },
+    output: '## Overnight check\n\n- **Gates:** the north gate reported open twice after midnight. Both closed within 4 seconds.\n- **Weather:** low of 41°F, clear through Friday.\n- **Water:** trough levels normal.\n\nExplicit fixture output. No routine was executed.' },
+  { run: { id: 'run-cert', routineId: 'r2', routineName: 'Certificate check', startedAt: '2026-10-01T16:10:00.000Z', finishedAt: '2026-10-01T16:10:04.000Z', status: 'failed', error: 'cameras.ranch.example expires in 3 days.', preview: 'FAILED · cameras.ranch.example expires in 3 days.', previewOnly: true },
+    output: '- cameras.ranch.example: expires Oct 4, 2026 (3 days)\n- home.ranch.example: expires Dec 19, 2026\n- gate.ranch.example: expires Jan 8, 2027', previewOnly: true },
+  { run: { id: 'run-feed', routineId: 'r3', routineName: 'Feed inventory', startedAt: '2026-10-01T16:23:00.000Z', status: 'running', preview: 'This run is still in progress.', previewOnly: true },
+    output: 'This run is still in progress.', previewOnly: true },
+];
 const fixtureEvents = [{ id: 'fixture-completed', botId: 'fox', kind: 'completed', title: 'Trail options are ready', body: 'Explicit fixture. Open the conversation to review the proposal.', occurredAt: new Date(Date.now() - 10 * 60000).toISOString() }];
 // Tiny WAV tone, never provider-generated speech. Used only to verify audio controls.
 const fixtureWav = (() => {
@@ -428,6 +440,10 @@ const server = createServer(async (request, response) => {
       if (request.method === 'POST' && !routineReceipts.has(key)) routineReceipts.set(key, { requestId, routineId: routine.id, botId: routine.botId, status: 'completed', startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(), message: 'Explicit fixture. No routine or external action was executed.' });
       return json(response, routineReceipts.get(key) || { error: 'Fixture run receipt not found.' }, routineReceipts.has(key) ? 200 : 404);
     }
+    const runsMatch = /^\/bots\/([^/]+)\/routine-runs$/.exec(path);
+    if (runsMatch) return json(response, { runs: routineRunFixtures.filter(({ run }) => routines.some(row => row.id === run.routineId && row.botId === runsMatch[1])).map(({ run }) => run), unavailable: [] });
+    const fixtureRun = /^\/bots\/[^/]+\/routines\/[^/]+\/results\/([^/]+)$/.exec(path) && routineRunFixtures.find(({ run }) => run.id === path.split('/').at(-1));
+    if (fixtureRun) return json(response, { previewOnly: !!fixtureRun.previewOnly, messages: [{ id: `${fixtureRun.run.id}-output`, role: 'assistant', text: fixtureRun.output }] });
     const resultsMatch = /^\/bots\/([^/]+)\/routines\/([^/]+)\/results(?:\/([^/]+))?$/.exec(path);
     if (resultsMatch) return json(response, resultsMatch[3] ? { previewOnly: false, messages: [{ id: 'fixture-run-output', role: 'assistant', text: '## Morning gate check\n\nThe north gate battery needs replacing. The east gate is at **62%** and the barn gate is at **48%**.\n\nExplicit fixture output. No routine was executed.' }] } : [{ id: 'fixture-run', title: 'Morning gate check', startedAt: new Date().toISOString(), previewOnly: false }]);
     if (path === '/groups') {

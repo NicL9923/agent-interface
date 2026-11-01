@@ -28,9 +28,12 @@ import { AttentionCard } from "./AttentionCard";
 import { FindBar } from "./FindBar";
 import { QuoteSelection, ReplyActions, TranscriptTools } from "./ReplyActions";
 import { attentionAnchor, foldSummary, isHumanMessage, quoteBlock, turnDuration, workGroups } from "./transcript-logic";
+import { RoutineRunCard } from "../components/RoutineRunCard";
+import { placeRuns, type RoutineRun } from "../shared/routine-runs";
+import { useRoutineRuns } from "./use-routine-runs";
 import "./transcript.css";
 const activeStates: ActivityState[] = ["thinking", "working", "waiting", "blocked"];
-export function Conversation({ boot, selected, botId, conversation, canonical, echo, state, showActivity, avatarState, connectionLost, offline, appUnavailable, checkingConnection, reconnect, error, setError, notifications, scroll, endSpace, content, history, reply, onScroll, onCreate, onDraft }: {
+export function Conversation({ boot, selected, botId, conversation, canonical, echo, state, showActivity, avatarState, connectionLost, offline, appUnavailable, checkingConnection, reconnect, error, setError, notifications, scroll, endSpace, content, history, reply, onScroll, onCreate, onDraft, onRoutineResults, onHideRoutineRuns }: {
   boot: Bootstrap;
   selected?: Bot;
   botId: string;
@@ -60,10 +63,20 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
   /** Adds text to the draft. False while the draft is on its way, when it must not change. */
   /** Adds to the person's draft, never replacing it. False while a send is on its way; otherwise how many files didn't fit. */
   onDraft(text: string, files?: FileRef[]): number | false;
+  /** Opens a routine's full results at one run. */
+  onRoutineResults(routineId: string, resultId: string): void;
+  /** Keeps a routine's runs out of this chat, with a way back. */
+  onHideRoutineRuns(routineId: string, routineName: string): void;
 }) {
   const prefs = boot.preferences;
   const advanced = prefs.presentation === "advanced";
   const blocks = useMemo(() => turns(conversation, advanced), [conversation, advanced]);
+  // Routine runs sit among the turns by time. See src/shared/routine-runs.ts for the rules.
+  const hiddenRoutines = useMemo(() => (prefs.hiddenRoutineRuns ?? []).filter(entry => entry.botId === botId).map(entry => entry.routineId), [prefs.hiddenRoutineRuns, botId]);
+  const runs = useRoutineRuns({ botId, messages: canonical?.botId === botId ? canonical.messages : undefined, complete: history.complete,
+    enabled: !!selected && !!boot.capabilities.routines?.supported, hiddenRoutines });
+  const runSlots = useMemo(() => placeRuns(blocks.map(turnTime), runs), [blocks, runs]);
+  const runActions = useMemo(() => ({ onResults: onRoutineResults, onHide: onHideRoutineRuns }), [onRoutineResults, onHideRoutineRuns]);
   const actions: Record<ActivityState, string> = {
     idle: "ready", thinking: "thinking", working: "working", waiting: "waiting for approval",
     blocked: "waiting for your input", done: "done", failed: "having trouble", interrupted: "stopped", disconnected: "reconnecting",
@@ -199,11 +212,11 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
           </div>
         ) : !conversation && !connectionLost ? (
           <HistorySkeleton />
-        ) : blocks.length ? (
+        ) : blocks.length || runs.length ? (
           <>
             <HistoryEdge history={history} scroll={scroll} name={selected.name} disabled={connectionLost} />
             <Turns blocks={blocks} advanced={advanced} disconnected={connectionLost} name={selected.name} botId={botId} userId={boot.user.id}
-              running={running} outgoingId={echo?.request.requestId} outgoing={echo?.status} />
+              running={running} outgoingId={echo?.request.requestId} outgoing={echo?.status} runSlots={runSlots} runActions={runActions} />
           </>
         ) : !showActivity ? (
           <div className="empty-state">
@@ -381,19 +394,30 @@ type TurnProps = {
   /** The person's sent message still shown from this device, and how far it got. Only the turn that holds it gets these. */
   outgoingId?: string; outgoing?: SentEcho["status"];
 };
+/** When a turn started, for placing routine runs: its first dated message, shown or folded. */
+const turnTime = (block: Turn) => block.messages.find(message => message.createdAt)?.createdAt
+  ?? [...block.tools.values()].find(message => message.createdAt)?.createdAt;
+type RunActions = { onResults(routineId: string, resultId: string): void; onHide(routineId: string, routineName: string): void };
+const runCards = (runs: RoutineRun[] | undefined, botId: string, actions: RunActions) => (runs ?? []).map(run =>
+  <RoutineRunCard key={`run:${run.routineId}:${run.id}`} run={run} botId={botId} onResults={actions.onResults} onHide={actions.onHide} />);
 // Memoized so typing in the composer does not re-render the whole transcript.
-const Turns = memo(function Turns({ blocks, running, outgoingId, outgoing, ...shared }: Omit<TurnProps, "block" | "live" | "outgoingId" | "outgoing"> & {
+const Turns = memo(function Turns({ blocks, running, outgoingId, outgoing, runSlots, runActions, ...shared }: Omit<TurnProps, "block" | "live" | "outgoingId" | "outgoing"> & {
   blocks: Turn[];
   /** The latest turn is still working. */
   running: boolean;
   outgoingId?: string; outgoing?: SentEcho["status"];
+  /** Routine runs before each turn, and after the last; see placeRuns. */
+  runSlots: RoutineRun[][];
+  runActions: RunActions;
 }) {
+  // One keyed list, so an opened run card stays open when a new turn lands after it.
   return <>
-    {blocks.map((block, index) => {
+    {blocks.flatMap((block, index) => {
       const holdsEcho = outgoingId !== undefined && block.messages.some(message => message.id === outgoingId);
-      return <TurnView key={block.messages[0]?.id || `tools-${index}`} block={block} {...shared} live={running && index === blocks.length - 1}
-        outgoingId={holdsEcho ? outgoingId : undefined} outgoing={holdsEcho ? outgoing : undefined} />;
+      return [...runCards(runSlots[index], shared.botId, runActions), <TurnView key={block.messages[0]?.id || `tools-${index}`} block={block} {...shared} live={running && index === blocks.length - 1}
+        outgoingId={holdsEcho ? outgoingId : undefined} outgoing={holdsEcho ? outgoing : undefined} />];
     })}
+    {runCards(runSlots[blocks.length], shared.botId, runActions)}
   </>;
 });
 // A stream changes the latest reply about four times a second, and `turns` rebuilds every block each

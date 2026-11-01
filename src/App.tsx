@@ -16,6 +16,7 @@ import { useChatPresence } from "./app/use-chat-presence";
 import { useSubmission } from "./app/use-submission";
 import { sendingDraft, useSentEchoes, withEchoes } from "./app/sent-echo";
 import { moveSectionEdit, togglePinEdit, type UndoableEdit } from "./app/home-undo";
+import { withRunsShown } from "./shared/routine-runs";
 import { useAppInstall, useMobile } from "./app/use-browser";
 import { latestMessageAt, useReadThrough } from "./app/unread";
 import { useStableCallback } from "./app/use-stable-callback";
@@ -145,6 +146,12 @@ export function App() {
     if (boot) undoable(moveSectionEdit(boot.preferences, bot.id, bot.name, sectionId));
   });
   const newSection = useStableCallback((bot: Bot) => setPanel({ kind: "details", botId: bot.id, newSection: true }));
+  const openRoutineRun = useStableCallback((routineId: string, resultId: string) => setPanel({ kind: "routine", botId, routineId, resultId }));
+  // Hiding a routine's runs from the chat can be taken back from the toast, or in its routine settings.
+  const hideRoutineRuns = useStableCallback((routineId: string, name: string) => undoable({
+    apply: value => withRunsShown(value, botId, routineId, false), undo: value => withRunsShown(value, botId, routineId, true),
+    message: `Hid ${name} runs from this chat`,
+  }));
   const [overlay, setOverlay] = useState<"palette" | "shortcuts" | "stop" | null>(null);
   const closeOverlay = useCallback(() => setOverlay(null), []);
   // Search from the palette opens Search & saved with the words already searched.
@@ -246,6 +253,7 @@ export function App() {
             offline={offline} appUnavailable={appUnavailable} checkingConnection={session.checkingConnection}
             reconnect={session.reconnect} error={error} setError={setError}
             notifications={notifications} scroll={scroll} endSpace={endSpace} content={content} history={history} reply={reply} onScroll={scrolled}
+            onRoutineResults={openRoutineRun} onHideRoutineRuns={hideRoutineRuns}
             onDraft={(text, files = []) => {
               // Drafts are known by their text, so one on its way must not change.
               if (sendingDraft(draft, pending, sending)) return false;
@@ -276,6 +284,7 @@ export function App() {
             onClose={() => closePanels("settings")}
             onDeleted={id => { deleted.current = id; }}
             onOpenRoutine={(botId, routineId) => { selectBot(botId); setPanel({ kind: "routine", botId, routineId }); }}
+            editPreferences={session.editPreferences}
             onSaved={() => void session.refresh()}
           />
         </Loading>

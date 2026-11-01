@@ -156,7 +156,7 @@ describe("Show runs in chat preference", () => {
     const { app, store } = await createApp(config, fakeRuntime({ close: async () => {} }), { background: false }); apps.push(app);
     const one = signIn(store, origin, "one");
     const hiddenRoutineRuns = [{ botId: "ranch", routineId: "cert" }];
-    const patch = (payload: unknown) => app.inject({ method: "PATCH", url: "/api/preferences", headers: one, payload });
+    const patch = (payload: object) => app.inject({ method: "PATCH", url: "/api/preferences", headers: one, payload });
     expect((await patch({ ...defaultPreferences, hiddenRoutineRuns })).json().hiddenRoutineRuns).toEqual(hiddenRoutineRuns);
     // An app that predates the setting sends preferences without it.
     expect((await patch({ ...defaultPreferences, theme: "dark" })).statusCode).toBe(200);
