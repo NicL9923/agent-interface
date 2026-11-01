@@ -164,9 +164,18 @@ if (process.env.PREVIEW_LONG_TOOL === '1') {
   conversations.kitchen.sessionId = 'fixture-kitchen';
 }
 const previewRoom = { room_id: 'fixture-group', name: 'Weekend at the ranch', members: ['ranch', 'garden'].map(id => ({ member_id: id, profile: id, handle: id, display_name: bots.find(bot => bot.id === id)?.name || id })) };
-const groupRooms = [previewRoom];
+const supperRoom = { room_id: 'fixture-supper', name: 'Supper planning', members: ['kitchen', 'trail', 'ranch'].map(id => ({ member_id: id, profile: id, handle: id, display_name: bots.find(bot => bot.id === id)?.name || id })) };
+const groupRooms = [previewRoom, supperRoom];
 const groupEvents = [{ event_id: 'group-user', seq: 1, kind: 'message.user', actor: { kind: 'user', id: 'preview' }, sender: { id: 'preview', name: 'Nicolas' }, payload: { text: 'Can we fit a short nature walk around the gate repair? Explicit preview fixture.', thread_id: 'a624af77-b3de-46f9-a583-626018476e41' }, created_at: Date.now() / 1000 }, { event_id: 'group-reply', seq: 2, kind: 'message.member', actor: { kind: 'member', id: 'ranch' }, payload: { member_id: 'ranch', text: 'Replace the battery before breakfast, then take the shady trail. Bring water and check the weather before leaving.', thread_id: 'a624af77-b3de-46f9-a583-626018476e41' }, created_at: Date.now() / 1000 }];
 const groupRequests = new Set();
+// The catalog previews each room's newest message, as the app server does. Supper planning keeps a fixed one so home shows an older row.
+function roomWithLatest(room) {
+  if (room === supperRoom) return { ...room, latest: { text: 'The smoker is free Sunday, so brisket is on.', at: new Date(Date.now() - 3 * 3600_000).toISOString(), author: 'Kitchen companion' } };
+  const event = [...groupEvents].reverse().find(item => item.kind === 'message.user' || item.kind === 'message.member');
+  if (room !== previewRoom || !event) return room;
+  const author = event.kind === 'message.user' ? 'You' : room.members.find(member => member.member_id === event.payload.member_id)?.display_name || 'Assistant';
+  return { ...room, latest: { text: event.payload.text, at: new Date(event.created_at * 1000).toISOString(), author } };
+}
 const conversationFor = (id) => ({ botId: id, messages: [], approvals: [], files: [], activity: { state: bots.find(item => item.id === id)?.activity || 'idle' }, ...conversations[id] });
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const vaults = new Map();
@@ -500,7 +509,7 @@ const server = createServer(async (request, response) => {
     if (resultsMatch) return json(response, resultsMatch[3] ? { previewOnly: false, messages: [{ id: 'fixture-run-output', role: 'assistant', text: '## Morning gate check\n\nThe north gate battery needs replacing. The east gate is at **62%** and the barn gate is at **48%**.\n\nExplicit fixture output. No routine was executed.' }] } : [{ id: 'fixture-run', title: 'Morning gate check', startedAt: new Date().toISOString(), previewOnly: false }]);
     if (path === '/groups') {
       if (request.method === 'POST') { let room = groupRooms.find(room => room.room_id === body.requestId); if (!room) { room = { room_id: body.requestId, name: body.name, members: body.botIds.map(id => ({ member_id: id, profile: id, handle: id, display_name: bots.find(bot => bot.id === id)?.name || id })) }; groupRooms.push(room); } return json(response, { room }); }
-      return json(response, { supported: true, canSend: process.env.PREVIEW_GROUP_DRIVER_OFF !== '1', rooms: groupRooms, ...(process.env.PREVIEW_GROUP_DRIVER_OFF === '1' ? { reason: 'Fixture group coordinator is unavailable. History is still readable.' } : {}) });
+      return json(response, { supported: true, canSend: process.env.PREVIEW_GROUP_DRIVER_OFF !== '1', rooms: groupRooms.map(roomWithLatest), ...(process.env.PREVIEW_GROUP_DRIVER_OFF === '1' ? { reason: 'Fixture group coordinator is unavailable. History is still readable.' } : {}) });
     }
     const groupMatch = /^\/groups\/([^/]+)(?:\/(log|messages|stop|approve))?$/.exec(path);
     if (groupMatch) {

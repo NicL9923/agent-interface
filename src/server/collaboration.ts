@@ -12,6 +12,7 @@ import { id } from './schemas.js';
 import { routineRun, runTime, type RoutineRun, type RoutineRunPage } from '../shared/routine-runs.js';
 /** How long one read of an assistant's runs serves every viewer. */
 export const RUNS_CACHE_MS = 5_000;
+import { GroupLatestCache, previewOf } from './group-latest.js';
 const uuid = z.string().uuid();
 
 /** Whether a room has only local assistants this person may see, as every group route requires. */
@@ -91,11 +92,22 @@ export async function installCollaborationRoutes(app: FastifyInstance, runtime: 
       return user ? { ...event, sender: { id: user.id, name: user.name } } : event;
     }) };
   }
+  // Home previews each room's newest message. One cache serves everyone, since the log is the same; only the author wording is per viewer.
+  const latest = new GroupLatestCache((roomId, since) => request({ operation: 'log', roomId, since }) as Promise<GroupPage>);
   app.get('/api/groups', async req => {
     if (!runtime.groupRequest) return { supported: false, canSend: false, rooms: [], reason: 'Hosted group chats are unavailable on this Hermes integration.' } satisfies GroupCatalog;
-    const allowed = new Set((await bots(signedIn(req).id)).map(bot => bot.id));
+    const userId = signedIn(req).id;
+    const allowed = new Set((await bots(userId)).map(bot => bot.id));
     const value = await request({ operation: 'list' }) as GroupCatalog;
-    return { ...value, rooms: value.rooms.filter(room => accessible(room, allowed)) };
+    const rooms = value.rooms.filter(room => accessible(room, allowed));
+    await latest.refresh(rooms);
+    return { ...value, rooms: rooms.map(room => {
+      const event = latest.latest(room.room_id);
+      if (!event) return room;
+      const senders = event.kind === 'message.user' ? store.groupSenders(room.room_id, [event.event_id]) : new Map<string, string>();
+      const sender = senders.get(event.event_id);
+      return { ...room, latest: previewOf(sender ? { ...event, sender: { id: sender, name: store.getUser(sender)?.name ?? '' } } : event, room, userId, other => store.getUser(other)?.name) };
+    }) };
   });
   app.post('/api/groups', async req => {
     const body = z.object({ requestId: uuid, name: z.string().trim().min(1).max(100), botIds: z.array(id).min(2).max(6).refine(ids => new Set(ids).size === ids.length) }).strict().parse(req.body);

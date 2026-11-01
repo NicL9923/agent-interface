@@ -128,9 +128,9 @@ import XCTest
     capture(app, name: "Native routine saved output")
     app.terminate(); app = launch()
     XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 10))
-    if !app.buttons["openGroups"].canTap { app.navigationBars.buttons.firstMatch.tap() }
-    app.buttons["openGroups"].tap()
-    let newGroup = app.buttons["New group"]
+    if !app.buttons["newMenu"].canTap { app.navigationBars.buttons.firstMatch.tap() }
+    app.buttons["newMenu"].tapWhenReady()
+    let newGroup = app.buttons["newGroup"]
     XCTAssertTrue(newGroup.waitForExistence(timeout: 5))
     expectation(for: NSPredicate(format: "enabled == true"), evaluatedWith: newGroup); waitForExpectations(timeout: 5)
     newGroup.tap()

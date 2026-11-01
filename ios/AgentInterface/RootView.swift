@@ -1,9 +1,9 @@
 import Network
 import SwiftUI
 
-enum HomeDestination { case conversation, today, groups, find }
+enum HomeDestination { case conversation, today, room, find }
 /// A screen pushed over home on iPhone. Home is the stack's root; everything else is one push away.
-enum HomeRoute: Hashable { case chat, today, groups, search }
+enum HomeRoute: Hashable { case chat, today, room, search }
 
 /// Keeps the system prominent control while pairing its label with the app's accent color.
 struct AccentProminentButtonStyle: PrimitiveButtonStyle {
@@ -28,6 +28,11 @@ struct RootView: View {
   private let reachability = NetworkReachability.shared
   @State private var settingsBot: Bot?
   @State private var creatingBot = false
+  @State private var creatingGroup = false
+  /// The group chat open beside or over home. Kept whole, so a room that leaves the catalog still shows its own notice.
+  @State private var openedRoom: GroupRoom?
+  /// The room just made, opened once its sheet is gone.
+  @State private var createdRoom: GroupRoom?
   @State private var preferencesOpen = false
   #if DEBUG
     @State private var captureConnectionOpen = false
@@ -42,6 +47,9 @@ struct RootView: View {
   @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
   @State private var compactColumn: NavigationSplitViewColumn = .sidebar
   @State private var quickSwitcherOpen = false
+  #if DEBUG
+    @State private var captureRoomWhenListed = false
+  #endif
   @State private var quickSettingsRequested = false
   var body: some View {
     Group {
@@ -92,6 +100,11 @@ struct RootView: View {
       if request != nil { store.homeRequest = nil; destination = .conversation; path = []; compactColumn = .sidebar }
     }
     .onChange(of: store.bootstrap?.user.id) { old, new in if let old, old != new { accountChanged() } }
+    #if DEBUG
+    .onChange(of: store.groupCatalog?.rooms.first?.id) { _, _ in
+      if captureRoomWhenListed, let room = store.groupCatalog?.rooms.first { captureRoomWhenListed = false; open(room) }
+    }
+    #endif
   }
   /// Above the split view, not a safe-area inset: an inset would sit over its navigation bars.
   private var household: some View {
@@ -108,18 +121,18 @@ struct RootView: View {
   private var splitNavigation: some View {
     NavigationSplitView(columnVisibility: $columnVisibility, preferredCompactColumn: $compactColumn) {
       BotListView(
-        destination: destination, openPreferences: { preferencesOpen = true }, edit: { settingsBot = $0 }, create: { creatingBot = true },
+        destination: destination, openedRoomId: openedRoom?.id, openPreferences: { preferencesOpen = true }, edit: { settingsBot = $0 }, create: { creatingBot = true },
         openBot: { destination = .conversation; compactColumn = .detail },
         openToday: { destination = .today; compactColumn = .detail },
-        openGroups: { destination = .groups; compactColumn = .detail },
+        openRoom: { open($0) }, newGroup: { creatingGroup = true }, creatingGroup: creatingGroup,
         openDiscovery: { destination = .find; compactColumn = .detail })
     } detail: { detail }
   }
   @ViewBuilder private var detail: some View {
     if destination == .find {
       DiscoveryView()
-    } else if destination == .groups {
-      GroupChatsView()
+    } else if destination == .room, let room = openedRoom {
+      GroupConversationView(room: room, canSend: store.groupCatalog?.canSend ?? false).id(room.id)
     } else if destination == .today {
       TodayView(openBot: { destination = .conversation; compactColumn = .detail })
     } else if let bot = store.bot {
@@ -133,7 +146,9 @@ struct RootView: View {
     }
   }
   private var sheets: RootSheets {
-    RootSheets(store: store, sharedCapture: $sharedCapture, settingsBot: $settingsBot, creatingBot: $creatingBot, preferencesOpen: $preferencesOpen)
+    RootSheets(store: store, sharedCapture: $sharedCapture, settingsBot: $settingsBot, creatingBot: $creatingBot, creatingGroup: $creatingGroup, preferencesOpen: $preferencesOpen,
+      groupCreated: { room in createdRoom = room; store.groupRoomCreated(room) },
+      groupDismissed: { if let room = createdRoom { createdRoom = nil; open(room) } })
   }
   private func scopeChanged(_ scope: String?) {
     checkShares()
@@ -160,7 +175,8 @@ struct RootView: View {
     if DebugFixtures.captureConnectionPage { captureConnectionOpen = true; return }
     if DebugFixtures.capturePreferencesPage || DebugFixtures.captureComputerPage || DebugFixtures.captureUpgradePage || DebugFixtures.captureNotificationsPage { preferencesOpen = true; return }
     if DebugFixtures.captureGroupPage {
-      destination = .groups; path = [.groups]; compactColumn = .detail; return
+      if let room = store.groupCatalog?.rooms.first { open(room) } else { captureRoomWhenListed = true }
+      return
     }
     guard DebugFixtures.captureDiscoveryTab != nil else { return }
     destination = .find; path = [.search]; compactColumn = .detail
@@ -175,7 +191,14 @@ struct RootView: View {
     // Handled: losing the same assistant again later is a new change.
     store.leftBotId = nil
   }
+  /// Opens a group chat the way an assistant's chat opens: over home on iPhone, in the detail column on iPad.
+  private func open(_ room: GroupRoom) {
+    openedRoom = room
+    destination = .room
+    if UIDevice.current.userInterfaceIdiom == .phone { path = [.room] } else { compactColumn = .detail }
+  }
   private func accountChanged() {
+    openedRoom = nil
     destination = .conversation
     path = []
     preferencesOpen = false
@@ -188,10 +211,11 @@ struct RootView: View {
   /// cannot stack the same screen twice.
   private var compactNavigation: some View {
     NavigationStack(path: $path) {
-      BotListView(destination: destination, openPreferences: { preferencesOpen = true },
+      BotListView(destination: destination, openedRoomId: openedRoom?.id, openPreferences: { preferencesOpen = true },
         edit: { settingsBot = $0 }, create: { creatingBot = true },
         openBot: { destination = .conversation; path = [.chat] },
-        openToday: { path = [.today] }, openGroups: { path = [.groups] },
+        openToday: { path = [.today] },
+        openRoom: { open($0) }, newGroup: { creatingGroup = true }, creatingGroup: creatingGroup,
         openDiscovery: { path = [.search] })
         .navigationDestination(for: HomeRoute.self) { route in pushed(route) }
     }
@@ -199,7 +223,7 @@ struct RootView: View {
   @ViewBuilder private func pushed(_ route: HomeRoute) -> some View {
     switch route {
     case .today: TodayView(openBot: { destination = .conversation; openChat() })
-    case .groups: GroupChatsView()
+    case .room: if let room = openedRoom { GroupConversationView(room: room, canSend: store.groupCatalog?.canSend ?? false).id(room.id) }
     case .search: DiscoveryView()
     case .chat: if let bot = store.bot { ConversationView(bot: bot, edit: { settingsBot = bot }).id(bot.id) }
     }
@@ -242,7 +266,8 @@ struct RootView: View {
       Task { await store.select(id) }
     case .settings: quickSettingsRequested = true
     case .today: destination = .today; path = [.today]; compactColumn = .detail
-    case .groups: destination = .groups; path = [.groups]; compactColumn = .detail
+    case .room(let id):
+      if let room = store.groupCatalog?.rooms.first(where: { $0.id == id }) { open(room) }
     case .search: store.searchFocusPending = true; destination = .find; path = [.search]; compactColumn = .detail
     }
   }
@@ -258,13 +283,17 @@ private struct RootSheets: ViewModifier {
   @Binding var sharedCapture: SharedCapture?
   @Binding var settingsBot: Bot?
   @Binding var creatingBot: Bool
+  @Binding var creatingGroup: Bool
   @Binding var preferencesOpen: Bool
+  var groupCreated: (GroupRoom) -> Void
+  var groupDismissed: () -> Void
   func body(content: Content) -> some View {
     @Bindable var store = store
     content
       .sheet(item: $sharedCapture) { capture in ShareCaptureView(capture: capture).appStore(store).coveringChat(store) }
       .sheet(item: $settingsBot) { bot in BotSettingsView(bot: bot, close: { settingsBot = nil }).appStore(store).coveringChat(store) }
       .sheet(isPresented: $creatingBot) { BotSettingsView(bot: nil, close: { creatingBot = false }).appStore(store).coveringChat(store) }
+      .sheet(isPresented: $creatingGroup, onDismiss: groupDismissed) { NavigationStack { GroupCreateView(onCreated: groupCreated) }.appStore(store).coveringChat(store) }
       .sheet(isPresented: $preferencesOpen) { PreferencesView(close: { preferencesOpen = false }).appStore(store).coveringChat(store) }
       .sheet(item: $store.openedFile) { FilePreview(file: $0).ignoresSafeArea().coveringChat(store) }
       .sheet(item: $store.routineResult) { target in
@@ -405,17 +434,24 @@ struct BotListView: View {
   @Environment(\.dynamicTypeSize) private var typeSize
   @ScaledMetric(relativeTo: .subheadline) private var pinColumn: CGFloat = 100
   var destination: HomeDestination
+  /// The group chat open now, which its row shows as selected beside home.
+  var openedRoomId: String? = nil
   var openPreferences: () -> Void
   var edit: (Bot) -> Void
   var create: () -> Void
   var openBot: () -> Void
   var openToday: () -> Void
-  var openGroups: () -> Void
+  var openRoom: (GroupRoom) -> Void
+  var newGroup: () -> Void
+  /// True while the new-group sheet is up, so a request it leaves saved shows here once it closes.
+  var creatingGroup = false
   var openDiscovery: () -> Void
   private let reachability = NetworkReachability.shared
   @State private var checkingConnection = false
   /// The assistant a new home section is being named for.
   @State private var sectionFor: Bot?
+  /// A saved group creation whose outcome is unknown, offered as "Finish creating group".
+  @State private var pendingGroup: GroupCreate?
   /// Undo for the last pin or section move made from a row here.
   @State private var undo = UndoQueue()
   private var pinnedMinimum: CGFloat { sizeClass == .compact ? pinColumn : pinColumn * 0.76 }
@@ -453,13 +489,25 @@ struct BotListView: View {
             HStack(spacing: 10) { householdLinks }
             VStack(alignment: .leading, spacing: 8) { householdLinks }
           }
-          ForEach(bootstrap.preferences.assistantGroups(bootstrap.bots)) { group in
+          let assistantGroups = bootstrap.preferences.assistantGroups(bootstrap.bots)
+          let rooms = GroupRows.ordered(store.groupCatalog?.rooms ?? [])
+          let hasChats = !rooms.isEmpty || pendingGroup != nil
+          ForEach(assistantGroups) { group in
+            // Group chats join the assistants outside any section, so that list is named for both.
+            let joined = group.id == "remaining" && hasChats
             VStack(alignment: .leading, spacing: 4) {
-              if !group.title.isEmpty {
-                Text(group.title).font(.caption.weight(.semibold)).tracking(1.1).textCase(.uppercase)
-                  .foregroundStyle(Palette.muted).padding(.horizontal, 10).padding(.bottom, 8).accessibilityAddTraits(.isHeader)
+              if !group.title.isEmpty { sectionTitle(joined ? "More chats" : group.title) }
+              LazyVStack(spacing: 2) {
+                if joined { pendingRow }
+                ForEach(group.bots) { bot in row(bot) }
+                if joined { ForEach(rooms) { room in roomRow(room) } }
               }
-              LazyVStack(spacing: 2) { ForEach(group.bots) { bot in row(bot) } }
+            }
+          }
+          if hasChats && assistantGroups.last?.id != "remaining" {
+            VStack(alignment: .leading, spacing: 4) {
+              if !assistantGroups.isEmpty { sectionTitle("More chats") }
+              LazyVStack(spacing: 2) { pendingRow; ForEach(rooms) { room in roomRow(room) } }
             }
           }
           if bootstrap.bots.isEmpty { emptyHome }
@@ -476,11 +524,26 @@ struct BotListView: View {
         ToolbarItemGroup(placement: .topBarTrailing) {
           Button(action: openDiscovery) { Image(systemName: "magnifyingglass") }
             .accessibilityLabel("Search & saved").accessibilityIdentifier("openDiscovery")
-          Button(action: createOrExplain) { Image(systemName: "plus") }.accessibilityLabel("New assistant")
-            .opacity(store.assistantSetupBlock == nil ? 1 : 0.4).accessibilityHint(store.assistantSetupBlock ?? "")
-            .accessibilityIdentifier("newAssistant")
+          if canMakeGroup {
+            Menu {
+              Button { createOrExplain() } label: { Label("New assistant", systemImage: "plus") }.accessibilityIdentifier("newAssistant")
+              Button { newGroup() } label: { Label("New group chat", systemImage: "bubble.left.and.bubble.right") }
+                .disabled(groupHint != nil).accessibilityIdentifier("newGroup")
+              if let groupHint { Text(groupHint) }
+            } label: { Image(systemName: "plus") }.accessibilityLabel("New").accessibilityIdentifier("newMenu")
+          } else {
+            Button(action: createOrExplain) { Image(systemName: "plus") }.accessibilityLabel("New assistant")
+              .opacity(store.assistantSetupBlock == nil ? 1 : 0.4).accessibilityHint(store.assistantSetupBlock ?? "")
+              .accessibilityIdentifier("newAssistant")
+          }
         }
-      }.refreshable { await store.refreshBootstrap() }
+      }.refreshable { await store.refreshBootstrap(); await store.refreshGroups() }
+      // Rooms come with the catalog, read once on appearing and every 30 seconds while the app is in use.
+      // Split-view reparenting can cancel a view task during a phone push, so the first read does not depend on one.
+      .onAppear { pendingGroup = GroupCreation.pending(scope: store.scope); Task { await store.refreshGroups() } }
+      .onChange(of: store.scope) { _, scope in pendingGroup = GroupCreation.pending(scope: scope); Task { await store.refreshGroups() } }
+      .onChange(of: creatingGroup) { _, _ in pendingGroup = GroupCreation.pending(scope: store.scope) }
+      .pollWhileActive(id: store.scope ?? "", every: .seconds(30)) { await store.refreshGroups() }
       .newSectionAlert(for: $sectionFor)
       .undoToast($undo) { change in Task { await store.undo(change) } }
   }
@@ -529,7 +592,18 @@ struct BotListView: View {
   }
   @ViewBuilder private var householdLinks: some View {
     Button(action: openToday) { Label("Today", systemImage: "calendar") }.buttonStyle(HomeLinkStyle(selected: destination == .today)).accessibilityIdentifier("openToday")
-    Button(action: openGroups) { Label("Group chats", systemImage: "bubble.left.and.bubble.right") }.buttonStyle(HomeLinkStyle(selected: destination == .groups)).accessibilityIdentifier("openGroups")
+  }
+  private func sectionTitle(_ title: String) -> some View {
+    Text(title).font(.caption.weight(.semibold)).tracking(1.1).textCase(.uppercase)
+      .foregroundStyle(Palette.muted).padding(.horizontal, 10).padding(.bottom, 8).accessibilityAddTraits(.isHeader)
+  }
+  private var canMakeGroup: Bool { GroupRows.canCreate(store.groupCatalog, bots: store.bootstrap?.bots ?? [], pending: pendingGroup != nil) }
+  private var groupHint: String? { pendingGroup != nil ? nil : GroupRows.creationHint(store.groupCatalog, connected: store.connected) }
+  @ViewBuilder private var pendingRow: some View {
+    if let pendingGroup { PendingGroupRow(request: pendingGroup, action: newGroup) }
+  }
+  private func roomRow(_ room: GroupRoom) -> some View {
+    GroupRoomRow(room: room, selected: selectionVisible && destination == .room && store.groupCatalog != nil && openedRoomId == room.id, ring: homeBackground) { openRoom(room) }
   }
   private func state(_ bot: Bot) -> ActivityState {
     // The open conversation is read only while on screen; otherwise the roster's state is the current one.
@@ -720,7 +794,7 @@ struct AccountAvatar: View {
     }.frame(width: size, height: size).clipShape(Circle()).accessibilityHidden(true)
   }
 }
-private struct AssistantListDate: View {
+struct AssistantListDate: View {
   var date: Date
   private let clock = MinuteClock.shared
   var body: some View {

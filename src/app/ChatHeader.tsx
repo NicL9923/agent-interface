@@ -1,12 +1,13 @@
 import type { ActivityState, Bootstrap, Bot } from "../shared/types";
+import type { GroupRoom } from "../shared/collaboration";
+import { memberNames } from "./home-rooms";
 import { Avatar } from "../components/Avatar";
 import { Icon } from "../components/Icon";
 import { ModelChipFace, modelChipTitle } from "../components/ModelChip";
 import { ChatModelPicker, Loading } from "./panels";
 import type { View } from "./view";
-const titles: Record<Exclude<View, "conversation">, [string, string]> = {
+const titles: Record<Exclude<View, "conversation" | "group">, [string, string]> = {
   find: ["Search & saved", "Past answers, saved items and automations"],
-  groups: ["Group chats", "Two to six assistants in one conversation"],
   today: ["Today", "Your assistants, at a glance"],
 };
 /** Who the assistant belongs to. The model is shown only in Advanced, as its own chip. */
@@ -24,10 +25,12 @@ function ModelChipPlaceholder({ bot, failed = false }: { bot: Bot; failed?: bool
  * Like a messaging app: a lone back button on phones, and the assistant itself as the
  * one control that opens its details, where pinning, artifacts and settings live.
  */
-export function ChatHeader({ view, boot, selected, avatarState, offline = false, modelLocked = false, railOpen, onOpenRail, onDetails, onModelSaved }: {
+export function ChatHeader({ view, boot, selected, room, avatarState, offline = false, modelLocked = false, railOpen, onOpenRail, onDetails, onModelSaved }: {
   view: View;
   boot: Bootstrap;
   selected?: Bot;
+  /** The open group chat, when the view is a group. It may not be listed yet. */
+  room?: GroupRoom;
   avatarState: ActivityState;
   offline?: boolean;
   /** The model cannot change now: Hermes is out of reach, or a message is on its way. */
@@ -51,7 +54,8 @@ export function ChatHeader({ view, boot, selected, avatarState, offline = false,
       >
         <Icon name="back" />
       </button>
-      {view !== "conversation" ? <div className="chat-title"><h1>{titles[view][0]}</h1><p>{titles[view][1]}</p></div> : selected ? (
+      {view === "group" ? <div className="chat-title"><h1>{room?.name ?? "Group chat"}</h1><p>{room ? memberNames(room) : "Two to six assistants in one conversation"}</p></div>
+        : view !== "conversation" ? <div className="chat-title"><h1>{titles[view][0]}</h1><p>{titles[view][1]}</p></div> : selected ? (
         <div className="chat-identity-wrap">
           <h1 className="chat-identity-heading">
             <button className="chat-identity" aria-haspopup="dialog" aria-label={selected.name}

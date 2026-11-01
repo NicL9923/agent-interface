@@ -141,7 +141,8 @@
         if environment["AGENT_INTERFACE_UI_GROUP"] == "1" {
           FixtureProtocol.groupRooms = [["room_id": "fixture-room", "name": "Supper planning", "members": [
             ["member_id": "ranch", "profile": "ranch", "handle": "ranch", "display_name": "Ranch hand"],
-            ["member_id": "kitchen", "profile": "kitchen", "handle": "kitchen", "display_name": "Kitchen companion"]]]]
+            ["member_id": "kitchen", "profile": "kitchen", "handle": "kitchen", "display_name": "Kitchen companion"]],
+            "latest": ["text": "Brisket, if the smoker is free.", "at": "2026-10-31T10:00:00.000Z", "author": "Kitchen companion"]]]
           FixtureProtocol.groupEvents = [
             ["event_id": "group-1", "seq": 1, "kind": "message.user", "created_at": 1_790_000_000, "sender": ["id": "native-test-two", "name": "Second test member"],
              "payload": ["text": "What should we cook on Sunday?", "thread_id": "thread-1"]],

@@ -94,3 +94,40 @@ it('names the household member who sent each group message, and nobody for messa
     expect(events.map((event: any) => event.sender)).toEqual([{id: 'one', name: 'Nicolas'}, undefined, undefined]);
   }
 });
+it('previews each room by its newest message, reading a room again only when it moves', async () => {
+  const s = await fixture();
+  s.store.user({id: 'one', name: 'Nicolas', email: 'one@example.invalid'});
+  const event = (seq: number, kind: string, actorId: string, text: string, extra: object = {}) => ({event_id: `e${seq}`, seq, kind, created_at: 1_790_000_000 + seq, actor: {kind: kind === 'message.user' ? 'user' : 'bot', id: actorId}, payload: {text, ...extra}, ...extra});
+  const events = [event(3, 'message.member', 'planner', 'Brisket   is\nready'), event(4, 'driver.status', 'planner', ''), event(5, 'message.user', 'user', 'Thanks!')];
+  let latestSeq = 5;
+  const member = (profile: string, name: string) => ({member_id: profile, profile, handle: profile, display_name: name});
+  const rooms = () => [{room_id: 'shared', name: 'Shared discussion', latest_seq: latestSeq, members: [member('ranch', 'Ranch hand'), member('planner', 'Planner')]}, {room_id: 'quiet', name: 'Quiet', latest_seq: 0, members: [member('ranch', 'Ranch hand'), member('planner', 'Planner')]}];
+  const logs = () => s.groupRequest.mock.calls.filter(([input]) => input.operation === 'log').map(([input]) => input);
+  s.groupRequest.mockImplementation(async (input: any) => input.operation === 'list' ? {supported: true, canSend: true, rooms: rooms()}
+    : input.operation === 'log' ? {events: events.filter(item => item.seq > input.since), cursor: latestSeq, latest_seq: latestSeq, has_more: false} : {});
+  // The newest message wins over later notices, and a human message sent elsewhere is not mistaken for this person.
+  const first = (await s.app.inject({url: '/api/groups', headers: s.headers})).json().rooms;
+  expect(first.map((room: any) => room.latest)).toEqual([{text: 'Thanks!', at: new Date(1_790_000_005_000).toISOString(), author: 'Household member'}, undefined]);
+  s.store.attributeGroupMessage('shared', 'e5', 'one');
+  expect((await s.app.inject({url: '/api/groups', headers: s.headers})).json().rooms[0].latest.author).toBe('You');
+  // Home polls again and again; a quiet room is not read again, and a room with no events never is.
+  await s.app.inject({url: '/api/groups', headers: s.headers}); await s.app.inject({url: '/api/groups', headers: s.headers});
+  expect(logs()).toEqual([{operation: 'log', roomId: 'shared', since: 0}]);
+  // A new message makes one more bounded read, and an assistant's reply is credited to its display name.
+  latestSeq = 40; events.push(event(40, 'message.member', 'planner', 'x'.repeat(400)));
+  const second = (await s.app.inject({url: '/api/groups', headers: s.headers})).json().rooms[0].latest;
+  expect(second.author).toBe('Planner'); expect(second.text).toHaveLength(160); expect(second.text.endsWith('…')).toBe(true);
+  expect(logs().at(-1)).toEqual({operation: 'log', roomId: 'shared', since: 10});
+  expect(logs()).toHaveLength(2);
+});
+it('keeps the catalog when a preview cannot be read', async () => {
+  const s = await fixture();
+  s.groupRequest.mockImplementation(async (input: any) => {
+    if (input.operation === 'list') return {supported: true, canSend: true, rooms: [{room_id: 'shared', name: 'Shared discussion', latest_seq: 2, members: [{member_id: 'ranch', profile: 'ranch', handle: 'ranch'}, {member_id: 'planner', profile: 'planner', handle: 'planner'}]}]};
+    throw new Error('Hermes is busy');
+  });
+  const response = await s.app.inject({url: '/api/groups', headers: s.headers});
+  expect(response.statusCode).toBe(200);
+  expect(response.json().rooms).toMatchObject([{room_id: 'shared'}]);
+  expect(response.json().rooms[0].latest).toBeUndefined();
+});

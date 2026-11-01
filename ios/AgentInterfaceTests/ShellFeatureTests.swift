@@ -276,14 +276,54 @@ import XCTest
     XCTAssertEqual(DiscoveryView.searchDelay, .milliseconds(300))
     XCTAssertEqual(DiscoveryView.resultsAnnouncement(1), "1 result")
   }
-  func testQuickSwitcherListsPinnedAssistantsFirstThenMatchingViews() throws {
+  func testQuickSwitcherListsPinnedAssistantsFirstThenGroupChatsThenMatchingViews() throws {
     let bots = try [bot("alpha"), bot("kitchen"), bot("ranch")]
-    let all = QuickSwitch.entries(query: "", bots: bots, pinned: ["ranch", "kitchen"])
-    XCTAssertEqual(all.map(\.target), [.bot("ranch"), .bot("kitchen"), .bot("alpha"), .today, .groups, .search, .settings])
+    let rooms = [room("quiet", "Quiet room"), room("supper", "Supper planning", at: "2026-10-31T10:00:00Z")]
+    let all = QuickSwitch.entries(query: "", bots: bots, pinned: ["ranch", "kitchen"], rooms: rooms)
+    XCTAssertEqual(all.map(\.target), [.bot("ranch"), .bot("kitchen"), .bot("alpha"), .room("supper"), .room("quiet"), .today, .search, .settings])
     XCTAssertEqual(QuickSwitch.entries(query: "kit", bots: bots, pinned: []).map(\.target), [.bot("kitchen")])
-    XCTAssertEqual(QuickSwitch.entries(query: "group", bots: bots, pinned: []).map(\.target), [.groups])
+    XCTAssertEqual(QuickSwitch.entries(query: "supper", bots: bots, pinned: [], rooms: rooms).map(\.target), [.room("supper")])
     XCTAssertEqual(QuickSwitch.entries(query: "settings", bots: bots, pinned: []).map(\.target), [.settings])
     XCTAssertEqual(QuickSwitch.entries(query: "zzz", bots: bots, pinned: []), [])
+  }
+  // MARK: Group chats on home
+  private func room(_ id: String, _ name: String, at: String? = nil, text: String = "Hello", author: String = "Planner") -> GroupRoom {
+    GroupRoom(room_id: id, name: name, members: members, latest: at.map { GroupLatest(text: text, at: $0, author: author) })
+  }
+  func testRoomsFollowTheAssistantsNewestMessageFirstAndQuietRoomsKeepTheirOrder() {
+    let rooms = [room("quiet-a", "A"), room("old", "Old", at: "2026-10-01T10:00:00Z"), room("quiet-b", "B"), room("new", "New", at: "2026-10-30T10:00:00Z"), room("same", "Same", at: "2026-10-01T10:00:00Z")]
+    XCTAssertEqual(GroupRows.ordered(rooms).map(\.id), ["new", "old", "same", "quiet-a", "quiet-b"])
+    XCTAssertEqual(GroupRows.ordered(GroupRows.ordered(rooms)).map(\.id), ["new", "old", "same", "quiet-a", "quiet-b"], "Ordering twice changes nothing")
+  }
+  func testARowPreviewNamesTheLastSpeakerOrSaysNobodySpoke() {
+    XCTAssertEqual(GroupRows.preview(room("a", "A", at: "2026-10-01T10:00:00Z", text: "The smoker is free.", author: "You")), "You: The smoker is free.")
+    XCTAssertEqual(GroupRows.preview(room("b", "B")), "No messages yet")
+    XCTAssertEqual(GroupRows.preview(room("c", "C", at: "2026-10-01T10:00:00Z", text: "")), "No messages yet")
+  }
+  func testAClusterShowsAtMostThreeFacesAndMembersInWords() throws {
+    let big = GroupRoom(room_id: "big", name: "Big", members: members + [GroupMember(member_id: "garden", profile: "garden", handle: "garden", display_name: "Gardener")])
+    let faces = GroupRows.faces(big, bots: try [bot("ranch")])
+    XCTAssertEqual(faces.map(\.id), ["ranch", "kitchen", "planner"])
+    XCTAssertEqual(faces.map { $0.bot?.id }, ["ranch", nil, nil], "A member this person cannot see keeps its place, as an initial")
+    XCTAssertEqual(GroupRows.memberNames(room("a", "A")), "Ranch hand, Kitchen companion and Meal planner")
+    XCTAssertEqual(GroupRows.memberNames(GroupRoom(room_id: "p", name: "P", members: Array(members.prefix(2)))), "Ranch hand and Kitchen companion")
+  }
+  func testHomeOffersANewGroupOnlyWhereHermesHostsThemAndTwoAssistantsExist() throws {
+    let two = try [bot("ranch"), bot("kitchen")]
+    func catalog(supported: Bool = true, canSend: Bool = true, reason: String? = nil) -> GroupCatalog { GroupCatalog(supported: supported, canSend: canSend, reason: reason, rooms: []) }
+    XCTAssertTrue(GroupRows.canCreate(catalog(), bots: two, pending: false))
+    XCTAssertFalse(GroupRows.canCreate(catalog(), bots: [two[0]], pending: false), "One assistant cannot make a group")
+    XCTAssertFalse(GroupRows.canCreate(catalog(supported: false), bots: two, pending: false))
+    XCTAssertFalse(GroupRows.canCreate(nil, bots: two, pending: false), "Not read yet")
+    XCTAssertTrue(GroupRows.canCreate(nil, bots: [], pending: true), "A saved request can always be finished")
+    XCTAssertNil(GroupRows.creationHint(catalog(), connected: true))
+    XCTAssertEqual(GroupRows.creationHint(catalog(canSend: false, reason: "Coordinator is down."), connected: true), "Coordinator is down.")
+    XCTAssertEqual(GroupRows.creationHint(catalog(), connected: false), "Reconnect to Hermes to make a group chat.")
+  }
+  func testTheCatalogDecodesEachRoomsNewestMessageAndOlderServersOmitIt() throws {
+    let json = #"{"supported":true,"canSend":true,"rooms":[{"room_id":"a","name":"A","members":[],"latest":{"text":"Brisket","at":"2026-10-31T10:00:00.000Z","author":"Planner"}},{"room_id":"b","name":"B","members":[]}]}"#
+    let catalog = try JSONDecoder().decode(GroupCatalog.self, from: Data(json.utf8))
+    XCTAssertEqual(catalog.rooms.map { $0.latest?.author }, ["Planner", nil])
   }
   func testAShortOptionListIsSegmentedAndALongOneStaysAMenu() {
     XCTAssertTrue(InferenceChoice.segmented(InferenceSettings.speeds.count))

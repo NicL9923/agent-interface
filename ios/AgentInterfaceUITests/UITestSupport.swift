@@ -93,6 +93,21 @@ extension XCUIElementQuery {
 }
 
 extension XCUIApplication {
+  /// Home's New button: a menu of New assistant and New group chat while Hermes can host groups, else
+  /// the New assistant button itself. True once either is on screen.
+  func newAssistantReady(timeout: TimeInterval) -> Bool {
+    buttons["newMenu"].waitForExistence(timeout: timeout) || buttons["New assistant"].exists
+  }
+  /// Makes a new assistant from home, through the New menu when there is one.
+  func tapNewAssistant(timeout: TimeInterval = 10) {
+    XCTAssertTrue(newAssistantReady(timeout: timeout), "Home's New button is on screen\n\(debugDescription)")
+    if buttons["newMenu"].exists {
+      buttons["newMenu"].tapWhenReady(timeout: timeout)
+      buttons["newAssistant"].tapWhenReady(timeout: timeout)
+    } else {
+      buttons["New assistant"].tapWhenReady(timeout: timeout)
+    }
+  }
   /// Sends a hardware keyboard shortcut and waits for `target` to appear. A shortcut sent while the
   /// screen is still settling can be dropped on a slow simulator, so it is sent again, up to
   /// `attempts` times, while `target` has not appeared.

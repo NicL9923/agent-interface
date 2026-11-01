@@ -66,7 +66,7 @@
 
 - `bash .agents/tools/capture-settings-ios.sh APP_PATH SIMULATOR_UUID OUTPUT_DIR TAB [TAB...]` captures compiled Debug settings or Search, History, Saved, Automations, Groups and app Preferences pages using the installed simulator, with synthetic data and the machine-wide lock. It boots one simulator, saves PNGs and shuts it down. It resolves `simctl` through the selected Xcode; `SIMULATOR_CAPTURE_DISPLAY` selects a display and defaults to 1.
 
-- `capture-groups.js` captures desktop and phone group conversations, mention suggestions, thread selection, the create limit and named pending approval cards in an existing Playwright CLI browser. It checks draft preservation and one synthetic send, then closes its isolated context.
+- `capture-groups.js` captures desktop and phone home with group rows, group conversations, mention suggestions, thread selection, the New menu's create sheet and limit and named pending approval cards in an existing Playwright CLI browser. It checks draft preservation and one synthetic send, then closes its isolated context.
 
 - `capture-app-settings.js` captures app settings, Following, home section editing, keyboard help, command palette and find-in-chat at desktop and phone widths, with reversible fixture preference edits. It closes its isolated browser context.
 

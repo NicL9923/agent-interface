@@ -15,7 +15,9 @@ export interface RoutineResult {
 }
 export interface RoutineOutput { messages: Message[]; previewOnly: boolean }
 export interface GroupMember { member_id: string; profile: string; handle: string; display_name?: string; target?: { kind: string; profile: string } }
-export interface GroupRoom { room_id: string; name: string; members: GroupMember[]; latest_seq?: number }
+/** The newest message in a room, as the catalog previews it on home. `author` is already worded for the viewer, such as "You". */
+export interface GroupLatest { text: string; at: string; author: string }
+export interface GroupRoom { room_id: string; name: string; members: GroupMember[]; latest_seq?: number; latest?: GroupLatest }
 export interface GroupEvent {
   event_id: string; seq: number; kind: string; created_at: number;
   actor: { kind: string; id: string };

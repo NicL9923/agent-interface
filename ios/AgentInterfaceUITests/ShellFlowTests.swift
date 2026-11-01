@@ -99,10 +99,26 @@ import XCTest
     XCTAssertFalse(app.buttons["Back to results"].exists)
   }
 
+  func testGroupRowsSitBesideAssistantsAndOpenLikeAConversation() throws {
+    let app = launch(["GROUP"], home: true)
+    let row = app.buttons["room.fixture-room"]
+    XCTAssertTrue(row.waitForExistence(timeout: 15), app.debugDescription)
+    XCTAssertTrue(app.buttons["bot.ranch"].exists, "Assistants and rooms share home")
+    XCTAssertTrue(row.label.contains("Supper planning"), row.label)
+    XCTAssertTrue(row.label.contains("Kitchen companion: Brisket, if the smoker is free."), "The row previews the last message and who said it: \(row.label)")
+    XCTAssertFalse(app.buttons["openGroups"].exists, "There is no separate Group chats link")
+    try capture("05a-home-with-group")
+    row.tapWhenReady()
+    XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "groupComposer").firstMatch.waitForExistence(timeout: 10), app.debugDescription)
+    // Back returns to home, as from a conversation.
+    let back = app.navigationBars.buttons.matching(identifier: "Your assistants").firstMatch
+    if back.waitForExistence(timeout: 3) { back.tap(); XCTAssertTrue(row.waitForExistence(timeout: 5)) }
+  }
+
   func testGroupChatNamesSendersSuggestsMentionsAndUpdatesLive() throws {
     let app = launch(["GROUP"], home: true)
-    app.buttons["openGroups"].tapWhenReady(timeout: 15)
-    app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Supper planning")).firstMatch.tapWhenReady()
+    // The room is a row on home beside the assistants.
+    app.buttons["room.fixture-room"].tapWhenReady(timeout: 15)
     XCTAssertTrue(app.staticTexts["Second test member"].waitForExistence(timeout: 10), app.debugDescription)
     let composer = app.descendants(matching: .any).matching(identifier: "groupComposer").firstMatch
     composer.typeWhenFocused("Ask @kit")

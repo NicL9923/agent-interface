@@ -11,7 +11,8 @@ export const BotDetails = lazy(() => import("./BotDetails").then(module => ({ de
 export const PreferencesDialog = lazy(() => import("./PreferencesDialog").then(module => ({ default: module.PreferencesDialog })));
 export const ChatModelPicker = lazy(() => import("../components/ChatModelPicker").then(module => ({ default: module.ChatModelPicker })));
 export const DiscoveryPanel = lazy(() => import("../components/DiscoveryPanel").then(module => ({ default: module.DiscoveryPanel })));
-export const GroupChats = lazy(() => import("../components/GroupChats").then(module => ({ default: module.GroupChats })));
+export const GroupRoomView = lazy(() => import("../components/GroupChats").then(module => ({ default: module.GroupRoomView })));
+export const GroupCreate = lazy(() => import("../components/GroupCreate").then(module => ({ default: module.GroupCreate })));
 
 /** True once `active` has been, for panels that keep their state while closed but need not load until first use. */
 export function useOnceActive(active: boolean) {
