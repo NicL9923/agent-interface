@@ -167,6 +167,9 @@ The [shared computer](docs/SharedComputer.md) provides one persistent desktop an
 browser for all assistants, with human takeover for every household member and a
 real VPS terminal for terminal administrators. The iOS app shows the desktop on its
 own Computer screen with Take over and Hand back; the terminal still opens in Safari.
+An assistant can ask for a person in the conversation; the card's Take over opens the
+computer with control in one step, and handing back tells the assistant to continue.
+While a browser tool runs, the live row offers Watch.
 
 The [capability matrix](docs/HermesCapabilityMatrix.md) records the tested upstream
 revision, native integration probes, and the small revision-bound extension for
@@ -287,7 +290,9 @@ only recognized automation sources move into activity.
 
 Assistant settings > **Logins** manages the selected Hermes profile's encrypted
 login vault. Native login, code, vault-unlock and secret requests appear inline
-with masked fields, outside chat and drafts. Ownership and source controls follow
+with masked fields, outside chat and drafts. Each card shows when it is sending and
+when Hermes took the answer, then folds to one line. Sending a message instead
+closes the request so the assistant reads it and can ask again. Ownership and source controls follow
 Hermes. See [passwords and logins](docs/PasswordsAndLogins.md) for storage scope,
 external password managers and uncertain-request recovery.
 

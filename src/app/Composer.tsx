@@ -135,7 +135,7 @@ function useFileDrop(footer: React.RefObject<HTMLElement | null>, onDrop: (files
   return { panel, over };
 }
 // Memoized with stable callbacks from App, so a streaming reply, which changes the conversation about four times a second, does not re-render it.
-export const Composer = memo(function Composer({ boot, selected, botId, prompts, state, active, connectionLost, draft, setDraft, draftReady, uploads, previews, uploading, upload, retryUpload, cancelUpload, pending, receipt, sending, send, retry, discard, reviewed, setReviewed, dock = [], stopping, onStop }: {
+export const Composer = memo(function Composer({ boot, selected, botId, prompts, state, active, connectionLost, draft, setDraft, draftReady, uploads, previews, uploading, upload, retryUpload, cancelUpload, pending, receipt, sending, send, retry, discard, reviewed, setReviewed, dock = [], stopping, onStop, waiting }: {
   boot: Bootstrap;
   selected: Bot;
   botId: string;
@@ -143,6 +143,8 @@ export const Composer = memo(function Composer({ boot, selected, botId, prompts,
   prompts: readonly string[];
   state: ActivityState;
   active: boolean;
+  /** The placeholder while the assistant waits on a request this person could answer by message. */
+  waiting?: string;
   connectionLost: boolean;
   draft: Draft;
   setDraft(update: (current: Draft) => Draft): void;
@@ -313,9 +315,9 @@ export const Composer = memo(function Composer({ boot, selected, botId, prompts,
           value={shown.text}
           placeholder={
             handedOff ? "Sending…"
-              : active
+              : waiting ?? (active
               ? "Guide…"
-              : "Message…"
+              : "Message…")
           }
           aria-describedby={pasteStatus ? "composer-paste-status" : undefined}
           // Read-only rather than disabled, so focus stays here for the next message.

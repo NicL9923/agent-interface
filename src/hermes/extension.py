@@ -400,6 +400,8 @@ class Bridge:
         self.maintenance_file = maintenance_file
         self.canonical_lock = threading.RLock()
         self.submission_lock = threading.RLock()
+        # The (profile, session, actor) a submit on this thread just admitted as steering.
+        self.steered = threading.local()
         self.maintenance_lock = threading.RLock()
         self.maintenance_read = contextvars.ContextVar("agent_interface_maintenance_read", default=False)
         self.keepers = {}
@@ -1161,7 +1163,28 @@ class Bridge:
                     journal.db.execute("UPDATE receipts SET status=?,row_id=COALESCE(?,row_id),terminal=CASE WHEN ? THEN 1 ELSE terminal END WHERE request_id=?", (status, result.get("user_row_id"), steering or status == "rejected", request_id))
                     if interrupted and status == "accepted":
                         journal.db.execute("DELETE FROM interruptions WHERE profile=? AND stored_session=?", (profile, stored))
+                    if steering and status == "accepted":
+                        self.steered.value = (profile, sid, actor)
                     return self.admitted(rid, request_id)
+
+    def submit_from_app(self, rid, params):
+        """An app message. Once it is durably admitted as steering, the asks it answers instead close.
+
+        A blocked tool returns only when its ask settles, and native steering drains after that
+        tool returns, so the message would otherwise wait behind the ask. This runs after every
+        lock is released: closing wakes the waiting tool thread, which may need them.
+        """
+        self.steered.value = None
+        try:
+            return self.submit(rid, params)
+        finally:
+            steered, self.steered.value = self.steered.value, None
+            hook = getattr(self.journal, "steering_admitted", None)
+            if steered and hook:
+                try:
+                    hook(*steered)
+                except Exception:
+                    logging.getLogger(__name__).exception("Could not close the asks a steering message answered")
 
     def receipt(self, rid, params):
         with self.journal.lock:
@@ -1240,7 +1263,7 @@ class Bridge:
     def rpc_methods(self):
         """The agent-interface RPCs that read or admit app work, by registered name."""
         return {"agent-interface." + name: handler for name, handler in
-                {"open": self.open_bot, "submit": self.submit, "receipt": self.receipt, "discover": self.discover}.items()}
+                {"open": self.open_bot, "submit": self.submit_from_app, "receipt": self.receipt, "discover": self.discover}.items()}
 
     # Bot Chat delivery: routines and bot messages arrive as canonical chat turns.
 
@@ -1277,8 +1300,10 @@ def install(path=None):
     actual_revision, patch_hash = source_state()
     from tui_gateway import server
     from hermes_constants import get_hermes_home, profile_name_for_home
-    sibling_module("computer").install(server)
+    computer = sibling_module("computer")
+    computer.install(server)
     journal = Journal(path or Path(get_hermes_home()) / "runtime" / "agent-interface.db")
+    computer.bind_journal(journal)
     bridge = Bridge(server, journal, get_hermes_home=get_hermes_home, profile_name_for_home=profile_name_for_home,
                     maintenance_file=os.environ.get("HERMES_AGENT_INTERFACE_MAINTENANCE_FILE"))
     from hermes_cli.backend_retirement import retirement

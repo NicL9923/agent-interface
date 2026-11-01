@@ -1,12 +1,15 @@
 import type { ActivityState, Bot, Conversation, FileRef, Message, SubmissionReceipt, ToolCall } from '../shared/types.js';
 import type { ExplicitLoginRequest, SecureRequest } from '../shared/vault.js';
+import { computerHandoffMethod as COMPUTER_HANDOFF, type ComputerHandoff } from '../shared/computer.js';
 import { messageOrigin, withMessageOrigins, wireOrigin } from '../shared/message-origin.js';
 import type { Wire } from './hermes-transport.js';
 
 /** What a session's frames have said since its last read: streamed text, open requests and tools. */
 export type LiveState = {text: string; reasoning: string; state: ActivityState; requests: Wire[]; tools: ToolCall[]; detail?: string};
 export const emptyLiveState = (): LiveState => ({text: '', reasoning: '', state: 'idle', requests: [], tools: []});
-const blockingRequests = ['clarify', 'sudo', 'secret', 'vault.save_login', 'vault.code', 'vault.unlock_prompt', 'connection'];
+// Requests a person answers, which this client must leave open rather than refuse. The add-on's
+// computer handoff is one: refusing it would settle the assistant's request at once.
+const blockingRequests = ['clarify', 'sudo', 'secret', 'vault.save_login', 'vault.code', 'vault.unlock_prompt', 'connection', COMPUTER_HANDOFF];
 
 /**
  * Removes persisted segments from the front of accumulated live text. Whitespace
@@ -248,18 +251,25 @@ export function openRequests(value: Wire, sid: string): {approvals: Conversation
     }
     const explicit = secure?.method === 'vault.save_login' && !!secure.explicit;
     const clarify = x.method === 'clarify';
+    // The add-on's household computer handoff. Only this executor can settle it.
+    const computer: ComputerHandoff | undefined = x.method === COMPUTER_HANDOFF && x.app_local_secure === true
+      && typeof owner.epoch === 'string' && typeof params.reason === 'string' && typeof params.what_to_do === 'string'
+      ? {...owner, reason: params.reason.slice(0, 200), whatToDo: params.what_to_do.slice(0, 300)} : undefined;
     return {
       id: String(x.id),
-      kind: secure ? 'secure' as const : clarify ? 'clarify' as const : 'official' as const,
+      kind: secure ? 'secure' as const : clarify ? 'clarify' as const : computer ? 'computer' as const : 'official' as const,
       title: explicit ? 'Hermes asks to save a login'
         : secure ? 'Hermes needs secure input'
         : clarify ? 'Hermes needs your answer'
+        : computer ? 'Take over the computer?'
         : 'Continue in the official Hermes client',
       detail: explicit ? 'Check the address and reason first. The password goes directly to the encrypted Hermes vault, never into this chat or to the assistant.'
         : secure ? 'Enter this value securely. It will go directly to Hermes without becoming a chat message.'
         : clarify ? 'Answer the questions to continue this task.'
+        : computer ? computer.reason
         : `Hermes is waiting for ${x.method}. Use the official client to complete credential or service setup.`,
       secure,
+      ...(computer ? {computer} : {}),
       questions: clarify ? (params.questions ?? []).map((q: Wire) => ({id: q.qid, prompt: q.question ?? '', options: q.choices})) : undefined,
     };
   });

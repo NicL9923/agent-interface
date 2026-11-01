@@ -43,3 +43,15 @@
 .vault-remove-confirmation { margin: 12px 0; padding: 12px; border-radius: 10px; background: var(--rail); }
 .vault-remove-confirmation > p { margin: 0; font-size: .875rem; }
 .vault-remove-confirmation .actions { margin: 12px 0 0; }
+
+/* A secure request after it is sent: a short confirmation, then one line in its place. */
+.secure-request .secure-reply-hint { margin: 0; font-size: .875rem; line-height: 1.5; }
+.secure-request input:read-only:disabled { opacity: .75; }
+.secure-request.is-accepted { padding-block: 16px; }
+.secure-accepted { display: flex; align-items: center; gap: 8px; margin: 0; font-weight: 600; color: var(--accent); }
+.secure-accepted svg, .secure-receipt svg { flex: none; }
+.secure-receipt { display: flex; align-items: center; gap: 8px; margin: 0 0 24px; padding: 10px 14px; border-radius: 10px;
+  background: var(--accent-soft); color: var(--ink); font-size: .875rem; line-height: 1.4; }
+.secure-receipt svg { color: var(--accent); }
+/* Sending is progress, not an unavailable control: it keeps full contrast. */
+.secure-request button.primary.is-sending:disabled { opacity: 1; cursor: progress; }

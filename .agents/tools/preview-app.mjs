@@ -193,6 +193,46 @@ if (process.env.PREVIEW_SECURE_REQUEST) {
     detail: 'Explicit preview fixture. Use made-up credentials; no website login or native vault change occurs.',
     secure: { epoch: 'fixture-epoch', sessionId: 'fixture-session', method, ...metadata } }];
 }
+// PREVIEW_SECURE_FLOW=login|handoff runs the whole wait: a message to Kitchen companion starts a turn
+// that asks for a login or a computer takeover, the answer takes a moment, and Hermes stops listing the
+// request shortly before the app hears about it. A message sent while it waits closes the request.
+const secureFlow = process.env.PREVIEW_SECURE_FLOW;
+const flowRequest = () => secureFlow === 'handoff'
+  ? { id: `fixture-handoff-${Date.now()}`, kind: 'computer', title: 'Take over the computer?', detail: 'The supply site wants a code from your phone.',
+    computer: { epoch: 'fixture-epoch', sessionId: 'fixture-session', reason: 'The supply site wants a code from your phone.', whatToDo: 'Enter the code from your phone, then press Hand back.' } }
+  : { id: `fixture-login-${Date.now()}`, kind: 'secure', title: 'Hermes asks to save a login', detail: 'Check the address and reason first. The password goes directly to the encrypted Hermes vault, never into this chat or to the assistant.',
+    secure: { epoch: 'fixture-epoch', sessionId: 'fixture-session', method: 'vault.save_login', origin: 'https://supply.example.invalid', site: 'supply.example.invalid',
+      explicit: { label: 'Ranch supply', purpose: 'Sign in to check this week\'s feed order.', profile: 'kitchen', requestedBy: { id: 'preview', name: 'Nicolas' } } } };
+const flowReply = (conversation, text, delay = 2500) => setTimeout(() => {
+  conversation.messages.push({ id: `flow-reply-${Date.now()}`, role: 'assistant', text, createdAt: new Date().toISOString() });
+  conversation.activity = { state: 'done' }; conversation.toolCalls = []; changed('kitchen');
+}, delay);
+function secureFlowMessage(body) {
+  const conversation = conversations.kitchen, now = new Date().toISOString();
+  conversation.messages.push({ id: body.requestId, role: 'user', sender: { id: 'preview', name: 'Nicolas' }, text: body.text, createdAt: now });
+  if (conversation.attention?.length) {
+    // A reply while it waits closes the request; the assistant reads the message next.
+    conversation.attention = [];
+    conversation.activity = { state: 'working', detail: 'Reading your message', updatedAt: now };
+    flowReply(conversation, 'Thanks, I closed that request. I will use the address you gave me instead.');
+  } else {
+    conversation.activity = { state: 'working', detail: secureFlow === 'handoff' ? 'Opening the supply site' : 'Preparing the supply sign-in', updatedAt: now };
+    conversation.toolCalls = [{ id: 'flow-tool', name: secureFlow === 'handoff' ? 'browser_navigate' : 'vault_save_login', status: 'running', startedAt: now }];
+    setTimeout(() => {
+      conversation.attention = [flowRequest()];
+      conversation.activity = { state: 'blocked', updatedAt: new Date().toISOString() }; changed('kitchen');
+    }, 1200);
+  }
+  changed('kitchen');
+}
+function secureFlowSettled(conversation, outcome) {
+  // Hermes stops listing it at once; the app learns of it from the next change notice.
+  conversation.attention = [];
+  conversation.activity = { state: 'working', detail: 'Continuing', updatedAt: new Date().toISOString() };
+  conversation.toolCalls = [{ id: 'flow-tool-2', name: 'browser_navigate', status: 'running', startedAt: new Date().toISOString() }];
+  setTimeout(() => changed('kitchen'), 1500);
+  flowReply(conversation, outcome === 'declined' ? 'No problem. I left the order as it is.' : 'Signed in. This week\'s feed order is two bags of layer pellets and one of scratch grain.', 4000);
+}
 const memories = new Map();
 const memoryFor = botId => {
   if (!memories.has(botId)) memories.set(botId, { botId, profile: botId, scope: 'profile', owner: 'Hermes',
@@ -294,6 +334,17 @@ const server = createServer(async (request, response) => {
         ? [{ botId, botName: bot?.name, sessionId: conversation.sessionId, title: bot?.name, snippet: message.text.slice(0, 120), messageId: message.id, offset }] : []) : [];
       return json(response, { hits, unavailableBots: [] });
     }
+    if (secureFlow && request.method === 'POST' && path === '/bots/kitchen/messages' && !body.retryOf) {
+      secureFlowMessage(body);
+      return json(response, { requestId: body.requestId, status: 'accepted', messageId: body.requestId });
+    }
+    const handoffMatch = /^\/bots\/([^/]+)\/computer-handoffs\/([^/]+)$/.exec(path);
+    if (handoffMatch) {
+      const conversation = conversations[decodeURIComponent(handoffMatch[1])], pending = conversation?.attention?.find(item => item.id === handoffMatch[2]);
+      if (!pending) return json(response, { status: 'expired' });
+      secureFlowSettled(conversation, 'declined');
+      return setTimeout(() => json(response, { status: 'ok' }), 700);
+    }
     // Retry of a failed turn: the fixture runs again briefly, then answers. Nothing is fetched.
     const retryMatch = request.method === 'POST' && body.retryOf ? /^\/bots\/([^/]+)\/messages$/.exec(path) : null;
     if (retryMatch) {
@@ -393,6 +444,7 @@ const server = createServer(async (request, response) => {
       const botId = decodeURIComponent(secureMatch[1]), conversation = conversations[botId], pending = conversation?.attention?.find(item => item.id === secureMatch[2]);
       if (!pending || body.epoch !== pending.secure.epoch || body.sessionId !== pending.secure.sessionId || body.method !== pending.secure.method) return json(response, { error: 'The fixture request expired.' }, 409);
       if (process.env.PREVIEW_SECURE_FAILURE === '1') return json(response, { error: 'Fixture result uncertain.' }, 502);
+      if (secureFlow) { secureFlowSettled(conversation, body.cancel ? 'declined' : 'saved'); return setTimeout(() => json(response, { status: 'ok' }), 900); }
       if (!body.cancel && pending.secure.method === 'vault.save_login') vaultFor(botId).items.push({ id: 'fixture-' + randomUUID(), kind: 'login', label: pending.secure.site, origin: pending.secure.origin, identifier: body.identifier, identifierType: 'username', createdAt: new Date().toISOString(), hasOtp: false, backend: 'local', canRemove: true });
       conversation.attention = []; conversation.activity = { state: 'idle' }; changed(botId);
       return json(response, { status: 'ok' });
@@ -468,7 +520,12 @@ const server = createServer(async (request, response) => {
     }
     if (path === '/models') return json(response, modelCatalog);
     if (path === '/computer') return json(response, computerStatus());
-    if (path === '/computer/control') { computerControl = body.action === 'take' ? { kind: 'human', mine: true, name: 'Nicolas' } : { kind: 'idle' }; return json(response, computerStatus()); }
+    if (path === '/computer/control') {
+      computerControl = body.action === 'take' ? { kind: 'human', mine: true, name: 'Nicolas' } : { kind: 'idle' };
+      // Handing the computer back answers an open handoff, as the add-on's lease watcher does.
+      if (body.action === 'release' && conversations.kitchen.attention?.some(item => item.kind === 'computer')) secureFlowSettled(conversations.kitchen, 'handed_back');
+      return json(response, computerStatus());
+    }
     if (path === '/computer/terminal/end') { for (const client of computerSockets.clients) if (client.computerKind === 'terminal') { client.send(JSON.stringify({ type: 'exit' })); client.close(); } return json(response, { ok: true }); }
     if (path === '/computer/desktop' || path === '/computer/terminal') {
       const kind = path.split('/').at(-1), ticket = `fixture-${++computerTicket}`;

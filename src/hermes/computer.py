@@ -431,6 +431,8 @@ class Computer:
         supplied = params.get("service_key", "")
         if not secret or not isinstance(supplied, str) or not hmac.compare_digest(supplied, secret):
             raise ComputerError("Private application authentication is required.")
+        if action == "handoff":
+            return decline_handoff(params)
         if action not in ("observe", "take", "release"):
             raise ComputerError("Unknown household computer action.")
         with self.operation():
@@ -729,6 +731,213 @@ def install_tools():
     return computer
 
 
+HANDOFF = "agent_interface.computer_handoff"
+HANDOFF_TOOL = "computer_request_handoff"
+# A card nobody takes over closes after this long. Once someone has control, it waits for them.
+HANDOFF_WAIT = 600
+HIDDEN = re.compile(r"[\x00-\x1f\x7f-\x9f\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff]")
+_journal = None
+_handoffs_lock = threading.Lock()
+# Open handoff request ID -> {"opened": monotonic time, "taken": bool}, while the watcher runs.
+_handoffs = {}
+_watcher = None
+
+
+def bind_journal(journal):
+    """The add-on journal, which maps a live session to its profile and tells whether a person is waiting."""
+    global _journal
+    _journal = journal
+
+
+def handoff_failure(error_type, message):
+    return json.dumps({"success": False, "error_type": error_type, "error": message})
+
+
+def person_waiting(sid):
+    """A member's app message started this session's current turn, so someone can see the card."""
+    journal = _journal
+    if journal is None:
+        return False
+    profile = journal.live_profile_for_session(sid)
+    if profile is None or journal.canonical_session(profile) != sid:
+        return False
+    with journal.lock:
+        return journal.db.execute("SELECT 1 FROM receipts WHERE session_id=? AND terminal=0 AND steering=0 LIMIT 1",
+                                  (sid,)).fetchone() is not None
+
+
+def handoff_text(args, name, limit):
+    value = " ".join(args.get(name).split()) if isinstance(args.get(name), str) else ""
+    if not 1 <= len(value) <= limit or HIDDEN.search(value):
+        raise ComputerError(f"Give {name} as 1 to {limit} visible characters.")
+    return value
+
+
+def settle_handoff(request_id, outcome):
+    from tui_gateway import server_requests
+    return server_requests.resolve_response({"jsonrpc": "2.0", "id": request_id, "result": {"value": outcome}})
+
+
+def watch_handoffs(computer):
+    """Settles open handoffs from the lease: taken once a person holds the computer, handed back when they release it.
+
+    The lease is the one record every path shares: the card, Settings > Computer, a closed
+    viewer and the iOS screen. Any takeover answers every open handoff, because each asked a
+    person to use the same computer.
+    """
+    global _watcher
+    from tui_gateway import server_requests
+    while True:
+        try:
+            human = computer._lease().holder == computer.lease.HUMAN
+        except Exception:
+            human = False
+        now, settle = time.monotonic(), []
+        with server_requests._lock:
+            open_ids = {request_id for request_id, request in server_requests._open.items() if request.method == HANDOFF}
+        with _handoffs_lock:
+            for request_id in list(_handoffs):
+                if request_id not in open_ids and now - _handoffs[request_id]["opened"] > 5:
+                    _handoffs.pop(request_id)
+            for request_id in open_ids:
+                state = _handoffs.setdefault(request_id, {"opened": now, "taken": False})
+                if human:
+                    state["taken"] = True
+                elif state["taken"]:
+                    settle.append((request_id, "handed_back"))
+                elif now - state["opened"] >= HANDOFF_WAIT:
+                    settle.append((request_id, "timed_out"))
+            for request_id, _ in settle:
+                _handoffs.pop(request_id, None)
+            if not _handoffs:
+                _watcher = None
+                return
+        for request_id, outcome in settle:
+            settle_handoff(request_id, outcome)
+        time.sleep(.5)
+
+
+def start_handoff_watch(computer):
+    global _watcher
+    with _handoffs_lock:
+        # The watcher exits once nothing is open. This placeholder keeps it running until the ask
+        # about to be sent registers, and it is added under the lock the exit decision takes.
+        _handoffs["pending:" + secrets.token_hex(8)] = {"opened": time.monotonic(), "taken": False}
+        if _watcher is None:
+            _watcher = threading.Thread(target=watch_handoffs, args=(computer,), name="agent-interface-computer-handoff", daemon=True)
+            _watcher.start()
+
+
+HANDOFF_RESULTS = {
+    "handed_back": dict(success=True, status="handed_back", next=(
+        "A person took control of the household computer and has handed it back. They may have changed the "
+        "screen, the open page or the signed-in account, and may or may not have done what you asked. Take a new "
+        "screenshot or page snapshot before acting, check whether the step is done, and tell the user what you "
+        "found.")),
+    "declined": dict(success=False, error_type="declined", error=(
+        "The person chose Not now, so nobody used the computer. Continue without that step, or tell them what it "
+        "blocks. Do not ask again unless they ask you to.")),
+    "timed_out": dict(success=False, error_type="timed_out", error=(
+        "Nobody took over the computer within 10 minutes, so the request closed. Tell the user what is waiting and "
+        "ask them to reply when they are ready.")),
+}
+
+
+def request_handoff(computer, args, **_kwargs):
+    """Asks a person in WildBots to take over the household computer, and waits until they hand it back."""
+    vault = sibling_module("vault")
+    try:
+        if not isinstance(args, dict) or set(args) - {"reason", "what_to_do"}:
+            raise ComputerError("Pass only reason and what_to_do.")
+        reason, todo = handoff_text(args, "reason", 200), handoff_text(args, "what_to_do", 300)
+    except ComputerError as error:
+        return handoff_failure("invalid_arguments", str(error))
+    from gateway.session_context import get_session_env
+    sid = get_session_env("HERMES_UI_SESSION_ID")
+    if not sid or not person_waiting(sid):
+        return handoff_failure("no_person", "Nobody is waiting in this WildBots conversation to take over, as in a "
+                               "scheduled or messaging run. Tell the user what needs a person on the household computer "
+                               "and ask them to open Computer in WildBots when they can.")
+    try:
+        status = computer.status()
+    except ComputerError as error:
+        status = {"available": False, "reason": str(error)}
+    if not status.get("available") or not status.get("running") or status.get("reason"):
+        return handoff_failure("computer_unavailable", "The household computer cannot be taken over right now: "
+                               + (status.get("reason") or "it is not running.") + " Tell the user what is blocked.")
+    from tui_gateway import server_requests
+    start_handoff_watch(computer)
+    with vault.watched_asks() as asks:
+        # Bot computer actions stay paused for the person; this tool holds no browser lock of its own.
+        with computer.suspend_for_prompt():
+            result = server_requests.send(HANDOFF, sid, {"reason": reason, "what_to_do": todo}, timeout=None)
+    value = (result or {}).get("value", "")
+    if value in HANDOFF_RESULTS:
+        return json.dumps(HANDOFF_RESULTS[value])
+    if vault.replied_in_chat(asks):
+        return handoff_failure("user_replied_in_chat", "The user sent a chat message instead of taking over, so the "
+                               "request closed and nobody used the computer. Their message is the next user message: read "
+                               "it before doing anything else. If they still want help, ask again with what they corrected.")
+    return handoff_failure("cancelled", "The request closed without an answer, for example because the task was "
+                           "stopped. Do not continue the step that needed a person.")
+
+
+HANDOFF_SCHEMA = dict(name=HANDOFF_TOOL, description=(
+    "Ask a person to take over the household computer. Use it for a step you cannot or should not do yourself: a "
+    "CAPTCHA, a sign-in that needs their phone or a passkey, a payment or purchase confirmation, or a choice only they "
+    "can make. Use it only while your task uses the household computer's browser or desktop, and leave the screen on "
+    "the step they need. "
+    "The person sees a card in WildBots with your reason and what you want them to do, and buttons for Take over and "
+    "Not now. While they have control, your browser and computer actions are refused. The call waits until they hand "
+    "the computer back. "
+    "Results: status handed_back: take a new screenshot or snapshot before acting, because the screen may have "
+    "changed, and check whether the step is done. declined: they chose Not now; continue without it or explain what "
+    "it blocks, and do not ask again unless they ask you to. user_replied_in_chat: they sent a message instead; read "
+    "it next and ask again only if they still want this. timed_out: nobody took over within 10 minutes; tell them "
+    "what is waiting. computer_unavailable or no_person: nobody can take over now; explain what is blocked. "
+    "invalid_arguments: fix the arguments and call again. cancelled: the task was stopped; do not continue that step. "
+    "Never ask the person to type passwords or codes into chat; they type them on the computer itself."),
+    parameters=dict(type="object", additionalProperties=False, required=["reason", "what_to_do"], properties=dict(
+        reason=dict(type="string", description="Why you need a person, in one short sentence the user sees, such as "
+                    "The bank wants a code from your phone. At most 200 characters."),
+        what_to_do=dict(type="string", description="What the person should do before handing back, such as Enter the "
+                        "code, then press Hand back. At most 300 characters."))))
+
+
+def register_handoff(computer):
+    """Registers the ask's wire contract and its tool. Older Hermes revisions without either seam get no tool."""
+    from tui_gateway.contracts import registry as contracts
+    from tui_gateway.contracts.server_requests import ServerRequestParams, ValueResult
+    if HANDOFF not in contracts.SERVER_REQUESTS:
+        class ComputerHandoffParams(ServerRequestParams):
+            reason: str
+            what_to_do: str
+        contracts.server_request(HANDOFF, params=ComputerHandoffParams, result=ValueResult,
+                                 doc="WildBots: ask a person to take over the household computer and hand it back.")
+    from tools.registry import registry
+    # An ask-the-user tool: it rides with clarify, and a session nobody can answer refuses at call time.
+    registry.register(name=HANDOFF_TOOL, toolset="clarify", schema=HANDOFF_SCHEMA, emoji="🖥️",
+                      handler=lambda args, **kwargs: request_handoff(computer, args, **kwargs))
+
+
+def decline_handoff(params):
+    """Not now on a handoff card. Only this executor's open handoff for that profile's conversation settles."""
+    from tui_gateway import server_requests
+    request_id, sid, epoch, profile = (params.get(key) for key in ("requestId", "sessionId", "epoch", "profile"))
+    if params.get("decision") != "decline" or not all(isinstance(value, str) and 1 <= len(value) <= 200
+                                                      for value in (request_id, sid, epoch, profile)):
+        raise ComputerError("This computer request is invalid.")
+    with server_requests._lock:
+        request = server_requests._open.get(request_id)
+    if request is None:
+        return {"status": "expired"}
+    journal = _journal
+    if (journal is None or request.method != HANDOFF or request.sid != sid or epoch != journal.epoch
+            or journal.live_profile_for_session(sid) != profile or journal.canonical_session(profile) != sid):
+        raise ComputerError("This computer request changed. Refresh the conversation.")
+    return {"status": "ok" if settle_handoff(request_id, "declined") else "expired"}
+
+
 def install(server):
     computer = install_tools()
     def request(rid, params):
@@ -745,6 +954,10 @@ def install(server):
     server.register_method("agent-interface.computer", request)
     if computer is None:
         return
+    try:
+        register_handoff(computer)
+    except ImportError:
+        pass  # A revision without the contract seam keeps the computer without the handoff tool.
     native_ask = server._ask
     @functools.wraps(native_ask)
     def ask(method, sid, params, timeout=300):

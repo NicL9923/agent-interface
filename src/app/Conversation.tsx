@@ -11,7 +11,7 @@ import { ConnectionPanel } from "../components/ConnectionPanel";
 import { Icon } from "../components/Icon";
 import { NotificationOnboarding } from "../components/DeviceNotifications";
 import type { useDeviceNotifications } from "../components/use-device-notifications";
-import { SecureRequestCard } from "../components/SecureRequestCard";
+import { openComputer, usesComputer } from "../components/ComputerHandoffCard";
 import { AgentExchange, isAgentExchange } from "../components/AgentExchange";
 import { ActionReceipt } from "../components/ActionReceipt";
 import { When } from "../components/When";
@@ -24,7 +24,7 @@ import type { SentEcho } from "./sent-echo";
 import type { useConversation } from "./use-conversation";
 import { useStableCallback } from "./use-stable-callback";
 import { useTurnRetry } from "./use-turn-retry";
-import { AttentionCard } from "./AttentionCard";
+import { AttentionList } from "./AttentionList";
 import { FindBar } from "./FindBar";
 import { MessageMeta, QuoteSelection, TranscriptTools } from "./ReplyActions";
 import { useReplySpeech } from "./use-reply-speech";
@@ -250,7 +250,11 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
                 </> : <Shimmer text={`${selected.name} is ${action}...`} />}
               </div>
               {running && (liveTool || liveThought) && <div className="activity-live">
-                {liveTool && <p className="activity-live-tool">{liveTool}</p>}
+                {liveTool && (usesComputer(runningCall?.name) ? <div className="activity-live-computer">
+                  <p className="activity-live-tool">{liveTool}</p>
+                  <button type="button" className="activity-watch" aria-label={`Watch ${selected.name} on the computer`}
+                    onClick={() => openComputer()}><Icon name="computer" size={16} />Watch</button>
+                </div> : <p className="activity-live-tool">{liveTool}</p>)}
                 {liveThought && <p className="activity-live-thought">{liveThought}</p>}
               </div>}
               {retry.message && <p className="recovery-guidance" role={retry.checking ? "status" : undefined}>{retry.checking
@@ -270,19 +274,8 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
             </div>
           </div>
         )}
-        {conversation?.attention?.map((request) => (
-          request.kind === "secure" && request.secure ? <SecureRequestCard
-            key={`${boot.user.id}:${botId}:${request.id}:${JSON.stringify(request.secure)}`}
-            request={request.secure} requestId={request.id} botId={botId} ownerId={boot.user.id}
-            title={request.title} detail={request.detail} assistantName={selected?.name}
-          /> : <AttentionCard
-            key={request.id}
-            request={request}
-            disconnected={connectionLost}
-            botId={botId}
-            report={setError}
-          />
-        ))}
+        <AttentionList conversation={conversation} botId={botId} userId={boot.user.id} assistantName={selected?.name}
+          disconnected={connectionLost} report={setError} />
         {conversation?.approvals
           .filter((approval) => approval.status === "pending")
           .map((approval) => <ApprovalCard key={`${boot.user.id}:${botId}:${approval.id}`} approval={approval} botId={botId} userId={boot.user.id} disconnected={connectionLost}

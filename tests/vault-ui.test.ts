@@ -35,7 +35,11 @@ it("sends a scoped login answer outside chat and clears fields before confirmati
     epoch: "epoch", sessionId: "session", method: "vault.save_login", identifier: "someone", password: "  exact password  ",
   });
   expect(container.querySelector<HTMLInputElement>('input[type="password"]')!.value).toBe(""); expect(localStorage.length).toBe(0);
-  await act(async () => done({ status: "ok" })); expect(container.textContent).toContain("Sent directly to Hermes"); expect(container.querySelector("form")).toBeNull();
+  // Locked while sending: the identifier shows, the password field is empty behind a masked placeholder.
+  expect(container.querySelector<HTMLInputElement>('input[type="password"]')!.disabled).toBe(true);
+  expect(container.querySelector<HTMLInputElement>("input:not([type=password])")!.value).toBe("someone");
+  expect(container.textContent).toContain("Sending securely…");
+  await act(async () => done({ status: "ok" })); expect(container.textContent).toContain("Login saved. The assistant is continuing."); expect(container.querySelector("form")).toBeNull();
 });
 it("cancels only the bound native request without submitting entered secrets", async () => {
   vi.mocked(write).mockResolvedValue({ status: "ok" }); await render(card()); await type("Password", "must-not-send"); await click("Cancel request");
@@ -68,7 +72,7 @@ it("fences old completions and clears fields when household identity changes", a
   let done!: (value: unknown) => void; vi.mocked(write).mockReturnValue(new Promise(resolve => { done = resolve; }));
   await render(card()); await type("Username, email or phone", "first"); await type("Password", "first-secret"); await submit();
   await render(card(request, "two")); await type("Password", "second-secret"); await act(async () => done({ status: "ok" }));
-  expect(container.textContent).not.toContain("Sent directly"); expect(container.querySelector<HTMLInputElement>('input[type="password"]')!.value).toBe("second-secret");
+  expect(container.textContent).not.toContain("Login saved"); expect(container.querySelector<HTMLInputElement>('input[type="password"]')!.value).toBe("second-secret");
   await render(card({ ...request, sessionId: "new-session" }, "two")); expect(container.querySelector<HTMLInputElement>('input[type="password"]')!.value).toBe("");
 });
 it("clears secure fields when the page is hidden without submitting anything", async () => {
