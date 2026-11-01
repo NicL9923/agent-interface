@@ -23,8 +23,8 @@ extension AppStore {
       "earlierFileCache": \.earlierFileCache, "loadingEarlierFiles": \.loadingEarlierFiles,
       "earlierFilesFailure": \.earlierFilesFailure, "loadingEarlier": \.loadingEarlier,
       "conversationScreens": \.conversationScreens, "chatCovers": \.chatCovers,
-      "connectionError": \.connectionError, "activity": \.activity, "latestReply": \.latestReply,
-      "readHere": \.readHere,
+      "connectionError": \.connectionError, "activity": \.activity,
+      "readHere": \.readHere, "homeRequest": \.homeRequest,
       // Transcript entry points (I1): Retry, opening at a message, and the attention scroll.
       "retryAttempt": \.retryAttempt, "focusedMessage": \.focusedMessage, "attentionScrollRequest": \.attentionScrollRequest,
     ]

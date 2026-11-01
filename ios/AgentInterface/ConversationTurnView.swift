@@ -7,7 +7,13 @@ private struct TranscriptConnectedKey: EnvironmentKey { static let defaultValue 
 /// keeps the name renders no message again.
 private struct TranscriptRecipientKey: EnvironmentKey { static let defaultValue = "Assistant" }
 private struct FoundMessageKey: EnvironmentKey { static let defaultValue: String? = nil }
+private struct TranscriptUserKey: EnvironmentKey { static let defaultValue: String? = nil }
 extension EnvironmentValues {
+  /// The signed-in person, so only another member's message carries a name.
+  var transcriptUserId: String? {
+    get { self[TranscriptUserKey.self] }
+    set { self[TranscriptUserKey.self] = newValue }
+  }
   var foundMessage: String? {
     get { self[FoundMessageKey.self] }
     set { self[FoundMessageKey.self] = newValue }
@@ -62,8 +68,8 @@ struct ConversationTurnView: View, Equatable {
         switch row {
         case .work: work
         case .message(let index, let message):
-        MessageView(message: message,
-          continued: message.role == "assistant" && index > 0 && visible[index - 1].role == "assistant" && message.id != turn.replyStart,
+        let run = turn.replyRun(at: index, in: visible)
+        MessageView(message: message, continued: run.continued, endsRun: run.endsRun, when: run.when,
           delivery: delivery?.id == message.id ? delivery?.status : nil).id(message.id)
         }
       }
@@ -208,6 +214,26 @@ extension ConversationTurn {
       }
     }
     return result
+  }
+}
+
+/// Where a message sits among consecutive reply parts. Parts read as one reply, so the time goes under
+/// the last, taken from an earlier part when the last has none, as on the web.
+struct ReplyRun: Equatable {
+  var continued: Bool
+  var endsRun: Bool
+  var when: String?
+}
+extension ConversationTurn {
+  func replyRun(at index: Int, in visible: [Message]) -> ReplyRun {
+    func joins(_ earlier: Int, _ later: Int) -> Bool {
+      visible.indices.contains(earlier) && visible.indices.contains(later)
+        && visible[earlier].role == "assistant" && visible[later].role == "assistant" && visible[later].id != replyStart
+    }
+    var when = visible[index].createdAt
+    var at = index
+    while when == nil, joins(at - 1, at) { at -= 1; when = visible[at].createdAt }
+    return ReplyRun(continued: joins(index - 1, index), endsRun: !joins(index, index + 1), when: when)
   }
 }
 

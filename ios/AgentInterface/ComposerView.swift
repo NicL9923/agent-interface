@@ -18,12 +18,12 @@ struct ComposerView: View {
   @Environment(\.dynamicTypeSize) private var dynamicTypeSize
   @ScaledMetric(relativeTo: .headline) private var sendGlyphSize = 18.0
   @State private var voice = VoiceController()
+  @Environment(SpeechController.self) private var speech: SpeechController?
   @State private var importFiles = false
   @State private var importPhotos = false
   @State private var takePhoto = false
   @State private var photos: [PhotosPickerItem] = []
   @State private var discardConfirm = false
-  @State private var modelOpen = false
   @State private var stopping = false
   @State private var dropTargeted = false
   @State private var recall = PromptRecall()
@@ -43,7 +43,7 @@ struct ComposerView: View {
       .overlay { if dropTargeted { ComposerDropOverlay(botName: bot.name, unavailable: store.attachUnavailable(bot.id)) } }
       .modifier(ComposerPickers(
         bot: bot, importFiles: $importFiles, importPhotos: $importPhotos, takePhoto: $takePhoto, photos: $photos,
-        discardConfirm: $discardConfirm, modelOpen: $modelOpen))
+        discardConfirm: $discardConfirm))
       .onAppear { configureVoice() }
       #if DEBUG
       .onChange(of: store.draftReady, initial: true) { _, ready in
@@ -92,13 +92,10 @@ struct ComposerView: View {
       AttachmentTrayView(botId: bot.id)
       ComposerRowLayout(singleLine: inputLineHeight,
         forceStack: dynamicTypeSize.isAccessibilitySize || store.composerDraft.text.contains("\n")) {
-        HStack(spacing: 4) {
-          attachMenu
-          if store.bootstrap?.preferences.presentation == "advanced" { modelButton }
-        }
+        HStack(spacing: 4) { attachMenu }
         input
         HStack(spacing: 4) {
-          VoiceButtons(voice: voice, bot: bot, reply: store.active || !store.composerDraft.text.isEmpty ? nil : store.latestReply, disabled: voiceDisabled)
+          VoiceButtons(voice: voice, bot: bot, disabled: voiceDisabled, beforeRecording: { speech?.cancel() })
           if focused { hideKeyboardButton }
           sendButton
         }
@@ -152,13 +149,6 @@ struct ComposerView: View {
       .accessibilityHint(unavailable ?? "You can also paste or drop them here.")
       .disabled(unavailable != nil)
   }
-  /// Icon only, like the web at phone width; the label still names the model.
-  private var modelButton: some View {
-    Button { modelOpen = true } label: {
-      RobotGlyph().frame(width: 20, height: 20).frame(width: 44, height: 44)
-    }.accessibilityLabel("Model: \(bot.model)").accessibilityIdentifier("composerModel")
-      .disabled(!store.supports(.botConfiguration) || !store.connected || store.sending)
-  }
   private var sendButton: some View {
     let enabled = stopVisible ? !stopDisabled : store.canSend
     return Button {
@@ -209,6 +199,7 @@ struct ComposerView: View {
     guard request.fresh(), request.scope == store.scope, voice.recording == nil, voice.state == .idle else { store.listenRequest = nil; return }
     guard !voiceDisabled else { return }
     store.listenRequest = nil
+    speech?.cancel()
     Task { await voice.startRecording() }
   }
   /// Steps through earlier messages from an empty composer. Never while a message is on its way:
@@ -289,11 +280,9 @@ private struct ComposerPickers: ViewModifier {
   @Binding var takePhoto: Bool
   @Binding var photos: [PhotosPickerItem]
   @Binding var discardConfirm: Bool
-  @Binding var modelOpen: Bool
   @Environment(AppStore.self) private var store
   func body(content: Content) -> some View {
     content
-      .sheet(isPresented: $modelOpen) { ComposerModelSheet(botId: bot.id).appStore(store) }
       .photosPicker(isPresented: $importPhotos, selection: $photos, maxSelectionCount: UploadRules.maxAttachments, matching: .images)
       .onChange(of: photos) { _, selection in pick(selection) }
       .fullScreenCover(isPresented: $takePhoto) {

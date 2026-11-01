@@ -57,8 +57,8 @@ transcribes the audio into your draft. Review it before sending. Transcription
 never submits a message. A failed web transcription keeps the recording for an
 explicit retry or discard.
 
-Listen to reply uses the selected Hermes profile's configured speech provider and
-the stored, completed assistant reply. The server returns private audio through a
+The speaker button in each assistant reply's action row uses the selected Hermes profile's configured speech provider and
+that stored, completed reply, one reply playing at a time. The server returns private audio through a
 short-lived, single-use URL bound to the signed-in account. Stop speaking ends
 playback. Provider credentials stay in Hermes. If no speech provider is available,
 the app explains the missing configuration.

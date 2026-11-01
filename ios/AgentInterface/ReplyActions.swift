@@ -5,25 +5,45 @@ struct ReplyActions: ViewModifier {
   var message: Message
   @Environment(AppStore.self) private var store: AppStore?
   @Environment(\.transcriptConnected) private var connected
+  @Environment(SpeechController.self) private var speech: SpeechController?
   @State private var saving = false
   @State private var saved = false
   private var eligible: Bool {
     message.role == "assistant" && !message.isInternalActivity && !message.isToolActivity
       && !message.id.hasSuffix("-inflight") && !message.text.isEmpty
   }
+  /// A person's own message offers Copy alone, as on the web.
+  private var ownMessage: Bool {
+    message.role == "user" && message.isHumanMessage && !message.id.hasSuffix("-inflight") && !message.text.isEmpty
+  }
   func body(content: Content) -> some View {
-    if eligible {
+    if ownMessage {
+      content.contextMenu { Button("Copy message", systemImage: "doc.on.doc", action: copy) }
+        .accessibilityAction(named: "Copy message", copy)
+    } else if eligible {
       content.contextMenu {
         Button("Copy answer", systemImage: "doc.on.doc", action: copy)
+        if let speech {
+          Button(listenTitle(speech), systemImage: "speaker.wave.2") { speech.toggle(message) }
+            .disabled(!connected && speech.current?.id != message.id)
+        }
         Button("Quote in reply", systemImage: "text.quote", action: quote)
         ShareLink(item: message.text) { Label("Share answer", systemImage: "square.and.arrow.up") }
         Button(saved ? "Reply saved" : saving ? "Saving…" : "Save reply", systemImage: "bookmark", action: save)
           .disabled(saving || saved || !connected)
       }
       .accessibilityAction(named: "Copy answer", copy)
+      .accessibilityAction(named: speech?.current?.id == message.id ? "Stop speaking" : "Listen to reply") { speech?.toggle(message) }
       .accessibilityAction(named: "Quote in reply", quote)
       .accessibilityAction(named: "Save reply", save)
     } else { content }
+  }
+  private func listenTitle(_ speech: SpeechController) -> String {
+    switch speech.current?.id == message.id ? speech.current?.phase : nil {
+    case .preparing?, .speaking?: "Stop speaking"
+    case .ready?: "Play audio"
+    case nil: "Listen to reply"
+    }
   }
   private func copy() {
     UIPasteboard.general.string = message.text
