@@ -844,3 +844,21 @@ it("returns focus to the edited routine after saving the previewed schedule", as
   expect(card.contains(document.activeElement)).toBe(true);
   expect(editor.querySelector("h3")?.textContent).toBe("New routine");
 });
+
+it("offers Show runs in chat per routine as this person's preference, not a routine change", async () => {
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [{ id: "r1", botId: bot.id, name: "Certificates", prompt: "", schedule: "every 6h", enabled: true }] : { providers: [], provider: "", model: "" });
+  const edits: ((value: typeof bootstrap.preferences) => typeof bootstrap.preferences)[] = [];
+  // Saves stay on their way, so the switch shows the edit as it would until the server answers.
+  const editPreferences = vi.fn((edit: (value: typeof bootstrap.preferences) => typeof bootstrap.preferences) => { edits.push(edit); return new Promise<void>(() => {}); });
+  await act(async () => root.render(createElement(BotSettings, { bot, bootstrap, onClose, onSaved, editPreferences })));
+  await click("routines");
+  const toggle = () => container.querySelector<HTMLInputElement>(".routine-chat-toggle input")!;
+  expect(toggle().checked).toBe(true);
+  await act(async () => toggle().click());
+  expect(toggle().checked).toBe(false);
+  expect(edits.at(-1)!(bootstrap.preferences).hiddenRoutineRuns).toEqual([{ botId: bot.id, routineId: "r1" }]);
+  await act(async () => toggle().click());
+  expect(toggle().checked).toBe(true);
+  expect(edits.at(-1)!({ ...bootstrap.preferences, hiddenRoutineRuns: [{ botId: bot.id, routineId: "r1" }] }).hiddenRoutineRuns).toEqual([]);
+  expect(write).not.toHaveBeenCalled();
+});

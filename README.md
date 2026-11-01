@@ -256,6 +256,17 @@ settings > **Work** manages standing goals, native tasks and event triggers.
 requires an explicit start. Memory edits apply to the canonical conversation at
 the next safe turn boundary, with pending/applied status and preserved history.
 
+Each routine run also appears in its assistant's conversation, in time order with the
+messages, as a collapsed card: a status dot, the routine's name, when it ran and a line of
+its output. Failed, running and undelivered runs say so in words beside the dot. Open a
+card to read the output with its files, save it, or open all results. A run whose output
+Hermes delivered into the chat shows once, as that message. Cards follow the loaded
+history, so paging back brings in earlier runs, and they update while the chat is open.
+**Hide this routine in chat** on a card, with Undo, or **Show runs in chat** in the
+routine's settings, keeps a routine such as a certificate check out of your chat. It
+is your own setting and doesn't change the routine for anyone else. Run status needs the
+current Hermes add-on; with an older one, runs show as "Status unknown".
+
 Use **View results** beside a routine to read its saved runs, including trials.
 Routine notifications name the routine and quote the start of its answer, or the
 error for a failed run, and open this history directly. Results stay within the selected
