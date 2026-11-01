@@ -100,7 +100,7 @@ export async function installCollaborationRoutes(app: FastifyInstance, runtime: 
     const allowed = new Set((await bots(userId)).map(bot => bot.id));
     const value = await request({ operation: 'list' }) as GroupCatalog;
     const rooms = value.rooms.filter(room => accessible(room, allowed));
-    await latest.refresh(rooms);
+    await latest.refresh(rooms, value.rooms);
     return { ...value, rooms: rooms.map(room => {
       const event = latest.latest(room.room_id);
       if (!event) return room;

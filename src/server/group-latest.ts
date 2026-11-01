@@ -45,9 +45,13 @@ export class GroupLatestCache {
   private readonly seen = new Map<string, { seq: number; event?: GroupEvent }>();
   private readonly reading = new Map<string, Promise<void>>();
   constructor(private readonly read: Read) {}
-  /** Brings the rooms' previews up to date, then forgets rooms that are gone. */
-  async refresh(rooms: GroupRoom[]) {
-    const live = new Set(rooms.map(room => room.room_id));
+  /**
+   * Brings these rooms' previews up to date and forgets rooms gone from Hermes's whole catalog.
+   * `rooms` is what this viewer may see; `catalog` is every room, so one viewer's filter never
+   * evicts a room only someone else can see.
+   */
+  async refresh(rooms: GroupRoom[], catalog: GroupRoom[] = rooms) {
+    const live = new Set(catalog.map(room => room.room_id));
     for (const id of [...this.seen.keys()]) if (!live.has(id)) this.seen.delete(id);
     const stale = rooms.filter(room => typeof room.latest_seq === "number" && room.latest_seq > 0 && this.seen.get(room.room_id)?.seq !== room.latest_seq);
     const queue = [...stale];

@@ -44,8 +44,8 @@ _close_after_answer = set()
 # Native request ID -> True for asks a chat reply closed, until the tool call that opened it reads it.
 _replies_lock = threading.Lock()
 _replies = {}
-# Session ID -> the member whose chat message was admitted as steering there and has not reached the
-# model yet. An ask a tool opens meanwhile is out of date the moment it registers. Under _answer_lock.
+# Session ID -> the members whose chat messages were admitted as steering there and have not reached
+# the model yet. An ask a tool opens meanwhile is out of date the moment it registers. Under _answer_lock.
 _steered = {}
 
 
@@ -238,7 +238,7 @@ def close_for_chat(sid, actor):
     chosen = []
     with _answer_lock:
         # Recorded before the scan, so an ask that registers after it closes on registration instead.
-        _steered[sid] = actor
+        _steered.setdefault(sid, set()).add(actor)
         with server_requests._lock:
             candidates = [request for request in server_requests._open.values()
                           if request.sid == sid and request.method in CHAT_CLOSES]
@@ -259,14 +259,14 @@ def closes_for(request, actor):
 
 
 def steer_waiting(sid):
-    """The member whose admitted message has not reached the model in ``sid`` yet, or None.
+    """The members whose admitted messages have not reached the model in ``sid`` yet: an empty set if none.
 
     Reads the native agent's own steer buffer, the one record of whether the message was delivered.
-    A Hermes without that buffer gives None: nothing is closed on a guess.
+    A Hermes without that buffer gives an empty set: nothing is closed on a guess.
     """
     with _answer_lock:
         if sid not in _steered:
-            return None
+            return set()
     try:
         from tui_gateway import server
         agent = (server._sessions.get(sid) or {}).get("agent")
@@ -276,16 +276,16 @@ def steer_waiting(sid):
     with _answer_lock:
         if not pending:
             _steered.pop(sid, None)
-            return None
-        return _steered.get(sid)
+            return set()
+        return set(_steered.get(sid, ()))
 
 
 def close_if_steered(server_requests, request):
     """Closes an ask that registered after a chat message for its session was admitted but before the model read it."""
     if request.method not in CHAT_CLOSES:
         return
-    actor = steer_waiting(request.sid)
-    if actor is not None and closes_for(request, actor):
+    # Any waiting member's message closes it, except that a login asked for by address waits for its requester's.
+    if any(closes_for(request, actor) for actor in steer_waiting(request.sid)):
         close_requests(server_requests, [request])
 
 
