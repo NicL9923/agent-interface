@@ -15,7 +15,6 @@ import time
 import types
 import unittest
 import uuid
-from pathlib import Path
 from unittest.mock import patch
 
 from support import load_source
@@ -250,8 +249,8 @@ class ChatReplyTests(unittest.TestCase):
         for _ in range(40):
             request, thread, done = self.native.ask("vault.code", params={"site": "site.invalid", "hint": ""})
             outcome = {}
-            racers = [threading.Thread(target=lambda: outcome.setdefault("answer", self.answer(request, value="42"))),
-                      threading.Thread(target=lambda: outcome.setdefault("closed", self.vault.close_for_chat("live", "member-a")))]
+            racers = [threading.Thread(target=lambda outcome=outcome, request=request: outcome.setdefault("answer", self.answer(request, value="42"))),
+                      threading.Thread(target=lambda outcome=outcome: outcome.setdefault("closed", self.vault.close_for_chat("live", "member-a")))]
             for racer in racers:
                 racer.start()
             for racer in racers:
