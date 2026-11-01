@@ -294,6 +294,19 @@ class ChatReplyTests(unittest.TestCase):
         del self.native.agent._pending_steer_parts
         self.assertEqual(self.vault.steer_waiting("live"), {"member-c", "member-a"})
 
+    def test_ticketed_and_malformed_buffer_parts(self):
+        # A gateway transfer with the same words is not the member's message.
+        self.vault.close_for_chat("live", "member-a", "ok")
+        self.native.agent._pending_steer = "ok"
+        self.native.agent._pending_steer_parts = [("transfer-1", "ok")]
+        self.assertEqual(self.vault.steer_waiting("live"), set())
+        # Parts that don't describe the buffer fall back to whole lines instead of raising.
+        for parts in ([(None, "ok"), None], [(None, "ok"), ("bad",)], [(None, None)]):
+            self.vault.close_for_chat("live", "member-b", "ok")
+            self.native.agent._pending_steer = "ok"
+            self.native.agent._pending_steer_parts = parts
+            self.assertEqual(self.vault.steer_waiting("live"), {"member-b"})
+
     def test_only_another_members_waiting_reply_leaves_a_late_login_open(self):
         self.vault.close_for_chat("live", "member-b")
         self.native.agent._pending_steer = "Check the barn."

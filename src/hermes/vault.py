@@ -300,11 +300,15 @@ def buffered_messages(pending, parts):
     """How many times each whole message is in the native steer buffer.
 
     Native ``steer`` stores each message's stripped text as one part and joins them with newlines.
+    App messages are ticketless parts.
     Without consistent parts, a message counts only where it fills whole lines of the joined text,
     so "yes" never matches inside "yes, keep checking".
     """
-    if isinstance(parts, list) and "\n".join(str(part[1]) for part in parts if isinstance(part, tuple) and len(part) == 2) == pending:
-        return collections.Counter(text for _, text in parts)
+    whole = isinstance(parts, list) and all(isinstance(part, tuple) and len(part) == 2 and isinstance(part[1], str) for part in parts)
+    if whole and "\n".join(text for _, text in parts) == pending:
+        # App messages reach the buffer through session.steer without a ticket; a ticketed part is a
+        # gateway transfer, never one of these members' messages, even when its words are the same.
+        return collections.Counter(text for ticket, text in parts if ticket is None)
     return _LineCounts(pending)
 
 
