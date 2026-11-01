@@ -6,6 +6,12 @@ export interface RoutineResult {
   startedAt?: string;
   preview?: string;
   previewOnly: boolean;
+  /** Older add-ons omit these; read a missing status as "unknown". */
+  status?: import('./routine-runs.js').RoutineRunStatus;
+  finishedAt?: string;
+  /** The run finished but Hermes could not deliver its output. */
+  deliveryFailed?: boolean;
+  error?: string;
 }
 export interface RoutineOutput { messages: Message[]; previewOnly: boolean }
 export interface GroupMember { member_id: string; profile: string; handle: string; display_name?: string; target?: { kind: string; profile: string } }

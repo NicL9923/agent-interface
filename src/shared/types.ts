@@ -98,6 +98,8 @@ export interface Preferences {
   followBots: string[];
   startPage?: "today" | "assistant";
   notifications?: { timezone: string; quietStart?: string; quietEnd?: string; batchMinutes: number };
+  /** Routines whose runs this person keeps out of their assistant's chat. Runs show by default. */
+  hiddenRoutineRuns?: { botId: string; routineId: string }[];
 }
 export const reasoningLevels = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"] as const;
 export const serviceTiers = ["normal", "fast", "ultrafast"] as const;

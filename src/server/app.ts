@@ -109,6 +109,7 @@ export async function createApp(
     const seen = (botId: string) => visibleTo(store, botId, userId);
     return { ...value, favorites: value.favorites.filter(seen), followBots: value.followBots.filter(seen),
       sections: value.sections.map(section => ({ ...section, botIds: section.botIds.filter(seen) })),
+      ...(value.hiddenRoutineRuns ? { hiddenRoutineRuns: value.hiddenRoutineRuns.filter(entry => seen(entry.botId)) } : {}),
       defaultBotId: value.defaultBotId && seen(value.defaultBotId) ? value.defaultBotId : undefined };
   };
   app.get("/api/health", async () => ({ ok: true }));
@@ -209,6 +210,8 @@ export async function createApp(
     value.modelFavorites ??= previous.modelFavorites;
     value.startPage ??= previous.startPage;
     value.notifications ??= previous.notifications;
+    // Older clients don't know hidden routine runs; their saves keep this person's list.
+    value.hiddenRoutineRuns ??= previous.hiddenRoutineRuns;
     store.savePreferences(signedIn(req).id, value);
     return value;
   });

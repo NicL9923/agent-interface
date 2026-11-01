@@ -527,6 +527,101 @@ class RoutineLedgerOutputTests(RoutineOutputTests):
         self.assertEqual(experience.routine_results({**self.data, 'operation': 'routine_results'}), [])
 
 
+class RoutineRunStatusTests(unittest.TestCase):
+    """Each run's normalized status, from the execution ledger when Hermes has one."""
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.home = Path(self.temp.name).resolve()
+        self.directory = self.home / 'cron/output/routine'
+        self.directory.mkdir(parents=True)
+        (self.home / 'state.db').write_text('written store')
+        self.sessions, self.docs, self.attempts, self.ledger, self.live = [], [], [], [], None
+        self.job = None
+        self.db = types.SimpleNamespace(list_cron_job_runs=lambda *a, **kw: self.sessions, close=lambda: None)
+        executions = types.SimpleNamespace(list_executions=lambda **kw: self.ledger, live_inflight_execution=lambda job_id: self.live)
+        self.modules = {
+            'hermes_cli.web_routers.cron': types.SimpleNamespace(
+                _owner_home_scope=lambda profile: contextlib.nullcontext(),
+                _open_session_db_for_profile=lambda profile, **kw: self.db,
+                _call_cron_for_profile=lambda *a: self.job,
+                _list_cron_output_runs=lambda *a: (self.docs, self.attempts),
+                _reconcile_cron_runs=lambda sessions, docs, attempts, job_id, limit: sessions + docs,
+                _cron_output_runs_dir=lambda *a: self.directory),
+            'hermes_cli.web_routers.sessions': types.SimpleNamespace(_project_for_display=lambda rows, **kw: rows),
+            'hermes_cli.web_server_sessions': types.SimpleNamespace(_session_db_path_for_profile=lambda profile: self.home / 'state.db'),
+            'hermes_constants': types.SimpleNamespace(get_hermes_home=lambda: self.home),
+            'cron': types.SimpleNamespace(executions=executions), 'cron.executions': executions,
+        }
+        self.patch = patch.dict(sys.modules, self.modules); self.patch.start()
+        self.data = dict(operation='routine_results', profile='private', routineId='routine')
+    def tearDown(self):
+        self.patch.stop(); self.temp.cleanup()
+    def results(self):
+        return {row['id']: row for row in experience.routine_results(self.data)}
+
+    def test_unified_session_takes_its_executions_status_and_delivery(self):
+        self.sessions += [dict(id='local-1', source='cron', title='Brief', started_at=1000.0, ended_at=1060.0, cron_execution_id='e1'),
+            dict(id='local-2', source='cron', title='Brief', started_at=500.0, ended_at=560.0, cron_execution_id='e2')]
+        self.ledger += [dict(id='e1', status='completed', claimed_at='1970-01-01T00:16:39+00:00', finished_at='1970-01-01T00:17:41+00:00', delivery_outcome='failed'),
+            dict(id='e2', status='failed', claimed_at='1970-01-01T00:08:19+00:00', finished_at='1970-01-01T00:09:20+00:00', error='Model refused')]
+        rows = self.results()
+        self.assertEqual((rows['local-1']['status'], rows['local-1']['deliveryFailed'], rows['local-1']['error']), ('succeeded', True, None))
+        self.assertEqual(rows['local-1']['finishedAt'], '1970-01-01T00:17:41+00:00')
+        self.assertEqual((rows['local-2']['status'], rows['local-2']['error']), ('failed', 'Model refused'))
+        # The row keeps every field older apps read.
+        self.assertLessEqual({'id', 'title', 'startedAt', 'preview', 'previewOnly'}, set(rows['local-2']))
+
+    def test_open_session_is_running_only_while_active(self):
+        now = time.time()
+        self.sessions += [dict(id='cron_routine_live', source='cron', started_at=now - 30, last_active=now - 5, ended_at=None),
+            dict(id='cron_routine_stale', source='cron', started_at=now - 4000, last_active=now - 3600, ended_at=None)]
+        rows = self.results()
+        self.assertEqual((rows['cron_routine_live']['status'], rows['cron_routine_live']['finishedAt']), ('running', None))
+        self.assertEqual(rows['cron_routine_stale']['status'], 'unknown')
+
+    def test_script_document_pairs_with_the_attempt_that_wrote_it(self):
+        self.docs.append(dict(id='cron_output:routine:2026-10-02_07-00-05', source='cron_output', title='FAILED · Certificate expired', started_at=2005.0))
+        (self.directory / '2026-10-02_07-00-05.md').write_text('Certificate expired')
+        self.attempts += [dict(id='e3', status='failed', claimed_at=2000.0, finished_at=2006.0, error='Certificate expired'),
+            dict(id='e2', status='completed', claimed_at=1000.0, finished_at=1004.0, error='')]
+        row = self.results()['cron_output:routine:2026-10-02_07-00-05']
+        self.assertEqual((row['status'], row['error']), ('failed', 'Certificate expired'))
+        self.assertEqual((row['startedAt'], row['finishedAt']), ('1970-01-01T00:33:20+00:00', '1970-01-01T00:33:26+00:00'))
+
+    def test_metadata_row_indexes_terminal_attempts(self):
+        self.docs.append(dict(id='cron_output:routine:exec:1', source='cron_output', title='COMPLETED · Script-only run', started_at=1004.0))
+        self.attempts += [dict(id='e3', status='failed', claimed_at=2000.0, finished_at=2006.0, error='x'),
+            dict(id='e2', status='completed', claimed_at=1000.0, finished_at=1004.0, error='')]
+        self.assertEqual(self.results()['cron_output:routine:exec:1']['status'], 'succeeded')
+
+    def test_older_hermes_without_a_ledger_reads_unknown_except_the_newest_known_run(self):
+        del self.modules['cron'], self.modules['cron.executions']
+        self.patch.stop(); self.patch = patch.dict(sys.modules, self.modules); self.patch.start()
+        sys.modules.pop('cron', None); sys.modules.pop('cron.executions', None)
+        self.modules['hermes_cli.web_routers.cron']._list_cron_output_runs = lambda *a: self.docs
+        self.modules['hermes_cli.web_routers.cron']._reconcile_cron_runs = lambda sessions, docs, limit: sessions + docs
+        self.sessions += [dict(id='cron_routine_2', source='cron', started_at=3000.0, ended_at=3050.0),
+            dict(id='cron_routine_1', source='cron', started_at=1000.0, ended_at=1050.0)]
+        self.job = dict(last_run_at=3049.0, last_status='delivery_failed')
+        rows = self.results()
+        self.assertEqual((rows['cron_routine_2']['status'], rows['cron_routine_2']['deliveryFailed']), ('succeeded', True))
+        self.assertEqual(rows['cron_routine_1']['status'], 'unknown')
+        self.job = dict(last_run_at=9000.0, last_status='ok')
+        self.assertEqual(self.results()['cron_routine_2']['status'], 'unknown')
+
+    def test_live_script_attempt_is_a_running_row_with_a_preview(self):
+        self.live = dict(id='e9', status='running', claimed_at='1970-01-01T01:00:00+00:00')
+        self.ledger.append(self.live)
+        rows = self.results()
+        running = rows['cron_output:routine:running']
+        self.assertEqual((running['status'], running['startedAt'], running['finishedAt']), ('running', '1970-01-01T01:00:00+00:00', None))
+        output = experience.routine_results({**self.data, 'operation': 'routine_output', 'resultId': 'cron_output:routine:running'})
+        self.assertEqual((output['previewOnly'], output['messages'][0]['text']), (True, 'This run is still in progress.'))
+        # An agent run's own open session already stands for the live attempt.
+        self.sessions.append(dict(id='local-9', source='cron', started_at=3600.0, last_active=time.time(), ended_at=None, cron_execution_id='e9'))
+        self.assertNotIn('cron_output:routine:running', self.results())
+
+
 
 class HistoryAttributionTests(unittest.TestCase):
     def setUp(self):

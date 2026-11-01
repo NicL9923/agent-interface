@@ -1484,6 +1484,18 @@ describe('owned Hermes operation response decoding', () => {
     vi.stubGlobal('fetch',vi.fn(async()=>Response.json([{id:'run',title:'Fence',startedAt:null,preview:null,previewOnly:true}])));
     expect(await runtime.routineResults!('shared','routine')).toEqual([{id:'run',title:'Fence',startedAt:undefined,preview:undefined,previewOnly:true}]);
   });
+  it('normalizes each run status and keeps an unnamed or newer status unknown', async () => {
+    vi.stubGlobal('fetch',vi.fn(async()=>Response.json([
+      {id:'ok',title:'Fence',startedAt:'2026-10-02T07:00:00+00:00',finishedAt:'2026-10-02T07:01:00+00:00',status:'succeeded',deliveryFailed:true,error:null,preview:null,previewOnly:false},
+      {id:'bad',title:'Fence',startedAt:null,preview:null,previewOnly:true,status:'failed',error:'Certificate expired',finishedAt:null,deliveryFailed:false},
+      {id:'new',title:'Fence',previewOnly:true,status:'queued_for_review'},
+    ])));
+    expect(await runtime.routineResults!('shared','routine')).toEqual([
+      {id:'ok',title:'Fence',startedAt:'2026-10-02T07:00:00+00:00',finishedAt:'2026-10-02T07:01:00+00:00',status:'succeeded',deliveryFailed:true,preview:undefined,previewOnly:false},
+      {id:'bad',title:'Fence',startedAt:undefined,preview:undefined,previewOnly:true,status:'failed',error:'Certificate expired'},
+      {id:'new',title:'Fence',startedAt:undefined,preview:undefined,previewOnly:true,status:'unknown'},
+    ]);
+  });
   it('registers only attested history files and removes native metadata', async () => {
     vi.stubGlobal('fetch',vi.fn(async()=>Response.json({...history,messages:[{id:'tool',role:'tool',text:'Generated',app_artifacts:[{path:'/workspace/fence.txt',name:'fence.txt',mime:'text/plain'}],content:'private-canary'}]})));
     const page=await runtime.experienceRequest!({operation:'history',profile,sessionId:'stored',offset:0});
