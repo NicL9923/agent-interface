@@ -79,6 +79,8 @@ struct ConversationView: View {
   @State private var sentAnchorMessage: String?
   @State private var anchorTop: CGFloat?
   @State private var contentEnd: CGFloat = 0
+  /// The anchored message whose reply has filled the screen, so it reserves no more room.
+  @State private var anchorFilled: String?
   /// Whether the reader sits at the end, where the jump control has nothing to jump to.
   @State private var atEnd = true
   private var matches: [FindMatches.Match] {
@@ -91,10 +93,16 @@ struct ConversationView: View {
     return SendAnchor.resolve(messages, requestId: sentAnchor, messageId: sentAnchorMessage, text: sentAnchorText,
       senderId: store.bootstrap?.user.id)
   }
-  /// Room below the sent message so it can sit at the top before its reply fills the screen.
+  /// Room below the sent message so it can sit at the top before its reply fills the screen. Once
+  /// what follows it has filled the screen, it gets none again: a request card or tool rows that
+  /// fold or leave must not turn into a blank screen below the finished reply, as on the web.
   private var anchorRoom: CGFloat {
+    guard let message = anchoredMessage, anchorFilled != message else { return 0 }
+    return openAnchorRoom
+  }
+  private var openAnchorRoom: CGFloat {
     guard anchoredMessage != nil, let anchorTop else { return 0 }
-    return max(0, viewportHeight - (contentEnd - anchorTop) - 16)
+    return SendAnchor.room(viewport: viewportHeight, contentEnd: contentEnd, anchorTop: anchorTop)
   }
   var body: some View {
     VStack(spacing: 0) {
@@ -107,6 +115,11 @@ struct ConversationView: View {
     .bareToolbarItem(.principal) { header }
     .onChange(of: bot.id) { _, _ in earlierFailed = false }
     .sheet(isPresented: $fileSheetOpen) { ConversationFilesView().appStore(store).coveringChat(store) }
+    .sheet(item: Bindable(store).openComputer) { opening in
+      NavigationStack {
+        ComputerView(take: opening.take).toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { store.openComputer = nil } } }
+      }.appStore(store).coveringChat(store)
+    }
     .sheet(isPresented: $profileOpen, onDismiss: profileClosed) { profileSheet }
     // On screen, even under a sheet, the conversation is polled and streamed; elsewhere it is not.
     .onAppear { if !visible { store.conversationShown(bot.id, true) }; visible = true }
@@ -281,6 +294,9 @@ struct ConversationView: View {
         anchorScrollPending = true
         scrollToAnchor(proxy)
       }
+      .onChange(of: openAnchorRoom) { _, room in
+        if room == 0, anchorTop != nil, let message = anchoredMessage { anchorFilled = message }
+      }
       .onChange(of: anchorRoom) { old, room in
         // The room below the sent message exists only after a layout pass, so the scroll that puts
         // the message at the top runs again once it does.
@@ -374,6 +390,8 @@ struct ConversationView: View {
         liveTurn: store.activity.active ? store.turns.last?.id : nil)
         .environment(\.foundMessage, findTarget ?? highlighted)
       if ![.idle, .done].contains(store.activity) { liveActivity }
+      // A request this device just settled keeps its line a moment after Hermes stops listing it.
+      ForEach(SettledRequests.shared.lingering(botId: bot.id, listed: Set((store.conversation?.attention ?? []).map(\.id)))) { SettledReceiptRow(text: $0.text) }
       // Questions and secure requests come before approvals, as on the web.
       ForEach(store.conversation?.attention ?? []) { request in
         let target = "attention-" + request.id
@@ -589,7 +607,16 @@ struct ConversationView: View {
             moving: [.thinking, .working, .waiting].contains(store.activity))
         }
         if working, let receipt = live.receipt {
-          Text(receipt).font(.caption).foregroundStyle(Palette.muted).lineLimit(1).accessibilityIdentifier("liveReceipt")
+          HStack(spacing: 8) {
+            Text(receipt).font(.caption).foregroundStyle(Palette.muted).lineLimit(1).accessibilityIdentifier("liveReceipt")
+            if ComputerHandoff.usesComputer(store.conversation?.toolCalls?.last { $0.status == "running" }?.name) {
+              Button { store.openComputer = ComputerOpening(take: false) } label: {
+                Label("Watch", systemImage: "desktopcomputer").font(.caption.weight(.semibold)).padding(.horizontal, 6).frame(minHeight: 44)
+                  .contentShape(Rectangle())
+              }.buttonStyle(.borderless)
+                .accessibilityLabel("Watch \(bot.name) on the computer").accessibilityIdentifier("liveWatch")
+            }
+          }
         }
         if working && advanced, let line = live.reasoning {
           Text(line).font(.caption).italic().foregroundStyle(Palette.muted).lineLimit(2).accessibilityIdentifier("liveReasoning")
@@ -856,13 +883,23 @@ struct AttentionView: View {
   @State private var settled = false
   @FocusState private var focusedQuestion: String?
   private var secure: Bool { request.kind == "secure" && request.secure?.supported == true }
+  private var handoff: ComputerHandoff? { request.kind == "computer" ? request.computer : nil }
   private var questions: [Question] { request.questions ?? [] }
   var body: some View {
+    // A request this device settled folds to one line until Hermes stops listing it.
+    if let settled = SettledRequests.shared.item(botId: botId, requestId: request.id), settled.collapsed {
+      SettledReceiptRow(text: settled.text)
+    } else { card }
+  }
+  private var card: some View {
     VStack(alignment: .leading, spacing: 12) {
-      Text(request.kind == "clarify" ? "A question for you" : secure ? "Secure input for Hermes" : "Continue in Hermes")
+      Text(request.kind == "clarify" ? "A question for you" : secure ? "Secure input for Hermes" : handoff != nil ? "Household computer" : "Continue in Hermes")
         .font(.caption.weight(.semibold)).foregroundStyle(Palette.attention)
-      Text(request.title).font(.headline)
-      Text(request.detail).textSelection(.enabled)
+      // A handoff card names the assistant and its reason itself.
+      if handoff == nil {
+        Text(request.title).font(.headline)
+        Text(request.detail).textSelection(.enabled)
+      }
       if request.kind == "clarify" {
         ForEach(questions) { question in questionView(question).id(questionAnchor(question)).disabled(settled) }
         Text(settled ? "Answers sent." : !store.connected ? "Connect to send your answers. Your answers stay here while this form is open." : answers.complete(questions) ? "Ready to send." : "Answer every question to send.")
@@ -874,6 +911,8 @@ struct AttentionView: View {
       } else if secure, let value = request.secure {
         SecureAttentionView(request: request, botId: botId)
           .id(request.id + value.binding)
+      } else if let handoff {
+        ComputerHandoffView(request: request, handoff: handoff, botId: botId)
       } else {
         Text("Open the official Hermes interface to handle this request. Return here when it is complete.").font(.footnote)
           .foregroundStyle(Palette.muted)
@@ -1340,6 +1379,10 @@ enum FindMatches {
 /// another row. Only while no receipt names one does it guess this person's newest message with the
 /// sent words, so another member's newer message, or a scheduled one, never takes the anchor.
 enum SendAnchor {
+  /// Room below a sent message starting at `anchorTop` so it can reach the top of the viewport.
+  static func room(viewport: CGFloat, contentEnd: CGFloat, anchorTop: CGFloat) -> CGFloat {
+    max(0, viewport - (contentEnd - anchorTop) - 16)
+  }
   static func resolve(_ messages: [Message], requestId: String, messageId: String?, text: String?, senderId: String?) -> String? {
     if messages.contains(where: { $0.id == requestId }) { return requestId }
     if let messageId { return messages.contains { $0.id == messageId } ? messageId : nil }

@@ -140,6 +140,8 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   var openedFile: PreviewFile?
   /// The shared desktop's availability for the Settings row. Nil until the first read.
   var computerStatus: ComputerStatus?
+  /// The computer screen the transcript asked for: Watch on the live row, or Take over on a handoff.
+  var openComputer: ComputerOpening?
   /// Builds the client for a server address. Tests substitute a client with a mock transport.
   @ObservationIgnored var makeClient: (URL) -> APIClient = { APIClient(baseURL: $0) }
   @ObservationIgnored private var authSession: ASWebAuthenticationSession?
@@ -718,7 +720,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
           sending = false
           uploads.reset()
           interruptionReviewed = false
-          upgrade.reset(); computerStatus = nil
+          upgrade.reset(); computerStatus = nil; openComputer = nil
           resetPreferenceSaves()
         }
         if bootstrap != value { bootstrap = value; applied = true }
@@ -1949,7 +1951,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     sessionExpired = false
     dismissedPolls = []
     renewalAttemptedAt = nil
-    upgrade.reset(); computerStatus = nil
+    upgrade.reset(); computerStatus = nil; openComputer = nil
     resetPreferenceSaves()
     return true
   }

@@ -108,7 +108,10 @@ import XCTest
     field("secure.identifier", app: app, value: "fixture-parent")
     field("secure.value", app: app, value: "fixture-password", secure: true)
     capture(app, name: "Native secure login request")
+    XCTAssertTrue(app.staticTexts["secure.replyHint"].exists, "The card says a message replaces the request")
     app.buttons["secure.submit"].tap()
+    // The outcome stays as one line after Hermes moves on to the next request.
+    XCTAssertTrue(app.descendants(matching: .any)["settledReceipt"].waitForExistence(timeout: 5), app.debugDescription)
     XCTAssertTrue(app.secureTextFields["secure.value"].waitForExistence(timeout: 5))
     XCTAssertTrue(app.staticTexts["Enter the fixture verification code."].waitForExistence(timeout: 5))
     XCTAssertFalse(app.textFields["secure.identifier"].exists)
@@ -138,5 +141,54 @@ import XCTest
     app.buttons["Refresh request"].tap()
     XCTAssertTrue(app.buttons["Refresh request"].waitForExistence(timeout: 5)); XCTAssertFalse(app.buttons["secure.submit"].exists)
     capture(app, name: "Native uncertain secure request cannot replay")
+  }
+
+  private func launchHandoff(_ extra: [String: String] = [:]) -> XCUIApplication {
+    let app = XCUIApplication()
+    app.launchEnvironment["AGENT_INTERFACE_UI_FIXTURE"] = "1"
+    app.launchEnvironment["AGENT_INTERFACE_UI_RESET"] = "1"
+    app.launchEnvironment["AGENT_INTERFACE_UI_SCOPE"] = UUID().uuidString.lowercased()
+    for (key, value) in extra { app.launchEnvironment[key] = value }
+    app.launch(); return app
+  }
+  func testHandoffTakesOverInOneStepAndHandingBackAnswersIt() {
+    let app = launchHandoff(["AGENT_INTERFACE_UI_HANDOFF": "1"])
+    let take = app.buttons["handoff.take"]
+    XCTAssertTrue(take.waitForExistence(timeout: 15), app.debugDescription)
+    let card = app.descendants(matching: .any)["handoff"]
+    XCTAssertTrue(card.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "The fixture bank wants a code from your phone.")).firstMatch.exists)
+    XCTAssertTrue(card.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Enter the code, then press Hand back.")).firstMatch.exists)
+    capture(app, name: "Native computer handoff request")
+    take.tapWhenReady()
+    let control = app.buttons["computerControl"]
+    XCTAssertTrue(control.wait(until: "label == %@", "Hand back", timeout: 20), "Take over takes control once the desktop connects: \(app.debugDescription)")
+    capture(app, name: "Native handoff took control")
+    control.tapWhenReady()
+    XCTAssertTrue(control.wait(until: "label == %@", "Take over"), control.label)
+    app.buttons["Done"].tapWhenReady()
+    XCTAssertTrue(app.staticTexts["Thanks, I'll check the page again."].waitForExistence(timeout: 10), app.debugDescription)
+    XCTAssertFalse(app.buttons["handoff.take"].exists)
+  }
+  func testHandoffNotNowLeavesOneLine() {
+    let app = launchHandoff(["AGENT_INTERFACE_UI_HANDOFF": "1"])
+    let decline = app.buttons["handoff.decline"]
+    XCTAssertTrue(decline.waitForExistence(timeout: 15), app.debugDescription)
+    XCTAssertGreaterThanOrEqual(decline.frame.height.rounded(), 44)
+    XCTAssertGreaterThanOrEqual(app.buttons["handoff.take"].frame.height.rounded(), 44)
+    decline.tapWhenReady()
+    let receipt = app.descendants(matching: .any)["settledReceipt"]
+    XCTAssertTrue(receipt.waitForExistence(timeout: 5), app.debugDescription)
+    XCTAssertTrue(receipt.label.contains("You chose Not now."), receipt.label)
+    XCTAssertFalse(app.buttons["handoff.take"].exists)
+    capture(app, name: "Native handoff declined")
+  }
+  func testWatchOpensTheComputerWhileABrowserToolRuns() {
+    let app = launchHandoff(["AGENT_INTERFACE_UI_LIVE_COMPUTER": "1"])
+    let watch = app.buttons["liveWatch"]
+    XCTAssertTrue(watch.waitForExistence(timeout: 15), app.debugDescription)
+    XCTAssertGreaterThanOrEqual(watch.frame.height.rounded(), 44)
+    watch.tapWhenReady()
+    XCTAssertTrue(app.descendants(matching: .any)["computerStatus"].waitForExistence(timeout: 10), app.debugDescription)
+    XCTAssertTrue(app.buttons["computerControl"].wait(until: "label == %@", "Take over", timeout: 15), "Watch does not take control")
   }
 }

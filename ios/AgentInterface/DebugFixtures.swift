@@ -250,6 +250,8 @@
     nonisolated(unsafe) static var memoryEntries: [[String: Any]] = [["id": "m1", "text": "Weeknight dinners under 30 minutes"]]
     nonisolated(unsafe) static var vaultItems: [[String: Any]] = [["id": "fixture-login", "kind": "login", "label": "Fixture school portal", "origin": "https://school.example.test", "createdAt": "2026-10-02T12:00:00Z", "identifier": "fixture.parent@example.test", "identifierType": "email", "hasOtp": false, "backend": "local", "canRemove": true]]
     nonisolated(unsafe) static var secureIndex = 0
+    /// AGENT_INTERFACE_UI_HANDOFF: an assistant's computer handoff until it is handed back or declined.
+    nonisolated(unsafe) static var handoffOpen = true
     nonisolated(unsafe) static var vaultUnlocked = false
     nonisolated(unsafe) static var sourceEnabled = true
     nonisolated(unsafe) static var todayReads = 0
@@ -563,6 +565,22 @@
           let text = "Twelve bales lasts about 24 days. Compare a larger supply below.\n\n```wildbots-html\n" + String(decoding: data, as: UTF8.self) + "\n```"
           object = ["botId": path.components(separatedBy: "/")[3], "messages": [["id": "inline-fixture", "role": "assistant", "text": text]], "activity": ["state": "idle"], "approvals": [], "files": [], "attention": [], "draft": Self.draft, "readPosition": Self.readPosition]
         }
+        if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_HANDOFF"] == "1" {
+          let attention: [[String: Any]] = Self.handoffOpen ? [["id": "fixture-handoff", "kind": "computer", "title": "Take over the computer?",
+            "detail": "The fixture bank wants a code from your phone.",
+            "computer": ["epoch": "fixture-epoch", "sessionId": "fixture-session", "reason": "The fixture bank wants a code from your phone.",
+              "whatToDo": "Enter the code, then press Hand back."]]] : []
+          object = ["botId": path.components(separatedBy: "/")[3], "sessionId": "fixture-session",
+            "messages": [["id": "handoff-fixture", "role": "assistant", "text": Self.handoffOpen ? "The bank sign-in needs you." : "Thanks, I'll check the page again."]],
+            "activity": ["state": Self.handoffOpen ? "blocked" : "idle"], "approvals": [], "files": [], "attention": attention,
+            "draft": Self.draft, "readPosition": Self.readPosition]
+        }
+        if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_LIVE_COMPUTER"] == "1" {
+          object = ["botId": path.components(separatedBy: "/")[3], "messages": [["id": "fixture-answer", "role": "assistant", "text": "Opening the supply site."]],
+            "activity": ["state": "working", "detail": "Opening the supply site"],
+            "toolCalls": [["id": "fixture-browse", "name": "browser_navigate", "arguments": "{\"url\":\"https://supply.example.test\"}", "status": "running"]],
+            "approvals": [], "files": [], "attention": [], "draft": Self.draft, "readPosition": Self.readPosition]
+        }
         if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_VAULT"] == "1" {
           let requests: [[String: Any]] = [
             ["method": "vault.save_login", "origin": "https://school.example.test", "site": "Fixture school portal"],
@@ -710,7 +728,11 @@
         Self.desktopTickets += 1
         object = ["path": "/api/computer/desktop/ws?ticket=fixture-\(Self.desktopTickets)",
           "expiresAt": ISO8601DateFormatter().string(from: Date().addingTimeInterval(30)), "viewerId": body["viewerId"] ?? "fixture-viewer-000001"]
+      } else if path.contains("/computer-handoffs/"), method == "POST" {
+        object = ["status": Self.handoffOpen ? "ok" : "expired"]; Self.handoffOpen = false
       } else if path == "/api/computer/control", method == "POST" {
+        // Handing back answers an open handoff, as the add-on's lease watcher does.
+        if body["action"] as? String == "release" { Self.handoffOpen = false }
         Self.computerControl = body["action"] as? String == "take" ? ["kind": "human", "name": "Local test member", "mine": true] : ["kind": "idle"]
         object = ["available": true, "running": true, "browserReady": true, "label": "Fixture host", "reason": NSNull(),
           "control": Self.computerControl, "terminal": ["available": false, "target": ""]]
