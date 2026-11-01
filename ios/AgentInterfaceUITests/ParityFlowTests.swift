@@ -358,7 +358,7 @@ import UIKit
     XCTAssertTrue(app.staticTexts["Connect your household to Hermes"].waitForExistence(timeout: 10), app.debugDescription)
     XCTAssertTrue(app.staticTexts["Pick up with your assistants"].exists)
     XCTAssertTrue(app.buttons["Check connection"].exists)
-    app.buttons["New assistant"].tap()
+    app.tapNewAssistant()
     XCTAssertTrue(app.staticTexts["Assistant setup is unavailable while Hermes is disconnected."].waitForExistence(timeout: 5))
   }
   func testNotificationPromptAsksIosOnlyAfterEnableAndSettingsSwitchFollows() {

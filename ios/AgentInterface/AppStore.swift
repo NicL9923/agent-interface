@@ -23,6 +23,8 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     let next = bootstrap.flatMap { boot in api.map { Data(($0.baseURL.absoluteString + "|" + boot.user.id).utf8).base64URLEncoded } }
     guard next != scope else { return }
     scope = next
+    // Another account's rooms never show.
+    groupCatalog = nil
     // Only a loaded account replaces it; launching, before the account loads, leaves it alone.
     if let next { UserDefaults.standard.set(next, forKey: DeviceDefaults.signedInScope) }
     additions = savedAdditions()
@@ -130,6 +132,9 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   @ObservationIgnored var date: () -> Date = { Date() }
   var conversationRequest: UUID?
   var homeRequest: UUID?
+  /// The household's group chats, which home lists beside the assistants. Nil until the first read for this account.
+  var groupCatalog: GroupCatalog?
+  @ObservationIgnored var groupLoadId = UUID()
   var preferencesSaving = false
   var preferencesSaveFailed = false
   var preferencesDraft: Preferences?

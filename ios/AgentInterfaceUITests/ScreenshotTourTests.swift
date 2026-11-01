@@ -3001,7 +3001,7 @@ import CryptoKit
       ("large-text", "light", "UICTContentSizeCategoryAccessibilityXL")] {
       let app = launch(textSize: size, environment: ["AGENT_INTERFACE_UI_DESIGN_FIXTURE": fixture, "AGENT_INTERFACE_UI_THEME": theme])
       XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 15))
-      goToAssistantList(app); app.buttons["New assistant"].tapWhenReady()
+      goToAssistantList(app); app.tapNewAssistant()
       XCTAssertTrue(app.descendants(matching: .any)["creationStep"].waitForExistence(timeout: 5))
       try capture("avatar-create-\(name)-top")
       let form = app.descendants(matching: .any)["assistantCreationForm"].firstMatch
@@ -3039,9 +3039,9 @@ import CryptoKit
       let encoded = String(decoding: try JSONSerialization.data(withJSONObject: fixture), as: UTF8.self)
       let app = launch(textSize: size, environment: ["AGENT_INTERFACE_UI_DESIGN_FIXTURE": encoded, "AGENT_INTERFACE_UI_THEME": theme, "AGENT_INTERFACE_UI_HOME": "1"])
       goToAssistantList(app)
-      XCTAssertTrue(app.buttons["New assistant"].waitForExistence(timeout: 15))
+      XCTAssertTrue(app.newAssistantReady(timeout: 15))
       if ["settings-loaded", "settings-dark", "settings-large-text"].contains(name) {
-        app.buttons["New assistant"].tapWhenReady()
+        app.tapNewAssistant()
         XCTAssertTrue(app.descendants(matching: .any)["creationStep"].waitForExistence(timeout: 5))
         try capture(name + "-create-look")
         let field = app.textFields["Name"]
@@ -3213,7 +3213,7 @@ import CryptoKit
     try capture("01-home")
 
     for (identifier, name, ready) in [
-      ("openToday", "17-today", "todayOverview"), ("openGroups", "18-group-chats", "New group"),
+      ("openToday", "17-today", "todayOverview"),
       ("openDiscovery", "19-search", "Search conversations"),
     ] {
       app.buttons[identifier].tap()
@@ -3221,6 +3221,16 @@ import CryptoKit
       try capture(name)
       goToAssistantList(app)
     }
+    // Group chats are made from the New menu, and the sheet is their only page without a room.
+    app.buttons["newMenu"].tapWhenReady()
+    let newGroup = app.buttons["newGroup"]
+    XCTAssertTrue(newGroup.waitForExistence(timeout: 10))
+    XCTAssertTrue(newGroup.wait(until: "enabled == true"))
+    newGroup.tap()
+    XCTAssertTrue(app.textFields["Group name"].waitForExistence(timeout: 10))
+    try capture("18-group-create")
+    app.buttons["Close"].tap()
+    goToAssistantList(app)
     app.buttons["openDiscovery"].tap()
     XCTAssertTrue(app.buttons["Saved items"].waitForExistence(timeout: 10))
     app.buttons["Saved items"].tap()

@@ -2,7 +2,7 @@ import SwiftUI
 
 /// A place the quick switcher can open.
 enum QuickSwitchTarget: Hashable {
-  case bot(String), today, groups, search, settings
+  case bot(String), room(String), today, search, settings
 }
 
 /// What the quick switcher lists for a query: matching assistants, pinned first, then the
@@ -16,17 +16,17 @@ enum QuickSwitch {
   }
   static let places: [Entry] = [
     Entry(target: .today, title: "Today", symbol: "calendar"),
-    Entry(target: .groups, title: "Group chats", symbol: "bubble.left.and.bubble.right"),
     Entry(target: .search, title: "Search & saved", symbol: "magnifyingglass"),
     Entry(target: .settings, title: "Settings", symbol: "gearshape"),
   ]
-  static func entries(query: String, bots: [Bot], pinned: [String]) -> [Entry] {
+  static func entries(query: String, bots: [Bot], pinned: [String], rooms: [GroupRoom] = []) -> [Entry] {
     let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
     func matches(_ title: String) -> Bool { needle.isEmpty || title.localizedStandardContains(needle) }
     let ordered = bots.filter { pinned.contains($0.id) }.sorted { (pinned.firstIndex(of: $0.id) ?? 0) < (pinned.firstIndex(of: $1.id) ?? 0) }
       + bots.filter { !pinned.contains($0.id) }
     let assistants = ordered.filter { matches($0.name) }.map { Entry(target: .bot($0.id), title: $0.name, symbol: "person.crop.circle") }
-    return assistants + places.filter { matches($0.title) }
+    let chats = GroupRows.ordered(rooms).filter { matches($0.name) }.map { Entry(target: .room($0.id), title: $0.name, symbol: "bubble.left.and.bubble.right") }
+    return assistants + chats + places.filter { matches($0.title) }
   }
 }
 
@@ -39,13 +39,13 @@ struct QuickSwitcher: View {
   @State private var query = ""
   @FocusState private var focused: Bool
   private var entries: [QuickSwitch.Entry] {
-    QuickSwitch.entries(query: query, bots: store.bootstrap?.bots ?? [], pinned: store.homePreferences?.favorites ?? [])
+    QuickSwitch.entries(query: query, bots: store.bootstrap?.bots ?? [], pinned: store.homePreferences?.favorites ?? [], rooms: store.groupCatalog?.rooms ?? [])
   }
   var body: some View {
     NavigationStack {
       List {
         Section {
-          TextField("Go to an assistant or view", text: $query).focused($focused).submitLabel(.go)
+          TextField("Go to an assistant, group chat or view", text: $query).focused($focused).submitLabel(.go)
             .autocorrectionDisabled().textInputAutocapitalization(.never)
             .onSubmit { if let first = entries.first { choose(first.target) } }
             .accessibilityIdentifier("quickSwitcherField")
@@ -77,7 +77,7 @@ struct QuickSwitcher: View {
     switch target {
     case .bot(let id): "quickSwitch.\(id)"
     case .today: "quickSwitch.today"
-    case .groups: "quickSwitch.groups"
+    case .room(let id): "quickSwitch.room.\(id)"
     case .search: "quickSwitch.search"
     case .settings: "quickSwitch.settings"
     }
