@@ -97,6 +97,9 @@ class Native:
         self.requests = real() if SOURCE else stand_in()
         gateway = types.ModuleType("tui_gateway")
         gateway.server_requests = self.requests
+        # The native agent's steer buffer: text while an admitted chat message has not reached the model.
+        self.agent = types.SimpleNamespace(_pending_steer=None)
+        gateway.server = types.SimpleNamespace(_sessions={"live": {"agent": self.agent}})
         self.prompt, self.saved = None, []
         store = types.SimpleNamespace(add_item=lambda kind, label, secret, origin=None: self.saved.append(label)
                                       or types.SimpleNamespace(id="vault_handle", label=label, origin=origin))
@@ -189,6 +192,31 @@ class ChatReplyTests(unittest.TestCase):
         self.native.requests.resolve_response({"id": other.id, "result": {"value": ""}})
         other_thread.join(2); approval_thread.join(2)
         self.assertNotIn("user_replied_in_chat", other_done["result"])
+
+    def test_an_ask_opened_after_an_undelivered_reply_closes_at_once(self):
+        # The message was admitted before the tool sent its prompt, so the prompt is out of date.
+        self.assertEqual(self.vault.close_for_chat("live", "member-a"), 0)
+        self.native.agent._pending_steer = "Use https://kvm.example.net instead."
+        done = {}
+        self.native.tools["late"] = lambda args: json.dumps({"raw": self.native.requests.send("vault.code", "live", {}, timeout=5)})
+        thread = threading.Thread(target=lambda: done.setdefault("result", self.native.registry.dispatch("late", {})))
+        thread.start()
+        thread.join(2)
+        self.assertFalse(thread.is_alive())
+        self.assertTrue(json.loads(done["result"])["user_replied_in_chat"])
+        with self.native.requests._lock:
+            self.assertFalse([request for request in self.native.requests._open.values() if request.sid == "live"])
+
+    def test_an_ask_after_the_reply_reached_the_model_stays_open(self):
+        self.vault.close_for_chat("live", "member-a")
+        self.native.agent._pending_steer = None
+        request, thread, done = self.native.ask("vault.code")
+        time.sleep(.1)
+        with self.native.requests._lock:
+            self.assertIn(request.id, self.native.requests._open)
+        self.native.requests.resolve_response({"id": request.id, "result": {"value": "123456"}})
+        thread.join(2)
+        self.assertNotIn("user_replied_in_chat", done["result"])
 
     def test_another_members_reply_leaves_an_explicit_login_with_its_requester(self):
         self.native.prompt = lambda origin, site: (lambda raw: json.loads(raw) if raw else None)(
@@ -330,6 +358,21 @@ class HandoffTests(unittest.TestCase):
         result = self.result(thread, done)
         self.assertEqual(result["status"], "handed_back")
         self.assertIn("new screenshot", result["next"])
+
+    def test_a_takeover_longer_than_registration_still_answers_on_hand_back(self):
+        # The watcher's registration placeholder expires first; the last handoff must still settle.
+        with patch.object(self.computer_module, "HANDOFF_REGISTER", .2):
+            thread, done = self.call()
+            self.native.wait_open(self.computer_module.HANDOFF)
+            self.lease.holder = Lease.HUMAN
+            time.sleep(1.2)
+            self.lease.holder = Lease.AGENT
+            self.assertEqual(self.result(thread, done)["status"], "handed_back")
+
+    def test_a_timeout_after_registration_still_answers(self):
+        with patch.object(self.computer_module, "HANDOFF_REGISTER", .2), patch.object(self.computer_module, "HANDOFF_WAIT", 1.0):
+            thread, done = self.call()
+            self.assertEqual(self.result(thread, done)["error_type"], "timed_out")
 
     def test_someone_already_in_control_answers_when_they_hand_back(self):
         self.lease.holder = Lease.HUMAN

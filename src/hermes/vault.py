@@ -44,6 +44,9 @@ _close_after_answer = set()
 # Native request ID -> True for asks a chat reply closed, until the tool call that opened it reads it.
 _replies_lock = threading.Lock()
 _replies = {}
+# Session ID -> the member whose chat message was admitted as steering there and has not reached the
+# model yet. An ask a tool opens meanwhile is out of date the moment it registers. Under _answer_lock.
+_steered = {}
 
 
 class VaultError(Exception):
@@ -234,18 +237,56 @@ def close_for_chat(sid, actor):
     from tui_gateway import server_requests
     chosen = []
     with _answer_lock:
+        # Recorded before the scan, so an ask that registers after it closes on registration instead.
+        _steered[sid] = actor
         with server_requests._lock:
             candidates = [request for request in server_requests._open.values()
                           if request.sid == sid and request.method in CHAT_CLOSES]
         for request in candidates:
-            explicit = explicit_request(request.id) if request.method == "vault.save_login" else None
-            if explicit and explicit["actor"] is not None and explicit["actor"] != actor:
+            if not closes_for(request, actor):
                 continue
             if request.id in _answering:
                 _close_after_answer.add(request.id)
                 continue
             chosen.append(request)
     return close_requests(server_requests, chosen) if chosen else 0
+
+
+def closes_for(request, actor):
+    """Whether a chat message from ``actor`` closes this ask. A login asked for by address stays with its requester."""
+    explicit = explicit_request(request.id) if request.method == "vault.save_login" else None
+    return not (explicit and explicit["actor"] is not None and explicit["actor"] != actor)
+
+
+def steer_waiting(sid):
+    """The member whose admitted message has not reached the model in ``sid`` yet, or None.
+
+    Reads the native agent's own steer buffer, the one record of whether the message was delivered.
+    A Hermes without that buffer gives None: nothing is closed on a guess.
+    """
+    with _answer_lock:
+        if sid not in _steered:
+            return None
+    try:
+        from tui_gateway import server
+        agent = (server._sessions.get(sid) or {}).get("agent")
+        pending = getattr(agent, "_pending_steer", None) if agent is not None and hasattr(agent, "_pending_steer") else None
+    except Exception:
+        pending = None
+    with _answer_lock:
+        if not pending:
+            _steered.pop(sid, None)
+            return None
+        return _steered.get(sid)
+
+
+def close_if_steered(server_requests, request):
+    """Closes an ask that registered after a chat message for its session was admitted but before the model read it."""
+    if request.method not in CHAT_CLOSES:
+        return
+    actor = steer_waiting(request.sid)
+    if actor is not None and closes_for(request, actor):
+        close_requests(server_requests, [request])
 
 
 def chat_reply_result(result):
@@ -461,7 +502,10 @@ def bind_requests(server_requests, journal):
                 _explicit[request.id] = dict(origin=context["origin"], label=context["label"], purpose=context["purpose"],
                                              profile=context["profile"], actor=row[0] if row else None, sid=request.sid)
             context["requests"].append(request.id)
-        return original(request)
+        result = original(request)
+        # The native caller waits on this request next; closed now, that wait returns at once.
+        close_if_steered(server_requests, request)
+        return result
     register._agent_interface_explicit = True
     server_requests._register = register
 

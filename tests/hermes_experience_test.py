@@ -594,6 +594,15 @@ class RoutineRunStatusTests(unittest.TestCase):
             dict(id='e2', status='completed', claimed_at=1000.0, finished_at=1004.0, error='')]
         self.assertEqual(self.results()['cron_output:routine:exec:1']['status'], 'succeeded')
 
+    def test_metadata_row_index_counts_unknown_attempts_as_hermes_does(self):
+        # Hermes numbers exec:N by position in the whole attempts list, so exec:1 is e2, not e3.
+        self.docs.append(dict(id='cron_output:routine:exec:1', source='cron_output', title='COMPLETED · Script-only run', started_at=1004.0))
+        self.attempts += [dict(id='e1', status='unknown', claimed_at=500.0, finished_at=None, error=''),
+            dict(id='e2', status='completed', claimed_at=1000.0, finished_at=1004.0, error=''),
+            dict(id='e3', status='failed', claimed_at=2000.0, finished_at=2006.0, error='x')]
+        row = self.results()['cron_output:routine:exec:1']
+        self.assertEqual((row['status'], row['error'], row['finishedAt']), ('succeeded', None, '1970-01-01T00:16:44+00:00'))
+
     def test_older_hermes_without_a_ledger_reads_unknown_except_the_newest_known_run(self):
         del self.modules['cron'], self.modules['cron.executions']
         self.patch.stop(); self.patch = patch.dict(sys.modules, self.modules); self.patch.start()

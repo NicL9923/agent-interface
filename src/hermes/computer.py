@@ -735,6 +735,8 @@ HANDOFF = "agent_interface.computer_handoff"
 HANDOFF_TOOL = "computer_request_handoff"
 # A card nobody takes over closes after this long. Once someone has control, it waits for them.
 HANDOFF_WAIT = 600
+# How long a handoff about to be sent keeps the watcher alive before its ask registers.
+HANDOFF_REGISTER = 5
 HIDDEN = re.compile(r"[\x00-\x1f\x7f-\x9f\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff]")
 _journal = None
 _handoffs_lock = threading.Lock()
@@ -797,7 +799,7 @@ def watch_handoffs(computer):
             open_ids = {request_id for request_id, request in server_requests._open.items() if request.method == HANDOFF}
         with _handoffs_lock:
             for request_id in list(_handoffs):
-                if request_id not in open_ids and now - _handoffs[request_id]["opened"] > 5:
+                if request_id not in open_ids and now - _handoffs[request_id]["opened"] > HANDOFF_REGISTER:
                     _handoffs.pop(request_id)
             for request_id in open_ids:
                 state = _handoffs.setdefault(request_id, {"opened": now, "taken": False})
@@ -809,11 +811,16 @@ def watch_handoffs(computer):
                     settle.append((request_id, "timed_out"))
             for request_id, _ in settle:
                 _handoffs.pop(request_id, None)
-            if not _handoffs:
+            # Decided under the lock a new ask's placeholder takes, so a handoff registered after
+            # this starts its own watcher.
+            done = not _handoffs
+            if done:
                 _watcher = None
-                return
+        # Settle before exiting: the last handoff's outcome is what lets its tool return.
         for request_id, outcome in settle:
             settle_handoff(request_id, outcome)
+        if done:
+            return
         time.sleep(.5)
 
 

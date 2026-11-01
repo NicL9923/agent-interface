@@ -350,7 +350,7 @@ def run_outcome(row, attempts, ledger, job, newest, now=None):
 
     A unified-runtime session names its execution; a legacy session started just after its claim;
     a script-only document was written inside its attempt's window, as `_execution_contains` reads
-    it; `exec:N` rows index the terminal attempts. Without a ledger, only the newest run can borrow
+    it; `exec:N` rows index the native attempts list. Without a ledger, only the newest run can borrow
     the job's own last status, and only when the job's last run time falls inside it. Anything
     else is `unknown`, never a guess.
     """
@@ -369,9 +369,11 @@ def run_outcome(row, attempts, ledger, job, newest, now=None):
     elif row.get("id", "").endswith(":running"):
         attempt = ledger.get(str(row.get("execution_id") or ""))
     elif re.fullmatch(r"\d+", stem or "") and ":exec:" in row.get("id", ""):
+        # Native `exec:N` is N's position in the whole attempts list, unknown attempts included.
         index = int(stem)
-        terminal = [a for a in attempts if a.get("status") in ("completed", "failed")]
-        attempt = ledger.get(str(terminal[index].get("id"))) or terminal[index] if index < len(terminal) else None
+        picked = attempts[index] if index < len(attempts) and isinstance(attempts[index], dict) else None
+        if picked is not None and picked.get("status") in ("completed", "failed"):
+            attempt = ledger.get(str(picked.get("id"))) or picked
     elif started and stem != "latest":
         candidates = []
         for a in attempts:
