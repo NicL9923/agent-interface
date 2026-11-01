@@ -3,7 +3,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import WebSocket, { type RawData } from "ws";
 import type { Runtime, User } from "../shared/types.js";
-import type { ComputerAttachment, ComputerStatus } from "../shared/computer.js";
+import type { ComputerAttachment, ComputerHandoffResult, ComputerStatus } from "../shared/computer.js";
 import { hash, signedIn } from "./auth.js";
 import { allowedIdentity, type Config } from "./config.js";
 import type { Store } from "./store.js";
@@ -127,6 +127,19 @@ export async function installComputerRoutes(app: FastifyInstance, config: Config
     if (input.action === "take") fence();
     await runtime.computerRequest!({...input, ...actor(req)});
     return status(req);
+  });
+  // Not now on an assistant's request to take over. Take over itself is the ordinary control route.
+  const handoffParams = z.object({id: z.string().regex(/^[A-Za-z0-9_-]{1,200}$/), requestId: z.string().regex(/^[A-Za-z0-9_-]{1,200}$/)}).strict();
+  const handoffBody = z.object({decision: z.literal("decline"), epoch: z.string().regex(/^[A-Za-z0-9_-]{1,200}$/),
+    sessionId: z.string().regex(/^[A-Za-z0-9_-]{1,200}$/)}).strict();
+  app.post("/api/bots/:id/computer-handoffs/:requestId", async (req): Promise<ComputerHandoffResult> => {
+    const params = handoffParams.parse(req.params), body = handoffBody.parse(req.body);
+    if (!visibleTo(store, params.id, signedIn(req).id)) throw httpError(404, "Assistant not found");
+    requireDesktop();
+    const result = await runtime.computerRequest!({action: "handoff", decision: body.decision, profile: params.id, requestId: params.requestId,
+      epoch: body.epoch, sessionId: body.sessionId, ...actor(req)}) as unknown as Partial<ComputerHandoffResult>;
+    if (result?.status !== "ok" && result?.status !== "expired") throw httpError(502, "Hermes returned an invalid answer for this computer request");
+    return {status: result.status};
   });
   app.post("/api/computer/terminal", async req => {
     empty.parse(req.body); fence(); requireShell(req, true);

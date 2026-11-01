@@ -113,7 +113,7 @@ function ownerLabel(status: ComputerStatus | null, controlling: boolean) {
   return "Watching the shared desktop";
 }
 
-export function ComputerPanel({ open, onClose, initialTab = "desktop" }: { open: boolean; onClose: () => void; initialTab?: Tab }) {
+export function ComputerPanel({ open, onClose, initialTab = "desktop", take }: { open: boolean; onClose: () => void; initialTab?: Tab; take?: number }) {
   const [tab, setTab] = useState<Tab>(initialTab);
   const [desktopOpened, setDesktopOpened] = useState(initialTab === "desktop");
   const [terminalOpened, setTerminalOpened] = useState(initialTab === "terminal");
@@ -156,6 +156,12 @@ export function ComputerPanel({ open, onClose, initialTab = "desktop" }: { open:
     };
   }, [open]);
 
+  // Take over from an assistant's request in the transcript always lands on the desktop.
+  useEffect(() => {
+    if (!take) return;
+    setTab("desktop"); setDesktopOpened(true);
+  }, [take]);
+
   const terminal = status?.terminal;
   useEffect(() => {
     if (terminalOpened && terminalStep === null && terminal?.available)
@@ -195,7 +201,7 @@ export function ComputerPanel({ open, onClose, initialTab = "desktop" }: { open:
     </div>
     {statusError && <p role="status" className="computer-notice">{statusError}</p>}
     <section id="computer-desktop" role="tabpanel" aria-labelledby="computer-tab-desktop" hidden={tab !== "desktop"}>
-      {open && desktopOpened && status?.available ? <DesktopView status={status} onStatus={setStatus} viewerId={viewerId} />
+      {open && desktopOpened && status?.available ? <DesktopView status={status} onStatus={setStatus} viewerId={viewerId} take={take} />
         : <Unavailable icon="computer" title={!status ? "Connecting to the computer" : "Desktop unavailable"}
           detail={status?.reason || (!status ? "Checking the shared desktop on the Hermes host." : "The shared desktop needs to be started on the Hermes host.")} />}
     </section>
@@ -254,9 +260,11 @@ function ConfirmIdentity({ onConfirmed }: { onConfirmed: () => void }) {
   </div>;
 }
 
-function DesktopView({ status, onStatus, viewerId }: {
+function DesktopView({ status, onStatus, viewerId, take }: {
   status: ComputerStatus; onStatus: (status: ComputerStatus) => void;
   viewerId: React.RefObject<string | undefined>;
+  /** A take over request from the transcript, carried out once, as soon as the desktop connects. */
+  take?: number;
 }) {
   const screen = useRef<HTMLDivElement>(null);
   const rfb = useRef<RFB | null>(null);
@@ -345,6 +353,14 @@ function DesktopView({ status, onStatus, viewerId }: {
       if (epoch === attachmentEpoch.current) setError(failure(cause, "Couldn't confirm control. You are watching. Try Take over again."));
     } finally { setSubmitting(false); }
   };
+
+  // Each request takes over at most once. A failure leaves the person watching with the reason, like the button.
+  const taken = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    if (!take || taken.current === take || connection !== "connected" || submitting) return;
+    taken.current = take;
+    if (!controlling && !(status.control.kind === "human" && !status.control.mine)) void control("take");
+  });
 
   const heldElsewhere = status.control.kind === "human";
   const hint = controlling ? "Assistants are paused while you use the desktop."

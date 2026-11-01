@@ -230,3 +230,34 @@ it("lets the iOS app attach with its bearer token and its desktop page connect w
   await expect(s.app.injectWS(web, {headers: {origin}})).rejects.toThrow("401");
   ws.close();
 });
+
+it("declines a handoff only for an assistant the member can see, with a validated binding", async () => {
+  const s = await setup();
+  s.computerRequest.mockImplementation(async input => (input.action === "handoff" ? {status: "ok"} : {}) as never);
+  const decline = (headers: Record<string, string>, payload: unknown, bot = "patch", request = "srq-0123456789ab") =>
+    s.app.inject({method: "POST", url: `/api/bots/${bot}/computer-handoffs/${request}`, headers, payload: payload as object});
+  const body = {decision: "decline", epoch: "epoch-one", sessionId: "live-one"};
+  expect((await s.app.inject({method: "POST", url: "/api/bots/patch/computer-handoffs/srq-1", payload: body})).statusCode).toBe(401);
+  for (const bad of [{...body, decision: "take"}, {...body, extra: true}, {...body, epoch: "../x"}, {decision: "decline"}])
+    expect((await decline(s.one, bad)).statusCode).toBe(400);
+  expect((await decline(s.one, body, "patch", "bad id")).statusCode).toBe(400);
+  expect(s.computerRequest).not.toHaveBeenCalled();
+  s.store.savePresentation("private", {shared: false, ownerId: "two"});
+  expect((await decline(s.one, body, "private")).statusCode).toBe(404);
+  const ok = await decline(s.one, body);
+  expect(ok.statusCode).toBe(200);
+  expect(ok.json()).toEqual({status: "ok"});
+  // The member comes from the session, never the body.
+  expect(s.computerRequest).toHaveBeenCalledWith({action: "handoff", decision: "decline", profile: "patch", requestId: "srq-0123456789ab",
+    epoch: "epoch-one", sessionId: "live-one", actorId: "one", actorName: "one"});
+  s.computerRequest.mockImplementation(async () => ({status: "maybe"}) as never);
+  expect((await decline(s.one, body)).statusCode).toBe(502);
+});
+
+it("names the same handoff method as the Hermes add-on", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const { computerHandoffMethod } = await import("../src/shared/computer.js");
+  const source = await readFile(new URL("../src/hermes/computer.py", import.meta.url), "utf8");
+  expect(source).toContain(`HANDOFF = "${computerHandoffMethod}"`);
+  expect(await readFile(new URL("../src/hermes/vault.py", import.meta.url), "utf8")).toContain(`HANDOFF = "${computerHandoffMethod}"`);
+});

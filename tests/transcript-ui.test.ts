@@ -761,6 +761,21 @@ describe("turn work", () => {
     await render();
     expect(container.querySelector(".turn-work summary")?.textContent).toBe("Working · 1 tool call");
     expect(container.querySelector(".activity-live-tool")?.textContent).toBe("Action in progress · calendar.create_event");
+    expect(container.querySelector(".activity-watch")).toBeNull();
+  });
+
+  it("offers Watch while the running tool uses the household computer", async () => {
+    conversation = { ...conversation, activity: { state: "working", runId: "r" }, messages: [prompt("q", "Check the order")],
+      toolCalls: [{ id: "c1", name: "browser_navigate", status: "running" }] };
+    await render();
+    const opened = vi.fn();
+    window.addEventListener("wildbots:computer", opened);
+    try {
+      const watch = container.querySelector<HTMLButtonElement>(".activity-watch")!;
+      expect(watch.textContent).toBe("Watch");
+      await act(async () => watch.click());
+      expect((opened.mock.calls[0][0] as CustomEvent).detail).toEqual({ take: false });
+    } finally { window.removeEventListener("wildbots:computer", opened); }
   });
 });
 
@@ -885,6 +900,29 @@ describe("send anchor", () => {
   const top = (id: string) => container.querySelector(`[data-message-id="${id}"]`)!.getBoundingClientRect().top;
   const other = (id: string) => prompt(id, "Another member's guidance", { sender: { id: "two", name: "Two" } });
   const show = (messages: Message[]) => act(async () => hook.setConversation({ ...conversation, messages, draft: null, readPosition: null }));
+
+  it("never reserves end space again once what follows the sent message has filled the view", async () => {
+    layout({ q: 400, a: 600, mine: 1800 });
+    let content = 2000;
+    const reserved = () => Number.parseFloat(hook.endSpace.current?.style.height || "0") || 0;
+    vi.spyOn(Element.prototype, "scrollHeight", "get").mockImplementation(() => content + reserved());
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) {
+      return this === hook.endSpace.current ? reserved() : 0;
+    });
+    conversation = { ...conversation, messages: [prompt("q", "Question"), answer("a", "Reply")] };
+    await act(async () => root.render(createElement(Harness)));
+    await act(async () => hook.history.anchorSend("request-1"));
+    const own = [...conversation.messages, prompt("mine", "Check the feed order")];
+    await show(own);
+    expect(hook.endSpace.current!.style.height).toBe("176px");
+    // A tall secure request card arrives below it, then is answered and leaves.
+    content = 2800;
+    await show([...own]);
+    expect(hook.endSpace.current!.style.height).toBe("");
+    content = 2000;
+    await show([...own, answer("reply", "Two bags of pellets")]);
+    expect(hook.endSpace.current!.style.height).toBe("");
+  });
 
   it("keeps this person's sent message near the top when another member posts after it", async () => {
     layout({ q: 400, a: 600, mine: 1800, theirs: 2200 });

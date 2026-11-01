@@ -261,6 +261,20 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     expect(result.attention![1].secure).toEqual({epoch:'epoch-one',sessionId:'live-one',method:'vault.save_login',origin:'https://page.invalid',site:'page.invalid'});
   });
 
+  it('shows an assistant\'s computer handoff only when this executor owns it, with its bounded text', async () => {
+    snapshot.executor_epoch='epoch-one';
+    snapshot.open_requests=[
+      {id:'srq-handoff',method:'agent_interface.computer_handoff',app_local_secure:true,params:{reason:'r'.repeat(250),what_to_do:'Enter the code.'}},
+      {id:'srq-mirrored',method:'agent_interface.computer_handoff',params:{reason:'Mirrored',what_to_do:'Nothing'}},
+      {id:'srq-malformed',method:'agent_interface.computer_handoff',app_local_secure:true,params:{reason:'No action'}},
+    ];
+    const result=await runtime.conversation('shared');
+    expect(result.attention![0]).toEqual({id:'srq-handoff',kind:'computer',title:'Take over the computer?',detail:'r'.repeat(200),secure:undefined,
+      questions:undefined,computer:{epoch:'epoch-one',sessionId:'live-one',reason:'r'.repeat(200),whatToDo:'Enter the code.'}});
+    expect(result.attention!.slice(1).map(request=>[request.kind,request.computer])).toEqual([['official',undefined],['official',undefined]]);
+    expect(result.activity.state).toBe('blocked');
+  });
+
   it('transmits credentials privately once and never forwards native secret-bearing error text',async()=>{
     const payload={operation:'answer' as const,profile:'shared',requestId:'srq-proof',actor:'member-one',answer:{epoch:'epoch-one',sessionId:'live-one',method:'vault.code' as const,value:'123456'}};
     const fetcher=vi.fn(async(_url: URL | string, _init?: RequestInit)=>Response.json({error:'private synthetic canary'}, {status:409}));

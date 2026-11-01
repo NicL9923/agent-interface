@@ -5,7 +5,8 @@ export type View = "conversation" | "today" | "groups" | "find";
 export type Panel =
   | { kind: "preferences"; destination?: { kind: "following" } | { kind: "section"; id: string } | { kind: "signout" } }
   | { kind: "integrations" | "upgrade" }
-  | { kind: "computer"; tab?: "desktop" | "terminal" }
+  /** take asks the desktop to take control once it connects; each request is a new number. */
+  | { kind: "computer"; tab?: "desktop" | "terminal"; take?: number }
   | { kind: "settings"; bot: Bot | "new" }
   | { kind: "details"; botId: string; newSection?: boolean }
   | { kind: "routine"; botId: string; routineId: string; resultId?: string };

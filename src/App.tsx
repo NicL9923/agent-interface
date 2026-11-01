@@ -29,6 +29,7 @@ import { ShortcutsDialog } from "./app/ShortcutsDialog";
 import { StopConfirm } from "./app/StopConfirm";
 import { Toast, useToast } from "./app/Toast";
 import { useShortcuts } from "./app/shortcuts";
+import { waitingPlaceholder } from "./app/waiting-input";
 import { badgeCount, useAppBadge } from "./app/badge";
 import { ConnectionPanel } from "./components/ConnectionPanel";
 import { DecisionsNotice, reviewFirstDecision, type DockItem } from "./app/StatusDock";
@@ -83,6 +84,12 @@ export function App() {
   // The anchored send follows the ID Hermes gave its message, once the receipt names one.
   const { sentAs } = history;
   useEffect(() => { if (receipt?.messageId) sentAs(receipt.requestId, receipt.messageId); }, [receipt, sentAs]);
+  // A handoff card's Take over and the live row's Watch open the computer from the transcript.
+  useEffect(() => {
+    const opened = (event: Event) => setPanel({ kind: "computer", ...((event as CustomEvent<{ take?: boolean }>).detail?.take ? { take: Date.now() } : {}) });
+    window.addEventListener("wildbots:computer", opened);
+    return () => window.removeEventListener("wildbots:computer", opened);
+  }, []);
   // A sent message shows in the transcript at once; Send keeps spinning until Hermes answers.
   const echoes = useSentEchoes({ pending, receipt, sending, conversation, sender: boot?.user });
   const transcript = useMemo(() => withEchoes(conversation, echoes), [conversation, echoes]);
@@ -262,7 +269,7 @@ export function App() {
             active={active} connectionLost={connectionLost} draft={draft} setDraft={setDraft}
             draftReady={draftReady} uploads={uploads} previews={previews} uploading={uploading} upload={uploadFiles}
             retryUpload={retryUploadFile} cancelUpload={cancelUploadFile} pending={pending} receipt={receipt}
-            sending={sending} retry={retrySend} discard={discardSend}
+            sending={sending} retry={retrySend} discard={discardSend} waiting={waitingPlaceholder(ownConversation, boot.user.id)}
             send={sendMessage} reviewed={reviewed} setReviewed={setReviewed}
             stopping={stopping} onStop={stop} dock={dock}
             refresh={refreshSession} />}
@@ -291,7 +298,8 @@ export function App() {
       )}
       {panel?.kind === "routine" && <Loading><RoutineResults key={`${boot.user.id}:${panel.botId}:${panel.routineId}`} botId={panel.botId} routineId={panel.routineId} userId={boot.user.id} resultId={panel.resultId} onClose={() => closePanels("routine")} /></Loading>}
       {panel?.kind === "integrations" && <Loading><IntegrationsPanel key={`integrations:${boot.user.id}`} bots={boot.bots} accountScope={boot.user.id} onClose={() => closePanels("integrations")} /></Loading>}
-      {computerLoaded && <Loading><ComputerPanel key={`computer:${boot.user.id}`} initialTab={panel?.kind === "computer" ? panel.tab : undefined} open={panel?.kind === "computer"} onClose={() => closePanels("computer")} /></Loading>}
+      {computerLoaded && <Loading><ComputerPanel key={`computer:${boot.user.id}`} initialTab={panel?.kind === "computer" ? panel.tab : undefined} open={panel?.kind === "computer"}
+        take={panel?.kind === "computer" ? panel.take : undefined} onClose={() => closePanels("computer")} /></Loading>}
       {upgradeLoaded && <Loading><HermesUpgradePanel key={`upgrades:${boot.user.id}`} open={panel?.kind === "upgrade"} onClose={() => closePanels("upgrade")}
         bots={boot.bots} currentVersion={boot.connection.version} currentRevisionDate={boot.connection.revisionDate} /></Loading>}
       {panel?.kind === "preferences" && (

@@ -233,6 +233,37 @@ class OpenTests(unittest.TestCase):
             self.assertEqual(result["status"], "rejected")
             self.assertEqual(hermes.journal.receipt("closed")["status"], "rejected")
 
+    def test_admitted_steering_closes_the_asks_it_answers_after_every_lock_is_released(self):
+        with FakeGateway([]) as hermes:
+            hermes.open()
+            calls = []
+            def admitted(profile, sid, actor):
+                free = []
+                probe = threading.Thread(target=lambda: free.extend(lock.acquire(blocking=False) and (lock.release() or True)
+                                                                    for lock in (hermes.bridge.submission_lock, hermes.journal.lock)))
+                probe.start(); probe.join()
+                calls.append((profile, sid, actor, free))
+            hermes.journal.steering_admitted = admitted
+            submit = hermes.methods["agent-interface.submit"]
+            hermes.server.handle_request = Mock(return_value=hermes.server._ok("native", {"status": "accepted"}))
+            params = {"profile": "default", "request_id": "first", "sender_id": "member", "text": "Start"}
+            submit("send", params)
+            self.assertEqual(calls, [])
+            hermes.server._sessions["sid"]["running"] = True
+            hermes.server.handle_request = Mock(return_value=hermes.server._ok("native", {"status": "queued"}))
+            steer = {**params, "request_id": "steer", "text": "Use the other address"}
+            self.assertEqual(submit("send", steer)["result"]["status"], "accepted")
+            self.assertEqual(calls, [("default", "sid", "member", [True, True])])
+            # A replay, a native refusal and a hook failure close nothing more and still answer.
+            submit("again", steer)
+            hermes.server.handle_request = Mock(return_value=hermes.server._ok("native", {"status": "rejected"}))
+            submit("send", {**params, "request_id": "refused", "text": "Late"})
+            hermes.journal.steering_admitted = Mock(side_effect=RuntimeError("hook"))
+            hermes.server.handle_request = Mock(return_value=hermes.server._ok("native", {"status": "queued"}))
+            with self.assertLogs(level="ERROR"):
+                self.assertEqual(submit("send", {**params, "request_id": "third", "text": "Again"})["result"]["status"], "accepted")
+            self.assertEqual(len(calls), 1)
+
     def test_submit_resolves_canonical_and_preserves_interruption_guard(self):
         with FakeGateway([]) as hermes:
             hermes.open()
