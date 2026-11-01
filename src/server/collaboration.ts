@@ -9,6 +9,9 @@ import type { Store } from './store.js';
 import { notFound, redactAgents, Roster, visibleBots } from './bot-access.js';
 import { httpError } from './http-error.js';
 import { id } from './schemas.js';
+import { routineRun, runTime, type RoutineRun, type RoutineRunPage } from '../shared/routine-runs.js';
+/** How long one read of an assistant's runs serves every viewer. */
+export const RUNS_CACHE_MS = 5_000;
 const uuid = z.string().uuid();
 
 /** Whether a room has only local assistants this person may see, as every group route requires. */
@@ -28,6 +31,37 @@ export async function installCollaborationRoutes(app: FastifyInstance, runtime: 
     await profile(signedIn(req).id, p.botId);
     if (!runtime.routineResults) throw httpError(409, 'Routine history is unavailable on this Hermes integration.');
     return runtime.routineResults(p.botId, p.routineId);
+  });
+  // Every run of one assistant's routines, for its conversation. Hermes reads one routine at a
+  // time, so a read is shared for a few seconds across viewers and polls; access and redaction
+  // stay per request.
+  const runReads = new Map<string, { at: number; value: Promise<RoutineRunPage> }>();
+  function assistantRuns(botId: string) {
+    const cached = runReads.get(botId);
+    if (cached && Date.now() - cached.at < RUNS_CACHE_MS) return cached.value;
+    const value = (async () => {
+      const routines = (await runtime.routines()).filter(routine => routine.botId === botId);
+      const runs: RoutineRun[] = [], unavailable: string[] = [];
+      for (let index = 0; index < routines.length; index += 4) await Promise.all(routines.slice(index, index + 4).map(async routine => {
+        try { runs.push(...(await runtime.routineResults!(botId, routine.id)).map(result => routineRun(routine, result))); }
+        catch { unavailable.push(routine.id); }
+      }));
+      return { runs: runs.filter(run => !Number.isNaN(runTime(run))).sort((a, b) => runTime(a) - runTime(b)), unavailable };
+    })();
+    runReads.set(botId, { at: Date.now(), value });
+    value.catch(() => { if (runReads.get(botId)?.value === value) runReads.delete(botId); });
+    return value;
+  }
+  apiRoute(app, "GET /bots/:botId/routine-runs", {}, async req => {
+    const { botId } = z.object({ botId: id }).parse(req.params);
+    const { since } = z.object({ since: z.string().datetime({ offset: true }).optional() }).strict().parse(req.query);
+    await profile(signedIn(req).id, botId);
+    if (!runtime.routineResults) throw httpError(409, 'Routine history is unavailable on this Hermes integration.');
+    const page = await assistantRuns(botId);
+    const from = since ? Date.parse(since) : -Infinity;
+    const redact = await redactAgents(store, roster, signedIn(req).id);
+    return { unavailable: page.unavailable, runs: page.runs.filter(run => runTime(run) >= from).map(run => ({
+      ...run, preview: run.preview === undefined ? undefined : redact.text(run.preview), error: run.error === undefined ? undefined : redact.text(run.error) })) };
   });
   apiRoute(app, "GET /bots/:botId/routines/:routineId/results/:resultId", {}, async req => {
     const p = z.object({ botId: id, routineId: id, resultId: id }).parse(req.params);

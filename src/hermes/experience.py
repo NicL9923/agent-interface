@@ -303,6 +303,115 @@ def store_unwritten(profile):
     return not store.is_file() or store.stat().st_size == 0
 
 
+def _epoch(value):
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value) or None
+    if isinstance(value, str) and value.strip():
+        try:
+            return datetime.datetime.fromisoformat(value.strip()).timestamp()
+        except ValueError:
+            return None
+    return None
+
+
+def _iso(value):
+    at = _epoch(value)
+    return datetime.datetime.fromtimestamp(at, datetime.timezone.utc).isoformat() if at else None
+
+
+# Hermes job and ledger words, normalized for the app. A delivery failure still ran.
+_LEDGER_STATUS = {"completed": "succeeded", "failed": "failed", "claimed": "running", "running": "running"}
+_JOB_STATUS = {"ok": "succeeded", "delivery_queued": "succeeded", "delivery_failed": "succeeded",
+               "error": "failed", "failed": "failed", "interrupted": "failed", "blocked_config": "failed"}
+# How long a never-closed session without a ledger counts as live, as Hermes's own is_active.
+_ACTIVE_SECONDS = 300.0
+
+
+def routine_ledger(job_id):
+    """This job's execution attempts by ID, and its live in-flight attempt, or nothing on Hermes
+    without the ledger. Call inside the owner's home scope."""
+    try:
+        from cron.executions import list_executions
+        rows = {str(row.get("id")): row for row in list_executions(job_id=job_id, limit=100) if isinstance(row, dict) and row.get("id")}
+    except Exception:
+        return {}, None
+    try:
+        from cron.executions import live_inflight_execution
+        live = live_inflight_execution(job_id)
+    except Exception:
+        live = None
+    return rows, live if isinstance(live, dict) else None
+
+
+def run_outcome(row, attempts, ledger, job, newest, now=None):
+    """One reconciled run's normalized status and times.
+
+    A unified-runtime session names its execution; a legacy session started just after its claim;
+    a script-only document was written inside its attempt's window, as `_execution_contains` reads
+    it; `exec:N` rows index the terminal attempts. Without a ledger, only the newest run can borrow
+    the job's own last status, and only when the job's last run time falls inside it. Anything
+    else is `unknown`, never a guess.
+    """
+    now = time.time() if now is None else now
+    started, ended = _epoch(row.get("started_at")), _epoch(row.get("ended_at"))
+    stem = str(row.get("id") or "").rsplit(":", 1)[-1] if row.get("source") == "cron_output" else None
+    attempt = None
+    if row.get("source") != "cron_output":
+        attempt = ledger.get(str(row.get("cron_execution_id") or "")) if row.get("cron_execution_id") else None
+        if attempt is None and not row.get("cron_execution_id") and started:
+            # Newest first: the latest claim at or just before the session began.
+            attempt = next((a for a in sorted(ledger.values(), key=lambda a: _epoch(a.get("claimed_at")) or 0, reverse=True)
+                            if (_epoch(a.get("claimed_at")) or 0) <= started + 5), None)
+            if attempt is not None and _epoch(attempt.get("finished_at")) and started > _epoch(attempt.get("finished_at")):
+                attempt = None
+    elif row.get("id", "").endswith(":running"):
+        attempt = ledger.get(str(row.get("execution_id") or ""))
+    elif re.fullmatch(r"\d+", stem or "") and ":exec:" in row.get("id", ""):
+        index = int(stem)
+        terminal = [a for a in attempts if a.get("status") in ("completed", "failed")]
+        attempt = ledger.get(str(terminal[index].get("id"))) or terminal[index] if index < len(terminal) else None
+    elif started and stem != "latest":
+        candidates = []
+        for a in attempts:
+            claimed, finished = _epoch(a.get("claimed_at")), _epoch(a.get("finished_at"))
+            if a.get("status") not in ("completed", "failed") or claimed is None or started + 0.001 < int(claimed):
+                continue
+            if finished is not None and started > finished + 300:
+                continue
+            candidates.append((finished is not None and started > finished, -claimed, a))
+        if candidates:
+            chosen = min(candidates, key=lambda c: c[:2])[2]
+            attempt = ledger.get(str(chosen.get("id"))) or chosen
+    status, delivery_failed, error = "unknown", False, None
+    if attempt is not None:
+        status = _LEDGER_STATUS.get(str(attempt.get("status") or ""), "unknown")
+        delivery_failed = attempt.get("delivery_outcome") == "failed"
+        error = str(attempt.get("error") or "").strip() or None
+        if row.get("source") == "cron_output":
+            started = _epoch(attempt.get("claimed_at")) or started
+        ended = _epoch(attempt.get("finished_at")) or ended
+    elif row.get("source") != "cron_output" and ended is None:
+        last = _epoch(row.get("last_active")) or started
+        status = "running" if last and now - last < _ACTIVE_SECONDS else "unknown"
+    if status == "unknown" and newest and isinstance(job, dict):
+        last_run = _epoch(job.get("last_run_at"))
+        known = _JOB_STATUS.get(str(job.get("last_status") or ""))
+        end = ended or _epoch(row.get("last_active")) or started
+        if known and last_run and started and started - 300 <= last_run <= (end or started) + 300:
+            status = known
+            delivery_failed = job.get("last_status") == "delivery_failed"
+            error = str(job.get("last_error") or "").strip() or None if known == "failed" else None
+    if row.get("source") == "cron_output" and status != "running" and ended is None:
+        # A script document is written as its run finishes.
+        ended = started
+    if status == "running":
+        ended = None
+    return dict(status=status, startedAt=_iso(started), finishedAt=_iso(ended),
+        deliveryFailed=delivery_failed, error=error[:500] if error and status == "failed" else None)
+
+
 def routine_results(data):
     """Read only this profile's native run sessions and cron output documents.
 
@@ -347,10 +456,23 @@ def routine_results(data):
             rows = _reconcile_cron_runs(*arguments)
             # Ledger reconciliation can add metadata-only cron_output rows.
             rows = [row for row in rows if row.get("source") != "cron_output" or safe_document(row)]
+            ledger, live = routine_ledger(job_id)
+            # A script-only run in flight has no session or document yet; its live claim stands for it.
+            if live and not any(row.get("cron_execution_id") == live.get("id") or row.get("source") != "cron_output" and not row.get("cron_execution_id")
+                                and row.get("ended_at") is None for row in rows):
+                rows.insert(0, dict(id=f"cron_output:{job_id}:running", source="cron_output", execution_id=live.get("id"),
+                    title="Running", preview="This run is still in progress.", started_at=_epoch(live.get("claimed_at"))))
             if data["operation"] == "routine_results":
-                return [dict(id=row["id"], title=row.get("title") or "Routine run",
-                    startedAt=datetime.datetime.fromtimestamp(row["started_at"], datetime.timezone.utc).isoformat() if row.get("started_at") else None,
-                    preview=row.get("preview"), previewOnly=row.get("source") == "cron_output") for row in rows]
+                results = []
+                for index, row in enumerate(rows):
+                    result = dict(id=row["id"], title=row.get("title") or "Routine run",
+                        startedAt=datetime.datetime.fromtimestamp(row["started_at"], datetime.timezone.utc).isoformat() if row.get("started_at") else None,
+                        preview=row.get("preview"), previewOnly=row.get("source") == "cron_output")
+                    # Additive fields; the ledger's claim time replaces a document's write time.
+                    outcome = run_outcome(row, attempts, ledger, job, index == 0)
+                    result.update({key: value for key, value in outcome.items() if key != "startedAt" or value})
+                    results.append(result)
+                return results
             result_id = data.get("resultId")
             row = next((row for row in rows if row["id"] == result_id), None)
             if row is None:

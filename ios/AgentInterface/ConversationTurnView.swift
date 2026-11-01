@@ -36,11 +36,34 @@ struct TranscriptTurns: View, Equatable {
   var delivery: SentEcho.Delivery?
   /// The turn the assistant is still working on, whose work reads as live.
   var liveTurn: String? = nil
+  /// Routine runs before each turn and after the last; see `RoutineRunRules.place`.
+  var runSlots: [[RoutineRun]] = []
+  var botId = ""
+  /// One keyed list, so an opened run card stays open when a new turn lands after it.
+  private enum Row: Identifiable {
+    case run(RoutineRun), turn(ConversationTurn)
+    var id: String { switch self { case .run(let run): run.key; case .turn(let turn): turn.id } }
+  }
+  private var rows: [Row] {
+    guard !runSlots.isEmpty else { return turns.map(Row.turn) }
+    var rows: [Row] = []
+    for (index, turn) in turns.enumerated() {
+      if index < runSlots.count { rows += runSlots[index].map(Row.run) }
+      rows.append(.turn(turn))
+    }
+    if turns.count < runSlots.count { rows += runSlots[turns.count].map(Row.run) }
+    return rows
+  }
   var body: some View {
     // Only the turn holding the message on its way renders again as it goes.
-    ForEach(turns) { turn in
-      ConversationTurnView(turn: turn, advanced: advanced,
-        delivery: turn.messages.contains { $0.id == delivery?.id } ? delivery : nil, live: turn.id == liveTurn)
+    ForEach(rows) { row in
+      switch row {
+      case .turn(let turn):
+        ConversationTurnView(turn: turn, advanced: advanced,
+          delivery: turn.messages.contains { $0.id == delivery?.id } ? delivery : nil, live: turn.id == liveTurn)
+      case .run(let run):
+        RoutineRunCard(run: run, botId: botId).id(run.key)
+      }
     }.disclosureGroupStyle(TranscriptDisclosureStyle())
   }
 }

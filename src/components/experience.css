@@ -157,3 +157,9 @@
 .routine-manager .routine-schedule { font-family: var(--font-mono); }
 
 .routine-manager fieldset .checkbox-label { min-height: 44px; font-size: 1rem; }
+
+/* Routine settings: Show runs in chat, with its note under the label. */
+.routine-chat-toggle { align-items: flex-start; margin: 4px 0 12px; }
+.routine-chat-toggle input { margin-top: 3px; }
+.routine-chat-toggle span { display: grid; gap: 2px; }
+.routine-chat-toggle small { font-size: 0.75rem; }

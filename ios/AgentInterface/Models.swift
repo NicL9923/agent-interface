@@ -111,6 +111,8 @@ struct Preferences: Codable, Equatable {
   var defaultBotId: String?
   var sections: [BotSection] = []
   var followBots: [String] = []
+  /// Routines whose runs this person keeps out of their assistant's chat. Older servers omit it.
+  var hiddenRoutineRuns: [HiddenRoutineRun]?
 }
 struct Capability: Codable, Equatable {
   var supported: Bool

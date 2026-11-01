@@ -81,6 +81,16 @@ struct ConversationView: View {
   @State private var contentEnd: CGFloat = 0
   /// Whether the reader sits at the end, where the jump control has nothing to jump to.
   @State private var atEnd = true
+  /// This assistant's routine runs, placed among the turns by time; see RoutineRuns.swift.
+  @State private var routineRuns = RoutineRunsFeed()
+  @State private var runUndo = UndoQueue()
+  private var runsEnabled: Bool { store.supports(.routines) }
+  private var runSlots: [[RoutineRun]] {
+    guard runsEnabled, routineRuns.botId == bot.id, !routineRuns.runs.isEmpty, let conversation = store.conversation, conversation.botId == bot.id else { return [] }
+    let hidden = Set((store.currentPreferences?.hiddenRoutineRuns ?? []).filter { $0.botId == bot.id }.map(\.routineId))
+    let shown = RoutineRunRules.shown(routineRuns.runs, conversation: conversation, hidden: hidden)
+    return shown.isEmpty ? [] : RoutineRunRules.place(turnTimes: store.turns.map(\.startedAt), runs: shown)
+  }
   private var matches: [FindMatches.Match] {
     FindMatches.merge(loaded: store.transcript?.messages ?? [], query: findQuery,
       hits: findHits?.query == findQuery ? findHits?.hits ?? [] : [], botId: bot.id, sessionId: store.conversation?.sessionId)
@@ -340,6 +350,16 @@ struct ConversationView: View {
     }
     .scrollPosition(id: $visibleMessage, anchor: .top)
     .coordinateSpace(name: "transcript")
+    .undoToast($runUndo) { change in Task { await store.undo(change) } }
+    // Runs reread every minute, every 15 seconds while one runs, and when a saved message arrives.
+    .task(id: "\(store.scope ?? ""):\(bot.id):\(runsEnabled):\(store.conversation?.messages.last { !$0.id.hasSuffix("-inflight") }?.id ?? "")") {
+      guard runsEnabled else { return }
+      routineRuns.reset(bot.id)
+      while !Task.isCancelled {
+        await routineRuns.load(store, botId: bot.id)
+        try? await Task.sleep(for: routineRuns.running ? RoutineRunRules.runningPoll : RoutineRunRules.poll)
+      }
+    }
     .onGeometryChange(for: CGFloat.self) {
       $0.size.height
     } action: {
@@ -371,8 +391,12 @@ struct ConversationView: View {
       }
       emptyState
       TranscriptTurns(turns: store.turns, advanced: advanced, delivery: store.outgoing,
-        liveTurn: store.activity.active ? store.turns.last?.id : nil)
+        liveTurn: store.activity.active ? store.turns.last?.id : nil, runSlots: runSlots, botId: bot.id)
         .environment(\.foundMessage, findTarget ?? highlighted)
+        .environment(\.hideRoutineRuns, { run in
+          store.setRunsShown(botId: bot.id, routineId: run.routineId, shown: false)
+          runUndo.show(UndoToast(message: "Hid \(run.routineName) runs from this chat", change: .routineRuns(botId: bot.id, routineId: run.routineId)))
+        })
       if ![.idle, .done].contains(store.activity) { liveActivity }
       // Questions and secure requests come before approvals, as on the web.
       ForEach(store.conversation?.attention ?? []) { request in

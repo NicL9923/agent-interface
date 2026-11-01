@@ -24,8 +24,8 @@ const firstPage = (botId: string) => routeUrl("GET /bots/:id/conversation", { id
  * The first transcript message whose bottom is below `y`. Messages are laid out in document
  * order, so a binary search measures a handful of them instead of every one on each scroll.
  */
-export function firstMessageBelow(container: HTMLElement, y: number) {
-  const items = container.querySelectorAll<HTMLElement>("[data-message-id]");
+export function firstMessageBelow(container: HTMLElement, y: number, selector = "[data-message-id]") {
+  const items = container.querySelectorAll<HTMLElement>(selector);
   let low = 0, high = items.length;
   while (low < high) {
     const middle = (low + high) >> 1;
@@ -36,6 +36,12 @@ export function firstMessageBelow(container: HTMLElement, y: number) {
 }
 const messageElement = (container: HTMLElement, id: string) =>
   [...container.querySelectorAll<HTMLElement>("[data-message-id]")].find(item => item.dataset.messageId === id);
+// Rows that hold the reader's place without being messages, such as routine run cards, so one
+// opened at the top of the view stays put. Read positions still name only messages.
+const placeRows = "[data-message-id], [data-place-id]";
+const placeId = (item: HTMLElement) => item.dataset.messageId ?? `place:${item.dataset.placeId}`;
+const placeElement = (container: HTMLElement, id: string) =>
+  [...container.querySelectorAll<HTMLElement>(placeRows)].find(item => placeId(item) === id);
 const editable = (target: EventTarget | null) =>
   target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName));
 const countsAsNew = (message: Message) =>
@@ -261,7 +267,7 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
   };
   const returnToPlace = () => {
     const element = scroll.current, held = anchor.current;
-    const target = held && element ? messageElement(element, held.id) : undefined;
+    const target = held && element ? placeElement(element, held.id) : undefined;
     if (!element || !held || !target) return;
     const shift = target.getBoundingClientRect().top - element.getBoundingClientRect().top - held.offset;
     if (shift) element.scrollTop += shift;
@@ -271,8 +277,8 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
     anchor.current = null;
     if (!element || mode.current !== "free") return;
     const top = element.getBoundingClientRect().top;
-    const target = firstMessageBelow(element, top);
-    if (target) anchor.current = { id: target.dataset.messageId!, offset: target.getBoundingClientRect().top - top };
+    const target = firstMessageBelow(element, top, placeRows);
+    if (target) anchor.current = { id: placeId(target), offset: target.getBoundingClientRect().top - top };
   };
   // The person's message a send anchored. See sendAnchor for how it is followed.
   const sentMessage = () => {

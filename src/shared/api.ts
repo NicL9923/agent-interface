@@ -2,6 +2,7 @@ import type { AutomationOverview as WorkOverview, AutomationTask, AutomationRequ
 import type { AutomationOverview, HistoryPage, SavedItem, SearchHit, Starter } from "./discovery.js";
 import type { ProfileMemory, RoutinePreview, RoutineRunReceipt, TodayOverview } from "./experience.js";
 import type { RoutineOutput, RoutineResult } from "./collaboration.js";
+import type { RoutineRunPage } from "./routine-runs.js";
 import type { ReplyCardState } from "./reply-cards.js";
 import type { Routine } from "./types.js";
 import type { routinePresets } from "./routine-presets.js";
@@ -103,6 +104,7 @@ export interface ApiRoutes {
   "GET /routines/:id/runs/:requestId": { response: RoutineRunReceipt };
   "GET /bots/:botId/routines/:routineId/results": { response: RoutineResult[] };
   "GET /bots/:botId/routines/:routineId/results/:resultId": { response: RoutineOutput };
+  "GET /bots/:botId/routine-runs": { query: { since?: string }; response: RoutineRunPage };
   "GET /bots/:id/messages/:messageId/cards/:cardId/state": { response: ReplyCardState };
   "PUT /bots/:id/messages/:messageId/cards/:cardId/state": { body: ReplyCardState; response: ReplyCardState };
   "GET /bots/:id/automation": { response: WorkOverview };
