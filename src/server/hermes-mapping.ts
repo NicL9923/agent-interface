@@ -7,7 +7,9 @@ import type { Wire } from './hermes-transport.js';
 /** What a session's frames have said since its last read: streamed text, open requests and tools. */
 export type LiveState = {text: string; reasoning: string; state: ActivityState; requests: Wire[]; tools: ToolCall[]; detail?: string};
 export const emptyLiveState = (): LiveState => ({text: '', reasoning: '', state: 'idle', requests: [], tools: []});
-const blockingRequests = ['clarify', 'sudo', 'secret', 'vault.save_login', 'vault.code', 'vault.unlock_prompt', 'connection'];
+// Requests a person answers, which this client must leave open rather than refuse. The add-on's
+// computer handoff is one: refusing it would settle the assistant's request at once.
+const blockingRequests = ['clarify', 'sudo', 'secret', 'vault.save_login', 'vault.code', 'vault.unlock_prompt', 'connection', COMPUTER_HANDOFF];
 
 /**
  * Removes persisted segments from the front of accumulated live text. Whitespace

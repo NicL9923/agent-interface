@@ -35,13 +35,31 @@ address, and Hermes fills the password only on a page whose origin matches
 exactly. The tool uses the same native save-login prompt as a browser page, so
 the Hermes desktop app and dashboard chat show their usual login prompt for it.
 Scheduled, messaging and API runs have no prompt, so the tool refuses and tells
-the assistant not to ask in chat. API keys and tokens are not logins; native
+the assistant not to ask in chat. The tool's description lists each result it can
+return (saved, user replied in chat, not saved, prompt unavailable, invalid
+argument, save failed) with the next step for each. API keys and tokens are not logins; native
 secret requests still handle them. The terminal CLI and TUI do not load the
 WildBots add-on, so the tool is unavailable there.
 
 These fields never become chat messages or drafts. They clear on submission,
-backgrounding and dismissal. An uncertain result disables resubmission of the
-same request; Refresh request checks its current state. Management failures ask
+backgrounding and dismissal. While an answer is on its way, the card locks its
+fields and says **Sending securely…**. Once Hermes takes it, the card confirms,
+for example "Login saved. Ranch hand is continuing.", then folds to that one line,
+which stays a moment after Hermes stops listing the request. An uncertain result
+disables resubmission of the same request; Refresh request checks its current state.
+An answer that arrives after the request closed is not used, and the card says so.
+
+To correct the assistant instead of answering, send a message. The composer says
+"Or reply here instead…" while a request waits. Hermes admits the message first,
+then closes that conversation's open requests, so the waiting tool returns and
+the assistant reads the message next. The tool tells the assistant that nothing
+was saved and that it may ask again with the corrected details. An answer already
+being sent wins over a message that arrives at the same moment, so each request
+has one outcome. A login asked for by address stays with the member whose task
+asked: another member's message does not close it, and their composer says it
+waits for that person. Questions from the assistant and computer handoff requests
+close the same way; answers already chosen on a question are kept. Approvals keep
+their own decision. Management failures ask
 you to reload and review saved entries before entering anything again.
 
 The server binds answers to the current executor, canonical session, profile,

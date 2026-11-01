@@ -261,3 +261,15 @@ it("names the same handoff method as the Hermes add-on", async () => {
   expect(source).toContain(`HANDOFF = "${computerHandoffMethod}"`);
   expect(await readFile(new URL("../src/hermes/vault.py", import.meta.url), "utf8")).toContain(`HANDOFF = "${computerHandoffMethod}"`);
 });
+
+it("keeps a handoff request open instead of refusing it as an unknown bridge", async () => {
+  const { applyFrame, emptyLiveState } = await import("../src/server/hermes-mapping.js");
+  const { computerHandoffMethod } = await import("../src/shared/computer.js");
+  const state = emptyLiveState();
+  expect(applyFrame(state, {jsonrpc: "2.0", id: "srq-hand", method: computerHandoffMethod, params: {session_id: "s", reason: "r", what_to_do: "w"}}, 1)).toBe(true);
+  expect(state.state).toBe("blocked");
+  expect(applyFrame(state, {jsonrpc: "2.0", id: "event", method: "event", params: {type: "request.cancel", payload: {id: "srq-hand"}}}, 2)).toBe(true);
+  expect(state.requests).toEqual([]);
+  // Window bridges this client cannot answer are still refused.
+  expect(applyFrame(emptyLiveState(), {jsonrpc: "2.0", id: "srq-x", method: "preview.read", params: {}}, 3)).toBe(false);
+});

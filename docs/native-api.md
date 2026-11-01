@@ -605,6 +605,25 @@ The iOS app shows the shared desktop in a `WKWebView` without a web session:
 The page accepts only a desktop ticket path. It is served with the app's content
 security policy and needs no Hermes credential. The terminal stays in the browser.
 
+### Handoff requests
+
+An assistant's request to take over the computer arrives in a conversation's
+`attention` with `kind: "computer"` and
+`computer: { "epoch", "sessionId", "reason", "whatToDo" }`. `reason` and
+`whatToDo` are the assistant's own words, at most 200 and 300 characters. Take
+over uses the steps above; Hermes answers the request when the person who took
+control hands back, so the client sends nothing extra. For **Not now**, call
+`POST /api/bots/:id/computer-handoffs/:requestId` with
+`{ "decision": "decline", "epoch": "...", "sessionId": "..." }`. It answers
+`{ "status": "ok" }`, or `{ "status": "expired" }` when the request already
+closed, and 409 when the binding no longer matches the assistant's conversation.
+
+A message sent with `POST /api/bots/:id/messages` while the assistant waits on a
+question, a secure request or a handoff closes those requests after the message
+is admitted, so the assistant reads it next. A login the assistant asked for by
+address stays open unless the sender is the member whose task asked for it. An
+answer that reaches Hermes after its request closed answers `{ "status": "expired" }`.
+
 ## Live Activity
 
 The app shows one aggregate Live Activity per device: the person's assistants that are
