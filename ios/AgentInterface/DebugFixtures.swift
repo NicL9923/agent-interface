@@ -502,6 +502,10 @@
           "activity": ["state": "idle"], "approvals": [], "files": [], "attention": [],
           "draft": Self.draft, "readPosition": Self.readPosition,
         ]
+        if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_ROUTINE_RUNS"] == "1" {
+          object = ["botId": path.components(separatedBy: "/")[3], "messages": TranscriptFixtures.routineMessages, "earlier": 0,
+            "activity": ["state": "idle"], "approvals": [], "files": [], "attention": [], "draft": Self.draft]
+        }
         if let conversation = Self.designFixture?["conversation"] as? [String: Any] {
           object = Self.questionAnswered && Self.designFixture?["screen"] as? String == "questions"
             ? Self.designFixture?["afterAnswer"] ?? conversation : conversation
@@ -640,6 +644,11 @@
           if request.url?.query?.contains("state=1") == true { page["state"] = Self.groupState }
           object = page
         } else { object = Self.groupState }
+      } else if path.hasSuffix("/routine-runs") {
+        // Routine runs among the turns: on with AGENT_INTERFACE_UI_ROUTINE_RUNS=1, empty otherwise.
+        object = ["runs": ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_ROUTINE_RUNS"] == "1" ? TranscriptFixtures.routineRuns : [], "unavailable": []]
+      } else if path.contains("/routines/") && path.contains("/results/"), let output = TranscriptFixtures.routineOutputs[request.url!.lastPathComponent] {
+        object = ["messages": [["id": "\(request.url!.lastPathComponent)-output", "role": "assistant", "text": output]], "previewOnly": false]
       } else if path.contains("/routines/") && path.hasSuffix("/results") {
         object = [["id": "fixture-run", "title": "Morning brief", "startedAt": "2026-10-02T12:00:00Z", "previewOnly": false]]
       } else if path.contains("/routines/") && path.contains("/results/") {
@@ -1096,6 +1105,28 @@
 
   /// Transcript fixtures for the chat UX catch-up (I1). Explicit synthetic content.
   enum TranscriptFixtures {
+    /// A day with routine runs: one before the first message, one between turns, one delivered
+    /// into the chat (shown once, as its message) and one still running. Synthetic.
+    static var routineMessages: [[String: Any]] { [
+      ["id": "rr-q1", "role": "user", "text": "Plan the week's chores.", "sender": ["id": "native-test", "name": "Local test member"], "createdAt": "2026-10-02T14:00:00Z"],
+      ["id": "rr-a1", "role": "assistant", "text": "Monday fences, Wednesday feed, Friday the truck.", "createdAt": "2026-10-02T14:00:20Z"],
+      ["id": "rr-d1", "role": "user", "text": "[Cron delivery: Morning brief]\nClear skies, a light north wind.", "createdAt": "2026-10-02T15:00:20Z"],
+      ["id": "rr-q2", "role": "user", "text": "Thanks.", "sender": ["id": "native-test", "name": "Local test member"], "createdAt": "2026-10-02T16:00:00Z"],
+      ["id": "rr-a2", "role": "assistant", "text": "Any time.", "createdAt": "2026-10-02T16:00:05Z"],
+    ] }
+    static var routineRuns: [[String: Any]] { [
+      ["id": "rr-cert-1", "routineId": "cert", "routineName": "Certificate check", "startedAt": "2026-10-02T13:00:00Z", "finishedAt": "2026-10-02T13:00:04Z",
+       "status": "failed", "error": "cameras.ranch.example expires in 3 days.", "preview": "FAILED", "previewOnly": true],
+      ["id": "rr-brief", "routineId": "brief", "routineName": "Morning brief", "startedAt": "2026-10-02T15:00:00Z", "finishedAt": "2026-10-02T15:00:15Z", "status": "succeeded", "previewOnly": false],
+      ["id": "rr-cert-2", "routineId": "cert", "routineName": "Certificate check", "startedAt": "2026-10-02T15:30:00Z", "finishedAt": "2026-10-02T15:30:04Z",
+       "status": "succeeded", "preview": "All 3 certificates are valid for at least 60 days.", "previewOnly": false],
+      ["id": "rr-feed", "routineId": "feed", "routineName": "Feed inventory", "startedAt": "2026-10-02T16:30:00Z", "status": "running", "preview": "This run is still in progress.", "previewOnly": true],
+    ] }
+    static let routineOutputs = [
+      "rr-cert-2": "## Certificates\n\n- **home.ranch.example** valid until Dec 19\n- **gate.ranch.example** valid until Jan 8\n- **cameras.ranch.example** renewed today",
+      "rr-cert-1": "- cameras.ranch.example: expires in 3 days",
+      "rr-feed": "This run is still in progress.",
+    ]
     static let longSession = "fixture-long-session"
     static var questions: [[String: Any]] { [
       ["id": "plan", "prompt": "Your plan", "options": ["First", "Second"]],

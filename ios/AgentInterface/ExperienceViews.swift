@@ -638,6 +638,14 @@ struct RoutineEnhancements: View {
   var body: some View {
     RoutineSchedulePreview(botId: routine.botId, schedule: routine.schedule)
     NavigationLink("View results") { RoutineResultsView(botId: routine.botId, routineId: routine.id) }
+    // This person's view of the chat, not part of the routine, so it saves with their preferences.
+    Toggle(isOn: Binding(get: { !RoutineRunRules.hidden(store.currentPreferences, botId: routine.botId, routineId: routine.id) },
+      set: { store.setRunsShown(botId: routine.botId, routineId: routine.id, shown: $0) })) {
+      VStack(alignment: .leading, spacing: 2) {
+        Text("Show runs in chat")
+        Text("Each run appears in the assistant's conversation for you.").font(.caption).foregroundStyle(Palette.muted)
+      }
+    }.tint(Palette.accent).accessibilityIdentifier("routineShowRuns-\(routine.id)")
     if let receipt, !receipt.finished {
       Button(busy ? "Checking…" : "Check run status") { checkRun(receipt.requestId) }.disabled(busy || disabled || !store.connected)
     } else {
