@@ -1,10 +1,11 @@
 import type { ActivityState, Bot } from "../shared/types";
+import type { GroupRoom } from "../shared/collaboration";
+import { memberNames } from "./home-rooms";
 import { Avatar } from "../components/Avatar";
 import { Icon } from "../components/Icon";
 import type { View } from "./view";
-const titles: Record<Exclude<View, "conversation">, [string, string]> = {
+const titles: Record<Exclude<View, "conversation" | "group">, [string, string]> = {
   find: ["Search & saved", "Past answers, saved items and automations"],
-  groups: ["Group chats", "Two to six assistants in one conversation"],
   today: ["Today", "Your assistants, at a glance"],
 };
 export function botSummary(bot: Bot) {
@@ -15,9 +16,11 @@ export function botSummary(bot: Bot) {
  * Like a messaging app: a lone back button on phones, and the assistant itself as the
  * one control that opens its details, where pinning, artifacts and settings live.
  */
-export function ChatHeader({ view, selected, avatarState, offline = false, railOpen, onOpenRail, onDetails }: {
+export function ChatHeader({ view, selected, room, avatarState, offline = false, railOpen, onOpenRail, onDetails }: {
   view: View;
   selected?: Bot;
+  /** The open group chat, when the view is a group. It may not be listed yet. */
+  room?: GroupRoom;
   avatarState: ActivityState;
   offline?: boolean;
   railOpen: boolean;
@@ -36,7 +39,8 @@ export function ChatHeader({ view, selected, avatarState, offline = false, railO
       >
         <Icon name="back" />
       </button>
-      {view !== "conversation" ? <div className="chat-title"><h1>{titles[view][0]}</h1><p>{titles[view][1]}</p></div> : selected ? (
+      {view === "group" ? <div className="chat-title"><h1>{room?.name ?? "Group chat"}</h1><p>{room ? memberNames(room) : "Two to six assistants in one conversation"}</p></div>
+        : view !== "conversation" ? <div className="chat-title"><h1>{titles[view][0]}</h1><p>{titles[view][1]}</p></div> : selected ? (
         <h1 className="chat-identity-heading">
           <button className="chat-identity" aria-haspopup="dialog" aria-label={selected.name}
             title="Details, pin, artifacts and settings" onClick={() => onDetails(selected)}>

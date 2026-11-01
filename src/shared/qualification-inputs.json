@@ -48,6 +48,7 @@
   "src/server/effect-support.ts",
   "src/server/event-stream.ts",
   "src/server/experience.ts",
+  "src/server/group-latest.ts",
   "src/server/group-watch.ts",
   "src/server/health.ts",
   "src/server/hermes-files.ts",

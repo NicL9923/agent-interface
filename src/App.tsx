@@ -2,12 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { isConversationReply } from "./shared/message-origin";
 import type { ActivityState, Bot, Preferences } from "./shared/types";
 import { MAX_ATTACHMENTS } from "./shared/uploads";
-import { write } from "./client-api";
+import { api, write } from "./client-api";
+import type { GroupCatalog, GroupRoom } from "./shared/collaboration";
 import { AvatarTrio, SignIn } from "./components/SignIn";
 import { useDeviceNotifications } from "./components/use-device-notifications";
 import { TodayPanel } from "./components/TodayPanel";
 import "./components/discovery.css";
-import { hasDestination, initialPanel, initialView, startsOnToday, useUrlSync } from "./app/view";
+import { hasDestination, initialPanel, initialRoom, initialView, startsOnToday, useUrlSync } from "./app/view";
 import type { Panel, View } from "./app/view";
 import { useSession } from "./app/use-session";
 import { useDraft, useDraftPersistence } from "./app/use-draft";
@@ -19,8 +20,10 @@ import { moveSectionEdit, togglePinEdit, type UndoableEdit } from "./app/home-un
 import { useAppInstall, useMobile } from "./app/use-browser";
 import { latestMessageAt, useReadThrough } from "./app/unread";
 import { useStableCallback } from "./app/use-stable-callback";
+import { useResource } from "./app/use-resource";
+import { orderRooms, pendingGroup } from "./app/home-rooms";
 import { UpdateNotice } from "./app/UpdateNotice";
-import { Sidebar } from "./app/Sidebar";
+import { Sidebar, type HomeGroups } from "./app/Sidebar";
 import { ChatHeader } from "./app/ChatHeader";
 import { Conversation } from "./app/Conversation";
 import { Composer, useOwnPrompts, useStopResponse } from "./app/Composer";
@@ -32,9 +35,12 @@ import { useShortcuts } from "./app/shortcuts";
 import { badgeCount, useAppBadge } from "./app/badge";
 import { ConnectionPanel } from "./components/ConnectionPanel";
 import { DecisionsNotice, reviewFirstDecision, type DockItem } from "./app/StatusDock";
-import { BotDetails, BotSettings, ComputerPanel, DiscoveryPanel, GroupChats, HermesUpgradePanel, IntegrationsPanel, Loading, PreferencesDialog, RoutineResults, useOnceActive } from "./app/panels";
+import { BotDetails, BotSettings, ComputerPanel, DiscoveryPanel, GroupCreate, GroupRoomView, HermesUpgradePanel, IntegrationsPanel, Loading, PreferencesDialog, RoutineResults, useOnceActive } from "./app/panels";
 export function App() {
   const [view, setView] = useState<View>(initialView);
+  // The group chat open in the main pane when the view is "group".
+  const [roomId, setRoomId] = useState(initialRoom);
+  const [creatingGroup, setCreatingGroup] = useState(false);
   const [panel, setPanel] = useState<Panel | null>(initialPanel);
   const closePanels = (...kinds: Panel["kind"][]) =>
     setPanel(current => current && kinds.includes(current.kind) ? null : current);
@@ -54,6 +60,7 @@ export function App() {
     onIdentityChange: () => {
       reset(); clearUploads(); toast.dismiss();
       closePanels("settings", "details", "preferences", "upgrade", "integrations", "computer"); setError("");
+      setRoomId(""); setCreatingGroup(false); setView(current => current === "group" ? "conversation" : current);
     },
     onFirstBootstrap: next => { if (startsOnToday(next.preferences)) setView("today"); },
     onError: setError,
@@ -62,7 +69,26 @@ export function App() {
   const { boot, botId, setBotId, identityEpoch, offline, appUnavailable } = session;
   const userId = boot?.user.id;
   const toast = useToast(session.auth ? undefined : userId);
-  useUrlSync(view, panel, botId, userId);
+  useUrlSync(view, panel, botId, userId, roomId);
+  // Home lists the household's group chats beside its assistants. The catalog carries each room's
+  // newest message, so one slow poll serves every row; no room's log is read from here.
+  // A poll that finds nothing new returns the copy already held, so home does not redraw for it.
+  const groupsHeld = useRef<{ json: string; value: { userId: string; catalog: GroupCatalog } }>(undefined);
+  const groupLoad = useResource<{ userId: string; catalog: GroupCatalog }>(userId ? "/groups" : null, {
+    deps: [userId], pollMs: 30_000, wake: true,
+    load: async (path, signal) => {
+      const catalog = await api<GroupCatalog>(path, { signal });
+      const json = JSON.stringify([userId, catalog]);
+      if (groupsHeld.current?.json === json) return groupsHeld.current.value;
+      groupsHeld.current = { json, value: { userId: userId!, catalog } };
+      return groupsHeld.current.value;
+    },
+  });
+  // Another account's rooms never show while this one's load.
+  const catalog = userId && groupLoad.data?.userId === userId ? groupLoad.data.catalog : null;
+  const rooms = useMemo(() => orderRooms(catalog?.rooms ?? []), [catalog]);
+  const reloadGroups = useStableCallback(() => void groupLoad.reload());
+  const pendingCreate = useMemo(() => userId && !creatingGroup ? pendingGroup(userId) : null, [userId, creatingGroup]);
   const notifications = useDeviceNotifications(userId, boot?.vapidPublicKey);
   const { draft, setDraft, draftReady, uploads, previews, uploading, upload, retryUpload, cancelUpload, clearUploads } = useDraft({ botId, userId, identityEpoch, setError });
   const { conversation, setConversation, disconnected: conversationDisconnected, reply, reviewed, setReviewed, scroll, endSpace, content, history, persistPosition } = useConversation(botId, userId, id => {
@@ -112,6 +138,13 @@ export function App() {
     setRailOpen(false);
     setError("");
   });
+  const selectRoom = useStableCallback((id: string) => {
+    persistPosition(true);
+    setView("group");
+    setRoomId(id);
+    setRailOpen(false);
+    setError("");
+  });
   const signOut = async () => {
     try {
       await notifications.disable();
@@ -132,6 +165,14 @@ export function App() {
   const showView = useStableCallback((next: View) => { setView(next); setRailOpen(false); });
   const openPanel = useStableCallback((next: Panel) => setPanel(next));
   const newBot = useStableCallback(() => setPanel({ kind: "settings", bot: "new" }));
+  const newGroup = useStableCallback(() => setCreatingGroup(true));
+  const groupCreated = useStableCallback((room: GroupRoom) => {
+    setCreatingGroup(false);
+    // The new room shows at once; the next read of the catalog replaces this copy.
+    groupLoad.setData(current => current && { ...current, catalog: { ...current.catalog, rooms: [...current.catalog.rooms.filter(item => item.room_id !== room.room_id), room] } });
+    selectRoom(room.room_id);
+    reloadGroups();
+  });
   const openPreferences = useStableCallback(() => setPanel({ kind: "preferences" }));
   // Home menu changes can be taken back for a few seconds, by the toast's Undo or Cmd+Z. The
   // toast belongs to whoever made the change; useToast drops it for anyone else.
@@ -145,6 +186,17 @@ export function App() {
     if (boot) undoable(moveSectionEdit(boot.preferences, bot.id, bot.name, sectionId));
   });
   const newSection = useStableCallback((bot: Bot) => setPanel({ kind: "details", botId: bot.id, newSection: true }));
+  // Home is memoized, so its group props keep one identity until something they show changes.
+  const homeGroups = useMemo<HomeGroups>(() => {
+    // Making a group needs Hermes to host them and two assistants to put in one.
+    const choosable = boot?.bots.filter(bot => !["all", "everyone"].includes(bot.id.toLowerCase())).length ?? 0;
+    return {
+      rooms, roomId, pending: pendingCreate, onSelect: selectRoom, onCreate: newGroup,
+      canCreate: !!pendingCreate || catalog?.supported === true && choosable >= 2,
+      hint: pendingCreate ? undefined : !catalog?.canSend ? catalog?.reason ?? "The Hermes group coordinator must be running to make a group chat."
+        : boot && !boot.connection.connected ? "Reconnect to Hermes to make a group chat." : undefined,
+    };
+  }, [rooms, roomId, pendingCreate, selectRoom, newGroup, catalog, boot]);
   const [overlay, setOverlay] = useState<"palette" | "shortcuts" | "stop" | null>(null);
   const closeOverlay = useCallback(() => setOverlay(null), []);
   // Search from the palette opens Search & saved with the words already searched.
@@ -230,17 +282,17 @@ export function App() {
 
   return (
     <div className="app-shell">
-      <Sidebar boot={boot} botId={botId} shownBotId={shownBotId} readThrough={readThrough} view={view} state={state}
+      <Sidebar boot={boot} botId={botId} shownBotId={shownBotId} readThrough={readThrough} groups={homeGroups} view={view} state={state}
         connectionLost={connectionLost} offline={offline} mobile={mobile} open={railOpen} update={update}
         onSelectBot={selectBot} onView={showView} onNewBot={newBot} onSettings={openPreferences} onPin={togglePin}
         onBotSettings={botSettings} onMoveToSection={moveToSection} onNewSection={newSection} />
       <main className="conversation-panel" inert={mobile && railOpen}>
-        <ChatHeader offline={offline} view={view} selected={selected} avatarState={avatarState} railOpen={railOpen}
+        <ChatHeader offline={offline} view={view} selected={selected} room={rooms.find(room => room.room_id === roomId)} avatarState={avatarState} railOpen={railOpen}
           onOpenRail={() => setRailOpen(true)}
           onDetails={bot => open({ kind: "details", botId: bot.id })} />
         {/* On a computer the rail is always beside this, so its notice is enough. In a chat it joins the composer's dock. */}
         {mobile && !(view === "conversation" && selected) && <UpdateNotice update={update} />}
-        {view === "find" ? <Loading key="find"><DiscoveryPanel key={boot.user.id} bootstrap={boot} search={findQuery} onOpenMessage={openMessage} onRoutine={(id,routineId,resultId)=>setPanel({kind:"routine",botId:id,routineId,resultId})} /></Loading> : view === "groups" ? <Loading key="groups"><GroupChats key={boot.user.id} bootstrap={boot} /></Loading> : view === "today" ? <TodayPanel key={boot.user.id} bootstrap={boot} onOpen={(id, routineId) => { selectBot(id); if (routineId) setPanel({ kind: "routine", botId: id, routineId }); }} /> : <>
+        {view === "find" ? <Loading key="find"><DiscoveryPanel key={boot.user.id} bootstrap={boot} search={findQuery} onOpenMessage={openMessage} onRoutine={(id,routineId,resultId)=>setPanel({kind:"routine",botId:id,routineId,resultId})} /></Loading> : view === "group" ? <Loading key="group"><GroupRoomView key={`${boot.user.id}:${roomId}`} bootstrap={boot} roomId={roomId} canSend={catalog?.canSend ?? false} reason={catalog?.reason} onChanged={reloadGroups} /></Loading> : view === "today" ? <TodayPanel key={boot.user.id} bootstrap={boot} onOpen={(id, routineId) => { selectBot(id); if (routineId) setPanel({ kind: "routine", botId: id, routineId }); }} /> : <>
           <Conversation boot={boot} selected={selected} botId={botId} conversation={transcript} canonical={conversation} echo={outgoing} state={state}
             showActivity={showActivity} avatarState={avatarState} connectionLost={connectionLost}
             offline={offline} appUnavailable={appUnavailable} checkingConnection={session.checkingConnection}
@@ -268,6 +320,7 @@ export function App() {
             refresh={refreshSession} />}
         </>}
       </main>
+      {creatingGroup && <Loading><GroupCreate bootstrap={boot} canSend={catalog?.canSend ?? false} onClose={() => setCreatingGroup(false)} onCreated={groupCreated} /></Loading>}
       {panel?.kind === "settings" && (
         <Loading>
           <BotSettings
@@ -303,7 +356,7 @@ export function App() {
             onUpgrade={() => open({ kind: "upgrade" })} onShortcuts={showShortcuts} />
         </Loading>
       )}
-      {overlay === "palette" && <CommandPalette boot={boot} botId={botId} shownBotId={shownBotId} readThrough={readThrough}
+      {overlay === "palette" && <CommandPalette boot={boot} botId={botId} rooms={rooms} onSelectRoom={id => { setPanel(null); selectRoom(id); }} onNewGroup={homeGroups.canCreate ? () => { setPanel(null); newGroup(); } : undefined} shownBotId={shownBotId} readThrough={readThrough}
         connectionLost={connectionLost} onClose={closeOverlay} onSelectBot={id => { setPanel(null); selectBot(id); }}
         onView={next => { setPanel(null); showView(next); }} onSearch={text => { setPanel(null); searchMessages(text); }}
         onSettings={destination => setPanel({ kind: "preferences", destination })} onNewBot={newBot} onTheme={setTheme} onShortcuts={showShortcuts}

@@ -261,7 +261,15 @@ Routine notifications name the routine and quote the start of its answer, or the
 error for a failed run, and open this history directly. Results stay within the selected
 Hermes profile; a run with only a saved preview says so.
 
-**Group chats** lets 2–6 local assistants discuss a task in one room. Create a
+**Group chats** lets 2–6 local assistants discuss a task in one room. Rooms are rows
+in the home list beside the assistants, with overlapping member faces, the last
+message and who said it, and its time. Rooms follow the assistants, newest message first, because assistant rows keep
+the roster's order and do not jump. Home reads Hermes's room catalog every 30 seconds while the page is visible;
+the server adds each room's newest message to it and re-reads a room's log only when the room
+has a newer message, so home never polls room logs. Home has no group unread dot, since
+the app keeps no read position for rooms. Choose a room to open it like a conversation
+(`?view=group&room=ID`; the old `?view=groups` link opens home). Make a group from the **+** button's
+New group chat, which opens it. Create a
 named group, address assistants with `@handle` (typing `@` suggests members),
 reply in a thread, approve a pending action or stop the discussion. Messages show
 which household member sent them, and new messages arrive live. Hermes owns the persistent coordinator.
@@ -305,7 +313,7 @@ that message. A status area above the message box gathers send problems, the
 interrupted-task review, waiting decisions with **Review**, and connection trouble,
 most urgent first.
 
-On a computer, Cmd/Ctrl+K opens a command palette for assistants, Today, Group chats,
+On a computer, Cmd/Ctrl+K opens a command palette for assistants, group chats, Today,
 Search, Settings and appearance. Cmd/Ctrl+1 to 9 open pinned assistants in the
 installed app (browsers keep those keys for tabs), Cmd/Ctrl+. stops the current
 reply after asking, and `?` lists every shortcut. An iPad with a keyboard has Cmd+K

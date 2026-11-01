@@ -1,6 +1,8 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { ActivityState, Bootstrap, Bot, Preferences } from "../shared/types";
+import type { GroupRoom } from "../shared/collaboration";
+import { memberNames } from "./home-rooms";
 import { Avatar, stateLabels } from "../components/Avatar";
 import { Icon, type IconName } from "../components/Icon";
 import { Dialog } from "../components/ui/dialog";
@@ -20,9 +22,14 @@ export function paletteBots(boot: Bootstrap) {
 
 const themes: [Preferences["theme"], string][] = [["light", "Light"], ["dark", "Dark"], ["system", "Follow device"]];
 
-export function CommandPalette({ boot, botId, shownBotId, readThrough, connectionLost, onClose, onSelectBot, onView, onSearch, onSettings, onNewBot, onTheme, onShortcuts, onFind }: {
+export function CommandPalette({ boot, botId, rooms = [], onSelectRoom, onNewGroup, shownBotId, readThrough, connectionLost, onClose, onSelectBot, onView, onSearch, onSettings, onNewBot, onTheme, onShortcuts, onFind }: {
   boot: Bootstrap;
   botId: string;
+  /** The household's group chats, which open like assistants do. */
+  rooms?: GroupRoom[];
+  onSelectRoom?(id: string): void;
+  /** Absent when no group chat can be made right now. */
+  onNewGroup?(): void;
   shownBotId?: string;
   readThrough: ReadThrough;
   connectionLost: boolean;
@@ -59,13 +66,18 @@ export function CommandPalette({ boot, botId, shownBotId, readThrough, connectio
         run: () => onSelectBot(bot.id),
       };
     });
+    const groupChats = rooms.map((room): Command => ({
+      id: `room:${room.room_id}`, group: "Group chats", label: room.name, keywords: ["group", "room", "discussion", ...room.members.map(member => member.display_name || member.profile)],
+      icon: icon("groups"), detail: memberNames(room), run: () => onSelectRoom?.(room.room_id),
+    }));
     return [
       ...bots,
+      ...groupChats,
       { id: "view:today", group: "Go to", label: "Today", keywords: ["home", "schedule"], icon: icon("today"), run: () => onView("today") },
-      { id: "view:groups", group: "Go to", label: "Group chats", keywords: ["rooms", "discussion"], icon: icon("groups"), run: () => onView("groups") },
       { id: "view:find", group: "Go to", label: "Search & saved", keywords: ["find", "saved items", "automations"], icon: icon("search"), run: () => onView("find") },
       ...onFind ? [{ id: "action:find", group: "Actions", label: "Find in chat", keywords: ["search this chat"], icon: icon("search"), hint: formatCombo(shortcuts.find), run: onFind }] : [],
       { id: "action:new", group: "Actions", label: "New assistant", keywords: ["create", "add"], icon: icon("plus"), run: onNewBot },
+      ...onNewGroup ? [{ id: "action:new-group", group: "Actions", label: "New group chat", keywords: ["create", "add", "room", "discussion"], icon: icon("groups"), run: onNewGroup }] : [],
       { id: "action:settings", group: "Actions", label: "Settings", keywords: ["preferences", "account", "notifications"], icon: icon("gear"), run: onSettings },
       { id: "settings:following", group: "Settings", label: "Following", icon: icon("gear"), run: () => onSettings({ kind: "following" }) },
       ...boot.preferences.sections.map(section => ({ id: `settings:section:${section.id}`, group: "Settings", label: `Home section: ${section.name}`, icon: icon("gear"), run: () => onSettings({ kind: "section", id: section.id }) })),
@@ -78,7 +90,7 @@ export function CommandPalette({ boot, botId, shownBotId, readThrough, connectio
       })),
       { id: "search", group: "Search", label: "", trailing: true, icon: icon("search"), run: () => onSearch(query.trim()) },
     ];
-  }, [boot, botId, shownBotId, readThrough, connectionLost, pins, query, onSelectBot, onView, onNewBot, onSettings, onShortcuts, onTheme, onSearch, onFind]);
+  }, [boot, botId, rooms, onSelectRoom, onNewGroup, shownBotId, readThrough, connectionLost, pins, query, onSelectBot, onView, onNewBot, onSettings, onShortcuts, onTheme, onSearch, onFind]);
   const searching = !!query.trim();
   const results = useMemo(() => rankItems(query, commands), [query, commands]);
   useEffect(() => setActive(0), [query]);

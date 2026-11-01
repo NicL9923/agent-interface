@@ -3,10 +3,10 @@ import { api, ApiError, changeStream, write } from '../client-api';
 import { insertMention, matchMembers, mentionAt } from '../app/mentions';
 import { useAction } from '../app/use-action';
 import { useResource } from '../app/use-resource';
-import { groupCreateKey, groupSendKey } from '../app/storage';
+import { groupSendKey } from '../app/storage';
 import { FormMessage } from './ui/form-message';
 import type { Bootstrap } from '../shared/types';
-import type { GroupCatalog, GroupEvent, GroupPage, GroupRoom, GroupState } from '../shared/collaboration';
+import type { GroupEvent, GroupPage, GroupState } from '../shared/collaboration';
 import { MessageMarkdown } from './MessageMarkdown';
 import { Icon } from './Icon';
 import { Avatar } from './Avatar';
@@ -16,8 +16,12 @@ type PendingMessage = { requestId: string; threadId: string; text: string };
 type RoomView = { state: GroupState; page: GroupPage };
 function saved<T>(key: string): T | null { try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch { return null; } }
 
-export function GroupChats({ bootstrap }: { bootstrap: Bootstrap }) {
-  const [roomId, setRoomId] = useState('');
+/**
+ * One group chat, open in the main pane. Home lists the rooms and creates them; this shows the
+ * room chosen there: its messages, thread replies, approvals and stop control, and the composer.
+ * `onChanged` tells home to refresh its preview when the room gets a message.
+ */
+export function GroupRoomView({ bootstrap, roomId, canSend, reason, onChanged }: { bootstrap: Bootstrap; roomId: string; canSend: boolean; reason?: string; onChanged(): void }) {
   const [events, setEvents] = useState<GroupEvent[]>([]);
   const [more, setMore] = useState(false);
   const [draft, setDraft] = useState('');
@@ -27,24 +31,17 @@ export function GroupChats({ bootstrap }: { bootstrap: Bootstrap }) {
   const panel = useRef<HTMLDivElement>(null);
   const scrollLatest = useRef(false);
   const [notice, setNotice] = useState('');
+  // Another member made one of its assistants personal, so the group left this person's list.
+  const [gone, setGone] = useState(false);
   const action = useAction();
   const { busy, error, setError } = action;
-  const [creating, setCreating] = useState(false);
-  const [name, setName] = useState('');
-  const [members, setMembers] = useState<string[]>([]);
-  const createKey = groupCreateKey(bootstrap.user.id);
-  const [pendingCreate, setPendingCreate] = useState<{ requestId: string; name: string; botIds: string[] } | null>(() => saved(createKey));
   const key = groupSendKey(bootstrap.user.id, roomId);
   const scope = useRef(key); scope.current = key;
-  const groups = useResource<GroupCatalog>('/groups', {
-    deps: [bootstrap.user.id], pollMs: 15000,
-    onData: value => setRoomId(current => value.rooms.some(room => room.room_id === current) ? current : value.rooms[0]?.room_id || ''),
-  });
-  const { data: catalog, setData: setCatalog } = groups;
+  const changed = useRef(onChanged); changed.current = onChanged;
   // The room log is read from a cursor, so each check adds only newer events to what is shown.
   const cursor = useRef(0);
   // The event stream announces new room events; this slow poll only covers a missed notice.
-  const room = useResource<RoomView>(roomId ? `/groups/${encodeURIComponent(roomId)}` : null, {
+  const room = useResource<RoomView>(roomId && !gone ? `/groups/${encodeURIComponent(roomId)}` : null, {
     pollMs: 30000,
     load: async (path, signal) => {
       const state = await api<GroupState>(path, { signal });
@@ -57,16 +54,15 @@ export function GroupChats({ bootstrap }: { bootstrap: Bootstrap }) {
       const newMessage = page.events.some(event => event.seq > cursor.current && ['message.user', 'message.member'].includes(event.kind));
       if (!more && !page.has_more && newMessage && view && (cursor.current === 0 || view.scrollHeight - view.clientHeight - view.scrollTop < 48)) scrollLatest.current = true;
       cursor.current = page.cursor;
+      if (newMessage) changed.current();
       setEvents(current => [...new Map([...current, ...page.events].map(event => [event.event_id, event])).values()].sort((a, b) => a.seq - b.seq));
       setMore(page.has_more);
     },
     errorMessage: cause => {
       if (!(cause instanceof ApiError && cause.status === 404)) return (cause as Error).message;
-      // Another member made one of its assistants personal, so the group left this person's list.
-      // Its name, members and transcript go at once, whether or not the list refreshes.
-      setRoomId(''); setEvents([]);
-      setCatalog(current => current && { ...current, rooms: current.rooms.filter(row => row.room_id !== roomId) });
-      setNotice('That group chat is no longer available to you.'); void groups.reload();
+      // Its name, members and transcript go at once, whether or not home's list refreshes.
+      setGone(true); setEvents([]);
+      setNotice('That group chat is no longer available to you.'); changed.current();
       return '';
     },
   });
@@ -129,18 +125,9 @@ export function GroupChats({ bootstrap }: { bootstrap: Bootstrap }) {
     caret.current = null;
   }, [draft]);
   useEffect(() => {
-    cursor.current = 0; scrollLatest.current = false; setEvents([]); setMore(false); setError(''); setThreadId(''); setReplyToId('');
+    cursor.current = 0; scrollLatest.current = false; setEvents([]); setMore(false); setError(''); setThreadId(''); setReplyToId(''); setGone(false); setNotice('');
     setDraft(saved<string>(`${key}:draft`) || ''); setPending(saved<PendingMessage>(key));
   }, [roomId, key]);
-  const create = () => {
-    const input = pendingCreate || { requestId: crypto.randomUUID(), name: name.trim(), botIds: members };
-    return action.run(async () => {
-      localStorage.setItem(createKey, JSON.stringify(input)); setPendingCreate(input);
-      const value = await write<{ room: GroupRoom }>('/groups', input);
-      localStorage.removeItem(createKey); setPendingCreate(null); setCreating(false); setName(''); setMembers([]);
-      await groups.reload(); setRoomId(value.room.room_id);
-    }, { onError: cause => `${(cause as Error).message} Retry the saved request to check this room's creation.` });
-  };
   const send = () => {
     const input = pending || { requestId: crypto.randomUUID(), threadId: threadId || crypto.randomUUID(), text: draft.trim() };
     const attemptKey = key;
@@ -159,7 +146,7 @@ export function GroupChats({ bootstrap }: { bootstrap: Bootstrap }) {
       await write(`/groups/${encodeURIComponent(roomId)}/${path}`, body); await room.reload();
     }, { onError: cause => scope.current === attemptKey ? (cause as Error).message : null });
   };
-  const writable = catalog?.canSend && bootstrap.connection.connected;
+  const writable = canSend && bootstrap.connection.connected;
   const messages = events.filter(event => event.kind === 'message.user' || event.kind === 'message.member');
   const memberFor = (id: unknown) => state?.room.members.find(member => member.member_id === id);
   const memberName = (id: unknown) => { const member = memberFor(id);return member?.display_name || member?.profile || 'Assistant'; };
@@ -177,34 +164,20 @@ export function GroupChats({ bootstrap }: { bootstrap: Bootstrap }) {
   const avatar = (id: unknown) => { const bot = bootstrap.bots.find(bot => bot.id === id);return bot && <span aria-hidden="true"><Avatar avatar={bot.avatar} name={bot.name} botId={bot.id} size={24} reducedMotion/></span>; };
   const newTopic = () => { setThreadId('');setReplyToId('');field.current?.focus(); };
 
-  const newGroup = <button type="button" className="group-new" disabled={!writable || busy} aria-expanded={creating} onClick={() => setCreating(value => !value)}><Icon name="plus" size={16} />New group</button>;
-  const createForm = (creating || pendingCreate) && <form className="group-create" onSubmit={event => { event.preventDefault(); void create(); }}><h3>{pendingCreate ? 'Finish creating group' : 'New group'}</h3>
-    {pendingCreate ? <p>{pendingCreate.name} · {pendingCreate.botIds.length} assistants. The saved request will be checked with Hermes.</p> : <><label>Name<input value={name} maxLength={100} required onChange={event => setName(event.target.value)} /></label>
-      <fieldset><legend>Choose 2–6 assistants <span role="status">· {members.length} chosen</span></legend>{bootstrap.bots.filter(bot => !['all', 'everyone'].includes(bot.id.toLowerCase())).map(bot => <label key={bot.id}><input type="checkbox" checked={members.includes(bot.id)} disabled={busy || members.length === 6 && !members.includes(bot.id)} onChange={event => setMembers(current => event.target.checked ? [...current, bot.id] : current.filter(id => id !== bot.id))} />{avatar(bot.id)}{bot.name}</label>)}</fieldset>
-      {members.length === 6 && <p className="muted" role="status">Six assistants selected. Deselect one to choose another.</p>}
-      {members.some(id => bootstrap.bots.some(bot => bot.id === id && !bot.shared && bot.ownerId)) && <p className="muted">Only you will see this group, because it includes your personal assistant.</p>}</>}
-    <div className="actions">{!pendingCreate && <button type="button" onClick={() => setCreating(false)}>Cancel</button>}<button type="submit" className="primary" disabled={busy || !writable || !pendingCreate && (members.length < 2 || !name.trim())}>{pendingCreate ? 'Retry saved group request' : 'Create group'}</button></div>
-  </form>;
-  // A saved uncertain request stays above the rooms so they remain readable until it is retried.
-  const drafting = creating && !pendingCreate;
   const status = state?.driver_status?.blocked ? 'Discussion needs attention.' : state?.driver_status?.working ? 'Assistants are discussing…' : 'Type @ to address one assistant.';
   useLayoutEffect(() => {
     const view = panel.current;
-    if (!scrollLatest.current || !view || creating) return;
+    if (!scrollLatest.current || !view) return;
     scrollLatest.current = false;
     // Include pending decisions and paging controls after the messages.
     view.scrollTop = view.scrollHeight;
-  }, [events, state, creating, pendingCreate]);
+  }, [events, state]);
   return <div className="group-panel" ref={panel}>
-    {(groups.error || room.error) && <FormMessage tone="error">{groups.error || room.error} <button onClick={() => { void groups.reload(); void room.reload(); }}>Retry</button></FormMessage>}
+    {room.error && <FormMessage tone="error">{room.error} <button onClick={() => void room.reload()}>Retry</button></FormMessage>}
     {error && <FormMessage tone="error">{error}</FormMessage>}
     {notice && <p className="capability-note" role="status">{notice}</p>}
-    {!catalog && !groups.error && !room.error && <p role="status" className="muted">Checking Hermes group chats…</p>}
-    {catalog?.reason && <p className="capability-note">{catalog.reason}</p>}
-    {pendingCreate && createForm}
-    {catalog?.supported && !catalog.rooms.length && !pendingCreate && <>{createForm || <div className="group-empty"><p>No group chats yet. Create one to let your assistants discuss a task together.</p>{newGroup}</div>}</>}
-    {!!catalog?.rooms.length && <div className="group-layout"><nav className="group-rooms" aria-label="Group chats">{catalog.rooms.map(room => <button key={room.room_id} disabled={busy} aria-current={roomId === room.room_id && !drafting ? 'page' : undefined} onClick={() => { setCreating(false); setNotice(''); setRoomId(room.room_id); }}>{room.name}<small>{room.members.length} assistants</small></button>)}{newGroup}</nav>
-      <section aria-label="Group conversation">{drafting ? createForm : (state ? <><div className="group-heading"><div><h3>{state.room.name}</h3>
+    {reason && !canSend && !gone && <p className="capability-note">{reason}</p>}
+    {!gone && <section aria-label="Group conversation">{state ? <><div className="group-heading"><div>
         <p className="muted">{state.room.members.map(member => `${member.display_name || member.profile} (@${member.handle})`).join(' · ')}</p></div>{state.driver_status?.working && <button disabled={busy || !writable} onClick={() => void act('stop', { requestId: crypto.randomUUID() })}><Icon name="stop" size={14} /> Stop discussion</button>}</div>
         {messages.map((event, index) => {
           const root = typeof event.payload.thread_id === 'string' ? threadRoots.get(event.payload.thread_id) : undefined;
@@ -251,7 +224,6 @@ export function GroupChats({ bootstrap }: { bootstrap: Bootstrap }) {
           <div className="composer-tools"><span id="group-status" role="status" className="group-status">{status}</span>
             {pending ? <button type="submit" className="primary" disabled={busy || !writable}>Retry same saved message</button>
               : <button type="submit" className="send-button" aria-label={busy ? 'Sending…' : 'Send to group'} disabled={busy || !writable || !draft.trim()}><Icon name="send" size={19} /></button>}</div>
-        </form></> : <p role="status" className="muted">Opening group conversation…</p>)}</section>
-    </div>}
+        </form></> : !room.error && <p role="status" className="muted">Opening group conversation…</p>}</section>}
   </div>;
 }

@@ -1,6 +1,7 @@
-import { memo } from "react";
+import { memo, type CSSProperties } from "react";
 import { Button } from "../components/ui/button";
 import type { ActivityState, Bootstrap, Bot } from "../shared/types";
+import type { GroupRoom } from "../shared/collaboration";
 import { Avatar, stateLabels } from "../components/Avatar";
 import { Icon } from "../components/Icon";
 import { useMinute } from "../components/When";
@@ -9,8 +10,28 @@ import type { View } from "./view";
 import type { AppUpdate } from "./use-browser";
 import { UpdateNotice } from "./UpdateNotice";
 import { BotMenu } from "./BotMenu";
+import { NewMenu } from "./NewMenu";
+import { memberNames, roomFaces, roomPreview, type PendingGroup } from "./home-rooms";
 import { isUnread, type ReadThrough } from "./unread";
 import "./home.css";
+
+/** Group chats on home: the rooms in order, what is open, and how to make or finish one. */
+export type HomeGroups = {
+  rooms: GroupRoom[];
+  /** The room open in the main pane. */
+  roomId: string;
+  /** False when Hermes cannot host groups at all, which hides the choice to make one. */
+  canCreate: boolean;
+  /** Why making one is not possible right now, when it is not. */
+  hint?: string;
+  /** A saved creation whose outcome is unknown. */
+  pending: PendingGroup | null;
+  onSelect(id: string): void;
+  onCreate(): void;
+};
+
+/** Home without group chats, for a household whose Hermes cannot host them. */
+export const noGroups: HomeGroups = { rooms: [], roomId: "", canCreate: false, pending: null, onSelect: () => {}, onCreate: () => {} };
 
 const initials = (name: string) => name.split(/\s+/).filter(Boolean).slice(0, 2).map(word => word[0]).join("").toUpperCase() || "?";
 
@@ -18,12 +39,14 @@ const initials = (name: string) => name.split(/\s+/).filter(Boolean).slice(0, 2)
  * Home: pinned assistants up top, then everyone else with their latest message.
  * Memoized so typing and streamed replies do not redraw every row and live avatar.
  */
-export const Sidebar = memo(function Sidebar({ boot, botId, shownBotId, readThrough, view, state, connectionLost, offline, mobile, open, update, onSelectBot, onView, onNewBot, onSettings, onPin, onBotSettings, onMoveToSection, onNewSection }: {
+export const Sidebar = memo(function Sidebar({ boot, botId, shownBotId, readThrough, groups = noGroups, view, state, connectionLost, offline, mobile, open, update, onSelectBot, onView, onNewBot, onSettings, onPin, onBotSettings, onMoveToSection, onNewSection }: {
   boot: Bootstrap;
   botId: string;
   /** The chat on screen now, which is never marked unread. */
   shownBotId?: string;
   readThrough: ReadThrough;
+  /** Group chats listed beside the assistants. Without any, home shows assistants alone. */
+  groups?: HomeGroups;
   view: View;
   state: ActivityState;
   connectionLost: boolean;
@@ -71,6 +94,32 @@ export const Sidebar = memo(function Sidebar({ boot, botId, shownBotId, readThro
       </BotMenu>
     </li>;
   };
+  // Group chats sit in the same list as the assistants outside any section, so the list is named for both.
+  const chatsName = groups.rooms.length || groups.pending ? "chats" : "assistants";
+  const roomRow = (room: GroupRoom) => {
+    const open = view === "group" && groups.roomId === room.room_id;
+    return <li key={room.room_id}>
+      <Button className={`bot-item bot-row room-row${open ? " selected" : ""}`} aria-current={open ? "page" : undefined} onClick={() => groups.onSelect(room.room_id)}>
+        <RoomFaces room={room} bots={boot.bots} cluster={mobile ? 52 : 44} />
+        <span className="bot-row-text">
+          <span className="bot-row-top"><span className="bot-row-name"><strong>{room.name}</strong></span>
+            {room.latest?.at && <span className="bot-row-meta"><ListDate value={room.latest.at} /></span>}</span>
+          <small><span className="sr-only">Group chat with {memberNames(room)}. </span>{roomPreview(room)}</small>
+        </span>
+      </Button>
+    </li>;
+  };
+  const finishRow = groups.pending && <li key="finish-group">
+    <Button className="bot-item bot-row room-row room-pending" onClick={groups.onCreate}>
+      <span className="home-row-avatar room-faces" aria-hidden="true" style={{ width: mobile ? 52 : 44, height: mobile ? 52 : 44 }}>
+        <span className="room-face room-face-icon"><Icon name="groups" size={20} /></span></span>
+      <span className="bot-row-text">
+        <span className="bot-row-top"><span className="bot-row-name"><strong>Finish creating group</strong></span></span>
+        <small>{groups.pending.name} · {groups.pending.botIds.length} assistants. The saved request will be checked with Hermes.</small>
+      </span>
+    </Button>
+  </li>;
+  const chatRows = rest.length > 0 || groups.rooms.length > 0 || !!finishRow;
   const status = connectionLost ? offline ? "offline" : "reconnecting" : "connected";
   return (
     <aside id="assistant-navigation" className={`bot-rail home${open ? " open" : ""}`} aria-label="Assistants" inert={mobile && !open}>
@@ -85,7 +134,7 @@ export const Sidebar = memo(function Sidebar({ boot, botId, shownBotId, readThro
           <Button className="home-round" aria-label="Search & saved" aria-pressed={view === "find"} onClick={() => onView("find")}>
             <Icon name="search" />
           </Button>
-          <Button className="home-round" aria-label="New assistant" onClick={onNewBot}><Icon name="plus" /></Button>
+          <NewMenu canGroup={groups.canCreate} groupHint={groups.hint} onNewBot={onNewBot} onNewGroup={groups.onCreate} />
         </span>
       </header>
       <UpdateNotice update={update} />
@@ -116,19 +165,17 @@ export const Sidebar = memo(function Sidebar({ boot, botId, shownBotId, readThro
           })}
         </ul>}
         <nav className="home-links" aria-label="Household">
-          {([["today", "Today"], ["groups", "Group chats"]] as const).map(([item, label]) => (
-            <Button key={item} aria-current={view === item ? "page" : undefined} onClick={() => onView(item)}>
-              <Icon name={item} size={16} /> {label}
-            </Button>
-          ))}
+          <Button aria-current={view === "today" ? "page" : undefined} onClick={() => onView("today")}>
+            <Icon name="today" size={16} /> Today
+          </Button>
         </nav>
         {sections.map(section => <section className="bot-section" key={section.id} aria-label={section.name}>
           <h2>{section.name}</h2>
           <ul className="home-list">{section.bots.map(row)}</ul>
         </section>)}
-        {rest.length > 0 && <section className="bot-section" aria-label={sections.length || pinned.length ? "More assistants" : "Your assistants"}>
-          {sections.length > 0 && <h2>More assistants</h2>}
-          <ul className="home-list">{rest.map(row)}</ul>
+        {chatRows && <section className="bot-section" aria-label={sections.length || pinned.length ? `More ${chatsName}` : `Your ${chatsName}`}>
+          {sections.length > 0 && <h2>More {chatsName}</h2>}
+          <ul className="home-list">{finishRow}{rest.map(row)}{groups.rooms.map(roomRow)}</ul>
         </section>}
         {!boot.bots.length && <div className="home-empty">
           <h2>No assistants yet</h2>
@@ -149,4 +196,18 @@ function UnreadMark() {
 function ListDate({ value }: { value: string }) {
   useMinute();
   return <time dateTime={value}>{formatListDate(value)}</time>;
+}
+
+/**
+ * A group's members as overlapping faces in the space one assistant's avatar takes, so rows line up.
+ * Two faces sit on a diagonal, three in a triangle; a member this person cannot see shows an initial.
+ */
+function RoomFaces({ room, bots, cluster }: { room: GroupRoom; bots: Bot[]; cluster: number }) {
+  const faces = roomFaces(room, bots);
+  const size = Math.round(cluster * (faces.length === 2 ? 0.68 : 0.56));
+  return <span className={`home-row-avatar room-faces faces-${faces.length}`} aria-hidden="true" style={{ width: cluster, height: cluster, "--face": `${size}px` } as CSSProperties}>
+    {faces.map(({ member, bot }) => <span className="room-face" key={member.member_id}>
+      {bot ? <Avatar avatar={bot.avatar} size={size} name={bot.name} reducedMotion /> : <span className="room-face-initial">{initials(member.display_name || member.profile)}</span>}
+    </span>)}
+  </span>;
 }
