@@ -44,8 +44,9 @@ _close_after_answer = set()
 # Native request ID -> True for asks a chat reply closed, until the tool call that opened it reads it.
 _replies_lock = threading.Lock()
 _replies = {}
-# Session ID -> the members whose chat messages were admitted as steering there and have not reached
-# the model yet. An ask a tool opens meanwhile is out of date the moment it registers. Under _answer_lock.
+# Session ID -> [(member, message text)] for chat messages admitted as steering there that may not have
+# reached the model yet. An ask a tool opens meanwhile is out of date the moment it registers. Each entry
+# lasts while its text is still in the native agent's steer buffer. Under _answer_lock.
 _steered = {}
 
 
@@ -227,7 +228,7 @@ def close_requests(server_requests, requests, reason="user_replied"):
     return len(targets)
 
 
-def close_for_chat(sid, actor):
+def close_for_chat(sid, actor, text=None):
     """A member's message was admitted as steering for ``sid``: close the asks it answers instead.
 
     Only that session's app-answerable asks close. A login an assistant asked for by address stays
@@ -238,7 +239,7 @@ def close_for_chat(sid, actor):
     chosen = []
     with _answer_lock:
         # Recorded before the scan, so an ask that registers after it closes on registration instead.
-        _steered.setdefault(sid, set()).add(actor)
+        _steered.setdefault(sid, []).append((actor, text.strip() if isinstance(text, str) else None))
         with server_requests._lock:
             candidates = [request for request in server_requests._open.values()
                           if request.sid == sid and request.method in CHAT_CLOSES]
@@ -262,7 +263,8 @@ def steer_waiting(sid):
     """The members whose admitted messages have not reached the model in ``sid`` yet: an empty set if none.
 
     Reads the native agent's own steer buffer, the one record of whether the message was delivered.
-    A Hermes without that buffer gives an empty set: nothing is closed on a guess.
+    A member counts while their message's text is still in it, so one drained earlier does not count
+    for a later batch. A Hermes without that buffer gives an empty set: nothing is closed on a guess.
     """
     with _answer_lock:
         if sid not in _steered:
@@ -277,7 +279,10 @@ def steer_waiting(sid):
         if not pending:
             _steered.pop(sid, None)
             return set()
-        return set(_steered.get(sid, ()))
+        # A message without its text on record can only be timed by the buffer emptying.
+        waiting = [(actor, text) for actor, text in _steered.get(sid, ()) if text is None or text in pending]
+        _steered[sid] = waiting
+        return {actor for actor, _ in waiting}
 
 
 def close_if_steered(server_requests, request):
@@ -653,7 +658,7 @@ def install(web, journal):
     bind_prompt_waits(server, journal)
     journal.explicit_credential = explicit_metadata
     # The add-on calls this after durably admitting a member's message as steering.
-    journal.steering_admitted = lambda _profile, sid, actor: close_for_chat(sid, actor)
+    journal.steering_admitted = lambda _profile, sid, actor, text=None: close_for_chat(sid, actor, text)
     from tools.registry import registry
     bind_dispatch(registry)
     register_tool()

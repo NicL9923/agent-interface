@@ -237,12 +237,12 @@ class OpenTests(unittest.TestCase):
         with FakeGateway([]) as hermes:
             hermes.open()
             calls = []
-            def admitted(profile, sid, actor):
+            def admitted(profile, sid, actor, text):
                 free = []
                 probe = threading.Thread(target=lambda: free.extend(lock.acquire(blocking=False) and (lock.release() or True)
                                                                     for lock in (hermes.bridge.submission_lock, hermes.journal.lock)))
                 probe.start(); probe.join()
-                calls.append((profile, sid, actor, free))
+                calls.append((profile, sid, actor, text, free))
             hermes.journal.steering_admitted = admitted
             submit = hermes.methods["agent-interface.submit"]
             hermes.server.handle_request = Mock(return_value=hermes.server._ok("native", {"status": "accepted"}))
@@ -253,7 +253,7 @@ class OpenTests(unittest.TestCase):
             hermes.server.handle_request = Mock(return_value=hermes.server._ok("native", {"status": "queued"}))
             steer = {**params, "request_id": "steer", "text": "Use the other address"}
             self.assertEqual(submit("send", steer)["result"]["status"], "accepted")
-            self.assertEqual(calls, [("default", "sid", "member", [True, True])])
+            self.assertEqual(calls, [("default", "sid", "member", "Use the other address", [True, True])])
             # A replay, a native refusal and a hook failure close nothing more and still answer.
             submit("again", steer)
             hermes.server.handle_request = Mock(return_value=hermes.server._ok("native", {"status": "rejected"}))

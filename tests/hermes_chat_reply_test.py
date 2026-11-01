@@ -238,8 +238,8 @@ class ChatReplyTests(unittest.TestCase):
 
     def test_a_requesters_waiting_reply_closes_their_late_login_even_after_another_members(self):
         # Both messages wait in Hermes's buffer; the requester's must still close the login that opens now.
-        self.vault.close_for_chat("live", "member-a")
-        self.vault.close_for_chat("live", "member-b")
+        self.vault.close_for_chat("live", "member-a", "Use the other address.")
+        self.vault.close_for_chat("live", "member-b", "Also check the barn.")
         self.native.agent._pending_steer = "Use the other address.\nAlso check the barn."
         self.native.prompt = lambda origin, site: (lambda raw: json.loads(raw) if raw else None)(
             (self.native.requests.send("vault.save_login", "live", {"origin": origin, "site": site}, timeout=5) or {}).get("value"))
@@ -250,6 +250,29 @@ class ChatReplyTests(unittest.TestCase):
         thread.start()
         thread.join(2)
         self.assertFalse(thread.is_alive())
+        self.assertEqual(json.loads(done["result"])["error_type"], "user_replied_in_chat")
+
+    def test_a_requesters_reply_that_already_reached_the_model_no_longer_closes_their_login(self):
+        # A's message drained into the turn; only B's is waiting when A's login opens.
+        self.vault.close_for_chat("live", "member-a", "Use the other address.")
+        self.native.agent._pending_steer = "Use the other address."
+        self.assertEqual(self.vault.steer_waiting("live"), {"member-a"})
+        self.vault.close_for_chat("live", "member-b", "Also check the barn.")
+        self.native.agent._pending_steer = "Also check the barn."
+        self.native.prompt = lambda origin, site: (lambda raw: json.loads(raw) if raw else None)(
+            (self.native.requests.send("vault.save_login", "live", {"origin": origin, "site": site}, timeout=5) or {}).get("value"))
+        self.native.tools["vault_save_login"] = lambda args: self.vault.save_explicit_login(args)
+        done = {}
+        args = dict(origin="https://kvm.example.net", label="KVM", purpose="Check the console.")
+        thread = threading.Thread(target=lambda: done.setdefault("result", self.native.registry.dispatch("vault_save_login", args)))
+        thread.start()
+        request = self.native.wait_open("vault.save_login")
+        time.sleep(.1)
+        with self.native.requests._lock:
+            self.assertIn(request.id, self.native.requests._open)
+        self.assertEqual(self.vault.steer_waiting("live"), {"member-b"})
+        self.vault.close_for_chat("live", "member-a", "Cancel that.")
+        thread.join(2)
         self.assertEqual(json.loads(done["result"])["error_type"], "user_replied_in_chat")
 
     def test_only_another_members_waiting_reply_leaves_a_late_login_open(self):

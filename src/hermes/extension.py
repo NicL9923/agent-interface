@@ -1164,7 +1164,7 @@ class Bridge:
                     if interrupted and status == "accepted":
                         journal.db.execute("DELETE FROM interruptions WHERE profile=? AND stored_session=?", (profile, stored))
                     if steering and status == "accepted":
-                        self.steered.value = (profile, sid, actor)
+                        self.steered.value = (profile, sid, actor, text)
                     return self.admitted(rid, request_id)
 
     def submit_from_app(self, rid, params):
