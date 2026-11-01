@@ -109,11 +109,15 @@ import XCTest
 
   func testListenToReplyPlaysServerAudioWithAnExplicitStop() {
     let app = launch()
-    XCTAssertTrue(app.buttons["Listen to reply"].waitForExistence(timeout: 10))
-    app.buttons["Listen to reply"].tap()
+    // Each reply carries its own speaker button, so the one nearest the composer is the latest reply's.
+    let listen = app.buttons.matching(identifier: "listenToReply")
+    XCTAssertTrue(listen.firstMatch.waitForExistence(timeout: 10))
+    capture(app, name: "Native reply action row")
+    listen.element(boundBy: listen.count - 1).tapWhenReady()
     XCTAssertTrue(app.buttons["Stop speaking"].waitForExistence(timeout: 3))
-    app.buttons["Stop speaking"].tap()
-    XCTAssertTrue(app.buttons["Listen to reply"].waitForExistence(timeout: 3))
+    capture(app, name: "Native reply speaking")
+    app.buttons["Stop speaking"].tapWhenReady()
+    XCTAssertTrue(app.buttons["Listen to reply"].firstMatch.waitForExistence(timeout: 3))
   }
   func testRoutineResultsAndGroupCreationMessaging() {
     var app = launch()
@@ -124,9 +128,9 @@ import XCTest
     capture(app, name: "Native routine saved output")
     app.terminate(); app = launch()
     XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 10))
-    if !app.buttons["openGroups"].canTap { app.navigationBars.buttons.firstMatch.tap() }
-    app.buttons["openGroups"].tap()
-    let newGroup = app.buttons["New group"]
+    if !app.buttons["newMenu"].canTap { app.navigationBars.buttons.firstMatch.tap() }
+    app.buttons["newMenu"].tapWhenReady()
+    let newGroup = app.buttons["newGroup"]
     XCTAssertTrue(newGroup.waitForExistence(timeout: 5))
     expectation(for: NSPredicate(format: "enabled == true"), evaluatedWith: newGroup); waitForExpectations(timeout: 5)
     newGroup.tap()

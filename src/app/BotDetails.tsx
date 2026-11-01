@@ -89,7 +89,7 @@ export function BotDetails({ boot, bot, avatarState, conversation, connectionLos
         </Button>
       </div>
       <dl className="settings-group bot-details-facts">
-        <div className="settings-row"><dt className="row-label">Model</dt><dd>{bot.provider ? `${bot.provider} / ${bot.model}` : bot.model}</dd></div>
+        <div className="settings-row"><dt className="row-label">Model</dt><dd>{bot.provider ? `${bot.provider} / ${bot.modelName || bot.model}` : bot.modelName || bot.model}</dd></div>
         {working && <div className="settings-row"><dt className="row-label">Now</dt><dd className={`bot-activity state-${avatarState}`}>{stateLabels[avatarState]}</dd></div>}
         <div className="settings-row"><dt className="row-label">Last message</dt>
           <dd>{bot.lastMessage?.at ? <><When value={bot.lastMessage.at} inline />{bot.lastMessage.text && <small>{excerpt(bot.lastMessage.text)}</small>}</>

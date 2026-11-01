@@ -2129,24 +2129,30 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
         XCTAssertFalse(value.appendTranscript("Wrong assistant", botId: "other"))
         XCTAssertEqual(value.draft.text, "Only this")
     }
-    func testListenToReplyUsesTheServersVoiceAndRefusesLongReplies() async throws {
+    func testListenToReplyUsesTheServersVoiceReadsOneReplyAtATimeAndRefusesLongReplies() async throws {
         let server = NativeMockServer(); defer { FakeExchange.remove(host: server.origin.host!) }
-        let voice = VoiceController(); voice.api = client(server); voice.botId = "bot"
-        defer { voice.cancel() }
-        let long = Message(id: "long", role: "assistant", text: String(repeating: "a", count: VoiceController.maxSpokenText + 1))
-        voice.speak(long)
-        XCTAssertEqual(voice.error, "This reply is too long to read aloud. Ask for a shorter summary.")
-        XCTAssertEqual(voice.state, .idle); XCTAssertTrue(server.requests.isEmpty)
-        voice.speak(Message(id: "reply-1", role: "assistant", text: "The gate is closed."))
-        XCTAssertEqual(voice.state, .preparing); XCTAssertEqual(voice.error, "")
-        try await until { voice.state != .preparing }
-        XCTAssertEqual(voice.state, .speaking, voice.error)
+        let speech = SpeechController(); speech.api = client(server); speech.botId = "bot"
+        defer { speech.cancel() }
+        let long = Message(id: "long", role: "assistant", text: String(repeating: "a", count: SpeechController.maxSpokenText + 1))
+        speech.toggle(long)
+        XCTAssertEqual(speech.failure, .init(id: "long", text: "This reply is too long to read aloud. Ask for a shorter summary."))
+        XCTAssertNil(speech.current); XCTAssertTrue(server.requests.isEmpty)
+        speech.toggle(Message(id: "reply-1", role: "assistant", text: "The gate is closed."))
+        XCTAssertEqual(speech.current, .init(id: "reply-1", phase: .preparing)); XCTAssertNil(speech.failure)
+        try await until { speech.current?.phase != .preparing }
+        XCTAssertEqual(speech.current, .init(id: "reply-1", phase: .speaking), speech.failure?.text ?? "")
         let speak = try XCTUnwrap(server.requests.first { $0.url?.path == "/api/bots/bot/voice/speak" })
         XCTAssertEqual(speak.httpMethod, "POST")
         XCTAssertEqual(FakeExchange.body(speak).flatMap { try? JSONDecoder().decode([String: String].self, from: $0) }, ["messageId": "reply-1"])
         XCTAssertTrue(server.requests.contains { $0.url?.path.hasPrefix("/api/voice/audio/") == true && $0.value(forHTTPHeaderField: "Authorization") != nil })
-        voice.cancel()
-        XCTAssertEqual(voice.state, .idle)
+        // Any other reply takes over, so only one plays across the transcript.
+        speech.toggle(Message(id: "reply-2", role: "assistant", text: "The latch is open."))
+        XCTAssertEqual(speech.current, .init(id: "reply-2", phase: .preparing))
+        try await until { speech.current?.phase != .preparing }
+        XCTAssertEqual(speech.current, .init(id: "reply-2", phase: .speaking), speech.failure?.text ?? "")
+        // Choosing the playing reply again stops it.
+        speech.toggle(Message(id: "reply-2", role: "assistant", text: "The latch is open."))
+        XCTAssertNil(speech.current)
     }
     func testDelayedPreferencesCannotReplaceNewIdentityPreferencesAndFailedLogoutRetainsToken() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }

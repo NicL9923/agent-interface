@@ -6,7 +6,6 @@
 .voice-status, .voice-error { margin: 0; font-size: 0.8125rem; line-height: 1.4; overflow-wrap: anywhere; }
 .voice-status { color: var(--muted); }
 .voice-error { color: var(--danger); }
-@media (max-width: 620px) { .voice-controls[data-has-draft] .voice-listen { display: none; } }
 
 .voice-actions button { min-height: 44px; min-width: 44px; justify-content: center; }
 .voice-actions .tool-label { display: none; }

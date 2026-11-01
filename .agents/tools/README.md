@@ -17,7 +17,7 @@
 
 - `PREVIEW_LONG_TOOL=1 node .agents/tools/preview-app.mjs` shows short, long and unstructured tool-output fixtures for scrolling checks; combine with `PREVIEW_PRESENTATION=advanced` for raw tool details.
 - `capture-ui-comparison.js` is a Playwright CLI run-code function that captures six desktop/phone states from the synthetic loopback preview. A wrapper can pass `{ outputDir, prefix }` as its second argument; defaults write to ignored `.private/ui-comparison`.
-- `check-model-picker-browser.js` is a Playwright CLI run-code function that delays or blocks the actual model-picker chunk and verifies that text and voice controls remain uncovered at desktop and phone widths.
+- `check-model-picker-browser.js` is a Playwright CLI run-code function that delays or blocks the actual model-picker chunk and verifies that the header's model chip stands in while its chunk loads or fails and that the chat header, text and voice controls remain uncovered at desktop and phone widths.
 
 - `node .agents/tools/publish-ios.mjs setup|prepare|status|archive VERSION BUILD|upload VERSION BUILD|distribute VERSION BUILD` registers Apple identifiers, checks App Store profiles, archives and verifies the exact signed IPA, uploads it once, and confirms internal TestFlight availability before producing update settings. Uses private Mac credentials in `~/.config/wildbots/apple/config.json`; see `ios/README.md`. `apple-api.mjs` supplies authenticated requests, bounded pagination, and distribution checks.
 
@@ -66,7 +66,7 @@
 
 - `bash .agents/tools/capture-settings-ios.sh APP_PATH SIMULATOR_UUID OUTPUT_DIR TAB [TAB...]` captures compiled Debug settings or Search, History, Saved, Automations, Groups and app Preferences pages using the installed simulator, with synthetic data and the machine-wide lock. It boots one simulator, saves PNGs and shuts it down. It resolves `simctl` through the selected Xcode; `SIMULATOR_CAPTURE_DISPLAY` selects a display and defaults to 1.
 
-- `capture-groups.js` captures desktop and phone group conversations, mention suggestions, thread selection, the create limit and named pending approval cards in an existing Playwright CLI browser. It checks draft preservation and one synthetic send, then closes its isolated context.
+- `capture-groups.js` captures desktop and phone home with group rows, group conversations, mention suggestions, thread selection, the New menu's create sheet and limit and named pending approval cards in an existing Playwright CLI browser. It checks draft preservation and one synthetic send, then closes its isolated context.
 
 - `capture-app-settings.js` captures app settings, Following, home section editing, keyboard help, command palette and find-in-chat at desktop and phone widths, with reversible fixture preference edits. It closes its isolated browser context.
 

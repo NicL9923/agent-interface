@@ -34,8 +34,8 @@ const previewPushKey = process.env.PREVIEW_PUSH_CONFIGURED === '1' ? Buffer.conc
 // PREVIEW_THEME=light|dark|system and PREVIEW_PRESENTATION=simple|advanced pick the initial preferences.
 const portrait = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 80"><rect width="80" height="80" fill="#d9c7a3"/><circle cx="40" cy="31" r="15" fill="#6b4f3a"/><path d="M12 80c4-20 16-29 28-29s24 9 28 29Z" fill="#3f6b57"/></svg>');
 const bots = [
-  { id: 'ranch', lastMessage: { text: 'Here is what I will set up: reminders for all three gates on Nov 1.', at: new Date(Date.now() - 2 * 60_000).toISOString() }, name: 'Ranch hand', shared: true, model: 'configured-model', provider: 'openrouter', activity: 'working', description: 'Everyday household help', instructions: 'Explicit fixture instructions.', avatar: { mode: 'geometric', shape: 'blob', color: '#1084FE', eyes: 'oval', accessory: 'none' } },
-  { id: 'kitchen', unread: true, lastMessage: { text: 'Pot roast tonight. I added carrots and onions to the shared list.', at: new Date(Date.now() - 90 * 60_000).toISOString() }, name: 'Kitchen companion', shared: true, model: 'configured-model', provider: 'openrouter', activity: 'idle', avatar: { mode: 'mascot', family: 'bear', color: '#FF9800', eyes: 'round', accessory: 'none' } },
+  { id: 'ranch', lastMessage: { text: 'Here is what I will set up: reminders for all three gates on Nov 1.', at: new Date(Date.now() - 2 * 60_000).toISOString() }, name: 'Ranch hand', shared: true, model: 'claude-opus-5-5', modelName: 'Claude Opus 5.5', provider: 'anthropic', activity: 'working', description: 'Everyday household help', instructions: 'Explicit fixture instructions.', avatar: { mode: 'geometric', shape: 'blob', color: '#1084FE', eyes: 'oval', accessory: 'none' } },
+  { id: 'kitchen', unread: true, lastMessage: { text: 'Pot roast tonight. I added carrots and onions to the shared list.', at: new Date(Date.now() - 90 * 60_000).toISOString() }, name: 'Kitchen companion', shared: true, model: 'gpt-6.1-terra', modelName: 'GPT-6.1-Terra', provider: 'openai', activity: 'idle', avatar: { mode: 'mascot', family: 'bear', color: '#FF9800', eyes: 'round', accessory: 'none' } },
   { id: 'garden', lastMessage: { text: 'Frost is likely Thursday night. Cover the peppers.', at: new Date(Date.now() - 300 * 60_000).toISOString() }, name: 'Garden planner', shared: false, model: 'configured-model', provider: 'openrouter', activity: 'thinking', avatar: { mode: 'mascot', family: 'sprout', color: '#00BCA6', eyes: 'oval', accessory: 'hat' } },
   { id: 'homework', lastMessage: { text: 'Ready to check the fractions worksheet when you are.', at: new Date(Date.now() - 1500 * 60_000).toISOString() }, name: 'Homework helper', shared: false, model: 'configured-model', provider: 'openrouter', activity: 'waiting', avatar: { mode: 'geometric', shape: 'hex', color: '#9159FE', eyes: 'oval', accessory: 'glasses' } },
   { id: 'ledger', lastMessage: { text: 'September is reconciled except for one charge I cannot match.', at: new Date(Date.now() - 3000 * 60_000).toISOString() }, name: 'Ledger', shared: true, model: 'configured-model', provider: 'openrouter', activity: 'blocked', avatar: { mode: 'geometric', shape: 'triangle', color: '#FF309B', eyes: 'visor', accessory: 'none' } },
@@ -164,9 +164,18 @@ if (process.env.PREVIEW_LONG_TOOL === '1') {
   conversations.kitchen.sessionId = 'fixture-kitchen';
 }
 const previewRoom = { room_id: 'fixture-group', name: 'Weekend at the ranch', members: ['ranch', 'garden'].map(id => ({ member_id: id, profile: id, handle: id, display_name: bots.find(bot => bot.id === id)?.name || id })) };
-const groupRooms = [previewRoom];
+const supperRoom = { room_id: 'fixture-supper', name: 'Supper planning', members: ['kitchen', 'trail', 'ranch'].map(id => ({ member_id: id, profile: id, handle: id, display_name: bots.find(bot => bot.id === id)?.name || id })) };
+const groupRooms = [previewRoom, supperRoom];
 const groupEvents = [{ event_id: 'group-user', seq: 1, kind: 'message.user', actor: { kind: 'user', id: 'preview' }, sender: { id: 'preview', name: 'Nicolas' }, payload: { text: 'Can we fit a short nature walk around the gate repair? Explicit preview fixture.', thread_id: 'a624af77-b3de-46f9-a583-626018476e41' }, created_at: Date.now() / 1000 }, { event_id: 'group-reply', seq: 2, kind: 'message.member', actor: { kind: 'member', id: 'ranch' }, payload: { member_id: 'ranch', text: 'Replace the battery before breakfast, then take the shady trail. Bring water and check the weather before leaving.', thread_id: 'a624af77-b3de-46f9-a583-626018476e41' }, created_at: Date.now() / 1000 }];
 const groupRequests = new Set();
+// The catalog previews each room's newest message, as the app server does. Supper planning keeps a fixed one so home shows an older row.
+function roomWithLatest(room) {
+  if (room === supperRoom) return { ...room, latest: { text: 'The smoker is free Sunday, so brisket is on.', at: new Date(Date.now() - 3 * 3600_000).toISOString(), author: 'Kitchen companion' } };
+  const event = [...groupEvents].reverse().find(item => item.kind === 'message.user' || item.kind === 'message.member');
+  if (room !== previewRoom || !event) return room;
+  const author = event.kind === 'message.user' ? 'You' : room.members.find(member => member.member_id === event.payload.member_id)?.display_name || 'Assistant';
+  return { ...room, latest: { text: event.payload.text, at: new Date(event.created_at * 1000).toISOString(), author } };
+}
 const conversationFor = (id) => ({ botId: id, messages: [], approvals: [], files: [], activity: { state: bots.find(item => item.id === id)?.activity || 'idle' }, ...conversations[id] });
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const vaults = new Map();
@@ -193,6 +202,46 @@ if (process.env.PREVIEW_SECURE_REQUEST) {
     detail: 'Explicit preview fixture. Use made-up credentials; no website login or native vault change occurs.',
     secure: { epoch: 'fixture-epoch', sessionId: 'fixture-session', method, ...metadata } }];
 }
+// PREVIEW_SECURE_FLOW=login|handoff runs the whole wait: a message to Kitchen companion starts a turn
+// that asks for a login or a computer takeover, the answer takes a moment, and Hermes stops listing the
+// request shortly before the app hears about it. A message sent while it waits closes the request.
+const secureFlow = process.env.PREVIEW_SECURE_FLOW;
+const flowRequest = () => secureFlow === 'handoff'
+  ? { id: `fixture-handoff-${Date.now()}`, kind: 'computer', title: 'Take over the computer?', detail: 'The supply site wants a code from your phone.',
+    computer: { epoch: 'fixture-epoch', sessionId: 'fixture-session', reason: 'The supply site wants a code from your phone.', whatToDo: 'Enter the code from your phone, then press Hand back.' } }
+  : { id: `fixture-login-${Date.now()}`, kind: 'secure', title: 'Hermes asks to save a login', detail: 'Check the address and reason first. The password goes directly to the encrypted Hermes vault, never into this chat or to the assistant.',
+    secure: { epoch: 'fixture-epoch', sessionId: 'fixture-session', method: 'vault.save_login', origin: 'https://supply.example.invalid', site: 'supply.example.invalid',
+      explicit: { label: 'Ranch supply', purpose: 'Sign in to check this week\'s feed order.', profile: 'kitchen', requestedBy: { id: 'preview', name: 'Nicolas' } } } };
+const flowReply = (conversation, text, delay = 2500) => setTimeout(() => {
+  conversation.messages.push({ id: `flow-reply-${Date.now()}`, role: 'assistant', text, createdAt: new Date().toISOString() });
+  conversation.activity = { state: 'done' }; conversation.toolCalls = []; changed('kitchen');
+}, delay);
+function secureFlowMessage(body) {
+  const conversation = conversations.kitchen, now = new Date().toISOString();
+  conversation.messages.push({ id: body.requestId, role: 'user', sender: { id: 'preview', name: 'Nicolas' }, text: body.text, createdAt: now });
+  if (conversation.attention?.length) {
+    // A reply while it waits closes the request; the assistant reads the message next.
+    conversation.attention = [];
+    conversation.activity = { state: 'working', detail: 'Reading your message', updatedAt: now };
+    flowReply(conversation, 'Thanks, I closed that request. I will use the address you gave me instead.');
+  } else {
+    conversation.activity = { state: 'working', detail: secureFlow === 'handoff' ? 'Opening the supply site' : 'Preparing the supply sign-in', updatedAt: now };
+    conversation.toolCalls = [{ id: 'flow-tool', name: secureFlow === 'handoff' ? 'browser_navigate' : 'vault_save_login', status: 'running', startedAt: now }];
+    setTimeout(() => {
+      conversation.attention = [flowRequest()];
+      conversation.activity = { state: 'blocked', updatedAt: new Date().toISOString() }; changed('kitchen');
+    }, 1200);
+  }
+  changed('kitchen');
+}
+function secureFlowSettled(conversation, outcome) {
+  // Hermes stops listing it at once; the app learns of it from the next change notice.
+  conversation.attention = [];
+  conversation.activity = { state: 'working', detail: 'Continuing', updatedAt: new Date().toISOString() };
+  conversation.toolCalls = [{ id: 'flow-tool-2', name: 'browser_navigate', status: 'running', startedAt: new Date().toISOString() }];
+  setTimeout(() => changed('kitchen'), 1500);
+  flowReply(conversation, outcome === 'declined' ? 'No problem. I left the order as it is.' : 'Signed in. This week\'s feed order is two bags of layer pellets and one of scratch grain.', 4000);
+}
 const memories = new Map();
 const memoryFor = botId => {
   if (!memories.has(botId)) memories.set(botId, { botId, profile: botId, scope: 'profile', owner: 'Hermes',
@@ -204,7 +253,19 @@ const memoryFor = botId => {
   return memories.get(botId);
 };
 const cardStates = new Map(), todaySeen = new Map(), routineReceipts = new Map(), fixtureAudio = new Map();
-const routines = [{ id: 'r1', botId: 'ranch', name: 'Morning check', prompt: 'Summarize overnight sensor alerts and the weather.', schedule: '0 6 * * *', enabled: true, recipientIds: ['preview'] }];
+const routines = [{ id: 'r1', botId: 'ranch', name: 'Morning check', prompt: 'Summarize overnight sensor alerts and the weather.', schedule: '0 6 * * *', enabled: true, recipientIds: ['preview'] },
+  { id: 'r2', botId: 'ranch', name: 'Certificate check', prompt: '', script: 'check_certs.py', noAgent: true, schedule: 'every 6h', enabled: true, recipientIds: [] },
+  { id: 'r3', botId: 'ranch', name: 'Feed inventory', prompt: 'Count feed on hand and draft an order if any bin is under a week.', schedule: '0 16 * * 1', enabled: true, recipientIds: ['preview'] }];
+// Routine runs shown among the Ranch hand's turns: succeeded before the first message, failed between
+// turns, and one still running at the end. Synthetic; no routine runs.
+const routineRunFixtures = [
+  { run: { id: 'run-morning', routineId: 'r1', routineName: 'Morning check', startedAt: '2026-10-01T15:58:00.000Z', finishedAt: '2026-10-01T15:59:10.000Z', status: 'succeeded', preview: 'Overnight: two north gate alerts, low of 41°F, no rain expected.', previewOnly: false },
+    output: '## Overnight check\n\n- **Gates:** the north gate reported open twice after midnight. Both closed within 4 seconds.\n- **Weather:** low of 41°F, clear through Friday.\n- **Water:** trough levels normal.\n\nExplicit fixture output. No routine was executed.' },
+  { run: { id: 'run-cert', routineId: 'r2', routineName: 'Certificate check', startedAt: '2026-10-01T16:10:00.000Z', finishedAt: '2026-10-01T16:10:04.000Z', status: 'failed', error: 'cameras.ranch.example expires in 3 days.', preview: 'FAILED · cameras.ranch.example expires in 3 days.', previewOnly: true },
+    output: '- cameras.ranch.example: expires Oct 4, 2026 (3 days)\n- home.ranch.example: expires Dec 19, 2026\n- gate.ranch.example: expires Jan 8, 2027', previewOnly: true },
+  { run: { id: 'run-feed', routineId: 'r3', routineName: 'Feed inventory', startedAt: '2026-10-01T16:23:00.000Z', status: 'running', preview: 'This run is still in progress.', previewOnly: true },
+    output: 'This run is still in progress.', previewOnly: true },
+];
 const fixtureEvents = [{ id: 'fixture-completed', botId: 'fox', kind: 'completed', title: 'Trail options are ready', body: 'Explicit fixture. Open the conversation to review the proposal.', occurredAt: new Date(Date.now() - 10 * 60000).toISOString() }];
 // Tiny WAV tone, never provider-generated speech. Used only to verify audio controls.
 const fixtureWav = (() => {
@@ -281,6 +342,17 @@ const server = createServer(async (request, response) => {
       const hits = conversation.sessionId ? conversation.messages.flatMap((message, offset) => ['user', 'assistant'].includes(message.role) && message.text.toLowerCase().includes(q)
         ? [{ botId, botName: bot?.name, sessionId: conversation.sessionId, title: bot?.name, snippet: message.text.slice(0, 120), messageId: message.id, offset }] : []) : [];
       return json(response, { hits, unavailableBots: [] });
+    }
+    if (secureFlow && request.method === 'POST' && path === '/bots/kitchen/messages' && !body.retryOf) {
+      secureFlowMessage(body);
+      return json(response, { requestId: body.requestId, status: 'accepted', messageId: body.requestId });
+    }
+    const handoffMatch = /^\/bots\/([^/]+)\/computer-handoffs\/([^/]+)$/.exec(path);
+    if (handoffMatch) {
+      const conversation = conversations[decodeURIComponent(handoffMatch[1])], pending = conversation?.attention?.find(item => item.id === handoffMatch[2]);
+      if (!pending) return json(response, { status: 'expired' });
+      secureFlowSettled(conversation, 'declined');
+      return setTimeout(() => json(response, { status: 'ok' }), 700);
     }
     // Retry of a failed turn: the fixture runs again briefly, then answers. Nothing is fetched.
     const retryMatch = request.method === 'POST' && body.retryOf ? /^\/bots\/([^/]+)\/messages$/.exec(path) : null;
@@ -381,6 +453,7 @@ const server = createServer(async (request, response) => {
       const botId = decodeURIComponent(secureMatch[1]), conversation = conversations[botId], pending = conversation?.attention?.find(item => item.id === secureMatch[2]);
       if (!pending || body.epoch !== pending.secure.epoch || body.sessionId !== pending.secure.sessionId || body.method !== pending.secure.method) return json(response, { error: 'The fixture request expired.' }, 409);
       if (process.env.PREVIEW_SECURE_FAILURE === '1') return json(response, { error: 'Fixture result uncertain.' }, 502);
+      if (secureFlow) { secureFlowSettled(conversation, body.cancel ? 'declined' : 'saved'); return setTimeout(() => json(response, { status: 'ok' }), 900); }
       if (!body.cancel && pending.secure.method === 'vault.save_login') vaultFor(botId).items.push({ id: 'fixture-' + randomUUID(), kind: 'login', label: pending.secure.site, origin: pending.secure.origin, identifier: body.identifier, identifierType: 'username', createdAt: new Date().toISOString(), hasOtp: false, backend: 'local', canRemove: true });
       conversation.attention = []; conversation.activity = { state: 'idle' }; changed(botId);
       return json(response, { status: 'ok' });
@@ -428,11 +501,15 @@ const server = createServer(async (request, response) => {
       if (request.method === 'POST' && !routineReceipts.has(key)) routineReceipts.set(key, { requestId, routineId: routine.id, botId: routine.botId, status: 'completed', startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(), message: 'Explicit fixture. No routine or external action was executed.' });
       return json(response, routineReceipts.get(key) || { error: 'Fixture run receipt not found.' }, routineReceipts.has(key) ? 200 : 404);
     }
+    const runsMatch = /^\/bots\/([^/]+)\/routine-runs$/.exec(path);
+    if (runsMatch) return json(response, { runs: routineRunFixtures.filter(({ run }) => routines.some(row => row.id === run.routineId && row.botId === runsMatch[1])).map(({ run }) => run), unavailable: [] });
+    const fixtureRun = /^\/bots\/[^/]+\/routines\/[^/]+\/results\/([^/]+)$/.exec(path) && routineRunFixtures.find(({ run }) => run.id === path.split('/').at(-1));
+    if (fixtureRun) return json(response, { previewOnly: !!fixtureRun.previewOnly, messages: [{ id: `${fixtureRun.run.id}-output`, role: 'assistant', text: fixtureRun.output }] });
     const resultsMatch = /^\/bots\/([^/]+)\/routines\/([^/]+)\/results(?:\/([^/]+))?$/.exec(path);
     if (resultsMatch) return json(response, resultsMatch[3] ? { previewOnly: false, messages: [{ id: 'fixture-run-output', role: 'assistant', text: '## Morning gate check\n\nThe north gate battery needs replacing. The east gate is at **62%** and the barn gate is at **48%**.\n\nExplicit fixture output. No routine was executed.' }] } : [{ id: 'fixture-run', title: 'Morning gate check', startedAt: new Date().toISOString(), previewOnly: false }]);
     if (path === '/groups') {
       if (request.method === 'POST') { let room = groupRooms.find(room => room.room_id === body.requestId); if (!room) { room = { room_id: body.requestId, name: body.name, members: body.botIds.map(id => ({ member_id: id, profile: id, handle: id, display_name: bots.find(bot => bot.id === id)?.name || id })) }; groupRooms.push(room); } return json(response, { room }); }
-      return json(response, { supported: true, canSend: process.env.PREVIEW_GROUP_DRIVER_OFF !== '1', rooms: groupRooms, ...(process.env.PREVIEW_GROUP_DRIVER_OFF === '1' ? { reason: 'Fixture group coordinator is unavailable. History is still readable.' } : {}) });
+      return json(response, { supported: true, canSend: process.env.PREVIEW_GROUP_DRIVER_OFF !== '1', rooms: groupRooms.map(roomWithLatest), ...(process.env.PREVIEW_GROUP_DRIVER_OFF === '1' ? { reason: 'Fixture group coordinator is unavailable. History is still readable.' } : {}) });
     }
     const groupMatch = /^\/groups\/([^/]+)(?:\/(log|messages|stop|approve))?$/.exec(path);
     if (groupMatch) {
@@ -452,7 +529,12 @@ const server = createServer(async (request, response) => {
     }
     if (path === '/models') return json(response, modelCatalog);
     if (path === '/computer') return json(response, computerStatus());
-    if (path === '/computer/control') { computerControl = body.action === 'take' ? { kind: 'human', mine: true, name: 'Nicolas' } : { kind: 'idle' }; return json(response, computerStatus()); }
+    if (path === '/computer/control') {
+      computerControl = body.action === 'take' ? { kind: 'human', mine: true, name: 'Nicolas' } : { kind: 'idle' };
+      // Handing the computer back answers an open handoff, as the add-on's lease watcher does.
+      if (body.action === 'release' && conversations.kitchen.attention?.some(item => item.kind === 'computer')) secureFlowSettled(conversations.kitchen, 'handed_back');
+      return json(response, computerStatus());
+    }
     if (path === '/computer/terminal/end') { for (const client of computerSockets.clients) if (client.computerKind === 'terminal') { client.send(JSON.stringify({ type: 'exit' })); client.close(); } return json(response, { ok: true }); }
     if (path === '/computer/desktop' || path === '/computer/terminal') {
       const kind = path.split('/').at(-1), ticket = `fixture-${++computerTicket}`;

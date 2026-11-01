@@ -9,9 +9,10 @@ export const ComputerPanel = lazy(() => import("../components/ComputerPanel").th
 export const HermesUpgradePanel = lazy(() => import("../components/HermesUpgradePanel").then(module => ({ default: module.HermesUpgradePanel })));
 export const BotDetails = lazy(() => import("./BotDetails").then(module => ({ default: module.BotDetails })));
 export const PreferencesDialog = lazy(() => import("./PreferencesDialog").then(module => ({ default: module.PreferencesDialog })));
-export const ComposerModelPicker = lazy(() => import("../components/ComposerModelPicker").then(module => ({ default: module.ComposerModelPicker })));
+export const ChatModelPicker = lazy(() => import("../components/ChatModelPicker").then(module => ({ default: module.ChatModelPicker })));
 export const DiscoveryPanel = lazy(() => import("../components/DiscoveryPanel").then(module => ({ default: module.DiscoveryPanel })));
-export const GroupChats = lazy(() => import("../components/GroupChats").then(module => ({ default: module.GroupChats })));
+export const GroupRoomView = lazy(() => import("../components/GroupChats").then(module => ({ default: module.GroupRoomView })));
+export const GroupCreate = lazy(() => import("../components/GroupCreate").then(module => ({ default: module.GroupCreate })));
 
 /** True once `active` has been, for panels that keep their state while closed but need not load until first use. */
 export function useOnceActive(active: boolean) {

@@ -133,3 +133,12 @@ it("redacts a private bot source before sending a shared-chat reply to speech",a
   expect((await s.app.inject({method:'POST',url:'/api/bots/ranch/voice/speak',headers:s.first,payload:{messageId:'private-reply'}})).statusCode).toBe(404);
   expect(s.synthesizeVoice).not.toHaveBeenCalled();
 });
+
+it("speaks any completed reply in the conversation, not only the latest", async () => {
+  const s = await setup();
+  s.conversation.mockResolvedValue(conversationFixture({ botId: "ranch", messages: [
+    { id: "first", role: "assistant", text: "The first answer." }, { id: "q", role: "user", text: "And then?" }, { id: "latest", role: "assistant", text: "The latest answer." }] }));
+  const response = await s.app.inject({ method: "POST", url: "/api/bots/ranch/voice/speak", headers: s.first, payload: { messageId: "first" } });
+  expect(response.statusCode).toBe(200);
+  expect(s.synthesizeVoice).toHaveBeenCalledExactlyOnceWith("ranch", "The first answer.");
+});

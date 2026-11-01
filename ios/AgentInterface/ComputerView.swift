@@ -71,6 +71,8 @@ enum DesktopLink {
 /// The viewer watches until Take over; Hand back returns the desktop to the assistants. The VPS
 /// terminal stays in the browser.
 struct ComputerView: View {
+  /// Opened from an assistant's handoff request: take control as soon as the desktop connects, once.
+  var take = false
   @Environment(AppStore.self) private var store
   @Environment(\.colorScheme) private var scheme
   enum Phase: Equatable { case opening, connected, reconnecting, failed(String) }
@@ -82,6 +84,7 @@ struct ComputerView: View {
   @State private var error: String?
   /// Bumped for each attachment, so a late answer for an earlier one changes nothing.
   @State private var epoch = 0
+  @State private var tookOver = false
   private var status: ComputerStatus? { store.computerStatus }
   var body: some View {
     VStack(spacing: 0) {
@@ -246,6 +249,11 @@ struct ComputerView: View {
     switch event {
     case .connected:
       phase = .connected; attempt = 0; error = nil
+      // A takeover from the transcript happens once; a failure leaves the person watching with the reason.
+      if take && !tookOver {
+        tookOver = true
+        if !desktop.held && DesktopLink.canTake(status) { Task { await desktop.take(store) } }
+      }
     case .disconnected(let reason), .failed(let reason):
       guard phase == .connected || phase == .opening || phase == .reconnecting else { return }
       dropped(reason ?? "Desktop disconnected. Reconnecting in watch mode.", epoch: epoch)
@@ -398,6 +406,7 @@ struct DesktopWebView: UIViewRepresentable {
     if context.coordinator.loaded {
       // The page follows its fragment: a new path reconnects, a new control mode only switches input.
       view.evaluateJavaScript("location.hash = \(Self.literal(fragment))")
+      context.coordinator.applied = fragment
     } else if !context.coordinator.loading {
       context.coordinator.loading = true
       #if DEBUG
@@ -409,9 +418,9 @@ struct DesktopWebView: UIViewRepresentable {
       guard let url = DesktopLink.pageURL(base: base, path: path, control: control) else { return }
       context.coordinator.applied = fragment
       view.load(URLRequest(url: url))
-      return
     }
-    context.coordinator.applied = fragment
+    // While the page loads, an update leaves the fragment unapplied: didFinish applies the latest one.
+    // Marking it applied here dropped a path or control change that arrived during the load.
   }
   static func dismantleUIView(_ view: WKWebView, coordinator: Coordinator) {
     view.configuration.userContentController.removeScriptMessageHandler(forName: "computer")
@@ -491,3 +500,86 @@ struct DesktopWebView: UIViewRepresentable {
       """
   }
 #endif
+
+/// An assistant asking a person to take over the household computer. Its reason and the step it
+/// asks for are the assistant's own words. Hermes settles it when the person hands back.
+struct ComputerHandoff: Codable, Equatable {
+  var epoch: String
+  var sessionId: String
+  var reason: String
+  var whatToDo: String
+  /// Tools that act on the household computer, as the Hermes add-on brackets them.
+  static func usesComputer(_ tool: String?) -> Bool {
+    guard let tool else { return false }
+    return tool == "computer_use" || tool.hasPrefix("browser_")
+  }
+}
+struct ComputerHandoffResult: Decodable { var status: String }
+/// The computer screen opened from the transcript: Watch, or Take over from a handoff request.
+struct ComputerOpening: Identifiable, Equatable {
+  let id = UUID()
+  var take: Bool
+}
+
+/// The card for a handoff request. Take over opens the computer and takes control; Not now declines.
+struct ComputerHandoffView: View {
+  var request: Attention
+  var handoff: ComputerHandoff
+  var botId: String
+  @Environment(AppStore.self) private var store
+  @State private var declining = false
+  @State private var error: String?
+  private var name: String { store.bootstrap?.bots.first { $0.id == botId }?.name ?? "The assistant" }
+  private var control: ComputerStatus.Control? { store.computerStatus?.control }
+  private var mine: Bool { control?.kind == "human" && control?.mine == true }
+  private var elsewhere: Bool { control?.kind == "human" && control?.mine != true }
+  private var unavailable: Bool { store.computerStatus.map { !$0.available || $0.running == false } ?? false }
+  var body: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      Text("\(name) needs you on the computer").font(.subheadline.bold())
+      ForEach([("Why", handoff.reason), ("What to do", handoff.whatToDo)], id: \.0) { label, value in
+        VStack(alignment: .leading, spacing: 2) {
+          Text(label).font(.caption).foregroundStyle(.secondary)
+          Text(value).font(.subheadline).textSelection(.enabled)
+        }.accessibilityElement(children: .combine)
+      }
+      Text("In \(name)'s words. \(name) pauses its computer actions while you have control.")
+        .font(.caption).foregroundStyle(.secondary)
+      if let state { Text(state).font(.footnote).accessibilityIdentifier("handoff.state") }
+      HStack {
+        Button(mine ? "Open computer" : "Take over", systemImage: "desktopcomputer") { store.openComputer = ComputerOpening(take: !mine) }
+          .buttonStyle(.accentProminent).controlSize(.large)
+          .disabled(!store.connected || declining || elsewhere || unavailable).accessibilityIdentifier("handoff.take")
+        if !mine {
+          Button { decline() } label: { Text(declining ? "Sending…" : "Not now").frame(minHeight: 44).padding(.horizontal, 8).contentShape(Rectangle()) }
+            .disabled(!store.connected || declining).accessibilityIdentifier("handoff.decline")
+        }
+      }
+      Text("Or send a message instead. That cancels this request so \(name) can read it.")
+        .font(.caption).foregroundStyle(.secondary)
+      if let error { Text(error).font(.footnote).foregroundStyle(Palette.attention).accessibilityIdentifier("handoff.error") }
+    }.task { while !Task.isCancelled { await store.refreshComputer(); try? await Task.sleep(for: .seconds(4)) } }
+      .accessibilityElement(children: .contain).accessibilityIdentifier("handoff")
+  }
+  private var state: String? {
+    if mine { return "You have control. Press Hand back on the Computer screen when you're done, and \(name) will continue." }
+    if elsewhere { return "\(control?.name ?? "Another household member") has control right now. Take over is available after they hand back." }
+    if unavailable { return store.computerStatus?.reason ?? "The household computer isn't running right now." }
+    return nil
+  }
+  private func decline() {
+    guard let api = store.api, !declining else { return }
+    declining = true; error = nil
+    let id = request.id
+    Task {
+      defer { declining = false }
+      do {
+        let path = "/bots/\(botId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? botId)/computer-handoffs/\(id)"
+        let result: ComputerHandoffResult = try await api.write(path, ["decision": "decline", "epoch": handoff.epoch, "sessionId": handoff.sessionId])
+        if result.status == "expired" { error = "This request had already closed. Refresh the conversation to see what happened."; return }
+        SettledRequests.shared.remember(botId: botId, requestId: id, text: "You chose Not now. \(name) will continue without it.")
+        await store.refreshConversation()
+      } catch { self.error = "Couldn't reach Hermes. Try Not now again." }
+    }
+  }
+}

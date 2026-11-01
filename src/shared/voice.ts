@@ -1,4 +1,4 @@
-export type VoiceState = "idle" | "requesting" | "recording" | "transcribing" | "preparing" | "speaking";
+export type VoiceState = "idle" | "requesting" | "recording" | "transcribing";
 export interface VoiceTranscript { text: string; provider?: string }
 export interface VoiceAudio { data: Buffer; mime: string; provider?: string }
 export interface VoicePlayback { url: string; mime: string; expiresAt: string }
@@ -9,3 +9,5 @@ export const VOICE_MIMES = new Set([
   "audio/webm", "video/webm", "audio/ogg", "audio/wav", "audio/wave", "audio/x-wav",
   "audio/mp4", "audio/m4a", "audio/x-m4a", "audio/aac", "audio/mpeg", "audio/mp3", "audio/flac",
 ]);
+/** Window event the composer sends when recording starts, so a reply being read aloud stops. */
+export const STOP_SPEECH = "agent-interface:stop-speech";

@@ -23,6 +23,8 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     let next = bootstrap.flatMap { boot in api.map { Data(($0.baseURL.absoluteString + "|" + boot.user.id).utf8).base64URLEncoded } }
     guard next != scope else { return }
     scope = next
+    // Another account's rooms never show.
+    groupCatalog = nil
     // Only a loaded account replaces it; launching, before the account loads, leaves it alone.
     if let next { UserDefaults.standard.set(next, forKey: DeviceDefaults.signedInScope) }
     additions = savedAdditions()
@@ -50,7 +52,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     didSet {
       appliedConversationTag = nil
       if conversation != oldValue {
-        cachedArtifacts = nil; updateEcho(conversationChanged: true); updateActivity(); updateLatestReply(); updateRetryChecks()
+        cachedArtifacts = nil; updateEcho(conversationChanged: true); updateActivity(); updateRetryChecks()
       }
     }
   }
@@ -130,6 +132,9 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   @ObservationIgnored var date: () -> Date = { Date() }
   var conversationRequest: UUID?
   var homeRequest: UUID?
+  /// The household's group chats, which home lists beside the assistants. Nil until the first read for this account.
+  var groupCatalog: GroupCatalog?
+  @ObservationIgnored var groupLoadId = UUID()
   var preferencesSaving = false
   var preferencesSaveFailed = false
   var preferencesDraft: Preferences?
@@ -140,6 +145,8 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   var openedFile: PreviewFile?
   /// The shared desktop's availability for the Settings row. Nil until the first read.
   var computerStatus: ComputerStatus?
+  /// The computer screen the transcript asked for: Watch on the live row, or Take over on a handoff.
+  var openComputer: ComputerOpening?
   /// Builds the client for a server address. Tests substitute a client with a mock transport.
   @ObservationIgnored var makeClient: (URL) -> APIClient = { APIClient(baseURL: $0) }
   @ObservationIgnored private var authSession: ASWebAuthenticationSession?
@@ -260,16 +267,6 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     if next != activity { activity = next }
   }
   var active: Bool { activity.active }
-  /// The newest reply in the conversation, the one the web's Listen to reply reads. Stored for the
-  /// same reason as `activity`; while a reply streams the composer does not read it.
-  private(set) var latestReply: Message?
-  private func updateLatestReply() {
-    let next = conversation?.messages.last {
-      $0.role == "assistant" && !$0.isInternalActivity
-        && (!$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !($0.files ?? []).isEmpty)
-    }.flatMap { $0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
-    if next != latestReply { latestReply = next }
-  }
   /// Chats read on this device since the roster last said otherwise; see `UnreadChats`.
   private(set) var readHere = UnreadChats()
   /// Whether home shows this assistant's chat as unread. The chat on screen never is.
@@ -718,7 +715,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
           sending = false
           uploads.reset()
           interruptionReviewed = false
-          upgrade.reset(); computerStatus = nil
+          upgrade.reset(); computerStatus = nil; openComputer = nil
           resetPreferenceSaves()
         }
         if bootstrap != value { bootstrap = value; applied = true }
@@ -1949,7 +1946,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     sessionExpired = false
     dismissedPolls = []
     renewalAttemptedAt = nil
-    upgrade.reset(); computerStatus = nil
+    upgrade.reset(); computerStatus = nil; openComputer = nil
     resetPreferenceSaves()
     return true
   }

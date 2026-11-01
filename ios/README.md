@@ -16,7 +16,7 @@ app server's shared desktop and VPS terminal in the system browser. The browser
 uses its own household sign-in; the native session token is never passed in the
 URL. This keeps the native client free of embedded browser and terminal views.
 
-On iPhone, home is the root of one navigation stack: Today, Group chats and Search push from it, and a chat opened from Today or Search goes back there. Drafts are kept as you move around. iPad keeps its sidebar.
+On iPhone, home is the root of one navigation stack: Today and Search push from it, a chat or group chat opened from home pushes over it, and a chat opened from Today or Search goes back there. Group chats are rows in the home list beside the assistants, and **+** offers New assistant or New group chat. Drafts are kept as you move around. iPad keeps its sidebar.
 
 Home opens with your avatar for **Settings**, Search, and New assistant.
 Pin assistants from their card or by long-pressing an assistant, which also offers
@@ -307,7 +307,7 @@ detail pane, and reads it on each change notice, polling every 30 seconds while 
 1.5 seconds without one, with backoff. Home, Today and Search leave the conversation alone; it is read
 again as soon as it returns to the screen. Bootstrap refreshes every 45 seconds and on roster notices. Reads keep the last response and its ETag in memory, so an unchanged
 response arrives as an empty 304 and is not decoded or applied again; sign-out and identity changes clear them. Today,
-the group chat list and an open group poll only while the app is active, and refresh once on return. An
+home's group chat rows (every 30 seconds) and an open group poll only while the app is active, and refresh once on return. An
 unconfirmed send is checked after 1.5, 5 and 15 seconds, then every minute, and at once after a change
 notice from its conversation. The client preserves drafts and admission IDs; it never automatically resubmits a message.
 Use authenticated Quick Look previews to share or save images, PDFs, and text files.

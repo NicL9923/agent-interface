@@ -24,8 +24,8 @@ const firstPage = (botId: string) => routeUrl("GET /bots/:id/conversation", { id
  * The first transcript message whose bottom is below `y`. Messages are laid out in document
  * order, so a binary search measures a handful of them instead of every one on each scroll.
  */
-export function firstMessageBelow(container: HTMLElement, y: number) {
-  const items = container.querySelectorAll<HTMLElement>("[data-message-id]");
+export function firstMessageBelow(container: HTMLElement, y: number, selector = "[data-message-id]") {
+  const items = container.querySelectorAll<HTMLElement>(selector);
   let low = 0, high = items.length;
   while (low < high) {
     const middle = (low + high) >> 1;
@@ -36,6 +36,12 @@ export function firstMessageBelow(container: HTMLElement, y: number) {
 }
 const messageElement = (container: HTMLElement, id: string) =>
   [...container.querySelectorAll<HTMLElement>("[data-message-id]")].find(item => item.dataset.messageId === id);
+// Rows that hold the reader's place without being messages, such as routine run cards, so one
+// opened at the top of the view stays put. Read positions still name only messages.
+const placeRows = "[data-message-id], [data-place-id]";
+const placeId = (item: HTMLElement) => item.dataset.messageId ?? `place:${item.dataset.placeId}`;
+const placeElement = (container: HTMLElement, id: string) =>
+  [...container.querySelectorAll<HTMLElement>(placeRows)].find(item => placeId(item) === id);
 const editable = (target: EventTarget | null) =>
   target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName));
 const countsAsNew = (message: Message) =>
@@ -72,7 +78,7 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
    * this person's first message after those `known` when they sent stands in as `guess`, which a
    * named copy replaces. Once a receipt names the copy, nothing else stands in for it.
    */
-  const sendAnchor = useRef<{ known: Set<string>; requestId?: string; messageId?: string; id?: string; guess?: string } | null>(null);
+  const sendAnchor = useRef<{ known: Set<string>; requestId?: string; messageId?: string; id?: string; guess?: string; filled?: Element } | null>(null);
   // Where a scroll event last left the transcript, so reading upward can be told from growth.
   const lastTop = useRef(0);
   // A smooth jump reports positions short of the end until it lands.
@@ -261,7 +267,7 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
   };
   const returnToPlace = () => {
     const element = scroll.current, held = anchor.current;
-    const target = held && element ? messageElement(element, held.id) : undefined;
+    const target = held && element ? placeElement(element, held.id) : undefined;
     if (!element || !held || !target) return;
     const shift = target.getBoundingClientRect().top - element.getBoundingClientRect().top - held.offset;
     if (shift) element.scrollTop += shift;
@@ -271,8 +277,8 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
     anchor.current = null;
     if (!element || mode.current !== "free") return;
     const top = element.getBoundingClientRect().top;
-    const target = firstMessageBelow(element, top);
-    if (target) anchor.current = { id: target.dataset.messageId!, offset: target.getBoundingClientRect().top - top };
+    const target = firstMessageBelow(element, top, placeRows);
+    if (target) anchor.current = { id: placeId(target), offset: target.getBoundingClientRect().top - top };
   };
   // The person's message a send anchored. See sendAnchor for how it is followed.
   const sentMessage = () => {
@@ -298,15 +304,18 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
     return mine ? messageElement(element, mine.id) : undefined;
   };
   // Keeps enough space at the end for the sent message to reach the top of the view. It never moves
-  // what is above it, and it shrinks as the reply grows into it.
+  // what is above it, and it shrinks as the reply grows into it. Once what follows the message has
+  // filled the view, the space is never reserved again for it: a request card or tool rows that
+  // later fold or leave must not turn into a blank screen below the finished reply.
   const reserveEnd = () => {
-    const element = scroll.current, space = endSpace.current, sent = sentMessage();
+    const element = scroll.current, space = endSpace.current, sent = sentMessage(), anchor = sendAnchor.current;
     if (!element || !space) return;
     const reserve = space.offsetHeight;
-    const next = sent ? endReserve({
+    const next = sent && anchor?.filled !== sent ? endReserve({
       offset: sent.getBoundingClientRect().top - element.getBoundingClientRect().top + element.scrollTop,
       scrollHeight: element.scrollHeight, clientHeight: element.clientHeight, reserve,
     }) : 0;
+    if (sent && anchor && next === 0) anchor.filled = sent;
     if (next !== reserve) space.style.height = next ? `${next}px` : "";
   };
   // Brings the opened message into view, a little below the top, and marks it briefly.

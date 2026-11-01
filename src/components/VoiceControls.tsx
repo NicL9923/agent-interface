@@ -3,73 +3,54 @@ import type { Avatar as AvatarConfig } from "../shared/types";
 import { useEffect, useRef, useState } from "react";
 import { api } from "../client-api.js";
 import { Icon } from "./Icon.js";
-import { MAX_RECORDING_SECONDS, MAX_SPOKEN_TEXT, MAX_VOICE_BYTES } from "../shared/voice.js";
-import type { VoicePlayback, VoiceState, VoiceTranscript } from "../shared/voice.js";
+import { MAX_RECORDING_SECONDS, MAX_VOICE_BYTES, STOP_SPEECH } from "../shared/voice.js";
+import type { VoiceState, VoiceTranscript } from "../shared/voice.js";
 import "./voice-controls.css";
 
 export interface VoiceControlsProps {
   avatar?: AvatarConfig;
   name?: string;
   botId: string;
-  reply?: { id: string; text: string };
   disabled?: boolean;
-  hasDraft?: boolean;
   onTranscript(text: string): void;
   onStateChange?(state: VoiceState): void;
 }
-const labels: Record<VoiceState, string> = { idle: "", requesting: "Waiting for microphone permission…", recording: "Recording", transcribing: "Transcribing…", preparing: "Preparing spoken reply…", speaking: "Speaking" };
+const labels: Record<VoiceState, string> = { idle: "", requesting: "Waiting for microphone permission…", recording: "Recording", transcribing: "Transcribing…" };
 const message = (error: unknown) => error instanceof Error ? error.message : "Voice could not be completed. Your draft is kept.";
 
-export function VoiceControls({ botId, reply, disabled = false, hasDraft = false, onTranscript, onStateChange, avatar, name }: VoiceControlsProps) {
+export function VoiceControls({ botId, disabled = false, onTranscript, onStateChange, avatar, name }: VoiceControlsProps) {
   const [state, setState] = useState<VoiceState>("idle");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [recording, setRecording] = useState<Blob | null>(null);
-  const [playable, setPlayable] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const callbacks = useRef({ onTranscript, onStateChange }); callbacks.current = { onTranscript, onStateChange };
   const media = useRef<MediaRecorder | null>(null);
   const stream = useRef<MediaStream | null>(null);
-  const playback = useRef<HTMLAudioElement | null>(null);
-  const audioURL = useRef<string | null>(null);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
   const request = useRef<AbortController | null>(null);
   const generation = useRef(0);
   const discarded = useRef(false);
   const active = useRef<VoiceState>("idle");
-  const latestReply = useRef(reply?.id);
   const transition = (next: VoiceState) => { active.current = next; setState(next); callbacks.current.onStateChange?.(next); };
   const releaseMic = () => {
     if (timer.current) clearInterval(timer.current); timer.current = null;
     stream.current?.getTracks().forEach(track => track.stop()); stream.current = null;
   };
-  const releaseAudio = () => {
-    const player = playback.current; playback.current = null;
-    if (player) { player.onplaying = player.onended = player.onerror = null; player.pause(); player.removeAttribute("src"); }
-    if (audioURL.current) URL.revokeObjectURL(audioURL.current); audioURL.current = null;
-  };
   const cancel = () => {
     generation.current++; discarded.current = true;
     request.current?.abort(); request.current = null;
     if (media.current?.state !== "inactive") media.current?.stop(); media.current = null;
-    releaseMic(); releaseAudio(); setPlayable(false); transition("idle");
+    releaseMic(); transition("idle");
   };
   useEffect(() => {
     return () => {
       generation.current++; discarded.current = true; request.current?.abort();
       if (media.current?.state !== "inactive") media.current?.stop(); media.current = null;
-      releaseMic(); releaseAudio(); callbacks.current.onStateChange?.("idle");
+      releaseMic(); callbacks.current.onStateChange?.("idle");
     };
   }, [botId]);
   useEffect(() => { if (disabled && active.current !== "idle") cancel(); }, [disabled]);
-  useEffect(() => {
-    if (!reply?.id || reply.id === latestReply.current) return;
-    latestReply.current = reply.id;
-    if (active.current === "preparing" || active.current === "speaking") {
-      generation.current++; request.current?.abort(); request.current = null; transition("idle");
-    }
-    releaseAudio(); setPlayable(false);
-  }, [reply?.id]);
 
   async function transcribe(blob: Blob) {
     const run = ++generation.current;
@@ -91,7 +72,9 @@ export function VoiceControls({ botId, reply, disabled = false, hasDraft = false
       setError("Recording needs a browser with microphone support and a secure connection. You can still type your message."); return;
     }
     const run = ++generation.current; discarded.current = false;
-    releaseAudio(); setPlayable(false); setError(""); setNotice(""); setElapsed(0); transition("requesting");
+    // Speech from a reply must not end up in the recording.
+    window.dispatchEvent(new Event(STOP_SPEECH));
+    setError(""); setNotice(""); setElapsed(0); transition("requesting");
     try {
       const input = await navigator.mediaDevices.getUserMedia({ audio: true });
       if (generation.current !== run) { input.getTracks().forEach(track => track.stop()); return; }
@@ -135,48 +118,16 @@ export function VoiceControls({ botId, reply, disabled = false, hasDraft = false
     }
   }
   const stopRecording = () => { if (media.current?.state === "recording") { media.current.stop(); releaseMic(); } };
-  async function playAudio() {
-    const player = playback.current; if (!player) return;
-    setError(""); transition("preparing");
-    const run = generation.current;
-    try { await player.play(); }
-    catch (e) { if (generation.current === run) { transition("idle"); setError("Audio could not start. Select Play audio to try again."); } }
-  }
-  async function speak() {
-    if (!reply || active.current !== "idle" || disabled) return;
-    if (reply.text.length > MAX_SPOKEN_TEXT) { setError("This reply is too long to read aloud. Ask for a shorter summary."); return; }
-    const run = ++generation.current; const controller = new AbortController(); request.current = controller;
-    releaseAudio(); setPlayable(false); setError(""); setNotice(""); transition("preparing");
-    try {
-      const result = await api<VoicePlayback>(`/bots/${encodeURIComponent(botId)}/voice/speak`, { method: "POST", body: JSON.stringify({ messageId: reply.id }), signal: controller.signal });
-      if (generation.current !== run) return;
-      if (!/^\/api\/voice\/audio\/[0-9a-f-]{36}$/.test(result.url)) throw new Error("The app returned an invalid audio link.");
-      const response = await fetch(result.url, { credentials: "same-origin", cache: "no-store", redirect: "error", signal: controller.signal });
-      if (!response.ok) throw new Error("This audio reply expired. Select Listen to reply to prepare it again.");
-      const blob = await response.blob();
-      if (generation.current !== run) return;
-      if (!blob.size || blob.size > MAX_VOICE_BYTES) throw new Error("The spoken reply could not be loaded.");
-      audioURL.current = URL.createObjectURL(blob);
-      const player = new Audio(audioURL.current); playback.current = player; setPlayable(true);
-      player.onplaying = () => { if (generation.current === run) transition("speaking"); };
-      player.onended = () => { if (generation.current === run) transition("idle"); };
-      player.onerror = () => { if (generation.current === run) { transition("idle"); setError("This browser could not play the spoken reply."); setPlayable(false); releaseAudio(); } };
-      await playAudio();
-    } catch (e) {
-      if (generation.current === run && !controller.signal.aborted) { transition("idle"); setError(message(e)); }
-    } finally { if (generation.current === run) request.current = null; }
-  }
   const busy = state !== "idle";
   const supported = typeof navigator.mediaDevices?.getUserMedia === "function" && typeof MediaRecorder !== "undefined";
-  return <div className="voice-controls" data-voice-state={state} data-has-draft={hasDraft || undefined}>
+  return <div className="voice-controls" data-voice-state={state}>
     <div className="voice-actions">
       {state === "recording" ? <button type="button" className="voice-recording" aria-label={`Stop recording, ${elapsed} seconds`} onClick={stopRecording}><span className="sr-only">Stop recording · </span><Icon name="stop" size={16} /><span>{elapsed}s</span></button>
         : <button type="button" aria-label="Record voice" disabled={disabled || busy} title={!supported ? "Microphone recording is unavailable in this browser. You can still type." : "Record up to two minutes. Review the transcript before sending."} onClick={() => void startRecording()}><Icon name="mic" size={18} /><span className="tool-label">Record voice</span></button>}
-      {reply && <button type="button" className="voice-listen" aria-label={playable ? "Play audio" : "Listen to reply"} title={playable ? "Play audio" : "Listen to reply"} disabled={disabled || busy} onClick={() => void (playable ? playAudio() : speak())}><Icon name="speaker" size={18} /><span className="tool-label">{playable ? "Play audio" : "Listen to reply"}</span></button>}
     </div>
     <div className="voice-panel">
       {busy && <span className={`voice-avatar voice-${state}`}><Avatar avatar={avatar} name={name} state="idle" size={24} reducedMotion /></span>}
-      {busy && <button type="button" onClick={cancel}>{state === "speaking" ? "Stop speaking" : "Cancel voice"}</button>}
+      {busy && <button type="button" onClick={cancel}>Cancel voice</button>}
       {recording && !busy && <><button type="button" disabled={disabled} onClick={() => void transcribe(recording)}>Retry transcription</button><button type="button" onClick={() => { setRecording(null); setError(""); }}>Discard recording</button></>}
     {(busy || notice) && <p className="voice-status" role="status">{busy ? labels[state] : notice}</p>}
     {error && <p className="voice-error" role="alert">{error}</p>}

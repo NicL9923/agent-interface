@@ -110,7 +110,7 @@ import XCTest
 
   func testCreationIsNameAndLookThenRoleAndSavesTheChosenAvatar() throws {
     let app = launch()
-    app.buttons["New assistant"].tap()
+    app.tapNewAssistant()
     XCTAssertTrue(app.descendants(matching: .any)["creationStep"].waitForExistence(timeout: 5))
     // Tabs that need an existing assistant are not offered while creating.
     XCTAssertFalse(app.buttons["settingsMore"].exists)
@@ -144,7 +144,7 @@ import XCTest
 
   func testAFailedAvatarSaveKeepsTheNewAssistantOpenWithRetry() throws {
     let app = launch(["AVATAR_FAILURE"])
-    app.buttons["New assistant"].tap()
+    app.tapNewAssistant()
     let name = app.textFields["Name"]
     XCTAssertTrue(name.waitForExistence(timeout: 5))
     name.typeWhenFocused("Feed tracker")

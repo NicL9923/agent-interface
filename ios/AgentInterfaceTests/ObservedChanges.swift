@@ -17,14 +17,14 @@ extension AppStore {
       "sending": \.sending, "appUnavailable": \.appUnavailable, "interruptionReviewed": \.interruptionReviewed,
       "authConfig": \.authConfig, "restoring": \.restoring, "sessionExpired": \.sessionExpired,
       "conversationRequest": \.conversationRequest, "preferencesSaving": \.preferencesSaving,
-      "preferencesSaveFailed": \.preferencesSaveFailed, "preferencesDraft": \.preferencesDraft,
+      "preferencesSaveFailed": \.preferencesSaveFailed, "preferencesDraft": \.preferencesDraft, "groupCatalog": \.groupCatalog, "homeRequest": \.homeRequest,
       "deviceNotifications": \.deviceNotifications, "openedFile": \.openedFile, "computerStatus": \.computerStatus,
       "replyAnnouncement": \.replyAnnouncement, "offlineSavedAt": \.offlineSavedAt, "cachedChats": \.cachedChats,
       "earlierFileCache": \.earlierFileCache, "loadingEarlierFiles": \.loadingEarlierFiles,
       "earlierFilesFailure": \.earlierFilesFailure, "loadingEarlier": \.loadingEarlier,
       "conversationScreens": \.conversationScreens, "chatCovers": \.chatCovers,
-      "connectionError": \.connectionError, "activity": \.activity, "latestReply": \.latestReply,
-      "readHere": \.readHere,
+      "connectionError": \.connectionError, "activity": \.activity,
+      "readHere": \.readHere, "homeRequest": \.homeRequest,
       // Transcript entry points (I1): Retry, opening at a message, and the attention scroll.
       "retryAttempt": \.retryAttempt, "focusedMessage": \.focusedMessage, "attentionScrollRequest": \.attentionScrollRequest,
     ]

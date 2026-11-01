@@ -35,6 +35,29 @@ import SwiftUI
     _ = try await api().answerSecureRequest(botId: "patch", requestId: "request", answer: SecureRequestAnswer(request: explicit, identifier: "kvm-admin", value: "fixture-password", cancel: true))
     payload = try body(); XCTAssertEqual(Set(payload.keys), ["epoch", "sessionId", "method", "cancel"])
   }
+  private func waiting(_ attention: String, state: String = "blocked") throws -> Conversation {
+    let json = #"{"botId":"kitchen","messages":[],"activity":{"state":"\#(state)"},"approvals":[],"files":[],"attention":[\#(attention)]}"#
+    return try JSONDecoder().decode(Conversation.self, from: Data(json.utf8))
+  }
+  func testComposerSaysAMessageReplacesTheRequestUnlessAnotherMembersLoginHoldsIt() throws {
+    let plain = #"{"id":"a","kind":"secure","title":"t","detail":"d","secure":{"epoch":"e","sessionId":"s","method":"vault.code"}}"#
+    let owned = #"{"id":"b","kind":"secure","title":"t","detail":"d","secure":{"epoch":"e","sessionId":"s","method":"vault.save_login","origin":"https://kvm.example.test","site":"kvm","explicit":{"label":"KVM","purpose":"Why","profile":"patch","requestedBy":{"id":"two","name":"Jordan"}}}}"#
+    let handoff = #"{"id":"c","kind":"computer","title":"t","detail":"d","computer":{"epoch":"e","sessionId":"s","reason":"Code needed","whatToDo":"Enter it"}}"#
+    XCTAssertEqual(WaitingInput.placeholder(try waiting(plain), userId: "one"), "Or reply here instead…")
+    XCTAssertEqual(WaitingInput.placeholder(try waiting(handoff), userId: "one"), "Or reply here instead…")
+    XCTAssertEqual(WaitingInput.placeholder(try waiting(owned), userId: "one"), "Your message waits for Jordan…")
+    XCTAssertEqual(WaitingInput.placeholder(try waiting(owned), userId: "two"), "Or reply here instead…")
+    XCTAssertNil(WaitingInput.placeholder(try waiting(plain, state: "working"), userId: "one"))
+    XCTAssertNil(WaitingInput.placeholder(try waiting(#"{"id":"d","kind":"official","title":"t","detail":"d"}"#), userId: "one"))
+    let decoded = try XCTUnwrap(try waiting(handoff).attention?.first?.computer)
+    XCTAssertEqual(decoded, ComputerHandoff(epoch: "e", sessionId: "s", reason: "Code needed", whatToDo: "Enter it"))
+  }
+  func testOnlyComputerToolsOfferWatchAndTheSendRoomShrinksToNothing() {
+    XCTAssertTrue(ComputerHandoff.usesComputer("browser_navigate")); XCTAssertTrue(ComputerHandoff.usesComputer("computer_use"))
+    XCTAssertFalse(ComputerHandoff.usesComputer("web_search")); XCTAssertFalse(ComputerHandoff.usesComputer(nil))
+    XCTAssertEqual(SendAnchor.room(viewport: 600, contentEnd: 1900, anchorTop: 1800), 484)
+    XCTAssertEqual(SendAnchor.room(viewport: 600, contentEnd: 2700, anchorTop: 1800), 0)
+  }
   func testExplicitLoginDecodesAndOnlyItsRequesterMayAnswer() throws {
     let json = #"{"epoch":"e","sessionId":"s","method":"vault.save_login","origin":"https://kvm.example.test","site":"kvm.example.test","explicit":{"label":"Comet KVM","purpose":"Why","profile":"patch","requestedBy":{"id":"one","name":"One"}}}"#
     let decoded = try JSONDecoder().decode(SecureRequest.self, from: Data(json.utf8))
@@ -79,6 +102,20 @@ import SwiftUI
     let reopened = SecureRequestInput(); reopened.bind(key); XCTAssertTrue(reopened.blocked)
     reopened.bind(key + "new-epoch"); XCTAssertFalse(reopened.blocked)
     input.value = "fixture-password"; input.teardown(); XCTAssertEqual(input.value, "")
+  }
+  func testAcceptedAnswerConfirmsAndLeavesOnlyItsLine() async throws {
+    let input = SecureRequestInput(), key = UUID().uuidString, requestId = "accepted-" + key
+    input.bind(key); input.identifier = " fixture-parent "; input.value = "fixture-password"
+    input.submit(api: api(), botId: "bot", requestId: requestId, request: request(), key: key, cancel: false, assistant: "Ranch hand",
+      current: { true }, refresh: {})
+    // While sending, only the visible identifier stands in the locked field.
+    XCTAssertEqual(input.sendingIdentifier, "fixture-parent"); XCTAssertEqual(input.value, "")
+    try await until { !input.busy }
+    XCTAssertEqual(input.accepted, "Login saved. Ranch hand is continuing.")
+    XCTAssertNil(input.sendingIdentifier)
+    XCTAssertEqual(SettledRequests.shared.item(botId: "bot", requestId: requestId)?.text, "Login saved. Ranch hand is continuing.")
+    XCTAssertEqual(SettledRequests.shared.lingering(botId: "bot", listed: []).map(\.requestId).contains(requestId), true)
+    XCTAssertTrue(SettledRequests.shared.lingering(botId: "bot", listed: [requestId]).allSatisfy { $0.requestId != requestId })
   }
   func testTemporaryInactivityPreservesSecureEntryUntilBackground() {
     let input = SecureRequestInput()

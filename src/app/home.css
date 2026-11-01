@@ -119,20 +119,6 @@
   position: relative;
   display: inline-flex;
 }
-.pin-badge {
-  position: absolute;
-  right: -3px;
-  bottom: -3px;
-  display: grid;
-  place-items: center;
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  background: var(--raised);
-  color: var(--accent);
-  box-shadow: 0 0 0 3px var(--rail);
-}
-.pin-badge .icon { stroke-width: 2.4; }
 .pinned-copy {
   display: grid;
   flex: 1;
@@ -162,6 +148,37 @@
   overflow-wrap: anywhere;
 }
 .home .pinned-activity.state-disconnected { color: var(--muted); }
+.home-new { position: relative; display: inline-flex; }
+.home-new-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  min-width: 210px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--raised);
+  box-shadow: 0 12px 36px #0003;
+}
+.home-new-menu button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--ink);
+  font-size: 0.9375rem;
+  text-align: left;
+}
+.home-new-menu button:hover:enabled, .home-new-menu button:focus-visible { background: var(--accent-soft); color: var(--accent); }
+.home-new-menu button:disabled { color: var(--muted); }
+.home-new-menu small { padding: 4px 12px 8px; color: var(--muted); font-size: 0.8125rem; line-height: 1.4; }
 .home-links {
   display: flex;
   flex-wrap: wrap;
@@ -211,6 +228,37 @@
   margin-block: 12px 8px;
 }
 .home-row-avatar { display: flex; flex-shrink: 0; }
+/* A group's faces overlap inside one avatar-sized square; the page's surface rings each face. */
+.room-faces { position: relative; display: block; }
+.room-face {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  width: var(--face, 100%);
+  height: var(--face, 100%);
+  border-radius: 50%;
+  background: var(--surface);
+  box-shadow: 0 0 0 2px var(--rail, var(--surface));
+}
+.room-faces.faces-2 .room-face:nth-child(1) { top: 0; left: 0; }
+.room-faces.faces-2 .room-face:nth-child(2) { right: 0; bottom: 0; }
+.room-faces.faces-3 .room-face:nth-child(1) { top: 0; left: 50%; transform: translateX(-50%); }
+.room-faces.faces-3 .room-face:nth-child(2) { bottom: 0; left: 0; }
+.room-faces.faces-3 .room-face:nth-child(3) { bottom: 0; right: 0; }
+.room-face-initial, .room-face-icon {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 0.75rem;
+  font-weight: 650;
+}
+.room-face-icon { position: static; width: 100%; height: 100%; }
+.room-pending .room-face { position: static; width: 100%; height: 100%; }
+.room-pending strong { color: var(--accent); }
 .home .bot-row-top {
   display: flex;
   flex-wrap: wrap;
@@ -583,7 +631,6 @@ button.settings-row:hover:enabled { background: color-mix(in srgb, var(--accent-
     transition: transform 240ms cubic-bezier(0.2, 0.8, 0.2, 1);
   }
   .home-status { box-shadow: 0 0 0 3px var(--surface); }
-  .pin-badge { width: 28px; height: 28px; box-shadow: 0 0 0 3px var(--surface); }
   .home-scroll { margin: 0 -18px; padding: 0 18px 24px; }
   .home-bar { padding-bottom: 20px; }
   .home-pinned { grid-template-columns: repeat(auto-fit, minmax(0, 6.5rem)); gap: 12px; padding: 8px 0 22px; }

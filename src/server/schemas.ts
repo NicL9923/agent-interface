@@ -82,6 +82,7 @@ export const preferences = z.object({
       "Choose different quiet start and end times.",
     )
     .optional(),
+  hiddenRoutineRuns: z.array(z.object({ botId: id, routineId: id }).strict()).max(500).optional(),
 });
 
 type Keys<T> = T extends unknown ? keyof T : never;

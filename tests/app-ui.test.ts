@@ -313,19 +313,26 @@ describe("conversation state", () => {
     expect(container.querySelector(".activity-copy")?.textContent).not.toContain("Shared is running terminal...");
   });
 
-  it("hides empty tool-call replies and the assistant's own name, keeping one timestamp per reply", async () => {
+  it("hides empty tool-call replies and the assistant's own name, keeping one timestamp under the last part of a reply", async () => {
     conversation = { ...conversation, activity: { state: "done" }, messages: [
       { id: "question", role: "user", text: "Check the NAS", sender: { id: "one", name: "One" }, createdAt: "2026-10-07T12:00:00Z" },
       { id: "call-row", role: "assistant", text: "", createdAt: "2026-10-07T12:00:05Z", toolCall: { id: "ssh", name: "terminal", status: "completed" } },
       { id: "first", role: "assistant", text: "Tailscale is installed.", createdAt: "2026-10-07T12:00:09Z" },
       { id: "second", role: "assistant", text: "It is connected." },
+      { id: "other", role: "user", text: "Thanks from the kitchen", sender: { id: "two", name: "Two" }, createdAt: "2026-10-07T12:01:00Z" },
     ] };
     await render();
     const replies = [...container.querySelectorAll(".message-assistant")];
     expect(replies.map(reply => reply.getAttribute("data-message-id"))).toEqual(["first", "second"]);
-    expect(replies.map(reply => reply.querySelectorAll(".message-attribution time").length)).toEqual([1, 0]);
-    expect(replies.some(reply => reply.querySelector(".message-attribution")?.textContent?.includes("Shared"))).toBe(false);
-    expect(container.querySelector(".message-user .message-attribution")?.textContent).toContain("One");
+    // The time sits under the last part, taken from the earlier part when the last has none.
+    expect(replies.map(reply => reply.querySelectorAll(".message-meta time").length)).toEqual([0, 1]);
+    expect(replies.every(reply => !reply.querySelector(".message-attribution"))).toBe(true);
+    const [mine, theirs] = [...container.querySelectorAll(".message-user")];
+    // The person's own message needs no name, and another member's does. Both have their time under the bubble.
+    expect(mine.querySelector(".message-attribution")).toBeNull();
+    expect(theirs.querySelector(".message-attribution")?.textContent).toBe("Two");
+    expect(mine.querySelector(".message-bubble + .message-meta-own time")).not.toBeNull();
+    expect([...mine.querySelectorAll(".message-meta button")].map(button => button.getAttribute("aria-label"))).toEqual(["Copy message"]);
     expect(container.querySelector(".tool-count")?.textContent).toBe("1");
   });
 
@@ -388,7 +395,7 @@ describe("conversation state", () => {
       expect(sent()).toHaveLength(1);
       expect(sent()[0].textContent).toContain("My saved server draft");
       expect(sent()[0].classList.contains("message-sending")).toBe(true);
-      expect(sent()[0].querySelector(".message-delivery")?.textContent).toBe("Sending…");
+      expect(sent()[0].querySelector(".message-meta .message-delivery")?.textContent).toBe("Sending…");
       expect(container.querySelector("textarea")!.value).toBe("");
       expect(sendButton().getAttribute("aria-busy")).toBe("true");
       const requestId = (vi.mocked(write).mock.calls.find(([path]) => path === "/bots/shared/messages")![1] as { requestId: string }).requestId;
@@ -822,7 +829,7 @@ describe("conversation state", () => {
     await render();
     const bubbles = [...container.querySelectorAll(".message[data-message-id]")];
     expect(bubbles.map(row => row.getAttribute("data-message-id"))).toEqual(["reminder", "human"]);
-    expect(bubbles[0].querySelector(".message-attribution")?.textContent).toContain("Scheduled");
+    expect(bubbles[0].querySelector(".message-attribution")?.textContent).toBe("Scheduled");
     expect(bubbles[1].textContent).toContain("Hello from Desktop");
     const groups = [...container.querySelectorAll(".tool-calls")];
     expect(groups.map(group => group.querySelector("summary")?.textContent)).toEqual(["Scheduled jobs1", "Bot messages2", "Subagents1Running"]);

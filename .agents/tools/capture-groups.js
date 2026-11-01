@@ -19,7 +19,7 @@ async (page, { origin, outputDir }) => {
   try {
     for (const width of [1440, 390]) {
       await tab.setViewportSize({ width, height: width === 1440 ? 1000 : 844 });
-      await tab.goto(`${origin}/?view=groups`);
+      await tab.goto(`${origin}/?view=group&room=fixture-group`);
       const panel = tab.locator('.group-panel');
       const composer = panel.getByRole('textbox', { name: 'Message the group', exact: true });
       await panel.locator('.group-message').first().waitFor();
@@ -41,8 +41,12 @@ async (page, { origin, outputDir }) => {
       await panel.getByRole('button', { name: 'New topic', exact: true }).click();
       if (await panel.locator('.group-thread').count()) throw new Error('New topic kept the thread selected');
 
-      await panel.getByRole('button', { name: 'New group', exact: true }).click();
-      const form = panel.locator('.group-create');
+      // Phones show the room over home; the plus button lives on home.
+      if (width === 390) await tab.getByRole('button', { name: 'Back to assistants', exact: true }).click();
+      await shot(`group-home-${width}`);
+      await tab.getByRole('button', { name: 'New', exact: true }).click();
+      await tab.getByRole('menuitem', { name: 'New group chat', exact: true }).click();
+      const form = tab.locator('.group-create');
       await form.getByRole('textbox', { name: 'Name', exact: true }).fill('Weekend plans');
       await form.getByRole('checkbox', { name: 'Ranch hand', exact: true }).check();
       await form.getByRole('checkbox', { name: 'Garden planner', exact: true }).check();
@@ -56,6 +60,7 @@ async (page, { origin, outputDir }) => {
       await form.getByText('Six assistants selected. Deselect one to choose another.', { exact: true }).waitFor();
       await shot(`group-create-limit-${width}`);
       await form.getByRole('button', { name: 'Cancel', exact: true }).click();
+      if (width === 390) await tab.locator('.room-row', { hasText: 'Weekend at the ranch' }).click();
       if (await composer.inputValue() !== '@ranch Can we keep the walk under an hour?') throw new Error('Creating then cancelling lost the conversation draft');
       if (width === 390) {
         await panel.getByRole('button', { name: 'Send to group', exact: true }).click();
@@ -82,7 +87,7 @@ async (page, { origin, outputDir }) => {
     });
     for (const width of [1440, 390]) {
       await tab.setViewportSize({ width, height: width === 1440 ? 1000 : 844 });
-      await tab.goto(`${origin}/?view=groups`);
+      await tab.goto(`${origin}/?view=group&room=fixture-group`);
       const card = tab.locator('.group-panel .approval-card');
       await card.waitFor();
       await card.evaluate(node => node.scrollIntoView({ block: 'center' }));

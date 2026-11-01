@@ -111,6 +111,8 @@ struct Preferences: Codable, Equatable {
   var defaultBotId: String?
   var sections: [BotSection] = []
   var followBots: [String] = []
+  /// Routines whose runs this person keeps out of their assistant's chat. Older servers omit it.
+  var hiddenRoutineRuns: [HiddenRoutineRun]?
 }
 struct Capability: Codable, Equatable {
   var supported: Bool
@@ -147,6 +149,8 @@ struct Bot: Codable, Identifiable, Equatable {
   var description: String?
   var instructions: String?
   var model: String
+  /// A readable name for the model that the server fills. Older servers omit it, so show `model` then.
+  var modelName: String? = nil
   var provider: String?
   var enabledMcpServers: [String]?
   var shared: Bool
@@ -349,6 +353,7 @@ struct Attention: Codable, Identifiable, Equatable {
   var detail: String
   var questions: [Question]?
   var secure: SecureRequest? = nil
+  var computer: ComputerHandoff? = nil
 }
 /// What this device reports about the chat on screen: reading it, or gone after reading it.
 struct ChatPresenceReport: Codable, Equatable {
@@ -757,6 +762,8 @@ struct ComputerStatus: Decodable, Equatable {
     var mine: Bool?
   }
   var available: Bool
+  /// Absent from older servers; false means the desktop is installed but not running.
+  var running: Bool? = nil
   var reason: String?
   var control: Control
   /// What the Settings row says under "Computer", worded like the web panel.

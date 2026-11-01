@@ -79,8 +79,13 @@ struct RoutineResultsView: View {
 }
 
 struct GroupMember: Codable, Hashable { var member_id: String; var profile: String; var handle: String; var display_name: String? }
-struct GroupRoom: Decodable, Identifiable, Hashable { var room_id: String; var name: String; var members: [GroupMember]; var id: String { room_id } }
-struct GroupCatalog: Decodable { var supported: Bool; var canSend: Bool; var reason: String?; var rooms: [GroupRoom] }
+struct GroupRoom: Decodable, Identifiable, Hashable {
+  var room_id: String; var name: String; var members: [GroupMember]
+  /// The newest message, which the catalog adds for home. Older servers and room reads omit it.
+  var latest: GroupLatest? = nil
+  var id: String { room_id }
+}
+struct GroupCatalog: Decodable, Equatable { var supported: Bool; var canSend: Bool; var reason: String?; var rooms: [GroupRoom] }
 struct GroupCreated: Decodable { var room: GroupRoom }
 struct GroupCreate: Codable { var requestId: String; var name: String; var botIds: [String] }
 struct GroupSend: Codable { var requestId: String; var threadId: String; var text: String }
@@ -154,93 +159,6 @@ struct GroupDriver: Decodable { var working: Bool; var blocked: Bool; var pendin
 struct GroupState: Decodable { var room: GroupRoom; var driver_status: GroupDriver? }
 struct GroupDecision: Encodable { var taskId: String; var memberId: String; var generation: Int; var choice: String; var requestId: String }
 
-struct GroupChatsView: View {
-  @Environment(AppStore.self) private var store
-  @State private var catalog: GroupCatalog?
-  @State private var error: String?
-  @State private var creating = false
-  @State private var loadId = UUID()
-  @State private var pendingCreate: GroupCreate?
-  @State private var retryingCreate = false
-  /// The room just created, opened once the new-group sheet is gone.
-  @State private var created: GroupRoom?
-  @State private var opened: GroupRoom?
-  var body: some View {
-    List {
-      if let reason = catalog?.reason { Section { Text(reason).font(.footnote).foregroundStyle(.secondary) } }
-      if let error { Section { ErrorBanner(message: error); Button("Retry") { Task { await load() } } } }
-      if catalog == nil && error == nil { Section { ProgressView("Checking Hermes group chats…") } }
-      if let pendingCreate { pendingSection(pendingCreate) }
-      if let catalog, catalog.supported { roomsSection(catalog) }
-    }.householdListBackground().viewHeader("Group chats", "Two to six assistants in one conversation").refreshable { await load() }
-      // Rooms other members create show up without a manual refresh, like the web's 15 second poll.
-      // Split-view reparenting can cancel a view task during a phone push, so the first read
-      // does not depend on one; the poll below only keeps it fresh.
-      .onAppear { pendingCreate = GroupCreation.pending(scope: store.scope); Task { await load() } }
-      .pollWhileActive(id: store.scope ?? "", every: .seconds(15)) { await load() }
-      .onChange(of: store.scope) { _, scope in
-        catalog = nil; opened = nil; pendingCreate = GroupCreation.pending(scope: scope)
-        Task { await load() }
-      }
-      // The split view's detail column honors the legacy link, not a value destination, for a push by code.
-      .background { openedLink }
-      .sheet(isPresented: $creating, onDismiss: sheetDismissed) {
-        NavigationStack { GroupCreateView(onCreated: { created = $0 }) }.appStore(store)
-      }
-  }
-  @ViewBuilder private var openedLink: some View {
-    NavigationLink(isActive: Binding(get: { opened != nil }, set: { if !$0 { opened = nil } })) {
-      if let room = opened { GroupConversationView(room: room, canSend: catalog?.canSend ?? false) }
-    } label: { EmptyView() }.hidden()
-  }
-  private func roomsSection(_ catalog: GroupCatalog) -> some View {
-    Section {
-      if catalog.rooms.isEmpty && pendingCreate == nil { Text("No group chats yet. Create one to let your assistants discuss a task together.").foregroundStyle(.secondary) }
-      ForEach(catalog.rooms) { room in
-        NavigationLink { GroupConversationView(room: room, canSend: catalog.canSend) } label: {
-          VStack(alignment: .leading, spacing: 3) { Text(room.name); Text("\(room.members.count) assistants").font(.caption).foregroundStyle(.secondary) }
-        }
-      }
-      Button { creating = true } label: { Label("New group", systemImage: "plus") }
-        .disabled(!catalog.canSend || !store.connected)
-    }
-  }
-  /// A saved request stays above the rooms until Hermes answers, so a retry cannot make a second room.
-  private func pendingSection(_ request: GroupCreate) -> some View {
-    Section {
-      Text("Finish creating group").font(.headline)
-      Text("\(request.name) · \(request.botIds.count) assistants. The saved request will be checked with Hermes.").font(.footnote).foregroundStyle(.secondary)
-      Button(retryingCreate ? "Checking…" : "Retry saved group request") { Task { await retryCreate(request) } }
-        .disabled(retryingCreate || !(catalog?.canSend ?? false) || !store.connected).accessibilityIdentifier("retryGroupRequest")
-    }
-  }
-  private func retryCreate(_ request: GroupCreate) async {
-    let room = await store.run(busy: $retryingCreate, error: $error, failure: GroupCreation.failure) {
-      try await GroupCreation.submit(request, api: $0.api, scope: $0.scope)
-    }
-    guard let room else { return }
-    pendingCreate = nil; error = nil; created = room
-    await open(room)
-  }
-  private func sheetDismissed() {
-    pendingCreate = GroupCreation.pending(scope: store.scope)
-    guard let room = created else { Task { await load() }; return }
-    created = nil
-    Task { await open(room) }
-  }
-  /// Refreshes the list, then opens the room, as the web selects the room it just created.
-  private func open(_ room: GroupRoom) async { await load(); opened = room }
-  private func load() async {
-    let id = UUID(); loadId = id
-    let value: GroupCatalog? = await store.run(error: $error, current: { loadId == id }) { try await $0.api.get("/groups") }
-    if let value {
-      catalog = value; error = nil
-      #if DEBUG
-      if DebugFixtures.captureGroupPage, opened == nil { opened = value.rooms.first }
-      #endif
-    }
-  }
-}
 struct GroupCreateView: View {
   var onCreated: (GroupRoom) -> Void = { _ in }
   @Environment(AppStore.self) private var store
@@ -274,7 +192,7 @@ struct GroupCreateView: View {
           }
         }
       }
-      Button(pending == nil ? "Create group" : "Retry saved group request") { Task { await create() } }.disabled(busy || !store.connected || pending == nil && (botIds.count < 2 || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
+      Button(pending == nil ? "Create group" : "Retry saved group request") { Task { await create() } }.accessibilityIdentifier(pending == nil ? "createGroup" : "retryGroupRequest").disabled(busy || !store.connected || pending == nil && (botIds.count < 2 || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
     }.navigationTitle(pending == nil ? "New group" : "Finish creating group").toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
       .task { pending = GroupCreation.pending(scope: store.scope) }
   }
@@ -558,5 +476,164 @@ struct GroupConversationView: View {
     case .failure(let failure)?: store.buzz(.failed); error = failure.localizedDescription
     case nil: break
     }
+  }
+}
+
+// MARK: Group chats on home
+
+/// The newest message in a room, which the server words for this viewer ("You", an assistant's name).
+struct GroupLatest: Decodable, Hashable { var text: String; var at: String; var author: String }
+
+/// One face in a room's cluster on home: a member, with the assistant it stands for when this person can see it.
+struct GroupFace: Identifiable {
+  var member: GroupMember; var bot: Bot?
+  var id: String { member.member_id }
+}
+
+/// How group chats appear in the home list. Pure, so ordering and wording are tested without a screen.
+enum GroupRows {
+  /// Rooms follow the assistants, newest message first. Assistant rows keep the roster's order and
+  /// never jump while a reply arrives, so rooms do the same inside their run: a room with no message
+  /// yet keeps the catalog's order after those that have one.
+  static func ordered(_ rooms: [GroupRoom]) -> [GroupRoom] {
+    rooms.enumerated().sorted { a, b in
+      let left = a.element.latest.flatMap { ServerDate.parse($0.at) }, right = b.element.latest.flatMap { ServerDate.parse($0.at) }
+      switch (left, right) {
+      case let (l?, r?): return l != r ? l > r : a.offset < b.offset
+      case (_?, nil): return true
+      case (nil, _?): return false
+      case (nil, nil): return a.offset < b.offset
+      }
+    }.map(\.element)
+  }
+  /// The row's second line: who spoke last and what they said, or a plain note.
+  static func preview(_ room: GroupRoom) -> String {
+    guard let latest = room.latest, !latest.text.isEmpty else { return "No messages yet" }
+    return "\(latest.author): \(latest.text)"
+  }
+  /// At most three members shown as faces, in the room's order.
+  static func faces(_ room: GroupRoom, bots: [Bot]) -> [GroupFace] {
+    room.members.prefix(3).map { member in GroupFace(member: member, bot: bots.first { $0.id == member.member_id }) }
+  }
+  /// The members in words, such as "Ranch hand, Planner and Kitchen companion".
+  static func memberNames(_ room: GroupRoom) -> String {
+    let names = room.members.map { $0.display_name ?? $0.profile }
+    guard names.count > 1 else { return names.joined() }
+    return names.dropLast().joined(separator: ", ") + " and " + names.last!
+  }
+  /// Whether home offers to make a group: Hermes hosts them and two assistants exist to put in one,
+  /// or a saved request is waiting to be finished.
+  static func canCreate(_ catalog: GroupCatalog?, bots: [Bot], pending: Bool) -> Bool {
+    if pending { return true }
+    guard let catalog, catalog.supported else { return false }
+    return bots.filter { !["all", "everyone"].contains($0.id.lowercased()) }.count >= 2
+  }
+  /// Why a group cannot be made right now, or nil when one can.
+  static func creationHint(_ catalog: GroupCatalog?, connected: Bool) -> String? {
+    if catalog?.canSend != true { return catalog?.reason ?? "The Hermes group coordinator must be running to make a group chat." }
+    return connected ? nil : "Reconnect to Hermes to make a group chat."
+  }
+}
+
+extension AppStore {
+  /// Reads the room catalog for home. A failure keeps the rooms already shown; the next poll tries again.
+  func refreshGroups() async {
+    let id = UUID(); groupLoadId = id
+    let result = await attempt(current: { [weak self] in self?.groupLoadId == id }) { try await $0.api.get("/groups") as GroupCatalog }
+    guard case .success(let value)? = result, value != groupCatalog else { return }
+    groupCatalog = value
+  }
+  /// A room just made shows at once; the next read of the catalog replaces this copy.
+  func groupRoomCreated(_ room: GroupRoom) {
+    guard var catalog = groupCatalog else { return }
+    catalog.rooms.removeAll { $0.id == room.id }
+    catalog.rooms.append(room)
+    groupCatalog = catalog
+    Task { await refreshGroups() }
+  }
+}
+
+/// A group's members as overlapping faces in the square one assistant's avatar takes, so rows line up.
+/// Two faces sit on a diagonal, three in a triangle; a member this person cannot see shows an initial.
+struct RoomFacesView: View {
+  var room: GroupRoom; var bots: [Bot]; var cluster: CGFloat; var ring: Color
+  var body: some View {
+    let faces = GroupRows.faces(room, bots: bots)
+    let size = (cluster * (faces.count == 2 ? 0.68 : 0.56)).rounded()
+    ZStack {
+      ForEach(Array(faces.enumerated()), id: \.element.id) { index, face in
+        faceView(face, size: size).offset(offset(index, count: faces.count, size: size))
+      }
+    }.frame(width: cluster, height: cluster).accessibilityHidden(true)
+  }
+  private func offset(_ index: Int, count: Int, size: CGFloat) -> CGSize {
+    let reach = (cluster - size) / 2
+    switch (count, index) {
+    case (2, 0): return CGSize(width: -reach, height: -reach)
+    case (2, _): return CGSize(width: reach, height: reach)
+    case (_, 0): return CGSize(width: 0, height: -reach)
+    case (_, 1): return CGSize(width: -reach, height: reach)
+    default: return CGSize(width: reach, height: reach)
+    }
+  }
+  @ViewBuilder private func faceView(_ face: GroupFace, size: CGFloat) -> some View {
+    Group {
+      if let bot = face.bot {
+        AvatarView(avatar: bot.avatar ?? AvatarConfig(), size: size, name: bot.name, forceReducedMotion: true)
+      } else {
+        Text(String((face.member.display_name ?? face.member.profile).prefix(1)).uppercased())
+          .font(.system(size: size * 0.42, weight: .semibold)).foregroundStyle(Palette.accent)
+          .frame(width: size, height: size).background(Palette.accentSoft, in: Circle())
+      }
+    }.frame(width: size, height: size).clipShape(Circle()).overlay(Circle().strokeBorder(ring, lineWidth: 2))
+  }
+}
+
+/// One group chat in the home list, shaped like an assistant row: faces, name, time, and the last message.
+struct GroupRoomRow: View {
+  var room: GroupRoom; var selected: Bool; var ring: Color; var action: () -> Void
+  @Environment(AppStore.self) private var store
+  @Environment(\.dynamicTypeSize) private var typeSize
+  var body: some View {
+    Button(action: action) {
+      HStack(spacing: 12) {
+        RoomFacesView(room: room, bots: store.bootstrap?.bots ?? [], cluster: 52, ring: ring)
+        VStack(alignment: .leading, spacing: 5) {
+          if typeSize.isAccessibilitySize {
+            Text(room.name).font(.body.weight(.semibold)).foregroundStyle(.primary)
+            if let at = room.latest?.at, let date = ServerDate.parse(at) { AssistantListDate(date: date) }
+          } else {
+            HStack(alignment: .firstTextBaseline) {
+              Text(room.name).font(.body.weight(.semibold)).foregroundStyle(.primary).lineLimit(2)
+              Spacer(minLength: 8)
+              if let at = room.latest?.at, let date = ServerDate.parse(at) { AssistantListDate(date: date) }
+            }
+          }
+          Text(GroupRows.preview(room)).font(.subheadline).foregroundStyle(.secondary).lineLimit(typeSize.isAccessibilitySize ? 3 : 2)
+        }.frame(maxWidth: .infinity, alignment: .leading)
+      }.padding(.horizontal, 10).padding(.vertical, 12).contentShape(Rectangle())
+    }.buttonStyle(.plain)
+      .background(selected ? Palette.accentSoft : Color.clear, in: RoundedRectangle(cornerRadius: 16))
+      .accessibilityHint("Group chat with \(GroupRows.memberNames(room))")
+      .accessibilityAddTraits(selected ? .isSelected : [])
+      .accessibilityIdentifier("room.\(room.id)")
+  }
+}
+
+/// A saved request to make a group, which may already have reached Hermes. Opening it finishes the request.
+struct PendingGroupRow: View {
+  var request: GroupCreate; var action: () -> Void
+  var body: some View {
+    Button(action: action) {
+      HStack(spacing: 12) {
+        Image(systemName: "bubble.left.and.bubble.right").font(.title3).foregroundStyle(Palette.accent)
+          .frame(width: 52, height: 52).background(Palette.accentSoft, in: Circle()).accessibilityHidden(true)
+        VStack(alignment: .leading, spacing: 5) {
+          Text("Finish creating group").font(.body.weight(.semibold)).foregroundStyle(Palette.accent)
+          Text("\(request.name) · \(request.botIds.count) assistants. The saved request will be checked with Hermes.")
+            .font(.subheadline).foregroundStyle(.secondary).lineLimit(3)
+        }.frame(maxWidth: .infinity, alignment: .leading)
+      }.padding(.horizontal, 10).padding(.vertical, 12).contentShape(Rectangle())
+    }.buttonStyle(.plain).accessibilityIdentifier("finishGroup")
   }
 }

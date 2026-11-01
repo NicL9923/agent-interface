@@ -368,12 +368,32 @@ a {
 }
 /* The assistant is the header's one control; it opens the details sheet. */
 .chat-identity-heading {
-  flex: 1;
   min-width: 0;
   margin: 0;
   font-size: inherit;
   font-weight: inherit;
   letter-spacing: normal;
+}
+/* In Advanced, the model chip is a second control over the identity button's second line. */
+.chat-identity-wrap {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+}
+.chat-identity-wrap > * {
+  grid-area: 1 / 1;
+}
+.chat-model-slot {
+  z-index: 1;
+  align-self: end;
+  justify-self: start;
+  max-width: calc(100% - 56px);
+  /* The name starts after the avatar: its 42 px, the 14 px gap, less the chip's own 8 px padding. */
+  margin-left: 48px;
+}
+.chat-model-reserve {
+  display: block;
+  height: 24px;
 }
 .chat-identity {
   display: flex;
@@ -424,7 +444,7 @@ a {
   min-height: 0;
   overflow: auto;
   flex: 1;
-  padding: 30px max(32px, calc((100% - 720px) / 2));
+  padding: 30px max(32px, calc((100% - 720px) / 2)) 12px;
   scrollbar-gutter: stable;
   outline-offset: -4px;
   /* The app holds the reader's place itself; browser anchoring would move it twice. */
@@ -539,10 +559,14 @@ a {
   padding: 4px 0;
 }
 .message-user {
+  margin-left: max(0px, 10%);
+  /* Its meta line sits below, so the gap to the next message is shorter than after a reply. */
+  margin-bottom: 14px;
+}
+.message-bubble {
   padding: 15px 20px;
   background: var(--user);
   border-radius: 18px 18px 4px 18px;
-  margin-left: max(0px, 10%);
 }
 .message-attribution {
   display: flex;
@@ -557,6 +581,11 @@ a {
 }
 .message-continued {
   margin-top: -16px;
+}
+/* What comes last needs no space after it: the composer has its own. */
+.transcript-content > :last-child,
+.conversation-turn:last-child > :last-child {
+  margin-bottom: 0;
 }
 .message-attribution time {
   font-size: 0.6875rem;
@@ -576,6 +605,29 @@ a {
 .message-delivery {
   font-size: 0.6875rem;
   font-weight: 400;
+}
+/* The line under a message: its time, or its delivery status, and its actions. */
+.message-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  margin-top: 2px;
+  font-size: 0.6875rem;
+  color: var(--message-meta);
+}
+.message-meta time {
+  font-size: 0.6875rem;
+}
+/* A person's own message ends at the right edge, with its time last. */
+.message-meta-own {
+  flex-direction: row-reverse;
+}
+.speech-error {
+  margin: 0 0 4px;
+  font-size: 0.75rem;
+  color: var(--danger);
+  overflow-wrap: anywhere;
 }
 @keyframes message-send {
   from {
@@ -1150,7 +1202,7 @@ a {
     padding: 18px 24px;
   }
   .transcript {
-    padding: 26px 28px;
+    padding: 26px 28px 12px;
   }
   .composer-area {
     padding: 6px 12px max(8px, env(safe-area-inset-bottom));
@@ -1179,10 +1231,18 @@ a {
     padding-top: max(8px, env(safe-area-inset-top));
     padding-bottom: 8px;
   }
-  .chat-header-identity .chat-identity-heading {
+  .chat-header-identity .chat-identity-wrap {
     grid-column: 2;
+    justify-items: center;
+  }
+  .chat-header-identity .chat-identity-heading {
     display: flex;
     justify-content: center;
+  }
+  .chat-model-slot {
+    justify-self: center;
+    max-width: 100%;
+    margin-left: 0;
   }
   .chat-header-identity .chat-identity {
     flex-direction: column;
@@ -1217,7 +1277,7 @@ a {
     margin: 0 -4px;
   }
   .transcript {
-    padding: 25px 20px;
+    padding: 25px 20px 10px;
   }
   .empty-state {
     margin-top: 55px;

@@ -110,7 +110,7 @@ import UIKit
     closeSettings(app)
     try capture("home-dark")
     app.buttons["bot.ranch"].tap()
-    XCTAssertTrue(app.buttons["composerModel"].waitForExistence(timeout: 10))
+    XCTAssertTrue(app.buttons["chatModel"].waitForExistence(timeout: 10))
     app.openBotProfile("Ranch hand")
     XCTAssertEqual(app.buttons["profilePin"].label, "Unpin")
     app.buttons["profilePin"].tap()
@@ -118,7 +118,7 @@ import UIKit
     waitForExpectations(timeout: 5)
     app.buttons["closeBotProfile"].tap()
     try capture("conversation-dark")
-    app.buttons["composerModel"].tap()
+    app.buttons["chatModel"].tap()
     XCTAssertTrue(app.textFields["modelSearch"].waitForExistence(timeout: 10))
     try capture("model-dark")
     // Three speeds fit as a segmented control: one tap, no menu.
@@ -132,12 +132,12 @@ import UIKit
     search.typeWhenFocused("Fixture fast")
     let choice = app.buttons["Fixture fast model"].firstMatch
     XCTAssertTrue(choice.waitForExistence(timeout: 5)); choice.tapWhenReady()
-    XCTAssertTrue(app.buttons["composerModel"].waitForExistence(timeout: 10))
-    XCTAssertTrue(app.buttons["composerModel"].wait(until: "label == %@", "Model: fixture-fast"), app.buttons["composerModel"].label)
+    XCTAssertTrue(app.buttons["chatModel"].waitForExistence(timeout: 10))
+    XCTAssertTrue(app.buttons["chatModel"].wait(until: "label == %@", "Model: fixture-fast"), app.buttons["chatModel"].label)
     let composer = app.textViews["messageComposer"]
     composer.typeWhenFocused("Check the fence")
     XCTAssertTrue(app.buttons["sendMessage"].isEnabled)
-    XCTAssertGreaterThan(composer.frame.width, 240, "Advanced tools must not squeeze the input")
+    XCTAssertFalse(app.buttons["composerModel"].exists, "The model lives in the chat header, so Advanced adds nothing to the composer")
     try capture("composer-typing")
   }
   func testAssistantCardFollowsAndMovesIntoANewHomeSection() throws {
@@ -358,7 +358,7 @@ import UIKit
     XCTAssertTrue(app.staticTexts["Connect your household to Hermes"].waitForExistence(timeout: 10), app.debugDescription)
     XCTAssertTrue(app.staticTexts["Pick up with your assistants"].exists)
     XCTAssertTrue(app.buttons["Check connection"].exists)
-    app.buttons["New assistant"].tap()
+    app.tapNewAssistant()
     XCTAssertTrue(app.staticTexts["Assistant setup is unavailable while Hermes is disconnected."].waitForExistence(timeout: 5))
   }
   func testNotificationPromptAsksIosOnlyAfterEnableAndSettingsSwitchFollows() {

@@ -3,6 +3,7 @@ import type { ExperienceOperation, ExperienceResult } from '../shared/experience
 import type { AutomationOperation, AutomationResult } from '../shared/automation.js';
 import type { FileRef, Message } from '../shared/types.js';
 import { withMessageOrigins, wireOrigin } from '../shared/message-origin.js';
+import { runStatus } from '../shared/routine-runs.js';
 import { exposedText, toolDetails } from './hermes-mapping.js';
 import { httpError } from './http-error.js';
 
@@ -62,10 +63,15 @@ function experienceSchemas(profile: string, artifacts: Artifacts): { [O in Exper
       actualCost: number.nullable(), estimatedCost: number.nullable(), partial: flag, notice: text }),
     // Python emits null when native result metadata is absent. Normalize that to
     // the app's optional fields rather than rejecting legitimate saved runs.
-    routine_results: z.array(z.object({ id: text, title: text, startedAt: text.nullish(), preview: text.nullish(), previewOnly: flag })
-      .transform(row => ({ ...row, startedAt: row.startedAt ?? undefined, preview: row.preview ?? undefined }))),
+    // Status fields are additive: older add-ons omit them and newer words read as unknown.
+    routine_results: z.array(z.object({ id: text, title: text, startedAt: text.nullish(), preview: text.nullish(), previewOnly: flag,
+      status: z.unknown().optional(), finishedAt: text.nullish(), deliveryFailed: flag.nullish(), error: text.nullish() })
+      .transform(({ status, finishedAt, deliveryFailed, error, ...row }) => ({ ...row, startedAt: row.startedAt ?? undefined, preview: row.preview ?? undefined,
+        ...(status === undefined ? {} : { status: runStatus(status) }), ...(finishedAt ? { finishedAt } : {}),
+        ...(deliveryFailed ? { deliveryFailed } : {}), ...(error ? { error } : {}) }))),
     routine_output: z.object({ messages: z.array(message), previewOnly: flag }),
     memory, save_memory: memory, delete_memory: memory,
+    model_names: z.object({ names: z.array(z.object({ provider: text, model: text, name: text.nullable() })) }),
     preview: z.object({ botId: text, schedule: text, timezone: text, nextRuns: z.array(text), kind: z.enum(['once', 'interval', 'cron']) }),
     run: receipt, run_receipt: receipt,
   };

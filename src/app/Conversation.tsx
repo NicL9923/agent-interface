@@ -11,7 +11,7 @@ import { ConnectionPanel } from "../components/ConnectionPanel";
 import { Icon } from "../components/Icon";
 import { NotificationOnboarding } from "../components/DeviceNotifications";
 import type { useDeviceNotifications } from "../components/use-device-notifications";
-import { SecureRequestCard } from "../components/SecureRequestCard";
+import { openComputer, usesComputer } from "../components/ComputerHandoffCard";
 import { AgentExchange, isAgentExchange } from "../components/AgentExchange";
 import { ActionReceipt } from "../components/ActionReceipt";
 import { When } from "../components/When";
@@ -24,13 +24,17 @@ import type { SentEcho } from "./sent-echo";
 import type { useConversation } from "./use-conversation";
 import { useStableCallback } from "./use-stable-callback";
 import { useTurnRetry } from "./use-turn-retry";
-import { AttentionCard } from "./AttentionCard";
+import { AttentionList } from "./AttentionList";
 import { FindBar } from "./FindBar";
-import { QuoteSelection, ReplyActions, TranscriptTools } from "./ReplyActions";
+import { MessageMeta, QuoteSelection, TranscriptTools } from "./ReplyActions";
+import { useReplySpeech } from "./use-reply-speech";
 import { attentionAnchor, foldSummary, isHumanMessage, quoteBlock, turnDuration, workGroups } from "./transcript-logic";
+import { RoutineRunCard } from "../components/RoutineRunCard";
+import { placeRuns, type RoutineRun } from "../shared/routine-runs";
+import { useRoutineRuns } from "./use-routine-runs";
 import "./transcript.css";
 const activeStates: ActivityState[] = ["thinking", "working", "waiting", "blocked"];
-export function Conversation({ boot, selected, botId, conversation, canonical, echo, state, showActivity, avatarState, connectionLost, offline, appUnavailable, checkingConnection, reconnect, error, setError, notifications, scroll, endSpace, content, history, reply, onScroll, onCreate, onDraft }: {
+export function Conversation({ boot, selected, botId, conversation, canonical, echo, state, showActivity, avatarState, connectionLost, offline, appUnavailable, checkingConnection, reconnect, error, setError, notifications, scroll, endSpace, content, history, reply, onScroll, onCreate, onDraft, onRoutineResults, onHideRoutineRuns }: {
   boot: Bootstrap;
   selected?: Bot;
   botId: string;
@@ -60,10 +64,20 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
   /** Adds text to the draft. False while the draft is on its way, when it must not change. */
   /** Adds to the person's draft, never replacing it. False while a send is on its way; otherwise how many files didn't fit. */
   onDraft(text: string, files?: FileRef[]): number | false;
+  /** Opens a routine's full results at one run. */
+  onRoutineResults(routineId: string, resultId: string): void;
+  /** Keeps a routine's runs out of this chat, with a way back. */
+  onHideRoutineRuns(routineId: string, routineName: string): void;
 }) {
   const prefs = boot.preferences;
   const advanced = prefs.presentation === "advanced";
   const blocks = useMemo(() => turns(conversation, advanced), [conversation, advanced]);
+  // Routine runs sit among the turns by time. See src/shared/routine-runs.ts for the rules.
+  const hiddenRoutines = useMemo(() => (prefs.hiddenRoutineRuns ?? []).filter(entry => entry.botId === botId).map(entry => entry.routineId), [prefs.hiddenRoutineRuns, botId]);
+  const runs = useRoutineRuns({ botId, messages: canonical?.botId === botId ? canonical.messages : undefined, complete: history.complete,
+    enabled: !!selected && !!boot.capabilities.routines?.supported, hiddenRoutines });
+  const runSlots = useMemo(() => placeRuns(blocks.map(turnTime), runs), [blocks, runs]);
+  const runActions = useMemo(() => ({ onResults: onRoutineResults, onHide: onHideRoutineRuns }), [onRoutineResults, onHideRoutineRuns]);
   const actions: Record<ActivityState, string> = {
     idle: "ready", thinking: "thinking", working: "working", waiting: "waiting for approval",
     blocked: "waiting for your input", done: "done", failed: "having trouble", interrupted: "stopped", disconnected: "reconnecting",
@@ -97,8 +111,9 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
     announce(left ? `Your message is in the message box, without ${left} of its files: a message can carry only ${MAX_ATTACHMENTS}.` : "Your message is in the message box.");
     requestAnimationFrame(() => document.getElementById("message")?.focus());
   });
-  const tools = useMemo<TranscriptTools>(() => ({ botId, sessionId: conversation?.sessionId, unavailable: connectionLost, quote, announce }),
-    [botId, conversation?.sessionId, connectionLost, quote, announce]);
+  const speech = useReplySpeech(botId, connectionLost);
+  const tools = useMemo<TranscriptTools>(() => ({ botId, sessionId: conversation?.sessionId, unavailable: connectionLost, quote, announce, speech }),
+    [botId, conversation?.sessionId, connectionLost, quote, announce, speech]);
   const frame = useRef<HTMLDivElement>(null);
   const retry = useTurnRetry({ botId, userId: boot.user.id, canonical, blocked: !!echo || connectionLost || !boot.capabilities.chat.supported,
     resendable: boot.capabilities.idempotency.supported, report: setError });
@@ -199,11 +214,11 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
           </div>
         ) : !conversation && !connectionLost ? (
           <HistorySkeleton />
-        ) : blocks.length ? (
+        ) : blocks.length || runs.length ? (
           <>
             <HistoryEdge history={history} scroll={scroll} name={selected.name} disabled={connectionLost} />
             <Turns blocks={blocks} advanced={advanced} disconnected={connectionLost} name={selected.name} botId={botId} userId={boot.user.id}
-              running={running} outgoingId={echo?.request.requestId} outgoing={echo?.status} />
+              running={running} outgoingId={echo?.request.requestId} outgoing={echo?.status} runSlots={runSlots} runActions={runActions} />
           </>
         ) : !showActivity ? (
           <div className="empty-state">
@@ -235,7 +250,11 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
                 </> : <Shimmer text={`${selected.name} is ${action}...`} />}
               </div>
               {running && (liveTool || liveThought) && <div className="activity-live">
-                {liveTool && <p className="activity-live-tool">{liveTool}</p>}
+                {liveTool && (usesComputer(runningCall?.name) ? <div className="activity-live-computer">
+                  <p className="activity-live-tool">{liveTool}</p>
+                  <button type="button" className="activity-watch" aria-label={`Watch ${selected.name} on the computer`}
+                    onClick={() => openComputer()}><Icon name="computer" size={16} />Watch</button>
+                </div> : <p className="activity-live-tool">{liveTool}</p>)}
                 {liveThought && <p className="activity-live-thought">{liveThought}</p>}
               </div>}
               {retry.message && <p className="recovery-guidance" role={retry.checking ? "status" : undefined}>{retry.checking
@@ -255,19 +274,8 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
             </div>
           </div>
         )}
-        {conversation?.attention?.map((request) => (
-          request.kind === "secure" && request.secure ? <SecureRequestCard
-            key={`${boot.user.id}:${botId}:${request.id}:${JSON.stringify(request.secure)}`}
-            request={request.secure} requestId={request.id} botId={botId} ownerId={boot.user.id}
-            title={request.title} detail={request.detail} assistantName={selected?.name}
-          /> : <AttentionCard
-            key={request.id}
-            request={request}
-            disconnected={connectionLost}
-            botId={botId}
-            report={setError}
-          />
-        ))}
+        <AttentionList conversation={conversation} botId={botId} userId={boot.user.id} assistantName={selected?.name}
+          disconnected={connectionLost} report={setError} />
         {conversation?.approvals
           .filter((approval) => approval.status === "pending")
           .map((approval) => <ApprovalCard key={`${boot.user.id}:${botId}:${approval.id}`} approval={approval} botId={botId} userId={boot.user.id} disconnected={connectionLost}
@@ -381,19 +389,30 @@ type TurnProps = {
   /** The person's sent message still shown from this device, and how far it got. Only the turn that holds it gets these. */
   outgoingId?: string; outgoing?: SentEcho["status"];
 };
+/** When a turn started, for placing routine runs: its first dated message, shown or folded. */
+const turnTime = (block: Turn) => block.messages.find(message => message.createdAt)?.createdAt
+  ?? [...block.tools.values()].find(message => message.createdAt)?.createdAt;
+type RunActions = { onResults(routineId: string, resultId: string): void; onHide(routineId: string, routineName: string): void };
+const runCards = (runs: RoutineRun[] | undefined, botId: string, actions: RunActions) => (runs ?? []).map(run =>
+  <RoutineRunCard key={`run:${run.routineId}:${run.id}`} run={run} botId={botId} onResults={actions.onResults} onHide={actions.onHide} />);
 // Memoized so typing in the composer does not re-render the whole transcript.
-const Turns = memo(function Turns({ blocks, running, outgoingId, outgoing, ...shared }: Omit<TurnProps, "block" | "live" | "outgoingId" | "outgoing"> & {
+const Turns = memo(function Turns({ blocks, running, outgoingId, outgoing, runSlots, runActions, ...shared }: Omit<TurnProps, "block" | "live" | "outgoingId" | "outgoing"> & {
   blocks: Turn[];
   /** The latest turn is still working. */
   running: boolean;
   outgoingId?: string; outgoing?: SentEcho["status"];
+  /** Routine runs before each turn, and after the last; see placeRuns. */
+  runSlots: RoutineRun[][];
+  runActions: RunActions;
 }) {
+  // One keyed list, so an opened run card stays open when a new turn lands after it.
   return <>
-    {blocks.map((block, index) => {
+    {blocks.flatMap((block, index) => {
       const holdsEcho = outgoingId !== undefined && block.messages.some(message => message.id === outgoingId);
-      return <TurnView key={block.messages[0]?.id || `tools-${index}`} block={block} {...shared} live={running && index === blocks.length - 1}
-        outgoingId={holdsEcho ? outgoingId : undefined} outgoing={holdsEcho ? outgoing : undefined} />;
+      return [...runCards(runSlots[index], shared.botId, runActions), <TurnView key={block.messages[0]?.id || `tools-${index}`} block={block} {...shared} live={running && index === blocks.length - 1}
+        outgoingId={holdsEcho ? outgoingId : undefined} outgoing={holdsEcho ? outgoing : undefined} />];
     })}
+    {runCards(runSlots[blocks.length], shared.botId, runActions)}
   </>;
 });
 // A stream changes the latest reply about four times a second, and `turns` rebuilds every block each
@@ -430,38 +449,44 @@ const TurnView = memo(function TurnView({ block, advanced, disconnected, name, b
   const foldAt = work.length ? block.replyAt : block.messages.find(message => message.role !== "user")?.id;
   // One keyed list, so the fold keeps its open state when finishing moves it above the reply.
   const rows = block.messages.flatMap((message, position) => {
-    // The conversation is with one assistant, so its replies need no name, and
-    // consecutive reply parts in a turn share the first part's timestamp.
-    const reply = message.role === "assistant" || messageOrigin(message)?.kind === "scheduled";
-    const continued = reply && block.messages[position - 1]?.role === "assistant" && message.id !== block.replyAt;
+    // The conversation is with one assistant, so its replies need no name. Consecutive reply parts
+    // in a turn read as one reply, with the time under the last part.
+    const reply = isReplyRow(message);
+    const joins = (earlier: Message | undefined, later: Message | undefined) => !!later && isReplyRow(later) && earlier?.role === "assistant" && later.id !== block.replyAt;
+    const continued = joins(block.messages[position - 1], message);
+    const endsRun = !joins(message, block.messages[position + 1]);
     const scheduled = messageOrigin(message)?.kind === "scheduled";
-    const label = scheduled ? "Scheduled" : message.role === "user" ? message.sender?.name || "User"
+    const own = message.role === "user" && !scheduled;
+    // A name goes above a message only where it tells the reader something: a scheduled prompt, or
+    // another member of the household. The person's own words and the assistant's replies need none.
+    const label = scheduled ? "Scheduled" : own ? message.sender && message.sender.id !== userId ? message.sender.name : ""
       : reply ? "" : message.toolName || message.role;
     // Accepted, it reads as any other message until Hermes's own copy takes its place.
     const delivery = outgoingId === message.id && outgoing !== "accepted" ? outgoing : undefined;
     const streaming = message.id.endsWith("-inflight");
+    const exchange = isAgentExchange(message);
+    let when = message.createdAt;
+    for (let at = position; !when && at > 0 && joins(block.messages[at - 1], block.messages[at]); at--) when = block.messages[at - 1].createdAt;
+    const files = message.files?.map(file => <FileLink file={file} key={file.id} />);
     const article = <article
-      className={`message message-${isAgentExchange(message) ? "agent" : message.role}${continued ? " message-continued" : ""}${delivery ? ` message-outgoing message-${delivery}` : ""}`}
+      className={`message message-${exchange ? "agent" : message.role}${continued ? " message-continued" : ""}${delivery ? ` message-outgoing message-${delivery}` : ""}`}
       key={message.id}
       data-message-id={message.id}
       aria-busy={delivery === "sending" || undefined}
     >
-      {!isAgentExchange(message) && !continued && (label || message.createdAt) && <div className="message-attribution">
-        {label}
-        {delivery ? <span className="message-delivery">{delivery === "sending" ? "Sending…" : "Not confirmed yet"}</span>
-          : message.createdAt && <When value={message.createdAt} />}
-      </div>}
-      {isAgentExchange(message) ? <AgentExchange message={message} recipient={name} /> : reply ? (
+      {!exchange && !continued && label && <div className="message-attribution">{label}</div>}
+      {/* Only a person's own message has a bubble, so its meta line can sit beneath it. */}
+      {exchange ? <AgentExchange message={message} recipient={name} /> : reply ? (
         streaming
           ? <StreamingMarkdown text={message.text} botId={botId} messageId={message.id} userId={userId} unavailable={disconnected} inlineUi={message.role === "assistant"} />
           : <MessageMarkdown text={message.text} botId={botId} messageId={message.id} userId={userId} unavailable={disconnected} inlineUi={message.role === "assistant"} />
       ) : message.role !== "tool" && (
-        <div className="message-text">{message.text}</div>
+        own ? <div className="message-bubble"><div className="message-text">{message.text}</div>{files}</div> : <div className="message-text">{message.text}</div>
       )}
-      {message.files?.map((file) => (
-        <FileLink file={file} key={file.id} />
-      ))}
-      {message.role === "assistant" && !streaming && !isAgentExchange(message) && !!message.text.trim() && <ReplyActions message={message} />}
+      {!own && files}
+      {!exchange && !streaming && (reply || own) && <MessageMeta message={message} own={own}
+        when={endsRun ? when : undefined} delivery={delivery}
+        actions={!!message.text.trim() && (message.role === "assistant" || own)} />}
     </article>;
     return message.id === foldAt && fold ? [fold, article] : [article];
   });
@@ -484,6 +509,7 @@ function TurnWork({ work, reasoning, messages, advanced, disconnected, recipient
     </div>
   </details>;
 }
+const isReplyRow = (message: Message) => message.role === "assistant" || messageOrigin(message)?.kind === "scheduled";
 function visibleMessage(message: Message) {
   return message.role !== "assistant" || isAgentExchange(message) || !!message.text.trim() || !!message.files?.length;
 }

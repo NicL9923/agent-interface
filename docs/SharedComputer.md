@@ -12,6 +12,23 @@ A second household member can watch, but cannot steal another person's control.
 After a lost connection, the desktop reconnects in watch mode; take over explicitly
 to resume input. Closing the last desktop attachment normally hands control back.
 
+An assistant can ask for a person from the conversation with its
+`computer_request_handoff` tool, for a CAPTCHA, a sign-in that needs a phone, a
+purchase confirmation or a choice only a person should make. The tool exists only
+when the household computer is configured. Its card shows the assistant's reason
+and what it wants done. **Take over** opens the computer and takes control in one
+step, on the web and in the iOS app. Handing the computer back answers the
+request, whichever screen hands it back, including closing the last desktop view.
+**Not now** declines it, and sending a message instead closes it. If someone else
+has control, the card says who; if the computer is not running, it says why. A
+request nobody takes over closes after 10 minutes. Each result tells the
+assistant what happened; after a hand back it is told to look at the screen again
+before acting, because the person may have changed it. Any takeover answers every
+open handoff, since each asked a person to use the same computer.
+
+While an assistant's running tool uses the browser or desktop, its live row in
+the conversation offers **Watch**, which opens the computer without taking control.
+
 The **Terminal** tab opens a real shell on the Hermes VPS. Its host and starting
 folder appear above it. Each terminal administrator gets a separate persistent tmux
 session. Closing the panel or reconnecting preserves the shell and running commands;

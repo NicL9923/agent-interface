@@ -121,6 +121,53 @@ import XCTest
     XCTAssertTrue(app.staticTexts["Fixture question 30"].waitUntilHittable(timeout: 10))
   }
 
+  func testRoutineRunsSitAmongTurnsAndOpenToTheirOutput() throws {
+    let app = launch(["AGENT_INTERFACE_UI_ROUTINE_RUNS": "1", "AGENT_INTERFACE_UI_THEME": "light"])
+    let valid = app.buttons["routineRun-rr-cert-2"]
+    XCTAssertTrue(valid.waitForExistence(timeout: 15), app.debugDescription)
+    XCTAssertTrue(app.buttons["routineRun-rr-cert-1"].exists)
+    XCTAssertTrue(app.buttons["routineRun-rr-feed"].exists)
+    XCTAssertFalse(app.buttons["routineRun-rr-brief"].exists, "The delivered run shows once, as its message")
+    XCTAssertTrue(app.buttons["routineRun-rr-cert-1"].label.hasPrefix("Certificate check, Failed"), app.buttons["routineRun-rr-cert-1"].label)
+    XCTAssertTrue(valid.label.hasPrefix("Certificate check, Succeeded"), valid.label)
+    XCTAssertEqual(valid.value as? String, "Collapsed")
+    XCTAssertGreaterThanOrEqual(valid.frame.height, 44)
+    XCTAssertTrue(app.staticTexts["All 3 certificates are valid for at least 60 days."].exists)
+    try capture(app, "routine-runs-collapsed")
+
+    valid.tapWhenReady()
+    XCTAssertTrue(valid.wait(until: "value == %@", "Expanded"))
+    XCTAssertTrue(app.descendants(matching: .any)["routineRunStatus"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "home.ranch.example")).firstMatch.waitForExistence(timeout: 10))
+    XCTAssertTrue(app.buttons["routineRunSave"].waitUntilHittable())
+    XCTAssertTrue(app.buttons["routineRunResults"].exists)
+    XCTAssertGreaterThanOrEqual(app.buttons["routineRunHide"].frame.height, 44)
+    XCTAssertFalse(app.staticTexts["All 3 certificates are valid for at least 60 days."].exists, "Opened, the output replaces the preview")
+    try capture(app, "routine-runs-expanded")
+    valid.tapWhenReady()
+    XCTAssertTrue(valid.wait(until: "value == %@", "Collapsed"))
+    XCTAssertTrue(app.buttons["routineRunSave"].waitForDisappearance())
+
+    // Hiding the routine takes both its runs out of this chat, and Undo brings them back.
+    valid.tapWhenReady()
+    app.buttons["routineRunHide"].tapWhenReady()
+    XCTAssertTrue(valid.waitForDisappearance())
+    XCTAssertFalse(app.buttons["routineRun-rr-cert-1"].exists)
+    XCTAssertTrue(app.buttons["routineRun-rr-feed"].exists)
+    app.buttons["undoToastAction"].tapWhenReady()
+    XCTAssertTrue(valid.waitForExistence(timeout: 10))
+    XCTAssertTrue(app.buttons["routineRun-rr-cert-1"].exists)
+
+    app.terminate()
+    let dark = launch(["AGENT_INTERFACE_UI_ROUTINE_RUNS": "1", "AGENT_INTERFACE_UI_THEME": "dark"])
+    let failed = dark.buttons["routineRun-rr-cert-1"]
+    XCTAssertTrue(failed.waitForExistence(timeout: 15))
+    try capture(dark, "routine-runs-dark-collapsed")
+    failed.tapWhenReady()
+    XCTAssertTrue(dark.buttons["routineRunSave"].waitUntilHittable())
+    try capture(dark, "routine-runs-dark-expanded")
+  }
+
   func testFinishedWorkFoldsAndCodeAndTablesOfferTheirCopies() throws {
     let app = launch(["AGENT_INTERFACE_UI_WORK": "1"])
     let work = app.buttons["turnWork"]

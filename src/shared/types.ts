@@ -1,7 +1,7 @@
 import type { AutomationRequester } from './automation.js';
 import type { ExperienceRequester } from "./experience.js";
 import type { IntegrationRequest, IntegrationCatalog, IntegrationConnection, IntegrationFlow } from "./integrations.js";
-import type { ComputerRequest, ComputerStatus, ComputerAttachment } from "./computer.js";
+import type { ComputerRequest, ComputerStatus, ComputerAttachment, ComputerHandoff } from "./computer.js";
 import type { SecureRequest, VaultRequest, VaultResponse } from "./vault.js";
 import type { GroupRequest, GroupResponse, RoutineOutput, RoutineResult } from './collaboration.js';
 export type ActivityState =
@@ -98,6 +98,8 @@ export interface Preferences {
   followBots: string[];
   startPage?: "today" | "assistant";
   notifications?: { timezone: string; quietStart?: string; quietEnd?: string; batchMinutes: number };
+  /** Routines whose runs this person keeps out of their assistant's chat. Runs show by default. */
+  hiddenRoutineRuns?: { botId: string; routineId: string }[];
 }
 export const reasoningLevels = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"] as const;
 export const serviceTiers = ["normal", "fast", "ultrafast"] as const;
@@ -149,6 +151,8 @@ export interface Bot {
   description?: string;
   instructions?: string;
   model: string;
+  /** A readable name for the model, filled by the server. Clients show it as given. */
+  modelName?: string;
   provider?: string;
   enabledMcpServers?: string[];
   shared: boolean;
@@ -245,12 +249,13 @@ export interface Activity {
 }
 export interface AttentionRequest {
   id: string;
-  kind: "clarify" | "official" | "secure";
+  kind: "clarify" | "official" | "secure" | "computer";
   title: string;
   detail: string;
   /** `multiple` lets a person choose several options, sent as one comma-separated answer. Absent means one. */
   questions?: { id: string; prompt: string; options?: string[]; multiple?: boolean }[];
   secure?: SecureRequest;
+  computer?: ComputerHandoff;
 }
 export interface Conversation {
   attention?: AttentionRequest[];

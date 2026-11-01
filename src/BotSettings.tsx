@@ -29,6 +29,8 @@ import { VaultPanel } from "./components/VaultPanel";
 import { RoutineEnhancements, RoutineSchedulePreview } from "./components/RoutineEnhancements";
 import { interactiveReplyInstructions } from "./shared/reply-cards";
 import { routinePresets } from "./shared/routine-presets";
+import { runsHidden, withRunsShown } from "./shared/routine-runs";
+import { usePreferenceEdits, type PreferenceEdit } from "./app/use-preference-edits";
 import { AdvancedRoutineFields } from "./components/AdvancedRoutineFields";
 const settingsSections = ["details", "avatar", "connections", "tools", "skills", "routines", "work", "learning", "memory", "logins"] as const;
 type SettingsTab = (typeof settingsSections)[number];
@@ -65,6 +67,7 @@ function LoadedBotSettings({
   onSaved,
   onDeleted,
   onOpenRoutine,
+  editPreferences,
   loading,
 }: {
   loading?: { error: string; retry(): void };
@@ -74,6 +77,8 @@ function LoadedBotSettings({
   onSaved: () => void;
   onDeleted?: (botId: string) => void;
   onOpenRoutine?: (botId: string, routineId: string) => void;
+  /** Saves this person's preferences, for "Show runs in chat". */
+  editPreferences?: (edit: PreferenceEdit) => Promise<void>;
 }) {
   // Creating saves the assistant and then its avatar. Once it exists, this same sheet edits it,
   // so an avatar that failed to save is still here to retry.
@@ -638,6 +643,7 @@ function LoadedBotSettings({
                 reload={routinesResource.reload}
                 bootstrap={bootstrap}
                 actions={actions}
+                editPreferences={editPreferences}
               />
           </>
         )}
@@ -668,8 +674,10 @@ function RoutineManager({
   reload,
   bootstrap,
   actions,
+  editPreferences,
 }: {
   onOpenRoutine?: (botId: string, routineId: string) => void;
+  editPreferences?: (edit: PreferenceEdit) => Promise<void>;
   botId: string;
   routines: Routine[];
   reload: () => Promise<void>;
@@ -678,6 +686,8 @@ function RoutineManager({
   actions: ReturnType<typeof useAction>;
 }) {
   const [editing, setEditing] = useState<string | null>(null);
+  // Showing runs in chat is this person's view of the conversation, not part of the routine.
+  const [preferences, commitPreferences] = usePreferenceEdits(bootstrap.preferences, editPreferences ?? (async () => {}));
   const editor = useRef<HTMLFormElement>(null);
   const nameInput = useRef<HTMLInputElement>(null);
   const editButtons = useRef(new Map<string, HTMLButtonElement>());
@@ -733,6 +743,11 @@ function RoutineManager({
           <dl className="routine-meta"><div><dt>Schedule</dt><dd><code>{routine.schedule}</code></dd></div><div><dt>Status</dt><dd><span className={routine.enabled ? "routine-status" : "routine-status paused"}>{routine.enabled ? "Active" : "Paused"}</span></dd></div></dl>
           <p className="routine-prompt">{routine.prompt}</p>
           <RoutineEnhancements key={`${bootstrap.user.id}:${routine.id}`} routine={routine} userId={bootstrap.user.id} disabled={busy || !supported} onOpenResults={onOpenRoutine ? () => onOpenRoutine(botId, routine.id) : undefined} />
+          {editPreferences && <label className="checkbox-label routine-chat-toggle">
+            <Input type="checkbox" checked={!runsHidden(preferences, botId, routine.id)}
+              onChange={event => { const shown = event.target.checked; commitPreferences(value => withRunsShown(value, botId, routine.id, shown)); }} />
+            <span>Show runs in chat<small className="muted">Each run appears in {bootstrap.bots.find(bot => bot.id === botId)?.name ?? "this assistant"}'s conversation for you.</small></span>
+          </label>}
           <div className="actions routine-management-actions">
             <Button
               disabled={busy}

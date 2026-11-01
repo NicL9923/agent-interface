@@ -39,7 +39,7 @@ import XCTest
       let checkID = String(UUID().uuidString.prefix(8))
       let botName = "Native check \(checkID)"
       app.navigationBars.buttons.matching(identifier: "Your assistants").firstMatch.tap()
-      app.buttons["New assistant"].tap()
+      app.tapNewAssistant()
       let name = app.textFields["Name"]
       XCTAssertTrue(name.waitForExistence(timeout: 10))
       name.typeWhenFocused(botName)
@@ -106,7 +106,7 @@ import XCTest
       let back = app.navigationBars.buttons.matching(identifier: "Your assistants").firstMatch
       if back.exists { back.tap() }
       XCTAssertTrue(
-        app.buttons["New assistant"].waitForExistence(timeout: 20),
+        app.newAssistantReady(timeout: 20),
         "Remove the test-owned assistant after capture.")
       XCTAssertFalse(newBot.exists)
     }

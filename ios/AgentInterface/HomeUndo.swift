@@ -6,6 +6,8 @@ struct UndoToast: Identifiable, Equatable {
   enum Change: Equatable {
     case pin(botId: String, pinned: Bool)
     case move(botId: String, from: String?)
+    /// Runs of a routine hidden from its assistant's chat.
+    case routineRuns(botId: String, routineId: String)
   }
   let id = UUID()
   var message: String
@@ -45,6 +47,8 @@ extension AppStore {
       if homePreferences?.favorites.contains(botId) == pinned { await togglePin(botId) }
     case .move(let botId, let from):
       homeMove(botId, toSection: from)
+    case .routineRuns(let botId, let routineId):
+      setRunsShown(botId: botId, routineId: routineId, shown: true)
     }
   }
   /// The name of an assistant's home section, for the toast.

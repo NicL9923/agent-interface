@@ -27,8 +27,8 @@ Web assistant settings load model options from the connected Hermes profile.
 The selected provider starts expanded. Search the catalog, refresh it after
 changing connected providers, and star models to keep personal favorites. Shared assistants keep one shared model. Existing selections remain
 saved when a provider is unavailable, and Hermes model warnings still require
-confirmation. In Advanced presentation, the model button in the web and iOS composers switches
-the assistant's model from the same catalog without opening settings. Both pickers control reasoning effort and Normal/Fast/Ultrafast speed for the current
+confirmation. In Advanced presentation, the model chip under the assistant's name in the web and iOS chat headers, with the provider's mark and the model's display name, switches
+the assistant's model from the same catalog without opening settings. Simple presentation never shows the model. Display names come from Hermes's cached models.dev catalog through the add-on, and the server formats the identifier itself (`claude-opus-5-5` becomes Claude Opus 5.5) when the add-on is older or does not know the model. Both pickers control reasoning effort and Normal/Fast/Ultrafast speed for the current
 conversation. The native picker includes search, provider groups, refresh and model favorites. Hermes validates support for the selected model.
 
 An assistant is either shared with the household or personal. A personal assistant
@@ -167,6 +167,9 @@ The [shared computer](docs/SharedComputer.md) provides one persistent desktop an
 browser for all assistants, with human takeover for every household member and a
 real VPS terminal for terminal administrators. The iOS app shows the desktop on its
 own Computer screen with Take over and Hand back; the terminal still opens in Safari.
+An assistant can ask for a person in the conversation; the card's Take over opens the
+computer with control in one step, and handing back tells the assistant to continue.
+While a browser tool runs, the live row offers Watch.
 
 The [capability matrix](docs/HermesCapabilityMatrix.md) records the tested upstream
 revision, native integration probes, and the small revision-bound extension for
@@ -211,7 +214,7 @@ unrecognized native errors keep the saved request ID for receipt checks.
 The app opens **Today** unless you choose an assistant start page or follow a notification. Today shows pending decisions, scheduled work, recent results and files
 across your assistants. **Mark caught up** shares your recap position between
 web and iOS. Voice messages are transcribed into a draft for review before you
-send. **Listen to reply** reads the latest reply with Hermes speech on web and iOS.
+send. The speaker button in any reply's action row reads that reply with Hermes speech on web and iOS, one reply at a time. Each message shows its time under its bubble beside its actions, and a reply made of several parts shows the time once, under the last. A name appears above a message only for another household member or a scheduled prompt. Copy is available on your own messages too.
 
 Hermes questions on web and iOS show each suggested answer as a card to tap, with
 **Write my own answer** last. A question that allows several answers shows checkboxes.
@@ -256,12 +259,31 @@ settings > **Work** manages standing goals, native tasks and event triggers.
 requires an explicit start. Memory edits apply to the canonical conversation at
 the next safe turn boundary, with pending/applied status and preserved history.
 
+Each routine run also appears in its assistant's conversation, in time order with the
+messages, as a collapsed card: a status dot, the routine's name, when it ran and a line of
+its output. Failed, running and undelivered runs say so in words beside the dot. Open a
+card to read the output with its files, save it, or open all results. A run whose output
+Hermes delivered into the chat shows once, as that message. Cards follow the loaded
+history, so paging back brings in earlier runs, and they update while the chat is open.
+**Hide this routine in chat** on a card, with Undo, or **Show runs in chat** in the
+routine's settings, keeps a routine such as a certificate check out of your chat. It
+is your own setting and doesn't change the routine for anyone else. Run status needs the
+current Hermes add-on; with an older one, runs show as "Status unknown".
+
 Use **View results** beside a routine to read its saved runs, including trials.
 Routine notifications name the routine and quote the start of its answer, or the
 error for a failed run, and open this history directly. Results stay within the selected
 Hermes profile; a run with only a saved preview says so.
 
-**Group chats** lets 2–6 local assistants discuss a task in one room. Create a
+**Group chats** lets 2–6 local assistants discuss a task in one room. Rooms are rows
+in the home list beside the assistants, with overlapping member faces, the last
+message and who said it, and its time. Rooms follow the assistants, newest message first, because assistant rows keep
+the roster's order and do not jump. Home reads Hermes's room catalog every 30 seconds while the page is visible;
+the server adds each room's newest message to it and re-reads a room's log only when the room
+has a newer message, so home never polls room logs. Home has no group unread dot, since
+the app keeps no read position for rooms. Choose a room to open it like a conversation
+(`?view=group&room=ID`; the old `?view=groups` link opens home). Make a group from the **+** button's
+New group chat, which opens it. Create a
 named group, address assistants with `@handle` (typing `@` suggests members),
 reply in a thread, approve a pending action or stop the discussion. Messages show
 which household member sent them, and new messages arrive live. Hermes owns the persistent coordinator.
@@ -276,7 +298,9 @@ only recognized automation sources move into activity.
 
 Assistant settings > **Logins** manages the selected Hermes profile's encrypted
 login vault. Native login, code, vault-unlock and secret requests appear inline
-with masked fields, outside chat and drafts. Ownership and source controls follow
+with masked fields, outside chat and drafts. Each card shows when it is sending and
+when Hermes took the answer, then folds to one line. Sending a message instead
+closes the request so the assistant reads it and can ask again. Ownership and source controls follow
 Hermes. See [passwords and logins](docs/PasswordsAndLogins.md) for storage scope,
 external password managers and uncertain-request recovery.
 
@@ -305,7 +329,7 @@ that message. A status area above the message box gathers send problems, the
 interrupted-task review, waiting decisions with **Review**, and connection trouble,
 most urgent first.
 
-On a computer, Cmd/Ctrl+K opens a command palette for assistants, Today, Group chats,
+On a computer, Cmd/Ctrl+K opens a command palette for assistants, group chats, Today,
 Search, Settings and appearance. Cmd/Ctrl+1 to 9 open pinned assistants in the
 installed app (browsers keep those keys for tabs), Cmd/Ctrl+. stops the current
 reply after asking, and `?` lists every shortcut. An iPad with a keyboard has Cmd+K

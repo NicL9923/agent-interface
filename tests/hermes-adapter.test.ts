@@ -261,6 +261,20 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     expect(result.attention![1].secure).toEqual({epoch:'epoch-one',sessionId:'live-one',method:'vault.save_login',origin:'https://page.invalid',site:'page.invalid'});
   });
 
+  it('shows an assistant\'s computer handoff only when this executor owns it, with its bounded text', async () => {
+    snapshot.executor_epoch='epoch-one';
+    snapshot.open_requests=[
+      {id:'srq-handoff',method:'agent_interface.computer_handoff',app_local_secure:true,params:{reason:'r'.repeat(250),what_to_do:'Enter the code.'}},
+      {id:'srq-mirrored',method:'agent_interface.computer_handoff',params:{reason:'Mirrored',what_to_do:'Nothing'}},
+      {id:'srq-malformed',method:'agent_interface.computer_handoff',app_local_secure:true,params:{reason:'No action'}},
+    ];
+    const result=await runtime.conversation('shared');
+    expect(result.attention![0]).toEqual({id:'srq-handoff',kind:'computer',title:'Take over the computer?',detail:'r'.repeat(200),secure:undefined,
+      questions:undefined,computer:{epoch:'epoch-one',sessionId:'live-one',reason:'r'.repeat(200),whatToDo:'Enter the code.'}});
+    expect(result.attention!.slice(1).map(request=>[request.kind,request.computer])).toEqual([['official',undefined],['official',undefined]]);
+    expect(result.activity.state).toBe('blocked');
+  });
+
   it('transmits credentials privately once and never forwards native secret-bearing error text',async()=>{
     const payload={operation:'answer' as const,profile:'shared',requestId:'srq-proof',actor:'member-one',answer:{epoch:'epoch-one',sessionId:'live-one',method:'vault.code' as const,value:'123456'}};
     const fetcher=vi.fn(async(_url: URL | string, _init?: RequestInit)=>Response.json({error:'private synthetic canary'}, {status:409}));
@@ -320,6 +334,35 @@ describe('Hermes adapter trust and recovery boundary',()=>{
       {id:'house',name:'House provider',aliases:['custom:house','house'],authenticated:true,models:[{id:'current',name:'current',available:true},{id:'other',name:'other',available:false}]},
       {id:'lost',name:'Disconnected',aliases:[],authenticated:false,warning:'Reconnect this account',models:[{id:'saved',name:'saved',available:false}]},
     ]});
+  });
+  describe('model display names',()=>{
+    const roster=()=>{beforeSend=(request,socket)=>{
+      if(request.method!=='profiles.list')return;
+      queueMicrotask(()=>socket.receive({jsonrpc:'2.0',id:request.id,result:{profiles:[
+        {name:'shared',model:'claude-opus-5-5',provider:'anthropic'},{name:'custom',model:'house-model-7',provider:'house'},{name:'bare',model:'gpt-6.1-terra'}]}}));
+    };};
+    it('fills each assistant\'s model name from the add-on in one batch, and formats what the cache lacks',async()=>{
+      const fetcher=vi.fn(async(_url:URL|string,init?:RequestInit)=>Response.json({names:(JSON.parse(init!.body as string).models as {provider:string;model:string}[])
+        .map(row=>({...row,name:row.provider==='anthropic'?'Claude Opus 5.5 (latest)':null}))}));
+      vi.stubGlobal('fetch',fetcher);roster();
+      const bots=await runtime.listBots();
+      expect(bots.map(row=>row.modelName)).toEqual(['Claude Opus 5.5 (latest)','house-model-7','GPT-6.1-Terra']);
+      expect(fetcher).toHaveBeenCalledOnce();
+      expect(JSON.parse(fetcher.mock.calls[0][1]!.body as string)).toEqual({operation:'model_names',profile:'default',models:[{provider:'anthropic',model:'claude-opus-5-5'},{provider:'house',model:'house-model-7'}]});
+      await runtime.listBots();
+      expect(fetcher).toHaveBeenCalledOnce();
+    });
+    it('formats the slug when the add-on is older, without failing the roster',async()=>{
+      vi.stubGlobal('fetch',vi.fn(async()=>Response.json({error:'Unknown experience operation.'},{status:400})));roster();
+      expect((await runtime.listBots()).map(row=>row.modelName)).toEqual(['Claude Opus 5.5','house-model-7','GPT-6.1-Terra']);
+    });
+    it('names catalog models with the add-on\'s names',async()=>{
+      vi.stubGlobal('fetch',vi.fn(async()=>Response.json({names:[{provider:'anthropic',model:'claude-opus-5-5',name:'Claude Opus 5.5 (latest)'},{provider:'anthropic',model:'claude-sonnet-5-5',name:null}]})));
+      beforeSend=(request,socket)=>{if(request.method==='model.options')queueMicrotask(()=>socket.receive({jsonrpc:'2.0',id:request.id,result:{provider:'anthropic',model:'claude-opus-5-5',
+        providers:[{slug:'anthropic',name:'Anthropic',authenticated:true,models:['claude-opus-5-5','claude-sonnet-5-5']}]}}));};
+      const result=await runtime.modelOptions!('shared');
+      expect(result.providers[0].models.map(model=>model.name)).toEqual(['Claude Opus 5.5 (latest)','Claude Sonnet 5.5']);
+    });
   });
   it('exposes real streamed reasoning and keeps working while a tool is running', async () => {
     snapshot.info.running = true;
@@ -1483,6 +1526,18 @@ describe('owned Hermes operation response decoding', () => {
   it('normalizes native nullable routine result metadata', async () => {
     vi.stubGlobal('fetch',vi.fn(async()=>Response.json([{id:'run',title:'Fence',startedAt:null,preview:null,previewOnly:true}])));
     expect(await runtime.routineResults!('shared','routine')).toEqual([{id:'run',title:'Fence',startedAt:undefined,preview:undefined,previewOnly:true}]);
+  });
+  it('normalizes each run status and keeps an unnamed or newer status unknown', async () => {
+    vi.stubGlobal('fetch',vi.fn(async()=>Response.json([
+      {id:'ok',title:'Fence',startedAt:'2026-10-02T07:00:00+00:00',finishedAt:'2026-10-02T07:01:00+00:00',status:'succeeded',deliveryFailed:true,error:null,preview:null,previewOnly:false},
+      {id:'bad',title:'Fence',startedAt:null,preview:null,previewOnly:true,status:'failed',error:'Certificate expired',finishedAt:null,deliveryFailed:false},
+      {id:'new',title:'Fence',previewOnly:true,status:'queued_for_review'},
+    ])));
+    expect(await runtime.routineResults!('shared','routine')).toEqual([
+      {id:'ok',title:'Fence',startedAt:'2026-10-02T07:00:00+00:00',finishedAt:'2026-10-02T07:01:00+00:00',status:'succeeded',deliveryFailed:true,preview:undefined,previewOnly:false},
+      {id:'bad',title:'Fence',startedAt:undefined,preview:undefined,previewOnly:true,status:'failed',error:'Certificate expired'},
+      {id:'new',title:'Fence',startedAt:undefined,preview:undefined,previewOnly:true,status:'unknown'},
+    ]);
   });
   it('registers only attested history files and removes native metadata', async () => {
     vi.stubGlobal('fetch',vi.fn(async()=>Response.json({...history,messages:[{id:'tool',role:'tool',text:'Generated',app_artifacts:[{path:'/workspace/fence.txt',name:'fence.txt',mime:'text/plain'}],content:'private-canary'}]})));

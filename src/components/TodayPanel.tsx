@@ -17,7 +17,7 @@ function attentionCopy(item: TodayItem) {
   const approval = item.approvals.find(value => value.status === "pending");
   if (approval) return { title: approval.title, reason: "Approval", action: "Review", failed: false };
   const question = item.attention[0];
-  if (question) return { title: question.title, reason: question.kind === "clarify" ? "Question" : question.kind === "secure" ? "Secure request" : "Needs your help", action: question.kind === "clarify" ? "Answer" : "Review", failed: false };
+  if (question) return { title: question.title, reason: question.kind === "clarify" ? "Question" : question.kind === "secure" ? "Secure request" : question.kind === "computer" ? "Computer" : "Needs your help", action: question.kind === "clarify" ? "Answer" : "Review", failed: false };
   const failed = item.activity.state === "failed" || item.activity.state === "interrupted";
   return { title: item.activity.detail || stateLabels[item.activity.state], reason: stateLabels[item.activity.state], action: failed ? "View error" : "Review", failed };
 }
