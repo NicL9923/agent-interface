@@ -296,6 +296,9 @@ class QualificationWorkerTests(unittest.TestCase):
             "qualificationPython":sys.executable,"qualificationReceipt":str(self.receipt),"requiredPatchSha256":None,
             "hooks":{**{action:[sys.executable,str(hook),action] for action in ['quiescence','backup','install','verify','rollback','finish','recover','restart_service']},
                 "regressions":[[sys.executable,str(hook),'regressions']]}})
+        # The headroom check reads the real disk, which a CI runner may not have spare. Tests of it patch their own.
+        ample = type('Usage',(),{'free':200*1024**3,'total':256*1024**3,'used':56*1024**3})()
+        disk = patch.object(worker.shutil,'disk_usage',return_value=ample); disk.start(); self.addCleanup(disk.stop)
         self.original_run = worker.Worker.run
         self.fixture_upstream = self.source
         def run(instance, argv, **kwargs):
