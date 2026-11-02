@@ -108,13 +108,27 @@ def fingerprint(home):
     return digest.hexdigest()
 
 
+def token_stamp(home):
+    """When any MCP OAuth token file last changed. A sign-in that reuses a server's file names still moves it."""
+    digest = hashlib.sha256()
+    tokens = Path(home) / "mcp-tokens"
+    if tokens.is_dir():
+        for path in sorted(tokens.iterdir()):
+            try:
+                stat_result = path.stat()
+            except OSError:
+                continue
+            digest.update(f"{path.name}\0{stat_result.st_mtime_ns}\0{stat_result.st_size}\0".encode())
+    return digest.hexdigest()
+
+
 def cache_check(home, result):
     path = Path(home) / "agent_interface_integration_checks.json"
     try:
         cached = private_json(path)
     except (ValueError, OSError):
         cached = {}
-    cached[result["id"]] = dict(fingerprint=fingerprint(home), checked=result)
+    cached[result["id"]] = dict(fingerprint=fingerprint(home), tokens=token_stamp(home), checked=result)
     private_fs.atomic_json(path, cached)
 
 
@@ -123,10 +137,14 @@ def apply_checks(home, rows):
         saved = private_json(Path(home) / "agent_interface_integration_checks.json")
     except (ValueError, OSError):
         return rows
-    current = fingerprint(home)
+    current, tokens = fingerprint(home), token_stamp(home)
     for row in rows:
         checked = saved.get(row["id"], {})
-        if checked.get("fingerprint") == current:
+        # A failed MCP check stops counting once any OAuth tokens are rewritten, as a reconnect does;
+        # a success survives routine token refreshes, which keep the same files.
+        mcp_row = row["id"] in PRESETS or row["id"].startswith("mcp:")
+        stale = mcp_row and checked.get("checked", {}).get("status") != "connected" and checked.get("tokens") != tokens
+        if checked.get("fingerprint") == current and not stale:
             evidence = checked.get("checked", {})
             for field in ("status", "detail", "checkedAt", "account", "capabilities"):
                 if field in evidence:

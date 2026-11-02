@@ -50,6 +50,18 @@ class IntegrationTests(unittest.TestCase):
         self.assertEqual(rows()[0]["status"], "connected")
         (tokens / "supabase.json").unlink()
         self.assertEqual(rows()[0]["status"], "configured")
+        # Reconnecting writes new tokens under the same name: an earlier failure no longer counts.
+        (tokens / "supabase.json").write_text("{}")
+        integrations.cache_check(str(self.home), dict(id="supabase", status="expired", detail="Sign in again."))
+        self.assertEqual(rows()[0]["status"], "expired")
+        stamp = (tokens / "supabase.json").stat().st_mtime_ns + 1_000_000
+        (tokens / "supabase.json").write_text('{"new": "grant"}')
+        os.utime(tokens / "supabase.json", ns=(stamp, stamp))
+        self.assertEqual(rows()[0]["status"], "configured")
+        # Other connections' failures don't depend on MCP tokens.
+        integrations.cache_check(str(self.home), dict(id="key:brave", status="expired", detail="Refused."))
+        os.utime(tokens / "supabase.json", ns=(stamp + 1_000_000, stamp + 1_000_000))
+        self.assertEqual(integrations.apply_checks(str(self.home), [dict(id="key:brave", status="configured")])[0]["status"], "expired")
 
     def test_a_sign_in_names_its_connection(self):
         integrations.FLOWS["open"] = dict(kind="mcp", connection="supabase", home=str(self.home), status="pending", expires=integrations.time.time() + 60)
