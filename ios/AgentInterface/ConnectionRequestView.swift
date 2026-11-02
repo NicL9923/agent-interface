@@ -29,10 +29,11 @@ struct ConnectionRequestResult: Decodable { var status: String }
 /// becomes ready while the card is on screen, or after its own sign-in finished in the card, does
 /// not. Every ready read after that asks again, so a continue the server refused is retried.
 struct ConnectionReadiness: Equatable {
-  /// Set up and not waiting on a sign-in, as the server checks (src/shared/integrations.ts connectionReady).
+  /// Set up, as the server checks (src/shared/integrations.ts connectionReady). An OAuth MCP server
+  /// whose sign-in never finished reads as not connected.
   static func isReady(_ connection: IntegrationConnection?) -> Bool {
     guard let connection else { return false }
-    return ["connected", "configured"].contains(connection.status) && connection.authorizing != true
+    return ["connected", "configured"].contains(connection.status)
   }
   private var initiallyReady: Bool?
   private var flowApproved = false

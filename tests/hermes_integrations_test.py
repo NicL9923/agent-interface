@@ -29,16 +29,16 @@ class IntegrationTests(unittest.TestCase):
         integrations.FLOWS["flow"] = value
         return value
 
-    def test_an_unfinished_sign_in_marks_only_its_own_connection_and_names_it(self):
-        now = integrations.time.time()
-        integrations.FLOWS.update({
-            "open": dict(kind="mcp", connection="supabase", home=str(self.home), status="pending", expires=now + 60),
-            "done": dict(kind="mcp", connection="github", home=str(self.home), status="approved", expires=now + 60),
-            "stale": dict(kind="provider", connection="provider:nous", home=str(self.home), status="pending", expires=now - 1),
-            "other": dict(kind="google", connection="google_workspace", home=str(self.home) + "-other", status="pending", expires=now + 60),
-        })
-        rows = [dict(id=key) for key in ("supabase", "github", "provider:nous", "google_workspace")]
-        self.assertEqual([row.get("authorizing", False) for row in integrations.mark_authorizing(str(self.home), rows)], [True, False, False, False])
+    def test_an_oauth_server_without_a_finished_sign_in_is_not_connected(self):
+        tokens = {"signed": True, "unsigned": False, "unknown": None}
+        with patch.object(integrations, "oauth_signed_in", lambda home, name: tokens[name]):
+            self.assertEqual(integrations.mcp_status(str(self.home), dict(name="unsigned", auth="oauth"))[0], "not_connected")
+            for native in (dict(name="signed", auth="oauth"), dict(name="unknown", auth="oauth"), dict(name="unsigned", auth="header"), dict(name="unsigned", auth=None)):
+                self.assertEqual(integrations.mcp_status(str(self.home), native)[0], "configured")
+            self.assertEqual(integrations.mcp_status(str(self.home), None)[0], "not_connected")
+
+    def test_a_sign_in_names_its_connection(self):
+        integrations.FLOWS["open"] = dict(kind="mcp", connection="supabase", home=str(self.home), status="pending", expires=integrations.time.time() + 60)
         self.assertEqual(integrations.flow_summary("open", integrations.FLOWS["open"])["connectionId"], "supabase")
 
     def test_callback_requires_exact_state_profile_redirect_and_single_use(self):
@@ -91,7 +91,7 @@ class IntegrationTests(unittest.TestCase):
         retirement.retirement = types.SimpleNamespace(prepare=lambda: {"ok": True, "token": "permit"}, cancel=lambda value: calls.append(value))
         with patch.dict(sys.modules, {"requests": requests, "hermes_cli.backend_retirement": retirement}):
             result = integrations.google_callback("https://app.example/integrations/google/callback?state=safe-state&code=new-code", "flow", "one")
-        self.assertEqual(result["status"], "approved")
+        self.assertEqual((result["status"], result["connectionId"]), ("approved", "google_workspace"))
         self.assertEqual(json.loads(token.read_text())["account"], "member@example.test")
         self.assertEqual(calls, ["permit"])
 

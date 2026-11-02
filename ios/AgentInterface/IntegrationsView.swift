@@ -38,8 +38,6 @@ struct IntegrationConnection: Codable, Equatable, Identifiable {
   var setup: [IntegrationField]
   var capabilities: [String]
   var botIds: [String]
-  /// A sign-in for it started and hasn't finished, so its saved configuration isn't usable yet.
-  var authorizing: Bool? = nil
   /// Where the connection is used, worded like the web card.
   func assistantsLabel(name: (String) -> String?) -> String {
     botIds.isEmpty ? "This assistant" : botIds.map { name($0) ?? $0 }.joined(separator: ", ")

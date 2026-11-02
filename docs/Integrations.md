@@ -50,6 +50,10 @@ already set up when the card opened, the person presses **Continue**, because
 a saved grant can still be expired. **Not now** declines it, and sending a
 message instead closes it. A request nobody finishes closes after 15 minutes.
 
+An OAuth MCP server counts as set up only once Hermes holds its sign-in
+tokens. Settings shows a saved server whose sign-in never finished as **Not
+connected**, with Connect to sign in.
+
 Any member can decline or continue. Connecting still needs an integration
 administrator, and the card says so to everyone else. The server checks the
 catalog before it tells the assistant a connection is set up. Apple data is

@@ -26,16 +26,13 @@ import XCTest
     XCTAssertEqual(ConnectionDecision.connected, "connected"); XCTAssertEqual(ConnectionDecision.decline, "decline")
     XCTAssertEqual(try JSONDecoder().decode(ConnectionRequestResult.self, from: Data(#"{"status":"expired"}"#.utf8)).status, "expired")
   }
-  private func item(_ status: String, authorizing: Bool? = nil) throws -> IntegrationConnection {
-    var json = #"{"id":"key:brave","name":"Brave Search","category":"providers","owner":"Hermes","profile":"kitchen","status":"\#(status)","detail":"","permissions":[],"actions":{"connect":true,"check":false,"disconnect":false},"setup":[],"capabilities":[],"botIds":["kitchen"]"#
-    if let authorizing { json += #","authorizing":\#(authorizing)"# }
+  private func item(_ status: String) throws -> IntegrationConnection {
+    let json = #"{"id":"key:brave","name":"Brave Search","category":"providers","owner":"Hermes","profile":"kitchen","status":"\#(status)","detail":"","permissions":[],"actions":{"connect":true,"check":false,"disconnect":false},"setup":[],"capabilities":[],"botIds":["kitchen"]"#
     return try JSONDecoder().decode(IntegrationConnection.self, from: Data((json + "}").utf8))
   }
-  func testOnlyASetUpConnectionWithoutAnUnfinishedSignInIsReady() throws {
+  func testOnlyConnectedAndConfiguredAreReady() throws {
     for status in ["connected", "configured"] { XCTAssertTrue(ConnectionReadiness.isReady(try item(status))) }
     for status in ["not_connected", "expired", "missing_permission", "unavailable", "unsupported"] { XCTAssertFalse(ConnectionReadiness.isReady(try item(status))) }
-    XCTAssertFalse(ConnectionReadiness.isReady(try item("configured", authorizing: true)))
-    XCTAssertTrue(ConnectionReadiness.isReady(try item("configured", authorizing: false)))
     XCTAssertFalse(ConnectionReadiness.isReady(nil))
   }
   func testAFlowNamesItsConnection() throws {
@@ -55,9 +52,9 @@ import XCTest
     // The card's autoSent flag stops a second send while one is in flight; after a refused send, the next read retries.
     XCTAssertTrue(readiness.observe(ready: true))
   }
-  func testASignInThatFinishesWhileAuthorizingSendsOnceItIsReady() throws {
+  func testAnUnsignedServerThatFinishesSigningInSendsOnceItIsReady() throws {
     var readiness = ConnectionReadiness()
-    XCTAssertFalse(readiness.observe(ready: ConnectionReadiness.isReady(try item("configured", authorizing: true))))
+    XCTAssertFalse(readiness.observe(ready: ConnectionReadiness.isReady(try item("not_connected"))))
     XCTAssertTrue(readiness.observe(ready: ConnectionReadiness.isReady(try item("configured"))))
   }
   func testItsOwnFinishedFlowSendsEvenFromAReadyStart() {

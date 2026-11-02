@@ -632,8 +632,8 @@ characters. Show that one connection's integration controls in the card. To
 answer, call `POST /api/bots/:id/connection-requests/:requestId` with
 `{ "decision": "connected" | "decline", "epoch": "...", "sessionId": "...", "connection": "<connectionId>" }`.
 `connected` answers 409 with a message to show until the catalog lists the
-connection as `connected` or `configured` without `authorizing: true`. An MCP
-server saved before its OAuth finishes reads as `configured` and `authorizing`.
+connection as `connected` or `configured`. An OAuth MCP server whose sign-in
+never finished reads as `not_connected`, from Hermes's own token store.
 Send it once the connection becomes ready while the card is open, or after an
 in-card setup finishes. A flow names its connection in `connectionId`; a sign-in
 restored for another connection must not settle the card. If the

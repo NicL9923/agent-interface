@@ -9,8 +9,6 @@ export interface IntegrationConnection {
   permissions: { id: string; name: string; granted: boolean | null }[];
   actions: { connect: boolean; check: boolean; disconnect: boolean };
   setup: IntegrationField[]; capabilities: string[]; botIds: string[];
-  /** A sign-in for it started and hasn't finished. Its saved configuration isn't usable yet. */
-  authorizing?: boolean;
 }
 export interface IntegrationCatalog { profile: string; canManage: boolean; connections: IntegrationConnection[] }
 export interface IntegrationFlow {
@@ -44,8 +42,11 @@ export type ConnectionRequestResult = { status: "ok" | "expired" };
 export interface ConnectionRequestSettle { decision: ConnectionRequestDecision; profile: string; requestId: string; epoch: string; sessionId: string; connection: string }
 /** Catalog statuses that count as set up, so Continue can tell the assistant it may go ahead. */
 export const readyConnectionStatuses: readonly IntegrationStatus[] = ["connected", "configured"];
-/** Set up and not waiting on a sign-in, as the server checks before an assistant hears "connected". */
-export const connectionReady = (item?: Pick<IntegrationConnection, "status" | "authorizing">) =>
-  !!item && readyConnectionStatuses.includes(item.status) && !item.authorizing;
+/**
+ * Set up, as the server checks before an assistant hears "connected". An OAuth MCP server whose
+ * sign-in never finished reads as not connected, from Hermes's own token store.
+ */
+export const connectionReady = (item?: Pick<IntegrationConnection, "status">) =>
+  !!item && readyConnectionStatuses.includes(item.status);
 /** Catalog IDs an assistant may ask for. Apple data is chosen on the iPhone, never asked for in chat. */
 export const requestableConnectionId = /^(google_workspace|github|synology|supabase|cloudflare|vps|home_assistant|selected_files|discord|key:[a-z0-9_]{1,40}|provider:[A-Za-z0-9_-]{1,80}|mcp:[A-Za-z0-9_-]{1,80})$/;

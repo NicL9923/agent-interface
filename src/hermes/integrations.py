@@ -376,7 +376,7 @@ def google_callback(callback_url, flow_id=None, profile=None):
         entry["status"] = "exchanging"
     if query.get("error"):
         entry["status"] = "error"
-        return dict(kind="instructions", status="error", flowId=key, message="Google consent was declined. Your previous grant remains available.")
+        return dict(kind="instructions", status="error", flowId=key, connectionId="google_workspace", message="Google consent was declined. Your previous grant remains available.")
     if not query.get("code"):
         entry["status"] = "error"
         raise IntegrationError("The full Google callback URL must include its code and state.")
@@ -434,7 +434,7 @@ def google_callback(callback_url, flow_id=None, profile=None):
                     entry["status"] = "approved"
             finally:
                 retirement.cancel(permit["token"])
-        return dict(kind="connected", status="approved", flowId=key, message="Google Workspace is connected to " + account + ". Enable the Google Tasks toolset on this bot to read its task lists and tasks.")
+        return dict(kind="connected", status="approved", flowId=key, connectionId="google_workspace", message="Google Workspace is connected to " + account + ". Enable the Google Tasks toolset on this bot to read its task lists and tasks.")
     except Exception:
         with FLOW_LOCK:
             if entry["status"] != "cancelled":
@@ -566,15 +566,15 @@ async def inventory(profile):
     server_map = {row["name"]: row for row in servers}
     for key, (label, category) in PRESETS.items():
         native = server_map.get(key)
-        rows.append(card(key, label, category, profile, "configured" if native else "not_connected",
-                         "MCP server saved in this Hermes profile. Check verifies tool discovery." if native else "Connect this service's MCP endpoint. Credentials stay in Hermes.",
+        rows.append(card(key, label, category, profile, *mcp_status(home, native),
                          setup=[dict(key="url", label="HTTPS MCP endpoint", kind="url", required=key not in DEFAULT_URLS, defaultValue=DEFAULT_URLS.get(key, "")), dict(key="auth", label="Authentication", kind="text", required=True, defaultValue="bearer" if key in ("github", "home_assistant") else "oauth", options=[dict(value="oauth", label="Browser sign-in"), dict(value="bearer", label="Access token"), dict(value="none", label="No sign-in")]), dict(key="token", label="Bearer token", kind="secret", required=False)] if not native else [dict(key="token", label="New bearer token", kind="secret", required=True)] if native.get("auth") == "header" else [],
                          actions=dict(connect=not native or native.get("auth") in ("oauth", "header"), check=bool(native), disconnect=bool(native) and native.get("source") != "plugin"), capabilities=["Tools provided by the connected MCP server"] ))
     for native in servers:
         if native["name"] in PRESETS:
             continue
-        rows.append(card("mcp:" + native["name"], native["name"], "custom", profile, "configured",
-                         "Configured MCP server. A saved configuration does not prove live access.",
+        status, detail = mcp_status(home, native)
+        rows.append(card("mcp:" + native["name"], native["name"], "custom", profile, status,
+                         detail if status != "configured" else "Configured MCP server. A saved configuration does not prove live access.",
                          setup=[dict(key="token", label="New bearer token", kind="secret", required=True)] if native.get("auth") == "header" else [],
                          actions=dict(connect=native.get("auth") in ("oauth", "header") and native.get("source") != "plugin", check=True, disconnect=native.get("source") != "plugin"), capabilities=["Native MCP tools"]))
     rows.append(card("selected_files", "Selected files and folders", "files", profile, "configured" if roots else "not_connected",
@@ -600,19 +600,26 @@ async def inventory(profile):
         rows.append(card("provider:" + provider["id"], provider["name"], "providers", profile, "configured" if connected else "not_connected",
                          "Hermes has provider credentials. Its native provider status is configuration evidence." if connected else "Authorize this model provider through its native Hermes flow." if provider["flow"] == "device_code" else "This provider's account is owned by its official CLI. Complete sign-in there, then refresh this list.",
                          actions=dict(connect=provider["flow"] == "device_code", check=False, disconnect=bool(provider.get("disconnectable") and connected)), capabilities=["Models"]))
-    return dict(profile=profile, canManage=False, connections=mark_authorizing(home, apply_checks(home, rows)))
+    return dict(profile=profile, canManage=False, connections=apply_checks(home, rows))
 
 
-def mark_authorizing(home, rows):
-    """Marks connections with an unfinished sign-in. Saving an MCP server comes before its OAuth,
-    so its configured status alone does not mean an assistant can use it yet."""
-    with FLOW_LOCK:
-        pending = {entry.get("connection") for entry in FLOWS.values() if entry["home"] == str(home)
-                   and entry["status"] in ("pending", "exchanging") and entry["expires"] > time.time()}
-    for row in rows:
-        if row["id"] in pending:
-            row["authorizing"] = True
-    return rows
+def oauth_signed_in(home, name):
+    """Whether Hermes holds OAuth tokens for this MCP server, which may be expired. None when this
+    revision can't say. Saving an OAuth server comes before its sign-in, so saved alone isn't usable."""
+    try:
+        from tools.mcp_oauth import HermesTokenStorage
+        return HermesTokenStorage(name, hermes_home=home).has_cached_tokens()
+    except Exception:
+        return None
+
+
+def mcp_status(home, native):
+    """A saved server reads as configured unless it uses OAuth and its sign-in never finished."""
+    if not native:
+        return "not_connected", "Connect this service's MCP endpoint. Credentials stay in Hermes."
+    if native.get("auth") == "oauth" and oauth_signed_in(home, native["name"]) is False:
+        return "not_connected", "Saved in this Hermes profile, but its sign-in hasn't finished. Connect to sign in."
+    return "configured", "MCP server saved in this Hermes profile. Check verifies tool discovery."
 
 
 def flow_summary(key, entry):

@@ -73,9 +73,8 @@ describe("connection request card", () => {
     expect(container.querySelector(".secure-receipt")).not.toBeNull();
   });
 
-  it("waits while a saved connection's sign-in is unfinished, and ignores another connection's restored sign-in", async () => {
+  it("ignores another connection's restored sign-in and continues when its own setup finishes", async () => {
     sessionStorage.setItem("integration-flow:one:kitchen", "github-flow");
-    catalog = { ...catalog, connections: [brave({ status: "configured", authorizing: true })] };
     let flow = { kind: "redirect", status: "pending", flowId: "github-flow", connectionId: "github", message: "Waiting for authorization." };
     vi.mocked(api).mockImplementation(async path => (path.includes("flows") ? flow : catalog) as never);
     await render();

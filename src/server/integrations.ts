@@ -51,8 +51,7 @@ export async function installIntegrationsRoutes(app: FastifyInstance, runtime: R
       const catalog = await request({ operation: "list", profile: params.id }) as IntegrationCatalog;
       const item = catalog.connections?.find(connection => connection.id === input.connection);
       if (!item) throw httpError(409, "This assistant doesn't have that connection. Choose Not now or tell the assistant in a message.");
-      if (!connectionReady(item)) throw httpError(409, item.authorizing ? `${item.name} is still waiting for its sign-in. Finish signing in, then press Continue.`
-        : `${item.name} isn't set up yet. Finish connecting it, then press Continue.`);
+      if (!connectionReady(item)) throw httpError(409, `${item.name} isn't set up yet. Finish connecting it, then press Continue.`);
     }
     const result = await runtime.connectionRequest({ ...input, profile: params.id, requestId: params.requestId });
     if (result?.status !== "ok" && result?.status !== "expired") throw httpError(502, "Hermes returned an invalid answer for this connection request");
