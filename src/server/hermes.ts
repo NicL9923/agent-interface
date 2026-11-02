@@ -154,8 +154,8 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     if (value.ok !== true) throw httpError(409, 'Hermes voice is unavailable. Check the speech provider in the native dashboard.');
     return value;
   }
-  // Hermes answers opens from its RPC pool, so an answer can arrive after newer frames or a later
-  // open's answer. Live state takes only answers that nothing has superseded since they were asked.
+  // The add-on answers opens off the socket's serial lane, so an answer can arrive after newer frames
+  // or a later open's answer. Only an answer nothing has superseded since it was asked touches live state.
   let openSequence = 0;
   const appliedOpens = new Map<string, number>();
   const supersededOpens = new WeakSet<Wire>();
@@ -171,7 +171,7 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
       value = await rpc('agent-interface.open', {profile: botId,
         ...(read.history === false ? {omit_messages: true} : read.window ? {window: read.window} : {})});
       if (timing) {
-        timing.hermes = performance.now() - started;
+        timing.hermes = (timing.hermes ?? 0) + performance.now() - started;
         // An older add-on reports nothing. Only plain phase names reach a header.
         const phases = Object.entries(value.app_timing ?? {}).filter(([name, ms]) => /^[a-z]{1,20}$/.test(name) && typeof ms === 'number' && Number.isFinite(ms) && ms >= 0);
         if (phases.length) timing.addon = Object.fromEntries(phases) as Record<string, number>;
@@ -184,13 +184,13 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     const superseded = generation !== structuralGenerationOf(botId) || sequence < (appliedOpens.get(botId) ?? 0);
     if (!superseded || !live.has(botId)) live.set(botId, value.session_id);
     owners.set(value.session_id, botId);
-    if (!transient.has(value.session_id)) {
-      transient.set(value.session_id, {text: value.inflight?.assistant ?? '', reasoning: value.inflight?.reasoning ?? '',
-        state: value.info?.running ? 'thinking' : 'idle', requests: Array.isArray(value.open_requests) ? value.open_requests : [], tools: []});
-    }
     if (superseded) {
       supersededOpens.add(value);
       return value;
+    }
+    if (!transient.has(value.session_id)) {
+      transient.set(value.session_id, {text: value.inflight?.assistant ?? '', reasoning: value.inflight?.reasoning ?? '',
+        state: value.info?.running ? 'thinking' : 'idle', requests: [], tools: []});
     }
     appliedOpens.set(botId, sequence);
     const state = transient.get(value.session_id);
@@ -304,12 +304,19 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
   }
   async function readConversation(botId: string, options: ConversationOptions): Promise<Conversation> {
     await connect();
-    const generation = structuralGenerationOf(botId);
-    const value = await open(botId, options.history === false ? {history: false} : {window: options.window}, options.timing);
+    // A superseded answer is older than live state, so ask again. One that stays superseded through
+    // a burst of changes is shown as Hermes answered it, without reading or seeding live state.
+    let generation: string, value: Wire;
+    for (let attempt = 1; ; attempt++) {
+      generation = structuralGenerationOf(botId);
+      value = await open(botId, options.history === false ? {history: false} : {window: options.window}, options.timing);
+      if (!supersededOpens.has(value) || attempt === 3) break;
+    }
+    const current = !supersededOpens.has(value);
     const sid = value.session_id;
     const history = value.messages ?? (await rpc('session.history', {session_id: sid, profile: botId})).messages;
     const rows = historyMessages(sid, history, row => artifacts(botId, row));
-    const state = transient.get(sid), inflight = value.inflight ?? {}, active = !!value.info?.running || !!value.app_run_id;
+    const state = current ? transient.get(sid) : undefined, inflight = value.inflight ?? {}, active = !!value.info?.running || !!value.app_run_id;
     // Seed a socket attached mid-turn, without replacing text that already advanced during the read.
     if (active && state && typeof inflight.assistant === 'string' &&
         (!state.text || inflight.assistant.startsWith(state.text) || inflight.assistant.endsWith(state.text)))
@@ -319,8 +326,7 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
       state.reasoning = inflight.reasoning;
     const tail = inflightMessage(value, rows, state);
     if (tail.text || tail.reasoning) rows.push(tail);
-    // An idle answer that newer frames superseded must not clear the turn they started.
-    if (!active && state && !supersededOpens.has(value)) {
+    if (!active && state) {
       state.text = '';
       state.reasoning = '';
       state.tools = [];
@@ -342,7 +348,7 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     const runId = value.app_run_id ?? value.app_interruption?.runId ?? undefined;
     // Live patches need only the last prompt and its persisted assistant segments,
     // never a second retained copy of an older client's full transcript.
-    if (options.history !== false && generation === structuralGenerationOf(botId)) {
+    if (options.history !== false && current && generation === structuralGenerationOf(botId)) {
       snapshots.set(botId, {
         value: {session_id: sid, info: {running: value.info?.running}, app_run_id: value.app_run_id,
           inflight: {user: inflight.user, display_kind: inflight.display_kind, display_metadata: inflight.display_metadata}},

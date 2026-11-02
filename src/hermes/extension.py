@@ -5,6 +5,9 @@ python src/hermes/extension.py --port 19119
 See docs/HermesCapabilityMatrix.md. Journal contains private runtime data, never commit it.
 """
 import argparse
+import atexit
+import collections
+import concurrent.futures
 import contextvars
 import datetime
 import hashlib
@@ -340,6 +343,44 @@ def routine_run_body(home, job_id, execution, executions=()):
     return None
 
 
+class ReadQueue:
+    """Runs add-on reads on threads of its own, one at a time per key, in arrival order.
+
+    Waiting work holds no thread, so one slow assistant can take at most one worker
+    and never any of Hermes's native RPC pool, which its long handlers need.
+    """
+
+    def __init__(self, workers):
+        self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=workers, thread_name_prefix="agent-interface-read")
+        atexit.register(lambda: self.pool.shutdown(wait=False, cancel_futures=True))
+        self.lock = threading.Lock()
+        self.queues = {}
+
+    def submit(self, key, job):
+        with self.lock:
+            if key in self.queues:
+                self.queues[key].append(job)
+                return
+            self.queues[key] = collections.deque([job])
+        self.pool.submit(self.run_next, key)
+
+    def run_next(self, key):
+        with self.lock:
+            job = self.queues[key].popleft()
+        try:
+            job()
+        except Exception:
+            logging.getLogger(__name__).exception("Add-on read failed")
+        finally:
+            with self.lock:
+                more = bool(self.queues[key])
+                if not more:
+                    del self.queues[key]
+            # Requeue behind other keys' work instead of looping, so keys share workers fairly.
+            if more:
+                self.pool.submit(self.run_next, key)
+
+
 class Keeper:
     """Holds a canonical session's transport open between app requests."""
     closed = False
@@ -402,9 +443,11 @@ RUN_TERMINAL = "SELECT kind FROM events WHERE run_id=? AND kind IN ('completed',
 INSERT_REJECTED = "INSERT INTO receipts(request_id,digest,profile,session_id,stored_session,actor,epoch,run_id,input_text,attachments,steering,status,terminal,created) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
 
 
-# Reads the app polls. Native dispatch runs these on its RPC pool instead of the
+# Reads the app polls. They run on the add-on's own read queue instead of the
 # connection's serial lane, so one slow history read never queues every other RPC.
-POOLED_READS = frozenset({"agent-interface.open", "agent-interface.discover"})
+QUEUED_READS = frozenset({"agent-interface.open", "agent-interface.discover"})
+# Distinct assistants read at once; a busy assistant's later reads wait without a thread.
+READ_WORKERS = 4
 # Decorated history is keyed on exact history identity, journal mutation and native
 # redaction state; the lifetime only bounds what an identity collision could serve.
 # Without readable redaction state, the earlier short lifetime still applies.
@@ -436,6 +479,7 @@ class Bridge:
         # Leaf lock for the decorated-history cache, which every profile's open prunes.
         self.cache_lock = threading.Lock()
         self.submission_lock = threading.RLock()
+        self.reads = ReadQueue(READ_WORKERS)
         # The (profile, session, actor) a submit on this thread just admitted as steering.
         self.steered = threading.local()
         self.maintenance_lock = threading.RLock()
@@ -538,8 +582,46 @@ class Bridge:
         # Native dispatch reserves pool work before queueing. Fencing only the
         # synchronous handler misses native shell/configuration/image RPCs.
         server.handle_request = lambda request: self.guarded_call(original_handle, request)
-        server.dispatch = lambda request, *args, **kwargs: self.guarded_call(original_dispatch, request, *args, **kwargs)
+        self.original_handle, self.original_dispatch = original_handle, original_dispatch
+        server.dispatch = lambda request, *args, **kwargs: self.guarded_call(self.route, request, *args, **kwargs)
         server.register_method("agent-interface.maintenance", self.maintenance)
+
+    def route(self, request, *args, **kwargs):
+        """Native dispatch, except polled add-on reads, which go to the add-on's read queue.
+
+        This mirrors native long handlers: reserve admission before queueing, answer through
+        the connection's transport, release once answered. Direct handle_request calls stay
+        synchronous, and a request without a connection transport keeps native dispatch.
+        """
+        transport = args[0] if args else kwargs.get("transport")
+        method = request.get("method") if isinstance(request, dict) else None
+        if method not in QUEUED_READS or transport is None or "id" not in request:
+            return self.original_dispatch(request, *args, **kwargs)
+        from tui_gateway.transport import bind_transport
+        server, retirement = self.server, self.retirement
+        if not retirement.acquire():
+            return server._err(request["id"], 5035, "backend is retiring; reconnect to continue")
+        context = contextvars.copy_context()
+        def answer():
+            try:
+                # Native activation attaches the session to the transport bound here.
+                bind_transport(transport)
+                try:
+                    response = self.original_handle(request)
+                except Exception as exc:
+                    response = server._err(request["id"], -32000, f"handler error: {exc}")
+                if response is not None:
+                    transport.write(response)
+            finally:
+                retirement.release()
+        params = request.get("params") if isinstance(request.get("params"), dict) else {}
+        try:
+            self.reads.submit((method, params.get("profile", "default") if method == "agent-interface.open" else None),
+                              lambda: context.run(answer))
+        except BaseException:
+            retirement.release()
+            raise
+        return None
 
 
     # Native seams: tool detail, inline guidance, frames and turn settlement.
@@ -1399,10 +1481,6 @@ def install(path=None):
     server.register_method("agent-interface.capabilities", lambda rid, _: server._ok(rid, {"revision": actual_revision, "tracked_patch_sha256": patch_hash, "executor_epoch": journal.epoch, "durable_admission": True, "durable_events": True, "canonical_open": True, "explicit_credentials": True, "canonical_submit": True, "incremental_discovery": True, "essential_skills": sorted(ESSENTIAL_SKILLS)}))
     for name, handler in bridge.rpc_methods().items():
         server.register_method(name, handler)
-    # Native dispatch reads _LONG_HANDLERS from this module's globals at call time,
-    # as native plugins that widen it rely on.
-    if hasattr(server, "_LONG_HANDLERS"):
-        server._LONG_HANDLERS = server._LONG_HANDLERS | POOLED_READS
     bridge.install_delivery()
     bridge.install_automation()
     return journal

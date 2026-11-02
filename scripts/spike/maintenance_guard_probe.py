@@ -217,6 +217,18 @@ def main():
             response = maintenance("acquire")
             assert "error" in response and not (home / "maintenance.json").exists(), response
             checks["queued_long_rpc_refuses_maintenance"] = True
+            # Polled add-on reads never wait for a native worker: this one answers while the
+            # only one is held, through the connection's transport, under its own reservation.
+            replies = []
+            class Replies:
+                def write(self, response): replies.append(response); return True
+            assert not {"agent-interface.open", "agent-interface.discover"} & server._LONG_HANDLERS
+            assert server.dispatch({"id": 5, "method": "agent-interface.discover", "params": {"cursor": "0"}}, Replies()) is None, "Polled add-on reads still run inline"
+            deadline = time.monotonic() + 10
+            while (not replies or retirement.active_count() > 2) and time.monotonic() < deadline:
+                time.sleep(0.05)
+            assert replies and "result" in replies[0] and retirement.active_count() == 2, replies
+            checks["polled_addon_reads_skip_the_native_pool"] = True
         finally:
             release.set(); server._pool.shutdown(wait=True); server._pool = native_pool
         assert queued.is_set() and retirement.active_count() == 0
@@ -227,19 +239,6 @@ def main():
         assert server._start_session_work(lambda: None, name="qualification-gated-deferred") is None
         checks["held_lease_blocks_long_rpc_and_deferred_work"] = True
         assert maintenance("release")["result"]["active"] is False
-
-        # Polled add-on reads leave the connection's serial lane. Native dispatch must still
-        # read _LONG_HANDLERS from server globals, which the add-on widens at install.
-        replies = []
-        class Replies:
-            def write(self, response): replies.append(response); return True
-        assert {"agent-interface.open", "agent-interface.discover"} <= server._LONG_HANDLERS
-        assert server.dispatch({"id": 5, "method": "agent-interface.discover", "params": {"cursor": "0"}}, Replies()) is None, "Polled add-on reads still run inline"
-        deadline = time.monotonic() + 10
-        while (not replies or retirement.active_count()) and time.monotonic() < deadline:
-            time.sleep(0.05)
-        assert replies and "result" in replies[0] and retirement.active_count() == 0, replies
-        checks["polled_addon_reads_run_on_native_pool"] = True
 
         deferred_started, deferred_release = threading.Event(), threading.Event()
         def deferred(): deferred_started.set(); deferred_release.wait(10)
