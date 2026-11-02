@@ -632,8 +632,11 @@ characters. Show that one connection's integration controls in the card. To
 answer, call `POST /api/bots/:id/connection-requests/:requestId` with
 `{ "decision": "connected" | "decline", "epoch": "...", "sessionId": "...", "connection": "<connectionId>" }`.
 `connected` answers 409 with a message to show until the catalog lists the
-connection as `connected` or `configured`. Send it once the status changes to
-one of those while the card is open, or after an in-card setup finishes. If the
+connection as `connected` or `configured` without `authorizing: true`. An MCP
+server saved before its OAuth finishes reads as `configured` and `authorizing`.
+Send it once the connection becomes ready while the card is open, or after an
+in-card setup finishes. A flow names its connection in `connectionId`; a sign-in
+restored for another connection must not settle the card. If the
 connection already read as set up when the card opened, wait for the person to
 press **Continue**. It answers `{ "status": "ok" }`, or `{ "status": "expired" }`
 when the request already closed.

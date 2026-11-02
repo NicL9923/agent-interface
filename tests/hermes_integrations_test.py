@@ -29,6 +29,18 @@ class IntegrationTests(unittest.TestCase):
         integrations.FLOWS["flow"] = value
         return value
 
+    def test_an_unfinished_sign_in_marks_only_its_own_connection_and_names_it(self):
+        now = integrations.time.time()
+        integrations.FLOWS.update({
+            "open": dict(kind="mcp", connection="supabase", home=str(self.home), status="pending", expires=now + 60),
+            "done": dict(kind="mcp", connection="github", home=str(self.home), status="approved", expires=now + 60),
+            "stale": dict(kind="provider", connection="provider:nous", home=str(self.home), status="pending", expires=now - 1),
+            "other": dict(kind="google", connection="google_workspace", home=str(self.home) + "-other", status="pending", expires=now + 60),
+        })
+        rows = [dict(id=key) for key in ("supabase", "github", "provider:nous", "google_workspace")]
+        self.assertEqual([row.get("authorizing", False) for row in integrations.mark_authorizing(str(self.home), rows)], [True, False, False, False])
+        self.assertEqual(integrations.flow_summary("open", integrations.FLOWS["open"])["connectionId"], "supabase")
+
     def test_callback_requires_exact_state_profile_redirect_and_single_use(self):
         entry = self.flow()
         for address, profile in [("https://app.example/integrations/google/callback?state=wrong&code=code", "one"), ("https://app.example/integrations/google/callback?state=safe-state&code=code", "two"), ("https://other.example/integrations/google/callback?state=safe-state&code=code", "one"), ("https://app.example/integrations/google/callback?state=safe-state&state=wrong&code=code", "one")]:

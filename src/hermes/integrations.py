@@ -352,7 +352,7 @@ def begin_google(home, profile, redirect_uri, fields=None):
                 if expected_account != existing.get("expected_account", ""):
                     raise IntegrationError("Cancel the existing Google authorization before choosing another account.")
                 return flow_summary(existing_id, existing)
-        FLOWS[flow_id] = dict(kind="google", profile=profile, home=str(home), state=state, flow=flow, client=client, expires=time.time()+600, status="pending", manual=manual, public_url=url, flow_kind="redirect", callbackInput=manual, expected_account=expected_account, original_token=(Path(home) / "google_token.json").read_bytes() if (Path(home) / "google_token.json").exists() else None)
+        FLOWS[flow_id] = dict(kind="google", connection="google_workspace", profile=profile, home=str(home), state=state, flow=flow, client=client, expires=time.time()+600, status="pending", manual=manual, public_url=url, flow_kind="redirect", callbackInput=manual, expected_account=expected_account, original_token=(Path(home) / "google_token.json").read_bytes() if (Path(home) / "google_token.json").exists() else None)
     return dict(kind="redirect", status="pending", flowId=flow_id, url=url, callbackInput=manual,
                 message="Authorize Google, then return to check this connection." if not manual else "This existing installed OAuth client uses an advanced manual flow. Copy the entire localhost redirect URL and paste it here. A registered web client enables automatic completion.")
 
@@ -600,7 +600,19 @@ async def inventory(profile):
         rows.append(card("provider:" + provider["id"], provider["name"], "providers", profile, "configured" if connected else "not_connected",
                          "Hermes has provider credentials. Its native provider status is configuration evidence." if connected else "Authorize this model provider through its native Hermes flow." if provider["flow"] == "device_code" else "This provider's account is owned by its official CLI. Complete sign-in there, then refresh this list.",
                          actions=dict(connect=provider["flow"] == "device_code", check=False, disconnect=bool(provider.get("disconnectable") and connected)), capabilities=["Models"]))
-    return dict(profile=profile, canManage=False, connections=apply_checks(home, rows))
+    return dict(profile=profile, canManage=False, connections=mark_authorizing(home, apply_checks(home, rows)))
+
+
+def mark_authorizing(home, rows):
+    """Marks connections with an unfinished sign-in. Saving an MCP server comes before its OAuth,
+    so its configured status alone does not mean an assistant can use it yet."""
+    with FLOW_LOCK:
+        pending = {entry.get("connection") for entry in FLOWS.values() if entry["home"] == str(home)
+                   and entry["status"] in ("pending", "exchanging") and entry["expires"] > time.time()}
+    for row in rows:
+        if row["id"] in pending:
+            row["authorizing"] = True
+    return rows
 
 
 def flow_summary(key, entry):
@@ -608,7 +620,7 @@ def flow_summary(key, entry):
     status = "expired" if expired else entry["status"]
     pending = status in ("pending", "exchanging")
     result = dict(kind=entry.get("flow_kind", "redirect") if pending else "connected" if status == "approved" else "instructions", status="pending" if status == "exchanging" else status,
-                  flowId=key, expiresAt=datetime.datetime.fromtimestamp(entry["expires"], datetime.timezone.utc).isoformat(),
+                  flowId=key, connectionId=entry.get("connection"), expiresAt=datetime.datetime.fromtimestamp(entry["expires"], datetime.timezone.utc).isoformat(),
                   message="Authorization completed. Refresh the connection status." if status == "approved" else "Authorization expired. Start again." if status == "expired" else "Waiting for authorization." if pending else "Authorization cancelled. Refresh connection status." if status == "cancelled" else "Authorization did not complete. Check connection status before retrying.")
     if pending:
         for field in ("userCode", "callbackInput"):
@@ -774,7 +786,7 @@ async def dispatch(data, request):
             result = await mcp.auth_mcp_server(name, request, profile)
             key = secrets.token_urlsafe(24)
             with FLOW_LOCK:
-                FLOWS[key] = dict(kind="mcp", profile=profile, home=home, native_id=result["flow_id"], public_url=clean_url(result.get("authorization_url")), flow_kind="redirect", expires=time.time()+600, status="pending")
+                FLOWS[key] = dict(kind="mcp", connection=name if name in PRESETS else identity, profile=profile, home=home, native_id=result["flow_id"], public_url=clean_url(result.get("authorization_url")), flow_kind="redirect", expires=time.time()+600, status="pending")
             url = clean_url(result.get("authorization_url"))
             if not url:
                 raise IntegrationError("Hermes did not return a safe authorization URL. Review the native MCP connection.")
@@ -784,7 +796,7 @@ async def dispatch(data, request):
             result = await oauth.start_oauth_login(provider, request, profile)
             key = secrets.token_urlsafe(24)
             with FLOW_LOCK:
-                FLOWS[key] = dict(kind="provider", profile=profile, home=home, provider=provider, native_id=result["session_id"], public_url=clean_url(result.get("verification_url")), flow_kind="device_code", userCode=result.get("user_code"), expires=time.time()+min(result.get("expires_in", 600), 900), status="pending")
+                FLOWS[key] = dict(kind="provider", connection=identity, profile=profile, home=home, provider=provider, native_id=result["session_id"], public_url=clean_url(result.get("verification_url")), flow_kind="device_code", userCode=result.get("user_code"), expires=time.time()+min(result.get("expires_in", 600), 900), status="pending")
             url = clean_url(result.get("verification_url"))
             if not url:
                 raise IntegrationError("The provider did not return a safe authorization URL.")

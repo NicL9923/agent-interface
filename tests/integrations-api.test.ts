@@ -85,11 +85,11 @@ it("explains a missing integration add-on without attempting a connection change
 });
 
 describe("assistant connection requests", () => {
-  async function setupRequests(status: "not_connected" | "configured" = "not_connected") {
+  async function setupRequests(status: "not_connected" | "configured" = "not_connected", authorizing = false) {
     const config = loadConfig({ NODE_ENV: "production", APP_ORIGIN: origin, APP_DATABASE: ":memory:", GOOGLE_CLIENT_ID: "fixture-client",
       HOUSEHOLD_EMAILS: "admin@example.invalid,member@example.invalid", HERMES_INTEGRATION_ADMINS: "admin@example.invalid" });
     const integrationRequest = vi.fn(async (request: IntegrationRequest) => ({ profile: request.profile, canManage: true,
-      connections: [{ id: "key:brave", name: "Brave Search", status }] }) as never);
+      connections: [{ id: "key:brave", name: "Brave Search", status, authorizing }] }) as never);
     const connectionRequest = vi.fn(async () => ({ status: "ok" as const }));
     const runtime = fakeRuntime({ integrationRequest, connectionRequest, close: async () => {},
       listBots: async () => [{ id: "ranch", name: "Ranch hand", shared: true, model: "test", activity: "idle" }] });
@@ -115,6 +115,10 @@ describe("assistant connection requests", () => {
     expect(waiting.connectionRequest).not.toHaveBeenCalled();
     const unknown = await waiting.app.inject({ method: "POST", url, headers: waiting.member, payload: body("connected", { connection: "github" }) });
     expect(unknown.statusCode).toBe(409);
+    const signingIn = await setupRequests("configured", true);
+    const pending = await signingIn.app.inject({ method: "POST", url, headers: signingIn.member, payload: body("connected") });
+    expect([pending.statusCode, pending.json().error]).toEqual([409, "Brave Search is still waiting for its sign-in. Finish signing in, then press Continue."]);
+    expect(signingIn.connectionRequest).not.toHaveBeenCalled();
     const ready = await setupRequests("configured");
     expect((await ready.app.inject({ method: "POST", url, headers: ready.member, payload: body("connected") })).statusCode).toBe(200);
     expect(ready.integrationRequest).toHaveBeenCalledWith({ operation: "list", profile: "ranch" });

@@ -36,11 +36,12 @@ export function IntegrationsPanel({ bots, accountScope, onClose }: { bots: Bot[]
 
 /**
  * One assistant's connections. `only` narrows it to one catalog entry, as a connection request card
- * shows it; `onCatalog` sees each catalog read and `onApproved` hears when a sign-in or setup finishes.
+ * shows it; `onCatalog` sees each catalog read and `onApproved` hears which connection a finished
+ * sign-in or setup was for, when known. A restored sign-in can belong to another connection.
  */
 export function IntegrationList({ profile, bots, accountScope = "", only, onCatalog, onApproved }: {
   profile: string; bots: Bot[]; accountScope?: string; only?: string;
-  onCatalog?: (catalog: IntegrationCatalog) => void; onApproved?: () => void;
+  onCatalog?: (catalog: IntegrationCatalog) => void; onApproved?: (connectionId?: string) => void;
 }) {
   const disconnectButtons = useRef(new Map<string, HTMLButtonElement>());
   const keepConnected = useRef<HTMLButtonElement>(null);
@@ -81,7 +82,7 @@ export function IntegrationList({ profile, bots, accountScope = "", only, onCata
     pollMs: 2500,
     onData: next => {
       setFlow(next);
-      if (next.status === "approved") onApproved?.();
+      if (next.status === "approved") onApproved?.(next.connectionId);
       if (next.status !== "pending") { try { sessionStorage.removeItem(flowKey); } catch {} void refresh(); }
     },
   });
@@ -93,10 +94,10 @@ export function IntegrationList({ profile, bots, accountScope = "", only, onCata
     try { saved = sessionStorage.getItem(flowKey); } catch { /* Private browsing can disable storage. */ }
     if (saved) setFlow({ flowId: saved, kind: "instructions", status: "pending", message: "Restoring the sign-in status…" });
   }, [flowKey]);
-  const acceptFlow = (next: IntegrationFlow, service = "") => {
+  const acceptFlow = (next: IntegrationFlow, service = "", connectionId?: string) => {
     setFlowService(service);
     setFlow(next);
-    if (next.status === "approved") onApproved?.();
+    if (next.status === "approved") onApproved?.(next.connectionId ?? connectionId);
     if (next.flowId && next.status === "pending") try { sessionStorage.setItem(flowKey, next.flowId); } catch {}
     const url = authorizationUrl(next.url);
     if (url && next.status === "pending") window.open(url, "_blank", "noopener,noreferrer");
@@ -109,7 +110,7 @@ export function IntegrationList({ profile, bots, accountScope = "", only, onCata
     const next = await write<IntegrationFlow>(`/integrations/${encodeURIComponent(id)}/${operation}`, payload);
     if (!current()) return;
     if (operation === "connect") {
-      setFields({}); setEditing(undefined); acceptFlow(next, catalog?.connections.find(item => item.id === id)?.name);
+      setFields({}); setEditing(undefined); acceptFlow(next, catalog?.connections.find(item => item.id === id)?.name, id);
     }
     setDisconnect(""); await refresh();
   }, { onError: cause => actionError(cause, operation === "check") });
@@ -122,7 +123,7 @@ export function IntegrationList({ profile, bots, accountScope = "", only, onCata
       const next = cancel ? await api<IntegrationFlow>(`${path}?profile=${encodeURIComponent(profile)}`, { method: "DELETE" })
         : await write<IntegrationFlow>(`${path}/callback`, { profile, callbackUrl: callback });
       // A check that started before this answer could otherwise replace it with the older state.
-      if (current()) { flowCheck.invalidate(); setFlow(next); setCallback(""); await refresh(); if (next.status === "approved") onApproved?.(); }
+      if (current()) { flowCheck.invalidate(); setFlow(next); setCallback(""); await refresh(); if (next.status === "approved") onApproved?.(next.connectionId); }
       if (next.status !== "pending") try { sessionStorage.removeItem(flowKey); } catch {}
     });
   };

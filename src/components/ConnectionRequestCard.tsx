@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { ApiError, write } from "../client-api";
 import type { Bot } from "../shared/types";
-import { readyConnectionStatuses, type ConnectionRequest, type ConnectionRequestDecision, type ConnectionRequestResult, type IntegrationCatalog, type IntegrationConnection } from "../shared/integrations";
+import { connectionReady, type ConnectionRequest, type ConnectionRequestDecision, type ConnectionRequestResult, type IntegrationCatalog, type IntegrationConnection } from "../shared/integrations";
 import { rememberSettled } from "../app/waiting-input";
 import { attentionAnchor } from "../app/transcript-logic";
 import { Icon } from "./Icon";
@@ -12,7 +12,7 @@ import "./handoff.css";
 // The integrations UI loads with Settings, so the transcript only pays for it when a card appears.
 const IntegrationList = lazy(() => import("./IntegrationsPanel").then(module => ({ default: module.IntegrationList })));
 
-const ready = (item?: IntegrationConnection) => !!item && readyConnectionStatuses.includes(item.status);
+const ready = (item?: IntegrationConnection | null) => connectionReady(item ?? undefined);
 
 /**
  * An assistant asks a person to set up one of its connections, in the chat. The card holds that
@@ -30,7 +30,8 @@ export function ConnectionRequestCard({ request, requestId, botId, bots, userId,
   const [settled, setSettled] = useState<string | null>(null);
   const [error, setError] = useState("");
   const live = useRef(true);
-  useEffect(() => () => { live.current = false; }, []);
+  // Set in the effect too: StrictMode runs cleanup and setup again on mount.
+  useEffect(() => { live.current = true; return () => { live.current = false; }; }, []);
   // Whether it was already set up when the card first read the catalog. Only a change while the
   // card is open continues on its own, so an expired grant that still reads as saved waits for Continue.
   const initiallyReady = useRef<boolean | undefined>(undefined);
@@ -65,11 +66,16 @@ export function ConnectionRequestCard({ request, requestId, botId, bots, userId,
     void settle("connected", true);
   }
 
+  /** A finished sign-in continues only for this request's connection; one restored from Settings may be another's. */
+  function onApproved(connectionId?: string) {
+    if (connectionId === request.connectionId) continueOnce();
+  }
+
   function onCatalog(catalog: IntegrationCatalog) {
     const next = catalog.connections.find(connection => connection.id === request.connectionId) ?? null;
     setItem(next); setCanManage(catalog.canManage);
-    if (initiallyReady.current === undefined) initiallyReady.current = ready(next ?? undefined);
-    else if (!initiallyReady.current && ready(next ?? undefined)) continueOnce();
+    if (initiallyReady.current === undefined) initiallyReady.current = ready(next);
+    else if (!initiallyReady.current && ready(next)) continueOnce();
   }
 
   if (settled) return <SettledReceipt requestId={requestId} text={settled} />;
@@ -80,15 +86,15 @@ export function ConnectionRequestCard({ request, requestId, botId, bots, userId,
     <dl className="handoff-ask"><dt>Why</dt><dd>{request.reason}</dd></dl>
     <p className="muted handoff-source">In {name}'s words. Credentials go straight to Hermes, never into this chat.</p>
     {missing ? <p className="handoff-state" role="status">WildBots doesn't have a connection called {request.connectionId} for {name}.</p>
-      : !canManage && !ready(item ?? undefined) ? <p className="handoff-state" role="status">Only a household integration administrator can connect {service}. Ask one of them, or choose Not now.</p>
+      : !canManage && !ready(item) ? <p className="handoff-state" role="status">Only a household integration administrator can connect {service}. Ask one of them, or choose Not now.</p>
       : null}
     <div className="connection-request-setup">
       <Suspense fallback={<p className="muted" role="status">Loading connection…</p>}>
-        <IntegrationList profile={botId} bots={bots} accountScope={userId} only={request.connectionId} onCatalog={onCatalog} onApproved={continueOnce} />
+        <IntegrationList profile={botId} bots={bots} accountScope={userId} only={request.connectionId} onCatalog={onCatalog} onApproved={onApproved} />
       </Suspense>
     </div>
     <div className="actions">
-      {!missing && <button type="button" className="primary with-progress" disabled={disconnected || !!sending || !ready(item ?? undefined)}
+      {!missing && <button type="button" className="primary with-progress" disabled={disconnected || !!sending || !ready(item)}
         onClick={() => void settle("connected")}>{sending === "connected" && <Icon name="spinner" className="spin" size={16} />}{sending === "connected" ? "Sending…" : "Continue"}</button>}
       <button type="button" className="with-progress" disabled={disconnected || !!sending} onClick={() => void settle("decline")}>
         {sending === "decline" && <Icon name="spinner" className="spin" size={16} />}{sending === "decline" ? "Sending…" : "Not now"}</button>
