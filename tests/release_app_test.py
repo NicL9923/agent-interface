@@ -138,7 +138,13 @@ class Host:
         (self.source / "auth.py").write_text("repaired\n")
         self.profile = self.home / "config.yaml"
         self.profile.write_text("model: default\n")
-        (self.base / "shared/hermes-worker.json").write_text(json.dumps({"appRoot": str(self.base / "releases/release-live"), "qualificationReceipt": "receipt"}))
+        # A native launcher that reports the store interpreter the way Hermes's does.
+        self.interpreter = self.home / "tools/python-3.14.9/bin/python3"
+        self.launcher = self.home / "launcher"
+        self.launcher.write_text("#!/bin/sh\nprintf '%s' '" + json.dumps([str(self.interpreter), "-I", "-c", "pass"]) + "'\n")
+        self.launcher.chmod(0o700)
+        (self.base / "shared/hermes-worker.json").write_text(json.dumps({"appRoot": str(self.base / "releases/release-live"),
+                                                                       "qualificationReceipt": "receipt", "managedLauncher": str(self.launcher)}))
         self.status({"phase": "idle", "maintenance": False})
 
     def status(self, value):
@@ -200,6 +206,16 @@ class ReleaseRules(unittest.TestCase):
         config = self.config(hermes_revision="e" * 40, repair_sha="new-repair")
         self.assertEqual((config["hermesRevision"], config["repairSha256"]), ("e" * 40, "new-repair"))
 
+    def test_the_launchers_current_interpreter_replaces_a_carried_one(self):
+        # A Hermes update moved the store interpreter; the carried path would relaunch without input.
+        prior = {**PRIOR, "managedPython": "/home/.hermes/tools/python-3.14.7/bin/python3"}
+        config = release_app.derive_config(prior, release="/srv/app/releases/new", current="/srv/app/releases/old", operation="op",
+                                           web_build="b" * 16, worker={"appRoot": "/srv/app/releases/old"},
+                                           profile_hashes={"/home/config.yaml": "now"}, helper_sha="helper",
+                                           hermes_revision=PRIOR["hermesRevision"], repair_sha=PRIOR["repairSha256"],
+                                           managed_python="/home/.hermes/tools/python-3.14.9/bin/python3")
+        self.assertEqual(config["managedPython"], "/home/.hermes/tools/python-3.14.9/bin/python3")
+
     def test_settled_update_phases_count_as_clear(self):
         clear = {"maintenance": False, "leasePresent": False, "drainPresent": False}
         for phase in ("idle", "succeeded", "rolled_back", "cancelled"):
@@ -213,7 +229,7 @@ class ReleaseRules(unittest.TestCase):
 
     def facts(self, **overrides):
         return {"prior": PRIOR, "maintenance": False, "leasePresent": False, "drainPresent": False,
-                "upgradePhase": "idle", **overrides}
+                "upgradePhase": "idle", "managedPython": "/home/.hermes/tools/python/bin/python3", **overrides}
 
     def built(self, **overrides):
         return {"webBuild": "bbbbbbbbbbbbbbbb", "helperSha256": "helper",
@@ -233,6 +249,7 @@ class ReleaseRules(unittest.TestCase):
         self.assertIn("local build", self.problems(local_web_build="cccccccccccccccc")[0])
         stale = self.built(receipt={"valid": False, "error": "digest differs"})
         self.assertIn("--qualification", self.problems(built=stale)[0])
+        self.assertIn("did not report an interpreter", self.problems(self.facts(managedPython=None))[0])
         self.assertNotIn("--qualification", self.problems(built=stale, qualification="/srv/q.json")[0])
 
     def test_upgrade_helper_changes_need_explicit_review(self):
@@ -463,6 +480,7 @@ class HostPrograms(unittest.TestCase):
         repair = subprocess.check_output(["git", "-c", "core.abbrev=10", "-C", str(self.host.source), "diff", "HEAD", "--binary"])
         self.assertEqual((facts["hermesRevision"], facts["repairSha256"]), (head, hashlib.sha256(repair).hexdigest()))
         self.assertEqual(facts["workerSha256"], hashlib.sha256((self.host.base / "shared/hermes-worker.json").read_bytes()).hexdigest())
+        self.assertEqual(facts["managedPython"], str(self.host.interpreter))
 
     def test_facts_report_active_maintenance(self):
         self.host.deployment("latest", "op-2", True)
@@ -642,7 +660,8 @@ class HostPrograms(unittest.TestCase):
         release = str((self.host.base / "releases/release-live").resolve())
         self.assertEqual({key for key in config if config[key] != prior.get(key)},
                          {"expectedRelease", "hermesRevision", "repairSha256", "newQualificationReceipt",
-                          "operationId", "profileHashes", "preservedFiles", "deployFunctionsSha256"})
+                          "operationId", "profileHashes", "preservedFiles", "deployFunctionsSha256", "managedPython"})
+        self.assertEqual(config["managedPython"], str(self.host.interpreter))
         self.assertEqual((config["release"], config["expectedRelease"]), (release, release))
         self.assertEqual((config["hermesRevision"], config["repairSha256"]), (head, hashlib.sha256(repair).hexdigest()))
         self.assertEqual(config["newQualificationReceipt"], "/stage/qualification.json")

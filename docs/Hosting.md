@@ -172,12 +172,20 @@ It is ready for the administrator's separate installation action; the running
 Hermes version remains d23.
 
 Releases and Hermes installs wait for the gateway to report no active agents.
-`prepare-when-idle.py` prints what the gateway reports on each busy attempt. If it
-counts agents with no listed work for 20 minutes or more, it says so once. On
-October 22, 2026 the gateway counted one agent for 80 minutes. It had no turn, cron,
-kanban or delegation records, no tool processes and no new messages. A restart
-cleared it: `systemctl --user restart hermes-gateway.service`. Restart only when
-nobody is mid-conversation, Discord included, because a restart ends any real turn.
+`prepare-when-idle.py` prints which check refused and what the gateway reports on
+each busy attempt. Hermes lists `active_work` only while it drains, so an empty list
+is normal for a real turn.
+
+The gateway can keep counting an agent after its turn ends. On October 22 and
+November 2, 2026 it counted one with no turn records and no tool processes while the
+household was idle; a restart cleared it each time. A working turn usually writes its
+messages after each tool batch, but a long model call or a script-only routine can stay
+silent, so silence alone never proves a leak. `prepare-when-idle.py` reports a count
+that persists for 5 minutes with no message written in any profile and no live routine
+run. With `--household-idle`, passed only after the household confirms nobody is
+mid-conversation, Discord included, it restarts `hermes-gateway.service` once. The host
+re-checks the count, messages and routine runs in the same command that restarts it.
+A restart ends any real turn.
 
 Old releases accumulate under `releases/`. The household host filled to 14 GB free
 with 129 of them, below the update check's 20 GB minimum. `release-app.py activate`
