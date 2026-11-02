@@ -1137,6 +1137,17 @@ print('fixture real candidate patch identity passed')
         self.assertEqual(after['qualificationPython'],pythons['3.14.9']); self.assertEqual(after['hooks']['finish'][0],pythons['3.14.9'])
         self.assertEqual(after['hooks']['finish'][1:],before['hooks']['finish'][1:])
 
+    def test_hooks_left_on_an_older_interpreter_follow_even_when_qualification_python_is_current(self):
+        # The live host: qualificationPython hand-corrected to 3.14.9, every hook still on 3.14.7.
+        before,pythons=self.managed_interpreters('3.14.7')
+        before['qualificationPython']=pythons['3.14.9']; worker.atomic(self.config,before)
+        self.check(); self.assertEqual(self.install()['status'],'complete'); self.assertEqual(self.status()['phase'],'succeeded')
+        after=json.loads(self.config.read_text())
+        self.assertEqual(after['qualificationPython'],pythons['3.14.9'])
+        self.assertEqual({argv[0] for name,argv in after['hooks'].items() if name!='regressions'},{pythons['3.14.9']})
+        self.assertEqual({argv[0] for argv in after['hooks']['regressions']},{pythons['3.14.9']})
+        worker.check_config(after)
+
     def test_a_failed_release_keeps_the_worker_interpreter_paths_for_review(self):
         before,_=self.managed_interpreters('3.14.7')
         stage=self.check(); (stage/'fail-finish').touch(); self.install(expect_error=True)

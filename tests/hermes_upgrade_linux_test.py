@@ -740,7 +740,7 @@ def sync_venv(extras=None, **kwargs):
         stderr = io.StringIO()
         with contextlib.redirect_stderr(stderr):
             self.platform.quiescence(); self.platform.backup(); self.platform.install(); self.platform.verify(); self.platform.finish()
-        self.assertIn("Updated 1 interpreter path(s) in " + str(self.config) + " from " + stale + " to " + self.pythons["3.14.9"], stderr.getvalue())
+        self.assertIn("Updated 1 interpreter path(s) in " + str(self.config) + " to " + self.pythons["3.14.9"], stderr.getvalue())
         self.assertEqual(self.platform.load()["baseline"]["interpreter"], self.pythons["3.14.9"])
         self.assertEqual(self.platform.load()["phase"], "finished")
         self.assertEqual(json.loads(self.config.read_text())["managedPython"], self.pythons["3.14.9"])
@@ -767,6 +767,21 @@ def sync_venv(extras=None, **kwargs):
         self.assertEqual(self.config.stat().st_mode & 0o777, 0o600)
         self.assertEqual(linux.Platform(self.config, self.environment).config, after)
         self.assertEqual(self.platform.config, after)
+
+    def test_finish_moves_positions_left_on_different_old_versions_to_the_launchers_interpreter(self):
+        # The live host had managedPython hand-corrected to 3.14.9 while regression commands stayed on 3.14.7.
+        old, new = self.pythons["3.14.7"], self.pythons["3.14.9"]
+        self.reconfigure(managedPython=new, regressionPython=old,
+                         regressionCommands={"sharedOAuth": [old, "-c", "pass"], "googleAuth": [old, "-c", "pass"]})
+        self.select("3.14.9")
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            self.platform.quiescence(); self.platform.backup(); self.platform.install(); self.platform.verify(); self.platform.finish()
+        after = json.loads(self.config.read_text())
+        self.assertEqual((after["managedPython"], after["regressionPython"]), (new, new))
+        self.assertEqual({argv[0] for argv in after["regressionCommands"].values()}, {new})
+        self.assertIn("Updated 3 interpreter path(s)", stderr.getvalue())
+        self.assertEqual(linux.Platform(self.config, self.environment).config, after)
 
     def test_the_interpreter_changing_mid_operation_at_the_baseline_revision_is_refused(self):
         self.platform.quiescence()

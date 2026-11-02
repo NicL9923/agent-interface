@@ -117,10 +117,12 @@ it. Native PM sync runs in the recorded interpreter. A record from an older help
 has none; sync then uses `managedPython`, and the tool store still bounds the check.
 
 After `finish` releases maintenance, the platform helper asks the launcher again.
-If the answer differs from `managedPython`, it replaces every string value exactly
-equal to the old path, such as `managedPython`, `regressionPython` and regression
-argv entries. It checks the result as it checks any configuration, then atomically
-rewrites the file with mode `0600`. After a rollback the launcher reports the
+It points every string value that names a Python 3 interpreter inside the tool store
+at the launcher's answer, whichever version it named before. That covers
+`managedPython`, `regressionPython` and regression argv entries, so positions left
+on different old versions all follow. Other tool-store binaries, such as Chromium,
+stay as they are. It checks the result as it checks any configuration, then
+atomically rewrites the file with mode `0600`. After a rollback the launcher reports the
 restored interpreter, and the file follows it. The worker does the same for
 `qualificationPython` and its hook argv after a released install, a restored
 install or a recovery. Both refreshes replace only tool-store paths, so a system

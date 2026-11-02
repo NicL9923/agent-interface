@@ -99,14 +99,22 @@ def sha(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def replace_interpreter_paths(path, old, new, check):
-    """Replace every JSON string value exactly equal to OLD with NEW in the private configuration
-    at PATH, keeping it owner-only. CHECK must accept the result before it replaces the file.
-    Keys and partial matches stay as they are. Returns the new configuration and the count."""
+STORE_PYTHON = re.compile(r"python3(?:\.\d+)*")
+
+
+def replace_interpreter_paths(path, new, store, check):
+    """Point every native tool-store Python in the private configuration at PATH to NEW.
+
+    A value is replaced when it is a path inside STORE whose file name is a Python 3 interpreter,
+    whichever version it names, so positions left on different old versions all follow the
+    launcher. Other tool-store binaries and system Pythons stay as they are. CHECK must accept the
+    result before it replaces the owner-only file. Returns the new configuration and the count."""
+    store = Path(store).resolve()
     replaced = 0
     def walk(value):
         nonlocal replaced
-        if isinstance(value, str) and value == old:
+        if (isinstance(value, str) and value != new and Path(value).is_absolute()
+                and STORE_PYTHON.fullmatch(Path(value).name) and Path(value).resolve().is_relative_to(store)):
             replaced += 1
             return new
         if isinstance(value, list): return [walk(item) for item in value]
@@ -636,14 +644,13 @@ class Worker:
                 cwd=self.source, env=dict(environment, HERMES_HOME=home), stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=True, timeout=30, text=True).stdout)
             if not isinstance(command, list) or not command or not isinstance(command[0], str) or not Path(command[0]).is_absolute():
                 raise RuntimeError("the native launcher did not report its interpreter")
-            old, new = self.config["qualificationPython"], command[0]
-            if new == old: return
-            # Only a tool-store path is a launcher selection. A system bootstrap Python is the installer's choice.
+            new = command[0]
+            # Only tool-store Pythons are launcher selections. A system bootstrap Python is the installer's choice.
             store = (Path(home) / "tools").resolve()
-            if not Path(old).resolve().is_relative_to(store) or not Path(new).resolve().is_relative_to(store) or not Path(new).is_file():
-                note("skipped, the qualification interpreter is not a native tool-store selection."); return
-            self.config, replaced = replace_interpreter_paths(self.config_file, old, new, check_config)
-            note("updated %d path(s) in %s from %s to %s" % (replaced, self.config_file, old, new))
+            if not Path(new).resolve().is_relative_to(store) or not Path(new).is_file():
+                note("skipped, the launcher's interpreter is not in the native tool store."); return
+            self.config, replaced = replace_interpreter_paths(self.config_file, new, store, check_config)
+            if replaced: note("updated %d path(s) in %s to %s" % (replaced, self.config_file, new))
         except Exception as error:
             note("skipped after " + type(error).__name__ + (": " + str(error) if isinstance(error, RuntimeError) else ""))
 

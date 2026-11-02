@@ -807,13 +807,12 @@ print(json.dumps({'ok':True,'state':'synced'}))
         update has already succeeded, and the next operation binds the launcher's interpreter
         itself. A rollback restores the old tools, so the launcher's choice is right either way."""
         try:
-            old, new = self.config["managedPython"], self.launcher_python()
-            if new == old: return
-            # Only a tool-store path is a launcher selection. Anything else is the installer's choice.
-            if not self.in_tool_store(old) or not self.in_tool_store(new) or not Path(new).is_file():
-                raise RuntimeError("The managed interpreter paths are not both inside the native tool store")
-            self.config, replaced = upgrade_worker().replace_interpreter_paths(self.config_file, old, new, self.check_config)
-            print("Updated %d interpreter path(s) in %s from %s to %s" % (replaced, self.config_file, old, new), file=sys.stderr, flush=True)
+            new = self.launcher_python()
+            # Only tool-store Pythons are launcher selections. Anything else is the installer's choice.
+            if not self.in_tool_store(new) or not Path(new).is_file():
+                raise RuntimeError("The launcher's interpreter is not inside the native tool store")
+            self.config, replaced = upgrade_worker().replace_interpreter_paths(self.config_file, new, self.home / "tools", self.check_config)
+            if replaced: print("Updated %d interpreter path(s) in %s to %s" % (replaced, self.config_file, new), file=sys.stderr, flush=True)
         except Exception as error:
             with contextlib.suppress(OSError):
                 print("Interpreter path refresh skipped: " + describe(error), file=sys.stderr, flush=True)
