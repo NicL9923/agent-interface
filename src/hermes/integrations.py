@@ -6,6 +6,7 @@ proxy, shell installation, environment editor, or credential reveal is exposed.
 import asyncio
 import datetime
 import hashlib
+import hmac
 import importlib.util
 import ipaddress
 import json
@@ -986,3 +987,145 @@ def install(web):
     # FastAPI's annotation resolver needs Request in module globals.
     globals()["Request"] = Request
     web.app.add_api_route("/api/agent-interface/integrations", endpoint, methods=["POST"])
+
+
+CONNECTION_REQUEST = "agent_interface.connection_request"
+CONNECTION_TOOL = "request_connection"
+# A card nobody finishes closes after this long. Browser sign-ins and finding a token take a while.
+CONNECTION_WAIT = 900
+# Catalog IDs an assistant may ask for; src/shared/integrations.ts requestableConnectionId must match.
+REQUESTABLE = re.compile(r"(google_workspace|github|synology|supabase|cloudflare|vps|home_assistant|selected_files|discord|key:[a-z0-9_]{1,40}|provider:[A-Za-z0-9_-]{1,80}|mcp:[A-Za-z0-9_-]{1,80})")
+# Control, zero-width and bidirectional characters can disguise what a card shows.
+HIDDEN = re.compile(r"[\x00-\x1f\x7f-\x9f​-‏ -‮⁠-⁯﻿]")
+_journal = None
+
+
+def connection_failure(error_type, message):
+    return json.dumps({"success": False, "error_type": error_type, "error": message})
+
+
+CONNECTION_RESULTS = {
+    "connected": dict(success=True, status="connected", next=(
+        "The person set up the connection and WildBots confirmed Hermes has it saved. Continue the task with it. "
+        "Tools from a newly added MCP server can appear only at the start of your next turn: if they are not in your "
+        "tools yet, tell the user it is connected and ask them to reply so you can continue. If using it fails, say "
+        "what failed instead of asking again.")),
+    "declined": dict(success=False, error_type="declined", error=(
+        "The person chose Not now, so nothing was connected. Continue without it, or tell them what it blocks. Do not "
+        "ask again unless they ask you to.")),
+    "timed_out": dict(success=False, error_type="timed_out", error=(
+        "Nobody finished the connection within 15 minutes, so the request closed. Tell the user what is waiting and "
+        "that they can connect it from this assistant's Connections settings, then ask them to reply.")),
+}
+
+
+def request_connection(args, **_kwargs):
+    """Asks a person in WildBots to set up one of this assistant's connections, and waits for them."""
+    vault, computer = sibling_module("vault"), sibling_module("computer")
+    if not isinstance(args, dict) or set(args) - {"connection", "reason"}:
+        return connection_failure("invalid_arguments", "Pass only connection and reason.")
+    connection = args.get("connection").strip() if isinstance(args.get("connection"), str) else ""
+    reason = " ".join(args.get("reason").split()) if isinstance(args.get("reason"), str) else ""
+    if not REQUESTABLE.fullmatch(connection):
+        return connection_failure("invalid_arguments", "Give connection as one catalog ID from this tool's description, "
+                                  "such as google_workspace, github or key:brave.")
+    if not 1 <= len(reason) <= 200 or HIDDEN.search(reason):
+        return connection_failure("invalid_arguments", "Give reason as 1 to 200 visible characters.")
+    from gateway.session_context import get_session_env
+    sid = get_session_env("HERMES_UI_SESSION_ID")
+    if not sid or not computer.person_waiting(sid, _journal):
+        return connection_failure("no_person", "Nobody is waiting in this WildBots conversation to see a connection card, "
+                                  "as in a scheduled or messaging run. Tell the user which connection you need and that "
+                                  "they can add it from this assistant's Connections settings in WildBots.")
+    from tui_gateway import server_requests
+    started = time.monotonic()
+    with vault.watched_asks() as asks:
+        result = server_requests.send(CONNECTION_REQUEST, sid, {"connection": connection, "reason": reason},
+                                      timeout=CONNECTION_WAIT)
+    value = (result or {}).get("value", "")
+    if value in ("connected", "declined"):
+        return json.dumps(CONNECTION_RESULTS[value])
+    if vault.replied_in_chat(asks):
+        return connection_failure("user_replied_in_chat", "The user sent a chat message instead of finishing the "
+                                  "connection card, so it closed. Their message is the next user message: read it before "
+                                  "doing anything else. If they still want this, ask again with what they corrected.")
+    if result is None and time.monotonic() - started >= CONNECTION_WAIT - 1:
+        return json.dumps(CONNECTION_RESULTS["timed_out"])
+    return connection_failure("cancelled", "The request closed without an answer, for example because the task was "
+                              "stopped. Do not continue the step that needed this connection.")
+
+
+CONNECTION_SCHEMA = dict(name=CONNECTION_TOOL, description=(
+    "Ask the user to connect a service inline in the chat. Use it when your task needs an account, MCP server or API "
+    "key this assistant does not have yet, or a connection that expired or lacks a permission, such as Gmail access "
+    "for an email task. The user sees a card in WildBots with your reason and that connection's own sign-in or setup "
+    "form, plus Continue and Not now. Credentials go straight to Hermes; never ask for tokens, keys or passwords in "
+    "chat. The call waits until the user finishes or declines, up to 15 minutes. "
+    "connection is a catalog ID: google_workspace (Gmail, Calendar, Drive, Tasks, Contacts), github, supabase, "
+    "cloudflare, home_assistant, synology, vps, selected_files (server folders), discord, key:openai, key:anthropic_key, "
+    "key:gemini, key:openrouter, key:brave, key:exa, key:firecrawl, key:fal, provider:<Hermes model provider id>, or "
+    "mcp:<name of a custom MCP server already added>. "
+    "Results: status connected: continue with it; a new MCP server's tools may appear only next turn. declined: they "
+    "chose Not now; continue without it or explain what it blocks, and do not ask again unless they ask you to. "
+    "user_replied_in_chat: they sent a message instead; read it next. timed_out: nobody finished within 15 minutes; "
+    "tell them what is waiting. no_person: nobody can see a card now, as in a scheduled run; tell them what to "
+    "connect in Settings. invalid_arguments: fix the arguments and call again. cancelled: the task was stopped."),
+    parameters=dict(type="object", additionalProperties=False, required=["connection", "reason"], properties=dict(
+        connection=dict(type="string", description="The catalog ID of the connection to set up, such as google_workspace."),
+        reason=dict(type="string", description="Why you need it, in one short sentence the user sees, such as "
+                    "I need Gmail access to find your flight confirmation. At most 200 characters."))))
+
+
+def settle_connection_request(params):
+    """Continue or Not now on a connection card. Only this executor's open ask in that profile's conversation settles.
+
+    The app confirms the connection reads as set up before it sends connected.
+    """
+    from tui_gateway import server_requests
+    request_id, sid, epoch, profile = (params.get(key) for key in ("requestId", "sessionId", "epoch", "profile"))
+    decision = {"connected": "connected", "decline": "declined"}.get(params.get("decision"))
+    if decision is None or not all(isinstance(value, str) and 1 <= len(value) <= 200 for value in (request_id, sid, epoch, profile)):
+        raise IntegrationError("This connection request is invalid.")
+    with server_requests._lock:
+        request = server_requests._open.get(request_id)
+    if request is None:
+        return {"status": "expired"}
+    journal = _journal
+    if (journal is None or request.method != CONNECTION_REQUEST or request.sid != sid or epoch != journal.epoch
+            or journal.live_profile_for_session(sid) != profile or journal.canonical_session(profile) != sid):
+        raise IntegrationError("This connection request changed. Refresh the conversation.")
+    if params.get("connection") != request.params.get("connection"):
+        raise IntegrationError("This connection request changed. Refresh the conversation.")
+    resolved = server_requests.resolve_response({"jsonrpc": "2.0", "id": request_id, "result": {"value": decision}})
+    return {"status": "ok" if resolved else "expired"}
+
+
+def install_requests(server, journal):
+    """Registers the connection ask, its tool and the app's settle method. Older revisions without the seam get no tool."""
+    global _journal
+    _journal = journal
+    def settle(rid, params):
+        params = params if isinstance(params, dict) else {}
+        secret, supplied = os.environ.get("HERMES_AGENT_INTERFACE_TOKEN", ""), params.get("service_key", "")
+        if not secret or not isinstance(supplied, str) or not hmac.compare_digest(supplied, secret):
+            return server._err(rid, 403, "Private application authentication is required.")
+        try:
+            return server._ok(rid, settle_connection_request(params))
+        except IntegrationError as exc:
+            return server._err(rid, 409, str(exc))
+    server.register_method("agent-interface.connection-request", settle)
+    try:
+        from tui_gateway.contracts import registry as contracts
+        from tui_gateway.contracts.server_requests import ServerRequestParams, ValueResult
+    except ImportError:
+        return
+    if CONNECTION_REQUEST not in contracts.SERVER_REQUESTS:
+        class ConnectionRequestParams(ServerRequestParams):
+            connection: str
+            reason: str
+        contracts.server_request(CONNECTION_REQUEST, params=ConnectionRequestParams, result=ValueResult,
+                                 doc="WildBots: ask a person to set up one of this assistant's connections inline.")
+    from tools.registry import registry
+    # An ask-the-user tool: it rides with clarify, and a session nobody can answer refuses at call time.
+    registry.register(name=CONNECTION_TOOL, toolset="clarify", schema=CONNECTION_SCHEMA, emoji="🔗",
+                      handler=request_connection)

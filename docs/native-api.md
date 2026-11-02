@@ -621,8 +621,25 @@ control hands back, so the client sends nothing extra. For **Not now**, call
 `{ "status": "ok" }`, or `{ "status": "expired" }` when the request already
 closed, and 409 when the binding no longer matches the assistant's conversation.
 
+### Connection requests
+
+An assistant's request to set up one of its connections arrives in `attention`
+with `kind: "connection"` and
+`connection: { "epoch", "sessionId", "connectionId", "reason" }`. `connectionId`
+is an ID from `GET /api/integrations?profile=:id`, such as `google_workspace`,
+`github` or `key:brave`. `reason` is the assistant's own words, at most 200
+characters. Show that one connection's integration controls in the card. To
+answer, call `POST /api/bots/:id/connection-requests/:requestId` with
+`{ "decision": "connected" | "decline", "epoch": "...", "sessionId": "...", "connection": "<connectionId>" }`.
+`connected` answers 409 with a message to show until the catalog lists the
+connection as `connected` or `configured`. Send it once the status changes to
+one of those while the card is open, or after an in-card setup finishes. If the
+connection already read as set up when the card opened, wait for the person to
+press **Continue**. It answers `{ "status": "ok" }`, or `{ "status": "expired" }`
+when the request already closed.
+
 A message sent with `POST /api/bots/:id/messages` while the assistant waits on a
-question, a secure request or a handoff closes those requests after the message
+question, a secure request, a handoff or a connection request closes those requests after the message
 is admitted, so the assistant reads it next. A login the assistant asked for by
 address stays open unless the sender is the member whose task asked for it. An
 answer that reaches Hermes after its request closed answers `{ "status": "expired" }`.

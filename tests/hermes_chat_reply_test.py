@@ -525,5 +525,109 @@ class HandoffTests(unittest.TestCase):
         self.assertEqual(self.computer_module.HANDOFF, self.native.vault.HANDOFF)
 
 
+
+class ConnectionRequestTests(unittest.TestCase):
+    def setUp(self):
+        self.native = Native()
+        self.sid = "live"
+        session = types.SimpleNamespace(get_session_env=lambda name: self.sid)
+        self.extra = patch.dict(sys.modules, {"gateway": types.ModuleType("gateway"), "gateway.session_context": session})
+        self.extra.start()
+        computer = load_source("src/hermes/computer.py", "chat_reply_computer_" + uuid.uuid4().hex)
+        sys.modules["agent_interface_vault"], sys.modules["agent_interface_computer"] = self.native.vault, computer
+        self.module = load_source("src/hermes/integrations.py", "chat_reply_integrations_" + uuid.uuid4().hex)
+        self.methods = {}
+        server = types.SimpleNamespace(register_method=self.methods.__setitem__, _ok=lambda rid, value: {"result": value},
+                                       _err=lambda rid, code, message: {"error": (code, message)})
+        self.module.install_requests(server, self.native.journal)
+        self.native.tools["connect"] = self.module.request_connection
+
+    def tearDown(self):
+        sys.modules.pop("agent_interface_vault", None)
+        sys.modules.pop("agent_interface_computer", None)
+        self.extra.stop()
+        self.native.close()
+
+    def call(self, args=None):
+        done = {}
+        args = args or {"connection": "google_workspace", "reason": "I need Gmail to find your flight confirmation."}
+        # A daemon, so a failing test cannot leave the process waiting out the 15-minute ask.
+        thread = threading.Thread(target=lambda: done.setdefault("result", self.native.registry.dispatch("connect", args)), daemon=True)
+        thread.start()
+        return thread, done
+
+    def result(self, thread, done):
+        thread.join(5)
+        self.assertFalse(thread.is_alive())
+        return json.loads(done["result"])
+
+    def settle(self, request, **values):
+        params = dict(decision="connected", requestId=request.id, sessionId="live", epoch="epoch", profile="one",
+                      connection="google_workspace")
+        return self.module.settle_connection_request({**params, **values})
+
+    def test_connected_checks_the_conversation_and_the_connection_then_continues(self):
+        thread, done = self.call()
+        request = self.native.wait_open(self.module.CONNECTION_REQUEST)
+        self.assertEqual(request.params, {"connection": "google_workspace", "reason": "I need Gmail to find your flight confirmation."})
+        for key, value in [("sessionId", "other"), ("epoch", "old"), ("profile", "two"), ("decision", "maybe"), ("connection", "github")]:
+            with self.assertRaises(self.module.IntegrationError):
+                self.settle(request, **{key: value})
+        self.assertEqual(self.settle(request, requestId="srq-missing"), {"status": "expired"})
+        self.assertEqual(self.settle(request), {"status": "ok"})
+        self.assertEqual(self.settle(request), {"status": "expired"})
+        result = self.result(thread, done)
+        self.assertEqual(result["status"], "connected")
+        self.assertIn("next turn", result["next"])
+
+    def test_not_now_declines(self):
+        thread, done = self.call()
+        request = self.native.wait_open(self.module.CONNECTION_REQUEST)
+        self.assertEqual(self.settle(request, decision="decline"), {"status": "ok"})
+        self.assertEqual(self.result(thread, done)["error_type"], "declined")
+
+    def test_the_app_must_authenticate_to_settle(self):
+        thread, done = self.call()
+        request = self.native.wait_open(self.module.CONNECTION_REQUEST)
+        params = dict(decision="decline", requestId=request.id, sessionId="live", epoch="epoch", profile="one", connection="google_workspace")
+        settle = self.methods["agent-interface.connection-request"]
+        with patch.dict(os.environ, {"HERMES_AGENT_INTERFACE_TOKEN": "service-secret"}):
+            self.assertEqual(settle("rid", {**params, "service_key": "wrong"})["error"][0], 403)
+            self.assertEqual(settle("rid", {**params, "service_key": "service-secret", "epoch": "old"})["error"][0], 409)
+            self.assertEqual(settle("rid", {**params, "service_key": "service-secret"}), {"result": {"status": "ok"}})
+        self.assertEqual(self.result(thread, done)["error_type"], "declined")
+
+    def test_a_chat_reply_closes_the_request(self):
+        thread, done = self.call()
+        self.native.wait_open(self.module.CONNECTION_REQUEST)
+        self.assertEqual(self.native.vault.close_for_chat("live", "member-b"), 1)
+        result = self.result(thread, done)
+        self.assertEqual(result["error_type"], "user_replied_in_chat")
+        self.assertIn("next user message", result["error"])
+
+    def test_nobody_finishing_times_out(self):
+        with patch.object(self.module, "CONNECTION_WAIT", 1.2):
+            thread, done = self.call()
+            self.assertEqual(self.result(thread, done)["error_type"], "timed_out")
+
+    def test_refuses_without_a_person_or_with_bad_arguments(self):
+        self.sid = "routine"
+        self.assertEqual(self.result(*self.call())["error_type"], "no_person")
+        self.sid = "live"
+        for args in ({"connection": "apple", "reason": "Calendars"}, {"connection": "../github", "reason": "x"},
+                     {"connection": "github", "reason": ""}, {"connection": "github", "reason": "x" * 201},
+                     {"connection": "github", "reason": "a\u202eb"}, {"connection": "github", "reason": "x", "token": "y"}):
+            self.assertEqual(self.result(*self.call(args))["error_type"], "invalid_arguments")
+        with self.native.requests._lock:
+            self.assertEqual(list(self.native.requests._open.values()), [])
+
+    def test_the_catalog_sentence_fits_and_every_result_is_named(self):
+        schema = self.module.CONNECTION_SCHEMA
+        self.assertLessEqual(len(schema["description"].split(". ")[0]), 60)
+        for outcome in ("connected", "declined", "user_replied_in_chat", "timed_out", "no_person", "invalid_arguments", "cancelled"):
+            self.assertIn(outcome, schema["description"])
+        self.assertEqual(self.module.CONNECTION_REQUEST, self.native.vault.CONNECTION_REQUEST)
+
+
 if __name__ == "__main__":
     unittest.main()

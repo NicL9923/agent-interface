@@ -755,9 +755,9 @@ def handoff_failure(error_type, message):
     return json.dumps({"success": False, "error_type": error_type, "error": message})
 
 
-def person_waiting(sid):
+def person_waiting(sid, journal=None):
     """A member's app message started this session's current turn, so someone can see the card."""
-    journal = _journal
+    journal = journal or _journal
     if journal is None:
         return False
     profile = journal.live_profile_for_session(sid)

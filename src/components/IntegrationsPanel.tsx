@@ -34,7 +34,14 @@ export function IntegrationsPanel({ bots, accountScope, onClose }: { bots: Bot[]
   </Dialog>;
 }
 
-export function IntegrationList({ profile, bots, accountScope = "" }: { profile: string; bots: Bot[]; accountScope?: string }) {
+/**
+ * One assistant's connections. `only` narrows it to one catalog entry, as a connection request card
+ * shows it; `onCatalog` sees each catalog read and `onApproved` hears when a sign-in or setup finishes.
+ */
+export function IntegrationList({ profile, bots, accountScope = "", only, onCatalog, onApproved }: {
+  profile: string; bots: Bot[]; accountScope?: string; only?: string;
+  onCatalog?: (catalog: IntegrationCatalog) => void; onApproved?: () => void;
+}) {
   const disconnectButtons = useRef(new Map<string, HTMLButtonElement>());
   const keepConnected = useRef<HTMLButtonElement>(null);
   const refreshButton = useRef<HTMLButtonElement>(null);
@@ -50,7 +57,9 @@ export function IntegrationList({ profile, bots, accountScope = "" }: { profile:
   const [mcp, setMcp] = useState({ name: "", url: "", auth: "none", token: "" });
   const flowKey = integrationFlowKey(accountScope, profile);
   const connections = useResource<IntegrationCatalog>(`/integrations?profile=${encodeURIComponent(profile)}`, { wake: true });
-  const { data: catalog, loading, reload: refresh } = connections;
+  const { data: everything, loading, reload: refresh } = connections;
+  const catalog = everything && only ? { ...everything, connections: everything.connections.filter(item => item.id === only) } : everything;
+  useEffect(() => { if (everything) onCatalog?.(everything); }, [everything]);
   const action = useAction();
   const copyCode = useAction();
   const { busy } = action;
@@ -72,6 +81,7 @@ export function IntegrationList({ profile, bots, accountScope = "" }: { profile:
     pollMs: 2500,
     onData: next => {
       setFlow(next);
+      if (next.status === "approved") onApproved?.();
       if (next.status !== "pending") { try { sessionStorage.removeItem(flowKey); } catch {} void refresh(); }
     },
   });
@@ -86,6 +96,7 @@ export function IntegrationList({ profile, bots, accountScope = "" }: { profile:
   const acceptFlow = (next: IntegrationFlow, service = "") => {
     setFlowService(service);
     setFlow(next);
+    if (next.status === "approved") onApproved?.();
     if (next.flowId && next.status === "pending") try { sessionStorage.setItem(flowKey, next.flowId); } catch {}
     const url = authorizationUrl(next.url);
     if (url && next.status === "pending") window.open(url, "_blank", "noopener,noreferrer");
@@ -111,13 +122,13 @@ export function IntegrationList({ profile, bots, accountScope = "" }: { profile:
       const next = cancel ? await api<IntegrationFlow>(`${path}?profile=${encodeURIComponent(profile)}`, { method: "DELETE" })
         : await write<IntegrationFlow>(`${path}/callback`, { profile, callbackUrl: callback });
       // A check that started before this answer could otherwise replace it with the older state.
-      if (current()) { flowCheck.invalidate(); setFlow(next); setCallback(""); await refresh(); }
+      if (current()) { flowCheck.invalidate(); setFlow(next); setCallback(""); await refresh(); if (next.status === "approved") onApproved?.(); }
       if (next.status !== "pending") try { sessionStorage.removeItem(flowKey); } catch {}
     });
   };
   const categories = [...new Set(catalog?.connections.map(item => item.category))];
   return <div className="integration-list">
-    <div className="integration-toolbar"><span className="muted">{catalog ? `${catalog.connections.filter(c => c.status === "connected").length} connected` : "Checking connections…"}</span><Button ref={refreshButton} disabled={loading || busy} onClick={refreshStatus}>{loading ? "Refreshing…" : "Refresh status"}</Button></div>
+    <div className="integration-toolbar"><span className="muted">{!catalog ? "Checking connections…" : only ? "" : `${catalog.connections.filter(c => c.status === "connected").length} connected`}</span><Button ref={refreshButton} disabled={loading || busy} onClick={refreshStatus}>{loading ? "Refreshing…" : "Refresh status"}</Button></div>
     {error && <FormMessage tone="error">{error}</FormMessage>}
     {!catalog && !loading && error && <Button onClick={refreshStatus}>Try again</Button>}
     {flow && <section className="integration-flow" aria-label="Connection sign-in" role="status">
@@ -150,8 +161,8 @@ export function IntegrationList({ profile, bots, accountScope = "" }: { profile:
         {item.actions.disconnect && <Button ref={node => { if (node) disconnectButtons.current.set(item.id, node); else disconnectButtons.current.delete(item.id); }} disabled={busy || !catalog!.canManage} onClick={() => { returnToDisconnect.current = item.id; setDisconnect(item.id); }}>Disconnect</Button>}
       </div>)}
     </article>; })}</div></section>)}
-    {catalog && catalog.connections.length === 0 && <p className="muted">Hermes has not reported any connections for this assistant.</p>}
-    {catalog?.canManage && <section className="integration-custom"><Button aria-expanded={custom} onClick={() => setCustom(!custom)}><Icon name="plus" size={18} /> Add custom MCP connection</Button>{custom && <form onSubmit={e => {
+    {catalog && catalog.connections.length === 0 && !only && <p className="muted">Hermes has not reported any connections for this assistant.</p>}
+    {catalog?.canManage && !only && <section className="integration-custom"><Button aria-expanded={custom} onClick={() => setCustom(!custom)}><Icon name="plus" size={18} /> Add custom MCP connection</Button>{custom && <form onSubmit={e => {
       e.preventDefault();
       void action.run(async ({ current }) => {
         const next = await write<IntegrationFlow | IntegrationConnection>("/integrations/mcp", { profile, ...mcp, token: mcp.auth === "bearer" ? mcp.token : undefined });

@@ -21,3 +21,24 @@ export interface IntegrationFlow {
 export interface CustomMcpInput { name: string; url: string; auth: "none" | "bearer" | "oauth"; token?: string }
 export type IntegrationOperation = "list" | "check" | "connect" | "disconnect" | "flow" | "cancel" | "callback" | "add_mcp";
 export interface IntegrationRequest { operation: IntegrationOperation; profile: string; id?: string; flowId?: string; fields?: Record<string, string>; mcp?: CustomMcpInput; callbackUrl?: string; redirectUri?: string }
+
+/** The add-on's native ask method. src/hermes/integrations.py CONNECTION_REQUEST must match; tests check. */
+export const connectionRequestMethod = "agent_interface.connection_request";
+/**
+ * An assistant asking a person to set up one of its connections inline in the chat. `connectionId`
+ * is a catalog ID such as `google_workspace`, `github` or `key:brave`; `reason` is the assistant's
+ * own words. Hermes settles it as connected or declined; a chat message closes it.
+ */
+export interface ConnectionRequest {
+  epoch: string;
+  sessionId: string;
+  connectionId: string;
+  reason: string;
+}
+export type ConnectionRequestDecision = "connected" | "decline";
+export type ConnectionRequestResult = { status: "ok" | "expired" };
+export interface ConnectionRequestSettle { decision: ConnectionRequestDecision; profile: string; requestId: string; epoch: string; sessionId: string; connection: string }
+/** Catalog statuses that count as set up, so Continue can tell the assistant it may go ahead. */
+export const readyConnectionStatuses: readonly IntegrationStatus[] = ["connected", "configured"];
+/** Catalog IDs an assistant may ask for. Apple data is chosen on the iPhone, never asked for in chat. */
+export const requestableConnectionId = /^(google_workspace|github|synology|supabase|cloudflare|vps|home_assistant|selected_files|discord|key:[a-z0-9_]{1,40}|provider:[A-Za-z0-9_-]{1,80}|mcp:[A-Za-z0-9_-]{1,80})$/;
