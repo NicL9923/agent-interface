@@ -18,5 +18,5 @@
 }
 /* An assistant's request to set up a connection holds that connection's own setup. */
 .connection-request-setup { margin-top: 12px; }
-.connection-request-setup .integration-list { display: grid; gap: 12px; }
 .connection-request-setup .integration-group > h3 { display: none; }
+.connection-request-setup .integration-cards { grid-template-columns: minmax(0, 1fr); }

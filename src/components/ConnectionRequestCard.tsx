@@ -94,7 +94,8 @@ export function ConnectionRequestCard({ request, requestId, botId, bots, userId,
       </Suspense>
     </div>
     <div className="actions">
-      {!missing && <button type="button" className="primary with-progress" disabled={disconnected || !!sending || !ready(item)}
+      {/* Until it is set up, Connect inside is the next step; the card continues on its own once it is. */}
+      {ready(item) && <button type="button" className="primary with-progress" disabled={disconnected || !!sending}
         onClick={() => void settle("connected")}>{sending === "connected" && <Icon name="spinner" className="spin" size={16} />}{sending === "connected" ? "Sending…" : "Continue"}</button>}
       <button type="button" className="with-progress" disabled={disconnected || !!sending} onClick={() => void settle("decline")}>
         {sending === "decline" && <Icon name="spinner" className="spin" size={16} />}{sending === "decline" ? "Sending…" : "Not now"}</button>

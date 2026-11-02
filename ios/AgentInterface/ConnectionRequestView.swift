@@ -89,10 +89,11 @@ struct ConnectionRequestView: View {
         }
       }
       HStack {
-        if !missing {
+        // Until it is set up, Connect inside is the next step; the card continues on its own once it is.
+        if ready {
           Button(sending == ConnectionDecision.connected ? "Sending…" : "Continue") { settle(ConnectionDecision.connected) }
             .buttonStyle(.accentProminent).controlSize(.large)
-            .disabled(!store.connected || busy || !ready).accessibilityIdentifier("connection.continue")
+            .disabled(!store.connected || busy).accessibilityIdentifier("connection.continue")
         }
         Button { settle(ConnectionDecision.decline) } label: {
           Text(sending == ConnectionDecision.decline ? "Sending…" : "Not now").frame(minHeight: 44).padding(.horizontal, 8).contentShape(Rectangle())

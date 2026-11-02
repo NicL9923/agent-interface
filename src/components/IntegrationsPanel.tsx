@@ -57,7 +57,9 @@ export function IntegrationList({ profile, bots, accountScope = "", only, onCata
   const [custom, setCustom] = useState(false);
   const [mcp, setMcp] = useState({ name: "", url: "", auth: "none", token: "" });
   const flowKey = integrationFlowKey(accountScope, profile);
-  const connections = useResource<IntegrationCatalog>(`/integrations?profile=${encodeURIComponent(profile)}`, { wake: true });
+  // A chat card has no Refresh button: it rereads on return to the tab and every 15 seconds, so a
+  // connection someone finishes on another device still continues the assistant.
+  const connections = useResource<IntegrationCatalog>(`/integrations?profile=${encodeURIComponent(profile)}`, { wake: true, pollMs: only ? 15000 : undefined });
   const { data: everything, loading, reload: refresh } = connections;
   const catalog = everything && only ? { ...everything, connections: everything.connections.filter(item => item.id === only) } : everything;
   useEffect(() => { if (everything) onCatalog?.(everything); }, [everything]);
@@ -129,7 +131,8 @@ export function IntegrationList({ profile, bots, accountScope = "", only, onCata
   };
   const categories = [...new Set(catalog?.connections.map(item => item.category))];
   return <div className="integration-list">
-    <div className="integration-toolbar"><span className="muted">{!catalog ? "Checking connections…" : only ? "" : `${catalog.connections.filter(c => c.status === "connected").length} connected`}</span><Button ref={refreshButton} disabled={loading || busy} onClick={refreshStatus}>{loading ? "Refreshing…" : "Refresh status"}</Button></div>
+    {only ? !catalog && <p className="muted" role="status">Checking connection…</p>
+      : <div className="integration-toolbar"><span className="muted">{catalog ? `${catalog.connections.filter(c => c.status === "connected").length} connected` : "Checking connections…"}</span><Button ref={refreshButton} disabled={loading || busy} onClick={refreshStatus}>{loading ? "Refreshing…" : "Refresh status"}</Button></div>}
     {error && <FormMessage tone="error">{error}</FormMessage>}
     {!catalog && !loading && error && <Button onClick={refreshStatus}>Try again</Button>}
     {flow && <section className="integration-flow" aria-label="Connection sign-in" role="status">

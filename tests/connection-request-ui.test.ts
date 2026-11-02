@@ -31,7 +31,7 @@ async function render(attention = [request()]) {
   await act(async () => root.render(createElement(StrictMode, null, createElement(AttentionList, { conversation, botId: "kitchen", userId: "one", assistantName: "Kitchen companion",
     bots: [{ id: "kitchen", name: "Kitchen companion", shared: true, model: "test", activity: "idle" }], disconnected: false, report: () => {} }))));
   // The integrations UI loads on demand.
-  for (let i = 0; i < 500 && (container.textContent?.includes("Loading connection") || container.textContent?.includes("Checking connections")); i++)
+  for (let i = 0; i < 500 && (container.textContent?.includes("Loading connection") || container.textContent?.includes("Checking connection")); i++)
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
 }
 
@@ -43,7 +43,7 @@ describe("connection request card", () => {
     expect(container.querySelectorAll(".integration-card")).toHaveLength(1);
     expect(container.textContent).not.toContain("GitHub");
     expect(container.textContent).not.toContain("Add custom MCP connection");
-    expect(button("Continue").disabled).toBe(true);
+    expect(container.textContent).not.toContain("Continue");
     await click("Not now");
     expect(write).toHaveBeenCalledWith(...settled("decline"));
     expect(container.querySelector(".secure-receipt")?.textContent).toBe("You chose Not now. Kitchen companion will continue without it.");
@@ -78,7 +78,8 @@ describe("connection request card", () => {
     let flow = { kind: "redirect", status: "pending", flowId: "github-flow", connectionId: "github", message: "Waiting for authorization." };
     vi.mocked(api).mockImplementation(async path => (path.includes("flows") ? flow : catalog) as never);
     await render();
-    expect(button("Continue").disabled).toBe(true);
+    expect(container.textContent).not.toContain("Continue");
+    expect(container.textContent).not.toContain("Refresh status");
     // The GitHub sign-in started in Settings finishes while this card is open.
     flow = { ...flow, status: "approved", message: "Authorization completed." };
     for (let i = 0; i < 400 && !container.textContent?.includes("Authorization completed"); i++)
@@ -87,7 +88,8 @@ describe("connection request card", () => {
     expect(settleCalls()).toEqual([]);
     // Brave's own sign-in finishing is what continues.
     catalog = { ...catalog, connections: [brave({ status: "configured" })] };
-    await click("Refresh status");
+    await act(async () => { window.dispatchEvent(new Event("focus")); });
+    for (let i = 0; i < 200 && !settleCalls().length; i++) await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
     expect(settleCalls()).toEqual([settled("connected")]);
   });
 
