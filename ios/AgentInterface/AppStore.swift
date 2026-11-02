@@ -488,6 +488,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
       .first { $0.isKeyWindow } ?? ASPresentationAnchor()
   }
   func startPolling() {
+    suspended = false
     stopPolling()
     pollTask = Task { [weak self] in
       while !Task.isCancelled {
@@ -646,6 +647,8 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     }
   }
   func suspend() {
+    suspended = true
+    cancelPrefetch()
     stopPolling()
     // The next poll loop starts with a fresh bootstrap.
     bootstrapRefreshedAt = nil
@@ -705,6 +708,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
           conversation = nil
           conversationCache.removeAll()
           conversationCapturedAt.removeAll()
+          resetPrefetch()
           historyStarts.removeAll()
           earlierFileCache.removeAll()
           draft = Draft()
@@ -795,24 +799,116 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     historyStarts[id] = nil
     replyWatch = nil
     let selectedGeneration = selectionGeneration
-    do {
-      // The draft is a quick local read. It settles first so the conversation's copy merges onto it.
-      let remote: SavedDraft? = try await api.get("/bots/\(APIClient.component(id))/draft")
-      guard selectionGeneration == selectedGeneration else { return }
-      loadDraft(remote, botId: id)
-    } catch {
-      guard selectionGeneration == selectedGeneration else { return }
-      if Self.missing(error) { await leave(id); return }
-      draftReady = cached != nil
-      // The web's wording. Polls keep reading the draft with the conversation.
-      if cached?.dirty != true { report(APIError(message: "Your saved draft could not be loaded. Retrying. \(error.localizedDescription)", status: 0)) }
+    // The draft and the conversation are asked for together, as the web does. The conversation
+    // waits to apply until the draft has settled, so its copy still merges onto the draft.
+    let draftLoad = Task {
+      do {
+        let remote: SavedDraft? = try await api.get("/bots/\(APIClient.component(id))/draft")
+        guard self.selectionGeneration == selectedGeneration else { return }
+        self.loadDraft(remote, botId: id)
+      } catch {
+        guard self.selectionGeneration == selectedGeneration else { return }
+        if Self.missing(error) { await self.leave(id); return }
+        self.draftReady = cached != nil
+        // The web's wording. Polls keep reading the draft with the conversation.
+        if cached?.dirty != true { self.report(APIError(message: "Your saved draft could not be loaded. Retrying. \(error.localizedDescription)", status: 0)) }
+      }
     }
-    await refreshConversation()
+    await withTaskCancellationHandler {
+      // An unsaved edit may start its save as the draft loads, and the conversation must see that
+      // save finished, not in flight. That case, being rare, keeps the draft strictly first.
+      if cached?.dirty == true { await draftLoad.value }
+      await refreshConversation(after: draftLoad)
+      await draftLoad.value
+    } onCancel: { draftLoad.cancel() }
+  }
+  // MARK: Chats opened ahead of the tap
+  /// Chats read ahead per pass. Reads go one at a time, because the server serializes some of them.
+  static let prefetchChats = 3
+  /// A chat read or refreshed this recently is not read ahead again.
+  static let prefetchFreshness: TimeInterval = 15
+  @ObservationIgnored private var prefetchTask: Task<Void, Never>?
+  @ObservationIgnored private var prefetchRun: UUID?
+  @ObservationIgnored private var prefetchAgain = false
+  /// When each chat was last read, by opening, polling or reading ahead.
+  @ObservationIgnored private var chatReadAt: [String: ContinuousClock.Instant] = [:]
+  @ObservationIgnored private var suspended = false
+  private var canPrefetch: Bool {
+    api?.token != nil && bootstrap != nil && !suspended && !sessionExpired && offlineSavedAt == nil
+      && !NetworkReachability.shared.offline
+  }
+  var isPrefetching: Bool { prefetchTask != nil }
+  /// The chat is kept in the offline library, so a new one needs room under the same cap.
+  private func canCache(_ id: String) -> Bool {
+    bootstrap?.bots.contains { $0.id == id } == true
+      && (recentChats.contains(id) || recentChats.count < OfflineLibrary.maximumChats)
+  }
+  /// The chats the person is most likely to tap from home: unread ones, then the latest opened.
+  /// The one on screen is read by its own polls.
+  var likelyChatIds: [String] {
+    let unread = (bootstrap?.bots ?? []).filter { self.unread($0) }.map(\.id)
+    var ids: [String] = []
+    for id in unread + recentChats.reversed() where id != followedBotId && !ids.contains(id) && canCache(id) {
+      ids.append(id)
+      if ids.count == Self.prefetchChats { break }
+    }
+    return ids
+  }
+  /// Refreshes the saved copy of the likely chats, so opening one shows its latest messages at once.
+  /// This only fills the cache `select` reads: it applies no draft, echo, reply or selection.
+  func prefetchLikelyChats() {
+    guard canPrefetch else { return }
+    if prefetchTask != nil { prefetchAgain = true; return }
+    let run = UUID(), account = generation
+    prefetchRun = run
+    prefetchTask = Task { [weak self] in
+      repeat {
+        guard let self else { return }
+        self.prefetchAgain = false
+        for id in self.likelyChatIds where self.prefetchDue(id) {
+          guard !Task.isCancelled, self.generation == account, self.canPrefetch else { break }
+          await self.prefetchConversation(id)
+        }
+      } while self?.prefetchAgain == true && !Task.isCancelled
+      if self?.prefetchRun == run { self?.prefetchTask = nil; self?.prefetchRun = nil }
+    }
+  }
+  private func cancelPrefetch() {
+    prefetchTask?.cancel(); prefetchTask = nil; prefetchRun = nil; prefetchAgain = false
+  }
+  /// Another account's chats are not this one's to read ahead.
+  private func resetPrefetch() {
+    cancelPrefetch()
+    chatReadAt.removeAll()
+  }
+  private func prefetchDue(_ id: String) -> Bool {
+    chatReadAt[id].map { now() - $0 >= .seconds(Self.prefetchFreshness) } ?? true
+  }
+  private func prefetchConversation(_ id: String) async {
+    guard let api else { return }
+    let account = generation, started = Date()
+    // Stamped before the read, so a failing chat is not asked again at once.
+    chatReadAt[id] = now()
+    // A failure says nothing the open chat's own reads would not: opening reads again and reports.
+    guard let value: Conversation = try? await api.get(conversationPath(id, query: "turns=\(Self.historyPageTurns)")),
+      generation == account, canPrefetch, canCache(id), id != followedBotId, openingBotId != id,
+      // Opening or polling it while this read ran left a copy at least as new.
+      conversationCapturedAt[id].map({ $0 < started }) ?? true
+    else { return }
+    cachedChats.remove(id)
+    conversationCapturedAt[id] = Date()
+    if !recentChats.contains(id) { recentChats.insert(id, at: 0) }
+    if conversationCache[id] != value {
+      conversationCache[id] = value
+      saveOfflineLibrary()
+    }
   }
   private func conversationPath(_ id: String, query: String) -> String {
     "/bots/\(APIClient.component(id))/conversation?\(query)"
   }
-  func refreshConversation() async {
+  /// `draftLoad` is the draft read opening this chat started alongside it. Whatever this read
+  /// brings waits for the draft to settle before it applies.
+  func refreshConversation(after draftLoad: Task<Void, Never>? = nil) async {
     guard let id = selectedBotId, let api, bootstrap != nil else { return }
     let selectedGeneration = selectionGeneration
     let requestedWindow = windowGeneration
@@ -823,10 +919,16 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     conversationReadsInFlight += 1
     defer { conversationReadsInFlight -= 1 }
     // A draft still to load or to save again needs the conversation's copy applied every time.
-    let skippable = draftReady && !(draft.dirty == true && settled(id))
+    // One still loading is assumed to load; if it does not, the copy is read again below.
+    let needsCopy = { !self.draftReady || self.draft.dirty == true && self.settled(id) }
+    let skippable = draftLoad != nil ? !(draft.dirty == true && settled(id)) : !needsCopy()
     do {
-      let response: (value: Conversation?, etag: String?) = try await api.changed(
+      var response: (value: Conversation?, etag: String?) = try await api.changed(
         conversationPath(id, query: query), since: skippable ? appliedConversationTag : nil)
+      await draftLoad?.value
+      if response.value == nil, selectedGeneration == selectionGeneration, needsCopy() {
+        response = try await api.changed(conversationPath(id, query: query), since: nil)
+      }
       guard selectedGeneration == selectionGeneration, requestedWindow == windowGeneration,
         read > appliedConversationRead
       else { return }
@@ -836,12 +938,13 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
       // Echoes settle against each current read, changed or not.
       defer { if !echoes.isEmpty { updateEcho() } }
       // The conversation applied last time, unchanged: nothing to decode, merge or render.
-      guard let value = response.value else { conversationCapturedAt[id] = Date(); return }
+      guard let value = response.value else { conversationCapturedAt[id] = Date(); chatReadAt[id] = now(); return }
       hearReplies(in: value, botId: id)
       historyStarts[id] = value.messages.first?.id
       apply(value, botId: id)
       appliedConversationTag = response.etag
     } catch is CancellationError {} catch {
+      await draftLoad?.value
       // A failure that a newer read or a wider window has already overtaken says nothing current.
       guard selectedGeneration == selectionGeneration, requestedWindow == windowGeneration,
         read > appliedConversationRead
@@ -946,6 +1049,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     let value = latestInflight?.applying(to: value) ?? value
     let changed = conversationCache[id] != value
     conversationCapturedAt[id] = Date()
+    chatReadAt[id] = now()
     if conversation?.activity.runId != value.activity.runId
       || conversation?.activity.state != .interrupted && value.activity.state == .interrupted
     {
@@ -1926,6 +2030,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     conversation = nil
     conversationCache.removeAll()
     conversationCapturedAt.removeAll()
+    resetPrefetch()
     recentChats.removeAll()
     historyStarts.removeAll()
     earlierFileCache.removeAll()

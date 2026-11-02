@@ -305,6 +305,17 @@ export interface ConversationOptions {
   window?: { start?: string; turns?: number };
   /** false reads current state, approvals and requests without history, as write checks need. */
   history?: false;
+  /** Filled by the runtime with how it served this read, for Server-Timing. Never part of the result. */
+  timing?: ReadTiming;
+}
+/** Where one conversation read spent its time, in milliseconds. */
+export interface ReadTiming {
+  /** The add-on open's round trip, when this read made one. */
+  hermes?: number;
+  /** The add-on's own phases, when it reports them. */
+  addon?: Record<string, number>;
+  /** Whether the read joined another reader's read instead of asking Hermes. */
+  shared?: boolean;
 }
 export interface Tool {
   id: string;

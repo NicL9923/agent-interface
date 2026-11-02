@@ -68,7 +68,7 @@ class BoundaryTests(unittest.TestCase):
         self.patcher = patch.dict(sys.modules, self.modules)
         self.patcher.start()
         self.controller = automation.Controller(self.server, lambda *_: {'profiles': [{'name': 'ranch'}, {'name': 'private'}]},
-            lambda *_: {'result': self.value}, threading.RLock(), threading.RLock(), threading.RLock(), lambda: self.maintenance, self.journal)
+            lambda *_: {'result': self.value}, threading.RLock(), threading.RLock(), lambda: self.maintenance, self.journal)
 
     def tearDown(self):
         self.patcher.stop()

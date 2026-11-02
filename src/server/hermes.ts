@@ -1,5 +1,5 @@
 import { botIdFor, reasoningLevels, serviceTiers } from "../shared/types.js";
-import type { ActivityState, Avatar, Bot, BotInput, Capabilities, Conversation, ConversationOptions, Inflight, Message, Routine, Runtime, RuntimeDiscovery, Skill, Submission, SubmissionReceipt, Tool, ToolCall } from '../shared/types.js';
+import type { ActivityState, Avatar, Bot, BotInput, Capabilities, Conversation, ConversationOptions, Inflight, Message, ReadTiming, Routine, Runtime, RuntimeDiscovery, Skill, Submission, SubmissionReceipt, Tool, ToolCall } from '../shared/types.js';
 import ClientWebSocket from 'ws';
 import type { ComputerAttachment, ComputerStatus } from '../shared/computer.js';
 import { withMessageOrigins, wireOrigin } from "../shared/message-origin.js";
@@ -23,6 +23,7 @@ const supported = (value: boolean, reason?: string) => ({supported: value,
 const deltaEvents = ['message.delta', 'reasoning.delta', 'thinking.delta', 'tool.generating', 'status.update', 'tool.start'];
 const settledStates = ['done', 'failed', 'interrupted'];
 // Every viewer of an assistant shares one read until Hermes reports a change there, for a few seconds at most.
+// It stays short: writers outside this socket, such as another gateway process or the CLI, send it no frame.
 const SHARED_READ_MS = 3_000;
 // Lazy detail reads share expensive profile files for ten seconds. This app's
 // profile edits invalidate them, and settings catalog reads ask for fresh detail.
@@ -153,26 +154,45 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     if (value.ok !== true) throw httpError(409, 'Hermes voice is unavailable. Check the speech provider in the native dashboard.');
     return value;
   }
+  // The add-on answers opens off the socket's serial lane, so an answer can arrive after newer frames
+  // or a later open's answer. Only an answer nothing has superseded since it was asked touches live state.
+  let openSequence = 0;
+  const appliedOpens = new Map<string, number>();
+  const supersededOpens = new WeakSet<Wire>();
   // Most callers need only the session, its run state and open requests, so they skip the history read.
-  async function open(botId: string, read: {history?: boolean; window?: ConversationOptions['window']} = {history: false}): Promise<Wire> {
+  async function open(botId: string, read: {history?: boolean; window?: ConversationOptions['window']} = {history: false}, timing?: ReadTiming): Promise<Wire> {
     await connect();
     if (!contract.extension) throw new Error('The verified durable Hermes add-on is required before opening a conversation.');
     opening.set(botId, (opening.get(botId) ?? 0) + 1);
+    const sequence = ++openSequence, generation = structuralGenerationOf(botId);
     let value: Wire;
     try {
+      const started = performance.now();
       value = await rpc('agent-interface.open', {profile: botId,
         ...(read.history === false ? {omit_messages: true} : read.window ? {window: read.window} : {})});
+      if (timing) {
+        timing.hermes = (timing.hermes ?? 0) + performance.now() - started;
+        // An older add-on reports nothing. Only plain phase names reach a header.
+        const phases = Object.entries(value.app_timing ?? {}).filter(([name, ms]) => /^[a-z]{1,20}$/.test(name) && typeof ms === 'number' && Number.isFinite(ms) && ms >= 0);
+        if (phases.length) timing.addon = Object.fromEntries(phases) as Record<string, number>;
+      }
     } finally {
       const count = (opening.get(botId) ?? 1) - 1;
       if (count) opening.set(botId, count);
       else opening.delete(botId);
     }
-    live.set(botId, value.session_id);
+    const superseded = generation !== structuralGenerationOf(botId) || sequence < (appliedOpens.get(botId) ?? 0);
+    if (!superseded || !live.has(botId)) live.set(botId, value.session_id);
     owners.set(value.session_id, botId);
+    if (superseded) {
+      supersededOpens.add(value);
+      return value;
+    }
     if (!transient.has(value.session_id)) {
       transient.set(value.session_id, {text: value.inflight?.assistant ?? '', reasoning: value.inflight?.reasoning ?? '',
         state: value.info?.running ? 'thinking' : 'idle', requests: [], tools: []});
     }
+    appliedOpens.set(botId, sequence);
     const state = transient.get(value.session_id);
     if (state) {
       state.requests = Array.isArray(value.open_requests) ? value.open_requests : [];
@@ -284,12 +304,19 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
   }
   async function readConversation(botId: string, options: ConversationOptions): Promise<Conversation> {
     await connect();
-    const generation = structuralGenerationOf(botId);
-    const value = await open(botId, options.history === false ? {history: false} : {window: options.window});
+    // A superseded answer is older than live state, so ask again. One that stays superseded through
+    // a burst of changes is shown as Hermes answered it, without reading or seeding live state.
+    let generation: string, value: Wire;
+    for (let attempt = 1; ; attempt++) {
+      generation = structuralGenerationOf(botId);
+      value = await open(botId, options.history === false ? {history: false} : {window: options.window}, options.timing);
+      if (!supersededOpens.has(value) || attempt === 3) break;
+    }
+    const current = !supersededOpens.has(value);
     const sid = value.session_id;
     const history = value.messages ?? (await rpc('session.history', {session_id: sid, profile: botId})).messages;
     const rows = historyMessages(sid, history, row => artifacts(botId, row));
-    const state = transient.get(sid), inflight = value.inflight ?? {}, active = !!value.info?.running || !!value.app_run_id;
+    const state = current ? transient.get(sid) : undefined, inflight = value.inflight ?? {}, active = !!value.info?.running || !!value.app_run_id;
     // Seed a socket attached mid-turn, without replacing text that already advanced during the read.
     if (active && state && typeof inflight.assistant === 'string' &&
         (!state.text || inflight.assistant.startsWith(state.text) || inflight.assistant.endsWith(state.text)))
@@ -321,7 +348,7 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     const runId = value.app_run_id ?? value.app_interruption?.runId ?? undefined;
     // Live patches need only the last prompt and its persisted assistant segments,
     // never a second retained copy of an older client's full transcript.
-    if (options.history !== false && generation === structuralGenerationOf(botId)) {
+    if (options.history !== false && current && generation === structuralGenerationOf(botId)) {
       snapshots.set(botId, {
         value: {session_id: sid, info: {running: value.info?.running}, app_run_id: value.app_run_id,
           inflight: {user: inflight.user, display_kind: inflight.display_kind, display_metadata: inflight.display_metadata}},
@@ -603,13 +630,17 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     },
     conversation(botId, options = {}) {
       // Write checks and activity summaries need current state, not history. Never shared.
+      if (options.timing) options.timing.shared = false;
       if (options.history === false) return readConversation(botId, options);
       const now = Date.now(), generation = generationOf(botId);
       for (const [key, entry] of sharedReads) if (now - entry.at >= SHARED_READ_MS) sharedReads.delete(key);
       const key = botId + '\0' + JSON.stringify(options.window ?? null);
       const hit = sharedReads.get(key);
       const copy = (value: Conversation) => ({...value});
-      if (hit && hit.generation === generation) return hit.value.then(copy);
+      if (hit && hit.generation === generation) {
+        if (options.timing) options.timing.shared = true;
+        return hit.value.then(copy);
+      }
       const entry = {generation, at: now, value: readConversation(botId, options)};
       sharedReads.set(key, entry);
       entry.value.then(value => {

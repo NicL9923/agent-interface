@@ -1,7 +1,6 @@
 import { matchRanges } from "./find-ranges";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ApiError, cachedResponse, changeStream, pollWhileVisible, request } from "../client-api";
-import { routeUrl, type ApiQuery } from "../shared/api";
 import { isActivityMessage } from "../shared/message-origin";
 import { HISTORY_PAGE_TURNS } from "../shared/history";
 import { applyInflightDelta } from "../shared/inflight";
@@ -9,6 +8,7 @@ import type { Inflight, Message } from "../shared/types";
 import { replySnippet, watchReplies } from "./reply-announcement";
 import type { ReplyWatch } from "./reply-announcement";
 import type { SavedConversation } from "./storage";
+import { firstPage, firstQuery, prefetchedFirstPage, type PageQuery } from "./conversation-page";
 import { ANCHOR_GAP, afterIntent, atTrueEnd, distanceToEnd, endReserve, scrollIntent } from "./scroll-follow";
 import type { Intent, ScrollMode } from "./scroll-follow";
 import { clearMessageParam, initialMessage } from "./view";
@@ -16,10 +16,6 @@ import { clearMessageParam, initialMessage } from "./view";
 const LATEST_DISTANCE = 100;
 /** How long a message opened from find or a link stays highlighted. */
 const FOUND_MS = 2400;
-type PageQuery = ApiQuery<"GET /bots/:id/conversation">;
-const firstQuery: PageQuery = { turns: HISTORY_PAGE_TURNS };
-// The cache key of the page an opened conversation reads first.
-const firstPage = (botId: string) => routeUrl("GET /bots/:id/conversation", { id: botId }, firstQuery);
 /**
  * The first transcript message whose bottom is below `y`. Messages are laid out in document
  * order, so a binary search measures a handful of them instead of every one on each scroll.
@@ -157,7 +153,10 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
         ? { start, turns: earlierPage ? HISTORY_PAGE_TURNS : undefined }
         : earlierPage ? { turns: HISTORY_PAGE_TURNS * 2 } : firstQuery;
       try {
-        const result = await request("GET /bots/:id/conversation", { params: { id: botId }, query });
+        // A prefetch of the latest page still on its way is that read; if it fails, read again.
+        const joined = query === firstQuery ? prefetchedFirstPage(botId) : undefined;
+        const result = await joined?.catch(() => undefined)
+          ?? await request("GET /bots/:id/conversation", { params: { id: botId }, query });
         if (!live) return;
         // A message was asked for meanwhile: this page is from before, and the load for it follows.
         if (generation !== navigation) {

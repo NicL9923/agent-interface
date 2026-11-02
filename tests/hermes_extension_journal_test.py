@@ -4,7 +4,9 @@ The real gateway contract lives in scripts/spike/extension_probe.py. These
 tests pin the journal reads every conversation poll makes.
 """
 import copy
+import concurrent.futures
 import contextlib
+import contextvars
 import json
 import re
 import stat
@@ -51,7 +53,13 @@ class FakeGateway:
         requests = types.SimpleNamespace(_lock=threading.Lock(), _open={})
         gateway = types.ModuleType("tui_gateway")
         gateway.server, gateway.server_requests = server, requests
-        self.modules = {"tui_gateway": gateway, "tui_gateway.server": server, "tui_gateway.server_requests": requests}
+        # Native redaction registries, which history projection reads in memory.
+        self.redact = types.SimpleNamespace(_VAULT_REDACTION_LOCK=threading.Lock(), _VAULT_REDACTION_VALUES={},
+                                            _registry_lock=threading.Lock(), _PLUGIN_PREFIX_PATTERNS={})
+        bound = contextvars.ContextVar("transport", default=None)
+        self.transport = types.SimpleNamespace(bind_transport=bound.set, current_transport=bound.get)
+        self.modules = {"tui_gateway": gateway, "tui_gateway.server": server, "tui_gateway.server_requests": requests,
+                        "tui_gateway.transport": self.transport, "agent": types.ModuleType("agent"), "agent.redact": self.redact}
 
     def __enter__(self):
         self.patches = [patch.dict(sys.modules, self.modules), patch.dict("os.environ", self.environment)]
@@ -129,6 +137,100 @@ class FakeHermes(FakeGateway):
         self.methods = self.registered
         self.bridge = self.methods["agent-interface.open"].__self__
         return journal
+
+
+class ProfilesGateway(FakeGateway):
+    """Two assistants with their own canonical sessions; a test can hold either one's native activation."""
+    def __init__(self):
+        super().__init__([])
+        self.held, self.entered, self.inside, self.peak = {}, {}, {}, {}
+        server, counting = self.server, threading.Lock()
+        def handle(request):
+            params = request.get("params") or {}
+            profile = params.get("profile", "default")
+            if request["method"] == "profiles.list":
+                return server._ok(request["id"], {"profiles": [{"name": name, "canonical_session": {"resolved_id": "stored-" + name}} for name in ("slow", "fast")]})
+            if request["method"] not in ("session.activate", "session.resume"):
+                self.native_calls.append((request["method"], params))
+                return server._ok(request["id"], {"status": "accepted"})
+            with counting:
+                self.inside[profile] = self.inside.get(profile, 0) + 1
+                self.peak[profile] = max(self.peak.get(profile, 0), self.inside[profile])
+            try:
+                self.entered.setdefault(profile, threading.Event()).set()
+                if profile in self.held:
+                    self.held[profile].wait(5)
+            finally:
+                with counting:
+                    self.inside[profile] -= 1
+            server._sessions.setdefault("sid-" + profile, {"session_key": "stored-" + profile})
+            return server._ok(request["id"], {"session_id": "sid-" + profile, "messages": []})
+        server.handle_request = handle
+
+    def opening(self, profile, results):
+        thread = threading.Thread(target=lambda: results.append(self.open(profile=profile)), daemon=True)
+        thread.start()
+        return thread
+
+
+class PooledHermes(FakeHermes):
+    """FakeHermes behind native dispatch as rpc_dispatch does it: long handlers on an
+    8-worker pool, reserved before queueing and released once answered; the rest inline."""
+    def __init__(self):
+        super().__init__([])
+        server, self.native_pool = self.server, concurrent.futures.ThreadPoolExecutor(max_workers=8)
+        self.held, self.entered, self.active, counting = threading.Event(), threading.Event(), [0], threading.Lock()
+        def acquire():
+            with counting:
+                self.active[0] += 1
+            return True
+        def release():
+            with counting:
+                self.active[0] -= 1
+        self.retirement.acquire, self.retirement.release = acquire, release
+        server._LONG_HANDLERS = frozenset({"profiles.list"})
+        def handle(request):
+            method, params = request["method"], request.get("params") or {}
+            if method in self.registered:
+                return self.registered[method](request.get("id"), params)
+            if method == "profiles.list":
+                return server._ok(request["id"], {"profiles": [{"name": name, "canonical_session": {"resolved_id": "stored-" + name}} for name in ("slow", "fast")]})
+            profile = params.get("profile", "default")
+            if method in ("session.activate", "session.resume") and profile == "slow":
+                self.entered.set()
+                self.held.wait(10)
+            server._sessions.setdefault("sid-" + profile, {"session_key": "stored-" + profile})
+            return server._ok(request["id"], {"session_id": "sid-" + profile, "messages": []})
+        server.handle_request = handle
+        def dispatch(request, transport=None):
+            if request["method"] not in server._LONG_HANDLERS:
+                return server.handle_request(request)
+            if not self.retirement.acquire():
+                return server._err(request["id"], 5035, "backend is retiring")
+            self.native_pool.submit(lambda: transport.write(server.handle_request(request))).add_done_callback(lambda _: self.retirement.release())
+            return None
+        server.dispatch = dispatch
+
+    def __exit__(self, *exc):
+        self.held.set()
+        self.native_pool.shutdown(wait=True)
+        return super().__exit__(*exc)
+
+
+class Replies:
+    """A connection transport that records what each request ID was answered."""
+    def __init__(self):
+        self.answers, self.changed = {}, threading.Condition()
+
+    def write(self, response):
+        with self.changed:
+            self.answers[response["id"]] = response
+            self.changed.notify_all()
+        return True
+
+    def wait(self, *ids, timeout=3):
+        with self.changed:
+            return self.changed.wait_for(lambda: all(rid in self.answers for rid in ids), timeout)
 
 
 def turns(count, files=()):
@@ -484,6 +586,119 @@ class OpenTests(unittest.TestCase):
             hermes.open()
             self.assertNotIn("omit_messages", hermes.native_calls[-1][1])
 
+    def test_one_assistants_slow_open_never_holds_up_anothers(self):
+        with ProfilesGateway() as hermes:
+            hermes.held["slow"] = threading.Event()
+            slow, fast = [], []
+            waiting = hermes.opening("slow", slow)
+            self.assertTrue(hermes.entered["slow"].wait(5))
+            # A global open lock would queue this behind the held activation.
+            hermes.opening("fast", fast).join(2)
+            self.assertEqual([result["session_id"] for result in fast], ["sid-fast"])
+            self.assertEqual(slow, [])
+            hermes.held["slow"].set()
+            waiting.join(5)
+            self.assertEqual(slow[0]["session_id"], "sid-slow")
+
+    def test_one_assistants_opens_still_run_one_at_a_time(self):
+        with ProfilesGateway() as hermes:
+            hermes.held["slow"] = threading.Event()
+            results = []
+            first = hermes.opening("slow", results)
+            self.assertTrue(hermes.entered["slow"].wait(5))
+            second = hermes.opening("slow", results)
+            time.sleep(0.2)
+            self.assertEqual((hermes.inside["slow"], results), (1, []))
+            hermes.held["slow"].set()
+            first.join(5); second.join(5)
+            self.assertEqual(hermes.peak["slow"], 1)
+            # The second open reports the time it spent behind the first.
+            self.assertGreaterEqual(max(result["app_timing"]["wait"] for result in results), 150)
+            self.assertEqual(hermes.bridge.canonical, {"slow": "sid-slow"})
+
+    def test_a_send_never_waits_behind_its_assistants_history_read(self):
+        with ProfilesGateway() as hermes:
+            hermes.open(profile="slow")
+            hermes.held["slow"] = threading.Event()
+            hermes.entered["slow"].clear()
+            reading = hermes.opening("slow", [])
+            self.assertTrue(hermes.entered["slow"].wait(5))
+            sent = []
+            params = {"profile": "slow", "request_id": "send", "sender_id": "member", "text": "Hello"}
+            sending = threading.Thread(target=lambda: sent.append(hermes.methods["agent-interface.submit"]("send", params)), daemon=True)
+            sending.start(); sending.join(2)
+            self.assertEqual([response["result"]["status"] for response in sent], ["accepted"])
+            hermes.held["slow"].set()
+            reading.join(5)
+
+    def test_open_reports_its_phases_in_milliseconds(self):
+        with FakeGateway(turns(2)) as hermes:
+            timing = hermes.open(window={"turns": 20})["app_timing"]
+            self.assertEqual(set(timing), {"wait", "activate", "decorate", "window", "total"})
+            self.assertTrue(all(isinstance(value, float) and value >= 0 for value in timing.values()))
+            self.assertGreaterEqual(timing["total"], timing["activate"])
+
+    def test_decorated_history_outlives_a_short_idle_until_its_bound(self):
+        with FakeGateway(turns(3)) as hermes:
+            hermes.open()
+            session = hermes.modules["tui_gateway.server"]._sessions["sid"]
+            session.update(history=hermes.messages, history_lock=threading.Lock(), profile_home=hermes.directory.name)
+            hermes.open()
+            stored = time.monotonic()
+            # Coming back to an idle chat minutes later reuses its exact decorated history.
+            with patch.object(extension.time, "monotonic", return_value=stored + 300):
+                self.assertEqual(len(hermes.open()["messages"]), 6)
+            self.assertTrue(hermes.native_calls[-1][1].get("omit_messages"))
+            with patch.object(extension.time, "monotonic", return_value=stored + extension.DECORATED_TTL + 1):
+                hermes.open()
+            self.assertNotIn("omit_messages", hermes.native_calls[-1][1])
+
+    def test_decorated_history_follows_native_redaction_registries(self):
+        with FakeGateway(turns(3)) as hermes:
+            hermes.open()
+            session = hermes.modules["tui_gateway.server"]._sessions["sid"]
+            session.update(history=hermes.messages, history_lock=threading.Lock(), profile_home=hermes.directory.name)
+            hermes.open()
+            hermes.open()
+            self.assertTrue(hermes.native_calls[-1][1].get("omit_messages"))
+            # A vault fill or plugin pattern scrubs native commentary without touching history.
+            for registry, value in ((hermes.redact._VAULT_REDACTION_VALUES, {"secret": None}), (hermes.redact._PLUGIN_PREFIX_PATTERNS, ["tok_"])):
+                registry["/home/default"] = value
+                hermes.open()
+                self.assertNotIn("omit_messages", hermes.native_calls[-1][1])
+                hermes.open()
+                self.assertTrue(hermes.native_calls[-1][1].get("omit_messages"))
+            # A Hermes that keeps them elsewhere gets only the short lifetime.
+            with patch.dict(sys.modules, {"agent.redact": None}):
+                hermes.open()
+                stored = time.monotonic()
+                with patch.object(extension.time, "monotonic", return_value=stored + extension.UNTRACKED_REDACTION_TTL - 1):
+                    hermes.open()
+                self.assertTrue(hermes.native_calls[-1][1].get("omit_messages"))
+                with patch.object(extension.time, "monotonic", return_value=stored + extension.UNTRACKED_REDACTION_TTL + 1):
+                    hermes.open()
+                self.assertNotIn("omit_messages", hermes.native_calls[-1][1])
+
+    def test_eviction_keeps_the_most_recently_read_histories(self):
+        clock = Mock(return_value=100)
+        with FakeGateway(turns(1)) as hermes, patch.object(extension.time, "monotonic", clock), patch.object(extension, "DECORATED_LIMIT", 2):
+            hermes.open()
+            sessions = hermes.modules["tui_gateway.server"]._sessions
+            sessions["sid"].update(history=hermes.messages, history_lock=threading.Lock(), profile_home=hermes.directory.name)
+            hermes.open()
+            clock.return_value = 300
+            hermes.open()
+            cache = hermes.bridge.decorated
+            # A hit refreshes its read time; its lifetime still counts from the fill.
+            self.assertEqual(cache["sid"][3:], (100, 300))
+            for sid, filled, read in (("read-recently", 50, 350), ("filled-recently", 200, 200)):
+                hermes.bridge.canonical[sid], sessions[sid] = sid, dict(sessions["sid"])
+                cache[sid] = (*cache["sid"][:3], filled, read)
+            clock.return_value = 400
+            sessions["sid"]["history"] = hermes.messages = turns(2)
+            hermes.open()
+            self.assertEqual(sorted(cache), ["read-recently", "sid"])
+
     def test_light_open_skips_native_history_and_a_window_cuts_it(self):
         with FakeGateway(turns(25, files={3})) as hermes:
             first = hermes.open(omit_messages=True)
@@ -781,6 +996,39 @@ class MaintenanceLeaseTests(unittest.TestCase):
             self.lease.symlink_to(Path(directory) / "missing.json")
             with self.assertRaisesRegex(RuntimeError, "not private"):
                 hermes.server.handle_request({"id": 2, "method": "prompt.submit", "params": {}})
+
+class ReadQueueTests(unittest.TestCase):
+    def test_one_slow_assistants_reads_never_take_hermes_native_workers(self):
+        with PooledHermes() as hermes:
+            replies, server = Replies(), hermes.server
+            opens = [server.dispatch({"id": f"slow-{index}", "method": "agent-interface.open", "params": {"profile": "slow"}}, replies) for index in range(8)]
+            self.assertEqual(opens, [None] * 8)
+            self.assertTrue(hermes.entered.wait(3))
+            # As many reads as Hermes has workers, all behind one held activation. Native long
+            # handlers and another assistant's read still answer.
+            self.assertIsNone(server.dispatch({"id": "roster", "method": "profiles.list", "params": {}}, replies))
+            server.dispatch({"id": "fast", "method": "agent-interface.open", "params": {"profile": "fast"}}, replies)
+            server.dispatch({"id": "discover", "method": "agent-interface.discover", "params": {"cursor": "0"}}, replies)
+            self.assertTrue(replies.wait("roster", "fast"), replies.answers)
+            self.assertEqual(replies.answers["fast"]["result"]["session_id"], "sid-fast")
+            self.assertFalse(any(rid.startswith("slow") for rid in replies.answers))
+            # Each queued read holds a native admission reservation until it is answered.
+            self.assertGreaterEqual(hermes.active[0], 8)
+            hermes.held.set()
+            self.assertTrue(replies.wait(*(f"slow-{index}" for index in range(8))))
+            self.assertTrue(all(replies.answers[f"slow-{index}"]["result"]["session_id"] == "sid-slow" for index in range(8)))
+            deadline = time.monotonic() + 3
+            while hermes.active[0] and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertEqual(hermes.active[0], 0)
+
+    def test_direct_calls_and_writes_keep_native_dispatch(self):
+        with PooledHermes() as hermes:
+            server = hermes.server
+            # In-process callers and requests without a connection transport answer synchronously.
+            self.assertEqual(server.handle_request({"id": 1, "method": "agent-interface.open", "params": {"profile": "fast"}})["result"]["session_id"], "sid-fast")
+            self.assertEqual(server.dispatch({"id": 2, "method": "agent-interface.open", "params": {"profile": "fast"}})["result"]["session_id"], "sid-fast")
+            self.assertIn("result", server.dispatch({"id": 3, "method": "agent-interface.receipt", "params": {"request_id": "none"}}, Replies()))
 
 
 class BotDeliveryInstallTests(unittest.TestCase):

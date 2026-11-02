@@ -13,7 +13,7 @@ import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
 import { gzipSync } from 'node:zlib';
 import { createHermesRuntime } from '../src/server/hermes.js';
 import { createHermesTransport } from '../src/server/hermes-transport.js';
-import type { Runtime, Submission } from '../src/shared/types.js';
+import type { ReadTiming, Runtime, Submission } from '../src/shared/types.js';
 
 const realFetch=globalThis.fetch;
 // Isolated wire-contract regressions. Real Hermes execution evidence lives in the spike probes.
@@ -1267,6 +1267,94 @@ it('allowlists history fields before redacting a private bot handoff and its inh
 
 describe('Hermes conversation and roster read costs', () => {
   const opens = () => calls.filter(call => call.method === 'agent-interface.open');
+  it('keeps a turn that started while an older idle open answer was on its way', async () => {
+    await runtime.status();
+    await runtime.conversation('shared');
+    deferredMethods.add('agent-interface.open');
+    hermesChanged();
+    const stale = runtime.conversation('shared');
+    await vi.waitFor(() => expect(opens()).toHaveLength(2));
+    const request = opens().at(-1) as Record<string, any>;
+    sockets[0].receive({method: 'event', params: {session_id: 'live-one', type: 'message.start', payload: {}}});
+    sockets[0].receive({method: 'event', params: {session_id: 'live-one', type: 'message.delta', payload: {text: 'Hel'}}});
+    deferredMethods.delete('agent-interface.open');
+    snapshot.info = {running: true};
+    sockets[0].receive({jsonrpc: '2.0', id: request.id, result: {...structuredClone(snapshot), info: {running: false}}});
+    await stale;
+    expect((await runtime.conversation('shared')).messages.at(-1)).toMatchObject({id: 'live-one-inflight', text: 'Hel'});
+  });
+  const heldOpen = async (count: number) => {
+    await vi.waitFor(() => expect(opens()).toHaveLength(count));
+    return opens().at(-1) as Record<string, any>;
+  };
+  const answer = (request: Record<string, any>, result: Record<string, any>) => sockets[0].receive({jsonrpc: '2.0', id: request.id, result});
+  const frame = (type: string, payload: Record<string, unknown> = {}) => sockets[0].receive({method: 'event', params: {session_id: 'live-one', type, payload}});
+  it('never seeds a new turn with an older active answer, and asks again', async () => {
+    await runtime.status();
+    await runtime.conversation('shared');
+    deferredMethods.add('agent-interface.open');
+    hermesChanged();
+    const read = runtime.conversation('shared');
+    const held = await heldOpen(2);
+    frame('message.complete', {status: 'complete'});
+    frame('message.start');
+    deferredMethods.delete('agent-interface.open');
+    Object.assign(snapshot, {info: {running: true}, app_run_id: 'NEW-RUN'});
+    answer(held, {...structuredClone(snapshot), app_run_id: 'OLD-RUN', inflight: {assistant: 'OLD REPLY', reasoning: 'OLD REASONING'}});
+    const shown = await read;
+    expect(opens()).toHaveLength(3);
+    expect(shown.activity.runId).toBe('NEW-RUN');
+    expect(JSON.stringify(shown)).not.toMatch(/OLD/);
+    frame('message.delta', {text: 'New'});
+    const fresh = await runtime.conversation('shared');
+    expect(JSON.stringify(fresh)).not.toMatch(/OLD/);
+    expect(fresh.messages.at(-1)).toMatchObject({id: 'live-one-inflight', text: 'New'});
+  });
+  it('asks again when an approval is cancelled while an open answer is on its way', async () => {
+    await runtime.status();
+    await runtime.conversation('shared');
+    deferredMethods.add('agent-interface.open');
+    const read = runtime.conversation('shared', {history: false});
+    const held = await heldOpen(2);
+    frame('request.cancel', {id: 'ask'});
+    deferredMethods.delete('agent-interface.open');
+    answer(held, {...structuredClone(snapshot), open_requests: [{id: 'ask', method: 'approval'}]});
+    expect((await read).approvals).toEqual([]);
+    await expect(runtime.approve('shared', 'ask', 'approved', 'person')).rejects.toThrow('stale');
+  });
+  it('lets a later open answer stand when an earlier one arrives after it', async () => {
+    await runtime.status();
+    await runtime.conversation('shared');
+    deferredMethods.add('agent-interface.open');
+    const first = runtime.conversation('shared', {history: false});
+    const older = await heldOpen(2);
+    const second = runtime.conversation('shared', {history: false});
+    const newer = await heldOpen(3);
+    answer(newer, structuredClone(snapshot));
+    expect((await second).approvals).toEqual([]);
+    deferredMethods.delete('agent-interface.open');
+    answer(older, {...structuredClone(snapshot), open_requests: [{id: 'ask', method: 'approval'}]});
+    expect((await first).approvals).toEqual([]);
+    expect(opens()).toHaveLength(4);
+    await expect(runtime.approve('shared', 'ask', 'approved', 'person')).rejects.toThrow('stale');
+  });
+  it('reports the add-on round trip and phases for timing, never in the conversation', async () => {
+    await runtime.status();
+    snapshot.messages = [{row_id: 1, role: 'user', text: 'Hi'}];
+    snapshot.app_timing = {wait: 1.5, activate: 20, total: 25, 'bad;name': 3, decorate: 'slow'};
+    const first: ReadTiming = {}, second: ReadTiming = {};
+    const [read, joined] = await Promise.all([runtime.conversation('shared', {window: {turns: 20}, timing: first}), runtime.conversation('shared', {window: {turns: 20}, timing: second})]);
+    expect(first).toEqual({shared: false, hermes: expect.any(Number), addon: {wait: 1.5, activate: 20, total: 25}});
+    // The second reader joined the first read, so it reports no Hermes time of its own.
+    expect(second).toEqual({shared: true});
+    expect(joined).toEqual(read);
+    expect(JSON.stringify(read)).not.toMatch(/timing|activate/);
+    delete snapshot.app_timing;
+    hermesChanged();
+    const older: ReadTiming = {};
+    await runtime.conversation('shared', {window: {turns: 20}, timing: older});
+    expect(older).toEqual({shared: false, hermes: expect.any(Number)});
+  });
   it('reads write-check state without history and asks Hermes to cut a window', async () => {
     await runtime.submit(input());
     await runtime.conversation('shared', {history: false});
@@ -1384,9 +1472,10 @@ describe('Review regressions for shared reads and credential negotiation', () =>
     sockets[0].receive({jsonrpc: '2.0', id: 'srq-early', method: 'vault.save_login', params: {session_id: 'live-one', origin: 'https://kvm.example.test', site: 'kvm.example.test'}});
     expect(notices).toHaveBeenCalledOnce();
     const open = calls.find(call => call.method === 'agent-interface.open') as Record<string, any>;
+    // The frame supersedes this answer, so the read asks again.
+    deferredMethods.delete('agent-interface.open');
     sockets[0].receive({jsonrpc: '2.0', id: open.id, result: structuredClone(snapshot)});
     await read;
-    deferredMethods.delete('agent-interface.open');
     snapshot.open_requests = [{id: 'srq-early', method: 'vault.save_login', app_local_secure: true, params: {origin: 'https://kvm.example.test', site: 'kvm.example.test'}}];
     snapshot.executor_epoch = 'epoch-one';
     expect((await runtime.conversation('shared', {window: {turns: 20}})).attention).toHaveLength(1);

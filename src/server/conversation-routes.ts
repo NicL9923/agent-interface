@@ -5,7 +5,7 @@ import { interruptionPendingMessage } from "../shared/errors.js";
 import { filesBefore, historyWindow, MAX_HISTORY_TURNS, windowFiles } from "../shared/history.js";
 import { messageOrigin } from "../shared/message-origin.js";
 import { isRetryRequestId, retryRequestId } from "../shared/retry-id.js";
-import type { CapabilityKey, InflightDelta, Runtime, Submission, SubmissionReceipt } from "../shared/types.js";
+import type { CapabilityKey, InflightDelta, ReadTiming, Runtime, Submission, SubmissionReceipt } from "../shared/types.js";
 import { formatBytes, MAX_ATTACHMENTS, MAX_DOWNLOAD_BYTES, MAX_UPLOAD_BYTES, UPLOAD_KINDS, UPLOAD_MIME_TYPES } from "../shared/uploads.js";
 import { accountMarker } from "./apns.js";
 import { apiRoute, type ApiRequest } from "./api-route.js";
@@ -21,6 +21,21 @@ import { nameRequesters } from "./vault.js";
 
 // Longer than the runtime shares one history read among readers.
 const sharedReadMargin = 60000;
+
+/** Server-Timing for a conversation read. Headers stay out of the body, so its ETag still matches. */
+export function readTimingHeader(timing: ReadTiming, runtime: number, total: number): string {
+  const metric = (name: string, ms: number) => `${name};dur=${Math.round(ms * 10) / 10}`;
+  return [
+    ...(timing.shared !== undefined ? [`cache;desc=${timing.shared ? "shared" : "miss"}`] : []),
+    ...(timing.hermes !== undefined ? [metric("hermes", timing.hermes)] : []),
+    ...Object.entries(timing.addon ?? {}).map(([phase, ms]) => metric(`addon-${phase}`, ms)),
+    // Outside the add-on's handler: native pool queueing, serialization and the socket.
+    ...(timing.hermes !== undefined && timing.addon?.total !== undefined ? [metric("transit", Math.max(0, timing.hermes - timing.addon.total))] : []),
+    metric("runtime", runtime),
+    metric("node", total - runtime),
+    metric("total", total),
+  ].join(", ");
+}
 
 /** Decides a pending approval for this person, as the chat and notification actions do. */
 export async function decideApproval(runtime: Runtime, store: Store, botId: string, approvalId: string, decision: "approved" | "denied", userId: string) {
@@ -55,7 +70,8 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
   requireCapability: (key: CapabilityKey) => Promise<void>;
 }) {
   const { config, runtime, store, roster, streams, requireCapability } = collaborators;
-  apiRoute(app, "GET /bots/:id/conversation", {}, async req => {
+  apiRoute(app, "GET /bots/:id/conversation", {}, async (req, _body, reply) => {
+    const started = performance.now(), timing: ReadTiming = {};
     // Without a window, as for the native app, the whole history is returned.
     const window = z.object({
       start: z.string().min(1).max(512).optional(),
@@ -63,7 +79,8 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
     }).parse(req.query);
     const windowed = window.start !== undefined || window.turns !== undefined;
     const readAt = Date.now();
-    const { window: cut, requestSessionId, ...result } = await runtime.conversation(req.params.id, windowed ? { window } : undefined);
+    const { window: cut, requestSessionId, ...result } = await runtime.conversation(req.params.id, windowed ? { window, timing } : { timing });
+    const read = performance.now() - started;
     // Hermes's open requests settle approvals answered outside the app. A history read can be
     // shared for a few seconds, so only approvals notified well before it count.
     store.reconcileApprovals(req.params.id, requestSessionId, result.approvals.map(approval => approval.id), readAt - sharedReadMargin);
@@ -72,9 +89,9 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
     if (result.toolCalls) result.toolCalls = result.toolCalls.map(redact.call);
     // A runtime that already cut the window adds only the earlier messages still needed for files.
     const context = cut?.context ?? [];
-    const read = [...context, ...result.messages];
-    const originalFileIds = new Set(read.flatMap(message => message.files ?? []).map(file => file.id));
-    const shown = read.map((message) => {
+    const rows = [...context, ...result.messages];
+    const originalFileIds = new Set(rows.flatMap(message => message.files ?? []).map(file => file.id));
+    const shown = rows.map((message) => {
       const attribution =
         store.submissionForMessage(req.params.id, message.id) ??
         store.submission(message.id);
@@ -102,6 +119,7 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
     const claims = result.activity.state === "failed" ? store.retryClaims(req.params.id, result.activity.runId ?? "") : [];
     const retried = result.messages.findLast(message => claims.some(claim => claim.retryOf === message.id));
     const retry = claims.find(claim => claim.retryOf === retried?.id);
+    reply.header("Server-Timing", readTimingHeader(timing, read, performance.now() - started));
     return {
       ...result,
       ...(retry ? { retry: { ...retry.receipt, retryOf: retry.retryOf } } : {}),
