@@ -652,8 +652,9 @@ class Worker:
                 raise RuntimeError("the native launcher did not report its interpreter")
             new = command[0]
             # Only tool-store Pythons are launcher selections. A system bootstrap Python is the installer's choice.
-            store = (Path(home) / "tools").resolve()
-            if not Path(new).resolve().is_relative_to(store) or not Path(new).is_file():
+            # Unresolved, so configured paths written through a linked home or tools directory still match.
+            store = Path(home) / "tools"
+            if not Path(new).resolve().is_relative_to(store.resolve()) or not Path(new).is_file():
                 note("skipped, the launcher's interpreter is not in the native tool store."); return
             self.config, replaced = replace_interpreter_paths(self.config_file, new, store, check_config)
             if replaced: note("updated %d path(s) in %s to %s" % (replaced, self.config_file, new))

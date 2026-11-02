@@ -1157,6 +1157,16 @@ print('fixture real candidate patch identity passed')
         self.assertEqual(after['hooks']['finish'][0],str(venv/'python3'))
         self.assertEqual(after['hooks']['backup'][0],pythons['3.14.9'])
 
+    def test_interpreters_written_through_a_linked_home_still_follow(self):
+        before,pythons=self.managed_interpreters('3.14.7')
+        linked=self.root/'linked-home'; linked.symlink_to(before['managedHome'])
+        home=before['managedHome']
+        before['hooks']['backup']=[str(linked/Path(before['hooks']['backup'][0]).relative_to(home)),*before['hooks']['backup'][1:]]
+        before['managedHome']=str(linked)
+        worker.atomic(self.config,before)
+        self.check(); self.assertEqual(self.install()['status'],'complete')
+        self.assertEqual(json.loads(self.config.read_text())['hooks']['backup'][0],pythons['3.14.9'])
+
     def test_a_failed_release_keeps_the_worker_interpreter_paths_for_review(self):
         before,_=self.managed_interpreters('3.14.7')
         stage=self.check(); (stage/'fail-finish').touch(); self.install(expect_error=True)
