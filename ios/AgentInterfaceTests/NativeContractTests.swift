@@ -1681,6 +1681,116 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
         XCTAssertEqual(server.draftSaves(), [.init(text: "Old unsent text", baseRevision: 1)], "Saved on its base, so a changed server copy refuses it")
     }
 
+    func testOpeningAChatAsksForItsDraftAndConversationTogetherAndAppliesTheDraftFirst() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.versionDrafts("other", text: "Server draft", revision: 1)
+        server.serveHistory(["m01", "reply-1"])
+        let draftPath = "/api/bots/other/draft", conversationPath = "/api/bots/other/conversation"
+        server.hold(draftPath); server.delayResponse(conversationPath)
+        let opening = Task { await value.select("other") }
+        // Both are in flight at once: the conversation did not wait for the draft to come back.
+        try await server.waitForHeld(draftPath)
+        try await server.waitForDelayed(conversationPath)
+        server.releaseResponse(conversationPath)
+        // The conversation has arrived. It stays unapplied while the draft is still out.
+        try await Task.sleep(for: .milliseconds(150)) // Absence check: nothing may apply in this window.
+        XCTAssertNil(value.conversation, "The conversation waits for the draft to settle")
+        XCTAssertFalse(value.draftReady)
+        server.release(draftPath); await opening.value
+        XCTAssertEqual(value.draft.text, "Server draft")
+        XCTAssertEqual(value.conversation?.messages.map(\.id), ["m01", "reply-1"])
+        XCTAssertTrue(value.draftReady)
+        XCTAssertEqual(server.requestCount(conversationPath), 1, "Nothing was asked twice")
+    }
+
+    func testAMissingAssistantFoundByItsDraftLeavesWithoutApplyingTheConversation() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.hideBot()
+        await value.select("bot")
+        XCTAssertNil(value.selectedBotId)
+        XCTAssertNil(value.conversation)
+        XCTAssertEqual(value.notice, "That assistant is no longer available to you.")
+    }
+
+    // MARK: Chats read ahead
+
+    /// The family chat was opened once, then the store went back to a followed "bot" chat.
+    private func storeWithOpenedFamily(_ server: NativeMockServer) async throws -> AppStore {
+        server.addFamilyBot()
+        server.serveHistory(["m01", "reply-1"])
+        let value = try store(server)
+        await value.select("family")
+        await value.select("bot"); value.conversationShown("bot", true)
+        value.draft = Draft(text: "Send this", attachments: [], dirty: true); value.draftReady = true
+        return value
+    }
+    private func opened(_ value: AppStore, _ id: String, _ server: NativeMockServer) async throws -> Conversation? {
+        let path = "/api/bots/\(id)/conversation"
+        server.hold(path)
+        let opening = Task { await value.select(id) }
+        try await server.waitForHeld(path)
+        let shown = value.conversation
+        server.release(path); await opening.value
+        return shown
+    }
+
+    func testAChatReadAheadOpensWithItsLatestMessagesAndTouchesNothingElse() async throws {
+        let server = NativeMockServer(); let value = try await storeWithOpenedFamily(server); defer { clean(server, value) }
+        server.appendHistory("m02")
+        // The family chat was read a moment ago, so time moves past its freshness window.
+        var time = ContinuousClock.now
+        value.now = { time }; time += .seconds(AppStore.prefetchFreshness + 1)
+        let before = server.requestCount("/api/bots/family/conversation"), drafts = server.requestCount("/api/bots/family/draft")
+        let followed = value.conversation
+        value.prefetchLikelyChats()
+        try await until { server.requestCount("/api/bots/family/conversation") == before + 1 && !value.isPrefetching }
+        XCTAssertEqual(server.conversationQueries.last, "turns=20", "The same page opening reads")
+        XCTAssertEqual(server.requestCount("/api/bots/family/draft"), drafts, "No draft is read or applied")
+        XCTAssertEqual(value.selectedBotId, "bot"); XCTAssertEqual(value.conversation, followed)
+        XCTAssertEqual(value.draft.text, "Send this"); XCTAssertNil(value.replyAnnouncement)
+        let shown = try await opened(value, "family", server)
+        XCTAssertEqual(shown?.messages.map(\.id), ["m01", "reply-1", "m02"], "Cached copy is the read-ahead one before the open's own read returns")
+    }
+
+    func testReadingAheadSkipsTheChatOnScreenFreshChatsAndABackgroundedApp() async throws {
+        let server = NativeMockServer(); let value = try await storeWithOpenedFamily(server); defer { clean(server, value) }
+        var time = ContinuousClock.now
+        value.now = { time }; time += .seconds(AppStore.prefetchFreshness + 1)
+        let reads = { server.requestCount("/api/bots/family/conversation") }
+        let start = reads(), followedReads = server.requestCount("/api/bots/bot/conversation")
+        value.prefetchLikelyChats()
+        try await until { reads() == start + 1 && !value.isPrefetching }
+        value.prefetchLikelyChats(); value.prefetchLikelyChats()
+        try await until { !value.isPrefetching }
+        XCTAssertEqual(reads(), start + 1, "A chat read a moment ago is not read again")
+        XCTAssertEqual(server.requestCount("/api/bots/bot/conversation"), followedReads, "The chat on screen is left to its own polls")
+        time += .seconds(AppStore.prefetchFreshness + 1)
+        value.suspend()
+        value.prefetchLikelyChats()
+        try await Task.sleep(for: .milliseconds(150)) // Absence check: nothing may start in this window.
+        XCTAssertEqual(reads(), start + 1, "A backgrounded app reads nothing ahead")
+        XCTAssertFalse(value.isPrefetching)
+    }
+
+    func testAReadAheadThatLandsAfterTheChatOpenedDoesNotRollItBack() async throws {
+        let server = NativeMockServer(); let value = try await storeWithOpenedFamily(server); defer { clean(server, value) }
+        let path = "/api/bots/family/conversation"
+        var time = ContinuousClock.now
+        value.now = { time }; time += .seconds(AppStore.prefetchFreshness + 1)
+        server.delayResponse(path)
+        value.prefetchLikelyChats()
+        try await server.waitForDelayed(path)
+        // The chat opens and reads a newer page while the read-ahead is still out.
+        server.appendHistory("m02")
+        await value.select("family")
+        XCTAssertEqual(value.conversation?.messages.last?.id, "m02")
+        server.releaseResponse(path)
+        try await until { !value.isPrefetching }
+        await value.select("bot")
+        let shown = try await opened(value, "family", server)
+        XCTAssertEqual(shown?.messages.last?.id, "m02", "The older read-ahead page did not replace the newer copy")
+    }
+
     func testARevertSavesAgainAfterAnOlderSaveLands() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
         server.versionDrafts(text: "A", revision: 1)

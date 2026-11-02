@@ -10,6 +10,7 @@ import type { View } from "./view";
 import type { AppUpdate } from "./use-browser";
 import { UpdateNotice } from "./UpdateNotice";
 import { BotMenu } from "./BotMenu";
+import { prefetchFirstPage } from "./conversation-page";
 import { NewMenu } from "./NewMenu";
 import { memberNames, roomFaces, roomPreview, type PendingGroup } from "./home-rooms";
 import { isUnread, type ReadThrough } from "./unread";
@@ -72,6 +73,11 @@ export const Sidebar = memo(function Sidebar({ boot, botId, shownBotId, readThro
   const activity = (bot: Bot): ActivityState => connectionLost ? "disconnected" : bot.id === botId ? state : bot.activity;
   const current = (bot: Bot) => bot.id === botId && view === "conversation";
   const unread = (bot: Bot) => isUnread(bot, shownBotId, readThrough);
+  // Pointing at, pressing or focusing a row reads its chat before the click opens it.
+  const intent = (bot: Bot) => {
+    const prefetch = () => { if (!current(bot)) prefetchFirstPage(bot.id); };
+    return { onPointerEnter: prefetch, onPointerDown: prefetch, onFocus: prefetch };
+  };
   const row = (bot: Bot) => {
     const botState = activity(bot);
     const working = !connectionLost && botState !== "idle" && botState !== "done";
@@ -79,7 +85,7 @@ export const Sidebar = memo(function Sidebar({ boot, botId, shownBotId, readThro
       <BotMenu bot={bot} preferences={prefs} onPin={() => onPin(bot)} onSettings={() => onBotSettings(bot)}
         onMove={sectionId => onMoveToSection(bot, sectionId)} onNewSection={() => onNewSection(bot)}>
         <Button className={`bot-item bot-row${current(bot) ? " selected" : ""}${unread(bot) ? " unread" : ""}`} aria-current={current(bot) ? "page" : undefined}
-          onClick={() => onSelectBot(bot.id)}>
+          {...intent(bot)} onClick={() => onSelectBot(bot.id)}>
           <span className="home-row-avatar" aria-hidden="true"><Avatar avatar={bot.avatar} state={botState === "done" || botState === "blocked" ? "idle" : botState} size={mobile ? 52 : 44} name={bot.name} reducedMotion /></span>
           <span className="bot-row-text">
             <span className="bot-row-top"><span className="bot-row-name"><strong>{bot.name}</strong></span>
@@ -147,7 +153,7 @@ export const Sidebar = memo(function Sidebar({ boot, botId, shownBotId, readThro
               <BotMenu bot={bot} preferences={prefs} onPin={() => onPin(bot)} onSettings={() => onBotSettings(bot)}
                 onMove={sectionId => onMoveToSection(bot, sectionId)} onNewSection={() => onNewSection(bot)}>
                 <Button className={`bot-item pinned-bot${current(bot) ? " selected" : ""}${unread(bot) ? " unread" : ""}`} aria-current={current(bot) ? "page" : undefined}
-                  onClick={() => onSelectBot(bot.id)}>
+                  {...intent(bot)} onClick={() => onSelectBot(bot.id)}>
                   <span className="pinned-avatar" aria-hidden="true">
                     {/* Pinned assistants are few and featured, so they stay alive; the system Reduce Motion setting still applies. */}
                     <Avatar avatar={bot.avatar} state={botState === "done" || botState === "blocked" ? "idle" : botState} size={mobile ? 92 : 60} name={bot.name} botId={bot.id} offline={offline} />

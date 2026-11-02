@@ -24,7 +24,7 @@ extension AppStore {
       "earlierFilesFailure": \.earlierFilesFailure, "loadingEarlier": \.loadingEarlier,
       "conversationScreens": \.conversationScreens, "chatCovers": \.chatCovers,
       "connectionError": \.connectionError, "activity": \.activity,
-      "readHere": \.readHere, "homeRequest": \.homeRequest,
+      "readHere": \.readHere, "openComputer": \.openComputer,
       // Transcript entry points (I1): Retry, opening at a message, and the attention scroll.
       "retryAttempt": \.retryAttempt, "focusedMessage": \.focusedMessage, "attentionScrollRequest": \.attentionScrollRequest,
     ]

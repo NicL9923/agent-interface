@@ -540,7 +540,9 @@ struct BotListView: View {
       }.refreshable { await store.refreshBootstrap(); await store.refreshGroups() }
       // Rooms come with the catalog, read once on appearing and every 30 seconds while the app is in use.
       // Split-view reparenting can cancel a view task during a phone push, so the first read does not depend on one.
-      .onAppear { pendingGroup = GroupCreation.pending(scope: store.scope); Task { await store.refreshGroups() } }
+      .onAppear { pendingGroup = GroupCreation.pending(scope: store.scope); Task { await store.refreshGroups() }; store.prefetchLikelyChats() }
+      // A reply that makes a chat unread is the likeliest next tap, so it is read ahead too.
+      .onChange(of: store.likelyChatIds) { _, _ in store.prefetchLikelyChats() }
       .onChange(of: store.scope) { _, scope in pendingGroup = GroupCreation.pending(scope: scope); Task { await store.refreshGroups() } }
       .onChange(of: creatingGroup) { _, _ in pendingGroup = GroupCreation.pending(scope: store.scope) }
       .pollWhileActive(id: store.scope ?? "", every: .seconds(30)) { await store.refreshGroups() }
