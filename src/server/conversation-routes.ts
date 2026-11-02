@@ -142,7 +142,7 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
   // and assistant access are the conversation read's own hooks; each notice rechecks the session.
   const watchers = new Map<string, Set<() => void>>();
   // The app's own conversation writes notify at once, before Hermes reports their effect.
-  const conversationWrites = new Set(["messages", "steer", "stop", "requests/:approvalId", "approvals/:approvalId", "secure-requests/:requestId", "computer-handoffs/:requestId"]
+  const conversationWrites = new Set(["messages", "steer", "stop", "requests/:approvalId", "approvals/:approvalId", "secure-requests/:requestId", "computer-handoffs/:requestId", "connection-requests/:requestId"]
     .map(path => `POST /api/bots/:id/${path}`));
   app.addHook("onResponse", async (req, reply) => {
     if (reply.statusCode < 400 && conversationWrites.has(`${req.method} ${routePattern(req)}`))

@@ -1472,6 +1472,7 @@ def install(path=None):
     computer.install(server)
     journal = Journal(path or Path(get_hermes_home()) / "runtime" / "agent-interface.db")
     computer.bind_journal(journal)
+    sibling_module("integrations").install_requests(server, journal)
     bridge = Bridge(server, journal, get_hermes_home=get_hermes_home, profile_name_for_home=profile_name_for_home,
                     maintenance_file=os.environ.get("HERMES_AGENT_INTERFACE_MAINTENANCE_FILE"))
     from hermes_cli.backend_retirement import retirement

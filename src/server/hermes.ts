@@ -2,6 +2,7 @@ import { botIdFor, reasoningLevels, serviceTiers } from "../shared/types.js";
 import type { ActivityState, Avatar, Bot, BotInput, Capabilities, Conversation, ConversationOptions, Inflight, Message, ReadTiming, Routine, Runtime, RuntimeDiscovery, Skill, Submission, SubmissionReceipt, Tool, ToolCall } from '../shared/types.js';
 import ClientWebSocket from 'ws';
 import type { ComputerAttachment, ComputerStatus } from '../shared/computer.js';
+import type { ConnectionRequestResult } from '../shared/integrations.js';
 import { withMessageOrigins, wireOrigin } from "../shared/message-origin.js";
 import { decodeAutomation, decodeExperience, readOperationJson } from './hermes-operation-contracts.js';
 import type { ExperienceRequest, ExperienceResult } from '../shared/experience.js';
@@ -763,6 +764,16 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
         return await (await http('/api/agent-interface/integrations', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(input)})).json();
       } finally {
         if (!['list', 'check'].includes(input.operation)) edited(input.profile);
+      }
+    },
+    async connectionRequest(input) {
+      try {
+        return await rpc('agent-interface.connection-request', {...input, ...(serviceAuth ? {service_key: options.token} : {})}) as ConnectionRequestResult;
+      } catch (error) {
+        // The add-on's 409 explains a request that changed; keep it for the card.
+        if (error instanceof TransportError && error.rpcCode === 409)
+          throw httpError(409, error.rpcMessage || error.message);
+        throw error;
       }
     },
     async computerRequest(input) {

@@ -354,6 +354,7 @@ struct Attention: Codable, Identifiable, Equatable {
   var questions: [Question]?
   var secure: SecureRequest? = nil
   var computer: ComputerHandoff? = nil
+  var connection: ConnectionRequest? = nil
 }
 /// What this device reports about the chat on screen: reading it, or gone after reading it.
 struct ChatPresenceReport: Codable, Equatable {

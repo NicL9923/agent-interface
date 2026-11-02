@@ -38,6 +38,30 @@ local connection; it does not claim to revoke an account-wide grant at the vendo
 | Custom MCP | Add an HTTPS server with OAuth, a bearer token or no authentication. Hermes owns discovery and tool execution. Local command installation is not exposed. |
 | Apple Calendar and Reminders | In iOS, grant device permission, select calendars or reminder lists and a date range, preview the selection, then add it to a bot's draft. Send the draft to share it. Refresh explicitly to share newer data. |
 
+## Connection requests in chat
+
+An assistant can ask for a connection from the conversation with its
+`request_connection` tool. Examples: Gmail access for an email task, a search key
+or a GitHub repository. The card shows the assistant's reason and that one
+connection's own controls, the same ones as in Settings: Connect or Reconnect,
+setup fields, the sign-in flow and Check connection. Once the connection reads
+as set up, the card tells the assistant to continue on its own. If it was
+already set up when the card opened, the person presses **Continue**, because
+a saved grant can still be expired. **Not now** declines it, and sending a
+message instead closes it. A request nobody finishes closes after 15 minutes.
+
+An OAuth MCP server counts as set up only once Hermes holds its sign-in
+tokens. Settings shows a saved server whose sign-in never finished as **Not
+connected**, with Connect to sign in.
+
+Any member can decline or continue. Connecting still needs an integration
+administrator, and the card says so to everyone else. The server checks the
+catalog before it tells the assistant a connection is set up. Apple data is
+chosen on the iPhone and is never requested this way. The tool rides with the
+`clarify` toolset and refuses when nobody is waiting in the conversation, as in
+a routine. Tools from a newly added MCP server can appear only on the
+assistant's next turn; its result tells it so.
+
 Apple access is labeled **On this iPhone**. A selected snapshot is an ordinary
 attachment in the shared bot conversation once sent. The server cannot continue
 reading the phone when the app is closed. Denying or revoking device permission

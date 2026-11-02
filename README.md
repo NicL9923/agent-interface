@@ -160,8 +160,10 @@ Hermes runs separately from this application. Guided setup saves `HERMES_URL` an
 HTTP is restricted to loopback. Provider credentials remain in Hermes. Open
 **Integrations** to inspect the selected profile's accounts, check their health,
 and connect or reconnect supported services. Connection changes require an
-integration administrator. See the [integration guide](docs/Integrations.md) for
-supported services, one-time hosting configuration and device limitations.
+integration administrator. An assistant that needs a service it lacks can ask in
+the chat: its card holds that connection's setup and continues once it is set up.
+See the [integration guide](docs/Integrations.md) for supported services, one-time
+hosting configuration and device limitations.
 
 The [shared computer](docs/SharedComputer.md) provides one persistent desktop and
 browser for all assistants, with human takeover for every household member and a
