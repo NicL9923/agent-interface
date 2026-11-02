@@ -1148,6 +1148,15 @@ print('fixture real candidate patch identity passed')
         self.assertEqual({argv[0] for argv in after['hooks']['regressions']},{pythons['3.14.9']})
         worker.check_config(after)
 
+    def test_a_virtualenv_python_that_links_into_the_store_keeps_its_environment(self):
+        before,pythons=self.managed_interpreters('3.14.7')
+        venv=self.root/'hook-venv/bin'; venv.mkdir(parents=True); (venv/'python3').symlink_to(pythons['3.14.7'])
+        before['hooks']['finish']=[str(venv/'python3'),*before['hooks']['finish'][1:]]; worker.atomic(self.config,before)
+        self.check(); self.assertEqual(self.install()['status'],'complete')
+        after=json.loads(self.config.read_text())
+        self.assertEqual(after['hooks']['finish'][0],str(venv/'python3'))
+        self.assertEqual(after['hooks']['backup'][0],pythons['3.14.9'])
+
     def test_a_failed_release_keeps_the_worker_interpreter_paths_for_review(self):
         before,_=self.managed_interpreters('3.14.7')
         stage=self.check(); (stage/'fail-finish').touch(); self.install(expect_error=True)

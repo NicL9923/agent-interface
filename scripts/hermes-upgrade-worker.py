@@ -105,16 +105,22 @@ STORE_PYTHON = re.compile(r"python3(?:\.\d+)*")
 def replace_interpreter_paths(path, new, store, check):
     """Point every native tool-store Python in the private configuration at PATH to NEW.
 
-    A value is replaced when it is a path inside STORE whose file name is a Python 3 interpreter,
+    A value is replaced when it is a path named inside STORE, and resolving inside it, whose file
+    name is a Python 3 interpreter,
     whichever version it names, so positions left on different old versions all follow the
     launcher. Other tool-store binaries and system Pythons stay as they are. CHECK must accept the
     result before it replaces the owner-only file. Returns the new configuration and the count."""
-    store = Path(store).resolve()
+    # The configured path itself must name the store, not only resolve there: a virtualenv's
+    # python3 symlinks into the store, and replacing it would drop that environment.
+    lexical, store = Path(os.path.normpath(store)), Path(store).resolve()
+    def inside(value):
+        named = Path(os.path.normpath(value))
+        return (named.is_relative_to(lexical) or named.is_relative_to(store)) and Path(value).resolve().is_relative_to(store)
     replaced = 0
     def walk(value):
         nonlocal replaced
         if (isinstance(value, str) and value != new and Path(value).is_absolute()
-                and STORE_PYTHON.fullmatch(Path(value).name) and Path(value).resolve().is_relative_to(store)):
+                and STORE_PYTHON.fullmatch(Path(value).name) and inside(value)):
             replaced += 1
             return new
         if isinstance(value, list): return [walk(item) for item in value]
