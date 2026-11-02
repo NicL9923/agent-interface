@@ -44,10 +44,10 @@ OPERATIONS = READS | frozenset(("goal_set", "goal_pause", "goal_resume", "goal_c
 class Controller:
     error_type = AutomationError
 
-    def __init__(self, server, native, open_bot, canonical_lock, submission_lock, maintenance_lock, maintenance_state, journal, submit=None):
+    def __init__(self, server, native, open_bot, submission_lock, maintenance_lock, maintenance_state, journal, submit=None):
         self.submit = submit
         self.server, self.native, self.open_bot = server, native, open_bot
-        self.canonical_lock, self.submission_lock = canonical_lock, submission_lock
+        self.submission_lock = submission_lock
         self.maintenance_lock, self.maintenance_state, self.journal = maintenance_lock, maintenance_state, journal
         self.lock = threading.RLock()
         with journal.lock, journal.db:
@@ -632,8 +632,8 @@ def skill_operation(data, journal=None):
     return dict(ok=True)
 
 
-def install_runtime(server, native, open_bot, canonical_lock, submission_lock, maintenance_lock, maintenance_state, journal, submit):
-    journal.automation = Controller(server, native, open_bot, canonical_lock, submission_lock, maintenance_lock, maintenance_state, journal, submit)
+def install_runtime(server, native, open_bot, submission_lock, maintenance_lock, maintenance_state, journal, submit):
+    journal.automation = Controller(server, native, open_bot, submission_lock, maintenance_lock, maintenance_state, journal, submit)
 
 
 def install(web, journal):

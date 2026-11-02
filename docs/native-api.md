@@ -78,6 +78,9 @@ those messages with their files. `GET /api/bots/:id/events` is a server-sent
 event stream for the same readers: each `change` message means the
 conversation may have changed, so refetch it, and refetch after any reconnect.
 It sends a `ping` event every 25 seconds and ends when the session does.
+Conversation reads carry a `Server-Timing` header that splits the time between the
+Hermes read, the add-on's phases and this server. It is diagnostic only and never part
+of the body or its ETag.
 
 Clients may opt in with `/api/bots/:id/events?inflight=1`. Token, reasoning,
 status and tool-start frames then send `event: inflight` at most four times a

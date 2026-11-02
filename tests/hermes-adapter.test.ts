@@ -13,7 +13,7 @@ import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
 import { gzipSync } from 'node:zlib';
 import { createHermesRuntime } from '../src/server/hermes.js';
 import { createHermesTransport } from '../src/server/hermes-transport.js';
-import type { Runtime, Submission } from '../src/shared/types.js';
+import type { ReadTiming, Runtime, Submission } from '../src/shared/types.js';
 
 const realFetch=globalThis.fetch;
 // Isolated wire-contract regressions. Real Hermes execution evidence lives in the spike probes.
@@ -1267,6 +1267,39 @@ it('allowlists history fields before redacting a private bot handoff and its inh
 
 describe('Hermes conversation and roster read costs', () => {
   const opens = () => calls.filter(call => call.method === 'agent-interface.open');
+  it('keeps a turn that started while an older idle open answer was on its way', async () => {
+    await runtime.status();
+    await runtime.conversation('shared');
+    deferredMethods.add('agent-interface.open');
+    hermesChanged();
+    const stale = runtime.conversation('shared');
+    await vi.waitFor(() => expect(opens()).toHaveLength(2));
+    const request = opens().at(-1) as Record<string, any>;
+    sockets[0].receive({method: 'event', params: {session_id: 'live-one', type: 'message.start', payload: {}}});
+    sockets[0].receive({method: 'event', params: {session_id: 'live-one', type: 'message.delta', payload: {text: 'Hel'}}});
+    sockets[0].receive({jsonrpc: '2.0', id: request.id, result: structuredClone(snapshot)});
+    await stale;
+    deferredMethods.delete('agent-interface.open');
+    snapshot.info = {running: true};
+    expect((await runtime.conversation('shared')).messages.at(-1)).toMatchObject({id: 'live-one-inflight', text: 'Hel'});
+  });
+  it('reports the add-on round trip and phases for timing, never in the conversation', async () => {
+    await runtime.status();
+    snapshot.messages = [{row_id: 1, role: 'user', text: 'Hi'}];
+    snapshot.app_timing = {wait: 1.5, activate: 20, total: 25, 'bad;name': 3, decorate: 'slow'};
+    const first: ReadTiming = {}, second: ReadTiming = {};
+    const [read, joined] = await Promise.all([runtime.conversation('shared', {window: {turns: 20}, timing: first}), runtime.conversation('shared', {window: {turns: 20}, timing: second})]);
+    expect(first).toEqual({shared: false, hermes: expect.any(Number), addon: {wait: 1.5, activate: 20, total: 25}});
+    // The second reader joined the first read, so it reports no Hermes time of its own.
+    expect(second).toEqual({shared: true});
+    expect(joined).toEqual(read);
+    expect(JSON.stringify(read)).not.toMatch(/timing|activate/);
+    delete snapshot.app_timing;
+    hermesChanged();
+    const older: ReadTiming = {};
+    await runtime.conversation('shared', {window: {turns: 20}, timing: older});
+    expect(older).toEqual({shared: false, hermes: expect.any(Number)});
+  });
   it('reads write-check state without history and asks Hermes to cut a window', async () => {
     await runtime.submit(input());
     await runtime.conversation('shared', {history: false});

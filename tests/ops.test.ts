@@ -275,4 +275,25 @@ describe("ETags", () => {
     expect(file.headers.etag).toBeUndefined();
     expect((await app.inject("/api/bootstrap")).headers.etag).toBeUndefined();
   });
+
+  it("reports where a conversation read spent its time without changing its body or ETag", async () => {
+    let reads = 0;
+    const conversation: Runtime["conversation"] = async (botId, options) => {
+      reads++;
+      Object.assign(options!.timing!, reads === 1 ? { shared: false, hermes: 42.25, addon: { wait: 0, activate: 30.5, total: 40 } } : { shared: true });
+      return { botId, messages: [{ id: "m1", role: "assistant", text: "Hello" }], activity: { state: "idle" }, approvals: [], attention: [], files: [] };
+    };
+    const { app } = await setup({}, { runtime: runtime({ conversation }).value });
+    const headers = await login(app);
+    const first = await app.inject({ url: "/api/bots/shared/conversation?turns=20", headers });
+    expect(first.statusCode).toBe(200);
+    expect(first.headers["server-timing"]).toMatch(/^cache;desc=miss, hermes;dur=42\.3, addon-wait;dur=0, addon-activate;dur=30\.5, addon-total;dur=40, transit;dur=2\.3, runtime;dur=[\d.]+, node;dur=[\d.]+, total;dur=[\d.]+$/);
+    expect(first.body).not.toMatch(/timing|dur=|hermes/i);
+    const second = await app.inject({ url: "/api/bots/shared/conversation?turns=20", headers });
+    expect(second.headers["server-timing"]).toMatch(/^cache;desc=shared, runtime;dur=/);
+    expect([second.body, second.headers.etag]).toEqual([first.body, first.headers.etag]);
+    const unchanged = await app.inject({ url: "/api/bots/shared/conversation?turns=20", headers: { ...headers, "if-none-match": first.headers.etag as string } });
+    expect(unchanged.statusCode).toBe(304);
+    expect(unchanged.headers["server-timing"]).toMatch(/^cache;desc=shared, /);
+  });
 });

@@ -9,6 +9,7 @@ from pathlib import Path
 import sys
 import tempfile
 import threading
+import time
 import types
 
 from guard import MARKER, verify_home
@@ -226,6 +227,19 @@ def main():
         assert server._start_session_work(lambda: None, name="qualification-gated-deferred") is None
         checks["held_lease_blocks_long_rpc_and_deferred_work"] = True
         assert maintenance("release")["result"]["active"] is False
+
+        # Polled add-on reads leave the connection's serial lane. Native dispatch must still
+        # read _LONG_HANDLERS from server globals, which the add-on widens at install.
+        replies = []
+        class Replies:
+            def write(self, response): replies.append(response); return True
+        assert {"agent-interface.open", "agent-interface.discover"} <= server._LONG_HANDLERS
+        assert server.dispatch({"id": 5, "method": "agent-interface.discover", "params": {"cursor": "0"}}, Replies()) is None, "Polled add-on reads still run inline"
+        deadline = time.monotonic() + 10
+        while (not replies or retirement.active_count()) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert replies and "result" in replies[0] and retirement.active_count() == 0, replies
+        checks["polled_addon_reads_run_on_native_pool"] = True
 
         deferred_started, deferred_release = threading.Event(), threading.Event()
         def deferred(): deferred_started.set(); deferred_release.wait(10)

@@ -15,6 +15,7 @@ import sqlite3
 import threading
 import time
 import uuid
+import weakref
 import contextlib
 import re
 import mimetypes
@@ -350,6 +351,26 @@ class Keeper:
         self.closed = True
 
 
+def redaction_state():
+    """A digest of native redaction registries, which change history projection in memory only.
+
+    None when this Hermes keeps them elsewhere, so a renamed registry cannot pass unnoticed.
+    """
+    try:
+        redact = importlib.import_module("agent.redact")
+        vault_lock, vault = redact._VAULT_REDACTION_LOCK, redact._VAULT_REDACTION_VALUES
+        plugin_lock, plugin = redact._registry_lock, redact._PLUGIN_PREFIX_PATTERNS
+    except (ImportError, AttributeError):
+        return None
+    digest = hashlib.sha256()
+    with vault_lock:
+        vault = sorted((str(home), sorted(values)) for home, values in vault.items())
+    with plugin_lock:
+        plugin = sorted((str(source), list(patterns)) for source, patterns in plugin.items())
+    digest.update(json.dumps([vault, plugin]).encode())
+    return digest.hexdigest()
+
+
 def history_row_floor(session):
     # Native flushes stamp raw rows with their durable IDs. Snapshot those
     # already-visible rows without taking another database or session lock.
@@ -381,6 +402,16 @@ RUN_TERMINAL = "SELECT kind FROM events WHERE run_id=? AND kind IN ('completed',
 INSERT_REJECTED = "INSERT INTO receipts(request_id,digest,profile,session_id,stored_session,actor,epoch,run_id,input_text,attachments,steering,status,terminal,created) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
 
 
+# Reads the app polls. Native dispatch runs these on its RPC pool instead of the
+# connection's serial lane, so one slow history read never queues every other RPC.
+POOLED_READS = frozenset({"agent-interface.open", "agent-interface.discover"})
+# Decorated history is keyed on exact history identity, journal mutation and native
+# redaction state; the lifetime only bounds what an identity collision could serve.
+# Without readable redaction state, the earlier short lifetime still applies.
+DECORATED_TTL = 600
+UNTRACKED_REDACTION_TTL = 30
+DECORATED_LIMIT = 32
+
 # Methods a held maintenance lease still admits: status, history and discovery reads.
 MAINTENANCE_READS = {"agent-interface.maintenance", "agent-interface.capabilities", "agent-interface.receipt", "agent-interface.discover",
                      "client.capabilities", "profiles.list", "profiles.describe", "session.list", "session.history", "session.info", "session.events.since",
@@ -398,7 +429,12 @@ class Bridge:
         self.server, self.journal = server, journal
         self.get_hermes_home, self.profile_name_for_home = get_hermes_home, profile_name_for_home
         self.maintenance_file = maintenance_file
-        self.canonical_lock = threading.RLock()
+        # One lock per profile: an assistant's open never waits on another's. Weak values keep
+        # a lock alive exactly while a thread holds or waits on it.
+        self.profile_locks = weakref.WeakValueDictionary()
+        self.profile_locks_guard = threading.Lock()
+        # Leaf lock for the decorated-history cache, which every profile's open prunes.
+        self.cache_lock = threading.Lock()
         self.submission_lock = threading.RLock()
         # The (profile, session, actor) a submit on this thread just admitted as steering.
         self.steered = threading.local()
@@ -760,6 +796,14 @@ class Bridge:
 
     # Canonical open: each profile's one Bot Chat, attributed from the journal.
 
+    def profile_lock(self, profile):
+        """The profile's open lock. Order: submission_lock, profile lock, journal.lock, cache_lock."""
+        with self.profile_locks_guard:
+            lock = self.profile_locks.get(profile)
+            if lock is None:
+                lock = self.profile_locks[profile] = threading.RLock()
+            return lock
+
     def history_identity(self, session):
         if "history" not in session or "history_lock" not in session:
             return None
@@ -784,19 +828,21 @@ class Bridge:
         # Like the native change watcher, observe both DB and WAL: another native
         # connection can commit a display lineage without changing the warm history.
         # File replacement, checkpoint and profile commentary configuration invalidate too.
-        return memory, tuple(stamp(path) for path in (db_path, db_path.with_name(db_path.name + "-wal"), home / "config.yaml"))
+        # Vault secrets and plugin patterns registered at runtime redact native commentary.
+        return memory, tuple(stamp(path) for path in (db_path, db_path.with_name(db_path.name + "-wal"), home / "config.yaml")), redaction_state()
 
     def activate(self, profile, omit, skip_cache):
         """Activate or resume the profile's canonical session; None for an unknown profile.
 
         Returns (value, cached, identity, mutation). ``cached`` is decorated history this
-        poll may reuse, already placed in ``value``. Callers hold canonical_lock.
+        poll may reuse, already placed in ``value``. Callers hold the profile's lock.
         """
         server, journal, canonical, decorated = self.server, self.journal, self.canonical, self.decorated
-        # Retain only live canonical sessions, with a bounded household cache.
-        live_canonical = set(canonical.values()) & server._sessions.keys()
-        for old in list(decorated):
-            if old not in live_canonical:
+        # Retain only live canonical sessions, with a bounded household cache. Other
+        # profiles' opens change these dictionaries concurrently, so read snapshots.
+        live_canonical = set(canonical.copy().values()) & set(server._sessions.copy())
+        with self.cache_lock:
+            for old in [sid for sid in decorated if sid not in live_canonical]:
                 del decorated[old]
         cached = None
         identity = None
@@ -806,9 +852,13 @@ class Bridge:
             identity = None if omit else self.history_identity(server._sessions[sid])
             with journal.lock:
                 mutation = journal.mutation
-                entry = decorated.get(sid)
-                if not omit and not skip_cache and identity is not None and mutation is not None and entry and entry[:2] == (identity, mutation) and time.monotonic() - entry[3] < 30:
-                    cached = entry[2]
+                with self.cache_lock:
+                    entry = decorated.get(sid)
+                    lifetime = DECORATED_TTL if identity is not None and identity[-1] is not None else UNTRACKED_REDACTION_TTL
+                    if not omit and not skip_cache and identity is not None and mutation is not None and entry and entry[:2] == (identity, mutation) and time.monotonic() - entry[3] < lifetime:
+                        cached = entry[2]
+                        # Eviction keeps the most recently read histories; lifetime counts from the fill.
+                        decorated[sid] = (*entry[:4], time.monotonic())
             value = self.native("session.activate", {"session_id": sid, "profile": profile, **({"omit_messages": True} if omit or cached is not None else {})})
             # Native activation takes its own snapshot. Never combine cached history with
             # a live payload that crossed a history or journal mutation.
@@ -864,17 +914,21 @@ class Bridge:
                 value["inflight"] = {}
             value["inflight"]["reasoning"] = session["app_exposed_reasoning"]
         session["app_manual_recovery"] = True
-        keeper = self.keepers.setdefault(sid, Keeper())
+        # A registered keeper marks a session prepared for app work; open_canonical relies on it.
+        keeper = self.keepers.get(sid) or Keeper()
         self.server._attach_session_transport(session, keeper)
+        self.keepers.setdefault(sid, keeper)
         db = self.journal.db
         value["executor_epoch"] = self.journal.epoch
         value["canonical_stored_session_id"] = session.get("session_key")
-        interruption = db.execute("SELECT request_id,created FROM interruptions WHERE profile=? AND stored_session=?", (profile, value["canonical_stored_session_id"])).fetchone()
+        # Other profiles' opens share this connection. Never hold the journal across native calls.
+        with self.journal.lock:
+            interruption = db.execute("SELECT request_id,created FROM interruptions WHERE profile=? AND stored_session=?", (profile, value["canonical_stored_session_id"])).fetchone()
+            current = db.execute(OPEN_RUN, (sid,)).fetchone()
+            # Cold resume has a new runtime SID; use the canonical journal owner.
+            terminal = self.journal.last_terminal(profile, sid, value["canonical_stored_session_id"])
         value["app_interruption"] = {"requestId": interruption[0], "runId": interruption[0], "detail": "Hermes restarted during this task. Review its results before retrying."} if interruption else None
-        current = db.execute(OPEN_RUN, (sid,)).fetchone()
         value["app_run_id"] = current[0] if current else None
-        # Cold resume has a new runtime SID; use the canonical journal owner.
-        terminal = self.journal.last_terminal(profile, sid, value["canonical_stored_session_id"])
         value["app_task_state"] = {"completed": "done", "failed": "failed", "interrupted": "interrupted"}.get(terminal[0]) if terminal and not current else None
 
     def attribute(self, profile, sid, value):
@@ -973,10 +1027,12 @@ class Bridge:
         calls = []
         if not session.get("running"):
             return calls
-        for tool_id, call in session.get("app_live_tools", {}).items():
+        # Frame threads add tools and replace these per turn. Iterate copies.
+        live, floors = dict(session.get("app_live_tools", {})), dict(session.get("app_live_tool_row_floors", {}))
+        for tool_id, call in live.items():
             represented = False
             if call.get("status") != "running":
-                floor = session.get("app_live_tool_row_floors", {}).get(tool_id)
+                floor = floors.get(tool_id)
                 try:
                     arguments = json.loads(call.get("arguments", "{}"))
                 except (ValueError, TypeError):
@@ -998,48 +1054,78 @@ class Bridge:
         return calls
 
     def open_bot(self, rid, params):
+        """The profile's canonical session, reporting where this open spent its time.
+
+        ``app_timing`` holds milliseconds: waiting for the profile's lock, native activation,
+        journal decoration, windowing and the whole call.
+        """
+        started = time.perf_counter()
+        phases = dict.fromkeys(("wait", "activate", "decorate", "window"), 0.0)
+        with self.profile_lock(params.get("profile", "default")):
+            phases["wait"] = time.perf_counter() - started
+            response = self.open_locked(rid, params, phases)
+        if "result" in response:
+            phases["total"] = time.perf_counter() - started
+            response["result"]["app_timing"] = {name: round(seconds * 1000, 1) for name, seconds in phases.items()}
+        return response
+
+    def open_locked(self, rid, params, phases):
         server, journal = self.server, self.journal
         profile = params.get("profile", "default")
         # Callers that need only the session, its run state and open requests skip the
         # native history read. A first open still resumes with history.
         omit = params.get("omit_messages") is True
         window = params.get("window") if isinstance(params.get("window"), dict) and not omit else None
-        with self.canonical_lock:
-            activated = self.activate(profile, omit, params.get("_skip_cache"))
-            if activated is None:
-                return server._err(rid, 4040, "Unknown Hermes profile")
-            value, cached, identity, mutation = activated
-            value.setdefault("open_requests", [])
-            self.mark_local_requests(value)
-            sid = value["session_id"]
-            session = server._sessions[sid]
-            self.describe_task(profile, sid, session, value)
-            with journal.lock:
-                if cached is None:
-                    messages, bound_mutation, cacheable = self.attribute(profile, sid, value)
-            # Never acquire history_lock while holding journal.lock: native flushes
-            # emit frames under history_lock and the frame hook needs journal.lock.
-            after = self.history_identity(session) if not omit else None
-            if cached is not None and (after != identity or mutation != journal.mutation):
-                return self.open_bot(rid, {**params, "_skip_cache": True})
-            with journal.lock:
-                if cached is None:
+        mark = time.perf_counter()
+        activated = self.activate(profile, omit, params.get("_skip_cache"))
+        if activated is None:
+            return server._err(rid, 4040, "Unknown Hermes profile")
+        phases["activate"] += time.perf_counter() - mark
+        mark = time.perf_counter()
+        value, cached, identity, mutation = activated
+        value.setdefault("open_requests", [])
+        self.mark_local_requests(value)
+        sid = value["session_id"]
+        session = server._sessions[sid]
+        self.describe_task(profile, sid, session, value)
+        with journal.lock:
+            if cached is None:
+                messages, bound_mutation, cacheable = self.attribute(profile, sid, value)
+        # Never acquire history_lock while holding journal.lock: native flushes
+        # emit frames under history_lock and the frame hook needs journal.lock.
+        after = self.history_identity(session) if not omit else None
+        if cached is not None and (after != identity or mutation != journal.mutation):
+            phases["decorate"] += time.perf_counter() - mark
+            return self.open_locked(rid, {**params, "_skip_cache": True}, phases)
+        with journal.lock:
+            if cached is None:
+                cache = self.decorated
+                with self.cache_lock:
                     if not omit and identity is not None and after == identity and cacheable and mutation == bound_mutation == journal.mutation:
                         # Full binding preserves cursor identities and earlier file context.
-                        self.decorated[sid] = (identity, journal.mutation, messages, time.monotonic())
-                        while len(self.decorated) > 32:
-                            del self.decorated[min(self.decorated, key=lambda key: self.decorated[key][3])]
+                        now = time.monotonic()
+                        cache[sid] = (identity, journal.mutation, messages, now, now)
+                        while len(cache) > DECORATED_LIMIT:
+                            del cache[min(cache, key=lambda key: cache[key][4])]
                     else:
-                        self.decorated.pop(sid, None)
-            value["app_tool_calls"] = self.unrepresented_tool_calls(session, value.get("messages", []))
-            if window is not None:
-                value["messages"], cut = history_window(value.get("messages", []), sid, window.get("start"), window.get("turns", 0))
-                if cut:
-                    value["app_window"] = cut
-            return server._ok(rid, value)
+                        cache.pop(sid, None)
+        phases["decorate"] += time.perf_counter() - mark
+        mark = time.perf_counter()
+        value["app_tool_calls"] = self.unrepresented_tool_calls(session, value.get("messages", []))
+        if window is not None:
+            value["messages"], cut = history_window(value.get("messages", []), sid, window.get("start"), window.get("turns", 0))
+            if cut:
+                value["app_window"] = cut
+        phases["window"] += time.perf_counter() - mark
+        return server._ok(rid, value)
 
     def open_canonical(self, profile):
-        with self.canonical_lock:
+        # A live, prepared canonical session needs no lock, so a send never waits behind a
+        # history read. Submit rechecks ownership under the journal lock.
+        sid = self.canonical.get(profile)
+        if sid in self.server._sessions and sid in self.keepers:
+            return sid
+        with self.profile_lock(profile):
             if self.canonical.get(profile) in self.server._sessions:
                 return self.canonical[profile]
             response = self.open_bot("agent-interface-delivery", {"profile": profile})
@@ -1100,7 +1186,7 @@ class Bridge:
         with self.submission_lock:
             # Replays need neither fresh canonical activation nor interruption review.
             # Keep the submission fence until admission finishes so only one call owns
-            # a request ID. Do not take canonical_lock while holding journal.lock.
+            # a request ID. Do not take a profile lock while holding journal.lock.
             with journal.lock:
                 previous = journal.db.execute("SELECT digest FROM receipts WHERE request_id=?", (request_id,)).fetchone()
                 if previous:
@@ -1293,7 +1379,7 @@ class Bridge:
         self.journal.bot_delivery.start()
 
     def install_automation(self):
-        sibling_module("automation").install_runtime(self.server, self.native, self.open_bot, self.canonical_lock, self.submission_lock,
+        sibling_module("automation").install_runtime(self.server, self.native, self.open_bot, self.submission_lock,
                                                      self.maintenance_lock, self.maintenance_state, self.journal, self.submit)
 
 def install(path=None):
@@ -1313,6 +1399,10 @@ def install(path=None):
     server.register_method("agent-interface.capabilities", lambda rid, _: server._ok(rid, {"revision": actual_revision, "tracked_patch_sha256": patch_hash, "executor_epoch": journal.epoch, "durable_admission": True, "durable_events": True, "canonical_open": True, "explicit_credentials": True, "canonical_submit": True, "incremental_discovery": True, "essential_skills": sorted(ESSENTIAL_SKILLS)}))
     for name, handler in bridge.rpc_methods().items():
         server.register_method(name, handler)
+    # Native dispatch reads _LONG_HANDLERS from this module's globals at call time,
+    # as native plugins that widen it rely on.
+    if hasattr(server, "_LONG_HANDLERS"):
+        server._LONG_HANDLERS = server._LONG_HANDLERS | POOLED_READS
     bridge.install_delivery()
     bridge.install_automation()
     return journal

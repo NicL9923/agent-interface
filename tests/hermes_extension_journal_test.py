@@ -51,7 +51,11 @@ class FakeGateway:
         requests = types.SimpleNamespace(_lock=threading.Lock(), _open={})
         gateway = types.ModuleType("tui_gateway")
         gateway.server, gateway.server_requests = server, requests
-        self.modules = {"tui_gateway": gateway, "tui_gateway.server": server, "tui_gateway.server_requests": requests}
+        # Native redaction registries, which history projection reads in memory.
+        self.redact = types.SimpleNamespace(_VAULT_REDACTION_LOCK=threading.Lock(), _VAULT_REDACTION_VALUES={},
+                                            _registry_lock=threading.Lock(), _PLUGIN_PREFIX_PATTERNS={})
+        self.modules = {"tui_gateway": gateway, "tui_gateway.server": server, "tui_gateway.server_requests": requests,
+                        "agent": types.ModuleType("agent"), "agent.redact": self.redact}
 
     def __enter__(self):
         self.patches = [patch.dict(sys.modules, self.modules), patch.dict("os.environ", self.environment)]
@@ -129,6 +133,40 @@ class FakeHermes(FakeGateway):
         self.methods = self.registered
         self.bridge = self.methods["agent-interface.open"].__self__
         return journal
+
+
+class ProfilesGateway(FakeGateway):
+    """Two assistants with their own canonical sessions; a test can hold either one's native activation."""
+    def __init__(self):
+        super().__init__([])
+        self.held, self.entered, self.inside, self.peak = {}, {}, {}, {}
+        server, counting = self.server, threading.Lock()
+        def handle(request):
+            params = request.get("params") or {}
+            profile = params.get("profile", "default")
+            if request["method"] == "profiles.list":
+                return server._ok(request["id"], {"profiles": [{"name": name, "canonical_session": {"resolved_id": "stored-" + name}} for name in ("slow", "fast")]})
+            if request["method"] not in ("session.activate", "session.resume"):
+                self.native_calls.append((request["method"], params))
+                return server._ok(request["id"], {"status": "accepted"})
+            with counting:
+                self.inside[profile] = self.inside.get(profile, 0) + 1
+                self.peak[profile] = max(self.peak.get(profile, 0), self.inside[profile])
+            try:
+                self.entered.setdefault(profile, threading.Event()).set()
+                if profile in self.held:
+                    self.held[profile].wait(5)
+            finally:
+                with counting:
+                    self.inside[profile] -= 1
+            server._sessions.setdefault("sid-" + profile, {"session_key": "stored-" + profile})
+            return server._ok(request["id"], {"session_id": "sid-" + profile, "messages": []})
+        server.handle_request = handle
+
+    def opening(self, profile, results):
+        thread = threading.Thread(target=lambda: results.append(self.open(profile=profile)), daemon=True)
+        thread.start()
+        return thread
 
 
 def turns(count, files=()):
@@ -484,6 +522,119 @@ class OpenTests(unittest.TestCase):
             hermes.open()
             self.assertNotIn("omit_messages", hermes.native_calls[-1][1])
 
+    def test_one_assistants_slow_open_never_holds_up_anothers(self):
+        with ProfilesGateway() as hermes:
+            hermes.held["slow"] = threading.Event()
+            slow, fast = [], []
+            waiting = hermes.opening("slow", slow)
+            self.assertTrue(hermes.entered["slow"].wait(5))
+            # A global open lock would queue this behind the held activation.
+            hermes.opening("fast", fast).join(2)
+            self.assertEqual([result["session_id"] for result in fast], ["sid-fast"])
+            self.assertEqual(slow, [])
+            hermes.held["slow"].set()
+            waiting.join(5)
+            self.assertEqual(slow[0]["session_id"], "sid-slow")
+
+    def test_one_assistants_opens_still_run_one_at_a_time(self):
+        with ProfilesGateway() as hermes:
+            hermes.held["slow"] = threading.Event()
+            results = []
+            first = hermes.opening("slow", results)
+            self.assertTrue(hermes.entered["slow"].wait(5))
+            second = hermes.opening("slow", results)
+            time.sleep(0.2)
+            self.assertEqual((hermes.inside["slow"], results), (1, []))
+            hermes.held["slow"].set()
+            first.join(5); second.join(5)
+            self.assertEqual(hermes.peak["slow"], 1)
+            # The second open reports the time it spent behind the first.
+            self.assertGreaterEqual(max(result["app_timing"]["wait"] for result in results), 150)
+            self.assertEqual(hermes.bridge.canonical, {"slow": "sid-slow"})
+
+    def test_a_send_never_waits_behind_its_assistants_history_read(self):
+        with ProfilesGateway() as hermes:
+            hermes.open(profile="slow")
+            hermes.held["slow"] = threading.Event()
+            hermes.entered["slow"].clear()
+            reading = hermes.opening("slow", [])
+            self.assertTrue(hermes.entered["slow"].wait(5))
+            sent = []
+            params = {"profile": "slow", "request_id": "send", "sender_id": "member", "text": "Hello"}
+            sending = threading.Thread(target=lambda: sent.append(hermes.methods["agent-interface.submit"]("send", params)), daemon=True)
+            sending.start(); sending.join(2)
+            self.assertEqual([response["result"]["status"] for response in sent], ["accepted"])
+            hermes.held["slow"].set()
+            reading.join(5)
+
+    def test_open_reports_its_phases_in_milliseconds(self):
+        with FakeGateway(turns(2)) as hermes:
+            timing = hermes.open(window={"turns": 20})["app_timing"]
+            self.assertEqual(set(timing), {"wait", "activate", "decorate", "window", "total"})
+            self.assertTrue(all(isinstance(value, float) and value >= 0 for value in timing.values()))
+            self.assertGreaterEqual(timing["total"], timing["activate"])
+
+    def test_decorated_history_outlives_a_short_idle_until_its_bound(self):
+        with FakeGateway(turns(3)) as hermes:
+            hermes.open()
+            session = hermes.modules["tui_gateway.server"]._sessions["sid"]
+            session.update(history=hermes.messages, history_lock=threading.Lock(), profile_home=hermes.directory.name)
+            hermes.open()
+            stored = time.monotonic()
+            # Coming back to an idle chat minutes later reuses its exact decorated history.
+            with patch.object(extension.time, "monotonic", return_value=stored + 300):
+                self.assertEqual(len(hermes.open()["messages"]), 6)
+            self.assertTrue(hermes.native_calls[-1][1].get("omit_messages"))
+            with patch.object(extension.time, "monotonic", return_value=stored + extension.DECORATED_TTL + 1):
+                hermes.open()
+            self.assertNotIn("omit_messages", hermes.native_calls[-1][1])
+
+    def test_decorated_history_follows_native_redaction_registries(self):
+        with FakeGateway(turns(3)) as hermes:
+            hermes.open()
+            session = hermes.modules["tui_gateway.server"]._sessions["sid"]
+            session.update(history=hermes.messages, history_lock=threading.Lock(), profile_home=hermes.directory.name)
+            hermes.open()
+            hermes.open()
+            self.assertTrue(hermes.native_calls[-1][1].get("omit_messages"))
+            # A vault fill or plugin pattern scrubs native commentary without touching history.
+            for registry, value in ((hermes.redact._VAULT_REDACTION_VALUES, {"secret": None}), (hermes.redact._PLUGIN_PREFIX_PATTERNS, ["tok_"])):
+                registry["/home/default"] = value
+                hermes.open()
+                self.assertNotIn("omit_messages", hermes.native_calls[-1][1])
+                hermes.open()
+                self.assertTrue(hermes.native_calls[-1][1].get("omit_messages"))
+            # A Hermes that keeps them elsewhere gets only the short lifetime.
+            with patch.dict(sys.modules, {"agent.redact": None}):
+                hermes.open()
+                stored = time.monotonic()
+                with patch.object(extension.time, "monotonic", return_value=stored + extension.UNTRACKED_REDACTION_TTL - 1):
+                    hermes.open()
+                self.assertTrue(hermes.native_calls[-1][1].get("omit_messages"))
+                with patch.object(extension.time, "monotonic", return_value=stored + extension.UNTRACKED_REDACTION_TTL + 1):
+                    hermes.open()
+                self.assertNotIn("omit_messages", hermes.native_calls[-1][1])
+
+    def test_eviction_keeps_the_most_recently_read_histories(self):
+        clock = Mock(return_value=100)
+        with FakeGateway(turns(1)) as hermes, patch.object(extension.time, "monotonic", clock), patch.object(extension, "DECORATED_LIMIT", 2):
+            hermes.open()
+            sessions = hermes.modules["tui_gateway.server"]._sessions
+            sessions["sid"].update(history=hermes.messages, history_lock=threading.Lock(), profile_home=hermes.directory.name)
+            hermes.open()
+            clock.return_value = 300
+            hermes.open()
+            cache = hermes.bridge.decorated
+            # A hit refreshes its read time; its lifetime still counts from the fill.
+            self.assertEqual(cache["sid"][3:], (100, 300))
+            for sid, filled, read in (("read-recently", 50, 350), ("filled-recently", 200, 200)):
+                hermes.bridge.canonical[sid], sessions[sid] = sid, dict(sessions["sid"])
+                cache[sid] = (*cache["sid"][:3], filled, read)
+            clock.return_value = 400
+            sessions["sid"]["history"] = hermes.messages = turns(2)
+            hermes.open()
+            self.assertEqual(sorted(cache), ["read-recently", "sid"])
+
     def test_light_open_skips_native_history_and_a_window_cuts_it(self):
         with FakeGateway(turns(25, files={3})) as hermes:
             first = hermes.open(omit_messages=True)
@@ -781,6 +932,13 @@ class MaintenanceLeaseTests(unittest.TestCase):
             self.lease.symlink_to(Path(directory) / "missing.json")
             with self.assertRaisesRegex(RuntimeError, "not private"):
                 hermes.server.handle_request({"id": 2, "method": "prompt.submit", "params": {}})
+
+    def test_install_moves_only_polled_reads_onto_the_native_pool(self):
+        hermes = FakeHermes([])
+        hermes.server._LONG_HANDLERS = frozenset({"session.resume"})
+        with hermes:
+            self.assertTrue({"session.resume", "agent-interface.open", "agent-interface.discover"} <= hermes.server._LONG_HANDLERS)
+            self.assertFalse({"agent-interface.submit", "agent-interface.receipt"} & hermes.server._LONG_HANDLERS)
 
 
 class BotDeliveryInstallTests(unittest.TestCase):
