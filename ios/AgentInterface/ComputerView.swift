@@ -85,6 +85,9 @@ struct ComputerView: View {
   /// Bumped for each attachment, so a late answer for an earlier one changes nothing.
   @State private var epoch = 0
   @State private var tookOver = false
+  @State private var typing = DesktopTyping()
+  /// The system keyboard types into the desktop while this viewer has input.
+  @State private var keyboard = false
   private var status: ComputerStatus? { store.computerStatus }
   var body: some View {
     VStack(spacing: 0) {
@@ -98,6 +101,8 @@ struct ComputerView: View {
         }
       footer
     }.background(Palette.surface(scheme))
+      .background { DesktopKeyboard(shown: $keyboard, typing: typing).frame(width: 0, height: 0).accessibilityHidden(true) }
+      .onChange(of: input) { _, input in if !input { keyboard = false } }
       .navigationTitle("Computer").navigationBarTitleDisplayMode(.inline)
       .task { await watchStatus() }
       .task(id: store.scope) { await attach() }
@@ -110,6 +115,7 @@ struct ComputerView: View {
         Task { await desktop.leave(store) }
         // A reconnect still waiting must not fetch tickets for a screen that is gone.
         epoch += 1
+        keyboard = false
       }
   }
   private var toolbar: some View {
@@ -123,6 +129,14 @@ struct ComputerView: View {
           .font(.caption).foregroundStyle(.secondary)
       }.frame(maxWidth: .infinity, alignment: .leading).accessibilityElement(children: .combine)
         .accessibilityIdentifier("computerStatus")
+      if desktop.held {
+        Button { keyboard.toggle() } label: {
+          Image(systemName: keyboard ? "keyboard.chevron.compact.down" : "keyboard").frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
+        }.disabled(!input)
+          .accessibilityLabel(keyboard ? "Hide keyboard" : "Type on the desktop")
+          .accessibilityHint("Keys go to the field selected on the desktop")
+          .accessibilityIdentifier("computerKeyboard")
+      }
       Button(desktop.submitting ? "Updating…" : desktop.held ? "Hand back" : "Take over") {
         Task { if desktop.held { await desktop.release(store) } else { await desktop.take(store) } }
       }.buttonStyle(.accentProminent).tint(desktop.held ? Palette.muted : Palette.accent)
@@ -131,7 +145,7 @@ struct ComputerView: View {
     }.padding(12)
   }
   private var controlHint: String {
-    if desktop.held { return "Assistants are paused while you use the desktop." }
+    if desktop.held { return "Assistants are paused. Tap a field, then the keyboard to type." }
     if status?.control.kind == "human" {
       return status?.control.mine == true ? "Take over to use it here." : "Take over is available after they hand back."
     }
@@ -150,7 +164,7 @@ struct ComputerView: View {
     ZStack {
       Color.black.opacity(scheme == .dark ? 0.4 : 0.06)
       if let api = store.api, let ticket {
-        DesktopWebView(base: api.baseURL, path: ticket.path, control: input, event: received)
+        DesktopWebView(base: api.baseURL, path: ticket.path, control: input, typing: typing, event: received)
           .accessibilityLabel(input ? "Shared desktop. You have control." : "Shared desktop. Watching.")
           .accessibilityIdentifier("computerScreen")
       }
@@ -385,6 +399,7 @@ struct DesktopWebView: UIViewRepresentable {
   var base: URL
   var path: String
   var control: Bool
+  var typing: DesktopTyping
   var event: (Event) -> Void
   func makeCoordinator() -> Coordinator { Coordinator(self) }
   func makeUIView(context: Context) -> WKWebView {
@@ -397,6 +412,7 @@ struct DesktopWebView: UIViewRepresentable {
     view.backgroundColor = .clear
     view.scrollView.isScrollEnabled = false
     view.scrollView.contentInsetAdjustmentBehavior = .never
+    typing.webView = view
     return view
   }
   func updateUIView(_ view: WKWebView, context: Context) {
@@ -484,17 +500,21 @@ struct DesktopWebView: UIViewRepresentable {
 }
 
 #if DEBUG
-  /// UI test stand-in for the server's viewer page: it reports a connection for each ticket and
-  /// shows the control mode, so the native controls can be exercised without a desktop.
+  /// UI test stand-in for the server's viewer page: it reports a connection for each ticket, shows
+  /// the control mode, and, like the real page, takes typing only with control, showing what came,
+  /// so the native controls can be exercised without a desktop.
   enum DesktopFixturePage {
     static let html = """
       <!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">
-      <style>body{margin:0;font:600 17px -apple-system;display:grid;place-items:center;height:100vh;background:#1d3b2a;color:#fff}</style>
-      <p id="mode">Fixture desktop</p>
+      <style>body{margin:0;font:600 17px -apple-system;display:grid;place-content:center;text-align:center;height:100vh;background:#1d3b2a;color:#fff}</style>
+      <p id="mode">Fixture desktop</p><p id="typed"></p>
       <script>
-      function apply(){const p=new URLSearchParams(location.hash.slice(1));if(!p.get('path'))return;
-      document.getElementById('mode').textContent=p.get('control')==='1'?'Fixture desktop · You have control':'Fixture desktop · Watching';
+      let control=false,typed='';
+      function apply(){const p=new URLSearchParams(location.hash.slice(1));if(!p.get('path'))return;control=p.get('control')==='1';
+      document.getElementById('mode').textContent=control?'Fixture desktop · You have control':'Fixture desktop · Watching';
       window.webkit.messageHandlers.computer.postMessage({type:'connected'})}
+      window.desktopInput=i=>{if(!control)return false;const k=i.key?'['+i.key+']':String(i.text).replace(/\\n/g,'[enter]');
+      typed+=i.control?'[ctrl+'+k+']':k;document.getElementById('typed').textContent='Typed: '+typed;return true};
       addEventListener('hashchange',apply);apply()
       </script>
       """

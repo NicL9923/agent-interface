@@ -11,10 +11,13 @@ scheme. Connect to the self-hosted **app server**, for example
 accepted only for localhost development. Hermes and provider credentials stay on
 the server.
 
-**Settings > Computer** opens the configured
-app server's shared desktop and VPS terminal in the system browser. The browser
-uses its own household sign-in; the native session token is never passed in the
-URL. This keeps the native client free of embedded browser and terminal views.
+**Settings > Computer** shows the shared desktop in the app through the server's
+native viewer page, watching until **Take over**. With control, the keyboard
+button types straight into the desktop: Return presses Enter, Delete presses
+Backspace, and the row above the keyboard adds Escape, Tab, a one-shot Control,
+arrows and Paste. Tapping the desktop to pick a field keeps the keyboard up. The
+VPS terminal still opens in the system browser with its own household sign-in;
+the native session token is never passed in a URL.
 
 On iPhone, home is the root of one navigation stack: Today and Search push from it, a chat or group chat opened from home pushes over it, and a chat opened from Today or Search goes back there. Group chats are rows in the home list beside the assistants, and **+** offers New assistant or New group chat. Drafts are kept as you move around. iPad keeps its sidebar.
 

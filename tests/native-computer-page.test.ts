@@ -3,12 +3,12 @@ import { readFileSync } from "node:fs";
 import { beforeAll, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  clients: [] as Array<EventTarget & { url: string; viewOnly: boolean; scaleViewport: boolean; disconnect: ReturnType<typeof vi.fn>; focus: ReturnType<typeof vi.fn> }>,
+  clients: [] as Array<EventTarget & { url: string; viewOnly: boolean; scaleViewport: boolean; disconnect: ReturnType<typeof vi.fn>; focus: ReturnType<typeof vi.fn>; sendKey: ReturnType<typeof vi.fn> }>,
   reports: [] as unknown[],
 }));
 vi.mock("@novnc/novnc", () => ({ default: class extends EventTarget {
   viewOnly = false; scaleViewport = false; resizeSession = true;
-  disconnect = vi.fn(); focus = vi.fn();
+  disconnect = vi.fn(); focus = vi.fn(); sendKey = vi.fn();
   constructor(_target: HTMLElement, readonly url: string) { super(); mocks.clients.push(this as never); }
 } }));
 
@@ -64,4 +64,28 @@ it("refuses any address but a desktop ticket", async () => {
     // Same refused path twice is not reconnected; change it for the next case.
     await go("path=x");
   }
+});
+
+it("types for the app only while connected with control", async () => {
+  await go(`path=${encodeURIComponent(ticket("d"))}&control=0`);
+  await vi.waitFor(() => expect(mocks.clients.at(-1)!.url).toContain(ticket("d")));
+  const client = mocks.clients.at(-1)!;
+  const type = window.desktopInput!;
+  // Not connected yet, then connected but watching: nothing reaches the desktop.
+  expect(type({ text: "hi" })).toBe(false);
+  client.dispatchEvent(new Event("connect"));
+  expect(type({ text: "hi" })).toBe(false);
+  await go(`path=${encodeURIComponent(ticket("d"))}&control=1`);
+  expect(type({ text: "Hé\r\n" })).toBe(true);
+  expect(client.sendKey.mock.calls).toEqual([[0x48], [0xe9], [0xff0d]]);
+  client.sendKey.mockClear();
+  expect(type({ key: "escape" })).toBe(true);
+  expect(type({ text: "l", control: true })).toBe(true);
+  expect(client.sendKey.mock.calls).toEqual([[0xff1b], [0xffe3, "ControlLeft", true], [0x6c], [0xffe3, "ControlLeft", false]]);
+  client.sendKey.mockClear();
+  // Unknown keys and empty text send nothing, as does a dropped connection.
+  expect([type({ key: "toString" }), type({ key: "launchMissiles" }), type({ text: "" }), type({})]).toEqual([false, false, false, false]);
+  client.dispatchEvent(Object.assign(new Event("disconnect"), { detail: { clean: false } }));
+  expect(type({ text: "hi" })).toBe(false);
+  expect(client.sendKey).not.toHaveBeenCalled();
 });

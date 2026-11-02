@@ -153,8 +153,26 @@ import XCTest
     XCTAssertTrue(control.wait(until: "label == %@", "Hand back"), control.label)
     XCTAssertTrue(status.wait(until: "label CONTAINS %@", "You have control"), status.label)
     try capture("08-computer-control")
+    // The system keyboard types straight into the desktop, and the row above it adds keys it lacks.
+    app.buttons["computerKeyboard"].tapWhenReady()
+    let keyboard = app.keyboards.firstMatch
+    XCTAssertTrue(keyboard.waitForExistence(timeout: 10), "The software keyboard shows: \(app.debugDescription)")
+    keyboard.keys["h"].tapWhenReady()
+    keyboard.keys["i"].tapWhenReady()
+    app.buttons["desktopKey.escape"].tapWhenReady()
+    app.buttons["desktopKey.control"].tapWhenReady()
+    keyboard.keys["l"].tapWhenReady()
+    XCTAssertTrue(app.staticTexts["Typed: hi[escape][ctrl+l]"].waitForExistence(timeout: 10), app.debugDescription)
+    // Tapping the desktop to pick a field keeps the keyboard up for it.
+    app.descendants(matching: .any)["computerScreen"].tapWhenReady()
+    keyboard.keys["x"].tapWhenReady()
+    XCTAssertTrue(app.staticTexts["Typed: hi[escape][ctrl+l]x"].waitForExistence(timeout: 10), app.debugDescription)
+    try capture("08b-computer-keyboard")
+    app.buttons["desktopKey.done"].tapWhenReady()
+    XCTAssertTrue(keyboard.waitForDisappearance(), "Done puts the keyboard away")
     control.tapWhenReady()
     XCTAssertTrue(control.wait(until: "label == %@", "Take over"), control.label)
+    XCTAssertFalse(app.buttons["computerKeyboard"].exists, "Watching offers no keyboard")
   }
 
   func testCommandKOpensTheQuickSwitcherAndGoesWhereChosen() throws {
