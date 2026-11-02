@@ -153,23 +153,26 @@ import XCTest
     XCTAssertTrue(control.wait(until: "label == %@", "Hand back"), control.label)
     XCTAssertTrue(status.wait(until: "label CONTAINS %@", "You have control"), status.label)
     try capture("08-computer-control")
-    // The system keyboard types straight into the desktop, and the row above it adds keys it lacks.
-    app.buttons["computerKeyboard"].tapWhenReady()
-    let keyboard = app.keyboards.firstMatch
-    XCTAssertTrue(keyboard.waitForExistence(timeout: 10), "The software keyboard shows: \(app.debugDescription)")
-    keyboard.keys["h"].tapWhenReady()
-    keyboard.keys["i"].tapWhenReady()
+    // The keyboard types straight into the desktop, and the row above it adds keys it lacks. The
+    // input is the focused text view; typing into it works with a software or hardware keyboard.
+    let keyboardButton = app.buttons["computerKeyboard"]
+    keyboardButton.tapWhenReady()
+    let input = app.textViews.matching(NSPredicate(format: "hasKeyboardFocus == true")).firstMatch
+    XCTAssertTrue(input.waitForExistence(timeout: 10), "The desktop keyboard takes focus: \(app.debugDescription)")
+    input.typeText("hi")
     app.buttons["desktopKey.escape"].tapWhenReady()
     app.buttons["desktopKey.control"].tapWhenReady()
-    keyboard.keys["l"].tapWhenReady()
+    input.typeText("l")
     XCTAssertTrue(app.staticTexts["Typed: hi[escape][ctrl+l]"].waitForExistence(timeout: 10), app.debugDescription)
     // Tapping the desktop to pick a field keeps the keyboard up for it.
     app.descendants(matching: .any)["computerScreen"].tapWhenReady()
-    keyboard.keys["x"].tapWhenReady()
+    XCTAssertTrue(input.waitForKeyboardFocus(), "The desktop keyboard keeps focus after a tap on the desktop")
+    input.typeText("x")
     XCTAssertTrue(app.staticTexts["Typed: hi[escape][ctrl+l]x"].waitForExistence(timeout: 10), app.debugDescription)
     try capture("08b-computer-keyboard")
-    app.buttons["desktopKey.done"].tapWhenReady()
-    XCTAssertTrue(keyboard.waitForDisappearance(), "Done puts the keyboard away")
+    XCTAssertEqual(keyboardButton.label, "Hide keyboard")
+    keyboardButton.tapWhenReady()
+    XCTAssertTrue(app.buttons["desktopKey.escape"].waitForDisappearance(), "The keyboard button puts the keyboard away")
     control.tapWhenReady()
     XCTAssertTrue(control.wait(until: "label == %@", "Take over"), control.label)
     XCTAssertFalse(app.buttons["computerKeyboard"].exists, "Watching offers no keyboard")

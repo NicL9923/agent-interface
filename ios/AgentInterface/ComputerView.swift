@@ -101,7 +101,7 @@ struct ComputerView: View {
         }
       footer
     }.background(Palette.surface(scheme))
-      .background { DesktopKeyboard(shown: $keyboard, typing: typing).frame(width: 0, height: 0).accessibilityHidden(true) }
+      .background { DesktopKeyboard(shown: keyboard, typing: typing) { keyboard = false }.frame(width: 0, height: 0).accessibilityHidden(true) }
       .onChange(of: input) { _, input in if !input { keyboard = false } }
       .navigationTitle("Computer").navigationBarTitleDisplayMode(.inline)
       .task { await watchStatus() }

@@ -33,13 +33,15 @@ import WebKit
   }
 }
 
-/// The system keyboard for the shared desktop, shown while `shown` is on. Each key goes straight
-/// to the desktop: Return presses Enter and Delete presses Backspace. A row above the keyboard adds
-/// Escape, Tab, a one-shot Control and arrows, and pastes without a permission prompt. A tap on the
-/// desktop, which puts the keyboard away in a web view, keeps it up so the next field takes typing.
+/// The system keyboard for the shared desktop, shown while `shown` is on; `hidden` reports that it
+/// went away. Each key goes straight to the desktop: Return presses Enter and Delete presses
+/// Backspace. A row above the keyboard adds Escape, Tab, a one-shot Control and arrows, and pastes
+/// without a permission prompt. A tap on the desktop, which moves focus into the web view, keeps
+/// the keyboard up so the field it picks takes the typing.
 struct DesktopKeyboard: UIViewRepresentable {
-  @Binding var shown: Bool
+  var shown: Bool
   var typing: DesktopTyping
+  var hidden: () -> Void
   func makeCoordinator() -> Coordinator { Coordinator(self) }
   func makeUIView(context: Context) -> KeyView {
     let view = KeyView()
@@ -48,11 +50,11 @@ struct DesktopKeyboard: UIViewRepresentable {
   }
   func updateUIView(_ view: KeyView, context: Context) {
     context.coordinator.parent = self
-    guard view.window != nil else { return }
+    // Focus changes wait for the update to finish, as the composer's do: resigning reports back.
     if shown, !view.isFirstResponder {
-      view.becomeFirstResponder()
+      DispatchQueue.main.async { if view.window != nil, !view.becomeFirstResponder() { context.coordinator.parent.hidden() } }
     } else if !shown, view.isFirstResponder {
-      view.resignFirstResponder()
+      DispatchQueue.main.async { _ = view.resignFirstResponder() }
     }
   }
   static func dismantleUIView(_ view: KeyView, coordinator: Coordinator) { view.resignFirstResponder() }
@@ -73,12 +75,11 @@ struct DesktopKeyboard: UIViewRepresentable {
       control = false
       guard parent.shown else { return }
       DispatchQueue.main.async { [self] in
-        guard parent.shown, view.window != nil else { return }
-        if parent.typing.holdsFocus, view.becomeFirstResponder() { return }
-        parent.shown = false
+        guard parent.shown else { return }
+        if view.window != nil, parent.typing.holdsFocus, view.becomeFirstResponder() { return }
+        parent.hidden()
       }
     }
-    func done() { parent.shown = false }
   }
 
   final class KeyView: UIView, UIKeyInput {
@@ -124,9 +125,8 @@ struct DesktopKeyboard: UIViewRepresentable {
         (UIKeyCommand.inputEnd, .end), (UIKeyCommand.inputPageUp, .pageUp), (UIKeyCommand.inputPageDown, .pageDown),
       ]
       return keys.map { input, key in
-        let command = UIKeyCommand(input: input, modifierFlags: [], action: #selector(hardwareKey(_:)))
+        let command = UIKeyCommand(title: key.rawValue, action: #selector(hardwareKey(_:)), input: input, propertyList: key.rawValue)
         command.wantsPriorityOverSystemBehavior = true
-        command.propertyList = key.rawValue
         return command
       }
     }
@@ -146,13 +146,13 @@ struct DesktopKeyboard: UIViewRepresentable {
       bar.allowsSelfSizing = true
       let row = UIStackView()
       row.axis = .horizontal
-      row.spacing = 6
+      row.spacing = 4
       row.translatesAutoresizingMaskIntoConstraints = false
       func key(_ title: String?, symbol: String?, label: String, id: String, _ action: @escaping () -> Void) -> UIButton {
         var configuration = UIButton.Configuration.gray()
         configuration.title = title
         if let symbol { configuration.image = UIImage(systemName: symbol) }
-        configuration.contentInsets = NSDirectionalEdgeInsets(top: 8, leading: 10, bottom: 8, trailing: 10)
+        configuration.contentInsets = NSDirectionalEdgeInsets(top: 8, leading: 8, bottom: 8, trailing: 8)
         let button = UIButton(configuration: configuration, primaryAction: UIAction { _ in action() })
         button.accessibilityLabel = label
         button.accessibilityIdentifier = id
@@ -171,7 +171,7 @@ struct DesktopKeyboard: UIViewRepresentable {
         guard let control else { return }
         control.configuration = on ? .filled() : .gray()
         control.configuration?.title = "ctrl"
-        control.configuration?.contentInsets = NSDirectionalEdgeInsets(top: 8, leading: 10, bottom: 8, trailing: 10)
+        control.configuration?.contentInsets = NSDirectionalEdgeInsets(top: 8, leading: 8, bottom: 8, trailing: 8)
         control.accessibilityValue = on ? "On" : nil
         control.accessibilityTraits = on ? [.button, .selected] : .button
       }
@@ -190,17 +190,16 @@ struct DesktopKeyboard: UIViewRepresentable {
       paste.accessibilityIdentifier = "desktopKey.paste"
       paste.widthAnchor.constraint(equalToConstant: 44).isActive = true
       row.addArrangedSubview(paste)
+      // The Computer toolbar's keyboard button hides the keyboard, so every key here fits on a
+      // phone; the row scrolls on a narrower screen or with larger text.
       let scroller = UIScrollView()
       scroller.showsHorizontalScrollIndicator = false
       scroller.translatesAutoresizingMaskIntoConstraints = false
       scroller.addSubview(row)
-      let done = key(nil, symbol: "keyboard.chevron.compact.down", label: "Hide keyboard", id: "desktopKey.done") { [weak self] in self?.coordinator?.done() }
-      done.translatesAutoresizingMaskIntoConstraints = false
       bar.addSubview(scroller)
-      bar.addSubview(done)
       NSLayoutConstraint.activate([
         scroller.leadingAnchor.constraint(equalTo: bar.layoutMarginsGuide.leadingAnchor),
-        scroller.trailingAnchor.constraint(equalTo: done.leadingAnchor, constant: -6),
+        scroller.trailingAnchor.constraint(equalTo: bar.layoutMarginsGuide.trailingAnchor),
         scroller.topAnchor.constraint(equalTo: bar.topAnchor, constant: 4),
         scroller.bottomAnchor.constraint(equalTo: bar.bottomAnchor, constant: -4),
         row.leadingAnchor.constraint(equalTo: scroller.contentLayoutGuide.leadingAnchor),
@@ -208,8 +207,6 @@ struct DesktopKeyboard: UIViewRepresentable {
         row.topAnchor.constraint(equalTo: scroller.contentLayoutGuide.topAnchor),
         row.bottomAnchor.constraint(equalTo: scroller.contentLayoutGuide.bottomAnchor),
         row.heightAnchor.constraint(equalTo: scroller.frameLayoutGuide.heightAnchor),
-        done.trailingAnchor.constraint(equalTo: bar.layoutMarginsGuide.trailingAnchor),
-        done.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
       ])
       return bar
     }
