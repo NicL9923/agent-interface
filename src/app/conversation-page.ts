@@ -1,4 +1,4 @@
-import { request } from "../client-api";
+import { request, responseScope } from "../client-api";
 import { routeUrl, type ApiQuery, type ApiResponse } from "../shared/api";
 import { HISTORY_PAGE_TURNS } from "../shared/history";
 
@@ -14,9 +14,18 @@ const FRESH_MS = 5_000;
 const MAX_PREFETCHES = 2;
 const inflight = new Map<string, Promise<Page>>();
 const readAt = new Map<string, number>();
+// Reads belong to the account they were made for. A new account starts with none to join.
+let scope = responseScope();
+function current() {
+  if (scope === responseScope()) return;
+  scope = responseScope();
+  inflight.clear();
+  readAt.clear();
+}
 
 /** The latest page being prefetched, so opening the chat joins that read instead of repeating it. */
 export function prefetchedFirstPage(botId: string): Promise<Page> | undefined {
+  current();
   return inflight.get(firstPage(botId));
 }
 
@@ -28,10 +37,14 @@ export function prefetchedFirstPage(botId: string): Promise<Page> | undefined {
 export function prefetchFirstPage(botId: string) {
   if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
   if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+  current();
   const path = firstPage(botId);
   if (inflight.has(path) || inflight.size >= MAX_PREFETCHES) return;
   if (Date.now() - (readAt.get(path) ?? -Infinity) < FRESH_MS) return;
   const read = request("GET /bots/:id/conversation", { params: { id: botId }, query: firstQuery });
   inflight.set(path, read);
-  void read.then(() => readAt.set(path, Date.now()), () => {}).finally(() => inflight.delete(path));
+  const made = scope;
+  // A read that finishes after a sign-out leaves the next account's state alone.
+  void read.then(() => { if (made === responseScope()) readAt.set(path, Date.now()); }, () => {})
+    .finally(() => { if (inflight.get(path) === read) inflight.delete(path); });
 }

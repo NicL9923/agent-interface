@@ -14,6 +14,10 @@ let cachedChars = 0, generation = 0;
 export function cachedResponse<T>(path: string) {
   return responses.get(path)?.data as T | undefined;
 }
+/** Changes whenever cached responses stop belonging to the signed-in account. */
+export function responseScope() {
+  return generation;
+}
 export function clearResponseCache() {
   responses.clear();
   cachedChars = 0;

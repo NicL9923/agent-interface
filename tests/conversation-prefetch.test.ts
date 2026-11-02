@@ -149,6 +149,24 @@ describe("opening a chat after a prefetch", () => {
     expect(conversationReads()).toHaveLength(1);
   });
 
+  it("never answers the next account with a read made for the last one", async () => {
+    respond = path => path.includes("/conversation") ? hold() : json({});
+    const { prefetchFirstPage } = await import("../src/app/conversation-page");
+    prefetchFirstPage("barn");
+    // Signing out clears the cache; the next account opens the same chat before the old read ends.
+    clearResponseCache();
+    const container = await open();
+    expect(conversationReads()).toHaveLength(2);
+    held[0](new Response(JSON.stringify(page("barn", "Last account's private draft")), { status: 200 }));
+    held[1](new Response(JSON.stringify(page("barn", "Mine")), { status: 200 }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(container.textContent).toBe("Mine");
+    expect(cachedResponse<{ messages: { text: string }[] }>(firstPage("barn"))?.messages[0].text).toBe("Mine");
+    // The old read's end leaves the new account free to prefetch at once.
+    prefetchFirstPage("barn");
+    expect(conversationReads()).toHaveLength(3);
+  });
+
   it("reads again itself when the prefetch fails", async () => {
     let calls = 0;
     respond = path => path.includes("/conversation")
