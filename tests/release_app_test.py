@@ -138,7 +138,13 @@ class Host:
         (self.source / "auth.py").write_text("repaired\n")
         self.profile = self.home / "config.yaml"
         self.profile.write_text("model: default\n")
-        (self.base / "shared/hermes-worker.json").write_text(json.dumps({"appRoot": str(self.base / "releases/release-live"), "qualificationReceipt": "receipt"}))
+        # A native launcher that reports the store interpreter the way Hermes's does.
+        self.interpreter = self.home / "tools/python-3.14.9/bin/python3"
+        self.launcher = self.home / "launcher"
+        self.launcher.write_text("#!/bin/sh\nprintf '%s' '" + json.dumps([str(self.interpreter), "-I", "-c", "pass"]) + "'\n")
+        self.launcher.chmod(0o700)
+        (self.base / "shared/hermes-worker.json").write_text(json.dumps({"appRoot": str(self.base / "releases/release-live"),
+                                                                       "qualificationReceipt": "receipt", "managedLauncher": str(self.launcher)}))
         self.status({"phase": "idle", "maintenance": False})
 
     def status(self, value):
@@ -474,6 +480,7 @@ class HostPrograms(unittest.TestCase):
         repair = subprocess.check_output(["git", "-c", "core.abbrev=10", "-C", str(self.host.source), "diff", "HEAD", "--binary"])
         self.assertEqual((facts["hermesRevision"], facts["repairSha256"]), (head, hashlib.sha256(repair).hexdigest()))
         self.assertEqual(facts["workerSha256"], hashlib.sha256((self.host.base / "shared/hermes-worker.json").read_bytes()).hexdigest())
+        self.assertEqual(facts["managedPython"], str(self.host.interpreter))
 
     def test_facts_report_active_maintenance(self):
         self.host.deployment("latest", "op-2", True)
@@ -653,7 +660,8 @@ class HostPrograms(unittest.TestCase):
         release = str((self.host.base / "releases/release-live").resolve())
         self.assertEqual({key for key in config if config[key] != prior.get(key)},
                          {"expectedRelease", "hermesRevision", "repairSha256", "newQualificationReceipt",
-                          "operationId", "profileHashes", "preservedFiles", "deployFunctionsSha256"})
+                          "operationId", "profileHashes", "preservedFiles", "deployFunctionsSha256", "managedPython"})
+        self.assertEqual(config["managedPython"], str(self.host.interpreter))
         self.assertEqual((config["release"], config["expectedRelease"]), (release, release))
         self.assertEqual((config["hermesRevision"], config["repairSha256"]), (head, hashlib.sha256(repair).hexdigest()))
         self.assertEqual(config["newQualificationReceipt"], "/stage/qualification.json")

@@ -234,6 +234,21 @@ sha = lambda path: hashlib.sha256(Path(path).read_bytes()).hexdigest()
 def finish(value):
     print(json.dumps(value))
     raise SystemExit(0)
+# The interpreter the native launcher runs now, asked as the upgrade helper asks it, or None.
+# A Hermes update can move it (Nov 2, 2026: 3.14.7 to 3.14.9). A stale path makes Hermes
+# relaunch a guarded call into the new one without its input.
+def managed_interpreter(launcher, source, hermes_home):
+    if not launcher:
+        return None
+    try:
+        command = json.loads(subprocess.check_output([launcher, "--print-runtime-command", "--module",
+            "hermes_cli.venv_sync", "--", "--project-root", str(source), "--check", "--json"], text=True, timeout=60))
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    found = command[0] if isinstance(command, list) and command and isinstance(command[0], str) else None
+    if not found or not Path(found).is_absolute() or not Path(found).resolve().is_relative_to(Path(hermes_home).resolve() / "tools"):
+        return None
+    return found
 """
 
 REMOTE_FACTS = """
@@ -253,16 +268,8 @@ prior = best[2]
 status = json.loads((Path(prior["upgradeStateDir"]) / "status.json").read_text())
 source = prior["source"]
 worker = json.loads((base / "shared/hermes-worker.json").read_text())
-# The interpreter the native launcher runs now, asked the way the upgrade helper asks it.
-try:
-    command = json.loads(subprocess.check_output([worker["managedLauncher"], "--print-runtime-command", "--module",
-        "hermes_cli.venv_sync", "--", "--project-root", source, "--check", "--json"], text=True, timeout=60))
-    managed = command[0] if isinstance(command, list) and command and isinstance(command[0], str) else None
-except (OSError, ValueError, KeyError, subprocess.SubprocessError):
-    managed = None
 finish({
-    "managedPython": managed if managed and Path(managed).is_absolute()
-        and Path(managed).resolve().is_relative_to(Path(prior["hermesHome"]).resolve() / "tools") else None,
+    "managedPython": managed_interpreter(worker.get("managedLauncher"), source, prior["hermesHome"]),
     "hermesRevision": subprocess.check_output(["git", "-C", source, "rev-parse", "HEAD"], text=True).strip(),
     "repairSha256": hashlib.sha256(subprocess.check_output(["git", "-c", "core.abbrev=10", "-C", source, "diff", "HEAD", "--binary"])).hexdigest(),
     "workerSha256": sha(base / "shared/hermes-worker.json"),
@@ -377,8 +384,11 @@ else:
                  *(units / (unit + ".service.d") / name for unit in ("hermes-gateway", "hermes-dashboard")
                    for name in ("90-agent-interface.conf", "computer.conf")),
                  *(source / ("agent_interface_" + name + ".py") for name in ("gateway", "dashboard", "computer_host"))]
+    worker = json.loads((base / "shared/hermes-worker.json").read_text())
+    managed = managed_interpreter(worker.get("managedLauncher"), source, home)
+    assert managed, "The native launcher did not report an interpreter inside the Hermes tool store."
     config = dict(prior,
-        release=str(release), expectedRelease=str(release), operationId=operation,
+        release=str(release), expectedRelease=str(release), operationId=operation, managedPython=managed,
         hermesRevision=subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip(),
         repairSha256=hashlib.sha256(subprocess.check_output(["git", "-c", "core.abbrev=10", "-C", str(source), "diff", "HEAD", "--binary"])).hexdigest(),
         newQualificationReceipt=PAYLOAD["receipt"],
