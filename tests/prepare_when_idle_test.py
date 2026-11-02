@@ -19,13 +19,22 @@ class IdlePreparationTests(unittest.TestCase):
         argv = ['prepare-when-idle.py', 'commit', '--host', 'host', '--app-base', '/app', '--interval', interval, *extra]
         with patch.object(sys, 'argv', argv), \
                 patch.object(idle.subprocess, 'run', side_effect=results) as run, \
-                patch.object(idle, 'gateway_report', side_effect=reports or (lambda *_: None)), \
-                patch.object(idle, 'restart_gateway', side_effect=restart or (lambda host: True)) as restarted, \
+                patch.object(idle, 'gateway_report', side_effect=self.host(reports, restart)) as report, \
                 patch.object(idle.time, 'monotonic', side_effect=lambda: now[0]), \
                 patch.object(idle.time, 'sleep', side_effect=sleep) as slept:
             result = idle.main()
-        self.restarted = restarted
+        self.restarts = [call for call in report.call_args_list if call.kwargs.get('restart_after')]
         return result, run, slept
+
+    @staticmethod
+    def host(reports, restart):
+        """Plays the host: one report per attempt, and a restart re-check answered by ``restart``."""
+        queue = list(reports or [])
+        def report(host, home, restart_after=0):
+            if restart_after:
+                return {**(restart() if restart else {'agents': 1, 'work': [], 'quiet': 9999.0, 'routines': 0}), 'restarted': restart is None}
+            return queue.pop(0) if queue else None
+        return report
 
     def test_each_busy_owner_discards_the_refused_stage_before_retrying(self):
         for reason in ['maintenance gate inactive with no busy work', 'gateway reports no active agents or work']:
@@ -43,43 +52,44 @@ class IdlePreparationTests(unittest.TestCase):
     DISCARDED = subprocess.CompletedProcess([], 0, '', '')
     READY = subprocess.CompletedProcess([], 0, 'Prepared release-next\n', '')
 
-    def test_a_leaked_count_restarts_the_gateway_once_after_a_quiet_window(self):
-        # Ten-minute attempts: counted at 0, 10 and 20 minutes with no message written for longer.
-        leaked = {'agents': 1, 'work': [], 'quiet': 3600.0}
+    LEAKED = {'agents': 1, 'work': [], 'quiet': 3600.0, 'routines': 0}
+
+    def test_a_leaked_count_is_reported_once_and_restarted_only_with_household_idle(self):
+        with patch('sys.stdout'), patch('sys.stderr') as err:
+            result, run, sleep = self.invoke([self.REFUSED, self.DISCARDED] * 5 + [self.READY], [self.LEAKED] * 5)
+        self.assertEqual(result, 0)
+        self.assertEqual(self.restarts, [])
+        self.assertEqual(''.join(call.args[0] for call in err.write.call_args_list).count('looks like a leaked count'), 1)
         with patch('sys.stdout') as out:
-            result, run, sleep = self.invoke([self.REFUSED, self.DISCARDED] * 3 + [self.READY], [leaked] * 3, interval='600')
+            result, run, sleep = self.invoke([self.REFUSED, self.DISCARDED] * 4 + [self.READY], [self.LEAKED] * 4, extra=['--household-idle'])
         printed = ''.join(call.args[0] for call in out.write.call_args_list)
         self.assertEqual(result, 0)
-        self.restarted.assert_called_once_with('host')
+        # Watched at 0, 2 and 4 minutes, then the five-minute window has passed at 6.
+        self.assertEqual(len(self.restarts), 1)
         self.assertIn('Attempt 1: messaging gateway busy (gateway: 1 active agent, last assistant message 60 min ago)', printed)
         self.assertIn('Restarted hermes-gateway.service', printed)
 
-    def test_a_working_turn_that_keeps_writing_is_never_restarted(self):
-        working = {'agents': 1, 'work': [], 'quiet': 45.0}
-        with patch('sys.stdout'):
-            result, run, sleep = self.invoke([self.REFUSED, self.DISCARDED] * 4 + [self.READY], [working] * 4, interval='600')
-        self.assertEqual(result, 0)
-        self.restarted.assert_not_called()
+    def test_silence_is_not_enough_while_a_routine_runs_or_a_store_is_unreadable(self):
+        for report in ({**self.LEAKED, 'routines': 1}, {**self.LEAKED, 'quiet': None}, {**self.LEAKED, 'quiet': 45.0}):
+            with self.subTest(report=report), patch('sys.stdout'), patch('sys.stderr'):
+                result, run, sleep = self.invoke([self.REFUSED, self.DISCARDED] * 5 + [self.READY], [report] * 5, extra=['--household-idle'])
+                self.assertEqual(result, 0)
+                self.assertEqual(self.restarts, [])
 
-    def test_household_idle_shortens_the_window_and_no_restart_only_reports(self):
-        leaked = {'agents': 1, 'work': [], 'quiet': 400.0}
-        with patch('sys.stdout'):
-            result, run, sleep = self.invoke([self.REFUSED, self.DISCARDED] * 4 + [self.READY], [leaked] * 4, extra=['--household-idle'])
-        self.assertEqual(result, 0)
-        self.restarted.assert_called_once()
+    def test_new_work_seen_by_the_host_recheck_prevents_the_restart(self):
         with patch('sys.stdout'), patch('sys.stderr') as err:
-            result, run, sleep = self.invoke([self.REFUSED, self.DISCARDED] * 4 + [self.READY], [leaked] * 4,
-                                             extra=['--household-idle', '--no-restart'])
-        self.restarted.assert_not_called()
-        self.assertEqual(''.join(call.args[0] for call in err.write.call_args_list).count('a leaked count'), 1)
+            result, run, sleep = self.invoke([self.REFUSED, self.DISCARDED] * 4 + [self.READY], [self.LEAKED] * 4,
+                                             extra=['--household-idle'], restart=lambda: {**self.LEAKED, 'quiet': 3.0})
+        self.assertEqual(result, 0)
+        self.assertIn('Did not restart the gateway', ''.join(call.args[0] for call in err.write.call_args_list))
 
     def test_a_count_that_drops_resets_the_window(self):
-        leaked, idle_now = {'agents': 1, 'work': [], 'quiet': 3600.0}, {'agents': 0, 'work': [], 'quiet': 3600.0}
+        idle_now = {**self.LEAKED, 'agents': 0}
         with patch('sys.stdout'):
             result, run, sleep = self.invoke([self.REFUSED, self.DISCARDED] * 4 + [self.READY],
-                                             [leaked, leaked, idle_now, leaked], interval='600')
+                                             [self.LEAKED, self.LEAKED, idle_now, self.LEAKED], extra=['--household-idle'])
         self.assertEqual(result, 0)
-        self.restarted.assert_not_called()
+        self.assertEqual(self.restarts, [])
 
     def test_integrity_failure_stops_without_discard_or_retry(self):
         failed = subprocess.CompletedProcess([], 1, '', 'Fence: household profile settings unchanged\nDiscard with: release-app.py discard release-test')
