@@ -25,7 +25,9 @@ import host_access
 
 TOOL = Path(__file__).with_name("release-app.py")
 # Either native admission owner can report work. Retry only their no-change preflight refusals.
-BUSY = re.compile(r'Fence: (?:maintenance gate inactive with no busy work|gateway reports no active agents or work)|gate\["busy"\]')
+# Only the fence's own refusal counts. A traceback that merely quotes the fence's source line,
+# as when the gate's status call itself failed on Nov 2, 2026, is a real failure.
+BUSY = re.compile(r'Fence: (?:maintenance gate inactive with no busy work|gateway reports no active agents or work)')
 DISCARD = re.compile(r"Discard with: release-app\.py discard (release-[\w-]+)")
 # How long a counted agent must persist with no message written and no live routine run
 # before it is reported as leaked, and restarted with --household-idle.
@@ -148,7 +150,7 @@ def main():
             subprocess.run([sys.executable, str(TOOL), "discard", stage.group(1), "--host", args.host], capture_output=True, check=True)
         report = gateway_report(args.host, args.hermes_home)
         # Two owners can refuse: app and routine sessions behind the maintenance gate, or the messaging gateway.
-        owner = "app or routine session running" if "maintenance gate" in output or 'gate["busy"]' in output else "messaging gateway busy"
+        owner = "app or routine session running" if "Fence: maintenance gate" in output else "messaging gateway busy"
         print(f"Attempt {attempt}: {owner} ({describe(report)}), discarded {stage.group(1) if stage else 'nothing'}.", flush=True)
         now = time.monotonic()
         # Hermes flushes a turn's messages after each tool batch, so a working turn never stays

@@ -91,6 +91,15 @@ class IdlePreparationTests(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertEqual(self.restarts, [])
 
+    def test_a_crashed_gate_call_that_quotes_the_busy_check_is_a_real_failure(self):
+        crashed = subprocess.CompletedProcess([], 1, '', '    gate=rpc("status");fence(gate["active"] is False and gate["busy"]==[], '
+                                              '"maintenance gate inactive with no busy work")\nRuntimeError: A deployment command failed\n'
+                                              'Discard with: release-app.py discard release-test')
+        with patch('sys.stderr'):
+            result, run, sleep = self.invoke([crashed])
+        self.assertEqual(result, 1)
+        sleep.assert_not_called()
+
     def test_integrity_failure_stops_without_discard_or_retry(self):
         failed = subprocess.CompletedProcess([], 1, '', 'Fence: household profile settings unchanged\nDiscard with: release-app.py discard release-test')
         result, run, sleep = self.invoke([failed])

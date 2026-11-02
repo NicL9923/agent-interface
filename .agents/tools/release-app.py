@@ -69,12 +69,14 @@ def helper_hooks(value, release):
 
 
 def derive_config(prior, *, release, current, operation, web_build, worker, profile_hashes,
-                  helper_sha, hermes_revision, repair_sha, qualification=None):
+                  helper_sha, hermes_revision, repair_sha, qualification=None, managed_python=None):
     """The next guarded deploy configuration.
 
     Settings are carried from the last successful release. Live state supplies the
-    worker configuration (pointed at the new release) and the installed Hermes
-    revision and repair, which a Hermes update changes without an app release.
+    worker configuration (pointed at the new release), the installed Hermes revision and
+    repair, and the native launcher's interpreter, all of which a Hermes update changes
+    without an app release. A stale interpreter makes Hermes relaunch the guarded tool's
+    calls into the new one without their input (Nov 2, 2026: 3.14.7 to 3.14.9).
     """
     config = {key: value for key, value in prior.items() if key != "newQualificationReceipt"}
     config.update(
@@ -88,6 +90,8 @@ def derive_config(prior, *, release, current, operation, web_build, worker, prof
         hermesRevision=hermes_revision,
         repairSha256=repair_sha,
     )
+    if managed_python:
+        config["managedPython"] = str(managed_python)
     if qualification:
         config["newQualificationReceipt"] = str(qualification)
     return config
@@ -108,6 +112,8 @@ def preparation_problems(facts, built, *, local_web_build, qualification, accept
             "The app integration inputs no longer match the qualification receipt"
             + (" supplied." if qualification else ". Qualify this release and pass --qualification.")
             + f" ({built['receipt']['error']})")
+    if not facts.get("managedPython"):
+        problems.append("The native launcher did not report an interpreter inside the Hermes tool store.")
     if built["helperSha256"] != prior["fixedHelperSha256"] and not accept_helper_change:
         problems.append("The upgrade helper changed since the last release. Review it, then pass "
                         "--accept-helper-change.")
@@ -246,12 +252,22 @@ if best is None:
 prior = best[2]
 status = json.loads((Path(prior["upgradeStateDir"]) / "status.json").read_text())
 source = prior["source"]
+worker = json.loads((base / "shared/hermes-worker.json").read_text())
+# The interpreter the native launcher runs now, asked the way the upgrade helper asks it.
+try:
+    command = json.loads(subprocess.check_output([worker["managedLauncher"], "--print-runtime-command", "--module",
+        "hermes_cli.venv_sync", "--", "--project-root", source, "--check", "--json"], text=True, timeout=60))
+    managed = command[0] if isinstance(command, list) and command and isinstance(command[0], str) else None
+except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+    managed = None
 finish({
+    "managedPython": managed if managed and Path(managed).is_absolute()
+        and Path(managed).resolve().is_relative_to(Path(prior["hermesHome"]).resolve() / "tools") else None,
     "hermesRevision": subprocess.check_output(["git", "-C", source, "rev-parse", "HEAD"], text=True).strip(),
     "repairSha256": hashlib.sha256(subprocess.check_output(["git", "-c", "core.abbrev=10", "-C", source, "diff", "HEAD", "--binary"])).hexdigest(),
     "workerSha256": sha(base / "shared/hermes-worker.json"),
     "priorPath": str(best[1]), "prior": prior, "current": str((base / "current").resolve()),
-    "worker": json.loads((base / "shared/hermes-worker.json").read_text()),
+    "worker": worker,
     "profileHashes": {path: sha(path) for path in prior["profileHashes"]},
     "upgradePhase": status.get("phase"), "maintenance": status.get("maintenance") is not False,
     "leasePresent": Path(prior["maintenanceFile"]).exists(),
@@ -542,7 +558,7 @@ def prepare(args):
                            web_build=built["webBuild"], worker=facts["worker"],
                            profile_hashes=facts["profileHashes"], helper_sha=built["helperSha256"],
                            hermes_revision=facts["hermesRevision"], repair_sha=facts["repairSha256"],
-                           qualification=args.qualification)
+                           qualification=args.qualification, managed_python=facts["managedPython"])
     config_path = operation_dir / "deploy-config.json"
     remote(args.host, REMOTE_WRITE_CONFIG, {"path": str(config_path), "config": config})
     manifest.update(configPath=str(config_path), operationId=config["operationId"],
