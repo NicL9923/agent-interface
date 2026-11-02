@@ -52,9 +52,12 @@ app starts, it ends shells that belong to anyone who is no longer a terminal
 administrator. It skips that cleanup until at least one administrator has signed
 in, so a new database or a mistyped list cannot end the owner's shell.
 
-The iOS app's Preferences offers **Open computer in browser**. It opens the same web
-workspace in the system browser, which needs its own household Google sign-in.
-The shell opens only there; the iOS app's own session cannot request one.
+The iOS app's **Settings > Computer** shows the desktop through `/native/computer`
+and types with the system keyboard while the person has control. The page's
+`desktopInput` sends nothing unless that viewer is connected with control. The
+terminal opens the web workspace in the system browser, which needs its own
+household Google sign-in. The shell opens only there; the iOS app's own session
+cannot request one.
 
 ## Host setup
 

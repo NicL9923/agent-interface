@@ -8,6 +8,7 @@ import type { Terminal } from "@xterm/xterm";
 import { api, ApiError, write } from "../client-api";
 import { isChunkFailure, useRaise } from "../app/chunk-failure";
 import type { ComputerStatus, ComputerStreamTicket } from "../shared/computer";
+import { desktopKeys, keysymsFor } from "../lib/desktop-keys";
 import { useGoogleButton } from "./google-identity";
 import { useAction } from "../app/use-action";
 import { useResource } from "../app/use-resource";
@@ -386,17 +387,14 @@ function DesktopView({ status, onStatus, viewerId, take }: {
     </div>
     <div className="terminal-tools">
       <Button disabled={!controlling} aria-expanded={textOpen} aria-controls="desktop-text" onClick={() => setTextOpen(value => !value)}>Type text</Button>
-      <Button disabled={!controlling} onClick={() => key(0xff0d)}>Enter</Button>
-      <Button disabled={!controlling} onClick={() => key(0xff09)}>Tab</Button>
-      <Button disabled={!controlling} onClick={() => key(0xff08)}>Backspace</Button>
+      <Button disabled={!controlling} onClick={() => key(desktopKeys.enter)}>Enter</Button>
+      <Button disabled={!controlling} onClick={() => key(desktopKeys.tab)}>Tab</Button>
+      <Button disabled={!controlling} onClick={() => key(desktopKeys.backspace)}>Backspace</Button>
     </div>
     {textOpen && <form id="desktop-text" className="terminal-paste" onSubmit={event => {
       event.preventDefault();
       if (!controlling || connection !== "connected") return;
-      for (const character of typedText) {
-        const point = character.codePointAt(0)!;
-        key(point === 10 || point === 13 ? 0xff0d : point === 9 ? 0xff09 : point <= 255 ? point : 0x01000000 | point);
-      }
+      for (const keysym of keysymsFor(typedText)) key(keysym);
       setTypedText(""); setTextOpen(false); rfb.current?.focus();
     }}><label htmlFor="desktop-text-input">Type into the selected desktop field</label>
       <Textarea id="desktop-text-input" autoFocus autoCapitalize="none" autoComplete="off" autoCorrect="off" spellCheck={false} maxLength={8192} rows={2} value={typedText} onChange={event => setTypedText(event.target.value)} />

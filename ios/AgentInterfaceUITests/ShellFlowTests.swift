@@ -153,8 +153,34 @@ import XCTest
     XCTAssertTrue(control.wait(until: "label == %@", "Hand back"), control.label)
     XCTAssertTrue(status.wait(until: "label CONTAINS %@", "You have control"), status.label)
     try capture("08-computer-control")
+    // The keyboard types straight into the desktop, and the row above it adds keys it lacks. The
+    // input is the focused text view; typing into it works with a software or hardware keyboard.
+    let keyboardButton = app.buttons["computerKeyboard"]
+    keyboardButton.tapWhenReady()
+    let input = app.textViews.matching(NSPredicate(format: "hasKeyboardFocus == true")).firstMatch
+    XCTAssertTrue(input.waitForExistence(timeout: 10), "The desktop keyboard takes focus: \(app.debugDescription)")
+    // Typing can hide and restore the software keyboard; the key row moves with it, so taps on
+    // its keys wait for it to settle.
+    let escape = app.buttons["desktopKey.escape"]
+    input.typeWhenFocused("hi")
+    escape.waitForKeyboardLayout()
+    escape.tapWhenReady()
+    app.buttons["desktopKey.control"].tapWhenReady()
+    input.typeWhenFocused("l")
+    XCTAssertTrue(app.staticTexts["Typed: hi[escape][ctrl+l]"].waitForExistence(timeout: 10), app.debugDescription)
+    // Tapping the desktop to pick a field keeps the keyboard up for it.
+    app.descendants(matching: .any)["computerScreen"].tapWhenReady()
+    XCTAssertTrue(input.waitForKeyboardFocus(), "The desktop keyboard keeps focus after a tap on the desktop")
+    input.typeWhenFocused("x")
+    XCTAssertTrue(app.staticTexts["Typed: hi[escape][ctrl+l]x"].waitForExistence(timeout: 10), app.debugDescription)
+    try capture("08b-computer-keyboard")
+    XCTAssertEqual(keyboardButton.label, "Hide keyboard")
+    escape.waitForKeyboardLayout()
+    keyboardButton.tapWhenReady()
+    XCTAssertTrue(escape.waitForDisappearance(), "The keyboard button puts the keyboard away")
     control.tapWhenReady()
     XCTAssertTrue(control.wait(until: "label == %@", "Take over"), control.label)
+    XCTAssertFalse(app.buttons["computerKeyboard"].exists, "Watching offers no keyboard")
   }
 
   func testCommandKOpensTheQuickSwitcherAndGoesWhereChosen() throws {

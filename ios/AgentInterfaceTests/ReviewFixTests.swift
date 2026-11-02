@@ -1,3 +1,4 @@
+import JavaScriptCore
 import XCTest
 @testable import AgentInterface
 
@@ -497,5 +498,22 @@ import XCTest
     XCTAssertFalse(DesktopLink.trusts(scheme: "https", host: "agentui.example.test", port: 0, page: nil, base: base))
     let local = URL(string: "http://localhost:3000")!
     XCTAssertTrue(DesktopLink.trusts(scheme: "http", host: "localhost", port: 3000, page: URL(string: "http://localhost:3000/native/computer"), base: local))
+  }
+
+  func testTypingReachesThePageAsDataWhateverTheText() throws {
+    let context = try XCTUnwrap(JSContext())
+    context.evaluateScript("var window = {}, got = []; window.desktopInput = i => { got.push(i); return true }")
+    let text = "a\"); window.desktopInput = null; ('\n</script>\u{2028}🤠"
+    for (input, control) in [(DesktopTyping.Input.text(text), false), (.key(.escape), true)] {
+      XCTAssertTrue(context.evaluateScript(DesktopTyping.script(input, control: control)).toBool())
+    }
+    context.setObject(text, forKeyedSubscript: "expected" as NSString)
+    XCTAssertTrue(context.evaluateScript("""
+      got.length === 2 && got[0].text === expected && !("control" in got[0]) && got[1].key === "escape" && got[1].control === true
+      """).toBool(), context.evaluateScript("JSON.stringify(got)").toString())
+    // A page without the bridge, such as one still loading, takes nothing and throws nothing.
+    context.evaluateScript("window = {}")
+    XCTAssertFalse(context.evaluateScript(DesktopTyping.script(.text("x"), control: false)).toBool())
+    XCTAssertNil(context.exception)
   }
 }
