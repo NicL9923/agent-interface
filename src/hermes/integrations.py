@@ -101,6 +101,10 @@ def fingerprint(home):
         path = Path(home) / name
         digest.update(name.encode())
         digest.update(path.read_bytes() if path.exists() else b"missing")
+    # Which MCP servers hold OAuth tokens, by file name only: finishing or losing a sign-in changes
+    # their status, so a check cached before must not outlive it. Token refreshes keep the names.
+    tokens = Path(home) / "mcp-tokens"
+    digest.update(b"mcp-tokens\0" + "\0".join(sorted(path.name for path in tokens.iterdir())).encode() if tokens.is_dir() else b"no-mcp-tokens")
     return digest.hexdigest()
 
 

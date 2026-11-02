@@ -37,6 +37,20 @@ class IntegrationTests(unittest.TestCase):
                 self.assertEqual(integrations.mcp_status(str(self.home), native)[0], "configured")
             self.assertEqual(integrations.mcp_status(str(self.home), None)[0], "not_connected")
 
+    def test_a_finished_or_lost_sign_in_retires_cached_checks(self):
+        integrations.cache_check(str(self.home), dict(id="supabase", status="expired", detail="Sign in again."))
+        rows = lambda: integrations.apply_checks(str(self.home), [dict(id="supabase", status="configured", detail="Saved.")])
+        self.assertEqual(rows()[0]["status"], "expired")
+        tokens = self.home / "mcp-tokens"
+        tokens.mkdir()
+        (tokens / "supabase.json").write_text("{}")
+        self.assertEqual(rows()[0]["status"], "configured")
+        integrations.cache_check(str(self.home), dict(id="supabase", status="connected", detail="Checked."))
+        (tokens / "supabase.json").write_text('{"refreshed": true}')
+        self.assertEqual(rows()[0]["status"], "connected")
+        (tokens / "supabase.json").unlink()
+        self.assertEqual(rows()[0]["status"], "configured")
+
     def test_a_sign_in_names_its_connection(self):
         integrations.FLOWS["open"] = dict(kind="mcp", connection="supabase", home=str(self.home), status="pending", expires=integrations.time.time() + 60)
         self.assertEqual(integrations.flow_summary("open", integrations.FLOWS["open"])["connectionId"], "supabase")
