@@ -100,6 +100,14 @@ class IdlePreparationTests(unittest.TestCase):
         self.assertEqual(result, 1)
         sleep.assert_not_called()
 
+    def test_a_reviewed_helper_change_reaches_every_prepare_attempt(self):
+        with patch('sys.stdout'):
+            result, run, sleep = self.invoke([self.REFUSED, self.DISCARDED, self.READY], extra=['--accept-helper-change'])
+        self.assertEqual(result, 0)
+        prepares = [call.args[0] for call in run.call_args_list if call.args[0][2] == 'prepare']
+        self.assertEqual(len(prepares), 2)
+        self.assertTrue(all(command[-1] == '--accept-helper-change' for command in prepares))
+
     def test_integrity_failure_stops_without_discard_or_retry(self):
         failed = subprocess.CompletedProcess([], 1, '', 'Fence: household profile settings unchanged\nDiscard with: release-app.py discard release-test')
         result, run, sleep = self.invoke([failed])

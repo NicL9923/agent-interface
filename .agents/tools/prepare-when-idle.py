@@ -119,6 +119,8 @@ def main():
     parser.add_argument("--host", required=True)
     parser.add_argument("--app-base", required=True)
     parser.add_argument("--qualification")
+    parser.add_argument("--accept-helper-change", action="store_true",
+                        help="pass through to release-app.py prepare after reviewing a changed upgrade helper")
     parser.add_argument("--minutes", type=float, default=40, help="give up after this long (default 40)")
     parser.add_argument("--interval", type=float, default=120, help="seconds between attempts (default 120)")
     parser.add_argument("--hermes-home", default="~/.hermes", help="Hermes home on the host (default ~/.hermes)")
@@ -128,6 +130,8 @@ def main():
     command = [sys.executable, str(TOOL), "prepare", args.commit, "--host", args.host, "--app-base", args.app_base]
     if args.qualification:
         command += ["--qualification", args.qualification]
+    if args.accept_helper_change:
+        command.append("--accept-helper-change")
     window = QUIET_MINUTES * 60
     deadline = time.monotonic() + args.minutes * 60
     attempt = 0
