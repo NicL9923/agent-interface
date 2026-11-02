@@ -234,6 +234,16 @@ def fingerprint(python):
     return json.loads(subprocess.check_output([str(python), "-c", code], stderr=subprocess.PIPE, timeout=180))
 
 
+def installs_into_environment(declaration):
+    """Whether native PM makes this plugin a workspace member of the shared environment.
+
+    Hermes 6661080238 (Oct 30, 2026) renamed ``is_member`` to ``installs_packages``: a pyproject
+    that installs nothing no longer joins the workspace. Older qualified revisions keep the old name.
+    """
+    value = getattr(declaration, "installs_packages", None)
+    return bool(declaration.is_member if value is None else value)
+
+
 def selection(source, home):
     python, selected = activate_readonly(source, home)
     from pm.environments import runtime_facts_path
@@ -243,7 +253,7 @@ def selection(source, home):
     if set(members) != {path for path in enabled if (path / "pyproject.toml").is_file() or (path / "hermes-plugin.json").is_file()}:
         # A selected plugin rejected by this native version must not vanish silently.
         from pm.plugin_declarations import read_python_declaration
-        if any(read_python_declaration(path).is_member and path not in members for path in enabled):
+        if any(installs_into_environment(read_python_declaration(path)) and path not in members for path in enabled):
             raise RuntimeError("An enabled native plugin was excluded from the dependency union")
     facts = json.loads(runtime_facts_path(source).read_text())
     extras = facts.get("packages", {}).get("venv", {}).get("extras")
