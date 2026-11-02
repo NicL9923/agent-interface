@@ -26,23 +26,22 @@ struct ConnectionRequestResult: Decodable { var status: String }
 
 /// Decides when a connection card tells the assistant it may continue without being asked.
 /// A connection that was already set up when the card first loaded waits for Continue. One that
-/// becomes ready while the card is on screen, or after a sign-in finished in the card, does not.
+/// becomes ready while the card is on screen, or after its own sign-in finished in the card, does
+/// not. Every ready read after that asks again, so a continue the server refused is retried.
 struct ConnectionReadiness: Equatable {
-  /// Statuses that count as set up, as the server counts them.
-  static func isReady(_ status: String?) -> Bool { status == "connected" || status == "configured" }
-  private var previous: Bool?
+  /// Set up and not waiting on a sign-in, as the server checks (src/shared/integrations.ts connectionReady).
+  static func isReady(_ connection: IntegrationConnection?) -> Bool {
+    guard let connection else { return false }
+    return ["connected", "configured"].contains(connection.status) && connection.authorizing != true
+  }
+  private var initiallyReady: Bool?
   private var flowApproved = false
-  /// A connect or sign-in flow in the card finished. The next ready read settles the request.
+  /// A connect or sign-in flow for this card's connection finished. The next ready read settles the request.
   mutating func flowFinished() { flowApproved = true }
-  /// Records a status read. True when the card should send `connected` itself.
-  mutating func observe(status: String?) -> Bool {
-    let ready = Self.isReady(status)
-    let before = previous
-    previous = ready
-    guard let before, ready else { return false }
-    guard !before || flowApproved else { return false }
-    flowApproved = false
-    return true
+  /// Records a catalog read. True when the card should send `connected` itself.
+  mutating func observe(ready: Bool) -> Bool {
+    guard let initial = initiallyReady else { initiallyReady = ready; return false }
+    return ready && (!initial || flowApproved)
   }
 }
 
@@ -65,18 +64,22 @@ struct ConnectionRequestView: View {
   private var entry: IntegrationConnection? { catalog?.connections.first { $0.id == connection.connectionId && $0.id != "apple" } }
   private var serviceName: String { entry?.name ?? "a service" }
   private var missing: Bool { catalog != nil && entry == nil }
-  private var ready: Bool { ConnectionReadiness.isReady(entry?.status) }
+  private var ready: Bool { ConnectionReadiness.isReady(entry) }
   private var busy: Bool { sending != nil || settled }
   var body: some View {
     VStack(alignment: .leading, spacing: 10) {
       Text(missing ? "\(name) asked for a connection" : "\(name) wants to connect \(serviceName)").font(.subheadline.bold())
-      Text(connection.reason).font(.subheadline).textSelection(.enabled)
+      VStack(alignment: .leading, spacing: 2) {
+        Text("Why").font(.caption).foregroundStyle(.secondary)
+        Text(connection.reason).font(.subheadline).textSelection(.enabled)
+      }.accessibilityElement(children: .combine)
       Text("In \(name)'s words. Credentials go straight to Hermes, never into this chat.").font(.caption).foregroundStyle(.secondary)
       if missing {
         Text("WildBots doesn't have a connection called \(connection.connectionId) for \(name).").font(.subheadline)
           .accessibilityIdentifier("connection.missing")
       } else {
-        IntegrationsView(botId: botId, focus: IntegrationFocus(id: connection.connectionId, loaded: { loaded($0) }, approved: { readiness.flowFinished() }))
+        IntegrationsView(botId: botId, focus: IntegrationFocus(id: connection.connectionId, loaded: { loaded($0) },
+          approved: { if $0 == connection.connectionId { readiness.flowFinished() } }))
           .padding(12).frame(maxWidth: .infinity, alignment: .leading)
           .background(Palette.surface(scheme), in: RoundedRectangle(cornerRadius: 10))
         if catalog?.canManage == false && !ready {
@@ -101,8 +104,8 @@ struct ConnectionRequestView: View {
   }
   private func loaded(_ value: IntegrationCatalog) {
     catalog = value
-    let status = value.connections.first { $0.id == connection.connectionId && $0.id != "apple" }?.status
-    if readiness.observe(status: status), !autoSent, !busy {
+    let current = value.connections.first { $0.id == connection.connectionId && $0.id != "apple" }
+    if readiness.observe(ready: ConnectionReadiness.isReady(current)), !autoSent, !busy {
       autoSent = true
       settle(ConnectionDecision.connected, automatic: true)
     }

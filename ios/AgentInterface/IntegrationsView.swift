@@ -38,6 +38,8 @@ struct IntegrationConnection: Codable, Equatable, Identifiable {
   var setup: [IntegrationField]
   var capabilities: [String]
   var botIds: [String]
+  /// A sign-in for it started and hasn't finished, so its saved configuration isn't usable yet.
+  var authorizing: Bool? = nil
   /// Where the connection is used, worded like the web card.
   func assistantsLabel(name: (String) -> String?) -> String {
     botIds.isEmpty ? "This assistant" : botIds.map { name($0) ?? $0 }.joined(separator: ", ")
@@ -76,6 +78,8 @@ struct IntegrationFlow: Codable, Equatable {
   var message: String
   var expiresAt: String?
   var callbackInput: Bool?
+  /// The catalog ID this sign-in connects. A flow restored from storage may belong to another connection.
+  var connectionId: String? = nil
   /// Sign-in finished and the account is usable.
   var succeeded: Bool { status == "approved" }
   var heading: String {
@@ -123,8 +127,9 @@ struct IntegrationFocus {
   var id: String
   /// The catalog after each load, so the card can tell the connection's status.
   var loaded: @MainActor (IntegrationCatalog) -> Void
-  /// A connect or sign-in flow finished successfully. The status read that follows says if it is ready.
-  var approved: @MainActor () -> Void
+  /// A connect or sign-in flow finished successfully, with the connection it was for when known.
+  /// The status read that follows says if it is ready.
+  var approved: @MainActor (String?) -> Void
 }
 
 struct IntegrationsView: View {
@@ -380,7 +385,7 @@ struct IntegrationsView: View {
         let value: IntegrationFlow = try await api.write("/integrations/\(APIClient.component(connection.id))/connect", IntegrationConnectInput(profile: profile, fields: fields))
         guard store.api === api, connection.profile == profile else { busy = false; return }
         fields = [:]; flow = value
-        if value.succeeded { focus?.approved() }
+        if value.succeeded { focus?.approved(value.connectionId ?? connection.id) }
         if let id = value.flowId, value.status == "pending" { UserDefaults.standard.set(id, forKey: flowKey) }
         if editing == nil, let url = safeURL(value.url) { browser = IntegrationBrowser(url: url) }
       } else if action == "disconnect" {
@@ -398,7 +403,7 @@ struct IntegrationsView: View {
       let value: IntegrationFlow = try await api.get("/integrations/flows/\(APIClient.component(id))?profile=\(APIClient.component(profile))")
       guard flow?.flowId == id, store.api === api else { return }
       flow = value
-      if value.succeeded { focus?.approved() }
+      if value.succeeded { focus?.approved(value.connectionId) }
       if value.status != "pending" { UserDefaults.standard.removeObject(forKey: flowKey); browser = nil; await refresh() }
     } catch { self.error = error.localizedDescription }
   }
@@ -411,7 +416,7 @@ struct IntegrationsView: View {
       else { value = try await api.write("/integrations/flows/\(APIClient.component(id))/callback", ["profile": profile, "callbackUrl": callback]) }
       guard flow?.flowId == id, store.api === api else { return }
       flow = value; callback = ""
-      if value.succeeded { focus?.approved() }
+      if value.succeeded { focus?.approved(value.connectionId) }
       if value.status != "pending" { UserDefaults.standard.removeObject(forKey: flowKey); browser = nil }
     } catch { self.error = error.localizedDescription }
   }
