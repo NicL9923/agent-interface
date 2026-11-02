@@ -1,7 +1,7 @@
 import SafariServices
 import SwiftUI
 
-struct IntegrationField: Codable, Identifiable {
+struct IntegrationField: Codable, Equatable, Identifiable {
   var key: String
   var label: String
   var kind: String
@@ -10,18 +10,18 @@ struct IntegrationField: Codable, Identifiable {
   var options: [IntegrationFieldOption]?
   var id: String { key }
 }
-struct IntegrationFieldOption: Codable { var value: String; var label: String }
-struct IntegrationPermission: Codable, Identifiable {
+struct IntegrationFieldOption: Codable, Equatable { var value: String; var label: String }
+struct IntegrationPermission: Codable, Equatable, Identifiable {
   var id: String
   var name: String
   var granted: Bool?
 }
-struct IntegrationActions: Codable {
+struct IntegrationActions: Codable, Equatable {
   var connect: Bool
   var check: Bool
   var disconnect: Bool
 }
-struct IntegrationConnection: Codable, Identifiable {
+struct IntegrationConnection: Codable, Equatable, Identifiable {
   var id: String
   var name: String
   var category: String
@@ -61,13 +61,13 @@ struct IntegrationConnection: Codable, Identifiable {
     }
   }
 }
-struct IntegrationCatalog: Codable {
+struct IntegrationCatalog: Codable, Equatable {
   var profile: String
   var canManage: Bool
   var connections: [IntegrationConnection]
   var connectedSummary: String { "\(connections.filter { $0.status == "connected" }.count) connected" }
 }
-struct IntegrationFlow: Codable {
+struct IntegrationFlow: Codable, Equatable {
   var kind: String
   var status: String
   var flowId: String?
@@ -76,6 +76,8 @@ struct IntegrationFlow: Codable {
   var message: String
   var expiresAt: String?
   var callbackInput: Bool?
+  /// Sign-in finished and the account is usable.
+  var succeeded: Bool { status == "approved" }
   var heading: String {
     status == "approved" || kind == "connected" ? "Connection ready" : status == "pending" ? "Finish connecting your account" : "Sign-in status"
   }
@@ -115,8 +117,19 @@ private struct IntegrationSafariView: UIViewControllerRepresentable {
   func updateUIViewController(_ controller: SFSafariViewController, context: Context) {}
 }
 
+/// Shows one connection by ID as a block in place of the list, for an assistant's connection
+/// request in the chat. It reuses the list's rows, sign-in flow and setup sheet.
+struct IntegrationFocus {
+  var id: String
+  /// The catalog after each load, so the card can tell the connection's status.
+  var loaded: @MainActor (IntegrationCatalog) -> Void
+  /// A connect or sign-in flow finished successfully. The status read that follows says if it is ready.
+  var approved: @MainActor () -> Void
+}
+
 struct IntegrationsView: View {
   var botId: String?
+  var focus: IntegrationFocus? = nil
   @Environment(AppStore.self) private var store
   @Environment(\.scenePhase) private var scenePhase
   @State private var selectedProfile = ""
@@ -139,47 +152,9 @@ struct IntegrationsView: View {
   private var profile: String { botId ?? selectedProfile }
   private var flowKey: String { "integration.flow.\(store.scope ?? "").\(profile)" }
   var body: some View {
-    Form {
-      if botId == nil {
-        Section {
-          Text(IntegrationInput.intro).foregroundStyle(.secondary)
-          if (store.bootstrap?.bots.count ?? 0) > 1 {
-            Picker("Connections for", selection: $selectedProfile) {
-              ForEach(store.bootstrap?.bots ?? []) { Text($0.name).tag($0.id) }
-            }
-          }
-        }
-      }
-      if !profile.isEmpty { statusSection }
-      if let error {
-        Section {
-          Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.red)
-          if catalog == nil && !loading { Button("Try again") { Task { await refresh() } } }
-        }
-      }
-      if let flow { flowSection(flow) }
-      if let catalog {
-        ForEach(categories(catalog), id: \.self) { category in
-          Section(categoryLabel(category)) {
-            ForEach(catalog.connections.filter { $0.category == category }) { connection in
-              connectionRow(connection, canManage: catalog.canManage)
-            }
-          }
-        }
-        if catalog.connections.isEmpty { Text("Hermes has not reported connections for this assistant.").foregroundStyle(.secondary) }
-        if catalog.canManage {
-          Section { Button("Add custom MCP connection", systemImage: "plus") { custom = true } }
-        }
-      } else if busy { ProgressView("Loading connections…") }
-      else if profile.isEmpty { Text("Create an assistant before connecting its services.") }
-      if catalog?.connections.contains(where: { $0.id == "apple" }) != true { Section {
-        NavigationLink { AppleDeviceConnectionsView(botId: profile) } label: {
-          Label("Apple Calendar & Reminders", systemImage: "calendar")
-        }
-      } footer: { Text("Choose data on this iPhone and share it with an assistant. Sharing requires this app to be open.") } }
-    }.navigationTitle("Integrations").navigationBarTitleDisplayMode(.inline)
-      .disabled(store.sessionExpired)
-      .refreshable { await refresh() }
+    Group {
+      if let focus { focusedBlock(focus) } else { list }
+    }
       .task(id: profile) {
         guard !profile.isEmpty else {
           selectedProfile = store.selectedBotId ?? store.bootstrap?.bots.first?.id ?? ""
@@ -225,6 +200,66 @@ struct IntegrationsView: View {
       .confirmationDialog("Disconnect \(disconnecting?.name ?? "this connection")? Assistants using it will lose access.", isPresented: $showDisconnect, titleVisibility: .visible) {
         Button("Disconnect", role: .destructive) { if let connection = disconnecting { Task { await operate(connection, "disconnect") } } }
       }
+  }
+  /// One connection and its sign-in flow, as a block for a chat card. A missing or unmanageable
+  /// connection is the card's to explain from `focus.loaded`, so this shows only what can be acted on.
+  @ViewBuilder private func focusedBlock(_ focus: IntegrationFocus) -> some View {
+    VStack(alignment: .leading, spacing: 10) {
+      if let error { Label(error, systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(Palette.attention) }
+      if let flow {
+        Text(flow.heading).font(.subheadline.bold())
+        flowContent(flow)
+      }
+      if let catalog {
+        if let connection = catalog.connections.first(where: { $0.id == focus.id && $0.id != "apple" }) {
+          connectionRow(connection, canManage: catalog.canManage)
+        }
+      } else if busy || loading { ProgressView("Loading connection…") }
+      else if error != nil { Button("Try again") { Task { await refresh() } } }
+    }
+  }
+  private var list: some View {
+    Form {
+      if botId == nil {
+        Section {
+          Text(IntegrationInput.intro).foregroundStyle(.secondary)
+          if (store.bootstrap?.bots.count ?? 0) > 1 {
+            Picker("Connections for", selection: $selectedProfile) {
+              ForEach(store.bootstrap?.bots ?? []) { Text($0.name).tag($0.id) }
+            }
+          }
+        }
+      }
+      if !profile.isEmpty { statusSection }
+      if let error {
+        Section {
+          Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.red)
+          if catalog == nil && !loading { Button("Try again") { Task { await refresh() } } }
+        }
+      }
+      if let flow { flowSection(flow) }
+      if let catalog {
+        ForEach(categories(catalog), id: \.self) { category in
+          Section(categoryLabel(category)) {
+            ForEach(catalog.connections.filter { $0.category == category }) { connection in
+              connectionRow(connection, canManage: catalog.canManage)
+            }
+          }
+        }
+        if catalog.connections.isEmpty { Text("Hermes has not reported connections for this assistant.").foregroundStyle(.secondary) }
+        if catalog.canManage {
+          Section { Button("Add custom MCP connection", systemImage: "plus") { custom = true } }
+        }
+      } else if busy { ProgressView("Loading connections…") }
+      else if profile.isEmpty { Text("Create an assistant before connecting its services.") }
+      if catalog?.connections.contains(where: { $0.id == "apple" }) != true { Section {
+        NavigationLink { AppleDeviceConnectionsView(botId: profile) } label: {
+          Label("Apple Calendar & Reminders", systemImage: "calendar")
+        }
+      } footer: { Text("Choose data on this iPhone and share it with an assistant. Sharing requires this app to be open.") } }
+    }.navigationTitle("Integrations").navigationBarTitleDisplayMode(.inline)
+      .disabled(store.sessionExpired)
+      .refreshable { await refresh() }
   }
   private var statusSection: some View {
     Section {
@@ -288,7 +323,10 @@ struct IntegrationsView: View {
     }
   }
   @ViewBuilder private func flowSection(_ value: IntegrationFlow) -> some View {
-    Section(value.heading) {
+    Section(value.heading) { flowContent(value) }
+  }
+  @ViewBuilder private func flowContent(_ value: IntegrationFlow) -> some View {
+    Group {
       Text(value.message)
       if let code = value.userCode { LabeledContent("Sign-in code", value: code).textSelection(.enabled) }
       if value.status == "pending" {
@@ -331,7 +369,7 @@ struct IntegrationsView: View {
     guard let api = store.api, !profile.isEmpty, !busy else { return }
     let currentProfile = profile
     busy = true; loading = true; defer { busy = false; loading = false }
-    do { let value: IntegrationCatalog = try await api.get("/integrations?profile=\(APIClient.component(currentProfile))"); guard profile == currentProfile, store.api === api else { return }; catalog = value; error = nil }
+    do { let value: IntegrationCatalog = try await api.get("/integrations?profile=\(APIClient.component(currentProfile))"); guard profile == currentProfile, store.api === api else { return }; catalog = value; error = nil; focus?.loaded(value) }
     catch { self.error = error.localizedDescription; if (error as? APIError)?.status == 401 { store.report(error) } }
   }
   private func operate(_ connection: IntegrationConnection, _ action: String) async {
@@ -342,6 +380,7 @@ struct IntegrationsView: View {
         let value: IntegrationFlow = try await api.write("/integrations/\(APIClient.component(connection.id))/connect", IntegrationConnectInput(profile: profile, fields: fields))
         guard store.api === api, connection.profile == profile else { busy = false; return }
         fields = [:]; flow = value
+        if value.succeeded { focus?.approved() }
         if let id = value.flowId, value.status == "pending" { UserDefaults.standard.set(id, forKey: flowKey) }
         if editing == nil, let url = safeURL(value.url) { browser = IntegrationBrowser(url: url) }
       } else if action == "disconnect" {
@@ -359,6 +398,7 @@ struct IntegrationsView: View {
       let value: IntegrationFlow = try await api.get("/integrations/flows/\(APIClient.component(id))?profile=\(APIClient.component(profile))")
       guard flow?.flowId == id, store.api === api else { return }
       flow = value
+      if value.succeeded { focus?.approved() }
       if value.status != "pending" { UserDefaults.standard.removeObject(forKey: flowKey); browser = nil; await refresh() }
     } catch { self.error = error.localizedDescription }
   }
@@ -371,6 +411,7 @@ struct IntegrationsView: View {
       else { value = try await api.write("/integrations/flows/\(APIClient.component(id))/callback", ["profile": profile, "callbackUrl": callback]) }
       guard flow?.flowId == id, store.api === api else { return }
       flow = value; callback = ""
+      if value.succeeded { focus?.approved() }
       if value.status != "pending" { UserDefaults.standard.removeObject(forKey: flowKey); browser = nil }
     } catch { self.error = error.localizedDescription }
   }

@@ -243,7 +243,7 @@ struct TodayView: View {
     let question = item.attention.first
     let failed = item.error != nil || [.failed, .interrupted].contains(item.activity.state)
     let title = item.error ?? approval?.title ?? question?.title ?? item.activity.detail ?? item.activity.state.label
-    let reason = item.error != nil ? "Disconnected" : approval != nil ? "Approval" : question != nil ? (question?.kind == "clarify" ? "Question" : question?.kind == "secure" ? "Secure request" : "Needs your help") : item.activity.state.label
+    let reason = item.error != nil ? "Disconnected" : approval != nil ? "Approval" : question != nil ? (question?.kind == "clarify" ? "Question" : question?.kind == "secure" ? "Secure request" : question?.kind == "connection" ? "Connection request" : "Needs your help") : item.activity.state.label
     let verb = item.error != nil ? "Reconnect" : approval != nil ? "Review" : question != nil ? (question?.kind == "clarify" ? "Answer" : "Review") : failed ? "View error" : "Review"
     return Button { open(item.botId) } label: {
       HStack(spacing: 12) {

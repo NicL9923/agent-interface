@@ -253,6 +253,8 @@
     nonisolated(unsafe) static var secureIndex = 0
     /// AGENT_INTERFACE_UI_HANDOFF: an assistant's computer handoff until it is handed back or declined.
     nonisolated(unsafe) static var handoffOpen = true
+    /// AGENT_INTERFACE_UI_CONNECTION: an assistant's request to set up the fixture Google Workspace connection, until it is settled.
+    nonisolated(unsafe) static var connectionOpen = true
     nonisolated(unsafe) static var vaultUnlocked = false
     nonisolated(unsafe) static var sourceEnabled = true
     nonisolated(unsafe) static var todayReads = 0
@@ -580,6 +582,16 @@
             "activity": ["state": Self.handoffOpen ? "blocked" : "idle"], "approvals": [], "files": [], "attention": attention,
             "draft": Self.draft, "readPosition": Self.readPosition]
         }
+        if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_CONNECTION"] == "1" {
+          let attention: [[String: Any]] = Self.connectionOpen ? [["id": "fixture-connection", "kind": "connection", "title": "Set up a connection?",
+            "detail": "I need your calendar to plan the week.",
+            "connection": ["epoch": "fixture-epoch", "sessionId": "fixture-session", "connectionId": "workspace",
+              "reason": "I need your calendar to plan the week."]]] : []
+          object = ["botId": path.components(separatedBy: "/")[3], "sessionId": "fixture-session",
+            "messages": [["id": "connection-fixture", "role": "assistant", "text": Self.connectionOpen ? "I can plan the week once Google Workspace is connected." : "Thanks, planning the week now."]],
+            "activity": ["state": Self.connectionOpen ? "blocked" : "idle"], "approvals": [], "files": [], "attention": attention,
+            "draft": Self.draft, "readPosition": Self.readPosition]
+        }
         if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_LIVE_COMPUTER"] == "1" {
           object = ["botId": path.components(separatedBy: "/")[3], "messages": [["id": "fixture-answer", "role": "assistant", "text": "Opening the supply site."]],
             "activity": ["state": "working", "detail": "Opening the supply site"],
@@ -740,6 +752,8 @@
           "expiresAt": ISO8601DateFormatter().string(from: Date().addingTimeInterval(30)), "viewerId": body["viewerId"] ?? "fixture-viewer-000001"]
       } else if path.contains("/computer-handoffs/"), method == "POST" {
         object = ["status": Self.handoffOpen ? "ok" : "expired"]; Self.handoffOpen = false
+      } else if path.contains("/connection-requests/"), method == "POST" {
+        object = ["status": Self.connectionOpen ? "ok" : "expired"]; Self.connectionOpen = false
       } else if path == "/api/computer/control", method == "POST" {
         // Handing back answers an open handoff, as the add-on's lease watcher does.
         if body["action"] as? String == "release" { Self.handoffOpen = false }
