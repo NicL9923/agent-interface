@@ -119,28 +119,14 @@ class ActiveWork(RuntimeError):
 
 class Platform:
     def __init__(self, config, environment=None):
+        self.config_file = Path(config)
         self.config = json.loads(private(config).read_text())
         self.env = dict(os.environ if environment is None else environment)
-        for key in ("source", "hermesHome", "managedLauncher", "managedPython", "serviceEnvFile", "qualificationReceipt", "maintenanceFile", "stageRoot", "systemctl"):
-            if not isinstance(self.config.get(key), str) or not Path(self.config[key]).is_absolute(): raise RuntimeError("Installer paths must be fixed and absolute: " + key)
+        self.check_config(self.config)
         self.source, self.home = Path(self.config["source"]), Path(self.config["hermesHome"])
         self.objects = self.source / ".git/objects"
-        if self.source.is_symlink() or self.home.is_symlink(): raise RuntimeError("Source and Hermes home must be real directories")
-        if not self.source.is_relative_to(self.home): raise RuntimeError("Managed source must be inside the shared Hermes home")
-        if Path(self.config["stageRoot"]).is_relative_to(self.home): raise RuntimeError("Staging and backups must be outside the live Hermes home")
-        if self.config.get("dashboardOrigin") != "http://127.0.0.1:" + str(self.config.get("dashboardPort")): raise RuntimeError("Only the fixed direct loopback dashboard is supported")
-        for name in ("dashboardUnit", "gatewayUnit", "appUnit"):
-            if not re.fullmatch(r"[A-Za-z0-9_.@-]+\.service", self.config.get(name, "")): raise RuntimeError("Invalid fixed user service")
-        if len({self.config[k] for k in ("dashboardUnit", "gatewayUnit", "appUnit")}) != 3: raise RuntimeError("User service names must be distinct")
-        commands = self.config.get("regressionCommands", {})
-        regression_python = self.config.get("regressionPython", self.config["managedPython"])
-        if not isinstance(regression_python, str) or not Path(regression_python).is_absolute(): raise RuntimeError("Regression Python must be fixed")
-        for name in ("sharedOAuth", "googleAuth"):
-            self.command(commands.get(name))
-            if Path(commands[name][0]).absolute() != Path(regression_python).absolute(): raise RuntimeError("Regression commands must use the fixed Python interpreter")
-        self.command(self.config.get("googleVerificationCommand"))
-        if not isinstance(self.config.get("discordConnections"), list) or len(self.config["discordConnections"]) != 2 or len(set(self.config["discordConnections"])) != 2:
-            raise RuntimeError("Exactly two native Discord connection keys must be configured")
+        # Set by baseline() before the operation record holds it.
+        self.interpreter = None
         self.operation = self.env.get("HERMES_UPGRADE_OPERATION_ID", "")
         uuid.UUID(self.operation)
         if self.env.get("HERMES_UPGRADE_SOURCE") != str(self.source): raise RuntimeError("Worker source differs from fixed host configuration")
@@ -163,6 +149,30 @@ class Platform:
         self.child_env.update({k: v for k, v in self.env.items() if k.startswith("HERMES_UPGRADE_")})
         if "HERMES_UPDATE_HANDOFF_PID" in self.env:
             self.child_env["HERMES_UPDATE_HANDOFF_PID"] = self.env["HERMES_UPDATE_HANDOFF_PID"]
+
+    @classmethod
+    def check_config(cls, config):
+        """Refuse a host configuration this helper cannot run safely. It also checks a refreshed
+        configuration before that replaces the file."""
+        for key in ("source", "hermesHome", "managedLauncher", "managedPython", "serviceEnvFile", "qualificationReceipt", "maintenanceFile", "stageRoot", "systemctl"):
+            if not isinstance(config.get(key), str) or not Path(config[key]).is_absolute(): raise RuntimeError("Installer paths must be fixed and absolute: " + key)
+        source, home = Path(config["source"]), Path(config["hermesHome"])
+        if source.is_symlink() or home.is_symlink(): raise RuntimeError("Source and Hermes home must be real directories")
+        if not source.is_relative_to(home): raise RuntimeError("Managed source must be inside the shared Hermes home")
+        if Path(config["stageRoot"]).is_relative_to(home): raise RuntimeError("Staging and backups must be outside the live Hermes home")
+        if config.get("dashboardOrigin") != "http://127.0.0.1:" + str(config.get("dashboardPort")): raise RuntimeError("Only the fixed direct loopback dashboard is supported")
+        for name in ("dashboardUnit", "gatewayUnit", "appUnit"):
+            if not re.fullmatch(r"[A-Za-z0-9_.@-]+\.service", config.get(name, "")): raise RuntimeError("Invalid fixed user service")
+        if len({config[k] for k in ("dashboardUnit", "gatewayUnit", "appUnit")}) != 3: raise RuntimeError("User service names must be distinct")
+        commands = config.get("regressionCommands", {})
+        regression_python = config.get("regressionPython", config["managedPython"])
+        if not isinstance(regression_python, str) or not Path(regression_python).is_absolute(): raise RuntimeError("Regression Python must be fixed")
+        for name in ("sharedOAuth", "googleAuth"):
+            cls.command(commands.get(name))
+            if Path(commands[name][0]).absolute() != Path(regression_python).absolute(): raise RuntimeError("Regression commands must use the fixed Python interpreter")
+        cls.command(config.get("googleVerificationCommand"))
+        if not isinstance(config.get("discordConnections"), list) or len(config["discordConnections"]) != 2 or len(set(config["discordConnections"])) != 2:
+            raise RuntimeError("Exactly two native Discord connection keys must be configured")
 
     @staticmethod
     def command(argv):
@@ -207,15 +217,33 @@ class Platform:
         if plugins.exists(): paths.extend(path for path in plugins.rglob("*") if path.is_file() and path.suffix in (".py", ".yaml", ".toml"))
         return {str(path): digest(path) for path in paths if path.exists()}
 
-    def store_python(self):
+    def launcher_python(self):
+        """The interpreter the native launcher selects now. Hermes updates move it between tool
+        versions (Oct 30, 2026: 3.14.7 to 3.14.9), so no fixed configuration path is authoritative."""
         command = json.loads(self.run([self.config["managedLauncher"], "--print-runtime-command", "--module", "hermes_cli.venv_sync", "--", "--project-root", str(self.source), "--check", "--json"], capture=True, timeout=30))
         if not isinstance(command, list) or not command or not isinstance(command[0], str) or not Path(command[0]).is_absolute(): raise RuntimeError("Native managed launcher did not export its interpreter")
+        return command[0]
+
+    def in_tool_store(self, python):
+        return Path(python).resolve().is_relative_to((self.home / "tools").resolve())
+
+    def baseline_interpreter(self):
+        """The interpreter this operation's baseline ran, or None before baseline() or for a
+        record an older helper wrote."""
+        if self.interpreter is not None: return self.interpreter
+        if not self.record.exists(): return None
+        return self.load().get("baseline", {}).get("interpreter")
+
+    def store_python(self):
+        python = self.launcher_python()
         current = self.source_state()[0]
         if current == self.env.get("HERMES_UPGRADE_CURRENT"):
-            if Path(command[0]).absolute() != Path(self.config["managedPython"]).absolute(): raise RuntimeError("Baseline managed interpreter selection changed")
-        elif current != self.candidate or not Path(command[0]).absolute().is_relative_to(self.home / "tools"):
+            expected = self.baseline_interpreter()
+            if expected is not None and Path(python).absolute() != Path(expected).absolute(): raise RuntimeError("Baseline managed interpreter selection changed")
+            if not self.in_tool_store(python): raise RuntimeError("The baseline managed interpreter is outside the native tool store")
+        elif current != self.candidate or not self.in_tool_store(python):
             raise RuntimeError("The updated managed interpreter escaped the native tool store")
-        return command[0]
+        return python
 
     def native(self, action, **values):
         payload = dict(values, action=action, source=str(self.source), home=str(self.home))
@@ -261,9 +289,7 @@ class Platform:
             if not tested or not Path(tested).is_absolute(): raise RuntimeError("The tested managed interpreter must be fixed")
             selected = self.native("runtime")["python"]
             if Path(selected).absolute() != Path(tested).absolute(): raise RuntimeError("Managed dependency selection differs from the qualified interpreter")
-            spec = importlib.util.spec_from_file_location("upgrade_worker", Path(__file__).with_name("hermes-upgrade-worker.py"))
-            worker = importlib.util.module_from_spec(spec); spec.loader.exec_module(worker)
-            value = worker.runtime_fingerprint(selected)
+            value = upgrade_worker().runtime_fingerprint(selected)
         if expected is not None and value != expected:
             if value.get("interpreterSha256") != expected.get("interpreterSha256"): raise RuntimeError("The managed interpreter differs from the qualified runtime")
             raise RuntimeError("Managed dependencies differ from the qualified runtime" + (". Its package rows are in the stage as " + dump.name if descriptor and dump.exists() else ""))
@@ -331,7 +357,9 @@ print(json.dumps({'ok':True,'state':'synced'}))
         # lock instead, uv keeps every version it holds.
         seed = Path(qualified["generation"]).parent / "workspace/uv.lock" if qualified.get("generation") else None
         if seed is not None and not seed.is_file(): raise RuntimeError("The qualified dependency lock is missing")
-        return json.loads(self.run([self.config["managedPython"], "-I", "-c", code, str(self.source), json.dumps(qualified.get("extras")), str(seed or ""), "1" if descriptor else "0"], capture=True))
+        # PM sync runs in the interpreter the baseline ran. A record from an older helper has none.
+        python = self.baseline_interpreter() or self.config["managedPython"]
+        return json.loads(self.run([python, "-I", "-c", code, str(self.source), json.dumps(qualified.get("extras")), str(seed or ""), "1" if descriptor else "0"], capture=True))
 
     def google(self):
         value = json.loads(self.run(self.config["googleVerificationCommand"], capture=True, timeout=60))
@@ -364,12 +392,16 @@ print(json.dumps({'ok':True,'state':'synced'}))
             raise RuntimeError("Original Google authentication gate did not reject anonymous access")
 
     def baseline(self):
+        # Bind the interpreter first: every later store_python() call compares against it.
+        interpreter = self.launcher_python()
+        if not self.in_tool_store(interpreter): raise RuntimeError("The baseline managed interpreter is outside the native tool store")
+        self.interpreter = interpreter
         units = {name: self.unit(name) for name in ("gatewayUnit", "dashboardUnit", "appUnit")}
         gateway = self.gateway()
         if any(gateway.get("platforms", {}).get(key, {}).get("state") != "connected" for key in self.config["discordConnections"]): raise RuntimeError("Both baseline Discord connections must be connected")
         self.anonymous_rejection(); self.google()
         runtime = self.runtime()
-        return {"runtime": runtime, "source": self.source_state(), "settings": self.settings(), "units": units, "discordConnections": self.config["discordConnections"]}
+        return {"interpreter": interpreter, "runtime": runtime, "source": self.source_state(), "settings": self.settings(), "units": units, "discordConnections": self.config["discordConnections"]}
 
     def regressions(self):
         environment = dict(self.child_env, HERMES_HOME=str(self.stage / "regression-home"), PYTHONPATH=str(self.target))
@@ -768,6 +800,23 @@ print(json.dumps({'ok':True,'state':'synced'}))
         if released.get("active") is not False: raise RuntimeError("Native gate release was not confirmed")
         self.wait_gateway()
         self.save(dict(record, phase="finished"))
+        self.refresh_interpreter()
+
+    def refresh_interpreter(self):
+        """Point this configuration at the interpreter the launcher runs now. Best-effort: the
+        update has already succeeded, and the next operation binds the launcher's interpreter
+        itself. A rollback restores the old tools, so the launcher's choice is right either way."""
+        try:
+            old, new = self.config["managedPython"], self.launcher_python()
+            if new == old: return
+            # Only a tool-store path is a launcher selection. Anything else is the installer's choice.
+            if not self.in_tool_store(old) or not self.in_tool_store(new) or not Path(new).is_file():
+                raise RuntimeError("The managed interpreter paths are not both inside the native tool store")
+            self.config, replaced = upgrade_worker().replace_interpreter_paths(self.config_file, old, new, self.check_config)
+            print("Updated %d interpreter path(s) in %s from %s to %s" % (replaced, self.config_file, old, new), file=sys.stderr, flush=True)
+        except Exception as error:
+            with contextlib.suppress(OSError):
+                print("Interpreter path refresh skipped: " + describe(error), file=sys.stderr, flush=True)
 
 
 # Only these exception class names are logged; any other text from a failed command is untrusted.
@@ -778,6 +827,16 @@ KNOWN_ERRORS = frozenset((
     "ConnectionResetError", "BrokenPipeError", "JSONDecodeError", "UnicodeDecodeError", "HTTPError", "URLError",
     "SSLError", "InvalidStatus", "InvalidHandshake", "InvalidURI", "ConnectionClosed", "ConnectionClosedError",
     "ConnectionClosedOK", "HTTPStatusError", "ConnectError", "ReadTimeout", "ConnectTimeout"))
+
+
+def upgrade_worker():
+    """The worker beside this script, loaded once. It holds helpers both share."""
+    name = "agent_interface_upgrade_worker"
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name("hermes-upgrade-worker.py"))
+        module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+        sys.modules[name] = module
+    return sys.modules[name]
 
 
 def tree_bytes(root, excluded=None):

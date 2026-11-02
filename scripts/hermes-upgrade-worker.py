@@ -99,6 +99,26 @@ def sha(data):
     return hashlib.sha256(data).hexdigest()
 
 
+def replace_interpreter_paths(path, old, new, check):
+    """Replace every JSON string value exactly equal to OLD with NEW in the private configuration
+    at PATH, keeping it owner-only. CHECK must accept the result before it replaces the file.
+    Keys and partial matches stay as they are. Returns the new configuration and the count."""
+    replaced = 0
+    def walk(value):
+        nonlocal replaced
+        if isinstance(value, str) and value == old:
+            replaced += 1
+            return new
+        if isinstance(value, list): return [walk(item) for item in value]
+        if isinstance(value, dict): return {key: walk(item) for key, item in value.items()}
+        return value
+    config = walk(json.loads(private_file(path).read_text()))
+    if replaced:
+        check(config)
+        atomic(path, config)
+    return config, replaced
+
+
 def now():
     return datetime.datetime.now(datetime.timezone.utc).isoformat()
 
@@ -458,6 +478,32 @@ class NativeUpdateClaim:
         sys.dont_write_bytecode = self.original_bytecode
 
 
+def check_config(config):
+    """Refuse a worker configuration with unfixed paths or hooks. It also checks a refreshed
+    configuration before that replaces the file."""
+    for key in ["source", "qualificationPython", "appRoot", "stageRoot", "qualificationReceipt"]:
+        if not isinstance(config.get(key), str) or not Path(config[key]).is_absolute():
+            raise RuntimeError("Installer paths must be absolute")
+    if config.get("managedLauncher") or config.get("managedHome"):
+        for key in ("managedLauncher", "managedHome"):
+            if not isinstance(config.get(key), str) or not Path(config[key]).is_absolute(): raise RuntimeError("Managed qualification requires an absolute launcher and Hermes home")
+    if config.get("approvedPatchFile") is not None:
+        path = config["approvedPatchFile"]
+        if not isinstance(path, str) or not Path(path).is_absolute(): raise RuntimeError("Approved repair path must be fixed and absolute")
+        private_file(path)
+        if not re.fullmatch(r"[a-f0-9]{64}", str(config.get("requiredPatchSha256", ""))): raise RuntimeError("Approved repair requires an exact original artifact hash")
+    if config.get("upstreamRef", "refs/remotes/origin/main") != "refs/remotes/origin/main":
+        raise RuntimeError("Only the trusted upstream main branch is supported")
+    hooks = config.get("hooks", {})
+    def command(value):
+        return isinstance(value, list) and value and all(isinstance(arg, str) and "\0" not in arg for arg in value) and Path(value[0]).is_absolute()
+    for name in ["quiescence", "backup", "install", "verify", "rollback", "finish"]:
+        if not command(hooks.get(name)): raise RuntimeError("Missing fixed installer hook: " + name)
+    regressions = hooks.get("regressions")
+    if not isinstance(regressions, list) or not regressions or not all(command(argv) for argv in regressions):
+        raise RuntimeError("Host regression tests are mandatory")
+
+
 class Worker:
     def __init__(self, config, state_dir, action, operation):
         self.config = json.loads(private_file(config).read_text())
@@ -569,30 +615,37 @@ class Worker:
             if stage not in keep: shutil.rmtree(stage)
 
     def validate_config(self):
-        for key in ["source", "qualificationPython", "appRoot", "stageRoot", "qualificationReceipt"]:
-            if not isinstance(self.config.get(key), str) or not Path(self.config[key]).is_absolute():
-                raise RuntimeError("Installer paths must be absolute")
-        if self.config.get("managedLauncher") or self.config.get("managedHome"):
-            for key in ("managedLauncher", "managedHome"):
-                if not isinstance(self.config.get(key), str) or not Path(self.config[key]).is_absolute(): raise RuntimeError("Managed qualification requires an absolute launcher and Hermes home")
-        if self.config.get("approvedPatchFile") is not None:
-            path = self.config["approvedPatchFile"]
-            if not isinstance(path, str) or not Path(path).is_absolute(): raise RuntimeError("Approved repair path must be fixed and absolute")
-            private_file(path)
-            if not re.fullmatch(r"[a-f0-9]{64}", str(self.config.get("requiredPatchSha256", ""))): raise RuntimeError("Approved repair requires an exact original artifact hash")
-        if self.config.get("upstreamRef", "refs/remotes/origin/main") != "refs/remotes/origin/main":
-            raise RuntimeError("Only the trusted upstream main branch is supported")
+        check_config(self.config)
         remote = git(self.source, "remote", "get-url", "origin").decode().strip().removesuffix(".git")
         if remote != "https://github.com/NousResearch/hermes-agent":
             raise RuntimeError("Installed source must use the official HTTPS upstream")
-        hooks = self.config.get("hooks", {})
-        def command(value):
-            return isinstance(value, list) and value and all(isinstance(arg, str) and "\0" not in arg for arg in value) and Path(value[0]).is_absolute()
-        for name in ["quiescence", "backup", "install", "verify", "rollback", "finish"]:
-            if not command(hooks.get(name)): raise RuntimeError("Missing fixed installer hook: " + name)
-        regressions = hooks.get("regressions")
-        if not isinstance(regressions, list) or not regressions or not all(command(argv) for argv in regressions):
-            raise RuntimeError("Host regression tests are mandatory")
+
+    def refresh_interpreter(self):
+        """After a successful release, point the configuration at the interpreter the native
+        launcher runs now. Best-effort: Hermes is already verified and open. Hermes PM keeps
+        old tool versions, so a stale path still runs, but it should not lag forever."""
+        launcher, home = self.config.get("managedLauncher"), self.config.get("managedHome")
+        if not launcher: return
+        def note(text):
+            try: print("Interpreter path refresh: " + text, file=self.log, flush=True)
+            except (OSError, ValueError): pass
+        try:
+            # The launcher's runtime query reads only HERMES_HOME, never the native update claim.
+            environment = {key: self.environment[key] for key in ("PATH", "HOME", "LANG")}
+            command = json.loads(subprocess.run([launcher, "--print-runtime-command", "--module", "hermes_cli.venv_sync", "--", "--project-root", str(self.source), "--check", "--json"],
+                cwd=self.source, env=dict(environment, HERMES_HOME=home), stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=True, timeout=30, text=True).stdout)
+            if not isinstance(command, list) or not command or not isinstance(command[0], str) or not Path(command[0]).is_absolute():
+                raise RuntimeError("the native launcher did not report its interpreter")
+            old, new = self.config["qualificationPython"], command[0]
+            if new == old: return
+            # Only a tool-store path is a launcher selection. A system bootstrap Python is the installer's choice.
+            store = (Path(home) / "tools").resolve()
+            if not Path(old).resolve().is_relative_to(store) or not Path(new).resolve().is_relative_to(store) or not Path(new).is_file():
+                note("skipped, the qualification interpreter is not a native tool-store selection."); return
+            self.config, replaced = replace_interpreter_paths(self.config_file, old, new, check_config)
+            note("updated %d path(s) in %s from %s to %s" % (replaced, self.config_file, old, new))
+        except Exception as error:
+            note("skipped after " + type(error).__name__ + (": " + str(error) if isinstance(error, RuntimeError) else ""))
 
     def update(self, **fields):
         current = json.loads(self.state_file.read_text())
@@ -987,6 +1040,7 @@ class Worker:
                             try: self.hook("restart_service" if action == "restart_service" else "recover")
                             finally: self.native_claim = None
                     else: self.hook("restart_service" if action == "restart_service" else "recover")
+                    self.refresh_interpreter()
                     current = self.snapshot(self.source)
                     self.update(current=self.revision(current[0]), maintenance=False)
             self.update(phase="cancelled" if action == "cancel" else "succeeded", maintenance=False,
@@ -1071,6 +1125,7 @@ class Worker:
             self.release_started = True
             journal["releaseStarted"] = True; atomic(stage / "recovery.json", journal)
             self.check_step("release", "Resume household Hermes work", lambda: self.hook("finish")); lease = False
+            self.refresh_interpreter()
             self.update(phase="succeeded", maintenance=False, current=self.revision(target[0]), message="Hermes is updated and ready.")
         except Cancelled:
             self.recovery("cancel")
@@ -1095,6 +1150,7 @@ class Worker:
                 self.release_started = True
                 journal["releaseStarted"] = True; atomic(stage / "recovery.json", journal)
                 self.check_step("release", "Resume the restored Hermes installation", lambda: self.hook("finish")); lease = False
+                self.refresh_interpreter()
                 self.update(phase="rolled_back", maintenance=False, current=self.revision(old[0]), message="The update could not be verified. The previous Hermes is restored and ready.", error="upgrade_rolled_back")
             else:
                 if not lease and not (isinstance(install_error, subprocess.CalledProcessError) and install_error.returncode == 75):

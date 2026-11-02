@@ -6,6 +6,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shlex
 import shutil
 import subprocess
 import tarfile
@@ -65,6 +66,8 @@ class FixturePlatform(linux.Platform):
     def wait_dashboard(self): self.rpc_calls.append("dashboard-ready")
     def anonymous_rejection(self): pass
     def runtime(self, expected=None):
+        # The real inspection runs in the launcher's interpreter, so it binds that selection too.
+        self.store_python()
         value = {"interpreterSha256": "fixed-python", "dependenciesSha256": "fixed-generation"}
         if expected is not None and value != expected: raise RuntimeError("Untested runtime")
         return value
@@ -111,11 +114,19 @@ class PlatformTests(unittest.TestCase):
         self.systemctl = self.directory / "systemctl"
         self.systemctl.write_text("#!/usr/bin/env python3\nimport json,sys\nfrom pathlib import Path\np=Path(" + repr(str(self.states)) + ")\ns=json.loads(p.read_text())\nverb,unit=sys.argv[2:4]\nif verb=='show':\n for k,v in s[unit].items(): print(k+'='+v)\nelse:\n s[unit]['ActiveState']='inactive' if verb=='stop' else 'active'\n s[unit]['MainPID']='0' if verb=='stop' else '200'\n p.write_text(json.dumps(s))\n")
         self.systemctl.chmod(0o700)
+        # Two native store interpreters, as Hermes PM keeps them side by side across updates.
+        self.pythons = {}
+        for version in ("3.14.7", "3.14.9"):
+            python = self.home / "tools" / ("python-" + version) / "bin/python3"; python.parent.mkdir(parents=True)
+            python.write_text("#!/bin/sh\nexec " + shlex.quote(os.sys.executable) + ' "$@"\n'); python.chmod(0o700)
+            self.pythons[version] = str(python)
+        self.selection = self.directory / "selected-python"
+        self.select("3.14.7")
         self.launcher = self.source / ".hermes/bin/hermes"; self.launcher.parent.mkdir(parents=True)
-        self.launcher.write_text('#!/bin/sh\nprintf \'{"ok":true,"state":"current"}\\n\'\n'); self.launcher.chmod(0o700)
+        self.launcher.write_text("#!/bin/sh\nprintf '[\"%s\",\"-I\"]\\n' \"$(cat " + shlex.quote(str(self.selection)) + ')"\n'); self.launcher.chmod(0o700)
         self.config = self.directory / "platform.json"
         linux.atomic(self.config, {"source": str(self.source), "hermesHome": str(self.home), "managedLauncher": str(self.launcher),
-            "managedPython": str(Path(os.sys.executable).absolute()), "serviceEnvFile": str(self.service_env), "qualificationReceipt": str(self.directory / "deployed-receipt.json"),
+            "managedPython": self.pythons["3.14.7"], "serviceEnvFile": str(self.service_env), "qualificationReceipt": str(self.directory / "deployed-receipt.json"),
             "maintenanceFile": str(self.home / "maintenance.json"), "stageRoot": str(self.stage_root), "systemctl": str(self.systemctl),
             "dashboardOrigin": "http://127.0.0.1:9119", "dashboardPort": 9119, "gatewayUnit": "gateway.service", "dashboardUnit": "dashboard.service", "appUnit": "app.service",
             "regressionPython": "/usr/bin/python3", "regressionCommands": {"sharedOAuth": ["/usr/bin/python3", "-c", "pass"], "googleAuth": ["/usr/bin/python3", "-c", "pass"]}, "googleVerificationCommand": ["/usr/bin/true"],
@@ -130,6 +141,7 @@ class PlatformTests(unittest.TestCase):
         linux.atomic(self.stage / "qualification.json", {"revision": self.candidate, "trackedPatchSha256": self.platform.source_state(self.target)[1]})
 
     def tearDown(self): self.temp.cleanup()
+    def select(self, version): self.selection.write_text(self.pythons.get(version, version))
     def git(self, *args): return subprocess.check_output(["git", "-C", str(self.source), *args], stderr=subprocess.PIPE).decode()
 
     def baseline_receipt(self):
@@ -714,6 +726,103 @@ def sync_venv(extras=None, **kwargs):
         self.assertEqual(linux.Platform.runtime(self.platform, {"interpreterSha256": "same", "dependenciesSha256": "live"})["dependenciesSha256"], "live")
         self.assertFalse(Path(calls[-1][-1]).exists()); self.assertFalse(Path(calls[-1][-1] + ".editable.json").exists())
 
+
+    def reconfigure(self, **values):
+        config = json.loads(self.config.read_text()); config.update(values)
+        linux.atomic(self.config, config)
+        self.platform.config = config
+
+    def test_a_stale_pinned_interpreter_does_not_block_an_update_and_finish_refreshes_it(self):
+        # Oct 30, 2026: Hermes moved to 3.14.9 while the host configuration still named 3.14.7.
+        stale = self.pythons["3.14.7"]
+        self.reconfigure(managedPython=stale)
+        self.select("3.14.9")
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            self.platform.quiescence(); self.platform.backup(); self.platform.install(); self.platform.verify(); self.platform.finish()
+        self.assertIn("Updated 1 interpreter path(s) in " + str(self.config) + " from " + stale + " to " + self.pythons["3.14.9"], stderr.getvalue())
+        self.assertEqual(self.platform.load()["baseline"]["interpreter"], self.pythons["3.14.9"])
+        self.assertEqual(self.platform.load()["phase"], "finished")
+        self.assertEqual(json.loads(self.config.read_text())["managedPython"], self.pythons["3.14.9"])
+
+    def test_finish_rewrites_only_exact_interpreter_values_and_the_result_stays_valid(self):
+        old, new = self.pythons["3.14.7"], self.pythons["3.14.9"]
+        self.reconfigure(regressionPython=old, regressionCommands={"sharedOAuth": [old, "-c", "pass"], "googleAuth": [old, "-c", "pass"]},
+            googleVerificationCommand=["/usr/bin/true", old + ".bak", "--python=" + old], interpreters={old: "kept as a key"})
+        before = json.loads(self.config.read_text())
+        # Native PM installs the candidate's newer interpreter during sync.
+        def sync():
+            self.select("3.14.9"); return {"ok": True, "state": "synced"}
+        self.platform.sync = sync
+        self.platform.quiescence(); self.platform.backup()
+        self.assertEqual(self.platform.load()["baseline"]["interpreter"], old)
+        self.platform.install(); self.platform.verify()
+        self.assertEqual(json.loads(self.config.read_text()), before)
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr): self.platform.finish()
+        self.assertIn("Updated 4 interpreter path(s)", stderr.getvalue())
+        after = json.loads(self.config.read_text())
+        self.assertEqual(after, dict(before, managedPython=new, regressionPython=new,
+            regressionCommands={"sharedOAuth": [new, "-c", "pass"], "googleAuth": [new, "-c", "pass"]}))
+        self.assertEqual(self.config.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(linux.Platform(self.config, self.environment).config, after)
+        self.assertEqual(self.platform.config, after)
+
+    def test_the_interpreter_changing_mid_operation_at_the_baseline_revision_is_refused(self):
+        self.platform.quiescence()
+        self.select("3.14.9")
+        with self.assertRaisesRegex(RuntimeError, "^Baseline managed interpreter selection changed$"): self.platform.store_python()
+        # A later hook is a new process; it binds the operation record, not the pinned configuration.
+        fresh = FixturePlatform(self.config, self.environment)
+        with self.assertRaisesRegex(RuntimeError, "^Baseline managed interpreter selection changed$"): fresh.store_python()
+        self.select("3.14.7")
+        self.assertEqual(fresh.store_python(), self.pythons["3.14.7"])
+
+    def test_an_interpreter_outside_the_tool_store_is_refused(self):
+        self.select(os.sys.executable)
+        with self.assertRaisesRegex(RuntimeError, "^The baseline managed interpreter is outside the native tool store$"): self.platform.quiescence()
+        self.assertFalse((self.stage / "platform.json").exists())
+        # A record from an older helper has no interpreter; the tool store still bounds it.
+        self.platform.save({"baseline": {"source": list(self.platform.source_state())}, "phase": "quiescent"})
+        with self.assertRaisesRegex(RuntimeError, "outside the native tool store"): self.platform.store_python()
+        escape = self.home / "tools/python-3.14.9/bin/escape"; escape.symlink_to(os.sys.executable)
+        self.select(str(escape))
+        with self.assertRaisesRegex(RuntimeError, "outside the native tool store"): self.platform.store_python()
+        self.select("3.14.9")
+        self.assertEqual(self.platform.store_python(), self.pythons["3.14.9"])
+        self.git("reset", "--hard", self.candidate)
+        self.select(os.sys.executable)
+        with self.assertRaisesRegex(RuntimeError, "escaped the native tool store"): self.platform.store_python()
+
+    def test_sync_runs_in_the_recorded_baseline_interpreter(self):
+        calls = []
+        self.platform.run = lambda argv, **kwargs: calls.append(argv) or '{"ok": true, "state": "synced"}'
+        self.platform.save({"baseline": {"interpreter": self.pythons["3.14.9"]}, "phase": "backed_up"})
+        linux.Platform.sync(self.platform)
+        self.platform.save({"baseline": {}, "phase": "backed_up"})
+        linux.Platform.sync(self.platform)
+        self.assertEqual([argv[0] for argv in calls], [self.pythons["3.14.9"], self.pythons["3.14.7"]])
+
+    def test_a_failed_interpreter_refresh_never_fails_finish(self):
+        def finish():
+            self.platform.save(dict(self.platform.load(), phase="verified"))
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr): self.platform.finish()
+            self.assertEqual(self.platform.load()["phase"], "finished")
+            return stderr.getvalue()
+        self.platform.quiescence(); self.platform.backup(); self.platform.install(); self.platform.verify()
+        before = self.config.read_bytes()
+        self.select("3.14.9")
+        # The configuration directory refuses the atomic replacement.
+        self.directory.chmod(0o500)
+        try: log = finish()
+        finally: self.directory.chmod(0o700)
+        self.assertIn("Interpreter path refresh skipped: PermissionError on " + str(self.directory), log)
+        self.assertEqual(self.config.read_bytes(), before)
+        # The launcher cannot answer.
+        self.launcher.write_text("#!/bin/sh\nexit 1\n")
+        self.assertIn("Interpreter path refresh skipped: CalledProcessError (exit 1", finish())
+        self.assertEqual(self.config.read_bytes(), before)
 
     def test_private_config_and_fixed_stage_paths_are_required(self):
         self.config.chmod(0o644)

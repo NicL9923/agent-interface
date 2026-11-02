@@ -31,8 +31,10 @@ changing them requires a fresh check.
 Keep both configuration files owned by the app/service user with mode `0600`.
 Keep the state and staging directories at `0700`. Staging must be outside the
 live Hermes home, including its recovery archives. Paths below are placeholders.
-Copy the actual managed interpreter paths from the host's native launcher and PM
-selection. Do not substitute the retired in-tree venv or a system Python.
+At setup, copy the actual managed interpreter paths from the host's native launcher
+and PM selection. Do not substitute the retired in-tree venv or a system Python.
+Hermes updates move the store interpreter between tool versions. The helpers then
+refresh these paths themselves, as [interpreter paths](#interpreter-paths) describes.
 
 The platform configuration can live at
 `/home/installer/.config/agent-interface/hermes-linux.json`:
@@ -100,6 +102,33 @@ The helper reads the token locally. It uses a direct loopback service ticket and
 passes the key to the native maintenance request through stdin. Neither the
 browser nor a public admin command receives it. A missing maintenance extension,
 wrong service configuration, or unavailable native work record stops the upgrade.
+
+## Interpreter paths
+
+A Hermes update can move the native store interpreter. The Oct 30, 2026 update
+moved it from Python 3.14.7 to 3.14.9 while the host configuration still named
+3.14.7. So `managedPython` is not authoritative for an operation's checks.
+
+Each operation asks the native launcher for its interpreter when maintenance
+starts. The helper requires it inside `HERMES_HOME/tools` and records it in the
+operation's platform record. Later hooks at the original revision compare the
+launcher's answer with that record, so a change during the operation still stops
+it. Native PM sync runs in the recorded interpreter. A record from an older helper
+has none; sync then uses `managedPython`, and the tool store still bounds the check.
+
+After `finish` releases maintenance, the platform helper asks the launcher again.
+If the answer differs from `managedPython`, it replaces every string value exactly
+equal to the old path, such as `managedPython`, `regressionPython` and regression
+argv entries. It checks the result as it checks any configuration, then atomically
+rewrites the file with mode `0600`. After a rollback the launcher reports the
+restored interpreter, and the file follows it. The worker does the same for
+`qualificationPython` and its hook argv after a released install, a restored
+install or a recovery. Both refreshes replace only tool-store paths, so a system
+bootstrap interpreter stays as configured. They are best-effort and write to the
+update's private log. A failed refresh never fails an update that already succeeded.
+
+The rewritten files change the host fingerprint. The next check binds it afresh, and
+a release prepared before the refresh must be prepared again.
 
 ## Persistent gateway gate
 

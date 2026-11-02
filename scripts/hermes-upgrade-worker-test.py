@@ -13,6 +13,7 @@ import time
 import json
 import os
 from pathlib import Path
+import shlex
 import shutil
 import subprocess
 import sys
@@ -73,8 +74,25 @@ elif action=='restart_service':
     assert (stage/'gate').exists()
     (stage/'gate').unlink()
 elif action=='finish':
+    if os.environ.get('FIXTURE_WORKER_CONFIG'):
+        (stage/'config-at-finish.json').write_bytes(pathlib.Path(os.environ['FIXTURE_WORKER_CONFIG']).read_bytes())
     (stage/'gate').unlink(missing_ok=True)
     if (stage/'fail-finish').exists(): raise SystemExit(1)
+'''
+
+# Fixture managed-runtime helper. It validates controller wiring only; the actual helper has
+# separate tests and the final Hermes suite proves activated libraries.
+MANAGED_HELPER = '''import argparse, hashlib, json, pathlib, shlex, sys
+def fingerprint(python):
+    return {"interpreterSha256":hashlib.sha256(pathlib.Path(sys.executable).read_bytes()).hexdigest(),"dependenciesSha256":"b"*64}
+if __name__=="__main__":
+    parser=argparse.ArgumentParser(); parser.add_argument("action")
+    for key in ("source","stage","launcher","installed-source","installed-home"): parser.add_argument("--"+key)
+    args=parser.parse_args(); stage=pathlib.Path(args.stage)
+    marker=json.loads((stage/".agent-interface-upgrade-stage").read_text()); assert marker["state"]=="active"
+    launcher=stage/"qualified-python"; launcher.write_text("#!/bin/sh\\nexec "+shlex.quote(sys.executable)+" \\\"$@\\\"\\n"); launcher.chmod(0o700)
+    descriptor=stage/"qualified-runtime.json"; descriptor.write_text("{}"); descriptor.chmod(0o600)
+    print(json.dumps({"python":str(launcher),"descriptor":str(descriptor),"fingerprint":fingerprint(str(launcher))}))
 '''
 
 # Native marker double tests worker ownership/handoff wiring, not native locking.
@@ -320,7 +338,8 @@ class QualificationWorkerTests(unittest.TestCase):
         worker.atomic(self.state / "status.json",state)
         worker.atomic(self.state / "requests" / (request+'.json'),{"operationId":operation,"candidateRevision":self.new,"status":"pending"})
         instance=worker.Worker(self.config,self.state,"install",operation)
-        if instance.config.get('managedHome'): instance.environment['FIXTURE_MANAGED_HOME']=instance.config['managedHome']
+        if instance.config.get('managedHome'):
+            instance.environment.update(FIXTURE_MANAGED_HOME=instance.config['managedHome'], FIXTURE_WORKER_CONFIG=str(self.config))
         if expect_error:
             with self.assertRaises(Exception): instance.main()
         else: instance.main()
@@ -1036,21 +1055,7 @@ print('fixture real candidate patch identity passed')
         self.assertEqual((stage/'hook-order.txt').read_text().splitlines(),['regressions'])
 
     def test_managed_preparation_qualifies_changed_dependencies_and_binds_returned_launcher(self):
-        # Fixture helper validates controller wiring only. The actual helper has
-        # separate tests and the final Hermes suite proves activated libraries.
-        helper=self.app/'scripts/hermes-qualified-python.py'
-        helper.write_text('''import argparse, hashlib, json, pathlib, shlex, sys
-def fingerprint(python):
-    return {"interpreterSha256":hashlib.sha256(pathlib.Path(sys.executable).read_bytes()).hexdigest(),"dependenciesSha256":"b"*64}
-if __name__=="__main__":
-    parser=argparse.ArgumentParser(); parser.add_argument("action")
-    for key in ("source","stage","launcher","installed-source","installed-home"): parser.add_argument("--"+key)
-    args=parser.parse_args(); stage=pathlib.Path(args.stage)
-    marker=json.loads((stage/".agent-interface-upgrade-stage").read_text()); assert marker["state"]=="active"
-    launcher=stage/"qualified-python"; launcher.write_text("#!/bin/sh\\nexec "+shlex.quote(sys.executable)+" \\\"$@\\\"\\n"); launcher.chmod(0o700)
-    descriptor=stage/"qualified-runtime.json"; descriptor.write_text("{}"); descriptor.chmod(0o600)
-    print(json.dumps({"python":str(launcher),"descriptor":str(descriptor),"fingerprint":fingerprint(str(launcher))}))
-''')
+        (self.app/'scripts/hermes-qualified-python.py').write_text(MANAGED_HELPER)
         self.git('checkout','--detach',self.new); (self.source/'pm').mkdir(); (self.source/'pm/lock.json').write_text('{"dependency":"changed"}')
         self.git('add','.'); self.git('commit','-m','changed dependency lock'); self.new=self.git('rev-parse','HEAD').decode().strip()
         self.git('update-ref','refs/remotes/origin/main',self.new); self.git('checkout','--detach',self.old)
@@ -1070,6 +1075,89 @@ if __name__=="__main__":
         self.assertEqual(qualification['runtimeFingerprint']['dependenciesSha256'],'b'*64)
         self.assertEqual(self.install()['status'],'complete'); self.assertEqual(self.status()['phase'],'succeeded')
         self.assertFalse((self.root/'fixture-live-home/.hermes-update-in-progress').exists())
+
+    def managed_interpreters(self, bootstrap):
+        """Managed qualification on a home with two native store interpreters. The launcher reports
+        3.14.9; every configured interpreter starts as BOOTSTRAP, a version name or a path."""
+        (self.app/'scripts/hermes-qualified-python.py').write_text(MANAGED_HELPER)
+        home=self.root/'fixture-live-home'; tools=home/'tools'
+        pythons={}
+        for version in ('3.14.7','3.14.9'):
+            python=tools/('python-'+version)/'bin/python3'; python.parent.mkdir(parents=True,exist_ok=True)
+            python.write_text('#!/bin/sh\nexec '+shlex.quote(sys.executable)+' "$@"\n'); python.chmod(0o700)
+            pythons[version]=str(python)
+        launcher=self.root/'fixture-managed-launcher'
+        launcher.write_text('#!/bin/sh\nprintf \'["%s","-I"]\\n\' '+shlex.quote(pythons['3.14.9'])+'\n'); launcher.chmod(0o700)
+        browser=tools/'chromium-1/chrome'; browser.parent.mkdir(parents=True,exist_ok=True)
+        browser.write_text('#!/bin/sh\n'); browser.chmod(0o700)
+        (tools/'facts.json').write_text(json.dumps({'packages':{'chromium':{'env':{'AGENT_BROWSER_EXECUTABLE_PATH':'{{store}}/chromium-1/chrome'}}}}))
+        old=pythons.get(bootstrap,bootstrap)
+        config=json.loads(self.config.read_text())
+        config.update(managedLauncher=str(launcher),managedHome=str(home),qualificationPython=old,
+            hooks={**{name:[old,*argv[1:]] for name,argv in config['hooks'].items() if name!='regressions'},'regressions':[[old,*argv[1:]] for argv in config['hooks']['regressions']]})
+        worker.atomic(self.config,config)
+        return config, pythons
+
+    def assert_refreshed(self, before, stage, new):
+        old=before['qualificationPython']
+        after=json.loads(self.config.read_text())
+        expected=dict(before,qualificationPython=new,hooks={name:([[new,*argv[1:]] for argv in value] if name=='regressions' else [new,*value[1:]]) for name,value in before['hooks'].items()})
+        self.assertEqual(after,expected); self.assertEqual(self.config.stat().st_mode&0o777,0o600)
+        worker.check_config(after)
+        # qualificationPython, each single hook, and each regression argv.
+        # The finish hook still saw the old paths: the refresh follows its success.
+        self.assertEqual(json.loads((stage/'config-at-finish.json').read_text())['qualificationPython'],old)
+        self.assertIn('Interpreter path refresh: updated %d path(s)' % (len(before['hooks'])+len(before['hooks']['regressions'])),''.join(path.read_text() for path in self.state.glob('*.log')))
+
+    def test_a_successful_install_refreshes_the_worker_interpreter_paths_after_finish(self):
+        before,pythons=self.managed_interpreters('3.14.7')
+        stage=self.check()
+        self.assertEqual(json.loads(self.config.read_text()),before)
+        self.assertEqual(self.install()['status'],'complete'); self.assertEqual(self.status()['phase'],'succeeded')
+        self.assert_refreshed(before,stage,pythons['3.14.9'])
+
+    def test_a_restored_install_refreshes_the_worker_interpreter_paths_after_finish(self):
+        before,pythons=self.managed_interpreters('3.14.7')
+        stage=self.check(); (stage/'fail-verify').touch()
+        self.assertEqual(self.install()['status'],'complete'); self.assertEqual(self.status()['phase'],'rolled_back')
+        self.assert_refreshed(before,stage,pythons['3.14.9'])
+
+    def test_a_recovered_install_refreshes_the_worker_interpreter_paths(self):
+        before,pythons=self.managed_interpreters('3.14.7')
+        stage=self.check(); qualification=self.status()['qualification']
+        # A worker that died after the host hooks started, under its saved maintenance gate.
+        operation=str(uuid.uuid4())
+        worker.atomic(self.state/'status.json',{'operationId':operation,'phase':'failed','maintenance':True,'checks':[],'qualification':qualification,'message':'Interrupted'})
+        worker.atomic(stage/'recovery.json',{'operationId':operation,'hostHookStarted':True,'installStarted':True,'releaseStarted':False})
+        (stage/'gate').write_text('exclusive')
+        self.control('restart_service')
+        worker.Worker(self.config,self.state,'restart_service',operation).main()
+        self.assertEqual(self.status()['phase'],'succeeded'); self.assertFalse((stage/'gate').exists())
+        after=json.loads(self.config.read_text())
+        self.assertEqual(after['qualificationPython'],pythons['3.14.9']); self.assertEqual(after['hooks']['finish'][0],pythons['3.14.9'])
+        self.assertEqual(after['hooks']['finish'][1:],before['hooks']['finish'][1:])
+
+    def test_a_failed_release_keeps_the_worker_interpreter_paths_for_review(self):
+        before,_=self.managed_interpreters('3.14.7')
+        stage=self.check(); (stage/'fail-finish').touch(); self.install(expect_error=True)
+        self.assertEqual(self.status()['phase'],'failed'); self.assertEqual(json.loads(self.config.read_text()),before)
+
+    def test_a_system_bootstrap_interpreter_is_never_replaced_by_the_launcher_selection(self):
+        before,_=self.managed_interpreters(sys.executable)
+        self.check(); self.assertEqual(self.install()['status'],'complete')
+        self.assertEqual(json.loads(self.config.read_text()),before)
+
+    def test_a_failed_worker_interpreter_refresh_never_fails_a_released_update(self):
+        directory=self.root/'private-config'; directory.mkdir(mode=0o700)
+        self.config=Path(shutil.move(self.config,directory/'config.json'))
+        before,_=self.managed_interpreters('3.14.7')
+        self.check()
+        # The configuration directory refuses the atomic replacement.
+        directory.chmod(0o500)
+        try: self.assertEqual(self.install()['status'],'complete')
+        finally: directory.chmod(0o700)
+        self.assertEqual(self.status()['phase'],'succeeded'); self.assertEqual(json.loads(self.config.read_text()),before)
+        self.assertIn('Interpreter path refresh: skipped after PermissionError',''.join(path.read_text() for path in self.state.glob('*.log')))
 
     def test_native_updater_claim_refuses_foreign_owner_and_never_removes_replacement(self):
         home=self.root/'native-home'; home.mkdir(mode=0o700)
