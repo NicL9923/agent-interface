@@ -1,6 +1,6 @@
 import type { AutomationRequester } from './automation.js';
 import type { ExperienceRequester } from "./experience.js";
-import type { IntegrationRequest, IntegrationCatalog, IntegrationConnection, IntegrationFlow } from "./integrations.js";
+import type { IntegrationRequest, IntegrationCatalog, IntegrationConnection, IntegrationFlow, ConnectionRequestSettle, ConnectionRequestResult, ConnectionRequest } from "./integrations.js";
 import type { ComputerRequest, ComputerStatus, ComputerAttachment, ComputerHandoff } from "./computer.js";
 import type { SecureRequest, VaultRequest, VaultResponse } from "./vault.js";
 import type { GroupRequest, GroupResponse, RoutineOutput, RoutineResult } from './collaboration.js';
@@ -249,13 +249,14 @@ export interface Activity {
 }
 export interface AttentionRequest {
   id: string;
-  kind: "clarify" | "official" | "secure" | "computer";
+  kind: "clarify" | "official" | "secure" | "computer" | "connection";
   title: string;
   detail: string;
   /** `multiple` lets a person choose several options, sent as one comma-separated answer. Absent means one. */
   questions?: { id: string; prompt: string; options?: string[]; multiple?: boolean }[];
   secure?: SecureRequest;
   computer?: ComputerHandoff;
+  connection?: ConnectionRequest;
 }
 export interface Conversation {
   attention?: AttentionRequest[];
@@ -429,6 +430,8 @@ export interface Runtime {
   inferenceSettings?(botId: string, update?: Partial<InferenceSettings>): Promise<InferenceSettings>;
   modelOptions?(profile?: string): Promise<ModelCatalog>;
   integrationRequest?(input: IntegrationRequest): Promise<IntegrationCatalog | IntegrationConnection | IntegrationFlow | {ok: true}>;
+  /** Continue or Not now on an assistant's connection request. Hermes checks it belongs to that profile's conversation. */
+  connectionRequest?(input: ConnectionRequestSettle): Promise<ConnectionRequestResult>;
   status(): Promise<RuntimeStatus>;
   reconnect?(): Promise<RuntimeStatus>;
   capabilities(): Promise<Capabilities>;

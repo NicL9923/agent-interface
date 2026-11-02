@@ -274,7 +274,7 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
             </div>
           </div>
         )}
-        <AttentionList conversation={conversation} botId={botId} userId={boot.user.id} assistantName={selected?.name}
+        <AttentionList conversation={conversation} botId={botId} userId={boot.user.id} bots={boot.bots} assistantName={selected?.name}
           disconnected={connectionLost} report={setError} />
         {conversation?.approvals
           .filter((approval) => approval.status === "pending")

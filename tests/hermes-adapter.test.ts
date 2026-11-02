@@ -275,6 +275,19 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     expect(result.activity.state).toBe('blocked');
   });
 
+  it('shows an assistant\'s connection request only when this executor owns it and names a requestable connection', async () => {
+    snapshot.executor_epoch='epoch-one';
+    snapshot.open_requests=[
+      {id:'srq-conn',method:'agent_interface.connection_request',app_local_secure:true,params:{connection:'google_workspace',reason:'r'.repeat(250)}},
+      {id:'srq-mirrored',method:'agent_interface.connection_request',params:{connection:'github',reason:'Mirrored'}},
+      {id:'srq-apple',method:'agent_interface.connection_request',app_local_secure:true,params:{connection:'apple',reason:'Calendars'}},
+    ];
+    const result=await runtime.conversation('shared');
+    expect(result.attention![0]).toEqual({id:'srq-conn',kind:'connection',title:'Set up a connection?',detail:'r'.repeat(200),secure:undefined,
+      questions:undefined,connection:{epoch:'epoch-one',sessionId:'live-one',connectionId:'google_workspace',reason:'r'.repeat(200)}});
+    expect(result.attention!.slice(1).map(request=>[request.kind,request.connection])).toEqual([['official',undefined],['official',undefined]]);
+  });
+
   it('transmits credentials privately once and never forwards native secret-bearing error text',async()=>{
     const payload={operation:'answer' as const,profile:'shared',requestId:'srq-proof',actor:'member-one',answer:{epoch:'epoch-one',sessionId:'live-one',method:'vault.code' as const,value:'123456'}};
     const fetcher=vi.fn(async(_url: URL | string, _init?: RequestInit)=>Response.json({error:'private synthetic canary'}, {status:409}));
