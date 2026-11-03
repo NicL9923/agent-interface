@@ -2,11 +2,14 @@
 import { act, createElement, StrictMode } from "react";
 import type { Root } from "react-dom/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { preparePortrait } from "../src/portrait-upload";
 import { BotSettings } from "../src/BotSettings";
 import { api, ApiError, write } from "../src/client-api";
 import { defaultPreferences } from "../src/shared/types";
 import type { Bootstrap, Bot } from "../src/shared/types";
 import { click, mountRoot, typeInto } from "./ui-harness";
+
+vi.mock("../src/portrait-upload", () => ({ preparePortrait: vi.fn(async (file: File) => file) }));
 
 // SVG geometry is a browser concern; these tests cover the form around the avatar.
 vi.mock("../src/components/Avatar", async (original) => ({
@@ -719,11 +722,23 @@ describe("existing assistant portraits", () => {
     await act(async () => input.dispatchEvent(new Event("change", { bubbles: true })));
     return input;
   };
-  it.each([new File(["bad"], "portrait.txt", { type: "text/plain" }), new File([new Uint8Array(2_000_001)], "portrait.png", { type: "image/png" })])("rejects invalid files without submitting or enabling Save", async file => {
+  it("shows compression failures without submitting or enabling Save", async () => {
+    const file = new File(["bad"], "portrait.png", { type: "image/png" });
+    vi.mocked(preparePortrait).mockRejectedValueOnce(new Error("Choose a PNG, JPEG, or WebP portrait no larger than 15 MB."));
     await upload(file);
     expect(api).not.toHaveBeenCalled();
-    expect(container.textContent).toContain("Choose a PNG, JPEG, or WebP portrait no larger than 2 MB.");
+    expect(container.textContent).toContain("Choose a PNG, JPEG, or WebP portrait no larger than 15 MB.");
     expect([...container.querySelectorAll("button")].find(button => button.textContent === "Save avatar")!.disabled).toBe(true);
+  });
+  it("uploads the prepared portrait rather than the original photo", async () => {
+    const compressed = new File(["compressed"], "portrait.png", { type: "image/png" });
+    vi.mocked(preparePortrait).mockResolvedValueOnce(compressed);
+    await upload(new File(["original"], "photo.jpg", { type: "image/jpeg" }));
+    const options = vi.mocked(api).mock.calls.at(-1)![1]!;
+    const uploaded = (options.body as FormData).get("file") as File;
+    expect(uploaded.name).toBe("portrait.png");
+    expect(uploaded.type).toBe("image/png");
+    expect(uploaded.size).toBe(compressed.size);
   });
   it("clears the file input after failure so choosing the same file can retry", async () => {
     vi.mocked(api).mockRejectedValueOnce(new Error("Upload interrupted."));
