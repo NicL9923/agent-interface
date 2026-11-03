@@ -1,3 +1,4 @@
+import { preparePortrait } from "./portrait-upload";
 import { Dialog } from "./components/ui/dialog";
 import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
@@ -238,14 +239,10 @@ function LoadedBotSettings({
   };
   const uploadPortrait = async (file: File | undefined) => {
     if (!file || !existing) return;
-    if (!["image/png", "image/jpeg", "image/webp"].includes(file.type) || file.size > 2_000_000) {
-      setError("Choose a PNG, JPEG, or WebP portrait no larger than 2 MB.");
-      return;
-    }
     setPortraitOperation("upload");
     try { await run(async () => {
       const data = new FormData();
-      data.append("file", file);
+      data.append("file", await preparePortrait(file));
       // Multipart, so the mapped route is posted with a form body instead of through request().
       const result = await api<ApiResponse<"POST /bots/:id/uploads">>(
         routeUrl("POST /bots/:id/uploads", { id: existing.id }),
@@ -580,7 +577,7 @@ function LoadedBotSettings({
                       onChange={(e) => { const file = e.currentTarget.files?.[0]; e.currentTarget.value = ""; void uploadPortrait(file); }}
                     />
                   </label>
-                  <p className="muted">PNG, JPEG, or WebP, up to 2 MB.</p>
+                  <p className="muted">PNG, JPEG, or WebP, up to 15 MB.</p>
                   {unavailable("uploads")}
                   </fieldset>
                   <fieldset className="avatar-portrait-group"><legend>Generate a portrait</legend>

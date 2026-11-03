@@ -4,6 +4,26 @@ import ImageIO
 import UniformTypeIdentifiers
 @testable import AgentInterface
 final class ShareInboxTests:XCTestCase {
+  func testPortraitResizesAndPreservesTransparency() throws {
+    let format = UIGraphicsImageRendererFormat()
+    format.scale = 1
+    let image = UIGraphicsImageRenderer(size: CGSize(width: 1600, height: 800), format: format).image { context in
+      UIColor.green.setFill()
+      context.fill(CGRect(x: 0, y: 0, width: 800, height: 800))
+    }
+    let data = try PortraitUpload.prepare(image.pngData()!)
+    let resized = try XCTUnwrap(UIImage(data: data)?.cgImage)
+    XCTAssertEqual(resized.width, 512)
+    XCTAssertEqual(resized.height, 256)
+    XCTAssertTrue([CGImageAlphaInfo.premultipliedFirst, .premultipliedLast, .first, .last].contains(resized.alphaInfo))
+    XCTAssertLessThanOrEqual(data.count, 2_000_000)
+    XCTAssertThrowsError(try PortraitUpload.prepare(Data("bad".utf8)))
+    XCTAssertThrowsError(try PortraitUpload.prepare(Data(count: PortraitUpload.maxInputBytes + 1)))
+    // The source limit is inclusive. PNG decoders tolerate trailing bytes.
+    var exactLimit = image.pngData()!
+    exactLimit.append(Data(count: PortraitUpload.maxInputBytes - exactLimit.count))
+    XCTAssertNoThrow(try PortraitUpload.prepare(exactLimit))
+  }
   func testRejectsTraversalAndInvalidCaptureIdentity() {
     var value=SharedCapture(id:UUID().uuidString,scope:"account",text:"Shared webpage",files:["shared-1.pdf"],createdAt:Date())
     XCTAssertTrue(ShareInbox.valid(value));value.files=["../outside.pdf"];XCTAssertFalse(ShareInbox.valid(value));value.files=["shared.pdf"];value.id="../outside";XCTAssertFalse(ShareInbox.valid(value))

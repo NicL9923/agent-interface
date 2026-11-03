@@ -446,7 +446,7 @@ struct BotSettingsView: View {
             .font(.caption).foregroundStyle(Palette.muted)
           Button("Upload portrait") { beginPortraitImport() }.disabled(
             bot == nil || !store.supports(.uploads) || !store.connected)
-          Text("PNG, JPEG, or WebP, up to 2 MB.").font(.caption).foregroundStyle(Palette.muted)
+          Text("PNG, JPEG, or WebP, up to 15 MB.").font(.caption).foregroundStyle(Palette.muted)
           unavailable(.uploads)
         } header: { settingsHeader("Upload a portrait") }
         Section {
@@ -876,15 +876,15 @@ struct BotSettingsView: View {
       let accessed = url.startAccessingSecurityScopedResource()
       defer { if accessed { url.stopAccessingSecurityScopedResource() } }
       let values = try url.resourceValues(forKeys: [.fileSizeKey, .contentTypeKey])
-      guard (values.fileSize ?? 0) <= 2_000_000 else {
-        throw APIError(message: "Choose a portrait no larger than 2 MB.", status: 400)
+      guard (values.fileSize ?? 0) <= PortraitUpload.maxInputBytes else {
+        throw APIError(message: "Choose a portrait no larger than 15 MB.", status: 400)
       }
       let mime = values.contentType?.preferredMIMEType ?? "application/octet-stream"
       guard ["image/png", "image/jpeg", "image/webp"].contains(mime) else {
         throw APIError(message: "Choose a PNG, JPEG, or WebP portrait.", status: 400)
       }
       let file = try await api.upload(
-        botId: bot.id, name: url.lastPathComponent, mime: mime, data: Data(contentsOf: url))
+        botId: bot.id, name: "portrait.png", mime: "image/png", data: PortraitUpload.prepare(Data(contentsOf: url)))
       avatar.src = file.url ?? "/api/files/\(APIClient.component(file.id))"
       avatar.origin = "uploaded"
       notice = "Portrait uploaded. Save avatar to apply it."
