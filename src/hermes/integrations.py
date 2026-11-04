@@ -146,14 +146,40 @@ def mcp_runtime(profile):
             for row in rows if isinstance(row, dict) and isinstance(row.get("name"), str)}
 
 
-def cache_check(home, result, needs_auth=False):
+def auth_episodes(home, runtime):
+    """The rejected sign-in episode each MCP connection is in, as an opaque ID.
+
+    An episode starts when the app first reads ``needs_auth: true`` for a server and ends when Hermes
+    reports ``needs_auth: false``, so a later rejection is a new episode even with unchanged tokens.
+    A row without the field, or no status at all, leaves the record as it was. The app sees only the
+    states it reads: a recovery and a new rejection between two reads look like one episode.
+    """
+    path = Path(home) / "agent_interface_mcp_auth_episodes.json"
+    try:
+        saved = private_json(path)
+    except (ValueError, OSError):
+        saved = {}
+    episodes = {key: value for key, value in saved.items() if isinstance(value, str)} if isinstance(saved, dict) else {}
+    for row_id, row in (runtime or {}).items():
+        if not isinstance(row, dict):
+            continue
+        if row.get("needs_auth") is True and row_id not in episodes:
+            episodes[row_id] = secrets.token_hex(8)
+        elif row.get("needs_auth") is False:
+            episodes.pop(row_id, None)
+    if episodes != saved:
+        private_fs.atomic_json(path, episodes)
+    return episodes
+
+
+def cache_check(home, result, episode=None):
     path = Path(home) / "agent_interface_integration_checks.json"
     try:
         cached = private_json(path)
     except (ValueError, OSError):
         cached = {}
-    # needsAuth: Hermes still reported the server parked on a rejected sign-in when this check ran.
-    cached[result["id"]] = dict(fingerprint=fingerprint(home), tokens=token_stamp(home), checked=result, **({"needsAuth": True} if needs_auth else {}))
+    # needsAuthEpisode: the rejected sign-in episode Hermes still reported when this check ran.
+    cached[result["id"]] = dict(fingerprint=fingerprint(home), tokens=token_stamp(home), checked=result, **({"needsAuthEpisode": episode} if episode else {}))
     private_fs.atomic_json(path, cached)
 
 
@@ -161,15 +187,17 @@ def apply_checks(home, rows, runtime=None):
     """Lay saved check results and Hermes's live MCP state over the configuration rows.
 
     For an MCP server, Hermes's own ``needs_auth`` decides the reconnect state when it reports one. Only a
-    successful check made after the park, with the same OAuth tokens, outranks it: a sign-in finished in
-    another profile's process clears the park at that assistant's next turn. A live connection retires a
-    saved failure. Without either signal, a failed check stops counting once OAuth tokens are rewritten.
+    successful check made during the same rejection episode, with the same OAuth tokens, outranks it: a
+    sign-in finished in another profile's process clears the park at that assistant's next turn. A live
+    connection retires a saved failure. Without either signal, a failed check stops counting once OAuth
+    tokens are rewritten.
     """
     try:
         saved = private_json(Path(home) / "agent_interface_integration_checks.json")
     except (ValueError, OSError):
         saved = {}
     current, tokens = fingerprint(home), token_stamp(home)
+    episodes = auth_episodes(home, runtime)
     for row in rows:
         checked = saved.get(row["id"], {})
         evidence = checked.get("checked", {})
@@ -178,7 +206,8 @@ def apply_checks(home, rows, runtime=None):
         live = live if isinstance(live, dict) else {}
         failed = evidence.get("status") != "connected"
         if live.get("needs_auth") is True:
-            if failed or checked.get("needsAuth") is not True or checked.get("tokens") != tokens or checked.get("fingerprint") != current:
+            episode = checked.get("needsAuthEpisode")
+            if failed or not episode or episode != episodes.get(row["id"]) or checked.get("tokens") != tokens or checked.get("fingerprint") != current:
                 row.update(status="expired", detail=NEEDS_AUTH_DETAIL)
                 continue
             stale = False
@@ -962,8 +991,9 @@ async def dispatch(data, request):
             failure_status = "expired" if any(word in error for word in ("401", "oauth authentication required", "unauthorized", "invalid_token")) else "missing_permission" if any(word in error for word in ("403", "forbidden", "permission")) else "unavailable"
             result.update(status="connected" if checked.get("ok") else failure_status, detail="Hermes connected and discovered the MCP tools." if checked.get("ok") else "MCP discovery failed. Review authentication and service availability in Hermes.", capabilities=[tool["name"] for tool in checked.get("tools", [])][:100])
             result["checkedAt"] = now()
-            parked = (await asyncio.to_thread(mcp_runtime, profile)).get(identity, {}).get("needs_auth") is True
-            await asyncio.to_thread(cache_check, home, result, parked)
+            runtime = await asyncio.to_thread(mcp_runtime, profile)
+            episode = (await asyncio.to_thread(auth_episodes, home, runtime)).get(identity) if runtime.get(identity, {}).get("needs_auth") is True else None
+            await asyncio.to_thread(cache_check, home, result, episode)
             return result
         elif identity.startswith("key:") and identity[4:] in KEYS:
             env_key = KEYS[identity[4:]][1]

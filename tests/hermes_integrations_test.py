@@ -78,7 +78,16 @@ class IntegrationTests(unittest.TestCase):
         self.assertEqual(status(None), ("connected", "Checked."))
         self.assertEqual(status(parked), ("expired", integrations.NEEDS_AUTH_DETAIL))
         # Signed in again, and a check made while Hermes still had the server parked succeeded with these tokens.
-        integrations.cache_check(str(self.home), dict(id="supabase", status="connected", detail="Checked."), needs_auth=True)
+        episode = integrations.auth_episodes(str(self.home), parked)["supabase"]
+        integrations.cache_check(str(self.home), dict(id="supabase", status="connected", detail="Checked."), episode)
+        self.assertEqual(status(parked), ("connected", "Checked."))
+        # Hermes recovers, then rejects the same tokens again: a new episode, so the earlier check no longer counts.
+        recovered = {"supabase": dict(name="supabase", connected=True, status="connected", needs_auth=False)}
+        self.assertEqual(status(recovered), ("connected", "Checked."))
+        self.assertEqual(status(None), ("connected", "Checked."))
+        self.assertEqual(status(parked), ("expired", integrations.NEEDS_AUTH_DETAIL))
+        self.assertNotEqual(integrations.auth_episodes(str(self.home), parked)["supabase"], episode)
+        integrations.cache_check(str(self.home), dict(id="supabase", status="connected", detail="Checked."), integrations.auth_episodes(str(self.home), parked)["supabase"])
         self.assertEqual(status(parked), ("connected", "Checked."))
         stamp = (tokens / "supabase.json").stat().st_mtime_ns + 1_000_000
         os.utime(tokens / "supabase.json", ns=(stamp, stamp))
@@ -123,6 +132,11 @@ class IntegrationTests(unittest.TestCase):
             # Checked after signing in again, while Hermes still waits to reconnect.
             self.assertEqual(run("check")["status"], "connected")
             self.assertEqual(status(), "connected")
+            # Recovered, then the same tokens are rejected again with nothing else changed.
+            runtime["needs_auth"] = False
+            self.assertEqual(status(), "connected")
+            runtime["needs_auth"] = True
+            self.assertEqual(status(), "expired")
 
     def test_runtime_status_comes_from_native_mcp_servers_status(self):
         calls = []

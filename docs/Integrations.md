@@ -59,8 +59,12 @@ sign-in, native `mcp.servers.status` reports `needs_auth` and the card reads
 **Expired** with Reconnect. That signal outranks a saved check, except a
 successful Check made after the rejection with the same tokens: Hermes clears
 the flag when it reconnects, which happens right after an in-app sign-in for
-the process's own profile and at the assistant's next turn for the others. A
-live connection retires a saved failed check. When the field is missing, as on
+the process's own profile and at the assistant's next turn for the others.
+That exception belongs to one rejection episode. The episode ends when the app
+reads `needs_auth: false`, so a later rejection of the same tokens shows
+Reconnect again. The app sees only the states it reads: a recovery and a new
+rejection between two reads look like one episode. A live connection retires
+a saved failed check. When the field is missing, as on
 an older Hermes, or Hermes reports the server as never tried, which is what a
 process that doesn't hold that profile's runtime reports, the app treats it as
 no evidence and keeps the earlier rule: a failed Check stops counting once the
