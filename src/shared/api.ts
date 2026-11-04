@@ -1,4 +1,4 @@
-import type { AutomationOverview as WorkOverview, AutomationTask, AutomationRequest, TaskInput, TriggerInput, SkillContent, SkillDiff, EventSubscription } from "./automation.js";
+import type { AutomationOverview as WorkOverview, AutomationTask, AutomationRequest, TaskInput, TriggerInput, SkillContent, SkillDiff, SkillLock, EventSubscription } from "./automation.js";
 import type { AutomationOverview, HistoryPage, SavedItem, SearchHit, Starter } from "./discovery.js";
 import type { ProfileMemory, RoutinePreview, RoutineRunReceipt, TodayOverview } from "./experience.js";
 import type { RoutineOutput, RoutineResult } from "./collaboration.js";
@@ -125,6 +125,7 @@ export interface ApiRoutes {
   "GET /bots/:id/automation/skills/pending/:pendingId": { response: SkillDiff };
   "POST /bots/:id/automation/skills/pending/:pendingId": { body: { revision: string; decision: "approve" | "reject" }; response: Ok };
   "PUT /bots/:id/automation/skills/policy": { body: { approvalRequired: boolean }; response: Ok };
+  "PUT /bots/:id/automation/skills/lock": { body: { name: string; locked: boolean }; response: SkillLock };
   "GET /bootstrap": { query: { roster?: "lean" }; response: Bootstrap };
   "POST /connection/retry": { response: RuntimeStatus };
   "PATCH /preferences": { body: Preferences; response: Preferences };

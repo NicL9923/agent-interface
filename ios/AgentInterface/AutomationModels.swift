@@ -24,6 +24,8 @@ struct HermesAutomationOverview: Decodable {
   struct Skills: Decodable {
     var supported: Bool; var reason: String?; var installed: [HermesInstalledSkill]
     var pending: [HermesPendingSkill]; var approvalRequired: Bool
+    /// Absent or false when this Hermes can't lock skills.
+    var lockSupported: Bool?
   }
 }
 struct HermesGoal: Decodable {
@@ -72,6 +74,8 @@ func hermesTriggerSubtitle(_ trigger: HermesSubscription, routines: [Routine], l
 }
 struct HermesInstalledSkill: Decodable, Identifiable {
   var name: String; var description: String
+  /// Native Hermes's skill lock: while set, assistants can't change the skill. Nil when Hermes can't lock skills.
+  var locked: Bool?
   var id: String { name }
 }
 struct HermesPendingSkill: Decodable, Identifiable {
@@ -177,6 +181,8 @@ struct HermesTriggerUpdate: Encodable {
 struct HermesTriggerToggle: Encodable { var enabled: Bool; var revision: String }
 struct HermesRevisionInput: Encodable { var revision: String }
 struct HermesPolicyInput: Encodable { var approvalRequired: Bool }
+struct HermesSkillLockInput: Encodable { var name: String; var locked: Bool }
+struct HermesSkillLock: Decodable { var ok: Bool; var name: String; var locked: Bool }
 struct HermesTriggerResult: Decodable { var subscription: HermesSubscription; var secret: String? }
 
 /// Deliberately not Codable. Signing secrets exist only while the foreground Work tab is open.

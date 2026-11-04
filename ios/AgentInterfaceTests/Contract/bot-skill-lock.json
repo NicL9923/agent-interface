@@ -1,0 +1,8 @@
+{
+  "request": "PUT /api/bots/household/automation/skills/lock",
+  "response": {
+    "ok": true,
+    "name": "ranch/fences",
+    "locked": false
+  }
+}

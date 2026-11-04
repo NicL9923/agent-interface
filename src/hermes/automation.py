@@ -38,7 +38,8 @@ def goal_document(state):
 
 
 READS = frozenset(("overview", "task_get", "skill_content", "skill_diff"))
-OPERATIONS = READS | frozenset(("goal_set", "goal_pause", "goal_resume", "goal_clear", "task_create", "task_update", "task_action", "task_dependency", "trigger_create", "trigger_update", "trigger_toggle", "trigger_delete", "skill_decide", "skill_policy"))
+OPERATIONS = READS | frozenset(("goal_set", "goal_pause", "goal_resume", "goal_clear", "task_create", "task_update", "task_action", "task_dependency", "trigger_create", "trigger_update", "trigger_toggle", "trigger_delete", "skill_decide", "skill_policy", "skill_lock"))
+SKILL_NAME = re.compile(r"[A-Za-z0-9_./-]{1,200}")
 
 
 class Controller:
@@ -526,12 +527,40 @@ def trigger_operation(data):
     return wh._mutate_subscriptions(mutate)
 
 
+def skill_locks():
+    """Native Hermes's own lock index for the dashboard's lock switch, or None on a revision without skill locks.
+
+    Locks are keyed by skill directory while rows carry the load name; the index maps one to the other.
+    """
+    try:
+        from hermes_cli.web_routers.skills import _locked_index
+        from tools import skill_usage
+    except ImportError:
+        return None
+    if not callable(getattr(skill_usage, "set_locked", None)):
+        return None
+    return _locked_index()
+
+
 def skill_list():
     from tools import write_approval as wa
     from tools.skills_tool import find_all_skills
-    return dict(installed=[dict(name=text(row["name"], 200), description=text(row.get("description"), 1000)) for row in find_all_skills(skip_disabled=True)[:200]],
+    locks = skill_locks()
+    locked_dirs, dir_by_name = locks or (set(), {})
+    def row(skill):
+        name = text(skill["name"], 200)
+        locked = {"locked": dir_by_name.get(skill["name"], skill["name"]) in locked_dirs} if locks is not None else {}
+        return dict(name=name, description=text(skill.get("description"), 1000), **locked)
+    return dict(installed=[row(skill) for skill in find_all_skills(skip_disabled=True)[:200]],
         pending=[dict(id=row["id"], summary=text(row.get("summary"), 1000), origin=text(row.get("origin"), 40), revision=digest(row)) for row in wa.list_pending(wa.SKILLS)[:100] if re.fullmatch(r"[a-f0-9]{8}", str(row.get("id", "")))],
-        approvalRequired=wa.write_approval_enabled(wa.SKILLS))
+        approvalRequired=wa.write_approval_enabled(wa.SKILLS), lockSupported=locks is not None)
+
+
+def skill_name(data):
+    name = data.get("name")
+    if not isinstance(name, str) or not SKILL_NAME.fullmatch(name) or any(part in ("", ".", "..") for part in name.split("/")):
+        raise AutomationError("Invalid skill name.")
+    return name
 
 
 def skill_refusal_is_definite(record, result):
@@ -542,6 +571,9 @@ def skill_refusal_is_definite(record, result):
     """
     if not isinstance(result, dict) or result.get("success") is not False:
         return False
+    if result.get("_locked") is True:
+        # Native lock refusals come from the preflight before any handler or batch snapshot runs.
+        return True
     payload = record.get("payload") or {}
     operations = payload.get("operations")
     if operations is not None:
@@ -573,11 +605,27 @@ def skill_operation(data, journal=None):
             config.setdefault("skills", {})[wa.CONFIG_KEY] = data["approvalRequired"]
             save_config(config)
         return dict(ok=True)
+    if operation == "skill_lock":
+        # The same record and directory key as native PUT /api/skills/lock and `hermes curator lock`.
+        # Native skill_manage refuses every assistant edit of a locked skill; people can still edit it.
+        name = skill_name(data)
+        if type(data.get("locked")) is not bool:
+            raise AutomationError("Choose whether this skill is locked.")
+        if skill_locks() is None:
+            raise AutomationError("This Hermes version can't lock skills. Update Hermes first.", 409)
+        from hermes_cli.web_routers._common import config_write_scope
+        from tools import skill_usage
+        from tools.skill_manager_tool import _find_skill
+        with config_write_scope(data["profile"]):
+            found = _find_skill(name)
+            if not found:
+                raise AutomationError("Installed skill not found in this profile.", 404)
+            if not skill_usage.set_locked(found["path"].name, data["locked"]):
+                raise AutomationError("Hermes couldn't save this skill's lock. Check that the profile's skills folder is writable.", 409)
+        return dict(ok=True, name=name, locked=data["locked"])
     if operation == "skill_content":
         from tools.skill_manager_tool import _find_skill
-        name = data.get("name")
-        if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_./-]{1,200}", name) or any(part in ("", ".", "..") for part in name.split("/")):
-            raise AutomationError("Invalid skill name.")
+        name = skill_name(data)
         found = _find_skill(name)
         if not found:
             raise AutomationError("Installed skill not found in this profile.", 404)
@@ -623,6 +671,8 @@ def skill_operation(data, journal=None):
             if skill_refusal_is_definite(record, result):
                 with journal.lock, journal.db:
                     journal.db.execute("UPDATE automation_skill_decisions SET status='rejected' WHERE profile=? AND pending_id=?", (data["profile"], pending_id))
+                if result.get("_locked") is True:
+                    raise AutomationError("This skill is locked, so Hermes didn't apply the change. Unlock the skill to approve it, or reject the change.", 409)
                 raise AutomationError("Hermes refused this skill edit without a surviving content change. Refresh its diff before retrying or rejecting it.", 409)
             raise AutomationError("Hermes could not confirm whether this skill edit changed content. Review it in native Hermes before another attempt.", 409)
     if not wa.discard_pending(wa.SKILLS, pending_id):
