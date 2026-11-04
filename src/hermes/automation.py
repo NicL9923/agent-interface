@@ -571,8 +571,10 @@ def skill_refusal_is_definite(record, result):
     """
     if not isinstance(result, dict) or result.get("success") is not False:
         return False
-    if result.get("_locked") is True:
-        # Native lock refusals come from the preflight before any handler or batch snapshot runs.
+    # A lock refusal with no failed_index comes from the preflight, before any handler or batch
+    # snapshot runs. A batch op refused mid-run carries _locked too, after earlier ops applied:
+    # that one is safe only when the rollback below verifiably finished.
+    if result.get("_locked") is True and "failed_index" not in result:
         return True
     payload = record.get("payload") or {}
     operations = payload.get("operations")

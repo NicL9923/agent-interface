@@ -645,6 +645,25 @@ class SkillTests(unittest.TestCase):
                 self.assertEqual(self.db.execute('SELECT status FROM automation_skill_decisions').fetchone()[0], 'rejected')
         self.assertFalse(automation.skill_refusal_is_definite(dict(payload=dict(action='delete')), dict(success=False, _locked=False)))
 
+    def test_a_lock_that_stops_a_batch_midway_is_definite_only_after_a_complete_rollback(self):
+        # Another process locked the second skill after the first op applied. Native copies the
+        # failing op's _locked onto the batch result, whatever its rollback did.
+        self.record['payload'] = dict(operations=[dict(action='patch', name='fence'), dict(action='patch', name='gate')])
+        request = dict(profile='ranch', operation='skill_diff', pendingId='deadbeef')
+        decision = dict(request, operation='skill_decide', revision=automation.skill_operation(request, self.journal)['revision'], decision='approve')
+        partial = dict(success=False, failed_index=1, completed_before_failure=1, _locked=True,
+                       error="operations[1] (patch on 'gate') failed: Refusing patch: Skill 'gate' is locked — batch aborted, ROLLBACK FAILED for fence.")
+        applier = sys.modules['hermes_cli.write_approval_commands']
+        applier._apply_one = lambda *_: (False, partial['error'], partial)
+        with self.assertRaisesRegex(automation.AutomationError, 'could not confirm whether'):
+            automation.skill_operation(decision, self.journal)
+        self.assertEqual(self.db.execute('SELECT status FROM automation_skill_decisions').fetchone()[0], 'uncertain')
+        applier._apply_one = lambda *_: self.fail('an uncertain partial batch was replayed')
+        with self.assertRaisesRegex(automation.AutomationError, 'already attempted'):
+            automation.skill_operation(decision, self.journal)
+        rolled_back = dict(partial, error="operations[1] (patch on 'gate') failed: Refusing patch — batch aborted, all touched skills rolled back.")
+        self.assertTrue(automation.skill_refusal_is_definite(self.record, rolled_back))
+
     def test_truncated_diff_and_path_traversal_are_not_approvable(self):
         self.diff = 'x' * 100001
         detail = automation.skill_operation(dict(profile='ranch', operation='skill_diff', pendingId='deadbeef'), self.journal)
