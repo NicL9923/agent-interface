@@ -16,7 +16,7 @@ const RUNNING = new Set(["checking", "qualifying", "installing", "verifying", "r
  * So after a request, a status counts only once it is newer than the request: a different
  * operation, or an updatedAt no older than the request. A retry first finishes its recovery
  * as "succeeded" and then starts a new check under a new operation, so only that new
- * operation settles it. Returns the exit code: 0 ready, succeeded or idle; 1 another settled
+ * operation settles it, unless the recovery itself fails first. Returns the exit code: 0 ready, succeeded or idle; 1 another settled
  * phase or an operation that never started; 2 an interrupted worker; 3 still running at the
  * deadline. */
 export async function follow(result, {action, control, original, requested, poll, log = console.log, now = Date.now,
@@ -24,7 +24,8 @@ export async function follow(result, {action, control, original, requested, poll
   const deadline = now() + WAIT_LIMIT_MS;
   const replaced = value => Boolean(value.operationId) && value.operationId !== original;
   const pending = value => action !== "status" && !replaced(value) && !(Date.parse(value.updatedAt ?? "") >= requested);
-  const settles = value => !(action === "control" && control === "retry") || replaced(value);
+  // A retry's recovery that fails ends on the original operation, so only its interim success waits.
+  const settles = value => !(action === "control" && control === "retry") || replaced(value) || value.phase !== "succeeded";
   let seen = "";
   while (now() < deadline) {
     const step = result.checks?.findLast(check => check.status === "running")?.id ?? "";

@@ -45,6 +45,12 @@ describe("hermes-update --wait", () => {
     expect(result.operationId).toBe("new");
   });
 
+  it("ends a retry whose recovery fails before a new check starts", async () => {
+    const old = { operationId: "old", phase: "rolled_back", updatedAt: at(-3600_000) };
+    const h = harness([{ operationId: "old", phase: "failed", error: "recovery_failed", updatedAt: at(60_000) }]);
+    expect((await follow(old, { action: "control", control: "retry", original: "old", requested: h.requested, ...h.options })).code).toBe(1);
+  });
+
   it("reports an interrupted retry whose new state has no timestamp", async () => {
     const old = { operationId: "old", phase: "failed", updatedAt: at(-3600_000) };
     const h = harness([{ operationId: "new", phase: "blocked", error: "worker_interrupted" }]);
