@@ -415,8 +415,21 @@ print(json.dumps({'ok':True,'state':'synced'}))
         # repeats this after the drain, and then finds little left. On Nov 4, 2026 a candidate
         # 1,100 commits ahead lacked 133,000 objects; packing them took over four minutes, the
         # backup's attempt timed out, and the gateway had been draining the whole time.
+        # Hermes is serving, so keep the same live reserve the backup keeps. The staged object
+        # store bounds both the temporary pack in staging and what lands in the live store.
+        objects = tree_bytes(self.target / ".git")
+        self.require_space(objects, objects + self.config.get("backupReserveBytes", 5 * 1024 ** 3))
         try: self.materialize_candidate()
         except Exception as error: raise RuntimeError("Copying the candidate's Git objects failed: " + describe(error)) from None
+
+    def require_space(self, staging, live):
+        """Refuse before writing when staging or the live Hermes filesystem lacks the bytes needed."""
+        budgets = {self.stage: staging + live} if os.stat(self.stage).st_dev == os.stat(self.home).st_dev else {self.stage: staging, self.home: live}
+        for location, needed in budgets.items():
+            free = shutil.disk_usage(location).free
+            if free < needed:
+                raise RuntimeError("The update needs about %d GB free at %s and only %d GB is free. Free space on the Hermes host before updating"
+                                   % (-(-needed // 1024 ** 3), location, free // 1024 ** 3))
 
     def clear_drain(self):
         marker = self.home / ".drain_request.json"
@@ -493,12 +506,7 @@ print(json.dumps({'ok':True,'state':'synced'}))
         objects = tree_bytes(self.target / ".git")
         install = tree_bytes(self.target, excluded=self.target / ".git") + tree_bytes(self.stage / "pm-home/installs")
         staging, live = archives + objects, objects + install + self.config.get("backupReserveBytes", 5 * 1024 ** 3)
-        budgets = {self.stage: staging + live} if os.stat(self.stage).st_dev == os.stat(self.home).st_dev else {self.stage: staging, self.home: live}
-        for location, needed in budgets.items():
-            free = shutil.disk_usage(location).free
-            if free < needed:
-                raise RuntimeError("The update needs about %d GB free at %s and only %d GB is free. Free space on the Hermes host before updating"
-                                   % (-(-needed // 1024 ** 3), location, free // 1024 ** 3))
+        self.require_space(staging, live)
         self.materialize_candidate()
         self.gateway(draining=True)
         try:

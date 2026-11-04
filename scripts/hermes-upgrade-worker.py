@@ -982,7 +982,8 @@ class Worker:
             next(item for item in checks if item["id"] == "integration")["detail"] = "Passed on a second run after one intermittent failure. Both runs are in the private log."
             self.update(checks=checks)
         def regressions():
-            for argv in self.config["hooks"]["regressions"]: self.run(argv)
+            # The hook also imports the candidate's Git objects: up to 900 s each to pack and index.
+            for argv in self.config["hooks"]["regressions"]: self.run(argv, timeout=self.config.get("regressionTimeoutSeconds", 3600))
         self.check_step("regressions", "Host OAuth, Google authentication and profile regressions", regressions)
         if (self.managed_fingerprint(qualified_python) if managed else runtime_fingerprint(qualified_python)) != runtime:
             raise RuntimeError("The dependency environment changed during qualification")

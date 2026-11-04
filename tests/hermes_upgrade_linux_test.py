@@ -311,6 +311,18 @@ class PlatformTests(unittest.TestCase):
         self.assertFalse((self.home / ".drain_request.json").exists())
         self.assertEqual((self.git("for-each-ref"), self.platform.source_state()), (refs, state))
 
+    def test_regressions_keep_the_live_reserve_before_importing_objects(self):
+        new = [line.split()[0] for line in self.platform.git(self.target, "rev-list", "--objects", self.candidate, "^" + self.old).splitlines()]
+        for oid in new[1:]: (self.source / ".git/objects" / oid[:2] / oid[2:]).unlink()
+        original_run = self.platform.run
+        self.platform.run = lambda argv, **kwargs: None if argv[0] == self.environment["HERMES_UPGRADE_QUALIFICATION_PYTHON"] else original_run(argv, **kwargs)
+        usage = shutil._ntuple_diskusage(100 * 1024 ** 3, 99 * 1024 ** 3, 1024 ** 3)
+        with patch.object(linux.shutil, "disk_usage", return_value=usage), self.assertRaisesRegex(RuntimeError, "needs about .* GB free"):
+            self.platform.regressions()
+        offline = dict(os.environ, GIT_NO_LAZY_FETCH="1")
+        self.assertNotEqual(subprocess.run(["git", "-C", str(self.source), "cat-file", "-e", new[1]], env=offline,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode, 0)
+
     def test_timeouts_name_the_command_but_no_paths(self):
         error = subprocess.TimeoutExpired(["git", "-C", "/home/private/source", "-c", "core.x=1", "pack-objects", "--stdout"], 900)
         self.assertEqual(linux.describe(error), "TimeoutExpired after 900s (git pack-objects)")
