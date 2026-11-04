@@ -204,7 +204,9 @@ owner's personal assistants (400 with `code: "private_recipients"`). Routine and
 rooms you can open; others read "a group chat". `PATCH /api/bots/:id` refuses a sharing change that
 would let a routine post where people who cannot see its assistant read it, such as making an
 assistant personal while its routine posts in a room others can open, or sharing the last personal
-member of a room a personal routine posts in. It answers 409 with `code: "routine_rooms"` and names
+member of a room a personal routine posts in. `POST /api/bots` refuses the same way when a room
+still lists an earlier assistant with the new one's ID and the new one would open that room. Deleting
+an assistant is never refused: a room that lists a deleted assistant opens for nobody. These answer 409 with `code: "routine_rooms"` and names
 the routines and rooms you can see; remove those rooms from the routines first. When the routines or
 rooms cannot be read, it answers 409 with `code: "routine_rooms_unknown"` and changes nothing. Only its owner can
 reach a private assistant to share it again; sharing clears the recorded owner.

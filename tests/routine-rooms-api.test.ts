@@ -15,6 +15,7 @@ let save: ReturnType<typeof vi.fn>;
 let catalog: GroupCatalog;
 let groupRequest: ReturnType<typeof vi.fn>;
 let saveBot: ReturnType<typeof vi.fn>;
+let assistants: string[];
 beforeEach(async () => {
   rows = [{ ...base, id: "abc123", roomIds: ["team", "secret"] }];
   catalog = { supported: true, canSend: true, routineDelivery: true, rooms: [room("team", ["shared", "planner"]), room("secret", ["shared", "diary"]), room("mine", ["shared", "notes"]),
@@ -22,11 +23,13 @@ beforeEach(async () => {
     room("crew", ["planner", "garden"]), room("den", ["planner", "keeper"])] };
   save = vi.fn(async (input, id) => ({ ...input, id: id ?? "new" }));
   groupRequest = vi.fn(async () => catalog);
-  saveBot = vi.fn(async (input, id) => ({ ...input, id, activity: "idle" }));
+  assistants = ["shared", "planner", "diary", "notes", "garden", "keeper"];
+  saveBot = vi.fn(async (input, id) => { const botId = id ?? input.name; if (!assistants.includes(botId)) assistants.push(botId); return { ...input, id: botId, activity: "idle" }; });
   const runtime = {
     status: async () => ({ connected: true }),
     capabilities: async () => ({ routines: { supported: true }, botConfiguration: { supported: true }, avatarMetadata: { supported: false } }),
-    listBots: async () => ["shared", "planner", "diary", "notes", "garden", "keeper"].map(id => ({ id, name: id, shared: true, activity: "idle" })),
+    listBots: async () => assistants.map(id => ({ id, name: id, shared: true, activity: "idle" })),
+    deleteBot: async (id: string) => { assistants = assistants.filter(other => other !== id); },
     routines: async () => rows, saveRoutine: save, saveBot, groupRequest, close: async () => {},
   } as unknown as Runtime;
   created = await createApp(loadConfig({ LOCAL_DEV_AUTH: "true", APP_ORIGIN: origin, APP_DATABASE: ":memory:" }), runtime, { background: false });
@@ -140,4 +143,34 @@ it("names only rooms a person can open in a routine's errors", async () => {
   const [blind] = (await created.app.inject({ url: "/api/routines", headers })).json();
   expect(blind.lastDeliveryError).toBe("a group chat: no live Group Chat with that id on this machine; a group chat delivery failed: busy");
   expect(blind).not.toHaveProperty("roomIds");
+});
+
+const create = async (name: string, shared: boolean, member = "one") => created.app.inject({ method: "POST", url: "/api/bots", headers: await localLogin(created.app, origin, member),
+  payload: { name, instructions: "", model: "test", shared } });
+
+it("lets a room's last personal member be deleted, but refuses a shared assistant that would reopen the room under its ID", async () => {
+  // The reported gap: a personal routine posts in "den", private only because of local-one's "keeper".
+  rows = [{ ...base, botId: "notes", id: "notes1", name: "Journal", roomIds: ["den"] }];
+  const headers = await localLogin(created.app, origin);
+  expect((await created.app.inject({ method: "DELETE", url: "/api/bots/keeper", headers })).statusCode).toBe(200);
+  // A room listing a deleted assistant opens for nobody, so it is gone from every list.
+  for (const member of ["one", "two"])
+    expect((await created.app.inject({ url: "/api/groups", headers: await localLogin(created.app, origin, member) })).json().rooms.map((row: { room_id: string }) => row.room_id)).not.toContain("den");
+  // A new shared "keeper" would open "den" to the household while "Journal" still posts there.
+  const refused = await create("keeper", true, "two");
+  expect(refused.statusCode).toBe(409);
+  expect(refused.json().code).toBe("routine_rooms");
+  // local-two cannot see local-one's routine or room, so neither is named.
+  expect(refused.json().error).toContain("another member's routine posts in a group chat");
+  expect(saveBot).not.toHaveBeenCalled();
+  expect(created.store.presentation("keeper")).toEqual({});
+  // A personal "keeper" of the routine's owner keeps the room private, so that one may be made.
+  expect((await create("keeper", false)).statusCode).toBe(200);
+});
+
+it("treats a room member that is no longer an assistant as closing the room", async () => {
+  // "crew" is open to everyone while "garden" exists; without it, nobody can open the room.
+  assistants = assistants.filter(id => id !== "garden");
+  rows = [{ ...base, id: "abc123", roomIds: ["crew"] }];
+  expect((await share("shared", false)).statusCode).toBe(200);
 });
