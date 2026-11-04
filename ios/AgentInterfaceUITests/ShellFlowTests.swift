@@ -143,6 +143,9 @@ import XCTest
     XCTAssertTrue(kitchen.waitForExistence(timeout: 10), app.debugDescription)
     XCTAssertTrue(kitchen.label.contains("Kitchen companion is working..."), kitchen.label)
     XCTAssertFalse(app.staticTexts["Assistants are discussing…"].exists)
+    // A routine's post reads as the routine, not as a household member.
+    XCTAssertTrue(app.staticTexts["Morning brief"].waitForExistence(timeout: 5), app.debugDescription)
+    XCTAssertTrue(app.staticTexts["Routine"].exists)
     try capture("06a-group-activity")
     app.buttons["groupSettings"].tapWhenReady()
     let purpose = app.descendants(matching: .any).matching(identifier: "groupPurpose").firstMatch

@@ -94,6 +94,16 @@ enum GroupActivity {
     if others.isEmpty { return "\(name) took this one." }
     return chosen.contains(lead) ? "\(name) is answering this with \(others)." : "\(name) gave this to \(others)."
   }
+  /// A routine's post in the room (`deliver: room:<id>`), or nil for anything else. Hermes writes it as a
+  /// `message.user` event whose actor is `cron:<job>`, or `cron-notice:<job>` for a failed run's notice, with
+  /// the routine's name as `display_name`. A message someone sent through this app carries its sender instead.
+  static func scheduledPost(_ event: GroupEvent) -> (name: String, failed: Bool)? {
+    guard event.kind == "message.user", event.sender == nil, let id = event.actor?.id else { return nil }
+    let failed = id.hasPrefix("cron-notice:")
+    guard failed || id.hasPrefix("cron:") else { return nil }
+    let name = EventCopy.withoutBotTag(event.actor?.display_name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    return (name.isEmpty ? "Routine" : name, failed)
+  }
   /// The group chats an assistant's routine may post in: any room this person can open, or, for a personal
   /// assistant, only rooms with one of its owner's personal assistants, which nobody else can open.
   static func routineRoomChoices(_ catalog: GroupCatalog?, bot: Bot?, bots: [Bot]) -> [GroupRoom] {

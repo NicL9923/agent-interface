@@ -294,8 +294,10 @@ round, such as "Round 2 of 3". **Group settings** in the room sets its purpose, 
 that every assistant reads from the next message on, and an optional lead assistant who picks who
 answers a message that names no one; the room then shows each hand-off. Anyone who can open the
 room can change them. A routine can also post its results in group chats you choose in its
-editor; assistants answer such a post only when it @mentions them. A personal assistant's routine
-can post only in groups with one of your personal assistants. These need a Hermes with room
+editor. Its posts show under the routine's name, marked Routine, and assistants answer one only when
+it @mentions them. A personal assistant's routine can post only in groups with one of your personal
+assistants. While a routine posts in a group, a sharing change that would let someone who can't see
+its assistant read the group is refused until that group is removed from the routine. These need a Hermes with room
 activity and settings, such as `3a1e9ef`; with an older one the room says only that assistants
 are discussing, and settings and routine posts stay hidden.
 Hermes owns the persistent coordinator.

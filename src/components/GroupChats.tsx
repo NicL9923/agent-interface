@@ -7,7 +7,7 @@ import { groupSendKey } from '../app/storage';
 import { FormMessage } from './ui/form-message';
 import type { Bootstrap } from '../shared/types';
 import type { GroupEvent, GroupPage, GroupState } from '../shared/collaboration';
-import { assignmentText, groupStatus, memberActivity } from '../shared/group-activity';
+import { assignmentText, groupStatus, memberActivity, scheduledPost } from '../shared/group-activity';
 import { GroupSettings } from './GroupSettings';
 import { Shimmer } from './Shimmer';
 import { MessageMarkdown } from './MessageMarkdown';
@@ -155,6 +155,8 @@ export function GroupRoomView({ bootstrap, roomId, canSend, reason, onChanged }:
   const memberFor = (id: unknown) => state?.room.members.find(member => member.member_id === id);
   const memberName = (id: unknown) => { const member = memberFor(id);return member?.display_name || member?.profile || 'Assistant'; };
   const author = (event: GroupEvent) => {
+    const routine = scheduledPost(event);
+    if (routine) return routine.name;
     if (event.kind === 'message.user') return (event.sender?.id || event.actor.id) === bootstrap.user.id ? 'You' : event.sender?.name || 'Household member';
     const member = memberFor(event.actor.id) || memberFor(event.payload.member_id);
     return member?.display_name || member?.profile || event.actor.id || 'Assistant';
@@ -207,8 +209,9 @@ export function GroupRoomView({ bootstrap, roomId, canSend, reason, onChanged }:
           const root = typeof event.payload.thread_id === 'string' ? threadRoots.get(event.payload.thread_id) : undefined;
           const inThread = root && root.event_id !== event.event_id;
           const member = memberFor(event.actor.id) || memberFor(event.payload.member_id);
+          const routine = scheduledPost(event);
           return <article className={`group-message${replyToId === event.event_id ? ' selected' : ''}${event.kind === 'message.user' && (event.sender?.id || event.actor.id) === bootstrap.user.id ? ' own' : ''}`} key={event.event_id}>
-            <div className="message-attribution"><span className="group-speaker">{event.kind === 'message.member' && avatar(member?.member_id)}<strong>{author(event)}</strong></span><When value={event.created_at * 1000}/></div>
+            <div className="message-attribution"><span className="group-speaker">{event.kind === 'message.member' && avatar(member?.member_id)}<strong>{author(event)}</strong>{routine && <span className="group-routine-tag">{routine.failed ? 'Routine failed' : 'Routine'}</span>}</span><When value={event.created_at * 1000}/></div>
             {inThread && previous?.payload.thread_id !== event.payload.thread_id && <p className="group-thread-context">In thread with {describe(root)}</p>}
             <MessageMarkdown text={typeof event.payload.text === 'string' ? event.payload.text : ''}/>
             {typeof event.payload.thread_id === 'string' && <button className="group-reply" aria-label={`Reply in thread to ${describe(event)}`} disabled={busy || !!pending || !writable} onClick={() => { setThreadId(event.payload.thread_id as string);setReplyToId(event.event_id);field.current?.focus(); }}>Reply in thread</button>}

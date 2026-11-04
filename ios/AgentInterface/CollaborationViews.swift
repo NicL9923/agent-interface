@@ -112,7 +112,18 @@ struct GroupEventPayload: Decodable {
     member_ids = try? container.decodeIfPresent([String].self, forKey: .member_ids)
   }
 }
-struct GroupActor: Decodable { var kind: String?; var id: String? }
+/// `display_name` names a member or, on a routine's post, the routine. Read leniently, so it never fails the page.
+struct GroupActor: Decodable {
+  var kind: String?; var id: String?; var display_name: String? = nil
+  private enum CodingKeys: String, CodingKey { case kind, id, display_name }
+  init(kind: String? = nil, id: String? = nil, display_name: String? = nil) { self.kind = kind; self.id = id; self.display_name = display_name }
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    kind = try container.decodeIfPresent(String.self, forKey: .kind)
+    id = try container.decodeIfPresent(String.self, forKey: .id)
+    display_name = try? container.decodeIfPresent(String.self, forKey: .display_name)
+  }
+}
 /// The household member who sent a `message.user` event through this app. Older servers omit it.
 struct GroupSender: Decodable, Equatable { var id: String; var name: String }
 struct GroupEvent: Decodable, Identifiable {
@@ -477,6 +488,10 @@ struct GroupConversationView: View {
       HStack(alignment: .center, spacing: 8) {
         if event.kind == "message.member" { assistantAvatar(event.payload.member_id ?? event.actor?.id) }
         Text(author(event)).font(.subheadline.bold())
+        if let routine = GroupActivity.scheduledPost(event) {
+          Text(routine.failed ? "Routine failed" : "Routine").font(.caption.weight(.semibold)).foregroundStyle(Palette.muted)
+            .padding(.horizontal, 8).padding(.vertical, 2).overlay(Capsule().strokeBorder(Palette.line))
+        }
         Spacer()
         Text(When.format(Date(timeIntervalSince1970: event.created_at))).font(.caption).foregroundStyle(Palette.muted)
       }
@@ -495,6 +510,7 @@ struct GroupConversationView: View {
     }.listRowBackground(replyToId == event.id ? Palette.accentSoft : event.kind == "message.user" && author(event) == "You" ? Palette.rail(scheme) : Palette.raised(scheme))
   }
   private func author(_ event: GroupEvent) -> String {
+    if let routine = GroupActivity.scheduledPost(event) { return routine.name }
     if event.kind == "message.user" { return (event.sender?.id ?? event.actor?.id) == store.bootstrap?.user.id ? "You" : Self.memberName(event) }
     return Self.assistantName(event, in: room)
   }

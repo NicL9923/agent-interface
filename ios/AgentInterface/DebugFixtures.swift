@@ -149,6 +149,12 @@
             ["event_id": "group-2", "seq": 2, "kind": "message.member", "created_at": 1_790_000_060, "actor": ["kind": "member", "id": "kitchen"],
              "payload": ["text": "Brisket, if the smoker is free.", "thread_id": "thread-1", "member_id": "kitchen"]],
           ]
+          if environment["AGENT_INTERFACE_UI_GROUP_WORKING"] == "1" {
+            // A routine's post, as Hermes writes one for `deliver: room:<id>`.
+            FixtureProtocol.groupEvents.append(["event_id": "cron-post:1", "seq": 3, "kind": "message.user", "created_at": 1_790_000_120,
+              "actor": ["kind": "user", "id": "cron:fixture-job", "display_name": "[bot:ranch] Morning brief"],
+              "payload": ["text": "Fixture routine post: the smoker is free Sunday.", "thread_id": "cron-1"]])
+          }
         }
         if environment["AGENT_INTERFACE_UI_LONG_HISTORY"] == "1" {
           // Enough turns for three history pages, with replies tall enough to scroll.

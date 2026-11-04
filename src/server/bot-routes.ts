@@ -7,6 +7,7 @@ import { apiRoute } from "./api-route.js";
 import { signedIn } from "./auth.js";
 import { notFound, visible, type Roster } from "./bot-access.js";
 import { httpError } from "./http-error.js";
+import { assertSharingKeepsRoutinesPrivate, serialDelivery } from "./routine-delivery.js";
 import { avatar, botSaveRequest, id } from "./schemas.js";
 import type { Store } from "./store.js";
 
@@ -133,13 +134,17 @@ export function installBotRoutes(app: FastifyInstance, collaborators: {
       throw httpError(409, "Confirm making this assistant personal. It will disappear for the rest of the household.", { code: "private_confirmation_required" });
     // Claim the new sharing before Hermes changes anything, and only if nobody changed it first.
     const next = { shared: input.shared, ownerId: input.shared ? undefined : userId };
-    const version = store.swapPresentation(id, previous, next);
-    if (version === false)
-      throw httpError(409, "Someone changed who can see this assistant while you were saving. Review it and try again.", { code: "sharing_changed" });
-    let bot;
-    // A failed save puts sharing back only if no later save has changed it since.
-    try { bot = await runtime.saveBot(input, id); }
-    catch (error) { store.restorePresentation(id, version, previous); throw error; }
+    // Routines that post in group chats are checked against the new sharing, and no routine's rooms
+    // change until this save settles. See src/server/routine-delivery.ts.
+    const bot = await serialDelivery(store, async () => {
+      await assertSharingKeepsRoutinesPrivate(runtime, store, userId, id, next);
+      const version = store.swapPresentation(id, previous, next);
+      if (version === false)
+        throw httpError(409, "Someone changed who can see this assistant while you were saving. Review it and try again.", { code: "sharing_changed" });
+      // A failed save puts sharing back only if no later save has changed it since.
+      try { return await runtime.saveBot(input, id); }
+      catch (error) { store.restorePresentation(id, version, previous); throw error; }
+    });
     roster.forget();
     return directory.decorate(directory.remember(bot), await nativeAvatar());
   });

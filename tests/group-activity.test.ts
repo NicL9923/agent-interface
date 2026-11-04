@@ -1,8 +1,36 @@
 import { expect, it } from 'vitest';
 import { activityAction } from '../src/shared/activity-sentence';
-import { assignmentText, groupStatus, memberActivity } from '../src/shared/group-activity';
+import { assignmentText, groupStatus, memberActivity, scheduledPost } from '../src/shared/group-activity';
 import { routineRoomChoices, type GroupDriverStatus, type GroupEvent } from '../src/shared/collaboration';
 import { deliverRooms, withDeliverRooms } from '../src/server/hermes-mapping';
+import { previewOf } from '../src/server/group-latest';
+import { redactRooms, roomLeaks } from '../src/server/routine-delivery';
+
+it("names a routine's post in a room by its routine, never as a household member", () => {
+  const post = (actor: Record<string, string>, extra: Partial<GroupEvent> = {}) =>
+    ({ event_id: 'p', seq: 1, kind: 'message.user', created_at: 0, actor: { kind: 'user', ...actor } as GroupEvent['actor'], payload: { text: 'Gate is shut' }, ...extra }) as GroupEvent;
+  expect(scheduledPost(post({ id: 'cron:job-1', display_name: '[bot:ranch] Morning brief' }))).toEqual({ name: 'Morning brief', failed: false });
+  expect(scheduledPost(post({ id: 'cron-notice:job-1', display_name: 'Morning brief' }))).toEqual({ name: 'Morning brief', failed: true });
+  expect(scheduledPost(post({ id: 'cron:job-1' }))).toEqual({ name: 'Routine', failed: false });
+  // A person's message keeps its sender, whatever its actor says.
+  expect(scheduledPost(post({ id: 'cron:job-1' }, { sender: { id: 'one', name: 'Nicolas' } }))).toBeNull();
+  expect(scheduledPost(post({ id: 'desktop' }))).toBeNull();
+  const room = { room_id: 'r', name: 'R', members: [] };
+  expect(previewOf(post({ id: 'cron:job-1', display_name: '[bot:ranch] Morning brief' }), room, 'one', () => undefined).author).toBe('Morning brief');
+  expect(previewOf(post({ id: 'desktop' }), room, 'one', () => undefined).author).toBe('Household member');
+});
+
+it('finds who could read a routine post that cannot see its assistant', () => {
+  const room = (profiles: string[]) => ({ room_id: 'r', name: 'R', members: profiles.map(profile => ({ member_id: profile, profile, handle: profile })) });
+  const people: Record<string, { shared?: boolean; ownerId?: string }> = { open: { shared: true }, mine: { shared: false, ownerId: 'one' }, theirs: { shared: false, ownerId: 'two' }, old: { shared: false } };
+  const of = (id: string) => people[id] ?? {};
+  expect(roomLeaks(of('open'), room(['open', 'theirs']), of)).toBe(false);
+  expect(roomLeaks(of('mine'), room(['open', 'old']), of)).toBe(true);
+  expect(roomLeaks(of('mine'), room(['open', 'mine']), of)).toBe(false);
+  // Someone else's personal assistant in the room lets its owner in, who cannot see "mine".
+  expect(roomLeaks(of('mine'), room(['open', 'theirs']), of)).toBe(true);
+  expect(redactRooms('room:a: gone; room:b@x failed; room:a:b ok', new Set(['a']))).toBe('room:a: gone; a group chat failed; a group chat ok');
+});
 
 const members = [
   { member_id: 'ranch', profile: 'ranch', handle: 'ranch', display_name: 'Ranch hand' },

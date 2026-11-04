@@ -68,6 +68,19 @@ it("shows the purpose and the lead's hand-offs, and says who picks when nobody i
   expect(status()).toBe('Type @ to address one assistant. Otherwise Planner picks who answers.');
 });
 
+it("shows a routine's post under the routine's name with a routine marker", async () => {
+  state = { ...state, driver_status: undefined };
+  events = [
+    { event_id:'p', seq:1, kind:'message.user', actor:{kind:'user',id:'cron:job-1',display_name:'[bot:ranch] Morning brief'}, payload:{text:'Gate is shut.', thread_id:'cron-1'}, created_at:1 },
+    { event_id:'n', seq:2, kind:'message.user', actor:{kind:'user',id:'cron-notice:job-1',display_name:'Morning brief'}, payload:{text:'The run failed.', thread_id:'cron-2'}, created_at:2 },
+    { event_id:'h', seq:3, kind:'message.user', actor:{kind:'user',id:'desktop'}, payload:{text:'Thanks', thread_id:'cron-1'}, created_at:3 },
+  ];
+  await render();
+  const heads = [...container.querySelectorAll('.group-message .group-speaker')].map(head => head.textContent);
+  expect(heads).toEqual(['Morning briefRoutine', 'Morning briefRoutine failed', 'Household member']);
+  expect(container.querySelector('.group-message button.group-reply')?.getAttribute('aria-label')).toBe('Reply in thread to Morning brief: Gate is shut.');
+});
+
 it('saves purpose, notes and lead from Group settings, then reads the room again', async () => {
   state = { ...state, context: { purpose:'Old', notes:'Gate code 1234', routing:'lead', lead_member_id:'ranch' } };
   vi.mocked(write).mockResolvedValue({ context:{}, event:{} });

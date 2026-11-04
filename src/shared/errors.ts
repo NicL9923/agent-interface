@@ -14,6 +14,8 @@ export type ErrorCode =
   | "private_confirmation_required"
   | "private_recipients"
   | "reauthentication_required"
+  | "routine_rooms"
+  | "routine_rooms_unknown"
   | "session_expired"
   | "sharing_changed"
   // A Hermes transport failure carries its connection diagnosis.

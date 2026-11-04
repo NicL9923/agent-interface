@@ -35,6 +35,7 @@ import { assertRoutineEditable, installExperienceRoutes } from "./experience.js"
 import { installComputerRoutes } from "./computer.js";
 import { installCollaborationRoutes, roomAccessible, routineRooms, routinesFor } from './collaboration.js';
 import { routineRoomId } from '../shared/collaboration.js';
+import { serialDelivery } from './routine-delivery.js';
 import { GroupWatch } from "./group-watch.js";
 import { loggerOptions } from "./logging.js";
 import { errorHandler, httpError } from "./http-error.js";
@@ -393,10 +394,13 @@ export async function createApp(
     const owner = store.presentation(input.botId);
     if (owner.shared === false && owner.ownerId && input.recipientIds.some(id => id !== owner.ownerId))
       throw httpError(400, "Only you can receive your personal assistant's routine results.", { code: "private_recipients" });
-    // Checked last, so a refused routine never waits on Hermes's room catalog.
-    const rooms = await routineRooms(runtime, store, userId, input, previous?.roomIds);
-    if (rooms === undefined) delete input.roomIds; else input.roomIds = rooms;
-    const routine = await runtime.saveRoutine(input, routineId);
+    // Checked last, so a refused routine never waits on Hermes's room catalog. Rooms are checked and
+    // saved in one turn with sharing changes, which recheck them.
+    const routine = input.roomIds === undefined ? await runtime.saveRoutine(input, routineId) : await serialDelivery(store, async () => {
+      const rooms = await routineRooms(runtime, store, userId, input, previous?.roomIds);
+      if (rooms === undefined) delete input.roomIds; else input.roomIds = rooms;
+      return runtime.saveRoutine(input, routineId);
+    });
     store.routineRecipients(routine.id, input.recipientIds);
     const [saved] = await routinesFor(runtime, store, userId, [{ ...effective, ...routine, recipientIds: input.recipientIds }]);
     return saved;

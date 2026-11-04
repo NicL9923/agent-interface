@@ -13,6 +13,7 @@ import { routineRun, runTime, type RoutineRun, type RoutineRunPage } from '../sh
 /** How long one read of an assistant's runs serves every viewer. */
 export const RUNS_CACHE_MS = 5_000;
 import { GroupLatestCache, previewOf } from './group-latest.js';
+import { mentionsRoom, redactRooms, roomLeaks } from './routine-delivery.js';
 const uuid = z.string().uuid();
 
 /** Whether a room has only local assistants this person may see, as every group route requires. */
@@ -30,24 +31,39 @@ export async function openableRooms(runtime: Pick<Runtime, 'groupRequest' | 'lis
 }
 
 /**
- * A routine as one person sees it: only the group chats it posts in that they can open. Hermes is asked
- * only when a routine posts in one. If it cannot answer, those routines leave `roomIds` out, which clients
- * read as unknown: they neither show nor send rooms for it, so a save cannot drop one.
+ * A routine as one person sees it: only the group chats it posts in that they can open, and errors that
+ * name only those. Hermes is asked only when a routine posts in a room or an error names one. If it cannot
+ * answer, those routines leave `roomIds` out, which clients read as unknown: they neither show nor send
+ * rooms for it, so a save cannot drop one. Their errors then name no room at all.
  */
 export async function routinesFor<T extends Routine>(runtime: Pick<Runtime, 'groupRequest' | 'listBots'>, store: Store, userId: string, routines: T[]): Promise<T[]> {
-  if (!routines.some(routine => routine.roomIds?.length)) return routines;
-  const rooms = await openableRooms(runtime, store, userId).then(open => open.rooms, () => undefined);
+  const touches = (routine: Routine) => !!routine.roomIds?.length || mentionsRoom(routine.lastError) || mentionsRoom(routine.lastDeliveryError);
+  if (!routines.some(touches)) return routines;
+  const rooms = await openableRooms(runtime, store, userId).then(open => new Set(open.rooms.keys()), () => undefined);
   return routines.map(routine => {
-    if (!routine.roomIds?.length) return routine;
+    if (!touches(routine)) return routine;
     const { roomIds, ...rest } = routine;
-    return rooms ? { ...rest, roomIds: roomIds.filter(id => rooms.has(id)) } as T : rest as T;
+    const errors = {
+      ...(routine.lastError !== undefined ? { lastError: redactRooms(routine.lastError, rooms) } : {}),
+      ...(routine.lastDeliveryError !== undefined ? { lastDeliveryError: redactRooms(routine.lastDeliveryError, rooms) } : {}),
+    };
+    if (!roomIds) return { ...routine, ...errors };
+    return (rooms ? { ...rest, ...errors, roomIds: roomIds.filter(id => rooms.has(id)) } : { ...rest, ...errors }) as T;
   });
+}
+
+/** Hides from one person the rooms they cannot open in routine run errors. Hermes is asked only when an error names a room. */
+async function runErrorsFor<T extends { error?: string }>(runtime: Pick<Runtime, 'groupRequest' | 'listBots'>, store: Store, userId: string, rows: T[]): Promise<T[]> {
+  if (!rows.some(row => mentionsRoom(row.error))) return rows;
+  const rooms = await openableRooms(runtime, store, userId).then(open => new Set(open.rooms.keys()), () => undefined);
+  return rows.map(row => mentionsRoom(row.error) ? { ...row, error: redactRooms(row.error!, rooms) } : row);
 }
 
 /**
  * The group chats a saved routine will post in: those this person chose, which they must be able to open,
- * plus any it already posts in that they cannot see. A personal assistant's results go only to rooms with
- * one of its owner's personal assistants, which nobody else can open. Undefined when nothing changes.
+ * plus any it already posts in that they cannot see. A personal assistant's results go only to rooms that
+ * nobody else can open, in practice rooms with one of its owner's personal assistants. Undefined when
+ * nothing changes. Call it inside `serialDelivery`, so a sharing change cannot pass between check and save.
  */
 export async function routineRooms(runtime: Pick<Runtime, 'groupRequest' | 'listBots'>, store: Store, userId: string,
   input: { botId: string; roomIds?: string[] }, previous?: string[]): Promise<string[] | undefined> {
@@ -59,11 +75,9 @@ export async function routineRooms(runtime: Pick<Runtime, 'groupRequest' | 'list
   });
   if (chosen.length && !open.routineDelivery) throw httpError(409, 'This Hermes version cannot post routine results in group chats.');
   if (chosen.some(roomId => !open.rooms.has(roomId))) throw httpError(400, 'Choose group chats you can open.');
-  const owner = store.presentation(input.botId);
-  if (owner.shared === false && owner.ownerId && chosen.some(roomId => !open.rooms.get(roomId)!.members.some(member => {
-    const other = store.presentation(member.profile);
-    return other.shared === false && other.ownerId === owner.ownerId;
-  }))) throw httpError(400, 'Choose a group chat with one of your personal assistants, so only you see these results.', { code: 'private_recipients' });
+  // The same rule a sharing change checks again: nobody who cannot see the assistant may open the room.
+  const presentation = (botId: string) => store.presentation(botId);
+  if (chosen.some(roomId => roomLeaks(presentation(input.botId), open.rooms.get(roomId)!, presentation))) throw httpError(400, 'Choose a group chat with one of your personal assistants, so only you see these results.', { code: 'private_recipients' });
   // Rooms it already posts in keep their place; newly chosen ones follow.
   const before = previous ?? [];
   const rooms = [...before.filter(roomId => !open.rooms.has(roomId) || chosen.includes(roomId)), ...chosen.filter(roomId => !before.includes(roomId))];
@@ -81,7 +95,7 @@ export async function installCollaborationRoutes(app: FastifyInstance, runtime: 
     const p = z.object({ botId: id, routineId: id }).parse(req.params);
     await profile(signedIn(req).id, p.botId);
     if (!runtime.routineResults) throw httpError(409, 'Routine history is unavailable on this Hermes integration.');
-    return runtime.routineResults(p.botId, p.routineId);
+    return runErrorsFor(runtime, store, signedIn(req).id, await runtime.routineResults(p.botId, p.routineId));
   });
   // Every run of one assistant's routines, for its conversation. Hermes reads one routine at a
   // time, so a read is shared for a few seconds across viewers and polls; access and redaction
@@ -111,8 +125,8 @@ export async function installCollaborationRoutes(app: FastifyInstance, runtime: 
     const page = await assistantRuns(botId);
     const from = since ? Date.parse(since) : -Infinity;
     const redact = await redactAgents(store, roster, signedIn(req).id);
-    return { unavailable: page.unavailable, runs: page.runs.filter(run => runTime(run) >= from).map(run => ({
-      ...run, preview: run.preview === undefined ? undefined : redact.text(run.preview), error: run.error === undefined ? undefined : redact.text(run.error) })) };
+    return { unavailable: page.unavailable, runs: await runErrorsFor(runtime, store, signedIn(req).id, page.runs.filter(run => runTime(run) >= from).map(run => ({
+      ...run, preview: run.preview === undefined ? undefined : redact.text(run.preview), error: run.error === undefined ? undefined : redact.text(run.error) }))) };
   });
   apiRoute(app, "GET /bots/:botId/routines/:routineId/results/:resultId", {}, async req => {
     const p = z.object({ botId: id, routineId: id, resultId: id }).parse(req.params);

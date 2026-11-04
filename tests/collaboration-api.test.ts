@@ -131,6 +131,12 @@ it('keeps the catalog when a preview cannot be read', async () => {
   expect(response.json().rooms).toMatchObject([{room_id: 'shared'}]);
   expect(response.json().rooms[0].latest).toBeUndefined();
 });
+it("hides rooms a person cannot open from routine run errors", async () => {
+  const s = await fixture();
+  s.routineResults.mockResolvedValueOnce([{ id: 'run1', title: 'Morning', previewOnly: false, status: 'failed', error: 'room:private delivery failed; room:shared delivery failed' }] as never);
+  const response = await s.app.inject({ url: '/api/bots/ranch/routines/r1/results', headers: s.headers });
+  expect(response.json()[0].error).toBe('a group chat delivery failed; room:shared delivery failed');
+});
 it("saves a room's purpose, notes and lead for anyone who can open it, with checked limits", async () => {
   const s = await fixture();
   const save = (roomId: string, payload: object, headers: Record<string, string> = s.headers) => s.app.inject({ method: 'POST', url: `/api/groups/${roomId}/context`, headers, payload });

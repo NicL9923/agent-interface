@@ -20,7 +20,8 @@ export interface GroupLatest { text: string; at: string; author: string }
 export interface GroupRoom { room_id: string; name: string; members: GroupMember[]; latest_seq?: number; latest?: GroupLatest }
 export interface GroupEvent {
   event_id: string; seq: number; kind: string; created_at: number;
-  actor: { kind: string; id: string };
+  /** `display_name` names a member or, on a routine's post, the routine. */
+  actor: { kind: string; id: string; display_name?: string };
   payload: Record<string, unknown>;
   /** The household member who sent a message.user event through this app. Absent when unknown. */
   sender?: { id: string; name: string };

@@ -1,5 +1,6 @@
 import { activityAction } from './activity-sentence.js';
 import type { GroupContext, GroupDriverStatus, GroupEvent, GroupMember } from './collaboration.js';
+import { withoutBotTag } from './event-copy.js';
 
 // What a group chat says about its assistants' live work, its lead and the lead's hand-offs.
 // Pure, so the web and the server's tests read the same rules. ios/AgentInterface/GroupActivity.swift mirrors this file.
@@ -72,4 +73,19 @@ export function assignmentText(event: GroupEvent, members: GroupMember[]): strin
   const name = memberName(members, lead), others = nameList(chosen.filter(id => id !== lead).map(id => memberName(members, id)));
   if (!others) return `${name} took this one.`;
   return chosen.includes(lead) ? `${name} is answering this with ${others}.` : `${name} gave this to ${others}.`;
+}
+
+/**
+ * A routine's post in the room (`deliver: room:<id>`), or null for anything else. Hermes writes it as a
+ * `message.user` event whose server-owned actor is `cron:<job>`, or `cron-notice:<job>` for a failed run's
+ * notice, with the routine's name as `display_name` (gateway/hosted_room_context.py). A message someone sent
+ * through this app carries its sender instead.
+ */
+export function scheduledPost(event: GroupEvent): { name: string; failed: boolean } | null {
+  if (event.kind !== 'message.user' || event.sender) return null;
+  const id = typeof event.actor?.id === 'string' ? event.actor.id : '';
+  const failed = id.startsWith('cron-notice:');
+  if (!failed && !id.startsWith('cron:')) return null;
+  const label = typeof event.actor.display_name === 'string' ? withoutBotTag(event.actor.display_name).trim() : '';
+  return { name: label || 'Routine', failed };
 }

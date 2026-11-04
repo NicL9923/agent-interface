@@ -66,6 +66,21 @@ import XCTest
     XCTAssertEqual(rows.map(\.previousThread), [nil, nil, "t"])
   }
 
+  func testARoutinePostIsNamedByItsRoutineNeverAsAHouseholdMember() throws {
+    func post(_ actor: String, sender: String = "") throws -> GroupEvent {
+      try event(#"{"event_id":"p","seq":1,"kind":"message.user","created_at":1,"actor":\#(actor),"payload":{"text":"Gate is shut","thread_id":"cron-1"}\#(sender)}"#)
+    }
+    let routine = try XCTUnwrap(GroupActivity.scheduledPost(post(#"{"kind":"user","id":"cron:job-1","display_name":"[bot:ranch] Morning brief"}"#)))
+    XCTAssertEqual(routine.name, "Morning brief"); XCTAssertFalse(routine.failed)
+    let notice = try XCTUnwrap(GroupActivity.scheduledPost(post(#"{"kind":"user","id":"cron-notice:job-1","display_name":"Morning brief"}"#)))
+    XCTAssertTrue(notice.failed)
+    XCTAssertEqual(try GroupActivity.scheduledPost(post(#"{"kind":"user","id":"cron:job-1"}"#))?.name, "Routine")
+    // An unreadable name falls back rather than failing the page; a person's message keeps its sender.
+    XCTAssertEqual(try GroupActivity.scheduledPost(post(#"{"kind":"user","id":"cron:job-1","display_name":7}"#))?.name, "Routine")
+    XCTAssertNil(try GroupActivity.scheduledPost(post(#"{"kind":"user","id":"cron:job-1"}"#, sender: #","sender":{"id":"one","name":"Nicolas"}"#)))
+    XCTAssertNil(try GroupActivity.scheduledPost(post(#"{"kind":"user","id":"desktop"}"#)))
+  }
+
   func testRoomStateWithUnreadableLiveDetailStillOpensTheRoom() throws {
     let state = try JSONDecoder().decode(GroupState.self, from: Data(#"{"room":{"room_id":"r","name":"Gate","members":[]},"driver_status":{"working":true,"blocked":false,"pending_actions":[],"member_activity":"soon","max_rounds":"3"},"context":{"purpose":1}}"#.utf8))
     XCTAssertNil(state.driver_status?.member_activity); XCTAssertNil(state.driver_status?.max_rounds); XCTAssertNil(state.context)
