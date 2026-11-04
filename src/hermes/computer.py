@@ -9,6 +9,7 @@ import functools
 import hashlib
 import hmac
 import importlib.util
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -194,8 +195,9 @@ def configured():
 _SCHEME_COLON_RE = re.compile(r"(?<![A-Za-z0-9+.\-])(?:https?|wss?):[/\\]*"
                               r"(?=[^\s'\"`)\]<>/\\])((?:[^\s'\"`)\[\]<>]*\[[^\s'\"`)\[\]<>]*\])?[^\s'\"`)\]<>]*)",
                               re.IGNORECASE)
-# A literal cut at ")" or "]" inside its authority with an "@" ahead: the host follows the last "@".
-_SCHEME_COLON_USERINFO_RE = re.compile(r"[^\s'\"`/?#\\]*@([^\s'\"`)\]<>/?#\\]+)")
+# A literal cut at ")" or "]" inside its authority with an "@" ahead: the host follows the last "@",
+# a bracketed IPv6 host whole.
+_SCHEME_COLON_USERINFO_RE = re.compile(r"[^\s'\"`/?#\\]*@((?:\[[^\s'\"`\[\]<>/?#\\]*\])?[^\s'\"`)\]<>/?#\\]*)")
 _URL_WHITESPACE_RE = re.compile(r"\\[tnr]|[\t\n\r]")
 
 
@@ -212,9 +214,46 @@ def scheme_colon_literals(text):
             found.append("//" + body)
             if not any(c in "/?#" for c in body):
                 tail = _SCHEME_COLON_USERINFO_RE.match(variant, match.end())
-                if tail:
+                if tail and tail.group(1):
                     found.append("//" + tail.group(1))
     return list(dict.fromkeys(literal.rstrip(".,;") for literal in found))
+
+
+# IPv6 prefixes that carry an IPv4 address in their low 32 bits: IPv4-compatible (::/96), the
+# NAT64 well-known prefix and 6to4 (bits 16-48). Native already reads IPv4-mapped and -translated.
+_NAT64 = ipaddress.IPv6Network("64:ff9b::/96")
+
+
+def embedded_ipv4(ip):
+    """IPv4 addresses an IPv6 address can stand for."""
+    found = [ip.ipv4_mapped, ip.sixtofour]
+    if ip in _NAT64 or (int(ip) >> 32 == 0 and int(ip) > 0xFFFF):
+        found.append(ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF))
+    if int(ip) >> 32 == 0xFFFF0000:  # ::ffff:0:a.b.c.d
+        found.append(ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF))
+    return [address for address in found if address is not None]
+
+
+def scheme_colon_targets_metadata(literal, judge):
+    """Whether a ``scheme_colon_literals`` candidate names a metadata host, failing closed.
+
+    ``judge`` is native ``literal_targets_metadata``. A candidate whose authority cannot be parsed,
+    such as an unclosed or invalid bracketed host, counts as a metadata target: native reads it as
+    nothing, while the browser may read more. An IPv6 host is also judged by any IPv4 address it embeds.
+    """
+    if judge(literal):
+        return True
+    try:
+        host = urlsplit("http://" + literal.lstrip("/")).hostname
+    except ValueError:
+        return True
+    if not host:
+        return True
+    try:
+        ip = ipaddress.IPv6Address(host.split("%", 1)[0])
+    except ValueError:
+        return False
+    return any(judge("//" + str(address) + "/") for address in embedded_ipv4(ip))
 
 
 def param_strings(value):
@@ -749,11 +788,13 @@ def install_tools():
             method = args.get("method")
             if not isinstance(params, dict) or not isinstance(method, str):
                 return False
-            urls = browser_cdp_tool._fetched_param_urls(method, params)
-            if not method.startswith(browser_cdp_tool._TEXT_INPUT_METHOD_PREFIX) and method not in browser_cdp_tool._CDP_NON_FETCHING_METHODS:
-                # Forms native's scan misses that a browser still reads as a special-scheme authority.
-                urls = urls + [url for text in param_strings(params) for url in scheme_colon_literals(text)]
-            return any(browser_policy.literal_targets_metadata(url) for url in urls)
+            judge = browser_policy.literal_targets_metadata
+            if any(judge(url) for url in browser_cdp_tool._fetched_param_urls(method, params)):
+                return True
+            if method.startswith(browser_cdp_tool._TEXT_INPUT_METHOD_PREFIX) or method in browser_cdp_tool._CDP_NON_FETCHING_METHODS:
+                return False
+            # Forms native's scan misses that a browser still reads as a special-scheme authority.
+            return any(scheme_colon_targets_metadata(url, judge) for text in param_strings(params) for url in scheme_colon_literals(text))
         # An older revision: its browser_console expression and the two CDP methods it can fetch with.
         expression, target = "", ""
         if name == "browser_console":

@@ -654,6 +654,27 @@ class ModernInstallToolsTests(InstallToolsTests):
                                ("Runtime.evaluate", {"expression": 'fetch("http:/100.100.0.5/")'})):
             self.assertEqual(self.dispatch_cdp(installed, method, params), "native dispatch")
 
+    def test_bracketed_mapped_and_unparseable_scheme_colon_hosts_fail_closed(self):
+        installed = computer.install_tools()
+        # A stand-in that knows only the two literal metadata hosts, as native would read them.
+        matcher = self.native_modules["browser_url_policy"].literal_targets_metadata
+        matcher.side_effect = lambda url: url.startswith("//") and url[2:].split("/")[0].rsplit("@", 1)[-1] in ("169.254.169.254", "[fd00:ec2::254]")
+        self.assertEqual(computer.scheme_colon_literals('fetch("http:/x)@[fd00:ec2::254]/")'), ["//x", "//[fd00:ec2::254]"])
+        blocked = ("http:/x)@[fd00:ec2::254]/", "http:/x)@[::ffff:169.254.169.254]/", "http:/[::ffff:169.254.169.254]/",
+                   "http:/[::ffff:0:a9fe:a9fe]/", "http:/[64:ff9b::a9fe:a9fe]/", "http:/[::169.254.169.254]/", "http:/[2002:a9fe:a9fe::]/",
+                   "http:/x)@[fd00:ec2::254", "http:/[fd00:ec2::254", "http:/[zz]/")
+        for form in blocked:
+            for method, params in (("Runtime.evaluate", {"expression": f'location.href = "{form}"'}),
+                                   ("Runtime.callFunctionOn", {"functionDeclaration": f'function () {{ return fetch("{form}") }}'}),
+                                   ("Page.addScriptToEvaluateOnNewDocument", {"source": f'new Image().src = "{form}"'})):
+                with self.subTest(method=method, form=form):
+                    result = json.loads(self.dispatch_cdp(installed, method, params))
+                    self.assertEqual((result["success"], result["error"]), (False, "Blocked: URL targets a cloud metadata endpoint"))
+        self.native_dispatch.assert_not_called()
+        for form in ("http:/[2001:db8::1]/", "http:/x)@[2001:db8::1]/", "http:/[::1]/", "http:/x)@example.test/"):
+            with self.subTest(form=form):
+                self.assertEqual(self.dispatch_cdp(installed, "Runtime.evaluate", {"expression": f'fetch("{form}")'}), "native dispatch")
+
     def test_cdp_with_malformed_arguments_goes_to_native_validation(self):
         installed = computer.install_tools()
         for method, params in (("Page.navigate", ["http://169.254.169.254/"]), (None, {"url": "http://169.254.169.254/"})):
@@ -689,6 +710,11 @@ class ModernInstallToolsTests(InstallToolsTests):
                 ("Page.navigate", {"url": "http:/user@169.254.169.254/"}),
                 ("Target.createTarget", {"url": "http:/0xa9fea9fe/"}),
                 ("Network.loadNetworkResource", {"url": "http:\\169.254.169.254/", "options": {}}),
+                # Hosts after userinfo kept whole, IPv4 inside IPv6, and authorities native can't parse.
+                ("Runtime.evaluate", {"expression": 'location.href = "http:/x)@[fd00:ec2::254]/"'}),
+                ("Runtime.callFunctionOn", {"functionDeclaration": 'function () { return fetch("http:/x)@[::ffff:169.254.169.254]/") }'}),
+                ("Page.addScriptToEvaluateOnNewDocument", {"source": 'fetch("http:/[64:ff9b::a9fe:a9fe]/")'}),
+                ("Runtime.evaluate", {"expression": 'fetch("http:/x)@[fd00:ec2::254")'}),
             )
             for method, params in blocked:
                 with self.subTest(method=method, params=params):
@@ -702,6 +728,7 @@ class ModernInstallToolsTests(InstallToolsTests):
                 ("Input.insertText", {"text": "//169.254.169.254/"}),
                 ("Input.insertText", {"text": "http:/169.254.169.254/"}),
                 ("Runtime.evaluate", {"expression": 'const o = {https: true}; fetch("http:/100.100.0.5/")'}),
+                ("Runtime.evaluate", {"expression": 'fetch("http:/x)@[2001:db8::1]/")'}),
             )
             for method, params in allowed:
                 with self.subTest(method=method, params=params):

@@ -154,6 +154,12 @@ reads as an authority: zero or one slash (`http:/169.254.169.254/`,
 JavaScript spellings `\/`, `\t`, `\n` and `\r`, for `http`, `https`, `ws`
 and `wss`. It judges each by its literal host, as native judges `//host`, so
 a hostname that only resolves to a metadata address is not caught there.
+A bracketed IPv6 host stays whole, including one after userinfo, and an
+IPv6 host is also judged by any IPv4 address it embeds: mapped, translated,
+IPv4-compatible, NAT64 `64:ff9b::/96` and 6to4. A candidate whose authority
+can't be parsed, such as an unclosed or invalid bracketed host, is blocked.
+JavaScript `\u` and `\x` escapes, and URLs built at run time, are not
+decoded.
 Text input, block lists and cookie scopes stay unscanned, as in native.
 Native `browser_cdp` repeats its own floor, which lacks the extra forms. A
 `tools.browser_session` revision without these helpers fails the seam check,
