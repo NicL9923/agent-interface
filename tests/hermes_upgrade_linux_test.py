@@ -321,7 +321,7 @@ class PlatformTests(unittest.TestCase):
             self.platform.regressions()
         offline = dict(os.environ, GIT_NO_LAZY_FETCH="1")
         self.assertNotEqual(subprocess.run(["git", "-C", str(self.source), "cat-file", "-e", new[1]], env=offline,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode, 0)
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False).returncode, 0)
 
     def test_timeouts_name_the_command_but_no_paths(self):
         error = subprocess.TimeoutExpired(["git", "-C", "/home/private/source", "-c", "core.x=1", "pack-objects", "--stdout"], 900)
