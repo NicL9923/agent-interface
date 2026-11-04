@@ -182,6 +182,7 @@ export const assistantRoutes: Readonly<Record<string, BotScope>> = {
   "GET /api/groups/:roomId/log": "group",
   "POST /api/groups/:roomId/messages": "group",
   "POST /api/groups/:roomId/stop": "group",
+  "POST /api/groups/:roomId/context": "group",
   "POST /api/groups/:roomId/approve": "group",
   "GET /api/integrations": "query",
   "POST /api/integrations/:id/check": "body",

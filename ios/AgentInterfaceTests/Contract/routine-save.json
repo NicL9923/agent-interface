@@ -11,6 +11,9 @@
       "local-one",
       "local-two"
     ],
+    "roomIds": [
+      "room-dinner"
+    ],
     "nextRunAt": "2026-10-02T07:00:00.000Z",
     "lastRunAt": "2026-10-01T07:00:00.000Z",
     "lastStatus": "ok",

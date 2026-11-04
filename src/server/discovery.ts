@@ -9,6 +9,7 @@ import type { Store } from './store.js';
 import { notFound, redactAgents, Roster, visibleBots } from './bot-access.js';
 import { httpError } from './http-error.js';
 import { id } from './schemas.js';
+import { routinesFor } from './collaboration.js';
 export async function installDiscoveryRoutes(app: FastifyInstance, runtime: Runtime, store: Store, roster = new Roster(runtime)) {
   const visible = (userId: string) => visibleBots(runtime, store, userId);
   async function bot(userId: string, botId: string) {
@@ -81,7 +82,7 @@ export async function installDiscoveryRoutes(app: FastifyInstance, runtime: Runt
   apiRoute(app, "GET /automations", {}, async req => {
     const { days } = z.object({ days: z.coerce.number().refine(days => [7,30,90].includes(days)).default(30) }).strict().parse(req.query);
     const bots = await visible(signedIn(req).id); const allowed = new Set(bots.map(bot => bot.id));
-    const routines = (await runtime.routines()).filter(row => allowed.has(row.botId)).map(row => ({ ...row, recipientIds: store.getRoutineRecipients(row.id) }));
+    const routines = await routinesFor(runtime, store, signedIn(req).id, (await runtime.routines()).filter(row => allowed.has(row.botId)).map(row => ({ ...row, recipientIds: store.getRoutineRecipients(row.id) })));
     const usage: UsageSummary[] = []; const unavailableBots: string[] = [];
     for (let index = 0; index < bots.length; index += 4) await Promise.all(bots.slice(index,index+4).map(async bot => {
       try { usage.push(await experience()({ operation: 'usage', profile: bot.id, days })); } catch { unavailableBots.push(bot.id); }

@@ -8,7 +8,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createApp } from "../src/server/app.js";
 import { loadConfig } from "../src/server/config.js";
 import type { HermesUpgrades } from "../src/server/upgrades.js";
-import type { GroupCatalog, GroupPage, GroupRoom, GroupState, RoutineOutput, RoutineResult } from "../src/shared/collaboration.js";
+import type { GroupCatalog, GroupContext, GroupPage, GroupRoom, GroupState, RoutineOutput, RoutineResult } from "../src/shared/collaboration.js";
 import type { HistoryPage, SearchHit, UsageSummary } from "../src/shared/discovery.js";
 import type { ProfileMemory, RoutinePreview, RoutineRunReceipt } from "../src/shared/experience.js";
 import type { IntegrationCatalog, IntegrationConnection, IntegrationFlow } from "../src/shared/integrations.js";
@@ -26,7 +26,7 @@ const now = "2026-10-01T12:00:00.000Z";
 const origin = "http://127.0.0.1:3000";
 const at = (time: string) => `2026-10-01T${time}:00.000Z`;
 // Request IDs this test chooses stay readable; any other UUID is server-generated and normalized.
-const ids = { submission: "3f1c2a4e-8b7d-4c6e-9a5f-1d2e3c4b5a69", run: "7d9e0f1a-2b3c-4d5e-8f60-718293a4b5c6", group: "c0ffee00-1234-4abc-8def-0123456789ab", groupMessage: "5e6f7a8b-9c0d-4e1f-a2b3-c4d5e6f7a8b9", groupStop: "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d", operation: "9a8b7c6d-5e4f-4a3b-9c2d-1e0f9a8b7c6d", control: "0f1e2d3c-4b5a-4968-8776-5a4b3c2d1e0f", device: "6c5b4a39-2817-4f6e-9d5c-4b3a29180f7e" };
+const ids = { submission: "3f1c2a4e-8b7d-4c6e-9a5f-1d2e3c4b5a69", run: "7d9e0f1a-2b3c-4d5e-8f60-718293a4b5c6", group: "c0ffee00-1234-4abc-8def-0123456789ab", groupMessage: "5e6f7a8b-9c0d-4e1f-a2b3-c4d5e6f7a8b9", groupStop: "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d", groupContext: "b2c3d4e5-f6a7-4b8c-9d0e-1f2a3b4c5d6e", operation: "9a8b7c6d-5e4f-4a3b-9c2d-1e0f9a8b7c6d", control: "0f1e2d3c-4b5a-4968-8776-5a4b3c2d1e0f", device: "6c5b4a39-2817-4f6e-9d5c-4b3a29180f7e" };
 const ourIds = new Set(Object.values(ids));
 
 const generated = { id: "plan.signature", name: "dinner-plan.pdf", mime: "application/pdf", size: 18432, url: "/api/files/plan.signature" } satisfies FileRef;
@@ -77,7 +77,7 @@ const models = { provider: "anthropic", model: "claude-sonnet", providers: [{ id
 const tools = [{ id: "terminal", name: "Terminal", description: "Run shell commands.", enabled: true }, { id: "web", name: "Web", description: "Search the web.", enabled: true }] satisfies Tool[];
 const skills = [{ id: "meal-planning", name: "Meal planning", description: "Plan balanced meals.", enabled: true, required: true }] satisfies Skill[];
 const routines = [
-  { id: "routine-morning", botId: "household", name: "Morning brief", prompt: "Prepare a morning brief.", schedule: "0 7 * * *", enabled: true, recipientIds: ["local-one"],
+  { id: "routine-morning", botId: "household", name: "Morning brief", prompt: "Prepare a morning brief.", schedule: "0 7 * * *", enabled: true, recipientIds: ["local-one"], roomIds: ["room-dinner"],
     nextRunAt: "2026-10-02T07:00:00.000Z", lastRunAt: at("07:00"), lastStatus: "ok", lastError: "The weather source timed out.", lastDeliveryError: "One device was offline." },
   { id: "routine-garden", botId: "garden", name: "Watering reminder", prompt: "Remind me to water.", schedule: "0 18 * * *", enabled: false },
 ] satisfies Routine[];
@@ -113,9 +113,12 @@ const room = { room_id: "room-dinner", name: "Dinner team", latest_seq: 2, membe
   { member_id: "household", profile: "household", handle: "household", display_name: "Household", target: { kind: "local", profile: "household" } },
   { member_id: "garden", profile: "garden", handle: "garden", display_name: "Garden", target: { kind: "local", profile: "garden" } },
 ] } satisfies GroupRoom;
-const groups = { supported: true, canSend: true, reason: "Hosted group chats run on the household VPS.", rooms: [room] } satisfies GroupCatalog;
+const groups = { supported: true, canSend: true, reason: "Hosted group chats run on the household VPS.", rooms: [room], settings: true, routineDelivery: true } satisfies GroupCatalog;
+const groupContext = { purpose: "Plan the week's dinners.", notes: "No mushrooms.\nBudget is $120.", routing: "lead", lead_member_id: "garden" } satisfies GroupContext;
 const approval = { request_id: "approval-request-1", description: "Order groceries", command: "grocer order --items 12" };
-const groupState = { room, driver_status: { running: true, working: true, blocked: true, pending_actions: [{ kind: "approval", task_id: "task-1", member_id: "household", execution_generation: 1, ...approval, approval }] } } satisfies GroupState;
+const groupState = { room, driver_status: { running: true, working: true, blocked: true, pending_actions: [{ kind: "approval", task_id: "task-1", member_id: "household", execution_generation: 1, ...approval, approval }],
+  member_activity: [{ member_id: "garden", status: "running", thread_id: "thread-1", round_index: 1, started_at: 1790852410.25, tool: "web_search", progress_at: 1790852415.5 },
+    { member_id: "household", status: "queued", thread_id: "thread-1", round_index: 1 }], max_rounds: 3 }, context: groupContext } satisfies GroupState;
 const groupPage = { cursor: 1, latest_seq: 2, has_more: false, events: [{ event_id: "group-event-1", seq: 1, kind: "message", created_at: 1790852400.5, actor: { kind: "human", id: "local-one" },
   payload: { text: "Plan dinners together", thread_id: "thread-1", member_id: "household" } }] } satisfies GroupPage;
 const vault = { botId: "household", profile: "household", scope: "profile", owner: "Hermes", notice: "Hermes stores these logins for this profile.",
@@ -209,6 +212,8 @@ const runtime = {
       case "send": return { accepted: true };
       case "stop": return { cancelled: 1 };
       case "approve": return { approved: true };
+      case "context": return { context: { ...groupContext, purpose: input.purpose, notes: input.notes, routing: input.routing, lead_member_id: input.leadMemberId },
+        event: { event_id: input.requestId, seq: 3, kind: "room.context_set", created_at: 1790852420, actor: { kind: "system", id: "room-control" }, payload: {} } };
     }
   },
   vaultRequest: async input => {
@@ -315,7 +320,7 @@ it("keeps the server responses the iOS app decodes in sync with the committed co
     await record("voice-transcript", "POST", "/api/bots/household/voice/transcribe", audio.payload, audio.headers);
 
     await record("routine-save", "PUT", "/api/routines/routine-morning", { botId: "household", name: "Morning brief", prompt: "Prepare a morning brief.", schedule: "0 7 * * *", enabled: true,
-      recipientIds: ["local-one", "local-two"] });
+      recipientIds: ["local-one", "local-two"], roomIds: ["room-dinner"] });
     await record("routines", "GET", "/api/routines");
     await record("routine-templates", "GET", "/api/routines/templates");
     await record("routine-preview", "POST", "/api/routines/preview", { botId: "household", schedule: "0 7 * * *" });
@@ -353,6 +358,7 @@ it("keeps the server responses the iOS app decodes in sync with the committed co
     await record("group-log-state", "GET", "/api/groups/room-dinner/log?since=0&state=1");
     await record("group-message", "POST", "/api/groups/room-dinner/messages", { requestId: ids.groupMessage, threadId: "thread-1", text: "Plan dinners together" });
     await record("group-stop", "POST", "/api/groups/room-dinner/stop", { requestId: ids.groupStop });
+    await record("group-context", "POST", "/api/groups/room-dinner/context", { requestId: ids.groupContext, purpose: "Plan the week's dinners.", notes: "No mushrooms.", leadMemberId: "garden" });
     await record("group-approve", "POST", "/api/groups/room-dinner/approve", { taskId: "task-1", memberId: "household", generation: 1, choice: "once", requestId: "approval-request-1" });
 
     await record("vault", "GET", "/api/bots/household/vault");

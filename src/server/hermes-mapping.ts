@@ -317,3 +317,23 @@ export function inflightMessage(value: Wire, rows: Message[], state: LiveState |
   // Inherit the saved prompt origin exactly as a conversation read does.
   return message.text || message.reasoning ? withMessageOrigins([...rows, message]).at(-1)! : message;
 }
+
+// Routine delivery targets. Hermes's `deliver` is comma-separated (or, from some clients, a list). The app
+// writes `bot-chat:<profile>` for the assistant's own chat and `room:<id>` for each group chat it posts in
+// (cron/scheduler_delivery_room.py). A room named with `@<profile>` or any other target was written by
+// someone else, so it is kept as it is and never shown as one of the app's rooms.
+const roomTarget = /^room:([A-Za-z0-9][A-Za-z0-9._:-]*)$/i;
+function deliverTargets(deliver: unknown): string[] {
+  const parts = Array.isArray(deliver) ? deliver.map(String) : typeof deliver === 'string' ? deliver.split(',') : [];
+  return parts.map(part => part.trim()).filter(Boolean);
+}
+/** The group chats a routine posts in, in its saved order. */
+export function deliverRooms(deliver: unknown): string[] {
+  return [...new Set(deliverTargets(deliver).flatMap(part => roomTarget.exec(part)?.[1] ?? []))];
+}
+/** `deliver` with exactly these group chats, keeping every other target in place. */
+export function withDeliverRooms(deliver: unknown, roomIds: string[]): string {
+  const others = deliverTargets(deliver).filter(part => !roomTarget.test(part) && part.toLowerCase() !== 'local');
+  const targets = [...others, ...[...new Set(roomIds)].map(id => `room:${id}`)];
+  return targets.length ? targets.join(',') : 'local';
+}

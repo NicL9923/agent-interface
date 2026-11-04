@@ -877,3 +877,38 @@ it("offers Show runs in chat per routine as this person's preference, not a rout
   expect(edits.at(-1)!({ ...bootstrap.preferences, hiddenRoutineRuns: [{ botId: bot.id, routineId: "r1" }] }).hiddenRoutineRuns).toEqual([]);
   expect(write).not.toHaveBeenCalled();
 });
+
+it("posts a routine's results in chosen group chats, and never sends rooms it could not read", async () => {
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: vi.fn() });
+  const member = { member_id: "shared", profile: "shared", handle: "shared" };
+  const catalog = { supported: true, canSend: true, routineDelivery: true, rooms: [
+    { room_id: "team", name: "Weekend plans", members: [member] }, { room_id: "barn", name: "Barn crew", members: [member] }] };
+  const routine = { botId: bot.id, prompt: "Check the gate", schedule: "0 7 * * *", enabled: true };
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [{ ...routine, id: "r1", name: "Morning", roomIds: ["team"] }, { ...routine, id: "r2", name: "Evening" }]
+    : path === "/groups" ? catalog : { providers: [], provider: "", model: "" });
+  await click("routines");
+  const [first, second] = container.querySelectorAll(".routine-card");
+  expect(first.textContent).toContain("Posts inWeekend plans");
+  // Pausing never touches where a routine posts.
+  await click("Pause", first);
+  expect((vi.mocked(write).mock.calls.at(-1)![1] as { roomIds?: string[] }).roomIds).toBeUndefined();
+  const editor = container.querySelector(".routine-manager > form")!;
+  const rooms = () => Array.from(editor.querySelectorAll("fieldset")).find(set => set.querySelector("legend")?.textContent === "Also post results in these group chats");
+  await click("Edit", first);
+  expect(Array.from(rooms()!.querySelectorAll("label")).map(label => [label.textContent, label.querySelector("input")!.checked])).toEqual([["Weekend plans", true], ["Barn crew", false]]);
+  await act(async () => rooms()!.querySelectorAll("input")[1].click());
+  vi.mocked(write).mockResolvedValueOnce({ botId: bot.id, schedule: "0 7 * * *", kind: "cron", timezone: "UTC", nextRuns: [] });
+  await click("Preview schedule", editor);
+  vi.mocked(write).mockResolvedValueOnce({});
+  await click("Save routine", editor);
+  expect(write).toHaveBeenLastCalledWith("/routines/r1", expect.objectContaining({ roomIds: ["team", "barn"] }), "PUT");
+  // The server could not say where Evening posts, so its editor offers no rooms and sends none.
+  await click("Edit", second);
+  expect(rooms()).toBeUndefined();
+  vi.mocked(write).mockResolvedValueOnce({ botId: bot.id, schedule: "0 7 * * *", kind: "cron", timezone: "UTC", nextRuns: [] });
+  await click("Preview schedule", editor);
+  vi.mocked(write).mockResolvedValueOnce({});
+  await click("Save routine", editor);
+  expect(vi.mocked(write).mock.calls.at(-1)![0]).toBe("/routines/r2");
+  expect((vi.mocked(write).mock.calls.at(-1)![1] as { roomIds?: string[] }).roomIds).toBeUndefined();
+});

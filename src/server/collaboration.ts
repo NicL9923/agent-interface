@@ -3,8 +3,8 @@ import { createHash } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { signedIn } from './auth.js';
-import type { Runtime } from '../shared/types.js';
-import type { GroupCatalog, GroupEvent, GroupPage, GroupRequest, GroupRoom, GroupState } from '../shared/collaboration.js';
+import type { Routine, Runtime } from '../shared/types.js';
+import { GROUP_NOTES_MAX_BYTES, GROUP_PURPOSE_MAX, type GroupCatalog, type GroupEvent, type GroupPage, type GroupRequest, type GroupRoom, type GroupState } from '../shared/collaboration.js';
 import type { Store } from './store.js';
 import { notFound, redactAgents, Roster, visibleBots } from './bot-access.js';
 import { httpError } from './http-error.js';
@@ -18,6 +18,56 @@ const uuid = z.string().uuid();
 /** Whether a room has only local assistants this person may see, as every group route requires. */
 export function roomAccessible(room: GroupRoom, visible: (profile: string) => boolean) {
   return room.members?.length >= 2 && room.members.every(member => visible(member.profile) && (!member.target || member.target.kind === 'local'));
+}
+
+/** The group chats one person can open, by ID, and whether routines can post in them on this Hermes. */
+export async function openableRooms(runtime: Pick<Runtime, 'groupRequest' | 'listBots'>, store: Store, userId: string) {
+  const catalog = runtime.groupRequest ? await runtime.groupRequest({ operation: 'list' }) as GroupCatalog : undefined;
+  if (!catalog?.supported) return { rooms: new Map<string, GroupRoom>(), routineDelivery: false };
+  const allowed = new Set((await visibleBots(runtime, store, userId)).map(bot => bot.id));
+  return { rooms: new Map(catalog.rooms.filter(room => roomAccessible(room, profile => allowed.has(profile))).map(room => [room.room_id, room])),
+    routineDelivery: catalog.routineDelivery === true };
+}
+
+/**
+ * A routine as one person sees it: only the group chats it posts in that they can open. Hermes is asked
+ * only when a routine posts in one. If it cannot answer, those routines leave `roomIds` out, which clients
+ * read as unknown: they neither show nor send rooms for it, so a save cannot drop one.
+ */
+export async function routinesFor<T extends Routine>(runtime: Pick<Runtime, 'groupRequest' | 'listBots'>, store: Store, userId: string, routines: T[]): Promise<T[]> {
+  if (!routines.some(routine => routine.roomIds?.length)) return routines;
+  const rooms = await openableRooms(runtime, store, userId).then(open => open.rooms, () => undefined);
+  return routines.map(routine => {
+    if (!routine.roomIds?.length) return routine;
+    const { roomIds, ...rest } = routine;
+    return rooms ? { ...rest, roomIds: roomIds.filter(id => rooms.has(id)) } as T : rest as T;
+  });
+}
+
+/**
+ * The group chats a saved routine will post in: those this person chose, which they must be able to open,
+ * plus any it already posts in that they cannot see. A personal assistant's results go only to rooms with
+ * one of its owner's personal assistants, which nobody else can open. Undefined when nothing changes.
+ */
+export async function routineRooms(runtime: Pick<Runtime, 'groupRequest' | 'listBots'>, store: Store, userId: string,
+  input: { botId: string; roomIds?: string[] }, previous?: string[]): Promise<string[] | undefined> {
+  if (input.roomIds === undefined) return undefined;
+  const chosen = [...new Set(input.roomIds)];
+  const open = await openableRooms(runtime, store, userId).catch(error => {
+    if (chosen.length) throw error;
+    return { rooms: new Map<string, GroupRoom>(), routineDelivery: false };
+  });
+  if (chosen.length && !open.routineDelivery) throw httpError(409, 'This Hermes version cannot post routine results in group chats.');
+  if (chosen.some(roomId => !open.rooms.has(roomId))) throw httpError(400, 'Choose group chats you can open.');
+  const owner = store.presentation(input.botId);
+  if (owner.shared === false && owner.ownerId && chosen.some(roomId => !open.rooms.get(roomId)!.members.some(member => {
+    const other = store.presentation(member.profile);
+    return other.shared === false && other.ownerId === owner.ownerId;
+  }))) throw httpError(400, 'Choose a group chat with one of your personal assistants, so only you see these results.', { code: 'private_recipients' });
+  // Rooms it already posts in keep their place; newly chosen ones follow.
+  const before = previous ?? [];
+  const rooms = [...before.filter(roomId => !open.rooms.has(roomId) || chosen.includes(roomId)), ...chosen.filter(roomId => !before.includes(roomId))];
+  return previous && JSON.stringify(rooms) === JSON.stringify(previous) ? undefined : rooms;
 }
 
 export async function installCollaborationRoutes(app: FastifyInstance, runtime: Runtime, store: Store, roster = new Roster(runtime)) {
@@ -145,6 +195,25 @@ export async function installCollaborationRoutes(app: FastifyInstance, runtime: 
     const { requestId } = z.object({ requestId: uuid }).strict().parse(req.body);
     await room(signedIn(req).id, roomId);
     return request({ operation: 'stop', roomId, requestId });
+  });
+  // Anyone who can open the room may set its purpose, shared notes and lead, as anyone may message it.
+  app.post('/api/groups/:roomId/context', async req => {
+    const { roomId } = z.object({ roomId: id }).parse(req.params);
+    const body = z.object({
+      requestId: uuid,
+      purpose: z.string().max(GROUP_PURPOSE_MAX),
+      // Hermes counts the trimmed notes in UTF-8 bytes.
+      notes: z.string().max(GROUP_NOTES_MAX_BYTES * 4).refine(notes => Buffer.byteLength(notes.trim(), 'utf8') <= GROUP_NOTES_MAX_BYTES, "Shared notes are too long. Shorten them and try again."),
+      leadMemberId: id.nullable(),
+    }).strict().parse(req.body);
+    const userId = signedIn(req).id;
+    const state = await room(userId, roomId);
+    if (body.leadMemberId !== null && !state.room.members.some(member => member.member_id === body.leadMemberId))
+      throw httpError(400, "Choose a lead from this group's assistants.");
+    // Like a message, one person's retry is the same save, and two people's saves never share a key.
+    const requestId = `context:${createHash('sha256').update(JSON.stringify([userId, body.requestId])).digest('hex')}`;
+    return request({ operation: 'context', roomId, requestId, purpose: body.purpose, notes: body.notes,
+      routing: body.leadMemberId === null ? 'everyone' : 'lead', leadMemberId: body.leadMemberId ?? '' });
   });
   app.post('/api/groups/:roomId/approve', async req => {
     const { roomId } = z.object({ roomId: id }).parse(req.params);

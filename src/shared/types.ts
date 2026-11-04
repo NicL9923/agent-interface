@@ -339,6 +339,11 @@ export interface Routine {
   schedule: string;
   enabled: boolean;
   recipientIds?: string[];
+  /**
+   * Group chats this routine also posts its results in, as a message from the routine. Only rooms the
+   * viewer can open are listed; saving keeps the ones they cannot see. Undefined leaves them unchanged.
+   */
+  roomIds?: string[];
   skills?: string[];
   model?: string | null;
   provider?: string | null;

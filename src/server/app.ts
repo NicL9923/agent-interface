@@ -33,7 +33,8 @@ import { registerVoiceRoutes } from "./voice.js";
 import { installDiscoveryRoutes } from "./discovery.js";
 import { assertRoutineEditable, installExperienceRoutes } from "./experience.js";
 import { installComputerRoutes } from "./computer.js";
-import { installCollaborationRoutes, roomAccessible } from './collaboration.js';
+import { installCollaborationRoutes, roomAccessible, routineRooms, routinesFor } from './collaboration.js';
+import { routineRoomId } from '../shared/collaboration.js';
 import { GroupWatch } from "./group-watch.js";
 import { loggerOptions } from "./logging.js";
 import { errorHandler, httpError } from "./http-error.js";
@@ -326,10 +327,10 @@ export async function createApp(
   apiRoute(app, "GET /routines", {}, async (req) => {
     await requireCapability("routines");
     const userId = signedIn(req).id;
-    return (await runtime.routines()).filter(r => visibleTo(store, r.botId, userId)).map((r) => ({
+    return routinesFor(runtime, store, userId, (await runtime.routines()).filter(r => visibleTo(store, r.botId, userId)).map((r) => ({
       ...r,
       recipientIds: store.getRoutineRecipients(r.id),
-    }));
+    })));
   });
   const routineSchema = z
       .object({
@@ -339,6 +340,7 @@ export async function createApp(
         schedule: z.string().min(1).max(500),
         enabled: z.boolean(),
         recipientIds: z.array(id).max(20),
+        roomIds: z.array(z.string().max(200).regex(routineRoomId)).max(10).optional(),
         skills: z.array(z.string().trim().min(1).max(500)).max(100).optional(),
         model: z.string().trim().max(500).nullable().optional(),
         provider: z.string().trim().max(200).nullable().optional(),
@@ -348,6 +350,7 @@ export async function createApp(
         contextFrom: z.array(z.string().trim().min(1).max(200)).max(100).nullable().optional(),
       });
   const saveRoutine = async (
+    userId: string,
     input: ApiBody<"POST /routines">,
     routineId?: string,
   ) => {
@@ -390,12 +393,16 @@ export async function createApp(
     const owner = store.presentation(input.botId);
     if (owner.shared === false && owner.ownerId && input.recipientIds.some(id => id !== owner.ownerId))
       throw httpError(400, "Only you can receive your personal assistant's routine results.", { code: "private_recipients" });
+    // Checked last, so a refused routine never waits on Hermes's room catalog.
+    const rooms = await routineRooms(runtime, store, userId, input, previous?.roomIds);
+    if (rooms === undefined) delete input.roomIds; else input.roomIds = rooms;
     const routine = await runtime.saveRoutine(input, routineId);
     store.routineRecipients(routine.id, input.recipientIds);
-    return { ...effective, ...routine, recipientIds: input.recipientIds };
+    const [saved] = await routinesFor(runtime, store, userId, [{ ...effective, ...routine, recipientIds: input.recipientIds }]);
+    return saved;
   };
-  apiRoute(app, "POST /routines", { body: routineSchema, before: async () => requireCapability("routines") }, async (_, input) => saveRoutine(input));
-  apiRoute(app, "PUT /routines/:id", { body: routineSchema, before: async req => { await requireCapability("routines"); await assertRoutineEditable(runtime, store, req.params.id); } }, async (req, input) => saveRoutine(input, req.params.id));
+  apiRoute(app, "POST /routines", { body: routineSchema, before: async () => requireCapability("routines") }, async (req, input) => saveRoutine(signedIn(req).id, input));
+  apiRoute(app, "PUT /routines/:id", { body: routineSchema, before: async req => { await requireCapability("routines"); await assertRoutineEditable(runtime, store, req.params.id); } }, async (req, input) => saveRoutine(signedIn(req).id, input, req.params.id));
   apiRoute(app, "DELETE /routines/:id", {}, async (req) => {
     await requireCapability("routines");
     await assertRoutineEditable(runtime, store, params(req).id);

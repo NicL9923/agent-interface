@@ -13,7 +13,7 @@ import { httpError } from './http-error.js';
 import { createModelNames } from './model-names.js';
 import { createHermesTransport, TransportError, type Connection, type HermesOptions, type Wire } from './hermes-transport.js';
 import { fileSigner, safeStagedPath, type RegisteredFile } from './hermes-files.js';
-import { applyFrame, bot, emptyLiveState, exposedText, historyMessages, inflightMessage, openRequests, receipt, toolDetails, unbridged, type LiveState } from './hermes-mapping.js';
+import { applyFrame, bot, deliverRooms, emptyLiveState, withDeliverRooms, exposedText, historyMessages, inflightMessage, openRequests, receipt, toolDetails, unbridged, type LiveState } from './hermes-mapping.js';
 
 export type { HermesOptions } from './hermes-transport.js';
 
@@ -276,8 +276,15 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     const profile = `?profile=${encodeURIComponent(input.botId)}`;
     const body: Wire = {
       name: `[bot:${input.botId}] ${input.name}`, prompt: input.prompt,
-      schedule: input.schedule, ...(!id ? {deliver: `bot-chat:${input.botId}`, context_from: ['self']} : {}),
+      schedule: input.schedule, ...(!id ? {deliver: withDeliverRooms(`bot-chat:${input.botId}`, input.roomIds ?? []), context_from: ['self']} : {}),
     };
+    // Group chats change only the room targets. The rest of `deliver` is read now, since native PUT replaces it whole.
+    if (id && input.roomIds !== undefined) {
+      const response = await http(`/api/cron/jobs/${encodeURIComponent(id)}${profile}`);
+      const current = await response.json().catch(() => undefined) as Wire;
+      if (!response.ok || !current || typeof current !== 'object' || current.error) throw new Error('Hermes did not return the routine. Reload before retrying.');
+      body.deliver = withDeliverRooms((current.job ?? current).deliver, input.roomIds);
+    }
     // Native PUT merges updates. Omitted fields, including future native settings,
     // must stay omitted. null/[] explicitly clear the corresponding override.
     for (const [app, native] of [['skills', 'skills'], ['model', 'model'], ['provider', 'provider'],
@@ -402,12 +409,22 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
           offset = value.next_offset;
         }
         const canSend = capability.driver === true && ['groups.create', 'groups.send', 'groups.stop', 'groups.approve'].every(method => capability.methods?.includes(method));
-        return { supported: true, canSend, rooms, ...(!canSend ? { reason: 'Hermes group history is available. Its group coordinator must be running to create rooms or send messages.' } : {}) };
+        // Room settings and routine posts into rooms arrived in the same Hermes change, behind groups.context.
+        const settings = capability.methods?.includes('groups.context') === true;
+        return { supported: true, canSend, rooms, settings, routineDelivery: settings, ...(!canSend ? { reason: 'Hermes group history is available. Its group coordinator must be running to create rooms or send messages.' } : {}) };
       }
       const room_id = input.roomId;
       if (input.operation === 'state') return rpc('groups.state', { room_id });
       if (input.operation === 'log') return rpc('groups.log', { room_id, since_seq: input.since, limit: 200 });
       const catalog = await rpc('groups.capabilities', {});
+      if (input.operation === 'context') {
+        // Room settings are a room-log write, not a discussion turn, so they need no running coordinator.
+        if (catalog.protocol_version !== 2 || !catalog.methods?.includes('groups.context'))
+          throw httpError(409, 'This Hermes version cannot save group settings. Update Hermes to change them.');
+        // Routing is always sent: Hermes keeps the room's current routing only when it is omitted.
+        return rpc('groups.context', { room_id, event_id: input.requestId, purpose: input.purpose, notes: input.notes,
+          routing: input.routing, lead_member_id: input.leadMemberId });
+      }
       if (catalog.protocol_version !== 2 || catalog.driver !== true) throw httpError(409, 'The Hermes group coordinator is unavailable. Refresh before trying again.');
       if (input.operation === 'create') return rpc('groups.create', { room_id, name: input.name, members: input.members });
       if (input.operation === 'send') return rpc('groups.send', { room_id, event_id: input.requestId, payload: { text: input.text, thread_id: input.threadId } });
@@ -842,6 +859,7 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
             skills: job.skills ?? (job.skill ? [job.skill] : []), model: job.model ?? null, provider: job.provider ?? null,
             enabledToolsets: job.enabled_toolsets ?? null, script: job.script ?? null, noAgent: job.no_agent === true,
             contextFrom: typeof job.context_from === 'string' ? [job.context_from] : job.context_from ?? null,
+            roomIds: deliverRooms(job.deliver),
             enabled: job.enabled !== false && job.state !== 'paused',
             nextRunAt: job.next_run_at ?? undefined, lastRunAt: job.last_run_at ?? undefined,
             lastStatus: job.last_status ?? undefined, lastError: job.last_error ?? undefined, lastDeliveryError: job.last_delivery_error ?? undefined});

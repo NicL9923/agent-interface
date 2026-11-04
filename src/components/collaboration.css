@@ -81,3 +81,18 @@
 .routine-output-actions { margin-bottom: 20px; }
 .routine-output-actions > button { min-height: 44px; }
 .routine-output > article + article { margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--line); }
+
+/* Room purpose, settings and live work. */
+.group-heading-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.group-heading p.group-purpose { margin-top: 6px; color: var(--ink); overflow-wrap: anywhere; }
+.group-assignment { margin: 8px 12px; font-size: .8125rem; color: var(--message-meta); }
+.group-activity { list-style: none; margin: 16px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.group-activity li { display: flex; align-items: center; gap: 10px; }
+.group-activity li > span:last-child { display: flex; flex-direction: column; min-width: 0; }
+.group-activity small { font-size: .75rem; color: var(--muted); }
+.group-settings select, .group-settings textarea { width: 100%; }
+@media (max-width: 620px) {
+  .group-heading { flex-direction: column; }
+  .group-heading-actions { justify-content: flex-start; }
+  .group-heading-actions button { min-height: 44px; }
+}

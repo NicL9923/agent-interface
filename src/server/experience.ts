@@ -115,7 +115,9 @@ export async function installExperienceRoutes(app: FastifyInstance, runtime: Run
     for (const key of recaps.keys()) if (key.startsWith(`${userId}\0`) && !bots.some(bot => key === `${userId}\0${bot.id}`)) recaps.delete(key);
     const ids = new Set(bots.map(bot => bot.id));
     let upcoming: import("../shared/types.js").Routine[] = [];
-    try { upcoming = (await runtime.routines()).filter(row => ids.has(row.botId) && row.enabled && row.nextRunAt).sort((a,b)=>Date.parse(a.nextRunAt!) - Date.parse(b.nextRunAt!)).slice(0,10); } catch { /* The rest of Today remains useful during a scheduler outage. */ }
+    try { upcoming = (await runtime.routines()).filter(row => ids.has(row.botId) && row.enabled && row.nextRunAt).sort((a,b)=>Date.parse(a.nextRunAt!) - Date.parse(b.nextRunAt!)).slice(0,10)
+      // Today never shows where a routine posts, so it never reads the room catalog to hide rooms someone cannot open.
+      .map(({ roomIds: _, ...row }) => row); } catch { /* The rest of Today remains useful during a scheduler outage. */ }
     const content = { since, frontier: page.frontier, hasMore: page.hasMore, items,
       events: page.events.filter(event => ids.has(event.botId)).map(event => ({ ...event, ...(eventFiles.has(event.id) ? { files: eventFiles.get(event.id) } : {}) })).sort((a, b) => Date.parse(b.occurredAt) - Date.parse(a.occurredAt)),
       unavailableBots: items.filter(item => item.error).map(item => item.botId) };

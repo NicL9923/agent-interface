@@ -131,3 +131,26 @@ it('keeps the catalog when a preview cannot be read', async () => {
   expect(response.json().rooms).toMatchObject([{room_id: 'shared'}]);
   expect(response.json().rooms[0].latest).toBeUndefined();
 });
+it("saves a room's purpose, notes and lead for anyone who can open it, with checked limits", async () => {
+  const s = await fixture();
+  const save = (roomId: string, payload: object, headers: Record<string, string> = s.headers) => s.app.inject({ method: 'POST', url: `/api/groups/${roomId}/context`, headers, payload });
+  const requestId = crypto.randomUUID();
+  const body = { requestId, purpose: 'Plan the weekend', notes: '  Gate code is 1234.  ', leadMemberId: 'planner' };
+  expect((await save('shared', body, { cookie: s.headers.cookie })).statusCode).toBe(403);
+  expect((await save('private', body)).statusCode).toBe(404);
+  expect((await save('shared', { ...body, leadMemberId: 'private-bot' })).statusCode).toBe(400);
+  expect((await save('shared', { ...body, purpose: 'p'.repeat(501) })).statusCode).toBe(400);
+  // Hermes counts trimmed notes in bytes: 1,366 three-byte characters are over, trailing space is not.
+  expect((await save('shared', { ...body, notes: '€'.repeat(1366) })).statusCode).toBe(400);
+  expect((await save('shared', { ...body, notes: `${'a'.repeat(4096)}\n\n` })).statusCode).toBe(200);
+  expect((await save('shared', body)).statusCode).toBe(200);
+  expect((await save('shared', { ...body, leadMemberId: null })).statusCode).toBe(200);
+  const saves = s.groupRequest.mock.calls.map(([input]) => input).filter(input => input.operation === 'context');
+  expect(saves).toHaveLength(3);
+  expect(saves[1]).toMatchObject({ roomId: 'shared', purpose: 'Plan the weekend', notes: body.notes, routing: 'lead', leadMemberId: 'planner' });
+  expect(saves[2]).toMatchObject({ routing: 'everyone', leadMemberId: '' });
+  // One person's retry is the same save; the key never carries the raw request ID.
+  expect(saves[1].requestId).toBe(saves[2].requestId);
+  expect(saves[1].requestId).toMatch(/^context:[0-9a-f]{64}$/);
+  expect(saves[1].requestId).not.toContain(requestId);
+});

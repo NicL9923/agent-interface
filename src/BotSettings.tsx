@@ -13,6 +13,7 @@ import type {
 } from "./shared/types";
 import { api, ApiError, request, write } from "./client-api";
 import { routeUrl, type ApiResponse } from "./shared/api";
+import { routineRoomChoices, type GroupCatalog } from "./shared/collaboration";
 import { useAction } from "./app/use-action";
 import { useCatalogDraft } from "./app/use-catalog-draft";
 import { useResource } from "./app/use-resource";
@@ -708,6 +709,7 @@ function RoutineManager({
     schedule: "",
     enabled: true,
     recipientIds: [],
+    roomIds: [],
     contextFrom: ["self"],
   });
   const { busy } = actions;
@@ -723,6 +725,12 @@ function RoutineManager({
     await work();
     await reload();
   });
+  // Group chats a routine can post in. A routine whose rooms the server could not read has no roomIds,
+  // and so does a form while the catalog loads: neither shows nor sends rooms, so a save never drops one.
+  const groups = useResource<GroupCatalog>(supported ? "/groups" : null);
+  const roomChoices = routineRoomChoices(groups.data, bot, bootstrap.bots);
+  const roomNames = (ids: string[] = []) => ids.map(id => groups.data?.rooms.find(room => room.room_id === id)?.name).filter(Boolean).join(", ");
+  const roomsShown = !!groups.data?.routineDelivery && form.roomIds !== undefined && (roomChoices.length > 0 || form.roomIds.length > 0);
   return (
     <div className="routine-manager">
       <p className="muted">
@@ -731,13 +739,14 @@ function RoutineManager({
       </p>
       <h3>Routine recipes</h3>
       <div className="routine-presets" aria-label="Routine recipes">{routinePresets.map(preset => <Button type="button" className="routine-preset" key={preset.id} disabled={busy || !supported}
-        onClick={() => { setEditing(null); setPreviewedSchedule(""); setFocusEditor(true); setForm({ botId, name: preset.name, prompt: preset.prompt, schedule: preset.schedule, enabled: false, recipientIds: [bootstrap.user.id], contextFrom: ["self"] }); }}>
+        onClick={() => { setEditing(null); setPreviewedSchedule(""); setFocusEditor(true); setForm({ botId, name: preset.name, prompt: preset.prompt, schedule: preset.schedule, enabled: false, recipientIds: [bootstrap.user.id], roomIds: [], contextFrom: ["self"] }); }}>
         <strong>{preset.name}</strong><small>{preset.description}</small></Button>)}</div>
       {routines.length > 0 && <h3>Saved routines</h3>}
       {routines.map((routine) => (
         <article className="routine-card" key={routine.id}>
           <h4>{routine.name}</h4>
-          <dl className="routine-meta"><div><dt>Schedule</dt><dd><code>{routine.schedule}</code></dd></div><div><dt>Status</dt><dd><span className={routine.enabled ? "routine-status" : "routine-status paused"}>{routine.enabled ? "Active" : "Paused"}</span></dd></div></dl>
+          <dl className="routine-meta"><div><dt>Schedule</dt><dd><code>{routine.schedule}</code></dd></div><div><dt>Status</dt><dd><span className={routine.enabled ? "routine-status" : "routine-status paused"}>{routine.enabled ? "Active" : "Paused"}</span></dd></div>
+            {roomNames(routine.roomIds) && <div><dt>Posts in</dt><dd>{roomNames(routine.roomIds)}</dd></div>}</dl>
           <p className="routine-prompt">{routine.prompt}</p>
           <RoutineEnhancements key={`${bootstrap.user.id}:${routine.id}`} routine={routine} userId={bootstrap.user.id} disabled={busy || !supported} onOpenResults={onOpenRoutine ? () => onOpenRoutine(botId, routine.id) : undefined} />
           {editPreferences && <label className="checkbox-label routine-chat-toggle">
@@ -754,6 +763,8 @@ function RoutineManager({
                       ...routine,
                       enabled: !routine.enabled,
                       recipientIds: routine.recipientIds || [],
+                      // Pausing leaves where it posts alone.
+                      roomIds: undefined,
                     } }),
                 )
               }
@@ -802,7 +813,8 @@ function RoutineManager({
           if (form.noAgent && !form.script?.trim()) { actions.setError("Script-only routines require a profile script."); return; }
           if (!form.prompt.trim() && !form.script?.trim() && !form.skills?.length) { actions.setError("Add instructions, a skill, or a profile script."); return; }
           void action(async () => {
-            const body = { ...form, recipientIds: (form.recipientIds || []).filter((id) => recipients.some((user) => user.id === id)) };
+            const body = { ...form, recipientIds: (form.recipientIds || []).filter((id) => recipients.some((user) => user.id === id)),
+              roomIds: roomsShown ? form.roomIds!.filter(id => roomChoices.some(room => room.room_id === id)) : undefined };
             await (editing ? request("PUT /routines/:id", { params: { id: editing }, body }) : request("POST /routines", { body }));
             if (editing) focusRoutine(editing);
             setEditing(null);
@@ -814,6 +826,7 @@ function RoutineManager({
               schedule: "",
               enabled: true,
               recipientIds: [],
+              roomIds: [],
               contextFrom: ["self"],
             });
           });
@@ -883,6 +896,20 @@ function RoutineManager({
           No selected recipients means no completion notification. Routine
           results remain in the assistant conversation.
         </p>
+        {roomsShown && <>
+          <fieldset>
+            <legend>Also post results in these group chats</legend>
+            {roomChoices.map(room => (
+              <label className="checkbox-label" key={room.room_id}>
+                <Input type="checkbox" checked={form.roomIds!.includes(room.room_id)}
+                  onChange={event => setForm({ ...form, roomIds: event.target.checked
+                    ? [...form.roomIds!, room.room_id] : form.roomIds!.filter(id => id !== room.room_id) })} />
+                {room.name}
+              </label>
+            ))}
+          </fieldset>
+          <p className="muted">Results appear in the group as a message from this routine. Assistants answer it only when it @mentions them.</p>
+        </>}
         <div className="actions">
           <Button type="submit" className="primary" disabled={busy || !supported || previewedSchedule !== form.schedule || !form.schedule.trim()}>
             {busy ? "Saving…" : editing ? "Save routine" : "Add routine"}
@@ -901,6 +928,7 @@ function RoutineManager({
                   schedule: "",
                   enabled: true,
                   recipientIds: [],
+                  roomIds: [],
                   contextFrom: ["self"],
                 });
               }}
