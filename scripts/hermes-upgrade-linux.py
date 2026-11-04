@@ -28,6 +28,8 @@ import uuid
 
 ACTIONS = ("regressions", "quiescence", "backup", "install", "verify", "rollback", "finish", "recover", "restart_service")
 MAX_QUALIFIED_PACK_BYTES = 4 * 1024 * 1024 * 1024
+# Packing 133,000 missing objects took 4 min 18 s on the Hermes host; indexing them took 1 min.
+OBJECT_TRANSFER_SECONDS = 900
 # Repair hashes cover `git diff` text, whose abbreviated object names grow with the repository
 # unless pinned. Every recorded hash used ten characters.
 GIT_ABBREV = ("-c", "core.abbrev=10")
@@ -409,6 +411,12 @@ print(json.dumps({'ok':True,'state':'synced'}))
         python = self.env.get("HERMES_UPGRADE_QUALIFICATION_PYTHON")
         if not python or not Path(python).is_absolute(): raise RuntimeError("Regression checks require the qualified candidate interpreter")
         for argv in self.config["regressionCommands"].values(): self.run([python, *argv[1:]], env=environment)
+        # Copy the candidate's objects now, while the household works normally. The backup hook
+        # repeats this after the drain, and then finds little left. On Nov 4, 2026 a candidate
+        # 1,100 commits ahead lacked 133,000 objects; packing them took over four minutes, the
+        # backup's attempt timed out, and the gateway had been draining the whole time.
+        try: self.materialize_candidate()
+        except Exception as error: raise RuntimeError("Copying the candidate's Git objects failed: " + describe(error)) from None
 
     def clear_drain(self):
         marker = self.home / ".drain_request.json"
@@ -583,11 +591,11 @@ print(json.dumps({'ok':True,'state':'synced'}))
                     def bounded_pack(): resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_QUALIFIED_PACK_BYTES, MAX_QUALIFIED_PACK_BYTES))
                     subprocess.run(["git", "-C", str(self.target), "pack-objects", "--stdout"],
                         input=b"".join(missing), stdout=output, stderr=subprocess.PIPE, env=offline,
-                        check=True, timeout=180, preexec_fn=bounded_pack)
+                        check=True, timeout=OBJECT_TRANSFER_SECONDS, preexec_fn=bounded_pack)
                     output.flush(); os.fsync(output.fileno())
                 with pack.open("rb") as payload:
                     subprocess.run(["git", "-C", str(self.source), "index-pack", "--stdin"], stdin=payload,
-                        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=offline, check=True, timeout=180)
+                        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=offline, check=True, timeout=OBJECT_TRANSFER_SECONDS)
             finally:
                 pack.unlink(missing_ok=True)
         subprocess.run(["git", "-C", str(self.source), "rev-list", "--objects", "--missing=error", self.candidate],
@@ -861,7 +869,22 @@ def describe(error):
         named = re.match(r"([A-Za-z_][\w.]*)\s*(?::|$)", lines[-1]) if lines else None
         known = named.group(1).rsplit(".", 1)[-1] if named else None
         return "CalledProcessError (exit " + str(error.returncode) + ", " + (known if known in KNOWN_ERRORS else "unrecognized error") + ")"
+    if isinstance(error, subprocess.TimeoutExpired):
+        return "TimeoutExpired after %gs (%s)" % (error.timeout, command_name(error.cmd))
     return type(error).__name__
+
+
+def command_name(argv):
+    """The program and, for git, its subcommand. Never paths or other arguments."""
+    argv = [str(part) for part in argv] if isinstance(argv, (list, tuple)) else str(argv or "").split()
+    if not argv: return "unknown command"
+    program = os.path.basename(argv[0])
+    if program != "git": return program
+    rest = iter(argv[1:])
+    for part in rest:
+        if part in ("-C", "-c"): next(rest, None)
+        elif not part.startswith("-"): return "git " + part
+    return "git"
 
 
 def verifying(step, work):

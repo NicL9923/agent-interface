@@ -300,6 +300,22 @@ class PlatformTests(unittest.TestCase):
             for line in subprocess.check_output(["git", "show-index"], stdin=index.open("rb")).decode().splitlines()]
         self.assertEqual(sorted(imported), sorted(new[1:]))
 
+    def test_regressions_import_the_candidate_objects_before_any_drain(self):
+        new = [line.split()[0] for line in self.platform.git(self.target, "rev-list", "--objects", self.candidate, "^" + self.old).splitlines()]
+        for oid in new[1:]: (self.source / ".git/objects" / oid[:2] / oid[2:]).unlink()
+        refs, state = self.git("for-each-ref"), self.platform.source_state()
+        original_run = self.platform.run
+        self.platform.run = lambda argv, **kwargs: None if argv[0] == self.environment["HERMES_UPGRADE_QUALIFICATION_PYTHON"] else original_run(argv, **kwargs)
+        self.platform.regressions()
+        for oid in new: self.git("cat-file", "-e", oid)
+        self.assertFalse((self.home / ".drain_request.json").exists())
+        self.assertEqual((self.git("for-each-ref"), self.platform.source_state()), (refs, state))
+
+    def test_timeouts_name_the_command_but_no_paths(self):
+        error = subprocess.TimeoutExpired(["git", "-C", "/home/private/source", "-c", "core.x=1", "pack-objects", "--stdout"], 900)
+        self.assertEqual(linux.describe(error), "TimeoutExpired after 900s (git pack-objects)")
+        self.assertEqual(linux.describe(subprocess.TimeoutExpired(["/usr/bin/systemctl", "--user", "stop", "x.service"], 90)), "TimeoutExpired after 90s (systemctl)")
+
     def test_candidate_import_restores_an_old_object_the_installed_store_lacks(self):
         # A partial clone can lack an old object that the candidate's history still reaches.
         blob = self.git("rev-parse", self.old + ":app.py").strip()
@@ -615,8 +631,8 @@ class PlatformTests(unittest.TestCase):
         self.assertEqual(self.platform.source_state()[0], self.old)
 
     def test_regressions_run_through_qualified_interpreter_in_disposable_home(self):
-        calls = []
-        self.platform.run = lambda argv, **kwargs: calls.append((argv, kwargs))
+        calls, original_run = [], self.platform.run
+        self.platform.run = lambda argv, **kwargs: original_run(argv, **kwargs) if argv[0] == "git" else calls.append((argv, kwargs))
         self.platform.regressions()
         self.assertEqual(len(calls), 2)
         for argv, kwargs in calls:

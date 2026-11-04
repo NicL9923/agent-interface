@@ -293,7 +293,12 @@ Before stopping either service, the helper checks that it can read every file bo
 archives will include, so an unreadable file such as a root-owned operation copy fails
 without downtime. It then imports the qualified candidate's
 reachable Git objects from staging into the installed object store and proves
-they can be read without upstream access. This bounded private pack transfer
+they can be read without upstream access. The regressions check already made
+the same transfer while the household worked normally, so after the drain the
+backup copies only what changed since. A candidate far ahead of the installed
+revision can lack over 100,000 objects, which took about five minutes to pack and
+index on the Hermes host. A timeout names the command that ran out of time, never
+its arguments. This bounded private pack transfer
 changes no installed branches, tags, Git configuration, index, or working files.
 It avoids fetching missing objects during checkout while Hermes is offline.
 The install hook checks out the already-qualified SHA, applies the identical
