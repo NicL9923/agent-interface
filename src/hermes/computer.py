@@ -186,6 +186,48 @@ def configured():
     return home, endpoint.rstrip("/")
 
 
+# WHATWG URL parsing removes tabs and newlines anywhere, reads a special scheme case-insensitively,
+# treats "\" as "/" and accepts any number of slashes, none included, before the authority:
+# "http:/169.254.169.254/", "HTTP:169.254.169.254" and "http:\\169.254.169.254" all reach that host
+# from a page with another scheme. Native Hermes's literal scan finds only "http(s)://" and "//host".
+# A JavaScript string spells the same forms with "\/" or the "\t", "\n" and "\r" escapes.
+_SCHEME_COLON_RE = re.compile(r"(?<![A-Za-z0-9+.\-])(?:https?|wss?):[/\\]*"
+                              r"(?=[^\s'\"`)\]<>/\\])((?:[^\s'\"`)\[\]<>]*\[[^\s'\"`)\[\]<>]*\])?[^\s'\"`)\]<>]*)",
+                              re.IGNORECASE)
+# A literal cut at ")" or "]" inside its authority with an "@" ahead: the host follows the last "@".
+_SCHEME_COLON_USERINFO_RE = re.compile(r"[^\s'\"`/?#\\]*@([^\s'\"`)\]<>/?#\\]+)")
+_URL_WHITESPACE_RE = re.compile(r"\\[tnr]|[\t\n\r]")
+
+
+def scheme_colon_literals(text):
+    """Each special-scheme URL literal in text, as the scheme-relative "//authority..." form browsers
+    read it to be, for native ``literal_targets_metadata`` to judge by its literal host without DNS.
+    "http(s)://" literals come back too, harmlessly; native already judges them."""
+    if not isinstance(text, str):
+        return []
+    found = []
+    for variant in dict.fromkeys((text, _URL_WHITESPACE_RE.sub("", text.replace("\\/", "/")))):
+        for match in _SCHEME_COLON_RE.finditer(variant):
+            body = match.group(1).replace("\\", "/")
+            found.append("//" + body)
+            if not any(c in "/?#" for c in body):
+                tail = _SCHEME_COLON_USERINFO_RE.match(variant, match.end())
+                if tail:
+                    found.append("//" + tail.group(1))
+    return list(dict.fromkeys(literal.rstrip(".,;") for literal in found))
+
+
+def param_strings(value):
+    """Every string in CDP params at any depth."""
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [text for item in value.values() for text in param_strings(item)]
+    if isinstance(value, (list, tuple)):
+        return [text for item in value for text in param_strings(item)]
+    return []
+
+
 @contextlib.contextmanager
 def resource_scope(home):
     """Only desktop lifecycle helpers enter this scope, never the agent/tool body."""
@@ -573,6 +615,10 @@ def install_tools():
         # including scheme-relative //host and userinfo forms, judged without DNS for //host.
         required += ((cdp, dialog_name), (browser_policy, "url_literals"), (browser_policy, "literal_targets_metadata"),
                      (browser_cdp_tool, "_fetched_param_urls"))
+        # Native's methods whose params are never fetched: text input, block lists, cookie scopes.
+        if (not isinstance(getattr(browser_cdp_tool, "_TEXT_INPUT_METHOD_PREFIX", None), str)
+                or not isinstance(getattr(browser_cdp_tool, "_CDP_NON_FETCHING_METHODS", None), frozenset)):
+            raise ComputerError("Shared computer native tool seams require qualification.")
     else:
         required += ((session, "_run_browser_command"), (lifecycle, "_cleanup_single_browser_session"),
                      (router, "routed_browser_handler"))
@@ -703,7 +749,11 @@ def install_tools():
             method = args.get("method")
             if not isinstance(params, dict) or not isinstance(method, str):
                 return False
-            return any(browser_policy.literal_targets_metadata(url) for url in browser_cdp_tool._fetched_param_urls(method, params))
+            urls = browser_cdp_tool._fetched_param_urls(method, params)
+            if not method.startswith(browser_cdp_tool._TEXT_INPUT_METHOD_PREFIX) and method not in browser_cdp_tool._CDP_NON_FETCHING_METHODS:
+                # Forms native's scan misses that a browser still reads as a special-scheme authority.
+                urls = urls + [url for text in param_strings(params) for url in scheme_colon_literals(text)]
+            return any(browser_policy.literal_targets_metadata(url) for url in urls)
         # An older revision: its browser_console expression and the two CDP methods it can fetch with.
         expression, target = "", ""
         if name == "browser_console":

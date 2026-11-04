@@ -147,10 +147,17 @@ CDP metadata floor: `browser_cdp_tool._fetched_param_urls` names every URL a
 fetching method's parameters carry, including scheme-relative `//host` and
 `\\host` forms and hosts after userinfo, and
 `browser_url_policy.literal_targets_metadata` judges each one, including
-IPv6 and decimal, hex and octal IPv4 spellings. Text input, block lists and
-cookie scopes stay unscanned, as in native. Native `browser_cdp` repeats the
-same floor. A `tools.browser_session` revision without these helpers fails
-the seam check, so the shared computer stays off until it is qualified. The
+IPv6 and decimal, hex and octal IPv4 spellings. The wrapper also finds the
+special-scheme forms that native's scan misses but WHATWG URL parsing still
+reads as an authority: zero or one slash (`http:/169.254.169.254/`,
+`HTTP:169.254.169.254/`), backslashes (`http:\\169.254.169.254`), the
+JavaScript spellings `\/`, `\t`, `\n` and `\r`, for `http`, `https`, `ws`
+and `wss`. It judges each by its literal host, as native judges `//host`, so
+a hostname that only resolves to a metadata address is not caught there.
+Text input, block lists and cookie scopes stay unscanned, as in native.
+Native `browser_cdp` repeats its own floor, which lacks the extra forms. A
+`tools.browser_session` revision without these helpers fails the seam check,
+so the shared computer stays off until it is qualified. The
 older `browser_tool_*` revisions keep the earlier check of
 `browser_console(expression=...)`, CDP `Page.navigate` and CDP
 `Runtime.evaluate` with the http(s) literal scanner. These are literal

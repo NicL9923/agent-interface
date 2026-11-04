@@ -507,7 +507,8 @@ class InstallToolsTests(ComputerFixture):
                 browser_session_cdp=self.cdp, browser_session_cloud=self.cloud,
                 browser_url_policy=types.SimpleNamespace(url_literals=lambda value: computer.re.findall(r"https?://[^\s'\"]+", value),
                     literal_targets_metadata=Mock(return_value=False)),
-                browser_cdp_tool=types.SimpleNamespace(_fetched_param_urls=Mock(return_value=[])))
+                browser_cdp_tool=types.SimpleNamespace(_fetched_param_urls=Mock(return_value=[]), _TEXT_INPUT_METHOD_PREFIX="Input.",
+                    _CDP_NON_FETCHING_METHODS=frozenset({"Network.setBlockedURLs"})))
         self.native_modules = modules
         fake_modules = {"tools": types.SimpleNamespace(**modules),
             **({"tools.browser_session": modules["browser_session"]} if self.modern else {}),
@@ -542,7 +543,9 @@ class InstallToolsTests(ComputerFixture):
             seams += [(self.native_modules["browser_url_policy"], "url_literals"), (self.cdp, "get_dialog_policy_config"),
                       (self.native_modules["browser_session"], "shares_bot_desktop_browser"),
                       (self.native_modules["browser_url_policy"], "literal_targets_metadata"),
-                      (self.native_modules["browser_cdp_tool"], "_fetched_param_urls")]
+                      (self.native_modules["browser_cdp_tool"], "_fetched_param_urls"),
+                      (self.native_modules["browser_cdp_tool"], "_TEXT_INPUT_METHOD_PREFIX"),
+                      (self.native_modules["browser_cdp_tool"], "_CDP_NON_FETCHING_METHODS")]
         for module, name in seams:
             with self.subTest(name=name), patch.object(module, name, None):
                 with self.assertRaisesRegex(computer.ComputerError, "require qualification"):
@@ -616,6 +619,41 @@ class ModernInstallToolsTests(InstallToolsTests):
             self.assertEqual(self.dispatch_cdp(installed, "Network.setBlockedURLs", {"urls": ["*169.254.169.254*"]}), "native dispatch")
         self.assertEqual(self.native_dispatch.call_count, 2)
 
+    # Special-scheme forms WHATWG parsing reads as an authority, which native's literal scan misses.
+    # Backslashes are as the CDP text holds them: "\\" in a JavaScript string, "\t" an escape.
+    SCHEME_COLON_FORMS = ("http:/169.254.169.254/latest/meta-data/", "HTTP:169.254.169.254/", "http:\\\\169.254.169.254\\\\latest",
+                          "http:\\/\\/169.254.169.254/", "ht\\ttp:/169.254.169.254/", "https:/user@169.254.169.254/", "ws:/169.254.169.254/")
+
+    def test_scheme_colon_literals_read_each_form_as_the_browser_does(self):
+        self.assertEqual(computer.scheme_colon_literals('location.href = "http:/169.254.169.254/latest/meta-data/"'), ["//169.254.169.254/latest/meta-data/"])
+        self.assertEqual(computer.scheme_colon_literals('fetch("http:\\\\169.254.169.254\\\\x")'), ["//169.254.169.254//x"])
+        self.assertEqual(computer.scheme_colon_literals('fetch("ht\\ttp:/169.254.169.254/")'), ["//169.254.169.254/"])
+        self.assertEqual(computer.scheme_colon_literals('fetch("http:\\/\\/169.254.169.254/")'), ["//169.254.169.254/"])
+        self.assertEqual(computer.scheme_colon_literals('fetch("http:/x)@169.254.169.254/")'), ["//x", "//169.254.169.254"])
+        self.assertEqual(computer.scheme_colon_literals('fetch("https:/[fd00:ec2::254]/")'), ["//[fd00:ec2::254]/"])
+        # Not URLs, and a scheme inside another literal's query is part of that literal, as native reads it.
+        self.assertEqual(computer.scheme_colon_literals('const o = {https: true}; "see http: headers"; mailto:a@b'), [])
+        self.assertEqual(computer.scheme_colon_literals('fetch("https://example.test/?next=http:/169.254.169.254/")'),
+                         ["//example.test/?next=http:/169.254.169.254/"])
+
+    def test_cdp_metadata_floor_reads_scheme_colon_forms_in_every_fetching_method(self):
+        installed = computer.install_tools()
+        matcher = self.native_modules["browser_url_policy"].literal_targets_metadata
+        matcher.side_effect = lambda url: url.startswith("//") and url[2:].split("/")[0].rsplit("@", 1)[-1] == "169.254.169.254"
+        for form in self.SCHEME_COLON_FORMS:
+            for method, params in (("Runtime.evaluate", {"expression": f'location.href = "{form}"'}),
+                                   ("Runtime.callFunctionOn", {"functionDeclaration": f'function () {{ return fetch("{form}") }}'}),
+                                   ("Page.addScriptToEvaluateOnNewDocument", {"source": f'new Image().src = "{form}"'}),
+                                   ("Page.navigate", {"url": form}), ("Target.createTarget", {"url": form}),
+                                   ("Network.loadNetworkResource", {"url": form, "options": {}})):
+                with self.subTest(method=method, form=form):
+                    result = json.loads(self.dispatch_cdp(installed, method, params))
+                    self.assertEqual((result["success"], result["error"]), (False, "Blocked: URL targets a cloud metadata endpoint"))
+        self.native_dispatch.assert_not_called()
+        for method, params in (("Input.insertText", {"text": "http:/169.254.169.254/"}), ("Network.setBlockedURLs", {"urls": ["http:/169.254.169.254/*"]}),
+                               ("Runtime.evaluate", {"expression": 'fetch("http:/100.100.0.5/")'})):
+            self.assertEqual(self.dispatch_cdp(installed, method, params), "native dispatch")
+
     def test_cdp_with_malformed_arguments_goes_to_native_validation(self):
         installed = computer.install_tools()
         for method, params in (("Page.navigate", ["http://169.254.169.254/"]), (None, {"url": "http://169.254.169.254/"})):
@@ -641,6 +679,16 @@ class ModernInstallToolsTests(InstallToolsTests):
                 ("Network.loadNetworkResource", {"url": "http://[fd00:ec2::254]/", "options": {}}),
                 ("Runtime.callFunctionOn", {"functionDeclaration": 'function () { return fetch("//0xa9fea9fe/") }'}),
                 ("Page.addScriptToEvaluateOnNewDocument", {"source": 'new Image().src = "//metadata.google.internal/"'}),
+                # Forms native's own scan misses, which a browser still reads as a special-scheme authority.
+                ("Runtime.evaluate", {"expression": 'location.href = "http:/169.254.169.254/latest/meta-data/"'}),
+                ("Runtime.evaluate", {"expression": 'fetch("HTTP:169.254.169.254/")'}),
+                ("Runtime.evaluate", {"expression": 'fetch("http:\\\\169.254.169.254\\\\latest")'}),
+                ("Runtime.evaluate", {"expression": 'fetch("ht\\ttp:/169.254.169.254/")'}),
+                ("Runtime.callFunctionOn", {"functionDeclaration": 'function () { return fetch("http:/metadata.google.internal/") }'}),
+                ("Page.addScriptToEvaluateOnNewDocument", {"source": 'fetch("https:/[fd00:ec2::254]/")'}),
+                ("Page.navigate", {"url": "http:/user@169.254.169.254/"}),
+                ("Target.createTarget", {"url": "http:/0xa9fea9fe/"}),
+                ("Network.loadNetworkResource", {"url": "http:\\169.254.169.254/", "options": {}}),
             )
             for method, params in blocked:
                 with self.subTest(method=method, params=params):
@@ -652,6 +700,8 @@ class ModernInstallToolsTests(InstallToolsTests):
                 ("Page.navigate", {"url": "https://93.184.215.14/?next=//169.254.169.254/"}),
                 ("Network.setBlockedURLs", {"urls": ["http://169.254.169.254/*"]}),
                 ("Input.insertText", {"text": "//169.254.169.254/"}),
+                ("Input.insertText", {"text": "http:/169.254.169.254/"}),
+                ("Runtime.evaluate", {"expression": 'const o = {https: true}; fetch("http:/100.100.0.5/")'}),
             )
             for method, params in allowed:
                 with self.subTest(method=method, params=params):
