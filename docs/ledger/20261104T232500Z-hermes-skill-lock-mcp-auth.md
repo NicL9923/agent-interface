@@ -13,3 +13,13 @@ Native checks: Xcode 27.2 on an iPhone 17 simulator, iOS 27.0, under the machine
 Visual check: the loopback preview's Learning panel at 1280 and 390 pixels in light and dark showed the Locked label, the explanation and the Lock and Unlock buttons without horizontal overflow.
 
 Not exercised: a live Hermes profile, the full spike qualification, a live MCP OAuth service, a real shared-computer browser, physical devices and production. Independent review is left to the coordinator.
+
+## Review fixes
+
+Source fingerprint `sha256:2791570f2978250d9946db3b5f4feca8199956aaa31af34eccfccb8a73dd0930`. GPT-6.1 Sol's review of PR #232 found three problems, all fixed:
+
+- A lock refusal from a batch that stopped partway now stays uncertain unless the rollback verifiably finished.
+- A Check that outranks `needs_auth` now belongs to one rejection episode, which ends when Hermes reports `needs_auth: false`.
+- The browser wrapper now reads `http:/host`, `http:host`, backslash and escaped forms that WHATWG parsing resolves to an authority. Native Hermes misses these too; an upstream report is drafted outside the repository and not filed.
+
+Each new test failed against the previous commit. In the real-module metadata test, native's scan and the previous wrapper let 6 of 9 new forms through. `tests/hermes_automation_test.py` (31 tests), `tests/hermes_integrations_test.py` (17) and `tests/hermes_computer_test.py` (48) passed, the last also with `HERMES_SOURCE` set to the 3a1e9ef source. `ruff check .` passed. The disposable-home lock and MCP status runs against the real modules passed again. No TypeScript or Swift changed, so Vitest and the iOS tests were not rerun.
