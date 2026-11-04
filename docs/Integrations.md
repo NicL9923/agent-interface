@@ -54,6 +54,18 @@ An OAuth MCP server counts as set up only once Hermes holds its sign-in
 tokens. Settings shows a saved server whose sign-in never finished as **Not
 connected**, with Connect to sign in.
 
+When Hermes stops using an MCP server because the provider rejected its OAuth
+sign-in, native `mcp.servers.status` reports `needs_auth` and the card reads
+**Expired** with Reconnect. That signal outranks a saved check, except a
+successful Check made after the rejection with the same tokens: Hermes clears
+the flag when it reconnects, which happens right after an in-app sign-in for
+the process's own profile and at the assistant's next turn for the others. A
+live connection retires a saved failed check. When the field is missing, as on
+an older Hermes, or Hermes reports the server as never tried, which is what a
+process that doesn't hold that profile's runtime reports, the app treats it as
+no evidence and keeps the earlier rule: a failed Check stops counting once the
+OAuth token files change.
+
 Any member can decline or continue. Connecting still needs an integration
 administrator, and the card says so to everyone else. The server checks the
 catalog before it tells the assistant a connection is set up. Apple data is

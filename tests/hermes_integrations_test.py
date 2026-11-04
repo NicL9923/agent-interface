@@ -63,6 +63,83 @@ class IntegrationTests(unittest.TestCase):
         os.utime(tokens / "supabase.json", ns=(stamp + 1_000_000, stamp + 1_000_000))
         self.assertEqual(integrations.apply_checks(str(self.home), [dict(id="key:brave", status="configured")])[0]["status"], "expired")
 
+    def test_hermes_needs_auth_decides_the_reconnect_state(self):
+        tokens = self.home / "mcp-tokens"
+        tokens.mkdir()
+        (tokens / "supabase.json").write_text("{}")
+        def status(runtime, row_id="supabase"):
+            row = integrations.apply_checks(str(self.home), [dict(id=row_id, status="configured", detail="Saved.")], runtime)[0]
+            return row["status"], row["detail"]
+        parked = {"supabase": dict(name="supabase", connected=False, status="failed", needs_auth=True)}
+        # No saved check at all: Hermes's own signal still asks for a new sign-in.
+        self.assertEqual(status(parked), ("expired", integrations.NEEDS_AUTH_DETAIL))
+        # A success checked before the park (a revoked grant) does not hide it.
+        integrations.cache_check(str(self.home), dict(id="supabase", status="connected", detail="Checked."))
+        self.assertEqual(status(None), ("connected", "Checked."))
+        self.assertEqual(status(parked), ("expired", integrations.NEEDS_AUTH_DETAIL))
+        # Signed in again, and a check made while Hermes still had the server parked succeeded with these tokens.
+        integrations.cache_check(str(self.home), dict(id="supabase", status="connected", detail="Checked."), needs_auth=True)
+        self.assertEqual(status(parked), ("connected", "Checked."))
+        stamp = (tokens / "supabase.json").stat().st_mtime_ns + 1_000_000
+        os.utime(tokens / "supabase.json", ns=(stamp, stamp))
+        self.assertEqual(status(parked), ("expired", integrations.NEEDS_AUTH_DETAIL))
+        # A saved failure with unchanged tokens holds until Hermes shows a live connection.
+        integrations.cache_check(str(self.home), dict(id="supabase", status="expired", detail="Sign in again."))
+        self.assertEqual(status(None), ("expired", "Sign in again."))
+        self.assertEqual(status({"supabase": dict(name="supabase", connected=False, status="configured", needs_auth=False)}), ("expired", "Sign in again."))
+        self.assertEqual(status({"supabase": dict(name="supabase", connected=True, status="connected", needs_auth=False)}), ("configured", "Saved."))
+        # An older Hermes without the field keeps the token rule; other connections ignore MCP runtime rows.
+        self.assertEqual(status({"supabase": dict(name="supabase", connected=False, status="failed")}), ("expired", "Sign in again."))
+        self.assertEqual(status({"key:brave": dict(needs_auth=True)}, "key:brave"), ("configured", "Saved."))
+
+    def test_a_check_counts_over_the_rejected_sign_in_only_when_hermes_still_reported_it(self):
+        runtime = {"needs_auth": False}
+        async def asynchronous(value):
+            return value
+        mcp = types.SimpleNamespace(
+            list_mcp_servers=lambda profile: asynchronous({"servers": [dict(name="supabase", url="https://mcp.supabase.com/mcp", auth="oauth")]}),
+            test_mcp_server=lambda name, profile: asynchronous({"ok": True, "tools": [{"name": "query"}]}))
+        routers = types.ModuleType("hermes_cli.web_routers")
+        routers.mcp, routers.config_env = mcp, types.SimpleNamespace()
+        routers.oauth = types.SimpleNamespace(list_oauth_providers=lambda profile: asynchronous({"providers": []}))
+        routers.messaging = types.SimpleNamespace(get_messaging_platforms=lambda profile: asynchronous({"platforms": []}))
+        gateway = types.ModuleType("tui_gateway")
+        gateway.server = types.SimpleNamespace(handle_request=lambda request: {"result": {"servers": [dict(name="supabase", connected=False, **runtime)]}})
+        modules = {
+            "hermes_cli.web_routers": routers,
+            "hermes_cli.web_routers._common": types.SimpleNamespace(config_scoped_to_thread=lambda profile, read: asynchronous(read()), config_write_scope=None),
+            "hermes_cli.web_models": types.SimpleNamespace(MCPServerCreate=None, EnvVarUpdate=None, EnvVarDelete=None),
+            "hermes_cli.config": types.SimpleNamespace(load_env=dict, load_config=dict),
+            "hermes_constants": types.SimpleNamespace(get_hermes_home=lambda: self.home),
+            "tui_gateway": gateway, "tui_gateway.server": gateway.server}
+        run = lambda operation: integrations.asyncio.run(integrations.dispatch(dict(operation=operation, profile="ranch", id="supabase"), None))
+        status = lambda: next(row for row in run("list")["connections"] if row["id"] == "supabase")["status"]
+        with patch.dict(sys.modules, modules), patch.object(integrations, "validate_remote_url", lambda url: url), \
+                patch.object(integrations, "oauth_signed_in", lambda home, name: True):
+            # Checked before Hermes parked the server, as when a grant is revoked later.
+            self.assertEqual(run("check")["status"], "connected")
+            runtime["needs_auth"] = True
+            self.assertEqual(status(), "expired")
+            # Checked after signing in again, while Hermes still waits to reconnect.
+            self.assertEqual(run("check")["status"], "connected")
+            self.assertEqual(status(), "connected")
+
+    def test_runtime_status_comes_from_native_mcp_servers_status(self):
+        calls = []
+        response = {"result": {"servers": [dict(name="supabase", needs_auth=True), dict(name="nas", needs_auth=False), "bad"], "checked_at": 1}}
+        def handle_request(request):
+            calls.append(request)
+            if isinstance(response, Exception):
+                raise response
+            return response
+        gateway = types.ModuleType("tui_gateway")
+        gateway.server = types.SimpleNamespace(handle_request=handle_request)
+        with patch.dict(sys.modules, {"tui_gateway": gateway, "tui_gateway.server": gateway.server}):
+            self.assertEqual(integrations.mcp_runtime("ranch"), {"supabase": dict(name="supabase", needs_auth=True), "mcp:nas": dict(name="nas", needs_auth=False)})
+            self.assertEqual((calls[0]["method"], calls[0]["params"]), ("mcp.servers.status", {"profile": "ranch"}))
+            for response in ({"error": {"code": 5035, "message": "backend is retiring"}}, None, RuntimeError("native failure")):
+                self.assertEqual(integrations.mcp_runtime("ranch"), {})
+
     def test_a_sign_in_names_its_connection(self):
         integrations.FLOWS["open"] = dict(kind="mcp", connection="supabase", home=str(self.home), status="pending", expires=integrations.time.time() + 60)
         self.assertEqual(integrations.flow_summary("open", integrations.FLOWS["open"])["connectionId"], "supabase")
