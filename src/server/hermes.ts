@@ -278,12 +278,13 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
       name: `[bot:${input.botId}] ${input.name}`, prompt: input.prompt,
       schedule: input.schedule, ...(!id ? {deliver: withDeliverRooms(`bot-chat:${input.botId}`, input.roomIds ?? []), context_from: ['self']} : {}),
     };
-    // Group chats change only the room targets. The rest of `deliver` is read now, since native PUT replaces it whole.
+    // Group chats change only the room targets. The rest of `deliver` is read now, since native PUT replaces it
+    // whole. The profile's job list is read, as routines() does: the service route admits no single-job read.
     if (id && input.roomIds !== undefined) {
-      const response = await http(`/api/cron/jobs/${encodeURIComponent(id)}${profile}`);
-      const current = await response.json().catch(() => undefined) as Wire;
-      if (!response.ok || !current || typeof current !== 'object' || current.error) throw new Error('Hermes did not return the routine. Reload before retrying.');
-      body.deliver = withDeliverRooms((current.job ?? current).deliver, input.roomIds);
+      const jobs = await (await http(`/api/cron/jobs${profile}`)).json().catch(() => undefined) as Wire;
+      const current = Array.isArray(jobs) ? jobs.find((job: Wire) => (job.id ?? job.job_id) === id) : undefined;
+      if (!current) throw new Error('Hermes did not return the routine. Reload before retrying.');
+      body.deliver = withDeliverRooms(current.deliver, input.roomIds);
     }
     // Native PUT merges updates. Omitted fields, including future native settings,
     // must stay omitted. null/[] explicitly clear the corresponding override.

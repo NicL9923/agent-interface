@@ -246,7 +246,18 @@
     /// Who has the shared desktop: an assistant until this person takes over.
     nonisolated(unsafe) static var computerControl: [String: Any] = ["kind": "bot", "name": "Ranch hand"]
     nonisolated(unsafe) static var desktopTickets = 0
-    static var groupState: [String: Any] { ["room": groupRooms.first ?? [:], "driver_status": ["working": false, "blocked": false, "pending_actions": []]] }
+    /// Room settings, from Hermes versions that have them: on with AGENT_INTERFACE_UI_GROUP=1.
+    nonisolated(unsafe) static var groupContext: [String: Any]? = ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_GROUP"] == "1"
+      ? ["purpose": "", "notes": "", "routing": "everyone", "lead_member_id": ""] : nil
+    static var groupState: [String: Any] {
+      // AGENT_INTERFACE_UI_GROUP_WORKING=1 shows two assistants at work, for screenshots of the activity lines.
+      let working = ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_GROUP_WORKING"] == "1"
+      var driver: [String: Any] = ["working": working, "blocked": false, "pending_actions": [], "max_rounds": 3]
+      if working { driver["member_activity"] = [["member_id": "kitchen", "status": "running", "round_index": 1, "tool": "web_search"], ["member_id": "ranch", "status": "queued", "round_index": 1]] }
+      var state: [String: Any] = ["room": groupRooms.first ?? [:], "driver_status": driver]
+      if let groupContext { state["context"] = groupContext }
+      return state
+    }
     nonisolated(unsafe) static var designMemory: [String: Any]?
     nonisolated(unsafe) static var memoryEntries: [[String: Any]] = [["id": "m1", "text": "Weeknight dinners under 30 minutes"]]
     nonisolated(unsafe) static var vaultItems: [[String: Any]] = [["id": "fixture-login", "kind": "login", "label": "Fixture school portal", "origin": "https://school.example.test", "createdAt": "2026-10-02T12:00:00Z", "identifier": "fixture.parent@example.test", "identifierType": "email", "hasOtp": false, "backend": "local", "canRemove": true]]
@@ -669,6 +680,11 @@
             "sender": ["id": "native-test", "name": "Local test member"]]
           Self.groupEvents.append(event); object = ["accepted": true]
           if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_GROUP"] == "1" { Self.groupReplyPending = true }
+        } else if path.hasSuffix("/context") {
+          let lead = body["leadMemberId"] as? String
+          let context: [String: Any] = ["purpose": body["purpose"] ?? "", "notes": body["notes"] ?? "", "routing": lead == nil ? "everyone" : "lead", "lead_member_id": lead ?? ""]
+          Self.groupContext = context
+          object = ["context": context, "event": ["event_id": "context-\(Self.groupEvents.count + 1)", "seq": Self.groupEvents.count + 1, "kind": "room.context_set", "created_at": Date().timeIntervalSince1970, "payload": context]]
         } else if path.hasSuffix("/log") {
           var page: [String: Any] = ["events": Self.groupEvents, "cursor": Self.groupEvents.count, "has_more": false]
           // Like the app server, `state=1` brings the room state along.

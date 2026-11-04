@@ -288,7 +288,17 @@ the app keeps no read position for rooms. Choose a room to open it like a conver
 New group chat, which opens it. Create a
 named group, address assistants with `@handle` (typing `@` suggests members),
 reply in a thread, approve a pending action or stop the discussion. Messages show
-which household member sent them, and new messages arrive live. Hermes owns the persistent coordinator.
+which household member sent them, and new messages arrive live. While assistants work, the room
+names each one, as "Planner is working..."; Advanced presentation adds the tool it is in and its
+round, such as "Round 2 of 3". **Group settings** in the room sets its purpose, shared notes
+that every assistant reads from the next message on, and an optional lead assistant who picks who
+answers a message that names no one; the room then shows each hand-off. Anyone who can open the
+room can change them. A routine can also post its results in group chats you choose in its
+editor; assistants answer such a post only when it @mentions them. A personal assistant's routine
+can post only in groups with one of your personal assistants. These need a Hermes with room
+activity and settings, such as `3a1e9ef`; with an older one the room says only that assistants
+are discussing, and settings and routine posts stay hidden.
+Hermes owns the persistent coordinator.
 If that coordinator is unavailable, rooms remain readable and sending is disabled.
 After an uncertain send or creation, retry the saved request to check its status
 without creating a duplicate. Conversation activity keeps bot messages, scheduled-job handoffs, subagents,

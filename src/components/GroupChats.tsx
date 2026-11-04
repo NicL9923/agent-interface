@@ -221,9 +221,9 @@ export function GroupRoomView({ bootstrap, roomId, canSend, reason, onChanged }:
           <p>{actionItem.approval?.description || actionItem.approval?.command || 'An assistant needs approval'}</p>
           <div className="actions">{(['once', 'deny'] as const).map(choice => <button key={choice} disabled={busy || !writable} onClick={() => void act('approve', { taskId: actionItem.task_id, memberId: actionItem.member_id, generation: actionItem.execution_generation, requestId: actionItem.request_id || actionItem.approval?.request_id, choice })}>{choice === 'once' ? 'Allow once' : 'Deny'}</button>)}</div>
         </div> : <p key={actionItem.task_id} className="capability-note">The last turn from {memberName(actionItem.member_id)} is unconfirmed. Open this group in Hermes to review it before retrying.</p>)}
-        {working.length > 0 && <ul className="group-activity state-working" role="status" aria-label="Who is working">
+        {working.length > 0 && <div role="status" className="state-working"><ul className="group-activity" aria-label="Who is working">
           {working.map(line => <li key={line.memberId}>{avatar(line.memberId)}<span><Shimmer text={line.sentence} />{line.round && <small>{line.round}</small>}</span></li>)}
-        </ul>}
+        </ul></div>}
         <form className="composer group-composer" onSubmit={event => { event.preventDefault(); void send(); }}>{threadId && <div className="group-thread" role="status"><span><strong>Replying in thread</strong><small>{replyingTo ? describe(replyingTo) : 'Earlier messages in this thread'}</small></span><button type="button" onClick={newTopic}>New topic</button></div>}
           <label className="sr-only" htmlFor="group-message">Message the group</label>
           {suggesting && <ul className="mention-list" id={mentionList} role="listbox" aria-label="Assistants in this group">

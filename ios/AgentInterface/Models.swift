@@ -826,6 +826,8 @@ struct Routine: Codable, Identifiable {
   var schedule: String
   var enabled: Bool
   var recipientIds: [String]?
+  /// Group chats this routine also posts its results in. Nil when the server could not say, and then never sent.
+  var roomIds: [String]?
   var skills: [String]?
   var model: String?
   var provider: String?
@@ -839,7 +841,7 @@ struct Routine: Codable, Identifiable {
   var lastError: String?
   var lastDeliveryError: String?
   enum CodingKeys: String, CodingKey {
-    case id, botId, name, prompt, schedule, enabled, recipientIds, skills, model, provider
+    case id, botId, name, prompt, schedule, enabled, recipientIds, roomIds, skills, model, provider
     case enabledToolsets, script, noAgent, contextFrom, nextRunAt, lastRunAt, lastStatus, lastError, lastDeliveryError
   }
   // Explicit null releases an override; synthesized encodeIfPresent would omit it
@@ -853,6 +855,7 @@ struct Routine: Codable, Identifiable {
     try c.encode(schedule, forKey: .schedule)
     try c.encode(enabled, forKey: .enabled)
     try c.encodeIfPresent(recipientIds, forKey: .recipientIds)
+    try c.encodeIfPresent(roomIds, forKey: .roomIds)
     try c.encodeIfPresent(skills, forKey: .skills)
     try c.encode(model, forKey: .model)
     try c.encode(provider, forKey: .provider)
@@ -868,7 +871,7 @@ struct Routine: Codable, Identifiable {
   }
   static func empty(botId: String) -> Routine {
     Routine(
-      id: "", botId: botId, name: "", prompt: "", schedule: "", enabled: true, recipientIds: [], contextFrom: ["self"])
+      id: "", botId: botId, name: "", prompt: "", schedule: "", enabled: true, recipientIds: [], roomIds: [], contextFrom: ["self"])
   }
 }
 struct Receipt: Codable, Equatable {

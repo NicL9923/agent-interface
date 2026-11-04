@@ -1227,12 +1227,13 @@ it('posts routine results in chosen group chats and rewrites only the room targe
   const native={id:'job-one',name:'[bot:shared] Morning',prompt:'Check',schedule_display:'1h',enabled:true,
     deliver:'bot-chat:shared,room:old,room:kept@other,telegram:123'};
   const requests:{url:string;method:string;body:Record<string,any>}[]=[];
-  let single=true;
+  let listed=true;
   vi.stubGlobal('fetch',vi.fn(async(url:URL,init:RequestInit={})=>{
     const method=init.method ?? 'GET';
     requests.push({url:String(url),method,body:JSON.parse(String(init.body || '{}'))});
-    if(method==='GET'&&String(url).includes('/api/cron/jobs/job-one'))return single?Response.json(native):Response.json({detail:'Job not found'},{status:404});
-    return Response.json(method==='GET'?[native]:native);
+    // The service route admits only the profile's job list for reads, never a single job.
+    if(method==='GET')expect(new URL(String(url)).pathname).toMatch(/\/cron\/jobs$/);
+    return Response.json(method==='GET'?(listed?[native]:[]):native);
   }));
   const [routine]=await runtime.routines();
   expect(routine.roomIds).toEqual(['old']);
@@ -1247,9 +1248,9 @@ it('posts routine results in chosen group chats and rewrites only the room targe
   await runtime.saveRoutine({...base,roomIds:['dinner']});
   expect(requests.at(-1)).toMatchObject({method:'POST',body:{deliver:'bot-chat:shared,room:dinner'}});
   // A routine Hermes cannot return is never rewritten from a guess.
-  single=false;
+  listed=false;
   const count=requests.length;
-  await expect(runtime.saveRoutine({...base,roomIds:[]},'job-one')).rejects.toThrow();
+  await expect(runtime.saveRoutine({...base,roomIds:[]},'job-one')).rejects.toThrow('Hermes did not return the routine');
   expect(requests.slice(count).map(request=>request.method)).toEqual(['GET']);
 });
 it('routes routine history and output through the private scoped native experience reader',async()=>{
