@@ -545,7 +545,7 @@ def install_tools():
         from tools import browser_extension_router as router, browser_tool_eval_policy as browser_policy, browser_cdp_tool
         modern = False
     else:
-        from tools import browser_session_cdp as cdp, browser_session_cloud as cloud, browser_url_policy as browser_policy
+        from tools import browser_session_cdp as cdp, browser_session_cloud as cloud, browser_url_policy as browser_policy, browser_cdp_tool
         modern = True
     cdp_name = "get_cdp_override_raw" if modern else "_get_cdp_override_raw"
     local_name = "is_local_backend" if modern else "_is_local_backend"
@@ -569,7 +569,10 @@ def install_tools():
                 (browser_use_cli, "_route_backend"), (browser_use_cli, "_set_cdp_env"),
                 (browser_use_cli, "_run_cli_killing_process_group"), (cloud, local_name))
     if modern:
-        required += ((cdp, dialog_name), (browser_policy, "url_literals"))
+        # Native browser_cdp's own metadata floor: every URL a fetching method's params name,
+        # including scheme-relative //host and userinfo forms, judged without DNS for //host.
+        required += ((cdp, dialog_name), (browser_policy, "url_literals"), (browser_policy, "literal_targets_metadata"),
+                     (browser_cdp_tool, "_fetched_param_urls"))
     else:
         required += ((session, "_run_browser_command"), (lifecycle, "_cleanup_single_browser_session"),
                      (router, "routed_browser_handler"))
@@ -691,6 +694,29 @@ def install_tools():
         router.routed_browser_handler = lambda action, args, *, fallback, **kwargs: fallback()
         bt.routed_browser_handler = router.routed_browser_handler
         browser_cdp_tool.routed_browser_handler = router.routed_browser_handler
+    def metadata_target(name, args):
+        """Whether the call names a cloud metadata address. Native eval guards skip all checks for
+        local backends, so this keeps the metadata floor for explicit literals using native parsing."""
+        if name == "browser_cdp" and modern:
+            # The same URLs and matcher native browser_cdp applies before its private-address guard.
+            params = args.get("params") or {}
+            method = args.get("method")
+            if not isinstance(params, dict) or not isinstance(method, str):
+                return False
+            return any(browser_policy.literal_targets_metadata(url) for url in browser_cdp_tool._fetched_param_urls(method, params))
+        # An older revision: its browser_console expression and the two CDP methods it can fetch with.
+        expression, target = "", ""
+        if name == "browser_console":
+            expression = args.get("expression", "")
+        elif name == "browser_cdp":
+            params = args.get("params") or {}
+            if args.get("method") == "Page.navigate":
+                target = str(params.get("url") or "").strip()
+            elif args.get("method") == "Runtime.evaluate":
+                expression = params.get("expression", "")
+        found_literals = literals(expression) if isinstance(expression, str) else []
+        urls = ([target] if target else []) + [literal.rstrip(".,;") for literal in found_literals]
+        return any(url_safety.is_always_blocked_url(url) for url in urls)
     native_dispatch = registry.dispatch
     @functools.wraps(native_dispatch)
     def dispatch(name, args, **kwargs):
@@ -708,20 +734,7 @@ def install_tools():
             args["session"] = "household-" + hashlib.sha256(identity.encode()).hexdigest()[:32]
         try:
             with computer.bot_operation(profile):
-                # Native eval guards skip all checks for local backends. Keep
-                # the metadata floor for explicit literals using native parsing.
-                expression, target = "", ""
-                if name == "browser_console":
-                    expression = args.get("expression", "")
-                elif name == "browser_cdp":
-                    params = args.get("params") or {}
-                    if args.get("method") == "Page.navigate":
-                        target = str(params.get("url") or "").strip()
-                    elif args.get("method") == "Runtime.evaluate":
-                        expression = params.get("expression", "")
-                found_literals = literals(expression) if isinstance(expression, str) else []
-                urls = ([target] if target else []) + [literal.rstrip(".,;") for literal in found_literals]
-                if any(url_safety.is_always_blocked_url(url) for url in urls):
+                if metadata_target(name, args):
                     return json.dumps({"success": False, "error": "Blocked: URL targets a cloud metadata endpoint"})
                 return native_dispatch(name, args, **kwargs)
         except (ComputerError, lease.HumanHasControl) as exc:

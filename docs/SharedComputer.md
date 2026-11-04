@@ -141,10 +141,20 @@ that Unix account's full authority are not isolated from one another.
 This is native local-network behavior for the authorized profile, including
 private/LAN/Headnet addresses. It is not a KVM hostname allowlist. Hermes still
 keeps the metadata floor in navigation, redirect checks and `browser_exec`.
-The add-on dispatch wrapper also blocks metadata URL literals in
-`browser_console(expression=...)`, CDP `Page.navigate` and CDP `Runtime.evaluate`,
-using native Hermes's URL-literal scanner and always-blocked matcher. These are
-literal checks, not an egress firewall. Native local classification skips the
+The add-on dispatch wrapper also blocks metadata URL literals in `browser_cdp`
+before the household browser operation starts. It applies native Hermes's own
+CDP metadata floor: `browser_cdp_tool._fetched_param_urls` names every URL a
+fetching method's parameters carry, including scheme-relative `//host` and
+`\\host` forms and hosts after userinfo, and
+`browser_url_policy.literal_targets_metadata` judges each one, including
+IPv6 and decimal, hex and octal IPv4 spellings. Text input, block lists and
+cookie scopes stay unscanned, as in native. Native `browser_cdp` repeats the
+same floor. A `tools.browser_session` revision without these helpers fails
+the seam check, so the shared computer stays off until it is qualified. The
+older `browser_tool_*` revisions keep the earlier check of
+`browser_console(expression=...)`, CDP `Page.navigate` and CDP
+`Runtime.evaluate` with the http(s) literal scanner. These are literal
+checks, not an egress firewall. Native local classification skips the
 current-page metadata check before content tools, and computed or obfuscated
 JavaScript URLs can escape the literal scan. Do not claim metadata isolation for
 those paths. Native website-policy checks and their caching are unchanged. Human

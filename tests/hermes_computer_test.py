@@ -9,6 +9,7 @@ from pathlib import Path
 import tempfile
 import threading
 import time
+import socket
 import subprocess
 import sys
 import types
@@ -19,6 +20,25 @@ from support import load_source
 
 computer = load_source("src/hermes/computer.py", "computer")
 computer_host = load_source("src/hermes/computer_host.py", "computer_host")
+# Set HERMES_SOURCE to a Hermes checkout, run with an interpreter holding its dependencies, to check
+# the shared browser's metadata floor against that revision's real URL policy and CDP parameter scan.
+SOURCE = os.environ.get("HERMES_SOURCE")
+
+
+def native_url_policy():
+    """Hermes's real modules, imported once and then removed from sys.modules so other tests keep their stand-ins."""
+    before = set(sys.modules)
+    sys.path.insert(0, SOURCE)
+    try:
+        from tools import browser_cdp_tool, browser_url_policy, url_safety
+    finally:
+        sys.path.remove(SOURCE)
+        for name in set(sys.modules) - before:
+            del sys.modules[name]
+    return dict(browser_cdp_tool=browser_cdp_tool, browser_url_policy=browser_url_policy, url_safety=url_safety)
+
+
+NATIVE = native_url_policy() if SOURCE else {}
 
 
 class TestLease:
@@ -485,7 +505,9 @@ class InstallToolsTests(ComputerFixture):
             modules = {key: value for key, value in modules.items() if not key.startswith("browser_tool") and key != "browser_extension_router"}
             modules.update(browser_session=types.SimpleNamespace(shares_bot_desktop_browser=noop),
                 browser_session_cdp=self.cdp, browser_session_cloud=self.cloud,
-                browser_url_policy=types.SimpleNamespace(url_literals=lambda value: computer.re.findall(r"https?://[^\s'\"]+", value)))
+                browser_url_policy=types.SimpleNamespace(url_literals=lambda value: computer.re.findall(r"https?://[^\s'\"]+", value),
+                    literal_targets_metadata=Mock(return_value=False)),
+                browser_cdp_tool=types.SimpleNamespace(_fetched_param_urls=Mock(return_value=[])))
         self.native_modules = modules
         fake_modules = {"tools": types.SimpleNamespace(**modules),
             **({"tools.browser_session": modules["browser_session"]} if self.modern else {}),
@@ -518,7 +540,9 @@ class InstallToolsTests(ComputerFixture):
                  (self.terminal_scope, "TerminalPolicyUnavailable"), (self.terminal, "_ensure_terminal_env_bridged")]
         if self.modern:
             seams += [(self.native_modules["browser_url_policy"], "url_literals"), (self.cdp, "get_dialog_policy_config"),
-                      (self.native_modules["browser_session"], "shares_bot_desktop_browser")]
+                      (self.native_modules["browser_session"], "shares_bot_desktop_browser"),
+                      (self.native_modules["browser_url_policy"], "literal_targets_metadata"),
+                      (self.native_modules["browser_cdp_tool"], "_fetched_param_urls")]
         for module, name in seams:
             with self.subTest(name=name), patch.object(module, name, None):
                 with self.assertRaisesRegex(computer.ComputerError, "require qualification"):
@@ -530,9 +554,10 @@ class InstallToolsTests(ComputerFixture):
         installed = computer.install_tools()
         matcher = self.native_modules["url_safety"].is_always_blocked_url
         matcher.side_effect = lambda url: "metadata.google.internal" in url
-        cases = (("browser_console", {"expression": 'fetch("http://metadata.google.internal")'}),
-                 ("browser_cdp", {"method": "Page.navigate", "params": {"url": "http://metadata.google.internal"}}),
-                 ("browser_cdp", {"method": "Runtime.evaluate", "params": {"expression": 'fetch("http://metadata.google.internal")'}}))
+        cases = (("browser_console", {"expression": 'fetch("http://metadata.google.internal")'}),)
+        if not self.modern:
+            cases += (("browser_cdp", {"method": "Page.navigate", "params": {"url": "http://metadata.google.internal"}}),
+                      ("browser_cdp", {"method": "Runtime.evaluate", "params": {"expression": 'fetch("http://metadata.google.internal")'}}))
         with patch.object(installed, "bot_operation", return_value=contextlib.nullcontext()):
             for name, args in cases:
                 result = json.loads(self.registry.dispatch(name, args))
@@ -569,6 +594,68 @@ class InstallToolsTests(ComputerFixture):
 
 class ModernInstallToolsTests(InstallToolsTests):
     modern = True
+
+    def dispatch_cdp(self, installed, method, params):
+        with patch.object(installed, "bot_operation", return_value=contextlib.nullcontext()):
+            return self.registry.dispatch("browser_cdp", {"method": method, "params": params})
+
+    def test_cdp_metadata_floor_judges_every_url_native_cdp_would_fetch(self):
+        installed = computer.install_tools()
+        scan = self.native_modules["browser_cdp_tool"]._fetched_param_urls
+        matcher = self.native_modules["browser_url_policy"].literal_targets_metadata
+        matcher.side_effect = lambda url: url.lstrip("/").startswith("169.254.169.254")
+        params = {"url": "https://downloads.example/file", "options": {"includeCredentials": False}}
+        scan.side_effect = lambda method, value: ["https://downloads.example/file", "//169.254.169.254/latest"]
+        result = json.loads(self.dispatch_cdp(installed, "Network.loadNetworkResource", params))
+        self.assertEqual((result["success"], result["error"]), (False, "Blocked: URL targets a cloud metadata endpoint"))
+        scan.assert_called_once_with("Network.loadNetworkResource", params)
+        self.native_dispatch.assert_not_called()
+        # Native leaves text input and block lists unscanned; private addresses stay native policy's call.
+        for urls in ([], ["http://100.100.0.5/"]):
+            scan.side_effect = lambda method, value, _urls=urls: _urls
+            self.assertEqual(self.dispatch_cdp(installed, "Network.setBlockedURLs", {"urls": ["*169.254.169.254*"]}), "native dispatch")
+        self.assertEqual(self.native_dispatch.call_count, 2)
+
+    def test_cdp_with_malformed_arguments_goes_to_native_validation(self):
+        installed = computer.install_tools()
+        for method, params in (("Page.navigate", ["http://169.254.169.254/"]), (None, {"url": "http://169.254.169.254/"})):
+            self.assertEqual(self.dispatch_cdp(installed, method, params), "native dispatch")
+        self.native_modules["browser_cdp_tool"]._fetched_param_urls.assert_not_called()
+
+    @unittest.skipUnless(SOURCE, "Set HERMES_SOURCE to a Hermes checkout to use its real URL policy")
+    def test_native_url_policy_blocks_every_metadata_form_the_cdp_tool_blocks(self):
+        # The native CDP scan imports the policy module lazily, by name.
+        imports = patch.dict(sys.modules, {"tools." + name: value for name, value in NATIVE.items()})
+        # The resolver reads numeric spellings such as http://2852039166/ as addresses; names never reach DNS here.
+        no_dns = patch.object(NATIVE["url_safety"], "_getaddrinfo", side_effect=lambda host, port=None:
+                              socket.getaddrinfo(host, port, socket.AF_UNSPEC, socket.SOCK_STREAM, 0, socket.AI_NUMERICHOST))
+        with imports, no_dns, patch.dict(sys.modules["tools"].__dict__, NATIVE):
+            installed = computer.install_tools()
+            blocked = (
+                ("Runtime.evaluate", {"expression": 'fetch("//169.254.169.254/latest/meta-data/")'}),
+                ("Runtime.evaluate", {"expression": 'fetch("\\\\169.254.169.254\\latest")'}),
+                ("Runtime.evaluate", {"expression": 'fetch("http://x)@169.254.169.254/")'}),
+                ("Page.navigate", {"url": "http://user@169.254.169.254/"}),
+                ("Page.navigate", {"url": "http://user:secret@metadata.google.internal/"}),
+                ("Target.createTarget", {"url": "http://2852039166/"}),
+                ("Network.loadNetworkResource", {"url": "http://[fd00:ec2::254]/", "options": {}}),
+                ("Runtime.callFunctionOn", {"functionDeclaration": 'function () { return fetch("//0xa9fea9fe/") }'}),
+                ("Page.addScriptToEvaluateOnNewDocument", {"source": 'new Image().src = "//metadata.google.internal/"'}),
+            )
+            for method, params in blocked:
+                with self.subTest(method=method, params=params):
+                    result = json.loads(self.dispatch_cdp(installed, method, params))
+                    self.assertEqual((result["success"], result["error"]), (False, "Blocked: URL targets a cloud metadata endpoint"))
+            self.native_dispatch.assert_not_called()
+            allowed = (
+                ("Runtime.evaluate", {"expression": 'fetch("http://100.100.0.5/status") // see //TODO'}),
+                ("Page.navigate", {"url": "https://93.184.215.14/?next=//169.254.169.254/"}),
+                ("Network.setBlockedURLs", {"urls": ["http://169.254.169.254/*"]}),
+                ("Input.insertText", {"text": "//169.254.169.254/"}),
+            )
+            for method, params in allowed:
+                with self.subTest(method=method, params=params):
+                    self.assertEqual(self.dispatch_cdp(installed, method, params), "native dispatch")
 
 
 class DesktopActivityTests(unittest.TestCase):
