@@ -13,13 +13,18 @@ const RUNNING = new Set(["checking", "qualifying", "installing", "verifying", "r
 /** Follow an operation through the app's status, which alone notices a worker that died.
  * Until the worker writes, the status still holds the previous operation's settled phase: on
  * Nov 4, 2026 a retry --wait read the old "failed" and exited while the retry went on to pass.
- * So after a request, a settled phase counts only once its updatedAt is no older than the
- * request. Returns the exit code: 0 ready, succeeded or idle; 1 another settled phase or an
- * operation that never started; 2 an interrupted worker; 3 still running at the deadline. */
-export async function follow(result, {action, requested, poll, log = console.log, now = Date.now,
+ * So after a request, a status counts only once it is newer than the request: a different
+ * operation, or an updatedAt no older than the request. A retry first finishes its recovery
+ * as "succeeded" and then starts a new check under a new operation, so only that new
+ * operation settles it. Returns the exit code: 0 ready, succeeded or idle; 1 another settled
+ * phase or an operation that never started; 2 an interrupted worker; 3 still running at the
+ * deadline. */
+export async function follow(result, {action, control, original, requested, poll, log = console.log, now = Date.now,
   sleep = ms => new Promise(done => setTimeout(done, ms))}) {
   const deadline = now() + WAIT_LIMIT_MS;
-  const pending = value => action !== "status" && !(Date.parse(value.updatedAt ?? "") >= requested);
+  const replaced = value => Boolean(value.operationId) && value.operationId !== original;
+  const pending = value => action !== "status" && !replaced(value) && !(Date.parse(value.updatedAt ?? "") >= requested);
+  const settles = value => !(action === "control" && control === "retry") || replaced(value);
   let seen = "";
   while (now() < deadline) {
     const step = result.checks?.findLast(check => check.status === "running")?.id ?? "";
@@ -32,7 +37,7 @@ export async function follow(result, {action, requested, poll, log = console.log
       if (line !== seen) { log(`${new Date(now()).toISOString()} ${line}`); seen = line; }
       // The app reports a worker that stopped mid-operation; act on it at once.
       if (result.error === "worker_interrupted") return {code: 2, result};
-      if (!RUNNING.has(result.phase) && !result.controlRequestId)
+      if (!RUNNING.has(result.phase) && !result.controlRequestId && settles(result))
         return {code: ["ready", "succeeded", "idle"].includes(result.phase) ? 0 : 1, result};
     }
     await sleep(20000);
@@ -61,8 +66,9 @@ async function main() {
   const headers = {cookie: `session=${token}`, origin: config.origin, "x-csrf-token": csrf, "content-type": "application/json"};
   try {
     const base = `http://127.0.0.1:${config.port}/api/hermes/upgrade`;
-    // A recovery control names the operation it applies to, read from the updater itself.
-    const current = action === "control" ? await (await fetch(base, {headers})).json() : undefined;
+    // A recovery control names the operation it applies to, read from the updater itself. The
+    // operation before the request also tells --wait which status is still the old one.
+    const current = action === "status" ? undefined : await (await fetch(base, {headers})).json();
     const path = action === "status" ? "" : "/" + action;
     const body = action === "install" ? {candidateRevision: value, requestId: randomUUID()} : action === "check" ? {}
       : action === "control" ? {action: value, operationId: current.operationId, requestId: randomUUID()} : undefined;
@@ -72,7 +78,8 @@ async function main() {
     let result = await response.json();
     if (!response.ok) process.exitCode = 1;
     else if (wait) {
-      const followed = await follow(result, {action, requested, poll: async () => (await fetch(base, {headers})).json()});
+      const followed = await follow(result, {action, control: value, original: current?.operationId, requested,
+        poll: async () => (await fetch(base, {headers})).json()});
       process.exitCode = followed.code; result = followed.result;
     }
     console.log(JSON.stringify({status: response.status, phase: result.phase, message: result.message ?? result.error,

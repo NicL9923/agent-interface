@@ -35,6 +35,22 @@ describe("hermes-update --wait", () => {
     expect((await follow(saved, { action: "control", requested: h.requested, ...h.options })).code).toBe(0);
   });
 
+  it("follows a retry past its recovery's success into the new check", async () => {
+    const old = { operationId: "old", phase: "failed", updatedAt: at(-3600_000) };
+    const h = harness([{ operationId: "old", phase: "succeeded", updatedAt: at(20_000) },
+      { operationId: "new", phase: "checking", updatedAt: at(40_000) },
+      { operationId: "new", phase: "failed", error: "qualification_failed", updatedAt: at(600_000) }]);
+    const { code, result } = await follow(old, { action: "control", control: "retry", original: "old", requested: h.requested, ...h.options });
+    expect(code).toBe(1);
+    expect(result.operationId).toBe("new");
+  });
+
+  it("reports an interrupted retry whose new state has no timestamp", async () => {
+    const old = { operationId: "old", phase: "failed", updatedAt: at(-3600_000) };
+    const h = harness([{ operationId: "new", phase: "blocked", error: "worker_interrupted" }]);
+    expect((await follow(old, { action: "control", control: "retry", original: "old", requested: h.requested, ...h.options })).code).toBe(2);
+  });
+
   it("gives up when the requested operation never starts", async () => {
     const stale = { phase: "idle", updatedAt: at(-60_000) };
     const h = harness([stale]);

@@ -1064,7 +1064,7 @@ class Worker:
             if action == "retry":
                 # Retrying means a new qualification, never replaying an install.
                 self.operation = str(uuid.uuid4())
-                self.state = {"operationId": self.operation, "phase": "checking", "checks": [], "message": "Checking the update again."}
+                self.state = {"operationId": self.operation, "phase": "checking", "checks": [], "message": "Checking the update again.", "workerPid": os.getpid(), "updatedAt": now()}
                 atomic(self.state_file, self.state)
                 self.environment["HERMES_UPGRADE_OPERATION_ID"] = self.operation
                 self.recovering = False
