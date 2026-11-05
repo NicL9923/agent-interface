@@ -761,6 +761,26 @@ class InlineGuidanceTests(unittest.TestCase):
             self.assertEqual(hermes.journal.memory_refresh.before_turn.call_count, 4)
             hermes.journal.memory_refresh.before_turn.assert_called_with("default", session, agent)
 
+    def test_app_turns_drop_the_native_first_contact_note_and_others_keep_it(self):
+        intro = "[System note: This is the user's very first message ever. Introduce yourself and mention /help.]"
+        offer = "[System note: This is the user's very first message ever. OFFER to build a profile:\n  1. Ask.]"
+        with FakeHermes([], invocation=True) as hermes:
+            hermes.journal.memory_refresh.before_turn = Mock()
+            server = hermes.modules["tui_gateway.server"]
+            hermes.open()
+            self.pending_app_turn(hermes)
+            session = server._sessions["sid"]
+            for note in (intro, offer):
+                agent = types.SimpleNamespace(ephemeral_system_prompt="", _gateway_turn_context_notes=f"Daybreak note.\n\n{note}")
+                with self.assertRaises(RuntimeError):
+                    server._invoke_agent("sid", session, types.SimpleNamespace(agent=agent), None, None, None, [], None, None, None, "Original user text")
+                self.assertEqual(agent._gateway_turn_context_notes, "Daybreak note.")
+            # Another client's turn in the same session keeps Hermes's own note.
+            agent = types.SimpleNamespace(ephemeral_system_prompt="", _gateway_turn_context_notes=intro)
+            with self.assertRaises(RuntimeError):
+                server._invoke_agent("sid", session, types.SimpleNamespace(agent=agent), None, None, None, [], None, None, None, "Other client text")
+            self.assertEqual(agent._gateway_turn_context_notes, intro)
+
     def test_memory_refresh_runs_at_goal_and_steering_invocation_boundaries(self):
         with FakeHermes([], invocation=True) as hermes:
             server = hermes.modules["tui_gateway.server"]

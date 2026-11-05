@@ -14,20 +14,16 @@ enum TodayCopy {
 }
 /// Mirrors src/shared/event-copy.ts. Approval details stay in their conversation.
 enum EventCopy {
+  /// Plain text on one line, cut at a word near `limit`. The server already reads Markdown into
+  /// words, so only spacing is tidied here: Markdown rules would change literal text like __init__.
   static func excerpt(_ source: String?, limit: Int = 180) -> String {
-    var text = source ?? ""
-    for (pattern, replacement) in [
-      (#"(?s)```.*?(```|$)"#, " "),
-      (#"!?\[([^\]]*)\]\([^)]*\)"#, "$1"),
-      (#"(?m)^\s{0,3}(#{1,6}|[-*+]|\d+[.)]|>)\s+"#, ""),
-      (#"(\*\*|__|`|~~)"#, ""), (#"\s+"#, " "),
-    ] { text = text.replacingOccurrences(of: pattern, with: replacement, options: .regularExpression) }
-    text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    let text = (source ?? "").replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+      .trimmingCharacters(in: .whitespacesAndNewlines)
     guard text.count > limit else { return text }
     let cut = String(text.prefix(limit))
     let lastSpace = cut.lastIndex(of: " ").map { cut.distance(from: cut.startIndex, to: $0) } ?? 0
     return String(cut.prefix(max(lastSpace, Int(Double(limit) * 0.6))))
-      .trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: ",;:.–-"))) + "…"
+      .trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: ",;:.–·-"))) + "…"
   }
   /// A routine's name as people know it, without the "[bot:<id>] " owner tag Hermes keeps on it.
   static func withoutBotTag(_ title: String) -> String {

@@ -262,6 +262,16 @@ def history_window(messages, sid, start=None, turns=0):
     return rows, {"earlier": first, "context": len(kept)}
 
 
+FIRST_CONTACT_NOTE = "[System note: This is the user's very first message ever."
+
+
+def without_first_contact_note(notes):
+    """Turn context notes without Hermes's first-contact note, which native joins on blank lines."""
+    if not isinstance(notes, str) or FIRST_CONTACT_NOTE not in notes:
+        return notes
+    return "\n\n".join(part for part in notes.split("\n\n") if not part.lstrip().startswith(FIRST_CONTACT_NOTE))
+
+
 def event_body(value):
     """A bounded excerpt for event bodies that keeps its line breaks.
 
@@ -724,6 +734,12 @@ class Bridge:
     def with_inline_guidance(self, original, eligible, agent, *args, **kwargs):
         if not eligible or agent is None:
             return original(*args, **kwargs)
+        # Hermes stages its first-contact note before the turn. It points at /help and offers a
+        # profile interview, which suit a terminal, not an app chat with its own first-run flow.
+        notes = getattr(agent, "_gateway_turn_context_notes", None)
+        kept = without_first_contact_note(notes)
+        if kept != notes:
+            agent._gateway_turn_context_notes = kept
         prior = getattr(agent, "ephemeral_system_prompt", None)
         if self.inline_instructions not in (prior or ""):
             agent.ephemeral_system_prompt = "\n\n".join(part for part in (prior, self.inline_instructions) if part)
