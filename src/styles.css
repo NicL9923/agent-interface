@@ -411,6 +411,12 @@ a {
   display: grid;
   gap: 4px;
 }
+.chat-name-line {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
 .chat-name {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -427,6 +433,7 @@ a {
   color: var(--muted);
 }
 .chat-identity-chevron {
+  flex: none;
   color: var(--muted);
   transition: transform 140ms ease;
 }
@@ -441,6 +448,8 @@ a {
   min-height: 0;
 }
 .transcript {
+  /* Positioned, so visually hidden text inside it is clipped here instead of growing the page. */
+  position: relative;
   min-height: 0;
   overflow: auto;
   flex: 1;

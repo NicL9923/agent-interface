@@ -8,6 +8,7 @@
 .discovery-search { display: flex; gap: 8px; }
 .discovery-search input { flex: 1; min-width: 0; }
 .discovery-hint { margin: 8px 0 12px; }
+.discovery-snippet mark { background-color: color-mix(in srgb, var(--attention) 30%, transparent); color: inherit; border-radius: 2px; }
 .discovery-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .discovery-empty { color: var(--muted); padding: 24px 0; }
 .discovery-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 0; }

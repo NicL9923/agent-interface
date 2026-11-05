@@ -67,6 +67,7 @@ function LoadedBotSettings({
   bootstrap,
   onClose,
   onSaved,
+  onCreated,
   onDeleted,
   onOpenRoutine,
   editPreferences,
@@ -77,6 +78,8 @@ function LoadedBotSettings({
   bootstrap: Bootstrap;
   onClose: () => void;
   onSaved: () => void;
+  /** Called once a new assistant exists, so the app can open its conversation. */
+  onCreated?: (botId: string) => void;
   onDeleted?: (botId: string) => void;
   onOpenRoutine?: (botId: string, routineId: string) => void;
   /** Saves this person's preferences, for "Show runs in chat". */
@@ -190,6 +193,7 @@ function LoadedBotSettings({
       saved = await request("POST /bots", { body: { ...submitted, confirmModel: confirmed } });
       setConfirmModel(null);
     } finally { setSaving(null); }
+    onCreated?.(saved.id);
     const chosen = avatar;
     // Portraits are stored with the assistant, so a portrait is added once it exists.
     const portraitNext = chosen.mode === "portrait" && !chosen.src;

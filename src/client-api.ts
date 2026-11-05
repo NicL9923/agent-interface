@@ -107,8 +107,9 @@ export async function api<T>(path: string, init: RequestInit = {}, retried = fal
     return data as T;
   } catch (error) {
     if (error instanceof ApiError || init.signal?.aborted) throw error;
+    // Only a write has a draft and a sent message to reassure about; a slow read just needs another try.
     throw new ApiError(controller.signal.aborted
-      ? "The app took too long to respond. Your draft is kept; sent messages will be checked before retrying."
+      ? get ? "The app took too long to respond. Try again in a moment." : "The app took too long to respond. Your draft is kept; sent messages will be checked before retrying."
       : "Can't reach the app. Your draft is kept. We'll reconnect automatically.",
     controller.signal.aborted ? 504 : 503, "CONNECTION_UNAVAILABLE");
   } finally {

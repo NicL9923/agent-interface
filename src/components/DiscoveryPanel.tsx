@@ -11,7 +11,7 @@ import { MessageMarkdown } from './MessageMarkdown';
 import { isActivityMessage, messageOrigin } from '../shared/message-origin';
 import { withoutBotTag } from '../shared/event-copy';
 import { Icon } from "./Icon";
-import { routineResultLabel, savedReplyTitle } from "../shared/discovery";
+import { routineResultLabel, savedReplyTitle, snippetParts } from "../shared/discovery";
 import { When } from './When';
 /** Incremental search waits this long after typing stops, and starts at this many characters. */
 type HistorySave = Extract<SaveItem, {kind:"session"}>;
@@ -60,6 +60,8 @@ export function DiscoveryPanel({ bootstrap, search, onRoutine, onOpenMessage }: 
     const timer=setTimeout(()=>{if(text!==searched.current)void find(text);},SEARCH_DEBOUNCE_MS);
     return()=>clearTimeout(timer);
   },[query,tab]);
+  // A pointer user opens search to type. On touch, focusing would cover the page with the keyboard.
+  useEffect(()=>{ if(window.matchMedia?.('(pointer: fine)').matches)searchInput.current?.focus(); },[]);
   useEffect(()=>{ if(!search)return; changeTab('search');setQuery(search.text);if(search.text.trim())void find(search.text); },[search?.id]);
   const live=(hit:SearchHit)=>!!onOpenMessage&&!!hit.messageId&&bootstrap.bots.find(bot=>bot.id===hit.botId)?.sessionId===hit.sessionId;
   useEffect(()=> { setPage(null); void run(async({current})=> {
@@ -138,7 +140,7 @@ export function DiscoveryPanel({ bootstrap, search, onRoutine, onOpenMessage }: 
         <p className="sr-only" role="status">{searching?'Searching…':searched.current&&hits.length?`${hits.length} ${hits.length===1?'result':'results'}`:''}</p>
         <p className="muted discovery-hint">Searches answers, attachment names and routine previews across your assistants.</p>
         <div className="discovery-results" aria-busy={searching}>{hits.map(hit=><button className="today-row" key={`${hit.botId}:${hit.sessionId}`} onClick={()=>hit.routineId?onRoutine(hit.botId,hit.routineId,hit.resultId):live(hit)?onOpenMessage!(hit.botId,hit.messageId!):void history(hit.botId,hit.sessionId,hit.offset??0,hit.messageId,true,hit.title)}>
-          <span className="today-row-copy"><strong>{hit.title}</strong><small>{name(hit.botId,hit.botName)} · {hit.routineId?'Routine output':live(hit)?'Current chat':'Past conversation'}{hit.updatedAt&&<> <span className="discovery-meta-part">· Updated <When value={hit.updatedAt}/></span></>}</small><small>{hit.snippet.replace(/<[^>]*>/g,'').slice(0,300)}</small></span><span aria-hidden="true">›</span>
+          <span className="today-row-copy"><strong>{hit.title}</strong><small>{name(hit.botId,hit.botName)} · {hit.routineId?'Routine output':live(hit)?'Current chat':'Past conversation'}{hit.updatedAt&&<> <span className="discovery-meta-part">· Updated <When value={hit.updatedAt}/></span></>}</small><small className="discovery-snippet">{snippetParts(hit.snippet).map((part,index)=>part.match?<mark key={index}>{part.text}</mark>:<span key={index}>{part.text}</span>)}</small></span><span aria-hidden="true">›</span>
         </button>)}</div>
       </>}
       {tab==='saved'&&<>

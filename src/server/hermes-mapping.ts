@@ -3,6 +3,7 @@ import type { ExplicitLoginRequest, SecureRequest } from '../shared/vault.js';
 import { computerHandoffMethod as COMPUTER_HANDOFF, type ComputerHandoff } from '../shared/computer.js';
 import { connectionRequestMethod as CONNECTION_REQUEST, requestableConnectionId, type ConnectionRequest } from '../shared/integrations.js';
 import { messageOrigin, withMessageOrigins, wireOrigin } from '../shared/message-origin.js';
+import { excerpt } from '../shared/event-copy.js';
 import type { Wire } from './hermes-transport.js';
 
 /** What a session's frames have said since its last read: streamed text, open requests and tools. */
@@ -146,8 +147,11 @@ export function applyFrame(state: LiveState, frame: Wire, fallbackSeq: number): 
 }
 
 export function preview(session?: Wire): Bot['lastMessage'] {
-  const text = typeof session?.preview === 'string' ? session.preview.replace(/\s+/g, ' ').trim().slice(0, 160) : '';
-  if (!text || messageOrigin({id: 'preview', role: 'user', text})?.visibility === 'activity') return undefined;
+  const raw = typeof session?.preview === 'string' ? session.preview.replace(/\s+/g, ' ').trim() : '';
+  if (!raw || messageOrigin({id: 'preview', role: 'user', text: raw})?.visibility === 'activity') return undefined;
+  // Home shows the preview as plain text, so it carries the reply's words without its Markdown.
+  // A reply that is only a code block keeps its raw words rather than reading as empty.
+  const text = excerpt(session!.preview, 160) || raw.slice(0, 160);
   const at = typeof session?.last_active === 'number' && Number.isFinite(session.last_active)
     ? new Date(session.last_active * 1000).toISOString()
     : undefined;
@@ -266,13 +270,13 @@ export function openRequests(value: Wire, sid: string): {approvals: Conversation
       kind: secure ? 'secure' as const : clarify ? 'clarify' as const : computer ? 'computer' as const : connection ? 'connection' as const : 'official' as const,
       title: explicit ? 'Hermes asks to save a login'
         : secure ? 'Hermes needs secure input'
-        : clarify ? 'Hermes needs your answer'
+        : clarify ? 'The assistant needs your answer'
         : computer ? 'Take over the computer?'
         : connection ? 'Set up a connection?'
         : 'Continue in the official Hermes client',
       detail: explicit ? 'Check the address and reason first. The password goes directly to the encrypted Hermes vault, never into this chat or to the assistant.'
         : secure ? 'Enter this value securely. It will go directly to Hermes without becoming a chat message.'
-        : clarify ? 'Answer the questions to continue this task.'
+        : clarify ? `Answer ${(params.questions ?? []).length === 1 ? 'the question' : 'the questions'} to continue this task.`
         : computer ? computer.reason
         : connection ? connection.reason
         : `Hermes is waiting for ${x.method}. Use the official client to complete credential or service setup.`,

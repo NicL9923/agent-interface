@@ -26,6 +26,13 @@ async function copy() {
 }
 
 describe("assistant Markdown", () => {
+  it("opens web links but shows a file path on the Hermes computer as plain text", async () => {
+    await render("Saved to [notes.md](/home/nicolas/.hermes/profiles/testbot/notes.md). See [docs](https://example.test) or [the file](/api/files/abc).");
+    const links = [...container.querySelectorAll("a")].map(link => link.getAttribute("href"));
+    expect(links).toEqual(["https://example.test", "/api/files/abc"]);
+    expect(container.querySelector(".markdown-local-file")?.textContent).toBe("notes.md");
+  });
+
   it("renders only closed explicit UI fences when the caller enables assistant UI", async () => {
     stubMatchMedia();
     const payload = JSON.stringify({ version: 1, title: "Supply planner", html: "<button>Compare</button>" });

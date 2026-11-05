@@ -3,18 +3,38 @@ import type { RuntimeEvent } from "./types.js";
 // The add-on titles task events generically; the assistant's name and its own words say more.
 const generic = /^(Hermes (completed|failed|interrupted)|Approval requested)$/;
 
+// A table's divider row, such as |---|:--:|, on its own line or inside text already joined onto one line.
+const tableDivider = /\|?(?:\s*:?-{3,}:?\s*\|)+(?:\s*:?-{3,}:?\s*(?=\s|$))?/g;
+
+/**
+ * Markdown marks removed from text that may already be joined onto one line, such as a Hermes
+ * preview or a search snippet. Line-start syntax is matched after any space for that reason.
+ */
+export function inlinePlain(text: string) {
+  const table = /\|\s*:?-{3,}/.test(text);
+  let plain = text
+    // A link keeps its words. A preview can end inside the address, so the closing parenthesis is optional.
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/!?\[([^\]]*)\]\([^)\s]*$/, "$1")
+    .replace(tableDivider, " ");
+  // Pipes are table cells only beside a divider; elsewhere they are the author's own words.
+  if (table) plain = plain.replace(/(?:\s*\|\s*)+/g, " · ").replace(/^\s*·\s*|\s*·\s*$/g, "");
+  return plain
+    .replace(/(^|\s)#{1,6}\s+/g, "$1")
+    .replace(/(\*\*|__|`|~~)/g, "")
+    .replace(/(^|[\s(])\*(?=\S)([^*\n]+?)\*(?=[\s).,;:!?]|$)/g, "$1$2");
+}
+
 /** Plain, single-line text from a Markdown reply, cut at a word near `limit`. */
 export function excerpt(text: string | undefined, limit = 180) {
-  const plain = (text ?? "")
+  const plain = inlinePlain((text ?? "")
     .replace(/```[\s\S]*?(```|$)/g, " ")
-    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
-    .replace(/^\s{0,3}(#{1,6}|[-*+]|\d+[.)]|>)\s+/gm, "")
-    .replace(/(\*\*|__|`|~~)/g, "")
+    .replace(/^\s{0,3}([-*+]|\d+[.)]|>)\s+/gm, ""))
     .replace(/\s+/g, " ")
     .trim();
   if (plain.length <= limit) return plain;
   const cut = plain.slice(0, limit);
-  return `${cut.slice(0, Math.max(cut.lastIndexOf(" "), limit * 0.6)).replace(/[\s,;:.–-]+$/, "")}…`;
+  return `${cut.slice(0, Math.max(cut.lastIndexOf(" "), limit * 0.6)).replace(/[\s,;:.–·-]+$/, "")}…`;
 }
 
 /** A routine's name as people know it, without the "[bot:<id>] " owner tag Hermes keeps on it. */

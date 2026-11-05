@@ -91,18 +91,29 @@ function CodeBlock({ code, language, finished }: { code: string; language?: stri
   );
 }
 
+/**
+ * Whether a reply's link can open from this app. An assistant often links a file by its path on
+ * the Hermes computer, such as /home/…/notes.md, which here would only open this app again.
+ */
+export function openableHref(href: string | undefined): href is string {
+  return !!href && (/^(?:https?:|mailto:|tel:)/i.test(href) || href.startsWith("/api/files/") || href.startsWith("#"));
+}
+const localFile = "On the assistant's computer. Ask it to share the file to open it here.";
+
 const components: Components = {
   a({ children, href, title }) {
-    return href ? (
+    return openableHref(href) ? (
       <a href={href} title={title} target="_blank" rel="noopener noreferrer">
         {children}
       </a>
+    ) : href ? (
+      <span className="markdown-local-file" title={localFile}>{children}</span>
     ) : (
       <span>{children}</span>
     );
   },
   img({ src, alt, title }) {
-    return typeof src === "string" && src ? (
+    return typeof src === "string" && openableHref(src) ? (
       <a href={src} title={title} target="_blank" rel="noopener noreferrer">
         {alt ? `Open image: ${alt}` : "Open image"}
       </a>

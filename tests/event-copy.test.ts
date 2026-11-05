@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { digestCopy, eventHeadline, excerpt, notificationCopy, withoutBotTag } from "../src/shared/event-copy";
+import { digestCopy, eventHeadline, excerpt, inlinePlain, notificationCopy, withoutBotTag } from "../src/shared/event-copy";
 
 it("titles task notifications with the assistant and quotes what happened", () => {
   expect(notificationCopy({ kind: "completed", title: "Hermes completed", body: "**Tailscale is up** on the NAS. Run `tailscale status` to confirm." }, "Nic's Chief"))
@@ -49,4 +49,17 @@ it("flattens Markdown and cuts long replies at a word", () => {
   const long = excerpt("word ".repeat(80), 40);
   expect(long.endsWith("word…")).toBe(true);
   expect(long.length).toBeLessThanOrEqual(41);
+});
+
+it("flattens Markdown that Hermes already joined onto one line, as previews arrive", () => {
+  // A heading, a table and a link whose address the preview cut off.
+  expect(excerpt("## Grocery Demo | Item | Aisle | |---|---| | Milk | Dairy | saved to [notes.md](/home/nicolas/.hermes/pro"))
+    .toBe("Grocery Demo · Item · Aisle · Milk · Dairy · saved to notes.md");
+  expect(excerpt("## WFT COO — audit-only readiness report **Role / Nic-assigned work**"))
+    .toBe("WFT COO — audit-only readiness report Role / Nic-assigned work");
+  expect(excerpt("Use *one* cup, not 2 * 3 cups.")).toBe("Use one cup, not 2 * 3 cups.");
+});
+
+it("keeps pipes and number signs that are the author's own words", () => {
+  expect(inlinePlain("Run ls | sort, then see issue #42 in C# notes.")).toBe("Run ls | sort, then see issue #42 in C# notes.");
 });

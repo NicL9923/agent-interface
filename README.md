@@ -16,7 +16,7 @@ on home to pin it or move it to a section. Phones open on home and push into a
 conversation; Back returns. The account button opens Settings, which also holds Hermes
 updates, Computer, Integrations, the assistants you follow and your home sections.
 Each assistant can be in one section. New assistants start with their name and look,
-then role and model.
+then role and model. On the web, a new assistant's chat opens once it is created.
 
 The self-hoster connects this server to Hermes once. Web users sign in to that
 installation. iOS users enter its HTTPS address, then sign in to the same
@@ -223,7 +223,7 @@ Hermes questions on web and iOS show each suggested answer as a card to tap, wit
 On a computer, number keys pick an option. Choosing an answer moves on to the next
 question, and Send answers waits until every question has one.
 
-**Search & saved** searches native answers, attachment names, and routine previews across your visible assistants as you type. A match in an assistant's current conversation opens that chat at the message. Open original history, page through older messages, and save a conversation, reply, or routine output. Saved items belong to your account and hold references rather than copied transcripts.
+**Search & saved** searches native answers, attachment names, and routine previews across your visible assistants as you type. A match in an assistant's current conversation opens that chat at the message. Results mark the matching words. Open original history, page through older messages, and save a conversation, reply, or routine output. Saved items belong to your account and hold references rather than copied transcripts.
 
 Its **Automations** tab lists next runs, recent execution or delivery failures, result recipients, and pause/resume controls. Usage shows Hermes's recorded main-session tokens, reported cost, and estimates separately. Missing cost reporting stays unknown. Simple conversations show tool receipts with the native outcome and any reported result link.
 

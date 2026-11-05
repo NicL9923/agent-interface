@@ -6,7 +6,7 @@ import { Icon } from "../components/Icon";
 import { When } from "../components/When";
 import { useAction } from "./use-action";
 import type { ReplySpeech } from "./use-reply-speech";
-import { replyTitle } from "./transcript-logic";
+import { savedReplyTitle } from "../shared/discovery";
 
 /** What reply actions need from the conversation around them. Kept in context so the memoized transcript never re-renders for it. */
 export type TranscriptTools = {
@@ -71,7 +71,7 @@ function MessageActions({ message }: { message: Message }) {
   };
   const share = () => navigator.share({ text: message.text }).catch(() => { /* Dismissing the share sheet is not an error. */ });
   const keep = () => void save.run(() => apiRequest("POST /saved", { body: {
-    kind: "session", botId: tools.botId, sessionId: tools.sessionId!, messageId: message.id, title: replyTitle(message.text),
+    kind: "session", botId: tools.botId, sessionId: tools.sessionId!, messageId: message.id, title: savedReplyTitle(message.text),
   } }), {
     onSuccess: () => { setSaved(true); tools.announce("Reply saved. Find it in Search under Saved items."); },
     onError: cause => { tools.announce(`Couldn't save this reply. ${(cause as Error).message}`); return null; },

@@ -2,7 +2,7 @@ import { capabilitiesFixture } from "./helpers/runtime-fixtures.js";
 import { afterEach, expect, it } from 'vitest';
 import { Store } from '../src/server/store.js';
 import { defaultPreferences, type ToolCall } from '../src/shared/types.js';
-import { receipt, routineResultLabel, savedReplyTitle } from '../src/shared/discovery.js';
+import { receipt, routineResultLabel, savedReplyTitle, snippetParts } from '../src/shared/discovery.js';
 import { inQuietHours, BackgroundWorker } from '../src/server/notifications.js';
 import { loadConfig } from '../src/server/config.js';
 import { fakeRuntime } from "./helpers/server.js";
@@ -76,4 +76,18 @@ it('makes saved reply titles from the first line without markdown or broken word
   expect(savedReplyTitle('1. `freezer_door` is ready\nNext steps')).toBe('freezer_door is ready');
   const title = savedReplyTitle('A useful gate maintenance plan '.repeat(8));
   expect(title.length).toBeLessThanOrEqual(80);expect(title).toMatch(/(?:plan|gate|maintenance|useful|A)…$/);
+});
+
+it('titles a saved reply by the words a person reads first, never a code fence or a table divider',()=>{
+  expect(savedReplyTitle('```agent-ui\n{"version":1}\n```\nGrocery run is ready.')).toBe('Grocery run is ready.');
+  expect(savedReplyTitle('| Item | Aisle |\n|---|---|\n| Milk | Dairy |')).toBe('Item · Aisle');
+});
+
+it('marks search matches and reads snippets of stored JSON as plain words',()=>{
+  expect(snippetParts('the >>>grocery<<< store')).toEqual([{text:'the ',match:false},{text:'grocery',match:true},{text:' store',match:false}]);
+  // Markdown around a match, and line breaks escaped in stored tool output.
+  expect(snippetParts('## >>>Grocery<<< Demo\\n* Free >>>Grocery<<< Coupons').map(part=>part.text).join('')).toBe('Grocery Demo * Free Grocery Coupons');
+  // Text between a closing marker and a later > is never dropped.
+  expect(snippetParts('>>>Grocery<<< Demo, then x > y').map(part=>part.text).join('')).toBe('Grocery Demo, then x > y');
+  const long=snippetParts('word '.repeat(100),40);expect(long.map(part=>part.text).join('').length).toBeLessThanOrEqual(41);
 });

@@ -8,6 +8,7 @@ import { replyCardsFromText, validReplyCardState } from '../shared/reply-cards.j
 import { routinePresets } from '../shared/routine-presets.js';
 import type { Store } from './store.js';
 import { isConversationReply } from '../shared/message-origin.js';
+import { HISTORY_PAGE_TURNS } from '../shared/history.js';
 import { notFound, redactAgents, Roster, routineById, visibleBots } from './bot-access.js';
 import { nameRequesters } from './vault.js';
 import { contentEtag } from './etag.js';
@@ -99,8 +100,12 @@ export async function installExperienceRoutes(app: FastifyInstance, runtime: Run
           let read, recap;
           if (reusable && state && settled(state.activity)) [read, recap] = [state, reusable];
           else {
-            read = await runtime.conversation(bot.id);
-            recap = summarize(read.messages.map(redact.message), events, new Set(unreadRuns), since);
+            // A recent window is enough: its context holds every earlier message with files, and the
+            // latest reply is almost always in it. Reading whole histories made Today outlast its timeout.
+            read = await runtime.conversation(bot.id, { window: { turns: HISTORY_PAGE_TURNS } });
+            if (read.window?.earlier && !read.messages.some(isConversationReply)) read = await runtime.conversation(bot.id);
+            const messages = [...read.window?.context ?? [], ...read.messages];
+            recap = summarize(messages.map(redact.message), events, new Set(unreadRuns), since);
             if (settled(read.activity) && store.privacyVersion === privacyVersion) recaps.set(cacheKey, { key, at: Date.now(), recap });
             else recaps.delete(cacheKey);
           }

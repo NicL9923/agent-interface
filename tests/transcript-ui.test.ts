@@ -560,7 +560,8 @@ describe("reply actions", () => {
   it("saves the reply as a saved item", async () => {
     await render();
     await act(async () => labelled("Save reply").click());
-    expect(write).toHaveBeenCalledWith("/saved", { kind: "session", botId: "shared", sessionId: "live", messageId: "a", title: "Pot roast tonight. Carrots too." });
+    // A live save is titled like one from history: its first line, without Markdown.
+    expect(write).toHaveBeenCalledWith("/saved", { kind: "session", botId: "shared", sessionId: "live", messageId: "a", title: "Pot roast tonight." });
     expect(labelled("Reply saved").disabled).toBe(true);
   });
 
