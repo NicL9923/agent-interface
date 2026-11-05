@@ -510,6 +510,13 @@ def remote_source(program, payload):
     return REMOTE_PRELUDE + f"PAYLOAD = json.loads({json.dumps(json.dumps(payload))})\n" + program
 
 
+def host_facts(host, app_base):
+    """The live host facts every release tool starts from. One caller shape, so a key REMOTE_FACTS
+    reads can never be missing from one tool's payload (Nov 4, 2026: qualification sent no
+    metadataProbe and stopped with a KeyError on the host)."""
+    return remote(host, REMOTE_FACTS, {"appBase": str(app_base), "metadataProbe": METADATA_PROBE})
+
+
 def remote(host, program, payload, timeout=900):
     """Run a Python program on the host with a JSON payload; return its final JSON line."""
     done = host_access.ssh(host, ["python3", "-"], input=remote_source(program, payload), timeout=timeout, check=False, capture=True)
@@ -583,7 +590,7 @@ def prepare(args):
         raise SystemExit("Release only commits that are merged to origin/main.")
     name = release_name(commit, datetime.datetime.now(datetime.timezone.utc))
     base = Path(args.app_base)
-    facts = remote(args.host, REMOTE_FACTS, {"appBase": str(base), "metadataProbe": METADATA_PROBE})
+    facts = host_facts(args.host, base)
     prior = facts["prior"]
     print(f"Carrying settings from {facts['priorPath']}; live release {Path(facts['current']).name}.")
     operation_dir = base / "operations" / name

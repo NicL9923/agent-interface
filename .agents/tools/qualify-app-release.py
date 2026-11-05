@@ -214,7 +214,7 @@ def main(argv=None):
     manifest = release_app.load_manifest(args.name)
     if manifest["status"] not in ("preparing", "prepared"):
         parser.error("Qualify an unactivated staged release only")
-    facts = release_app.remote(manifest["host"], release_app.REMOTE_FACTS, {"appBase": manifest["appBase"]})
+    facts = release_app.host_facts(manifest["host"], manifest["appBase"])
     payload = {**manifest, "node": facts["prior"]["node"], "computerProbeBrowser": args.computer_probe_browser}
     result = release_app.remote(manifest["host"], REMOTE, payload, timeout=7200)
     release_app.MANIFESTS.joinpath(args.name + "-qualification.json").write_text(json.dumps(result, indent=2) + "\n")
