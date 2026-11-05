@@ -187,36 +187,54 @@ def configured():
     return home, endpoint.rstrip("/")
 
 
+# This matcher is defense in depth: literal text cannot show every URL a script builds. See
+# docs/SharedComputer.md for the network-level control.
+#
 # WHATWG URL parsing removes tabs and newlines anywhere, reads a special scheme case-insensitively,
 # treats "\" as "/" and accepts any number of slashes, none included, before the authority:
 # "http:/169.254.169.254/", "HTTP:169.254.169.254" and "http:\\169.254.169.254" all reach that host
 # from a page with another scheme. Native Hermes's literal scan finds only "http(s)://" and "//host".
 # A JavaScript string spells the same forms with "\/" or the "\t", "\n" and "\r" escapes.
-_SCHEME_COLON_RE = re.compile(r"(?<![A-Za-z0-9+.\-])(?:https?|wss?):[/\\]*"
-                              r"(?=[^\s'\"`)\]<>/\\])((?:[^\s'\"`)\[\]<>]*\[[^\s'\"`)\[\]<>]*\])?[^\s'\"`)\]<>]*)",
-                              re.IGNORECASE)
-# A literal cut at ")" or "]" inside its authority with an "@" ahead: the host follows the last "@",
-# a bracketed IPv6 host whole.
-_SCHEME_COLON_USERINFO_RE = re.compile(r"[^\s'\"`/?#\\]*@((?:\[[^\s'\"`\[\]<>/?#\\]*\])?[^\s'\"`)\]<>/?#\\]*)")
+_SCHEME_COLON_RE = re.compile(r"(?<![A-Za-z0-9+.\-])(?:https?|wss?):[/\\]*", re.IGNORECASE)
 _URL_WHITESPACE_RE = re.compile(r"\\[tnr]|[\t\n\r]")
+# A special-scheme authority ends at the first of these.
+_AUTHORITY_END = frozenset("/\\?#\n")
+# Where a literal in script text plausibly ends: a quote or whitespace. WHATWG would read on, but a
+# host holding one of these is either rejected or no metadata host. Userinfo may hold them, so an "@"
+# after one is read as well.
+_SOFT_END = frozenset("'\"`<> \t\r\f\v")
 
 
-def scheme_colon_literals(text):
-    """Each special-scheme URL literal in text, as the scheme-relative "//authority..." form browsers
-    read it to be, for native ``literal_targets_metadata`` to judge by its literal host without DNS.
-    "http(s)://" literals come back too, harmlessly; native already judges them."""
+def _first(text, characters, start=0):
+    return next((index for index in range(start, len(text)) if text[index] in characters), len(text))
+
+
+def scheme_colon_hosts(text):
+    """Each host a special-scheme URL literal in text can name, read as WHATWG reads an authority.
+
+    The userinfo ends at the last "@" before the first "/", "\\", "?" or "#", and a bracketed host stays
+    whole. When an "@" follows a quote or space inside that span, both readings come back. A scheme
+    inside an earlier literal, such as a query parameter, is part of that literal, as native reads it.
+    """
     if not isinstance(text, str):
         return []
-    found = []
+    hosts = []
     for variant in dict.fromkeys((text, _URL_WHITESPACE_RE.sub("", text.replace("\\/", "/")))):
+        consumed = 0
         for match in _SCHEME_COLON_RE.finditer(variant):
-            body = match.group(1).replace("\\", "/")
-            found.append("//" + body)
-            if not any(c in "/?#" for c in body):
-                tail = _SCHEME_COLON_USERINFO_RE.match(variant, match.end())
-                if tail and tail.group(1):
-                    found.append("//" + tail.group(1))
-    return list(dict.fromkeys(literal.rstrip(".,;") for literal in found))
+            if match.start() < consumed:
+                continue
+            start = match.end()
+            span = variant[start:_first(variant, _AUTHORITY_END, start)]
+            consumed = _first(variant, _SOFT_END, start)
+            soft = _first(span, _SOFT_END)
+            readings = [span[:soft]] + ([span] if "@" in span[soft:] else [])
+            for authority in readings:
+                host = authority.rpartition("@")[2]
+                host = host[:_first(host, _SOFT_END)]
+                if host:
+                    hosts.append(host)
+    return list(dict.fromkeys(hosts))
 
 
 # IPv6 prefixes that carry an IPv4 address in their low 32 bits: IPv4-compatible (::/96), the
@@ -238,20 +256,30 @@ def embedded_ipv4(ip):
 _FORBIDDEN_DOMAIN = frozenset("\x00\t\n\r #/:<>?@[\\]^|%\x7f") | frozenset(chr(code) for code in range(0x20))
 
 
-def scheme_colon_targets_metadata(literal, judge):
-    """Whether a ``scheme_colon_literals`` candidate names a metadata host a browser would accept.
+def uts46_ascii(name):
+    """WHATWG domain to ASCII for a non-ASCII name: UTS 46 mapping, nontransitional, without STD3 rules.
 
-    ``judge`` is native ``literal_targets_metadata``. The host is read as WHATWG URL parsing reads it.
-    A host WHATWG rejects fetches nothing and passes: an unclosed, empty or invalid bracketed host
-    such as ``[]`` from ``{https:[]}``, an empty host, a non-numeric port or a forbidden code point.
-    An accepted host is judged again in its plain form, an IPv6 host also by any IPv4 address it
-    embeds, and a non-ASCII host after IDNA mapping. A non-ASCII host that mapping can't read fails
-    closed, since WHATWG's UTS 46 processing may still accept it.
+    None when the ``idna`` package is missing or cannot map the name. The caller then blocks.
     """
-    if judge(literal):
-        return True
-    authority = re.split(r"[/?#]", literal.lstrip("/"), maxsplit=1)[0]
-    host = authority.rpartition("@")[2]
+    try:
+        import idna
+    except ImportError:
+        return None
+    try:
+        mapped = idna.uts46_remap(name, std3_rules=False, transitional=False)
+        return mapped if mapped.isascii() else idna.encode(mapped, uts46=False).decode("ascii")
+    except (idna.IDNAError, UnicodeError, ValueError):
+        return None
+
+
+def host_targets_metadata(host, judge):
+    """Whether a host from ``scheme_colon_hosts`` is one WHATWG accepts and that names a metadata address.
+
+    ``judge`` is native ``literal_targets_metadata``, which reads metadata names and every IPv4
+    spelling without DNS. A host WHATWG rejects fetches nothing and passes: an unclosed, empty or
+    invalid bracketed host such as ``[]`` from ``{https:[]}``, an empty host, a non-numeric port or a
+    forbidden code point. A non-ASCII name goes through UTS 46 first; one it can't map is blocked.
+    """
     if host.startswith("["):
         inner, closed, after = host[1:].partition("]")
         if not closed or not re.fullmatch(r"(?::[0-9]*)?", after):
@@ -260,26 +288,23 @@ def scheme_colon_targets_metadata(literal, judge):
             ip = ipaddress.IPv6Address(inner)
         except ValueError:
             return False
-        return any(judge("//" + str(address) + "/") for address in embedded_ipv4(ip))
+        return judge("//[" + inner + "]/") or any(judge("//" + str(address) + "/") for address in embedded_ipv4(ip))
     name, colon, port = host.rpartition(":")
     if not colon:
         name = host
-    elif not port.isdigit() and port:
+    elif port and not port.isdigit():
         return False
-    try:
-        name = unquote_to_bytes(name).decode("utf-8")
-    except UnicodeDecodeError:
-        return False
-    if not name or any(c in _FORBIDDEN_DOMAIN for c in name):
+    name = unquote_to_bytes(name).decode("utf-8", "replace")
+    if not name:
         return False
     if not name.isascii():
-        try:
-            name = name.encode("idna").decode("ascii")
-        except UnicodeError:
+        name = uts46_ascii(name)
+        if name is None:
             return True
-        if not name or any(c in _FORBIDDEN_DOMAIN for c in name):
-            return False
-    return judge("//" + name.lower() + "/")
+    name = name.lower()
+    if not name or any(c in _FORBIDDEN_DOMAIN for c in name):
+        return False
+    return judge("//" + name + "/")
 
 
 def param_strings(value):
@@ -820,7 +845,7 @@ def install_tools():
             if method.startswith(browser_cdp_tool._TEXT_INPUT_METHOD_PREFIX) or method in browser_cdp_tool._CDP_NON_FETCHING_METHODS:
                 return False
             # Forms native's scan misses that a browser still reads as a special-scheme authority.
-            return any(scheme_colon_targets_metadata(url, judge) for text in param_strings(params) for url in scheme_colon_literals(text))
+            return any(host_targets_metadata(host, judge) for text in param_strings(params) for host in scheme_colon_hosts(text))
         # An older revision: its browser_console expression and the two CDP methods it can fetch with.
         expression, target = "", ""
         if name == "browser_console":

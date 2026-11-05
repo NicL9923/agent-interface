@@ -31,3 +31,12 @@ Source fingerprint `sha256:4e32e48beb669fbbc18cd5a4f6f10fa7d913e7d81a65dd31a42da
 ## Second re-review fix
 
 Source fingerprint `sha256:285865826cb9dedf9c77b3f528f96afa74ad50db0ac46537e4bf590dcf625dae`. The re-review found no bypass in 10,890 WHATWG-valid metadata cases. It did find a false positive: ordinary script such as `const x={https:[]};` produced a malformed candidate that the fail-closed rule blocked. The wrapper now reads each candidate host as WHATWG does. A host WHATWG rejects passes, because it can't fetch anything. An accepted host is judged in its plain form, after percent-decoding and IDNA mapping. Only a non-ASCII host that Python's IDNA codec can't map still fails closed. On `c5f6d03`, the new lookalike tests failed for `{https:[]}`, `JSON.stringify({http:[],https:[]})` and `{http:[1,2], wss:[]}` on all three script paths. The unclosed bracket case moved from blocked to allowed, since WHATWG rejects it. Every metadata form blocked before is still blocked, and port, userinfo, percent-encoded and fullwidth forms were added. `tests/hermes_computer_test.py` passed all 50 tests, with stand-ins and again with `HERMES_SOURCE` set to the 3a1e9ef source. `ruff check .` passed.
+
+## Third re-review fix
+
+Source fingerprint `sha256:3af842475dc5384538fa5aa266d5c9660081b532d431bbd61fe9f8bcb37a403f`. The review of `60d8dc4` confirmed the false-positive fix and found two gaps.
+
+- The scanner truncated a host after bracketed userinfo, as in `http:/x[abc]@[64:ff9b::a9fe:a9fe]/`. It now reads the authority as WHATWG does: the userinfo ends at the last `@` before the first `/`, `\`, `?` or `#`, and a bracketed host stays whole.
+- Python's IDNA codec could map a host differently from WHATWG. Non-ASCII hosts now go through the `idna` package's UTS 46 mapping, and any non-ASCII host is blocked when that mapping is missing or fails.
+
+`docs/SharedComputer.md` now says the matcher is defense in depth, with a network-level block to follow in a separate change. On `60d8dc4`, the new tests failed for the reviewer's examples, for the IPv4-compatible and 6to4 variants, and for the UTS 46 forms: mathematical and fullwidth digits, the modifier capital M, the ideographic full stop, and the percent-encoded forms. The earlier lookalike tests still pass. `tests/hermes_computer_test.py` passed 53 tests with stand-ins in the system Python, which has no `idna`, so 1 test was skipped. All 53 passed with `HERMES_SOURCE` and `idna` 3.20. `ruff check .` passed.

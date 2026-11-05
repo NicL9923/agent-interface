@@ -624,17 +624,21 @@ class ModernInstallToolsTests(InstallToolsTests):
     SCHEME_COLON_FORMS = ("http:/169.254.169.254/latest/meta-data/", "HTTP:169.254.169.254/", "http:\\\\169.254.169.254\\\\latest",
                           "http:\\/\\/169.254.169.254/", "ht\\ttp:/169.254.169.254/", "https:/user@169.254.169.254/", "ws:/169.254.169.254/")
 
-    def test_scheme_colon_literals_read_each_form_as_the_browser_does(self):
-        self.assertEqual(computer.scheme_colon_literals('location.href = "http:/169.254.169.254/latest/meta-data/"'), ["//169.254.169.254/latest/meta-data/"])
-        self.assertEqual(computer.scheme_colon_literals('fetch("http:\\\\169.254.169.254\\\\x")'), ["//169.254.169.254//x"])
-        self.assertEqual(computer.scheme_colon_literals('fetch("ht\\ttp:/169.254.169.254/")'), ["//169.254.169.254/"])
-        self.assertEqual(computer.scheme_colon_literals('fetch("http:\\/\\/169.254.169.254/")'), ["//169.254.169.254/"])
-        self.assertEqual(computer.scheme_colon_literals('fetch("http:/x)@169.254.169.254/")'), ["//x", "//169.254.169.254"])
-        self.assertEqual(computer.scheme_colon_literals('fetch("https:/[fd00:ec2::254]/")'), ["//[fd00:ec2::254]/"])
+    def test_scheme_colon_hosts_read_each_authority_as_whatwg_does(self):
+        hosts = computer.scheme_colon_hosts
+        self.assertEqual(hosts('location.href = "http:/169.254.169.254/latest/meta-data/"'), ["169.254.169.254"])
+        self.assertEqual(hosts('fetch("http:\\\\169.254.169.254\\\\x")'), ["169.254.169.254"])
+        self.assertEqual(hosts('fetch("ht\\ttp:/169.254.169.254/")'), ["169.254.169.254"])
+        self.assertEqual(hosts('fetch("http:\\/\\/169.254.169.254/")'), ["169.254.169.254"])
+        # Userinfo runs to the last "@" before the path, and a bracketed host stays whole.
+        self.assertEqual(hosts('fetch("http:/x)@169.254.169.254/")'), ["169.254.169.254"])
+        self.assertEqual(hosts('location.href="http:/x[abc]@[64:ff9b::a9fe:a9fe]/"'), ["[64:ff9b::a9fe:a9fe]"])
+        self.assertEqual(hosts('fetch("https:/user:pw@[fd00:ec2::254]:80/")'), ["[fd00:ec2::254]:80"])
+        # An "@" after a quote or space may still be userinfo, so both readings come back.
+        self.assertEqual(hosts('fetch("http:/a b@169.254.169.254/")'), ["a", "169.254.169.254"])
         # Not URLs, and a scheme inside another literal's query is part of that literal, as native reads it.
-        self.assertEqual(computer.scheme_colon_literals('const o = {https: true}; "see http: headers"; mailto:a@b'), [])
-        self.assertEqual(computer.scheme_colon_literals('fetch("https://example.test/?next=http:/169.254.169.254/")'),
-                         ["//example.test/?next=http:/169.254.169.254/"])
+        self.assertEqual(hosts('const o = {https: true}; "see http: headers"; case "http:"'), [])
+        self.assertEqual(hosts('fetch("https://example.test/?next=http:/169.254.169.254/")'), ["example.test"])
 
     def test_cdp_metadata_floor_reads_scheme_colon_forms_in_every_fetching_method(self):
         installed = computer.install_tools()
@@ -673,12 +677,54 @@ class ModernInstallToolsTests(InstallToolsTests):
             with self.subTest(text=text):
                 self.assertEqual(set(self.dispatch_on_fetching_paths(installed, text).values()), {"native dispatch"})
 
+    def stand_in_metadata_matcher(self):
+        """Native's matcher, reduced to the literal metadata hosts the tests use."""
+        matcher = self.native_modules["browser_url_policy"].literal_targets_metadata
+        matcher.side_effect = lambda url: url.startswith("//") and url[2:].split("/")[0] in ("169.254.169.254", "[fd00:ec2::254]", "metadata.google.internal")
+
+    def assert_blocked_on_fetching_paths(self, installed, forms):
+        for form in forms:
+            for method, result in self.dispatch_on_fetching_paths(installed, f'location.href = "{form}"').items():
+                with self.subTest(method=method, form=form):
+                    self.assertEqual(json.loads(result), {"success": False, "error": "Blocked: URL targets a cloud metadata endpoint"})
+        self.native_dispatch.assert_not_called()
+
+    def test_brackets_in_userinfo_never_truncate_the_host(self):
+        installed = computer.install_tools()
+        self.stand_in_metadata_matcher()
+        self.assert_blocked_on_fetching_paths(installed, (
+            "http:/x[abc]@[64:ff9b::a9fe:a9fe]/", "http:/x[abc]@[::169.254.169.254]/", "http:/x[abc]@[2002:a9fe:a9fe::]/",
+            "http:/x]@[fd00:ec2::254]/", "http:/[a]b@169.254.169.254/", "https:/a b@169.254.169.254/"))
+
+    # WHATWG domain to ASCII is UTS 46: these all name a metadata host.
+    UTS46_FORMS = ("http:/%E1%B4%B9etadata.google.internal/", "http:/%F0%9F%AF%B169.254.169.254/",
+                   "http:/\U0001d7cf\U0001d7d4\U0001d7d7.254.169.254/", "http:/\uff11\uff16\uff19\uff0e\uff12\uff15\uff14.169.254/",
+                   "http:/169\u3002254\u3002169\u3002254/", "http:/\u1d39etadata.google.internal/")
+
+    @unittest.skipUnless(importlib.util.find_spec("idna"), "UTS 46 mapping needs the idna package Hermes ships")
+    def test_non_ascii_hosts_are_mapped_as_whatwg_maps_them(self):
+        installed = computer.install_tools()
+        self.stand_in_metadata_matcher()
+        self.assert_blocked_on_fetching_paths(installed, self.UTS46_FORMS)
+        # WHATWG keeps the small capital M (U+1D0D) as its own letter, so that host isn't metadata.google.internal.
+        for form in ("http:/b\u00fccher.example/", "http:/\u1d0detadata.google.internal/"):
+            with self.subTest(form=form):
+                self.assertEqual(self.dispatch_cdp(installed, "Runtime.evaluate", {"expression": f'fetch("{form}")'}), "native dispatch")
+
+    def test_without_idna_every_non_ascii_host_is_blocked_and_ascii_still_judged(self):
+        installed = computer.install_tools()
+        self.stand_in_metadata_matcher()
+        with patch.dict(sys.modules, {"idna": None}):
+            self.assert_blocked_on_fetching_paths(installed, self.UTS46_FORMS + ("http:/b\u00fccher.example/",))
+            for text in self.SCHEME_LOOKALIKES + ('fetch("http:/example.test/")',):
+                with self.subTest(text=text):
+                    self.assertEqual(set(self.dispatch_on_fetching_paths(installed, text).values()), {"native dispatch"})
+
     def test_bracketed_mapped_and_unparseable_scheme_colon_hosts_fail_closed(self):
         installed = computer.install_tools()
         # A stand-in that knows only the two literal metadata hosts, as native would read them.
         matcher = self.native_modules["browser_url_policy"].literal_targets_metadata
         matcher.side_effect = lambda url: url.startswith("//") and url[2:].split("/")[0].rsplit("@", 1)[-1] in ("169.254.169.254", "[fd00:ec2::254]")
-        self.assertEqual(computer.scheme_colon_literals('fetch("http:/x)@[fd00:ec2::254]/")'), ["//x", "//[fd00:ec2::254]"])
         blocked = ("http:/x)@[fd00:ec2::254]/", "http:/x)@[::ffff:169.254.169.254]/", "http:/[::ffff:169.254.169.254]/",
                    "http:/[::ffff:0:a9fe:a9fe]/", "http:/[64:ff9b::a9fe:a9fe]/", "http:/[::169.254.169.254]/", "http:/[2002:a9fe:a9fe::]/",
                    "http:/169.254.169.254:80/", "http:/user:pw@169.254.169.254/", "http:/%31%36%39.254.169.254/",
@@ -735,6 +781,10 @@ class ModernInstallToolsTests(InstallToolsTests):
                 ("Network.loadNetworkResource", {"url": "http:\\169.254.169.254/", "options": {}}),
                 # Hosts after userinfo kept whole, IPv4 inside IPv6, and authorities native can't parse.
                 ("Runtime.evaluate", {"expression": 'location.href = "http:/x)@[fd00:ec2::254]/"'}),
+                # Brackets in userinfo, and non-ASCII hosts WHATWG maps through UTS 46.
+                *(("Runtime.evaluate", {"expression": f'location.href = "{form}"'}) for form in (
+                    "http:/x[abc]@[64:ff9b::a9fe:a9fe]/", "http:/x[abc]@[::169.254.169.254]/", "http:/x[abc]@[2002:a9fe:a9fe::]/")),
+                *(("Runtime.callFunctionOn", {"functionDeclaration": f'function () {{ return fetch("{form}") }}'}) for form in self.UTS46_FORMS),
                 ("Runtime.callFunctionOn", {"functionDeclaration": 'function () { return fetch("http:/x)@[::ffff:169.254.169.254]/") }'}),
                 ("Page.addScriptToEvaluateOnNewDocument", {"source": 'fetch("http:/[64:ff9b::a9fe:a9fe]/")'}),
                 ("Runtime.evaluate", {"expression": 'fetch("http:/\uff11\uff16\uff19\uff0e\uff12\uff15\uff14\uff0e169.254/")'}),
@@ -754,6 +804,7 @@ class ModernInstallToolsTests(InstallToolsTests):
                 ("Runtime.evaluate", {"expression": 'fetch("http:/x)@[2001:db8::1]/")'}),
                 # Hosts WHATWG rejects fetch nothing, and object syntax that looks like a scheme isn't a URL.
                 ("Runtime.evaluate", {"expression": 'fetch("http:/x)@[fd00:ec2::254")'}),
+                ("Runtime.evaluate", {"expression": 'fetch("http:/b\u00fccher.example/")'}),
                 *(("Runtime.evaluate", {"expression": text}) for text in self.SCHEME_LOOKALIKES),
                 ("Runtime.callFunctionOn", {"functionDeclaration": "function () { return JSON.stringify({http:[],https:[]}) }"}),
                 ("Page.addScriptToEvaluateOnNewDocument", {"source": "const x={https:[]};"}),

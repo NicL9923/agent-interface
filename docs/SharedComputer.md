@@ -142,30 +142,46 @@ This is native local-network behavior for the authorized profile, including
 private/LAN/Headnet addresses. It is not a KVM hostname allowlist. Hermes still
 keeps the metadata floor in navigation, redirect checks and `browser_exec`.
 The add-on dispatch wrapper also blocks metadata URL literals in `browser_cdp`
-before the household browser operation starts. It applies native Hermes's own
-CDP metadata floor: `browser_cdp_tool._fetched_param_urls` names every URL a
-fetching method's parameters carry, including scheme-relative `//host` and
-`\\host` forms and hosts after userinfo, and
-`browser_url_policy.literal_targets_metadata` judges each one, including
-IPv6 and decimal, hex and octal IPv4 spellings. The wrapper also finds the
-special-scheme forms that native's scan misses but WHATWG URL parsing still
-reads as an authority: zero or one slash (`http:/169.254.169.254/`,
-`HTTP:169.254.169.254/`), backslashes (`http:\\169.254.169.254`), the
-JavaScript spellings `\/`, `\t`, `\n` and `\r`, for `http`, `https`, `ws`
-and `wss`. It judges each by its literal host, as native judges `//host`, so
-a hostname that only resolves to a metadata address is not caught there.
-A bracketed IPv6 host stays whole, including one after userinfo, and an
-IPv6 host is also judged by any IPv4 address it embeds: mapped, translated,
-IPv4-compatible, NAT64 `64:ff9b::/96` and 6to4. The wrapper reads each host
-as WHATWG URL parsing does. A host WHATWG rejects can't fetch anything and
-passes, so `{https:[]}` and `JSON.stringify({http:[]})` still run. That
-covers an unclosed, empty or invalid bracketed host, an empty host, a
-non-numeric port and a forbidden code point. An accepted host is judged in
-its plain form after percent-decoding, and a non-ASCII host after IDNA
-mapping. A non-ASCII host that Python's IDNA codec can't map is blocked,
-since WHATWG may still accept it.
-JavaScript `\u` and `\x` escapes, and URLs built at run time, are not
-decoded.
+before the household browser operation starts. This matcher is defense in
+depth, not the metadata control. A separate change adds a network-level block
+of metadata addresses for the shared browser, the control that also covers
+URLs a script builds at run time. Until that change ships, the matcher is the
+only add-on check on this path.
+
+The wrapper applies native Hermes's own CDP metadata floor.
+`browser_cdp_tool._fetched_param_urls` names every URL a fetching method's
+parameters carry, including scheme-relative `//host` and `\\host` forms and
+hosts after userinfo. `browser_url_policy.literal_targets_metadata` judges each
+one, including IPv6 and decimal, hex and octal IPv4 spellings, without DNS.
+
+The wrapper also finds special-scheme forms that native's scan misses but
+WHATWG URL parsing still reads as an authority. For `http`, `https`, `ws` and
+`wss`, these are zero or one slash (`http:/169.254.169.254/`,
+`HTTP:169.254.169.254/`), backslashes (`http:\\169.254.169.254`), and the
+JavaScript spellings `\/`, `\t`, `\n` and `\r`. It reads each authority as
+WHATWG does:
+
+- The userinfo ends at the last `@` before the first `/`, `\`, `?` or `#`.
+- A bracketed IPv6 host stays whole.
+- When an `@` follows a quote or space, the wrapper judges both readings. It
+  never judges a host cut short.
+
+A host WHATWG rejects can't fetch anything and passes. So `{https:[]}` and
+`JSON.stringify({http:[]})` still run. Rejected hosts include an unclosed,
+empty or invalid bracketed host, an empty host, a non-numeric port and a
+forbidden code point.
+
+An accepted host is judged by native in its plain form, after
+percent-decoding. A non-ASCII host first goes through the `idna` package's
+UTS 46 mapping, the mapping WHATWG domain-to-ASCII uses. So `%E1%B4%B9` and
+mathematical or fullwidth digits read as WHATWG reads them. If `idna` is
+missing or can't map the host, the call is blocked. An IPv6 host is also
+judged by any IPv4 address it embeds: mapped, translated, IPv4-compatible,
+NAT64 `64:ff9b::/96` and 6to4.
+
+Hostnames are judged literally, as native judges `//host`, so a name that
+only resolves to a metadata address is not caught here. JavaScript `\u` and
+`\x` escapes, and URLs built at run time, are not decoded.
 Text input, block lists and cookie scopes stay unscanned, as in native.
 Native `browser_cdp` repeats its own floor, which lacks the extra forms. A
 `tools.browser_session` revision without these helpers fails the seam check,
