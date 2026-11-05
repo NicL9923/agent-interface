@@ -2,6 +2,7 @@
 import datetime
 import hashlib
 import json
+import re
 import os
 from pathlib import Path
 import shutil
@@ -131,11 +132,20 @@ if __name__ == "__main__":
         with tempfile.TemporaryDirectory() as directory:
             manifest = dict(name="release-test", status="preparing", host="host", appBase="/srv/app")
             remote = Mock(side_effect=[{"prior": {"node": "/pm/node"}}, {"qualificationComplete": True}])
-            module = types.SimpleNamespace(load_manifest=lambda _: manifest, remote=remote, REMOTE_FACTS="facts", MANIFESTS=Path(directory))
+            # The real release module, so qualification calls the same host_facts() prepare does.
+            module = load_source(".agents/tools/release-app.py", "release_app_for_qualify")
             spec = types.SimpleNamespace(loader=types.SimpleNamespace(exec_module=lambda _: None))
-            with patch.object(qualify_app.importlib.util, "spec_from_file_location", return_value=spec), patch.object(qualify_app.importlib.util, "module_from_spec", return_value=module):
+            with patch.object(module, "remote", remote), patch.object(module, "load_manifest", lambda _: manifest), \
+                    patch.object(module, "MANIFESTS", Path(directory)), \
+                    patch.object(qualify_app.importlib.util, "spec_from_file_location", return_value=spec), \
+                    patch.object(qualify_app.importlib.util, "module_from_spec", return_value=module):
                 qualify_app.main(["release-test", "--computer-probe-browser", "/host-only/chrome"])
-            payload = remote.call_args.args[2]
+            facts_call, qualify_call = remote.call_args_list
+            self.assertIs(facts_call.args[1], module.REMOTE_FACTS)
+            # Every key REMOTE_FACTS reads from its payload must be supplied.
+            read = set(re.findall(r'PAYLOAD\["(\w+)"\]', module.REMOTE_PRELUDE + module.REMOTE_FACTS))
+            self.assertLessEqual(read, set(facts_call.args[2]))
+            payload = qualify_call.args[2]
             self.assertEqual(payload["computerProbeBrowser"], "/host-only/chrome")
             self.assertEqual(payload["node"], "/pm/node")
 
