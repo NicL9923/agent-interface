@@ -6,14 +6,14 @@ import { signedIn } from './auth.js';
 import type { Routine, Runtime } from '../shared/types.js';
 import { GROUP_NOTES_MAX_BYTES, GROUP_PURPOSE_MAX, type GroupCatalog, type GroupEvent, type GroupPage, type GroupRequest, type GroupRoom, type GroupState } from '../shared/collaboration.js';
 import type { Store } from './store.js';
-import { notFound, redactAgents, Roster, visibleBots } from './bot-access.js';
+import { notFound, redactAgents, Roster, visible, visibleBots } from './bot-access.js';
 import { httpError } from './http-error.js';
 import { id } from './schemas.js';
 import { routineRun, runTime, type RoutineRun, type RoutineRunPage } from '../shared/routine-runs.js';
 /** How long one read of an assistant's runs serves every viewer. */
 export const RUNS_CACHE_MS = 5_000;
 import { GroupLatestCache, previewOf } from './group-latest.js';
-import { mentionsRoom, redactRooms, roomLeaks } from './routine-delivery.js';
+import { mentionsRoom, presentations, redactRooms, roomLeaks, type Presentation } from './routine-delivery.js';
 const uuid = z.string().uuid();
 
 /** Whether a room has only local assistants this person may see, as every group route requires. */
@@ -21,67 +21,85 @@ export function roomAccessible(room: GroupRoom, visible: (profile: string) => bo
   return room.members?.length >= 2 && room.members.every(member => visible(member.profile) && (!member.target || member.target.kind === 'local'));
 }
 
-/** The group chats one person can open, by ID, and whether routines can post in them on this Hermes. */
+/**
+ * The group chats one person can open, by ID, and whether routines can post in them on this Hermes. `all`
+ * is every room Hermes lists and `assistants` every current assistant, for checking rooms they cannot see.
+ */
 export async function openableRooms(runtime: Pick<Runtime, 'groupRequest' | 'listBots'>, store: Store, userId: string) {
   const catalog = runtime.groupRequest ? await runtime.groupRequest({ operation: 'list' }) as GroupCatalog : undefined;
-  if (!catalog?.supported) return { rooms: new Map<string, GroupRoom>(), routineDelivery: false };
-  const allowed = new Set((await visibleBots(runtime, store, userId)).map(bot => bot.id));
-  return { rooms: new Map(catalog.rooms.filter(room => roomAccessible(room, profile => allowed.has(profile))).map(room => [room.room_id, room])),
-    routineDelivery: catalog.routineDelivery === true };
+  if (!catalog?.supported) return { rooms: new Map<string, GroupRoom>(), all: new Map<string, GroupRoom>(), presentation: () => undefined, routineDelivery: false };
+  const presentation = await presentations(runtime, store);
+  const allowed = (profile: string) => { const bot = presentation(profile); return !!bot && visible(bot, userId); };
+  return { rooms: new Map(catalog.rooms.filter(room => roomAccessible(room, allowed)).map(room => [room.room_id, room])),
+    all: new Map(catalog.rooms.map(room => [room.room_id, room])), presentation, routineDelivery: catalog.routineDelivery === true };
+}
+
+/** One person's view of routine and run errors: none that name a room they cannot open or an assistant they cannot see. */
+async function errorRedactor(runtime: Pick<Runtime, 'groupRequest' | 'listBots'>, store: Store, roster: Roster, userId: string, names: boolean) {
+  const rooms = names ? await openableRooms(runtime, store, userId).then(open => new Set(open.rooms.keys()), () => undefined) : undefined;
+  const agents = await redactAgents(store, roster, userId);
+  return { rooms, text: (text: string) => agents.text(names ? redactRooms(text, rooms) : text) };
 }
 
 /**
  * A routine as one person sees it: only the group chats it posts in that they can open, and errors that
- * name only those. Hermes is asked only when a routine posts in a room or an error names one. If it cannot
- * answer, those routines leave `roomIds` out, which clients read as unknown: they neither show nor send
- * rooms for it, so a save cannot drop one. Their errors then name no room at all.
+ * name no room they cannot open and no assistant they cannot see. Hermes is asked only when a routine posts
+ * in a room or an error names one. If it cannot answer, those routines leave `roomIds` out, which clients
+ * read as unknown: they neither show nor send rooms for it, so a save cannot drop one. Errors that name a
+ * room are then replaced.
  */
-export async function routinesFor<T extends Routine>(runtime: Pick<Runtime, 'groupRequest' | 'listBots'>, store: Store, userId: string, routines: T[]): Promise<T[]> {
+export async function routinesFor<T extends Routine>(runtime: Pick<Runtime, 'groupRequest' | 'listBots'>, store: Store, roster: Roster, userId: string, routines: T[]): Promise<T[]> {
   const touches = (routine: Routine) => !!routine.roomIds?.length || mentionsRoom(routine.lastError) || mentionsRoom(routine.lastDeliveryError);
-  if (!routines.some(touches)) return routines;
-  const rooms = await openableRooms(runtime, store, userId).then(open => new Set(open.rooms.keys()), () => undefined);
+  const errs = (routine: Routine) => routine.lastError !== undefined || routine.lastDeliveryError !== undefined;
+  if (!routines.some(routine => touches(routine) || errs(routine))) return routines;
+  const redact = await errorRedactor(runtime, store, roster, userId, routines.some(touches));
   return routines.map(routine => {
-    if (!touches(routine)) return routine;
+    if (!touches(routine) && !errs(routine)) return routine;
     const { roomIds, ...rest } = routine;
     const errors = {
-      ...(routine.lastError !== undefined ? { lastError: redactRooms(routine.lastError, rooms) } : {}),
-      ...(routine.lastDeliveryError !== undefined ? { lastDeliveryError: redactRooms(routine.lastDeliveryError, rooms) } : {}),
+      ...(routine.lastError !== undefined ? { lastError: redact.text(routine.lastError) } : {}),
+      ...(routine.lastDeliveryError !== undefined ? { lastDeliveryError: redact.text(routine.lastDeliveryError) } : {}),
     };
     if (!roomIds) return { ...routine, ...errors };
-    return (rooms ? { ...rest, ...errors, roomIds: roomIds.filter(id => rooms.has(id)) } : { ...rest, ...errors }) as T;
+    return (redact.rooms ? { ...rest, ...errors, roomIds: roomIds.filter(id => redact.rooms!.has(id)) } : { ...rest, ...errors }) as T;
   });
 }
 
-/** Hides from one person the rooms they cannot open in routine run errors. Hermes is asked only when an error names a room. */
-async function runErrorsFor<T extends { error?: string }>(runtime: Pick<Runtime, 'groupRequest' | 'listBots'>, store: Store, userId: string, rows: T[]): Promise<T[]> {
-  if (!rows.some(row => mentionsRoom(row.error))) return rows;
-  const rooms = await openableRooms(runtime, store, userId).then(open => new Set(open.rooms.keys()), () => undefined);
-  return rows.map(row => mentionsRoom(row.error) ? { ...row, error: redactRooms(row.error!, rooms) } : row);
+/** Routine run errors as one person sees them, by the same rules as `routinesFor`. */
+async function runErrorsFor<T extends { error?: string }>(runtime: Pick<Runtime, 'groupRequest' | 'listBots'>, store: Store, roster: Roster, userId: string, rows: T[]): Promise<T[]> {
+  if (!rows.some(row => row.error !== undefined)) return rows;
+  const redact = await errorRedactor(runtime, store, roster, userId, rows.some(row => mentionsRoom(row.error)));
+  return rows.map(row => row.error !== undefined ? { ...row, error: redact.text(row.error) } : row);
 }
 
 /**
  * The group chats a saved routine will post in: those this person chose, which they must be able to open,
- * plus any it already posts in that they cannot see. A personal assistant's results go only to rooms that
- * nobody else can open, in practice rooms with one of its owner's personal assistants. Undefined when
- * nothing changes. Call it inside `serialDelivery`, so a sharing change cannot pass between check and save.
+ * plus any it already posts in that they cannot see. `current` is the routine's rooms as Hermes has them
+ * now, read in this turn of `serialDelivery`, so an earlier save or sharing change in the queue is never
+ * undone. Every room in the result is checked against the current sharing, including the ones kept
+ * unseen: none may let someone who cannot see the assistant read its results. Undefined when nothing changes.
  */
 export async function routineRooms(runtime: Pick<Runtime, 'groupRequest' | 'listBots'>, store: Store, userId: string,
-  input: { botId: string; roomIds?: string[] }, previous?: string[]): Promise<string[] | undefined> {
+  input: { botId: string; roomIds?: string[] }, current?: string[]): Promise<string[] | undefined> {
   if (input.roomIds === undefined) return undefined;
   const chosen = [...new Set(input.roomIds)];
   const open = await openableRooms(runtime, store, userId).catch(error => {
     if (chosen.length) throw error;
-    return { rooms: new Map<string, GroupRoom>(), routineDelivery: false };
+    return { rooms: new Map<string, GroupRoom>(), all: new Map<string, GroupRoom>(), presentation: (): Presentation | undefined => undefined, routineDelivery: false };
   });
   if (chosen.length && !open.routineDelivery) throw httpError(409, 'This Hermes version cannot post routine results in group chats.');
   if (chosen.some(roomId => !open.rooms.has(roomId))) throw httpError(400, 'Choose group chats you can open.');
   // The same rule a sharing change checks again: nobody who cannot see the assistant may open the room.
-  const presentation = (botId: string) => store.presentation(botId);
-  if (chosen.some(roomId => roomLeaks(presentation(input.botId), open.rooms.get(roomId)!, presentation))) throw httpError(400, 'Choose a group chat with one of your personal assistants, so only you see these results.', { code: 'private_recipients' });
+  const presentation = open.presentation;
+  const bot = presentation(input.botId);
+  if (chosen.some(roomId => roomLeaks(bot, open.rooms.get(roomId)!, presentation))) throw httpError(400, 'Choose a group chat with one of your personal assistants, so only you see these results.', { code: 'private_recipients' });
   // Rooms it already posts in keep their place; newly chosen ones follow.
-  const before = previous ?? [];
+  const before = current ?? [];
   const rooms = [...before.filter(roomId => !open.rooms.has(roomId) || chosen.includes(roomId)), ...chosen.filter(roomId => !before.includes(roomId))];
-  return previous && JSON.stringify(rooms) === JSON.stringify(previous) ? undefined : rooms;
+  if (current && JSON.stringify(rooms) === JSON.stringify(current)) return undefined;
+  if (rooms.some(roomId => { const room = open.all.get(roomId); return !!room && roomLeaks(bot, room, presentation); }))
+    throw httpError(409, "This routine already posts in a group chat that people who can't see its assistant could open. Ask someone who can open that group chat to remove it from the routine, then try again.", { code: 'routine_rooms' });
+  return rooms;
 }
 
 export async function installCollaborationRoutes(app: FastifyInstance, runtime: Runtime, store: Store, roster = new Roster(runtime)) {
@@ -95,7 +113,7 @@ export async function installCollaborationRoutes(app: FastifyInstance, runtime: 
     const p = z.object({ botId: id, routineId: id }).parse(req.params);
     await profile(signedIn(req).id, p.botId);
     if (!runtime.routineResults) throw httpError(409, 'Routine history is unavailable on this Hermes integration.');
-    return runErrorsFor(runtime, store, signedIn(req).id, await runtime.routineResults(p.botId, p.routineId));
+    return runErrorsFor(runtime, store, roster, signedIn(req).id, await runtime.routineResults(p.botId, p.routineId));
   });
   // Every run of one assistant's routines, for its conversation. Hermes reads one routine at a
   // time, so a read is shared for a few seconds across viewers and polls; access and redaction
@@ -125,7 +143,7 @@ export async function installCollaborationRoutes(app: FastifyInstance, runtime: 
     const page = await assistantRuns(botId);
     const from = since ? Date.parse(since) : -Infinity;
     const redact = await redactAgents(store, roster, signedIn(req).id);
-    return { unavailable: page.unavailable, runs: await runErrorsFor(runtime, store, signedIn(req).id, page.runs.filter(run => runTime(run) >= from).map(run => ({
+    return { unavailable: page.unavailable, runs: await runErrorsFor(runtime, store, roster, signedIn(req).id, page.runs.filter(run => runTime(run) >= from).map(run => ({
       ...run, preview: run.preview === undefined ? undefined : redact.text(run.preview), error: run.error === undefined ? undefined : redact.text(run.error) }))) };
   });
   apiRoute(app, "GET /bots/:botId/routines/:routineId/results/:resultId", {}, async req => {

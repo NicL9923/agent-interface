@@ -200,8 +200,12 @@ rooms the reader can open, and leaves `roomIds` out when the server could not re
 catalog; send `roomIds` only when it was present, since saving replaces the rooms you can see
 and keeps the ones you cannot. A new room must be one you can open (400), and a private
 assistant's routine may post only in rooms nobody else can open, in practice rooms with one of its
-owner's personal assistants (400 with `code: "private_recipients"`). Routine and run errors name only
-rooms you can open; others read "a group chat". `PATCH /api/bots/:id` refuses a sharing change that
+owner's personal assistants (400 with `code: "private_recipients"`). An error that names a room you cannot
+open is replaced whole with "Couldn't post in a group chat you can't open.", since Hermes repeats the
+room's profile elsewhere in it, and one that names an assistant you cannot see is hidden as private.
+A save merges your rooms with the routine's rooms as Hermes has them when the save runs, and refuses
+with 409 `code: "routine_rooms"` if any resulting room, including ones you cannot see, would expose the
+routine. `PATCH /api/bots/:id` refuses a sharing change that
 would let a routine post where people who cannot see its assistant read it, such as making an
 assistant personal while its routine posts in a room others can open, or sharing the last personal
 member of a room a personal routine posts in. `POST /api/bots` refuses the same way when a room

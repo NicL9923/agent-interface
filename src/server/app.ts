@@ -328,7 +328,7 @@ export async function createApp(
   apiRoute(app, "GET /routines", {}, async (req) => {
     await requireCapability("routines");
     const userId = signedIn(req).id;
-    return routinesFor(runtime, store, userId, (await runtime.routines()).filter(r => visibleTo(store, r.botId, userId)).map((r) => ({
+    return routinesFor(runtime, store, roster, userId, (await runtime.routines()).filter(r => visibleTo(store, r.botId, userId)).map((r) => ({
       ...r,
       recipientIds: store.getRoutineRecipients(r.id),
     })));
@@ -397,12 +397,15 @@ export async function createApp(
     // Checked last, so a refused routine never waits on Hermes's room catalog. Rooms are checked and
     // saved in one turn with sharing changes, which recheck them.
     const routine = input.roomIds === undefined ? await runtime.saveRoutine(input, routineId) : await serialDelivery(store, async () => {
-      const rooms = await routineRooms(runtime, store, userId, input, previous?.roomIds);
+      // Read again in this turn: a save or sharing change ahead in the queue may have changed its rooms.
+      const current = routineId ? (await runtime.routines()).find(row => row.id === routineId) : undefined;
+      if (routineId && (!current || current.botId !== input.botId)) throw httpError(404, "Routine not found");
+      const rooms = await routineRooms(runtime, store, userId, input, current?.roomIds);
       if (rooms === undefined) delete input.roomIds; else input.roomIds = rooms;
       return runtime.saveRoutine(input, routineId);
     });
     store.routineRecipients(routine.id, input.recipientIds);
-    const [saved] = await routinesFor(runtime, store, userId, [{ ...effective, ...routine, recipientIds: input.recipientIds }]);
+    const [saved] = await routinesFor(runtime, store, roster, userId, [{ ...effective, ...routine, recipientIds: input.recipientIds }]);
     return saved;
   };
   apiRoute(app, "POST /routines", { body: routineSchema, before: async () => requireCapability("routines") }, async (req, input) => saveRoutine(signedIn(req).id, input));

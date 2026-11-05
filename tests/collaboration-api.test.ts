@@ -133,9 +133,13 @@ it('keeps the catalog when a preview cannot be read', async () => {
 });
 it("hides rooms a person cannot open from routine run errors", async () => {
   const s = await fixture();
-  s.routineResults.mockResolvedValueOnce([{ id: 'run1', title: 'Morning', previewOnly: false, status: 'failed', error: 'room:private delivery failed; room:shared delivery failed' }] as never);
+  // Exact Hermes strings (cron/scheduler_delivery_room.py), joined as cron/scheduler_delivery.py joins them.
+  s.routineResults.mockResolvedValueOnce([
+    { id: 'run1', title: 'Morning', previewOnly: false, status: 'failed', error: "room:private@private-bot delivery failed: This Group Chat is managed by another gateway. @private-bot does not host it. If a profile's gateway hosts this room, deliver to room:private@<that profile> (Room settings shows the exact target).; room:shared: no live Group Chat with that id on this machine" },
+    { id: 'run2', title: 'Morning', previewOnly: false, status: 'failed', error: 'room:shared: no live Group Chat with that id on this machine' },
+  ] as never);
   const response = await s.app.inject({ url: '/api/bots/ranch/routines/r1/results', headers: s.headers });
-  expect(response.json()[0].error).toBe('a group chat delivery failed; room:shared delivery failed');
+  expect(response.json().map((run: { error: string }) => run.error)).toEqual(["Couldn't post in a group chat you can't open.", 'room:shared: no live Group Chat with that id on this machine']);
 });
 it("saves a room's purpose, notes and lead for anyone who can open it, with checked limits", async () => {
   const s = await fixture();

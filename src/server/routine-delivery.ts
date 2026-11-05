@@ -8,7 +8,19 @@ import type { Store } from "./store.js";
 // routine's assistant. The rule is checked when a routine's rooms are chosen and again whenever an
 // assistant's sharing changes, since that changes who can open a room.
 
-type Presentation = { shared?: boolean; ownerId?: string };
+export type Presentation = { shared?: boolean; ownerId?: string };
+
+/**
+ * Who can see each current assistant, as every group route decides it: the app's record over what Hermes
+ * reports. Undefined for an ID that is no assistant now, such as a deleted one.
+ */
+export async function presentations(runtime: Pick<Runtime, "listBots">, store: Store) {
+  const bots = new Map((await runtime.listBots()).map(bot => [bot.id, bot]));
+  return (botId: string): Presentation | undefined => {
+    const bot = bots.get(botId);
+    return bot && { shared: bot.shared, ownerId: bot.ownerId, ...store.presentation(botId) };
+  };
+}
 
 /**
  * Whether a routine of an assistant with this sharing would show its results to someone who cannot see
@@ -56,12 +68,12 @@ export function serialDelivery<T>(store: Store, work: () => Promise<T>): Promise
 export async function assertRoutinesStayPrivate(runtime: Runtime, store: Store, userId: string, botId: string, next: Presentation) {
   if (!runtime.groupRequest) return;
   const unreadable = () => httpError(409, "WildBots couldn't check which group chats this household's routines post in, so nothing changed. Try again in a moment.", { code: "routine_rooms_unknown" });
-  let assistants: Set<string>;
-  try { assistants = new Set((await runtime.listBots()).map(bot => bot.id)); }
+  let current: (botId: string) => Presentation | undefined;
+  try { current = await presentations(runtime, store); }
   catch { throw unreadable(); }
-  const before = store.presentation(botId);
+  const before = current(botId);
   // A sharing change that keeps who can see the assistant changes no room.
-  if (assistants.has(botId) && (before.shared !== false) === (next.shared !== false) && before.ownerId === next.ownerId) return;
+  if (before && (before.shared !== false) === (next.shared !== false) && before.ownerId === next.ownerId) return;
   let routines: Routine[];
   try { routines = (await runtime.routines()).filter(routine => routine.roomIds?.length); }
   catch { throw unreadable(); }
@@ -70,16 +82,16 @@ export async function assertRoutinesStayPrivate(runtime: Runtime, store: Store, 
   try { catalog = await runtime.groupRequest({ operation: "list" }) as GroupCatalog; }
   catch { throw unreadable(); }
   const rooms = new Map((catalog.supported ? catalog.rooms : []).map(room => [room.room_id, room]));
-  const after = (id: string) => id === botId ? next : assistants.has(id) ? store.presentation(id) : undefined;
+  const after = (id: string) => id === botId ? next : current(id);
   const conflicts = routines.flatMap(routine => routine.roomIds!.flatMap(roomId => {
     const room = rooms.get(roomId);
     return room && roomLeaks(after(routine.botId), room, after) ? [{ routine, room }] : [];
   }));
   if (!conflicts.length) return;
-  const now = (id: string) => store.presentation(id);
+  const sees = (id: string) => { const bot = current(id); return !!bot && visible(bot, userId); };
   const named = conflicts.map(({ routine, room }) => {
-    const routineName = visible(now(routine.botId), userId) ? `"${routine.name}"` : "another member's routine";
-    const roomName = room.members.every(member => assistants.has(member.profile) && visible(now(member.profile), userId)) ? `"${room.name}"` : "a group chat";
+    const routineName = sees(routine.botId) ? `"${routine.name}"` : "another member's routine";
+    const roomName = room.members.every(member => sees(member.profile)) ? `"${room.name}"` : "a group chat";
     return `${routineName} posts in ${roomName}`;
   });
   throw httpError(409, `This would let people who can't see an assistant read its routine results: ${[...new Set(named)].join("; ")}. Remove those group chats from the routines, then try again.`,
@@ -87,14 +99,15 @@ export async function assertRoutinesStayPrivate(runtime: Runtime, store: Store, 
 }
 
 const roomToken = /room:([A-Za-z0-9][A-Za-z0-9._:-]*)(@[A-Za-z0-9_-]+)?/gi;
+export const hiddenRoomError = "Couldn't post in a group chat you can't open.";
 /**
- * Hides the group chats someone cannot open from Hermes text such as a routine's delivery error, which
- * names its target as `room:<id>[@<profile>]`. With no list of rooms, every room is hidden.
+ * A routine or run error as someone sees it. Hermes names a group chat target as `room:<id>[@<profile>]`
+ * and can repeat the profile elsewhere in the text, as in "@diary does not host it."
+ * (cron/scheduler_delivery_room.py), so an error that names any room this person cannot open is replaced
+ * whole. With no list of rooms, every room is one they cannot open.
  */
 export function redactRooms(text: string, open: ReadonlySet<string> | undefined): string {
-  return text.replace(roomToken, (token, id: string) => {
-    const bare = id.replace(/:+$/, "");
-    return open?.has(bare) ? token : `a group chat${id.slice(bare.length)}`;
-  });
+  const hidden = [...text.matchAll(roomToken)].some(([, id]) => !open?.has(id.replace(/:+$/, "")));
+  return hidden ? hiddenRoomError : text;
 }
 export const mentionsRoom = (text: unknown) => typeof text === "string" && /room:/i.test(text);

@@ -29,7 +29,11 @@ it('finds who could read a routine post that cannot see its assistant', () => {
   expect(roomLeaks(of('mine'), room(['open', 'mine']), of)).toBe(false);
   // Someone else's personal assistant in the room lets its owner in, who cannot see "mine".
   expect(roomLeaks(of('mine'), room(['open', 'theirs']), of)).toBe(true);
-  expect(redactRooms('room:a: gone; room:b@x failed; room:a:b ok', new Set(['a']))).toBe('room:a: gone; a group chat failed; a group chat ok');
+  // An error naming any room someone cannot open is replaced whole, since Hermes repeats the profile elsewhere.
+  expect(redactRooms('room:a: no live Group Chat with that id on this machine', new Set(['a']))).toBe('room:a: no live Group Chat with that id on this machine');
+  expect(redactRooms('room:a: gone; room:b@x failed', new Set(['a']))).toBe("Couldn't post in a group chat you can't open.");
+  expect(redactRooms('room:a:b failed', new Set(['a']))).toBe("Couldn't post in a group chat you can't open.");
+  expect(redactRooms('room:a: gone', undefined)).toBe("Couldn't post in a group chat you can't open.");
 });
 
 const members = [
