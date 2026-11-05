@@ -11,7 +11,7 @@ import { MessageMarkdown } from './MessageMarkdown';
 import { isActivityMessage, messageOrigin } from '../shared/message-origin';
 import { withoutBotTag } from '../shared/event-copy';
 import { Icon } from "./Icon";
-import { routineResultLabel, savedReplyTitle, snippetParts } from "../shared/discovery";
+import { routineResultLabel, snippetParts } from "../shared/discovery";
 import { When } from './When';
 /** Incremental search waits this long after typing stops, and starts at this many characters. */
 type HistorySave = Extract<SaveItem, {kind:"session"}>;
@@ -92,20 +92,23 @@ export function DiscoveryPanel({ bootstrap, search, onRoutine, onOpenMessage }: 
   useEffect(()=>{if(savedMessage&&page)document.getElementById(`history-${savedMessage}`)?.scrollIntoView?.({block:"center"});},[page,savedMessage]);
   useEffect(()=>{if(!page&&returning.current){activeTab.current?.focus();returning.current=false;}},[page]);
   const back = () => { reset();setSavingKey(null);returning.current=true;setPage(null); };
-  async function pin(item: HistorySave) {
+  /** Saves a conversation, or a reply titled from `reply`, its Markdown. */
+  async function pin(item: HistorySave, reply?: string) {
     const key=pinKey(item.botId,item.sessionId!,item.messageId);
     if(busy||pinned.has(key))return;
     await run(async({current})=>{
       setSavingKey(key);
       try {
-        await request("POST /saved", { body: item });
+        // The Markdown parser that titles a reply loads only when someone saves one.
+        const title=reply===undefined?item.title:(await import("../shared/plain-text")).replyTitle(reply);
+        await request("POST /saved", { body: {...item,title} });
         if(current())setPinned(previous=>new Set([...previous,key]));
       } finally { if(current())setSavingKey(null); }
     },{success:'Saved. Find it in Saved items.'});
   }
-  const saveControl = (item: HistorySave) => {
+  const saveControl = (item: HistorySave, reply?: string) => {
     const key=pinKey(item.botId,item.sessionId!,item.messageId), done=pinned.has(key);
-    return <button className="history-save" aria-disabled={busy||done} onClick={()=>void pin(item)}>{done?"Saved":savingKey===key?"Saving…":item.messageId?"Save reply":"Save conversation"}</button>;
+    return <button className="history-save" aria-disabled={busy||done} onClick={()=>void pin(item,reply)}>{done?"Saved":savingKey===key?"Saving…":item.messageId?"Save reply":"Save conversation"}</button>;
   };
   const speaker = (message:Message) => messageOrigin(message)?.kind==='scheduled'?'Scheduled':isActivityMessage(message)?'Activity':message.toolCall||isAgentExchange(message)?null:message.role==='assistant'?name(page!.botId):message.role==='user'?(message.sender?.id===bootstrap.user.id?'You':message.sender?.name||'User'):message.role==='system'?'System':'Tool';
   return <div className="discovery-panel">
@@ -124,7 +127,7 @@ export function DiscoveryPanel({ bootstrap, search, onRoutine, onOpenMessage }: 
       {page.messages.map(message=><article className="history-message" id={`history-${message.id}`} key={message.id} style={savedMessage===message.id?{borderLeft:"3px solid var(--accent)",paddingLeft:12}:undefined}>
         {(speaker(message)||message.role==='assistant'&&!isActivityMessage(message))&&<div className="history-message-heading">
           {speaker(message)&&<small>{speaker(message)}</small>}
-          {message.role==='assistant'&&!isActivityMessage(message)&&saveControl({kind:'session',botId:page.botId,sessionId:page.sessionId,messageId:message.id,offset:page.offset,title:savedReplyTitle(message.text)})}
+          {message.role==='assistant'&&!isActivityMessage(message)&&saveControl({kind:'session',botId:page.botId,sessionId:page.sessionId,messageId:message.id,offset:page.offset,title:'Saved reply'},message.text)}
         </div>}
         {isActivityMessage(message)?<details><summary>{withoutBotTag(messageOrigin(message)?.title ?? "") || "Activity details"}</summary><MessageMarkdown text={message.text}/></details>:isAgentExchange(message)?<AgentExchange message={message} recipient={name(page.botId)}/>:message.toolCall?<ActionReceipt call={message.toolCall}/>:<MessageMarkdown text={message.text}/>}
         {message.files?.map(file=><a key={file.id} href={`/api/files/${encodeURIComponent(file.id)}`} target="_blank" rel="noreferrer">{file.name}</a>)}

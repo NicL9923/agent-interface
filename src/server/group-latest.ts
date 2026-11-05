@@ -1,6 +1,6 @@
 import type { GroupEvent, GroupLatest, GroupPage, GroupRoom } from "../shared/collaboration.js";
 import { scheduledPost } from "../shared/group-activity.js";
-import { excerpt } from "../shared/event-copy.js";
+import { markdownPlain } from "../shared/plain-text.js";
 
 /** Events read back from a room's end to find its newest message. Driver notices in between rarely pass a handful. */
 export const LATEST_LOOKBACK = 30;
@@ -23,8 +23,7 @@ export function newestMessage(events: GroupEvent[]) {
 export function previewOf(event: GroupEvent, room: GroupRoom, viewerId: string, person: (userId: string) => string | undefined): GroupLatest {
   const raw = typeof event.payload?.text === "string" ? event.payload.text : "";
   // Home shows the preview as plain text, so it carries the message's words without its Markdown.
-  // A message that is only a code block keeps its raw words rather than reading as empty.
-  const text = excerpt(raw, Number.MAX_SAFE_INTEGER) || raw.replace(/\s+/g, " ").trim();
+  const text = markdownPlain(raw);
   let author: string;
   const routine = scheduledPost(event);
   if (routine) author = routine.name;

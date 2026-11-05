@@ -4,6 +4,7 @@ import { computerHandoffMethod as COMPUTER_HANDOFF, type ComputerHandoff } from 
 import { connectionRequestMethod as CONNECTION_REQUEST, requestableConnectionId, type ConnectionRequest } from '../shared/integrations.js';
 import { messageOrigin, withMessageOrigins, wireOrigin } from '../shared/message-origin.js';
 import { excerpt } from '../shared/event-copy.js';
+import { markdownPlain } from '../shared/plain-text.js';
 import type { Wire } from './hermes-transport.js';
 
 /** What a session's frames have said since its last read: streamed text, open requests and tools. */
@@ -150,8 +151,7 @@ export function preview(session?: Wire): Bot['lastMessage'] {
   const raw = typeof session?.preview === 'string' ? session.preview.replace(/\s+/g, ' ').trim() : '';
   if (!raw || messageOrigin({id: 'preview', role: 'user', text: raw})?.visibility === 'activity') return undefined;
   // Home shows the preview as plain text, so it carries the reply's words without its Markdown.
-  // A reply that is only a code block keeps its raw words rather than reading as empty.
-  const text = excerpt(session!.preview, 160) || raw.slice(0, 160);
+  const text = excerpt(markdownPlain(session!.preview), 160);
   const at = typeof session?.last_active === 'number' && Number.isFinite(session.last_active)
     ? new Date(session.last_active * 1000).toISOString()
     : undefined;

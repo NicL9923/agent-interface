@@ -3,50 +3,12 @@ import type { RuntimeEvent } from "./types.js";
 // The add-on titles task events generically; the assistant's name and its own words say more.
 const generic = /^(Hermes (completed|failed|interrupted)|Approval requested)$/;
 
-/** Text these helpers read before flattening. A preview or a title needs far less, and every pattern stays linear within it. */
-const READ_CHARS = 4000;
-
-/** Whether a line is a table's divider row, such as |---|:--:|. Cells are checked one at a time, so long dash runs cost one pass. */
-export function isTableDivider(line: string) {
-  const cells = line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|");
-  return line.includes("|") && cells.every(cell => /^\s*:?-{3,}:?\s*$/.test(cell));
-}
-
-// Divider cells already joined onto one line. Each cell must close with a pipe, so a match only starts at one.
-const joinedDivider = /\|(?: ?:?-{3,}:? ?\|)+(?: ?:?-{3,}:?(?= |$))?/g;
-
-/** Markdown marks outside inline code, which keeps its contents, such as __init__, exactly. */
-function prose(text: string) {
-  return text
-    // A heading after other words, as in a preview joined onto one line, has at least two marks:
-    // a lone # in a sentence is the author's own.
-    .replace(/(^| )#{2,6}(?: |$)/g, "$1").replace(/^# (?=\S)/, "")
-    .replace(/\*\*|~~/g, "")
-    // Underscores mark emphasis only at word edges; inside snake_case and foo__bar they are part of the word.
-    .replace(/(^|[^\w])__(?=\S)([^_]+?)__(?!\w)/g, "$1$2")
-    .replace(/(^|[ (])\*(?=\S)([^*]+?)\*(?=[ ).,;:!?]|$)/g, "$1$2");
-}
-
 /**
- * Markdown marks removed from text that may already be joined onto one line, such as a Hermes
- * preview or a search snippet. Whitespace is collapsed first, so no pattern scans a long run of it.
+ * Plain text on one line, cut at a word near `limit`. Callers pass words, not Markdown: the server
+ * flattens replies with `markdownPlain` before they reach notifications, Today and previews.
  */
-export function inlinePlain(text: string) {
-  let plain = text.slice(0, READ_CHARS).replace(/\s+/g, " ")
-    // A link keeps its words. A preview can end inside the address, so the closing parenthesis is optional.
-    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
-    .replace(/!?\[([^\]]*)\]\([^) ]*$/, "$1");
-  // Pipes are table cells only beside a divider; elsewhere they are the author's own words.
-  if (/\| ?:?-{3,}/.test(plain)) plain = plain.replace(joinedDivider, " ").replace(/ {2,}/g, " ").replace(/ ?(?:\| ?)+/g, " · ").replace(/^ ?· ?| ?· ?$/g, "");
-  return plain.split(/(`[^`]*`)/).map((part, index) => index % 2 ? part.slice(1, -1) : prose(part)).join("");
-}
-
-/** Plain, single-line text from a Markdown reply, cut at a word near `limit`. */
 export function excerpt(text: string | undefined, limit = 180) {
-  const plain = inlinePlain((text ?? "").slice(0, READ_CHARS)
-    .replace(/```[\s\S]*?(```|$)/g, " ")
-    .replace(/^ {0,3}(#{1,6}|[-*+]|\d+[.)]|>) +/gm, ""))
-    .trim();
+  const plain = (text ?? "").replace(/\s+/g, " ").trim();
   if (plain.length <= limit) return plain;
   const cut = plain.slice(0, limit);
   return `${cut.slice(0, Math.max(cut.lastIndexOf(" "), limit * 0.6)).replace(/[\s,;:.–·-]+$/, "")}…`;

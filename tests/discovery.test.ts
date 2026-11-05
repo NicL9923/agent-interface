@@ -2,7 +2,7 @@ import { capabilitiesFixture } from "./helpers/runtime-fixtures.js";
 import { afterEach, expect, it } from 'vitest';
 import { Store } from '../src/server/store.js';
 import { defaultPreferences, type ToolCall } from '../src/shared/types.js';
-import { receipt, routineResultLabel, savedReplyTitle, snippetParts } from '../src/shared/discovery.js';
+import { receipt, routineResultLabel, snippetParts } from '../src/shared/discovery.js';
 import { inQuietHours, BackgroundWorker } from '../src/server/notifications.js';
 import { loadConfig } from '../src/server/config.js';
 import { fakeRuntime } from "./helpers/server.js";
@@ -65,33 +65,9 @@ it('labels familiar routine results and keeps unfamiliar Hermes outcomes visible
   expect(routineResultLabel('waiting_for_device')).toBe('waiting_for_device');
   expect(routineResultLabel('__proto__')).toBe('__proto__');
 });
-it('makes readable saved titles without changing identifiers inside them',()=>{
-  expect(savedReplyTitle('## **Gate**')).toBe('Gate');
-  expect(savedReplyTitle('`binary_sensor.north_gate`')).toBe('binary_sensor.north_gate');
-  expect(savedReplyTitle(' ** ')).toBe('Saved reply');expect(savedReplyTitle('a'.repeat(200))).toHaveLength(80);
-});
-
-it('makes saved reply titles from the first line without markdown or broken words',()=>{
-  expect(savedReplyTitle('\n - **Check** `binary_sensor.north_gate`.\n- A second item')).toBe('Check binary_sensor.north_gate.');
-  expect(savedReplyTitle('1. `freezer_door` is ready\nNext steps')).toBe('freezer_door is ready');
-  const title = savedReplyTitle('A useful gate maintenance plan '.repeat(8));
-  expect(title.length).toBeLessThanOrEqual(80);expect(title).toMatch(/(?:plan|gate|maintenance|useful|A)…$/);
-});
-
-it('titles a saved reply by the words a person reads first, never a code fence or a table divider',()=>{
-  expect(savedReplyTitle('```agent-ui\n{"version":1}\n```\nGrocery run is ready.')).toBe('Grocery run is ready.');
-  expect(savedReplyTitle('| Item | Aisle |\n|---|---|\n| Milk | Dairy |')).toBe('Item · Aisle');
-  expect(savedReplyTitle('Call `__init__` first')).toBe('Call __init__ first');
-  // A line of dashes that is not a divider is read once, never retried cell by cell.
-  const started=performance.now();expect(savedReplyTitle('-'.repeat(5_000)+' status')).toMatch(/status|…$/);
-  expect(performance.now()-started).toBeLessThan(200);
-});
-
-it('marks search matches and reads snippets of stored JSON as plain words',()=>{
+it('marks search matches in the plain snippet the server sends',()=>{
   expect(snippetParts('the >>>grocery<<< store')).toEqual([{text:'the ',match:false},{text:'grocery',match:true},{text:' store',match:false}]);
-  // Markdown around a match, and line breaks escaped in stored tool output.
-  expect(snippetParts('## >>>Grocery<<< Demo\\n* Free >>>Grocery<<< Coupons').map(part=>part.text).join('')).toBe('Grocery Demo * Free Grocery Coupons');
-  // Text between a closing marker and a later > is never dropped.
   expect(snippetParts('>>>Grocery<<< Demo, then x > y').map(part=>part.text).join('')).toBe('Grocery Demo, then x > y');
   const long=snippetParts('word '.repeat(100),40);expect(long.map(part=>part.text).join('').length).toBeLessThanOrEqual(41);
+  const started=performance.now();snippetParts('>>>'.repeat(50_000)+'\\'.repeat(50_000));expect(performance.now()-started).toBeLessThan(200);
 });

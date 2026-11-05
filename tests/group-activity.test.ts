@@ -113,5 +113,5 @@ it("previews a room's newest message as plain words, keeping a code-only message
   const room = { room_id: 'r', name: 'R', members: [] };
   const said = (text: string) => ({ event_id: 'p', seq: 1, kind: 'message.user', created_at: 0, actor: { kind: 'user', id: 'two' }, sender: { id: 'two', name: 'Kim' }, payload: { text } }) as GroupEvent;
   expect(previewOf(said('## Plan\n**Test** recurring follow-through'), room, 'one', () => undefined).text).toBe('Plan Test recurring follow-through');
-  expect(previewOf(said('```\nls\n```'), room, 'one', () => undefined).text).toBe('``` ls ```');
+  expect(previewOf(said('```\nls\n```'), room, 'one', () => undefined).text).toBe('ls');
 });

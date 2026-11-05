@@ -9,6 +9,7 @@ import { routinePresets } from '../shared/routine-presets.js';
 import type { Store } from './store.js';
 import { isConversationReply } from '../shared/message-origin.js';
 import { HISTORY_PAGE_TURNS } from '../shared/history.js';
+import { markdownPlain } from '../shared/plain-text.js';
 import { notFound, redactAgents, Roster, routineById, visibleBots } from './bot-access.js';
 import { nameRequesters } from './vault.js';
 import { contentEtag } from './etag.js';
@@ -128,7 +129,8 @@ export async function installExperienceRoutes(app: FastifyInstance, runtime: Run
       // Today never shows where a routine posts, so it never reads the room catalog to hide rooms someone cannot open.
       .map(({ roomIds: _, delivery: __, ...row }) => row); } catch { /* The rest of Today remains useful during a scheduler outage. */ }
     const content = { since, frontier: page.frontier, hasMore: page.hasMore, items,
-      events: page.events.filter(event => ids.has(event.botId)).map(event => ({ ...event, ...(eventFiles.has(event.id) ? { files: eventFiles.get(event.id) } : {}) })).sort((a, b) => Date.parse(b.occurredAt) - Date.parse(a.occurredAt)),
+      // Today shows each result as one plain line on web and iOS, so a reply's Markdown becomes its words.
+      events: page.events.filter(event => ids.has(event.botId)).map(event => ({ ...event, ...(event.body ? { body: markdownPlain(event.body) } : {}), ...(eventFiles.has(event.id) ? { files: eventFiles.get(event.id) } : {}) })).sort((a, b) => Date.parse(b.occurredAt) - Date.parse(a.occurredAt)),
       unavailableBots: items.filter(item => item.error).map(item => item.botId) };
     // The check time alone never makes Today new, so an unchanged recap revalidates as 304 and the
     // client keeps the body it holds, with the time that content was generated.

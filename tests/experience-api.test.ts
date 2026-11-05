@@ -56,10 +56,12 @@ it('authenticates profile memory reads, protects edits and validates native prof
 it('builds Today from canonical activity and attention without hiding unavailable assistants', async () => {
   const s = await setup();
   const since = new Date(Date.now() - 3600000).toISOString();
-  s.store.recordEvents([{ id: 'event', botId: 'ranch', kind: 'completed', title: 'Finished', occurredAt: new Date().toISOString() }, { id: 'gone', botId: 'deleted', kind: 'completed', title: 'Deleted profile', occurredAt: new Date().toISOString() }], '1');
+  s.store.recordEvents([{ id: 'event', botId: 'ranch', kind: 'completed', title: 'Finished', body: '## Fence\n\n| Post | State |\n|---|---|\n| North | Set |', occurredAt: new Date().toISOString() }, { id: 'gone', botId: 'deleted', kind: 'completed', title: 'Deleted profile', occurredAt: new Date().toISOString() }], '1');
   const response = await s.app.inject({ url: `/api/today?since=${encodeURIComponent(since)}`, headers: s.first });
   expect(response.statusCode).toBe(200); const today = response.json();
   expect(today.since).toBe(since); expect(today.events.map((x: { id: string }) => x.id)).toEqual(['event']);
+  // Web and iOS show a result as one plain line.
+  expect(today.events[0].body).toBe('Fence Post · State · North · Set');
   expect(today.items[0].approvals.map((x: { id: string }) => x.id)).toEqual(['pending']); expect(today.items[0].attention[0].id).toBe('clarify');
   expect(today.items[0].files[0].name).toBe('plan.pdf'); expect(today.unavailableBots).toEqual(['offline']); expect(today.items[1].activity.state).toBe('disconnected'); expect(JSON.stringify(today)).not.toContain('private transport');
   await s.app.inject({ method: 'PUT', url: '/api/today/seen', headers: s.first, payload: { seenAt: since, frontier: today.frontier } });

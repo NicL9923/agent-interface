@@ -122,7 +122,8 @@ it('shows history context and speaker names, saves in place once, and preserves 
   const save=container.querySelector<HTMLButtonElement>('#history-answer .history-save')!;
   await act(async()=>{save.focus();save.click();});
   expect(save.textContent).toBe('Saving…');expect(save.getAttribute('aria-disabled')).toBe('true');
-  await act(async()=>save.click());expect(write).toHaveBeenCalledOnce();
+  // A second press while saving does nothing; the title's parser loads on the first save.
+  await act(async()=>save.click());await act(async()=>{await vi.dynamicImportSettled();});expect(write).toHaveBeenCalledOnce();
   await act(async()=>finish({id:'saved-reply'}));
   expect(save.textContent).toBe('Saved');expect(document.activeElement).toBe(save);
   await act(async()=>save.click());expect(write).toHaveBeenCalledOnce();

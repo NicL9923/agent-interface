@@ -1,5 +1,4 @@
 import type { Message, Routine, ToolCall } from './types.js';
-import { inlinePlain, isTableDivider } from './event-copy.js';
 export interface SearchHit { botId: string; botName: string; sessionId: string; title: string; snippet: string; messageId?: string; offset?: number; routineId?: string; resultId?: string; updatedAt?: string }
 export interface HistoryPage { botId: string; sessionId: string; messages: Message[]; offset: number; hasMore: boolean; targetMessageId?: string }
 export interface SavedItem { id: string; botId: string; kind: 'session' | 'routine'; sessionId?: string; routineId?: string; resultId?: string; messageId?: string; offset?: number; title: string; createdAt: string }
@@ -23,42 +22,23 @@ export function routineResultLabel(status: string): string {
   const labels: Record<string, string> = { ok: "Succeeded", success: "Succeeded", succeeded: "Succeeded", error: "Failed", failed: "Failed", delivery_failed: "Delivery failed", running: "Running", pending: "Pending", skipped: "Skipped", cancelled: "Canceled" };
   return Object.hasOwn(labels, status) ? labels[status] : status;
 }
-export function savedReplyTitle(text: string): string {
-  // The first line a person would read: never a code fence's contents or a table's divider row.
-  const first = text.replace(/```[\s\S]*?(```|$)/g, "\n").split(/\r?\n/)
-    .find(line => line.trim() && !isTableDivider(line)) || "";
-  // A table's header row reads as its cells.
-  const row = /^\s*\|.*\|\s*$/.test(first) ? first.trim().slice(1, -1).split("|").map(cell => cell.trim()).filter(Boolean).join(" · ") : first;
-  // Keep identifier underscores and punctuation next to inline code intact.
-  const title = inlinePlain(row.replace(/^\s*(?:#{1,6}\s+|[-+*]\s+|\d+[.)]\s+)/, ""))
-    .replace(/\s+/g, " ").trim();
-  if (!title) return "Saved reply";
-  const characters = Array.from(title);
-  if (characters.length <= 80) return title;
-  const prefix = characters.slice(0, 79).join("");
-  const boundary = prefix.lastIndexOf(" ");
-  return (boundary > 0 ? prefix.slice(0, boundary) : prefix) + "…";
-}
-
 /** One stretch of a search snippet, marked when it matched the search. */
 export interface SnippetPart { text: string; match: boolean }
 
 /**
- * A Hermes search snippet as plain text with its matches marked. Native search marks matches
- * >>>like this<<<, and a snippet can quote stored JSON, so escaped line breaks become spaces.
+ * A search snippet with its matches marked. The server has already made it plain text and kept
+ * Hermes's >>>match<<< markers, so this only splits it, in one pass, within `limit` characters.
  */
 export function snippetParts(snippet: string, limit = 300): SnippetPart[] {
-  const text = snippet
-    .replace(/\\+[nrt]/g, " ").replace(/\\+"/g, '"')
-    .replace(/<\/?(?:b|mark|strong)>/gi, "");
   const parts: SnippetPart[] = [];
   let used = 0;
-  for (const [index, piece] of text.split(/>>>|<<</).entries()) {
+  for (const [index, piece] of snippet.slice(0, limit * 4).split(/>>>|<<</).entries()) {
     // Odd pieces sat between an opening and a closing marker.
     const match = index % 2 === 1;
-    let words = inlinePlain(piece).replace(/\s+/g, " ");
+    let words = piece.replace(/\s+/g, " ");
     if (!parts.length) words = words.trimStart();
-    if (!words || used >= limit) continue;
+    if (!words) continue;
+    if (used >= limit) break;
     if (used + words.length > limit) words = `${words.slice(0, limit - used).trimEnd()}…`;
     used += words.length;
     const last = parts.at(-1);

@@ -1,8 +1,8 @@
 import { expect, it } from "vitest";
-import { digestCopy, eventHeadline, excerpt, inlinePlain, notificationCopy, withoutBotTag } from "../src/shared/event-copy";
+import { digestCopy, eventHeadline, excerpt, notificationCopy, withoutBotTag } from "../src/shared/event-copy";
 
 it("titles task notifications with the assistant and quotes what happened", () => {
-  expect(notificationCopy({ kind: "completed", title: "Hermes completed", body: "**Tailscale is up** on the NAS. Run `tailscale status` to confirm." }, "Nic's Chief"))
+  expect(notificationCopy({ kind: "completed", title: "Hermes completed", body: "Tailscale is up on the NAS. Run tailscale status to confirm." }, "Nic's Chief"))
     .toEqual({ title: "Nic's Chief", body: "Tailscale is up on the NAS. Run tailscale status to confirm." });
   expect(eventHeadline({ kind: "approval", title: "Approval requested", body: "curl -H 'Authorization: Bearer SYNTHETIC_SECRET'" })).toBe("Needs your approval to continue.");
   expect(eventHeadline({ kind: "failed", title: "Hermes failed", body: "Provider rate limit" })).toBe("Couldn't finish: Provider rate limit");
@@ -20,7 +20,7 @@ it("keeps meaningful titles, such as routine results, in the body", () => {
 });
 
 it("names routines without their owner tag and says when a run did not finish", () => {
-  expect(notificationCopy({ kind: "completed", title: "[bot:patch] Daily AI news", body: "**Three** model launches.", routineId: "job" }, "Patch"))
+  expect(notificationCopy({ kind: "completed", title: "[bot:patch] Daily AI news", body: "Three model launches.", routineId: "job" }, "Patch"))
     .toEqual({ title: "Patch", body: "Daily AI news: Three model launches." });
   expect(notificationCopy({ kind: "completed", title: "[bot:patch] Daily AI news", routineId: "job" }))
     .toEqual({ title: "Daily AI news", body: "Daily AI news" });
@@ -44,31 +44,11 @@ it("digests name one assistant once and several beside what each said", () => {
     .toEqual({ title: "3 updates from 2 assistants", body: "Patch: Done. · Kimberly: Top up hay. · Patch: Ready." });
 });
 
-it("flattens Markdown and cuts long replies at a word", () => {
-  expect(excerpt("# Plan\n\n- [Docs](https://example.test) first\n- then ```code``` done")).toBe("Plan Docs first then done");
+it("cuts long plain text at a word", () => {
+  expect(excerpt("  Plan\n\n Docs first  ")).toBe("Plan Docs first");
   const long = excerpt("word ".repeat(80), 40);
   expect(long.endsWith("word…")).toBe(true);
   expect(long.length).toBeLessThanOrEqual(41);
-});
-
-it("flattens Markdown that Hermes already joined onto one line, as previews arrive", () => {
-  // A heading, a table and a link whose address the preview cut off.
-  expect(excerpt("## Grocery Demo | Item | Aisle | |---|---| | Milk | Dairy | saved to [notes.md](/home/nicolas/.hermes/pro"))
-    .toBe("Grocery Demo · Item · Aisle · Milk · Dairy · saved to notes.md");
-  expect(excerpt("## WFT COO — audit-only readiness report **Role / Nic-assigned work**"))
-    .toBe("WFT COO — audit-only readiness report Role / Nic-assigned work");
-  expect(excerpt("Use *one* cup, not 2 * 3 cups.")).toBe("Use one cup, not 2 * 3 cups.");
-});
-
-it("keeps pipes, number signs and code that are the author's own words", () => {
-  expect(inlinePlain("Run ls | sort, then see issue #42 in C# notes.")).toBe("Run ls | sort, then see issue #42 in C# notes.");
-  expect(excerpt("Use # for comments.")).toBe("Use # for comments.");
-  expect(excerpt("Call `__init__` and `foo__bar`, not __this__.")).toBe("Call __init__ and foo__bar, not this.");
-  expect(excerpt("Set snake_case and foo__bar names.")).toBe("Set snake_case and foo__bar names.");
-});
-
-it("flattens long runs of dashes, spaces and stars in one pass, as a message can hold any text", () => {
-  const started = performance.now();
-  for (const text of ["-".repeat(50_000) + " status", "| " + "-".repeat(50_000), " ".repeat(50_000) + "|", "*a ".repeat(20_000), "|---".repeat(20_000)]) excerpt(text);
-  expect(performance.now() - started).toBeLessThan(500);
+  // Callers pass words, so a literal mark stays as written.
+  expect(excerpt("Call __init__ with **kwargs and use # for comments.")).toBe("Call __init__ with **kwargs and use # for comments.");
 });
