@@ -6,7 +6,7 @@ const stateFor = botId => {
     goals: { supported: true, goal: { title: 'Prepare a fall maintenance plan for the ranch', status: 'paused', turnsUsed: 0, maxTurns: 20 } },
     tasks: { supported: true, items: [{ id: 'task-fence', title: 'Review the north fence inspection', body: 'Read the latest inspection notes, then list repairs and supplies. Ask before ordering anything.', status: 'blocked', priority: 1, assignee: botId, owner: botId, dependencies: [], blockedReason: 'Waiting for you to start.' }] },
     triggers: { supported: true, platformEnabled: true, items: [{ id: 'ranch-alert', description: 'Review new ranch alerts', events: ['alert.created'], routineId: 'r1', enabled: false, url: 'https://hermes.example.test/hooks/ranch-alert', secretSet: true, revision }] },
-    skills: { supported: true, approvalRequired: true, installed: [{ name: 'ranch-maintenance', description: 'Seasonal maintenance checklists and supply planning.' }], pending: [{ id: 'aabbccdd', summary: 'Check water before planning feed', origin: 'background review', revision }] },
+    skills: { supported: true, approvalRequired: true, lockSupported: true, installed: [{ name: 'ranch-maintenance', description: 'Seasonal maintenance checklists and supply planning.', locked: true }, { name: 'feed-rounds', description: 'Daily feed and water rounds.', locked: false }], pending: [{ id: 'aabbccdd', summary: 'Check water before planning feed', origin: 'background review', revision }] },
   });
   return profiles.get(botId);
 };
@@ -49,6 +49,7 @@ export function automationPreview(path, method, body, query, send) {
     else if (item) Object.assign(item, body);
     return reply({ ok: true });
   }
+  if (suffix === '/skills/lock') { const skill = state.skills.installed.find(row => row.name === body.name); if (skill) skill.locked = body.locked; return reply({ ok: true, name: body.name, locked: body.locked }); }
   if (suffix === '/skills/policy') { state.skills.approvalRequired = body.approvalRequired; return reply({ ok: true }); }
   if (suffix === '/skills/content') return reply({ name: query.get('name'), content: '# Ranch maintenance\n\nRead the latest inspection. Check water and feed. Ask before purchases.', truncated: false });
   if (suffix.startsWith('/skills/pending/')) {

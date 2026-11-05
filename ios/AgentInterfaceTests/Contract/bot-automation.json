@@ -60,7 +60,13 @@
       "installed": [
         {
           "name": "ranch/fences",
-          "description": "Fence inspection"
+          "description": "Fence inspection",
+          "locked": true
+        },
+        {
+          "name": "ranch/gates",
+          "description": "Gate checks",
+          "locked": false
         }
       ],
       "pending": [
@@ -71,7 +77,8 @@
           "revision": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
         }
       ],
-      "approvalRequired": true
+      "approvalRequired": true,
+      "lockSupported": true
     },
     "canManageTriggers": true,
     "canManageLearningPolicy": true

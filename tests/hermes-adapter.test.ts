@@ -1653,6 +1653,7 @@ describe('owned Hermes operation response decoding', () => {
     {input:{operation:'skill_diff',profile,pendingId:'deadbeef'},result:{id:'deadbeef',diff:'Skill diff',revision:'a',truncated:false}},
     {input:{operation:'skill_decide',profile,pendingId:'deadbeef',decision:'approve',revision:'a'},result:{ok:true}},
     {input:{operation:'skill_policy',profile,approvalRequired:true},result:{ok:true}},
+    {input:{operation:'skill_lock',profile,name:'ranch/fence',locked:true},result:{ok:true,name:'ranch/fence',locked:true}},
   ];
   it.each(automationCases)('decodes the automation $input.operation result', async ({input,result}) => {
     vi.stubGlobal('fetch',vi.fn(async()=>Response.json(result)));
@@ -1675,6 +1676,7 @@ describe('owned Hermes operation response decoding', () => {
     {input:{operation:'goal_pause',profile},result:{...overview,tasks:{supported:true,items:[{id:'invalid'}]}}},
     {input:{operation:'trigger_create',profile,trigger:{id:'event',description:'Fence',events:['issue.created'],routineId:'routine'}},result:{subscription}},
     {input:{operation:'skill_policy',profile,approvalRequired:true},result:{ok:false,secret:'private-canary'}},
+    {input:{operation:'skill_lock',profile,name:'fence',locked:true},result:{ok:true,name:'fence',locked:'yes'}},
   ] satisfies {input:AutomationRequest;result:unknown}[])('rejects malformed or wrong-operation automation $input.operation data', async ({input,result}) => {
     const fetcher=vi.fn(async()=>Response.json(result)); vi.stubGlobal('fetch',fetcher);
     await expect(runtime.automationRequest!(input)).rejects.toMatchObject({statusCode:502,message:`Hermes returned an invalid automation response for ${input.operation}.`});

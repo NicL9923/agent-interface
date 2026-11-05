@@ -138,6 +138,10 @@
 .automation-diff-removed { color: var(--danger); background: color-mix(in srgb, var(--danger) 9%, var(--raised)); }
 
 .automation-learning .automation-learning-policy > p { margin: 4px 0 0 30px; }
+.automation-learning .automation-installed-skills > p { margin: 0 0 8px; }
+.automation-learning .automation-item > p.muted { margin-top: 0; }
+.automation-learning .automation-item > .actions { margin-top: 0; }
+.automation-skill-locked { display: inline-block; margin-inline-start: 4px; padding: 1px 8px; border-radius: 999px; background: var(--rail); color: var(--ink); font-size: .8125rem; font-weight: 600; line-height: 1.5; vertical-align: 1px; }
 .automation-learning .automation-code > code { font: inherit; }
 
 .automation-learning > .form-notice { margin: 12px 0; font-size: .875rem; line-height: 1.6; }

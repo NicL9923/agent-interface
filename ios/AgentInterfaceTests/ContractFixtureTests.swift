@@ -57,6 +57,7 @@ private typealias Check = @MainActor (Data) throws -> Void
       XCTAssertEqual($0.tasks.items.first?.dependencies, ["task-supplies"])
       XCTAssertFalse($0.triggers.platformEnabled); XCTAssertEqual($0.triggers.items.first?.revision, String(repeating: "b", count: 64))
       XCTAssertTrue($0.skills.approvalRequired); XCTAssertEqual($0.skills.installed.first?.name, "ranch/fences")
+      XCTAssertEqual($0.skills.lockSupported, true); XCTAssertEqual($0.skills.installed.map(\.locked), [true, false])
       XCTAssertEqual($0.skills.pending.first?.revision, String(repeating: "c", count: 64))
     },
     "bot-goal-resume": check(HermesAutomationOverview.self) {
@@ -80,6 +81,9 @@ private typealias Check = @MainActor (Data) throws -> Void
     },
     "bot-skill-content": check(HermesSkillContent.self) {
       XCTAssertEqual($0.name, "ranch/fences"); XCTAssertTrue($0.content.contains("Check the north gate.")); XCTAssertFalse($0.truncated)
+    },
+    "bot-skill-lock": check(HermesSkillLock.self) {
+      XCTAssertTrue($0.ok); XCTAssertEqual($0.name, "ranch/fences"); XCTAssertFalse($0.locked)
     },
     "bot-skill-diff": check(HermesSkillDiff.self) {
       XCTAssertEqual($0.id, "deadbeef"); XCTAssertTrue($0.diff.contains("+Check the north gate.")); XCTAssertFalse($0.truncated)

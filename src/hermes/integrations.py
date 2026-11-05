@@ -122,30 +122,101 @@ def token_stamp(home):
     return digest.hexdigest()
 
 
-def cache_check(home, result):
+NEEDS_AUTH_DETAIL = "Hermes stopped using this server because its sign-in was rejected. Reconnect to sign in again."
+
+
+def mcp_runtime(profile):
+    """Hermes's cached runtime state for this profile's MCP servers, keyed by connection ID.
+
+    Native ``mcp.servers.status`` never connects, probes or starts a sign-in. Its ``needs_auth`` says
+    the live server is parked on a rejected OAuth credential. An older Hermes omits the field, and a
+    process that doesn't hold the profile's runtime reports every server as never tried, so only
+    ``needs_auth: true`` and a live connection count as evidence. Empty when the status can't be read.
+    """
+    try:
+        from tui_gateway import server
+        response = server.handle_request({"jsonrpc": "2.0", "id": "agent-interface-mcp-status", "method": "mcp.servers.status", "params": {"profile": profile}})
+    except Exception:
+        return {}
+    result = response.get("result") if isinstance(response, dict) else None
+    rows = result.get("servers") if isinstance(result, dict) else None
+    if not isinstance(rows, list):
+        return {}
+    return {(row["name"] if row["name"] in PRESETS else "mcp:" + row["name"]): row
+            for row in rows if isinstance(row, dict) and isinstance(row.get("name"), str)}
+
+
+def auth_episodes(home, runtime):
+    """The rejected sign-in episode each MCP connection is in, as an opaque ID.
+
+    An episode starts when the app first reads ``needs_auth: true`` for a server and ends when Hermes
+    reports ``needs_auth: false``, so a later rejection is a new episode even with unchanged tokens.
+    A row without the field, or no status at all, leaves the record as it was. The app sees only the
+    states it reads: a recovery and a new rejection between two reads look like one episode.
+    """
+    path = Path(home) / "agent_interface_mcp_auth_episodes.json"
+    try:
+        saved = private_json(path)
+    except (ValueError, OSError):
+        saved = {}
+    episodes = {key: value for key, value in saved.items() if isinstance(value, str)} if isinstance(saved, dict) else {}
+    for row_id, row in (runtime or {}).items():
+        if not isinstance(row, dict):
+            continue
+        if row.get("needs_auth") is True and row_id not in episodes:
+            episodes[row_id] = secrets.token_hex(8)
+        elif row.get("needs_auth") is False:
+            episodes.pop(row_id, None)
+    if episodes != saved:
+        private_fs.atomic_json(path, episodes)
+    return episodes
+
+
+def cache_check(home, result, episode=None):
     path = Path(home) / "agent_interface_integration_checks.json"
     try:
         cached = private_json(path)
     except (ValueError, OSError):
         cached = {}
-    cached[result["id"]] = dict(fingerprint=fingerprint(home), tokens=token_stamp(home), checked=result)
+    # needsAuthEpisode: the rejected sign-in episode Hermes still reported when this check ran.
+    cached[result["id"]] = dict(fingerprint=fingerprint(home), tokens=token_stamp(home), checked=result, **({"needsAuthEpisode": episode} if episode else {}))
     private_fs.atomic_json(path, cached)
 
 
-def apply_checks(home, rows):
+def apply_checks(home, rows, runtime=None):
+    """Lay saved check results and Hermes's live MCP state over the configuration rows.
+
+    For an MCP server, Hermes's own ``needs_auth`` decides the reconnect state when it reports one. Only a
+    successful check made during the same rejection episode, with the same OAuth tokens, outranks it: a
+    sign-in finished in another profile's process clears the park at that assistant's next turn. A live
+    connection retires a saved failure. Without either signal, a failed check stops counting once OAuth
+    tokens are rewritten.
+    """
     try:
         saved = private_json(Path(home) / "agent_interface_integration_checks.json")
     except (ValueError, OSError):
-        return rows
+        saved = {}
     current, tokens = fingerprint(home), token_stamp(home)
+    episodes = auth_episodes(home, runtime)
     for row in rows:
         checked = saved.get(row["id"], {})
-        # A failed MCP check stops counting once any OAuth tokens are rewritten, as a reconnect does;
-        # a success survives routine token refreshes, which keep the same files.
+        evidence = checked.get("checked", {})
         mcp_row = row["id"] in PRESETS or row["id"].startswith("mcp:")
-        stale = mcp_row and checked.get("checked", {}).get("status") != "connected" and checked.get("tokens") != tokens
+        live = (runtime or {}).get(row["id"]) if mcp_row else None
+        live = live if isinstance(live, dict) else {}
+        failed = evidence.get("status") != "connected"
+        if live.get("needs_auth") is True:
+            episode = checked.get("needsAuthEpisode")
+            if failed or not episode or episode != episodes.get(row["id"]) or checked.get("tokens") != tokens or checked.get("fingerprint") != current:
+                row.update(status="expired", detail=NEEDS_AUTH_DETAIL)
+                continue
+            stale = False
+        elif live.get("connected") is True:
+            stale = failed
+        else:
+            # A success survives routine token refreshes, which keep the same files.
+            stale = mcp_row and failed and checked.get("tokens") != tokens
         if checked.get("fingerprint") == current and not stale:
-            evidence = checked.get("checked", {})
             for field in ("status", "detail", "checkedAt", "account", "capabilities"):
                 if field in evidence:
                     row[field] = evidence[field]
@@ -622,7 +693,8 @@ async def inventory(profile):
         rows.append(card("provider:" + provider["id"], provider["name"], "providers", profile, "configured" if connected else "not_connected",
                          "Hermes has provider credentials. Its native provider status is configuration evidence." if connected else "Authorize this model provider through its native Hermes flow." if provider["flow"] == "device_code" else "This provider's account is owned by its official CLI. Complete sign-in there, then refresh this list.",
                          actions=dict(connect=provider["flow"] == "device_code", check=False, disconnect=bool(provider.get("disconnectable") and connected)), capabilities=["Models"]))
-    return dict(profile=profile, canManage=False, connections=apply_checks(home, rows))
+    runtime = await asyncio.to_thread(mcp_runtime, profile)
+    return dict(profile=profile, canManage=False, connections=apply_checks(home, rows, runtime))
 
 
 def oauth_signed_in(home, name):
@@ -918,6 +990,11 @@ async def dispatch(data, request):
             error = str(checked.get("error", "")).lower()
             failure_status = "expired" if any(word in error for word in ("401", "oauth authentication required", "unauthorized", "invalid_token")) else "missing_permission" if any(word in error for word in ("403", "forbidden", "permission")) else "unavailable"
             result.update(status="connected" if checked.get("ok") else failure_status, detail="Hermes connected and discovered the MCP tools." if checked.get("ok") else "MCP discovery failed. Review authentication and service availability in Hermes.", capabilities=[tool["name"] for tool in checked.get("tools", [])][:100])
+            result["checkedAt"] = now()
+            runtime = await asyncio.to_thread(mcp_runtime, profile)
+            episode = (await asyncio.to_thread(auth_episodes, home, runtime)).get(identity) if runtime.get(identity, {}).get("needs_auth") is True else None
+            await asyncio.to_thread(cache_check, home, result, episode)
+            return result
         elif identity.startswith("key:") and identity[4:] in KEYS:
             env_key = KEYS[identity[4:]][1]
             def read_key():

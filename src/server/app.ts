@@ -43,7 +43,7 @@ import { errorHandler, httpError } from "./http-error.js";
 import { eventStreamConnection, type EventStream } from "./event-stream.js";
 import { id, modelFavoriteList, preferences } from "./schemas.js";
 import { apiRoute } from "./api-route.js";
-import { HealthMonitor, installHealthRoutes } from "./health.js";
+import { defaultMetadataProbe, HealthMonitor, installHealthRoutes, type MetadataProbe } from "./health.js";
 import { installEtags } from "./etag.js";
 import { installSecurityHeaders } from "./security-headers.js";
 import { installInlineUi } from "./inline-ui.js";
@@ -62,6 +62,7 @@ export async function createApp(
     upgrades?: HermesUpgrades;
     logStream?: { write(line: string): void };
     clientRoot?: string;
+    metadataProbe?: MetadataProbe;
   } = {},
 ) {
   const store = options.store ?? new Store(config.database);
@@ -467,7 +468,10 @@ export async function createApp(
     );
   }
   const worker = new BackgroundWorker(store, runtime, config, undefined, options.sendApns, app.log, options.sendLiveActivity);
-  const health = new HealthMonitor({ store, runtime, worker, config, maintenance: () => upgrades.maintenance(), log: app.log });
+  const health = new HealthMonitor({
+    store, runtime, worker, config, maintenance: () => upgrades.maintenance(), log: app.log,
+    metadataProbe: options.metadataProbe ?? defaultMetadataProbe(config),
+  });
   installHealthRoutes(app, health);
   if (options.background !== false) {
     worker.start();

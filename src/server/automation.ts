@@ -13,6 +13,7 @@ import { serialDelivery } from './routine-delivery.js';
 
 const id = z.string().regex(/^[A-Za-z0-9_-]{1,100}$/);
 const revision = z.string().regex(/^[a-f0-9]{64}$/);
+const skillName = z.string().regex(/^[A-Za-z0-9_./-]{1,200}$/).refine(name => !name.split('/').some(part => part === '..' || part === '.' || !part));
 const taskFields = { title: z.string().trim().min(1).max(500), body: z.string().max(20000), priority: z.number().int().min(-100).max(100), assignee: id.nullable() };
 const triggerFields = { description: z.string().max(1000), events: z.array(z.string().regex(/^[A-Za-z0-9_.*:-]{1,100}$/)).min(1).max(20), routineId: id };
 type OperationInput<T = AutomationRequest> = T extends AutomationRequest ? Omit<T, 'profile' | 'visibleProfiles'> : never;
@@ -24,6 +25,7 @@ export async function installAutomationRoutes(app: FastifyInstance, runtime: Run
     if (!bots.some(bot => bot.id === profile)) throw httpError(404, notFound.error, { code: notFound.code });
     if (input.operation.startsWith('trigger_') && !canManage(req)) throw httpError(403, 'Only an integration administrator can change event triggers and view a new signing secret.');
     if (input.operation === 'skill_policy' && !canManage(req)) throw httpError(403, 'Only an integration administrator can change learned skill approval policy.');
+    if (input.operation === 'skill_lock' && !canManage(req)) throw httpError(403, 'Only an integration administrator can lock or unlock skills.');
     if (!runtime.automationRequest) throw httpError(409, 'Update and qualify the Hermes integration to use goals, tasks, event triggers and learned skill review.');
     if (input.operation !== 'overview' && !['task_get', 'skill_content', 'skill_diff'].includes(input.operation) && maintenance()) throw httpError(409, 'Hermes is being upgraded. Automation changes are paused.');
     const task = 'task' in input ? input.task : undefined;
@@ -65,8 +67,9 @@ export async function installAutomationRoutes(app: FastifyInstance, runtime: Run
     return delivering(req, routineId, toggle);
   });
   apiRoute(app, "DELETE /bots/:id/automation/triggers/:triggerId", { body: z.object({ revision }).strict() }, async (req, body) => request(req, { operation: 'trigger_delete', triggerId: z.object({ triggerId: id }).parse(req.params).triggerId, ...body }));
-  apiRoute(app, "GET /bots/:id/automation/skills/content", {}, async req => request(req, { operation: 'skill_content', ...z.object({ name: z.string().regex(/^[A-Za-z0-9_./-]{1,200}$/).refine(name => !name.split('/').some(part => part === '..' || !part)) }).strict().parse(req.query) }));
+  apiRoute(app, "GET /bots/:id/automation/skills/content", {}, async req => request(req, { operation: 'skill_content', ...z.object({ name: skillName }).strict().parse(req.query) }));
   apiRoute(app, "GET /bots/:id/automation/skills/pending/:pendingId", {}, async req => request(req, { operation: 'skill_diff', pendingId: z.object({ pendingId: z.string().regex(/^[a-f0-9]{8}$/) }).parse(req.params).pendingId }));
   apiRoute(app, "POST /bots/:id/automation/skills/pending/:pendingId", { body: z.object({ revision, decision: z.enum(['approve', 'reject']) }).strict() }, async (req, body) => request(req, { operation: 'skill_decide', pendingId: z.object({ pendingId: z.string().regex(/^[a-f0-9]{8}$/) }).parse(req.params).pendingId, ...body }));
+  apiRoute(app, "PUT /bots/:id/automation/skills/lock", { body: z.object({ name: skillName, locked: z.boolean() }).strict() }, async (req, body) => request(req, { operation: 'skill_lock', ...body }));
   apiRoute(app, "PUT /bots/:id/automation/skills/policy", { body: z.object({ approvalRequired: z.boolean() }).strict() }, async (req, body) => request(req, { operation: 'skill_policy', ...body }));
 }

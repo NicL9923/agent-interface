@@ -71,6 +71,9 @@ After executor death, the journal marks unfinished receipts interrupted and proj
 | Routines and chosen recipients | Native cron store and official scheduler provider, native `bot-chat:<profile>` delivery through the live-owner mailbox | Passed native CRUD, atomic paused creation, pause/resume state transitions, actual provider execution, canonical bot delivery, durable completion discovery and outbox delivery only to the explicitly selected recipient. Routine participants are not inferred from the conversation. Hermes' unified gateway runtime retired the dashboard's mailbox consumer and sends deliveries only to its gateway authority, which refuses a Bot Chat the dashboard holds. On such a Hermes, `bot_delivery.py` keeps deliveries for add-on chats in the native mailbox and runs them in the dashboard, once each. The suite fires routines through the guarded native gateway, as production does. |
 | Durable notifications | Add-on monotonic event journal plus profile-owned native cron execution ledgers | Passed cursor replay without duplicate events, approval/completion discovery and executor interruption discovery. Routine execution uses its own durable execution identity. Physical closed-phone Web Push is a separate acceptance gap. |
 | Avatar editing and portraits | Native profile metadata and assets, `image.generate` | Passed geometric/mascot metadata and preservation during bot edits. Uploaded portraits use native profile assets. Native image capability probe and a real generation request refused the absent image backend. Live generation and generated-portrait acceptance require a configured backend. |
+| Skill locks | Native skill lock record (`tools.skill_usage.set_locked`, keyed by skill directory, the record `PUT /api/skills/lock` writes), the dashboard's `_locked_index`, and the `skill_manage` lock preflight | A disposable home run against the 3a1e9ef source locked a skill through the add-on by its frontmatter name, listed it as locked, and saw native `skill_manage` and replayed approvals (single edit, delete and batch) refuse with `_locked` before any write; unlocking restored edits. An approval refused by a lock records a definite refusal. Locking needs an integration administrator, as the skill write policy does. Not run against a live profile. |
+| MCP sign-in rejected | `mcp.servers.status` `needs_auth` through the in-process dispatcher | A disposable home call returned `needs_auth` for every configured server, and a server parked as native parks a rejected OAuth credential read `needs_auth: true` and showed as Expired. No live MCP OAuth service was configured. |
+| Shared browser metadata floor | `browser_cdp_tool._fetched_param_urls`, `browser_url_policy.literal_targets_metadata` | The add-on wrapper applies native's CDP metadata scan to every `browser_cdp` call. With `HERMES_SOURCE` set to the 3a1e9ef source, `tests/hermes_computer_test.py` blocks `//169.254.169.254/`, `\\169.254.169.254`, userinfo forms, `http://2852039166/`, `http://[fd00:ec2::254]/` and `//0xa9fea9fe/` across `Runtime.evaluate`, `Page.navigate`, `Target.createTarget`, `Network.loadNetworkResource`, `Runtime.callFunctionOn` and `Page.addScriptToEvaluateOnNewDocument`; the earlier wrapper let six of those cases through. The wrapper also reads zero- and one-slash, backslash and escaped special-scheme forms such as `http:/169.254.169.254/`, which native's scan misses: of nine such real-module cases, native alone and the earlier wrapper let six through. |
 
 ### Group chat activity, settings and routine posts
 
@@ -145,6 +148,16 @@ previews, and durable manual trials through the official scheduler. The new
 conflicts, paused trial execution and same-request deduplication in a disposable
 home. Voice delegates to native audio routes. See
 [Household experience](HouseholdExperience.md) for client behavior and limits.
+
+The November 4 follow-up for Hermes 3a1e9ef adopts three native features and
+degrades on an older revision. Without native skill locks, the overview omits
+`lockSupported` and both clients hide the lock control. Without `needs_auth`
+in `mcp.servers.status`, connection cards keep the earlier token rule. A
+`tools.browser_session` revision without `literal_targets_metadata` and
+`_fetched_param_urls` fails the shared computer's seam check, so the shared
+computer stays off rather than run a weaker metadata check. The automation
+probe now locks a skill, checks that an approved assistant edit to it is
+refused, and unlocks it again.
 
 New full spike runs save receipts in their disposable `evidence` directory,
 printed at completion. Archive a successful run with

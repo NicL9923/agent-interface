@@ -257,9 +257,34 @@ import CryptoKit
     approve.tapWhenReady()
     XCTAssertTrue(app.staticTexts["No skill changes waiting for review."].waitForExistence(timeout: 10), "The fixture accepts only the detail's revision")
     let installed = app.buttons["automation.installedSkill.ranch/fences"]
-    reveal(installed, in: app.collectionViews["automation.learning"]); installed.tapWhenReady()
+    // The section footer sits below the last skill.
+    reveal(text("Only an integration administrator can lock or unlock skills.", app: app), in: app.collectionViews["automation.learning"])
+    reveal(installed, in: app.collectionViews["automation.learning"], downward: true)
+    installed.tapWhenReady()
     XCTAssertTrue(text("# Fixture fence inspection", app: app).waitForExistence(timeout: 10))
+    let lock = app.switches["automation.skillLock"]
+    XCTAssertTrue(lock.waitForExistence(timeout: 5)); XCTAssertFalse(lock.isEnabled)
     capture(app, "Native installed skill content")
+  }
+  func testLearningLocksAndUnlocksAnInstalledSkill() {
+    let app = launch()
+    app.selectSettingsTab("Learning")
+    let installed = app.buttons["automation.installedSkill.ranch/fences"]
+    reveal(installed, in: app.collectionViews["automation.learning"])
+    XCTAssertTrue(installed.waitForExistence(timeout: 10)); XCTAssertFalse(installed.label.contains("Locked"))
+    installed.tapWhenReady()
+    let reader = app.collectionViews["automation.skillReader"]
+    let lock = app.switches["automation.skillLock"]
+    guard setSwitch(lock, in: reader, to: true) else { return }
+    XCTAssertTrue(text("Assistants can't change this skill while it's locked.", app: app).waitForExistence(timeout: 10))
+    XCTAssertTrue(text("Saved in Hermes.", app: app).exists)
+    capture(app, "Native locked skill")
+    app.navigationBars["Installed skill"].buttons["Done"].tapWhenReady()
+    XCTAssertTrue(installed.waitForExistence(timeout: 10))
+    XCTAssertTrue(installed.wait(until: "label CONTAINS %@", "Locked"), "The list shows the lock Hermes saved.\n\(installed.debugDescription)")
+    installed.tapWhenReady()
+    guard setSwitch(lock, in: reader, to: false) else { return }
+    XCTAssertTrue(text("Lock this skill to keep assistants from changing it.", app: app).waitForExistence(timeout: 10))
   }
   func testTriggerEditorStaysPresentedDuringKeyboardInputAndCancel() {
     let app = launch()
