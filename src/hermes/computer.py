@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 import secrets
 import re
+from bisect import bisect_left
 import subprocess
 import sys
 import time
@@ -198,18 +199,40 @@ def configured():
 _SCHEME_COLON_RE = re.compile(r"(?<![A-Za-z0-9+.\-])(?:https?|wss?):[/\\]*", re.IGNORECASE)
 _URL_WHITESPACE_RE = re.compile(r"\\[tnr]|[\t\n\r]")
 # A special-scheme authority ends at the first of these.
-_AUTHORITY_END = frozenset("/\\?#\n")
+_AUTHORITY_END_RE = re.compile(r"[/\\?#\n]")
 # Where a literal in script text plausibly ends: a quote or whitespace. WHATWG would read on, but a
 # host holding one of these is either rejected or no metadata host. Userinfo may hold them, so an "@"
 # after one is read as well.
-_SOFT_END = frozenset("'\"`<> \t\r\f\v")
+_SOFT_END_RE = re.compile(r"['\"`<> \t\r\f\v]")
 # Where CSS url(), @import, an unquoted HTML attribute or a srcset entry ends a URL. WHATWG would keep
 # this punctuation in the host, so the host is judged both with and without it.
-_MARKUP_END = frozenset(");'\",>} \t\r\f\v")
+_MARKUP_END_RE = re.compile(r"[);'\",>} \t\r\f\v]")
+_AT_RE = re.compile(r"@")
+_COLON_RE = re.compile(r":")
+# An ASCII character no spelling of an IPv4 address or a metadata name holds, before or after
+# percent-decoding and UTS 46 mapping. A long host holding one cannot name a metadata address.
+_NOT_ADDRESS_RE = re.compile(r"[^A-Za-z0-9.%\x80-\U0010ffff]")
+# Hosts up to this length are judged whole. A longer one is blocked unless it holds a character
+# that rules out an address, so padding such as leading zeros or percent-encoding cannot hide one.
+HOST_LIMIT = 1024
+OVERLONG_HOST = "\x00overlong host"
 
 
-def _first(text, characters, start=0):
-    return next((index for index in range(start, len(text)) if text[index] in characters), len(text))
+class _Delimiters:
+    """Sorted positions of one character class in a text, found in one pass and searched by bisection."""
+
+    def __init__(self, pattern, text):
+        self.positions = [match.start() for match in pattern.finditer(text)]
+
+    def next(self, start, limit):
+        """The first position in [start, limit), else limit."""
+        index = bisect_left(self.positions, start)
+        return min(self.positions[index], limit) if index < len(self.positions) else limit
+
+    def last(self, start, limit):
+        """The last position in [start, limit), else -1."""
+        index = bisect_left(self.positions, limit) - 1
+        return self.positions[index] if index >= 0 and self.positions[index] >= start else -1
 
 
 def scheme_colon_hosts(text):
@@ -218,25 +241,63 @@ def scheme_colon_hosts(text):
     The userinfo ends at the last "@" before the first "/", "\\", "?" or "#", and a bracketed host stays
     whole. When an "@" follows a quote or space inside that span, both readings come back. Every
     scheme occurrence is read on its own, one inside another URL's query included: no earlier
-    candidate's extent ever hides later text.
+    candidate's extent ever hides later text. Delimiter positions are found once per text, so each
+    occurrence costs a few bisections and the length of the hosts it yields, at most ``HOST_LIMIT``.
     """
     if not isinstance(text, str):
         return []
+    variants = dict.fromkeys((text, _URL_WHITESPACE_RE.sub("", text.replace("\\/", "/"))))
+    return list(dict.fromkeys(host for variant in variants for host in _variant_hosts(variant)))
+
+
+def _variant_hosts(variant):
+    # A match spans only one scheme and its slashes, so no occurrence can hide inside another.
+    matches = list(_SCHEME_COLON_RE.finditer(variant))
+    if not matches:
+        return []
     hosts = []
-    for variant in dict.fromkeys((text, _URL_WHITESPACE_RE.sub("", text.replace("\\/", "/")))):
-        # A match spans only one scheme and its slashes, so no occurrence can hide inside another.
-        for match in _SCHEME_COLON_RE.finditer(variant):
-            start = match.end()
-            span = variant[start:_first(variant, _AUTHORITY_END, start)]
-            soft = _first(span, _SOFT_END)
-            readings = [span[:soft]] + ([span] if "@" in span[soft:] else [])
-            # CSS and markup end the URL first, so the userinfo split must not reach past that end.
-            readings.append(span[:_first(span, _MARKUP_END)])
-            for authority in readings:
-                host = authority.rpartition("@")[2]
-                host = host[:_first(host, _SOFT_END)]
-                hosts.extend(reading for reading in (host, host[:_first(host, _MARKUP_END)]) if reading)
-    return list(dict.fromkeys(hosts))
+    end, soft, markup, at = (_Delimiters(pattern, variant) for pattern in (_AUTHORITY_END_RE, _SOFT_END_RE, _MARKUP_END_RE, _AT_RE))
+    found = {}
+
+    def delimiters(pattern):
+        if pattern not in found:
+            found[pattern] = _Delimiters(pattern, variant)
+        return found[pattern]
+
+    def host_in(authority_start, authority_end):
+        """The host after the authority's last "@", cut at a quote or space."""
+        separator = at.last(authority_start, authority_end)
+        start = separator + 1 if separator >= 0 else authority_start
+        return start, soft.next(start, authority_end)
+
+    def add(start, stop):
+        for cut in (stop, markup.next(start, stop)):
+            if cut <= start:
+                continue
+            if cut - start <= HOST_LIMIT:
+                hosts.append(variant[start:cut])
+            elif variant[start] == "[":
+                # An IPv6 address fits in 64 characters; a longer bracket is rejected by WHATWG.
+                close = variant.find("]", start, start + 64)
+                if close >= 0:
+                    hosts.append(variant[start:close + 1])
+            else:
+                name_end = delimiters(_COLON_RE).next(start, cut)
+                if name_end - start <= HOST_LIMIT:
+                    hosts.append(variant[start:name_end])
+                elif delimiters(_NOT_ADDRESS_RE).next(start, name_end) == name_end:
+                    hosts.append(OVERLONG_HOST)
+
+    for match in matches:
+        start = match.end()
+        stop = end.next(start, len(variant))
+        first_soft = soft.next(start, stop)
+        add(*host_in(start, first_soft))
+        if at.last(first_soft, stop) >= 0:
+            add(*host_in(start, stop))
+        # CSS and markup end the URL first, so the userinfo split must not reach past that end.
+        add(*host_in(start, markup.next(start, stop)))
+    return hosts
 
 
 # IPv6 prefixes that carry an IPv4 address in their low 32 bits: IPv4-compatible (::/96), the
@@ -282,6 +343,8 @@ def host_targets_metadata(host, judge):
     invalid bracketed host such as ``[]`` from ``{https:[]}``, an empty host, a non-numeric port or a
     forbidden code point. A non-ASCII name goes through UTS 46 first; one it can't map is blocked.
     """
+    if host == OVERLONG_HOST:
+        return True
     if host.startswith("["):
         inner, closed, after = host[1:].partition("]")
         if not closed or not re.fullmatch(r"(?::[0-9]*)?", after):

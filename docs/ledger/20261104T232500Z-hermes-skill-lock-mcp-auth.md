@@ -54,3 +54,16 @@ Source fingerprint `sha256:0e00218a48f0407e343498be32abaeb66063f09d18e12b96a8b17
 ## Sixth re-review fix
 
 Source fingerprint `sha256:dc8f6b4bb6221a3ae518842a552d20d13a5c21450b292c084e19448784075ace`. The review of `118c5bd` found 0 bypasses in both corpora and in 7,992 single-URL CSS, HTML and `srcset` variants. One structural gap remained: after each URL, the scanner skipped ahead to the next quote or whitespace, so a second URL in the same CSS, HTML or string was never read. All 84 multi-import variants got through. The scanner now reads every scheme occurrence on its own and never skips text because of an earlier candidate. A metadata URL in another URL's query is now blocked, which is stricter than native. New multi-URL tests cover CSS `@import` and `url()` lists, `srcset`, an `href` query, and JavaScript arrays built from a comma-joined string and a template literal, on four CDP paths. All of them failed on `118c5bd`. The false-positive tests still pass. `tests/hermes_computer_test.py` passed 55 tests with stand-ins (2 skipped) and all 55 with `HERMES_SOURCE`. `ruff check .` passed.
+
+## Seventh re-review fix
+
+Source fingerprint `sha256:e6d376ec6e670640e3426e1f92c191d4b1a3db99bdd2d50a9d8b787d897fab40`. The review of `a3364a5` found 0 bypasses in every corpus, but the scanner's cost was quadratic. With 1,024, 2,048 and 4,096 comma-joined schemes it took 0.34 s, 1.35 s and 5.37 s, and a 1 MiB script ran past 10 s.
+
+The scanner now finds each delimiter class once per text with `re.finditer` and answers each occurrence's queries by bisection: authority end, quote or space, markup end, the last `@`, and the first colon. A host over 1,024 characters is blocked unless it holds an ASCII character no IPv4 or metadata-name spelling has. Hosts within that limit are judged as before.
+
+Checks:
+
+- On 20,017 texts, 17 known cases and 20,000 random ones, the new scanner returned the same hosts as the old one.
+- The review's 1 MiB input, with 58,252 schemes, takes about 0.1 s through the full stand-in dispatch. The test asserts under 2 s. On `a3364a5` the same test did not finish in 300 s.
+- Padding tests stay blocked: 3,000 leading zeros, 600 percent-encoded zeros, 5,000 characters of userinfo, and a long zero-padded host with a port. With `HERMES_SOURCE`, short padded forms are blocked by native.
+- `tests/hermes_computer_test.py` passed 57 tests with stand-ins (2 skipped) and all 57 with `HERMES_SOURCE`. `ruff check .` passed.

@@ -774,6 +774,34 @@ class ModernInstallToolsTests(InstallToolsTests):
             with self.subTest(text=text):
                 self.assertEqual(set(self.dispatch_on_fetching_paths(installed, text).values()), {"native dispatch"})
 
+    def test_a_megabyte_of_scheme_occurrences_scans_in_near_linear_time(self):
+        installed = computer.install_tools()
+        self.stand_in_metadata_matcher()
+        # The review's input: 58,252 schemes in one string, each authority running to its end.
+        text = "'" + ",".join(["http:example.test"] * 58252) + "'.split(',')"
+        self.assertGreater(len(text), 1_000_000)
+        began = time.perf_counter()
+        self.assertEqual(self.dispatch_cdp(installed, "Runtime.evaluate", {"expression": text}), "native dispatch")
+        # About 0.1 s on the Mac mini. The quadratic scan took over 10 s; 2 s leaves room for a slow runner.
+        self.assertLess(time.perf_counter() - began, 2.0)
+        poisoned = text.replace("'.split", ",http:/169.254.169.254'.split")
+        self.assertEqual(json.loads(self.dispatch_cdp(installed, "Runtime.evaluate", {"expression": poisoned})),
+                         {"success": False, "error": "Blocked: URL targets a cloud metadata endpoint"})
+
+    # Padding that WHATWG reads away: long leading zeros, percent-encoding and userinfo.
+    PADDED_FORMS = ("http:/0x" + "0" * 3000 + "a9fea9fe/", "http:/" + "%30" * 600 + "251.0376.0251.0376/",
+                    "http:/" + "a" * 5000 + "@169.254.169.254/", "http:/" + "0" * 2000 + "251.0376.0251.0376:80/")
+
+    def test_padding_cannot_hide_a_metadata_host(self):
+        installed = computer.install_tools()
+        self.stand_in_metadata_matcher()
+        self.assert_blocked_on_fetching_paths(installed, self.PADDED_FORMS)
+        # A long host holding a character no address spelling has can't name one, and an over-long
+        # bracket is rejected by WHATWG.
+        for form in ("http:/" + "a-" * 1000 + "example.test/", "http:/[" + "0" * 100 + "::1]/", "'http:" + "a," * 2000 + "b'"):
+            with self.subTest(form=form[:40]):
+                self.assertEqual(self.dispatch_cdp(installed, "Runtime.evaluate", {"expression": f'fetch("{form}")'}), "native dispatch")
+
     def test_bracketed_mapped_and_unparseable_scheme_colon_hosts_fail_closed(self):
         installed = computer.install_tools()
         # A stand-in that knows only the two literal metadata hosts, as native would read them.
@@ -842,6 +870,10 @@ class ModernInstallToolsTests(InstallToolsTests):
                 ("Page.setDocumentContent", {"frameId": "main", "html": "<style>@import url(http:/169.254.169.254);@media print{body{color:red}}</style>"}),
                 ("Page.setDocumentContent", {"frameId": "main", "html": "<style>a{background:url(http:/169.254.169.254)}@font-face{font-family:x}</style>"}),
                 ("Runtime.evaluate", {"expression": "document.body.style.background = 'url(http:/169.254.169.254)'"}),
+                # Padding WHATWG reads away, judged by native when short and blocked when over-long.
+                *(("Runtime.evaluate", {"expression": f'fetch("{form}")'}) for form in self.PADDED_FORMS),
+                ("Runtime.evaluate", {"expression": 'fetch("http:/0x' + "0" * 60 + 'a9.0xfe.0xa9.0xfe/")'}),
+                ("Runtime.evaluate", {"expression": 'fetch("http:/' + "%30" * 60 + '251.0376.0251.0376/")'}),
                 # Several URLs in one text: an earlier one never hides a later one.
                 *(("Page.setDocumentContent", {"frameId": "main", "html": text}) for text in self.MULTI_URL_TEXTS),
                 *(("Runtime.evaluate", {"expression": text}) for text in self.MULTI_URL_TEXTS),
