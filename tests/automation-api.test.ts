@@ -12,7 +12,7 @@ import { installAutomationRoutes } from '../src/server/automation.js';
 const origin = 'https://automation.example.invalid';
 const apps: ReturnType<typeof Fastify>[] = [];
 afterEach(async () => { for (const app of apps.splice(0)) await app.close(); });
-async function setup() {
+async function setup(extra: Partial<import('../src/shared/types.js').Runtime> = {}) {
   const app = Fastify({ logger: false }); apps.push(app);
   const store = new Store(':memory:');
   const config = loadConfig({ NODE_ENV: 'production', APP_ORIGIN: origin, APP_DATABASE: ':memory:', GOOGLE_CLIENT_ID: 'fixture', HOUSEHOLD_EMAILS: 'first@example.invalid,second@example.invalid' });
@@ -28,7 +28,7 @@ async function setup() {
     trigger_delete: () => ({ok: true}), skill_policy: () => ({ok: true}), skill_decide: () => ({ok: true}),
     skill_lock: input => ({ok: true, name: input.name, locked: input.locked}),
   });
-  const runtime = fakeRuntime({ automationRequest: automation, listBots: vi.fn(async () => [botFixture({id:'ranch',name:'Ranch'}), botFixture({id:'private',name:'Private'})]) });
+  const runtime = fakeRuntime({ automationRequest: automation, listBots: vi.fn(async () => [botFixture({id:'ranch',name:'Ranch'}), botFixture({id:'private',name:'Private'})]), ...extra });
   const automationRequest = vi.spyOn(runtime, 'automationRequest');
   store.savePresentation('private', { shared: false, ownerId: 'second' });
   let maintenance = false;
@@ -40,7 +40,7 @@ async function setup() {
     return { origin, cookie: `session=${token}`, 'x-csrf-token': csrf };
   };
   app.addHook('onClose', async () => store.close());
-  return { app, runtime, automationRequest, overview, first: login('first'), second: login('second'), maintain: () => { maintenance = true; } };
+  return { app, store, runtime, automationRequest, overview, first: login('first'), second: login('second'), maintain: () => { maintenance = true; } };
 }
 it('authenticates and scopes every automation request to the visible roster', async () => {
   const s = await setup();
@@ -139,4 +139,53 @@ it('distinguishes explicit null task assignment from an omitted assignment', asy
   expect(s.automationRequest).toHaveBeenLastCalledWith({ operation: 'task_update', profile: 'ranch', taskId: 't_task', visibleProfiles: ['ranch'], assignee: null });
   expect((await s.app.inject({ method: 'PATCH', url, headers: s.first, payload: { title: 'Keep owner' } })).statusCode).toBe(200);
   expect(s.automationRequest).toHaveBeenLastCalledWith({ operation: 'task_update', profile: 'ranch', taskId: 't_task', visibleProfiles: ['ranch'], title: 'Keep owner' });
+});
+
+it("refuses a trigger that would run a routine posting where people who can't see its assistant read it", async () => {
+  // The first member's personal "mine" has a routine that posts in "lodge", which only the second member opens.
+  const room = { room_id: 'lodge', name: 'Lodge', members: ['private', 'ranch'].map(profile => ({ member_id: profile, profile, handle: profile })) };
+  const s = await setup({
+    listBots: vi.fn(async () => [botFixture({id:'ranch',name:'Ranch'}), botFixture({id:'private',name:'Private'}), botFixture({id:'mine',name:'Mine'})]),
+    routines: async () => [{ id: 'gate-check', botId: 'mine', name: 'Gate check', prompt: 'Check', schedule: '1h', enabled: false, roomIds: [], delivery: { deliver: 'room:lodge@private' } }],
+    groupRequest: async () => ({ supported: true, canSend: true, routineDelivery: true, rooms: [room] }),
+  });
+  s.store.savePresentation('mine', { shared: false, ownerId: 'first' });
+  const admin = { ...s.first, 'x-admin-fixture': 'yes' };
+  const trigger = { id: 'gate', description: 'Gate opened', events: ['gate.open'], routineId: 'gate-check' };
+  const refused = await s.app.inject({ method: 'POST', url: '/api/bots/mine/automation/triggers', headers: admin, payload: trigger });
+  expect(refused.statusCode).toBe(409);
+  expect(refused.json().error).toContain("people who can't see its assistant could open");
+  expect(s.automationRequest.mock.calls.some(([input]) => input.operation === 'trigger_create')).toBe(false);
+  // Turning a trigger off always goes ahead.
+  const off = await s.app.inject({ method: 'PATCH', url: '/api/bots/mine/automation/triggers/gate', headers: admin, payload: { enabled: false, revision: 'a'.repeat(64) } });
+  expect(off.statusCode).toBe(200);
+});
+
+it("refuses to turn on a trigger it cannot find to check, as one beyond the overview's 100", async () => {
+  // Re-review repro 4: the overview lists at most 100 triggers and the add-on has no single-trigger read.
+  const s = await setup({
+    routines: async () => [],
+    groupRequest: async () => ({ supported: true, canSend: true, routineDelivery: true, rooms: [] }),
+  });
+  const admin = { ...s.first, 'x-admin-fixture': 'yes' };
+  const refused = await s.app.inject({ method: 'PATCH', url: '/api/bots/ranch/automation/triggers/beyond-cap', headers: admin, payload: { enabled: true, revision: 'a'.repeat(64) } });
+  expect(refused.statusCode).toBe(409);
+  expect(s.automationRequest.mock.calls.some(([input]) => input.operation === 'trigger_toggle')).toBe(false);
+});
+
+it("checks the trigger's own assistant's routine when another assistant has a job with the same ID", async () => {
+  // A harmless default-profile copy is listed first; the private "mine" copy posts in "lodge", which only the second member opens.
+  const room = { room_id: 'lodge', name: 'Lodge', members: ['private', 'ranch'].map(profile => ({ member_id: profile, profile, handle: profile })) };
+  const s = await setup({
+    listBots: vi.fn(async () => [botFixture({id:'ranch',name:'Ranch'}), botFixture({id:'private',name:'Private'}), botFixture({id:'mine',name:'Mine'})]),
+    routines: async () => [
+      { id: 'gate-check', botId: 'ranch', name: 'Gate check', prompt: 'Check', schedule: '1h', enabled: false, roomIds: [] },
+      { id: 'gate-check', botId: 'mine', name: 'Gate check', prompt: 'Check', schedule: '1h', enabled: false, roomIds: [], delivery: { deliver: 'room:lodge' } }],
+    groupRequest: async () => ({ supported: true, canSend: true, routineDelivery: true, rooms: [room] }),
+  });
+  s.store.savePresentation('mine', { shared: false, ownerId: 'first' });
+  const admin = { ...s.first, 'x-admin-fixture': 'yes' };
+  const created = await s.app.inject({ method: 'POST', url: '/api/bots/mine/automation/triggers', headers: admin, payload: { id: 'gate', description: 'Gate', events: ['gate.open'], routineId: 'gate-check' } });
+  expect(created.statusCode).toBe(409);
+  expect(s.automationRequest.mock.calls.some(([input]) => input.operation === 'trigger_create')).toBe(false);
 });

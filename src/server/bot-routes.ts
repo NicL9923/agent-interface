@@ -7,6 +7,7 @@ import { apiRoute } from "./api-route.js";
 import { signedIn } from "./auth.js";
 import { notFound, visible, type Roster } from "./bot-access.js";
 import { httpError } from "./http-error.js";
+import { assertRoutinesStayPrivate, serialDelivery } from "./routine-delivery.js";
 import { avatar, botSaveRequest, id } from "./schemas.js";
 import type { Store } from "./store.js";
 
@@ -94,24 +95,30 @@ export function installBotRoutes(app: FastifyInstance, collaborators: {
     const id = botIdFor(input.name);
     if (id && await roster.has(id))
       throw httpError(409, "An assistant with this name already exists. Choose another name.");
-    const prior = id ? store.presentation(id) : {};
-    const version = id ? store.swapPresentation(id, prior, next) : false;
-    let bot;
-    try { bot = await runtime.saveBot(input); }
-    catch (error) {
-      // Hermes may have created the profile and then failed to remove it; it stays the creator's.
-      if (error instanceof IncompleteCreationError) {
-        const created = error.createdBotId;
-        if (created !== id) { if (version !== false) store.restorePresentation(id, version, prior); store.savePresentation(created, next); }
-        roster.forget();
-        throw httpError(502, `Hermes created ${input.name} but could not finish setting it up. It exists${input.shared ? "" : " and stays your personal assistant"}; review it in its settings.`, { expose: true, code: "created_incomplete" });
+    // A room may still list an earlier assistant with this ID, which the new one would open again.
+    // Checked and created in one turn with the other changes that decide who reads routine posts.
+    const bot = await serialDelivery(store, async () => {
+      if (id) await assertRoutinesStayPrivate(runtime, store, signedIn(req).id, id, next);
+      const prior = id ? store.presentation(id) : {};
+      const version = id ? store.swapPresentation(id, prior, next) : false;
+      let bot;
+      try { bot = await runtime.saveBot(input); }
+      catch (error) {
+        // Hermes may have created the profile and then failed to remove it; it stays the creator's.
+        if (error instanceof IncompleteCreationError) {
+          const created = error.createdBotId;
+          if (created !== id) { if (version !== false) store.restorePresentation(id, version, prior); store.savePresentation(created, next); }
+          roster.forget();
+          throw httpError(502, `Hermes created ${input.name} but could not finish setting it up. It exists${input.shared ? "" : " and stays your personal assistant"}; review it in its settings.`, { expose: true, code: "created_incomplete" });
+        }
+        if (version !== false) store.restorePresentation(id, version, prior);
+        throw error;
       }
-      if (version !== false) store.restorePresentation(id, version, prior);
-      throw error;
-    }
+      // A runtime that names it differently still gets its record.
+      if (bot.id !== id) { if (version !== false) store.restorePresentation(id, version, prior); store.savePresentation(bot.id, next); }
+      return bot;
+    });
     roster.forget();
-    // A runtime that names it differently still gets its record.
-    if (bot.id !== id) { if (version !== false) store.restorePresentation(id, version, prior); store.savePresentation(bot.id, next); }
     return directory.decorate(directory.remember(bot), await nativeAvatar());
   });
   apiRoute(app, "GET /bots/:id", {}, async req => {
@@ -133,22 +140,30 @@ export function installBotRoutes(app: FastifyInstance, collaborators: {
       throw httpError(409, "Confirm making this assistant personal. It will disappear for the rest of the household.", { code: "private_confirmation_required" });
     // Claim the new sharing before Hermes changes anything, and only if nobody changed it first.
     const next = { shared: input.shared, ownerId: input.shared ? undefined : userId };
-    const version = store.swapPresentation(id, previous, next);
-    if (version === false)
-      throw httpError(409, "Someone changed who can see this assistant while you were saving. Review it and try again.", { code: "sharing_changed" });
-    let bot;
-    // A failed save puts sharing back only if no later save has changed it since.
-    try { bot = await runtime.saveBot(input, id); }
-    catch (error) { store.restorePresentation(id, version, previous); throw error; }
+    // Routines that post in group chats are checked against the new sharing, and no routine's rooms
+    // change until this save settles. See src/server/routine-delivery.ts.
+    const bot = await serialDelivery(store, async () => {
+      await assertRoutinesStayPrivate(runtime, store, userId, id, next);
+      const version = store.swapPresentation(id, previous, next);
+      if (version === false)
+        throw httpError(409, "Someone changed who can see this assistant while you were saving. Review it and try again.", { code: "sharing_changed" });
+      // A failed save puts sharing back only if no later save has changed it since.
+      try { return await runtime.saveBot(input, id); }
+      catch (error) { store.restorePresentation(id, version, previous); throw error; }
+    });
     roster.forget();
     return directory.decorate(directory.remember(bot), await nativeAvatar());
   });
   apiRoute(app, "DELETE /bots/:id", {}, async req => {
     await requireCapability("botConfiguration");
-    await runtime.deleteBot(req.params.id);
-    directory.forget(req.params.id);
-    // A new assistant that reuses this ID starts with no owner, visibility or per-person state.
-    store.forgetBot(req.params.id);
+    // Deleting only closes the rooms that list this assistant, so it needs no routine check, but it waits
+    // its turn: a creation reusing the ID then checks the rooms after this record is gone.
+    await serialDelivery(store, async () => {
+      await runtime.deleteBot(req.params.id);
+      directory.forget(req.params.id);
+      // A new assistant that reuses this ID starts with no owner, visibility or per-person state.
+      store.forgetBot(req.params.id);
+    });
     roster.forget();
     return { ok: true };
   });

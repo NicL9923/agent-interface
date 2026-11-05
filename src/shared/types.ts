@@ -339,6 +339,16 @@ export interface Routine {
   schedule: string;
   enabled: boolean;
   recipientIds?: string[];
+  /**
+   * Group chats this routine also posts its results in, as a message from the routine. Only rooms the
+   * viewer can open are listed; saving keeps the ones they cannot see. Undefined leaves them unchanged.
+   */
+  roomIds?: string[];
+  /**
+   * Server only, never sent to clients: the delivery fields as Hermes stores them, which the server reads
+   * (src/server/delivery-targets.ts) to check every group chat the routine posts in.
+   */
+  delivery?: { deliver?: unknown; failure_deliver?: unknown; origin?: unknown };
   skills?: string[];
   model?: string | null;
   provider?: string | null;
@@ -476,7 +486,8 @@ export interface Runtime {
   setSkills(botId: string, ids: string[]): Promise<void>;
   routines(): Promise<Routine[]>;
   saveRoutine(input: Omit<Routine, "id">, id?: string): Promise<Routine>;
-  deleteRoutine(id: string): Promise<void>;
+  /** `botId` names the assistant whose job this is: Hermes lets several hold one ID. */
+  deleteRoutine(id: string, botId: string): Promise<void>;
   discoverEvents(cursor: string): Promise<RuntimeDiscovery>;
   close(): Promise<void>;
 }

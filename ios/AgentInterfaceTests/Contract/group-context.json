@@ -1,0 +1,22 @@
+{
+  "request": "POST /api/groups/room-dinner/context",
+  "response": {
+    "context": {
+      "purpose": "Plan the week's dinners.",
+      "notes": "No mushrooms.",
+      "routing": "lead",
+      "lead_member_id": "garden"
+    },
+    "event": {
+      "event_id": "context:ffd37beaf8f6ed090315088028e3e0b48aaa9cfaffb403fd6b6b95fcac0f80a1",
+      "seq": 3,
+      "kind": "room.context_set",
+      "created_at": 1790852420,
+      "actor": {
+        "kind": "system",
+        "id": "room-control"
+      },
+      "payload": {}
+    }
+  }
+}

@@ -341,7 +341,7 @@ it("shares durable participant/routine notifications across web/APNs without ret
     store.registerNativeDevice(userId, userId, userId, userId.repeat(32), "sandbox");
   }
   store.participate("run", "one");
-  store.routineRecipients("routine", ["two"]);
+  store.routineRecipients("bot", "routine", ["two"]);
   const event: RuntimeEvent = { id: "complete", botId: "bot", runId: "run", kind: "completed", title: "Done", occurredAt: "now" };
   store.recordEvents([event, { ...event, id: "routine", routineId: "routine" }], "cursor");
   store.subscribe("one", { endpoint: "https://push.test/one", keys: { p256dh: "key", auth: "auth" } });
@@ -458,7 +458,7 @@ it("sends a private assistant's news only to its owner on web and APNs, even aft
   }
   // Two joined the run, receives the routine and follows the assistant; none of that reaches past its privacy.
   store.participate("run", "two");
-  store.routineRecipients("routine", ["two"]);
+  store.routineRecipients("mine", "routine", ["two"]);
   store.savePresentation("mine", { shared: false, ownerId: "one" });
   const event: RuntimeEvent = { id: "run-done", botId: "mine", runId: "run", kind: "completed", title: "Done", occurredAt: "now" };
   store.recordEvents([event, { ...event, id: "routine-done", routineId: "routine" }], "cursor");

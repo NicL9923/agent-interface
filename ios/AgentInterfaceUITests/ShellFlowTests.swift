@@ -135,6 +135,25 @@ import XCTest
     try capture("06-group-live")
   }
 
+  func testGroupShowsWhoIsWorkingAndSavesItsPurposeFromSettings() throws {
+    let app = launch(["GROUP", "GROUP_WORKING"], home: true)
+    app.buttons["room.fixture-room"].tapWhenReady(timeout: 15)
+    // Simple presentation names who works, without tools or rounds.
+    let kitchen = app.descendants(matching: .any).matching(identifier: "groupActivity.kitchen").firstMatch
+    XCTAssertTrue(kitchen.waitForExistence(timeout: 10), app.debugDescription)
+    XCTAssertTrue(kitchen.label.contains("Kitchen companion is working..."), kitchen.label)
+    XCTAssertFalse(app.staticTexts["Assistants are discussing…"].exists)
+    // A routine's post reads as the routine, not as a household member.
+    XCTAssertTrue(app.staticTexts["Morning brief"].waitForExistence(timeout: 5), app.debugDescription)
+    XCTAssertTrue(app.staticTexts["Routine"].exists)
+    try capture("06a-group-activity")
+    app.buttons["groupSettings"].tapWhenReady()
+    let purpose = app.descendants(matching: .any).matching(identifier: "groupPurpose").firstMatch
+    purpose.typeWhenFocused("Plan Sunday supper")
+    app.buttons["saveGroupSettings"].tapWhenReady()
+    XCTAssertTrue(app.staticTexts["Plan Sunday supper"].waitForExistence(timeout: 10), "The saved purpose shows under the members: \(app.debugDescription)")
+  }
+
   func testComputerOpensInTheAppAndTakesOverThenHandsBack() throws {
     let app = launch(home: true)
     app.buttons["openSettings"].tapWhenReady(timeout: 15)

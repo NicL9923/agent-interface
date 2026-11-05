@@ -40,7 +40,7 @@ it("sends nothing anywhere while the person is reading that chat on any device",
     expect([web, native]).toEqual([[], []]);
     expect(store.outbox()).toHaveLength(0);
     // Another chat and a routine result still notify while this one is open.
-    store.routineRecipients("routine", ["one"]);
+    store.routineRecipients("shared", "routine", ["one"]);
     store.recordEvents([reply("other-chat", { botId: "elsewhere" }), reply("routine", { routineId: "routine" })], "cursor");
     await worker.tick();
     expect(web).toHaveLength(2);

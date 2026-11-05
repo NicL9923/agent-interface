@@ -8,17 +8,21 @@ import { replyCardsFromText, validReplyCardState } from '../shared/reply-cards.j
 import { routinePresets } from '../shared/routine-presets.js';
 import type { Store } from './store.js';
 import { isConversationReply } from '../shared/message-origin.js';
-import { notFound, redactAgents, Roster, visibleBots } from './bot-access.js';
+import { notFound, redactAgents, Roster, routineById, visibleBots } from './bot-access.js';
 import { nameRequesters } from './vault.js';
 import { contentEtag } from './etag.js';
 import { httpError } from './http-error.js';
 import { id } from './schemas.js';
+import { assertDeliveryPrivate } from './collaboration.js';
+import { routineTargets } from './delivery-targets.js';
+import { serialDelivery } from './routine-delivery.js';
 const target = z.enum(['memory', 'user']);
 const revision = z.string().regex(/^[a-f0-9]{64}$/);
 const iso = z.string().datetime({ offset: true });
-export async function assertRoutineEditable(runtime: Runtime, store: Store, routineId: string) {
+export async function assertRoutineEditable(runtime: Runtime, store: Store, routineId: string, botId: unknown) {
   if (!runtime.experienceRequest) return;
-  for (const trial of store.routineTrials(routineId)) {
+  // Trials belong to one assistant's routine: another assistant's job with the same ID is a different routine.
+  for (const trial of store.routineTrials(routineId).filter(trial => trial.botId === botId)) {
     try {
       const response = await runtime.experienceRequest({ operation: 'run_receipt', profile: trial.botId, routineId, requestId: trial.requestId, senderId: trial.userId });
       if ('status' in response) store.recordRoutineTrialStatus(trial.requestId, response.status === 'uncertain' && response.ownerStatus === 'unknown' ? 'settled' : response.status);
@@ -115,7 +119,9 @@ export async function installExperienceRoutes(app: FastifyInstance, runtime: Run
     for (const key of recaps.keys()) if (key.startsWith(`${userId}\0`) && !bots.some(bot => key === `${userId}\0${bot.id}`)) recaps.delete(key);
     const ids = new Set(bots.map(bot => bot.id));
     let upcoming: import("../shared/types.js").Routine[] = [];
-    try { upcoming = (await runtime.routines()).filter(row => ids.has(row.botId) && row.enabled && row.nextRunAt).sort((a,b)=>Date.parse(a.nextRunAt!) - Date.parse(b.nextRunAt!)).slice(0,10); } catch { /* The rest of Today remains useful during a scheduler outage. */ }
+    try { upcoming = (await runtime.routines()).filter(row => ids.has(row.botId) && row.enabled && row.nextRunAt).sort((a,b)=>Date.parse(a.nextRunAt!) - Date.parse(b.nextRunAt!)).slice(0,10)
+      // Today never shows where a routine posts, so it never reads the room catalog to hide rooms someone cannot open.
+      .map(({ roomIds: _, delivery: __, ...row }) => row); } catch { /* The rest of Today remains useful during a scheduler outage. */ }
     const content = { since, frontier: page.frontier, hasMore: page.hasMore, items,
       events: page.events.filter(event => ids.has(event.botId)).map(event => ({ ...event, ...(eventFiles.has(event.id) ? { files: eventFiles.get(event.id) } : {}) })).sort((a, b) => Date.parse(b.occurredAt) - Date.parse(a.occurredAt)),
       unavailableBots: items.filter(item => item.error).map(item => item.botId) };
@@ -144,8 +150,8 @@ export async function installExperienceRoutes(app: FastifyInstance, runtime: Run
   apiRoute(app, "POST /routines/preview", { body: z.object({ botId: id, schedule: z.string().trim().min(1).max(500) }).strict() }, async (req, body) => {
     return request({ operation: 'preview', profile: body.botId, schedule: body.schedule });
   });
-  const routine = async (routineId: string) => {
-    const row = (await runtime.routines()).find(routine => routine.id === routineId);
+  const routine = async (routineId: string, userId: string) => {
+    const row = routineById(await runtime.routines(), routineId, store, userId);
     if (!row) throw httpError(404, 'Routine not found');
     return row;
   };
@@ -154,9 +160,18 @@ export async function installExperienceRoutes(app: FastifyInstance, runtime: Run
     const userId = signedIn(req).id;
     const previous = store.routineTrial(requestId);
     if (previous && (previous.userId !== userId || previous.routineId !== params.id)) throw httpError(409, 'This trial request ID belongs to a different routine or person');
-    const row = previous ? { botId: previous.botId, id: previous.routineId } : await routine(params.id);
-    store.rememberRoutineTrial(requestId, userId, row.id, row.botId);
-    const receipt = await request({ operation: 'run', profile: row.botId, routineId: row.id, requestId, senderId: userId });
+    const row = previous ? { botId: previous.botId, id: previous.routineId } : await routine(params.id, userId);
+    // A trial delivers like a scheduled run, so its rooms are checked as Hermes has them now, in turn with
+    // sharing changes and routine saves.
+    const receipt = await serialDelivery(store, async () => {
+      // The same assistant's routine Hermes runs, read again in this turn.
+      const current = (await runtime.routines()).find(other => other.id === row.id && other.botId === row.botId);
+      // A retried trial whose routine Hermes no longer has, such as a one-shot routine that removed itself,
+      // cannot run again and only reads its receipt. Any other routine the app cannot find is refused.
+      if (current || !previous) await assertDeliveryPrivate(runtime, store, row.botId, current && routineTargets(current));
+      store.rememberRoutineTrial(requestId, userId, row.id, row.botId);
+      return request({ operation: 'run', profile: row.botId, routineId: row.id, requestId, senderId: userId });
+    });
     if ('status' in receipt) store.recordRoutineTrialStatus(requestId, receipt.status);
     return receipt;
   });

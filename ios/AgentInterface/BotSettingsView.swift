@@ -664,7 +664,7 @@ struct BotSettingsView: View {
         Section("Routine recipes") {
           ForEach(templates) { template in
             Button {
-              editingRoutine = Routine(id: "", botId: bot.id, name: template.name, prompt: template.prompt, schedule: template.schedule, enabled: false, recipientIds: [store.bootstrap?.user.id].compactMap { $0 })
+              editingRoutine = Routine(id: "", botId: bot.id, name: template.name, prompt: template.prompt, schedule: template.schedule, enabled: false, recipientIds: [store.bootstrap?.user.id].compactMap { $0 }, roomIds: [])
             } label: {
               VStack(alignment: .leading, spacing: 2) {
                 Text(template.name).font(.headline)
@@ -685,6 +685,7 @@ struct BotSettingsView: View {
                 .overlay(Capsule().strokeBorder(Palette.line))
             }
           }
+          if let rooms = RoutineRooms.names(routine.roomIds, catalog: store.groupCatalog) { LabeledContent("Posts in") { Text(rooms).foregroundStyle(Palette.muted) } }
           Text(routine.prompt).font(.body).lineLimit(6)
           RoutineEnhancements(routine: routine, disabled: !store.supports(.routines))
           Button(routine.enabled ? "Pause" : "Resume") {
@@ -692,6 +693,8 @@ struct BotSettingsView: View {
               guard let api = store.api else { return }
               var next = routine
               next.enabled.toggle()
+              // Pausing leaves where it posts alone.
+              next.roomIds = nil
               let _: Routine = try await api.write(
                 "/routines/\(APIClient.component(routine.id))", next, method: "PUT")
               await loadTab()
@@ -986,11 +989,30 @@ struct RoutineEditor: View {
             "No selected recipients means no completion notification. Routine results remain in the assistant conversation."
           )
         }
+        if RoutineRooms.shown(routine.roomIds, catalog: store.groupCatalog, choices: roomChoices) {
+          Section {
+            ForEach(roomChoices) { room in
+              Toggle(room.name, isOn: Binding(
+                get: { routine.roomIds?.contains(room.id) == true },
+                set: { selected in
+                  var ids = routine.roomIds ?? []
+                  if selected { if !ids.contains(room.id) { ids.append(room.id) } } else { ids.removeAll { $0 == room.id } }
+                  routine.roomIds = ids
+                }))
+            }
+          } header: {
+            Text("Also post results in these group chats")
+          } footer: {
+            Text("Results appear in the group as a message from this routine. Assistants answer it only when it @mentions them.")
+          }
+        }
         if !routine.id.isEmpty {
           Section { Button("Delete routine", role: .destructive) { deleteConfirm = true } }
         }
       }.accessibilityIdentifier("routineEditorForm").disabled(busy).navigationTitle(routine.id.isEmpty ? "New routine" : "Edit routine")
         .navigationBarTitleDisplayMode(.inline)
+        // Home keeps the room catalog; read it here when the editor opens before home has.
+        .task { if store.groupCatalog == nil { await store.refreshGroups() } }
         .toolbar {
           ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
           ToolbarItem(placement: .confirmationAction) {
@@ -1024,6 +1046,9 @@ struct RoutineEditor: View {
     let household = store.bootstrap?.household ?? []
     return store.bootstrap?.bots.first { $0.id == routine.botId }?.routineRecipients(household) ?? household
   }
+  private var roomChoices: [GroupRoom] {
+    GroupActivity.routineRoomChoices(store.groupCatalog, bot: store.bootstrap?.bots.first { $0.id == routine.botId }, bots: store.bootstrap?.bots ?? [])
+  }
   private var hasPayload: Bool {
     !routine.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
       || !(routine.script ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -1034,6 +1059,7 @@ struct RoutineEditor: View {
     error = nil
     var value = routine
     value.recipientIds = value.recipientIds?.filter { id in recipients.contains { $0.id == id } }
+    value.roomIds = RoutineRooms.saved(value.roomIds, catalog: store.groupCatalog, choices: roomChoices)
     Task {
       defer { busy = false }
       do {
@@ -1045,6 +1071,25 @@ struct RoutineEditor: View {
         dismiss()
       } catch { self.error = error.localizedDescription }
     }
+  }
+}
+
+/// Where a routine posts besides its assistant's chat, as the web's routine editor decides it.
+enum RoutineRooms {
+  /// The editor offers rooms only when Hermes can post in them and the server said where this routine posts.
+  static func shown(_ roomIds: [String]?, catalog: GroupCatalog?, choices: [GroupRoom]) -> Bool {
+    guard catalog?.routineDelivery == true, let roomIds else { return false }
+    return !choices.isEmpty || !roomIds.isEmpty
+  }
+  /// The rooms a save sends: the chosen ones still offered, or nil (leave them unchanged) when none were shown.
+  static func saved(_ roomIds: [String]?, catalog: GroupCatalog?, choices: [GroupRoom]) -> [String]? {
+    guard shown(roomIds, catalog: catalog, choices: choices), let roomIds else { return nil }
+    return roomIds.filter { id in choices.contains { $0.id == id } }
+  }
+  /// "Weekend plans, Barn crew", or nil when the routine posts in no room this person can name.
+  static func names(_ roomIds: [String]?, catalog: GroupCatalog?) -> String? {
+    let names = (roomIds ?? []).compactMap { id in catalog?.rooms.first { $0.id == id }?.name }
+    return names.isEmpty ? nil : names.joined(separator: ", ")
   }
 }
 

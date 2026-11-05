@@ -194,7 +194,38 @@ when an assistant with that name already exists. If someone else
 changed its sharing while the save was under way, it returns 409 with
 `code: "sharing_changed"` and changes nothing. A private assistant's routines
 accept only its owner as a recipient; others return 400 with
-`code: "private_recipients"`. Only its owner can
+`code: "private_recipients"`. Routines also take `roomIds`, the group chats they post their
+results in, where `GET /api/groups` reports `routineDelivery: true`. A routine lists only the
+rooms the reader can open, and leaves `roomIds` out when the server could not read the room
+catalog; send `roomIds` only when it was present, since saving replaces the rooms you can see
+and keeps the ones you cannot. A new room must be one you can open (400), and a private
+assistant's routine may post only in rooms nobody else can open, in practice rooms with one of its
+owner's personal assistants (400 with `code: "private_recipients"`). An error that names a room you cannot
+open is replaced whole with "Couldn't post in a group chat you can't open.", since Hermes repeats the
+room's profile elsewhere in it, and one that names an assistant you cannot see is hidden as private.
+A save merges your rooms with the routine's rooms as Hermes has them when the save runs. Anything that
+lets a routine deliver checks every room its delivery names, read exactly as Hermes reads it
+(`src/server/delivery-targets.ts`): `deliver` and `failure_deliver`, `room:<id>` with any spacing and
+case Hermes trims, `room:<id>@<profile>` as the same room, and `origin` delivery into the room a job
+came from. That includes rooms you cannot see and targets written outside the app. The places it applies: a save that leaves it enabled,
+`PATCH /api/routines/:id/state` with `enabled: true`, `POST /api/routines/:id/run`, and creating,
+changing or turning on an event trigger for it. If a room would expose the routine, these answer 409
+with `code: "routine_rooms"`. If the rooms, the routine or a trigger's routine cannot be read, they answer
+`code: "routine_rooms_unknown"`, including a trigger beyond the 100 the automation overview lists and a
+Hermes that offers no room catalog. Hermes lets two assistants hold jobs with one ID: a save checks the
+named assistant's routine and a trigger its own assistant's, and `PATCH /api/routines/:id/state`,
+`POST /api/routines/:id/run` and `DELETE /api/routines/:id` act on the one you can see and tell Hermes its
+assistant, a running trial blocks changes only to its own assistant's routine, a deletion answers 404 and deletes
+nothing if that assistant's copy is gone by the time it runs, routine recipients are kept per assistant, answering 409 with `code: "routine_ambiguous"`
+when you can see two. Pausing,
+saving a paused routine and turning a trigger off always go ahead. `PATCH /api/bots/:id` refuses a sharing change that
+would let a routine post where people who cannot see its assistant read it, such as making an
+assistant personal while its routine posts in a room others can open, or sharing the last personal
+member of a room a personal routine posts in. `POST /api/bots` refuses the same way when a room
+still lists an earlier assistant with the new one's ID and the new one would open that room. Deleting
+an assistant is never refused: a room that lists a deleted assistant opens for nobody. These answer 409 with `code: "routine_rooms"` and names
+the routines and rooms you can see; remove those rooms from the routines first. When the routines or
+rooms cannot be read, it answers 409 with `code: "routine_rooms_unknown"` and changes nothing. Only its owner can
 reach a private assistant to share it again; sharing clears the recorded owner.
 `DELETE /api/bots/:id` also removes its owner, visibility and each person's
 drafts, read positions, reply choices, saved items and preference references,
@@ -369,6 +400,8 @@ Web and native clients share these authenticated operations. See
 | `POST /api/routines/:id/run` | `{ "requestId": "UUID" }`; durable native trial receipt |
 | `GET /api/routines/:id/runs/:requestId` | Exact trial result; rechecking does not execute another trial |
 | `GET /api/groups/:id/log?since=CURSOR&state=1` | The group's events after `since`. `state=1` adds the room and its driver status as `state`, so an open group polls with one request and one Hermes read. Servers before this option answer 400; then read `GET /api/groups/:id` separately. A `message.user` event sent through this app carries `sender: { "id": "USER_ID", "name": "NAME" }`; label others "Household member" |
+| `GET /api/groups/:id` | A routine's post is a `message.user` event whose `actor.id` starts with `cron:` (`cron-notice:` for a failed run's notice) and whose `actor.display_name` is the routine's name, which may start with an `[bot:ID] ` tag to drop; show it as the routine's post. The room, its driver status and, from Hermes versions with room settings, `context: { "purpose", "notes", "routing": "everyone" or "lead", "lead_member_id" }`. `driver_status.member_activity` lists each assistant's live turn (`member_id`, `status` of queued, running or stopping, 0-based `round_index`, `started_at`, current `tool`), and `max_rounds` bounds a discussion. Older Hermes versions omit them; then say only that the room is working |
+| `POST /api/groups/:id/context` | `{ "requestId": "UUID", "purpose": "TEXT", "notes": "TEXT", "leadMemberId": "MEMBER_ID" or null }`. Anyone who can open the room may save; null means every assistant answers a message that names no one. Purpose is at most 500 characters and trimmed notes at most 4,096 UTF-8 bytes. Answers 409 when Hermes cannot save room settings. `GET /api/groups` reports `settings: true` where it can |
 | `GET /api/search?q=TEXT&botId=ID` | `{ "hits": [...], "unavailableBots": [...] }`. `botId` is optional and searches only that assistant, answering 404 with `code: "assistant_not_found"` for one the person cannot see. A hit whose `sessionId` is the assistant's current session and that has a `messageId` can open the live chat with `GET /api/bots/:id/conversation?start=MESSAGE_ID` |
 
 Preserve memory drafts after a 409 revision conflict. Persist a trial's request ID

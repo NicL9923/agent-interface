@@ -20,7 +20,8 @@ export interface GroupLatest { text: string; at: string; author: string }
 export interface GroupRoom { room_id: string; name: string; members: GroupMember[]; latest_seq?: number; latest?: GroupLatest }
 export interface GroupEvent {
   event_id: string; seq: number; kind: string; created_at: number;
-  actor: { kind: string; id: string };
+  /** `display_name` names a member or, on a routine's post, the routine. */
+  actor: { kind: string; id: string; display_name?: string };
   payload: Record<string, unknown>;
   /** The household member who sent a message.user event through this app. Absent when unknown. */
   sender?: { id: string; name: string };
@@ -30,12 +31,46 @@ export interface GroupAction {
   request_id?: string; description?: string; command?: string;
   approval?: { request_id?: string; description?: string; command?: string };
 }
+/**
+ * One assistant's live work in a room, from Hermes `groups.state`. `status` is queued, running or stopping.
+ * `round_index` is 0-based. `tool` is the tool it is in now, reported only by the process running the turn.
+ * Older Hermes versions send no activity.
+ */
+export interface GroupMemberActivity {
+  member_id: string; status: string; thread_id?: string | null; round_index?: number | null;
+  started_at?: number | null; tool?: string | null; progress_at?: number | null;
+}
+export type GroupRouting = 'everyone' | 'lead';
+/**
+ * The room's purpose and shared notes, which every member's turn reads from the next message on, and who
+ * answers a message that names no one: every member, or the lead, who passes it on.
+ */
+export interface GroupContext { purpose: string; notes: string; routing: GroupRouting; lead_member_id: string }
+/** Hermes's limits for room settings (gateway/hosted_room_context.py). Notes count UTF-8 bytes. */
+export const GROUP_PURPOSE_MAX = 500;
+export const GROUP_NOTES_MAX_BYTES = 4096;
+/** A room ID a routine can name as `room:<id>` (cron/scheduler_delivery_room.py). */
+export const routineRoomId = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
+export interface GroupDriverStatus {
+  running: boolean; working: boolean; blocked: boolean; pending_actions: GroupAction[];
+  member_activity?: GroupMemberActivity[];
+  /** How many rounds a discussion may take. Older Hermes versions omit it. */
+  max_rounds?: number | null;
+}
 export interface GroupState {
   room: GroupRoom;
-  driver_status?: { running: boolean; working: boolean; blocked: boolean; pending_actions: GroupAction[] };
+  driver_status?: GroupDriverStatus;
+  /** Absent from Hermes versions without room settings, and for a disbanded room. */
+  context?: GroupContext;
 }
 export interface GroupPage { events: GroupEvent[]; cursor: number; latest_seq: number; has_more: boolean }
-export interface GroupCatalog { supported: boolean; canSend: boolean; reason?: string; rooms: GroupRoom[] }
+export interface GroupCatalog {
+  supported: boolean; canSend: boolean; reason?: string; rooms: GroupRoom[];
+  /** Hermes saves a room's purpose, shared notes and lead. Older servers omit it. */
+  settings?: boolean;
+  /** Routines can post their results in a group chat. Older servers omit it. */
+  routineDelivery?: boolean;
+}
 export type GroupRequest =
   | { operation: 'list' }
   | { operation: 'create'; roomId: string; name: string; members: GroupMember[] }
@@ -43,8 +78,23 @@ export type GroupRequest =
   | { operation: 'log'; roomId: string; since: number }
   | { operation: 'send'; roomId: string; requestId: string; text: string; threadId: string }
   | { operation: 'stop'; roomId: string; requestId: string }
-  | { operation: 'approve'; roomId: string; taskId: string; memberId: string; generation: number; choice: 'once' | 'deny'; requestId: string };
-export type GroupResponse = GroupCatalog | GroupState | GroupPage | { room: GroupRoom } | { accepted?: boolean; cancelled?: number; approved?: boolean; event?: GroupEvent };
+  | { operation: 'approve'; roomId: string; taskId: string; memberId: string; generation: number; choice: 'once' | 'deny'; requestId: string }
+  | { operation: 'context'; roomId: string; requestId: string; purpose: string; notes: string; routing: GroupRouting; leadMemberId: string };
+export type GroupResponse = GroupCatalog | GroupState | GroupPage | { room: GroupRoom } | { accepted?: boolean; cancelled?: number; approved?: boolean; event?: GroupEvent }
+  | { context: GroupContext; event: GroupEvent };
+
+/**
+ * The group chats an assistant's routine may post in: any room this person can open, or, for a personal
+ * assistant, only rooms with one of its owner's personal assistants, which nobody else can open. The server
+ * enforces the same rule.
+ */
+export function routineRoomChoices(catalog: GroupCatalog | null | undefined, bot: { shared?: boolean; ownerId?: string } | undefined,
+  bots: { id: string; shared?: boolean; ownerId?: string }[]): GroupRoom[] {
+  if (!catalog?.supported || !catalog.routineDelivery) return [];
+  if (!bot || bot.shared !== false || !bot.ownerId) return catalog.rooms;
+  return catalog.rooms.filter(room => room.members.some(member =>
+    bots.some(other => other.id === member.profile && other.shared === false && other.ownerId === bot.ownerId)));
+}
 
 // Hermes's own Bot Mode envelopes. Display hints only, never authority.
 // App-attributed human messages deliberately bypass this fallback.

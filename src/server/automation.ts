@@ -7,6 +7,9 @@ import { notFound, visibleBots } from './bot-access.js';
 import { httpError } from './http-error.js';
 import { apiRoute } from './api-route.js';
 import type { Store } from './store.js';
+import { assertDeliveryPrivate } from './collaboration.js';
+import { routineTargets } from './delivery-targets.js';
+import { serialDelivery } from './routine-delivery.js';
 
 const id = z.string().regex(/^[A-Za-z0-9_-]{1,100}$/);
 const revision = z.string().regex(/^[a-f0-9]{64}$/);
@@ -40,9 +43,29 @@ export async function installAutomationRoutes(app: FastifyInstance, runtime: Run
   apiRoute(app, "PATCH /bots/:id/automation/tasks/:taskId", { body: z.object(taskFields).partial().strict().refine(value => Object.keys(value).length > 0, 'Enter a task change') }, async (req, body) => request(req, { operation: 'task_update', taskId: z.object({ taskId: id }).parse(req.params).taskId, ...body }));
   apiRoute(app, "POST /bots/:id/automation/tasks/:taskId/actions", { body: z.object({ action: z.enum(['start', 'block', 'unblock', 'request_review']), reason: z.string().trim().min(1).max(2000).optional(), reviewer: id.optional() }).strict() }, async (req, body) => request(req, { operation: 'task_action', taskId: z.object({ taskId: id }).parse(req.params).taskId, ...body }));
   apiRoute(app, "PUT /bots/:id/automation/tasks/:taskId/dependencies/:dependencyId", { body: z.object({ remove: z.boolean() }).strict() }, async (req, body) => request(req, { operation: 'task_dependency', ...z.object({ taskId: id, dependencyId: id }).parse(req.params), ...body }));
-  apiRoute(app, "POST /bots/:id/automation/triggers", { body: z.object({ id: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,79}$/), ...triggerFields }).strict() }, async (req, trigger, reply) => { reply.header('Cache-Control', 'no-store'); return request(req, { operation: 'trigger_create', trigger }); });
-  apiRoute(app, "PUT /bots/:id/automation/triggers/:triggerId", { body: z.object({ ...triggerFields, revision }).strict() }, async (req, { revision: expectedRevision, ...fields }) => request(req, { operation: 'trigger_update', trigger: { id: z.object({ triggerId: id }).parse(req.params).triggerId, ...fields }, revision: expectedRevision }));
-  apiRoute(app, "PATCH /bots/:id/automation/triggers/:triggerId", { body: z.object({ enabled: z.boolean(), revision }).strict() }, async (req, body) => request(req, { operation: 'trigger_toggle', triggerId: z.object({ triggerId: id }).parse(req.params).triggerId, ...body }));
+  // An event trigger runs its routine, which then delivers, so the routine's rooms are checked as Hermes has
+  // them, in turn with sharing changes and routine saves. Turning a trigger off always goes ahead.
+  const delivering = async <T>(req: FastifyRequest, routineId: string, work: () => Promise<T>) => !runtime.groupRequest ? work() : serialDelivery(store, async () => {
+    // The trigger runs the routine in its own assistant's profile, so that assistant's copy is the one checked.
+    const profile = z.object({ id }).parse(req.params).id;
+    const routine = (await runtime.routines()).find(row => row.id === routineId && row.botId === profile);
+    // A routine the app cannot find cannot be checked, so the trigger is refused.
+    await assertDeliveryPrivate(runtime, store, routine?.botId ?? '', routine && routineTargets(routine));
+    return work();
+  });
+  apiRoute(app, "POST /bots/:id/automation/triggers", { body: z.object({ id: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,79}$/), ...triggerFields }).strict() }, async (req, trigger, reply) => { reply.header('Cache-Control', 'no-store'); return delivering(req, trigger.routineId, () => request(req, { operation: 'trigger_create', trigger })); });
+  apiRoute(app, "PUT /bots/:id/automation/triggers/:triggerId", { body: z.object({ ...triggerFields, revision }).strict() }, async (req, { revision: expectedRevision, ...fields }) => delivering(req, fields.routineId, () => request(req, { operation: 'trigger_update', trigger: { id: z.object({ triggerId: id }).parse(req.params).triggerId, ...fields }, revision: expectedRevision })));
+  apiRoute(app, "PATCH /bots/:id/automation/triggers/:triggerId", { body: z.object({ enabled: z.boolean(), revision }).strict() }, async (req, body) => {
+    const triggerId = z.object({ triggerId: id }).parse(req.params).triggerId;
+    const toggle = () => request(req, { operation: 'trigger_toggle', triggerId, ...body });
+    if (!body.enabled) return toggle();
+    // The overview lists at most 100 triggers (src/hermes/automation.py trigger_list) and the add-on has no
+    // single-trigger read, so a trigger it does not list cannot be checked and is not turned on.
+    const overview = await request(req, { operation: 'overview' });
+    const routineId = overview.triggers.items.find(item => item.id === triggerId)?.routineId;
+    if (!routineId) throw httpError(409, "WildBots couldn't find this trigger's routine to check where it posts, so the trigger stays off. Turn it on in Hermes.", { code: 'routine_rooms_unknown' });
+    return delivering(req, routineId, toggle);
+  });
   apiRoute(app, "DELETE /bots/:id/automation/triggers/:triggerId", { body: z.object({ revision }).strict() }, async (req, body) => request(req, { operation: 'trigger_delete', triggerId: z.object({ triggerId: id }).parse(req.params).triggerId, ...body }));
   apiRoute(app, "GET /bots/:id/automation/skills/content", {}, async req => request(req, { operation: 'skill_content', ...z.object({ name: skillName }).strict().parse(req.query) }));
   apiRoute(app, "GET /bots/:id/automation/skills/pending/:pendingId", {}, async req => request(req, { operation: 'skill_diff', pendingId: z.object({ pendingId: z.string().regex(/^[a-f0-9]{8}$/) }).parse(req.params).pendingId }));

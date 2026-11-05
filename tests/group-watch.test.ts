@@ -20,6 +20,23 @@ const state = (roomId: string, latest_seq: number, working = false): GroupState 
 afterEach(() => { vi.useRealTimers(); });
 
 describe("group room watcher", () => {
+  it("announces who works in which tool, but not each step's timestamp", async () => {
+    vi.useFakeTimers();
+    let activity = { member_id: "ranch", status: "running", round_index: 0, tool: "terminal", progress_at: 1 };
+    const groupRequest = vi.fn(async () => ({ ...state("ranch", 1, true), driver_status: { running: true, working: true, blocked: false, pending_actions: [], member_activity: [activity], max_rounds: 3 } }));
+    const watch = new GroupWatch({ groupRequest });
+    const heard = vi.fn();
+    const stop = watch.watch("ranch", "one", heard);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(heard).toHaveBeenCalledTimes(1);
+    activity = { ...activity, progress_at: 2 };
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(heard).toHaveBeenCalledTimes(1);
+    activity = { ...activity, tool: "web_search", progress_at: 3 };
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(heard).toHaveBeenCalledTimes(2);
+    stop();
+  });
   it("polls each watched room once however many watch it, announcing only changes", async () => {
     vi.useFakeTimers();
     let seq = 1, working = false;

@@ -96,7 +96,10 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     const routine={botId:'shared',name:'Morning',prompt:'Check',schedule:'daily',enabled:true};
     await runtime.saveRoutine(routine,'job');
     await runtime.setRoutineEnabled!('shared','job',true);
-    await runtime.deleteRoutine('job');
+    await runtime.deleteRoutine('job','shared');
+    // Hermes allows one job ID in several profiles, so a deletion names the profile.
+    const deleted = vi.mocked(fetch).mock.calls.at(-1)!;
+    expect([String(deleted[0]).replace(/^.*\/cron\//, ''), (deleted[1] as RequestInit).method]).toEqual(['jobs/job?profile=shared', 'DELETE']);
     expect(calls.filter(call=>call.method==='agent-interface.discover')).toHaveLength(0);
     const tick=runtime.discoverEvents('7');
     await vi.waitFor(()=>expect(calls.filter(call=>call.method==='agent-interface.discover')).toHaveLength(1));
@@ -1202,6 +1205,58 @@ it('gates hosted groups by the native driver and sends exact duplicate-safe grou
   const sends=calls.filter(call=>call.method==='groups.send');
   expect(sends[0].params).toEqual({room_id:'room',event_id:'request-one',payload:{text:input.text,thread_id:input.threadId}});
   expect(sends[1].params).toEqual(sends[0].params);
+});
+it('saves room settings without the coordinator, only where Hermes offers them, and always names the routing',async()=>{
+  let methods=['groups.list','groups.state','groups.log'];
+  deferredMethods=new Set(['groups.capabilities','groups.list','groups.context']);
+  beforeSend=(request,socket)=>{
+    if(!request.method.startsWith('groups.'))return;
+    const result=request.method==='groups.capabilities'?{protocol_version:2,driver:false,methods}
+      :request.method==='groups.list'?{rooms:[],next_offset:null}
+      :{context:{purpose:'Plan',notes:'Gate',routing:'everyone',lead_member_id:''},event:{event_id:'context:abc'}};
+    queueMicrotask(()=>socket.receive({jsonrpc:'2.0',id:request.id,result}));
+  };
+  expect(await runtime.groupRequest!({operation:'list'})).toMatchObject({supported:true,settings:false,routineDelivery:false});
+  const input={operation:'context' as const,roomId:'room',requestId:'context:abc',purpose:'Plan',notes:'Gate',routing:'everyone' as const,leadMemberId:''};
+  await expect(runtime.groupRequest!(input)).rejects.toMatchObject({statusCode:409});
+  expect(calls.some(call=>call.method==='groups.context')).toBe(false);
+  methods=[...methods,'groups.context'];
+  expect(await runtime.groupRequest!({operation:'list'})).toMatchObject({settings:true,routineDelivery:true});
+  // The coordinator is still off: settings are a log write, not a turn.
+  await runtime.groupRequest!(input);
+  expect(calls.find(call=>call.method==='groups.context')?.params).toEqual({room_id:'room',event_id:'context:abc',purpose:'Plan',notes:'Gate',routing:'everyone',lead_member_id:''});
+});
+it('posts routine results in chosen group chats and rewrites only the room targets',async()=>{
+  const native={id:'job-one',name:'[bot:shared] Morning',prompt:'Check',schedule_display:'1h',enabled:true,
+    deliver:'bot-chat:shared,room:old,room:kept@other,telegram:123'};
+  const requests:{url:string;method:string;body:Record<string,any>}[]=[];
+  let listed=true;
+  vi.stubGlobal('fetch',vi.fn(async(url:URL,init:RequestInit={})=>{
+    const method=init.method ?? 'GET';
+    requests.push({url:String(url),method,body:JSON.parse(String(init.body || '{}'))});
+    // The service route admits only the profile's job list for reads, never a single job.
+    if(method==='GET')expect(new URL(String(url)).pathname).toMatch(/\/cron\/jobs$/);
+    return Response.json(method==='GET'?(listed?[native]:[]):native);
+  }));
+  const [routine]=await runtime.routines();
+  expect(routine.roomIds).toEqual(['old']);
+  // The delivery fields stay as Hermes has them, for the server's checks.
+  expect(routine.delivery).toEqual({deliver: native.deliver, failure_deliver: undefined, origin: undefined});
+  const base={botId:'shared',name:'Morning',prompt:'Check',schedule:'1h',enabled:true};
+  await runtime.saveRoutine({...base,roomIds:['new']},'job-one');
+  expect(requests.at(-1)).toMatchObject({method:'PUT',body:{updates:{deliver:'bot-chat:shared,room:kept@other,telegram:123,room:new'}}});
+  // Without rooms in the save, `deliver` is neither read nor written.
+  const before=requests.length;
+  await runtime.saveRoutine(base,'job-one');
+  expect(requests.slice(before).map(request=>request.method)).toEqual(['PUT']);
+  expect(requests.at(-1)?.body.updates).not.toHaveProperty('deliver');
+  await runtime.saveRoutine({...base,roomIds:['dinner']});
+  expect(requests.at(-1)).toMatchObject({method:'POST',body:{deliver:'bot-chat:shared,room:dinner'}});
+  // A routine Hermes cannot return is never rewritten from a guess.
+  listed=false;
+  const count=requests.length;
+  await expect(runtime.saveRoutine({...base,roomIds:[]},'job-one')).rejects.toThrow('Hermes did not return the routine');
+  expect(requests.slice(count).map(request=>request.method)).toEqual(['GET']);
 });
 it('routes routine history and output through the private scoped native experience reader',async()=>{
   const fetcher=vi.fn(async()=>Response.json([]));vi.stubGlobal('fetch',fetcher);

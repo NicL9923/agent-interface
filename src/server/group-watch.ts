@@ -12,6 +12,17 @@ type Listener = (state: GroupState) => void;
 type Room = { listeners: Set<Listener>; timer?: NodeJS.Timeout; delay: number; generation: number; seen?: string };
 
 /**
+ * What a watcher must hear about: the room's newest event and its driver status, including who works
+ * in which tool. Each assistant's last-frame time moves on almost every step of a turn, so it is left
+ * out; the slow fallback poll still refreshes it. Room settings append an event, so they move latest_seq.
+ */
+export function fingerprint(state: GroupState): string {
+  const status = state.driver_status;
+  return JSON.stringify([state.room.latest_seq, status && {
+    ...status, member_activity: status.member_activity?.map(({ progress_at: _, ...activity }) => activity) }]);
+}
+
+/**
  * Polls the Hermes group coordinator for rooms that open app event streams watch: one poller
  * per room, only while someone watches it, slowing down while Hermes fails. Listeners hear
  * each change to the room's latest event or driver status. A new watcher refetches on open,
@@ -74,7 +85,7 @@ export class GroupWatch {
     // The last watcher left while Hermes answered.
     if (stopped()) return;
     if (state?.room) {
-      const seen = JSON.stringify([state.room.latest_seq, state.driver_status]);
+      const seen = fingerprint(state);
       if (seen !== room.seen) {
         room.seen = seen;
         for (const listener of [...room.listeners]) listener(state);

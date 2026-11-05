@@ -145,6 +145,7 @@ export class Store {
   // routines
   routineRecipients(...args: Parameters<RoutineRepository["routineRecipients"]>) { return this.routines.routineRecipients(...args); }
   getRoutineRecipients(...args: Parameters<RoutineRepository["getRoutineRecipients"]>) { return this.routines.getRoutineRecipients(...args); }
+  adoptLegacyRecipients(...args: Parameters<RoutineRepository["adoptLegacyRecipients"]>) { return this.routines.adoptLegacyRecipients(...args); }
   routineTrial(...args: Parameters<RoutineRepository["routineTrial"]>) { return this.routines.routineTrial(...args); }
   routineTrials(...args: Parameters<RoutineRepository["routineTrials"]>) { return this.routines.routineTrials(...args); }
   rememberRoutineTrial(...args: Parameters<RoutineRepository["rememberRoutineTrial"]>) { return this.routines.rememberRoutineTrial(...args); }

@@ -53,7 +53,7 @@ export class NotificationRepository {
   recipients(event: RuntimeEvent): string[] {
     const ids = new Set<string>();
     if (event.routineId)
-      for (const userId of this.areas.routines.getRoutineRecipients(event.routineId)) ids.add(userId);
+      for (const userId of this.areas.routines.getRoutineRecipients(event.botId, event.routineId)) ids.add(userId);
     else if (event.runId)
       for (const userId of this.areas.submissions.participants(event.runId)) ids.add(userId);
     for (const user of this.areas.accounts.users())

@@ -15,7 +15,9 @@ import { openComputer, usesComputer } from "../components/ComputerHandoffCard";
 import { AgentExchange, isAgentExchange } from "../components/AgentExchange";
 import { ActionReceipt } from "../components/ActionReceipt";
 import { When } from "../components/When";
+import { Shimmer } from "../components/Shimmer";
 import { receipt } from "../shared/discovery";
+import { activityAction } from "../shared/activity-sentence";
 import { MAX_ATTACHMENTS } from "../shared/uploads";
 import { isActivityMessage, messageOrigin, withMessageOrigins } from "../shared/message-origin";
 import { withoutBotTag } from "../shared/event-copy";
@@ -78,14 +80,9 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
     enabled: !!selected && !!boot.capabilities.routines?.supported, hiddenRoutines });
   const runSlots = useMemo(() => placeRuns(blocks.map(turnTime), runs), [blocks, runs]);
   const runActions = useMemo(() => ({ onResults: onRoutineResults, onHide: onHideRoutineRuns }), [onRoutineResults, onHideRoutineRuns]);
-  const actions: Record<ActivityState, string> = {
-    idle: "ready", thinking: "thinking", working: "working", waiting: "waiting for approval",
-    blocked: "waiting for your input", done: "done", failed: "having trouble", interrupted: "stopped", disconnected: "reconnecting",
-  };
-  const detail = conversation?.activity.detail?.trim().replace(/[.…]+$/, "");
   const runningCall = connectionLost ? undefined : conversation?.toolCalls?.findLast(call => call.status === "running");
   const prop = avatarProp(runningCall?.name);
-  const action = offline ? "offline" : !connectionLost && state === "working" && detail ? detail.charAt(0).toLowerCase() + detail.slice(1) : actions[state];
+  const action = activityAction(state, conversation?.activity.detail, { offline, connectionLost });
   const running = !!conversation && activeStates.includes(conversation.activity.state);
   // The running turn's one live row: the current tool's receipt, and in Advanced, the latest reasoning line.
   const liveTool = runningCall ? `${receipt(runningCall).label} · ${runningCall.name}` : undefined;
@@ -306,9 +303,6 @@ function latestReasoning(messages: Message[]) {
   return text.trim().split("\n").findLast(line => line.trim())?.trim();
 }
 // The sweep copy is hidden from assistive technology; see .shimmer-band for how it moves.
-function Shimmer({ text }: { text: string }) {
-  return <span className="activity-shimmer">{text}<span className="shimmer-band" aria-hidden="true"><span>{text}</span></span></span>;
-}
 function HistorySkeleton() {
   return <div className="history-skeleton" role="status">
     <span className="sr-only">Opening your conversation…</span>

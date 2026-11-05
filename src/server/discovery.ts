@@ -6,9 +6,12 @@ import { signedIn } from './auth.js';
 import type { Runtime } from '../shared/types.js';
 import type { HistoryPage, AutomationOverview, SearchHit, SavedItem, Starter, UsageSummary } from '../shared/discovery.js';
 import type { Store } from './store.js';
-import { notFound, redactAgents, Roster, visibleBots } from './bot-access.js';
+import { notFound, redactAgents, Roster, routineById, visibleBots } from './bot-access.js';
 import { httpError } from './http-error.js';
 import { id } from './schemas.js';
+import { assertDeliveryPrivate, routinesFor } from './collaboration.js';
+import { routineTargets } from './delivery-targets.js';
+import { serialDelivery } from './routine-delivery.js';
 export async function installDiscoveryRoutes(app: FastifyInstance, runtime: Runtime, store: Store, roster = new Roster(runtime)) {
   const visible = (userId: string) => visibleBots(runtime, store, userId);
   async function bot(userId: string, botId: string) {
@@ -72,16 +75,28 @@ export async function installDiscoveryRoutes(app: FastifyInstance, runtime: Runt
   apiRoute(app, "DELETE /saved/:id", {}, async req => { store.deleteSavedItem(signedIn(req).id, z.object({ id }).parse(req.params).id); return { ok: true }; });
   apiRoute(app, "PATCH /routines/:id/state", { body: z.object({enabled:z.boolean()}).strict() }, async (req, { enabled }) => {
     const routineId = z.object({id}).parse(req.params).id;
-    const row=(await runtime.routines()).find(row=>row.id===routineId);
+    const row=routineById(await runtime.routines(),routineId,store,signedIn(req).id);
     if(!row)throw httpError(404,'Routine not found');
-    await bot(signedIn(req).id,row.botId);await assertRoutineEditable(runtime,store,routineId);
+    await bot(signedIn(req).id,row.botId);await assertRoutineEditable(runtime,store,routineId,row.botId);
     if(!runtime.setRoutineEnabled)throw httpError(409,'This integration cannot change routine state independently.');
-    await runtime.setRoutineEnabled(row.botId,routineId,enabled);return {ok:true};
+    // Resuming lets it deliver, so its rooms are checked as Hermes has them now; pausing always goes ahead.
+    await serialDelivery(store, async () => {
+      if (enabled) {
+        // The same assistant's routine Hermes is told to resume, read again in this turn.
+        const current = (await runtime.routines()).find(other => other.id === routineId && other.botId === row.botId);
+        if (!current) throw httpError(404, 'Routine not found');
+        await assertDeliveryPrivate(runtime, store, current.botId, routineTargets(current));
+      }
+      await runtime.setRoutineEnabled!(row.botId, routineId, enabled);
+    });
+    return {ok:true};
   });
   apiRoute(app, "GET /automations", {}, async req => {
     const { days } = z.object({ days: z.coerce.number().refine(days => [7,30,90].includes(days)).default(30) }).strict().parse(req.query);
     const bots = await visible(signedIn(req).id); const allowed = new Set(bots.map(bot => bot.id));
-    const routines = (await runtime.routines()).filter(row => allowed.has(row.botId)).map(row => ({ ...row, recipientIds: store.getRoutineRecipients(row.id) }));
+    const all = await runtime.routines();
+    store.adoptLegacyRecipients(all);
+    const routines = await routinesFor(runtime, store, roster, signedIn(req).id, all.filter(row => allowed.has(row.botId)).map(row => ({ ...row, recipientIds: store.getRoutineRecipients(row.botId, row.id) })));
     const usage: UsageSummary[] = []; const unavailableBots: string[] = [];
     for (let index = 0; index < bots.length; index += 4) await Promise.all(bots.slice(index,index+4).map(async bot => {
       try { usage.push(await experience()({ operation: 'usage', profile: bot.id, days })); } catch { unavailableBots.push(bot.id); }

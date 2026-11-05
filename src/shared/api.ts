@@ -75,7 +75,7 @@ export type SaveItem =
   | { kind: "session"; botId: string; sessionId: string; messageId?: string; offset?: number; title: string }
   | { kind: "routine"; botId: string; routineId: string; resultId: string; title: string };
 export type RoutineSave = Pick<Routine, "botId" | "name" | "prompt" | "schedule" | "enabled"> & { recipientIds: string[] }
-  & Partial<Pick<Routine, "skills" | "model" | "provider" | "enabledToolsets" | "script" | "noAgent" | "contextFrom">>;
+  & Partial<Pick<Routine, "roomIds" | "skills" | "model" | "provider" | "enabledToolsets" | "script" | "noAgent" | "contextFrom">>;
 type WorkInput<O extends AutomationRequest["operation"]> = Omit<Extract<AutomationRequest, { operation: O }>, "operation" | "profile" | "visibleProfiles">;
 type MemorySave = { revision: string; entries: { id?: string; text: string }[] };
 

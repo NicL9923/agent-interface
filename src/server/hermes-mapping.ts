@@ -317,3 +317,4 @@ export function inflightMessage(value: Wire, rows: Message[], state: LiveState |
   // Inherit the saved prompt origin exactly as a conversation read does.
   return message.text || message.reasoning ? withMessageOrigins([...rows, message]).at(-1)! : message;
 }
+

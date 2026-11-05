@@ -1,4 +1,5 @@
 import type { GroupEvent, GroupLatest, GroupPage, GroupRoom } from "../shared/collaboration.js";
+import { scheduledPost } from "../shared/group-activity.js";
 
 /** Events read back from a room's end to find its newest message. Driver notices in between rarely pass a handful. */
 export const LATEST_LOOKBACK = 30;
@@ -22,7 +23,9 @@ export function previewOf(event: GroupEvent, room: GroupRoom, viewerId: string, 
   const raw = typeof event.payload?.text === "string" ? event.payload.text : "";
   const text = raw.replace(/\s+/g, " ").trim();
   let author: string;
-  if (event.kind === "message.user") {
+  const routine = scheduledPost(event);
+  if (routine) author = routine.name;
+  else if (event.kind === "message.user") {
     const sender = event.sender?.id || event.actor?.id;
     author = sender === viewerId ? "You" : event.sender?.name || person(sender ?? "") || "Household member";
   } else {
