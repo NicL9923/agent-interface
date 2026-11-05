@@ -96,7 +96,11 @@ function CodeBlock({ code, language, finished }: { code: string; language?: stri
  * the Hermes computer, such as /home/…/notes.md, which here would only open this app again.
  */
 export function openableHref(href: string | undefined): href is string {
-  return !!href && (/^(?:https?:|mailto:|tel:)/i.test(href) || href.startsWith("/api/files/") || href.startsWith("#"));
+  if (!href) return false;
+  // Web addresses, including protocol-relative ones, and in-page anchors.
+  if (/^(?:https?:|mailto:|tel:|\/\/|#)/i.test(href)) return true;
+  // This app's own destinations, such as /?view=today, and its signed files.
+  return href === "/" || /^\/?[?#]/.test(href) || href.startsWith("/api/files/");
 }
 const localFile = "On the assistant's computer. Ask it to share the file to open it here.";
 

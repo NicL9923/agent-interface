@@ -81,6 +81,10 @@ it('makes saved reply titles from the first line without markdown or broken word
 it('titles a saved reply by the words a person reads first, never a code fence or a table divider',()=>{
   expect(savedReplyTitle('```agent-ui\n{"version":1}\n```\nGrocery run is ready.')).toBe('Grocery run is ready.');
   expect(savedReplyTitle('| Item | Aisle |\n|---|---|\n| Milk | Dairy |')).toBe('Item · Aisle');
+  expect(savedReplyTitle('Call `__init__` first')).toBe('Call __init__ first');
+  // A line of dashes that is not a divider is read once, never retried cell by cell.
+  const started=performance.now();expect(savedReplyTitle('-'.repeat(5_000)+' status')).toMatch(/status|…$/);
+  expect(performance.now()-started).toBeLessThan(200);
 });
 
 it('marks search matches and reads snippets of stored JSON as plain words',()=>{

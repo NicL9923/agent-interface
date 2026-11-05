@@ -1,5 +1,5 @@
 import type { Message, Routine, ToolCall } from './types.js';
-import { inlinePlain } from './event-copy.js';
+import { inlinePlain, isTableDivider } from './event-copy.js';
 export interface SearchHit { botId: string; botName: string; sessionId: string; title: string; snippet: string; messageId?: string; offset?: number; routineId?: string; resultId?: string; updatedAt?: string }
 export interface HistoryPage { botId: string; sessionId: string; messages: Message[]; offset: number; hasMore: boolean; targetMessageId?: string }
 export interface SavedItem { id: string; botId: string; kind: 'session' | 'routine'; sessionId?: string; routineId?: string; resultId?: string; messageId?: string; offset?: number; title: string; createdAt: string }
@@ -26,12 +26,12 @@ export function routineResultLabel(status: string): string {
 export function savedReplyTitle(text: string): string {
   // The first line a person would read: never a code fence's contents or a table's divider row.
   const first = text.replace(/```[\s\S]*?(```|$)/g, "\n").split(/\r?\n/)
-    .find(line => line.trim() && !/^\s*\|?(?:\s*:?-{3,}:?\s*\|?)+\s*$/.test(line)) || "";
+    .find(line => line.trim() && !isTableDivider(line)) || "";
   // A table's header row reads as its cells.
   const row = /^\s*\|.*\|\s*$/.test(first) ? first.trim().slice(1, -1).split("|").map(cell => cell.trim()).filter(Boolean).join(" · ") : first;
   // Keep identifier underscores and punctuation next to inline code intact.
   const title = inlinePlain(row.replace(/^\s*(?:#{1,6}\s+|[-+*]\s+|\d+[.)]\s+)/, ""))
-    .replace(/[`*]/g, "").replace(/\s+/g, " ").trim();
+    .replace(/\s+/g, " ").trim();
   if (!title) return "Saved reply";
   const characters = Array.from(title);
   if (characters.length <= 80) return title;

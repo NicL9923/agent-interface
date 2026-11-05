@@ -60,6 +60,15 @@ it("flattens Markdown that Hermes already joined onto one line, as previews arri
   expect(excerpt("Use *one* cup, not 2 * 3 cups.")).toBe("Use one cup, not 2 * 3 cups.");
 });
 
-it("keeps pipes and number signs that are the author's own words", () => {
+it("keeps pipes, number signs and code that are the author's own words", () => {
   expect(inlinePlain("Run ls | sort, then see issue #42 in C# notes.")).toBe("Run ls | sort, then see issue #42 in C# notes.");
+  expect(excerpt("Use # for comments.")).toBe("Use # for comments.");
+  expect(excerpt("Call `__init__` and `foo__bar`, not __this__.")).toBe("Call __init__ and foo__bar, not this.");
+  expect(excerpt("Set snake_case and foo__bar names.")).toBe("Set snake_case and foo__bar names.");
+});
+
+it("flattens long runs of dashes, spaces and stars in one pass, as a message can hold any text", () => {
+  const started = performance.now();
+  for (const text of ["-".repeat(50_000) + " status", "| " + "-".repeat(50_000), " ".repeat(50_000) + "|", "*a ".repeat(20_000), "|---".repeat(20_000)]) excerpt(text);
+  expect(performance.now() - started).toBeLessThan(500);
 });
