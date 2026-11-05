@@ -46,8 +46,9 @@ it("names the assistant and quotes the reply in queued notifications", () => {
   const store = storeWithUsers();
   store.participate("run", "one");
   store.botNames = new Map([["shared", "Nic's Chief"]]);
-  store.recordEvents([{ ...event, title: "Hermes completed", body: "Tailscale is up on the NAS." }], "cursor-1");
-  expect(JSON.parse(store.outbox()[0].payload)).toMatchObject({ title: "Nic's Chief", body: "Tailscale is up on the NAS." });
+  // A reply's Markdown reaches the notification as its words; inline code keeps its contents.
+  store.recordEvents([{ ...event, title: "Hermes completed", body: "**Tailscale is up** on the NAS.\n\nRun `tailscale __status__`." }], "cursor-1");
+  expect(JSON.parse(store.outbox()[0].payload)).toMatchObject({ title: "Nic's Chief", body: "Tailscale is up on the NAS. Run tailscale __status__." });
   store.close();
 });
 it("keeps completion pending without a subscription and retries failed delivery without resending successful endpoints", async () => {

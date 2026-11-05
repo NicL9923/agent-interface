@@ -182,7 +182,7 @@ export function MemoryPanel({ botId, onDirtyChange, onSavingChange }: { botId: s
   const requestReload = () => changed ? setConfirmReload(true) : reload();
   return <div className="memory-panel">
     <header className="memory-intro"><h2 ref={heading} tabIndex={-1}>What Hermes remembers</h2><p>Review and correct the facts saved in this Hermes profile.</p></header>
-    {memory && <div className="memory-scope"><strong>Shared profile: {memory.profile}</strong>
+    {memory && <div className="memory-scope"><strong>Hermes profile: {memory.profile}</strong>
       <p>Changes apply at the next safe turn boundary. Chat history stays unchanged.</p>
       <p>Anyone with Hermes dashboard access can reach this memory.</p>
     </div>}

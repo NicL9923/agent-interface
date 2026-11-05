@@ -17,6 +17,7 @@ Verified October 30, 2026. Direct dependencies use exact versions in
 | Vitest | 5.0.5 | [Registry and Node requirements](https://registry.npmjs.org/vitest/5.0.5) |
 | React Markdown | 10.1.0 | [Official documentation](https://github.com/remarkjs/react-markdown), [registry](https://registry.npmjs.org/react-markdown/10.1.0) |
 | remark-gfm | 4.0.1 | [Official documentation](https://github.com/remarkjs/remark-gfm), [registry](https://registry.npmjs.org/remark-gfm/4.0.1) |
+| mdast-util-from-markdown, micromark-extension-gfm and mdast-util-gfm, plain text for previews, Today, notifications, search snippets and saved titles (server, and a lazy client chunk), verified November 5, 2026 | 2.0.3 / 3.0.0 / 3.1.0 | [Official documentation](https://github.com/syntax-tree/mdast-util-from-markdown), [registry](https://registry.npmjs.org/mdast-util-from-markdown/2.0.3) |
 | jsdom, development DOM tests | 30.1.3 | [Official documentation](https://github.com/jsdom/jsdom), [registry](https://registry.npmjs.org/jsdom/30.1.3) |
 | Base UI, web context menus and popovers | 1.9.0 | [Official documentation](https://base-ui.com/react/overview/about), [registry](https://registry.npmjs.org/@base-ui/react/1.9.0) |
 | Tailwind CSS and Vite plugin | 4.3.3 | [Theme variables](https://tailwindcss.com/docs/theme), [registry](https://registry.npmjs.org/tailwindcss/4.3.3) |

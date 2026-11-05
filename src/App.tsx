@@ -344,6 +344,7 @@ export function App() {
             onOpenRoutine={(botId, routineId) => { selectBot(botId); setPanel({ kind: "routine", botId, routineId }); }}
             editPreferences={session.editPreferences}
             onSaved={() => void session.refresh()}
+            onCreated={id => void session.refresh().then(next => { if (next?.bots.some(bot => bot.id === id)) selectBot(id); })}
           />
         </Loading>
       )}

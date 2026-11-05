@@ -8,6 +8,7 @@ import type { HistoryPage, AutomationOverview, SearchHit, SavedItem, Starter, Us
 import type { Store } from './store.js';
 import { notFound, redactAgents, Roster, routineById, visibleBots } from './bot-access.js';
 import { httpError } from './http-error.js';
+import { snippetPlain } from '../shared/plain-text.js';
 import { id } from './schemas.js';
 import { assertDeliveryPrivate, routinesFor } from './collaboration.js';
 import { routineTargets } from './delivery-targets.js';
@@ -43,7 +44,8 @@ export async function installDiscoveryRoutes(app: FastifyInstance, runtime: Runt
       }
     } catch { /* Return successful native search hits during a scheduler outage. */ }
     const redact = await redactAgents(store, roster, signedIn(req).id);
-    return { hits: hits.map(hit => ({ ...hit, title: redact.text(hit.title), snippet: redact.text(hit.snippet) })), unavailableBots };
+    // Redaction reads the original snippet: flattening drops link addresses and code that can name a hidden assistant.
+    return { hits: hits.map(hit => ({ ...hit, title: redact.text(hit.title), snippet: snippetPlain(redact.text(hit.snippet)) })), unavailableBots };
   });
   apiRoute(app, "GET /bots/:botId/history/:sessionId", {}, async req => {
     const p = z.object({ botId: id, sessionId: id }).parse(req.params);

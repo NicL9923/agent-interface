@@ -41,6 +41,7 @@ let container: HTMLDivElement;
 let root: Root;
 const onClose = vi.fn();
 const onSaved = vi.fn();
+const onCreated = vi.fn();
 
 beforeEach(async () => {
   vi.clearAllMocks();
@@ -643,7 +644,7 @@ describe("creating an assistant", () => {
   const choose = (label: string) => act(async () => Array.from(container.querySelectorAll("label"))
     .find(item => item.textContent?.trim() === label)!.querySelector("input")!.click());
   beforeEach(async () => {
-    await act(async () => root.render(createElement(BotSettings, { bot: "new", bootstrap, onClose, onSaved })));
+    await act(async () => root.render(createElement(BotSettings, { bot: "new", bootstrap, onClose, onSaved, onCreated })));
   });
   const toRole = async (name = "Ranch hand") => {
     await type(name);
@@ -677,6 +678,8 @@ describe("creating an assistant", () => {
     expect(vi.mocked(write).mock.calls[0][1]).toMatchObject({ name: "Ranch hand", model: "test" });
     expect(vi.mocked(write).mock.calls[1][1]).toMatchObject({ mode: "mascot" });
     expect(onClose).toHaveBeenCalledTimes(1);
+    // The new assistant's chat opens, rather than leaving the person where they were.
+    expect(onCreated).toHaveBeenCalledWith("ranch-hand");
     expect(onSaved).toHaveBeenCalled();
   });
 

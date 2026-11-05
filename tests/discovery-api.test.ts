@@ -16,7 +16,7 @@ async function setup() {
   app.setErrorHandler(errorHandler({ production: true }));
   const history = vi.fn((input: {profile: string; sessionId: string; offset: number}): HistoryPage => ({botId:input.profile,sessionId:input.sessionId,messages:[{id:'reply',role:'assistant',text:'Plan'}],offset:input.offset,hasMore:false}));
   const experience = experienceRequester({
-    search: input => [{botId:input.profile,botName:'Shared',sessionId:'history',title:'Dinners',snippet:'Plan'}],
+    search: input => [{botId:input.profile,botName:'Shared',sessionId:'history',title:'Dinners',snippet:'## **>>>Dinner<<<** plan\\n- tacos'}],
     history,
     usage: input => ({botId:input.profile,days:input.days,sessions:0,inputTokens:0,outputTokens:0,actualCost:null,estimatedCost:null,partial:false,notice:'Recorded usage'}),
   });
@@ -27,7 +27,9 @@ async function setup() {
 }
 it('searches only visible profiles and includes routine results without copying their output',async()=>{
   const s=await setup();expect((await s.app.inject('/api/search?q=dinners')).statusCode).toBe(401);
-  const response=await s.app.inject({url:'/api/search?q=dinners',headers:s.headers});expect(response.statusCode).toBe(200);expect(response.json().hits).toHaveLength(2);expect(s.experienceRequest).toHaveBeenCalledWith({operation:'search',profile:'shared',query:'dinners'});expect(s.experienceRequest).not.toHaveBeenCalledWith(expect.objectContaining({profile:'private'}));
+  const response=await s.app.inject({url:'/api/search?q=dinners',headers:s.headers});expect(response.statusCode).toBe(200);expect(response.json().hits).toHaveLength(2);
+  // Snippets arrive as plain words that keep Hermes's match markers, for web and iOS alike.
+  expect(response.json().hits[0].snippet).toBe('>>>Dinner<<< plan tacos');expect(s.experienceRequest).toHaveBeenCalledWith({operation:'search',profile:'shared',query:'dinners'});expect(s.experienceRequest).not.toHaveBeenCalledWith(expect.objectContaining({profile:'private'}));
   expect((await s.app.inject({url:'/api/bots/private/history/history',headers:s.headers})).statusCode).toBe(404);
 });
 it('validates original reply identity and scoped saved references',async()=>{
@@ -53,6 +55,15 @@ it('locates a live reply before saving and re-resolves an old saved pointer on o
   const count=s.experienceRequest.mock.calls.length;
   expect((await s.app.inject({url:'/api/bots/private/history/history?messageId=stable-uid',headers:s.headers})).statusCode).toBe(404);
   expect(s.experienceRequest.mock.calls.length).toBe(count);
+});
+it('redacts a hidden assistant named only where flattening would drop it, such as a link address',async()=>{
+  const s=await setup();s.store.savePresentation('private',{shared:false,ownerId:'two'});
+  const original=s.experienceRequest.getMockImplementation()!;
+  s.experienceRequest.mockImplementation((async(input:{operation:string;profile:string})=>input.operation==='search'
+    ?[{botId:input.profile,botName:'Shared',sessionId:'history',title:'Ledger',snippet:'[Ledger](https://private.example.test) balance: >>>42<<<'}]
+    :original(input as never)) as never);
+  const hits=(await s.app.inject({url:'/api/search?q=42&botId=shared',headers:s.headers})).json().hits;
+  expect(hits.find((hit:{title:string})=>hit.title==='Ledger').snippet).toBe("Message from another member's assistant: This message is private.");
 });
 it('narrows a search to one visible assistant and refuses a hidden or unknown one',async()=>{
   const s=await setup();

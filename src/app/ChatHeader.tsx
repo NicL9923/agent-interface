@@ -62,11 +62,11 @@ export function ChatHeader({ view, boot, selected, room, avatarState, offline = 
               title="Details, pin, artifacts and settings" onClick={() => onDetails(selected)}>
               <Avatar avatar={selected.avatar} state={avatarState === "blocked" ? "idle" : avatarState} size={42} offline={offline} name={selected.name} botId={selected.id} />
               <span className="chat-title">
-                <span className="chat-name">{selected.name}</span>
+                {/* The chevron follows the name, so it never floats between the name and a wider model chip. */}
+                <span className="chat-name-line"><span className="chat-name">{selected.name}</span><Icon name="chevron" size={16} className="chat-identity-chevron" /></span>
                 {/* The chip is its own control, so it sits over this line beside the button rather than inside it. */}
                 {model ? <span className="chat-model-reserve" aria-hidden="true" /> : <span className="chat-summary">{botSummary(selected)}</span>}
               </span>
-              <Icon name="chevron" size={16} className="chat-identity-chevron" />
             </button>
           </h1>
           {model && <div className="chat-model-slot">

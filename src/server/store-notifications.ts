@@ -1,5 +1,6 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { digestCopy, notificationCopy } from "../shared/event-copy.js";
+import { markdownPlain } from "../shared/plain-text.js";
 import type { RuntimeEvent } from "../shared/types.js";
 import { httpError } from "./http-error.js";
 import type { AccountRepository } from "./store-accounts.js";
@@ -70,7 +71,8 @@ export class NotificationRepository {
   /** Assistant display names for notification titles, refreshed by the background worker. */
   botNames = new Map<string, string>();
   enqueue(event: RuntimeEvent) {
-    const copy = notificationCopy(event, this.botNames.get(event.botId));
+    // A notification is plain text, so the reply's Markdown becomes its words.
+    const copy = notificationCopy({ ...event, body: event.body && markdownPlain(event.body) }, this.botNames.get(event.botId));
     for (const userId of this.recipients(event))
       this.queueNotification(event.id, userId, {
         title: copy.title,

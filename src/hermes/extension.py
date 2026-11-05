@@ -263,10 +263,17 @@ def history_window(messages, sid, start=None, turns=0):
 
 
 def event_body(value):
-    """A bounded, single-line excerpt for event bodies; the app shortens it further for display."""
+    """A bounded excerpt for event bodies that keeps its line breaks.
+
+    The app reads it as Markdown, which needs lines and indentation to tell a table, a
+    heading or a list from prose, and shows it as one plain line. Spaces after a line's
+    indentation and runs of blank lines collapse.
+    """
     if not isinstance(value, str):
         value = "" if value is None else str(value)
-    text = " ".join(value.split())
+    # Leading indentation stays: it places a line inside a list or code block.
+    lines = [line[:len(line) - len(line.lstrip())] + " ".join(line.split()) if line.strip() else "" for line in value.splitlines()]
+    text = re.sub(r"\n{3,}", "\n\n", "\n".join(lines).strip("\n"))
     return text[:500] or None
 
 

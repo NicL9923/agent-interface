@@ -76,7 +76,9 @@
   background: var(--accent-soft);
   border-color: var(--accent);
 }
+/* Positioned, so visually hidden text inside it is clipped here instead of growing the page. */
 .home-scroll {
+  position: relative;
   flex: 1;
   min-height: 0;
   overflow: auto;
