@@ -203,6 +203,9 @@ _AUTHORITY_END = frozenset("/\\?#\n")
 # host holding one of these is either rejected or no metadata host. Userinfo may hold them, so an "@"
 # after one is read as well.
 _SOFT_END = frozenset("'\"`<> \t\r\f\v")
+# Where CSS url(), @import, an unquoted HTML attribute or a srcset entry ends a URL. WHATWG would keep
+# this punctuation in the host, so the host is judged both with and without it.
+_MARKUP_END = frozenset(");'\",>} \t\r\f\v")
 
 
 def _first(text, characters, start=0):
@@ -232,8 +235,7 @@ def scheme_colon_hosts(text):
             for authority in readings:
                 host = authority.rpartition("@")[2]
                 host = host[:_first(host, _SOFT_END)]
-                if host:
-                    hosts.append(host)
+                hosts.extend(reading for reading in (host, host[:_first(host, _MARKUP_END)]) if reading)
     return list(dict.fromkeys(hosts))
 
 

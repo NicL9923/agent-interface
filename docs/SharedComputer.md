@@ -165,6 +165,9 @@ WHATWG does:
 - A bracketed IPv6 host stays whole.
 - When an `@` follows a quote or space, the wrapper judges both readings. It
   never judges a host cut short.
+- CSS `url()` and `@import`, unquoted HTML attributes and `srcset` end a URL
+  at `)`, `;`, a quote, `,`, `>`, `}` or whitespace, so each host is also
+  judged cut at the first of those.
 
 A host WHATWG rejects can't fetch anything and passes. So `{https:[]}` and
 `JSON.stringify({http:[]})` still run. Rejected hosts include an unclosed,

@@ -720,6 +720,26 @@ class ModernInstallToolsTests(InstallToolsTests):
                 with self.subTest(text=text):
                     self.assertEqual(set(self.dispatch_on_fetching_paths(installed, text).values()), {"native dispatch"})
 
+    def test_markup_and_css_end_a_url_at_their_own_punctuation(self):
+        installed = computer.install_tools()
+        self.stand_in_metadata_matcher()
+        self.assertEqual(computer.scheme_colon_hosts("@import url(http:/169.254.169.254);"), ["169.254.169.254);", "169.254.169.254"])
+        documents = ("<style>@import url(http:/169.254.169.254);</style>", "<div style=background:url(http:/169.254.169.254)>",
+                     "<style>@import 'http:/169.254.169.254';</style>", "<img src=http:/169.254.169.254>",
+                     "<img srcset=http:/169.254.169.254,x.png>", '<img srcset="x.png 1x, http:/[fd00:ec2::254] 2x">',
+                     "<style>a{background:url(http:/x@169.254.169.254)}</style>")
+        for document in documents:
+            for method, params in (("Page.setDocumentContent", {"frameId": "main", "html": document}),
+                                   ("Runtime.evaluate", {"expression": f"document.body.innerHTML = '{document}'"}),
+                                   ("Page.addScriptToEvaluateOnNewDocument", {"source": f"document.write(`{document}`)"})):
+                with self.subTest(method=method, document=document):
+                    self.assertEqual(json.loads(self.dispatch_cdp(installed, method, params)),
+                                     {"success": False, "error": "Blocked: URL targets a cloud metadata endpoint"})
+        self.native_dispatch.assert_not_called()
+        for text in self.SCHEME_LOOKALIKES:
+            with self.subTest(text=text):
+                self.assertEqual(set(self.dispatch_on_fetching_paths(installed, text).values()), {"native dispatch"})
+
     def test_bracketed_mapped_and_unparseable_scheme_colon_hosts_fail_closed(self):
         installed = computer.install_tools()
         # A stand-in that knows only the two literal metadata hosts, as native would read them.
@@ -781,6 +801,11 @@ class ModernInstallToolsTests(InstallToolsTests):
                 ("Network.loadNetworkResource", {"url": "http:\\169.254.169.254/", "options": {}}),
                 # Hosts after userinfo kept whole, IPv4 inside IPv6, and authorities native can't parse.
                 ("Runtime.evaluate", {"expression": 'location.href = "http:/x)@[fd00:ec2::254]/"'}),
+                # CSS and markup end a URL at their own punctuation.
+                ("Page.setDocumentContent", {"frameId": "main", "html": "<style>@import url(http:/169.254.169.254);</style>"}),
+                ("Page.setDocumentContent", {"frameId": "main", "html": "<img src=http:/169.254.169.254>"}),
+                ("Page.setDocumentContent", {"frameId": "main", "html": "<img srcset=http:/169.254.169.254,x.png>"}),
+                ("Runtime.evaluate", {"expression": "document.body.style.background = 'url(http:/169.254.169.254)'"}),
                 # Brackets in userinfo, and non-ASCII hosts WHATWG maps through UTS 46.
                 *(("Runtime.evaluate", {"expression": f'location.href = "{form}"'}) for form in (
                     "http:/x[abc]@[64:ff9b::a9fe:a9fe]/", "http:/x[abc]@[::169.254.169.254]/", "http:/x[abc]@[2002:a9fe:a9fe::]/")),

@@ -40,3 +40,9 @@ Source fingerprint `sha256:3af842475dc5384538fa5aa266d5c9660081b532d431bbd61fe9f
 - Python's IDNA codec could map a host differently from WHATWG. Non-ASCII hosts now go through the `idna` package's UTS 46 mapping, and any non-ASCII host is blocked when that mapping is missing or fails.
 
 `docs/SharedComputer.md` now says the matcher is defense in depth, with a network-level block to follow in a separate change. On `60d8dc4`, the new tests failed for the reviewer's examples, for the IPv4-compatible and 6to4 variants, and for the UTS 46 forms: mathematical and fullwidth digits, the modifier capital M, the ideographic full stop, and the percent-encoded forms. The earlier lookalike tests still pass. `tests/hermes_computer_test.py` passed 53 tests with stand-ins in the system Python, which has no `idna`, so 1 test was skipped. All 53 passed with `HERMES_SOURCE` and `idna` 3.20. `ruff check .` passed.
+
+## Fourth re-review fix
+
+Source fingerprint `sha256:13d169cbbbca3c5db2de314beb075c60d130e333cb10ca3db5d6723fd486d2a8`. The review of `e29780c` found 0 bypasses in two corpora of WHATWG-valid metadata cases: 10,890 and 145,700. It also found a regression. `Page.setDocumentContent` with `<style>@import url(http:/169.254.169.254);</style>` kept `);` in the host and passed. Each host is now also judged cut at the first `)`, `;`, quote, `,`, `>`, `}` or whitespace, which is where CSS and markup end a URL.
+
+A new test covers CSS `url()`, `@import`, an unquoted HTML attribute and `srcset` on `Page.setDocumentContent`, `Runtime.evaluate` and `Page.addScriptToEvaluateOnNewDocument`. The test failed on `e29780c`, as did three of the four new real-module cases. The JavaScript lookalike tests still pass. `tests/hermes_computer_test.py` passed 54 tests with stand-ins (2 skipped: no `idna` and no `HERMES_SOURCE`) and all 54 with `HERMES_SOURCE`. `ruff check .` passed.
