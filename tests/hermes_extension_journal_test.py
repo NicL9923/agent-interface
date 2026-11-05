@@ -243,6 +243,17 @@ def turns(count, files=()):
     return rows
 
 
+class EventBodyTests(unittest.TestCase):
+    def test_keeps_line_breaks_so_the_app_can_read_markdown_structure(self):
+        body = extension.event_body("## Fence\r\n\n\n\n|  Post | State |\n|---|---|\n| North   | Set |  \n")
+        self.assertEqual(body, "## Fence\n\n| Post | State |\n|---|---|\n| North | Set |")
+
+    def test_stays_bounded_and_empty_text_has_no_body(self):
+        self.assertEqual(len(extension.event_body("word " * 400)), 500)
+        self.assertIsNone(extension.event_body(" \n\t\n"))
+        self.assertIsNone(extension.event_body(None))
+
+
 class HistoryWindowTests(unittest.TestCase):
     """extension.history_window must cut exactly where src/shared/history.ts historyWindow does."""
     def cut(self, rows, start=None, turns=0):
@@ -1129,7 +1140,8 @@ class DiscoveryTests(unittest.TestCase):
             (output / "2026-10-31_09-00-02.md").write_text(document("A later run."))
             run = {"status": "completed", "claimed_at": "2026-10-31T07:00:00.700-05:00", "finished_at": "2026-10-31T07:00:10-05:00"}
             body = lambda execution, job="job": extension.routine_run_body(home, job, execution)
-            self.assertEqual(body(run), "**Three** model launches and a new benchmark.")
+            # Lines survive for the app to read as Markdown.
+            self.assertEqual(body(run), "**Three** model launches\nand a new benchmark.")
             # A run whose document was pruned or never written must not borrow a later run's, even within the grace.
             pruned = {"status": "completed", "claimed_at": "2026-10-31T06:59:00-05:00", "finished_at": "2026-10-31T06:59:30-05:00"}
             self.assertIsNone(extension.routine_run_body(home, "job", pruned, [pruned, run]))
@@ -1142,7 +1154,7 @@ class DiscoveryTests(unittest.TestCase):
             prompt = "context " * 40000
             (output / "2026-10-31_09-00-02.md").write_text(f"# Cron Job: Daily AI news\n\n## Prompt\n\n{prompt}\n\n## Response\n\nLong prompt, short answer.\n")
             self.assertEqual(body({"status": "completed", "claimed_at": "2026-10-31T09:00:00-05:00"}), "Long prompt, short answer.")
-            self.assertEqual(body({"status": "failed", "error": "Provider\n rate limit"}), "Provider rate limit")
+            self.assertEqual(body({"status": "failed", "error": "Provider\n rate limit"}), "Provider\nrate limit")
             self.assertIsNone(body({"status": "unknown"}))
             self.assertIsNone(body(run, job="../job"))
             self.assertIsNone(body({"status": "completed"}))

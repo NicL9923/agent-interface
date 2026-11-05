@@ -56,6 +56,15 @@ it('locates a live reply before saving and re-resolves an old saved pointer on o
   expect((await s.app.inject({url:'/api/bots/private/history/history?messageId=stable-uid',headers:s.headers})).statusCode).toBe(404);
   expect(s.experienceRequest.mock.calls.length).toBe(count);
 });
+it('redacts a hidden assistant named only where flattening would drop it, such as a link address',async()=>{
+  const s=await setup();s.store.savePresentation('private',{shared:false,ownerId:'two'});
+  const original=s.experienceRequest.getMockImplementation()!;
+  s.experienceRequest.mockImplementation((async(input:{operation:string;profile:string})=>input.operation==='search'
+    ?[{botId:input.profile,botName:'Shared',sessionId:'history',title:'Ledger',snippet:'[Ledger](https://private.example.test) balance: >>>42<<<'}]
+    :original(input as never)) as never);
+  const hits=(await s.app.inject({url:'/api/search?q=42&botId=shared',headers:s.headers})).json().hits;
+  expect(hits.find((hit:{title:string})=>hit.title==='Ledger').snippet).toBe("Message from another member's assistant: This message is private.");
+});
 it('narrows a search to one visible assistant and refuses a hidden or unknown one',async()=>{
   const s=await setup();
   const response=await s.app.inject({url:'/api/search?q=dinners&botId=shared',headers:s.headers});

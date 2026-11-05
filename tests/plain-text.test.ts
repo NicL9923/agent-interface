@@ -22,11 +22,25 @@ it("reads links by their words, whatever their destination holds", () => {
   expect(markdownPlain(`[Docs](https://example.test "Reference")`)).toBe("Docs");
   // A paragraph the read limit would cut mid-link is left out rather than shown as raw Markdown.
   expect(markdownPlain(`Summary first.\n\n[Docs](https://example.test "${"x".repeat(4000)}")`)).toBe("Summary first.");
-  // A long code block never pushes the words after it out of reach.
-  expect(markdownPlain("```\n" + "x\n".repeat(3000) + "```\nActual summary.")).toBe("Actual summary.");
+  // CRLF and whitespace-only blank lines count as paragraph breaks too.
+  expect(markdownPlain(`First.\r\n\r\n[Docs](https://example.test "${"x".repeat(3000)}")`)).toBe("First.");
+  expect(markdownPlain(`First.\n  \n[Docs](https://example.test "${"x".repeat(3000)}")`)).toBe("First.");
+});
+
+it("keeps code-only replies readable however the code is written", () => {
+  expect(markdownPlain("    ls -la")).toBe("ls -la");
+  expect(markdownPlain("> ```\n> ls -la\n> ```")).toBe("ls -la");
+});
+
+it("reads fences inside lists and HTML comments by Markdown's own rules", () => {
+  expect(replyTitle("- ```js\n  code\n  ```\n\nActual summary.")).toBe("Actual summary.");
+  expect(markdownPlain("<!--\n```\n-->\nActual summary.")).toBe("Actual summary.");
 });
 
 it("keeps search markers through flattening, and escaped line breaks become spaces", () => {
+  // A snippet's own private-use characters never become markers.
+  expect(snippetPlain("\uE000literal\uE001 and >>>real<<<")).toBe("literal and >>>real<<<");
+  expect(snippetPlain(`First.\n\n[Docs](https://example.test "${"x".repeat(3000)}")`)).toBe("First.");
   expect(snippetPlain("## >>>Grocery<<< Demo\\n* Free >>>Grocery<<< Coupons")).toBe(">>>Grocery<<< Demo Free >>>Grocery<<< Coupons");
   // A match at the start of a line is never read as a quote.
   expect(snippetPlain(">>>Gate<<< battery\n>>>gate<<< code")).toBe(">>>Gate<<< battery >>>gate<<< code");
