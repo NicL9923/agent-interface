@@ -156,8 +156,14 @@ and `wss`. It judges each by its literal host, as native judges `//host`, so
 a hostname that only resolves to a metadata address is not caught there.
 A bracketed IPv6 host stays whole, including one after userinfo, and an
 IPv6 host is also judged by any IPv4 address it embeds: mapped, translated,
-IPv4-compatible, NAT64 `64:ff9b::/96` and 6to4. A candidate whose authority
-can't be parsed, such as an unclosed or invalid bracketed host, is blocked.
+IPv4-compatible, NAT64 `64:ff9b::/96` and 6to4. The wrapper reads each host
+as WHATWG URL parsing does. A host WHATWG rejects can't fetch anything and
+passes, so `{https:[]}` and `JSON.stringify({http:[]})` still run. That
+covers an unclosed, empty or invalid bracketed host, an empty host, a
+non-numeric port and a forbidden code point. An accepted host is judged in
+its plain form after percent-decoding, and a non-ASCII host after IDNA
+mapping. A non-ASCII host that Python's IDNA codec can't map is blocked,
+since WHATWG may still accept it.
 JavaScript `\u` and `\x` escapes, and URLs built at run time, are not
 decoded.
 Text input, block lists and cookie scopes stay unscanned, as in native.

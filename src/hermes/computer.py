@@ -19,7 +19,7 @@ import subprocess
 import sys
 import time
 import threading
-from urllib.parse import urlsplit
+from urllib.parse import unquote_to_bytes, urlsplit
 import urllib.request
 
 
@@ -234,26 +234,52 @@ def embedded_ipv4(ip):
     return [address for address in found if address is not None]
 
 
-def scheme_colon_targets_metadata(literal, judge):
-    """Whether a ``scheme_colon_literals`` candidate names a metadata host, failing closed.
+# WHATWG forbidden domain code points: a special-scheme host holding one is a parse failure.
+_FORBIDDEN_DOMAIN = frozenset("\x00\t\n\r #/:<>?@[\\]^|%\x7f") | frozenset(chr(code) for code in range(0x20))
 
-    ``judge`` is native ``literal_targets_metadata``. A candidate whose authority cannot be parsed,
-    such as an unclosed or invalid bracketed host, counts as a metadata target: native reads it as
-    nothing, while the browser may read more. An IPv6 host is also judged by any IPv4 address it embeds.
+
+def scheme_colon_targets_metadata(literal, judge):
+    """Whether a ``scheme_colon_literals`` candidate names a metadata host a browser would accept.
+
+    ``judge`` is native ``literal_targets_metadata``. The host is read as WHATWG URL parsing reads it.
+    A host WHATWG rejects fetches nothing and passes: an unclosed, empty or invalid bracketed host
+    such as ``[]`` from ``{https:[]}``, an empty host, a non-numeric port or a forbidden code point.
+    An accepted host is judged again in its plain form, an IPv6 host also by any IPv4 address it
+    embeds, and a non-ASCII host after IDNA mapping. A non-ASCII host that mapping can't read fails
+    closed, since WHATWG's UTS 46 processing may still accept it.
     """
     if judge(literal):
         return True
-    try:
-        host = urlsplit("http://" + literal.lstrip("/")).hostname
-    except ValueError:
-        return True
-    if not host:
-        return True
-    try:
-        ip = ipaddress.IPv6Address(host.split("%", 1)[0])
-    except ValueError:
+    authority = re.split(r"[/?#]", literal.lstrip("/"), maxsplit=1)[0]
+    host = authority.rpartition("@")[2]
+    if host.startswith("["):
+        inner, closed, after = host[1:].partition("]")
+        if not closed or not re.fullmatch(r"(?::[0-9]*)?", after):
+            return False
+        try:
+            ip = ipaddress.IPv6Address(inner)
+        except ValueError:
+            return False
+        return any(judge("//" + str(address) + "/") for address in embedded_ipv4(ip))
+    name, colon, port = host.rpartition(":")
+    if not colon:
+        name = host
+    elif not port.isdigit() and port:
         return False
-    return any(judge("//" + str(address) + "/") for address in embedded_ipv4(ip))
+    try:
+        name = unquote_to_bytes(name).decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    if not name or any(c in _FORBIDDEN_DOMAIN for c in name):
+        return False
+    if not name.isascii():
+        try:
+            name = name.encode("idna").decode("ascii")
+        except UnicodeError:
+            return True
+        if not name or any(c in _FORBIDDEN_DOMAIN for c in name):
+            return False
+    return judge("//" + name.lower() + "/")
 
 
 def param_strings(value):

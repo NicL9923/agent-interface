@@ -654,6 +654,25 @@ class ModernInstallToolsTests(InstallToolsTests):
                                ("Runtime.evaluate", {"expression": 'fetch("http:/100.100.0.5/")'})):
             self.assertEqual(self.dispatch_cdp(installed, method, params), "native dispatch")
 
+    def dispatch_on_fetching_paths(self, installed, text):
+        """The dispatch result for text in each CDP path that runs page script."""
+        return {method: self.dispatch_cdp(installed, method, params) for method, params in (
+            ("Runtime.evaluate", {"expression": text}),
+            ("Runtime.callFunctionOn", {"functionDeclaration": f"function () {{ {text} }}"}),
+            ("Page.addScriptToEvaluateOnNewDocument", {"source": text}))}
+
+    # Ordinary script syntax that only looks like a scheme. Its "host" is one WHATWG rejects, or no host.
+    SCHEME_LOOKALIKES = ("const x={https:[]};", "JSON.stringify({http:[],https:[]})", "const o = {http:1};", "const v = a?https:b;",
+                         'switch (protocol) { case "http:": break; }', "const r = {http:[1,2], wss:[]};", "label: { https:{} }")
+
+    def test_object_json_and_label_syntax_that_looks_like_a_scheme_passes(self):
+        installed = computer.install_tools()
+        matcher = self.native_modules["browser_url_policy"].literal_targets_metadata
+        matcher.side_effect = lambda url: url.startswith("//") and url[2:].split("/")[0].rsplit("@", 1)[-1] in ("169.254.169.254", "[fd00:ec2::254]")
+        for text in self.SCHEME_LOOKALIKES:
+            with self.subTest(text=text):
+                self.assertEqual(set(self.dispatch_on_fetching_paths(installed, text).values()), {"native dispatch"})
+
     def test_bracketed_mapped_and_unparseable_scheme_colon_hosts_fail_closed(self):
         installed = computer.install_tools()
         # A stand-in that knows only the two literal metadata hosts, as native would read them.
@@ -662,7 +681,8 @@ class ModernInstallToolsTests(InstallToolsTests):
         self.assertEqual(computer.scheme_colon_literals('fetch("http:/x)@[fd00:ec2::254]/")'), ["//x", "//[fd00:ec2::254]"])
         blocked = ("http:/x)@[fd00:ec2::254]/", "http:/x)@[::ffff:169.254.169.254]/", "http:/[::ffff:169.254.169.254]/",
                    "http:/[::ffff:0:a9fe:a9fe]/", "http:/[64:ff9b::a9fe:a9fe]/", "http:/[::169.254.169.254]/", "http:/[2002:a9fe:a9fe::]/",
-                   "http:/x)@[fd00:ec2::254", "http:/[fd00:ec2::254", "http:/[zz]/")
+                   "http:/169.254.169.254:80/", "http:/user:pw@169.254.169.254/", "http:/%31%36%39.254.169.254/",
+                   "http:/\uff11\uff16\uff19\uff0e254.169.254/")
         for form in blocked:
             for method, params in (("Runtime.evaluate", {"expression": f'location.href = "{form}"'}),
                                    ("Runtime.callFunctionOn", {"functionDeclaration": f'function () {{ return fetch("{form}") }}'}),
@@ -671,7 +691,10 @@ class ModernInstallToolsTests(InstallToolsTests):
                     result = json.loads(self.dispatch_cdp(installed, method, params))
                     self.assertEqual((result["success"], result["error"]), (False, "Blocked: URL targets a cloud metadata endpoint"))
         self.native_dispatch.assert_not_called()
-        for form in ("http:/[2001:db8::1]/", "http:/x)@[2001:db8::1]/", "http:/[::1]/", "http:/x)@example.test/"):
+        # WHATWG rejects an unclosed, empty or invalid bracketed host, an empty host and a bad port,
+        # so none of these can fetch anything.
+        for form in ("http:/[2001:db8::1]/", "http:/x)@[2001:db8::1]/", "http:/[::1]/", "http:/x)@example.test/",
+                     "http:/x)@[fd00:ec2::254", "http:/[fd00:ec2::254", "http:/[zz]/", "http:/[]/", "http:/@/", "http:/169.254.169.254:8x/"):
             with self.subTest(form=form):
                 self.assertEqual(self.dispatch_cdp(installed, "Runtime.evaluate", {"expression": f'fetch("{form}")'}), "native dispatch")
 
@@ -714,7 +737,7 @@ class ModernInstallToolsTests(InstallToolsTests):
                 ("Runtime.evaluate", {"expression": 'location.href = "http:/x)@[fd00:ec2::254]/"'}),
                 ("Runtime.callFunctionOn", {"functionDeclaration": 'function () { return fetch("http:/x)@[::ffff:169.254.169.254]/") }'}),
                 ("Page.addScriptToEvaluateOnNewDocument", {"source": 'fetch("http:/[64:ff9b::a9fe:a9fe]/")'}),
-                ("Runtime.evaluate", {"expression": 'fetch("http:/x)@[fd00:ec2::254")'}),
+                ("Runtime.evaluate", {"expression": 'fetch("http:/\uff11\uff16\uff19\uff0e\uff12\uff15\uff14\uff0e169.254/")'}),
             )
             for method, params in blocked:
                 with self.subTest(method=method, params=params):
@@ -729,6 +752,11 @@ class ModernInstallToolsTests(InstallToolsTests):
                 ("Input.insertText", {"text": "http:/169.254.169.254/"}),
                 ("Runtime.evaluate", {"expression": 'const o = {https: true}; fetch("http:/100.100.0.5/")'}),
                 ("Runtime.evaluate", {"expression": 'fetch("http:/x)@[2001:db8::1]/")'}),
+                # Hosts WHATWG rejects fetch nothing, and object syntax that looks like a scheme isn't a URL.
+                ("Runtime.evaluate", {"expression": 'fetch("http:/x)@[fd00:ec2::254")'}),
+                *(("Runtime.evaluate", {"expression": text}) for text in self.SCHEME_LOOKALIKES),
+                ("Runtime.callFunctionOn", {"functionDeclaration": "function () { return JSON.stringify({http:[],https:[]}) }"}),
+                ("Page.addScriptToEvaluateOnNewDocument", {"source": "const x={https:[]};"}),
             )
             for method, params in allowed:
                 with self.subTest(method=method, params=params):
