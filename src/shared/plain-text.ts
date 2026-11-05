@@ -10,13 +10,13 @@ import { gfm } from "micromark-extension-gfm";
 import type { Nodes, Root, RootContent } from "mdast";
 
 /**
- * Text parsed. Previews, titles and snippets need far less, and the parser's worst cases
- * (alternating * and _, deeply nested lists or quotes) stay under 50 ms at this size. A message
- * whose first READ_CHARS characters are code therefore previews as that code: reaching the words
- * after it would mean parsing far more, or a second pass that rebuilds Markdown, and both cost more
- * than they save.
+ * Text parsed. Previews show 160 characters and event bodies hold 500, and the parser's worst
+ * case, a list nested hundreds deep, takes about 50 ms at this size; its cost grows with the
+ * square of the depth. A message whose first READ_CHARS characters are code therefore previews
+ * as that code: reaching the words after it would mean parsing far more, or a second pass that
+ * rebuilds Markdown, and both cost more than they save.
  */
-const READ_CHARS = 2000;
+const READ_CHARS = 1000;
 /** Inline nodes join their children directly; everything else is a block that stands apart. */
 const inline = new Set(["paragraph", "heading", "emphasis", "strong", "delete", "link", "linkReference", "tableCell"]);
 /** Blocks that are never the words of a title. */

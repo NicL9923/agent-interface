@@ -27,7 +27,7 @@ it("reads links by their words, whatever their destination holds", () => {
   expect(markdownPlain(`First.\n  \n[Docs](https://example.test "${"x".repeat(3000)}")`)).toBe("First.");
 });
 
-it("reads the first 2,000 characters, so code that fills them previews as code", () => {
+it("reads the first 1,000 characters, so code that fills them previews as code", () => {
   // A deliberate bound: reaching words past a long code block would take far more parsing.
   expect(markdownPlain("```\n" + "y\n".repeat(3000) + "```\nSummary.")).toMatch(/^y y y/);
   // Words before the limit are found however much blank text follows them.
@@ -65,7 +65,8 @@ it("keeps search markers through flattening, and escaped line breaks become spac
 
 it("reads adversarial text in one pass", () => {
   const started = performance.now();
-  for (const text of [("- ".repeat(3998) + "x\n").padEnd(50_000, "x"), "> ".repeat(25_000), "-".repeat(50_000) + " status", "|".repeat(50_000), "*_".repeat(25_000), "#".repeat(50_000), "`".repeat(50_000), "[".repeat(50_000), "](".repeat(25_000), " ".repeat(50_000) + "x"]) {
+  // The nested list's leaf sits inside the read window, so it is really parsed that deep.
+  for (const text of [("- ".repeat(498) + "x\n").padEnd(50_000, "x"), ("> ".repeat(498) + "x\n").padEnd(50_000, "x"), "> ".repeat(25_000), "-".repeat(50_000) + " status", "|".repeat(50_000), "*_".repeat(25_000), "#".repeat(50_000), "`".repeat(50_000), "[".repeat(50_000), "](".repeat(25_000), " ".repeat(50_000) + "x"]) {
     markdownPlain(text); replyTitle(text);
   }
   snippetPlain("\\".repeat(50_000) + "!");
