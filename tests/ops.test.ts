@@ -9,7 +9,7 @@ import { join } from "node:path";
 import webpush from "web-push";
 import { createApp } from "../src/server/app.js";
 import { loadConfig, type Config } from "../src/server/config.js";
-import { defaultMetadataProbe, probeMetadata, type MetadataProbe } from "../src/server/health.js";
+import { attemptConnect, defaultMetadataProbe, metadataTargets, metadataVerdict, probeMetadata, type MetadataAttempt, type MetadataProbe } from "../src/server/health.js";
 import { FailureTracker } from "../src/server/logging.js";
 import type { HermesUpgrades } from "../src/server/upgrades.js";
 import type { Runtime, RuntimeStatus } from "../src/shared/types.js";
@@ -162,50 +162,68 @@ describe("health", () => {
     expect((await backup()).status).toBe("ok");
   });
 
-  it("fails readiness while the app can connect to the metadata service", async () => {
+  it("is ready only while every metadata attempt is explicitly refused", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
-    let outcome: Awaited<ReturnType<MetadataProbe>> = { outcome: "connected" };
-    const probe = vi.fn<MetadataProbe>(async () => outcome);
+    const v4 = (outcome: string, ms = 2): MetadataAttempt => ({ target: "169.254.169.254", family: 4, outcome, ms });
+    const v6 = (outcome: string, ms = 1): MetadataAttempt => ({ target: "fe80::a9fe:a9fe%ens3", family: 6, outcome, ms });
+    let attempts: MetadataAttempt[] = [v4("connected")];
+    const probe = vi.fn<MetadataProbe>(async () => attempts);
     const { app, worker } = await setup({}, { metadataProbe: probe });
+    const ready = async () => {
+      vi.setSystemTime(Date.now() + minute);
+      worker.loop.success();
+      const response = await app.inject("/api/health/ready");
+      return [response.statusCode, response.json().checks.metadataFloor] as const;
+    };
     let response = await app.inject("/api/health/ready");
     expect(response.statusCode).toBe(503);
     expect(response.json().checks.metadataFloor).toEqual({
-      status: "fail", detail: "This process connected to 169.254.169.254:80. Install the host's metadata egress floor; see docs/Hosting.md",
+      status: "fail", detail: "Connected: 169.254.169.254 port 80 connected in 2 ms. Install the host's metadata egress floor; see docs/Hosting.md",
     });
     // Requests between readiness ticks reuse the last probe.
-    outcome = { outcome: "refused", code: "ECONNREFUSED" };
+    attempts = [v4("ECONNREFUSED"), v6("ECONNREFUSED")];
     expect((await app.inject("/api/health/ready")).statusCode).toBe(503);
     expect(probe).toHaveBeenCalledTimes(1);
-    vi.setSystemTime(Date.now() + minute);
-    response = await app.inject("/api/health/ready");
-    expect(response.statusCode).toBe(200);
-    expect(response.json().checks.metadataFloor).toEqual({ status: "ok", detail: "169.254.169.254:80 refused: ECONNREFUSED" });
-    // An unrouted address never answers; that is blocked too.
-    outcome = { outcome: "timeout" };
-    vi.setSystemTime(Date.now() + minute);
-    worker.loop.success();
-    response = await app.inject("/api/health/ready");
-    expect(response.statusCode).toBe(200);
-    expect(response.json().checks.metadataFloor).toEqual({ status: "ok", detail: "No answer from 169.254.169.254:80" });
-    expect(probe).toHaveBeenCalledTimes(3);
+    expect(await ready()).toEqual([200, { status: "ok", detail: "Blocked: 169.254.169.254 ECONNREFUSED; fe80::a9fe:a9fe%ens3 ECONNREFUSED" }]);
+    // A link-local interface with no route sends nothing; IPv4 without a route proves nothing.
+    attempts = [v4("ECONNREFUSED"), v6("ENETUNREACH")];
+    expect((await ready())[0]).toBe(200);
+    // Silence, a slow ICMP error, a full file table or a missing route are not proof of the floor.
+    for (const unproven of [[v4("timeout", 1500)], [v4("EHOSTUNREACH", 3000)], [v4("EMFILE", 0)], [v4("ENETUNREACH")], [v4("ECONNREFUSED"), v6("timeout", 1500)]]) {
+      attempts = unproven;
+      const [status, check] = await ready();
+      expect(status).toBe(503);
+      expect(check.status).toBe("fail");
+      expect(check.detail).toMatch(/^Could not confirm the floor refuses metadata: /);
+    }
+    attempts = [v4("ECONNREFUSED"), v6("connected")];
+    expect((await ready())[1].detail).toMatch(/^Connected: fe80::a9fe:a9fe%ens3 port 80 connected/);
   });
 
-  it("probes the metadata service with one bounded TCP connect", async () => {
+  it("probes metadata with bounded TCP connects on IPv4 and each link-local interface", async () => {
     const server = createServer(socket => socket.destroy());
     await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
     const { port } = server.address() as AddressInfo;
     try {
-      expect(await probeMetadata({ open: () => new Socket().connect(port, "127.0.0.1") })).toEqual({ outcome: "connected" });
+      expect((await attemptConnect("127.0.0.1", port)).outcome).toBe("connected");
     } finally {
       await new Promise(resolve => server.close(resolve));
     }
-    expect(await probeMetadata({ open: () => new Socket().connect(port, "127.0.0.1") })).toEqual({ outcome: "refused", code: "ECONNREFUSED" });
+    const refused = await attemptConnect("127.0.0.1", port);
+    expect(refused.outcome).toBe("ECONNREFUSED");
+    expect(metadataVerdict(refused)).toBe("refused");
     // A socket that never connects stands in for a SYN nobody answers.
-    const started = performance.now();
-    expect(await probeMetadata({ timeoutMs: 50, open: () => new Socket() })).toEqual({ outcome: "timeout" });
-    expect(performance.now() - started).toBeLessThan(1000);
+    const silent = await attemptConnect("127.0.0.1", port, { timeoutMs: 50, open: () => new Socket() });
+    expect(silent.outcome).toBe("timeout");
+    expect(silent.ms).toBeLessThan(1000);
+    expect(metadataVerdict(silent)).toBe("inconclusive");
+    const exhausted = await attemptConnect("127.0.0.1", port, { open: () => { throw Object.assign(new Error("too many open files"), { code: "EMFILE" }); } });
+    expect([exhausted.outcome, metadataVerdict(exhausted)]).toEqual(["EMFILE", "inconclusive"]);
+    const address = (name: string, family: "IPv4" | "IPv6", internal = false) => ({ address: name, family, internal, netmask: "", mac: "", cidr: null, scopeid: 2 }) as never;
+    expect(metadataTargets({ lo: [address("::1", "IPv6", true)], ens3: [address("10.0.0.5", "IPv4"), address("fe80::f816:3eff:fe00:1", "IPv6")], wg0: [address("10.8.0.1", "IPv4")] }))
+      .toEqual([{ target: "169.254.169.254", family: 4 }, { target: "fe80::a9fe:a9fe%ens3", family: 6 }]);
     // Only production runs on the host that has the floor; tests and development never probe a real address.
-    expect(defaultMetadataProbe({ production: true } as Config)).toBeTypeOf("function");
+    expect(defaultMetadataProbe({ production: true } as Config)).toBe(probeMetadata);
     expect(defaultMetadataProbe({ production: false } as Config)).toBeUndefined();
   });
 

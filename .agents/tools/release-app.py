@@ -25,6 +25,7 @@ import argparse
 import contextlib
 import datetime
 import fcntl
+import importlib.util
 import json
 import re
 import shlex
@@ -44,10 +45,15 @@ APP_UNITS = ("agent-interface.service", "hermes-dashboard.service", "hermes-gate
 RUNNING_PHASES = ("checking", "qualifying", "installing", "verifying", "recovering")
 # A release in these states may be mid-cutover or live; only review may change it.
 UNDISCARDABLE = ("activating", "needs-review", "activated", "recorded", "recovering", "recovered")
-# The host's metadata egress floor (metadata-egress-floor.py). Host programs probe it as the
-# SSH user, which is the service user, so a release never ships onto a host without it.
-METADATA_PROBE = {"address": "169.254.169.254", "port": 80, "timeoutSeconds": 3,
-                  "unit": "agent-interface-metadata-floor.service"}
+# The host's metadata egress floor. Host programs check it as the SSH user, which is the
+# service user, with the tool's own verdicts, so a release never ships onto a host without it.
+_floor_spec = importlib.util.spec_from_file_location("metadata_egress_floor", Path(__file__).with_name("metadata-egress-floor.py"))
+FLOOR = importlib.util.module_from_spec(_floor_spec)
+_floor_spec.loader.exec_module(FLOOR)
+METADATA_PROBE = {"v4": FLOOR.METADATA_V4, "v6": FLOOR.METADATA_V6, "port": 80, "timeoutSeconds": 3,
+                  "interfaces": "/proc/net/if_inet6", "unit": FLOOR.UNIT,
+                  # The install's read-only sudo rule allows exactly this command.
+                  "liveRulesCommand": ["sudo", "-n", "/usr/sbin/nft", "-j", "list", "table", "inet", FLOOR.TABLE]}
 FLOOR_INSTALL = "sudo python3 .agents/tools/metadata-egress-floor.py install --user $USER (see docs/Hosting.md)"
 
 
@@ -118,9 +124,7 @@ def preparation_problems(facts, built, *, local_web_build, qualification, accept
             "The app integration inputs no longer match the qualification receipt"
             + (" supplied." if qualification else ". Qualify this release and pass --qualification.")
             + f" ({built['receipt']['error']})")
-    floor = metadata_floor_problem(facts["metadataFloor"])
-    if floor:
-        problems.append(floor)
+    problems += metadata_floor_problems(facts["metadataFloor"])
     if not facts.get("managedPython"):
         problems.append("The native launcher did not report an interpreter inside the Hermes tool store.")
     if built["helperSha256"] != prior["fixedHelperSha256"] and not accept_helper_change:
@@ -129,15 +133,21 @@ def preparation_problems(facts, built, *, local_web_build, qualification, accept
     return problems
 
 
-def metadata_floor_problem(floor):
-    """Why the host's metadata egress floor is not in place, or None when it is."""
-    target = f"{METADATA_PROBE['address']}:{METADATA_PROBE['port']}"
-    if floor["outcome"] == "connected":
-        return f"The service user reached {target}: the metadata egress floor is missing. Install it: {FLOOR_INSTALL}"
-    if floor["unit"] != "enabled":
-        return (f"The metadata egress floor's boot unit is {floor['unit'] or 'missing'}, so a reboot would drop it. "
-                f"Install it: {FLOOR_INSTALL}")
-    return None
+def metadata_floor_problems(floor):
+    """Why the host's live metadata egress floor is not enforcing, empty when it is."""
+    problems = []
+    if (floor["enabled"], floor["active"]) != ("enabled", "active"):
+        problems.append(f"its boot unit is {floor['enabled'] or 'missing'} and {floor['active'] or 'unknown'}, not enabled and active")
+    if not FLOOR.requires_floor(floor["userManager"]):
+        problems.append(f"user@{floor['uid']}.service does not require the boot unit")
+    if floor["listing"] is None:
+        problems.append("the live table could not be read through the floor's sudo rule")
+    else:
+        problems += FLOOR.live_rule_problems(floor["listing"], floor["uid"], floor["user"])
+    problems += FLOOR.probe_problems(floor["probe"])
+    if not problems:
+        return []
+    return [f"Metadata egress floor: {problem}" for problem in problems] + [f"Install or repair it: {FLOOR_INSTALL}"]
 
 
 def maintenance_clear(live):
@@ -246,7 +256,7 @@ def docs_pull_request(manifest):
 
 # Host and repository steps.
 
-REMOTE_PRELUDE = OPTIMIZED_REFUSAL + """
+REMOTE_PRELUDE = OPTIMIZED_REFUSAL + FLOOR.PROBE_FUNCTIONS + """
 import hashlib, json, os, runpy, shutil, subprocess, sys
 from pathlib import Path
 os.umask(0o077)
@@ -270,24 +280,24 @@ def managed_interpreter(launcher, source, hermes_home):
         return None
     return found
 
-# The metadata egress floor as the SSH user, which is the service user, sees it.
-# A refusal or timeout both mean metadata is unreachable; only a connection is a failure.
+# The metadata egress floor as the SSH user, which is the service user, sees it live.
+# release-app.py judges the result with the floor tool's own verdicts.
 def metadata_floor(probe):
-    import errno, socket, time
-    try:
-        unit = subprocess.run(["systemctl", "is-enabled", probe["unit"]], capture_output=True, text=True,
-                              timeout=30, check=False).stdout.strip()
-    except (OSError, subprocess.SubprocessError):
-        unit = ""
-    started = time.monotonic()
-    try:
-        socket.create_connection((probe["address"], probe["port"]), timeout=probe["timeoutSeconds"]).close()
-        outcome = "connected"
-    except TimeoutError:
-        outcome = "timeout"
-    except OSError as error:
-        outcome = errno.errorcode.get(error.errno, "error")
-    return {"unit": unit, "outcome": outcome, "ms": round((time.monotonic() - started) * 1000)}
+    import pwd
+    def run(argv):
+        try:
+            done = subprocess.run(argv, capture_output=True, text=True, timeout=30, check=False)
+            return done.returncode, done.stdout
+        except (OSError, subprocess.SubprocessError) as error:
+            return None, str(error)
+    uid = os.getuid()
+    code, listing = run(probe["liveRulesCommand"])
+    return {"uid": uid, "user": pwd.getpwuid(uid).pw_name,
+            "enabled": run(["systemctl", "is-enabled", probe["unit"]])[1].strip(),
+            "active": run(["systemctl", "is-active", probe["unit"]])[1].strip(),
+            "userManager": run(["systemctl", "show", "user@" + str(uid) + ".service", "-p", "Requires", "-p", "After"])[1],
+            "listing": listing if code == 0 else None,
+            "probe": floor_probe(probe["v4"], probe["v6"], probe["port"], probe["timeoutSeconds"], probe["interfaces"])}
 """
 
 REMOTE_FACTS = """
@@ -645,16 +655,16 @@ def verify_release(manifest):
         "operationId": manifest["operationId"],
         "upgradeStateDir": manifest["upgradeStateDir"], "maintenanceFile": manifest["maintenanceFile"],
         "hermesHome": manifest["hermesHome"], "metadataProbe": METADATA_PROBE})
-    floor = metadata_floor_problem(live["metadataFloor"])
-    if floor:
-        print(floor, file=sys.stderr)
+    floor = metadata_floor_problems(live["metadataFloor"])
+    for problem in floor:
+        print(problem, file=sys.stderr)
     checks = {
         "publicServiceWorkerBuild": public_build,
         "apiRequiresSignIn": signed_out,
         "releaseIsCurrent": live["current"] == live["release"],
         "servicesActive": all(state == "active" for state in live["units"].values()),
         "maintenanceCleared": maintenance_clear(live),
-        "metadataEgressFloor": floor is None,
+        "metadataEgressFloor": not floor,
     }
     return checks, live["result"]
 

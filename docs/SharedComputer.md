@@ -146,9 +146,11 @@ metadata egress floor, an nftables table that rejects every connection the
 service account's processes open to `169.254.169.254` or `fe80::a9fe:a9fe`.
 That account runs Hermes, the app, this browser and agent terminal tools, so the
 floor also covers runtime-built URLs, `curl` and Python tools. The app's
-readiness check fails if the app can connect to metadata, and release
-preparation and verification refuse a host without the floor. See
-[Hosting](Hosting.md#metadata-egress-floor) for installation.
+readiness check fails unless its metadata attempts are explicitly refused.
+Release preparation and verification refuse a host whose live floor does not
+match. A relay running as root or another account, such as an open proxy on
+loopback, is outside this boundary. See
+[Hosting](Hosting.md#metadata-egress-floor) for installation and limits.
 
 The literal checks below are defense in depth. Hermes keeps the metadata floor in
 navigation, redirect checks and `browser_exec`. The add-on dispatch wrapper also

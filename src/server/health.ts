@@ -1,5 +1,6 @@
 import { readdir, stat } from "node:fs/promises";
 import { connect, type Socket } from "node:net";
+import { networkInterfaces } from "node:os";
 import { join } from "node:path";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { allowedIdentity, type Config } from "./config.js";
@@ -26,29 +27,50 @@ const reason = (error: unknown) => (error instanceof Error ? error.message : Str
 
 /**
  * The cloud metadata service. The host's nftables floor (.agents/tools/metadata-egress-floor.py)
- * refuses the service user's connections to it; a connection from this process means the floor is gone.
+ * rejects the service user's connections to it, and these verdicts match that tool's.
  */
-export const metadataService = { host: "169.254.169.254", port: 80 } as const;
-export type MetadataProbeResult = { outcome: "connected" } | { outcome: "refused"; code: string } | { outcome: "timeout" };
-export type MetadataProbe = () => Promise<MetadataProbeResult>;
-/** One TCP connect attempt. Any error, or no answer in time (an unrouted address), counts as blocked. */
-export function probeMetadata({ timeoutMs = 1500, open = () => connect(metadataService) }: { timeoutMs?: number; open?: () => Socket } = {}) {
-  return new Promise<MetadataProbeResult>(resolve => {
+export const metadataService = { v4: "169.254.169.254", v6: "fe80::a9fe:a9fe", port: 80 } as const;
+export type MetadataAttempt = { target: string; family: 4 | 6; outcome: string; ms: number };
+export type MetadataProbe = () => Promise<MetadataAttempt[]>;
+// Only these, arriving fast, prove the reject rule answered. A timeout, EMFILE or any other
+// error proves nothing. A link-local IPv6 interface with no route cannot send at all.
+const refusals = new Set(["ECONNREFUSED", "EACCES", "EPERM", "EHOSTUNREACH"]);
+const noRoute = new Set(["ENETUNREACH", "EADDRNOTAVAIL", "ENODEV"]);
+export const refusedWithinMs = 1000;
+export function metadataVerdict({ outcome, ms }: Pick<MetadataAttempt, "outcome" | "ms">) {
+  if (outcome === "connected") return "connected";
+  if (refusals.has(outcome) && ms <= refusedWithinMs) return "refused";
+  return noRoute.has(outcome) ? "no-route" : "inconclusive";
+}
+/** IPv4 metadata, plus the IPv6 address scoped to every interface with a link-local address. */
+export function metadataTargets(interfaces: ReturnType<typeof networkInterfaces> = networkInterfaces()) {
+  const scoped = Object.entries(interfaces)
+    .filter(([, addresses]) => addresses?.some(address => address.family === "IPv6" && !address.internal && address.address.toLowerCase().startsWith("fe80:")))
+    .map(([name]) => ({ target: `${metadataService.v6}%${name}`, family: 6 as const }));
+  return [{ target: metadataService.v4, family: 4 as const }, ...scoped];
+}
+/** One TCP connect attempt and how it ended: connected, timeout, or the socket error code. */
+export function attemptConnect(host: string, port: number, { timeoutMs = 1500, open = (h: string, p: number) => connect({ host: h, port: p }) }:
+  { timeoutMs?: number; open?: (host: string, port: number) => Socket } = {}) {
+  const started = performance.now();
+  return new Promise<{ outcome: string; ms: number }>(resolve => {
     let socket: Socket | undefined;
-    const finish = (result: MetadataProbeResult) => { clearTimeout(timer); socket?.destroy(); resolve(result); };
-    const timer = setTimeout(() => finish({ outcome: "timeout" }), timeoutMs);
+    const finish = (outcome: string) => { clearTimeout(timer); socket?.destroy(); resolve({ outcome, ms: Math.round(performance.now() - started) }); };
+    const timer = setTimeout(() => finish("timeout"), timeoutMs);
     try {
-      socket = open();
+      socket = open(host, port);
     } catch (error) {
-      return finish({ outcome: "refused", code: (error as NodeJS.ErrnoException).code ?? reason(error) });
+      return finish((error as NodeJS.ErrnoException).code ?? "error");
     }
-    socket.once("connect", () => finish({ outcome: "connected" }));
-    socket.once("error", (error: NodeJS.ErrnoException) => finish({ outcome: "refused", code: error.code ?? reason(error) }));
+    socket.once("connect", () => finish("connected"));
+    socket.once("error", (error: NodeJS.ErrnoException) => finish(error.code ?? "error"));
   });
 }
+export const probeMetadata: MetadataProbe = () =>
+  Promise.all(metadataTargets().map(async ({ target, family }) => ({ target, family, ...await attemptConnect(target, metadataService.port) })));
 /** Only the production host has the floor; tests inject a probe, and development reports unconfigured. */
 export const defaultMetadataProbe = (config: Config): MetadataProbe | undefined =>
-  config.production ? () => probeMetadata() : undefined;
+  config.production ? probeMetadata : undefined;
 // The minute timer always probes afresh; public requests between ticks reuse the result.
 const metadataCacheMs = 50_000;
 
@@ -138,11 +160,18 @@ export class HealthMonitor {
     if (!probe) return { status: "unconfigured", detail: "Checked only in production" };
     const cached = this.metadataChecked;
     if (cached && now >= cached.at && now - cached.at < metadataCacheMs) return cached.check;
-    const target = `${metadataService.host}:${metadataService.port}`;
-    const result = await probe();
-    const check: Check = result.outcome === "connected"
-      ? { status: "fail", detail: `This process connected to ${target}. Install the host's metadata egress floor; see docs/Hosting.md` }
-      : { status: "ok", detail: result.outcome === "timeout" ? `No answer from ${target}` : `${target} refused: ${result.code}` };
+    const attempts = await probe();
+    const describe = (attempt: MetadataAttempt) => `${attempt.target} port ${metadataService.port} ${attempt.outcome} in ${attempt.ms} ms`;
+    const connected = attempts.filter(attempt => metadataVerdict(attempt) === "connected");
+    const unproven = attempts.filter(attempt => {
+      const verdict = metadataVerdict(attempt);
+      return verdict === "inconclusive" || (verdict === "no-route" && attempt.family === 4);
+    });
+    const check: Check = connected.length
+      ? { status: "fail", detail: `Connected: ${connected.map(describe).join("; ")}. Install the host's metadata egress floor; see docs/Hosting.md` }
+      : unproven.length
+        ? { status: "fail", detail: `Could not confirm the floor refuses metadata: ${unproven.map(describe).join("; ")}` }
+        : { status: "ok", detail: `Blocked: ${attempts.map(attempt => `${attempt.target} ${attempt.outcome}`).join("; ")}` };
     this.metadataChecked = { at: now, check };
     return check;
   }

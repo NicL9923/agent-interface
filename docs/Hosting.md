@@ -67,39 +67,80 @@ Python tools, so the host blocks that account at the network layer.
 `.agents/tools/metadata-egress-floor.py` installs a dedicated nftables table,
 `inet agent_interface_metadata`. Its output-hook chain rejects every packet the
 service account's sockets send to `169.254.169.254` or OpenStack's IPv6
-link-local `fe80::a9fe:a9fe`: TCP with a reset, everything else with
+link-local `fe80::a9fe:a9fe`. TCP gets a reset, and everything else gets
 admin-prohibited, so clients fail at once instead of hanging. Only those two
-addresses are blocked; the rest of `169.254.0.0/16` stays reachable, and root,
-including cloud-init, is not affected. The tool loads only its own table in one
-transaction and never flushes the ruleset, so ufw's iptables-nft rules stay
+addresses are blocked. The rest of `169.254.0.0/16` stays reachable, and root,
+including cloud-init, is not affected. The rules file loads only its own table in
+one transaction and never flushes the ruleset, so ufw's iptables-nft rules stay
 untouched.
 
-The rules live in root-owned `/etc/agent-interface/metadata-egress-floor.nft`.
-The root oneshot `agent-interface-metadata-floor.service` loads that file at boot,
-after `network.target`, `nftables.service` and `ufw.service` and before the
-service account's `user@UID.service`. It reloads and restarts with
-`nftables.service`, whose ruleset flush would otherwise remove the table.
+`install` puts the floor in place four ways:
+
+- The rules live in root-owned `/etc/nftables.d/agent-interface-metadata.nft`.
+- When `/etc/nftables.conf` exists, a marked block at its end includes that file.
+  Ubuntu's `nftables.conf` starts with `flush ruleset`, so the floor then loads in
+  the same transaction as the flush, and any `nftables.service` start, restart or
+  reload brings it back with no gap. The tool backs up the original file once to
+  `/etc/nftables.conf.agent-interface.bak` and checks the edited file with
+  `nft -c` before writing it.
+- The root oneshot `agent-interface-metadata-floor.service` loads the rules at boot
+  either way, after `nftables.service` and `ufw.service`. It does not follow
+  `nftables.service`: the include already covers that, and following it would
+  carry an nftables restart into the household services. `RefuseManualStop=yes`
+  blocks `systemctl stop` and `restart` of the unit. Reapply it with
+  `systemctl reload`.
+- A drop-in makes the service account's systemd manager, `user@UID.service`,
+  require that unit and start after it.
+- A sudo rule lets the service account run exactly
+  `nft -j list table inet agent_interface_metadata`, read-only, so release checks
+  can compare the live rules.
+
+**The drop-in fails closed.** If the floor cannot load at boot, the service
+account's manager does not start, and Hermes, the app and the shared browser stay
+down. Find the cause with `sudo journalctl -b -u agent-interface-metadata-floor`,
+fix it, then run
+`sudo systemctl start agent-interface-metadata-floor.service user@UID.service`.
+SSH sign-in and `sudo` for that account should still work without its manager,
+but that is untested here, so keep the provider's console as the fallback. In an
+emergency, `sudo metadata-egress-floor.py remove`, or deleting
+`/etc/systemd/system/user@UID.service.d/agent-interface-metadata-floor.conf` and
+running `systemctl daemon-reload`, starts the services without the floor.
 
 Install it before preparing a release, from any checkout that has the tool. Before
 the first release that carries it, copy the tool from the merged commit:
 
 ```sh
 git show origin/main:.agents/tools/metadata-egress-floor.py | ssh <host> 'umask 077 && cat > ~/metadata-egress-floor.py'
-ssh -t <host> 'sudo nft list ruleset > ~/nft-before.txt'
+ssh -t <host> 'sudo systemctl is-enabled nftables.service ufw.service; sudo nft list ruleset > ~/nft-before.txt'
 ssh -t <host> 'sudo python3 ~/metadata-egress-floor.py install --user <service user>'
 ssh -t <host> 'sudo python3 ~/metadata-egress-floor.py check --user <service user>'
 ```
 
-Install is idempotent: rerunning it rewrites nothing unless the uid changed, and
-reapplies the table. It validates the rules with `nft -c` before changing
-anything and refuses uid 0. `check` exits 1 unless the rules file, boot unit and
-loaded table are current, a TCP connect to `169.254.169.254:80` as the service
-user is refused within a second, the IPv6 address on the default interface does
-not connect, and as the service user DNS resolves and `github.com:443` connects.
-`--egress HOST:PORT` picks a different reachable target. It warns when the
-service account can run `sudo` without a password, because any agent could then
-remove the floor. `remove` disables the unit and deletes only this table and its
-files.
+Install is idempotent. A rerun rewrites nothing unless the uid changed, then
+reloads the table, and it never restarts the unit. It checks the rules with
+`nft -c` and the sudo rule with `visudo -c` before anything goes live, and it
+refuses uid 0. `check` reports `mode.persistence`, either
+`nftables.conf include and boot unit` or `boot unit only`. It exits 1 unless all
+of these hold:
+
+- The installed files are current.
+- `nftables.conf` includes the floor last whenever that file exists or
+  `nftables.service` is enabled.
+- The unit is enabled and active, and the user manager requires it.
+- The live table, read with `nft -j`, has exactly the expected uid, addresses,
+  output hook and reject verdicts.
+- As the service user, `169.254.169.254:80` is refused within a second, and
+  `fe80::a9fe:a9fe` is refused on every interface with a link-local address,
+  unless that interface has no route.
+- DNS resolves and `github.com:443` connects. `--egress HOST:PORT` picks a
+  different target.
+
+Only a fast `ECONNREFUSED`, `EACCES`, `EPERM` or `EHOSTUNREACH` proves the floor.
+A timeout, a slow error or anything else, such as `EMFILE`, is inconclusive and
+fails. `check` warns when the service account can run `sudo` without a password,
+because any agent could then remove the floor. `remove` drops the user-manager
+requirement first, then the include, the table and the tool's files. It never
+stops a unit.
 
 Confirm the rest of the ruleset is unchanged and that the service account now
 fails fast:
@@ -113,17 +154,33 @@ The diff should show only the added `agent_interface_metadata` table, and curl
 should report a refused connection with exit 7, not a timeout. Three checks keep
 a missing floor visible:
 
-- App readiness reports `metadataFloor` as `fail` and returns 503 if the app
-  process can connect to `169.254.169.254:80`.
-- `release-app.py prepare` refuses a host where the SSH user, which is the
-  service user, can connect to metadata or the boot unit is not enabled.
+- App readiness reports `metadataFloor` as `fail` and returns 503 unless every
+  metadata attempt from the app process is explicitly refused.
+- `release-app.py prepare` refuses the host unless the floor is enforcing live.
+  That means the unit is enabled and active, the user manager requires it, the
+  live rules match, and metadata is refused on IPv4 and on each link-local IPv6
+  interface. The check runs as the SSH user, which is the service user.
 - `release-app.py verify` and the post-activation record step check the same
   thing as `metadataEgressFloor`.
 
-The floor matches the socket owner's uid in the host's output hook. Traffic from
-containers with their own network namespace would pass through the forward hook
-instead and is not covered. Root processes, other accounts and `sudo` remain
-outside it by design.
+### Limits
+
+The floor matches the uid that owns each socket, in the host's output hook. It
+does not cover:
+
+- A relay that runs as root or as another account and accepts connections from
+  the service account, such as an open forward proxy on loopback. The relay's own
+  connection to metadata is not the service account's.
+- Containers with their own network namespace, whose traffic passes through the
+  forward hook instead.
+- Root processes, other accounts and anything run through `sudo`.
+
+The host documentation lists Caddy, which runs as its own account, as a reverse
+proxy to fixed upstreams. That makes it not an open relay. It also lists WireGuard
+and the Hermes services, which run as the service account and are inside the
+floor. It documents no forward proxy or container runtime. This repository cannot
+prove that none exist, so review the listeners after installing:
+`sudo ss -ltnup | grep -v 'users:(("<service user>"'`.
 
 ## Google setup
 
@@ -188,11 +245,15 @@ runs. Deploys depend on that, including during a Hermes drain.
 - hermes: Hermes has been disconnected for 5 minutes or longer. A Hermes update
   in progress counts as healthy.
 - worker: no successful background pass for 2 minutes, after a 2-minute startup grace.
-- metadataFloor: a TCP connect from the app process to `169.254.169.254:80`
-  succeeded, so the [metadata egress floor](#metadata-egress-floor) is missing.
-  A refusal or no answer within 1.5 seconds counts as blocked. The result is
-  reused for 50 seconds, so every minute's check probes afresh. Only production
-  probes; development and tests report `unconfigured`.
+- metadataFloor: the app process connected to metadata, so the
+  [metadata egress floor](#metadata-egress-floor) is missing, or could not
+  confirm the floor. It tries `169.254.169.254:80` and `fe80::a9fe:a9fe` on each
+  interface with a link-local address. Only `ECONNREFUSED`, `EACCES`, `EPERM` or
+  `EHOSTUNREACH` within a second counts as refused. A timeout, `EMFILE` or any
+  other error fails as inconclusive, except that a link-local interface with no
+  route passes. The result is reused for 50 seconds, so every minute's check
+  probes afresh. Only production probes; development and tests report
+  `unconfigured`.
 
 It also reports two checks that warn but never fail readiness:
 
