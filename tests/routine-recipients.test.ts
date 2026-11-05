@@ -48,3 +48,17 @@ it('moves the earlier recipients, kept by routine ID alone, to every assistant h
   // The earlier record stays as it was, for a rollback to the previous release.
   expect(store.db.prepare("SELECT COUNT(*) AS n FROM routine_recipients WHERE routine_id='dup'").get()).toEqual({ n: 2 });
 });
+
+it("keeps the earlier recipients another assistant still needs when one holding the same ID is deleted", () => {
+  const store = setup();
+  store.db.prepare('INSERT INTO routine_recipients VALUES(?,?)').run('dup', 'bob');
+  // "a" ran a trial of its "dup", which ties the ID to it, and is then deleted before the move.
+  store.rememberRoutineTrial('3f1c2a4e-8b7d-4c6e-9a5f-1d2e3c4b5a69', 'bob', 'dup', 'a');
+  store.routineRecipients('a', 'other', ['carol']);
+  store.forgetBot('a');
+  expect(store.getRoutineRecipients('b', 'dup')).toEqual(['bob']);
+  store.adoptLegacyRecipients([{ id: 'dup', botId: 'b' }]);
+  expect(store.getRoutineRecipients('b', 'dup')).toEqual(['bob']);
+  // Its own lists go.
+  expect(store.db.prepare("SELECT COUNT(*) AS n FROM routine_profile_recipients WHERE bot_id='a'").get()).toEqual({ n: 0 });
+});

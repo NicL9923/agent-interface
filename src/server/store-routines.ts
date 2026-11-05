@@ -26,6 +26,8 @@ export class RoutineRepository {
    * Moves the earlier recipients, kept by routine ID alone, to the assistants whose routines hold each
    * ID now: the one that holds it, or, when several do and nobody can tell which was meant, every one.
    * Each ID moves once, when a routine list from Hermes includes it; one Hermes no longer lists waits.
+   * The move is permanent: recipient edits the previous release makes to an ID after a rollback are not
+   * picked up when rolling forward again.
    */
   adoptLegacyRecipients(routines: { id: string; botId: string }[]) {
     const legacy = this.db.prepare("SELECT DISTINCT routine_id AS id FROM routine_recipients WHERE routine_id NOT IN (SELECT routine_id FROM routine_recipients_adopted)").all() as { id: string }[];

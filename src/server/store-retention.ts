@@ -14,7 +14,6 @@ export class RetentionRepository {
     this.database.transaction(() => {
       const ids = (sql: string) => (this.db.prepare(sql).all(botId, botId) as { id: string | null }[]).flatMap(row => row.id ? [row.id] : []);
       const runs = ids("SELECT json_extract(value,'$.runId') AS id FROM notification_events WHERE json_extract(value,'$.botId')=? UNION SELECT json_extract(receipt,'$.runId') FROM submissions WHERE bot_id=?");
-      const routines = ids("SELECT json_extract(value,'$.routineId') AS id FROM notification_events WHERE json_extract(value,'$.botId')=? UNION SELECT routine_id FROM routine_trials WHERE bot_id=?");
       const outbox = "SELECT id FROM outbox WHERE json_extract(payload,'$.botId')=?";
       this.db.prepare(`DELETE FROM delivered WHERE outbox_id IN (${outbox})`).run(botId);
       this.db.prepare(`DELETE FROM notification_batch_items WHERE outbox_id IN (${outbox})`).run(botId);
@@ -22,7 +21,8 @@ export class RetentionRepository {
       this.db.prepare("DELETE FROM notification_batches WHERE NOT EXISTS(SELECT 1 FROM notification_batch_items i WHERE i.batch_id=notification_batches.id)").run();
       this.db.prepare("DELETE FROM notification_events WHERE json_extract(value,'$.botId')=?").run(botId);
       for (const run of runs) this.db.prepare("DELETE FROM participants WHERE run_id=?").run(run);
-      for (const routine of routines) this.db.prepare("DELETE FROM routine_recipients WHERE routine_id=?").run(routine);
+      // routine_recipients, the earlier record by routine ID alone, may still serve another assistant
+      // holding the same ID until it is moved over, so only this assistant's own lists go.
       this.db.prepare("DELETE FROM routine_profile_recipients WHERE bot_id=?").run(botId);
       this.db.prepare("DELETE FROM routine_recipient_sets WHERE bot_id=?").run(botId);
       for (const table of ["bot_presentation", "bot_visibility_periods", "bot_names", "drafts", "draft_revisions", "read_positions", "chat_presence", "chat_reads", "card_state", "submissions", "approval_attribution", "approval_resolutions", "retry_claims", "routine_trials", "push_action_tokens"])
