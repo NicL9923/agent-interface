@@ -9,7 +9,8 @@ import type { Store } from './store.js';
 import { notFound, redactAgents, Roster, visibleBots } from './bot-access.js';
 import { httpError } from './http-error.js';
 import { id } from './schemas.js';
-import { assertDeliveryPrivate, routinesFor, routineTargets } from './collaboration.js';
+import { assertDeliveryPrivate, routinesFor } from './collaboration.js';
+import { routineTargets } from './delivery-targets.js';
 import { serialDelivery } from './routine-delivery.js';
 export async function installDiscoveryRoutes(app: FastifyInstance, runtime: Runtime, store: Store, roster = new Roster(runtime)) {
   const visible = (userId: string) => visibleBots(runtime, store, userId);

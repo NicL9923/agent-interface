@@ -2,6 +2,7 @@ import type { GroupCatalog, GroupRoom } from "../shared/collaboration.js";
 import type { Routine, Runtime } from "../shared/types.js";
 import { visible } from "./bot-access.js";
 import { httpError } from "./http-error.js";
+import { routineTargets } from "./delivery-targets.js";
 import type { Store } from "./store.js";
 
 // Where routines post their results in group chats must never reach someone who cannot see the
@@ -75,7 +76,16 @@ export async function assertRoutinesStayPrivate(runtime: Runtime, store: Store, 
   // A sharing change that keeps who can see the assistant changes no room.
   if (before && (before.shared !== false) === (next.shared !== false) && before.ownerId === next.ownerId) return;
   let routines: Routine[];
-  try { routines = (await runtime.routines()).filter(routine => routine.roomIds?.length); }
+  let targets: Map<Routine, string[]>;
+  try {
+    // Every room each routine posts in, from every delivery field Hermes honors (src/server/delivery-targets.ts).
+    targets = new Map((await runtime.routines()).map(routine => {
+      const found = routineTargets(routine);
+      if (found.unknown) throw unreadable();
+      return [routine, found.rooms] as const;
+    }).filter(([, rooms]) => rooms.length));
+    routines = [...targets.keys()];
+  }
   catch { throw unreadable(); }
   if (!routines.length) return;
   let catalog: GroupCatalog;
@@ -83,7 +93,7 @@ export async function assertRoutinesStayPrivate(runtime: Runtime, store: Store, 
   catch { throw unreadable(); }
   const rooms = new Map((catalog.supported ? catalog.rooms : []).map(room => [room.room_id, room]));
   const after = (id: string) => id === botId ? next : current(id);
-  const conflicts = routines.flatMap(routine => routine.roomIds!.flatMap(roomId => {
+  const conflicts = routines.flatMap(routine => targets.get(routine)!.flatMap(roomId => {
     const room = rooms.get(roomId);
     return room && roomLeaks(after(routine.botId), room, after) ? [{ routine, room }] : [];
   }));

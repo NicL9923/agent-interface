@@ -35,6 +35,7 @@ import { assertRoutineEditable, installExperienceRoutes } from "./experience.js"
 import { installComputerRoutes } from "./computer.js";
 import { assertDeliveryPrivate, installCollaborationRoutes, roomAccessible, routineRooms, routinesFor } from './collaboration.js';
 import { routineRoomId } from '../shared/collaboration.js';
+import { routineTargetsAfter } from './delivery-targets.js';
 import { serialDelivery } from './routine-delivery.js';
 import { GroupWatch } from "./group-watch.js";
 import { loggerOptions } from "./logging.js";
@@ -407,8 +408,7 @@ export async function createApp(
       // An enabled routine delivers, so every room it will post in is checked, including any its owner
       // cannot see and any written outside the app, even when this save changes none of them.
       if (input.enabled) {
-        const outside = (current?.roomTargets ?? []).filter(id => !(current?.roomIds ?? []).includes(id));
-        await assertDeliveryPrivate(runtime, store, input.botId, [...new Set([...input.roomIds ?? current?.roomIds ?? [], ...outside])]);
+        await assertDeliveryPrivate(runtime, store, input.botId, routineTargetsAfter(current, input.botId, input.roomIds));
       }
       return runtime.saveRoutine(input, routineId);
     });

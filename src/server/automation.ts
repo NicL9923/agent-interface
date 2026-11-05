@@ -7,7 +7,8 @@ import { notFound, visibleBots } from './bot-access.js';
 import { httpError } from './http-error.js';
 import { apiRoute } from './api-route.js';
 import type { Store } from './store.js';
-import { assertDeliveryPrivate, routineTargets } from './collaboration.js';
+import { assertDeliveryPrivate } from './collaboration.js';
+import { routineTargets } from './delivery-targets.js';
 import { serialDelivery } from './routine-delivery.js';
 
 const id = z.string().regex(/^[A-Za-z0-9_-]{1,100}$/);
@@ -44,7 +45,8 @@ export async function installAutomationRoutes(app: FastifyInstance, runtime: Run
   // them, in turn with sharing changes and routine saves. Turning a trigger off always goes ahead.
   const delivering = async <T>(routineId: string, work: () => Promise<T>) => !runtime.groupRequest ? work() : serialDelivery(store, async () => {
     const routine = (await runtime.routines()).find(row => row.id === routineId);
-    if (routine) await assertDeliveryPrivate(runtime, store, routine.botId, routineTargets(routine));
+    // A routine the app cannot find cannot be checked, so the trigger is refused.
+    await assertDeliveryPrivate(runtime, store, routine?.botId ?? '', routine && routineTargets(routine));
     return work();
   });
   apiRoute(app, "POST /bots/:id/automation/triggers", { body: z.object({ id: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,79}$/), ...triggerFields }).strict() }, async (req, trigger, reply) => { reply.header('Cache-Control', 'no-store'); return delivering(trigger.routineId, () => request(req, { operation: 'trigger_create', trigger })); });
@@ -53,9 +55,12 @@ export async function installAutomationRoutes(app: FastifyInstance, runtime: Run
     const triggerId = z.object({ triggerId: id }).parse(req.params).triggerId;
     const toggle = () => request(req, { operation: 'trigger_toggle', triggerId, ...body });
     if (!body.enabled) return toggle();
+    // The overview lists at most 100 triggers (src/hermes/automation.py trigger_list) and the add-on has no
+    // single-trigger read, so a trigger it does not list cannot be checked and is not turned on.
     const overview = await request(req, { operation: 'overview' });
     const routineId = overview.triggers.items.find(item => item.id === triggerId)?.routineId;
-    return routineId ? delivering(routineId, toggle) : toggle();
+    if (!routineId) throw httpError(409, "WildBots couldn't find this trigger's routine to check where it posts, so the trigger stays off. Turn it on in Hermes.", { code: 'routine_rooms_unknown' });
+    return delivering(routineId, toggle);
   });
   apiRoute(app, "DELETE /bots/:id/automation/triggers/:triggerId", { body: z.object({ revision }).strict() }, async (req, body) => request(req, { operation: 'trigger_delete', triggerId: z.object({ triggerId: id }).parse(req.params).triggerId, ...body }));
   apiRoute(app, "GET /bots/:id/automation/skills/content", {}, async req => request(req, { operation: 'skill_content', ...z.object({ name: z.string().regex(/^[A-Za-z0-9_./-]{1,200}$/).refine(name => !name.split('/').some(part => part === '..' || !part)) }).strict().parse(req.query) }));

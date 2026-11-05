@@ -13,6 +13,7 @@ import { routineRun, runTime, type RoutineRun, type RoutineRunPage } from '../sh
 /** How long one read of an assistant's runs serves every viewer. */
 export const RUNS_CACHE_MS = 5_000;
 import { GroupLatestCache, previewOf } from './group-latest.js';
+import type { DeliveryRooms } from './delivery-targets.js';
 import { mentionsRoom, presentations, redactRooms, roomLeaks, type Presentation } from './routine-delivery.js';
 const uuid = z.string().uuid();
 
@@ -52,7 +53,7 @@ export async function routinesFor<T extends Routine>(runtime: Pick<Runtime, 'gro
   const touches = (routine: Routine) => !!routine.roomIds?.length || mentionsRoom(routine.lastError) || mentionsRoom(routine.lastDeliveryError);
   const errs = (routine: Routine) => routine.lastError !== undefined || routine.lastDeliveryError !== undefined;
   // Every target the delivery names is the server's to check, never anyone's to read.
-  const listed = routines.map(({ roomTargets: _, ...routine }) => routine as T);
+  const listed = routines.map(({ delivery: _, ...routine }) => routine as T);
   if (!listed.some(routine => touches(routine) || errs(routine))) return listed;
   const redact = await errorRedactor(runtime, store, roster, userId, listed.some(touches));
   return listed.map(routine => {
@@ -67,10 +68,6 @@ export async function routinesFor<T extends Routine>(runtime: Pick<Runtime, 'gro
   });
 }
 
-/** Every group chat a routine's delivery names, as Hermes has it. */
-export const routineTargets = (routine: Pick<Routine, 'roomIds' | 'roomTargets'> | undefined) =>
-  [...new Set([...routine?.roomIds ?? [], ...routine?.roomTargets ?? []])];
-
 /**
  * Refuses to let a routine deliver while any group chat it posts in could be opened by someone who cannot
  * see its assistant. A target written outside the app, by Hermes, its CLI, the dashboard or an agent, can
@@ -78,11 +75,16 @@ export const routineTargets = (routine: Pick<Routine, 'roomIds' | 'roomTargets'>
  * anything that makes the routine deliver: a save that leaves it enabled, resuming it and a trial run.
  * Pausing and deleting never need it.
  */
-export async function assertDeliveryPrivate(runtime: Pick<Runtime, 'groupRequest' | 'listBots'>, store: Store, botId: string, roomIds: string[]) {
-  if (!roomIds.length || !runtime.groupRequest) return;
+export async function assertDeliveryPrivate(runtime: Pick<Runtime, 'groupRequest' | 'listBots'>, store: Store, botId: string, targets: DeliveryRooms | undefined) {
+  const unknown = () => httpError(409, "WildBots couldn't read or check the group chats this routine posts in, so it stays as it was. Review its delivery in Hermes, or try again in a moment.", { code: 'routine_rooms_unknown' });
+  // A routine or setting the app cannot read is refused, never waved through.
+  if (!targets || targets.unknown) throw unknown();
+  const roomIds = targets.rooms;
+  if (!roomIds.length) return;
+  if (!runtime.groupRequest) throw unknown();
   let open: Awaited<ReturnType<typeof openableRooms>>;
   try { open = await openableRooms(runtime, store, ''); }
-  catch { throw httpError(409, "WildBots couldn't check the group chats this routine posts in, so it stays as it was. Try again in a moment.", { code: 'routine_rooms_unknown' }); }
+  catch { throw unknown(); }
   const bot = open.presentation(botId);
   if (roomIds.some(roomId => { const room = open.all.get(roomId); return !!room && roomLeaks(bot, room, open.presentation); }))
     throw httpError(409, "This routine posts in a group chat that people who can't see its assistant could open, so it can't run. Pause it, or have someone who can open that group chat remove it from the routine.", { code: 'routine_rooms' });

@@ -345,10 +345,10 @@ export interface Routine {
    */
   roomIds?: string[];
   /**
-   * Server only, never sent to clients: every group chat the routine's delivery names, including targets
-   * written outside the app as `room:<id>@<profile>`. Checked before the routine may deliver.
+   * Server only, never sent to clients: the delivery fields as Hermes stores them, which the server reads
+   * (src/server/delivery-targets.ts) to check every group chat the routine posts in.
    */
-  roomTargets?: string[];
+  delivery?: { deliver?: unknown; failure_deliver?: unknown; origin?: unknown };
   skills?: string[];
   model?: string | null;
   provider?: string | null;

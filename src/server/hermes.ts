@@ -13,7 +13,8 @@ import { httpError } from './http-error.js';
 import { createModelNames } from './model-names.js';
 import { createHermesTransport, TransportError, type Connection, type HermesOptions, type Wire } from './hermes-transport.js';
 import { fileSigner, safeStagedPath, type RegisteredFile } from './hermes-files.js';
-import { applyFrame, bot, deliverRooms, deliverRoomTargets, emptyLiveState, withDeliverRooms, exposedText, historyMessages, inflightMessage, openRequests, receipt, toolDetails, unbridged, type LiveState } from './hermes-mapping.js';
+import { deliverRooms, withDeliverRooms } from './delivery-targets.js';
+import { applyFrame, bot, emptyLiveState, exposedText, historyMessages, inflightMessage, openRequests, receipt, toolDetails, unbridged, type LiveState } from './hermes-mapping.js';
 
 export type { HermesOptions } from './hermes-transport.js';
 
@@ -276,7 +277,7 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     const profile = `?profile=${encodeURIComponent(input.botId)}`;
     const body: Wire = {
       name: `[bot:${input.botId}] ${input.name}`, prompt: input.prompt,
-      schedule: input.schedule, ...(!id ? {deliver: withDeliverRooms(`bot-chat:${input.botId}`, input.roomIds ?? []), context_from: ['self']} : {}),
+      schedule: input.schedule, ...(!id ? {deliver: withDeliverRooms(`bot-chat:${input.botId}`, input.roomIds ?? [])!, context_from: ['self']} : {}),
     };
     // Group chats change only the room targets. The rest of `deliver` is read now, since native PUT replaces it
     // whole. The profile's job list is read, as routines() does: the service route admits no single-job read.
@@ -284,7 +285,9 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
       const jobs = await (await http(`/api/cron/jobs${profile}`)).json().catch(() => undefined) as Wire;
       const current = Array.isArray(jobs) ? jobs.find((job: Wire) => (job.id ?? job.job_id) === id) : undefined;
       if (!current) throw new Error('Hermes did not return the routine. Reload before retrying.');
-      body.deliver = withDeliverRooms(current.deliver, input.roomIds);
+      const deliver = withDeliverRooms(current.deliver, input.roomIds);
+      if (deliver === undefined) throw new Error('Hermes returned a delivery setting the app cannot read. Edit this routine in Hermes.');
+      body.deliver = deliver;
     }
     // Native PUT merges updates. Omitted fields, including future native settings,
     // must stay omitted. null/[] explicitly clear the corresponding override.
@@ -860,7 +863,7 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
             skills: job.skills ?? (job.skill ? [job.skill] : []), model: job.model ?? null, provider: job.provider ?? null,
             enabledToolsets: job.enabled_toolsets ?? null, script: job.script ?? null, noAgent: job.no_agent === true,
             contextFrom: typeof job.context_from === 'string' ? [job.context_from] : job.context_from ?? null,
-            roomIds: deliverRooms(job.deliver), roomTargets: deliverRoomTargets(job.deliver),
+            roomIds: deliverRooms(job.deliver), delivery: {deliver: job.deliver, failure_deliver: job.failure_deliver, origin: job.origin},
             enabled: job.enabled !== false && job.state !== 'paused',
             nextRunAt: job.next_run_at ?? undefined, lastRunAt: job.last_run_at ?? undefined,
             lastStatus: job.last_status ?? undefined, lastError: job.last_error ?? undefined, lastDeliveryError: job.last_delivery_error ?? undefined});

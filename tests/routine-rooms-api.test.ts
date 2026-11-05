@@ -264,10 +264,50 @@ describe("a paused personal routine that posts in a room only another member can
     expect(setRoutineEnabled).toHaveBeenCalledWith("shared", "abc123", false);
   });
   it("is checked for a target written as room:<id>@<profile>, which the app never shows", async () => {
-    rows = [{ ...base, id: "abc123", enabled: false, roomIds: [], roomTargets: ["lodge"] }];
+    rows = [{ ...base, id: "abc123", enabled: false, roomIds: [], delivery: { deliver: "bot-chat:shared,room:lodge@diary" } }];
     expect((await write({ ...base, enabled: true }, "abc123")).json().code).toBe("routine_rooms");
     // It is never sent to anyone.
     const [listed] = (await created.app.inject({ url: "/api/routines", headers: await headers() })).json();
-    expect(listed).not.toHaveProperty("roomTargets");
+    expect(listed).not.toHaveProperty("delivery");
+  });
+});
+
+describe("every delivery field Hermes honors, read as Hermes reads it", () => {
+  // "shared" is local-one's personal assistant here, so a room local-two can open must never hear from it.
+  beforeEach(() => { created.store.savePresentation("shared", { shared: false, ownerId: "local-one" }); });
+  it("checks a room named for a profile even when the save removes the same room's plain token", async () => {
+    // Re-review repro 1: "crew" is open to everyone; the app's token goes, "room:crew@keeper" stays.
+    rows = [{ ...base, id: "abc123", enabled: false, roomIds: ["crew"], delivery: { deliver: "bot-chat:shared,room:crew,room:crew@keeper" } }];
+    const refused = await write({ ...base, enabled: true, roomIds: [] }, "abc123");
+    expect(refused.json().code).toBe("routine_rooms");
+    expect(save).not.toHaveBeenCalled();
+  });
+  it("refuses sharing a room's last personal member while a routine posts there for a profile", async () => {
+    // Re-review repro 2: local-one's personal "notes" posts in "den" only through "room:den@keeper".
+    rows = [{ ...base, botId: "notes", id: "notes1", enabled: true, roomIds: [], delivery: { deliver: "bot-chat:notes,room:den@keeper" } }];
+    const refused = await share("keeper", true);
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json().code).toBe("routine_rooms");
+  });
+  it("reads room tokens with the spacing Hermes trims", async () => {
+    // Re-review repro 3: Hermes delivers "room: crew" and "room: crew@keeper".
+    for (const deliver of ["bot-chat:shared,room: crew", "bot-chat:shared, room: crew@keeper"]) {
+      rows = [{ ...base, id: "abc123", enabled: false, roomIds: [], delivery: { deliver } }];
+      expect((await write({ ...base, enabled: true }, "abc123")).json().code).toBe("routine_rooms");
+    }
+    expect(save).not.toHaveBeenCalled();
+  });
+  it("checks failure_deliver, which Hermes uses for a failed run's notice", async () => {
+    // Re-review repro 5.
+    rows = [{ ...base, id: "abc123", enabled: false, roomIds: [], delivery: { deliver: "bot-chat:shared", failure_deliver: "room:crew" } }];
+    expect((await write({ ...base, enabled: true }, "abc123")).json().code).toBe("routine_rooms");
+    const resumed = await created.app.inject({ method: "PATCH", url: "/api/routines/abc123/state", headers: await localLogin(created.app, origin), payload: { enabled: true } });
+    expect(resumed.json().code).toBe("routine_rooms");
+  });
+  it("refuses to enable a routine whose delivery it cannot read", async () => {
+    rows = [{ ...base, id: "abc123", enabled: false, roomIds: [], delivery: { deliver: { room: "crew" } } }];
+    expect((await write({ ...base, enabled: true }, "abc123")).json().code).toBe("routine_rooms_unknown");
+    // Paused, it still saves.
+    expect((await write({ ...base, name: "Renamed" }, "abc123")).statusCode).toBe(200);
   });
 });

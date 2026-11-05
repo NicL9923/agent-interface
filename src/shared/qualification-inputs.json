@@ -44,6 +44,7 @@
   "src/server/computer.ts",
   "src/server/config.ts",
   "src/server/conversation-routes.ts",
+  "src/server/delivery-targets.ts",
   "src/server/discovery.ts",
   "src/server/effect-support.ts",
   "src/server/event-stream.ts",

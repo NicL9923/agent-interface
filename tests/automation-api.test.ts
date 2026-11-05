@@ -128,7 +128,7 @@ it("refuses a trigger that would run a routine posting where people who can't se
   const room = { room_id: 'lodge', name: 'Lodge', members: ['private', 'ranch'].map(profile => ({ member_id: profile, profile, handle: profile })) };
   const s = await setup({
     listBots: vi.fn(async () => [botFixture({id:'ranch',name:'Ranch'}), botFixture({id:'private',name:'Private'}), botFixture({id:'mine',name:'Mine'})]),
-    routines: async () => [{ id: 'gate-check', botId: 'mine', name: 'Gate check', prompt: 'Check', schedule: '1h', enabled: false, roomIds: [], roomTargets: ['lodge'] }],
+    routines: async () => [{ id: 'gate-check', botId: 'mine', name: 'Gate check', prompt: 'Check', schedule: '1h', enabled: false, roomIds: [], delivery: { deliver: 'room:lodge@private' } }],
     groupRequest: async () => ({ supported: true, canSend: true, routineDelivery: true, rooms: [room] }),
   });
   s.store.savePresentation('mine', { shared: false, ownerId: 'first' });
@@ -141,4 +141,16 @@ it("refuses a trigger that would run a routine posting where people who can't se
   // Turning a trigger off always goes ahead.
   const off = await s.app.inject({ method: 'PATCH', url: '/api/bots/mine/automation/triggers/gate', headers: admin, payload: { enabled: false, revision: 'a'.repeat(64) } });
   expect(off.statusCode).toBe(200);
+});
+
+it("refuses to turn on a trigger it cannot find to check, as one beyond the overview's 100", async () => {
+  // Re-review repro 4: the overview lists at most 100 triggers and the add-on has no single-trigger read.
+  const s = await setup({
+    routines: async () => [],
+    groupRequest: async () => ({ supported: true, canSend: true, routineDelivery: true, rooms: [] }),
+  });
+  const admin = { ...s.first, 'x-admin-fixture': 'yes' };
+  const refused = await s.app.inject({ method: 'PATCH', url: '/api/bots/ranch/automation/triggers/beyond-cap', headers: admin, payload: { enabled: true, revision: 'a'.repeat(64) } });
+  expect(refused.statusCode).toBe(409);
+  expect(s.automationRequest.mock.calls.some(([input]) => input.operation === 'trigger_toggle')).toBe(false);
 });
