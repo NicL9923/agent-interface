@@ -39,6 +39,8 @@ CONF_BACKUP = Path("/etc/nftables.conf.agent-interface.bak")
 # sudo skips files in sudoers.d whose names contain a dot, so the staged copy is never live.
 SUDOERS = Path("/etc/sudoers.d/agent-interface-metadata-floor")
 NFTABLES_DROPIN = Path("/etc/systemd/system/nftables.service.d/agent-interface-metadata-floor.conf")
+# Outside /etc/nftables.d, so a wildcard include in nftables.conf can never load its flush.
+STOP_FILE = Path("/etc/agent-interface/nftables-stop.nft")
 SYSTEMD = Path("/etc/systemd/system")
 DROPIN_NAME = "agent-interface-metadata-floor.conf"
 METADATA_V4 = "169.254.169.254"
@@ -46,6 +48,8 @@ METADATA_V6 = "fe80::a9fe:a9fe"
 DEFAULT_EGRESS = "github.com:443"
 BEGIN = "# BEGIN agent-interface metadata egress floor"
 END = "# END agent-interface metadata egress floor"
+# Markers are these exact whole lines; the same text elsewhere in a line is ordinary content.
+BEGIN_LINE = f"{BEGIN}: managed by .agents/tools/metadata-egress-floor.py."
 
 # Only these, arriving fast, prove a reject rule answered. Anything slower or different
 # is inconclusive: an unanswered SYN, a full file table (EMFILE) or ARP/ND failure.
@@ -125,10 +129,20 @@ After={UNIT}
 
 def nftables_dropin(nft):
     return f"""# Managed by agent-interface .agents/tools/metadata-egress-floor.py. Do not edit.
-# Debian's nftables.service flushes the whole ruleset when it stops, which a restart also
-# does. Reload only the floor's own table right after, from its idempotent file.
+# Debian's nftables.service stops with a bare "nft flush ruleset". This replaces it with one
+# transaction that flushes and reloads the floor, so no packet passes between the two.
 [Service]
-ExecStopPost={nft} -f {RULES}
+ExecStop=
+ExecStop={nft} -f {STOP_FILE}
+"""
+
+
+def stop_rules():
+    return f"""#!/usr/sbin/nft -f
+# Managed by agent-interface .agents/tools/metadata-egress-floor.py. Do not edit.
+# nftables.service stops with this file: the flush and the floor commit as one transaction.
+flush ruleset
+include "{RULES}"
 """
 
 
@@ -138,29 +152,42 @@ def sudoers(user, nft):
             f"{user} ALL=(root) NOPASSWD: {nft} -j list table inet {TABLE}\n")
 
 
+def marker_span(conf):
+    """Line indexes of the one BEGIN/END pair, None without markers; ValueError otherwise."""
+    lines = conf.splitlines()
+    begins = [number for number, line in enumerate(lines) if line.strip() == BEGIN_LINE]
+    ends = [number for number, line in enumerate(lines) if line.strip() == END]
+    if not begins and not ends:
+        return None
+    if len(begins) == len(ends) == 1 and begins[0] < ends[0]:
+        return begins[0], ends[0]
+    raise ValueError(f"{NFTABLES_CONF} has {len(begins)} BEGIN and {len(ends)} END agent-interface markers"
+                     f"{' out of order' if len(begins) == len(ends) == 1 else ''}. Fix them by hand to zero or one "
+                     f"ordered pair; nothing was changed.")
+
+
 def marker_problem(conf):
     """Why nftables.conf's markers are unsafe to edit, or None for zero or one ordered pair."""
-    lines = conf.splitlines()
-    begins = [number for number, line in enumerate(lines) if line.startswith(BEGIN)]
-    ends = [number for number, line in enumerate(lines) if line.strip() == END]
-    if (len(begins), len(ends)) == (0, 0) or (len(begins), len(ends)) == (1, 1) and begins[0] < ends[0]:
-        return None
-    return (f"{NFTABLES_CONF} has {len(begins)} BEGIN and {len(ends)} END agent-interface markers"
-            f"{' out of order' if len(begins) == len(ends) == 1 else ''}. Fix them by hand to zero or one "
-            f"ordered pair; nothing was changed.")
+    try:
+        marker_span(conf)
+    except ValueError as error:
+        return str(error)
+    return None
 
 
 def without_include(conf):
-    """The nftables.conf text with this tool's marked block removed."""
-    if marker_problem(conf):
-        raise ValueError(marker_problem(conf))
-    kept = re.sub(rf"\n*{re.escape(BEGIN)}.*?{re.escape(END)}\n?", "\n", conf, flags=re.DOTALL)
-    return kept.rstrip("\n") + "\n"
+    """The nftables.conf text without exactly the marked lines, and the blank lines just before them."""
+    span = marker_span(conf)
+    if span is None:
+        return conf.rstrip("\n") + "\n"
+    lines = conf.splitlines(keepends=True)
+    head, tail = "".join(lines[:span[0]]).rstrip("\n"), "".join(lines[span[1] + 1:]).strip("\n")
+    return "\n\n".join(part for part in (head, tail) if part) + "\n"
 
 
 def with_include(conf):
     """The block goes last, so it loads after any "flush ruleset" in the same transaction."""
-    block = (f"{BEGIN}: managed by .agents/tools/metadata-egress-floor.py.\n"
+    block = (f"{BEGIN_LINE}\n"
              f"# Keep this block last, after any flush ruleset.\n"
              f'include "{RULES}"\n{END}\n')
     return without_include(conf) + "\n" + block
@@ -411,6 +438,9 @@ def install(system, name, uid):
         system.write(NFTABLES_CONF, with_include(conf), system.path(NFTABLES_CONF).stat().st_mode & 0o777)
         changed.append(str(NFTABLES_CONF))
     validated(system, SUDOERS, sudoers(name, nft), ["visudo", "-c", "-f"], "Checking the sudo rule")
+    # Checked whole, flush included, before nftables.service can ever stop with it.
+    validated(system, STOP_FILE, stop_rules(), [nft, "-c", "-f"], "Checking the nftables stop file")
+    changed += [str(STOP_FILE)] if system.write(STOP_FILE, stop_rules()) else []
     units = [(UNIT_FILE, unit(nft)), (dropin(uid), user_dropin()), (NFTABLES_DROPIN, nftables_dropin(nft))]
     changed_units = [str(path) for path, text in units if system.write(path, text)]
     # A previous uid's requirement, wherever it came from, must not outlive its rules.
@@ -445,7 +475,7 @@ def remove(system):
     present = system.run([nft, "list", "table", "inet", TABLE]).returncode == 0
     if present:
         must(system, [nft, "delete", "table", "inet", TABLE], "Deleting the table")
-    removed += [str(path) for path in (UNIT_FILE, SUDOERS, RULES) if system.remove(path)]
+    removed += [str(path) for path in (UNIT_FILE, SUDOERS, STOP_FILE, RULES) if system.remove(path)]
     if str(UNIT_FILE) in removed:
         must(system, ["systemctl", "daemon-reload"], "Reloading systemd")
     return {"removed": True, "files": removed, "tableDeleted": present}
@@ -474,7 +504,7 @@ def evaluate(state):
     return {
         "filesCurrent": state["files"] == {
             str(RULES): rules(uid), str(UNIT_FILE): unit(state["nft"]), str(dropin(uid)): user_dropin(),
-            str(NFTABLES_DROPIN): nftables_dropin(state["nft"]),
+            str(NFTABLES_DROPIN): nftables_dropin(state["nft"]), str(STOP_FILE): stop_rules(),
             str(SUDOERS): sudoers(name, state["nft"])},
         "nftablesConfIncludesFloor": found["nftablesConfInclude"] or not must_include,
         "unitEnabled": state["enabled"] == "enabled",
@@ -500,7 +530,7 @@ def check(system, user=None, egress=DEFAULT_EGRESS):
     state = {
         "uid": uid, "user": name, "nft": nft, "mode": mode(system),
         "confExists": system.read(NFTABLES_CONF) is not None,
-        "files": {str(path): system.read(path) for path in (RULES, UNIT_FILE, dropin(uid), NFTABLES_DROPIN, SUDOERS)},
+        "files": {str(path): system.read(path) for path in (RULES, UNIT_FILE, dropin(uid), NFTABLES_DROPIN, STOP_FILE, SUDOERS)},
         "enabled": system.run(["systemctl", "is-enabled", UNIT]).stdout.strip(),
         "active": system.run(["systemctl", "is-active", UNIT]).stdout.strip(),
         "userManager": system.run(["systemctl", "show", user_manager(uid), "-p", "Requires", "-p", "After"]).stdout,

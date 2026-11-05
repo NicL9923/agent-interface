@@ -102,13 +102,14 @@ class Generated(unittest.TestCase):
         self.assertIn("Requires=agent-interface-metadata-floor.service", lines)
         self.assertIn("After=agent-interface-metadata-floor.service", lines)
 
-    def test_nftables_stop_reloads_only_the_floor_table(self):
-        lines = floor.nftables_dropin(NFT).splitlines()
-        self.assertIn("ExecStopPost=/usr/sbin/nft -f /etc/nftables.d/agent-interface-metadata.nft", lines)
-        self.assertEqual([line for line in lines if line.startswith("Exec")], [lines[-1]])
-        # Reloading the file after the flush is safe because it replaces only its own table.
-        self.assertIn("delete table inet agent_interface_metadata", floor.rules(1001))
-        self.assertNotIn("flush", floor.rules(1001).split("Never add")[1].split("\n", 1)[1])
+    def test_nftables_stops_with_one_flush_and_floor_transaction(self):
+        self.assertEqual([line for line in floor.nftables_dropin(NFT).splitlines() if line.startswith(("Exec", "["))],
+                         ["[Service]", "ExecStop=", "ExecStop=/usr/sbin/nft -f /etc/agent-interface/nftables-stop.nft"])
+        self.assertNotIn("ExecStopPost", floor.nftables_dropin(NFT))
+        statements = [line for line in floor.stop_rules().splitlines() if line and not line.startswith("#")]
+        self.assertEqual(statements, ["flush ruleset", 'include "/etc/nftables.d/agent-interface-metadata.nft"'])
+        # Kept out of /etc/nftables.d, where a wildcard include could load its flush at start.
+        self.assertNotEqual(floor.STOP_FILE.parent, floor.RULES.parent)
 
     def test_sudo_rule_allows_only_listing_this_table(self):
         self.assertEqual(floor.sudoers("nicolas", NFT).splitlines()[-1],
@@ -233,7 +234,7 @@ class Install(unittest.TestCase):
         self.assertFalse(any(call[1:2] in (["stop"], ["restart"]) or "--now" in call for call in self.system.calls))
         self.assertIn([NFT, "delete", "table", "inet", floor.TABLE], self.system.calls)
         self.assertEqual(self.conf().read_text(), UBUNTU_CONF)
-        for path in (floor.RULES, floor.UNIT_FILE, floor.dropin(1001), floor.NFTABLES_DROPIN, floor.SUDOERS):
+        for path in (floor.RULES, floor.UNIT_FILE, floor.dropin(1001), floor.NFTABLES_DROPIN, floor.STOP_FILE, floor.SUDOERS):
             self.assertFalse(self.file(path).exists(), path)
 
     def test_remove_finds_every_user_manager_requirement_without_the_rules_file(self):
@@ -259,6 +260,30 @@ class Install(unittest.TestCase):
         self.assertFalse(self.file(floor.dropin(1002)).exists())
         self.assertTrue(self.file(floor.dropin(1001)).exists())
 
+    def test_install_validates_and_writes_the_nftables_stop_file(self):
+        floor.install(self.system, "nicolas", 1001)
+        self.assertIn([NFT, "-c", "-f", "/etc/agent-interface/nftables-stop.nft.check"], self.system.calls)
+        self.assertEqual(self.file(floor.STOP_FILE).read_text(), floor.stop_rules())
+        self.system.replies[(NFT, "-c", "-f", "/etc/agent-interface/nftables-stop.nft.check")] = (1, "")
+        self.file(floor.STOP_FILE).unlink()
+        with self.assertRaisesRegex(SystemExit, "Checking the nftables stop file failed"):
+            floor.install(self.system, "nicolas", 1001)
+        self.assertFalse(self.file(floor.STOP_FILE).exists())
+
+    def test_marker_text_inside_other_lines_is_ordinary_content(self):
+        # The review's repro: a comment quoting the marker, then an unrelated table, then a real block.
+        unrelated = "table inet keep_me {\n\tchain output { type filter hook output priority 0; }\n}\n"
+        mixed = UBUNTU_CONF + f"# See the note about {floor.BEGIN} below.\n" + unrelated
+        installed = floor.with_include(mixed)
+        self.assertEqual(floor.marker_span(installed)[1], len(installed.splitlines()) - 1)
+        self.assertEqual(floor.without_include(installed), mixed)
+        self.conf().write_text(installed)
+        floor.install(self.system, "nicolas", 1001)
+        self.assertEqual(self.conf().read_text(), installed)
+        floor.remove(self.system)
+        self.assertEqual(self.conf().read_text(), mixed)
+        self.assertIn("table inet keep_me", self.conf().read_text())
+
     def test_damaged_markers_refuse_install_and_remove_without_changing_anything(self):
         installed = floor.with_include(UBUNTU_CONF)
         user_rules = "table inet user_rules {\n\tchain forward { type filter hook forward priority 0; }\n}\n"
@@ -266,9 +291,9 @@ class Install(unittest.TestCase):
             # The review's repro: END deleted, then rules added below the old block.
             "missing END": installed.replace(floor.END + "\n", "") + user_rules,
             "missing BEGIN": installed.replace(installed[installed.index(floor.BEGIN):].splitlines()[0] + "\n", ""),
-            "END before BEGIN": UBUNTU_CONF + floor.END + "\n" + user_rules + floor.BEGIN + "\n",
+            "END before BEGIN": UBUNTU_CONF + floor.END + "\n" + user_rules + floor.BEGIN_LINE + "\n",
             "two blocks": installed + user_rules + installed[installed.index(floor.BEGIN):],
-            "nested": installed.replace(floor.END, floor.BEGIN + "\n" + floor.END + "\n" + floor.END),
+            "nested": installed.replace(floor.END, floor.BEGIN_LINE + "\n" + floor.END + "\n" + floor.END),
         }
         for label, text in damaged.items():
             with self.subTest(label):

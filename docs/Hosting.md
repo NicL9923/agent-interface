@@ -82,14 +82,20 @@ untouched.
   the same transaction as the flush, and any `nftables.service` start, restart or
   reload brings it back with no gap. The tool backs up the original file once to
   `/etc/nftables.conf.agent-interface.bak` and checks the edited file with
-  `nft -c` before writing it. It edits the file only when it holds no markers, or
-  exactly one BEGIN line followed by one END line. Otherwise it refuses and
-  changes nothing, so a damaged marker can never make it delete other rules.
-- Debian's `nftables.service` runs `nft flush ruleset` when it stops, and a
+  `nft -c` before writing it. The markers are exact whole lines. The same text
+  inside another line is ordinary content. The tool edits the file only when it
+  holds no markers, or exactly one BEGIN line followed by one END line, and then
+  removes exactly those lines. Otherwise it refuses and changes nothing, so a
+  damaged or quoted marker can never make it delete other rules.
+- Debian's `nftables.service` stops with a bare `nft flush ruleset`, and a
   restart stops it first. A managed drop-in,
   `/etc/systemd/system/nftables.service.d/agent-interface-metadata-floor.conf`,
-  adds `ExecStopPost=` to reload the floor file right after that flush. The file
-  replaces only its own table, so loading it again is always safe.
+  clears that `ExecStop=`. It runs `nft -f /etc/agent-interface/nftables-stop.nft`
+  instead, which holds `flush ruleset` and an include of the floor file. The flush
+  and the floor commit as one transaction, so no packet passes between them, and
+  a stopped nftables leaves only the floor loaded. The stop file is checked with
+  `nft -c` at install. It lives outside `/etc/nftables.d`, so a wildcard include
+  there can never load its flush.
 - The root oneshot `agent-interface-metadata-floor.service` loads the rules at boot
   either way, after `nftables.service` and `ufw.service`. It does not follow
   `nftables.service`: the include already covers that, and following it would
@@ -151,7 +157,7 @@ every managed `user@*.service.d` drop-in by name rather than trusting the rules
 file, so it also works when that file is missing. It never stops a unit.
 
 When this was written, the household host had `nftables.service` disabled, so
-the boot unit is what loads the floor there. The include and the stop hook only
+the boot unit is what loads the floor there. The include and the stop file only
 take effect if nftables is enabled later. None of this stops root: an
 administrator can still delete the table on purpose, and readiness and release
 checks report it when that happens.
