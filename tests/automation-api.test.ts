@@ -154,3 +154,20 @@ it("refuses to turn on a trigger it cannot find to check, as one beyond the over
   expect(refused.statusCode).toBe(409);
   expect(s.automationRequest.mock.calls.some(([input]) => input.operation === 'trigger_toggle')).toBe(false);
 });
+
+it("checks the trigger's own assistant's routine when another assistant has a job with the same ID", async () => {
+  // A harmless default-profile copy is listed first; the private "mine" copy posts in "lodge", which only the second member opens.
+  const room = { room_id: 'lodge', name: 'Lodge', members: ['private', 'ranch'].map(profile => ({ member_id: profile, profile, handle: profile })) };
+  const s = await setup({
+    listBots: vi.fn(async () => [botFixture({id:'ranch',name:'Ranch'}), botFixture({id:'private',name:'Private'}), botFixture({id:'mine',name:'Mine'})]),
+    routines: async () => [
+      { id: 'gate-check', botId: 'ranch', name: 'Gate check', prompt: 'Check', schedule: '1h', enabled: false, roomIds: [] },
+      { id: 'gate-check', botId: 'mine', name: 'Gate check', prompt: 'Check', schedule: '1h', enabled: false, roomIds: [], delivery: { deliver: 'room:lodge' } }],
+    groupRequest: async () => ({ supported: true, canSend: true, routineDelivery: true, rooms: [room] }),
+  });
+  s.store.savePresentation('mine', { shared: false, ownerId: 'first' });
+  const admin = { ...s.first, 'x-admin-fixture': 'yes' };
+  const created = await s.app.inject({ method: 'POST', url: '/api/bots/mine/automation/triggers', headers: admin, payload: { id: 'gate', description: 'Gate', events: ['gate.open'], routineId: 'gate-check' } });
+  expect(created.statusCode).toBe(409);
+  expect(s.automationRequest.mock.calls.some(([input]) => input.operation === 'trigger_create')).toBe(false);
+});

@@ -311,3 +311,28 @@ describe("every delivery field Hermes honors, read as Hermes reads it", () => {
     expect((await write({ ...base, name: "Renamed" }, "abc123")).statusCode).toBe(200);
   });
 });
+
+describe("lookups, catalogs and whitespace exactly as Hermes has them", () => {
+  beforeEach(() => { created.store.savePresentation("shared", { shared: false, ownerId: "local-one" }); });
+  it("checks the named assistant's routine when another assistant has a job with the same ID", async () => {
+    // A harmless copy on "planner" is listed first; "shared"'s copy posts in "crew", which everyone opens.
+    rows = [{ ...base, botId: "planner", id: "dup", enabled: false, roomIds: [] },
+      { ...base, id: "dup", enabled: false, roomIds: ["crew"], delivery: { deliver: "bot-chat:shared,room:crew" } }];
+    expect((await write({ ...base, enabled: true }, "dup")).json().code).toBe("routine_rooms");
+    // An ID-only route cannot tell two visible copies apart, so it changes neither.
+    const resumed = await created.app.inject({ method: "PATCH", url: "/api/routines/dup/state", headers: await localLogin(created.app, origin), payload: { enabled: true } });
+    expect(resumed.json().code).toBe("routine_ambiguous");
+    expect(save).not.toHaveBeenCalled();
+  });
+  it("refuses delivery and sharing changes when Hermes offers no room catalog", async () => {
+    catalog = { supported: false, canSend: false, rooms: [] };
+    rows = [{ ...base, id: "abc123", enabled: false, roomIds: ["crew"], delivery: { deliver: "bot-chat:shared,room:crew" } }];
+    expect((await write({ ...base, enabled: true }, "abc123")).json().code).toBe("routine_rooms_unknown");
+    expect((await share("planner", false)).json().code).toBe("routine_rooms_unknown");
+    expect(save).not.toHaveBeenCalled();
+  });
+  it("reads a target Hermes trims with Python whitespace", async () => {
+    rows = [{ ...base, id: "abc123", enabled: false, roomIds: [], delivery: { deliver: "bot-chat:shared,\u001croom:\u0085crew" } }];
+    expect((await write({ ...base, enabled: true }, "abc123")).json().code).toBe("routine_rooms");
+  });
+});

@@ -28,11 +28,11 @@ export function roomAccessible(room: GroupRoom, visible: (profile: string) => bo
  */
 export async function openableRooms(runtime: Pick<Runtime, 'groupRequest' | 'listBots'>, store: Store, userId: string) {
   const catalog = runtime.groupRequest ? await runtime.groupRequest({ operation: 'list' }) as GroupCatalog : undefined;
-  if (!catalog?.supported) return { rooms: new Map<string, GroupRoom>(), all: new Map<string, GroupRoom>(), presentation: () => undefined, routineDelivery: false };
+  if (!catalog?.supported) return { supported: false, rooms: new Map<string, GroupRoom>(), all: new Map<string, GroupRoom>(), presentation: () => undefined, routineDelivery: false };
   const presentation = await presentations(runtime, store);
   const allowed = (profile: string) => { const bot = presentation(profile); return !!bot && visible(bot, userId); };
   return { rooms: new Map(catalog.rooms.filter(room => roomAccessible(room, allowed)).map(room => [room.room_id, room])),
-    all: new Map(catalog.rooms.map(room => [room.room_id, room])), presentation, routineDelivery: catalog.routineDelivery === true };
+    all: new Map(catalog.rooms.map(room => [room.room_id, room])), presentation, routineDelivery: catalog.routineDelivery === true, supported: true };
 }
 
 /** One person's view of routine and run errors: none that name a room they cannot open or an assistant they cannot see. */
@@ -85,6 +85,8 @@ export async function assertDeliveryPrivate(runtime: Pick<Runtime, 'groupRequest
   let open: Awaited<ReturnType<typeof openableRooms>>;
   try { open = await openableRooms(runtime, store, ''); }
   catch { throw unknown(); }
+  // Without Hermes's room catalog nobody can say who opens these rooms.
+  if (!open.supported) throw unknown();
   const bot = open.presentation(botId);
   if (roomIds.some(roomId => { const room = open.all.get(roomId); return !!room && roomLeaks(bot, room, open.presentation); }))
     throw httpError(409, "This routine posts in a group chat that people who can't see its assistant could open, so it can't run. Pause it, or have someone who can open that group chat remove it from the routine.", { code: 'routine_rooms' });
@@ -110,7 +112,7 @@ export async function routineRooms(runtime: Pick<Runtime, 'groupRequest' | 'list
   const chosen = [...new Set(input.roomIds)];
   const open = await openableRooms(runtime, store, userId).catch(error => {
     if (chosen.length) throw error;
-    return { rooms: new Map<string, GroupRoom>(), all: new Map<string, GroupRoom>(), presentation: (): Presentation | undefined => undefined, routineDelivery: false };
+    return { supported: false, rooms: new Map<string, GroupRoom>(), all: new Map<string, GroupRoom>(), presentation: (): Presentation | undefined => undefined, routineDelivery: false };
   });
   if (chosen.length && !open.routineDelivery) throw httpError(409, 'This Hermes version cannot post routine results in group chats.');
   if (chosen.some(roomId => !open.rooms.has(roomId))) throw httpError(400, 'Choose group chats you can open.');

@@ -43,14 +43,16 @@ export async function installAutomationRoutes(app: FastifyInstance, runtime: Run
   apiRoute(app, "PUT /bots/:id/automation/tasks/:taskId/dependencies/:dependencyId", { body: z.object({ remove: z.boolean() }).strict() }, async (req, body) => request(req, { operation: 'task_dependency', ...z.object({ taskId: id, dependencyId: id }).parse(req.params), ...body }));
   // An event trigger runs its routine, which then delivers, so the routine's rooms are checked as Hermes has
   // them, in turn with sharing changes and routine saves. Turning a trigger off always goes ahead.
-  const delivering = async <T>(routineId: string, work: () => Promise<T>) => !runtime.groupRequest ? work() : serialDelivery(store, async () => {
-    const routine = (await runtime.routines()).find(row => row.id === routineId);
+  const delivering = async <T>(req: FastifyRequest, routineId: string, work: () => Promise<T>) => !runtime.groupRequest ? work() : serialDelivery(store, async () => {
+    // The trigger runs the routine in its own assistant's profile, so that assistant's copy is the one checked.
+    const profile = z.object({ id }).parse(req.params).id;
+    const routine = (await runtime.routines()).find(row => row.id === routineId && row.botId === profile);
     // A routine the app cannot find cannot be checked, so the trigger is refused.
     await assertDeliveryPrivate(runtime, store, routine?.botId ?? '', routine && routineTargets(routine));
     return work();
   });
-  apiRoute(app, "POST /bots/:id/automation/triggers", { body: z.object({ id: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,79}$/), ...triggerFields }).strict() }, async (req, trigger, reply) => { reply.header('Cache-Control', 'no-store'); return delivering(trigger.routineId, () => request(req, { operation: 'trigger_create', trigger })); });
-  apiRoute(app, "PUT /bots/:id/automation/triggers/:triggerId", { body: z.object({ ...triggerFields, revision }).strict() }, async (req, { revision: expectedRevision, ...fields }) => delivering(fields.routineId, () => request(req, { operation: 'trigger_update', trigger: { id: z.object({ triggerId: id }).parse(req.params).triggerId, ...fields }, revision: expectedRevision })));
+  apiRoute(app, "POST /bots/:id/automation/triggers", { body: z.object({ id: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,79}$/), ...triggerFields }).strict() }, async (req, trigger, reply) => { reply.header('Cache-Control', 'no-store'); return delivering(req, trigger.routineId, () => request(req, { operation: 'trigger_create', trigger })); });
+  apiRoute(app, "PUT /bots/:id/automation/triggers/:triggerId", { body: z.object({ ...triggerFields, revision }).strict() }, async (req, { revision: expectedRevision, ...fields }) => delivering(req, fields.routineId, () => request(req, { operation: 'trigger_update', trigger: { id: z.object({ triggerId: id }).parse(req.params).triggerId, ...fields }, revision: expectedRevision })));
   apiRoute(app, "PATCH /bots/:id/automation/triggers/:triggerId", { body: z.object({ enabled: z.boolean(), revision }).strict() }, async (req, body) => {
     const triggerId = z.object({ triggerId: id }).parse(req.params).triggerId;
     const toggle = () => request(req, { operation: 'trigger_toggle', triggerId, ...body });
@@ -60,7 +62,7 @@ export async function installAutomationRoutes(app: FastifyInstance, runtime: Run
     const overview = await request(req, { operation: 'overview' });
     const routineId = overview.triggers.items.find(item => item.id === triggerId)?.routineId;
     if (!routineId) throw httpError(409, "WildBots couldn't find this trigger's routine to check where it posts, so the trigger stays off. Turn it on in Hermes.", { code: 'routine_rooms_unknown' });
-    return delivering(routineId, toggle);
+    return delivering(req, routineId, toggle);
   });
   apiRoute(app, "DELETE /bots/:id/automation/triggers/:triggerId", { body: z.object({ revision }).strict() }, async (req, body) => request(req, { operation: 'trigger_delete', triggerId: z.object({ triggerId: id }).parse(req.params).triggerId, ...body }));
   apiRoute(app, "GET /bots/:id/automation/skills/content", {}, async req => request(req, { operation: 'skill_content', ...z.object({ name: z.string().regex(/^[A-Za-z0-9_./-]{1,200}$/).refine(name => !name.split('/').some(part => part === '..' || !part)) }).strict().parse(req.query) }));

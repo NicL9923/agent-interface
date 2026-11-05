@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { agentEnvelope } from "../shared/collaboration.js";
 import type { Bot, Message, Runtime, ToolCall } from "../shared/types.js";
 import { routePattern } from "./route-path.js";
+import { httpError } from "./http-error.js";
 import type { Store } from "./store.js";
 declare module "fastify" { interface FastifyRequest { privacyVersion?: number; assistantId?: string } }
 
@@ -25,6 +26,17 @@ export async function visibleBots(runtime: Pick<Runtime, "listBots">, store: Sto
 }
 
 export const notFound = { error: "Assistant not found", code: "assistant_not_found" } as const;
+
+/**
+ * The routine a route that names only its ID acts on. Hermes lets two assistants hold jobs with the same
+ * ID, so the ID alone can name several: it means the one this person can see, and Hermes is then told its
+ * assistant. A copy they cannot see is never chosen or revealed, and two they can see are ambiguous.
+ */
+export function routineById<T extends { id: string; botId: string }>(routines: T[], routineId: string, store: Store, userId: string): T | undefined {
+  const seen = routines.filter(routine => routine.id === routineId && visibleTo(store, routine.botId, userId));
+  if (seen.length > 1) throw httpError(409, "More than one of your assistants has a routine with this ID. Change it from that assistant's routines.", { code: "routine_ambiguous" });
+  return seen[0];
+}
 
 // Only a genuine signature names a file's assistant, so a forged ID naming a private one
 // fails exactly like any other forged ID. A runtime without signatures, as in tests,
@@ -264,12 +276,13 @@ export function installBotAccess(app: FastifyInstance, store: Store, runtime: Pi
     const scope = assistantRoutes[key(req.method, routePattern(req))];
     if (scope?.startsWith("routine")) {
       const routineId = (req.params as { id?: string }).id;
-      const row = (await runtime.routines()).find(routine => routine.id === routineId);
+      // Refused only when every routine with this ID is hidden; the handler acts on the one this person sees.
+      const rows = (await runtime.routines()).filter(routine => routine.id === routineId);
       // A trial remembers its assistant even after its routine is deleted.
       const requestId = (req.params as { requestId?: unknown }).requestId ?? (req.body as { requestId?: unknown } | undefined)?.requestId;
       const trial = typeof requestId === "string" ? store.routineTrial(requestId) : undefined;
       // A missing routine is the handler's 404, worded the same.
-      if (row && hidden(req, row.botId) || trial && hidden(req, trial.botId)) return reply.code(404).send({ error: "Routine not found" });
+      if (rows.length && rows.every(row => hidden(req, row.botId)) || trial && hidden(req, trial.botId)) return reply.code(404).send({ error: "Routine not found" });
     }
     if (scope === "body" || scope === "routine and body") {
       req.assistantId ??= named(req.body);

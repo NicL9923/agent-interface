@@ -357,7 +357,8 @@ export async function createApp(
     routineId?: string,
   ) => {
     const all = routineId || input.contextFrom?.some(ref => ref !== 'self') ? await runtime.routines() : [];
-    const previous = routineId ? all.find(row => row.id === routineId) : undefined;
+    // Hermes lets two assistants hold jobs with one ID; this save is for the named assistant's.
+    const previous = routineId ? all.find(row => row.id === routineId && row.botId === input.botId) : undefined;
     if (routineId && (!previous || previous.botId !== input.botId)) throw httpError(404, "Routine not found");
     // Compare against native state before forwarding updates. This also preserves
     // uneditable settings and avoids revalidating an untouched, missing script/source.
@@ -399,7 +400,7 @@ export async function createApp(
     // with sharing changes, which recheck routine rooms.
     const routine = await serialDelivery(store, async () => {
       // Read again in this turn: a save or sharing change ahead in the queue may have changed its rooms.
-      const current = routineId ? (await runtime.routines()).find(row => row.id === routineId) : undefined;
+      const current = routineId ? (await runtime.routines()).find(row => row.id === routineId && row.botId === input.botId) : undefined;
       if (routineId && (!current || current.botId !== input.botId)) throw httpError(404, "Routine not found");
       if (input.roomIds !== undefined) {
         const rooms = await routineRooms(runtime, store, userId, input, current?.roomIds);

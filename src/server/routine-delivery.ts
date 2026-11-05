@@ -91,7 +91,9 @@ export async function assertRoutinesStayPrivate(runtime: Runtime, store: Store, 
   let catalog: GroupCatalog;
   try { catalog = await runtime.groupRequest({ operation: "list" }) as GroupCatalog; }
   catch { throw unreadable(); }
-  const rooms = new Map((catalog.supported ? catalog.rooms : []).map(room => [room.room_id, room]));
+  // Routines post in rooms, so a catalog Hermes does not offer is as unreadable as one that failed.
+  if (!catalog?.supported || !Array.isArray(catalog.rooms)) throw unreadable();
+  const rooms = new Map(catalog.rooms.map(room => [room.room_id, room]));
   const after = (id: string) => id === botId ? next : current(id);
   const conflicts = routines.flatMap(routine => targets.get(routine)!.flatMap(roomId => {
     const room = rooms.get(roomId);

@@ -6,7 +6,7 @@ import { signedIn } from './auth.js';
 import type { Runtime } from '../shared/types.js';
 import type { HistoryPage, AutomationOverview, SearchHit, SavedItem, Starter, UsageSummary } from '../shared/discovery.js';
 import type { Store } from './store.js';
-import { notFound, redactAgents, Roster, visibleBots } from './bot-access.js';
+import { notFound, redactAgents, Roster, routineById, visibleBots } from './bot-access.js';
 import { httpError } from './http-error.js';
 import { id } from './schemas.js';
 import { assertDeliveryPrivate, routinesFor } from './collaboration.js';
@@ -75,14 +75,15 @@ export async function installDiscoveryRoutes(app: FastifyInstance, runtime: Runt
   apiRoute(app, "DELETE /saved/:id", {}, async req => { store.deleteSavedItem(signedIn(req).id, z.object({ id }).parse(req.params).id); return { ok: true }; });
   apiRoute(app, "PATCH /routines/:id/state", { body: z.object({enabled:z.boolean()}).strict() }, async (req, { enabled }) => {
     const routineId = z.object({id}).parse(req.params).id;
-    const row=(await runtime.routines()).find(row=>row.id===routineId);
+    const row=routineById(await runtime.routines(),routineId,store,signedIn(req).id);
     if(!row)throw httpError(404,'Routine not found');
     await bot(signedIn(req).id,row.botId);await assertRoutineEditable(runtime,store,routineId);
     if(!runtime.setRoutineEnabled)throw httpError(409,'This integration cannot change routine state independently.');
     // Resuming lets it deliver, so its rooms are checked as Hermes has them now; pausing always goes ahead.
     await serialDelivery(store, async () => {
       if (enabled) {
-        const current = (await runtime.routines()).find(other => other.id === routineId);
+        // The same assistant's routine Hermes is told to resume, read again in this turn.
+        const current = (await runtime.routines()).find(other => other.id === routineId && other.botId === row.botId);
         if (!current) throw httpError(404, 'Routine not found');
         await assertDeliveryPrivate(runtime, store, current.botId, routineTargets(current));
       }

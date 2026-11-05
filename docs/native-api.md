@@ -211,7 +211,11 @@ came from. That includes rooms you cannot see and targets written outside the ap
 `PATCH /api/routines/:id/state` with `enabled: true`, `POST /api/routines/:id/run`, and creating,
 changing or turning on an event trigger for it. If a room would expose the routine, these answer 409
 with `code: "routine_rooms"`. If the rooms, the routine or a trigger's routine cannot be read, they answer
-`code: "routine_rooms_unknown"`, including a trigger beyond the 100 the automation overview lists. Pausing,
+`code: "routine_rooms_unknown"`, including a trigger beyond the 100 the automation overview lists and a
+Hermes that offers no room catalog. Hermes lets two assistants hold jobs with one ID: a save checks the
+named assistant's routine and a trigger its own assistant's, and `PATCH /api/routines/:id/state` and
+`POST /api/routines/:id/run` act on the one you can see, answering 409 with `code: "routine_ambiguous"`
+when you can see two. Pausing,
 saving a paused routine and turning a trigger off always go ahead. `PATCH /api/bots/:id` refuses a sharing change that
 would let a routine post where people who cannot see its assistant read it, such as making an
 assistant personal while its routine posts in a room others can open, or sharing the last personal

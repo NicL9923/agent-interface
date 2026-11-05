@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { deliverRooms, deliveryRooms, parseRoomToken, routineTargetsAfter, withDeliverRooms } from '../src/server/delivery-targets';
+import { deliverRooms, deliveryRooms, parseRoomToken, PYTHON_WHITESPACE, routineTargetsAfter, strip, withDeliverRooms } from '../src/server/delivery-targets';
 
 // Cases from Hermes 3a1e9ef's own rules and tests: cron/scheduler_delivery_room.py (parse_room_deliver_token,
 // _ROOM_TOKEN_RE), tests/cron/test_cron_room_delivery.py, cron/scheduler_delivery.py (_normalize_deliver_value,
@@ -72,5 +72,25 @@ describe("the app's own rooms", () => {
     expect(routineTargetsAfter(current, 'shared', []).rooms.sort()).toEqual(['alerts', 'den']);
     expect(routineTargetsAfter(undefined, 'shared', ['team'])).toEqual({ rooms: ['team'], unknown: false });
     expect(routineTargetsAfter({ delivery: { deliver: 42n } }, 'shared', ['team']).unknown).toBe(true);
+  });
+});
+
+describe("Python's str.strip(), which Hermes trims targets with", () => {
+  it('strips exactly the characters str.isspace() accepts', () => {
+    // Generated with Python 3.14:
+    //   python3 -c "import sys; print(''.join('\\u%04x' % ord(c) for c in map(chr, range(sys.maxunicode + 1)) if c.isspace()))"
+    // which prints these 29 characters.
+    const python = '\u0009\u000a\u000b\u000c\u000d\u001c\u001d\u001e\u001f \u0085                 　';
+    expect([...PYTHON_WHITESPACE].sort()).toEqual([...python].sort());
+    for (const space of python) expect(strip(`${space}x${space}`)).toBe('x');
+    // JavaScript's trim() strips U+FEFF, which Python keeps.
+    expect(strip('﻿x')).toBe('﻿x');
+  });
+  it('reads room tokens Hermes resolves after Python whitespace, and not ones it does not', () => {
+    expect(parseRoomToken('room:\u0085crew')).toBe('crew');
+    expect(parseRoomToken('\u001croom:crew')).toBe('crew');
+    expect(parseRoomToken('﻿room:crew')).toBeNull();
+    expect(deliveryRooms({ deliver: 'bot-chat:shared,\u001froom:crew\u0085' }).rooms).toEqual(['crew']);
+    expect(deliveryRooms({ deliver: 'local', failure_deliver: '\u001c' }).rooms).toEqual([]);
   });
 });

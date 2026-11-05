@@ -8,7 +8,7 @@ import { replyCardsFromText, validReplyCardState } from '../shared/reply-cards.j
 import { routinePresets } from '../shared/routine-presets.js';
 import type { Store } from './store.js';
 import { isConversationReply } from '../shared/message-origin.js';
-import { notFound, redactAgents, Roster, visibleBots } from './bot-access.js';
+import { notFound, redactAgents, Roster, routineById, visibleBots } from './bot-access.js';
 import { nameRequesters } from './vault.js';
 import { contentEtag } from './etag.js';
 import { httpError } from './http-error.js';
@@ -149,8 +149,8 @@ export async function installExperienceRoutes(app: FastifyInstance, runtime: Run
   apiRoute(app, "POST /routines/preview", { body: z.object({ botId: id, schedule: z.string().trim().min(1).max(500) }).strict() }, async (req, body) => {
     return request({ operation: 'preview', profile: body.botId, schedule: body.schedule });
   });
-  const routine = async (routineId: string) => {
-    const row = (await runtime.routines()).find(routine => routine.id === routineId);
+  const routine = async (routineId: string, userId: string) => {
+    const row = routineById(await runtime.routines(), routineId, store, userId);
     if (!row) throw httpError(404, 'Routine not found');
     return row;
   };
@@ -159,11 +159,12 @@ export async function installExperienceRoutes(app: FastifyInstance, runtime: Run
     const userId = signedIn(req).id;
     const previous = store.routineTrial(requestId);
     if (previous && (previous.userId !== userId || previous.routineId !== params.id)) throw httpError(409, 'This trial request ID belongs to a different routine or person');
-    const row = previous ? { botId: previous.botId, id: previous.routineId } : await routine(params.id);
+    const row = previous ? { botId: previous.botId, id: previous.routineId } : await routine(params.id, userId);
     // A trial delivers like a scheduled run, so its rooms are checked as Hermes has them now, in turn with
     // sharing changes and routine saves.
     const receipt = await serialDelivery(store, async () => {
-      const current = (await runtime.routines()).find(other => other.id === row.id);
+      // The same assistant's routine Hermes runs, read again in this turn.
+      const current = (await runtime.routines()).find(other => other.id === row.id && other.botId === row.botId);
       // A retried trial whose routine Hermes no longer has, such as a one-shot routine that removed itself,
       // cannot run again and only reads its receipt. Any other routine the app cannot find is refused.
       if (current || !previous) await assertDeliveryPrivate(runtime, store, row.botId, current && routineTargets(current));

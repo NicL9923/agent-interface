@@ -10,6 +10,15 @@ export interface RoutineDelivery { deliver?: unknown; failure_deliver?: unknown;
 /** The rooms a routine posts in, by room identity, or `unknown` when Hermes's reading cannot be mirrored. */
 export type DeliveryRooms = { rooms: string[]; unknown: false } | { rooms: string[]; unknown: true };
 
+/**
+ * Python's str.strip(): the characters str.isspace() accepts, which JavaScript's trim() does not match
+ * exactly (Python adds U+001C to U+001F and U+0085; JavaScript adds U+FEFF). tests/delivery-targets.test.ts
+ * lists how the set was generated.
+ */
+export const PYTHON_WHITESPACE = "\t\n\v\f\r\u001c\u001d\u001e\u001f \u0085\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000";
+const edges = new RegExp(`^[${PYTHON_WHITESPACE}]+|[${PYTHON_WHITESPACE}]+$`, "gu");
+export function strip(text: string): string { return text.replace(edges, ""); }
+
 // _ROOM_TOKEN_RE: a room ID, then an optional @<profile> naming the gateway that hosts it.
 const ROOM_ADDRESS = /^(?<room>[A-Za-z0-9][A-Za-z0-9._:-]*)(?:@(?<profile>[A-Za-z0-9_-]+))?$/;
 const ROOM_PREFIX = "room:";
@@ -19,9 +28,9 @@ const ROOM_PREFIX = "room:";
  * address; a malformed room token gives "" (Hermes skips it); anything else gives null.
  */
 export function parseRoomToken(part: string): string | null {
-  const raw = part.trim();
+  const raw = strip(part);
   if (!raw.toLowerCase().startsWith(ROOM_PREFIX)) return null;
-  const rest = raw.slice(ROOM_PREFIX.length).trim();
+  const rest = strip(raw.slice(ROOM_PREFIX.length));
   return ROOM_ADDRESS.test(rest) ? rest : "";
 }
 /** The room an address names. `den` and `den@keeper` are the same room. */
@@ -39,7 +48,7 @@ function normalize(value: unknown): string | undefined {
   if (typeof value === "number") return String(value);
   if (Array.isArray(value)) {
     if (!value.every(item => typeof item === "string" || typeof item === "number")) return undefined;
-    const parts = value.map(item => String(item).trim()).filter(Boolean);
+    const parts = value.map(item => strip(String(item))).filter(Boolean);
     return parts.length ? parts.join(",") : "local";
   }
   return undefined;
@@ -52,7 +61,7 @@ function normalize(value: unknown): string | undefined {
 function lanes(job: RoutineDelivery): unknown[] {
   const success = "deliver" in job ? job.deliver : "local";
   const failure = job.failure_deliver;
-  const failureSet = failure !== null && failure !== undefined && (typeof failure !== "string" || failure.trim() !== "");
+  const failureSet = failure !== null && failure !== undefined && (typeof failure !== "string" || strip(failure) !== "");
   return failureSet ? [success, failure] : [success];
 }
 
@@ -87,7 +96,7 @@ export function deliveryRooms(job: RoutineDelivery): DeliveryRooms {
     if (value === undefined) { unknown = true; continue; }
     if (value === "local") continue;
     for (const raw of value.split(",")) {
-      const part = raw.trim();
+      const part = strip(raw);
       if (!part) continue;
       const address = parseRoomToken(part);
       if (address !== null) {
@@ -122,7 +131,7 @@ export function deliverRooms(deliver: unknown): string[] {
 export function withDeliverRooms(deliver: unknown, roomIds: string[]): string | undefined {
   const value = normalize(deliver);
   if (value === undefined) return undefined;
-  const parts = value === "local" ? [] : value.split(",").map(part => part.trim()).filter(Boolean);
+  const parts = value === "local" ? [] : value.split(",").map(part => strip(part)).filter(Boolean);
   const others = parts.filter(part => { const address = parseRoomToken(part); return !(address && !address.includes("@")) && part !== "local"; });
   const targets = [...others, ...[...new Set(roomIds)].map(id => `room:${id}`)];
   return targets.length ? targets.join(",") : "local";
