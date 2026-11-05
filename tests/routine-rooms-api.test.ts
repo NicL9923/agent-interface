@@ -342,6 +342,20 @@ describe("lookups, catalogs and whitespace exactly as Hermes has them", () => {
 describe("routes that name only a routine ID, when two assistants hold jobs with it", () => {
   // "diary" is local-two's personal assistant, so its copy of "dup" is hidden from local-one.
   beforeEach(() => { deleteRoutine.mockClear(); rows = [{ ...base, botId: "diary", id: "dup", roomIds: [] }, { ...base, botId: "planner", id: "dup", roomIds: [] }]; });
+  it("deletes only once when two deletions of the visible copy race, never the hidden one", async () => {
+    // As Hermes's _job_owner_profile does: the profile is a hint, and a job missing there is found elsewhere.
+    deleteRoutine.mockImplementation(async (id: string, botId: string) => {
+      await new Promise(resolve => setTimeout(resolve, 5));
+      const hinted = rows.find(row => row.id === id && row.botId === botId) ?? rows.find(row => row.id === id);
+      rows = rows.filter(row => row !== hinted);
+    });
+    const [first, second] = await Promise.all([1, 2].map(async () =>
+      created.app.inject({ method: "DELETE", url: "/api/routines/dup", headers: await localLogin(created.app, origin) })));
+    expect([first.statusCode, second.statusCode].sort()).toEqual([200, 404]);
+    expect(deleteRoutine).toHaveBeenCalledTimes(1);
+    expect(rows.map(row => row.botId)).toEqual(["diary"]);
+    deleteRoutine.mockImplementation(async () => {});
+  });
   it("deletes the copy the person can see and tells Hermes its assistant", async () => {
     const headers = await localLogin(created.app, origin);
     expect((await created.app.inject({ method: "DELETE", url: "/api/routines/dup", headers })).statusCode).toBe(200);

@@ -215,7 +215,8 @@ with `code: "routine_rooms"`. If the rooms, the routine or a trigger's routine c
 Hermes that offers no room catalog. Hermes lets two assistants hold jobs with one ID: a save checks the
 named assistant's routine and a trigger its own assistant's, and `PATCH /api/routines/:id/state`,
 `POST /api/routines/:id/run` and `DELETE /api/routines/:id` act on the one you can see and tell Hermes its
-assistant, a running trial blocks changes only to its own assistant's routine, answering 409 with `code: "routine_ambiguous"`
+assistant, a running trial blocks changes only to its own assistant's routine, a deletion answers 404 and deletes
+nothing if that assistant's copy is gone by the time it runs, routine recipients are kept per assistant, answering 409 with `code: "routine_ambiguous"`
 when you can see two. Pausing,
 saving a paused routine and turning a trigger off always go ahead. `PATCH /api/bots/:id` refuses a sharing change that
 would let a routine post where people who cannot see its assistant read it, such as making an

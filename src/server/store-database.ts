@@ -90,6 +90,12 @@ const additions = `
   -- The first request that retried each failed turn, by assistant, retried message and failed run
   -- ('' without one). Every later retry of that turn follows this request instead of running again.
   CREATE TABLE IF NOT EXISTS retry_claims(bot_id TEXT NOT NULL,retry_of TEXT NOT NULL,run_id TEXT NOT NULL,request_id TEXT NOT NULL,created_at INTEGER NOT NULL,PRIMARY KEY(bot_id,retry_of,run_id));
+  -- Who receives each routine's results, by assistant and routine ID: Hermes lets two assistants hold
+  -- jobs with one ID. A set row means that routine has its own list, even an empty one; an adopted row
+  -- means routine_recipients, the earlier record by routine ID alone, was moved over for that ID.
+  CREATE TABLE IF NOT EXISTS routine_profile_recipients(bot_id TEXT NOT NULL,routine_id TEXT NOT NULL,user_id TEXT NOT NULL REFERENCES users(id),PRIMARY KEY(bot_id,routine_id,user_id));
+  CREATE TABLE IF NOT EXISTS routine_recipient_sets(bot_id TEXT NOT NULL,routine_id TEXT NOT NULL,PRIMARY KEY(bot_id,routine_id));
+  CREATE TABLE IF NOT EXISTS routine_recipients_adopted(routine_id TEXT PRIMARY KEY);
   CREATE TABLE IF NOT EXISTS draft_revisions(user_id TEXT NOT NULL REFERENCES users(id),bot_id TEXT NOT NULL,revision INTEGER NOT NULL,reason TEXT NOT NULL,sent_revision INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(user_id,bot_id));
 `;
 export const schemaVersion = migrations.length;

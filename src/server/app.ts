@@ -329,9 +329,11 @@ export async function createApp(
   apiRoute(app, "GET /routines", {}, async (req) => {
     await requireCapability("routines");
     const userId = signedIn(req).id;
-    return routinesFor(runtime, store, roster, userId, (await runtime.routines()).filter(r => visibleTo(store, r.botId, userId)).map((r) => ({
+    const all = await runtime.routines();
+    store.adoptLegacyRecipients(all);
+    return routinesFor(runtime, store, roster, userId, all.filter(r => visibleTo(store, r.botId, userId)).map((r) => ({
       ...r,
-      recipientIds: store.getRoutineRecipients(r.id),
+      recipientIds: store.getRoutineRecipients(r.botId, r.id),
     })));
   });
   const routineSchema = z
@@ -413,7 +415,8 @@ export async function createApp(
       }
       return runtime.saveRoutine(input, routineId);
     });
-    store.routineRecipients(routine.id, input.recipientIds);
+    if (routineId) store.adoptLegacyRecipients(all);
+    store.routineRecipients(input.botId, routine.id, input.recipientIds);
     const [saved] = await routinesFor(runtime, store, roster, userId, [{ ...effective, ...routine, recipientIds: input.recipientIds }]);
     return saved;
   };
@@ -424,13 +427,20 @@ export async function createApp(
     await requireCapability("routines");
     // Hermes lets two assistants hold jobs with one ID, so the ID means the copy this person can see,
     // and Hermes is told its assistant. Without that, Hermes picks the copy itself, which may be hidden.
-    const all = await runtime.routines();
-    const routine = routineById(all, params(req).id, store, signedIn(req).id);
+    const routine = routineById(await runtime.routines(), params(req).id, store, signedIn(req).id);
     if (!routine) throw httpError(404, "Routine not found");
     await assertRoutineEditable(runtime, store, routine.id, routine.botId);
-    await runtime.deleteRoutine(routine.id, routine.botId);
-    // Recipients are kept by routine ID, so they stay while another assistant's copy remains.
-    if (!all.some(other => other.id === routine.id && other.botId !== routine.botId)) store.routineRecipients(routine.id, []);
+    // Hermes treats the profile as a hint and deletes another assistant's copy when this one is gone
+    // (hermes_cli/web_routers/cron.py _job_owner_profile), and nothing in it deletes strictly by profile
+    // without changing the add-on. So deletions run one at a time with the other routine changes, and
+    // each reads the routines again just before, deleting nothing unless this assistant's copy is still there.
+    await serialDelivery(store, async () => {
+      const all = await runtime.routines();
+      if (!all.some(other => other.id === routine.id && other.botId === routine.botId)) throw httpError(404, "Routine not found");
+      store.adoptLegacyRecipients(all);
+      await runtime.deleteRoutine(routine.id, routine.botId);
+      store.routineRecipients(routine.botId, routine.id, []);
+    });
     return { ok: true };
   });
   // The worker owns the aggregate so a push and this read agree; handlers run after it exists.

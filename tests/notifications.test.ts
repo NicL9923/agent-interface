@@ -33,7 +33,7 @@ it("persists durable event discovery with participant/routine recipient semantic
   store.recordEvents([event], "cursor-1");
   expect(store.cursor()).toBe("cursor-1");
   expect(store.outbox()).toHaveLength(1);
-  store.routineRecipients("routine", ["two"]);
+  store.routineRecipients("shared", "routine", ["two"]);
   store.recordEvents(
     [{ ...event, id: "routine-event", routineId: "routine" }],
     "cursor-2",
@@ -344,7 +344,7 @@ it.each(["runtime", "outbox", "live"] as const)("drains every job before closing
 });
 it("lists explicit routine recipients without adding bot followers", () => {
   const store = storeWithUsers();
-  store.routineRecipients("routine", ["one"]);
+  store.routineRecipients("shared", "routine", ["one"]);
   store.savePreferences("two", {
     presentation: "simple",
     theme: "system",
@@ -352,7 +352,7 @@ it("lists explicit routine recipients without adding bot followers", () => {
     sections: [],
     followBots: ["shared"],
   });
-  expect(store.getRoutineRecipients("routine")).toEqual(["one"]);
+  expect(store.getRoutineRecipients("shared", "routine")).toEqual(["one"]);
   expect(store.recipients({ ...event, routineId: "routine" })).toEqual([
     "one",
     "two",

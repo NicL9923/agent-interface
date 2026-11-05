@@ -23,6 +23,8 @@ export class RetentionRepository {
       this.db.prepare("DELETE FROM notification_events WHERE json_extract(value,'$.botId')=?").run(botId);
       for (const run of runs) this.db.prepare("DELETE FROM participants WHERE run_id=?").run(run);
       for (const routine of routines) this.db.prepare("DELETE FROM routine_recipients WHERE routine_id=?").run(routine);
+      this.db.prepare("DELETE FROM routine_profile_recipients WHERE bot_id=?").run(botId);
+      this.db.prepare("DELETE FROM routine_recipient_sets WHERE bot_id=?").run(botId);
       for (const table of ["bot_presentation", "bot_visibility_periods", "bot_names", "drafts", "draft_revisions", "read_positions", "chat_presence", "chat_reads", "card_state", "submissions", "approval_attribution", "approval_resolutions", "retry_claims", "routine_trials", "push_action_tokens"])
         this.db.prepare(`DELETE FROM ${table} WHERE bot_id=?`).run(botId);
       this.db.prepare("DELETE FROM saved_items WHERE json_extract(value,'$.botId')=?").run(botId);
