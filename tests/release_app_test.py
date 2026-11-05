@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -14,6 +15,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from support import load_source
+import metadata_egress_floor_test as floor_fixtures
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / ".agents/tools"))
@@ -42,6 +44,24 @@ def run_remote(program, payload):
     done = subprocess.run(["python3", "-"], input=release_app.remote_source(program, payload), capture_output=True, text=True, check=False)
     return done.returncode, done.stdout.strip().splitlines()[-1] if done.stdout.strip() else "", done.stderr
 
+
+def closed_probe(listing_uid=None):
+    """The production probe aimed at a closed loopback port, with a fixture live-rule listing."""
+    with socket.socket() as unused:
+        unused.bind(("127.0.0.1", 0))
+        port = unused.getsockname()[1]
+    listing = floor_fixtures.nft_listing(uid=os.getuid() if listing_uid is None else listing_uid)
+    return {**release_app.METADATA_PROBE, "v4": "127.0.0.1", "port": port, "interfaces": "/nonexistent/if_inet6",
+            "unit": "agent-interface-test-absent.service", "liveRulesCommand": [sys.executable, "-c", f"print({listing!r})"]}
+
+
+def healthy_floor(**overrides):
+    unit = release_app.FLOOR.UNIT
+    return {"uid": 1001, "user": "nicolas", "enabled": "enabled", "active": "active",
+            "userManager": f"Requires=user-runtime-dir@1001.service {unit}\nAfter={unit}\n",
+            "listing": floor_fixtures.nft_listing(uid=1001),
+            "probe": {"metadataV4": {"outcome": "ECONNREFUSED", "ms": 1}, "metadataV6": {"ens3": {"outcome": "ECONNREFUSED", "ms": 1}}},
+            **overrides}
 
 class QualificationBrowser(unittest.TestCase):
     def test_operator_qualification_persists_selection_in_private_receipt(self):
@@ -229,7 +249,8 @@ class ReleaseRules(unittest.TestCase):
 
     def facts(self, **overrides):
         return {"prior": PRIOR, "maintenance": False, "leasePresent": False, "drainPresent": False,
-                "upgradePhase": "idle", "managedPython": "/home/.hermes/tools/python/bin/python3", **overrides}
+                "upgradePhase": "idle", "managedPython": "/home/.hermes/tools/python/bin/python3",
+                "metadataFloor": healthy_floor(), **overrides}
 
     def built(self, **overrides):
         return {"webBuild": "bbbbbbbbbbbbbbbb", "helperSha256": "helper",
@@ -251,6 +272,33 @@ class ReleaseRules(unittest.TestCase):
         self.assertIn("--qualification", self.problems(built=stale)[0])
         self.assertIn("did not report an interpreter", self.problems(self.facts(managedPython=None))[0])
         self.assertNotIn("--qualification", self.problems(built=stale, qualification="/srv/q.json")[0])
+
+    def test_refuses_a_host_without_a_live_enforcing_metadata_egress_floor(self):
+        v4 = lambda outcome, ms=1: {"metadataV4": {"outcome": outcome, "ms": ms}, "metadataV6": {}}
+        broken = {
+            "connected": healthy_floor(probe=v4("connected")),
+            "timeout": healthy_floor(probe=v4("timeout", 3000)),
+            "EMFILE": healthy_floor(probe=v4("EMFILE", 0)),
+            "IPv6 connected": healthy_floor(probe={**v4("ECONNREFUSED"), "metadataV6": {"ens3": {"outcome": "connected", "ms": 1}}}),
+            "inactive": healthy_floor(active="inactive"),
+            "unrequired": healthy_floor(userManager="Requires=\nAfter=\n"),
+            "unreadable": healthy_floor(listing=None),
+            "another uid": healthy_floor(listing=floor_fixtures.nft_listing(uid=1002)),
+        }
+        expected = {"connected": "169.254.169.254:80 was connected", "timeout": "was inconclusive (timeout",
+                    "EMFILE": "was inconclusive (EMFILE", "IPv6 connected": "fe80::a9fe:a9fe%ens3 port 80 was connected",
+                    "inactive": "enabled and inactive, not enabled and active", "unrequired": "user@1001.service does not require",
+                    "unreadable": "could not be read through the floor's sudo rule", "another uid": "The live rules are"}
+        for label, floor in broken.items():
+            with self.subTest(label):
+                problems = self.problems(self.facts(metadataFloor=floor))
+                self.assertEqual(len(problems), 2, problems)
+                self.assertIn(expected[label], problems[0])
+                self.assertTrue(problems[0].startswith("Metadata egress floor: "))
+                self.assertIn("metadata-egress-floor.py install", problems[1])
+        # A link-local interface with no route cannot reach metadata at all.
+        unroutable = healthy_floor(probe={**v4("ECONNREFUSED"), "metadataV6": {"ens4": {"outcome": "ENETUNREACH", "ms": 0}}})
+        self.assertEqual(self.problems(self.facts(metadataFloor=unroutable)), [])
 
     def test_upgrade_helper_changes_need_explicit_review(self):
         changed = self.built(helperSha256="new-helper")
@@ -468,7 +516,7 @@ class HostPrograms(unittest.TestCase):
         os.utime(self.host.base / "operations/continued-op-1/result.json", (time.time() - 60,) * 2)
         self.host.deployment("latest", "op-2", True, node="new-node")
         self.host.deployment("abandoned", "op-3", False, node="abandoned-node")
-        code, output, error = run_remote(release_app.REMOTE_FACTS, {"appBase": str(self.host.base)})
+        code, output, error = run_remote(release_app.REMOTE_FACTS, {"appBase": str(self.host.base), "metadataProbe": closed_probe()})
         self.assertEqual(code, 0, error)
         facts = json.loads(output)
         self.assertEqual(facts["prior"]["node"], "new-node")
@@ -481,17 +529,57 @@ class HostPrograms(unittest.TestCase):
         self.assertEqual((facts["hermesRevision"], facts["repairSha256"]), (head, hashlib.sha256(repair).hexdigest()))
         self.assertEqual(facts["workerSha256"], hashlib.sha256((self.host.base / "shared/hermes-worker.json").read_bytes()).hexdigest())
         self.assertEqual(facts["managedPython"], str(self.host.interpreter))
+        floor = facts["metadataFloor"]
+        self.assertEqual((floor["uid"], floor["probe"]["metadataV4"]["outcome"], floor["probe"]["metadataV6"]),
+                         (os.getuid(), "ECONNREFUSED", {}))
+        # Live rules read and probe refused; only this machine's lack of the boot unit remains.
+        problems = release_app.metadata_floor_problems(floor)
+        self.assertIn("its boot unit is", problems[0])
+        self.assertFalse(any("live rules" in problem or "169.254" in problem or "could not be read" in problem for problem in problems), problems)
+
+    def test_facts_report_a_reachable_metadata_service(self):
+        self.host.deployment("latest", "op-2", True)
+        with socket.socket() as metadata:
+            metadata.bind(("127.0.0.1", 0)); metadata.listen()
+            probe = {**closed_probe(listing_uid=1), "port": metadata.getsockname()[1]}
+            code, output, error = run_remote(release_app.REMOTE_FACTS, {"appBase": str(self.host.base), "metadataProbe": probe})
+        self.assertEqual(code, 0, error)
+        problems = release_app.metadata_floor_problems(json.loads(output)["metadataFloor"])
+        self.assertTrue(any("was connected" in problem for problem in problems), problems)
+        self.assertTrue(any("The live rules are" in problem for problem in problems), problems)
+
+    def test_verify_fails_when_the_floor_is_missing(self):
+        manifest = {"origin": "https://app.example.test", "webBuild": "b" * 16, "host": "host", "appBase": "/srv/app",
+                    "release": "/srv/app/releases/new", "operationId": "op", "upgradeStateDir": "/s",
+                    "maintenanceFile": "/m", "hermesHome": "/h"}
+        live = {"current": "/srv/app/releases/new", "release": "/srv/app/releases/new", "units": {"a": "active"},
+                "phase": "idle", "maintenance": False, "leasePresent": False, "drainPresent": False, "result": None}
+        sent = []
+        def remote(host, program, payload):
+            sent.append(payload)
+            return {**live, "metadataFloor": floor}
+        with patch.object(release_app, "remote", remote), \
+             patch.object(release_app, "http_get", lambda url: (401, "") if url.endswith("/api/bootstrap") else (200, "b" * 16)):
+            floor = healthy_floor()
+            checks, _ = release_app.verify_release(manifest)
+            self.assertTrue(all(checks.values()), checks)
+            floor = healthy_floor(probe={"metadataV4": {"outcome": "timeout", "ms": 3000}, "metadataV6": {}})
+            with patch("sys.stderr"):
+                checks, _ = release_app.verify_release(manifest)
+        self.assertFalse(checks["metadataEgressFloor"])
+        self.assertEqual([name for name, passed in checks.items() if not passed], ["metadataEgressFloor"])
+        self.assertEqual(sent[0]["metadataProbe"], release_app.METADATA_PROBE)
 
     def test_facts_report_active_maintenance(self):
         self.host.deployment("latest", "op-2", True)
         self.host.status({"phase": "blocked", "maintenance": True})
         (self.host.home / ".drain_request.json").write_text("{}")
-        facts = json.loads(run_remote(release_app.REMOTE_FACTS, {"appBase": str(self.host.base)})[1])
+        facts = json.loads(run_remote(release_app.REMOTE_FACTS, {"appBase": str(self.host.base), "metadataProbe": closed_probe()})[1])
         self.assertTrue(facts["maintenance"] and facts["drainPresent"])
 
     def test_facts_refuse_without_a_successful_release(self):
         self.host.deployment("abandoned", "op-3", False)
-        code, _, error = run_remote(release_app.REMOTE_FACTS, {"appBase": str(self.host.base)})
+        code, _, error = run_remote(release_app.REMOTE_FACTS, {"appBase": str(self.host.base), "metadataProbe": closed_probe()})
         self.assertNotEqual(code, 0)
         self.assertIn("No successful guarded release", error)
 
