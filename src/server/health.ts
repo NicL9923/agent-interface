@@ -1,4 +1,6 @@
 import { readdir, stat } from "node:fs/promises";
+import { connect, type Socket } from "node:net";
+import { networkInterfaces } from "node:os";
 import { join } from "node:path";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { allowedIdentity, type Config } from "./config.js";
@@ -9,28 +11,78 @@ import { quietLog, type Log } from "./logging.js";
 
 export type CheckStatus = "ok" | "warn" | "fail" | "unconfigured";
 export interface Check { status: CheckStatus; detail: string }
-type Name = "database" | "hermes" | "worker" | "push" | "backup";
+type Name = "database" | "hermes" | "worker" | "push" | "backup" | "metadataFloor";
 export type Readiness = { ok: boolean; checks: Record<Name, Check> };
 // Completed copies written by .agents/tools/backup-app.mjs; never its .partial files.
 export const backupName = /^agent-interface-\d{4}-\d{2}-\d{2}T[\d.-]+Z-[a-f0-9-]{36}\.sqlite$/;
 const minute = 60_000, hour = 60 * minute;
 // Only these make the app unready. Push and backup problems alert but never fail readiness.
-const required: Name[] = ["database", "hermes", "worker"];
+const required: Name[] = ["database", "hermes", "worker", "metadataFloor"];
 const labels: Record<Name, string> = {
   database: "The app database", hermes: "The Hermes connection", worker: "The background worker",
-  push: "Push delivery", backup: "App backups",
+  push: "Push delivery", backup: "App backups", metadataFloor: "The metadata egress floor",
 };
 const ago = (ms: number) => ms < 2 * minute ? `${Math.round(ms / 1000)} s` : ms < 2 * hour ? `${Math.round(ms / minute)} min` : `${Math.round(ms / hour)} h`;
 const reason = (error: unknown) => (error instanceof Error ? error.message : String(error)).slice(0, 200);
 
+/**
+ * The cloud metadata service. The host's nftables floor (.agents/tools/metadata-egress-floor.py)
+ * rejects the service user's connections to it, and these verdicts match that tool's.
+ */
+export const metadataService = { v4: "169.254.169.254", v6: "fe80::a9fe:a9fe", port: 80 } as const;
+export type MetadataAttempt = { target: string; family: 4 | 6; outcome: string; ms: number };
+export type MetadataProbe = () => Promise<MetadataAttempt[]>;
+// Only these, arriving fast, prove the reject rule answered. A timeout, EMFILE or any other
+// error proves nothing. A link-local IPv6 interface with no route cannot send at all.
+const refusals = new Set(["ECONNREFUSED", "EACCES", "EPERM", "EHOSTUNREACH"]);
+const noRoute = new Set(["ENETUNREACH", "EADDRNOTAVAIL", "ENODEV"]);
+export const refusedWithinMs = 1000;
+export function metadataVerdict({ outcome, ms }: Pick<MetadataAttempt, "outcome" | "ms">) {
+  if (outcome === "connected") return "connected";
+  if (refusals.has(outcome) && ms <= refusedWithinMs) return "refused";
+  return noRoute.has(outcome) ? "no-route" : "inconclusive";
+}
+/** IPv4 metadata, plus the IPv6 address scoped to every interface with a link-local address. */
+export function metadataTargets(interfaces: ReturnType<typeof networkInterfaces> = networkInterfaces()) {
+  const scoped = Object.entries(interfaces)
+    .filter(([, addresses]) => addresses?.some(address => address.family === "IPv6" && !address.internal && address.address.toLowerCase().startsWith("fe80:")))
+    .map(([name]) => ({ target: `${metadataService.v6}%${name}`, family: 6 as const }));
+  return [{ target: metadataService.v4, family: 4 as const }, ...scoped];
+}
+/** One TCP connect attempt and how it ended: connected, timeout, or the socket error code. */
+export function attemptConnect(host: string, port: number, { timeoutMs = 1500, open = (h: string, p: number) => connect({ host: h, port: p }) }:
+  { timeoutMs?: number; open?: (host: string, port: number) => Socket } = {}) {
+  const started = performance.now();
+  return new Promise<{ outcome: string; ms: number }>(resolve => {
+    let socket: Socket | undefined;
+    const finish = (outcome: string) => { clearTimeout(timer); socket?.destroy(); resolve({ outcome, ms: Math.round(performance.now() - started) }); };
+    const timer = setTimeout(() => finish("timeout"), timeoutMs);
+    try {
+      socket = open(host, port);
+    } catch (error) {
+      return finish((error as NodeJS.ErrnoException).code ?? "error");
+    }
+    socket.once("connect", () => finish("connected"));
+    socket.once("error", (error: NodeJS.ErrnoException) => finish(error.code ?? "error"));
+  });
+}
+export const probeMetadata: MetadataProbe = () =>
+  Promise.all(metadataTargets().map(async ({ target, family }) => ({ target, family, ...await attemptConnect(target, metadataService.port) })));
+/** Only the production host has the floor; tests inject a probe, and development reports unconfigured. */
+export const defaultMetadataProbe = (config: Config): MetadataProbe | undefined =>
+  config.production ? probeMetadata : undefined;
+// The minute timer always probes afresh; public requests between ticks reuse the result.
+const metadataCacheMs = 50_000;
+
 export class HealthMonitor {
   private hermesDownSince?: number;
+  private metadataChecked?: { at: number; check: Check };
   private incidents = new Map<Name, { since: number; alerted: boolean }>();
   private pending?: Promise<Readiness>;
   private timer?: ReturnType<typeof setInterval>;
   constructor(private deps: {
     store: Store; runtime: Runtime; worker: BackgroundWorker; config: Config;
-    maintenance: () => boolean; log?: Log;
+    maintenance: () => boolean; log?: Log; metadataProbe?: MetadataProbe;
   }) {}
   start() {
     this.timer = setInterval(() => void this.evaluate(), minute);
@@ -45,11 +97,11 @@ export class HealthMonitor {
   private async run(now: number): Promise<Readiness> {
     const settle = (check: () => Check | Promise<Check>) =>
       Promise.resolve().then(check).catch((error): Check => ({ status: "fail", detail: reason(error) }));
-    const [database, hermes, worker, push, backup] = await Promise.all([
+    const [database, hermes, worker, push, backup, metadataFloor] = await Promise.all([
       settle(() => this.database()), settle(() => this.hermes(now)), settle(() => this.worker(now)),
-      settle(() => this.push(now)), settle(() => this.backup(now)),
+      settle(() => this.push(now)), settle(() => this.backup(now)), settle(() => this.metadataFloor(now)),
     ]);
-    const checks = { database, hermes, worker, push, backup };
+    const checks = { database, hermes, worker, push, backup, metadataFloor };
     this.track(checks, now);
     return { ok: required.every(name => checks[name].status !== "fail"), checks };
   }
@@ -102,6 +154,26 @@ export class HealthMonitor {
     }
     if (!newest) return { status: "warn", detail: "No completed backups" };
     return { status: now - newest < 36 * hour ? "ok" : "warn", detail: `Newest backup is ${ago(now - newest)} old` };
+  }
+  private async metadataFloor(now: number): Promise<Check> {
+    const probe = this.deps.metadataProbe;
+    if (!probe) return { status: "unconfigured", detail: "Checked only in production" };
+    const cached = this.metadataChecked;
+    if (cached && now >= cached.at && now - cached.at < metadataCacheMs) return cached.check;
+    const attempts = await probe();
+    const describe = (attempt: MetadataAttempt) => `${attempt.target} port ${metadataService.port} ${attempt.outcome} in ${attempt.ms} ms`;
+    const connected = attempts.filter(attempt => metadataVerdict(attempt) === "connected");
+    const unproven = attempts.filter(attempt => {
+      const verdict = metadataVerdict(attempt);
+      return verdict === "inconclusive" || (verdict === "no-route" && attempt.family === 4);
+    });
+    const check: Check = connected.length
+      ? { status: "fail", detail: `Connected: ${connected.map(describe).join("; ")}. Install the host's metadata egress floor; see docs/Hosting.md` }
+      : unproven.length
+        ? { status: "fail", detail: `Could not confirm the floor refuses metadata: ${unproven.map(describe).join("; ")}` }
+        : { status: "ok", detail: `Blocked: ${attempts.map(attempt => `${attempt.target} ${attempt.outcome}`).join("; ")}` };
+    this.metadataChecked = { at: now, check };
+    return check;
   }
   // Problems that last 10 minutes notify administrators once, and again when they clear.
   private track(checks: Record<Name, Check>, now: number) {
