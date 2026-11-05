@@ -74,7 +74,7 @@ including cloud-init, is not affected. The rules file loads only its own table i
 one transaction and never flushes the ruleset, so ufw's iptables-nft rules stay
 untouched.
 
-`install` puts the floor in place four ways:
+`install` puts the floor in place five ways:
 
 - The rules live in root-owned `/etc/nftables.d/agent-interface-metadata.nft`.
 - When `/etc/nftables.conf` exists, a marked block at its end includes that file.
@@ -82,7 +82,14 @@ untouched.
   the same transaction as the flush, and any `nftables.service` start, restart or
   reload brings it back with no gap. The tool backs up the original file once to
   `/etc/nftables.conf.agent-interface.bak` and checks the edited file with
-  `nft -c` before writing it.
+  `nft -c` before writing it. It edits the file only when it holds no markers, or
+  exactly one BEGIN line followed by one END line. Otherwise it refuses and
+  changes nothing, so a damaged marker can never make it delete other rules.
+- Debian's `nftables.service` runs `nft flush ruleset` when it stops, and a
+  restart stops it first. A managed drop-in,
+  `/etc/systemd/system/nftables.service.d/agent-interface-metadata-floor.conf`,
+  adds `ExecStopPost=` to reload the floor file right after that flush. The file
+  replaces only its own table, so loading it again is always safe.
 - The root oneshot `agent-interface-metadata-floor.service` loads the rules at boot
   either way, after `nftables.service` and `ufw.service`. It does not follow
   `nftables.service`: the include already covers that, and following it would
@@ -139,8 +146,15 @@ Only a fast `ECONNREFUSED`, `EACCES`, `EPERM` or `EHOSTUNREACH` proves the floor
 A timeout, a slow error or anything else, such as `EMFILE`, is inconclusive and
 fails. `check` warns when the service account can run `sudo` without a password,
 because any agent could then remove the floor. `remove` drops the user-manager
-requirement first, then the include, the table and the tool's files. It never
-stops a unit.
+requirement first, then the include, the table and the tool's files. It finds
+every managed `user@*.service.d` drop-in by name rather than trusting the rules
+file, so it also works when that file is missing. It never stops a unit.
+
+When this was written, the household host had `nftables.service` disabled, so
+the boot unit is what loads the floor there. The include and the stop hook only
+take effect if nftables is enabled later. None of this stops root: an
+administrator can still delete the table on purpose, and readiness and release
+checks report it when that happens.
 
 Confirm the rest of the ruleset is unchanged and that the service account now
 fails fast:

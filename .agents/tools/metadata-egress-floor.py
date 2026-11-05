@@ -38,6 +38,9 @@ NFTABLES_CONF = Path("/etc/nftables.conf")
 CONF_BACKUP = Path("/etc/nftables.conf.agent-interface.bak")
 # sudo skips files in sudoers.d whose names contain a dot, so the staged copy is never live.
 SUDOERS = Path("/etc/sudoers.d/agent-interface-metadata-floor")
+NFTABLES_DROPIN = Path("/etc/systemd/system/nftables.service.d/agent-interface-metadata-floor.conf")
+SYSTEMD = Path("/etc/systemd/system")
+DROPIN_NAME = "agent-interface-metadata-floor.conf"
 METADATA_V4 = "169.254.169.254"
 METADATA_V6 = "fe80::a9fe:a9fe"
 DEFAULT_EGRESS = "github.com:443"
@@ -57,7 +60,7 @@ def user_manager(uid):
 
 
 def dropin(uid):
-    return Path("/etc/systemd/system") / f"{user_manager(uid)}.d" / "agent-interface-metadata-floor.conf"
+    return SYSTEMD / f"{user_manager(uid)}.d" / DROPIN_NAME
 
 
 def rules(uid):
@@ -120,14 +123,37 @@ After={UNIT}
 """
 
 
+def nftables_dropin(nft):
+    return f"""# Managed by agent-interface .agents/tools/metadata-egress-floor.py. Do not edit.
+# Debian's nftables.service flushes the whole ruleset when it stops, which a restart also
+# does. Reload only the floor's own table right after, from its idempotent file.
+[Service]
+ExecStopPost={nft} -f {RULES}
+"""
+
+
 def sudoers(user, nft):
     return (f"# Managed by agent-interface .agents/tools/metadata-egress-floor.py. Do not edit.\n"
             f"# Read-only: lets release checks compare the live floor without a password.\n"
             f"{user} ALL=(root) NOPASSWD: {nft} -j list table inet {TABLE}\n")
 
 
+def marker_problem(conf):
+    """Why nftables.conf's markers are unsafe to edit, or None for zero or one ordered pair."""
+    lines = conf.splitlines()
+    begins = [number for number, line in enumerate(lines) if line.startswith(BEGIN)]
+    ends = [number for number, line in enumerate(lines) if line.strip() == END]
+    if (len(begins), len(ends)) == (0, 0) or (len(begins), len(ends)) == (1, 1) and begins[0] < ends[0]:
+        return None
+    return (f"{NFTABLES_CONF} has {len(begins)} BEGIN and {len(ends)} END agent-interface markers"
+            f"{' out of order' if len(begins) == len(ends) == 1 else ''}. Fix them by hand to zero or one "
+            f"ordered pair; nothing was changed.")
+
+
 def without_include(conf):
     """The nftables.conf text with this tool's marked block removed."""
+    if marker_problem(conf):
+        raise ValueError(marker_problem(conf))
     kept = re.sub(rf"\n*{re.escape(BEGIN)}.*?{re.escape(END)}\n?", "\n", conf, flags=re.DOTALL)
     return kept.rstrip("\n") + "\n"
 
@@ -347,15 +373,29 @@ def mode(system):
     """How the floor survives reboots and nftables.service on this host."""
     service = system.run(["systemctl", "is-enabled", "nftables.service"]).stdout.strip() or "not-found"
     conf = system.read(NFTABLES_CONF)
-    included = conf is not None and with_include(conf) == conf
+    included = conf is not None and not marker_problem(conf) and with_include(conf) == conf
     return {"nftablesService": service, "nftablesConfInclude": included,
             "persistence": ("nftables.conf include and boot unit" if included else "boot unit only")}
+
+
+def require_markers(system):
+    conf = system.read(NFTABLES_CONF)
+    if conf is not None and marker_problem(conf):
+        raise SystemExit(marker_problem(conf))
+    return conf
+
+
+def managed_user_dropins(system):
+    """Every user@UID.service drop-in this tool wrote, found without trusting the rules file."""
+    return sorted(Path("/") / path.relative_to(system.root)
+                  for path in system.path(SYSTEMD).glob(f"user@*.service.d/{DROPIN_NAME}") if path.is_file())
 
 
 def install(system, name, uid):
     """Write, validate and load the floor. Rerunning with the same uid changes no file."""
     system.require_root()
     nft = system.nft()
+    require_markers(system)
     script = rules(uid)
     previous = installed_uid(system.read(RULES))
     validated(system, RULES, script, [nft, "-c", "-f"], "Checking the generated rules")
@@ -371,11 +411,12 @@ def install(system, name, uid):
         system.write(NFTABLES_CONF, with_include(conf), system.path(NFTABLES_CONF).stat().st_mode & 0o777)
         changed.append(str(NFTABLES_CONF))
     validated(system, SUDOERS, sudoers(name, nft), ["visudo", "-c", "-f"], "Checking the sudo rule")
-    units = [(UNIT_FILE, unit(nft), 0o644), (dropin(uid), user_dropin(), 0o644)]
-    changed += [str(path) for path, text, mode_ in (*units, (SUDOERS, sudoers(name, nft), 0o440)) if system.write(path, text, mode_)]
-    if previous not in (None, uid):
-        changed += [str(path) for path in (dropin(previous),) if system.remove(path)]
-    if any(str(path) in changed for path in (UNIT_FILE, dropin(uid), dropin(previous or uid))):
+    units = [(UNIT_FILE, unit(nft)), (dropin(uid), user_dropin()), (NFTABLES_DROPIN, nftables_dropin(nft))]
+    changed_units = [str(path) for path, text in units if system.write(path, text)]
+    # A previous uid's requirement, wherever it came from, must not outlive its rules.
+    changed_units += [str(path) for path in managed_user_dropins(system) if path != dropin(uid) and system.remove(path)]
+    changed += changed_units + ([str(SUDOERS)] if system.write(SUDOERS, sudoers(name, nft), 0o440) else [])
+    if changed_units:
         must(system, ["systemctl", "daemon-reload"], "Reloading systemd")
     must(system, ["systemctl", "enable", UNIT], "Enabling the boot unit")
     # Start loads it when inactive; reload reapplies it when active. Never restart: the user
@@ -388,15 +429,15 @@ def install(system, name, uid):
 def remove(system):
     system.require_root()
     nft = system.nft()
-    uid = installed_uid(system.read(RULES))
-    # The requirement goes first, so nothing below can stop the household services.
-    removed = [str(path) for path in ([dropin(uid)] if uid else []) if system.remove(path)]
+    conf = require_markers(system)
+    # The requirement goes first, so nothing below can stop the household services. Found by
+    # name, so a missing or damaged rules file never leaves a manager requiring a removed unit.
+    removed = [str(path) for path in [*managed_user_dropins(system), NFTABLES_DROPIN] if system.remove(path)]
     if removed:
         must(system, ["systemctl", "daemon-reload"], "Reloading systemd")
     if system.read(UNIT_FILE) is not None:
         # RefuseManualStop keeps the unit active until reboot; only the table is enforcement.
         must(system, ["systemctl", "disable", UNIT], "Disabling the boot unit")
-    conf = system.read(NFTABLES_CONF)
     if conf is not None and without_include(conf) != conf:
         validated(system, NFTABLES_CONF, without_include(conf), [nft, "-c", "-f"], f"Checking {NFTABLES_CONF} without the include")
         system.write(NFTABLES_CONF, without_include(conf), system.path(NFTABLES_CONF).stat().st_mode & 0o777)
@@ -433,6 +474,7 @@ def evaluate(state):
     return {
         "filesCurrent": state["files"] == {
             str(RULES): rules(uid), str(UNIT_FILE): unit(state["nft"]), str(dropin(uid)): user_dropin(),
+            str(NFTABLES_DROPIN): nftables_dropin(state["nft"]),
             str(SUDOERS): sudoers(name, state["nft"])},
         "nftablesConfIncludesFloor": found["nftablesConfInclude"] or not must_include,
         "unitEnabled": state["enabled"] == "enabled",
@@ -458,7 +500,7 @@ def check(system, user=None, egress=DEFAULT_EGRESS):
     state = {
         "uid": uid, "user": name, "nft": nft, "mode": mode(system),
         "confExists": system.read(NFTABLES_CONF) is not None,
-        "files": {str(path): system.read(path) for path in (RULES, UNIT_FILE, dropin(uid), SUDOERS)},
+        "files": {str(path): system.read(path) for path in (RULES, UNIT_FILE, dropin(uid), NFTABLES_DROPIN, SUDOERS)},
         "enabled": system.run(["systemctl", "is-enabled", UNIT]).stdout.strip(),
         "active": system.run(["systemctl", "is-active", UNIT]).stdout.strip(),
         "userManager": system.run(["systemctl", "show", user_manager(uid), "-p", "Requires", "-p", "After"]).stdout,

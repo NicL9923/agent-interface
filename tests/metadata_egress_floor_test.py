@@ -102,6 +102,14 @@ class Generated(unittest.TestCase):
         self.assertIn("Requires=agent-interface-metadata-floor.service", lines)
         self.assertIn("After=agent-interface-metadata-floor.service", lines)
 
+    def test_nftables_stop_reloads_only_the_floor_table(self):
+        lines = floor.nftables_dropin(NFT).splitlines()
+        self.assertIn("ExecStopPost=/usr/sbin/nft -f /etc/nftables.d/agent-interface-metadata.nft", lines)
+        self.assertEqual([line for line in lines if line.startswith("Exec")], [lines[-1]])
+        # Reloading the file after the flush is safe because it replaces only its own table.
+        self.assertIn("delete table inet agent_interface_metadata", floor.rules(1001))
+        self.assertNotIn("flush", floor.rules(1001).split("Never add")[1].split("\n", 1)[1])
+
     def test_sudo_rule_allows_only_listing_this_table(self):
         self.assertEqual(floor.sudoers("nicolas", NFT).splitlines()[-1],
                          "nicolas ALL=(root) NOPASSWD: /usr/sbin/nft -j list table inet agent_interface_metadata")
@@ -225,8 +233,57 @@ class Install(unittest.TestCase):
         self.assertFalse(any(call[1:2] in (["stop"], ["restart"]) or "--now" in call for call in self.system.calls))
         self.assertIn([NFT, "delete", "table", "inet", floor.TABLE], self.system.calls)
         self.assertEqual(self.conf().read_text(), UBUNTU_CONF)
-        for path in (floor.RULES, floor.UNIT_FILE, floor.dropin(1001), floor.SUDOERS):
+        for path in (floor.RULES, floor.UNIT_FILE, floor.dropin(1001), floor.NFTABLES_DROPIN, floor.SUDOERS):
             self.assertFalse(self.file(path).exists(), path)
+
+    def test_remove_finds_every_user_manager_requirement_without_the_rules_file(self):
+        floor.install(self.system, "nicolas", 1001)
+        # A requirement left by an earlier uid, and a rules file lost before the emergency removal.
+        self.file(floor.dropin(1002)).parent.mkdir(parents=True)
+        self.file(floor.dropin(1002)).write_text(floor.user_dropin())
+        self.file(floor.RULES).unlink()
+        unrelated = self.file(floor.SYSTEMD / "user@1001.service.d/keep.conf")
+        unrelated.write_text("[Service]\n")
+        self.system.calls.clear()
+        result = floor.remove(self.system)
+        self.assertEqual(result["files"][:3], [str(floor.dropin(1001)), str(floor.dropin(1002)), str(floor.NFTABLES_DROPIN)])
+        self.assertEqual(self.systemctl()[0], ["daemon-reload"])
+        self.assertEqual(list(self.file(floor.SYSTEMD).glob("user@*.service.d/" + floor.DROPIN_NAME)), [])
+        self.assertTrue(unrelated.exists())
+
+    def test_install_installs_the_nftables_stop_hook_and_removes_stray_requirements(self):
+        self.file(floor.dropin(1002)).parent.mkdir(parents=True)
+        self.file(floor.dropin(1002)).write_text(floor.user_dropin())
+        floor.install(self.system, "nicolas", 1001)
+        self.assertEqual(self.file(floor.NFTABLES_DROPIN).read_text(), floor.nftables_dropin(NFT))
+        self.assertFalse(self.file(floor.dropin(1002)).exists())
+        self.assertTrue(self.file(floor.dropin(1001)).exists())
+
+    def test_damaged_markers_refuse_install_and_remove_without_changing_anything(self):
+        installed = floor.with_include(UBUNTU_CONF)
+        user_rules = "table inet user_rules {\n\tchain forward { type filter hook forward priority 0; }\n}\n"
+        damaged = {
+            # The review's repro: END deleted, then rules added below the old block.
+            "missing END": installed.replace(floor.END + "\n", "") + user_rules,
+            "missing BEGIN": installed.replace(installed[installed.index(floor.BEGIN):].splitlines()[0] + "\n", ""),
+            "END before BEGIN": UBUNTU_CONF + floor.END + "\n" + user_rules + floor.BEGIN + "\n",
+            "two blocks": installed + user_rules + installed[installed.index(floor.BEGIN):],
+            "nested": installed.replace(floor.END, floor.BEGIN + "\n" + floor.END + "\n" + floor.END),
+        }
+        for label, text in damaged.items():
+            with self.subTest(label):
+                self.assertIsNotNone(floor.marker_problem(text))
+                self.conf().write_text(text)
+                self.system.calls.clear()
+                for action in (lambda: floor.install(self.system, "nicolas", 1001), lambda: floor.remove(self.system)):
+                    with self.assertRaisesRegex(SystemExit, "agent-interface markers.*nothing was changed"):
+                        action()
+                self.assertEqual(self.conf().read_text(), text)
+                self.assertEqual(self.system.calls, [])
+                self.assertFalse(self.file(floor.RULES).exists())
+                self.assertFalse(floor.mode(self.system)["nftablesConfInclude"])
+        self.assertIsNone(floor.marker_problem(installed))
+        self.assertIsNone(floor.marker_problem(UBUNTU_CONF))
 
 
 def attempt(outcome, ms=2):
