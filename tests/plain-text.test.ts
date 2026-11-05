@@ -27,6 +27,13 @@ it("reads links by their words, whatever their destination holds", () => {
   expect(markdownPlain(`First.\n  \n[Docs](https://example.test "${"x".repeat(3000)}")`)).toBe("First.");
 });
 
+it("never lets a long code block use up the words after it", () => {
+  const code = "```\n" + "x".repeat(2100) + "\n```\n";
+  expect(markdownPlain(code + "Actual summary.")).toBe("Actual summary.");
+  expect(replyTitle(code + "Actual summary.")).toBe("Actual summary.");
+  expect(markdownPlain("```\n" + "y\n".repeat(3000) + "```")).toMatch(/^y y y/);
+});
+
 it("keeps code-only replies readable however the code is written", () => {
   expect(markdownPlain("    ls -la")).toBe("ls -la");
   expect(markdownPlain("> ```\n> ls -la\n> ```")).toBe("ls -la");
@@ -40,6 +47,9 @@ it("reads fences inside lists and HTML comments by Markdown's own rules", () => 
 it("keeps search markers through flattening, and escaped line breaks become spaces", () => {
   // A snippet's own private-use characters never become markers.
   expect(snippetPlain("\uE000literal\uE001 and >>>real<<<")).toBe("literal and >>>real<<<");
+  expect(snippetPlain("&#xE000;literal&#xE001; and &#57344;more&#57345;")).toBe("literal and more");
+  // Markers shrink a long snippet, but it was still cut, so its half-read last block stays out.
+  expect(snippetPlain(`First.\n\n[Docs](https://example.test "${">>>x<<<".repeat(1500)}")`)).toBe("First.");
   expect(snippetPlain(`First.\n\n[Docs](https://example.test "${"x".repeat(3000)}")`)).toBe("First.");
   expect(snippetPlain("## >>>Grocery<<< Demo\\n* Free >>>Grocery<<< Coupons")).toBe(">>>Grocery<<< Demo Free >>>Grocery<<< Coupons");
   // A match at the start of a line is never read as a quote.

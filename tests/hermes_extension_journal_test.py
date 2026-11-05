@@ -251,6 +251,9 @@ class EventBodyTests(unittest.TestCase):
     def test_stays_bounded_and_empty_text_has_no_body(self):
         self.assertEqual(len(extension.event_body("word " * 400)), 500)
         self.assertIsNone(extension.event_body(" \n\t\n"))
+
+    def test_keeps_indentation_that_places_lines_inside_a_list(self):
+        self.assertEqual(extension.event_body("- ```js\n  code   here\n  ```\n\nSummary."), "- ```js\n  code here\n  ```\n\nSummary.")
         self.assertIsNone(extension.event_body(None))
 
 
@@ -1154,7 +1157,7 @@ class DiscoveryTests(unittest.TestCase):
             prompt = "context " * 40000
             (output / "2026-10-31_09-00-02.md").write_text(f"# Cron Job: Daily AI news\n\n## Prompt\n\n{prompt}\n\n## Response\n\nLong prompt, short answer.\n")
             self.assertEqual(body({"status": "completed", "claimed_at": "2026-10-31T09:00:00-05:00"}), "Long prompt, short answer.")
-            self.assertEqual(body({"status": "failed", "error": "Provider\n rate limit"}), "Provider\nrate limit")
+            self.assertEqual(body({"status": "failed", "error": "Provider\n rate limit"}), "Provider\n rate limit")
             self.assertIsNone(body({"status": "unknown"}))
             self.assertIsNone(body(run, job="../job"))
             self.assertIsNone(body({"status": "completed"}))

@@ -45,7 +45,8 @@ export function snippetParts(snippet: string, limit = 300): SnippetPart[] {
     let words = piece.text.replace(/\s+/g, " ");
     if (!parts.length) words = words.trimStart();
     if (!words) continue;
-    if (used >= limit) break;
+    // Something is left out, so the last part says so.
+    if (used >= limit) { const last = parts.at(-1); if (last && !last.text.endsWith("…")) last.text += "…"; break; }
     if (used + words.length > limit) words = `${words.slice(0, limit - used).trimEnd()}…`;
     used += words.length;
     const last = parts.at(-1);

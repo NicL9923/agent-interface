@@ -70,6 +70,7 @@ it('marks search matches in the plain snippet the server sends',()=>{
   expect(snippetParts('>>>Grocery<<< Demo, then x > y').map(part=>part.text).join('')).toBe('Grocery Demo, then x > y');
   // Markers count only as an opening then a closing pair; a stray one stays as written.
   expect(snippetParts('Use <<< before >>>query<<< and >>>tail')).toEqual([{text:'Use <<< before ',match:false},{text:'query',match:true},{text:' and >>>tail',match:false}]);
+  expect(snippetParts('a'.repeat(300)+'>>>hidden tail<<<').at(-1)!.text.endsWith('…')).toBe(true);
   const long=snippetParts('word '.repeat(100),40);expect(long.map(part=>part.text).join('').length).toBeLessThanOrEqual(41);
   const started=performance.now();snippetParts('>>>'.repeat(50_000)+'\\'.repeat(50_000));expect(performance.now()-started).toBeLessThan(200);
 });
