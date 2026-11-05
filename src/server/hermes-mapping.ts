@@ -331,6 +331,13 @@ function deliverTargets(deliver: unknown): string[] {
 export function deliverRooms(deliver: unknown): string[] {
   return [...new Set(deliverTargets(deliver).flatMap(part => roomTarget.exec(part)?.[1] ?? []))];
 }
+/**
+ * Every group chat a routine's delivery names, including `room:<id>@<profile>` targets that Hermes, its CLI
+ * or an agent wrote and the app never edits. The server checks all of them before a routine may deliver.
+ */
+export function deliverRoomTargets(deliver: unknown): string[] {
+  return [...new Set(deliverTargets(deliver).flatMap(part => /^room:([A-Za-z0-9][A-Za-z0-9._:-]*)(?:@[A-Za-z0-9_-]+)?$/i.exec(part)?.[1] ?? []))];
+}
 /** `deliver` with exactly these group chats, keeping every other target in place. */
 export function withDeliverRooms(deliver: unknown, roomIds: string[]): string {
   const others = deliverTargets(deliver).filter(part => !roomTarget.test(part) && part.toLowerCase() !== 'local');

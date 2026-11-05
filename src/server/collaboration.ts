@@ -51,9 +51,11 @@ async function errorRedactor(runtime: Pick<Runtime, 'groupRequest' | 'listBots'>
 export async function routinesFor<T extends Routine>(runtime: Pick<Runtime, 'groupRequest' | 'listBots'>, store: Store, roster: Roster, userId: string, routines: T[]): Promise<T[]> {
   const touches = (routine: Routine) => !!routine.roomIds?.length || mentionsRoom(routine.lastError) || mentionsRoom(routine.lastDeliveryError);
   const errs = (routine: Routine) => routine.lastError !== undefined || routine.lastDeliveryError !== undefined;
-  if (!routines.some(routine => touches(routine) || errs(routine))) return routines;
-  const redact = await errorRedactor(runtime, store, roster, userId, routines.some(touches));
-  return routines.map(routine => {
+  // Every target the delivery names is the server's to check, never anyone's to read.
+  const listed = routines.map(({ roomTargets: _, ...routine }) => routine as T);
+  if (!listed.some(routine => touches(routine) || errs(routine))) return listed;
+  const redact = await errorRedactor(runtime, store, roster, userId, listed.some(touches));
+  return listed.map(routine => {
     if (!touches(routine) && !errs(routine)) return routine;
     const { roomIds, ...rest } = routine;
     const errors = {
@@ -63,6 +65,27 @@ export async function routinesFor<T extends Routine>(runtime: Pick<Runtime, 'gro
     if (!roomIds) return { ...routine, ...errors };
     return (redact.rooms ? { ...rest, ...errors, roomIds: roomIds.filter(id => redact.rooms!.has(id)) } : { ...rest, ...errors }) as T;
   });
+}
+
+/** Every group chat a routine's delivery names, as Hermes has it. */
+export const routineTargets = (routine: Pick<Routine, 'roomIds' | 'roomTargets'> | undefined) =>
+  [...new Set([...routine?.roomIds ?? [], ...routine?.roomTargets ?? []])];
+
+/**
+ * Refuses to let a routine deliver while any group chat it posts in could be opened by someone who cannot
+ * see its assistant. A target written outside the app, by Hermes, its CLI, the dashboard or an agent, can
+ * name such a room, and its owner may not even see it listed. Call it inside `serialDelivery` before
+ * anything that makes the routine deliver: a save that leaves it enabled, resuming it and a trial run.
+ * Pausing and deleting never need it.
+ */
+export async function assertDeliveryPrivate(runtime: Pick<Runtime, 'groupRequest' | 'listBots'>, store: Store, botId: string, roomIds: string[]) {
+  if (!roomIds.length || !runtime.groupRequest) return;
+  let open: Awaited<ReturnType<typeof openableRooms>>;
+  try { open = await openableRooms(runtime, store, ''); }
+  catch { throw httpError(409, "WildBots couldn't check the group chats this routine posts in, so it stays as it was. Try again in a moment.", { code: 'routine_rooms_unknown' }); }
+  const bot = open.presentation(botId);
+  if (roomIds.some(roomId => { const room = open.all.get(roomId); return !!room && roomLeaks(bot, room, open.presentation); }))
+    throw httpError(409, "This routine posts in a group chat that people who can't see its assistant could open, so it can't run. Pause it, or have someone who can open that group chat remove it from the routine.", { code: 'routine_rooms' });
 }
 
 /** Routine run errors as one person sees them, by the same rules as `routinesFor`. */
@@ -77,7 +100,7 @@ async function runErrorsFor<T extends { error?: string }>(runtime: Pick<Runtime,
  * plus any it already posts in that they cannot see. `current` is the routine's rooms as Hermes has them
  * now, read in this turn of `serialDelivery`, so an earlier save or sharing change in the queue is never
  * undone. Every room in the result is checked against the current sharing, including the ones kept
- * unseen: none may let someone who cannot see the assistant read its results. Undefined when nothing changes.
+ * unseen, by `assertDeliveryPrivate` before the save. Undefined when nothing changes.
  */
 export async function routineRooms(runtime: Pick<Runtime, 'groupRequest' | 'listBots'>, store: Store, userId: string,
   input: { botId: string; roomIds?: string[] }, current?: string[]): Promise<string[] | undefined> {
@@ -96,10 +119,7 @@ export async function routineRooms(runtime: Pick<Runtime, 'groupRequest' | 'list
   // Rooms it already posts in keep their place; newly chosen ones follow.
   const before = current ?? [];
   const rooms = [...before.filter(roomId => !open.rooms.has(roomId) || chosen.includes(roomId)), ...chosen.filter(roomId => !before.includes(roomId))];
-  if (current && JSON.stringify(rooms) === JSON.stringify(current)) return undefined;
-  if (rooms.some(roomId => { const room = open.all.get(roomId); return !!room && roomLeaks(bot, room, presentation); }))
-    throw httpError(409, "This routine already posts in a group chat that people who can't see its assistant could open. Ask someone who can open that group chat to remove it from the routine, then try again.", { code: 'routine_rooms' });
-  return rooms;
+  return current && JSON.stringify(rooms) === JSON.stringify(current) ? undefined : rooms;
 }
 
 export async function installCollaborationRoutes(app: FastifyInstance, runtime: Runtime, store: Store, roster = new Roster(runtime)) {

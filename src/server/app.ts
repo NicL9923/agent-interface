@@ -33,7 +33,7 @@ import { registerVoiceRoutes } from "./voice.js";
 import { installDiscoveryRoutes } from "./discovery.js";
 import { assertRoutineEditable, installExperienceRoutes } from "./experience.js";
 import { installComputerRoutes } from "./computer.js";
-import { installCollaborationRoutes, roomAccessible, routineRooms, routinesFor } from './collaboration.js';
+import { assertDeliveryPrivate, installCollaborationRoutes, roomAccessible, routineRooms, routinesFor } from './collaboration.js';
 import { routineRoomId } from '../shared/collaboration.js';
 import { serialDelivery } from './routine-delivery.js';
 import { GroupWatch } from "./group-watch.js";
@@ -394,14 +394,22 @@ export async function createApp(
     const owner = store.presentation(input.botId);
     if (owner.shared === false && owner.ownerId && input.recipientIds.some(id => id !== owner.ownerId))
       throw httpError(400, "Only you can receive your personal assistant's routine results.", { code: "private_recipients" });
-    // Checked last, so a refused routine never waits on Hermes's room catalog. Rooms are checked and
-    // saved in one turn with sharing changes, which recheck them.
-    const routine = input.roomIds === undefined ? await runtime.saveRoutine(input, routineId) : await serialDelivery(store, async () => {
+    // Checked last, so a refused routine never waits on Hermes's room catalog. Saves run one at a time
+    // with sharing changes, which recheck routine rooms.
+    const routine = await serialDelivery(store, async () => {
       // Read again in this turn: a save or sharing change ahead in the queue may have changed its rooms.
       const current = routineId ? (await runtime.routines()).find(row => row.id === routineId) : undefined;
       if (routineId && (!current || current.botId !== input.botId)) throw httpError(404, "Routine not found");
-      const rooms = await routineRooms(runtime, store, userId, input, current?.roomIds);
-      if (rooms === undefined) delete input.roomIds; else input.roomIds = rooms;
+      if (input.roomIds !== undefined) {
+        const rooms = await routineRooms(runtime, store, userId, input, current?.roomIds);
+        if (rooms === undefined) delete input.roomIds; else input.roomIds = rooms;
+      }
+      // An enabled routine delivers, so every room it will post in is checked, including any its owner
+      // cannot see and any written outside the app, even when this save changes none of them.
+      if (input.enabled) {
+        const outside = (current?.roomTargets ?? []).filter(id => !(current?.roomIds ?? []).includes(id));
+        await assertDeliveryPrivate(runtime, store, input.botId, [...new Set([...input.roomIds ?? current?.roomIds ?? [], ...outside])]);
+      }
       return runtime.saveRoutine(input, routineId);
     });
     store.routineRecipients(routine.id, input.recipientIds);

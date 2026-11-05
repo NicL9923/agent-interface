@@ -13,6 +13,8 @@ import { nameRequesters } from './vault.js';
 import { contentEtag } from './etag.js';
 import { httpError } from './http-error.js';
 import { id } from './schemas.js';
+import { assertDeliveryPrivate, routineTargets } from './collaboration.js';
+import { serialDelivery } from './routine-delivery.js';
 const target = z.enum(['memory', 'user']);
 const revision = z.string().regex(/^[a-f0-9]{64}$/);
 const iso = z.string().datetime({ offset: true });
@@ -117,7 +119,7 @@ export async function installExperienceRoutes(app: FastifyInstance, runtime: Run
     let upcoming: import("../shared/types.js").Routine[] = [];
     try { upcoming = (await runtime.routines()).filter(row => ids.has(row.botId) && row.enabled && row.nextRunAt).sort((a,b)=>Date.parse(a.nextRunAt!) - Date.parse(b.nextRunAt!)).slice(0,10)
       // Today never shows where a routine posts, so it never reads the room catalog to hide rooms someone cannot open.
-      .map(({ roomIds: _, ...row }) => row); } catch { /* The rest of Today remains useful during a scheduler outage. */ }
+      .map(({ roomIds: _, roomTargets: __, ...row }) => row); } catch { /* The rest of Today remains useful during a scheduler outage. */ }
     const content = { since, frontier: page.frontier, hasMore: page.hasMore, items,
       events: page.events.filter(event => ids.has(event.botId)).map(event => ({ ...event, ...(eventFiles.has(event.id) ? { files: eventFiles.get(event.id) } : {}) })).sort((a, b) => Date.parse(b.occurredAt) - Date.parse(a.occurredAt)),
       unavailableBots: items.filter(item => item.error).map(item => item.botId) };
@@ -157,8 +159,14 @@ export async function installExperienceRoutes(app: FastifyInstance, runtime: Run
     const previous = store.routineTrial(requestId);
     if (previous && (previous.userId !== userId || previous.routineId !== params.id)) throw httpError(409, 'This trial request ID belongs to a different routine or person');
     const row = previous ? { botId: previous.botId, id: previous.routineId } : await routine(params.id);
-    store.rememberRoutineTrial(requestId, userId, row.id, row.botId);
-    const receipt = await request({ operation: 'run', profile: row.botId, routineId: row.id, requestId, senderId: userId });
+    // A trial delivers like a scheduled run, so its rooms are checked as Hermes has them now, in turn with
+    // sharing changes and routine saves. A retried request whose routine is gone only reads its receipt.
+    const receipt = await serialDelivery(store, async () => {
+      const current = (await runtime.routines()).find(other => other.id === row.id);
+      if (current) await assertDeliveryPrivate(runtime, store, current.botId, routineTargets(current));
+      store.rememberRoutineTrial(requestId, userId, row.id, row.botId);
+      return request({ operation: 'run', profile: row.botId, routineId: row.id, requestId, senderId: userId });
+    });
     if ('status' in receipt) store.recordRoutineTrialStatus(requestId, receipt.status);
     return receipt;
   });

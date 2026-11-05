@@ -1237,6 +1237,8 @@ it('posts routine results in chosen group chats and rewrites only the room targe
   }));
   const [routine]=await runtime.routines();
   expect(routine.roomIds).toEqual(['old']);
+  // Every room target, including one written for a profile, is kept for the server's checks.
+  expect(routine.roomTargets).toEqual(['old', 'kept']);
   const base={botId:'shared',name:'Morning',prompt:'Check',schedule:'1h',enabled:true};
   await runtime.saveRoutine({...base,roomIds:['new']},'job-one');
   expect(requests.at(-1)).toMatchObject({method:'PUT',body:{updates:{deliver:'bot-chat:shared,room:kept@other,telegram:123,room:new'}}});

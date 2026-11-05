@@ -344,6 +344,11 @@ export interface Routine {
    * viewer can open are listed; saving keeps the ones they cannot see. Undefined leaves them unchanged.
    */
   roomIds?: string[];
+  /**
+   * Server only, never sent to clients: every group chat the routine's delivery names, including targets
+   * written outside the app as `room:<id>@<profile>`. Checked before the routine may deliver.
+   */
+  roomTargets?: string[];
   skills?: string[];
   model?: string | null;
   provider?: string | null;

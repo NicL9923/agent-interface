@@ -203,9 +203,13 @@ assistant's routine may post only in rooms nobody else can open, in practice roo
 owner's personal assistants (400 with `code: "private_recipients"`). An error that names a room you cannot
 open is replaced whole with "Couldn't post in a group chat you can't open.", since Hermes repeats the
 room's profile elsewhere in it, and one that names an assistant you cannot see is hidden as private.
-A save merges your rooms with the routine's rooms as Hermes has them when the save runs, and refuses
-with 409 `code: "routine_rooms"` if any resulting room, including ones you cannot see, would expose the
-routine. `PATCH /api/bots/:id` refuses a sharing change that
+A save merges your rooms with the routine's rooms as Hermes has them when the save runs. Anything that
+lets a routine deliver checks every room its delivery names, including rooms you cannot see and
+`room:<id>@<profile>` targets written outside the app: a save that leaves it enabled,
+`PATCH /api/routines/:id/state` with `enabled: true`, `POST /api/routines/:id/run`, and creating,
+changing or turning on an event trigger for it. If a room would expose the routine, these answer 409
+with `code: "routine_rooms"`; if the rooms cannot be read, `code: "routine_rooms_unknown"`. Pausing,
+saving a paused routine and turning a trigger off always go ahead. `PATCH /api/bots/:id` refuses a sharing change that
 would let a routine post where people who cannot see its assistant read it, such as making an
 assistant personal while its routine posts in a room others can open, or sharing the last personal
 member of a room a personal routine posts in. `POST /api/bots` refuses the same way when a room

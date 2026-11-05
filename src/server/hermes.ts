@@ -13,7 +13,7 @@ import { httpError } from './http-error.js';
 import { createModelNames } from './model-names.js';
 import { createHermesTransport, TransportError, type Connection, type HermesOptions, type Wire } from './hermes-transport.js';
 import { fileSigner, safeStagedPath, type RegisteredFile } from './hermes-files.js';
-import { applyFrame, bot, deliverRooms, emptyLiveState, withDeliverRooms, exposedText, historyMessages, inflightMessage, openRequests, receipt, toolDetails, unbridged, type LiveState } from './hermes-mapping.js';
+import { applyFrame, bot, deliverRooms, deliverRoomTargets, emptyLiveState, withDeliverRooms, exposedText, historyMessages, inflightMessage, openRequests, receipt, toolDetails, unbridged, type LiveState } from './hermes-mapping.js';
 
 export type { HermesOptions } from './hermes-transport.js';
 
@@ -860,7 +860,7 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
             skills: job.skills ?? (job.skill ? [job.skill] : []), model: job.model ?? null, provider: job.provider ?? null,
             enabledToolsets: job.enabled_toolsets ?? null, script: job.script ?? null, noAgent: job.no_agent === true,
             contextFrom: typeof job.context_from === 'string' ? [job.context_from] : job.context_from ?? null,
-            roomIds: deliverRooms(job.deliver),
+            roomIds: deliverRooms(job.deliver), roomTargets: deliverRoomTargets(job.deliver),
             enabled: job.enabled !== false && job.state !== 'paused',
             nextRunAt: job.next_run_at ?? undefined, lastRunAt: job.last_run_at ?? undefined,
             lastStatus: job.last_status ?? undefined, lastError: job.last_error ?? undefined, lastDeliveryError: job.last_delivery_error ?? undefined});

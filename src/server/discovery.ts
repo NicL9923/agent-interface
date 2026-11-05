@@ -9,7 +9,8 @@ import type { Store } from './store.js';
 import { notFound, redactAgents, Roster, visibleBots } from './bot-access.js';
 import { httpError } from './http-error.js';
 import { id } from './schemas.js';
-import { routinesFor } from './collaboration.js';
+import { assertDeliveryPrivate, routinesFor, routineTargets } from './collaboration.js';
+import { serialDelivery } from './routine-delivery.js';
 export async function installDiscoveryRoutes(app: FastifyInstance, runtime: Runtime, store: Store, roster = new Roster(runtime)) {
   const visible = (userId: string) => visibleBots(runtime, store, userId);
   async function bot(userId: string, botId: string) {
@@ -77,7 +78,16 @@ export async function installDiscoveryRoutes(app: FastifyInstance, runtime: Runt
     if(!row)throw httpError(404,'Routine not found');
     await bot(signedIn(req).id,row.botId);await assertRoutineEditable(runtime,store,routineId);
     if(!runtime.setRoutineEnabled)throw httpError(409,'This integration cannot change routine state independently.');
-    await runtime.setRoutineEnabled(row.botId,routineId,enabled);return {ok:true};
+    // Resuming lets it deliver, so its rooms are checked as Hermes has them now; pausing always goes ahead.
+    await serialDelivery(store, async () => {
+      if (enabled) {
+        const current = (await runtime.routines()).find(other => other.id === routineId);
+        if (!current) throw httpError(404, 'Routine not found');
+        await assertDeliveryPrivate(runtime, store, current.botId, routineTargets(current));
+      }
+      await runtime.setRoutineEnabled!(row.botId, routineId, enabled);
+    });
+    return {ok:true};
   });
   apiRoute(app, "GET /automations", {}, async req => {
     const { days } = z.object({ days: z.coerce.number().refine(days => [7,30,90].includes(days)).default(30) }).strict().parse(req.query);

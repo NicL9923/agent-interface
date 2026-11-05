@@ -2,7 +2,7 @@ import { expect, it } from 'vitest';
 import { activityAction } from '../src/shared/activity-sentence';
 import { assignmentText, groupStatus, memberActivity, scheduledPost } from '../src/shared/group-activity';
 import { routineRoomChoices, type GroupDriverStatus, type GroupEvent } from '../src/shared/collaboration';
-import { deliverRooms, withDeliverRooms } from '../src/server/hermes-mapping';
+import { deliverRooms, deliverRoomTargets, withDeliverRooms } from '../src/server/hermes-mapping';
 import { previewOf } from '../src/server/group-latest';
 import { redactRooms, roomLeaks } from '../src/server/routine-delivery';
 
@@ -105,6 +105,7 @@ it("reads and rewrites only the app's room targets in a routine's delivery", () 
   expect(deliverRooms('bot-chat:ranch, room:dinner,room:team@other,ROOM:dinner')).toEqual(['dinner']);
   expect(deliverRooms(['bot-chat:ranch', 'room:a'])).toEqual(['a']);
   expect(deliverRooms(undefined)).toEqual([]);
+  expect(deliverRoomTargets('bot-chat:ranch,room:dinner,room:team@other,room:dinner@x,telegram')).toEqual(['dinner', 'team']);
   expect(withDeliverRooms('bot-chat:ranch,room:old,room:team@other,telegram', ['new', 'new'])).toBe('bot-chat:ranch,room:team@other,telegram,room:new');
   expect(withDeliverRooms('local', ['a'])).toBe('room:a');
   expect(withDeliverRooms('room:a', [])).toBe('local');

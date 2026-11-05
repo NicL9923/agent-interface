@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/server/app.js";
 import { loadConfig } from "../src/server/config.js";
 import type { Routine, Runtime } from "../src/shared/types.js";
@@ -18,6 +18,7 @@ let saveBot: ReturnType<typeof vi.fn>;
 let assistants: string[];
 let slowRead: Promise<void> | undefined;
 let readsBeforeSlow = 0;
+const setRoutineEnabled = vi.fn(async () => {});
 beforeEach(async () => {
   rows = [{ ...base, id: "abc123", roomIds: ["team", "secret"] }];
   catalog = { supported: true, canSend: true, routineDelivery: true, rooms: [room("team", ["shared", "planner"]), room("secret", ["shared", "diary"]), room("mine", ["shared", "notes"]),
@@ -34,6 +35,7 @@ beforeEach(async () => {
     capabilities: async () => ({ routines: { supported: true }, botConfiguration: { supported: true }, avatarMetadata: { supported: false } }),
     listBots: async () => assistants.map(id => ({ id, name: id, shared: true, activity: "idle" })),
     deleteBot: async (id: string) => { assistants = assistants.filter(other => other !== id); },
+    setRoutineEnabled, experienceRequest: async () => ({ requestId: "r", routineId: "abc123", botId: "shared", status: "accepted" }),
     // A read copies the routines when Hermes is asked. `slowRead` holds back the answer to the read after
     // `readsBeforeSlow` more, as a slow Hermes would.
     routines: async () => {
@@ -225,11 +227,47 @@ it("merges a routine save with the rooms it has when its turn comes, not when it
 });
 
 it("refuses a save whose rooms, including ones the saver cannot see, would expose the routine", async () => {
-  // A state no current path makes, as left by an older app: a personal routine already posts in "lodge".
+  // As Hermes, its CLI or an agent can leave it: a personal routine already posts in "lodge", which only local-two opens.
   created.store.savePresentation("shared", { shared: false, ownerId: "local-one" });
   rows = [{ ...base, id: "abc123", roomIds: ["lodge"] }];
-  const refused = await write({ ...base, roomIds: ["team"] }, "abc123");
+  const refused = await write({ ...base, enabled: true, roomIds: ["team"] }, "abc123");
   expect(refused.statusCode).toBe(409);
   expect(refused.json().code).toBe("routine_rooms");
   expect(save).not.toHaveBeenCalled();
+});
+
+describe("a paused personal routine that posts in a room only another member can open", () => {
+  const headers = () => localLogin(created.app, origin);
+  beforeEach(() => {
+    created.store.savePresentation("shared", { shared: false, ownerId: "local-one" });
+    rows = [{ ...base, id: "abc123", enabled: false, roomIds: ["lodge"] }];
+  });
+  it("cannot be enabled by a save that leaves its rooms alone", async () => {
+    // The re-review's repro: its owner sees no rooms, and saves it enabled without naming any.
+    const [listed] = (await created.app.inject({ url: "/api/routines", headers: await headers() })).json();
+    expect(listed.roomIds).toEqual([]);
+    const refused = await write({ ...base, enabled: true }, "abc123");
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json().code).toBe("routine_rooms");
+    expect(save).not.toHaveBeenCalled();
+    // Kept paused, any change still saves.
+    expect((await write({ ...base, name: "Renamed" }, "abc123")).statusCode).toBe(200);
+  });
+  it("cannot be resumed or run, but can be paused", async () => {
+    setRoutineEnabled.mockClear();
+    const resumed = await created.app.inject({ method: "PATCH", url: "/api/routines/abc123/state", headers: await headers(), payload: { enabled: true } });
+    expect(resumed.json().code).toBe("routine_rooms");
+    const run = await created.app.inject({ method: "POST", url: "/api/routines/abc123/run", headers: await headers(), payload: { requestId: crypto.randomUUID() } });
+    expect(run.json().code).toBe("routine_rooms");
+    expect(setRoutineEnabled).not.toHaveBeenCalled();
+    expect((await created.app.inject({ method: "PATCH", url: "/api/routines/abc123/state", headers: await headers(), payload: { enabled: false } })).statusCode).toBe(200);
+    expect(setRoutineEnabled).toHaveBeenCalledWith("shared", "abc123", false);
+  });
+  it("is checked for a target written as room:<id>@<profile>, which the app never shows", async () => {
+    rows = [{ ...base, id: "abc123", enabled: false, roomIds: [], roomTargets: ["lodge"] }];
+    expect((await write({ ...base, enabled: true }, "abc123")).json().code).toBe("routine_rooms");
+    // It is never sent to anyone.
+    const [listed] = (await created.app.inject({ url: "/api/routines", headers: await headers() })).json();
+    expect(listed).not.toHaveProperty("roomTargets");
+  });
 });
