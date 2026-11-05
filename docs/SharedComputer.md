@@ -154,13 +154,67 @@ loopback, is outside this boundary. See
 
 The literal checks below are defense in depth. Hermes keeps the metadata floor in
 navigation, redirect checks and `browser_exec`. The add-on dispatch wrapper also
-blocks metadata URL literals in `browser_console(expression=...)`, CDP
-`Page.navigate` and CDP `Runtime.evaluate`, using native Hermes's URL-literal
-scanner and always-blocked matcher. They are not an egress firewall: native local
-classification skips the current-page metadata check before content tools, and
-computed or obfuscated JavaScript URLs can escape the literal scan. The nftables
-floor is what stops those. Native website-policy checks and their caching are
-unchanged. Human takeover, operation locks, recovery fences,
+blocks metadata URL literals in `browser_cdp` before the household browser
+operation starts.
+
+The wrapper applies native Hermes's own CDP metadata floor.
+`browser_cdp_tool._fetched_param_urls` names every URL a fetching method's
+parameters carry, including scheme-relative `//host` and `\\host` forms and
+hosts after userinfo. `browser_url_policy.literal_targets_metadata` judges each
+one, including IPv6 and decimal, hex and octal IPv4 spellings, without DNS.
+
+The wrapper also finds special-scheme forms that native's scan misses but
+WHATWG URL parsing still reads as an authority. For `http`, `https`, `ws` and
+`wss`, these are zero or one slash (`http:/169.254.169.254/`,
+`HTTP:169.254.169.254/`), backslashes (`http:\\169.254.169.254`), and the
+JavaScript spellings `\/`, `\t`, `\n` and `\r`. It reads each authority as
+WHATWG does:
+
+- The userinfo ends at the last `@` before the first `/`, `\`, `?` or `#`.
+- A bracketed IPv6 host stays whole.
+- When an `@` follows a quote or space, the wrapper judges both readings. It
+  never judges a host cut short.
+- CSS `url()` and `@import`, unquoted HTML attributes and `srcset` end a URL
+  at `)`, `;`, a quote, `,`, `>`, `}` or whitespace. The authority is also
+  read cut at the first of those, before the userinfo split, so an `@media`
+  rule after the URL is not taken for userinfo. Each host is also judged
+  cut at the same characters.
+- Every scheme occurrence is read on its own, including one inside another
+  URL's query, so an earlier URL in the same text never hides a later one.
+- Delimiter positions are found once per text, so the scan stays near
+  linear: a 1 MiB script holding 58,252 schemes takes about 0.1 s. A host
+  over 1,024 characters is blocked unless it holds a character no IPv4 or
+  metadata-name spelling has, so leading zeros, percent-encoding or long
+  userinfo can't hide an address.
+
+A host WHATWG rejects can't fetch anything and passes. So `{https:[]}` and
+`JSON.stringify({http:[]})` still run. Rejected hosts include an unclosed,
+empty or invalid bracketed host, an empty host, a non-numeric port and a
+forbidden code point.
+
+An accepted host is judged by native in its plain form, after
+percent-decoding. A non-ASCII host first goes through the `idna` package's
+UTS 46 mapping, the mapping WHATWG domain-to-ASCII uses. So `%E1%B4%B9` and
+mathematical or fullwidth digits read as WHATWG reads them. If `idna` is
+missing or can't map the host, the call is blocked. An IPv6 host is also
+judged by any IPv4 address it embeds: mapped, translated, IPv4-compatible,
+NAT64 `64:ff9b::/96` and 6to4.
+
+Hostnames are judged literally, as native judges `//host`, so a name that
+only resolves to a metadata address is not caught here. JavaScript `\u` and
+`\x` escapes, and URLs built at run time, are not decoded.
+Text input, block lists and cookie scopes stay unscanned, as in native.
+Native `browser_cdp` repeats its own floor, which lacks the extra forms. A
+`tools.browser_session` revision without these helpers fails the seam check,
+so the shared computer stays off until it is qualified. The
+older `browser_tool_*` revisions keep the earlier check of
+`browser_console(expression=...)`, CDP `Page.navigate` and CDP
+`Runtime.evaluate` with the http(s) literal scanner. These are literal
+checks, not an egress firewall. Native local classification skips the
+current-page metadata check before content tools, and computed or obfuscated
+JavaScript URLs can escape the literal scan. The nftables floor is what stops
+those. Native website-policy checks and their caching are unchanged. Human
+takeover, operation locks, recovery fences,
 and TLS validation also remain in force. The wrapper uses the revision-qualified
 `browser_tool_cloud._is_local_backend` seam because this native revision has no
 owned-browser provenance hook. Qualification must cover changes to this seam.

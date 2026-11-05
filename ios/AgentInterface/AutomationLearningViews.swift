@@ -41,6 +41,8 @@ import SwiftUI
   }
 }
 
+private let hermesSkillLockedNote = "Assistants can't change this skill while it's locked."
+
 private func hermesSkillSource(_ origin: String) -> String {
   "Source: " + (origin.isEmpty ? "Not reported" : origin.prefix(1).uppercased() + String(origin.dropFirst()))
 }
@@ -106,16 +108,29 @@ struct HermesLearningView: View {
     }
   }
   private func installedSkills(_ state: HermesAutomationOverview.Skills) -> some View {
-    Section("Installed skills") {
+    Section {
       if state.installed.isEmpty { Text("No installed skills reported.").foregroundStyle(Palette.muted) }
       ForEach(state.installed) { item in
         Button { installed = item } label: {
           VStack(alignment: .leading, spacing: 4) {
-            Text(item.name).foregroundStyle(Color.primary)
+            HStack(spacing: 6) {
+              Text(item.name).foregroundStyle(Color.primary)
+              if item.locked == true {
+                Label("Locked", systemImage: "lock.fill").font(.caption.weight(.semibold)).foregroundStyle(Palette.muted)
+              }
+            }
             if !item.description.isEmpty { Text(item.description).font(.caption).foregroundStyle(Palette.muted) }
+            if item.locked == true { Text(hermesSkillLockedNote).font(.caption).foregroundStyle(Palette.muted) }
             Text("Read skill").font(.subheadline)
           }.padding(.vertical, 4)
         }.disabled(control.busy).accessibilityIdentifier("automation.installedSkill.\(item.id)")
+      }
+    } header: { Text("Installed skills") } footer: {
+      if state.lockSupported == true {
+        VStack(alignment: .leading, spacing: 4) {
+          Text("Lock a skill to keep assistants from changing it. Open the skill to lock or unlock it. You can still edit it in Hermes.")
+          if control.value?.canManageLearningPolicy == false { Text("Only an integration administrator can lock or unlock skills.") }
+        }.font(.footnote).foregroundStyle(Palette.muted)
       }
     }
   }
@@ -140,16 +155,41 @@ private struct HermesSkillReader: View {
           if let error = loader.error { ErrorBanner(message: error) }
           Button("Reload skill") { Task { await load() } }.disabled(loader.loading)
         }
+        if control.value?.skills.lockSupported == true, let locked = current?.locked { lockSection(locked) }
         if let value = loader.value {
           Section("Skill content") {
             HermesAutomationDocument(text: value.content.isEmpty ? "This skill has no content." : value.content)
             if value.truncated { Text("Preview truncated. Open Hermes for the full skill.").foregroundStyle(Palette.danger) }
           }
         }
-      }.householdListBackground().navigationTitle("Installed skill").navigationBarTitleDisplayMode(.inline)
+      }.householdListBackground().accessibilityIdentifier("automation.skillReader")
+        .navigationTitle("Installed skill").navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } } }
         .task { loader.lifetime.appear(); await load() }
         .onDisappear { loader.lifetime.disappear() }
+    }
+  }
+  /// The skill as the latest status reports it, so the lock reflects what Hermes saved.
+  private var current: HermesInstalledSkill? { control.value?.skills.installed.first { $0.name == skill.name } }
+  private func lockSection(_ locked: Bool) -> some View {
+    Section {
+      if let error = control.error { ErrorBanner(message: error) }
+      if let notice = control.notice { Text(notice).font(.footnote).accessibilityAddTraits(.updatesFrequently) }
+      Toggle("Lock skill", isOn: Binding(get: { locked }, set: { setLock($0) }))
+        .disabled(control.disabled || !store.connected || control.value?.canManageLearningPolicy == false)
+        .accessibilityIdentifier("automation.skillLock")
+    } footer: {
+      VStack(alignment: .leading, spacing: 4) {
+        Text(locked ? hermesSkillLockedNote : "Lock this skill to keep assistants from changing it. You can still edit it in Hermes.")
+        if control.value?.canManageLearningPolicy == false { Text("Only an integration administrator can lock or unlock skills.") }
+      }.font(.footnote).foregroundStyle(Palette.muted)
+    }
+  }
+  private func setLock(_ locked: Bool) {
+    let alive = loader.lifetime.current
+    Task {
+      let _: HermesSkillLock? = await control.change(
+        store, "/skills/lock", HermesSkillLockInput(name: skill.name, locked: locked), method: "PUT", current: alive)
     }
   }
   @MainActor private func load() async {

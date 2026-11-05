@@ -86,8 +86,8 @@ const overview = z.object({ botId: text, owner: z.literal('Hermes'),
     interruptionPending: flag.optional(), resume: z.object({ requestId: text, status: z.enum(['accepted', 'rejected', 'uncertain']), runId: text.optional(), message: text.optional() }).optional() }),
   tasks: z.object({ ...support, items: z.array(task), truncated: flag.optional(), limit: number.optional() }),
   triggers: z.object({ ...support, items: z.array(subscription), platformEnabled: flag }),
-  skills: z.object({ ...support, installed: z.array(z.object({ name: text, description: text })),
-    pending: z.array(z.object({ id: text, summary: text, origin: text, revision: text })), approvalRequired: flag }),
+  skills: z.object({ ...support, installed: z.array(z.object({ name: text, description: text, locked: flag.optional() })),
+    pending: z.array(z.object({ id: text, summary: text, origin: text, revision: text })), approvalRequired: flag, lockSupported: flag.optional() }),
 });
 const ok = z.object({ ok: z.literal(true) });
 const automationSchemas: { [O in AutomationOperation]: z.ZodType<AutomationResult<O>> } = {
@@ -97,6 +97,7 @@ const automationSchemas: { [O in AutomationOperation]: z.ZodType<AutomationResul
   trigger_update: z.object({ subscription }), trigger_toggle: z.object({ subscription }), trigger_delete: ok,
   skill_content: z.object({ name: text, content: text, truncated: flag }),
   skill_diff: z.object({ id: text, diff: text, revision: text, truncated: flag }), skill_decide: ok, skill_policy: ok,
+  skill_lock: z.object({ ok: z.literal(true), name: text, locked: flag }),
 };
 function decode<T>(schema: z.ZodType<T>, value: unknown, family: string, operation: string): T {
   const result = schema.safeParse(value);

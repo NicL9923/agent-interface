@@ -11,16 +11,18 @@ export interface EventSubscription {
   id: string; description: string; events: string[]; routineId: string; enabled: boolean;
   url: string; secretSet: boolean; revision: string;
 }
-export interface InstalledSkill { name: string; description: string }
+/** `locked` is native Hermes's skill lock: while it is set, assistants can't change the skill. Absent when Hermes can't lock skills. */
+export interface InstalledSkill { name: string; description: string; locked?: boolean }
 export interface PendingSkill { id: string; summary: string; origin: string; revision: string }
 export interface SkillContent { name: string; content: string; truncated: boolean }
+export interface SkillLock { ok: true; name: string; locked: boolean }
 export interface SkillDiff { id: string; diff: string; revision: string; truncated: boolean }
 export interface AutomationOverview {
   botId: string; owner: 'Hermes'; canManageTriggers?: boolean; canManageLearningPolicy?: boolean;
   goals: AutomationSupport & { goal: PersistentGoal | null; interruptionPending?: boolean; resume?: { requestId: string; status: 'accepted' | 'rejected' | 'uncertain'; runId?: string; message?: string } };
   tasks: AutomationSupport & { items: AutomationTask[]; truncated?: boolean; limit?: number };
   triggers: AutomationSupport & { items: EventSubscription[]; platformEnabled: boolean };
-  skills: AutomationSupport & { installed: InstalledSkill[]; pending: PendingSkill[]; approvalRequired: boolean };
+  skills: AutomationSupport & { installed: InstalledSkill[]; pending: PendingSkill[]; approvalRequired: boolean; lockSupported?: boolean };
 }
 export interface TaskInput { requestId: string; title: string; body?: string; priority?: number; assignee?: string | null; dependencies?: string[] }
 export interface TriggerInput { id: string; description: string; events: string[]; routineId: string }
@@ -43,6 +45,7 @@ type AutomationRequestUnion = { profile: string; visibleProfiles?: string[] } & 
   | { operation: 'skill_diff'; pendingId: string }
   | { operation: 'skill_decide'; pendingId: string; revision: string; decision: 'approve' | 'reject' }
   | { operation: 'skill_policy'; approvalRequired: boolean }
+  | { operation: 'skill_lock'; name: string; locked: boolean }
 );
 export interface AutomationResults {
   overview: AutomationOverview;
@@ -63,6 +66,7 @@ export interface AutomationResults {
   skill_diff: SkillDiff;
   skill_decide: { ok: true };
   skill_policy: { ok: true };
+  skill_lock: SkillLock;
 }
 export type AutomationOperation = AutomationRequestUnion['operation'];
 export type AutomationRequests = { [O in AutomationOperation]: Extract<AutomationRequestUnion, { operation: O }> };

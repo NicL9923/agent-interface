@@ -72,6 +72,7 @@ export function automationRequester(handlers: AutomationHandlers): AutomationReq
       case 'skill_diff': return configured(handlers.skill_diff, input.operation)(input);
       case 'skill_decide': return configured(handlers.skill_decide, input.operation)(input);
       case 'skill_policy': return configured(handlers.skill_policy, input.operation)(input);
+      case 'skill_lock': return configured(handlers.skill_lock, input.operation)(input);
     }
   }
   return request;

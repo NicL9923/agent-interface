@@ -98,8 +98,8 @@ const profileAutomation = { botId: "household", owner: "Hermes", goals: { suppor
   goal: { title: "Maintain the pasture", status: "paused", turnsUsed: 4, maxTurns: 20, pausedReason: "Waiting for your approval." },
   resume: { requestId: ids.run, status: "accepted", runId: "run-goal" } },
   tasks: { supported: true, items: [automationTask] }, triggers: { supported: true, items: [eventSubscription], platformEnabled: false },
-  skills: { supported: true, installed: [{ name: "ranch/fences", description: "Fence inspection" }],
-    pending: [{ id: "deadbeef", summary: "Add gate check", origin: "agent", revision: "c".repeat(64) }], approvalRequired: true },
+  skills: { supported: true, installed: [{ name: "ranch/fences", description: "Fence inspection", locked: true }, { name: "ranch/gates", description: "Gate checks", locked: false }],
+    pending: [{ id: "deadbeef", summary: "Add gate check", origin: "agent", revision: "c".repeat(64) }], approvalRequired: true, lockSupported: true },
 } satisfies ProfileAutomationOverview;
 const skillContent = { name: "ranch/fences", content: "# Fence inspection\n\nCheck the north gate.", truncated: false } satisfies SkillContent;
 // The detail revision hashes the displayed diff, so it deliberately differs from the list revision.
@@ -199,6 +199,7 @@ const runtime = {
     trigger_update: () => ({ subscription: structuredClone(eventSubscription) }), trigger_toggle: () => ({ subscription: structuredClone(eventSubscription) }),
     trigger_delete: () => ({ ok: true }), skill_content: () => skillContent, skill_diff: () => skillDiff,
     skill_decide: () => ({ ok: true }), skill_policy: () => ({ ok: true }),
+    skill_lock: input => ({ ok: true, name: input.name, locked: input.locked }),
   }),
   groupRequest: async input => {
     switch (input.operation) {
@@ -338,6 +339,7 @@ it("keeps the server responses the iOS app decodes in sync with the committed co
       description: eventSubscription.description, events: eventSubscription.events, routineId: eventSubscription.routineId });
     await record("bot-skill-diff", "GET", "/api/bots/household/automation/skills/pending/deadbeef");
     await record("bot-skill-content", "GET", "/api/bots/household/automation/skills/content?name=ranch%2Ffences");
+    await record("bot-skill-lock", "PUT", "/api/bots/household/automation/skills/lock", { name: "ranch/fences", locked: false });
 
     await record("search", "GET", "/api/search?q=dinner");
     await record("history", "GET", "/api/bots/household/history/session-household?offset=0");

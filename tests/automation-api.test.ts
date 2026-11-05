@@ -26,6 +26,7 @@ async function setup() {
     trigger_create: () => ({subscription: subscriptionFixture(), secret: 'one-time-fixture'}),
     trigger_update: () => ({subscription: subscriptionFixture()}), trigger_toggle: () => ({subscription: subscriptionFixture()}),
     trigger_delete: () => ({ok: true}), skill_policy: () => ({ok: true}), skill_decide: () => ({ok: true}),
+    skill_lock: input => ({ok: true, name: input.name, locked: input.locked}),
   });
   const runtime = fakeRuntime({ automationRequest: automation, listBots: vi.fn(async () => [botFixture({id:'ranch',name:'Ranch'}), botFixture({id:'private',name:'Private'})]) });
   const automationRequest = vi.spyOn(runtime, 'automationRequest');
@@ -112,6 +113,23 @@ it('restricts learning policy to administrators while allowing visible editors t
   const requestId = randomUUID();
   expect((await s.app.inject({ method: 'POST', url: base + '/goal/resume', headers: s.first, payload: { requestId, reviewedInterruption: true } })).statusCode).toBe(200);
   expect(s.automationRequest).toHaveBeenLastCalledWith({ operation: 'goal_resume', profile: 'ranch', visibleProfiles: ['ranch'], senderId: 'first', requestId, reviewedInterruption: true });
+});
+
+it('lets only administrators lock skills, for a valid skill name, outside maintenance', async () => {
+  const s = await setup();
+  const url = '/api/bots/ranch/automation/skills/lock', admin = { ...s.first, 'x-admin-fixture': 'yes' };
+  expect((await s.app.inject({ method: 'PUT', url, headers: s.first, payload: { name: 'ranch/fence', locked: true } })).statusCode).toBe(403);
+  expect(s.automationRequest).not.toHaveBeenCalled();
+  for (const payload of [{ name: '../config.yaml', locked: true }, { name: 'ranch/./fence', locked: true }, { name: 'fence', locked: 'yes' }, { name: 'fence', locked: true, profile: 'private' }])
+    expect((await s.app.inject({ method: 'PUT', url, headers: admin, payload })).statusCode).toBe(400);
+  expect((await s.app.inject({ method: 'PUT', url: '/api/bots/private/automation/skills/lock', headers: admin, payload: { name: 'fence', locked: true } })).statusCode).toBe(404);
+  expect(s.automationRequest).not.toHaveBeenCalled();
+  const locked = await s.app.inject({ method: 'PUT', url, headers: admin, payload: { name: 'ranch/fence', locked: true } });
+  expect([locked.statusCode, locked.json()]).toEqual([200, { ok: true, name: 'ranch/fence', locked: true }]);
+  expect(s.automationRequest).toHaveBeenLastCalledWith({ operation: 'skill_lock', profile: 'ranch', visibleProfiles: ['ranch'], name: 'ranch/fence', locked: true });
+  s.maintain();
+  expect((await s.app.inject({ method: 'PUT', url, headers: admin, payload: { name: 'ranch/fence', locked: false } })).statusCode).toBe(409);
+  expect(s.automationRequest).toHaveBeenCalledOnce();
 });
 
 it('distinguishes explicit null task assignment from an omitted assignment', async () => {

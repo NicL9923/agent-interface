@@ -9,6 +9,7 @@ struct AutomationDebugFixture {
   private var taskRequests: [String: String] = [:]
   private var pending = true
   private var approvalRequired = true
+  private var skillLocked = false
   private var interruptionPending = ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_AUTOMATION_INTERRUPTED"] == "1"
   private var policyFailures = ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_AUTOMATION_POLICY_FAILURE"] == "1" ? 1 : 0
   private var readOnlyPolicy: Bool { ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_AUTOMATION_READONLY_POLICY"] == "1" }
@@ -20,7 +21,8 @@ struct AutomationDebugFixture {
     return ["botId": "ranch", "owner": "Hermes", "canManageTriggers": true, "canManageLearningPolicy": !readOnlyPolicy,
       "goals": goals, "tasks": ["supported": true, "items": tasks],
       "triggers": ["supported": true, "items": [], "platformEnabled": false],
-      "skills": ["supported": true, "installed": [["name": "ranch/fences", "description": "Fixture pasture inspection instructions"]],
+      "skills": ["supported": true, "lockSupported": true,
+        "installed": [["name": "ranch/fences", "description": "Fixture pasture inspection instructions", "locked": skillLocked]],
         "pending": pending ? [["id": "deadbeef", "summary": "Add fixture gate check", "origin": "agent", "revision": String(repeating: "c", count: 64)]] : [],
         "approvalRequired": approvalRequired]]
   }
@@ -82,6 +84,14 @@ struct AutomationDebugFixture {
       guard body["revision"] as? String == detailRevision else { return (409, ["error": "Use the loaded diff revision, not the list revision."]) }
       pending = false
       return (200, ["ok": true])
+    }
+    if path == base + "/skills/lock" {
+      if readOnlyPolicy { return (403, ["error": "Only an integration administrator can lock or unlock skills."]) }
+      guard body["name"] as? String == "ranch/fences", let locked = body["locked"] as? Bool else {
+        return (404, ["error": "Installed skill not found in this profile."])
+      }
+      skillLocked = locked
+      return (200, ["ok": true, "name": "ranch/fences", "locked": locked])
     }
     if path == base + "/skills/policy" {
       if readOnlyPolicy { return (403, ["error": "Only an integration administrator can change the skill write policy."]) }
