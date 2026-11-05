@@ -170,6 +170,8 @@ WHATWG does:
   read cut at the first of those, before the userinfo split, so an `@media`
   rule after the URL is not taken for userinfo. Each host is also judged
   cut at the same characters.
+- Every scheme occurrence is read on its own, including one inside another
+  URL's query, so an earlier URL in the same text never hides a later one.
 
 A host WHATWG rejects can't fetch anything and passes. So `{https:[]}` and
 `JSON.stringify({http:[]})` still run. Rejected hosts include an unclosed,

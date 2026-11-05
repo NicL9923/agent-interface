@@ -638,9 +638,9 @@ class ModernInstallToolsTests(InstallToolsTests):
         self.assertEqual(hosts('fetch("https:/user:pw@[fd00:ec2::254]:80/")'), ["[fd00:ec2::254]:80"])
         # An "@" after a quote or space may still be userinfo, so both readings come back.
         self.assertEqual(hosts('fetch("http:/a b@169.254.169.254/")'), ["a", "169.254.169.254"])
-        # Not URLs, and a scheme inside another literal's query is part of that literal, as native reads it.
+        # Not URLs. Every scheme occurrence is read, one inside another URL's query included.
         self.assertEqual(hosts('const o = {https: true}; "see http: headers"; case "http:"'), [])
-        self.assertEqual(hosts('fetch("https://example.test/?next=http:/169.254.169.254/")'), ["example.test"])
+        self.assertEqual(hosts('fetch("https://example.test/?next=http:/169.254.169.254/")'), ["example.test", "169.254.169.254"])
 
     def test_cdp_metadata_floor_reads_scheme_colon_forms_in_every_fetching_method(self):
         installed = computer.install_tools()
@@ -747,6 +747,33 @@ class ModernInstallToolsTests(InstallToolsTests):
             with self.subTest(text=text):
                 self.assertEqual(set(self.dispatch_on_fetching_paths(installed, text).values()), {"native dispatch"})
 
+    # Several URLs in one text: an earlier URL never hides a later one.
+    MULTI_URL_TEXTS = (
+        "<style>@import url(https://example.test);@import/**/url(http:/169.254.169.254);@media print{}</style>",
+        "<style>a{background:url(https://example.test/a.png),url(http:/169.254.169.254)}</style>",
+        "<img srcset=https://example.test/a.png,http:/169.254.169.254>",
+        "<a href=https://example.test/?u=http:/169.254.169.254/>x</a>",
+        "const urls = ['https://example.test', 'http:/x', 'http:/169.254.169.254/'];",
+        "const urls = [\"https:example.test\",\"http:169.254.169.254\"];",
+        "const urls = 'https://example.test,http:/169.254.169.254'.split(',');",
+        "const urls = [`https://example.test/${path},http:/169.254.169.254`];")
+
+    def test_every_url_in_a_text_is_judged_on_its_own(self):
+        installed = computer.install_tools()
+        self.stand_in_metadata_matcher()
+        for text in self.MULTI_URL_TEXTS:
+            for method, params in (("Page.setDocumentContent", {"frameId": "main", "html": text}),
+                                   ("Runtime.evaluate", {"expression": text}),
+                                   ("Runtime.callFunctionOn", {"functionDeclaration": f"function () {{ {text} }}"}),
+                                   ("Page.addScriptToEvaluateOnNewDocument", {"source": text})):
+                with self.subTest(method=method, text=text):
+                    self.assertEqual(json.loads(self.dispatch_cdp(installed, method, params)),
+                                     {"success": False, "error": "Blocked: URL targets a cloud metadata endpoint"})
+        self.native_dispatch.assert_not_called()
+        for text in self.SCHEME_LOOKALIKES + ("const urls = ['https://example.test', 'http:/x', 'http:/[2001:db8::1]/'];",):
+            with self.subTest(text=text):
+                self.assertEqual(set(self.dispatch_on_fetching_paths(installed, text).values()), {"native dispatch"})
+
     def test_bracketed_mapped_and_unparseable_scheme_colon_hosts_fail_closed(self):
         installed = computer.install_tools()
         # A stand-in that knows only the two literal metadata hosts, as native would read them.
@@ -815,6 +842,9 @@ class ModernInstallToolsTests(InstallToolsTests):
                 ("Page.setDocumentContent", {"frameId": "main", "html": "<style>@import url(http:/169.254.169.254);@media print{body{color:red}}</style>"}),
                 ("Page.setDocumentContent", {"frameId": "main", "html": "<style>a{background:url(http:/169.254.169.254)}@font-face{font-family:x}</style>"}),
                 ("Runtime.evaluate", {"expression": "document.body.style.background = 'url(http:/169.254.169.254)'"}),
+                # Several URLs in one text: an earlier one never hides a later one.
+                *(("Page.setDocumentContent", {"frameId": "main", "html": text}) for text in self.MULTI_URL_TEXTS),
+                *(("Runtime.evaluate", {"expression": text}) for text in self.MULTI_URL_TEXTS),
                 # Brackets in userinfo, and non-ASCII hosts WHATWG maps through UTS 46.
                 *(("Runtime.evaluate", {"expression": f'location.href = "{form}"'}) for form in (
                     "http:/x[abc]@[64:ff9b::a9fe:a9fe]/", "http:/x[abc]@[::169.254.169.254]/", "http:/x[abc]@[2002:a9fe:a9fe::]/")),

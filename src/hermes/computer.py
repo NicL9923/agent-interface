@@ -216,20 +216,18 @@ def scheme_colon_hosts(text):
     """Each host a special-scheme URL literal in text can name, read as WHATWG reads an authority.
 
     The userinfo ends at the last "@" before the first "/", "\\", "?" or "#", and a bracketed host stays
-    whole. When an "@" follows a quote or space inside that span, both readings come back. A scheme
-    inside an earlier literal, such as a query parameter, is part of that literal, as native reads it.
+    whole. When an "@" follows a quote or space inside that span, both readings come back. Every
+    scheme occurrence is read on its own, one inside another URL's query included: no earlier
+    candidate's extent ever hides later text.
     """
     if not isinstance(text, str):
         return []
     hosts = []
     for variant in dict.fromkeys((text, _URL_WHITESPACE_RE.sub("", text.replace("\\/", "/")))):
-        consumed = 0
+        # A match spans only one scheme and its slashes, so no occurrence can hide inside another.
         for match in _SCHEME_COLON_RE.finditer(variant):
-            if match.start() < consumed:
-                continue
             start = match.end()
             span = variant[start:_first(variant, _AUTHORITY_END, start)]
-            consumed = _first(variant, _SOFT_END, start)
             soft = _first(span, _SOFT_END)
             readings = [span[:soft]] + ([span] if "@" in span[soft:] else [])
             # CSS and markup end the URL first, so the userinfo split must not reach past that end.
