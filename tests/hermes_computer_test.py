@@ -630,8 +630,10 @@ class ModernInstallToolsTests(InstallToolsTests):
         self.assertEqual(hosts('fetch("http:\\\\169.254.169.254\\\\x")'), ["169.254.169.254"])
         self.assertEqual(hosts('fetch("ht\\ttp:/169.254.169.254/")'), ["169.254.169.254"])
         self.assertEqual(hosts('fetch("http:\\/\\/169.254.169.254/")'), ["169.254.169.254"])
-        # Userinfo runs to the last "@" before the path, and a bracketed host stays whole.
-        self.assertEqual(hosts('fetch("http:/x)@169.254.169.254/")'), ["169.254.169.254"])
+        # Userinfo runs to the last "@" before the path, and a bracketed host stays whole. CSS would
+        # end the first one at ")", so that reading comes back too.
+        self.assertEqual(hosts('fetch("http:/x)@169.254.169.254/")'), ["169.254.169.254", "x"])
+        self.assertEqual(hosts("@import url(http:/169.254.169.254);@media print{}"), ["media", "169.254.169.254"])
         self.assertEqual(hosts('location.href="http:/x[abc]@[64:ff9b::a9fe:a9fe]/"'), ["[64:ff9b::a9fe:a9fe]"])
         self.assertEqual(hosts('fetch("https:/user:pw@[fd00:ec2::254]:80/")'), ["[fd00:ec2::254]:80"])
         # An "@" after a quote or space may still be userinfo, so both readings come back.
@@ -727,7 +729,12 @@ class ModernInstallToolsTests(InstallToolsTests):
         documents = ("<style>@import url(http:/169.254.169.254);</style>", "<div style=background:url(http:/169.254.169.254)>",
                      "<style>@import 'http:/169.254.169.254';</style>", "<img src=http:/169.254.169.254>",
                      "<img srcset=http:/169.254.169.254,x.png>", '<img srcset="x.png 1x, http:/[fd00:ec2::254] 2x">',
-                     "<style>a{background:url(http:/x@169.254.169.254)}</style>")
+                     "<style>a{background:url(http:/x@169.254.169.254)}</style>",
+                     # An "@" after the URL's end in CSS or markup is not userinfo.
+                     "<style>@import url(http:/169.254.169.254);@media print{body{color:red}}</style>",
+                     "<style>a{background:url(http:/169.254.169.254)}@font-face{font-family:x}</style>",
+                     "<img src=http:/169.254.169.254 alt=me@example.test>",
+                     "<img srcset=http:/169.254.169.254,x.png@2x>")
         for document in documents:
             for method, params in (("Page.setDocumentContent", {"frameId": "main", "html": document}),
                                    ("Runtime.evaluate", {"expression": f"document.body.innerHTML = '{document}'"}),
@@ -805,6 +812,8 @@ class ModernInstallToolsTests(InstallToolsTests):
                 ("Page.setDocumentContent", {"frameId": "main", "html": "<style>@import url(http:/169.254.169.254);</style>"}),
                 ("Page.setDocumentContent", {"frameId": "main", "html": "<img src=http:/169.254.169.254>"}),
                 ("Page.setDocumentContent", {"frameId": "main", "html": "<img srcset=http:/169.254.169.254,x.png>"}),
+                ("Page.setDocumentContent", {"frameId": "main", "html": "<style>@import url(http:/169.254.169.254);@media print{body{color:red}}</style>"}),
+                ("Page.setDocumentContent", {"frameId": "main", "html": "<style>a{background:url(http:/169.254.169.254)}@font-face{font-family:x}</style>"}),
                 ("Runtime.evaluate", {"expression": "document.body.style.background = 'url(http:/169.254.169.254)'"}),
                 # Brackets in userinfo, and non-ASCII hosts WHATWG maps through UTS 46.
                 *(("Runtime.evaluate", {"expression": f'location.href = "{form}"'}) for form in (

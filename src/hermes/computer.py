@@ -232,6 +232,8 @@ def scheme_colon_hosts(text):
             consumed = _first(variant, _SOFT_END, start)
             soft = _first(span, _SOFT_END)
             readings = [span[:soft]] + ([span] if "@" in span[soft:] else [])
+            # CSS and markup end the URL first, so the userinfo split must not reach past that end.
+            readings.append(span[:_first(span, _MARKUP_END)])
             for authority in readings:
                 host = authority.rpartition("@")[2]
                 host = host[:_first(host, _SOFT_END)]
