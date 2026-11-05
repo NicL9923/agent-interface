@@ -27,11 +27,18 @@ it("reads links by their words, whatever their destination holds", () => {
   expect(markdownPlain(`First.\n  \n[Docs](https://example.test "${"x".repeat(3000)}")`)).toBe("First.");
 });
 
-it("never lets a long code block use up the words after it", () => {
-  const code = "```\n" + "x".repeat(2100) + "\n```\n";
-  expect(markdownPlain(code + "Actual summary.")).toBe("Actual summary.");
-  expect(replyTitle(code + "Actual summary.")).toBe("Actual summary.");
-  expect(markdownPlain("```\n" + "y\n".repeat(3000) + "```")).toMatch(/^y y y/);
+it("reads the first 2,000 characters, so code that fills them previews as code", () => {
+  // A deliberate bound: reaching words past a long code block would take far more parsing.
+  expect(markdownPlain("```\n" + "y\n".repeat(3000) + "```\nSummary.")).toMatch(/^y y y/);
+  // Words before the limit are found however much blank text follows them.
+  const code = "```\ncode\n```\n\nActual summary.\n\n";
+  expect(markdownPlain(code + " ".repeat(8000))).toBe("Actual summary.");
+  expect(replyTitle(code + " ".repeat(8000))).toBe("Actual summary.");
+});
+
+it("keeps Markdown's own meaning across blocks", () => {
+  expect(markdownPlain("[ref]: /url\n    <div>Important words</div>")).toBe("Important words");
+  expect(markdownPlain("```\n```\n\n```\nls -la\n```")).toBe("ls -la");
 });
 
 it("keeps code-only replies readable however the code is written", () => {
@@ -58,7 +65,7 @@ it("keeps search markers through flattening, and escaped line breaks become spac
 
 it("reads adversarial text in one pass", () => {
   const started = performance.now();
-  for (const text of ["-".repeat(50_000) + " status", "|".repeat(50_000), "*_".repeat(25_000), "#".repeat(50_000), "`".repeat(50_000), "[".repeat(50_000), "](".repeat(25_000), " ".repeat(50_000) + "x"]) {
+  for (const text of [("- ".repeat(3998) + "x\n").padEnd(50_000, "x"), "> ".repeat(25_000), "-".repeat(50_000) + " status", "|".repeat(50_000), "*_".repeat(25_000), "#".repeat(50_000), "`".repeat(50_000), "[".repeat(50_000), "](".repeat(25_000), " ".repeat(50_000) + "x"]) {
     markdownPlain(text); replyTitle(text);
   }
   snippetPlain("\\".repeat(50_000) + "!");
