@@ -7,7 +7,7 @@ import {randomBytes, randomUUID} from "node:crypto";
 import {resolve} from "node:path";
 import {pathToFileURL} from "node:url";
 
-export const WAIT_LIMIT_MS = 4 * 60 * 60 * 1000, START_LIMIT_MS = 5 * 60 * 1000;
+export const WAIT_LIMIT_MS = 4 * 60 * 60 * 1000, START_LIMIT_MS = 5 * 60 * 1000, REQUEST_TIMEOUT_MS = 60 * 1000;
 const RUNNING = new Set(["checking", "qualifying", "installing", "verifying", "recovering"]);
 
 /** Follow an operation through the app's status, which alone notices a worker that died.
@@ -26,12 +26,13 @@ export async function follow(result, {action, control, original, requested, poll
   const pending = value => action !== "status" && !replaced(value) && !(Date.parse(value.updatedAt ?? "") >= requested);
   // A retry's recovery that fails ends on the original operation, so only its interim success waits.
   const settles = value => !(action === "control" && control === "retry") || replaced(value) || value.phase !== "succeeded";
-  let seen = "";
+  let seen = "", unavailable = false;
   while (now() < deadline) {
     const step = result.checks?.findLast(check => check.status === "running")?.id ?? "";
     const line = `${result.phase}${step ? " / " + step : ""}${result.error ? " (" + result.error + ")" : ""}`;
     if (pending(result)) {
-      if (!result.controlRequestId && now() - requested > START_LIMIT_MS) {
+      // Only a status actually read can show the operation never started.
+      if (!result.controlRequestId && !unavailable && now() - requested > START_LIMIT_MS) {
         log("The updater did not start the requested operation."); return {code: 1, result};
       }
     } else {
@@ -42,7 +43,11 @@ export async function follow(result, {action, control, original, requested, poll
         return {code: ["ready", "succeeded", "idle"].includes(result.phase) ? 0 : 1, result};
     }
     await sleep(20000);
-    result = await poll();
+    // A poll can fail or stall while Hermes restarts underneath the app. On Nov 5, 2026 one hung
+    // for two hours with no timeout while the install itself finished in eleven minutes. Keep the
+    // last status and try again; the deadline still bounds the wait.
+    try { result = await poll(); unavailable = false; }
+    catch (error) { if (!unavailable) log(`${new Date(now()).toISOString()} status unavailable (${error?.name ?? "error"}), retrying`); unavailable = true; }
   }
   return {code: 3, result};
 }
@@ -69,18 +74,18 @@ async function main() {
     const base = `http://127.0.0.1:${config.port}/api/hermes/upgrade`;
     // A recovery control names the operation it applies to, read from the updater itself. The
     // operation before the request also tells --wait which status is still the old one.
-    const current = action === "status" ? undefined : await (await fetch(base, {headers})).json();
+    const current = action === "status" ? undefined : await (await fetch(base, {headers, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)})).json();
     const path = action === "status" ? "" : "/" + action;
     const body = action === "install" ? {candidateRevision: value, requestId: randomUUID()} : action === "check" ? {}
       : action === "control" ? {action: value, operationId: current.operationId, requestId: randomUUID()} : undefined;
     // The worker stamps updatedAt with this host's clock; a second of slack absorbs rounding.
     const requested = Date.now() - 1000;
-    const response = await fetch(base + path, {method: body ? "POST" : "GET", headers, body: body && JSON.stringify(body)});
+    const response = await fetch(base + path, {method: body ? "POST" : "GET", headers, body: body && JSON.stringify(body), signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)});
     let result = await response.json();
     if (!response.ok) process.exitCode = 1;
     else if (wait) {
       const followed = await follow(result, {action, control: value, original: current?.operationId, requested,
-        poll: async () => (await fetch(base, {headers})).json()});
+        poll: async () => (await fetch(base, {headers, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)})).json()});
       process.exitCode = followed.code; result = followed.result;
     }
     console.log(JSON.stringify({status: response.status, phase: result.phase, message: result.message ?? result.error,
