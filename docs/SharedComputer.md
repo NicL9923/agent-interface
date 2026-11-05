@@ -139,16 +139,26 @@ The record shares the existing service-account trust boundary. Processes with
 that Unix account's full authority are not isolated from one another.
 
 This is native local-network behavior for the authorized profile, including
-private/LAN/Headnet addresses. It is not a KVM hostname allowlist. Hermes still
-keeps the metadata floor in navigation, redirect checks and `browser_exec`.
-The add-on dispatch wrapper also blocks metadata URL literals in
-`browser_console(expression=...)`, CDP `Page.navigate` and CDP `Runtime.evaluate`,
-using native Hermes's URL-literal scanner and always-blocked matcher. These are
-literal checks, not an egress firewall. Native local classification skips the
-current-page metadata check before content tools, and computed or obfuscated
-JavaScript URLs can escape the literal scan. Do not claim metadata isolation for
-those paths. Native website-policy checks and their caching are unchanged. Human
-takeover, operation locks, recovery fences,
+private/LAN/Headnet addresses. It is not a KVM hostname allowlist.
+
+The control that keeps agents away from the cloud metadata service is the host's
+metadata egress floor, an nftables table that rejects every connection the
+service account's processes open to `169.254.169.254` or `fe80::a9fe:a9fe`.
+That account runs Hermes, the app, this browser and agent terminal tools, so the
+floor also covers runtime-built URLs, `curl` and Python tools. The app's
+readiness check fails if the app can connect to metadata, and release
+preparation and verification refuse a host without the floor. See
+[Hosting](Hosting.md#metadata-egress-floor) for installation.
+
+The literal checks below are defense in depth. Hermes keeps the metadata floor in
+navigation, redirect checks and `browser_exec`. The add-on dispatch wrapper also
+blocks metadata URL literals in `browser_console(expression=...)`, CDP
+`Page.navigate` and CDP `Runtime.evaluate`, using native Hermes's URL-literal
+scanner and always-blocked matcher. They are not an egress firewall: native local
+classification skips the current-page metadata check before content tools, and
+computed or obfuscated JavaScript URLs can escape the literal scan. The nftables
+floor is what stops those. Native website-policy checks and their caching are
+unchanged. Human takeover, operation locks, recovery fences,
 and TLS validation also remain in force. The wrapper uses the revision-qualified
 `browser_tool_cloud._is_local_backend` seam because this native revision has no
 owned-browser provenance hook. Qualification must cover changes to this seam.

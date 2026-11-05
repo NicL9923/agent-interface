@@ -1,4 +1,5 @@
 import { readdir, stat } from "node:fs/promises";
+import { connect, type Socket } from "node:net";
 import { join } from "node:path";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { allowedIdentity, type Config } from "./config.js";
@@ -9,28 +10,57 @@ import { quietLog, type Log } from "./logging.js";
 
 export type CheckStatus = "ok" | "warn" | "fail" | "unconfigured";
 export interface Check { status: CheckStatus; detail: string }
-type Name = "database" | "hermes" | "worker" | "push" | "backup";
+type Name = "database" | "hermes" | "worker" | "push" | "backup" | "metadataFloor";
 export type Readiness = { ok: boolean; checks: Record<Name, Check> };
 // Completed copies written by .agents/tools/backup-app.mjs; never its .partial files.
 export const backupName = /^agent-interface-\d{4}-\d{2}-\d{2}T[\d.-]+Z-[a-f0-9-]{36}\.sqlite$/;
 const minute = 60_000, hour = 60 * minute;
 // Only these make the app unready. Push and backup problems alert but never fail readiness.
-const required: Name[] = ["database", "hermes", "worker"];
+const required: Name[] = ["database", "hermes", "worker", "metadataFloor"];
 const labels: Record<Name, string> = {
   database: "The app database", hermes: "The Hermes connection", worker: "The background worker",
-  push: "Push delivery", backup: "App backups",
+  push: "Push delivery", backup: "App backups", metadataFloor: "The metadata egress floor",
 };
 const ago = (ms: number) => ms < 2 * minute ? `${Math.round(ms / 1000)} s` : ms < 2 * hour ? `${Math.round(ms / minute)} min` : `${Math.round(ms / hour)} h`;
 const reason = (error: unknown) => (error instanceof Error ? error.message : String(error)).slice(0, 200);
 
+/**
+ * The cloud metadata service. The host's nftables floor (.agents/tools/metadata-egress-floor.py)
+ * refuses the service user's connections to it; a connection from this process means the floor is gone.
+ */
+export const metadataService = { host: "169.254.169.254", port: 80 } as const;
+export type MetadataProbeResult = { outcome: "connected" } | { outcome: "refused"; code: string } | { outcome: "timeout" };
+export type MetadataProbe = () => Promise<MetadataProbeResult>;
+/** One TCP connect attempt. Any error, or no answer in time (an unrouted address), counts as blocked. */
+export function probeMetadata({ timeoutMs = 1500, open = () => connect(metadataService) }: { timeoutMs?: number; open?: () => Socket } = {}) {
+  return new Promise<MetadataProbeResult>(resolve => {
+    let socket: Socket | undefined;
+    const finish = (result: MetadataProbeResult) => { clearTimeout(timer); socket?.destroy(); resolve(result); };
+    const timer = setTimeout(() => finish({ outcome: "timeout" }), timeoutMs);
+    try {
+      socket = open();
+    } catch (error) {
+      return finish({ outcome: "refused", code: (error as NodeJS.ErrnoException).code ?? reason(error) });
+    }
+    socket.once("connect", () => finish({ outcome: "connected" }));
+    socket.once("error", (error: NodeJS.ErrnoException) => finish({ outcome: "refused", code: error.code ?? reason(error) }));
+  });
+}
+/** Only the production host has the floor; tests inject a probe, and development reports unconfigured. */
+export const defaultMetadataProbe = (config: Config): MetadataProbe | undefined =>
+  config.production ? () => probeMetadata() : undefined;
+// The minute timer always probes afresh; public requests between ticks reuse the result.
+const metadataCacheMs = 50_000;
+
 export class HealthMonitor {
   private hermesDownSince?: number;
+  private metadataChecked?: { at: number; check: Check };
   private incidents = new Map<Name, { since: number; alerted: boolean }>();
   private pending?: Promise<Readiness>;
   private timer?: ReturnType<typeof setInterval>;
   constructor(private deps: {
     store: Store; runtime: Runtime; worker: BackgroundWorker; config: Config;
-    maintenance: () => boolean; log?: Log;
+    maintenance: () => boolean; log?: Log; metadataProbe?: MetadataProbe;
   }) {}
   start() {
     this.timer = setInterval(() => void this.evaluate(), minute);
@@ -45,11 +75,11 @@ export class HealthMonitor {
   private async run(now: number): Promise<Readiness> {
     const settle = (check: () => Check | Promise<Check>) =>
       Promise.resolve().then(check).catch((error): Check => ({ status: "fail", detail: reason(error) }));
-    const [database, hermes, worker, push, backup] = await Promise.all([
+    const [database, hermes, worker, push, backup, metadataFloor] = await Promise.all([
       settle(() => this.database()), settle(() => this.hermes(now)), settle(() => this.worker(now)),
-      settle(() => this.push(now)), settle(() => this.backup(now)),
+      settle(() => this.push(now)), settle(() => this.backup(now)), settle(() => this.metadataFloor(now)),
     ]);
-    const checks = { database, hermes, worker, push, backup };
+    const checks = { database, hermes, worker, push, backup, metadataFloor };
     this.track(checks, now);
     return { ok: required.every(name => checks[name].status !== "fail"), checks };
   }
@@ -102,6 +132,19 @@ export class HealthMonitor {
     }
     if (!newest) return { status: "warn", detail: "No completed backups" };
     return { status: now - newest < 36 * hour ? "ok" : "warn", detail: `Newest backup is ${ago(now - newest)} old` };
+  }
+  private async metadataFloor(now: number): Promise<Check> {
+    const probe = this.deps.metadataProbe;
+    if (!probe) return { status: "unconfigured", detail: "Checked only in production" };
+    const cached = this.metadataChecked;
+    if (cached && now >= cached.at && now - cached.at < metadataCacheMs) return cached.check;
+    const target = `${metadataService.host}:${metadataService.port}`;
+    const result = await probe();
+    const check: Check = result.outcome === "connected"
+      ? { status: "fail", detail: `This process connected to ${target}. Install the host's metadata egress floor; see docs/Hosting.md` }
+      : { status: "ok", detail: result.outcome === "timeout" ? `No answer from ${target}` : `${target} refused: ${result.code}` };
+    this.metadataChecked = { at: now, check };
+    return check;
   }
   // Problems that last 10 minutes notify administrators once, and again when they clear.
   private track(checks: Record<Name, Check>, now: number) {

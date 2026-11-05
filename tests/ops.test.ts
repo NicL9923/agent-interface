@@ -2,12 +2,14 @@ import { capabilitiesFixture } from "./helpers/runtime-fixtures.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { createServer, Socket, type AddressInfo } from "node:net";
 import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import webpush from "web-push";
 import { createApp } from "../src/server/app.js";
-import { loadConfig } from "../src/server/config.js";
+import { loadConfig, type Config } from "../src/server/config.js";
+import { defaultMetadataProbe, probeMetadata, type MetadataProbe } from "../src/server/health.js";
 import { FailureTracker } from "../src/server/logging.js";
 import type { HermesUpgrades } from "../src/server/upgrades.js";
 import type { Runtime, RuntimeStatus } from "../src/shared/types.js";
@@ -39,11 +41,12 @@ function runtime(overrides: Partial<Runtime> = {}) {
   });
   return { value, set status(next: RuntimeStatus) { status = next; } };
 }
-async function setup(env: Record<string, string> = {}, options: { runtime?: Runtime; maintenance?: boolean; lines?: string[] } = {}) {
+async function setup(env: Record<string, string> = {}, options: { runtime?: Runtime; maintenance?: boolean; lines?: string[]; metadataProbe?: MetadataProbe } = {}) {
   const config = loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:", ...env });
   const upgrades = { maintenance: () => options.maintenance ?? false } as unknown as HermesUpgrades;
   const result = await createApp(config, options.runtime ?? runtime().value, {
     background: false, upgrades, logStream: options.lines ? { write: line => { options.lines!.push(line); } } : undefined,
+    metadataProbe: options.metadataProbe,
   });
   apps.push(result.app);
   return result;
@@ -68,6 +71,7 @@ describe("health", () => {
       worker: { status: "ok", detail: "Starting" },
       push: { status: "unconfigured", detail: expect.any(String) },
       backup: { status: "unconfigured", detail: "APP_BACKUP_DIR is not set" },
+      metadataFloor: { status: "unconfigured", detail: "Checked only in production" },
     } });
     for (const headers of [{ "x-forwarded-for": "203.0.113.9" }, { forwarded: "for=203.0.113.9" }, { "x-real-ip": "203.0.113.9" }])
       expect((await app.inject({ url: "/api/health/ready", headers })).body).toBe('{"ok":true}');
@@ -156,6 +160,53 @@ describe("health", () => {
     execFileSync(process.execPath, [".agents/tools/backup-app.mjs", source, backups]);
     expect(readdirSync(backups).filter(file => file.includes(".partial"))).toEqual([]);
     expect((await backup()).status).toBe("ok");
+  });
+
+  it("fails readiness while the app can connect to the metadata service", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    let outcome: Awaited<ReturnType<MetadataProbe>> = { outcome: "connected" };
+    const probe = vi.fn<MetadataProbe>(async () => outcome);
+    const { app, worker } = await setup({}, { metadataProbe: probe });
+    let response = await app.inject("/api/health/ready");
+    expect(response.statusCode).toBe(503);
+    expect(response.json().checks.metadataFloor).toEqual({
+      status: "fail", detail: "This process connected to 169.254.169.254:80. Install the host's metadata egress floor; see docs/Hosting.md",
+    });
+    // Requests between readiness ticks reuse the last probe.
+    outcome = { outcome: "refused", code: "ECONNREFUSED" };
+    expect((await app.inject("/api/health/ready")).statusCode).toBe(503);
+    expect(probe).toHaveBeenCalledTimes(1);
+    vi.setSystemTime(Date.now() + minute);
+    response = await app.inject("/api/health/ready");
+    expect(response.statusCode).toBe(200);
+    expect(response.json().checks.metadataFloor).toEqual({ status: "ok", detail: "169.254.169.254:80 refused: ECONNREFUSED" });
+    // An unrouted address never answers; that is blocked too.
+    outcome = { outcome: "timeout" };
+    vi.setSystemTime(Date.now() + minute);
+    worker.loop.success();
+    response = await app.inject("/api/health/ready");
+    expect(response.statusCode).toBe(200);
+    expect(response.json().checks.metadataFloor).toEqual({ status: "ok", detail: "No answer from 169.254.169.254:80" });
+    expect(probe).toHaveBeenCalledTimes(3);
+  });
+
+  it("probes the metadata service with one bounded TCP connect", async () => {
+    const server = createServer(socket => socket.destroy());
+    await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address() as AddressInfo;
+    try {
+      expect(await probeMetadata({ open: () => new Socket().connect(port, "127.0.0.1") })).toEqual({ outcome: "connected" });
+    } finally {
+      await new Promise(resolve => server.close(resolve));
+    }
+    expect(await probeMetadata({ open: () => new Socket().connect(port, "127.0.0.1") })).toEqual({ outcome: "refused", code: "ECONNREFUSED" });
+    // A socket that never connects stands in for a SYN nobody answers.
+    const started = performance.now();
+    expect(await probeMetadata({ timeoutMs: 50, open: () => new Socket() })).toEqual({ outcome: "timeout" });
+    expect(performance.now() - started).toBeLessThan(1000);
+    // Only production runs on the host that has the floor; tests and development never probe a real address.
+    expect(defaultMetadataProbe({ production: true } as Config)).toBeTypeOf("function");
+    expect(defaultMetadataProbe({ production: false } as Config)).toBeUndefined();
   });
 
   it("alerts administrators once after ten minutes and again on recovery", async () => {

@@ -55,6 +55,76 @@ release was activated.
 Secrets, household email addresses, host access details, backups and rollback
 receipts belong in private operating notes. They are not release artifacts.
 
+## Metadata egress floor
+
+The host is an OpenStack instance, and its metadata service at
+`169.254.169.254` serves cloud-init user data and instance details to any local
+process that asks. One Unix account runs everything household-facing: the Hermes
+gateway and dashboard, this app, the shared-computer browser and agent terminal
+tools. URL checks in the browser paths cannot see runtime-built URLs, `curl` or
+Python tools, so the host blocks that account at the network layer.
+
+`.agents/tools/metadata-egress-floor.py` installs a dedicated nftables table,
+`inet agent_interface_metadata`. Its output-hook chain rejects every packet the
+service account's sockets send to `169.254.169.254` or OpenStack's IPv6
+link-local `fe80::a9fe:a9fe`: TCP with a reset, everything else with
+admin-prohibited, so clients fail at once instead of hanging. Only those two
+addresses are blocked; the rest of `169.254.0.0/16` stays reachable, and root,
+including cloud-init, is not affected. The tool loads only its own table in one
+transaction and never flushes the ruleset, so ufw's iptables-nft rules stay
+untouched.
+
+The rules live in root-owned `/etc/agent-interface/metadata-egress-floor.nft`.
+The root oneshot `agent-interface-metadata-floor.service` loads that file at boot,
+after `network.target`, `nftables.service` and `ufw.service` and before the
+service account's `user@UID.service`. It reloads and restarts with
+`nftables.service`, whose ruleset flush would otherwise remove the table.
+
+Install it before preparing a release, from any checkout that has the tool. Before
+the first release that carries it, copy the tool from the merged commit:
+
+```sh
+git show origin/main:.agents/tools/metadata-egress-floor.py | ssh <host> 'umask 077 && cat > ~/metadata-egress-floor.py'
+ssh -t <host> 'sudo nft list ruleset > ~/nft-before.txt'
+ssh -t <host> 'sudo python3 ~/metadata-egress-floor.py install --user <service user>'
+ssh -t <host> 'sudo python3 ~/metadata-egress-floor.py check --user <service user>'
+```
+
+Install is idempotent: rerunning it rewrites nothing unless the uid changed, and
+reapplies the table. It validates the rules with `nft -c` before changing
+anything and refuses uid 0. `check` exits 1 unless the rules file, boot unit and
+loaded table are current, a TCP connect to `169.254.169.254:80` as the service
+user is refused within a second, the IPv6 address on the default interface does
+not connect, and as the service user DNS resolves and `github.com:443` connects.
+`--egress HOST:PORT` picks a different reachable target. It warns when the
+service account can run `sudo` without a password, because any agent could then
+remove the floor. `remove` disables the unit and deletes only this table and its
+files.
+
+Confirm the rest of the ruleset is unchanged and that the service account now
+fails fast:
+
+```sh
+ssh -t <host> 'sudo nft list ruleset | diff ~/nft-before.txt -'
+ssh <host> 'curl -sS -m 5 http://169.254.169.254/; echo "exit $?"'
+```
+
+The diff should show only the added `agent_interface_metadata` table, and curl
+should report a refused connection with exit 7, not a timeout. Three checks keep
+a missing floor visible:
+
+- App readiness reports `metadataFloor` as `fail` and returns 503 if the app
+  process can connect to `169.254.169.254:80`.
+- `release-app.py prepare` refuses a host where the SSH user, which is the
+  service user, can connect to metadata or the boot unit is not enabled.
+- `release-app.py verify` and the post-activation record step check the same
+  thing as `metadataEgressFloor`.
+
+The floor matches the socket owner's uid in the host's output hook. Traffic from
+containers with their own network namespace would pass through the forward hook
+instead and is not covered. Root processes, other accounts and `sudo` remain
+outside it by design.
+
 ## Google setup
 
 The app's HTTPS origin was added to the existing Google web client's authorized
@@ -118,6 +188,11 @@ runs. Deploys depend on that, including during a Hermes drain.
 - hermes: Hermes has been disconnected for 5 minutes or longer. A Hermes update
   in progress counts as healthy.
 - worker: no successful background pass for 2 minutes, after a 2-minute startup grace.
+- metadataFloor: a TCP connect from the app process to `169.254.169.254:80`
+  succeeded, so the [metadata egress floor](#metadata-egress-floor) is missing.
+  A refusal or no answer within 1.5 seconds counts as blocked. The result is
+  reused for 50 seconds, so every minute's check probes afresh. Only production
+  probes; development and tests report `unconfigured`.
 
 It also reports two checks that warn but never fail readiness:
 
