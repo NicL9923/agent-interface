@@ -71,6 +71,18 @@ describe("hermes-update --wait", () => {
     expect(h.logged.filter(line => line.includes("status unavailable"))).toHaveLength(1);
   });
 
+  it("does not call an operation unstarted while its status cannot be read", async () => {
+    const h = harness([]);
+    let calls = 0;
+    const poll = async () => {
+      calls += 1;
+      if (calls <= 20) throw Object.assign(new Error("timed out"), { name: "TimeoutError" });
+      return { operationId: "new", phase: "succeeded", updatedAt: at(900_000) };
+    };
+    const stale = { operationId: "old", phase: "failed", updatedAt: at(-3600_000) };
+    expect((await follow(stale, { action: "install", original: "old", requested: h.requested, ...h.options, poll })).code).toBe(0);
+  });
+
   it("gives up when the requested operation never starts", async () => {
     const stale = { phase: "idle", updatedAt: at(-60_000) };
     const h = harness([stale]);

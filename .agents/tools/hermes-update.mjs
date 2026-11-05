@@ -31,7 +31,8 @@ export async function follow(result, {action, control, original, requested, poll
     const step = result.checks?.findLast(check => check.status === "running")?.id ?? "";
     const line = `${result.phase}${step ? " / " + step : ""}${result.error ? " (" + result.error + ")" : ""}`;
     if (pending(result)) {
-      if (!result.controlRequestId && now() - requested > START_LIMIT_MS) {
+      // Only a status actually read can show the operation never started.
+      if (!result.controlRequestId && !unavailable && now() - requested > START_LIMIT_MS) {
         log("The updater did not start the requested operation."); return {code: 1, result};
       }
     } else {
