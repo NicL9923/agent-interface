@@ -19,7 +19,7 @@ import type {
 import { allowedIdentity, type Config } from "./config.js";
 import { Store } from "./store.js";
 import { installAuth, signedIn, stillSignedIn } from "./auth.js";
-import { installBotAccess, redactAgents, visible, visibleTo } from "./bot-access.js";
+import { installBotAccess, redactAgents, visible, visibleTo, routineById } from "./bot-access.js";
 import { BotDirectory, installBotRoutes } from "./bot-routes.js";
 import { installConversationRoutes } from "./conversation-routes.js";
 import { installPushRoutes } from "./push-routes.js";
@@ -418,12 +418,19 @@ export async function createApp(
     return saved;
   };
   apiRoute(app, "POST /routines", { body: routineSchema, before: async () => requireCapability("routines") }, async (req, input) => saveRoutine(signedIn(req).id, input));
-  apiRoute(app, "PUT /routines/:id", { body: routineSchema, before: async req => { await requireCapability("routines"); await assertRoutineEditable(runtime, store, req.params.id); } }, async (req, input) => saveRoutine(signedIn(req).id, input, req.params.id));
+  // A save names its assistant, so a trial of another assistant's routine with the same ID never blocks it.
+  apiRoute(app, "PUT /routines/:id", { body: routineSchema, before: async req => { await requireCapability("routines"); await assertRoutineEditable(runtime, store, req.params.id, (req.body as { botId?: unknown } | undefined)?.botId); } }, async (req, input) => saveRoutine(signedIn(req).id, input, req.params.id));
   apiRoute(app, "DELETE /routines/:id", {}, async (req) => {
     await requireCapability("routines");
-    await assertRoutineEditable(runtime, store, params(req).id);
-    await runtime.deleteRoutine(params(req).id);
-    store.routineRecipients(params(req).id, []);
+    // Hermes lets two assistants hold jobs with one ID, so the ID means the copy this person can see,
+    // and Hermes is told its assistant. Without that, Hermes picks the copy itself, which may be hidden.
+    const all = await runtime.routines();
+    const routine = routineById(all, params(req).id, store, signedIn(req).id);
+    if (!routine) throw httpError(404, "Routine not found");
+    await assertRoutineEditable(runtime, store, routine.id, routine.botId);
+    await runtime.deleteRoutine(routine.id, routine.botId);
+    // Recipients are kept by routine ID, so they stay while another assistant's copy remains.
+    if (!all.some(other => other.id === routine.id && other.botId !== routine.botId)) store.routineRecipients(routine.id, []);
     return { ok: true };
   });
   // The worker owns the aggregate so a push and this read agree; handlers run after it exists.

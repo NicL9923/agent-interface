@@ -486,7 +486,8 @@ export interface Runtime {
   setSkills(botId: string, ids: string[]): Promise<void>;
   routines(): Promise<Routine[]>;
   saveRoutine(input: Omit<Routine, "id">, id?: string): Promise<Routine>;
-  deleteRoutine(id: string): Promise<void>;
+  /** `botId` names the assistant whose job this is: Hermes lets several hold one ID. */
+  deleteRoutine(id: string, botId: string): Promise<void>;
   discoverEvents(cursor: string): Promise<RuntimeDiscovery>;
   close(): Promise<void>;
 }

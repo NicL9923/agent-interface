@@ -96,7 +96,10 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     const routine={botId:'shared',name:'Morning',prompt:'Check',schedule:'daily',enabled:true};
     await runtime.saveRoutine(routine,'job');
     await runtime.setRoutineEnabled!('shared','job',true);
-    await runtime.deleteRoutine('job');
+    await runtime.deleteRoutine('job','shared');
+    // Hermes allows one job ID in several profiles, so a deletion names the profile.
+    const deleted = vi.mocked(fetch).mock.calls.at(-1)!;
+    expect([String(deleted[0]).replace(/^.*\/cron\//, ''), (deleted[1] as RequestInit).method]).toEqual(['jobs/job?profile=shared', 'DELETE']);
     expect(calls.filter(call=>call.method==='agent-interface.discover')).toHaveLength(0);
     const tick=runtime.discoverEvents('7');
     await vi.waitFor(()=>expect(calls.filter(call=>call.method==='agent-interface.discover')).toHaveLength(1));

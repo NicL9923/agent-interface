@@ -19,6 +19,7 @@ let assistants: string[];
 let slowRead: Promise<void> | undefined;
 let readsBeforeSlow = 0;
 const setRoutineEnabled = vi.fn(async () => {});
+const deleteRoutine = vi.fn(async (_id: string, _botId: string) => {});
 beforeEach(async () => {
   rows = [{ ...base, id: "abc123", roomIds: ["team", "secret"] }];
   catalog = { supported: true, canSend: true, routineDelivery: true, rooms: [room("team", ["shared", "planner"]), room("secret", ["shared", "diary"]), room("mine", ["shared", "notes"]),
@@ -35,6 +36,7 @@ beforeEach(async () => {
     capabilities: async () => ({ routines: { supported: true }, botConfiguration: { supported: true }, avatarMetadata: { supported: false } }),
     listBots: async () => assistants.map(id => ({ id, name: id, shared: true, activity: "idle" })),
     deleteBot: async (id: string) => { assistants = assistants.filter(other => other !== id); },
+    deleteRoutine,
     setRoutineEnabled, experienceRequest: async () => ({ requestId: "r", routineId: "abc123", botId: "shared", status: "accepted" }),
     // A read copies the routines when Hermes is asked. `slowRead` holds back the answer to the read after
     // `readsBeforeSlow` more, as a slow Hermes would.
@@ -334,5 +336,29 @@ describe("lookups, catalogs and whitespace exactly as Hermes has them", () => {
   it("reads a target Hermes trims with Python whitespace", async () => {
     rows = [{ ...base, id: "abc123", enabled: false, roomIds: [], delivery: { deliver: "bot-chat:shared,\u001croom:\u0085crew" } }];
     expect((await write({ ...base, enabled: true }, "abc123")).json().code).toBe("routine_rooms");
+  });
+});
+
+describe("routes that name only a routine ID, when two assistants hold jobs with it", () => {
+  // "diary" is local-two's personal assistant, so its copy of "dup" is hidden from local-one.
+  beforeEach(() => { deleteRoutine.mockClear(); rows = [{ ...base, botId: "diary", id: "dup", roomIds: [] }, { ...base, botId: "planner", id: "dup", roomIds: [] }]; });
+  it("deletes the copy the person can see and tells Hermes its assistant", async () => {
+    const headers = await localLogin(created.app, origin);
+    expect((await created.app.inject({ method: "DELETE", url: "/api/routines/dup", headers })).statusCode).toBe(200);
+    expect(deleteRoutine).toHaveBeenCalledWith("dup", "planner");
+  });
+  it("deletes nothing when the person can see both copies", async () => {
+    rows = [{ ...base, botId: "shared", id: "dup", roomIds: [] }, { ...base, botId: "planner", id: "dup", roomIds: [] }];
+    const refused = await created.app.inject({ method: "DELETE", url: "/api/routines/dup", headers: await localLogin(created.app, origin) });
+    expect(refused.json().code).toBe("routine_ambiguous");
+    expect(deleteRoutine).not.toHaveBeenCalled();
+  });
+  it("lets a trial of the hidden copy block only that copy", async () => {
+    // local-two's trial of their "diary" copy is still running.
+    created.store.user({ id: "local-two", name: "two", email: "two@example.invalid" });
+    created.store.rememberRoutineTrial(crypto.randomUUID(), "local-two", "dup", "diary");
+    expect((await write({ ...base, botId: "planner", name: "Renamed" }, "dup")).statusCode).toBe(200);
+    expect((await created.app.inject({ method: "PATCH", url: "/api/routines/dup/state", headers: await localLogin(created.app, origin), payload: { enabled: false } })).statusCode).toBe(200);
+    expect((await created.app.inject({ method: "DELETE", url: "/api/routines/dup", headers: await localLogin(created.app, origin) })).statusCode).toBe(200);
   });
 });

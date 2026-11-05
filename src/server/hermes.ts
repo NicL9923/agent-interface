@@ -879,8 +879,9 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
       discoveryGeneration++;
     },
     saveRoutine: routineMutation,
-    async deleteRoutine(id) {
-      await http(`/api/cron/jobs/${encodeURIComponent(id)}`, {method: 'DELETE'});
+    async deleteRoutine(id, botId) {
+      // The profile names which assistant's job: Hermes allows one ID in several profiles.
+      await http(`/api/cron/jobs/${encodeURIComponent(id)}?profile=${encodeURIComponent(botId)}`, {method: 'DELETE'});
       discoveryFull = true;
       discoveryGeneration++;
     },

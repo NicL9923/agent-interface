@@ -19,9 +19,10 @@ import { serialDelivery } from './routine-delivery.js';
 const target = z.enum(['memory', 'user']);
 const revision = z.string().regex(/^[a-f0-9]{64}$/);
 const iso = z.string().datetime({ offset: true });
-export async function assertRoutineEditable(runtime: Runtime, store: Store, routineId: string) {
+export async function assertRoutineEditable(runtime: Runtime, store: Store, routineId: string, botId: unknown) {
   if (!runtime.experienceRequest) return;
-  for (const trial of store.routineTrials(routineId)) {
+  // Trials belong to one assistant's routine: another assistant's job with the same ID is a different routine.
+  for (const trial of store.routineTrials(routineId).filter(trial => trial.botId === botId)) {
     try {
       const response = await runtime.experienceRequest({ operation: 'run_receipt', profile: trial.botId, routineId, requestId: trial.requestId, senderId: trial.userId });
       if ('status' in response) store.recordRoutineTrialStatus(trial.requestId, response.status === 'uncertain' && response.ownerStatus === 'unknown' ? 'settled' : response.status);

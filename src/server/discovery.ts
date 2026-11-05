@@ -77,7 +77,7 @@ export async function installDiscoveryRoutes(app: FastifyInstance, runtime: Runt
     const routineId = z.object({id}).parse(req.params).id;
     const row=routineById(await runtime.routines(),routineId,store,signedIn(req).id);
     if(!row)throw httpError(404,'Routine not found');
-    await bot(signedIn(req).id,row.botId);await assertRoutineEditable(runtime,store,routineId);
+    await bot(signedIn(req).id,row.botId);await assertRoutineEditable(runtime,store,routineId,row.botId);
     if(!runtime.setRoutineEnabled)throw httpError(409,'This integration cannot change routine state independently.');
     // Resuming lets it deliver, so its rooms are checked as Hermes has them now; pausing always goes ahead.
     await serialDelivery(store, async () => {

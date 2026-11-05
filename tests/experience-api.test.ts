@@ -159,13 +159,21 @@ it('fences routine edits during a trial and stops rereading terminal trial histo
   const s = await setup(), requestId = randomUUID();
   s.store.rememberRoutineTrial(requestId, 'first', 'routine', 'ranch');
   s.receipt.mockReturnValueOnce(runReceiptFixture({ status: 'accepted', requestId }));
-  await expect(assertRoutineEditable(s.runtime, s.store, 'routine')).rejects.toMatchObject({ statusCode: 409 });
+  await expect(assertRoutineEditable(s.runtime, s.store, 'routine', 'ranch')).rejects.toMatchObject({ statusCode: 409 });
   s.receipt.mockReturnValueOnce(runReceiptFixture({ status: 'completed', requestId }));
-  await assertRoutineEditable(s.runtime, s.store, 'routine');
+  await assertRoutineEditable(s.runtime, s.store, 'routine', 'ranch');
   expect(s.store.routineTrials('routine')).toEqual([]);
   const count = s.experienceRequest.mock.calls.length;
-  await assertRoutineEditable(s.runtime, s.store, 'routine');
+  await assertRoutineEditable(s.runtime, s.store, 'routine', 'ranch');
   expect(s.experienceRequest.mock.calls.length).toBe(count);
+});
+it("fences only the assistant whose routine runs a trial, when another assistant has a job with the same ID", async () => {
+  const { assertRoutineEditable } = await import('../src/server/experience.js');
+  const s = await setup(), requestId = randomUUID();
+  s.store.rememberRoutineTrial(requestId, 'first', 'routine', 'private');
+  s.receipt.mockReturnValue(runReceiptFixture({ status: 'accepted', requestId }));
+  await assertRoutineEditable(s.runtime, s.store, 'routine', 'ranch');
+  await expect(assertRoutineEditable(s.runtime, s.store, 'routine', 'private')).rejects.toMatchObject({ statusCode: 409 });
 });
 it('shows late native completions and their attributed artifacts after a catch-up marker', async () => {
   const s = await setup();
