@@ -124,7 +124,7 @@ import XCTest
     XCTAssertNil(AppStore.userId(inScope: "not base64!"))
   }
 
-  private func controller(for fake: FakeServer, signedIn: String?) -> (NotificationController, () -> [UNNotificationRequest]) {
+  private func makeController(for fake: FakeServer, signedIn: String?) -> (NotificationController, () -> [UNNotificationRequest]) {
     let controller = NotificationController()
     var notices: [UNNotificationRequest] = []
     controller.deliverNotice = { notices.append($0) }
@@ -137,7 +137,7 @@ import XCTest
   func testStopUsesTheChatsStopForTheActivitysOwnAccount() async throws {
     let fake = FakeServer()
     let ownScope = AppStore.scope(server: fake.origin, userId: "one")
-    let (controller, notices) = controller(for: fake, signedIn: ownScope)
+    let (controller, notices) = makeController(for: fake, signedIn: ownScope)
     await controller.act(ActivityAction(kind: .stop, botId: "kitchen helper", scope: ownScope, name: "Kitchen"))
     XCTAssertEqual(fake.lastRequest?.httpMethod, "POST")
     XCTAssertEqual(fake.lastRequest?.url?.path, "/api/bots/kitchen helper/stop")
@@ -153,12 +153,12 @@ import XCTest
   func testDeclineNamesTheAccountAndAnotherSignInDoesNothing() async throws {
     let fake = FakeServer()
     let ownScope = AppStore.scope(server: fake.origin, userId: "one")
-    let (controller, notices) = controller(for: fake, signedIn: ownScope)
+    let (controller, notices) = makeController(for: fake, signedIn: ownScope)
     await controller.act(ActivityAction(kind: .decline(approvalId: "request:7"), botId: "kitchen", scope: ownScope, name: "Kitchen"))
     XCTAssertEqual(fake.lastRequest?.url?.path, "/api/bots/kitchen/approvals/request:7")
     XCTAssertEqual(try fake.lastJSON() as? [String: String], ["decision": "denied", "account": NotificationActions.accountMarker("one")])
     let sent = fake.requests.count
-    let (other, otherNotices) = controller(for: fake, signedIn: AppStore.scope(server: fake.origin, userId: "two"))
+    let (other, otherNotices) = makeController(for: fake, signedIn: AppStore.scope(server: fake.origin, userId: "two"))
     await other.act(ActivityAction(kind: .stop, botId: "kitchen", scope: ownScope, name: "Kitchen"))
     XCTAssertEqual(fake.requests.count, sent, "Another account's activity is never acted on")
     XCTAssertEqual(otherNotices().last?.content.title, "Kitchen wasn't changed")

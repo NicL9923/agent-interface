@@ -83,6 +83,7 @@
   "src/server/upgrades.ts",
   "src/server/vault.ts",
   "src/server/voice.ts",
+  "src/server/widget-refresh.ts",
   "src/shared/activity-sentence.ts",
   "src/shared/api.ts",
   "src/shared/automation.ts",

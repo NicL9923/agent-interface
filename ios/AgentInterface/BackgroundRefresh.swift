@@ -8,7 +8,7 @@ import WidgetKit
 /// widget extension still never holds a token. iOS decides when, and may skip both, so widgets keep
 /// saying "Open WildBots to refresh" once the snapshot is 30 minutes old.
 @MainActor enum BackgroundRefresh {
-  static let taskIdentifier = "dev.agentinterface.ios.widgets"
+  nonisolated static let taskIdentifier = "dev.agentinterface.ios.widgets"
   /// The earliest iOS may run the next refresh task. It usually waits longer.
   static let interval: TimeInterval = 15 * 60
   /// The saved server and Keychain sign-in, as a notification action uses after a background launch.
@@ -29,6 +29,14 @@ import WidgetKit
     running = task
     defer { running = nil }
     return await task.value
+  }
+  /// Refreshes, waiting no longer than `patience`. A slower read carries on and writes when it finishes.
+  static func refreshWidgets(waitingAtMost patience: Duration) async {
+    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+      let first = FirstFinish(continuation)
+      Task { @MainActor in await refreshWidgets(); first.finish() }
+      Task { @MainActor in try? await Task.sleep(for: patience); first.finish() }
+    }
   }
   private static func read(at now: @MainActor () -> Date) async -> Bool {
     guard let api = client(), let token = api.token else { return false }
@@ -68,4 +76,11 @@ import WidgetKit
 private final class SentTask: @unchecked Sendable {
   let task: BGTask
   init(_ task: BGTask) { self.task = task }
+}
+
+/// Resumes a wait once, for whichever of two tasks finishes first.
+@MainActor private final class FirstFinish {
+  private var continuation: CheckedContinuation<Void, Never>?
+  init(_ continuation: CheckedContinuation<Void, Never>) { self.continuation = continuation }
+  func finish() { continuation?.resume(); continuation = nil }
 }

@@ -99,12 +99,7 @@ struct CheckAssistantsIntent: AppIntent {
   @MainActor func perform() async throws -> some IntentResult & ProvidesDialog & ShowsSnippetView {
     let url = AssistantEntityQuery.snapshotURL
     if WidgetSnapshotStore.read(from: url).map({ Date().timeIntervalSince($0.generatedAt) > 60 }) ?? true {
-      await withTaskGroup(of: Void.self) { group in
-        group.addTask { @MainActor in await BackgroundRefresh.refreshWidgets() }
-        group.addTask { try? await Task.sleep(for: Self.refreshPatience) }
-        await group.next()
-        group.cancelAll()
-      }
+      await BackgroundRefresh.refreshWidgets(waitingAtMost: Self.refreshPatience)
     }
     guard let snapshot = WidgetSnapshotStore.read(from: url) else { throw AssistantIntentError.signedOut }
     let now = Date()
