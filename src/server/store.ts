@@ -183,6 +183,7 @@ export class Store {
   recordEvents(...args: Parameters<EventRepository["recordEvents"]>) { return this.events.recordEvents(...args); }
   enqueueKnownEvents(...args: Parameters<EventRepository["enqueueKnownEvents"]>) { return this.events.enqueueKnownEvents(...args); }
   latestEventFrontier(...args: Parameters<EventRepository["latestEventFrontier"]>) { return this.events.latestEventFrontier(...args); }
+  runOutcome(...args: Parameters<EventRepository["runOutcome"]>) { return this.events.runOutcome(...args); }
   eventPage(...args: Parameters<EventRepository["eventPage"]>) { return this.events.eventPage(...args); }
   todaySeen(...args: Parameters<EventRepository["todaySeen"]>) { return this.events.todaySeen(...args); }
   todayFrontier(...args: Parameters<EventRepository["todayFrontier"]>) { return this.events.todayFrontier(...args); }

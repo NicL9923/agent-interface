@@ -18,6 +18,9 @@ const ASK_WAIT_MS = 20_000;
 const RECHECK_MS = 2_000;
 // A request Hermes admitted but no read shows for this long is gone from the chat, as after a reset.
 const MISSING_MS = 30_000;
+// Discovery reads Hermes's run endings every five seconds. A steered run that ended without one
+// reported this long after is taken as finished.
+const SETTLE_MS = 15_000;
 const running = ["thinking", "working"];
 
 const clean = (text: string | undefined, limit: number) =>
@@ -75,17 +78,22 @@ export function spokenReplies(texts: string[], limit = MAX_TALK_ANSWER) {
   return kept.length < texts.length && spoken.length <= limit - 32 ? `${spoken} Earlier parts are in the chat.` : spoken;
 }
 
+export type RunOutcome = "completed" | "failed" | "interrupted";
 /**
- * Where a submitted request stands in a conversation read anchored at its message: undefined while
- * it runs or is not yet visible, "missing" when the read shows neither it nor any work.
- * `reply` turns a message into what this person may read.
+ * Where a submitted request stands in a conversation read anchored at its message, with the turn
+ * before it: undefined while it runs or is not yet visible, "missing" when the read shows neither it
+ * nor its run, and "settling" when a steered request's run ended but Hermes has not yet said how.
+ * `outcome` is how Hermes reported the request's run ending, once discovered. `reply` turns a
+ * message into what this person may read.
  */
-export function talkAnswer(receipt: SubmissionReceipt, conversation: Conversation, reply: (message: Message) => Message = message => message): TalkAnswer | "missing" | undefined {
+export function talkAnswer(receipt: SubmissionReceipt, conversation: Conversation, reply: (message: Message) => Message = message => message,
+  outcome?: RunOutcome): TalkAnswer | "missing" | "settling" | undefined {
   if (receipt.status === "rejected") return { state: "refused", text: receipt.message };
   if (receipt.status === "interrupted") return { state: "interrupted" };
   if (receipt.status !== "accepted") return undefined;
   const { activity } = conversation;
   const active = ["waiting", "blocked", ...running].includes(activity.state);
+  // Without a run ID, as from an older add-on, any work may be this request's.
   const ours = receipt.runId ? activity.runId === receipt.runId : active;
   if (ours && activity.state === "waiting") return { state: "needsApproval", text: conversation.approvals[0]?.title };
   if (ours && activity.state === "blocked") return { state: "needsAnswer", text: conversation.attention?.[0]?.title };
@@ -94,17 +102,22 @@ export function talkAnswer(receipt: SubmissionReceipt, conversation: Conversatio
   const messages = conversation.messages.filter(message => !message.id.endsWith("-inflight"));
   // The add-on names a person's message by its request ID; older ones by the receipt's row.
   const sent = messages.findIndex(message => message.role === "user" && (message.id === receipt.requestId || message.id === receipt.messageId));
-  if (sent < 0) return active ? undefined : "missing";
+  if (sent < 0) return ours ? undefined : "missing";
+  if (outcome === "interrupted") return { state: "interrupted" };
   const later = messages.slice(sent + 1);
   // No other turn followed, so an outcome without a run names this request's turn.
   const latest = !later.some(message => message.role === "user" && (!receipt.runId || message.runId !== receipt.runId));
   if (latest && !activity.runId && activity.state === "interrupted") return { state: "interrupted" };
-  // Only what came after the request: a steer joins a run whose earlier replies answered something else.
+  // A steer joins a run an earlier message started. Its receipt settles at admission, so only the
+  // run's own reported ending tells a finished run from an interrupted one.
+  const steered = !!receipt.runId && messages.slice(0, sent).some(message => message.role === "user" && message.runId === receipt.runId);
+  if (steered && !outcome) return "settling";
+  // Only what came after the request: the run's earlier replies answered something else.
   const inRun = receipt.runId ? later.filter(message => message.runId === receipt.runId) : [];
   const next = later.findIndex(message => message.role === "user");
   const replies = (inRun.length ? inRun : later.slice(0, next < 0 ? undefined : next)).filter(isConversationReply);
   const texts = replies.map(message => reply(message)).filter(isConversationReply).map(message => message.text.trim()).filter(Boolean);
-  if (!texts.length && latest && activity.state === "failed") return { state: "refused", text: "The assistant could not finish this request." };
+  if (!texts.length && (outcome === "failed" || latest && activity.state === "failed")) return { state: "refused", text: "The assistant could not finish this request." };
   return { state: "done", text: spokenReplies(texts) };
 }
 
@@ -150,8 +163,14 @@ export function installTalkRoutes(app: FastifyInstance, collaborators: {
     return session;
   });
   const ask = z.object({ requestId: z.string().uuid(), request: z.string().trim().min(1).max(4000) }).strict();
-  // When each admitted request was first missing from its anchored read, to tell a slow write from a lost one.
-  const missing = new Map<string, number>();
+  // When each admitted request was first missing from its anchored read, or first seen with its
+  // steered run ended but no reported outcome, to tell a slow write from a lost one.
+  const missing = new Map<string, number>(), settling = new Map<string, number>();
+  const waited = (since: Map<string, number>, requestId: string, limit: number) => {
+    const first = since.get(requestId) ?? now();
+    since.set(requestId, first);
+    return now() - first >= limit;
+  };
   apiRoute(app, "POST /bots/:id/talk/ask", { body: ask }, async (req, { requestId, request }, reply) => {
     const botId = req.params.id, userId = signedIn(req).id;
     reply.header("Cache-Control", "no-store");
@@ -168,22 +187,28 @@ export function installTalkRoutes(app: FastifyInstance, collaborators: {
     if (receipt.status === "uncertain") return { state: "working" };
     const redact = await redactAgents(store, roster, userId);
     const deadline = now() + waitMs;
-    for (const [id, at] of missing) if (now() - at > 10 * MISSING_MS) missing.delete(id);
+    for (const since of [missing, settling]) for (const [id, at] of since) if (now() - at > 10 * MISSING_MS) since.delete(id);
     let wake: (() => void) | undefined;
     // Streamed tokens change nothing this waits for; a structural change may settle the run.
     const unwatch = runtime.watch?.(botId, kind => { if (kind !== "inflight") wake?.(); });
     try {
       for (;;) {
-        // Anchored at the request, so later turns never push it out of the read.
-        const answer = talkAnswer(receipt, await runtime.conversation(botId, { window: { start: requestId } }), redact.message);
-        if (answer === "missing") {
-          const since = missing.get(requestId) ?? now();
-          missing.set(requestId, since);
-          if (now() - since >= MISSING_MS) {
-            missing.delete(requestId);
-            return { state: "refused", text: "This request is no longer in the chat. Check the chat before asking again." };
-          }
-        } else if (answer) { missing.delete(requestId); return answer; }
+        // Anchored at the request and the turn before it, so later turns never push it out of the
+        // read, and a steer shows the run it joined.
+        const conversation = await runtime.conversation(botId, { window: { start: requestId, turns: 1 } });
+        const answer = talkAnswer(receipt, conversation, redact.message, receipt.runId ? store.runOutcome(botId, receipt.runId) : undefined);
+        // Each wait counts only while its condition holds without a break.
+        if (answer !== "missing") missing.delete(requestId);
+        if (answer !== "settling") settling.delete(requestId);
+        if (answer === "missing" && waited(missing, requestId, MISSING_MS)) {
+          missing.delete(requestId);
+          return { state: "refused", text: "This request is no longer in the chat. Check the chat before asking again." };
+        }
+        if (answer === "settling" && waited(settling, requestId, SETTLE_MS)) {
+          settling.delete(requestId);
+          return talkAnswer(receipt, conversation, redact.message, "completed") as TalkAnswer;
+        }
+        if (answer && answer !== "missing" && answer !== "settling") return answer;
         const left = deadline - now();
         if (left <= 0) return { state: "working" };
         await new Promise<void>(resolve => {

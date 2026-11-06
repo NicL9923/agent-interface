@@ -103,6 +103,9 @@ describe("talk tool loop", () => {
     // The screen prompt is said once, not on every repeat.
     expect(s.sent.filter(event => event.type === "conversation.item.create")).toHaveLength(1);
     s.loop.dispose();
+    await s.settle();
+    // Disposal clears the pending wait, so nothing is left to fire.
+    expect(vi.getTimerCount()).toBe(0);
     const asked = s.asks.length;
     await s.settle(60_000);
     expect(s.asks.length).toBe(asked);

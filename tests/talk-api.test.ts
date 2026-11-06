@@ -113,11 +113,15 @@ const run = (messages: Conversation["messages"], activity: Conversation["activit
 // The add-on names a person's message by its request ID.
 const asked = (id = "r", runId = "run-talk") => ({ id, runId, role: "user" as const, text: "What's the weather?" });
 const said = (id: string, text: string, runId = "run-talk") => ({ id, runId, role: "assistant" as const, text });
-/** A history read as Hermes cuts it: from the start message when it is there, else the latest turns. */
-const anchored = (messages: Conversation["messages"]) => (options?: ConversationOptions) => {
-  const at = messages.findIndex(message => message.id === options?.window?.start);
-  return run(at >= 0 ? messages.slice(at) : messages.slice(-2));
+/** A history read as Hermes cuts it: from the start message and `turns` user turns before it, else the latest turns. */
+const anchored = (messages: Conversation["messages"], activity?: Conversation["activity"]) => (options?: ConversationOptions) => {
+  let at = messages.findIndex(message => message.id === options?.window?.start);
+  if (at < 0) return run(messages.slice(-2), activity);
+  for (let turns = options?.window?.turns ?? 0; at > 0 && turns > 0;) if (messages[--at]!.role === "user") turns--;
+  return run(messages.slice(at), activity);
 };
+const event = (kind: "completed" | "interrupted", runId = "run-talk") =>
+  ({ id: `${runId}:${kind}`, botId: "ranch", runId, kind, title: `Hermes ${kind}`, occurredAt: new Date().toISOString() });
 const ask = (s: Awaited<ReturnType<typeof setup>>, requestId: string, request = "What's the weather?") =>
   s.app.inject({ method: "POST", url: "/api/bots/ranch/talk/ask", headers: s.one, payload: { requestId, request } });
 async function fakeTime() {
@@ -175,6 +179,65 @@ describe("talk ask", () => {
     expect((await again).json()).toMatchObject({ state: "refused", text: expect.stringContaining("no longer in the chat") });
   });
 
+  it("follows a steered request's run to its reported ending, as its receipt settles at admission", async () => {
+    const requestId = randomUUID();
+    // Someone's question started run-talk; the spoken request steered it, then it was interrupted
+    // with partial text, and another message started run-next.
+    const history = [asked("first"), said("r0", "Here is the feed plan."), asked(requestId), said("partial", "Checking the gat"), asked("someone-else", "run-next")];
+    // Hermes's receipt for a steer is terminal and accepted from admission on.
+    const s = await setup({ lookup: id => id === requestId ? { requestId: id, status: "accepted", runId: "run-talk" } : null,
+      conversation: anchored(history, { state: "working", runId: "run-next" }) });
+    s.store.recordEvents([event("interrupted")], "1");
+    expect((await ask(s, requestId)).json()).toEqual({ state: "interrupted" });
+    // A finished steered run answers with what followed the request.
+    const finished = randomUUID();
+    s.setConversation(anchored([asked("first", "run-done"), said("d0", "Earlier."), asked(finished, "run-done"), said("d1", "Done now.", "run-done")]));
+    s.store.recordEvents([event("completed", "run-done")], "2");
+    s.submit.mockImplementationOnce(async input => ({ requestId: input.requestId, status: "accepted", runId: "run-done" }));
+    expect((await ask(s, finished)).json()).toEqual({ state: "done", text: "Done now." });
+  });
+
+  it("takes a steered run as finished when no ending is reported in time", async () => {
+    const requestId = randomUUID();
+    const s = await setup({ conversation: anchored([asked("first"), said("r0", "Earlier."), asked(requestId), said("r1", "Gate is shut.")]) });
+    const pass = await fakeTime();
+    const first = ask(s, requestId);
+    await pass(10_000);
+    s.store.recordEvents([], "1");
+    const answer = await Promise.race([first.then(response => response.json()), pass(11_000).then(() => "still waiting")]);
+    expect(answer).toEqual({ state: "done", text: "Gate is shut." });
+  });
+
+  it("does not let unrelated work hide a lost request", async () => {
+    const requestId = randomUUID();
+    const s = await setup({ conversation: anchored([asked("other", "run-other")], { state: "working", runId: "run-other" }) });
+    const pass = await fakeTime();
+    const first = ask(s, requestId);
+    await pass(21_000);
+    expect((await first).json()).toEqual({ state: "working" });
+    const second = ask(s, requestId);
+    await pass(21_000);
+    expect((await second).json()).toMatchObject({ state: "refused" });
+  });
+
+  it("restarts the missing wait whenever the request's own run shows", async () => {
+    const requestId = randomUUID();
+    const lost = anchored([asked("other", "run-other")]);
+    const s = await setup({ conversation: lost });
+    const pass = await fakeTime();
+    const first = ask(s, requestId);
+    await pass(21_000);
+    expect((await first).json()).toEqual({ state: "working" });
+    // The request's run is at work, though its message is not readable yet.
+    s.setConversation(() => run([], { state: "working", runId: "run-talk" }));
+    const second = ask(s, requestId);
+    await pass(5_000);
+    s.setConversation(lost);
+    await pass(17_000);
+    // Missing again for under 30 seconds since its run was seen: still waiting, not refused.
+    expect((await second).json()).toEqual({ state: "working" });
+  });
+
   it("honors Hermes's interrupted receipt, even once another run has started", async () => {
     const requestId = randomUUID();
     let receipt: SubmissionReceipt | null = null;
@@ -200,6 +263,8 @@ describe("talk answer states", () => {
   });
   it("keeps waiting while the run is unseen or running, and ignores other runs and unfinished text", () => {
     expect(talkAnswer(accepted, run([]))).toBe("missing");
+    // Only the request's own run covers a message not yet readable.
+    expect(talkAnswer(accepted, run([], { state: "working", runId: "run-other" }))).toBe("missing");
     expect(talkAnswer(accepted, run([], { state: "thinking", runId: "run-talk" }))).toBeUndefined();
     expect(talkAnswer(accepted, run([asked(), said("x-inflight", "Partial")], { state: "thinking", runId: "run-talk" }))).toBeUndefined();
     expect(talkAnswer({ ...accepted, status: "uncertain" }, run([]))).toBeUndefined();
@@ -210,7 +275,9 @@ describe("talk answer states", () => {
   it("speaks only replies after a steered request, keeping the latest when they are long", () => {
     // A steer joins the running turn, whose earlier replies answered the first question.
     const steered = run([asked("first"), said("r0", "Here is the feed plan."), asked("r"), said("r1", "x ".repeat(2500)), said("r2", "Corrected: feed at six.")]);
-    const answer = talkAnswer(accepted, steered) as { text: string };
+    expect(talkAnswer(accepted, steered)).toBe("settling");
+    expect(talkAnswer(accepted, steered, undefined, "interrupted")).toEqual({ state: "interrupted" });
+    const answer = talkAnswer(accepted, steered, undefined, "completed") as { text: string };
     expect(answer.text).not.toContain("feed plan");
     expect(answer.text).toMatch(/^Corrected: feed at six\. Earlier parts are in the chat\.$/);
     expect(spokenReplies(["One.", "Two."])).toBe("One.\n\nTwo.");
