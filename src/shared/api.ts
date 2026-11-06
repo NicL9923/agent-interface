@@ -67,21 +67,25 @@ export interface WebPushSubscription { endpoint: string; keys: { p256dh: string;
 export type PushTest = { ok: true; detail: string };
 /** Bounds the server enforces on a client error report. Clients trim to them before sending. */
 export const CLIENT_ERROR_LIMITS = { message: 1024, stack: 8192, route: 512, release: 64 } as const;
-/** A run of text with no space or quote: a URL, a path or a word. */
-const token = /[^\s"'`<>]+/g;
-/** Before its query, the token names a place: it has a scheme (`https:`, `blob:`) or a slash. */
-const place = /^\(?(?:[a-z][a-z\d+.-]*:|[^?#]*\/)/i;
+/** A run of text with no space: a URL, a path, a stack frame's location or a word. */
+const token = /\S+/g;
+/**
+ * Before its query, the token names a place: it has a scheme (`https:`, `blob:`), a slash, or ends in
+ * a file extension, as Chrome's `eval` frames name a bare script (`app.js?token=…`).
+ */
+const place = /^[("'`]*(?:[a-z][a-z\d+.-]*:|[^?#]*\/|[^?#]*\.[a-z\d]{1,8}$)/i;
 /** A stack frame's script ends its path, and may be followed by a line and a column. */
 const frame = /\.[cm]?[jt]sx?$/;
 /**
- * Drops the query string and hash from every URL or path in diagnostic text, whatever its form:
- * absolute, relative or `blob:`. They can carry a sign-in code, a search or a draft. Only a script's
- * stack frame keeps its trailing line and column, as in `(/assets/app.js?v=1:10:5)`.
+ * Drops the query string and hash from every URL, path or script name in diagnostic text, whatever its
+ * form, up to the next space: a query may hold quotes or parentheses. They can carry a sign-in code, a
+ * search or a draft. Only a script's stack frame keeps its trailing line and column, as in
+ * `(/assets/app.js?v=1:10:5)`.
  */
 export function withoutUrlQueries(text: string) {
   return text.replace(token, word => {
     const cut = word.search(/[?#]/);
-    if (cut < 0 || !place.test(word.slice(0, cut))) return word;
+    if (cut <= 0 || !place.test(word.slice(0, cut))) return word;
     const base = word.slice(0, cut);
     const position = frame.test(base) ? /(?::\d+){1,2}(?=\)?$)/.exec(word.slice(cut))?.[0] ?? "" : "";
     const closed = word.startsWith("(") && word.endsWith(")") ? ")" : "";

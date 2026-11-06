@@ -7,7 +7,7 @@ import { api, write } from "../src/client-api";
 import { defaultPreferences, type Bootstrap } from "../src/shared/types";
 import type { GroupCatalog, GroupRoom } from "../src/shared/collaboration";
 import { FakeEventSource } from "./fake-event-source";
-import { GROUP_FALLBACK_POLL_MS } from "../src/app/use-session";
+import { GROUP_FALLBACK_POLL_MS, GROUP_UNNOTIFIED_POLL_MS } from "../src/app/use-session";
 import { advance, mountRoot, stubMatchMedia } from "./ui-harness";
 
 vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(await (async original => ({ ...await original<typeof import("../src/client-api")>(), api: vi.fn(), write: vi.fn() }))(original)));
@@ -121,6 +121,8 @@ describe("group chats on home", () => {
     const household = [...FakeEventSource.streams].find(stream => stream.url === "/api/events")!;
     expect(household).toBeDefined();
     await act(async () => household.connect());
+    // The server answers every connect with a groups notice, which also shows it pushes changes.
+    await act(async () => household.emit("groups", "groups"));
     await advance(20);
     const opened = catalogReads();
     await advance(GROUP_FALLBACK_POLL_MS - 1000);
@@ -142,6 +144,19 @@ describe("group chats on home", () => {
     await act(async () => household.emit("groups", "groups"));
     await advance(20);
     expect(catalogReads()).toBe(before + 1);
+  });
+
+  it("keeps the 30-second catalog poll for a server that never sends groups notices", async () => {
+    await render();
+    const catalogReads = () => reads(path => path === "/groups");
+    const household = [...FakeEventSource.streams].find(stream => stream.url === "/api/events")!;
+    await act(async () => household.connect());
+    await advance(20);
+    const opened = catalogReads();
+    await advance(GROUP_UNNOTIFIED_POLL_MS);
+    expect(catalogReads()).toBe(opened + 1);
+    await advance(GROUP_UNNOTIFIED_POLL_MS);
+    expect(catalogReads()).toBe(opened + 2);
   });
 
   it("makes a group from the plus menu and opens the new room", async () => {

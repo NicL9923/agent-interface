@@ -546,7 +546,7 @@ struct BotListView: View {
       .onChange(of: store.likelyChatIds) { _, _ in store.prefetchLikelyChats() }
       .onChange(of: store.scope) { _, scope in pendingGroup = GroupCreation.pending(scope: scope); Task { await store.refreshGroups() } }
       .onChange(of: creatingGroup) { _, _ in pendingGroup = GroupCreation.pending(scope: store.scope) }
-      .pollWhileActive(id: store.scope ?? "", every: AppStore.groupsFallbackInterval) { await store.refreshGroups() }
+      .pollWhileActive(id: "\(store.scope ?? "")|\(store.groupsPollInterval)", every: store.groupsPollInterval) { await store.refreshGroups() }
       .newSectionAlert(for: $sectionFor)
       .undoToast($undo) { change in Task { await store.undo(change) } }
   }

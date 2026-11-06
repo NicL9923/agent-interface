@@ -81,7 +81,7 @@ extension AppStore {
           for try await line in lines {
             guard !Task.isCancelled else { return }
             if line == "data: roster" { await self.refreshBootstrap() }
-            if line == "data: groups" { await self.refreshGroups() }
+            if line == "data: groups" { self.groupNoticeScope = self.scope; await self.refreshGroups() }
           }
         } catch {}
         guard let self, !Task.isCancelled, !self.sessionExpired else { return }

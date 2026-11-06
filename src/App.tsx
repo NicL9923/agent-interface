@@ -9,7 +9,7 @@ import { TodayPanel } from "./components/TodayPanel";
 import "./components/discovery.css";
 import { hasDestination, initialPanel, initialRoom, initialView, startsOnToday, useUrlSync } from "./app/view";
 import type { Panel, View } from "./app/view";
-import { GROUP_FALLBACK_POLL_MS, GROUPS_EVENT, useSession } from "./app/use-session";
+import { GROUP_FALLBACK_POLL_MS, GROUP_UNNOTIFIED_POLL_MS, GROUPS_EVENT, useSession } from "./app/use-session";
 import { useDraft, useDraftPersistence } from "./app/use-draft";
 import { useConversation } from "./app/use-conversation";
 import { useChatPresence } from "./app/use-chat-presence";
@@ -77,7 +77,8 @@ export function App() {
   // A read that finds nothing new returns the copy already held, so home does not redraw for it.
   const groupsHeld = useRef<{ json: string; value: { userId: string; catalog: GroupCatalog } }>(undefined);
   const groupLoad = useResource<{ userId: string; catalog: GroupCatalog }>(userId ? "/groups" : null, {
-    deps: [userId], pollMs: GROUP_FALLBACK_POLL_MS, wake: true,
+    // A server that never sends `groups` notices gets the 30-second poll home always had.
+    deps: [userId], pollMs: session.groupsNotified ? GROUP_FALLBACK_POLL_MS : GROUP_UNNOTIFIED_POLL_MS, wake: true,
     load: async (path, signal) => {
       const catalog = await api<GroupCatalog>(path, { signal });
       const json = JSON.stringify([userId, catalog]);

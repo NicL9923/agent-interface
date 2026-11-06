@@ -17,6 +17,8 @@ type SessionEvents = {
 export const GROUPS_EVENT = "agent-interface:groups";
 /** Group chat reads that only cover a notice the stream missed. */
 export const GROUP_FALLBACK_POLL_MS = 5 * 60_000;
+/** Until the server has sent a `groups` notice, it may be one that never does, so poll as before. */
+export const GROUP_UNNOTIFIED_POLL_MS = 30_000;
 const groupsChanged = () => window.dispatchEvent(new Event(GROUPS_EVENT));
 /** A bootstrap this recent already answers a focus or visibility change, such as alt-tabbing back. */
 const FRESH_MS = 5_000;
@@ -26,6 +28,7 @@ export function useSession(events: SessionEvents) {
   const initialDestination = useRef(false);
   const [boot, setBoot] = useState<Bootstrap | null>(null);
   const [auth, setAuth] = useState(false);
+  const [groupsNotified, setGroupsNotified] = useState(false);
   const [botId, setBotId] = useState(
     () => new URLSearchParams(location.search).get("bot") || "",
   );
@@ -153,7 +156,7 @@ export function useSession(events: SessionEvents) {
     if (!boot?.user.id || auth) return;
     // The server sends `groups` once on every connect and on each catalog change, so connecting or a
     // roster notice does not read the group catalog itself.
-    const stream = changeStream("/events", () => { void refresh(); }, undefined, { groups: groupsChanged });
+    const stream = changeStream("/events", () => { void refresh(); }, undefined, { groups: () => { setGroupsNotified(true); groupsChanged(); } });
     const wake = () => {
       if (document.visibilityState !== "hidden" && navigator.onLine !== false) stream.open();
       else stream.close();
@@ -200,5 +203,7 @@ export function useSession(events: SessionEvents) {
   return {
     boot, auth, botId, setBotId, disconnected, appUnavailable, offline, checkingConnection,
     identityEpoch, refresh, reconnect, savePreferences, editPreferences, signedIn, signedOut,
+    /** This server sends `groups` notices, so a slow fallback poll is enough. */
+    groupsNotified,
   };
 }

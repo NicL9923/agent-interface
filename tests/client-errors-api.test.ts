@@ -59,6 +59,12 @@ it("drops the query and hash of absolute, relative and blob URLs, keeping only a
     ["at f (https://x.invalid/assets/app-1.js?v=SENTINEL:10:5)", "at f (https://x.invalid/assets/app-1.js:10:5)"],
     ["at f https://x.invalid/assets/app-1.js#SENTINEL:10:5", "at f https://x.invalid/assets/app-1.js:10:5"],
     ["a/b?c either/or?maybe", "a/b either/or"],
+    // Chrome names an eval'd or sourceURL script without a path.
+    ["at eval (app.js?token=SENTINEL:1:1)", "at eval (app.js:1:1)"],
+    ["at eval (https://x.invalid/app.js?token=x'SENTINEL:1:1)", "at eval (https://x.invalid/app.js:1:1)"],
+    // Safari and Firefox frames: name@location.
+    ["load@https://x.invalid/assets/app-1.js?t=SENTINEL:10:5", "load@https://x.invalid/assets/app-1.js:10:5"],
+    ['fetch "https://x.invalid/a?q=SENTINEL" failed', 'fetch "https://x.invalid/a failed'],
   ]) expect(withoutUrlQueries(text), text).toBe(safe);
 });
 

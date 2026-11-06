@@ -6,6 +6,12 @@ extension AppStore {
   /// sent on every connect and on each change, brings changes at once, so this only covers a
   /// notice lost to a stream that failed unnoticed.
   static let groupsFallbackInterval: Duration = .seconds(300)
+  /// An older server never sends `groups`, so home keeps the 30-second poll it always had until one arrives.
+  static let groupsUnnotifiedInterval: Duration = .seconds(30)
+  /// Home's poll for this account's server: slow once its stream has shown it pushes catalog changes.
+  var groupsPollInterval: Duration {
+    scope != nil && groupNoticeScope == scope ? Self.groupsFallbackInterval : Self.groupsUnnotifiedInterval
+  }
   /// Reads the room catalog for home. A failure keeps the rooms already shown; the next poll tries again.
   func refreshGroups() async {
     let id = UUID(); groupLoadId = id

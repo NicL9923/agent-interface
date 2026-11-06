@@ -1278,9 +1278,11 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
         try await until { server.requestCount("/api/events") == 1 && server.requestCount("/api/bootstrap") == 2 }
         let bootstraps = server.requestCount("/api/bootstrap")
         // Older servers never send `groups`, and a newer server may send notices this app does not know.
+        XCTAssertEqual(value.groupsPollInterval, AppStore.groupsUnnotifiedInterval, "A server that may never send groups keeps the 30-second poll")
         server.notifyHousehold("someday")
         server.notifyHousehold("groups")
         try await until { value.groupCatalog?.rooms.map(\.name) == ["Supper planning"] }
+        XCTAssertEqual(value.groupsPollInterval, AppStore.groupsFallbackInterval, "A server that sends groups needs only the slow fallback")
         server.serveGroups(["Supper planning", "Garden crew"])
         server.notifyHousehold("groups")
         try await until { value.groupCatalog?.rooms.map(\.name) == ["Supper planning", "Garden crew"] }

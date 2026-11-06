@@ -135,6 +135,8 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   var homeRequest: UUID?
   /// The household's group chats, which home lists beside the assistants. Nil until the first read for this account.
   var groupCatalog: GroupCatalog?
+  /// The account scope whose household stream has sent a `groups` notice: that server pushes catalog changes.
+  var groupNoticeScope: String?
   @ObservationIgnored var groupLoadId = UUID()
   var preferencesSaving = false
   var preferencesSaveFailed = false
