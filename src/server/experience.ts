@@ -18,6 +18,7 @@ import { id } from './schemas.js';
 import { assertDeliveryPrivate } from './collaboration.js';
 import { routineTargets } from './delivery-targets.js';
 import { serialDelivery } from './routine-delivery.js';
+import { mapLimit } from './concurrency.js';
 const target = z.enum(['memory', 'user']);
 const revision = z.string().regex(/^[a-f0-9]{64}$/);
 const iso = z.string().datetime({ offset: true });
@@ -74,6 +75,8 @@ export async function installExperienceRoutes(app: FastifyInstance, runtime: Run
     // discovered during those reads belongs to the next page, even when its
     // native occurredAt precedes the person's last visit.
     const upperFrontier = store.latestEventFrontier();
+    // Upcoming routines are read alongside the recaps. A scheduler outage leaves the rest of Today useful.
+    const routines = (async () => runtime.routines())().catch(() => undefined);
     const bots = await visibleBots(runtime, store, userId);
     // The redactor reads which assistants are private in this same tick, so this version names
     // exactly the privacy it applies. A recap is reused, or saved, only under that version.
@@ -85,49 +88,45 @@ export async function installExperienceRoutes(app: FastifyInstance, runtime: Run
     const hidden = store.privateBots().filter(row => row.ownerId !== userId).map(row => row.botId).sort();
     const names = hidden.length ? await roster.names() : undefined;
     const privacy = JSON.stringify([privacyVersion, hidden.map(botId => [botId, [...names?.get(botId) ?? []].sort()])]);
-    const items: TodayItem[] = [];
-    for (let index = 0; index < bots.length; index += 4) {
-      const batch = await Promise.all(bots.slice(index, index + 4).map(async bot => {
-        try {
-          const events = page.events.filter(event => event.botId === bot.id && event.kind === 'completed' && event.runId);
-          const unreadRuns = [...new Set(events.map(event => event.runId!))].sort();
-          // An unchanged roster preview means no new message, so a settled assistant's recap is
-          // reused and only its current state is read. History is read again after it changes.
-          const key = JSON.stringify([bot.sessionId, bot.lastMessage, since, unreadRuns, events.map(event => event.id), privacy]);
-          const cacheKey = `${userId}\0${bot.id}`;
-          const cached = recaps.get(cacheKey);
-          const reusable = cached?.key === key && Date.now() - cached.at < RECAP_MS ? cached.recap : undefined;
-          const state = reusable && await runtime.conversation(bot.id, { history: false });
-          let read, recap;
-          if (reusable && state && settled(state.activity)) [read, recap] = [state, reusable];
-          else {
-            // A recent window is enough: its context holds every earlier message with files, and the
-            // latest reply is almost always in it. Reading whole histories made Today outlast its timeout.
-            read = await runtime.conversation(bot.id, { window: { turns: HISTORY_PAGE_TURNS } });
-            if (read.window?.earlier && !read.messages.some(isConversationReply)) read = await runtime.conversation(bot.id);
-            const messages = [...read.window?.context ?? [], ...read.messages];
-            recap = summarize(messages.map(redact.message), events, new Set(unreadRuns), since);
-            if (settled(read.activity) && store.privacyVersion === privacyVersion) recaps.set(cacheKey, { key, at: Date.now(), recap });
-            else recaps.delete(cacheKey);
-          }
-          for (const [eventId, files] of recap.eventFiles) eventFiles.set(eventId, files);
-          return { botId: bot.id, botName: bot.name, activity: read.activity,
-            approvals: read.approvals.filter(approval => approval.status === 'pending'),
-            attention: nameRequesters(read.attention, userId => store.getUser(userId)?.name) ?? [],
-            ...(recap.latest ? { latestMessage: { ...recap.latest, text: redact.text(recap.latest.text) } } : {}),
-            files: recap.files };
-        } catch {
-          return { botId: bot.id, botName: bot.name, activity: { state: 'disconnected' as const }, approvals: [], attention: [], files: [], error: 'Could not read this Hermes conversation. Open it to reconnect.' };
+    // At most four assistants are read at once; the next starts as soon as one finishes.
+    const items: TodayItem[] = await mapLimit(bots, 4, async (bot): Promise<TodayItem> => {
+      try {
+        const events = page.events.filter(event => event.botId === bot.id && event.kind === 'completed' && event.runId);
+        const unreadRuns = [...new Set(events.map(event => event.runId!))].sort();
+        // An unchanged roster preview means no new message, so a settled assistant's recap is
+        // reused and only its current state is read. History is read again after it changes.
+        const key = JSON.stringify([bot.sessionId, bot.lastMessage, since, unreadRuns, events.map(event => event.id), privacy]);
+        const cacheKey = `${userId}\0${bot.id}`;
+        const cached = recaps.get(cacheKey);
+        const reusable = cached?.key === key && Date.now() - cached.at < RECAP_MS ? cached.recap : undefined;
+        const state = reusable && await runtime.conversation(bot.id, { history: false });
+        let read, recap;
+        if (reusable && state && settled(state.activity)) [read, recap] = [state, reusable];
+        else {
+          // A recent window is enough: its context holds every earlier message with files, and the
+          // latest reply is almost always in it. Reading whole histories made Today outlast its timeout.
+          read = await runtime.conversation(bot.id, { window: { turns: HISTORY_PAGE_TURNS } });
+          if (read.window?.earlier && !read.messages.some(isConversationReply)) read = await runtime.conversation(bot.id);
+          const messages = [...read.window?.context ?? [], ...read.messages];
+          recap = summarize(messages.map(redact.message), events, new Set(unreadRuns), since);
+          if (settled(read.activity) && store.privacyVersion === privacyVersion) recaps.set(cacheKey, { key, at: Date.now(), recap });
+          else recaps.delete(cacheKey);
         }
-      }));
-      items.push(...batch);
-    }
+        for (const [eventId, files] of recap.eventFiles) eventFiles.set(eventId, files);
+        return { botId: bot.id, botName: bot.name, activity: read.activity,
+          approvals: read.approvals.filter(approval => approval.status === 'pending'),
+          attention: nameRequesters(read.attention, userId => store.getUser(userId)?.name) ?? [],
+          ...(recap.latest ? { latestMessage: { ...recap.latest, text: redact.text(recap.latest.text) } } : {}),
+          files: recap.files };
+      } catch {
+        return { botId: bot.id, botName: bot.name, activity: { state: 'disconnected' as const }, approvals: [], attention: [], files: [], error: 'Could not read this Hermes conversation. Open it to reconnect.' };
+      }
+    });
     for (const key of recaps.keys()) if (key.startsWith(`${userId}\0`) && !bots.some(bot => key === `${userId}\0${bot.id}`)) recaps.delete(key);
     const ids = new Set(bots.map(bot => bot.id));
-    let upcoming: import("../shared/types.js").Routine[] = [];
-    try { upcoming = (await runtime.routines()).filter(row => ids.has(row.botId) && row.enabled && row.nextRunAt).sort((a,b)=>Date.parse(a.nextRunAt!) - Date.parse(b.nextRunAt!)).slice(0,10)
+    const upcoming = ((await routines) ?? []).filter(row => ids.has(row.botId) && row.enabled && row.nextRunAt).sort((a,b)=>Date.parse(a.nextRunAt!) - Date.parse(b.nextRunAt!)).slice(0,10)
       // Today never shows where a routine posts, so it never reads the room catalog to hide rooms someone cannot open.
-      .map(({ roomIds: _, delivery: __, ...row }) => row); } catch { /* The rest of Today remains useful during a scheduler outage. */ }
+      .map(({ roomIds: _, delivery: __, ...row }) => row);
     const content = { since, frontier: page.frontier, hasMore: page.hasMore, items,
       // Today shows each result as one plain line on web and iOS, so a reply's Markdown becomes its words.
       events: page.events.filter(event => ids.has(event.botId)).map(event => ({ ...event, ...(event.body ? { body: markdownPlain(event.body) } : {}), ...(eventFiles.has(event.id) ? { files: eventFiles.get(event.id) } : {}) })).sort((a, b) => Date.parse(b.occurredAt) - Date.parse(a.occurredAt)),

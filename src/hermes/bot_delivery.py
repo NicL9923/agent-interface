@@ -22,6 +22,7 @@ only. A rollback to such a Hermes leaves add-on receipts pinned to no native lea
 which native claims can never match, so the add-on still delivers each once.
 """
 import contextlib
+import json
 import logging
 import os
 import re
@@ -48,6 +49,22 @@ log = logging.getLogger("agent_interface.bot_delivery")
 # The native file primitives every supported Hermes keeps for its mailbox directory.
 _FILE_PRIMITIVES = ("_root", "_locked", "_read", "_write", "_delivery_id")
 _SEQUENCE_FILE = ".sequence"
+
+
+def scan_ticket(mailbox, path):
+    """A delivery ticket from a directory scan, or None.
+
+    Hermes's Bot Chat keeps its admission receipts in the same directory in its own schema.
+    They are never runnable here, and the native ticket check reports each one as malformed,
+    which logged 55 warnings at every Hermes start. They are skipped before that check.
+    """
+    try:
+        record = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        record = None
+    if isinstance(record, dict) and "owner" not in record and ("principal_id" in record or "admission_id" in record):
+        return None
+    return mailbox._scan_read(path)
 
 
 def ensure_helpers(mailbox):
@@ -87,7 +104,7 @@ def ensure_helpers(mailbox):
             except (OSError, ValueError):
                 persisted = 0
             scanned = max((record.get("sequence", record["created_at"]) for candidate in Path(root).glob("*.json")
-                           if (record := mailbox._scan_read(candidate)) is not None), default=0)
+                           if (record := scan_ticket(mailbox, candidate)) is not None), default=0)
             sequence = max(persisted, scanned) + 1
             temporary = counter.with_name(f"{_SEQUENCE_FILE}.{uuid.uuid4().hex}.tmp")
             fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -241,7 +258,7 @@ def _pending(mailbox, root, stored, open_db, home, native_records=True):
     """Queued records this canonical session may run, oldest first."""
     found, tips = [], {}
     for path in root.glob("*.json"):
-        record = mailbox._scan_read(path)
+        record = scan_ticket(mailbox, path)
         if not runnable(record, native_records):
             continue
         pinned = record["owner"]["session_id"]
@@ -315,7 +332,7 @@ class Consumer:
         if self.idle.get(home) == stamp:
             return False
         for path in root.glob("*.json"):
-            if runnable(self.mailbox._scan_read(path), self.native_records):
+            if runnable(scan_ticket(self.mailbox, path), self.native_records):
                 return True
         self.idle[home] = stamp
         return False

@@ -3,7 +3,8 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { assertRoutineEditable } from "./experience.js";
 import { signedIn } from './auth.js';
-import type { Runtime } from '../shared/types.js';
+import type { Routine, Runtime } from '../shared/types.js';
+import { mapLimit } from './concurrency.js';
 import type { HistoryPage, AutomationOverview, SearchHit, SavedItem, Starter, UsageSummary } from '../shared/discovery.js';
 import type { Store } from './store.js';
 import { notFound, redactAgents, Roster, routineById, visibleBots } from './bot-access.js';
@@ -27,22 +28,33 @@ export async function installDiscoveryRoutes(app: FastifyInstance, runtime: Runt
     // With botId, as find in chat asks, only that assistant is searched.
     const bots = (await visible(signedIn(req).id)).filter(bot => botId === undefined || bot.id === botId);
     if (botId !== undefined && !bots.length) throw httpError(404, notFound.error, { code: notFound.code });
-    const hits: SearchHit[] = []; const unavailableBots: string[] = [];
-    for (let index = 0; index < bots.length; index += 4) await Promise.all(bots.slice(index, index + 4).map(async bot => {
-      try { hits.push(...(await experience()({ operation: 'search', profile: bot.id, query: q })).map(hit => ({ ...hit, botName: bot.name }))); }
-      catch { unavailableBots.push(bot.id); }
-    }));
+    const unavailable = new Set<string>();
     // Native session FTS covers conversation text. Cron documents are owned by
     // the scoped routine reader and contribute separately, including script previews.
-    try {
-      for (const routine of (await runtime.routines()).filter(row=>bots.some(bot=>bot.id===row.botId))) {
-        if (!runtime.routineResults) break;
+    // Both run at once, each reading at most four assistants or routines at a time.
+    const native = mapLimit(bots, 4, async bot => {
+      // Without the add-on's search, each assistant reads as unavailable rather than failing the route.
+      try { return (await experience()({ operation: 'search', profile: bot.id, query: q })).map(hit => ({ ...hit, botName: bot.name })); }
+      catch { unavailable.add(bot.id); return []; }
+    });
+    const routineHits = (async (): Promise<SearchHit[][]> => {
+      const readResults = runtime.routineResults?.bind(runtime);
+      if (!readResults) return [];
+      let routines: Routine[];
+      try { routines = (await runtime.routines()).filter(row => bots.some(bot => bot.id === row.botId)); }
+      catch { return []; /* Return successful native search hits during a scheduler outage. */ }
+      const needle = q.toLowerCase();
+      return mapLimit(routines, 4, async routine => {
         try {
-          const results = await runtime.routineResults(routine.botId,routine.id);
-          for (const result of results.filter(result=>`${routine.name} ${result.title} ${result.preview||''}`.toLowerCase().includes(q.toLowerCase())).slice(0,20)) hits.push({botId:routine.botId,botName:bots.find(bot=>bot.id===routine.botId)!.name,sessionId:`routine:${routine.id}:${result.id}`,title:result.title,snippet:result.preview||routine.name,routineId:routine.id,resultId:result.id});
-        } catch { if(!unavailableBots.includes(routine.botId))unavailableBots.push(routine.botId); }
-      }
-    } catch { /* Return successful native search hits during a scheduler outage. */ }
+          const results = await readResults(routine.botId, routine.id);
+          return results.filter(result => `${routine.name} ${result.title} ${result.preview || ''}`.toLowerCase().includes(needle)).slice(0, 20)
+            .map(result => ({ botId: routine.botId, botName: bots.find(bot => bot.id === routine.botId)!.name, sessionId: `routine:${routine.id}:${result.id}`, title: result.title, snippet: result.preview || routine.name, routineId: routine.id, resultId: result.id }));
+        } catch { unavailable.add(routine.botId); return []; }
+      });
+    })();
+    const [nativeHits, routineMatches] = await Promise.all([native, routineHits]);
+    const hits: SearchHit[] = [...nativeHits.flat(), ...routineMatches.flat()];
+    const unavailableBots = bots.map(bot => bot.id).filter(botId => unavailable.has(botId));
     const redact = await redactAgents(store, roster, signedIn(req).id);
     // Redaction reads the original snippet: flattening drops link addresses and code that can name a hidden assistant.
     return { hits: hits.map(hit => ({ ...hit, title: redact.text(hit.title), snippet: snippetPlain(redact.text(hit.snippet)) })), unavailableBots };
@@ -109,10 +121,10 @@ export async function installDiscoveryRoutes(app: FastifyInstance, runtime: Runt
     const all = await runtime.routines();
     store.adoptLegacyRecipients(all);
     const routines = await routinesFor(runtime, store, roster, signedIn(req).id, all.filter(row => allowed.has(row.botId)).map(row => ({ ...row, recipientIds: store.getRoutineRecipients(row.botId, row.id) })));
-    const usage: UsageSummary[] = []; const unavailableBots: string[] = [];
-    for (let index = 0; index < bots.length; index += 4) await Promise.all(bots.slice(index,index+4).map(async bot => {
-      try { usage.push(await experience()({ operation: 'usage', profile: bot.id, days })); } catch { unavailableBots.push(bot.id); }
-    }));
+    const unavailableBots: string[] = [];
+    const usage: UsageSummary[] = (await mapLimit(bots, 4, async bot => {
+      try { return [await experience()({ operation: 'usage', profile: bot.id, days })]; } catch { unavailableBots.push(bot.id); return []; }
+    })).flat();
     return { routines, usage, unavailableBots } satisfies AutomationOverview;
   });
   apiRoute(app, "GET /bots/:id/starters", {}, async req => {

@@ -42,6 +42,7 @@
   "src/server/bot-routes.ts",
   "src/server/collaboration.ts",
   "src/server/computer.ts",
+  "src/server/concurrency.ts",
   "src/server/config.ts",
   "src/server/conversation-routes.ts",
   "src/server/delivery-targets.ts",

@@ -30,6 +30,8 @@ const SHARED_READ_MS = 3_000;
 // Lazy detail reads share expensive profile files for ten seconds. This app's
 // profile edits invalidate them, and settings catalog reads ask for fresh detail.
 const DESCRIPTION_MS = 10_000;
+// How long a roster read answers later requests when Hermes reported no change meanwhile.
+export const ROSTER_REUSE_MS = 2_000;
 
 export function createHermesRuntime(options: HermesOptions = {}): Runtime {
   let discoveryFull = false;
@@ -43,6 +45,7 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
   const rosterWatchers = new Set<() => void>();
   const rosterChanged = () => {
     rosterRequest = undefined;
+    rosterReuse = undefined;
     for (const listener of rosterWatchers) {
       try { listener(); } catch { /* Isolate listeners. */ }
     }
@@ -69,6 +72,9 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
   const descriptionEdits = new Map<string, number>();
   let capabilityRequest: Promise<Capabilities> | undefined;
   let rosterRequest: Promise<Bot[]> | undefined;
+  // The last roster read, reused briefly: one page load asks for it from several routes, and each
+  // read costs Hermes about 50 ms. Every change Hermes reports, and every edit here, drops it.
+  let rosterReuse: {at: number; bots: Bot[]} | undefined;
   const serviceAuth = options.authMode === 'service';
   // Without a bot, every watched conversation may have changed, as when the connection drops or returns.
   function changed(botId?: string, kind?: "inflight"): void {
@@ -91,6 +97,7 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
       live.clear();
       descriptions.clear();
       capabilityCache = undefined;
+      rosterReuse = undefined;
       // A disconnected stream cannot identify which turn is now active. Fresh
       // native snapshots restore current activity, reasoning and tools.
       transient.clear();
@@ -100,7 +107,20 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     connected: () => changed(),
     watching: () => watchers.size > 0 || rosterWatchers.size > 0,
   });
-  const {contract, connect, rpc, http} = transport;
+  const {contract, connect, http} = transport;
+  // Any profile write can change the roster, so once it settles, succeeded or not, the next
+  // roster read goes to Hermes. Covering every write here means a new one cannot forget to.
+  const profileReads = new Set(['profiles.list', 'profiles.describe']);
+  const rpc: typeof transport.rpc = (method, ...rest) => {
+    const call = transport.rpc(method, ...rest);
+    if (method.startsWith('profiles.') && !profileReads.has(method))
+      call.then(dropRoster, dropRoster);
+    return call;
+  };
+  function dropRoster(): void {
+    rosterRequest = undefined;
+    rosterReuse = undefined;
+  }
   const {signFile, fileValue, artifacts} = fileSigner(options.token);
   const toBot = (row: Wire, detail?: Wire) => bot(row, transient.get(live.get(row.name) ?? '')?.state ?? 'idle', detail);
   // Display names come from Hermes's models.dev cache through the add-on. An older add-on answers with an
@@ -224,6 +244,7 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
   }
   function edited(name: string): void {
     rosterRequest = undefined;
+    rosterReuse = undefined;
     descriptions.delete(name);
     descriptionEdits.set(name, (descriptionEdits.get(name) ?? 0) + 1);
   }
@@ -506,6 +527,7 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     },
     async listBots() {
       try { await connect(); } catch { return botCache.map(row => ({...row, activity: 'disconnected' as const})); }
+      if (rosterReuse && Date.now() - rosterReuse.at < ROSTER_REUSE_MS) return rosterReuse.bots.slice();
       if (rosterRequest) return rosterRequest;
       let request!: Promise<Bot[]>;
       request = (async () => {
@@ -514,7 +536,8 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
           const names = new Set(roster.profiles.map((row: Wire) => row.name));
           for (const name of descriptions.keys()) if (!names.has(name)) descriptions.delete(name);
           const bots = await named(roster.profiles.map((row: Wire) => toBot(row)));
-          if (rosterRequest === request) botCache = bots;
+          // A change reported meanwhile cleared rosterRequest, so this read is not reused.
+          if (rosterRequest === request) { botCache = bots; rosterReuse = {at: Date.now(), bots}; }
           return bots;
         } catch { return botCache.map(row => ({...row, activity: 'disconnected' as const})); }
       })();
@@ -851,10 +874,12 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     async routines(): Promise<Routine[]> {
       const roster = await rpc('profiles.list', {include_sessions: false});
       const all: Routine[] = [];
-      for (const row of roster.profiles) {
-        // Dashboard listing reads native jobs directly. The tool-facing list also
-        // probes machine-wide gateway processes, which is unsuitable for polling.
-        const jobs = await (await http(`/api/cron/jobs?profile=${encodeURIComponent(row.name)}`)).json() as Wire[];
+      // Dashboard listing reads native jobs directly. The tool-facing list also
+      // probes machine-wide gateway processes, which is unsuitable for polling.
+      // Every profile is read at once; results keep roster order.
+      const listings = await Promise.all(roster.profiles.map(async (row: Wire) =>
+        [row, await (await http(`/api/cron/jobs?profile=${encodeURIComponent(row.name)}`)).json() as Wire[]] as const));
+      for (const [row, jobs] of listings) {
         for (const job of jobs) {
           const prefix = `[bot:${row.name}] `;
           all.push({id: job.id ?? job.job_id, botId: row.name,

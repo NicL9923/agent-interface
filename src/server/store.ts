@@ -117,6 +117,7 @@ export class Store {
   draft(...args: Parameters<DraftRepository["draft"]>) { return this.drafts.draft(...args); }
   saveDraft(...args: Parameters<DraftRepository["saveDraft"]>) { return this.drafts.saveDraft(...args); }
   clearSubmittedDraft(...args: Parameters<DraftRepository["clearSubmittedDraft"]>) { return this.drafts.clearSubmittedDraft(...args); }
+  watchDrafts(...args: Parameters<DraftRepository["watch"]>) { return this.drafts.watch(...args); }
   // presentation
   presentation(...args: Parameters<PresentationRepository["presentation"]>) { return this.presentations.presentation(...args); }
   changedSince(...args: Parameters<PresentationRepository["changedSince"]>) { return this.presentations.changedSince(...args); }
