@@ -626,6 +626,14 @@ class RoutineRunStatusTests(unittest.TestCase):
         rows = self.results()
         self.assertEqual((rows['cron_output:routine:exec:0']['status'], rows['cron_output:routine:exec:1']['status']), ('stopped', 'missed'))
 
+    def test_an_overlapping_stopped_run_never_takes_a_finished_runs_document(self):
+        # Hermes pairs each output document once: A's document stays A's though B started later.
+        self.docs.append(dict(id='cron_output:routine:2026-10-02_07-00-19', source='cron_output', title='COMPLETED · A', started_at=1019.0))
+        (self.directory / '2026-10-02_07-00-19.md').write_text('A finished')
+        self.attempts += [dict(id='a', status='completed', claimed_at=1000.0, finished_at=1020.0, error=''),
+            dict(id='b', status='cancelled', claimed_at=1005.0, finished_at=1025.0, error='cancelled on request (Stop)')]
+        self.assertEqual(self.results()['cron_output:routine:2026-10-02_07-00-19']['status'], 'succeeded')
+
     def test_metadata_row_index_counts_unknown_attempts_as_hermes_does(self):
         # Hermes numbers exec:N by position in the whole attempts list, so exec:1 is e2, not e3.
         self.docs.append(dict(id='cron_output:routine:exec:1', source='cron_output', title='COMPLETED · Script-only run', started_at=1004.0))

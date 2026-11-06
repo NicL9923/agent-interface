@@ -326,7 +326,7 @@ def _iso(value):
 # A trial's native execution states that end it. Stop run cancels one, which must end the
 # trial's wait and release its maintenance reservation; it reads as a failed trial with its own message.
 _TRIAL_OUTCOME = {"completed": "completed", "failed": "failed", "cancelled": "failed", "unknown": "uncertain"}
-# Attempts that ended, which a run's history row can be. A stopped or missed one ended too.
+# Attempts that ended, which a run's history row names exactly (exec:N). A stopped or missed one ended too.
 _FINISHED_ATTEMPTS = ("completed", "failed", "cancelled", "missed")
 _LEDGER_STATUS = {"completed": "succeeded", "failed": "failed", "claimed": "running", "running": "running",
                   "cancelled": "stopped", "missed": "missed"}
@@ -386,7 +386,9 @@ def run_outcome(row, attempts, ledger, job, newest, now=None):
         candidates = []
         for a in attempts:
             claimed, finished = _epoch(a.get("claimed_at")), _epoch(a.get("finished_at"))
-            if a.get("status") not in _FINISHED_ATTEMPTS or claimed is None or started + 0.001 < int(claimed):
+            # Only runs that wrote a result pair by time here. Hermes pairs each document with one
+            # attempt; a stopped run overlapping a finished one would otherwise take its document.
+            if a.get("status") not in ("completed", "failed") or claimed is None or started + 0.001 < int(claimed):
                 continue
             if finished is not None and started > finished + 300:
                 continue

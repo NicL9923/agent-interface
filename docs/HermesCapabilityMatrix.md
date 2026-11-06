@@ -171,8 +171,9 @@ The same follow-up adopts the native cron cancel route (`POST /api/cron/jobs/{id
 list's `live_execution`. A routine with a run in flight shows Stop run on web and iOS; the schedule is
 unchanged. Stop works during a trial too: the trial then ends, reads as failed with "This trial was stopped
 before it finished.", and releases its maintenance reservation. In run history, an attempt Hermes records
-as `cancelled` reads as Stopped and one recorded as `missed` as Didn't run, for session, ledger and native
-`exec:N` output rows alike, instead of Status unknown. Both routes exist at `ed1afb0` too.
+as `cancelled` reads as Stopped and one recorded as `missed` as Didn't run wherever Hermes names the
+attempt exactly: session execution IDs, ledger rows and native `exec:N` output rows. Output documents
+matched by time still pair only with finished runs, so a stopped run never takes another run's document. Both routes exist at `ed1afb0` too.
 
 New full spike runs save receipts in their disposable `evidence` directory,
 printed at completion. Archive a successful run with
