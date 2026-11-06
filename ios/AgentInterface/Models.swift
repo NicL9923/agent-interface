@@ -840,9 +840,11 @@ struct Routine: Codable, Identifiable {
   var lastStatus: String?
   var lastError: String?
   var lastDeliveryError: String?
+  /// A run is in flight now, which Stop run can end. Read only.
+  var running: Bool?
   enum CodingKeys: String, CodingKey {
     case id, botId, name, prompt, schedule, enabled, recipientIds, roomIds, skills, model, provider
-    case enabledToolsets, script, noAgent, contextFrom, nextRunAt, lastRunAt, lastStatus, lastError, lastDeliveryError
+    case enabledToolsets, script, noAgent, contextFrom, nextRunAt, lastRunAt, lastStatus, lastError, lastDeliveryError, running
   }
   // Explicit null releases an override; synthesized encodeIfPresent would omit it
   // and native PUT would retain the old value. Unknown native fields stay server-side.
@@ -1048,6 +1050,8 @@ enum SignInRenewal {
   }
 }
 struct EmptyResponse: Codable { var ok: Bool? }
+/// `POST /routines/:id/stop`: whether a run was in flight to stop.
+struct StopRunResponse: Decodable { var stopped: Bool }
 struct PushConfig: Codable {
   var available: Bool
   var environment: String?

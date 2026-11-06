@@ -6,7 +6,8 @@ import type { Message, Preferences } from "./types.js";
  * conversation's turns, and which runs a delivered scheduled message already shows. Pure, so the
  * web and its tests share one rule; the iOS app mirrors it in RoutineRuns.swift.
  */
-export const routineRunStatuses = ["succeeded", "failed", "running", "unknown"] as const;
+// "stopped" was cancelled on request and "missed" never ran while Hermes was off: neither succeeded nor failed.
+export const routineRunStatuses = ["succeeded", "failed", "running", "stopped", "missed", "unknown"] as const;
 export type RoutineRunStatus = typeof routineRunStatuses[number];
 export interface RoutineRun {
   /** The routine result ID, which the result output route reads. */
@@ -46,7 +47,7 @@ export const runTime = (run: Pick<RoutineRun, "startedAt" | "finishedAt">) => Da
 /** The words that go with the status dot, so the dot never carries meaning alone. */
 export function runStatusLabel(run: Pick<RoutineRun, "status" | "deliveryFailed">) {
   if (run.status === "succeeded" && run.deliveryFailed) return "Finished, not delivered";
-  return { succeeded: "Succeeded", failed: "Failed", running: "Running", unknown: "Status unknown" }[run.status];
+  return { succeeded: "Succeeded", failed: "Failed", running: "Running", stopped: "Stopped", missed: "Didn't run", unknown: "Status unknown" }[run.status];
 }
 /** The dot's color class: a delivery failure warns like a run that needs a look. */
 export const runTone = (run: Pick<RoutineRun, "status" | "deliveryFailed">) =>

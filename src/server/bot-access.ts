@@ -184,6 +184,7 @@ export const assistantRoutes: Readonly<Record<string, BotScope>> = {
   "PUT /api/routines/:id": "routine and body",
   "DELETE /api/routines/:id": "routine",
   "PATCH /api/routines/:id/state": "routine",
+  "POST /api/routines/:id/stop": "routine",
   "POST /api/routines/:id/run": "routine",
   "GET /api/routines/:id/runs/:requestId": "routine",
   "POST /api/routines/preview": "body",

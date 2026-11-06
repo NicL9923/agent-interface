@@ -2,7 +2,8 @@ import SwiftUI
 
 /// A routine run's normalized status. Older servers omit it, and a newer word reads as unknown.
 enum RoutineRunStatus: String, Equatable, Hashable {
-  case succeeded, failed, running, unknown
+  // stopped was cancelled on request and missed never ran while Hermes was off: neither succeeded nor failed.
+  case succeeded, failed, running, stopped, missed, unknown
 }
 
 /// One run of an assistant's routine, as `GET /bots/:botId/routine-runs` lists it.
@@ -52,6 +53,8 @@ enum RoutineRunRules {
     case .succeeded: return "Succeeded"
     case .failed: return "Failed"
     case .running: return "Running"
+    case .stopped: return "Stopped"
+    case .missed: return "Didn't run"
     case .unknown: return "Status unknown"
     }
   }
@@ -66,7 +69,7 @@ enum RoutineRunRules {
     case .succeeded: return Palette.accent
     case .failed: return Palette.danger
     case .running: return Palette.attention
-    case .unknown: return Palette.muted
+    case .stopped, .missed, .unknown: return Palette.muted
     }
   }
   static func hidden(_ preferences: Preferences?, botId: String, routineId: String) -> Bool {
