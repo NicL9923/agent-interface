@@ -49,28 +49,43 @@ it("leaves text without a URL query alone", () => {
     expect(withoutUrlQueries(text), text).toBe(text);
 });
 
-it("drops the query and hash of absolute, relative and blob URLs, keeping only a script frame's position", () => {
+it("drops the query and hash of absolute, relative and blob URLs and file names", () => {
   for (const [text, safe] of [
     ["see (https://x.invalid/a?b=1) and /p#q.", "see (https://x.invalid/a) and /p"],
     ["fetch ./api/search?q=SENTINEL failed", "fetch ./api/search failed"],
     ["blob:null/0b8e?token=SENTINEL", "blob:null/0b8e"],
     ["https://x.invalid/a?q=(SENTINEL)", "https://x.invalid/a"],
-    ["at load (/api/search?q=SENTINEL:3:9)", "at load (/api/search)"],
-    ["at f (https://x.invalid/assets/app-1.js?v=SENTINEL:10:5)", "at f (https://x.invalid/assets/app-1.js:10:5)"],
-    // Not a frame shape any browser writes, so nothing after the hash is kept.
-    ["at f https://x.invalid/assets/app-1.js#SENTINEL:10:5", "at f https://x.invalid/assets/app-1.js"],
-    ["a/b?c either/or?maybe", "a/b either/or"],
-    // Chrome names an eval'd or sourceURL script without a path.
-    ["at eval (app.js?token=SENTINEL:1:1)", "at eval (app.js:1:1)"],
-    ["at eval (https://x.invalid/app.js?token=x'SENTINEL:1:1)", "at eval (https://x.invalid/app.js:1:1)"],
-    // Safari and Firefox frames: name@location.
-    ["load@https://x.invalid/assets/app-1.js?t=SENTINEL:10:5", "load@https://x.invalid/assets/app-1.js:10:5"],
     ['fetch "https://x.invalid/a?q=SENTINEL" failed', 'fetch "https://x.invalid/a failed'],
     ["Failed to load manifest.webmanifest?token=SENTINEL", "Failed to load manifest.webmanifest"],
-    // Outside a stack frame, digits after a query are the query's own.
-    ["Unable to load https://x.invalid/app.js?token=account:123456", "Unable to load https://x.invalid/app.js"],
-    ["at https://x.invalid/assets/app-1.js?v=SENTINEL:10:5", "at https://x.invalid/assets/app-1.js:10:5"],
+    ["Unable to load backup.7z?token=SENTINEL", "Unable to load backup.7z"],
+    ["a/b?c either/or?maybe", "a/b either/or"],
+    // A message never keeps digits after a query, even where it reads like a frame.
+    ["Failed to load script at https://x.invalid/app.js?token=account:123456", "Failed to load script at https://x.invalid/app.js"],
+    ["Failed (https://x.invalid/app.js?token=account:1:2)", "Failed (https://x.invalid/app.js)"],
   ]) expect(withoutUrlQueries(text), text).toBe(safe);
+});
+
+it("keeps a script's line and column only on a stack's frame lines", () => {
+  const stack = [
+    "Error: load failed for https://x.invalid/app.js?token=account:1:2",
+    "    at load (/api/search?q=SENTINEL:3:9)",
+    "    at eval (app.js?token=SENTINEL:1:1)",
+    "    at eval (https://x.invalid/app.js?token=x'SENTINEL:1:1)",
+    "    at https://x.invalid/assets/app-1.js?v=SENTINEL:10:5",
+    "    at f (https://x.invalid/app.js?token=account:123456)",
+    "load@https://x.invalid/assets/app-1.js?t=SENTINEL:10:5",
+    "@https://x.invalid/assets/app-1.js#SENTINEL:7:1",
+  ].join("\n");
+  expect(withoutUrlQueries(stack, { stack: true }).split("\n")).toEqual([
+    "Error: load failed for https://x.invalid/app.js",
+    "    at load (/api/search)",
+    "    at eval (app.js:1:1)",
+    "    at eval (https://x.invalid/app.js:1:1)",
+    "    at https://x.invalid/assets/app-1.js:10:5",
+    "    at f (https://x.invalid/app.js)",
+    "load@https://x.invalid/assets/app-1.js:10:5",
+    "@https://x.invalid/assets/app-1.js:7:1",
+  ]);
 });
 
 it("requires a session, the app's Origin and the CSRF token", async () => {

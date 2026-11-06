@@ -28,7 +28,8 @@ export function useSession(events: SessionEvents) {
   const initialDestination = useRef(false);
   const [boot, setBoot] = useState<Bootstrap | null>(null);
   const [auth, setAuth] = useState(false);
-  const [groupsNotified, setGroupsNotified] = useState(false);
+  /** The account whose household stream has sent a `groups` notice: that server pushes catalog changes. */
+  const [groupsNotifiedFor, setGroupsNotifiedFor] = useState<string | null>(null);
   const [botId, setBotId] = useState(
     () => new URLSearchParams(location.search).get("bot") || "",
   );
@@ -153,12 +154,11 @@ export function useSession(events: SessionEvents) {
     };
   }, [refresh]);
   useEffect(() => {
-    // A new account, or signing out, starts by assuming the server may never send `groups`.
-    setGroupsNotified(false);
     if (!boot?.user.id || auth) return;
+    const userId = boot.user.id;
     // The server sends `groups` once on every connect and on each catalog change, so connecting or a
     // roster notice does not read the group catalog itself.
-    const stream = changeStream("/events", () => { void refresh(); }, undefined, { groups: () => { setGroupsNotified(true); groupsChanged(); } });
+    const stream = changeStream("/events", () => { void refresh(); }, undefined, { groups: () => { setGroupsNotifiedFor(userId); groupsChanged(); } });
     const wake = () => {
       if (document.visibilityState !== "hidden" && navigator.onLine !== false) stream.open();
       else stream.close();
@@ -206,6 +206,7 @@ export function useSession(events: SessionEvents) {
     boot, auth, botId, setBotId, disconnected, appUnavailable, offline, checkingConnection,
     identityEpoch, refresh, reconnect, savePreferences, editPreferences, signedIn, signedOut,
     /** This server sends `groups` notices, so a slow fallback poll is enough. */
-    groupsNotified,
+    // Per account, so another account starts unproven in the same render that switches to it.
+    groupsNotified: !!boot?.user.id && groupsNotifiedFor === boot.user.id,
   };
 }

@@ -12,8 +12,8 @@ export const CLIENT_ERROR_WINDOW_MS = 10 * 60_000;
 const report = z.object({
   kind: z.enum(["render", "error", "rejection"]),
   // The client strips URL queries too; doing it again here keeps an older or altered client's from the log.
-  message: z.string().min(1).max(CLIENT_ERROR_LIMITS.message).transform(withoutUrlQueries),
-  stack: z.string().max(CLIENT_ERROR_LIMITS.stack).transform(withoutUrlQueries).optional(),
+  message: z.string().min(1).max(CLIENT_ERROR_LIMITS.message).transform(text => withoutUrlQueries(text)),
+  stack: z.string().max(CLIENT_ERROR_LIMITS.stack).transform(text => withoutUrlQueries(text, { stack: true })).optional(),
   // A path only: a query string or hash can carry a search, a room or a sign-in code.
   route: z.string().max(CLIENT_ERROR_LIMITS.route).regex(/^\/[^?#]*$/),
   release: z.string().max(CLIENT_ERROR_LIMITS.release).regex(/^[\w.-]+$/).optional(),
