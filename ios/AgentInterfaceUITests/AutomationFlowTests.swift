@@ -278,10 +278,10 @@ import CryptoKit
     let behavior = app.collectionViews["settings.behavior"]
     let lock = app.buttons["skill.lock.ranch/fences"]
     reveal(lock, in: behavior)
-    XCTAssertTrue(lock.wait(until: "enabled == true")); XCTAssertEqual(lock.label, "Lock skill")
+    XCTAssertTrue(lock.wait(until: "enabled == true")); XCTAssertEqual(lock.label, "Lock ranch/fences", "VoiceOver hears which skill")
     XCTAssertFalse(app.descendants(matching: .any)["skill.locked.ranch/fences"].exists)
     lock.tapWhenReady()
-    XCTAssertTrue(lock.wait(until: "label == %@", "Unlock skill"), "The row shows the lock Hermes saved")
+    XCTAssertTrue(lock.wait(until: "label == %@", "Unlock ranch/fences"), "The row shows the lock Hermes saved")
     XCTAssertTrue(app.descendants(matching: .any)["skill.locked.ranch/fences"].exists)
     XCTAssertTrue(text("Assistants can't change this skill while it's locked.", app: app).exists)
     XCTAssertTrue(text("Saved in Hermes.", app: app).exists)
@@ -292,8 +292,24 @@ import CryptoKit
     XCTAssertTrue(app.switches["automation.skillLock"].wait(until: "value == %@", "1"))
     app.navigationBars["Installed skill"].buttons["Done"].tapWhenReady()
     lock.tapWhenReady()
-    XCTAssertTrue(lock.wait(until: "label == %@", "Lock skill"))
+    XCTAssertTrue(lock.wait(until: "label == %@", "Lock ranch/fences"))
     XCTAssertFalse(app.descendants(matching: .any)["skill.locked.ranch/fences"].exists)
+  }
+  /// A skill status that never loaded says why and offers a way back, instead of dropping the lock controls silently.
+  func testBehaviorOffersRetryWhenSkillStatusFailsToLoad() {
+    let app = launch(["OVERVIEW_FAILURE"])
+    app.selectSettingsTab("Skills")
+    let behavior = app.collectionViews["settings.behavior"]
+    let refresh = app.buttons["skill.refreshStatus"]
+    reveal(refresh, in: behavior)
+    XCTAssertTrue(refresh.wait(until: "enabled == true"), app.debugDescription)
+    XCTAssertTrue(text("Fixture automation status unavailable", app: app).exists)
+    XCTAssertFalse(app.buttons["skill.lock.ranch/fences"].exists)
+    refresh.tapWhenReady()
+    let lock = app.buttons["skill.lock.ranch/fences"]
+    reveal(lock, in: behavior)
+    XCTAssertTrue(lock.wait(until: "enabled == true"), "The lock controls return once status loads")
+    XCTAssertTrue(refresh.waitForDisappearance())
   }
   func testSimplePresentationHidesSkillPolicyAndRoutineOverrides() {
     let app = launch()

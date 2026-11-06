@@ -113,6 +113,8 @@ struct BotSettingsView: View {
   @State private var acceptedConfirmation: SettingsConfirmation?
   @State private var initialized = false
   @State private var detailLoaded = false
+  /// Why the assistant's settings didn't load. Page messages clear on navigation; this stays until Retry.
+  @State private var detailError: String?
   @State private var avatar = AvatarConfig()
   @State private var lastDrawn = AvatarConfig()
   @State private var lastPortrait: AvatarConfig?
@@ -131,6 +133,9 @@ struct BotSettingsView: View {
   @State private var personalConfirmed = false
   @State private var portraitImport = false
   @FocusState private var portraitPromptFocused: Bool
+  @FocusState private var nameFocused: Bool
+  /// Raised when a save needs the name, so the Name field takes focus once Profile shows it.
+  @State private var focusNameRequest = 0
   @State private var portraitPrompt = ""
   @State private var portraitOperation: String?
   @State private var editingRoutine: Routine?
@@ -279,9 +284,9 @@ struct BotSettingsView: View {
     List {
       if !detailLoaded {
         Section {
-          if let error {
+          if let detailError {
             VStack(alignment: .leading, spacing: 12) {
-              ErrorBanner(message: error)
+              ErrorBanner(message: detailError)
               Button(action: retryDetail) {
                 Text("Retry settings").frame(minHeight: 44).contentShape(Rectangle())
               }.buttonStyle(.accentProminent)
@@ -524,6 +529,12 @@ struct BotSettingsView: View {
   private var nameSection: some View {
     Section {
       TextField("Name", text: $form.name, prompt: Text("Name").foregroundColor(Palette.muted))
+        .focused($nameFocused)
+        .task(id: focusNameRequest) {
+          guard focusNameRequest > 0 else { return }
+          nameFocused = true
+          focusNameRequest = 0
+        }
         .onChange(of: form.name) { _, value in
           if value.count > SettingsLimits.name { form.name = String(value.prefix(SettingsLimits.name)) }
         }
@@ -857,24 +868,30 @@ struct BotSettingsView: View {
     let lockable = control?.value?.skills.lockSupported == true
     if installed.locked == true { Text(hermesSkillLockedNote).font(.caption).foregroundStyle(Palette.muted) }
     HStack(spacing: 20) {
-      Button("Read skill") { readingSkill = installed }
+      Button { readingSkill = installed } label: {
+        Text("Read skill").frame(minHeight: 44).contentShape(Rectangle())
+      }
+        .accessibilityLabel("Read \(installed.name)")
         .accessibilityIdentifier("skill.read.\(installed.name)")
       if lockable, let locked = installed.locked {
-        Button(locked ? "Unlock skill" : "Lock skill") { setSkillLock(installed, locked: !locked) }
+        Button { setSkillLock(installed, locked: !locked) } label: {
+          Text(locked ? "Unlock skill" : "Lock skill").frame(minHeight: 44).contentShape(Rectangle())
+        }
           .disabled(control?.disabled != false || !store.connected || control?.value?.canManageLearningPolicy == false)
+          .accessibilityLabel("\(locked ? "Unlock" : "Lock") \(installed.name)")
           .accessibilityIdentifier("skill.lock.\(installed.name)")
       }
     }.buttonStyle(.borderless).font(.subheadline)
   }
   /// A lock change's outcome, and the refresh it needs before another change.
   @ViewBuilder private func skillLockStatus(_ control: HermesAutomationControls) -> some View {
-    if control.value != nil {
-      if let error = control.error { ErrorBanner(message: error) }
-      if let notice = control.notice { Text(notice).font(.footnote).accessibilityAddTraits(.updatesFrequently) }
-      if control.needsRefresh {
-        Button("Refresh skill status") { Task { await control.manualRefresh(store) } }
-          .disabled(control.busy || control.loading)
-      }
+    if let error = control.error { ErrorBanner(message: error) }
+    if control.value != nil, let notice = control.notice { Text(notice).font(.footnote).accessibilityAddTraits(.updatesFrequently) }
+    // A status that never loaded needs the same way back as one a change left uncertain.
+    if control.needsRefresh || control.value == nil && control.error != nil {
+      Button("Refresh skill status") { Task { await control.manualRefresh(store) } }
+        .disabled(control.busy || control.loading)
+        .accessibilityIdentifier("skill.refreshStatus")
     }
   }
   private func setSkillLock(_ skill: HermesInstalledSkill, locked: Bool) {
@@ -1031,6 +1048,14 @@ struct BotSettingsView: View {
   /// failure the next Save sends only what is still unsaved. A model or make-personal
   /// confirmation stops at the first step and, once confirmed, continues the whole save.
   private func saveChanges(confirmed: Bool = false, personal: Bool? = nil) {
+    // Every way to save, Retry included, checks the name before the fields are sent.
+    if form != savedForm && !nameReady {
+      if path != [.section(.profile)] { keepMessages = true; path = [.section(.profile)] }
+      error = "Give your assistant a name."
+      focusNameRequest += 1
+      return
+    }
+    if form != savedForm && !canSave { return }
     let personal = !form.shared && (personal ?? personalConfirmed)
     if form != savedForm && form.hidesFromHousehold(bot) && !personal {
       confirmation = .personal(name: savedName)
@@ -1053,7 +1078,7 @@ struct BotSettingsView: View {
           patched = true
           refresh = true
         }
-        if avatar != savedAvatar {
+        if avatar != savedAvatar || avatarFailure != nil {
           let sent = avatar
           try await putAvatar(bot.id, api, sent)
           savedAvatar = sent
@@ -1156,7 +1181,8 @@ struct BotSettingsView: View {
   /// Edits that Save changes covers: the assistant's fields, avatar, tools, skills and MCP servers.
   private var configDirty: Bool {
     guard initialized else { return false }
-    return form != savedForm || avatar != savedAvatar || CatalogKind.allCases.contains(where: capabilityDirty)
+    // An avatar whose first save failed still needs saving, even when it matches the default.
+    return form != savedForm || avatar != savedAvatar || avatarFailure != nil || CatalogKind.allCases.contains(where: capabilityDirty)
   }
   /// Everything closing would lose, including unsaved memory.
   private var dirty: Bool { memoryDirty || configDirty }
@@ -1165,7 +1191,7 @@ struct BotSettingsView: View {
 
   /// Every explicit retry dismisses the previous failure before starting the next load.
   private func retryDetail() {
-    error = nil
+    detailError = nil
     Task { await loadDetail() }
   }
   private func loadDetail() async {
@@ -1178,7 +1204,7 @@ struct BotSettingsView: View {
       availableMcpServers = detail.availableMcpServers ?? []
       detailLoaded = true
     } catch is CancellationError {} catch {
-      if !Task.isCancelled { self.error = error.localizedDescription }
+      if !Task.isCancelled { detailError = error.localizedDescription }
     }
   }
   /// Behavior's tools and skills, and Hermes's installed skills for their lock and read actions.

@@ -816,6 +816,24 @@ describe("creating an assistant", () => {
     expect(onSaved).toHaveBeenCalled();
   });
 
+  it("retries a failed default avatar instead of treating it as already saved", async () => {
+    let avatarFails = true;
+    vi.mocked(write).mockImplementation(async <T,>(path: string) => {
+      if (path === "/bots") return created as T;
+      if (avatarFails) throw new Error("Hermes is restarting.");
+      return {} as T;
+    });
+    await type("Ranch hand");
+    await act(async () => button("Next: role and model")!.click());
+    await act(async () => button("Create assistant")!.click());
+    expect(container.querySelector(".avatar-failure")).not.toBeNull();
+    avatarFails = false;
+    vi.mocked(write).mockClear();
+    await act(async () => button("Retry avatar")!.click());
+    expect(vi.mocked(write).mock.calls.map(([path, , method]) => [path, method])).toEqual([["/bots/ranch-hand/avatar", "PUT"]]);
+    expect(container.querySelector(".avatar-failure")).toBeNull();
+  });
+
   it("keeps the avatar to retry, editing the created assistant, when only the avatar fails", async () => {
     let avatarFails = true;
     vi.mocked(write).mockImplementation(async <T,>(path: string) => {

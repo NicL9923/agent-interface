@@ -139,7 +139,8 @@ function LoadedBotSettings({
   const toolsDraft = useCatalogDraft("tools", catalogOptions("tools"));
   const skillsDraft = useCatalogDraft("skills", catalogOptions("skills"));
   const formDirty = !same(form, baseline.form);
-  const avatarDirty = !same(avatar, baseline.avatar);
+  // An avatar whose first save failed still needs saving, even when it matches the default.
+  const avatarDirty = !same(avatar, baseline.avatar) || !!avatarFailure;
   // Everything the one Save changes button sends. Memory keeps its own Save.
   const configDirty = formDirty || avatarDirty || toolsDraft.staged || skillsDraft.staged;
   const unsaved = configDirty || memoryDirty;
