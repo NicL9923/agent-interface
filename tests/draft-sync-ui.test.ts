@@ -300,6 +300,28 @@ describe('draft sync across devices',()=>{
     }finally{vi.unstubAllGlobals();stubMatchMedia();}
   });
 
+  it('reads again when a newer revision is announced while a read is still on its way',async()=>{
+    FakeEventSource.reset();vi.stubGlobal('EventSource',FakeEventSource);
+    try{
+      phone.edit('shared','Buy feed');
+      await renderApp();
+      const stream=[...FakeEventSource.streams].find(stream=>stream.url.startsWith('/api/bots/shared/events'))!;
+      // The next draft read answers with the draft as it is now, but only once released.
+      let release!:()=>void;const held=new Promise<void>(resolve=>{release=resolve;});
+      const serve=vi.mocked(api).getMockImplementation()!;let taken=false;
+      vi.mocked(api).mockImplementation(async <T>(path:string,init?:RequestInit)=>{
+        if(taken||path!=='/bots/shared/draft')return serve(path,init) as Promise<T>;
+        taken=true;const answer=structuredClone(draft('shared'));await held;return answer as T;
+      });
+      phone.edit('shared','Fix the gate');
+      await act(async()=>stream.emit('draft',String(draft('shared').revision)));await advance(0);
+      phone.send('shared','Fix the gate');
+      await act(async()=>stream.emit('draft',String(draft('shared').revision)));await advance(0);
+      await act(async()=>release());await advance(0);
+      expect(textarea().value).toBe('');
+    }finally{vi.unstubAllGlobals();stubMatchMedia();}
+  });
+
   it('sends a save as an ordinary request when overlapping keepalive saves would exceed the browser budget',async()=>{
     await renderApp();
     let release!:()=>void;

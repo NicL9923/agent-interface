@@ -110,13 +110,15 @@ export function useDraft({ botId, userId, identityEpoch, setError }: {
     // the page is shown: it may have been edited or sent from another device since.
     let draftLoaded = false;
     let loadingDraft = false;
+    // A notice or poll during a read may announce a newer revision than that read returns.
+    let loadAgain = false;
     // Restoring the cached copy is not an edit: it keeps its own sequence, so a copy that was sent
     // is still the sent copy after a reload or a switch back.
     setDraftState({ ...(cached || { text: "", attachments: [] }), botId, userId });
     if (cached) setDraftReady(true);
     // Personal drafts remain available even when the separate executor is down.
     const loadDraft = async () => {
-      if (loadingDraft) return;
+      if (loadingDraft) { loadAgain = true; return; }
       loadingDraft = true;
       try {
         const saved = savedDraft(await request("GET /bots/:id/draft", { params: { id: botId } }));
@@ -131,6 +133,7 @@ export function useDraft({ botId, userId, identityEpoch, setError }: {
         if (live && !draftLoaded && !cached?.dirty) setError(`Your saved draft could not be loaded. Retrying. ${(e as Error).message}`);
       } finally {
         loadingDraft = false;
+        if (loadAgain && live) { loadAgain = false; void loadDraft(); }
       }
     };
     void loadDraft();

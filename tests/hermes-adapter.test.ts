@@ -200,6 +200,22 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     await runtime.listBots();
     expect(reads()).toBe(first+2);
   });
+  it('reads the roster again after any profile write, without waiting for a Hermes change notice', async () => {
+    vi.useFakeTimers({toFake:['Date']});
+    const reads=()=>calls.filter(call=>call.method==='profiles.list').length;
+    await runtime.listBots();
+    const before=reads();
+    await runtime.setAvatar!('shared',{mode:'mascot',family:'cactus',color:'#4a7',eyes:'round',accessory:'none'} as never);
+    await runtime.listBots();
+    // setAvatar reads the roster once itself; the listing after it reads again instead of reusing.
+    expect(reads()).toBe(before+2);
+    metadataConflict=true;
+    await runtime.listBots();
+    await expect(runtime.setAvatar!('shared',{mode:'mascot',family:'bear',color:'#4a7',eyes:'round',accessory:'none'} as never)).rejects.toThrow('changed on another client');
+    const failed=reads();
+    await runtime.listBots();
+    expect(reads()).toBe(failed+1);
+  });
   it('reads every profile\'s routines at once and keeps roster order', async () => {
     beforeSend=(request,socket)=>{
       if(request.method!=='profiles.list')return;

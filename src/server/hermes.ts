@@ -107,7 +107,20 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     connected: () => changed(),
     watching: () => watchers.size > 0 || rosterWatchers.size > 0,
   });
-  const {contract, connect, rpc, http} = transport;
+  const {contract, connect, http} = transport;
+  // Any profile write can change the roster, so once it settles, succeeded or not, the next
+  // roster read goes to Hermes. Covering every write here means a new one cannot forget to.
+  const profileReads = new Set(['profiles.list', 'profiles.describe']);
+  const rpc: typeof transport.rpc = (method, ...rest) => {
+    const call = transport.rpc(method, ...rest);
+    if (method.startsWith('profiles.') && !profileReads.has(method))
+      call.then(dropRoster, dropRoster);
+    return call;
+  };
+  function dropRoster(): void {
+    rosterRequest = undefined;
+    rosterReuse = undefined;
+  }
   const {signFile, fileValue, artifacts} = fileSigner(options.token);
   const toBot = (row: Wire, detail?: Wire) => bot(row, transient.get(live.get(row.name) ?? '')?.state ?? 'idle', detail);
   // Display names come from Hermes's models.dev cache through the add-on. An older add-on answers with an
