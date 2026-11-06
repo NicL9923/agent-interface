@@ -7,6 +7,7 @@ import { api, write } from "../src/client-api";
 import { defaultPreferences, type Bootstrap } from "../src/shared/types";
 import type { GroupCatalog, GroupRoom } from "../src/shared/collaboration";
 import { FakeEventSource } from "./fake-event-source";
+import { GROUP_FALLBACK_POLL_MS } from "../src/app/use-session";
 import { advance, mountRoot, stubMatchMedia } from "./ui-harness";
 
 vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(await (async original => ({ ...await original<typeof import("../src/client-api")>(), api: vi.fn(), write: vi.fn() }))(original)));
@@ -112,6 +113,31 @@ describe("group chats on home", () => {
       await advance(5 * 60_000);
       expect(catalogReads()).toBe(before);
     } finally { Reflect.deleteProperty(document, "visibilityState"); }
+  });
+
+  it("reads the catalog again on the household stream's groups notice and when it reconnects, and polls only every 5 minutes", async () => {
+    await render();
+    const catalogReads = () => reads(path => path === "/groups");
+    const household = [...FakeEventSource.streams].find(stream => stream.url === "/api/events")!;
+    expect(household).toBeDefined();
+    await act(async () => household.connect());
+    await advance(20);
+    const opened = catalogReads();
+    await advance(GROUP_FALLBACK_POLL_MS - 1000);
+    expect(catalogReads()).toBe(opened);
+    await act(async () => household.emit("groups", "groups"));
+    await advance(20);
+    expect(catalogReads()).toBe(opened + 1);
+    // A changed room shows without waiting for the poll.
+    catalog = { ...catalog, rooms: [...catalog.rooms, { room_id: "barn", name: "Barn raising", members: [member("ranch", "Ranch hand"), member("garden", "Garden planner")] }] };
+    await act(async () => household.emit("groups", "groups"));
+    await advance(20);
+    expect(names()).toContain("Barn raising");
+    // Notices sent while the stream was down are lost, so connecting again reads the catalog.
+    const before = catalogReads();
+    await act(async () => household.connect());
+    await advance(20);
+    expect(catalogReads()).toBe(before + 1);
   });
 
   it("makes a group from the plus menu and opens the new room", async () => {

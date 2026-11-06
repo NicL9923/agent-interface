@@ -4,6 +4,7 @@ import { insertMention, matchMembers, mentionAt } from '../app/mentions';
 import { useAction } from '../app/use-action';
 import { useResource } from '../app/use-resource';
 import { groupSendKey } from '../app/storage';
+import { GROUP_FALLBACK_POLL_MS, GROUPS_EVENT } from '../app/use-session';
 import { FormMessage } from './ui/form-message';
 import type { Bootstrap } from '../shared/types';
 import type { GroupEvent, GroupPage, GroupState } from '../shared/collaboration';
@@ -44,9 +45,9 @@ export function GroupRoomView({ bootstrap, roomId, canSend, reason, onChanged }:
   const changed = useRef(onChanged); changed.current = onChanged;
   // The room log is read from a cursor, so each check adds only newer events to what is shown.
   const cursor = useRef(0);
-  // The event stream announces new room events; this slow poll only covers a missed notice.
+  // The event stream announces new room events and reloads on reconnect; this slow poll only covers a missed notice.
   const room = useResource<RoomView>(roomId && !gone ? `/groups/${encodeURIComponent(roomId)}` : null, {
-    pollMs: 30000,
+    pollMs: GROUP_FALLBACK_POLL_MS,
     load: async (path, signal) => {
       const state = await api<GroupState>(path, { signal });
       // Read after the first request, once a room change has reset the cursor and the events.
@@ -97,9 +98,13 @@ export function GroupRoomView({ bootstrap, roomId, canSend, reason, onChanged }:
     wake();
     const retry = setInterval(wake, 45_000);
     window.addEventListener('online', wake); window.addEventListener('focus', wake); document.addEventListener('visibilitychange', wake);
+    // The household stream's catalog notice also covers this room leaving the person's list, which ends
+    // this stream without a notice of its own.
+    window.addEventListener(GROUPS_EVENT, refresh);
     return () => {
       clearInterval(retry); stream.close();
       window.removeEventListener('online', wake); window.removeEventListener('focus', wake); document.removeEventListener('visibilitychange', wake);
+      window.removeEventListener(GROUPS_EVENT, refresh);
     };
   }, [roomId]);
   // Typing @ offers the room's assistants by handle or name.

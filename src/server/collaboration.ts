@@ -13,6 +13,7 @@ import { routineRun, runTime, type RoutineRun, type RoutineRunPage } from '../sh
 /** How long one read of an assistant's runs serves every viewer. */
 export const RUNS_CACHE_MS = 5_000;
 import { GroupLatestCache, previewOf } from './group-latest.js';
+import type { CatalogRead } from './group-catalog-watch.js';
 import type { DeliveryRooms } from './delivery-targets.js';
 import { mentionsRoom, presentations, redactRooms, roomLeaks, type Presentation } from './routine-delivery.js';
 const uuid = z.string().uuid();
@@ -200,13 +201,8 @@ export async function installCollaborationRoutes(app: FastifyInstance, runtime: 
   }
   // Home previews each room's newest message. One cache serves everyone, since the log is the same; only the author wording is per viewer.
   const latest = new GroupLatestCache((roomId, since) => request({ operation: 'log', roomId, since }) as Promise<GroupPage>);
-  app.get('/api/groups', async req => {
-    if (!runtime.groupRequest) return { supported: false, canSend: false, rooms: [], reason: 'Hosted group chats are unavailable on this Hermes integration.' } satisfies GroupCatalog;
-    const userId = signedIn(req).id;
-    const allowed = new Set((await bots(userId)).map(bot => bot.id));
-    const value = await request({ operation: 'list' }) as GroupCatalog;
-    const rooms = value.rooms.filter(room => accessible(room, allowed));
-    await latest.refresh(rooms, value.rooms);
+  // One person's catalog: the rooms they may open, each with its newest message worded for them.
+  function present(userId: string, value: GroupCatalog, rooms: GroupRoom[]): GroupCatalog {
     return { ...value, rooms: rooms.map(room => {
       const event = latest.latest(room.room_id);
       if (!event) return room;
@@ -214,7 +210,31 @@ export async function installCollaborationRoutes(app: FastifyInstance, runtime: 
       const sender = senders.get(event.event_id);
       return { ...room, latest: previewOf(sender ? { ...event, sender: { id: sender, name: store.getUser(sender)?.name ?? '' } } : event, room, userId, other => store.getUser(other)?.name) };
     }) };
+  }
+  app.get('/api/groups', async req => {
+    if (!runtime.groupRequest) return { supported: false, canSend: false, rooms: [], reason: 'Hosted group chats are unavailable on this Hermes integration.' } satisfies GroupCatalog;
+    const userId = signedIn(req).id;
+    const allowed = new Set((await bots(userId)).map(bot => bot.id));
+    const value = await request({ operation: 'list' }) as GroupCatalog;
+    const rooms = value.rooms.filter(room => accessible(room, allowed));
+    await latest.refresh(rooms, value.rooms);
+    return present(userId, value, rooms);
   });
+  /**
+   * One read of the roster and the room catalog for everyone watching, for the household stream's
+   * `groups` notice. It answers what home shows of each person's `GET /api/groups`: everything but
+   * each room's `latest_seq`, which also moves for driver notices that change no row.
+   */
+  const catalogRead: CatalogRead | undefined = runtime.groupRequest ? async userIds => {
+    const [roster, value] = await Promise.all([runtime.listBots(), request({ operation: 'list' }) as Promise<GroupCatalog>]);
+    const allowedFor = (userId: string) => new Set(roster.filter(bot => visible({ ...bot, ...store.presentation(bot.id) }, userId)).map(bot => bot.id));
+    const roomsFor = (userId: string) => { const allowed = allowedFor(userId); return value.rooms.filter(room => accessible(room, allowed)); };
+    await latest.refresh([...new Map(userIds.flatMap(roomsFor).map(room => [room.room_id, room])).values()], value.rooms);
+    return userId => {
+      const catalog = present(userId, value, roomsFor(userId));
+      return JSON.stringify({ ...catalog, rooms: catalog.rooms.map(({ latest_seq: _, ...room }) => room) });
+    };
+  } : undefined;
   app.post('/api/groups', async req => {
     const body = z.object({ requestId: uuid, name: z.string().trim().min(1).max(100), botIds: z.array(id).min(2).max(6).refine(ids => new Set(ids).size === ids.length) }).strict().parse(req.body);
     const allowed = await bots(signedIn(req).id);
@@ -277,5 +297,5 @@ export async function installCollaborationRoutes(app: FastifyInstance, runtime: 
     await room(signedIn(req).id, roomId);
     return request({ operation: 'approve', roomId, ...body });
   });
-  return { room };
+  return { room, catalogRead };
 }

@@ -158,6 +158,7 @@ export const assistantRoutes: Readonly<Record<string, BotScope>> = {
   "POST /api/auth/native/exchange": "none",
   "POST /api/auth/native/renew": "none",
   "POST /api/csp-report": "none",
+  "POST /api/client-errors": "none",
   "GET /api/health": "none",
   "GET /api/health/ready": "none",
   "GET /api/bootstrap": "list",

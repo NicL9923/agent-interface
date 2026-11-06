@@ -106,6 +106,16 @@ Until that menu has loaded, `src/app/BotMenu.tsx` stands in for it and catches t
 right click, menu key or long press, so none is lost. `npm run build` fails when Base UI
 returns to the entry's static imports.
 
+### Crash reports
+
+A render failure anywhere outside a lazy screen shows a "Something went wrong" page with
+Reload instead of a blank screen. Chat and group drafts are written to the device on
+every edit, so a reload keeps them. While someone is signed in, the web client sends
+that crash, uncaught errors and unhandled rejections to `POST /api/client-errors`: each
+distinct report once, at most five per page load, and never chunk-load failures the
+screens already handle. The server logs each one as a `Client error` warning with the
+person's id and stores nothing. It accepts 20 reports per person every 10 minutes.
+
 ### Offline cache
 
 `scripts/build-worker.mjs` turns `scripts/service-worker.js` into `sw.js`, and
@@ -282,9 +292,12 @@ Hermes profile; a run with only a saved preview says so.
 **Group chats** lets 2–6 local assistants discuss a task in one room. Rooms are rows
 in the home list beside the assistants, with overlapping member faces, the last
 message and who said it, and its time. Rooms follow the assistants, newest message first, because assistant rows keep
-the roster's order and do not jump. Home reads Hermes's room catalog every 30 seconds while the page is visible;
-the server adds each room's newest message to it and re-reads a room's log only when the room
-has a newer message, so home never polls room logs. Home has no group unread dot, since
+the roster's order and do not jump. Home reads Hermes's room catalog when the household event stream
+says this person's rooms changed, when it reconnects or the page wakes, and every 5 minutes as a fallback.
+While any household stream is open, the server checks the catalog once for everyone at most every
+30 seconds, and right away after a group or assistant change made in the app, and tells only the people
+whose visible rooms changed. It adds each room's newest message to the catalog and re-reads a room's log
+only when the room has a newer message, so home never polls room logs. Home has no group unread dot, since
 the app keeps no read position for rooms. Choose a room to open it like a conversation
 (`?view=group&room=ID`; the old `?view=groups` link opens home). Make a group from the **+** button's
 New group chat, which opens it. Create a
