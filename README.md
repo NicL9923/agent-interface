@@ -218,7 +218,7 @@ unrecognized native errors keep the saved request ID for receipt checks.
 The app opens **Today** unless you choose an assistant start page or follow a notification. Today shows pending decisions, scheduled work, recent results and files
 across your assistants. **Mark caught up** shares your recap position between
 web and iOS. Voice messages are transcribed into a draft for review before you
-send. The speaker button in any reply's action row reads that reply with Hermes speech on web and iOS, one reply at a time. Each message shows its time under its bubble beside its actions, and a reply made of several parts shows the time once, under the last. A name appears above a message only for another household member or a scheduled prompt. Copy is available on your own messages too.
+send. The speaker button in any reply's action row reads that reply with Hermes speech on web and iOS, one reply at a time. On the web, **Talk** holds a live spoken conversation with an assistant: a voice model listens and answers out loud while the assistant does the work, and each assistant has its own voice. See [Live Talk](docs/HouseholdExperience.md#live-talk). Each message shows its time under its bubble beside its actions, and a reply made of several parts shows the time once, under the last. A name appears above a message only for another household member or a scheduled prompt. Copy is available on your own messages too.
 
 Hermes questions on web and iOS show each suggested answer as a card to tap, with
 **Write my own answer** last. A question that allows several answers shows checkboxes.

@@ -30,6 +30,7 @@ import { AttentionList } from "./AttentionList";
 import { FindBar } from "./FindBar";
 import { MessageMeta, QuoteSelection, TranscriptTools } from "./ReplyActions";
 import { useReplySpeech } from "./use-reply-speech";
+import { useTalkLive } from "./talk-live";
 import { attentionAnchor, foldSummary, isHumanMessage, quoteBlock, turnDuration, workGroups } from "./transcript-logic";
 import { RoutineRunCard } from "../components/RoutineRunCard";
 import { placeRuns, type RoutineRun } from "../shared/routine-runs";
@@ -108,7 +109,9 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
     announce(left ? `Your message is in the message box, without ${left} of its files: a message can carry only ${MAX_ATTACHMENTS}.` : "Your message is in the message box.");
     requestAnimationFrame(() => document.getElementById("message")?.focus());
   });
-  const speech = useReplySpeech(botId, connectionLost);
+  // Live Talk owns the speaker, so replies are not read aloud while it runs.
+  const talking = useTalkLive();
+  const speech = useReplySpeech(botId, connectionLost || talking);
   const tools = useMemo<TranscriptTools>(() => ({ botId, sessionId: conversation?.sessionId, unavailable: connectionLost, quote, announce, speech }),
     [botId, conversation?.sessionId, connectionLost, quote, announce, speech]);
   const frame = useRef<HTMLDivElement>(null);

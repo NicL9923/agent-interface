@@ -55,6 +55,51 @@ release was activated.
 Secrets, household email addresses, host access details, backups and rollback
 receipts belong in private operating notes. They are not release artifacts.
 
+## Live voice plugin
+
+Live Talk mints short-lived OpenAI Realtime client secrets on the household
+ChatGPT sign-in that Hermes holds for its launch profile. Hermes lets only code
+inside an installed plugin whose `plugin.yaml` declares
+`requires_auth: [openai-codex]` make such a request, and it attaches the
+credential itself. The app's plugin is `src/hermes/wildbots_voice`. Its
+`realtime.py` makes the one request; the add-on in `src/hermes/voice.py` loads
+that file through the plugins link, so the frame Hermes checks is under the
+plugins folder.
+
+The guarded activation links `<HERMES_HOME>/plugins/wildbots-voice` to
+`<app base>/current/src/hermes/wildbots_voice`. The link goes through
+`current`, so every later activation moves it with the release. Activation
+refuses before stopping anything if that path holds a folder or another link.
+It never enables the plugin. Enabling it lets the plugin use the ChatGPT
+sign-in, so a person does that once on the host, then restarts the dashboard:
+
+```sh
+hermes plugins enable wildbots-voice
+systemctl --user restart hermes-dashboard.service
+```
+
+The launch profile must be signed in to ChatGPT (`openai-codex`) in Hermes.
+`GET /api/agent-interface/voice/status` on the service bridge reports
+`{available, reason}`, and the app shows the reason in place of Talk:
+
+| Reason | Meaning and fix |
+| --- | --- |
+| The plugin is not linked into Hermes | The link is missing. Activate a current release. |
+| The plugin link is broken | The link's target is gone, usually a pruned release. Activate a current release. |
+| The plugin links to a different release | The link resolves to another release than the running add-on. Activate the current release again. |
+| The plugin manifest does not ask for the ChatGPT sign-in | The linked `plugin.yaml` lost `requires_auth`. Restore the release. |
+| This Hermes version cannot share its ChatGPT sign-in | Hermes lacks `hermes_cli.plugin_provider_requests`. Update Hermes. |
+
+Status does not contact OpenAI or refresh the sign-in. Starting Talk can still
+fail: signed out of ChatGPT answers 409 with "Sign in to ChatGPT in Hermes", a
+plugin Hermes refuses, such as one that is not enabled, answers 503 with the
+enable command, and an OpenAI error answers 502 with only its HTTP status. No
+secret or upstream body is logged or returned.
+
+The browser sends its WebRTC offer straight to `https://api.openai.com`, which
+the document Content-Security-Policy allows in `connect-src`. Caddy needs no
+change.
+
 ## Metadata egress floor
 
 The host is an OpenStack instance, and its metadata service at

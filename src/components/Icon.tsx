@@ -74,9 +74,13 @@ const paths = {
   tap: "M10 14V7a1.5 1.5 0 0 1 3 0v5l4.2.9a2 2 0 0 1 1.6 2.2l-.6 4.9H11l-3.6-4a1.5 1.5 0 0 1 2.2-2.1ZM6.5 7.5a5 5 0 0 1 10 0",
   trackpad: "M4 5h16v12H4ZM11 17v2M6 21h12M10 9l5 3-2.3.5L11.5 15Z",
   help: "M21 12a9 9 0 1 1-18 0a9 9 0 1 1 18 0ZM9.5 9.5a2.5 2.5 0 0 1 4.9-.7c.4 1.5-.9 2.2-1.7 2.7-.5.3-.7.8-.7 1.3M12 16.5h.01",
+  // Live Talk: a voice level rising and falling.
+  talk: "M4 10.5v3M8 7.5v9M12 4.5v15M16 7.5v9M20 10.5v3",
+  micOff: "M9 5a3 3 0 0 1 6 0v6a3 3 0 0 1-.9 2.1M9 9v2a3 3 0 0 0 4.5 2.6M5.5 11a6.5 6.5 0 0 0 10.4 5.2M18.5 11a6.5 6.5 0 0 1-.6 2.7M12 17.5V21M4 4l16 16",
+  play: "M8 5.5v13l10.5-6.5Z",
 } as const;
 export type IconName = keyof typeof paths;
-const filledIcons: IconName[] = ["stop"];
+const filledIcons: IconName[] = ["stop", "play"];
 
 export function Icon({ name, size = 20, filled = false, className }: {
   name: IconName;

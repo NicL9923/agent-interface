@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../client-api";
 import { MAX_SPOKEN_TEXT, MAX_VOICE_BYTES, STOP_SPEECH } from "../shared/voice";
 import type { VoicePlayback } from "../shared/voice";
+import { talkLive } from "./talk-live";
 
 /** Preparing is the request and download, ready is audio the browser would not start by itself, speaking is playing. */
 export type SpeechPhase = "preparing" | "ready" | "speaking";
@@ -93,6 +94,8 @@ export function useReplySpeech(botId: string, disabled: boolean): ReplySpeech {
       else stop();
       return;
     }
+    // Live Talk owns the speaker and microphone; a reply read aloud would talk over it.
+    if (talkLive()) { setError({ id: message.id, text: "Replies aren't read aloud during live Talk. End Talk to listen." }); return; }
     void speak(message);
   // `play`, `speak` and `stop` only touch refs and state setters, so they never need to be dependencies.
   }, [botId, stop]);
