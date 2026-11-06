@@ -115,6 +115,15 @@ import XCTest
     if back.waitForExistence(timeout: 3) { back.tap(); XCTAssertTrue(row.waitForExistence(timeout: 5)) }
   }
 
+  func testARoomAnotherMemberMadeAppearsOnHomeFromTheStreamNotice() throws {
+    let app = launch(["GROUP", "GROUP_NOTICE"], home: true)
+    XCTAssertTrue(app.buttons["room.fixture-room"].waitForExistence(timeout: 15), app.debugDescription)
+    // The household stream's `groups` notice brings it, well before the 5-minute fallback poll.
+    let added = app.buttons["room.fixture-notice-room"]
+    XCTAssertTrue(added.waitForExistence(timeout: 15), app.debugDescription)
+    XCTAssertTrue(added.label.contains("Garden crew"), added.label)
+  }
+
   func testGroupChatNamesSendersSuggestsMentionsAndUpdatesLive() throws {
     let app = launch(["GROUP"], home: true)
     // The room is a row on home beside the assistants.

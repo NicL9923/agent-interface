@@ -65,6 +65,8 @@ final class FakeExchange: URLProtocol, @unchecked Sendable {
     client?.urlProtocol(self, didLoad: Data("retry: 3000\n\n".utf8))
   }
   func send(_ text: String) { client?.urlProtocol(self, didLoad: Data(text.utf8)) }
+  /// Ends an open event stream, as a server restart or a dropped connection does.
+  func endStream() { client?.urlProtocolDidFinishLoading(self) }
   func respond(status: Int, data: Data, headers: [String: String] = [:]) {
     guard let url = request.url, let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: headers.merging(["Content-Type": "application/json"]) { value, _ in value }) else { return }
     client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
