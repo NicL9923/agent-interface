@@ -354,7 +354,7 @@ describe('Hermes adapter trust and recovery boundary',()=>{
   });
 
   it('bridges profile-scoped native speech and caps the returned audio', async () => {
-    const fetcher = vi.fn(async (url: URL | string, init?: RequestInit) => {
+    const fetcher = vi.fn(async (url: URL | string, _init?: RequestInit) => {
       const path = new URL(url).pathname;
       if (path.endsWith('/transcribe')) return Response.json({ok:true,transcript:'Pick up milk',provider:'fixture'});
       if (path.endsWith('/speak')) return Response.json({ok:true,data_url:'data:audio/mpeg;base64,' + Buffer.from('audio').toString('base64'),provider:'fixture'});

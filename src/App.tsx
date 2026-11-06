@@ -357,7 +357,7 @@ export function App() {
             onSettings={bot => open({ kind: "settings", bot })} onClose={() => closePanels("details")} />
         </Loading>
       )}
-      {panel?.kind === "routine" && <Loading><RoutineResults key={`${boot.user.id}:${panel.botId}:${panel.routineId}`} botId={panel.botId} routineId={panel.routineId} userId={boot.user.id} resultId={panel.resultId} onClose={() => closePanels("routine")} /></Loading>}
+      {panel?.kind === "routine" && <Loading><RoutineResults key={`${boot.user.id}:${panel.botId}:${panel.routineId}`} botId={panel.botId} routineId={panel.routineId} resultId={panel.resultId} onClose={() => closePanels("routine")} /></Loading>}
       {panel?.kind === "integrations" && <Loading><IntegrationsPanel key={`integrations:${boot.user.id}`} bots={boot.bots} accountScope={boot.user.id} onClose={() => closePanels("integrations")} /></Loading>}
       {computerLoaded && <Loading><ComputerPanel key={`computer:${boot.user.id}`} initialTab={panel?.kind === "computer" ? panel.tab : undefined} open={panel?.kind === "computer"}
         take={panel?.kind === "computer" ? panel.take : undefined} onClose={() => closePanels("computer")} /></Loading>}

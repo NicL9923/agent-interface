@@ -415,13 +415,17 @@ External file sources open only when you choose their link.
 
 ```sh
 npm test
+npm run lint
 npm run test:py
 npm run lint:py
 npm run build
 python3 .agents/tools/source-state.py
 ```
 
-`npm test` runs the application tests with Vitest. `npm run test:py` runs every
+`npm test` runs the application tests with Vitest. It refuses to start on a Node
+outside the `engines` range in `package.json`, and `.npmrc` makes `npm ci` refuse too:
+older Node 24 releases hang the event-stream tests. `npm run lint` runs oxlint over the
+TypeScript and JavaScript, with warnings failing the run. `npm run test:py` runs every
 Python test file it discovers in `tests/*_test.py`, `scripts/*-test.py` and
 `scripts/spike/*_test.py`, one subprocess each, and fails if a test-looking file
 sits outside those paths. Pass file paths to run a subset, for example
@@ -438,7 +442,7 @@ acceptance that needs a physical phone or configured external service. Tests wit
 a runtime double do not prove Hermes integration. Simulated push checks do not
 prove delivery to an installed phone app while it is closed.
 
-Pull requests run the application tests, production build and Python syntax checks
+Pull requests run the application tests, lint, production build and Python syntax checks
 on both supported Node versions. Native builds and simulator tests run on the
 Mac mini using Xcode 27.0. The isolated Hermes probes remain a separate
 explicit run using the capability matrix's reproduction instructions.

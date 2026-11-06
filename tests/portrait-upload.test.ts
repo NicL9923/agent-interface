@@ -19,6 +19,7 @@ beforeEach(() => {
   URL.createObjectURL = vi.fn(() => "blob:portrait");
   URL.revokeObjectURL = vi.fn();
   vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(function (this: HTMLCanvasElement) {
+    // oxlint-disable-next-line typescript/no-this-alias -- the test reads the instance the code under test made
     canvas = this;
     return { drawImage } as unknown as CanvasRenderingContext2D;
   });

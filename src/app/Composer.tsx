@@ -3,7 +3,6 @@ import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 
 import { createPortal } from "react-dom";
 import type { ActivityState, Bootstrap, Bot, Message, SubmissionReceipt } from "../shared/types";
 import type { VoiceState } from "../shared/voice";
-import { Avatar } from "../components/Avatar";
 import { Icon } from "../components/Icon";
 import { VoiceControls } from "../components/VoiceControls";
 import { request } from "../client-api";

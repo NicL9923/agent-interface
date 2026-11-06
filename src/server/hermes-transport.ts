@@ -108,6 +108,7 @@ export function createHermesTransport(options: HermesOptions, hooks: TransportHo
   let configurationError: TransportError | undefined;
   if (!options.url && !options.token) {
     configurationError = new TransportError('not_configured', 'Connect an existing supervised Hermes gateway with its server-side session token.');
+  // oxlint-disable-next-line no-control-regex -- a token with control characters is refused
   } else if (!options.url || !options.token || options.token.trim() !== options.token || /[\x00-\x1f\x7f]/.test(options.token)) {
     configurationError = new TransportError('invalid_config', 'Hermes needs both a gateway origin and a nonempty server-side session token.');
   } else {

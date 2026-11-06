@@ -1,4 +1,4 @@
-import { botFixture, capabilitiesFixture, experienceRequester, routineFixture, toolFixture } from './helpers/runtime-fixtures.js';
+import { botFixture, capabilitiesFixture, experienceRequester, toolFixture } from './helpers/runtime-fixtures.js';
 import type { HistoryPage } from '../src/shared/discovery.js';
 import Fastify from 'fastify';
 import cookie from '@fastify/cookie';

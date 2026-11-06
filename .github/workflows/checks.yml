@@ -34,6 +34,7 @@ jobs:
           node-version-file: ${{ matrix.node-version-file }}
           cache: npm
       - run: npm ci
+      - run: npm run lint
       - run: npm test
       - run: npm run build
   python:

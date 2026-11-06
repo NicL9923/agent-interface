@@ -14,7 +14,7 @@ import { advance, mountRoot } from "./ui-harness";
 vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(await (async original => ({ ...await original<typeof import("../src/client-api")>(), api: vi.fn(), write: vi.fn() }))(original)));
 // Avatar drawing is covered by its own suite; these tests exercise group interactions.
 vi.mock('../src/components/Avatar',()=>({Avatar:({botId}:{botId?:string})=>createElement('span',{'data-avatar':botId})}));
-let root: Root, container: HTMLDivElement, visibility: DocumentVisibilityState;
+let root: Root, visibility: DocumentVisibilityState;
 const bootstrap = { user: { id: "one", name: "One" }, preferences: defaultPreferences, connection: { connected: true },
   bots: [{ id: "ranch", name: "Ranch", activity: "idle" }] } as Bootstrap;
 const room = { room_id: "room", name: "Weekend plans", members: [] };
@@ -28,7 +28,7 @@ beforeEach(() => {
     : path.startsWith("/groups/") ? { room, driver_status: { working: false, blocked: false, pending_actions: [] } }
     : path === "/today" ? { generatedAt: "2026-10-14T12:00:00Z", frontier: "0", hasMore: false, since: "2026-10-14T00:00:00Z", unavailableBots: [], items: [], events: [] }
     : { requestId: "run", status: "accepted" });
-  ({ container, root } = mountRoot());
+  ({ root } = mountRoot());
 });
 afterEach(() => { Reflect.deleteProperty(document, "visibilityState"); });
 async function show(state: DocumentVisibilityState) {

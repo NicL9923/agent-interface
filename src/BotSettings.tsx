@@ -11,7 +11,7 @@ import type {
   BotInput,
   Routine,
 } from "./shared/types";
-import { api, ApiError, request, write } from "./client-api";
+import { api, ApiError, request } from "./client-api";
 import { routeUrl, type ApiResponse } from "./shared/api";
 import { routineRoomChoices, type GroupCatalog } from "./shared/collaboration";
 import { useAction } from "./app/use-action";

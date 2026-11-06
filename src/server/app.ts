@@ -460,12 +460,13 @@ export async function createApp(
       },
     });
     // The iOS app's shared desktop viewer. It holds nothing private: the app hands it a ticket in the hash.
-    app.get("/native/computer", (_req, reply) => reply.sendFile("native-computer.html"));
-    app.setNotFoundHandler((req, reply) =>
-      isApiRequest(req)
-        ? reply.code(404).send({ error: "API endpoint not found" })
-        : reply.type("text/html").sendFile("index.html"),
-    );
+    // These handlers send without returning the reply: a returned reply is thenable, so Fastify
+    // would add one more finished-watcher to every static response for nothing.
+    app.get("/native/computer", (_req, reply) => { reply.sendFile("native-computer.html"); });
+    app.setNotFoundHandler((req, reply) => {
+      if (isApiRequest(req)) reply.code(404).send({ error: "API endpoint not found" });
+      else reply.type("text/html").sendFile("index.html");
+    });
   }
   const worker = new BackgroundWorker(store, runtime, config, undefined, options.sendApns, app.log, options.sendLiveActivity);
   const health = new HealthMonitor({
