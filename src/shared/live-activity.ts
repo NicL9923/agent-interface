@@ -9,6 +9,11 @@ export interface LiveRow {
   /** Unix epoch seconds. ActivityKit would decode a Date from the 2001 epoch. */
   since?: number;
   color?: string;
+  /**
+   * A waiting row's first pending approval, so the Live Activity can offer Decline. Approving
+   * still happens in the chat, where the approval card shows what it would run.
+   */
+  approvalId?: string;
 }
 export interface LiveState {
   title: string;

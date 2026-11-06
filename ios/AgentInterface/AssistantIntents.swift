@@ -1,5 +1,5 @@
 import AppIntents
-import Foundation
+import SwiftUI
 
 /// A question from Siri or Shortcuts waiting to land in an assistant's draft. It is never sent:
 /// the person reviews it in the chat. It names the account it was asked in, so a different
@@ -85,6 +85,73 @@ struct OpenTodayIntent: AppIntent {
   }
 }
 
+/// Who needs the person and who is working, said and shown without opening the app. It reads the
+/// widgets' snapshot, refreshed first with the app's own sign-in when it is more than a minute old.
+struct CheckAssistantsIntent: AppIntent {
+  static var title: LocalizedStringResource { "Check on assistants" }
+  static var description: IntentDescription {
+    IntentDescription("Tells you which assistants need you and which are working, without opening WildBots.")
+  }
+  static var openAppWhenRun: Bool { false }
+  init() {}
+  /// Siri gives up after a few seconds; a slow server leaves the snapshot as it was.
+  static let refreshPatience: Duration = .seconds(4)
+  @MainActor func perform() async throws -> some IntentResult & ProvidesDialog & ShowsSnippetView {
+    let url = AssistantEntityQuery.snapshotURL
+    if WidgetSnapshotStore.read(from: url).map({ Date().timeIntervalSince($0.generatedAt) > 60 }) ?? true {
+      await withTaskGroup(of: Void.self) { group in
+        group.addTask { @MainActor in await BackgroundRefresh.refreshWidgets() }
+        group.addTask { try? await Task.sleep(for: Self.refreshPatience) }
+        await group.next()
+        group.cancelAll()
+      }
+    }
+    guard let snapshot = WidgetSnapshotStore.read(from: url) else { throw AssistantIntentError.signedOut }
+    let now = Date()
+    return .result(dialog: IntentDialog(stringLiteral: snapshot.spokenSummary(at: now)), view: AssistantStatusSnippet(snapshot: snapshot))
+  }
+}
+
+extension WidgetSnapshot {
+  /// What Siri says: each assistant that needs the person, then who is working, and how old the news is
+  /// when the snapshot is stale.
+  func spokenSummary(at now: Date) -> String {
+    func names(_ list: [Assistant]) -> String { ListFormatter.localizedString(byJoining: list.map(\.name)) }
+    let ordered = self.ordered
+    let attention = ordered.filter(\.needsAttention), working = ordered.filter(\.isWorking)
+    var parts = attention.map { "\($0.name) \($0.activity == "waiting" ? "needs your approval" : "needs your input")." }
+    if !working.isEmpty { parts.append("\(names(working)) \(working.count == 1 ? "is" : "are") working.") }
+    if parts.isEmpty { parts = ["All caught up. Nobody needs you and nothing is running."] }
+    if isStale(at: now) {
+      let age = RelativeDateTimeFormatter().localizedString(for: generatedAt, relativeTo: now)
+      parts.insert("WildBots last checked \(age), so this may be out of date.", at: 0)
+    }
+    return parts.joined(separator: " ")
+  }
+}
+
+/// The card Siri and Shortcuts show under the answer: the same rows as the widget, at most five.
+struct AssistantStatusSnippet: View {
+  var snapshot: WidgetSnapshot
+  var body: some View {
+    let rows = snapshot.ordered.filter { $0.needsAttention || $0.isWorking }.prefix(5)
+    VStack(alignment: .leading, spacing: 8) {
+      if rows.isEmpty {
+        Label("All caught up", systemImage: "checkmark.circle.fill").foregroundStyle(WidgetPalette.color(.done))
+      }
+      ForEach(Array(rows)) { assistant in
+        HStack(spacing: 8) {
+          AssistantGlyphView(color: WidgetPalette.hex(assistant.color) ?? WidgetPalette.brand).frame(width: 18, height: 18)
+          Text(assistant.name).fontWeight(.semibold).lineLimit(1)
+          Spacer(minLength: 4)
+          Text(assistant.status ?? "").foregroundStyle(WidgetPalette.color(assistant.phase)).lineLimit(1)
+        }.font(.subheadline).accessibilityElement(children: .combine)
+      }
+      Text("Updated \(snapshot.generatedAt, style: .relative) ago").font(.caption2).foregroundStyle(.secondary)
+    }.padding()
+  }
+}
+
 /// Phrases always include the app's name, which Siri requires and which keeps them from
 /// colliding with other apps' assistants.
 struct WildBotsShortcuts: AppShortcutsProvider {
@@ -104,6 +171,13 @@ struct WildBotsShortcuts: AppShortcutsProvider {
       intent: OpenTodayIntent(),
       phrases: ["Open Today in \(.applicationName)", "What is new in \(.applicationName)", "Show my \(.applicationName) recap"],
       shortTitle: "Open Today", systemImageName: "calendar")
+    AppShortcut(
+      intent: CheckAssistantsIntent(),
+      phrases: [
+        "What's waiting in \(.applicationName)", "Does anyone need me in \(.applicationName)",
+        "Check on my assistants in \(.applicationName)",
+      ],
+      shortTitle: "Check on assistants", systemImageName: "person.crop.circle.badge.exclamationmark")
   }
 }
 

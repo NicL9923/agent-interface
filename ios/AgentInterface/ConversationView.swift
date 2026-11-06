@@ -149,11 +149,16 @@ struct ConversationView: View {
       if visible, let error { AccessibilityNotification.Announcement(error).post() }
     }
     .task(id: "\(findOpen):\(findQuery)") { await searchHistory() }
+    // Handoff to another device, and the assistant on screen for Siri.
+    .userActivity(ChatHandoff.activityType, isActive: store.api != nil && !store.sessionExpired) { activity in
+      ChatHandoff.describe(activity, bot: bot, server: store.api?.baseURL)
+    }
     .findShortcut(botId: bot.id, open: openFind)
   }
   private func configureSpeech() {
     speech.api = store.api
     speech.botId = bot.id
+    speech.botName = bot.name
   }
   /// Advanced only: the model chip under the assistant's name. Simple never shows the model.
   @ViewBuilder private var modelBar: some View {

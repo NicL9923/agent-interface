@@ -18,6 +18,9 @@ const digest = path => createHash('sha256').update(readFileSync(path)).digest('h
 const fail = (condition, reason) => { if (!condition) throw new Error(reason); };
 // The App Store Connect API cannot enable these capabilities, so they are checked instead of set.
 const notificationCapabilities = ['com.apple.developer.usernotifications.time-sensitive', 'com.apple.developer.usernotifications.communication'];
+// Universal links and Handoff. `setup` enables the capability; the profile then allows any domain and
+// the signed app names the household's, from WILDBOTS_LINK_DOMAIN in ios/tools/generate-project.py.
+const associatedDomains = 'com.apple.developer.associated-domains';
 const keychains = () => run('security', ['list-keychains', '-d', 'user']).split('\n').map(line => line.trim()).filter(Boolean).map(line => JSON.parse(line));
 
 function checkHost() {
@@ -58,6 +61,7 @@ async function profiles(api, config, destination) {
     fail(e['application-identifier'] === `${config.teamId}.${identifier}` && e['get-task-allow'] === false && decoded.TeamIdentifier.includes(config.teamId), `Wrong distribution profile: ${identifier}`);
     fail(e['com.apple.security.application-groups']?.includes(appGroup), `Apple profile for ${identifier} lacks ${appGroup}. Link that group in the Developer portal, then regenerate the profile; do not bypass this check.`);
     fail(identifier !== bundleId || e['aps-environment'] === 'production', 'Main app profile lacks production APNs');
+    fail(identifier !== bundleId || e[associatedDomains] !== undefined, `Apple profile for ${identifier} lacks Associated Domains. Run setup again to enable it, then prepare; Apple invalidates the old profile and this creates a new one.`);
     fail(identifier !== bundleId || notificationCapabilities.every(key => e[key] === true), `Apple profile for ${identifier} lacks Time Sensitive or Communication Notifications. Turn both on for ${identifier} under Identifiers in the Apple Developer portal, then run prepare again; Apple invalidates the old profile and this creates a new one.`);
     writeFileSync(join(installed, `${decoded.UUID}.mobileprovision`), readFileSync(file), { mode: 0o600 });
     result[name] = decoded.Name;
@@ -77,6 +81,7 @@ function checkSignedBundles(root, config, version, build) {
     fail(profile.Entitlements['get-task-allow'] === false && profile.Entitlements['application-identifier'] === `${config.teamId}.${identifier}` && profile.Entitlements['com.apple.security.application-groups']?.includes(appGroup) && !profile.ProvisionedDevices && !profile.ProvisionsAllDevices && new Date(profile.ExpirationDate) > new Date(), `Not an unexpired App Store profile: ${name}`);
     if (name === 'AgentInterface') fail(entitlements['aps-environment'] === 'production' && profile.Entitlements['aps-environment'] === 'production' && info.ITSAppUsesNonExemptEncryption === false, 'Main app needs production APNs and its encryption declaration');
     if (name === 'AgentInterface') fail(notificationCapabilities.every(key => entitlements[key] === true && profile.Entitlements[key] === true), 'Main app needs its Time Sensitive and Communication Notifications entitlements');
+    if (name === 'AgentInterface') fail(Array.isArray(entitlements[associatedDomains]) && entitlements[associatedDomains].length > 0 && entitlements[associatedDomains].every(value => /^(applinks|activitycontinuation):[a-z0-9.-]+$/.test(value)) && profile.Entitlements[associatedDomains] !== undefined, 'Main app needs its associated domains, with WILDBOTS_LINK_DOMAIN expanded');
   }
 }
 
@@ -156,7 +161,7 @@ async function main() {
     const path = join(scratch, `profiles-${Date.now()}`);
     mkdirSync(path, { mode: 0o700 });
     await profiles(api, config, path);
-    console.log(`All ${identifiers.length} App Store profiles passed the App Group, production push and notification capability checks.`);
+    console.log(`All ${identifiers.length} App Store profiles passed the App Group, production push, notification and associated domain checks.`);
     return;
   }
   if (command === 'status') {

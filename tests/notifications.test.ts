@@ -290,7 +290,7 @@ it.each(["runtime", "outbox", "live"] as const)("drains every job before closing
   const finished = { runtime: deferred(), outbox: deferred(), live: deferred() };
   const close = vi.fn();
   const sender = Object.assign(vi.fn(async () => { await gates.outbox.promise; finished.outbox.resolve(); }), {
-    close, liveActivity: vi.fn(async () => {}), clear: vi.fn(async () => {}),
+    close, liveActivity: vi.fn(async () => {}), clear: vi.fn(async () => {}), refresh: vi.fn(async () => {}),
   });
   const factory = vi.spyOn(apns, "createApnsSender").mockReturnValue(sender);
   const config = household();

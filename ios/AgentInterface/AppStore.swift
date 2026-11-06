@@ -19,8 +19,10 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   /// The signed-in account on this server, kept apart from `bootstrap` so views keyed by the
   /// account, such as every image in the transcript, render again only when it changes.
   private(set) var scope: String?
+  /// The account on a server, as drafts, widgets and the Live Activity name it.
+  nonisolated static func scope(server: URL, userId: String) -> String { Data((server.absoluteString + "|" + userId).utf8).base64URLEncoded }
   private func updateScope() {
-    let next = bootstrap.flatMap { boot in api.map { Data(($0.baseURL.absoluteString + "|" + boot.user.id).utf8).base64URLEncoded } }
+    let next = bootstrap.flatMap { boot in api.map { Self.scope(server: $0.baseURL, userId: boot.user.id) } }
     guard next != scope else { return }
     scope = next
     // Another account's rooms never show.
@@ -77,6 +79,8 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   var todayRequest: UUID?
   /// A voice message to start in this assistant's chat, from the Talk to assistant control.
   var listenRequest: ListenRequest?
+  /// The assistants the current Focus lets through; see `FocusFilter.swift`.
+  var focus = FocusChoice.saved()
   var draft = Draft()
   var draftReady = false { didSet { if draftReady && !oldValue { scheduleAdditions() } } }
   /// Unconfirmed sends, one per assistant, as the web keeps one per assistant.

@@ -1,10 +1,12 @@
 import AVFoundation
+import MediaPlayer
 import SwiftUI
 
 /// Reads one assistant reply aloud at a time for the whole transcript, as the web's `useReplySpeech`
 /// does, with the app server's configured voice. Replies over 12,000 characters are refused instead
 /// of being cut short. The audio is released when another reply starts, when recording starts and
-/// when the chat closes.
+/// when the chat closes. It keeps playing with the phone locked or another app open, and the Lock
+/// Screen and Control Center show it with pause, play and stop.
 @MainActor @Observable final class SpeechController: NSObject, AVAudioPlayerDelegate {
   static let maxSpokenText = 12_000
   static let maxVoiceBytes = 8 * 1024 * 1024
@@ -18,17 +20,21 @@ import SwiftUI
   private(set) var failure: Failure?
   @ObservationIgnored var api: APIClient?
   @ObservationIgnored var botId = ""
+  /// The assistant's name for the Lock Screen's Now Playing.
+  @ObservationIgnored var botName = ""
   @ObservationIgnored private var player: AVAudioPlayer?
   @ObservationIgnored private var request: Task<Void, Never>?
   /// Bumped by every new action, so a late result from an earlier one is ignored.
   @ObservationIgnored private var generation = 0
   @ObservationIgnored private var sessionActive = false
+  /// The Lock Screen's handlers while this controller holds audio, removed with it.
+  @ObservationIgnored private var remoteTargets: [(MPRemoteCommand, Any)] = []
 
   /// Starts speaking the reply, plays prepared audio again, or stops this reply. Another reply's
   /// playback stops first.
   func toggle(_ reply: Message) {
     if let current, current.id == reply.id {
-      if current.phase == .ready { play(reply.id) } else { cancel() }
+      if current.phase == .ready { play(reply.id, fromStart: true) } else { cancel() }
       return
     }
     speak(reply)
@@ -82,7 +88,7 @@ import SwiftUI
         }
         value.delegate = self
         player = value
-        play(reply.id)
+        play(reply.id, fromStart: true)
       } catch {
         if generation == run, !(error is CancellationError) {
           current = nil
@@ -91,7 +97,8 @@ import SwiftUI
       }
     }
   }
-  private func play(_ id: String) {
+  /// Plays the prepared audio from the start, or, after a pause from the Lock Screen, from there.
+  private func play(_ id: String, fromStart: Bool) {
     guard let player else { return }
     failure = nil
     current = Current(id: id, phase: .preparing)
@@ -99,9 +106,10 @@ import SwiftUI
     try? session.setCategory(.playback, mode: .spokenAudio)
     try? session.setActive(true)
     sessionActive = true
-    player.currentTime = 0
+    if fromStart { player.currentTime = 0 }
     if player.play() {
       current = Current(id: id, phase: .speaking)
+      showNowPlaying(player)
     } else {
       current = Current(id: id, phase: .ready)
       failure = Failure(id: id, text: "Audio could not start. Select Play audio to try again.")
@@ -114,6 +122,7 @@ import SwiftUI
       // The prepared audio stays, so Play audio replays it without another request.
       self.current = Current(id: current.id, phase: .ready)
       self.deactivateSession()
+      self.hideNowPlaying()
     }
   }
   nonisolated func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
@@ -130,6 +139,53 @@ import SwiftUI
     player?.stop()
     player = nil
     deactivateSession()
+    hideNowPlaying()
+  }
+  /// Pauses where it is, as the Lock Screen's pause does. Play audio in the chat starts over.
+  private func pause() {
+    guard let player, let current, current.phase == .speaking else { return }
+    player.pause()
+    self.current = Current(id: current.id, phase: .ready)
+    MPNowPlayingInfoCenter.default().nowPlayingInfo?[MPNowPlayingInfoPropertyPlaybackRate] = 0.0
+    MPNowPlayingInfoCenter.default().nowPlayingInfo?[MPNowPlayingInfoPropertyElapsedPlaybackTime] = player.currentTime
+    MPNowPlayingInfoCenter.default().playbackState = .paused
+  }
+  private func showNowPlaying(_ player: AVAudioPlayer) {
+    MPNowPlayingInfoCenter.default().nowPlayingInfo = [
+      MPMediaItemPropertyTitle: botName.isEmpty ? "Assistant reply" : "Reply from \(botName)",
+      MPMediaItemPropertyArtist: "WildBots",
+      MPMediaItemPropertyPlaybackDuration: player.duration,
+      MPNowPlayingInfoPropertyElapsedPlaybackTime: player.currentTime,
+      MPNowPlayingInfoPropertyPlaybackRate: 1.0,
+      MPNowPlayingInfoPropertyMediaType: MPNowPlayingInfoMediaType.audio.rawValue,
+    ]
+    MPNowPlayingInfoCenter.default().playbackState = .playing
+    guard remoteTargets.isEmpty else { return }
+    let center = MPRemoteCommandCenter.shared()
+    // iOS calls these on the main thread.
+    func handle(_ command: MPRemoteCommand, _ action: @escaping @MainActor (SpeechController) -> Void) {
+      let target = command.addTarget { [weak self] _ in
+        MainActor.assumeIsolated {
+          guard let self, self.player != nil else { return .noActionableNowPlayingItem }
+          action(self)
+          return .success
+        }
+      }
+      command.isEnabled = true
+      remoteTargets.append((command, target))
+    }
+    handle(center.pauseCommand) { $0.pause() }
+    handle(center.playCommand) { speech in speech.current.map { speech.play($0.id, fromStart: false) } }
+    handle(center.togglePlayPauseCommand) { speech in
+      if speech.current?.phase == .speaking { speech.pause() } else { speech.current.map { speech.play($0.id, fromStart: false) } }
+    }
+    handle(center.stopCommand) { $0.cancel() }
+  }
+  private func hideNowPlaying() {
+    for (command, target) in remoteTargets { command.removeTarget(target) }
+    remoteTargets = []
+    MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+    MPNowPlayingInfoCenter.default().playbackState = .stopped
   }
   private func deactivateSession() {
     guard sessionActive else { return }
