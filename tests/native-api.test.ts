@@ -284,6 +284,11 @@ it("signs cached ES256 APNs provider requests and bounds multibyte payloads", as
     expect(JSON.parse(Buffer.from(jwt[0], "base64url").toString()).alg).toBe("ES256");
     expect(verify("sha256", Buffer.from(jwt.slice(0, 2).join(".")), { key: publicKey, dsaEncoding: "ieee-p1363" }, Buffer.from(jwt[2], "base64url"))).toBe(true);
     expect(JSON.parse(seen[0].body)).toMatchObject({ aps: { alert: { title: "Done" } }, url: "/?bot=bot" });
+    await sender.refresh(device);
+    expect(seen[2].headers).toMatchObject({ "apns-topic": "test.agentinterface", "apns-push-type": "background", "apns-priority": "5" });
+    // Only a nudge: the app reads names and states itself, with its own sign-in.
+    expect(JSON.parse(seen[2].body)).toEqual({ aps: { "content-available": 1 }, refresh: ["widgets"] });
+    seen.splice(2);
     await sender.clear(device, ["event"]);
     expect(seen[2].headers).toMatchObject({ "apns-topic": "test.agentinterface", "apns-push-type": "background", "apns-priority": "5" });
     expect(JSON.parse(seen[2].body)).toEqual({ aps: { "content-available": 1 }, clear: { tags: ["event"] } });
@@ -364,10 +369,11 @@ it("shares durable participant/routine notifications across web/APNs without ret
 it("groups iOS notifications per assistant and adds actions only where they make sense", () => {
   const base = { title: "Kitchen", body: "Done", url: "/?bot=kitchen", tag: "event-1", botId: "kitchen", account: "0123456789abcdef" };
   const reply = JSON.parse(apnsPayload(JSON.stringify({ ...base, kind: "completed" })));
-  expect(reply).toEqual({ aps: { alert: { title: "Kitchen", body: "Done" }, sound: "default", "thread-id": "kitchen", "mutable-content": 1, category: "REPLY" },
+  expect(reply).toEqual({ aps: { alert: { title: "Kitchen", body: "Done" }, sound: "default", "filter-criteria": "kitchen", "thread-id": "kitchen", "mutable-content": 1, category: "REPLY" },
     url: "/?bot=kitchen", tag: "event-1", botId: "kitchen", account: "0123456789abcdef" });
   const approval = JSON.parse(apnsPayload(JSON.stringify({ ...base, kind: "approval", approvalId: "request-7" })));
-  expect(approval.aps).toMatchObject({ "thread-id": "kitchen", category: "APPROVAL", "interruption-level": "time-sensitive" });
+  // A Focus filter can let every assistant's approvals through while it quiets the rest of their news.
+  expect(approval.aps).toMatchObject({ "thread-id": "kitchen", category: "APPROVAL", "interruption-level": "time-sensitive", "filter-criteria": "approval:kitchen" });
   expect(approval).toMatchObject({ botId: "kitchen", approvalId: "request-7", account: "0123456789abcdef" });
   // An add-on without approval IDs still sends a time-sensitive approval, which only opens the chat.
   const unnamed = JSON.parse(apnsPayload(JSON.stringify({ ...base, kind: "approval" })));
@@ -381,7 +387,7 @@ it("groups iOS notifications per assistant and adds actions only where they make
   // Routine results open their results sheet, not a chat to reply in; digests and host alerts have no assistant.
   expect(JSON.parse(apnsPayload(JSON.stringify({ ...base, kind: "completed", url: "/?bot=kitchen&routine=daily" }))).aps.category).toBeUndefined();
   const digest = JSON.parse(apnsPayload(JSON.stringify({ title: "2 assistant updates", body: "A · B", url: "/?view=today", tag: "batch", account: "0123456789abcdef" })));
-  expect(digest.aps).toEqual({ alert: { title: "2 assistant updates", body: "A · B" }, sound: "default" });
+  expect(digest.aps).toEqual({ alert: { title: "2 assistant updates", body: "A · B" }, sound: "default", "filter-criteria": "household" });
   // Without the account marker an action could be taken by whoever is signed in, so there is none,
   // and the extension cannot tell whose avatar to show.
   const anonymous = JSON.parse(apnsPayload(JSON.stringify({ ...base, account: undefined, kind: "completed" })));
@@ -502,4 +508,44 @@ it("stops a delivery mid-way when its assistant turns private, before any other 
   expect(sent).toEqual(["https://push.test/phone"]);
   expect(store.outbox()).toHaveLength(0);
   store.close();
+});
+
+it("publishes the iOS app's universal links only when the host signs for that app", async () => {
+  const unsigned = await setup();
+  expect((await unsigned.app.inject("/.well-known/apple-app-site-association")).statusCode).toBe(404);
+  const config = loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }); config.apns = apnsConfig();
+  const signed = await setup(config);
+  // Apple's CDN fetches it without a session.
+  const response = await signed.app.inject("/.well-known/apple-app-site-association");
+  expect(response.statusCode).toBe(200);
+  expect(response.headers["content-type"]).toMatch(/^application\/json/);
+  const value = response.json();
+  expect(value.applinks.details).toEqual([{ appIDs: ["TEAM123456.test.agentinterface"], components: [
+    expect.objectContaining({ "/": "/", "?": { bot: "?*" } }), expect.objectContaining({ "/": "/", "?": { view: "today" } }),
+  ] }]);
+  expect(value.activitycontinuation).toEqual({ apps: ["TEAM123456.test.agentinterface"] });
+});
+
+it("lets a Live Activity's Stop act only for the account it names", async () => {
+  const stopped: string[] = [];
+  const result = await createApp(loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }), fakeRuntime({
+    listBots: async () => [{ id: "bot", name: "Bot", shared: true, model: "test", activity: "working" }],
+    capabilities: async () => capabilitiesFixture({ avatarMetadata: { supported: false }, stop: { supported: true } }), stop: async (botId: string) => { stopped.push(botId); },
+    close: async () => {},
+  }), { background: false });
+  apps.push(result);
+  const { app } = result, { token } = await connectNative(app);
+  const stop = (payload?: object) => app.inject({ method: "POST", url: "/api/bots/bot/stop", headers: { authorization: `Bearer ${token}` }, ...(payload ? { payload } : {}) });
+  // Another person signed in on the phone since the activity started: nothing stops.
+  const refused = await stop({ account: accountMarker("local-two") });
+  expect(refused.statusCode).toBe(409);
+  expect(refused.json().error).toBe("This activity belongs to a different account");
+  expect(stopped).toEqual([]);
+  const allowed = await stop({ account: accountMarker("local-one") });
+  expect(allowed.statusCode, allowed.body).toBe(200);
+  // The chat's own Stop sends nothing or an empty body, as before.
+  expect((await stop()).statusCode).toBe(200);
+  expect((await stop({})).statusCode).toBe(200);
+  expect((await stop({ account: "x".repeat(65) })).statusCode).toBe(400);
+  expect(stopped).toEqual(["bot", "bot", "bot"]);
 });

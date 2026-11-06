@@ -76,15 +76,16 @@ struct AssistantsWidgetEntryView: View {
 struct AssistantsLiveActivity: Widget {
   var body: some WidgetConfiguration {
     ActivityConfiguration(for: AssistantsActivityAttributes.self) { context in
-      ActivityLockScreenView(state: context.state, stale: context.isStale)
+      ActivityLockScreenView(state: context.state, stale: context.isStale, scope: context.attributes.scope)
         .widgetURL(link(context.state))
     } dynamicIsland: { context in
       let state = context.state
       let stale = context.isStale
+      let scope = context.attributes.scope
       return DynamicIsland {
         DynamicIslandExpandedRegion(.leading) { IslandExpandedLeading(state: state, stale: stale).padding(.leading, 4) }
         DynamicIslandExpandedRegion(.trailing) { IslandExpandedTrailing(state: state, stale: stale).padding(.trailing, 4) }
-        DynamicIslandExpandedRegion(.bottom) { IslandExpandedBottom(state: state, stale: stale).padding(.horizontal, 4) }
+        DynamicIslandExpandedRegion(.bottom) { IslandExpandedBottom(state: state, stale: stale, scope: scope).padding(.horizontal, 4) }
       } compactLeading: {
         IslandGlyph(state: state, stale: stale).frame(width: 18, height: 18)
       } compactTrailing: {

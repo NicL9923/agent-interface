@@ -4,7 +4,8 @@ import { allowedIdentity, type Config } from "./config.js";
 import { maxDeliveryAttempts, type Store } from "./store.js";
 import type { Runtime } from "../shared/types.js";
 import { visibleTo } from "./bot-access.js";
-import { accountMarker, ApnsError, createApnsSender, type ApnsClearSender, type ApnsSender, type NativeDevice } from "./apns.js";
+import { accountMarker, ApnsError, createApnsSender, type ApnsClearSender, type ApnsRefreshSender, type ApnsSender, type NativeDevice } from "./apns.js";
+import { WidgetRefresh } from "./widget-refresh.js";
 import { FailureTracker, quietLog, safeError, type Log } from "./logging.js";
 import { LiveActivities, type LiveActivitySender } from "./live-activity.js";
 import { badgeFor, rosterOnce } from "./badge.js";
@@ -24,7 +25,7 @@ export function inQuietHours(settings: import('../shared/types.js').Preferences[
 const approvalCheckInterval = 60000;
 const approvalChecksPerPass = 5;
 export const approvalPassBudget = 20000;
-type Job = "runtime" | "outbox" | "live" | "approvals";
+type Job = "runtime" | "outbox" | "live" | "widgets" | "approvals";
 export class BackgroundWorker {
   private timer?: ReturnType<typeof setInterval>;
   private jobs = makeJobs<Job>(error => this.loop.failure(error));
@@ -44,6 +45,7 @@ export class BackgroundWorker {
   readonly push: FailureTracker;
   readonly clears: FailureTracker;
   readonly live: LiveActivities;
+  readonly widgets: WidgetRefresh;
   constructor(
     private store: Store,
     private runtime: Runtime,
@@ -53,6 +55,7 @@ export class BackgroundWorker {
     private log: Log = quietLog,
     sendLiveActivity?: LiveActivitySender,
     private sendClear?: ApnsClearSender,
+    sendRefresh?: ApnsRefreshSender,
   ) {
     this.loop = new FailureTracker(log, "Background worker");
     this.discovery = new FailureTracker(log, "Hermes event discovery");
@@ -63,9 +66,11 @@ export class BackgroundWorker {
       this.sendApns = sender;
       sendLiveActivity ??= sender.liveActivity;
       this.sendClear ??= sender.clear;
+      sendRefresh ??= sender.refresh;
       this.closeApns = () => sender.close();
     }
     this.live = new LiveActivities(store, runtime, config, sendLiveActivity, log);
+    this.widgets = new WidgetRefresh(store, runtime, config, sendRefresh, log);
     if (!send && config.vapidPublicKey) {
       webpush.setVapidDetails(
         config.vapidSubject,
@@ -111,9 +116,12 @@ export class BackgroundWorker {
     const live = this.runJob("live", async () => {
       try { await this.live.tick(); } catch (error) { this.live.push.failure(error); }
     });
+    const widgets = this.runJob("widgets", async () => {
+      try { await this.widgets.tick(); } catch (error) { this.widgets.push.failure(error); }
+    });
     // Its own job, so a slow Hermes read never holds up discovery or receipt recovery.
     const approvals = this.jobs.run("approvals", fromPromise(signal => this.reconcileApprovals(signal)));
-    return [outbox, runtime, live, approvals];
+    return [outbox, runtime, live, widgets, approvals];
   }
   private runJob(name: Job, work: () => Promise<void>, rerun?: () => boolean) {
     return this.jobs.run(name, fromPromise(() => work()), rerun);

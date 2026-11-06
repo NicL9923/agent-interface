@@ -85,6 +85,7 @@ export class Store {
   registerNativeDevice(...args: Parameters<DeviceRepository["registerNativeDevice"]>) { return this.devices.registerNativeDevice(...args); }
   removeNativeDevice(...args: Parameters<DeviceRepository["removeNativeDevice"]>) { return this.devices.removeNativeDevice(...args); }
   nativeDevices(...args: Parameters<DeviceRepository["nativeDevices"]>) { return this.devices.nativeDevices(...args); }
+  allNativeDevices(...args: Parameters<DeviceRepository["allNativeDevices"]>) { return this.devices.allNativeDevices(...args); }
   registerLiveActivity(...args: Parameters<DeviceRepository["registerLiveActivity"]>) { return this.devices.registerLiveActivity(...args); }
   liveActivityContext(...args: Parameters<DeviceRepository["liveActivityContext"]>) { return this.devices.liveActivityContext(...args); }
   removeLiveActivity(...args: Parameters<DeviceRepository["removeLiveActivity"]>) { return this.devices.removeLiveActivity(...args); }

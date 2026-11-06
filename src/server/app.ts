@@ -124,6 +124,13 @@ export async function createApp(
   installRoutineRoutes(app, { config, runtime, store, roster, requireCapability });
   // The worker owns the aggregate so a push and this read agree; handlers run after it exists.
   installPushRoutes(app, { config, runtime, store, live: () => worker.live });
+  // Universal links and Handoff for the iOS app, whose bundle ID is the APNs topic. Only chat and Today
+  // links open the app; sign-in and everything else stay on the web.
+  app.get("/.well-known/apple-app-site-association", (_req, reply) => {
+    if (!config.apns) return reply.code(404).send({ error: "Not found" });
+    const appID = `${config.apns.teamId}.${config.apns.topic}`;
+    return reply.type("application/json").header("Cache-Control", "public, max-age=3600").send(appleAppSiteAssociation(appID));
+  });
   const clientRoot = options.clientRoot ?? resolve("dist/client");
   if (existsSync(clientRoot)) {
     await app.register(staticFiles, {
@@ -165,4 +172,20 @@ export async function createApp(
     store.close();
   });
   return { app, store, worker, health, routes };
+}
+
+/** The association file Apple's CDN fetches for universal links and Handoff from Safari. */
+export function appleAppSiteAssociation(appID: string) {
+  return {
+    applinks: {
+      details: [{
+        appIDs: [appID],
+        components: [
+          { "/": "/", "?": { bot: "?*" }, comment: "A chat, as notifications and the web link it" },
+          { "/": "/", "?": { view: "today" }, comment: "Today" },
+        ],
+      }],
+    },
+    activitycontinuation: { apps: [appID] },
+  };
 }

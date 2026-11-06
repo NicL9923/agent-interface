@@ -87,7 +87,7 @@ export async function setupIdentifiers(api) {
     let registered = bundles.find(item => item.attributes.identifier === identifier);
     if (!registered) registered = (await api('POST', '/bundleIds', { data: { type: 'bundleIds', attributes: { identifier, name: `WildBots ${name}`, platform: 'IOS' } } })).data;
     const capabilities = await all(api, `/bundleIds/${registered.id}/bundleIdCapabilities`);
-    for (const capabilityType of ['APP_GROUPS', ...(identifier === bundleId ? ['PUSH_NOTIFICATIONS'] : [])]) {
+    for (const capabilityType of ['APP_GROUPS', ...(identifier === bundleId ? ['PUSH_NOTIFICATIONS', 'ASSOCIATED_DOMAINS'] : [])]) {
       if (!capabilities.some(item => item.attributes.capabilityType === capabilityType)) {
         await api('POST', '/bundleIdCapabilities', { data: { type: 'bundleIdCapabilities', attributes: { capabilityType }, relationships: { bundleId: { data: { type: 'bundleIds', id: registered.id } } } } });
       }

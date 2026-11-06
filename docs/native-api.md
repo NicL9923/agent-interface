@@ -534,6 +534,13 @@ Approval requests set `aps.interruption-level` to `time-sensitive`, so they brea
 through Focus. The app is signed with the Time Sensitive Notifications entitlement
 from build 15; iOS ignores the level for earlier builds.
 
+Every alert sets `aps.filter-criteria` for the app's Focus filter: the assistant ID,
+`approval:` and the assistant ID for an approval request, or `household` for digests
+and host alerts. A Focus filter that chose some assistants lets their notifications,
+household news and, unless the person turned it off, every assistant's approval
+requests through; iOS delivers the rest quietly. The criteria are dropped before the
+alert itself would exceed APNs' limit.
+
 Every alert about an assistant names its account with `account`, the first 16 hex
 characters of SHA-256 of `wildbots-account:` and the user ID, and the assistant
 with `botId`, and sets `aps.mutable-content` to 1. The app's notification service
@@ -737,7 +744,7 @@ the same rule as notifications. A private assistant appears only for its owner.
   "updatedAt": 1760000000,
   "rows": [
     { "botId": "kitchen", "name": "Kitchen", "phase": "waiting", "status": "Needs approval",
-      "detail": "Order groceries", "since": 1759999900, "color": "#1084FE" }
+      "detail": "Order groceries", "since": 1759999900, "color": "#1084FE", "approvalId": "request-7" }
   ]
 }
 ```
@@ -747,12 +754,26 @@ the same rule as notifications. A private assistant appears only for its owner.
 - `status` is a short label of at most 24 characters. `detail` is optional, at most 80
   characters, and comes from the current activity detail. `color` is the avatar color when
   the assistant has a geometric or character avatar.
+- `approvalId` is set on a `waiting` row to its first pending approval, when the ID is at
+  most 200 bytes. It never carries what the approval would run.
 - `updatedAt` and `since` are Unix epoch seconds. They are numbers, not ISO strings, because
   ActivityKit decodes `Date` from the 2001 reference epoch.
 - At most four rows, ordered: attention (`waiting`, `blocked`), then `failed` and
   `interrupted`, then `starting`, `thinking` and `working`, then `done`. The first row
   drives the tint, the minimal Dynamic Island symbol and the tap target.
 - `activeCount` counts non-terminal rows, including any beyond the first four.
+
+The first row gets one button while the activity is current: **Decline** for a `waiting`
+row with an `approvalId`, or **Stop** for a `thinking` or `working` row. Both need the
+phone unlocked and run in the app, never in the widget extension. The app acts only
+when the activity's scope is the signed-in account. Decline sends the notification
+action's request, `POST /api/bots/:id/approvals/:approvalId` with
+`{ "decision": "denied", "account": ACCOUNT }`; Stop sends `POST /api/bots/:id/stop` with
+`{ "account": ACCOUNT }`. The server answers 409 when the account is not the signed-in
+person's, so a sign-in that changed since the app's check cannot act with another
+person's token. Stop without a body, as the chat and the web send it, is unchanged.
+When either does not go through, a local notification says so and opens the chat.
+Approving stays in the chat, where the approval card shows what it would run.
 
 Registration requires native bearer authentication and binds the activity token to the
 person, installation UUID and native session, like device registration. The app keeps a
@@ -818,9 +839,37 @@ The widget extension never receives a sign-in token. The app writes a snapshot o
 signed-in person's visible assistants into the shared App Group whenever the household
 refreshes, removes it on sign-out or account change, and reloads widget timelines when it
 changes. Widgets show the snapshot time and say "Open WildBots to refresh" once it is
-older than 30 minutes. Message previews are privacy-sensitive, so a locked device that
+older than 30 minutes.
+
+While the app is closed, the background worker compares each person's visible roster
+every 30 seconds: names, states, latest messages, avatar colors and pins. When it
+changed, it sends each of their devices a background push,
+`{ "aps": { "content-available": 1 }, "refresh": ["widgets"] }` with
+`apns-push-type: background` and priority 5, at most once per device every 15 minutes.
+A change inside that window goes out when it ends. The push carries no names or
+previews. The app reads `GET /api/bootstrap?roster=lean` with its own sign-in and
+rewrites the snapshot, as it does in the foreground; an outage or a sign-in that changed
+during the read leaves the snapshot alone. iOS also runs the app's background refresh
+task, `dev.agentinterface.ios.widgets`, when it chooses. Both are best effort: iOS
+budgets background pushes and skips them for an app the person force-quit. A device
+first seen after the server starts is not woken until its person's roster next changes. Message previews are privacy-sensitive, so a locked device that
 hides widget data redacts them. A tap opens `agentinterface://open?bot=ID`, which the app
 handles exactly like a notification link to `/?bot=ID`.
+
+## Universal links and Handoff
+
+When APNs is configured, the server answers
+`GET /.well-known/apple-app-site-association` without a session. It names
+`APNS_TEAM_ID.APNS_TOPIC`, which is the app's bundle ID, for `applinks` and
+`activitycontinuation`. Only `/?bot=ID` and `/?view=today` open the app; sign-in and
+every other page stay on the web. Without APNs the route answers 404.
+
+The app lists `applinks:` and `activitycontinuation:` for the household's domain,
+set by `LINK_DOMAIN` in `ios/tools/generate-project.py`. A link for another server
+shows a notice instead of opening. An open chat advertises Handoff with its web link,
+`https://SERVER/?bot=ID`, so a Mac without the app opens the web client there. A device
+with the app opens it only when that link is its own server's, since another household's
+server may use the same assistant ID.
 
 ## App updates
 

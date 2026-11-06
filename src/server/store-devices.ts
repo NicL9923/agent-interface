@@ -67,6 +67,12 @@ export class DeviceRepository {
     return this.db.prepare("SELECT device_id AS deviceId,token,environment FROM native_devices WHERE user_id=? AND environment=?")
       .all(userId, environment) as { deviceId: string; token: string; environment: "sandbox" | "production" }[];
   }
+  /** Every registered device in this environment, with the person it belongs to. */
+  allNativeDevices(environment: "sandbox" | "production") {
+    this.accounts.pruneNativeAuth();
+    return this.db.prepare("SELECT user_id AS userId,device_id AS deviceId,token,environment FROM native_devices WHERE environment=?")
+      .all(environment) as { userId: string; deviceId: string; token: string; environment: "sandbox" | "production" }[];
+  }
   registerLiveActivity(userId: string, sessionHash: string, deviceId: string, token: string, environment: "sandbox" | "production", armed: string[], armedAt: number) {
     this.accounts.pruneNativeAuth();
     const conflicts = this.db.prepare("SELECT user_id FROM live_activities WHERE device_id=? OR (token=? AND environment=?)")
