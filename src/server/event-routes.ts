@@ -8,6 +8,7 @@ import type { BotDirectory } from "./bot-routes.js";
 import { roomAccessible } from "./collaboration.js";
 import type { Config } from "./config.js";
 import { eventStreamConnection, type EventStream } from "./event-stream.js";
+import type { GroupCatalogWatch } from "./group-catalog-watch.js";
 import type { GroupWatch } from "./group-watch.js";
 import { routePattern } from "./route-path.js";
 import { changesRoster, type RuntimeSnapshots } from "./runtime-snapshot.js";
@@ -16,7 +17,8 @@ import type { Store } from "./store.js";
 
 /**
  * The household change stream, `GET /api/events`: a roster notice when this person's visible
- * assistants change, and with `?group=<roomId>` a notice for each change to that group chat.
+ * assistants change, a groups notice when their visible group catalog changes, and with
+ * `?group=<roomId>` a notice for each change to that group chat.
  */
 export function installEventRoutes(app: FastifyInstance, collaborators: {
   config: Config;
@@ -28,10 +30,12 @@ export function installEventRoutes(app: FastifyInstance, collaborators: {
   /** Reads one group chat this person may open, or answers 404. */
   room: (userId: string, roomId: string) => Promise<GroupState>;
   groups: GroupWatch;
+  /** Watches the group catalog for open streams; absent when Hermes cannot host group chats. */
+  catalogs?: GroupCatalogWatch;
   /** Open event streams, which the app ends on shutdown. */
   streams: Set<() => void>;
 }) {
-  const { config, runtime, store, roster, directory, snapshot, room, groups, streams } = collaborators;
+  const { config, runtime, store, roster, directory, snapshot, room, groups, catalogs, streams } = collaborators;
   // Gateway frames are hints, not roster changes. Compare each viewer's visible
   // projection after one shared, cheap evaluation, at most once per second.
   const rosterListeners = new Set<(bots: Bot[], nativeAvatar: boolean) => void>();
@@ -63,7 +67,11 @@ export function installEventRoutes(app: FastifyInstance, collaborators: {
     }, Math.max(0, rosterLast + 1000 - Date.now()));
   };
   app.addHook("onResponse", async (req, reply) => {
-    if (req.method !== "GET" && reply.statusCode < 400 && changesRoster(routePattern(req))) evaluateRoster();
+    if (req.method === "GET" || reply.statusCode >= 400) return;
+    const path = routePattern(req);
+    if (changesRoster(path)) evaluateRoster();
+    // Rooms change with group writes, and with assistant changes such as sharing or deletion, which change who may open them.
+    if (changesRoster(path) || path.startsWith("/api/groups")) catalogs?.changed();
   });
   app.addHook("preClose", async () => {
     clearTimeout(rosterPending);
@@ -94,8 +102,10 @@ export function installEventRoutes(app: FastifyInstance, collaborators: {
       projection = next;
       stream?.send("event: roster\ndata: roster\n\n");
     };
+    let unwatchCatalog: (() => void) | undefined;
     const teardown = () => {
       unwatchGroup?.();
+      unwatchCatalog?.();
       rosterListeners.delete(changed);
       if (!rosterListeners.size) {
         unwatchRoster?.();
@@ -109,6 +119,10 @@ export function installEventRoutes(app: FastifyInstance, collaborators: {
       reserve: () => {
         rosterListeners.add(changed);
         unwatchRoster ??= runtime.watchRoster?.(evaluateRoster);
+        unwatchCatalog = catalogs?.watch(userId, () => {
+          if (!stillSignedIn(store, config, req)) { stream?.end(); return; }
+          stream?.send("event: groups\ndata: groups\n\n");
+        });
       },
       allowed: () => stillSignedIn(store, config, req),
       teardown,

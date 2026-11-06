@@ -292,9 +292,12 @@ Hermes profile; a run with only a saved preview says so.
 **Group chats** lets 2–6 local assistants discuss a task in one room. Rooms are rows
 in the home list beside the assistants, with overlapping member faces, the last
 message and who said it, and its time. Rooms follow the assistants, newest message first, because assistant rows keep
-the roster's order and do not jump. Home reads Hermes's room catalog every 30 seconds while the page is visible;
-the server adds each room's newest message to it and re-reads a room's log only when the room
-has a newer message, so home never polls room logs. Home has no group unread dot, since
+the roster's order and do not jump. Home reads Hermes's room catalog when the household event stream
+says this person's rooms changed, when it reconnects or the page wakes, and every 5 minutes as a fallback.
+While any household stream is open, the server checks the catalog once for everyone at most every
+30 seconds, and right away after a group or assistant change made in the app, and tells only the people
+whose visible rooms changed. It adds each room's newest message to the catalog and re-reads a room's log
+only when the room has a newer message, so home never polls room logs. Home has no group unread dot, since
 the app keeps no read position for rooms. Choose a room to open it like a conversation
 (`?view=group&room=ID`; the old `?view=groups` link opens home). Make a group from the **+** button's
 New group chat, which opens it. Create a

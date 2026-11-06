@@ -11,6 +11,7 @@ import { AgentExchange } from '../src/components/AgentExchange';
 import { defaultPreferences, type Bootstrap } from '../src/shared/types';
 import { click, mountRoot, typeInto } from './ui-harness';
 import { FakeEventSource } from './fake-event-source';
+import { GROUP_FALLBACK_POLL_MS, GROUPS_EVENT } from '../src/app/use-session';
 vi.mock('../src/client-api', async original => (await import("./helpers/request-mock")).withRequest(await (async original=>({...await original<typeof import('../src/client-api')>(),api:vi.fn(),write:vi.fn()}))(original)));
 // Avatar drawing is covered by its own suite; these tests exercise group interactions.
 vi.mock('../src/components/Avatar',()=>({Avatar:({botId}:{botId?:string})=>createElement('span',{'data-avatar':botId})}));
@@ -113,10 +114,10 @@ it('leaves a group that disappears, tells home to refresh, and says that a perso
   await act(async()=>root.render(view()));
   expect(container.textContent).toContain('@planner');
   exists=false;onChanged.mockClear();
-  await act(async()=>vi.advanceTimersByTimeAsync(30000));
+  await act(async()=>vi.advanceTimersByTimeAsync(GROUP_FALLBACK_POLL_MS));
   expect(container.textContent).toContain('That group chat is no longer available to you.');expect(container.textContent).not.toContain('@planner');
   expect(onChanged).toHaveBeenCalled();
-  const settled=reads;await act(async()=>vi.advanceTimersByTimeAsync(90000));expect(reads).toBe(settled);
+  const settled=reads;await act(async()=>vi.advanceTimersByTimeAsync(3*GROUP_FALLBACK_POLL_MS));expect(reads).toBe(settled);
   const mine={...bootstrap,bots:[...bootstrap.bots,{id:'books',name:'Ranch books',shared:false,ownerId:'one'}]} as Bootstrap;
   await act(async()=>root.render(createElement(GroupCreate,{bootstrap:mine,canSend:true,onClose:vi.fn(),onCreated:vi.fn()})));
   expect(container.textContent).not.toContain('Only you will see this group');
@@ -132,9 +133,25 @@ it('clears a vanished group at once, without waiting for home to refresh',async(
   await act(async()=>root.render(view()));
   expect(container.textContent).toContain('The secret ledger total');
   gone=true;
-  await act(async()=>vi.advanceTimersByTimeAsync(30000));
+  await act(async()=>vi.advanceTimersByTimeAsync(GROUP_FALLBACK_POLL_MS));
   for(const leak of ['The secret ledger total','Weekend plans','@planner'])expect(container.textContent).not.toContain(leak);
   expect(container.textContent).toContain('That group chat is no longer available to you.');
+});
+it('clears a group that left this person\'s list as soon as the household stream says their rooms changed',async()=>{
+  let gone=false,reads=0;
+  vi.mocked(api).mockImplementation(async(path)=>{
+    if(path==='/groups/room')reads++;
+    if(gone)throw new ApiError('Group chat not found',404);
+    return path.includes('/log')?{events:[],cursor:0,has_more:false}:{room,driver_status:{working:false,blocked:false,pending_actions:[]}};
+  });
+  await act(async()=>root.render(view()));
+  const before=reads;
+  await act(async()=>window.dispatchEvent(new Event(GROUPS_EVENT)));
+  expect(reads).toBe(before+1);
+  gone=true;
+  await act(async()=>window.dispatchEvent(new Event(GROUPS_EVENT)));
+  expect(container.textContent).toContain('That group chat is no longer available to you.');
+  expect(container.textContent).not.toContain('Weekend plans');
 });
 it('shows a sent group message at once even while a background check is still running',async()=>{
   const state={room,driver_status:{working:false,blocked:false,pending_actions:[]}};
@@ -147,7 +164,7 @@ it('shows a sent group message at once even while a background check is still ru
   });
   vi.mocked(write).mockImplementation(async()=>{delivered=true;return{accepted:true};});
   await act(async()=>root.render(view()));
-  await act(async()=>vi.advanceTimersByTimeAsync(30000));expect(held).toBeDefined();
+  await act(async()=>vi.advanceTimersByTimeAsync(GROUP_FALLBACK_POLL_MS));expect(held).toBeDefined();
   const field=container.querySelector<HTMLTextAreaElement>('#group-message')!;
   await act(async()=>{Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value')!.set!.call(field,'Plan Saturday');field.dispatchEvent(new Event('input',{bubbles:true}));});
   await act(async()=>field.form!.requestSubmit());
@@ -334,7 +351,7 @@ it('tells home when a room gets a message, so its preview stays current',async()
   await act(async()=>root.render(view()));
   expect(onChanged).not.toHaveBeenCalled();
   events=[{event_id:'a',seq:1,kind:'message.member',actor:{id:'planner'},payload:{text:'Brisket is ready'},created_at:1}];
-  await act(async()=>vi.advanceTimersByTimeAsync(30000));
+  await act(async()=>vi.advanceTimersByTimeAsync(GROUP_FALLBACK_POLL_MS));
   expect(onChanged).toHaveBeenCalledTimes(1);
 });
 
@@ -346,8 +363,8 @@ it('follows the conversation end without moving readers above the bottom or on u
   const panel=container.querySelector<HTMLElement>('.group-panel')!;
   Object.defineProperties(panel,{scrollHeight:{configurable:true,value:1000},clientHeight:{configurable:true,value:400}});
   panel.scrollTop=0;
-  rows=[...rows,event(2)];await act(async()=>vi.advanceTimersByTimeAsync(30000));expect(panel.scrollTop).toBe(0);
-  panel.scrollTop=600;rows=[...rows,event(3)];await act(async()=>vi.advanceTimersByTimeAsync(30000));expect(panel.scrollTop).toBe(1000);
+  rows=[...rows,event(2)];await act(async()=>vi.advanceTimersByTimeAsync(GROUP_FALLBACK_POLL_MS));expect(panel.scrollTop).toBe(0);
+  panel.scrollTop=600;rows=[...rows,event(3)];await act(async()=>vi.advanceTimersByTimeAsync(GROUP_FALLBACK_POLL_MS));expect(panel.scrollTop).toBe(1000);
   expect(container.querySelector('.approval-card')?.textContent).toContain('Read the weather');
   const field=container.querySelector<HTMLTextAreaElement>('#group-message')!;
   panel.scrollTop=0;

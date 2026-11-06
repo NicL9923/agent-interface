@@ -9,6 +9,15 @@ type SessionEvents = {
   /** The open assistant left this person's roster, as when another member made it personal. */
   onBotGone(botId: string): void;
 };
+/**
+ * Dispatched on window when this person's group catalog may have changed: the household stream's
+ * `groups` notice, a roster notice, or the stream (re)connecting, since notices sent while it was
+ * down are lost.
+ */
+export const GROUPS_EVENT = "agent-interface:groups";
+/** Group chat reads that only cover a notice the stream missed. */
+export const GROUP_FALLBACK_POLL_MS = 5 * 60_000;
+const groupsChanged = () => window.dispatchEvent(new Event(GROUPS_EVENT));
 /** A bootstrap this recent already answers a focus or visibility change, such as alt-tabbing back. */
 const FRESH_MS = 5_000;
 export function useSession(events: SessionEvents) {
@@ -142,7 +151,7 @@ export function useSession(events: SessionEvents) {
   }, [refresh]);
   useEffect(() => {
     if (!boot?.user.id || auth) return;
-    const stream = changeStream("/events", () => void refresh());
+    const stream = changeStream("/events", () => { void refresh(); groupsChanged(); }, undefined, { groups: groupsChanged });
     const wake = () => {
       if (document.visibilityState !== "hidden" && navigator.onLine !== false) stream.open();
       else stream.close();

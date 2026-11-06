@@ -52,6 +52,7 @@
   "src/server/event-routes.ts",
   "src/server/event-stream.ts",
   "src/server/experience.ts",
+  "src/server/group-catalog-watch.ts",
   "src/server/group-latest.ts",
   "src/server/group-watch.ts",
   "src/server/health.ts",

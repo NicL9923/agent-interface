@@ -146,6 +146,20 @@ that read when this app writes an assistant, a routine, an integration, a Hermes
 upgrade or a connection retry, and never keeps a disconnected one, so a change
 made outside this app can take up to 1.5 seconds longer to show.
 
+The household stream, with or without `?group=`, also sends `event: groups` with
+`data: groups` when that person's visible group catalog changes: a room added,
+removed, renamed or with changed members, or a room's newest message. Refetch
+`GET /api/groups`; the notice carries no room IDs or previews. Visibility follows
+`GET /api/groups`, so a room with someone else's private assistant never notifies.
+One server check serves every open stream: it reads the Hermes catalog at most once
+every 30 seconds, only while a household stream is open, and compares each person's
+catalog with the last one, so an unchanged catalog sends nothing. A group write
+through this app (create, send, stop, settings, approval) or an assistant change
+checks within about a second instead. There is no notice on open, and notices sent
+while disconnected are lost, so fetch on open, reconnect and foreground. A fallback
+poll of about 5 minutes covers a missed notice; older servers send no `groups`
+events, so keep a 30-second poll for them.
+
 `GET /api/events?group=ROOM_ID` also watches one group chat. The server checks the
 room like `GET /api/groups/:id`, answering 404 for a room the person cannot see,
 before the stream opens. While any stream watches a room, the server reads that

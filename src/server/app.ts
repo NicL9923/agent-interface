@@ -32,6 +32,7 @@ import { installClientErrorRoutes } from "./client-errors.js";
 import { installEventRoutes } from "./event-routes.js";
 import { installSnapshotInvalidation, runtimeSnapshots } from "./runtime-snapshot.js";
 import { GroupWatch } from "./group-watch.js";
+import { GroupCatalogWatch } from "./group-catalog-watch.js";
 import { loggerOptions } from "./logging.js";
 import { errorHandler, httpError } from "./http-error.js";
 import { defaultMetadataProbe, HealthMonitor, installHealthRoutes, type MetadataProbe } from "./health.js";
@@ -107,6 +108,7 @@ export async function createApp(
   await installDiscoveryRoutes(app, runtime, store, roster);
   const collaboration = await installCollaborationRoutes(app, runtime, store, roster);
   const groups = new GroupWatch(runtime);
+  const catalogs = collaboration.catalogRead && new GroupCatalogWatch(collaboration.catalogRead);
   await installVaultRoutes(app, runtime);
   await registerVoiceRoutes(app, runtime, { visible: (botId, userId) => visibleTo(store, botId, userId),
     redact: async (message, userId) => (await redactAgents(store, roster, userId)).message(message) });
@@ -116,7 +118,7 @@ export async function createApp(
   const streams = new Set<() => void>();
   installConversationRoutes(app, { config, runtime, store, roster, streams, requireCapability });
   installSnapshotInvalidation(app, snapshot);
-  installEventRoutes(app, { config, runtime, store, roster, directory, snapshot, room: collaboration.room, groups, streams });
+  installEventRoutes(app, { config, runtime, store, roster, directory, snapshot, room: collaboration.room, groups, catalogs, streams });
   installRoutineRoutes(app, { config, runtime, store, roster, requireCapability });
   // The worker owns the aggregate so a push and this read agree; handlers run after it exists.
   installPushRoutes(app, { config, runtime, store, live: () => worker.live });
@@ -154,6 +156,7 @@ export async function createApp(
   }
   app.addHook("onClose", async () => {
     groups.close();
+    catalogs?.close();
     health.stop();
     await worker.stop();
     await runtime.close();
