@@ -151,7 +151,9 @@ export function useSession(events: SessionEvents) {
   }, [refresh]);
   useEffect(() => {
     if (!boot?.user.id || auth) return;
-    const stream = changeStream("/events", () => { void refresh(); groupsChanged(); }, undefined, { groups: groupsChanged });
+    // The server sends `groups` once on every connect and on each catalog change, so connecting or a
+    // roster notice does not read the group catalog itself.
+    const stream = changeStream("/events", () => { void refresh(); }, undefined, { groups: groupsChanged });
     const wake = () => {
       if (document.visibilityState !== "hidden" && navigator.onLine !== false) stream.open();
       else stream.close();

@@ -47,10 +47,13 @@ export class GroupCatalogWatch {
     if (!this.seen.has(userId) && this.project) {
       try { this.seen.set(userId, this.project(userId)); } catch { /* The next read sets it. */ }
     }
-    // A starting point from an earlier check predates this stream, and its client reads the catalog as
-    // it connects, so any later change still differs from it. Without one, the first check could see a
-    // change the client's read missed and silently start from it, so that check notifies instead.
+    // Every stream hears once that its catalog is known, and clients read it on that notice rather than
+    // on connect. With a starting point from an earlier check, that is now: any later change still
+    // differs from it. Without one, it is when the first check lands, since that check could see a
+    // change the client's read missed and must not silently start from it.
     viewer.fresh = !this.seen.has(userId);
+    // After the caller's stream has opened, which finishes synchronously after this returns.
+    if (!viewer.fresh) queueMicrotask(() => { if (this.viewers.has(viewer)) viewer.changed(); });
     // The first viewer starts the checks.
     if (this.viewers.size === 1) this.schedule(0);
     let ended = false;

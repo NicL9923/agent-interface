@@ -155,8 +155,11 @@ One server check serves every open stream: it reads the Hermes catalog at most o
 every 30 seconds, only while a household stream is open, and compares each person's
 catalog with the last one, so an unchanged catalog sends nothing. A group write
 through this app (create, send, stop, settings, approval) or an assistant change
-checks within about a second instead. There is no notice on open, and notices sent
-while disconnected are lost, so fetch on open, reconnect and foreground. A fallback
+checks within about a second instead. Every connection also gets one `groups` notice
+once its catalog is known: at once when the server already has a starting point, or
+when its first check lands. Fetch on that notice rather than on connect, which would
+read twice. Notices sent while disconnected are lost, and the connect notice covers
+them. Fetch on foreground as well. A fallback
 poll of about 5 minutes covers a missed notice; older servers send no `groups`
 events, so keep a 30-second poll for them.
 

@@ -115,7 +115,7 @@ describe("group chats on home", () => {
     } finally { Reflect.deleteProperty(document, "visibilityState"); }
   });
 
-  it("reads the catalog again on the household stream's groups notice and when it reconnects, and polls only every 5 minutes", async () => {
+  it("reads the catalog again on the household stream's groups notice, which every connect brings, and polls only every 5 minutes", async () => {
     await render();
     const catalogReads = () => reads(path => path === "/groups");
     const household = [...FakeEventSource.streams].find(stream => stream.url === "/api/events")!;
@@ -133,9 +133,13 @@ describe("group chats on home", () => {
     await act(async () => household.emit("groups", "groups"));
     await advance(20);
     expect(names()).toContain("Barn raising");
-    // Notices sent while the stream was down are lost, so connecting again reads the catalog.
+    // Notices sent while the stream was down are lost. The server answers every connect with one,
+    // so the client reads on that notice instead of reading on connect as well.
     const before = catalogReads();
     await act(async () => household.connect());
+    await advance(20);
+    expect(catalogReads(), "connecting alone reads nothing").toBe(before);
+    await act(async () => household.emit("groups", "groups"));
     await advance(20);
     expect(catalogReads()).toBe(before + 1);
   });

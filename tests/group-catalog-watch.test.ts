@@ -60,16 +60,18 @@ describe("group catalog watch", () => {
     watch.close();
   });
 
-  it("starts a later viewer from the last check, so it hears only a later change", async () => {
+  it("tells a later viewer once as it joins, from the last check, then only about a later change", async () => {
     vi.useFakeTimers();
     const { catalogs, read, watch } = setup();
     watch.watch("one", vi.fn());
     await vi.advanceTimersByTimeAsync(0);
     const two = vi.fn();
     watch.watch("two", two);
-    // Joining a running watch adds no read of its own.
+    // Joining a running watch adds no read of its own, and hears at once that its catalog is known.
     await vi.advanceTimersByTimeAsync(0);
     expect(read).toHaveBeenCalledTimes(1);
+    expect(two).toHaveBeenCalledTimes(1);
+    two.mockClear();
     await vi.advanceTimersByTimeAsync(GROUP_CATALOG_POLL_MS);
     expect(two).not.toHaveBeenCalled();
     catalogs.set("two", "b2");
@@ -180,6 +182,18 @@ describe("group catalog watch", () => {
     watch.close();
   });
 
+  it("says nothing to a stream that ended before its joining notice", async () => {
+    vi.useFakeTimers();
+    const { watch } = setup();
+    watch.watch("one", vi.fn());
+    await vi.advanceTimersByTimeAsync(0);
+    const gone = vi.fn();
+    watch.watch("one", gone)();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(gone).not.toHaveBeenCalled();
+    watch.close();
+  });
+
   it("keeps what it saw when Hermes fails, and tries again at the next check", async () => {
     vi.useFakeTimers();
     const { catalogs, read, watch } = setup();
@@ -281,6 +295,22 @@ describe("groups notices on the household stream", () => {
       const reads = s.lists();
       await wait(3 * GROUP_CATALOG_POLL_MS);
       expect(s.lists(), "no stream, no checks").toBe(reads);
+    } finally { vi.useRealTimers(); await s.app.close(); }
+  });
+
+  it("tells a device that connects while another is open at once, with no extra Hermes read", async () => {
+    const s = await setup();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      const phone = await listen(s.base, "/api/events", s.one);
+      await wait(GROUP_CATALOG_WRITE_FLOOR_MS);
+      expect(notices(phone)).toBe(1);
+      const reads = s.lists();
+      const laptop = await listen(s.base, "/api/events", s.one);
+      await wait(500);
+      expect(notices(laptop)).toBe(1);
+      expect([notices(phone), s.lists()]).toEqual([1, reads]);
+      await Promise.all([phone.close(), laptop.close()]);
     } finally { vi.useRealTimers(); await s.app.close(); }
   });
 
