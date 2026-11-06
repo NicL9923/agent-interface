@@ -30,6 +30,7 @@ import { HermesUpgrades } from "./upgrades.js";
 import { installIntegrationsRoutes } from "./integrations.js";
 import { installVaultRoutes } from "./vault.js";
 import { registerVoiceRoutes } from "./voice.js";
+import { installTalkRoutes } from "./talk.js";
 import { installDiscoveryRoutes } from "./discovery.js";
 import { assertRoutineEditable, installExperienceRoutes } from "./experience.js";
 import { installComputerRoutes } from "./computer.js";
@@ -231,7 +232,8 @@ export async function createApp(
   });
   installBotRoutes(app, { runtime, store, roster, directory, requireCapability });
   const streams = new Set<() => void>();
-  installConversationRoutes(app, { config, runtime, store, roster, streams, requireCapability });
+  const conversations = installConversationRoutes(app, { config, runtime, store, roster, streams, requireCapability });
+  installTalkRoutes(app, { runtime, store, roster, directory, requireCapability, send: conversations.send });
   // Gateway frames are hints, not roster changes. Compare each viewer's visible
   // projection after one shared, cheap evaluation, at most once per second.
   const rosterListeners = new Set<(bots: Bot[], nativeAvatar: boolean) => void>();

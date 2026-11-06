@@ -129,6 +129,8 @@ export class Store {
   swapPresentation(...args: Parameters<PresentationRepository["swapPresentation"]>) { return this.presentations.swapPresentation(...args); }
   restorePresentation(...args: Parameters<PresentationRepository["restorePresentation"]>) { return this.presentations.restorePresentation(...args); }
   saveAvatar(...args: Parameters<PresentationRepository["saveAvatar"]>) { return this.presentations.saveAvatar(...args); }
+  botVoice(...args: Parameters<PresentationRepository["voice"]>) { return this.presentations.voice(...args); }
+  saveVoice(...args: Parameters<PresentationRepository["saveVoice"]>) { return this.presentations.saveVoice(...args); }
   // submissions
   intent(...args: Parameters<SubmissionRepository["intent"]>) { return this.submissions.intent(...args); }
   claimRetry(...args: Parameters<SubmissionRepository["claimRetry"]>) { return this.submissions.claimRetry(...args); }
