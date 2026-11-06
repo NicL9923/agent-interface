@@ -311,6 +311,7 @@ describe("talk answer states", () => {
   it("describes only the assistant it speaks for", () => {
     const persona = talkPersona({ name: "Ranch\u0000 Hand\u202e", description: "x".repeat(1000) });
     expect(persona).toContain("Ranch Hand");
+    // oxlint-disable-next-line no-control-regex -- the test checks a control character is gone
     expect(persona).not.toMatch(/[\u0000\u202e]/);
     expect(persona).not.toContain("x".repeat(401));
   });

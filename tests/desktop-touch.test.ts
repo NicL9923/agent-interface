@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type RFB from "@novnc/novnc";
 import { attachDesktopTouch, TouchGestures, touchTuning, type TouchAction } from "../src/lib/desktop-touch";
+import { quietConsoleErrors } from "./act-guard";
 
 let actions: TouchAction[];
 let zoomed: boolean;
@@ -235,7 +236,7 @@ describe("the viewer page's touch layer", () => {
     expect(noVNC).toHaveBeenCalled();
   });
   it("stays out of the way, leaving noVNC's own gestures, if noVNC's pointer methods are gone", () => {
-    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const error = quietConsoleErrors();
     const { nullLayer, target } = viewer({ pointer: false });
     expect(nullLayer).toBeNull();
     expect(target.style.touchAction).toBe("");

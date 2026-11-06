@@ -9,7 +9,7 @@ async ({tab,panel,fixture,reset,capture,paths,geometry,workChecks,browserErrors,
     const data=getWork().triggers.items.find(item=>item.id===id) || fixture.work.triggers.items.find(item=>item.id===id) || fixture.workFixture.newTrigger;
     return section.locator("article.automation-item").filter({has:tab.getByRole("heading",{name:data.description||id,exact:true})});
   };
-  let width=390,theme="light",large=false;
+  let width=390,theme="light";
   const ensure=(value,message)=>{if(!value)throw Error(message);};
   const bounds=async target=>target.evaluate(node=>{
     const r=node.getBoundingClientRect(),v=node.closest(".settings-content").getBoundingClientRect();
@@ -18,7 +18,7 @@ async ({tab,panel,fixture,reset,capture,paths,geometry,workChecks,browserErrors,
       fullyVisible:r.top>=Math.max(0,v.top)&&r.bottom<=Math.min(innerHeight,v.bottom)&&r.left>=0&&r.right<=innerWidth};
   });
   const setup=async(options={})=>{
-    releaseRoutines();width=options.width||390;theme=options.theme||"light";large=!!options.large;
+    releaseRoutines();width=options.width||390;theme=options.theme||"light";
     const routineStarted=options.mode==="routines-loading"?nextRoutineRequest():null;
     // reset can fail first; keep its pending request timeout from becoming an unhandled rejection.
     routineStarted?.catch(()=>{});

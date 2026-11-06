@@ -4,7 +4,7 @@ import ClientWebSocket from 'ws';
 import { TALK_MODEL } from '../shared/voice.js';
 import type { ComputerAttachment, ComputerStatus } from '../shared/computer.js';
 import type { ConnectionRequestResult } from '../shared/integrations.js';
-import { withMessageOrigins, wireOrigin } from "../shared/message-origin.js";
+import { withMessageOrigins } from "../shared/message-origin.js";
 import { decodeAutomation, decodeExperience, readOperationJson } from './hermes-operation-contracts.js';
 import type { ExperienceRequest, ExperienceResult } from '../shared/experience.js';
 import type { AutomationRequest, AutomationResult } from '../shared/automation.js';
@@ -15,7 +15,7 @@ import { createModelNames } from './model-names.js';
 import { createHermesTransport, TransportError, type Connection, type HermesOptions, type Wire } from './hermes-transport.js';
 import { fileSigner, safeStagedPath, type RegisteredFile } from './hermes-files.js';
 import { deliverRooms, withDeliverRooms } from './delivery-targets.js';
-import { applyFrame, bot, emptyLiveState, exposedText, historyMessages, inflightMessage, openRequests, receipt, toolDetails, unbridged, type LiveState } from './hermes-mapping.js';
+import { applyFrame, bot, emptyLiveState, historyMessages, inflightMessage, openRequests, receipt, unbridged, type LiveState } from './hermes-mapping.js';
 
 export type { HermesOptions } from './hermes-transport.js';
 

@@ -5,7 +5,7 @@ import { assertRoutineEditable } from "./experience.js";
 import { signedIn } from './auth.js';
 import type { Routine, Runtime } from '../shared/types.js';
 import { mapLimit } from './concurrency.js';
-import type { HistoryPage, AutomationOverview, SearchHit, SavedItem, Starter, UsageSummary } from '../shared/discovery.js';
+import type { AutomationOverview, SearchHit, Starter, UsageSummary } from '../shared/discovery.js';
 import type { Store } from './store.js';
 import { notFound, redactAgents, Roster, routineById, visibleBots } from './bot-access.js';
 import { httpError } from './http-error.js';

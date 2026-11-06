@@ -1431,7 +1431,6 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
       if(stage === "after") await previewState("idle");
       await choose("Cowboy hat");
       await shot("choices-phone");
-      const range=dialog.locator('input[type="range"]').first();
       await tune();await bottom();await shot("tune-bottom-phone");
       const draft=await dialog.getByRole("radio",{name:"Pumpkin",exact:true}).isChecked();
       if(!draft)throw Error("Seasonal draft was lost while tuning.");

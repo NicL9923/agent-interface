@@ -10,7 +10,7 @@ let token;
 async function request(path, { body, headers, method = body ? "POST" : "GET" } = {}) {
   const response = await fetch(new URL(path, origin), {
     method, headers: { ...(body ? { "Content-Type": "application/json" } : {}), ...headers },
-    body: body ? JSON.stringify(body) : undefined,
+    ...(body ? { body: JSON.stringify(body) } : {}),
     redirect: "error", signal: AbortSignal.timeout(20000),
   });
   return response;

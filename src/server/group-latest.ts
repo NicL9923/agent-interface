@@ -42,7 +42,7 @@ type Read = (roomId: string, since: number) => Promise<GroupPage>;
 
 /**
  * The newest message of each room, read from Hermes only when the room's `latest_seq` moves.
- * Home polls the catalog, so a quiet household costs no log reads at all, a new room costs one,
+ * Home and the household stream's catalog check read it often, so a quiet household costs no log reads, a new room costs one,
  * and a cold start costs one per room, a few at a time. A failed read leaves that room without
  * a preview until the next catalog read tries again.
  */

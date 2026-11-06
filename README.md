@@ -106,6 +106,16 @@ Until that menu has loaded, `src/app/BotMenu.tsx` stands in for it and catches t
 right click, menu key or long press, so none is lost. `npm run build` fails when Base UI
 returns to the entry's static imports.
 
+### Crash reports
+
+A render failure anywhere outside a lazy screen shows a "Something went wrong" page with
+Reload instead of a blank screen. Chat and group drafts are written to the device on
+every edit, so a reload keeps them. While someone is signed in, the web client sends
+that crash, uncaught errors and unhandled rejections to `POST /api/client-errors`: each
+distinct report once, at most five per page load, and never chunk-load failures the
+screens already handle. The server logs each one as a `Client error` warning with the
+person's id and stores nothing. It accepts 20 reports per person every 10 minutes.
+
 ### Offline cache
 
 `scripts/build-worker.mjs` turns `scripts/service-worker.js` into `sw.js`, and
@@ -282,9 +292,12 @@ Hermes profile; a run with only a saved preview says so.
 **Group chats** lets 2–6 local assistants discuss a task in one room. Rooms are rows
 in the home list beside the assistants, with overlapping member faces, the last
 message and who said it, and its time. Rooms follow the assistants, newest message first, because assistant rows keep
-the roster's order and do not jump. Home reads Hermes's room catalog every 30 seconds while the page is visible;
-the server adds each room's newest message to it and re-reads a room's log only when the room
-has a newer message, so home never polls room logs. Home has no group unread dot, since
+the roster's order and do not jump. Home reads Hermes's room catalog when the household event stream
+says this person's rooms changed, when it reconnects or the page wakes, and every 5 minutes as a fallback.
+While any household stream is open, the server checks the catalog once for everyone at most every
+30 seconds, and right away after a group or assistant change made in the app, and tells only the people
+whose visible rooms changed. It adds each room's newest message to the catalog and re-reads a room's log
+only when the room has a newer message, so home never polls room logs. Home has no group unread dot, since
 the app keeps no read position for rooms. Choose a room to open it like a conversation
 (`?view=group&room=ID`; the old `?view=groups` link opens home). Make a group from the **+** button's
 New group chat, which opens it. Create a
@@ -415,13 +428,18 @@ External file sources open only when you choose their link.
 
 ```sh
 npm test
+npm run lint
 npm run test:py
 npm run lint:py
 npm run build
+npm run test:e2e
 python3 .agents/tools/source-state.py
 ```
 
-`npm test` runs the application tests with Vitest. `npm run test:py` runs every
+`npm test` runs the application tests with Vitest. It refuses to start on a Node
+outside the `engines` range in `package.json`, and `.npmrc` makes `npm ci` refuse too:
+older Node 24 releases hang the event-stream tests. `npm run lint` runs oxlint over the
+TypeScript and JavaScript, with warnings failing the run. `npm run test:py` runs every
 Python test file it discovers in `tests/*_test.py`, `scripts/*-test.py` and
 `scripts/spike/*_test.py`, one subprocess each, and fails if a test-looking file
 sits outside those paths. Pass file paths to run a subset, for example
@@ -432,13 +450,23 @@ without `tmux`, shows SKIP locally and fails when `CI=true`.
 `npm run lint:py` runs ruff for undefined names and likely bugs. Install the
 version pinned in `.github/requirements-ci.txt`. CI runs both in its Python job.
 
+`npm run test:e2e` runs a short Playwright smoke suite in real Chromium. Run `npm run build`
+first, and `npx playwright install chromium` once per Playwright version. `e2e/server.ts`
+starts the real app server and built client on loopback ports 4173 and 4174, in memory,
+with local sign-in and a scripted assistant, so it never contacts Hermes, Google or the
+network. It covers sign-in, sending a message and receiving the reply over the live event
+stream, the service worker opening the app offline and recovering, and no page errors,
+console errors or CSP violation reports. It does not cover real Hermes behavior, push
+delivery, Google sign-in, the iOS app, or other browsers. CI runs it in the `browser` job
+and uploads the report and traces when it fails.
+
 The [validation ledger](docs/ledger/README.md) distinguishes application tests,
 real Hermes execution using a deterministic local provider, visual checks, and
 acceptance that needs a physical phone or configured external service. Tests with
 a runtime double do not prove Hermes integration. Simulated push checks do not
 prove delivery to an installed phone app while it is closed.
 
-Pull requests run the application tests, production build and Python syntax checks
+Pull requests run the application tests, lint, production build and Python syntax checks
 on both supported Node versions. Native builds and simulator tests run on the
 Mac mini using Xcode 27.0. The isolated Hermes probes remain a separate
 explicit run using the capability matrix's reproduction instructions.

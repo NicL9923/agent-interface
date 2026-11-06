@@ -9,7 +9,7 @@ import { TodayPanel } from "./components/TodayPanel";
 import "./components/discovery.css";
 import { hasDestination, initialPanel, initialRoom, initialView, startsOnToday, useUrlSync } from "./app/view";
 import type { Panel, View } from "./app/view";
-import { useSession } from "./app/use-session";
+import { GROUP_FALLBACK_POLL_MS, GROUP_UNNOTIFIED_POLL_MS, GROUPS_EVENT, useSession } from "./app/use-session";
 import { useDraft, useDraftPersistence } from "./app/use-draft";
 import { useConversation } from "./app/use-conversation";
 import { useChatPresence } from "./app/use-chat-presence";
@@ -72,11 +72,13 @@ export function App() {
   const toast = useToast(session.auth ? undefined : userId);
   useUrlSync(view, panel, botId, userId, roomId);
   // Home lists the household's group chats beside its assistants. The catalog carries each room's
-  // newest message, so one slow poll serves every row; no room's log is read from here.
-  // A poll that finds nothing new returns the copy already held, so home does not redraw for it.
+  // newest message, so one read serves every row; no room's log is read from here. The household
+  // stream's notices drive reads; the slow poll only covers one it missed.
+  // A read that finds nothing new returns the copy already held, so home does not redraw for it.
   const groupsHeld = useRef<{ json: string; value: { userId: string; catalog: GroupCatalog } }>(undefined);
   const groupLoad = useResource<{ userId: string; catalog: GroupCatalog }>(userId ? "/groups" : null, {
-    deps: [userId], pollMs: 30_000, wake: true,
+    // A server that never sends `groups` notices gets the 30-second poll home always had.
+    deps: [userId], pollMs: session.groupsNotified ? GROUP_FALLBACK_POLL_MS : GROUP_UNNOTIFIED_POLL_MS, wake: true,
     load: async (path, signal) => {
       const catalog = await api<GroupCatalog>(path, { signal });
       const json = JSON.stringify([userId, catalog]);
@@ -89,6 +91,15 @@ export function App() {
   const catalog = userId && groupLoad.data?.userId === userId ? groupLoad.data.catalog : null;
   const rooms = useMemo(() => orderRooms(catalog?.rooms ?? []), [catalog]);
   const reloadGroups = useStableCallback(() => void groupLoad.reload());
+  useEffect(() => {
+    if (!userId) return;
+    window.addEventListener(GROUPS_EVENT, reloadGroups);
+    window.addEventListener("agent-interface:reconnect", reloadGroups);
+    return () => {
+      window.removeEventListener(GROUPS_EVENT, reloadGroups);
+      window.removeEventListener("agent-interface:reconnect", reloadGroups);
+    };
+  }, [userId, reloadGroups]);
   const pendingCreate = useMemo(() => userId && !creatingGroup ? pendingGroup(userId) : null, [userId, creatingGroup]);
   const notifications = useDeviceNotifications(userId, boot?.vapidPublicKey);
   const { draft, setDraft, draftReady, uploads, previews, uploading, upload, retryUpload, cancelUpload, clearUploads } = useDraft({ botId, userId, identityEpoch, setError });
@@ -357,7 +368,7 @@ export function App() {
             onSettings={bot => open({ kind: "settings", bot })} onClose={() => closePanels("details")} />
         </Loading>
       )}
-      {panel?.kind === "routine" && <Loading><RoutineResults key={`${boot.user.id}:${panel.botId}:${panel.routineId}`} botId={panel.botId} routineId={panel.routineId} userId={boot.user.id} resultId={panel.resultId} onClose={() => closePanels("routine")} /></Loading>}
+      {panel?.kind === "routine" && <Loading><RoutineResults key={`${boot.user.id}:${panel.botId}:${panel.routineId}`} botId={panel.botId} routineId={panel.routineId} resultId={panel.resultId} onClose={() => closePanels("routine")} /></Loading>}
       {panel?.kind === "integrations" && <Loading><IntegrationsPanel key={`integrations:${boot.user.id}`} bots={boot.bots} accountScope={boot.user.id} onClose={() => closePanels("integrations")} /></Loading>}
       {computerLoaded && <Loading><ComputerPanel key={`computer:${boot.user.id}`} initialTab={panel?.kind === "computer" ? panel.tab : undefined} open={panel?.kind === "computer"}
         take={panel?.kind === "computer" ? panel.take : undefined} onClose={() => closePanels("computer")} /></Loading>}

@@ -97,7 +97,7 @@ export function useResource<T>(path: string | null, options: ResourceOptions<T> 
     if (!active) { setLoading(false); return; }
     void load(false);
     const quiet = () => void load(true);
-    const stops = [pollMs ? pollWhileVisible(quiet, pollMs) : undefined];
+    const stops: (() => void)[] = [];
     if (wake) {
       const woken = () => { if (document.visibilityState !== "hidden") quiet(); };
       window.addEventListener("focus", woken);
@@ -112,8 +112,14 @@ export function useResource<T>(path: string | null, options: ResourceOptions<T> 
     return () => {
       inflight.current?.abort();
       inflight.current = undefined;
-      for (const stop of stops) stop?.();
+      for (const stop of stops) stop();
     };
-  }, [load, active, pollMs, wake, ...deps]);
+  }, [load, active, wake, ...deps]);
+  // Its own effect, so a new interval restarts only the timer: the poll's first read comes one
+  // interval later, never at once, and the load above does not run again.
+  useEffect(() => {
+    if (!active || !pollMs) return;
+    return pollWhileVisible(() => void load(true), pollMs);
+  }, [load, active, pollMs, ...deps]);
   return { data, error, loading, reload, setData: replace, invalidate };
 }
