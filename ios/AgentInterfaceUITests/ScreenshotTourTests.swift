@@ -939,7 +939,7 @@ import CryptoKit
         try String(contentsOf: auditURL, encoding: .utf8).split(separator: "\n").map { try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any]) }
       }
       func headerVisible(_ header: XCUIElement) {
-        XCTAssertTrue(header.isHittable)
+        XCTAssertTrue(header.waitUntilHittable())
         let bar = app.navigationBars.firstMatch
         if bar.exists { XCTAssertGreaterThanOrEqual(header.frame.minY, bar.frame.maxY) }
       }
@@ -962,7 +962,7 @@ import CryptoKit
           }
         }
         XCTAssertEqual(observed, headers)
-        let done = board.buttons["Done (1)"]; XCTAssertTrue(done.isHittable)
+        let done = board.buttons["Done (1)"]; XCTAssertTrue(done.waitUntilHittable())
         XCTAssertFalse(board.buttons["automation.task.t_00000001"].exists, "Done starts collapsed")
         reveal(heading, board, up: false); headerVisible(heading); try capture(variant)
         press(done, board)
@@ -1009,7 +1009,7 @@ import CryptoKit
         reveal(detail.buttons["Start task"], detail); try capture("task-detail-actions")
         press(detail.buttons["Add an optional start note"], detail)
         let noteLabel = detail.staticTexts["Start note (optional)"]
-        reveal(noteLabel, detail); XCTAssertTrue(noteLabel.isHittable)
+        reveal(noteLabel, detail); XCTAssertTrue(noteLabel.waitUntilHittable())
         let noteFooter = detail.staticTexts["Hermes checks the task's current state and dependencies before changing it."]
         if !noteFooter.hasFrame { reveal(noteFooter, detail) }
         revealRange(noteLabel, through: noteFooter, detail)
@@ -1186,7 +1186,7 @@ import CryptoKit
         let query = app.buttons.matching(NSPredicate(format: "label == %@", label))
         XCTAssertTrue(query.firstMatch.waitForExistence(timeout: 5))
         for _ in 0..<10 {
-          let visible = query.allElementsBoundByIndex.filter { $0.isHittable }
+          let visible = query.allElementsBoundByIndex.filter { $0.canTap }
           if visible.count == 1 { visible[0].tapWhenReady(); return }
           usleep(100_000)
         }
@@ -1351,7 +1351,7 @@ import CryptoKit
         let query = app.buttons.matching(NSPredicate(format: "label == %@", label))
         XCTAssertTrue(query.firstMatch.waitForExistence(timeout: 5))
         for _ in 0..<10 {
-          let visible = query.allElementsBoundByIndex.filter { $0.isHittable }
+          let visible = query.allElementsBoundByIndex.filter { $0.canTap }
           if visible.count == 1 { visible[0].tapWhenReady(); return }
           usleep(100_000)
         }
@@ -1525,7 +1525,7 @@ import CryptoKit
     func landing(_ name: String, _ element: XCUIElement, in container: XCUIElement) {
       let present = element.exists, frame = present && element.hasFrame ? String(describing: element.frame) : "unmaterialized"
       let intersects = present && element.hasFrame && element.frame.intersects(container.frame)
-      print("DESIGN_WORK_TRIGGER_LANDING \(name) exists=\(present) frame=\(frame) viewport=\(container.frame) intersects=\(intersects) hittable=\(present && element.isHittable)")
+      print("DESIGN_WORK_TRIGGER_LANDING \(name) exists=\(present) frame=\(frame) viewport=\(container.frame) intersects=\(intersects) hittable=\(present && element.canTap)")
     }
     func shot(_ name: String) throws {
       guard name.hasPrefix("trigger-"), !FileManager.default.fileExists(atPath: directory.appendingPathComponent("\(name).png").path) else { XCTFail("Invalid or duplicate W3 image name"); return }
@@ -1556,7 +1556,7 @@ import CryptoKit
       XCTAssertTrue(query.firstMatch.waitForExistence(timeout: 5))
       XCTAssertEqual(app.buttons.matching(NSPredicate(format: "label == %@", excluded)).count, 0, "Routine menu must hide \(excluded)")
       for _ in 0..<10 {
-        let visible = query.allElementsBoundByIndex.filter { $0.isHittable }
+        let visible = query.allElementsBoundByIndex.filter { $0.canTap }
         if visible.count == 1 { visible[0].tapWhenReady(); return }
         usleep(100_000)
       }
@@ -1596,7 +1596,7 @@ import CryptoKit
     switch variant {
     case "trigger-list", "trigger-list-dark", "trigger-list-large-text":
       let first = row(try XCTUnwrap(freezer["description"] as? String))
-      XCTAssertTrue(first.isHittable, "Collapsed trigger list must show its first row before capture")
+      XCTAssertTrue(first.waitUntilHittable(), "Collapsed trigger list must show its first row before capture")
       if variant == "trigger-list" { try shot("trigger-list") }
       if variant == "trigger-list-dark" && !pad { try shot("trigger-list-dark") }
       if variant == "trigger-list-large-text" { try shot("trigger-list-large-text") }
@@ -1929,7 +1929,7 @@ import CryptoKit
     func landing(_ name: String, _ element: XCUIElement, in container: XCUIElement) {
       let present = element.exists, frame = present && element.hasFrame ? String(describing: element.frame) : "unmaterialized"
       let intersects = present && element.hasFrame && element.frame.intersects(container.frame)
-      print("DESIGN_WORK_TRIGGER_AFTER_LANDING \(name) exists=\(present) frame=\(frame) viewport=\(container.frame) intersects=\(intersects) hittable=\(present && element.isHittable)")
+      print("DESIGN_WORK_TRIGGER_AFTER_LANDING \(name) exists=\(present) frame=\(frame) viewport=\(container.frame) intersects=\(intersects) hittable=\(present && element.canTap)")
     }
     func shot(_ name: String) throws {
       guard name.hasPrefix("trigger-"), !FileManager.default.fileExists(atPath: directory.appendingPathComponent("\(name).png").path) else { XCTFail("Invalid or duplicate W3 image name"); return }
@@ -2152,7 +2152,7 @@ import CryptoKit
       XCTAssertTrue(query.firstMatch.waitForExistence(timeout: 5))
       XCTAssertEqual(app.buttons.matching(NSPredicate(format: "label == %@", excluded)).count, 0, "Routine menu must hide \(excluded)")
       for _ in 0..<10 {
-        let visible = query.allElementsBoundByIndex.filter { $0.isHittable }
+        let visible = query.allElementsBoundByIndex.filter { $0.canTap }
         if visible.count == 1 { visible[0].tapWhenReady(); return }
         usleep(100_000)
       }
@@ -2229,12 +2229,12 @@ import CryptoKit
     switch variant {
     case "trigger-list", "trigger-list-dark", "trigger-list-large-text":
       let first = row(try XCTUnwrap(freezer["description"] as? String))
-      XCTAssertTrue(first.isHittable, "Collapsed trigger list must show its first row before capture")
+      XCTAssertTrue(first.waitUntilHittable(), "Collapsed trigger list must show its first row before capture")
       if variant == "trigger-list" {
         for trigger in triggers {
           let id = try XCTUnwrap(trigger["id"] as? String)
           let item = form.buttons["automation.trigger.\(id)"]
-          XCTAssertTrue(item.exists && item.isHittable && form.frame.contains(item.frame), "All three trigger rows must be fully visible: \(id)")
+          XCTAssertTrue(item.exists && item.canTap && form.frame.contains(item.frame), "All three trigger rows must be fully visible: \(id)")
           XCTAssertGreaterThanOrEqual(item.frame.height, 44)
         }
         try shot("trigger-list")
@@ -2274,7 +2274,7 @@ import CryptoKit
         let pickerQuery = editor.buttons.matching(identifier: "automation.triggerRoutine")
         print("DESIGN_W3_STAGE AX-bottom routine-picker reveal")
         reveal(pickerQuery.firstMatch, editor); let picker = unique(pickerQuery, "routine picker")
-        XCTAssertTrue(picker.isHittable); XCTAssertTrue(app.keyboards.firstMatch.exists, "The AX editor capture must include the keyboard.")
+        XCTAssertTrue(picker.waitUntilHittable()); XCTAssertTrue(app.keyboards.firstMatch.exists, "The AX editor capture must include the keyboard.")
         try shot("trigger-create-large-text-bottom")
       }
       create(editor)
@@ -3192,7 +3192,7 @@ import CryptoKit
         XCTAssertTrue(app.buttons["Discard changes"].waitForExistence(timeout: 5))
         try capture("settings-discard-confirmation")
         if stage == "after" {
-          XCTAssertTrue(app.buttons["confirmationKeep"].isHittable)
+          XCTAssertTrue(app.buttons["confirmationKeep"].waitUntilHittable())
           app.buttons["confirmationKeep"].tapWhenReady()
           XCTAssertTrue(form.exists, "Keeping unsaved changes leaves the editor open")
           XCTAssertFalse(app.staticTexts["Assistant saved."].exists)

@@ -27,6 +27,19 @@ it("shows the model's display name with its provider mark under the name in Adva
   expect(chip()?.closest(".chat-identity")).toBeNull();
   expect(mount.container.querySelector(".chat-identity")?.textContent).toBe("Ranch hand");
 });
+it("opens details from the avatar too, while the name button stays the one control to tab to", async () => {
+  const onDetails = vi.fn();
+  await mount.render(createElement(ChatHeader, { view: "conversation", boot: boot("advanced"), selected: bot, avatarState: "idle", railOpen: false,
+    onOpenRail: vi.fn(), onDetails, onModelSaved: vi.fn() }));
+  await act(async () => { await vi.dynamicImportSettled(); });
+  const avatar = mount.container.querySelector<HTMLElement>(".chat-identity-avatar")!;
+  expect(avatar.getAttribute("aria-hidden")).toBe("true");
+  expect(avatar.querySelector("button, [tabindex]")).toBeNull();
+  // The chip sits beside the name button, not over a spare line inside it.
+  expect(mount.container.querySelector(".chat-identity .chat-summary, .chat-model-reserve")).toBeNull();
+  await act(async () => avatar.click());
+  expect(onDetails).toHaveBeenCalledWith(bot);
+});
 it("never shows the model in Simple", async () => {
   await render("simple");
   expect(chip()).toBeNull();

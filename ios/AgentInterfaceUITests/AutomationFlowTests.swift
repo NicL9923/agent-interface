@@ -567,7 +567,7 @@ import CryptoKit
     XCTAssertTrue(menu.firstMatch.waitForExistence(timeout: 5))
     var selected = false
     for _ in 0..<10 {
-      let visible = menu.allElementsBoundByIndex.filter { $0.isHittable }
+      let visible = menu.allElementsBoundByIndex.filter { $0.canTap }
       if visible.count == 1 { visible[0].tapWhenReady(); selected = true; break }
       usleep(100_000)
     }

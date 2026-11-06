@@ -56,16 +56,19 @@ export function ChatHeader({ view, boot, selected, room, avatarState, offline = 
       </button>
       {view === "group" ? <div className="chat-title"><h1>{room?.name ?? "Group chat"}</h1><p>{room ? memberNames(room) : "Two to six assistants in one conversation"}</p></div>
         : view !== "conversation" ? <div className="chat-title"><h1>{titles[view][0]}</h1><p>{titles[view][1]}</p></div> : selected ? (
-        <div className="chat-identity-wrap">
+        /* Avatar, name and model chip each own a grid cell, so no control's box covers another's. */
+        <div className={`chat-identity-wrap${model ? " with-model" : ""}`}>
+          {/* A larger place to click for pointers; the name button is the one control for keyboards and screen readers. */}
+          <span className="chat-identity-avatar" aria-hidden="true" onClick={() => onDetails(selected)}>
+            <Avatar avatar={selected.avatar} state={avatarState === "blocked" ? "idle" : avatarState} size={42} offline={offline} name={selected.name} botId={selected.id} />
+          </span>
           <h1 className="chat-identity-heading">
             <button className="chat-identity" aria-haspopup="dialog" aria-label={selected.name}
               title="Details, pin, artifacts and settings" onClick={() => onDetails(selected)}>
-              <Avatar avatar={selected.avatar} state={avatarState === "blocked" ? "idle" : avatarState} size={42} offline={offline} name={selected.name} botId={selected.id} />
               <span className="chat-title">
                 {/* The chevron follows the name, so it never floats between the name and a wider model chip. */}
                 <span className="chat-name-line"><span className="chat-name">{selected.name}</span><Icon name="chevron" size={16} className="chat-identity-chevron" /></span>
-                {/* The chip is its own control, so it sits over this line beside the button rather than inside it. */}
-                {model ? <span className="chat-model-reserve" aria-hidden="true" /> : <span className="chat-summary">{botSummary(selected)}</span>}
+                {!model && <span className="chat-summary">{botSummary(selected)}</span>}
               </span>
             </button>
           </h1>

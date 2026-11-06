@@ -24,7 +24,6 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
     }) });
   });
   const tab = await context.newPage();
-  // Header clicks target the avatar edge: the Advanced model chip overlays the middle of that button.
   // Open a settings section by label in either layout: tabs on wide screens, the section list on phones.
   const openSection = async (scope, label) => {
     await scope.locator('nav[aria-label="Settings sections"], button[aria-label="All settings"]').first().waitFor();
@@ -515,7 +514,7 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
         await tab.goto(`${origin.origin}/?bot=ranch`);
         await tab.evaluate(({large,theme})=>{localStorage.clear();sessionStorage.clear();document.documentElement.style.fontSize=large?"200%":"";document.documentElement.dataset.theme=theme;},{large,theme});
         const initialWrites=workSubmissions.length;
-        await tab.locator('.chat-header [title="Details, pin, artifacts and settings"]').click({position:{x:12,y:12}});
+        await tab.locator('.chat-header [title="Details, pin, artifacts and settings"]').click();
         await tab.locator(".bot-details").getByRole("button",{name:"Settings",exact:true}).click();
         await dialog.waitFor();
         await openSection(dialog,"Automation");
@@ -1036,7 +1035,7 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
         await tab.emulateMedia({colorScheme:theme});
         await tab.goto(`${origin.origin}/?bot=ranch`);
         await tab.evaluate(({large,theme})=>{document.documentElement.style.fontSize=large?"200%":"";document.documentElement.dataset.theme=theme;},{large,theme});
-        await tab.locator('.chat-header [title="Details, pin, artifacts and settings"]').click({position:{x:12,y:12}});
+        await tab.locator('.chat-header [title="Details, pin, artifacts and settings"]').click();
         await tab.locator(".bot-details").getByRole("button",{name:"Settings",exact:true}).click();
         await dialog.waitFor();
         await openSection(dialog,"Memory & learning");
@@ -1228,7 +1227,7 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
       // Tools and Skills are checklists on the Behavior section.
       const catalog = kind => dialog.locator(`.catalog-editor[aria-label="${kind==="skills"?"Skills":"Tools"}"]`);
       const settings = async kind => {
-        await tab.locator('.chat-header [title="Details, pin, artifacts and settings"]').click({position:{x:12,y:12}});
+        await tab.locator('.chat-header [title="Details, pin, artifacts and settings"]').click();
         await tab.locator(".bot-details").getByRole("button",{name:"Settings",exact:true}).click();
         await dialog.waitFor();
         await openSection(dialog,"Behavior");
@@ -1387,7 +1386,7 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
         await tab.emulateMedia({colorScheme:theme});
         await tab.goto(`${origin.origin}/?bot=ranch`);
         await tab.evaluate(({large,theme})=>{document.documentElement.style.fontSize=large?"200%":"";document.documentElement.dataset.theme=theme;},{large,theme});
-        await tab.locator('.chat-header [title="Details, pin, artifacts and settings"]').click({position:{x:12,y:12}});
+        await tab.locator('.chat-header [title="Details, pin, artifacts and settings"]').click();
         await tab.locator(".bot-details").getByRole("button",{name:"Settings",exact:true}).click();
         await openSection(dialog,"Profile");
         await dialog.locator(".avatar-stage").waitFor();
@@ -1528,7 +1527,7 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
       const openEdit = async () => {
         settingsBots=structuredClone(fixture.bots);
         await tab.goto(`${origin.origin}/?bot=ranch`);
-        await tab.locator('.chat-header [title="Details, pin, artifacts and settings"]').click({position:{x:12,y:12}});
+        await tab.locator('.chat-header [title="Details, pin, artifacts and settings"]').click();
         await tab.locator(".bot-details").getByRole("button",{name:"Settings",exact:true}).click();
         await dialog.waitFor();
         // Phones open on the section list. Load and unsupported states have no sections to open.
@@ -1648,7 +1647,7 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
       const profile = tab.locator(".bot-details"), artifacts = tab.locator(".artifacts-dialog");
       const openProfile = async () => {
         await tab.goto(`${origin.origin}/?bot=ranch`);
-        await tab.locator('.chat-header [title="Details, pin, artifacts and settings"]').click({position:{x:12,y:12}}); await profile.waitFor();
+        await tab.locator('.chat-header [title="Details, pin, artifacts and settings"]').click(); await profile.waitFor();
       };
       const openFiles = async () => { await profile.getByRole("button",{name:/^Artifacts/}).click(); await artifacts.waitFor(); };
       for (const [name,width,height,theme] of [
