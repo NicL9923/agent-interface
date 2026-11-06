@@ -46,6 +46,11 @@ it('stops a running routine for someone who can see it, and leaves its schedule 
   expect(s.stopRoutineRun).toHaveBeenCalledWith('shared','routine');expect(s.setRoutineEnabled).not.toHaveBeenCalled();expect(s.saveRoutine).not.toHaveBeenCalled();
   expect((await stop('missing')).statusCode).toBe(404);
   expect((await stop('routine',{cookie:s.headers.cookie,origin:s.headers.origin})).statusCode).toBe(403);
+  // A trial run is exactly a run someone may want to stop, so its edit lock does not apply.
+  s.store.rememberRoutineTrial('trial-request','one','routine','shared');
+  s.experienceRequest.mockImplementation((async()=>({requestId:'trial-request',routineId:'routine',botId:'shared',status:'accepted'})) as never);
+  expect((await s.app.inject({url:'/api/routines/routine/state',method:'PATCH',headers:s.headers,payload:{enabled:false}})).statusCode).toBe(409);
+  expect((await stop('routine')).statusCode).toBe(200);
 });
 it('offers only enabled tool starters and always leaves sending to the composer',async()=>{
   const s=await setup();const response=await s.app.inject({url:'/api/bots/shared/starters',headers:s.headers});expect(response.json().map((row:any)=>row.id)).toEqual(['meals','document','server']);

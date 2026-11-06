@@ -323,6 +323,11 @@ def _iso(value):
 
 # Hermes job and ledger words, normalized for the app. A delivery failure still ran.
 # A run stopped on request, or one Hermes skipped while it was off, is neither a success nor a failure.
+# A trial's native execution states that end it. Stop run cancels one, which must end the
+# trial's wait and release its maintenance reservation; it reads as a failed trial with its own message.
+_TRIAL_OUTCOME = {"completed": "completed", "failed": "failed", "cancelled": "failed", "unknown": "uncertain"}
+# Attempts that ended, which a run's history row can be. A stopped or missed one ended too.
+_FINISHED_ATTEMPTS = ("completed", "failed", "cancelled", "missed")
 _LEDGER_STATUS = {"completed": "succeeded", "failed": "failed", "claimed": "running", "running": "running",
                   "cancelled": "stopped", "missed": "missed"}
 _JOB_STATUS = {"ok": "succeeded", "delivery_queued": "succeeded", "delivery_failed": "succeeded",
@@ -375,13 +380,13 @@ def run_outcome(row, attempts, ledger, job, newest, now=None):
         # Native `exec:N` is N's position in the whole attempts list, unknown attempts included.
         index = int(stem)
         picked = attempts[index] if index < len(attempts) and isinstance(attempts[index], dict) else None
-        if picked is not None and picked.get("status") in ("completed", "failed"):
+        if picked is not None and picked.get("status") in _FINISHED_ATTEMPTS:
             attempt = ledger.get(str(picked.get("id"))) or picked
     elif started and stem != "latest":
         candidates = []
         for a in attempts:
             claimed, finished = _epoch(a.get("claimed_at")), _epoch(a.get("finished_at"))
-            if a.get("status") not in ("completed", "failed") or claimed is None or started + 0.001 < int(claimed):
+            if a.get("status") not in _FINISHED_ATTEMPTS or claimed is None or started + 0.001 < int(claimed):
                 continue
             if finished is not None and started > finished + 300:
                 continue
@@ -583,10 +588,12 @@ class RoutineRuns:
                 execution = get_execution(receipt["executionId"])
             if execution:
                 receipt["ownerStatus"] = execution["status"]
-                if execution["status"] in ("completed", "failed", "unknown"):
-                    receipt.update(status={"completed": "completed", "failed": "failed", "unknown": "uncertain"}[execution["status"]],
+                if execution["status"] in _TRIAL_OUTCOME:
+                    receipt.update(status=_TRIAL_OUTCOME[execution["status"]],
                         finishedAt=execution.get("finished_at") or timestamp(),
-                        message="Hermes finished this trial. Open View results to read its output." if execution["status"] == "completed" else "Review the native trial results before trying again.")
+                        message="Hermes finished this trial. Open View results to read its output." if execution["status"] == "completed"
+                            else "This trial was stopped before it finished." if execution["status"] == "cancelled"
+                            else "Review the native trial results before trying again.")
                 with self.journal.lock, self.journal.db:
                     self.journal.db.execute("UPDATE experience_runs SET receipt=? WHERE request_id=? AND json_extract(receipt,'$.status') IN ('accepted','uncertain')", (json.dumps(receipt), data["requestId"]))
         return receipt
@@ -678,9 +685,11 @@ class RoutineRuns:
                     status, message = "uncertain", "Hermes lost the native execution receipt. Review canonical results before trying again."
                     break
                 native_status = execution.get("status")
-                if native_status in ("completed", "failed", "unknown"):
-                    status = {"completed": "completed", "failed": "failed", "unknown": "uncertain"}[native_status]
-                    message = "Hermes finished this trial. Open the assistant for its results." if status == "completed" else "Hermes could not confirm a completed trial. Review the native results before trying again."
+                if native_status in _TRIAL_OUTCOME:
+                    status = _TRIAL_OUTCOME[native_status]
+                    message = ("Hermes finished this trial. Open the assistant for its results." if status == "completed"
+                               else "This trial was stopped before it finished." if native_status == "cancelled"
+                               else "Hermes could not confirm a completed trial. Review the native results before trying again.")
                     break
                 time.sleep(.25)
         except ExperienceError as exc:

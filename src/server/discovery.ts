@@ -94,11 +94,12 @@ export async function installDiscoveryRoutes(app: FastifyInstance, runtime: Runt
     return {ok:true};
   });
   // Stopping a run is like pausing: it never sends anything anywhere, so no delivery check applies.
+  // It is allowed during a trial, which is exactly a run someone may want to stop; the trial then ends.
   apiRoute(app, "POST /routines/:id/stop", {}, async req => {
     const routineId = z.object({id}).parse(req.params).id;
     const row=routineById(await runtime.routines(),routineId,store,signedIn(req).id);
     if(!row)throw httpError(404,'Routine not found');
-    await bot(signedIn(req).id,row.botId);await assertRoutineEditable(runtime,store,routineId,row.botId);
+    await bot(signedIn(req).id,row.botId);
     if(!runtime.stopRoutineRun)throw httpError(409,'This integration cannot stop a routine run.');
     return { stopped: await runtime.stopRoutineRun(row.botId, routineId) };
   });

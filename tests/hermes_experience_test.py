@@ -377,6 +377,20 @@ class TrialTests(unittest.TestCase):
         self.assertEqual(self.runs.lookup(self.data)['status'],'completed')
         self.assertFalse(self.job['enabled'])
         self.runs.start(self.data); self.assertEqual(self.fires,1)
+    def test_a_stopped_trial_ends_its_wait_and_releases_native_admission(self):
+        self.runs.start(self.data); self.assertTrue(self.started.wait(2))
+        self.assertEqual(self.reservations,1)
+        # Stop run cancels the live execution; the trial must not wait for a completion that never comes.
+        self.execution.update(status='cancelled', finished_at='2026-10-02T00:00:00+00:00')
+        self.wait_done()
+        receipt=self.runs.lookup(self.data)
+        self.assertEqual((receipt['status'],receipt['message']),('failed','This trial was stopped before it finished.'))
+    def test_restarted_receipt_reconciles_a_stopped_trial_as_finished(self):
+        receipt=dict(requestId='request',routineId='routine',botId='default',status='accepted',executionId='execution',startedAt=experience.timestamp())
+        self.journal.db.execute('INSERT INTO experience_runs VALUES(?,?,?,?,?)',('request','default','routine','one',json.dumps(receipt))); self.journal.db.commit()
+        self.execution=dict(id='execution',status='cancelled')
+        reconciled=experience.RoutineRuns(self.journal).reconcile(self.data)
+        self.assertEqual((reconciled['status'],reconciled['message']),('failed','This trial was stopped before it finished.'))
     def test_native_resume_before_claim_is_preserved_and_trial_does_not_execute(self):
         before=copy.deepcopy(self.job)
         self.job.update(enabled=True,state='scheduled',paused_at=None)
@@ -601,6 +615,16 @@ class RoutineRunStatusTests(unittest.TestCase):
         self.attempts += [dict(id='e3', status='failed', claimed_at=2000.0, finished_at=2006.0, error='x'),
             dict(id='e2', status='completed', claimed_at=1000.0, finished_at=1004.0, error='')]
         self.assertEqual(self.results()['cron_output:routine:exec:1']['status'], 'succeeded')
+
+    def test_metadata_rows_read_stopped_and_missed_attempts_after_newer_runs(self):
+        # Hermes's own reconciliation writes exec:N rows for a stopped script run and a missed occurrence.
+        self.docs += [dict(id='cron_output:routine:exec:0', source='cron_output', title='Stopped run', started_at=1000.0),
+            dict(id='cron_output:routine:exec:1', source='cron_output', title='Missed run', started_at=1500.0)]
+        self.attempts += [dict(id='e1', status='cancelled', claimed_at=1000.0, finished_at=1002.0, error='cancelled on request (Stop)'),
+            dict(id='e2', status='missed', claimed_at=1500.0, finished_at=1500.0, error=''),
+            dict(id='e3', status='completed', claimed_at=2000.0, finished_at=2006.0, error='')]
+        rows = self.results()
+        self.assertEqual((rows['cron_output:routine:exec:0']['status'], rows['cron_output:routine:exec:1']['status']), ('stopped', 'missed'))
 
     def test_metadata_row_index_counts_unknown_attempts_as_hermes_does(self):
         # Hermes numbers exec:N by position in the whole attempts list, so exec:1 is e2, not e3.
