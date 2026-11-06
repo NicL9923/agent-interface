@@ -149,6 +149,20 @@ conflicts, paused trial execution and same-request deduplication in a disposable
 home. Voice delegates to native audio routes. See
 [Household experience](HouseholdExperience.md) for client behavior and limits.
 
+Live Talk uses `hermes_cli.plugin_provider_requests.credentialed_provider_request`
+from the WildBots voice plugin (`requires_auth: [openai-codex]`) to mint OpenAI
+Realtime client secrets, with Hermes attaching the ChatGPT credential. The
+session shape, the frame check through the plugins link and the browser's WebRTC
+call were verified by hand against production Hermes and OpenAI. The application
+tests use a fake `credentialed_provider_request` and never contact OpenAI, and no
+isolated probe covers this seam yet. A host rehearsal showed Hermes mints for the
+linked plugin even when it is not enabled, so the add-on gates on the plugin's
+enabled state through `hermes_cli.plugins._get_enabled_plugins` and
+`_get_disabled_plugins`, the readers Hermes's own loader uses; those private names
+are checked against Hermes 0.15.2 source only, and their absence fails closed. An
+older Hermes without the module reports live voice as unavailable. See
+[Hosting](Hosting.md#live-voice-plugin).
+
 The November 4 follow-up for Hermes 3a1e9ef adopts three native features and
 degrades on an older revision. Without native skill locks, the overview omits
 `lockSupported` and both clients hide the lock control. Without `needs_auth`

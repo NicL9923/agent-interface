@@ -48,6 +48,12 @@ export class EventRepository {
         .run(now - 30 * 86400000);
     });
   }
+  /** How Hermes last reported a run ending, from discovered events, or undefined before it has. */
+  runOutcome(botId: string, runId: string): "completed" | "failed" | "interrupted" | undefined {
+    const row = this.db.prepare(`SELECT json_extract(e.value,'$.kind') AS kind FROM run_settlements s JOIN notification_ingestion i ON i.id=s.ingestion_id
+      JOIN notification_events e ON e.id=i.event_id WHERE s.bot_id=? AND s.run_id=? ORDER BY s.ingestion_id DESC LIMIT 1`).get(botId, runId) as { kind: string } | undefined;
+    return row && ["completed", "failed", "interrupted"].includes(row.kind) ? row.kind as "completed" | "failed" | "interrupted" : undefined;
+  }
   latestEventFrontier(): number {
     return (this.db.prepare("SELECT seq FROM sqlite_sequence WHERE name='notification_ingestion'").get() as { seq: number } | undefined)?.seq ?? 0;
   }

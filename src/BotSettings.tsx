@@ -11,7 +11,7 @@ import type {
   BotInput,
   Routine,
 } from "./shared/types";
-import { api, ApiError, request, write } from "./client-api";
+import { api, ApiError, request } from "./client-api";
 import { routeUrl, type ApiResponse } from "./shared/api";
 import { routineRoomChoices, type GroupCatalog } from "./shared/collaboration";
 import { useAction } from "./app/use-action";
@@ -28,13 +28,14 @@ import { ModelSelector } from "./components/ModelSelector";
 import { MemoryPanel } from "./components/MemoryPanel";
 import { AutomationPanel, LearningPanel } from "./components/AutomationPanel";
 import { VaultPanel } from "./components/VaultPanel";
+import { VoicePicker } from "./components/VoicePicker";
 import { RoutineEnhancements, RoutineSchedulePreview } from "./components/RoutineEnhancements";
 import { interactiveReplyInstructions } from "./shared/reply-cards";
 import { routinePresets } from "./shared/routine-presets";
 import { runsHidden, withRunsShown } from "./shared/routine-runs";
 import { usePreferenceEdits, type PreferenceEdit } from "./app/use-preference-edits";
 import { AdvancedRoutineFields } from "./components/AdvancedRoutineFields";
-const settingsSections = ["details", "avatar", "connections", "tools", "skills", "routines", "work", "learning", "memory", "logins"] as const;
+const settingsSections = ["details", "avatar", "voice", "connections", "tools", "skills", "routines", "work", "learning", "memory", "logins"] as const;
 type SettingsTab = (typeof settingsSections)[number];
 /** A lean roster row lacks some fields, so each one has a safe default. A missing bot takes the first one's model. */
 function formFromBot(bot: Bot | null, fallback?: Bot): BotInput {
@@ -630,6 +631,8 @@ function LoadedBotSettings({
             progress={<SaveProgress state={progress(tab)} label={`Save ${tab}`} />}
             onSave={() => void run(() => draft.save(existing.id), "Saved", tab)} />;
         })()}
+        {existing && tab === "voice" && <VoicePicker key={existing.id} botId={existing.id} name={savedName} voice={existing.voice}
+          liveVoice={bootstrap.capabilities.liveVoice} onSaved={() => { setNotice(""); onSaved(); }} />}
         {existing && tab === "connections" && <IntegrationList profile={existing.id} bots={bootstrap.bots} accountScope={bootstrap.user.id} />}
         {existing && tab === "work" && <AutomationPanel key={existing.id} botId={existing.id} bots={bootstrap.bots} accountScope={bootstrap.user.id} />}
         {existing && tab === "learning" && <LearningPanel key={existing.id} botId={existing.id} />}

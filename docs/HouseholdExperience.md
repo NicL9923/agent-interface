@@ -68,6 +68,39 @@ adding it to the draft. Listen to reply plays the same Hermes audio as the web a
 has a stop control. iOS cannot play Ogg or WebM speech and says so. Microphone and audio behavior on a physical phone require separate
 device acceptance.
 
+### Live Talk
+
+Talk, beside Record voice in the web composer, holds a live spoken conversation
+with the open assistant. A voice model listens and speaks; the assistant does the
+work. Each real request goes to the assistant as an ordinary message from the
+person speaking, in their words, so it appears in the chat, uses the same
+admission and steering as typing, and never sends twice for one spoken request.
+While the assistant works, the voice says a short filler and then reads the
+answer back briefly. Long answers end at a sentence and point to the chat. When
+an approval or a question is waiting, the voice asks the person to check the
+screen, and reads the answer once they decide.
+
+The panel above the composer shows whether Talk is connecting, listening,
+thinking, working or speaking, the latest words from each side, Mute and End.
+Starting Talk stops a reply being read aloud and turns off recording and read
+aloud until it ends. Talk ends when you press End, switch assistants, leave the
+chat or the page, after five quiet minutes, after 30 minutes, and on a phone when
+the app goes to the background. The voice knows only this assistant's name and
+description.
+
+Talk needs the WildBots voice plugin enabled in Hermes and the launch profile
+signed in to ChatGPT; see [Hosting](Hosting.md#live-voice-plugin). When it is
+unavailable, Talk shows why. A denied microphone, a signed-out ChatGPT account
+and a lost connection each have their own message. Each person can start Talk
+once every five seconds and 20 times an hour.
+
+Each assistant has a Talk voice in its settings, under **Voice**: Alloy, Ash,
+Ballad, Coral, Echo, Sage, Shimmer, Verse, Marin (the default) and Cedar. Each
+has a short sample to play; one plays at a time, and closing settings stops it.
+Choosing a voice saves it for the household with the assistant's profile.
+
+Live Talk is web-only for now. The iOS app keeps recording and read aloud.
+
 ## Memory
 
 Assistant settings > Memory reads the selected Hermes profile's native notes and

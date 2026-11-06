@@ -354,7 +354,7 @@ describe('Hermes adapter trust and recovery boundary',()=>{
   });
 
   it('bridges profile-scoped native speech and caps the returned audio', async () => {
-    const fetcher = vi.fn(async (url: URL | string, init?: RequestInit) => {
+    const fetcher = vi.fn(async (url: URL | string, _init?: RequestInit) => {
       const path = new URL(url).pathname;
       if (path.endsWith('/transcribe')) return Response.json({ok:true,transcript:'Pick up milk',provider:'fixture'});
       if (path.endsWith('/speak')) return Response.json({ok:true,data_url:'data:audio/mpeg;base64,' + Buffer.from('audio').toString('base64'),provider:'fixture'});
@@ -920,6 +920,43 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     vi.stubGlobal('fetch',vi.fn(async()=>new Response(new ReadableStream(),{headers:{'Content-Length':'2000001'}})));
     await expect(runtime.setAvatar!('shared',{mode:'portrait',origin:'uploaded',src:file.url!})).rejects.toThrow('Hermes portraits must be 2 MB or smaller.');
     expect(calls.some(call=>call.method==='profiles.set_asset')).toBe(false);
+  });
+
+  it('saves the Talk voice beside the avatar, preserving other metadata and refusing a stale revision',async()=>{
+    await runtime.setVoice!('shared','cedar');
+    const metadata=calls.find(call=>call.method==='profiles.configure')?.params;
+    expect(metadata?.ui_meta.agent_interface).toEqual({name:'Shared',unrelated:'preserve',voice:'cedar'});
+    expect(metadata?.ui_meta_expected_revisions.agent_interface).toBe(3);
+    metadataConflict=true;
+    await expect(runtime.setVoice!('shared','ash')).rejects.toMatchObject({statusCode:409});
+  });
+
+  it('reads live voice from the add-on over the service path and mints only a matching session',async()=>{
+    const fetcher=vi.fn(async(url: URL | string, _init?: RequestInit)=>{
+      const path=new URL(url).pathname;
+      if(path.endsWith('/voice/status'))return Response.json({available:false,reason:'The WildBots voice plugin is not linked into Hermes.'});
+      if(path.endsWith('/voice/client-secret'))return Response.json({clientSecret:'ek_fixture',expiresAt:1790000000,model:'gpt-realtime-2.1',voice:'marin'});
+      return Response.json({profiles:[]});
+    });
+    vi.stubGlobal('fetch',fetcher);
+    expect((await runtime.capabilities()).liveVoice).toEqual({supported:false,reason:'The WildBots voice plugin is not linked into Hermes.'});
+    const status=fetcher.mock.calls.find(call=>new URL(call[0]).pathname.endsWith('/voice/status'))!;
+    expect(new URL(status[0]).pathname).toBe('/api/agent-interface/service/agent-interface/voice/status');
+    expect(new Headers(status[1]!.headers).get('Authorization')).toBe('Bearer '+token);
+    const input={voice:'marin' as const,instructions:'Speak for Shared.',tools:[]};
+    expect(await runtime.realtimeSession!(input)).toEqual({clientSecret:'ek_fixture',expiresAt:1790000000,model:'gpt-realtime-2.1',voice:'marin'});
+    const minted=fetcher.mock.calls.find(call=>new URL(call[0]).pathname.endsWith('/voice/client-secret'))!;
+    expect(JSON.parse(minted[1]!.body as string)).toEqual({model:'gpt-realtime-2.1',...input});
+    await expect(runtime.realtimeSession!({...input,voice:'ash'})).rejects.toMatchObject({statusCode:502});
+  });
+
+  it('passes on the add-on\'s plain voice errors and names an add-on that predates live voice',async()=>{
+    let answer=Response.json({error:'Sign in to ChatGPT in Hermes to use live voice.'},{status:409});
+    vi.stubGlobal('fetch',vi.fn(async()=>answer));
+    const input={voice:'marin' as const,instructions:'Speak.',tools:[]};
+    await expect(runtime.realtimeSession!(input)).rejects.toMatchObject({statusCode:409,message:'Sign in to ChatGPT in Hermes to use live voice.'});
+    answer=Response.json({error:'Service operation not available'},{status:404});
+    await expect(runtime.realtimeSession!(input)).rejects.toMatchObject({statusCode:503,message:expect.stringContaining('predates live voice')});
   });
 
   it('does not overwrite a native portrait after metadata CAS rejects a stale save',async()=>{

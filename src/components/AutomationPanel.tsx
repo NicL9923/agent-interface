@@ -4,7 +4,7 @@ import { useAction } from "../app/use-action";
 import { routeUrl } from "../shared/api";
 import { useResource } from "../app/use-resource";
 import { goalResumeKey } from "../app/storage";
-import type { Bot, Routine } from "../shared/types";
+import type { Bot } from "../shared/types";
 import type { AutomationOverview, AutomationTask, EventSubscription, SkillContent, SkillDiff, TaskInput, TriggerInput } from "../shared/automation";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";

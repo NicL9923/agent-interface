@@ -157,18 +157,6 @@ describe("watching a group chat on the app event stream", () => {
     return { app, store, base, cookie, groupRequest, setSeq: (value: number) => { seq = value; },
       holdNextLookup: () => { let release!: () => void; gate = new Promise<void>(resolve => { release = resolve; }); return release; } };
   }
-  const read = async (response: Response, until: (text: string) => boolean, ms = 4000) => {
-    const reader = response.body!.pipeThrough(new TextDecoderStream()).getReader();
-    let text = "";
-    const deadline = Date.now() + ms;
-    while (!until(text)) {
-      if (Date.now() > deadline) throw new Error(`Stream never got there: ${JSON.stringify(text)}`);
-      const chunk = await Promise.race([reader.read(), new Promise<null>(resolve => setTimeout(() => resolve(null), 50))]);
-      if (chunk?.done) return { text, done: true, reader };
-      if (chunk) text += chunk.value;
-    }
-    return { text, done: false, reader };
-  };
 
   // Sends a stream request over a real socket and disconnects once the server is handling it.
   async function abandon(s: Awaited<ReturnType<typeof setup>>, path: string) {

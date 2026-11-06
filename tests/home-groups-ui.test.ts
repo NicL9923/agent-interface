@@ -7,6 +7,7 @@ import { api, write } from "../src/client-api";
 import { defaultPreferences, type Bootstrap } from "../src/shared/types";
 import type { GroupCatalog, GroupRoom } from "../src/shared/collaboration";
 import { FakeEventSource } from "./fake-event-source";
+import { GROUP_FALLBACK_POLL_MS, GROUP_UNNOTIFIED_POLL_MS } from "../src/app/use-session";
 import { advance, mountRoot, stubMatchMedia } from "./ui-harness";
 
 vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(await (async original => ({ ...await original<typeof import("../src/client-api")>(), api: vi.fn(), write: vi.fn() }))(original)));
@@ -114,6 +115,54 @@ describe("group chats on home", () => {
     } finally { Reflect.deleteProperty(document, "visibilityState"); }
   });
 
+  it("reads the catalog again on the household stream's groups notice, which every connect brings, and polls only every 5 minutes", async () => {
+    await render();
+    const catalogReads = () => reads(path => path === "/groups");
+    const household = [...FakeEventSource.streams].find(stream => stream.url === "/api/events")!;
+    expect(household).toBeDefined();
+    await act(async () => household.connect());
+    await advance(20);
+    const connected = catalogReads();
+    // The server answers every connect with a groups notice, which also shows it pushes changes.
+    await act(async () => household.emit("groups", "groups"));
+    await advance(20);
+    // One read for the notice; the slower poll it allows restarts only its timer.
+    expect(catalogReads()).toBe(connected + 1);
+    const opened = catalogReads();
+    await advance(GROUP_FALLBACK_POLL_MS - 1000);
+    expect(catalogReads()).toBe(opened);
+    await act(async () => household.emit("groups", "groups"));
+    await advance(20);
+    expect(catalogReads()).toBe(opened + 1);
+    // A changed room shows without waiting for the poll.
+    catalog = { ...catalog, rooms: [...catalog.rooms, { room_id: "barn", name: "Barn raising", members: [member("ranch", "Ranch hand"), member("garden", "Garden planner")] }] };
+    await act(async () => household.emit("groups", "groups"));
+    await advance(20);
+    expect(names()).toContain("Barn raising");
+    // Notices sent while the stream was down are lost. The server answers every connect with one,
+    // so the client reads on that notice instead of reading on connect as well.
+    const before = catalogReads();
+    await act(async () => household.connect());
+    await advance(20);
+    expect(catalogReads(), "connecting alone reads nothing").toBe(before);
+    await act(async () => household.emit("groups", "groups"));
+    await advance(20);
+    expect(catalogReads()).toBe(before + 1);
+  });
+
+  it("keeps the 30-second catalog poll for a server that never sends groups notices", async () => {
+    await render();
+    const catalogReads = () => reads(path => path === "/groups");
+    const household = [...FakeEventSource.streams].find(stream => stream.url === "/api/events")!;
+    await act(async () => household.connect());
+    await advance(20);
+    const opened = catalogReads();
+    await advance(GROUP_UNNOTIFIED_POLL_MS);
+    expect(catalogReads()).toBe(opened + 1);
+    await advance(GROUP_UNNOTIFIED_POLL_MS);
+    expect(catalogReads()).toBe(opened + 2);
+  });
+
   it("makes a group from the plus menu and opens the new room", async () => {
     await render();
     const plus = container.querySelector<HTMLButtonElement>('.home-bar [aria-haspopup="menu"]')!;
@@ -172,7 +221,7 @@ describe("group chats on home", () => {
     await render();
     expect(container.querySelector(".chat-header h1")?.textContent).toBe("Fence repair");
     expect(roomRows()[0].getAttribute("aria-current")).toBe("page");
-    root.unmount();
+    await act(async () => root.unmount());
     history.replaceState(null, "", "/?view=groups");
     stubMatchMedia(query => query.includes("620px"));
     await render();

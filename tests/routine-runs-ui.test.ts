@@ -51,6 +51,10 @@ beforeEach(() => {
   FakeEventSource.reset();
   vi.stubGlobal("EventSource", FakeEventSource);
   stubMatchMedia();
+  // jsdom has no modal dialogs; without these the full-results dialog crashes into the load-failure boundary.
+  for (const [name, open] of [["showModal", true], ["close", false]] as const) {
+    Object.defineProperty(HTMLDialogElement.prototype, name, { configurable: true, value(this: HTMLDialogElement) { this.open = open; } });
+  }
   history.replaceState(null, "", "/");
   preferences = { ...defaultPreferences, startPage: "assistant" };
   conversation = { botId: "shared", sessionId: "live", approvals: [], files: [], activity: { state: "idle" }, earlier: 0, messages: [
@@ -72,7 +76,7 @@ beforeEach(() => {
       : path.startsWith("/bots/shared/conversation?") ? conversation
       : path === "/bots/shared/routine-runs" ? { runs, unavailable: [] }
       : path === "/bots/shared/routines/cert/results/c2" ? { previewOnly: false, messages: [{ id: "m1", role: "assistant", text: "All **4** certificates are valid.", files: [{ id: "report", name: "report.txt", mime: "text/plain" }] }] }
-      : path === "/routines" ? []
+      : path === "/routines" || path === "/bots/shared/routines/cert/results" ? []
       : null;
     return result as T;
   });

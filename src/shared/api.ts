@@ -8,6 +8,7 @@ import type { Routine } from "./types.js";
 import type { routinePresets } from "./routine-presets.js";
 import type { EarlierFiles } from "./history.js";
 import type { LiveState } from "./live-activity.js";
+import type { TalkAnswer, TalkSession, TalkVoice } from "./voice.js";
 import type {
   Avatar,
   Bootstrap,
@@ -64,6 +65,54 @@ export interface MessageRequest {
 export interface DraftSave { text: string; attachments?: FileRef[]; baseRevision?: number }
 export interface WebPushSubscription { endpoint: string; keys: { p256dh: string; auth: string } }
 export type PushTest = { ok: true; detail: string };
+/** Bounds the server enforces on a client error report. Clients trim to them before sending. */
+export const CLIENT_ERROR_LIMITS = { message: 1024, stack: 8192, route: 512, release: 64 } as const;
+/** A run of text with no space: a URL, a path, a stack frame's location or a word. */
+const token = /\S+/g;
+/**
+ * Before its query, the token names a place: it has a scheme (`https:`, `blob:`), a slash, or a file
+ * extension, as Chrome's `eval` frames name a bare script (`app.js?token=…`) and a message may name
+ * `backup.7z?token=…`. Text like `1.2?` loses its `?`, which is harmless in a diagnostic.
+ */
+const place = /^[("'`]*(?:[a-z][a-z\d+.-]*:|[^?#]*\/|[^?#]*\.[a-z\d]+$)/i;
+/**
+ * A stack frame line: Chrome's `at …`, or Safari's and Firefox's `name@location`, including Safari's
+ * `global code@`, `module code@` and `eval code@`. An error's `Name: message` header never matches.
+ */
+const frameLine = /^\s*(?:at\s|(?:(?:global|module|eval) code|[^\s@]*)@\S)/;
+/** A script's location in a frame ends its path and is followed by a line and a column. */
+const script = /\.[cm]?[jt]sx?$/;
+/**
+ * Drops the query string and hash from every URL, path or file name in diagnostic text, whatever its
+ * form, up to the next space: a query may hold quotes or parentheses, and can carry a sign-in code, a
+ * search or a draft. With `stack`, a script's location on a frame line keeps its trailing
+ * `:line:column`, as in `at f (/assets/app.js?v=1:10:5)`. Everywhere else, including a stack's header
+ * line and any message, nothing after the `?` or `#` survives.
+ */
+export function withoutUrlQueries(text: string, { stack = false } = {}) {
+  return text.split("\n").map(line => {
+    const framed = stack && frameLine.test(line);
+    return line.replace(token, word => {
+      const cut = word.search(/[?#]/);
+      if (cut <= 0 || !place.test(word.slice(0, cut))) return word;
+      const base = word.slice(0, cut);
+      const position = framed && script.test(base) ? /:\d+:\d+(?=\)?$)/.exec(word.slice(cut))?.[0] ?? "" : "";
+      const closed = word.startsWith("(") && word.endsWith(")") ? ")" : "";
+      return base + position + closed;
+    });
+  }).join("\n");
+}
+/** A crash or uncaught error in the web client, reported so a white screen on a phone is not silent. */
+export interface ClientErrorReport {
+  /** Where it was caught: the root error boundary, a window `error`, or an unhandled rejection. */
+  kind: "render" | "error" | "rejection";
+  message: string;
+  stack?: string;
+  /** The page's path, without its query string or hash. */
+  route: string;
+  /** The client build, when the page can tell. */
+  release?: string;
+}
 
 /**
  * JSON routes under /api by "METHOD /path", with what clients send and what the server answers.
@@ -132,6 +181,7 @@ export interface ApiRoutes {
   "PATCH /preferences": { body: Preferences; response: Preferences };
   "PUT /preferences/models": { body: { modelFavorites: ModelChoice[] }; response: { modelFavorites: ModelChoice[] } };
   "GET /models": { query: { botId?: string }; response: ModelCatalog };
+  "POST /client-errors": { body: ClientErrorReport; response: Ok };
 
   "GET /bots": { query: { roster?: "lean" }; response: Bot[] };
   "POST /bots": { body: BotSaveRequest; response: Bot };
@@ -139,6 +189,11 @@ export interface ApiRoutes {
   "PATCH /bots/:id": { body: BotSaveRequest; response: Bot };
   "DELETE /bots/:id": { response: Ok };
   "PUT /bots/:id/avatar": { body: Avatar; response: Avatar };
+  "PUT /bots/:id/voice": { body: { voice: TalkVoice }; response: { voice: TalkVoice } };
+  /** A Realtime credential for live Talk with this assistant. Never cached. */
+  "POST /bots/:id/talk/session": { response: TalkSession };
+  /** Sends a spoken request through the normal message path and waits briefly for its answer. */
+  "POST /bots/:id/talk/ask": { body: { requestId: string; request: string }; response: TalkAnswer };
   "POST /bots/:id/portrait": { body: { prompt: string }; response: FileRef };
   "GET /bots/:id/inference": { response: InferenceSettings };
   "PATCH /bots/:id/inference": { body: Partial<InferenceSettings>; response: InferenceSettings };

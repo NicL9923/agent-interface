@@ -40,8 +40,11 @@ beforeEach(() => {
   FakeEventSource.reset();
 });
 afterEach(async () => {
-  for (const finish of held) finish(new Response("{}", { status: 200 }));
-  await vi.advanceTimersByTimeAsync(0);
+  // Still-mounted chats update when the held reads end, so that has to happen inside act.
+  await act(async () => {
+    for (const finish of held) finish(new Response("{}", { status: 200 }));
+    await vi.advanceTimersByTimeAsync(0);
+  });
   vi.useRealTimers();
   vi.unstubAllGlobals();
 });

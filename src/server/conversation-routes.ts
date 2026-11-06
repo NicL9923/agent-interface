@@ -142,7 +142,7 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
   // and assistant access are the conversation read's own hooks; each notice rechecks the session.
   const watchers = new Map<string, Set<() => void>>();
   // The app's own conversation writes notify at once, before Hermes reports their effect.
-  const conversationWrites = new Set(["messages", "steer", "stop", "requests/:approvalId", "approvals/:approvalId", "secure-requests/:requestId", "computer-handoffs/:requestId", "connection-requests/:requestId"]
+  const conversationWrites = new Set(["messages", "steer", "talk/ask", "stop", "requests/:approvalId", "approvals/:approvalId", "secure-requests/:requestId", "computer-handoffs/:requestId", "connection-requests/:requestId"]
     .map(path => `POST /api/bots/:id/${path}`));
   app.addHook("onResponse", async (req, reply) => {
     if (reply.statusCode < 400 && conversationWrites.has(`${req.method} ${routePattern(req)}`))
@@ -276,13 +276,14 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
     .refine((v) => v.retryOf === undefined || v.draftBaseRevision === undefined, {
       message: "A retry is not written on a draft",
     });
-  const submit = async (req: ApiRequest<"POST /bots/:id/messages" | "POST /bots/:id/steer">, body: z.output<typeof message>, explicitSteering = false): Promise<SubmissionReceipt> => {
+  // Shared with live Talk, whose spoken requests are ordinary messages from the person speaking.
+  const submit = async (target: { botId: string; requesterId: string }, body: z.output<typeof message>, explicitSteering = false): Promise<SubmissionReceipt> => {
     const { reviewedInterruption, reviewedUncertain, ...message } = body;
     if (message.retryOf !== undefined && explicitSteering) throw httpError(400, "Retry a message by sending it, not by steering");
-    const requesterId = signedIn(req).id;
+    const { requesterId } = target;
     let input: Submission = {
       ...message,
-      botId: req.params.id,
+      botId: target.botId,
       senderId: requesterId,
     };
     // Retry IDs are derived from their failed turn, so nobody can take one with another message.
@@ -370,8 +371,9 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
       return store.submission(input.requestId)!.receipt;
     }
   };
-  apiRoute(app, "POST /bots/:id/messages", { body: message }, async (req, body) => submit(req, body));
-  apiRoute(app, "POST /bots/:id/steer", { body: message }, async (req, body) => submit(req, body, true));
+  const sender = (req: ApiRequest<"POST /bots/:id/messages" | "POST /bots/:id/steer">) => ({ botId: req.params.id, requesterId: signedIn(req).id });
+  apiRoute(app, "POST /bots/:id/messages", { body: message }, async (req, body) => submit(sender(req), body));
+  apiRoute(app, "POST /bots/:id/steer", { body: message }, async (req, body) => submit(sender(req), body, true));
   apiRoute(app, "GET /submissions/:id", {}, async req => {
     const requestId = z.string().uuid().parse(req.params.id);
     const recorded = store.submission(requestId);
@@ -520,4 +522,9 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
     // Fastify destroys this when the person disconnects, which cancels the Hermes read.
     return reply.send(Readable.fromWeb(file.body as import("node:stream/web").ReadableStream<Uint8Array>));
   });
+  return {
+    /** Sends a message as this person, with the same idempotency, admission and steering as the chat. */
+    send: (botId: string, requesterId: string, requestId: string, text: string) =>
+      submit({ botId, requesterId }, message.parse({ requestId, text })),
+  };
 }

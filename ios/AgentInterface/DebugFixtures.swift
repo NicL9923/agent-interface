@@ -249,6 +249,11 @@
     nonisolated(unsafe) static var groupEvents: [[String: Any]] = []
     /// An assistant's answer to the last group message, announced on the next watching stream.
     nonisolated(unsafe) static var groupReplyPending = false
+    /// Another member makes a room once home has read the catalog, and every household stream from
+    /// then on opens with a `groups` notice, as the server's does: on with AGENT_INTERFACE_UI_GROUP_NOTICE=1.
+    static let groupNotices = ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_GROUP_NOTICE"] == "1"
+    nonisolated(unsafe) static var groupNoticeRoomMade = false
+    nonisolated(unsafe) static var groupCatalogReads = 0
     /// Who has the shared desktop: an assistant until this person takes over.
     nonisolated(unsafe) static var computerControl: [String: Any] = ["kind": "bot", "name": "Ranch hand"]
     nonisolated(unsafe) static var desktopTickets = 0
@@ -404,6 +409,18 @@
           stream += "event: group\ndata: {\"roomId\":\"\(room)\",\"latestSeq\":\(Self.groupEvents.count)}\n\n"
         }
         respond(raw: Data(stream.utf8), type: "text/event-stream")
+        return
+      }
+      if path == "/api/events", Self.groupNotices, Self.groupCatalogReads > 0 {
+        // The household stream: another member made a room. The notice, then the stream ends and the
+        // app reconnects, as after a dropped connection, and hears it again.
+        if !Self.groupNoticeRoomMade {
+          Self.groupNoticeRoomMade = true
+          Self.groupRooms.append(["room_id": "fixture-notice-room", "name": "Garden crew", "members": [
+            ["member_id": "ranch", "profile": "ranch", "handle": "ranch", "display_name": "Ranch hand"],
+            ["member_id": "kitchen", "profile": "kitchen", "handle": "kitchen", "display_name": "Kitchen companion"]]])
+        }
+        respond(raw: Data("event: groups\ndata: groups\n\n".utf8), type: "text/event-stream")
         return
       }
       if path.hasPrefix("/api/voice/audio/") {
@@ -679,7 +696,7 @@
         if method == "POST" {
           let room: [String: Any] = ["room_id": body["requestId"] ?? "room", "name": body["name"] ?? "Group", "members": (body["botIds"] as? [String] ?? []).map { id -> [String: Any] in ["member_id": id, "profile": id, "handle": id, "display_name": Self.bots.first { $0["id"] as? String == id }?["name"] ?? id] }]
           Self.groupRooms.append(room); object = ["room": room]
-        } else { object = ["supported": true, "canSend": true, "rooms": Self.groupRooms] }
+        } else { Self.groupCatalogReads += 1; object = ["supported": true, "canSend": true, "rooms": Self.groupRooms] }
       } else if path.hasPrefix("/api/groups/") {
         if path.hasSuffix("/messages") {
           let event: [String: Any] = ["event_id": body["requestId"] ?? "event", "seq": Self.groupEvents.count + 1, "kind": "message.user", "created_at": Date().timeIntervalSince1970, "payload": ["text": body["text"] ?? "", "thread_id": body["threadId"] ?? "thread-1"],

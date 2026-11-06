@@ -146,6 +146,23 @@ that read when this app writes an assistant, a routine, an integration, a Hermes
 upgrade or a connection retry, and never keeps a disconnected one, so a change
 made outside this app can take up to 1.5 seconds longer to show.
 
+The household stream, with or without `?group=`, also sends `event: groups` with
+`data: groups` when that person's visible group catalog changes: a room added,
+removed, renamed or with changed members, or a room's newest message. Refetch
+`GET /api/groups`; the notice carries no room IDs or previews. Visibility follows
+`GET /api/groups`, so a room with someone else's private assistant never notifies.
+One server check serves every open stream: it reads the Hermes catalog at most once
+every 30 seconds, only while a household stream is open, and compares each person's
+catalog with the last one, so an unchanged catalog sends nothing. A group write
+through this app (create, send, stop, settings, approval) or an assistant change
+checks within about a second instead. Every connection also gets one `groups` notice
+once its catalog is known: at once when the server already has a starting point, or
+when its first check lands. Fetch on that notice rather than on connect, which would
+read twice. Notices sent while disconnected are lost, and the connect notice covers
+them. Fetch on foreground as well. A fallback
+poll of about 5 minutes covers a missed notice; older servers send no `groups`
+events, so keep a 30-second poll for them.
+
 `GET /api/events?group=ROOM_ID` also watches one group chat. The server checks the
 room like `GET /api/groups/:id`, answering 404 for a room the person cannot see,
 before the stream opens. While any stream watches a room, the server reads that
@@ -403,6 +420,9 @@ Web and native clients share these authenticated operations. See
 | `DELETE /api/bots/:id/memory/:target` | `{ "revision": "SHA256", "entryId": "EXISTING_ID" }` |
 | `POST /api/bots/:id/voice/transcribe` | Multipart `audio` field, maximum 8 MiB; returns a reviewable transcript |
 | `POST /api/bots/:id/voice/speak` | `{ "messageId": "COMPLETED_ASSISTANT_MESSAGE_ID" }`; returns a private, single-use audio URL |
+| `PUT /api/bots/:id/voice` | `{ "voice": "marin" }`, one of `alloy`, `ash`, `ballad`, `coral`, `echo`, `sage`, `shimmer`, `verse`, `marin`, `cedar`; returns `{ "voice" }`. A bot's `voice` is absent until chosen, which means `marin` |
+| `POST /api/bots/:id/talk/session` | No body. Needs the `liveVoice` capability. Returns `{ "clientSecret", "expiresAt", "model", "voice" }` with `Cache-Control: no-store`; 429 for a second start within five seconds or past 20 an hour; 409 with the reason when live voice is unavailable or the launch profile is signed out of ChatGPT; 503 when the voice plugin was disabled since the last status check or Hermes refuses it |
+| `POST /api/bots/:id/talk/ask` | `{ "requestId": "UUID", "request": "SPOKEN_TEXT" }`; sends it as the caller's message and waits up to 20 seconds. Returns `{ "state": "done" | "working" | "needsApproval" | "needsAnswer" | "interrupted" | "refused", "text"? }`. Repeat the same request ID while the state is `working`, `needsApproval` or `needsAnswer`; it never sends twice |
 | `GET` or `PUT /api/bots/:id/messages/:messageId/cards/:cardId/state` | `{ "checkedIds": ["ITEM_ID"], "notes": { "ITEM_ID": "PERSONAL_NOTE" } }`, private to the caller |
 | `GET /api/routines/templates` | Routine recipes |
 | `POST /api/routines/preview` | `{ "botId": "ID", "schedule": "CRON_OR_NATIVE_SCHEDULE" }`; actual timezone and upcoming runs |
@@ -417,6 +437,8 @@ Preserve memory drafts after a 409 revision conflict. Persist a trial's request 
 before dispatch and reuse it after an uncertain admission. Do not replay a trial
 automatically. iOS read aloud plays `POST /api/bots/:id/voice/speak` audio from Hermes, as
 the web does, and refuses replies over 12,000 characters; transcription uses Hermes.
+Live Talk is web-only for now. iOS decodes the `liveVoice` capability and ignores
+a bot's `voice`.
 
 ## Work and learning
 

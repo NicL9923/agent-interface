@@ -1,4 +1,5 @@
 import type { Avatar, RuntimeEvent } from "../shared/types.js";
+import { isTalkVoice, type TalkVoice } from "../shared/voice.js";
 import { visible } from "./bot-access.js";
 import type { StoreDatabase } from "./store-database.js";
 
@@ -145,6 +146,14 @@ export class PresentationRepository {
       this.writePresentation(botId, { shared: previous.shared !== false, ownerId: previous.ownerId }, current.avatar ? JSON.stringify(current.avatar) : null);
       return true;
     });
+  }
+  /** The Talk voice saved here, for a Hermes that cannot keep it with the profile. */
+  voice(botId: string): TalkVoice | undefined {
+    const row = this.db.prepare("SELECT voice FROM bot_voices WHERE bot_id=?").get(botId) as { voice: string } | undefined;
+    return isTalkVoice(row?.voice) ? row.voice : undefined;
+  }
+  saveVoice(botId: string, voice: TalkVoice) {
+    this.db.prepare("INSERT INTO bot_voices VALUES(?,?) ON CONFLICT(bot_id) DO UPDATE SET voice=excluded.voice").run(botId, voice);
   }
   /** Changes only the avatar, never who may see the assistant. */
   saveAvatar(botId: string, avatar: Avatar, shared: boolean) {

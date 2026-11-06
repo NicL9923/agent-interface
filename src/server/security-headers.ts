@@ -12,8 +12,8 @@ export function contentSecurityPolicy(origin: string) {
     "style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style",
     "img-src 'self' data: blob: https://*.googleusercontent.com",
     "media-src 'self' blob:",
-    // Older Safari does not match WebSockets with 'self'.
-    `connect-src 'self' ${url.protocol === "https:" ? "wss:" : "ws:"}//${url.host} https://accounts.google.com/gsi/`,
+    // Older Safari does not match WebSockets with 'self'. Live Talk sends its WebRTC offer to OpenAI.
+    `connect-src 'self' ${url.protocol === "https:" ? "wss:" : "ws:"}//${url.host} https://accounts.google.com/gsi/ https://api.openai.com`,
     "frame-src 'self' https://accounts.google.com/gsi/",
     "worker-src 'self'",
     "manifest-src 'self'",
