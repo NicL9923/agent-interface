@@ -10,6 +10,13 @@ export const desktopKeys = {
 } as const;
 export type DesktopKey = keyof typeof desktopKeys;
 export const controlKey = 0xffe3;
+/** The most characters one paste types into the desktop, as the Type text box allows. */
+export const pasteLimit = 8192;
+/** The text a paste types, cut at a whole character, and whether it was cut. */
+export function limitPaste(text: string) {
+  const characters = Array.from(text);
+  return { text: characters.slice(0, pasteLimit).join(""), cut: characters.length > pasteLimit };
+}
 
 export function isDesktopKey(value: unknown): value is DesktopKey {
   return typeof value === "string" && Object.hasOwn(desktopKeys, value);

@@ -1,0 +1,81 @@
+{
+  "title": "Using the computer",
+  "sections": [
+    {
+      "title": "Taking control",
+      "items": [
+        {
+          "title": "Take over",
+          "icon": "hand",
+          "symbol": "hand.raised",
+          "web": "Tap Take over to use the desktop. Assistants pause until you tap Hand back.",
+          "ios": "Tap Take over to use the desktop. Assistants pause until you tap Hand back."
+        }
+      ]
+    },
+    {
+      "title": "Touching the screen",
+      "items": [
+        {
+          "title": "Scroll",
+          "icon": "scroll",
+          "symbol": "arrow.up.and.down",
+          "web": "Drag with two fingers.",
+          "ios": "Drag with two fingers."
+        },
+        {
+          "title": "Click and drag",
+          "icon": "tap",
+          "symbol": "hand.tap",
+          "web": "Tap to click where you tapped. One finger drags.",
+          "ios": "Tap to click where you tapped. One finger drags."
+        },
+        {
+          "title": "Right-click",
+          "icon": "menu",
+          "symbol": "list.bullet",
+          "web": "Tap with two fingers, or press and hold.",
+          "ios": "Tap with two fingers, or press and hold."
+        },
+        {
+          "title": "Zoom in",
+          "icon": "search",
+          "symbol": "plus.magnifyingglass",
+          "web": "Pinch to zoom. Zoomed in, two fingers pan instead of scrolling. Reset zoom appears below the desktop.",
+          "ios": "Pinch to zoom. Zoomed in, two fingers pan instead of scrolling. Reset zoom is in the ⋯ menu."
+        }
+      ]
+    },
+    {
+      "title": "Typing and the clipboard",
+      "items": [
+        {
+          "title": "Type",
+          "icon": "keyboard",
+          "symbol": "keyboard",
+          "web": "Tap Type text below the desktop, then Send text. Enter, Tab and Backspace have their own buttons.",
+          "ios": "Tap the keyboard button in the bottom bar."
+        },
+        {
+          "title": "Copy and paste",
+          "icon": "copy",
+          "symbol": "doc.on.clipboard",
+          "web": "Copy on the desktop first, then tap Copy to device. Paste from device types this device's clipboard into the selected field.",
+          "ios": "Tap the clipboard button in the bottom bar for Copy to {device} and Paste from {device}. Copy on the desktop first."
+        }
+      ]
+    },
+    {
+      "title": "When a pointer is easier",
+      "items": [
+        {
+          "title": "Trackpad mode",
+          "icon": "trackpad",
+          "symbol": "cursorarrow.motionlines",
+          "web": "Turn on Trackpad below the desktop. Your finger moves the pointer; tap to click there, double-tap and hold to drag. Recenter pointer if it drifts.",
+          "ios": "Turn on from the ⋯ menu. Your finger moves the pointer; tap to click there, double-tap and hold to drag. Recenter pointer if it drifts."
+        }
+      ]
+    }
+  ]
+}

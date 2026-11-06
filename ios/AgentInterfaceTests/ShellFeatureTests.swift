@@ -219,7 +219,30 @@ import XCTest
     XCTAssertEqual(url.absoluteString, "https://agentui.example.test/native/computer#path=%2Fapi%2Fcomputer%2Fdesktop%2Fws%3Fticket%3Dabc_-123&control=0")
     XCTAssertNil(url.query, "Nothing about the ticket reaches the server's logs")
     XCTAssertEqual(DesktopLink.fragment(path: "/p", control: true), "path=%2Fp&control=1")
+    XCTAssertEqual(DesktopLink.fragment(path: "/p", control: false, trackpad: true), "path=%2Fp&control=0&trackpad=1")
     XCTAssertEqual(DesktopWebView.literal("a'b\"c</script>"), #""a'b\"c<\/script>""#)
+  }
+  /// The ? sheet says what the web's help says, in the app's own words for its controls.
+  func testComputerHelpMatchesTheWebHelpSource() throws {
+    struct Help: Decodable {
+      struct Item: Decodable { var title: String; var symbol: String; var ios: String }
+      struct Section: Decodable { var title: String; var items: [Item] }
+      var title: String
+      var sections: [Section]
+    }
+    let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+      .appendingPathComponent("../../src/shared/computer-help.json").standardizedFileURL
+    let web = try JSONDecoder().decode(Help.self, from: Data(contentsOf: url))
+    XCTAssertEqual(ComputerHelp.title, web.title)
+    XCTAssertEqual(ComputerHelp.sections, web.sections.map { section in
+      ComputerHelp.Section(title: section.title, items: section.items.map { ComputerHelp.Item(title: $0.title, symbol: $0.symbol, detail: $0.ios) })
+    })
+    for item in ComputerHelp.sections.flatMap(\.items) { XCTAssertNotNil(UIImage(systemName: item.symbol), item.symbol) }
+    let copy = try XCTUnwrap(ComputerHelp.sections(device: "iPad").flatMap(\.items).first { $0.title == "Copy and paste" })
+    XCTAssertTrue(copy.detail.contains("Copy to iPad and Paste from iPad"), copy.detail)
+  }
+  func testBridgeCallsNameOnlyTheViewCommandsThePageKnows() {
+    XCTAssertEqual(DesktopTyping.ViewCommand.allCases.map(\.rawValue), ["recenter", "resetZoom"])
   }
   /// The screen waits this long for the page to connect with a ticket before getting a fresh one.
   func testThePageHasUntilItsTicketExpiresToConnect() {

@@ -6,10 +6,10 @@ import { initialPanel } from "../src/app/view";
 import { ComputerPanel } from "../src/components/ComputerPanel";
 import { api, ApiError, write } from "../src/client-api";
 import type { ComputerStatus } from "../src/shared/computer";
-import { button, click, mountRoot, typeInto } from "./ui-harness";
+import { button, click, mountRoot, stubMatchMedia, typeInto } from "./ui-harness";
 
 const mocks = vi.hoisted(() => ({
-  desktops: [] as Array<EventTarget & { viewOnly: boolean; disconnect: ReturnType<typeof vi.fn>; sendKey: ReturnType<typeof vi.fn> }>,
+  desktops: [] as Array<EventTarget & { viewOnly: boolean; disconnect: ReturnType<typeof vi.fn>; sendKey: ReturnType<typeof vi.fn>; clipboardPasteFrom: ReturnType<typeof vi.fn> }>,
   terminals: [] as Array<{ write: ReturnType<typeof vi.fn>; focus: ReturnType<typeof vi.fn>; dispose: ReturnType<typeof vi.fn>; paste: ReturnType<typeof vi.fn>; type: (data: string) => void }>,
 }));
 vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(await (async original => ({ ...await original<typeof import("../src/client-api")>(), api: vi.fn(), write: vi.fn() }))(original)));
@@ -18,7 +18,8 @@ vi.mock("@novnc/novnc", () => ({ default: class extends EventTarget {
   scaleViewport = false;
   resizeSession = true;
   disconnect = vi.fn();
-  focus = vi.fn(); sendKey = vi.fn();
+  focus = vi.fn(); sendKey = vi.fn(); clipboardPasteFrom = vi.fn();
+  _handleMouseButton = vi.fn(); _handleMouseMove = vi.fn();
   constructor() { super(); mocks.desktops.push(this); }
 } }));
 vi.mock("@xterm/xterm", () => ({ Terminal: class {
@@ -54,6 +55,8 @@ beforeEach(() => {
   vi.useFakeTimers(); vi.clearAllMocks();
   mocks.desktops.splice(0); mocks.terminals.splice(0); Socket.instances = []; ticket = 0;
   vi.stubGlobal("WebSocket", Socket);
+  stubMatchMedia(false);
+  localStorage.clear();
   Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: function(this: HTMLDialogElement) { this.open = true; } });
   Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: function(this: HTMLDialogElement) { this.open = false; } });
   status = { available: true, running: true, browserReady: true, label: "Family VPS", control: { kind: "idle" }, terminal: { available: true, target: "nicolas@hermes" } };
@@ -127,6 +130,52 @@ describe("shared computer", () => {
     await click("Type text"); await click("Hand back");
     expect(container.querySelector("#desktop-text-input")).toBeNull();
     expect(button("Enter").disabled).toBe(true);
+  });
+  it("copies the desktop's clipboard to this device and pastes this device's clipboard into the desktop", async () => {
+    const clipboard = { writeText: vi.fn(async () => {}), readText: vi.fn(async () => "hi\n") };
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: clipboard });
+    const desktop = await connectedDesktop();
+    expect(button("Copy to device").disabled).toBe(true);
+    expect(button("Paste from device").disabled).toBe(true);
+    await click("Take over");
+    await click("Copy to device");
+    expect(clipboard.writeText).not.toHaveBeenCalled();
+    expect(container.textContent).toContain("Nothing is copied on the desktop yet.");
+    await act(async () => desktop.dispatchEvent(new CustomEvent("clipboard", { detail: { text: "from the desktop" } })));
+    await click("Copy to device");
+    expect(clipboard.writeText).toHaveBeenCalledWith("from the desktop");
+    await click("Paste from device");
+    expect(desktop.clipboardPasteFrom).toHaveBeenCalledWith("hi\n");
+    expect(desktop.sendKey.mock.calls.map(call => call[0])).toEqual([0x68, 0x69, 0xff0d]);
+    // A browser that won't share its clipboard gets the Type text box, which takes a normal paste.
+    clipboard.readText.mockRejectedValueOnce(new Error("NotAllowedError"));
+    await click("Paste from device");
+    expect(container.querySelector("#desktop-text-input")).not.toBeNull();
+    expect(container.textContent).toContain("Paste into the box below");
+  });
+  it("offers touch help, trackpad mode and zoom reset only on a touch screen, and remembers trackpad mode", async () => {
+    await connectedDesktop();
+    expect(container.querySelector("[aria-label='How to use the desktop']")).toBeNull();
+    expect([...container.querySelectorAll("button")].some(item => item.textContent === "Trackpad")).toBe(false);
+    await render(false);
+    stubMatchMedia(query => query === "(any-pointer: coarse)");
+    await render(true, "touch-screen");
+    await click("Trackpad");
+    expect(button("Trackpad").getAttribute("aria-pressed")).toBe("true");
+    expect(localStorage.getItem("computer.trackpad")).toBe("1");
+    expect(button("Recenter pointer")).toBeDefined();
+    expect([...container.querySelectorAll("button")].some(item => item.textContent === "Reset zoom")).toBe(false);
+    await act(async () => container.querySelector<HTMLButtonElement>("[aria-label='How to use the desktop']")!.click());
+    const help = container.querySelector<HTMLDialogElement>("dialog.computer-help")!;
+    expect(help.open).toBe(true);
+    expect(help.querySelector("h2")!.textContent).toBe("Using the computer");
+    expect([...help.querySelectorAll("h3")].map(heading => heading.textContent)).toEqual(["Taking control", "Touching the screen", "Typing and the clipboard", "When a pointer is easier"]);
+    // Every item draws an icon the web has.
+    expect([...help.querySelectorAll("li svg path")].every(path => !!path.getAttribute("d"))).toBe(true);
+    await act(async () => help.querySelector<HTMLButtonElement>("[aria-label='Close help']")!.click());
+    expect(help.open).toBe(false);
+    await click("Trackpad");
+    expect(localStorage.getItem("computer.trackpad")).toBeNull();
   });
   it("explains a browser recovery fence while keeping the desktop available to watch", async () => {
     status.reason = "An interrupted browser action needs recovery before anyone can control the computer.";

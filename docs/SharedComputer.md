@@ -12,6 +12,24 @@ A second household member can watch, but cannot steal another person's control.
 After a lost connection, the desktop reconnects in watch mode; take over explicitly
 to resume input. Closing the last desktop attachment normally hands control back.
 
+On a phone or tablet, in the web app and the iOS app, touch works like this:
+
+- Tap clicks where you tapped, and one finger drags. A quick second tap on the same
+  spot double-clicks.
+- Two-finger tap, or press and hold, right-clicks. Two fingers scroll.
+- Pinch zooms the view, not the desktop. Zoomed in, two fingers pan instead of
+  scrolling. **Reset zoom** zooms back out.
+- **Trackpad mode** turns a finger into a trackpad: it moves a pointer, a tap
+  clicks there, and double-tap and hold drags. **Recenter pointer** brings the
+  pointer back on screen.
+- **Copy to** this device copies what was last copied on the desktop. **Paste
+  from** this device puts the device's clipboard on the desktop's clipboard and
+  types it into the selected field, up to 8192 characters.
+
+The **?** button explains these. On the web, the touch buttons sit below the
+desktop; in the iOS app, the bottom bar holds the keyboard and clipboard, and its
+**⋯** menu holds trackpad mode and zoom. Mouse and keyboard input are unchanged.
+
 An assistant can ask for a person from the conversation with its
 `computer_request_handoff` tool, for a CAPTCHA, a sign-in that needs a phone, a
 purchase confirmation or a choice only a person should make. The tool exists only

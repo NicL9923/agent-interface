@@ -169,6 +169,8 @@ The [shared computer](docs/SharedComputer.md) provides one persistent desktop an
 browser for all assistants, with human takeover for every household member and a
 real VPS terminal for terminal administrators. The iOS app shows the desktop on its
 own Computer screen with Take over and Hand back; the terminal still opens in Safari.
+On a phone, web and iOS add touch controls with a help sheet: two-finger scroll and
+right-click, pinch to zoom the view, trackpad mode and clipboard copy and paste.
 An assistant can ask for a person in the conversation; the card's Take over opens the
 computer with control in one step, and handing back tells the assistant to continue.
 While a browser tool runs, the live row offers Watch.

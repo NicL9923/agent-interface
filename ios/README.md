@@ -16,6 +16,9 @@ native viewer page, watching until **Take over**. With control, the keyboard
 button types straight into the desktop: Return presses Enter, Delete presses
 Backspace, and the row above the keyboard adds Escape, Tab, a one-shot Control,
 arrows and Paste. Tapping the desktop to pick a field keeps the keyboard up. The
+bottom bar holds the keyboard, a clipboard menu with Copy to and Paste from this
+device, and a **⋯** menu with trackpad mode, Recenter pointer and Reset zoom;
+**?** explains the touch controls. The
 VPS terminal still opens in the system browser with its own household sign-in;
 the native session token is never passed in a URL.
 
