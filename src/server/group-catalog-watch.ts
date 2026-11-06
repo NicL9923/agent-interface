@@ -9,7 +9,8 @@ export const GROUP_CATALOG_WRITE_FLOOR_MS = 1_000;
  * watching later.
  */
 export type CatalogRead = (userIds: string[]) => Promise<(userId: string) => string>;
-type Viewer = { userId: string; changed: () => void };
+/** `fresh` until the first check that covers it: its client's own read may predate that check's. */
+type Viewer = { userId: string; changed: () => void; fresh: boolean };
 
 /**
  * Tells open household streams when a person's visible group catalog changes: a room added,
@@ -32,6 +33,8 @@ export class GroupCatalogWatch {
   private last = -Infinity;
   /** Advances when the last viewer leaves, so a read that was running then changes nothing. */
   private generation = 0;
+  /** The Hermes read in flight, kept across generations so a reconnect never starts a second one. */
+  private inflight?: Promise<unknown>;
   constructor(private readonly read: CatalogRead, private readonly interval = GROUP_CATALOG_POLL_MS,
     private readonly floor = GROUP_CATALOG_WRITE_FLOOR_MS) {}
 
@@ -39,12 +42,16 @@ export class GroupCatalogWatch {
 
   /** Calls `changed` whenever this person's catalog changes, until the returned function runs. */
   watch(userId: string, changed: () => void): () => void {
-    const viewer: Viewer = { userId, changed };
+    const viewer: Viewer = { userId, changed, fresh: false };
     this.viewers.add(viewer);
     if (!this.seen.has(userId) && this.project) {
       try { this.seen.set(userId, this.project(userId)); } catch { /* The next read sets it. */ }
     }
-    // The first viewer starts the checks; its client reads the catalog as it connects, so this read only sets where it starts.
+    // A starting point from an earlier check predates this stream, and its client reads the catalog as
+    // it connects, so any later change still differs from it. Without one, the first check could see a
+    // change the client's read missed and silently start from it, so that check notifies instead.
+    viewer.fresh = !this.seen.has(userId);
+    // The first viewer starts the checks.
     if (this.viewers.size === 1) this.schedule(0);
     let ended = false;
     return () => {
@@ -94,10 +101,16 @@ export class GroupCatalogWatch {
     if (!this.viewers.size) return;
     const generation = this.generation;
     this.reading = true;
+    // A read started before the last viewer left may still be running: wait for it, never overlap it.
+    if (this.inflight) await this.inflight.catch(() => {});
+    if (generation !== this.generation || !this.viewers.size) return;
     this.last = Date.now();
     let project: ((userId: string) => string) | undefined;
-    try { project = await this.read([...new Set([...this.viewers].map(viewer => viewer.userId))]); }
+    const reading = this.read([...new Set([...this.viewers].map(viewer => viewer.userId))]);
+    this.inflight = reading;
+    try { project = await reading; }
     catch { /* Hermes or its catalog is unavailable: keep what was seen and try at the next check. */ }
+    finally { if (this.inflight === reading) this.inflight = undefined; }
     // A read from before the last viewer left changes nothing, not even whether a read is running.
     if (generation !== this.generation) return;
     this.reading = false;
@@ -113,8 +126,8 @@ export class GroupCatalogWatch {
         const value = next.get(viewer.userId);
         if (value === undefined) continue;
         const before = this.seen.get(viewer.userId);
-        // A viewer with nothing seen yet starts here; its client read the catalog as it connected.
-        if (before !== undefined && before !== value) viewer.changed();
+        if (viewer.fresh) { viewer.fresh = false; viewer.changed(); }
+        else if (before !== undefined && before !== value) viewer.changed();
       }
       for (const [userId, value] of next) if (value !== undefined) this.seen.set(userId, value);
     }

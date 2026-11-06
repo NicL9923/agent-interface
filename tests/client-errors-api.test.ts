@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createApp } from "../src/server/app.js";
 import { CLIENT_ERROR_WINDOW_MS, CLIENT_ERRORS_PER_WINDOW } from "../src/server/client-errors.js";
 import { loadConfig } from "../src/server/config.js";
+import { withoutUrlQueries } from "../src/shared/api.js";
 import { fakeRuntime, signIn } from "./helpers/server.js";
 
 const origin = "https://app.example.invalid";
@@ -28,6 +29,25 @@ it("logs a signed-in person's report with their id and stores nothing", async ()
   const response = await s.app.inject(post(s.one));
   expect([response.statusCode, response.json()]).toEqual([200, { ok: true }]);
   expect(s.logged()).toEqual([expect.objectContaining({ level: 40, userId: "one", clientError: report })]);
+});
+
+it("logs no URL query or hash from a report's message or stack, whatever the client sent", async () => {
+  const s = await setup();
+  const leaky = { ...report,
+    message: "TypeError: failed https://app.example.invalid/native/callback?code=SENTINEL#private-draft",
+    stack: "at load (/api/search?q=SENTINEL:3:9)\nat Home (https://app.example.invalid/assets/index-abc.js:1:2)" };
+  expect((await s.app.inject(post(s.one, leaky))).statusCode).toBe(200);
+  const [line] = s.logged();
+  expect(JSON.stringify(line)).not.toMatch(/SENTINEL|private-draft/);
+  expect(line.clientError).toMatchObject({
+    message: "TypeError: failed https://app.example.invalid/native/callback",
+    stack: "at load (/api/search:3:9)\nat Home (https://app.example.invalid/assets/index-abc.js:1:2)" });
+});
+
+it("leaves text without a URL query alone", () => {
+  for (const text of ["Is the gate shut? yes", "either/or?maybe", "Expected 3 rows, got 2 (page 1)", "at f (index-abc.js:1:2)", "ratio 1/2#3"])
+    expect(withoutUrlQueries(text), text).toBe(text);
+  expect(withoutUrlQueries("see (https://x.invalid/a?b=1) and /p#q.")).toBe("see (https://x.invalid/a) and /p");
 });
 
 it("requires a session, the app's Origin and the CSRF token", async () => {

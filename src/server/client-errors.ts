@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { CLIENT_ERROR_LIMITS } from "../shared/api.js";
+import { CLIENT_ERROR_LIMITS, withoutUrlQueries } from "../shared/api.js";
 import { apiRoute } from "./api-route.js";
 import { signedIn } from "./auth.js";
 import { httpError } from "./http-error.js";
@@ -11,8 +11,9 @@ export const CLIENT_ERROR_WINDOW_MS = 10 * 60_000;
 
 const report = z.object({
   kind: z.enum(["render", "error", "rejection"]),
-  message: z.string().min(1).max(CLIENT_ERROR_LIMITS.message),
-  stack: z.string().max(CLIENT_ERROR_LIMITS.stack).optional(),
+  // The client strips URL queries too; doing it again here keeps an older or altered client's from the log.
+  message: z.string().min(1).max(CLIENT_ERROR_LIMITS.message).transform(withoutUrlQueries),
+  stack: z.string().max(CLIENT_ERROR_LIMITS.stack).transform(withoutUrlQueries).optional(),
   // A path only: a query string or hash can carry a search, a room or a sign-in code.
   route: z.string().max(CLIENT_ERROR_LIMITS.route).regex(/^\/[^?#]*$/),
   release: z.string().max(CLIENT_ERROR_LIMITS.release).regex(/^[\w.-]+$/).optional(),

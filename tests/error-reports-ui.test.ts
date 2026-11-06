@@ -2,6 +2,7 @@
 import { act, createElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { mountRoot } from "./ui-harness";
+import { quietConsoleErrors } from "./act-guard";
 
 // Each test loads its own copy, so the page's dedupe and cap start empty, as on a fresh load.
 async function load(signedIn = true) {
@@ -18,7 +19,7 @@ const settle = () => act(async () => { await new Promise(resolve => setTimeout(r
 beforeEach(() => {
   fetch = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
   vi.stubGlobal("fetch", fetch);
-  vi.spyOn(console, "error").mockImplementation(() => {});
+  quietConsoleErrors();
   history.replaceState(null, "", "/?bot=secret-room#draft");
 });
 
@@ -69,6 +70,18 @@ describe("client error reports", () => {
     await settle();
     expect(sent().map(report => [report.body.kind, report.body.message])).toEqual([
       ["error", "RangeError: bad index"], ["rejection", "socket closed"]]);
+  });
+
+  it("strips URL queries and hashes from what it sends, keeping stack line numbers", async () => {
+    const { reports } = await load();
+    const cause = new Error("load failed for /api/search?q=SENTINEL#private-draft");
+    cause.stack = "Error: load failed\n    at search (https://app.example.invalid/assets/index-abc.js?v=SENTINEL:10:5)";
+    reports.reportClientError("error", cause);
+    await settle();
+    const [report] = sent();
+    expect(JSON.stringify(report.body)).not.toMatch(/SENTINEL|private-draft/);
+    expect(report.body.message).toBe("Error: load failed for /api/search");
+    expect(report.body.stack).toContain("assets/index-abc.js:10:5");
   });
 
   it("sends nothing while signed out or for a chunk failure the screens already handle", async () => {

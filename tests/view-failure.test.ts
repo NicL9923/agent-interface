@@ -7,6 +7,7 @@ import { api } from "../src/client-api";
 import { defaultPreferences } from "../src/shared/types";
 import type { Bootstrap } from "../src/shared/types";
 import { mountRoot, stubMatchMedia } from "./ui-harness";
+import { quietConsoleErrors } from "./act-guard";
 
 vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(await (async original => ({ ...await original<typeof import("../src/client-api")>(), api: vi.fn(), write: vi.fn().mockResolvedValue({}), clearResponseCache: vi.fn() }))(original)));
 // SVG geometry is a browser concern, not part of this regression.
@@ -36,7 +37,7 @@ let container: HTMLDivElement;
 let root: Root;
 beforeEach(() => {
   stubMatchMedia();
-  vi.spyOn(console, "error").mockImplementation(() => {});
+  quietConsoleErrors();
   history.replaceState(null, "", "/");
   vi.mocked(api).mockImplementation(async <T>(path: string) => (path === "/bootstrap?roster=lean" ? bootstrap
     : path === "/groups" ? { supported: true, canSend: true, rooms: [{ room_id: "room", name: "Supper planning", members: [] }] } : null) as T);

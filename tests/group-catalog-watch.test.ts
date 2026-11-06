@@ -48,6 +48,8 @@ describe("group catalog watch", () => {
     const one = vi.fn(), two = vi.fn();
     watch.watch("one", one); watch.watch("two", two);
     await vi.advanceTimersByTimeAsync(0);
+    expect([one.mock.calls.length, two.mock.calls.length], "the first check tells each starting stream once").toEqual([1, 1]);
+    one.mockClear(); two.mockClear();
     await vi.advanceTimersByTimeAsync(3 * GROUP_CATALOG_POLL_MS);
     expect([one.mock.calls.length, two.mock.calls.length]).toEqual([0, 0]);
     catalogs.set("one", "a2");
@@ -82,6 +84,7 @@ describe("group catalog watch", () => {
     const one = vi.fn();
     watch.watch("one", one);
     await vi.advanceTimersByTimeAsync(GROUP_CATALOG_WRITE_FLOOR_MS);
+    one.mockClear();
     catalogs.set("one", "sent");
     for (let index = 0; index < 5; index++) watch.changed();
     await vi.advanceTimersByTimeAsync(0);
@@ -104,12 +107,68 @@ describe("group catalog watch", () => {
     expect(read).toHaveBeenCalledTimes(4);
   });
 
+  it("tells a starting stream about a change its client's own read may have missed", async () => {
+    vi.useFakeTimers();
+    const { catalogs, watch } = setup();
+    const one = vi.fn();
+    // The client read "a" as it connected; the room changed before the first check read it.
+    watch.watch("one", one);
+    catalogs.set("one", "a2");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(one).toHaveBeenCalledTimes(1);
+    watch.close();
+  });
+
+  it("tells a starting stream once its first successful check lands, even after Hermes failed", async () => {
+    vi.useFakeTimers();
+    const { read, watch } = setup();
+    const one = vi.fn();
+    read.mockRejectedValueOnce(new Error("coordinator down"));
+    watch.watch("one", one);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(one).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(GROUP_CATALOG_POLL_MS);
+    expect(one).toHaveBeenCalledTimes(1);
+    watch.close();
+  });
+
+  it("never runs a second Hermes read while one from before a reconnect is still running", async () => {
+    vi.useFakeTimers();
+    const { read, watch } = setup();
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    read.mockImplementationOnce(async () => { await held; return () => "a"; });
+    let running = 0, most = 0;
+    const counted = read.getMockImplementation()!;
+    read.mockImplementation(async (userIds: string[]) => {
+      running++; most = Math.max(most, running);
+      try { return await counted(userIds); } finally { running--; }
+    });
+    // The first read hangs; streams drop and reconnect three times meanwhile.
+    for (let cycle = 0; cycle < 3; cycle++) {
+      const stop = watch.watch("one", vi.fn());
+      await vi.advanceTimersByTimeAsync(0);
+      stop();
+    }
+    const one = vi.fn();
+    watch.watch("one", one);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(read, "later checks wait for the hung read").toHaveBeenCalledTimes(1);
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(most).toBe(1);
+    expect(one, "the reconnected stream hears from the read that followed").toHaveBeenCalledTimes(1);
+    watch.close();
+  });
+
   it("keeps what it saw when Hermes fails, and tries again at the next check", async () => {
     vi.useFakeTimers();
     const { catalogs, read, watch } = setup();
     const one = vi.fn();
     watch.watch("one", one);
     await vi.advanceTimersByTimeAsync(0);
+    one.mockClear();
     read.mockRejectedValueOnce(new Error("coordinator down"));
     await vi.advanceTimersByTimeAsync(GROUP_CATALOG_POLL_MS);
     expect(one).not.toHaveBeenCalled();
@@ -187,17 +246,18 @@ describe("groups notices on the household stream", () => {
       const room = await listen(s.base, "/api/events?group=shared", s.two);
       await wait(GROUP_CATALOG_POLL_MS);
       expect(s.lists(), "one shared check, then one per interval").toBeLessThanOrEqual(2);
-      expect([notices(one), notices(two), notices(room)]).toEqual([0, 0, 0]);
+      // Each stream hears once as its first check lands, in case its client's read missed a change.
+      expect([notices(one), notices(two), notices(room)]).toEqual([1, 1, 1]);
       s.post("shared", "The smoker is free Sunday.");
       await wait(GROUP_CATALOG_POLL_MS);
-      expect([notices(one), notices(two), notices(room)]).toEqual([1, 1, 1]);
+      expect([notices(one), notices(two), notices(room)]).toEqual([2, 2, 2]);
       s.post("private", "The receipts are filed.");
       await wait(GROUP_CATALOG_POLL_MS);
-      expect([notices(one), notices(two), notices(room)]).toEqual([2, 1, 1]);
+      expect([notices(one), notices(two), notices(room)]).toEqual([3, 2, 2]);
       // A renamed room is a change; a quiet interval is not.
       s.rooms[0].name = "Sunday supper";
       await wait(2 * GROUP_CATALOG_POLL_MS);
-      expect([notices(one), notices(two), notices(room)]).toEqual([3, 2, 2]);
+      expect([notices(one), notices(two), notices(room)]).toEqual([4, 3, 3]);
       await Promise.all([one.close(), two.close(), room.close()]);
       await wait(1000);
       const reads = s.lists();
@@ -212,12 +272,13 @@ describe("groups notices on the household stream", () => {
     try {
       const two = await listen(s.base, "/api/events", s.two);
       await wait(GROUP_CATALOG_WRITE_FLOOR_MS);
+      expect(notices(two), "the first check").toBe(1);
       const sent = await fetch(`${s.base}/api/groups/shared/messages`, { method: "POST",
         headers: { ...s.one, "content-type": "application/json" },
         body: JSON.stringify({ requestId: crypto.randomUUID(), text: "Bring the brisket", threadId: "main" }) });
       expect(sent.status).toBe(200);
       await wait(GROUP_CATALOG_WRITE_FLOOR_MS);
-      expect(notices(two)).toBe(1);
+      expect(notices(two)).toBe(2);
       await two.close();
     } finally { vi.useRealTimers(); await s.app.close(); }
   });

@@ -1,4 +1,4 @@
-import { CLIENT_ERROR_LIMITS, type ClientErrorReport } from "../shared/api";
+import { CLIENT_ERROR_LIMITS, withoutUrlQueries, type ClientErrorReport } from "../shared/api";
 import { hasSession, request } from "../client-api";
 import { isChunkFailure } from "./chunk-failure";
 
@@ -26,8 +26,8 @@ function release() {
 export function reportClientError(kind: ClientErrorReport["kind"], cause: unknown, componentStack?: string) {
   try {
     if (!hasSession() || isChunkFailure(cause)) return;
-    const message = describe(cause).slice(0, CLIENT_ERROR_LIMITS.message) || "Unknown error";
-    const stack = [cause instanceof Error ? cause.stack : undefined, componentStack].filter(Boolean).join("\n")
+    const message = withoutUrlQueries(describe(cause)).slice(0, CLIENT_ERROR_LIMITS.message) || "Unknown error";
+    const stack = withoutUrlQueries([cause instanceof Error ? cause.stack : undefined, componentStack].filter(Boolean).join("\n"))
       .slice(0, CLIENT_ERROR_LIMITS.stack) || undefined;
     const key = `${message}\n${stack ?? ""}`;
     if (reported.has(key) || sent >= MAX_REPORTS_PER_PAGE) return;

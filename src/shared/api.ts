@@ -66,6 +66,15 @@ export interface WebPushSubscription { endpoint: string; keys: { p256dh: string;
 export type PushTest = { ok: true; detail: string };
 /** Bounds the server enforces on a client error report. Clients trim to them before sending. */
 export const CLIENT_ERROR_LIMITS = { message: 1024, stack: 8192, route: 512, release: 64 } as const;
+/** An absolute URL, or a path that starts a word, followed by its query string or hash. */
+const urlWithQuery = /((?:\b[a-z][a-z\d+.-]*:\/\/|(?<![\w/.])\/)[^\s?#"'`<>()]*)([?#][^\s"'`<>()]*)/gi;
+/**
+ * Drops the query string and hash from every URL in diagnostic text: they can carry a sign-in code,
+ * a search or a draft. A stack frame's trailing line and column survive, as in `/app.js?v=1:10:5`.
+ */
+export function withoutUrlQueries(text: string) {
+  return text.replace(urlWithQuery, (_match, url: string, query: string) => url + (/(?::\d+){1,2}$/.exec(query)?.[0] ?? ""));
+}
 /** A crash or uncaught error in the web client, reported so a white screen on a phone is not silent. */
 export interface ClientErrorReport {
   /** Where it was caught: the root error boundary, a window `error`, or an unhandled rejection. */
