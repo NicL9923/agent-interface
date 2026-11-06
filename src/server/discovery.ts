@@ -93,6 +93,15 @@ export async function installDiscoveryRoutes(app: FastifyInstance, runtime: Runt
     });
     return {ok:true};
   });
+  // Stopping a run is like pausing: it never sends anything anywhere, so no delivery check applies.
+  apiRoute(app, "POST /routines/:id/stop", {}, async req => {
+    const routineId = z.object({id}).parse(req.params).id;
+    const row=routineById(await runtime.routines(),routineId,store,signedIn(req).id);
+    if(!row)throw httpError(404,'Routine not found');
+    await bot(signedIn(req).id,row.botId);await assertRoutineEditable(runtime,store,routineId,row.botId);
+    if(!runtime.stopRoutineRun)throw httpError(409,'This integration cannot stop a routine run.');
+    return { stopped: await runtime.stopRoutineRun(row.botId, routineId) };
+  });
   apiRoute(app, "GET /automations", {}, async req => {
     const { days } = z.object({ days: z.coerce.number().refine(days => [7,30,90].includes(days)).default(30) }).strict().parse(req.query);
     const bots = await visible(signedIn(req).id); const allowed = new Set(bots.map(bot => bot.id));

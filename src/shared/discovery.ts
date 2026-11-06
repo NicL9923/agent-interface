@@ -19,7 +19,7 @@ export function receipt(call: ToolCall) {
 
 /** Keep unfamiliar Hermes statuses visible rather than guessing their outcome. */
 export function routineResultLabel(status: string): string {
-  const labels: Record<string, string> = { ok: "Succeeded", success: "Succeeded", succeeded: "Succeeded", error: "Failed", failed: "Failed", delivery_failed: "Delivery failed", running: "Running", pending: "Pending", skipped: "Skipped", cancelled: "Canceled" };
+  const labels: Record<string, string> = { ok: "Succeeded", success: "Succeeded", succeeded: "Succeeded", error: "Failed", failed: "Failed", delivery_failed: "Delivery failed", running: "Running", pending: "Pending", skipped: "Skipped", cancelled: "Canceled", missed: "Didn't run" };
   return Object.hasOwn(labels, status) ? labels[status] : status;
 }
 /** One stretch of a search snippet, marked when it matched the search. */

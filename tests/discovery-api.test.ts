@@ -20,10 +20,10 @@ async function setup() {
     history,
     usage: input => ({botId:input.profile,days:input.days,sessions:0,inputTokens:0,outputTokens:0,actualCost:null,estimatedCost:null,partial:false,notice:'Recorded usage'}),
   });
-  const setRoutineEnabled=vi.fn(async()=>{});const saveRoutine=vi.fn();const routineResults=vi.fn(async()=>[{id:'output',title:'Dinners',preview:'Plan dinners',previewOnly:false}]);
-  const runtime=fakeRuntime({listBots:async()=>[botFixture(),botFixture({id:'private',name:'Private',shared:false,ownerId:'two'})],experienceRequest:experience,routines:async()=>[{id:'routine',botId:'shared',name:'Dinners',schedule:'0 7 * * *',prompt:'Report',enabled:true}],routineResults,tools:async()=>[toolFixture({id:'browser',enabled:false}),toolFixture()],capabilities:async()=>capabilitiesFixture({uploads:{supported:true}}),setRoutineEnabled,saveRoutine});
+  const setRoutineEnabled=vi.fn(async()=>{});const stopRoutineRun=vi.fn(async()=>true);const saveRoutine=vi.fn();const routineResults=vi.fn(async()=>[{id:'output',title:'Dinners',preview:'Plan dinners',previewOnly:false}]);
+  const runtime=fakeRuntime({listBots:async()=>[botFixture(),botFixture({id:'private',name:'Private',shared:false,ownerId:'two'})],experienceRequest:experience,routines:async()=>[{id:'routine',botId:'shared',name:'Dinners',schedule:'0 7 * * *',prompt:'Report',enabled:true}],routineResults,tools:async()=>[toolFixture({id:'browser',enabled:false}),toolFixture()],capabilities:async()=>capabilitiesFixture({uploads:{supported:true}}),setRoutineEnabled,stopRoutineRun,saveRoutine});
   const experienceRequest = vi.spyOn(runtime, 'experienceRequest');
-  await installDiscoveryRoutes(app,runtime,store);const headers=signIn(store,origin,'one',{email:'one@example.test',csrf:'csrf'});app.addHook('onClose',async()=>store.close());return {app,store,headers,experienceRequest,history,setRoutineEnabled,saveRoutine};
+  await installDiscoveryRoutes(app,runtime,store);const headers=signIn(store,origin,'one',{email:'one@example.test',csrf:'csrf'});app.addHook('onClose',async()=>store.close());return {app,store,headers,experienceRequest,history,setRoutineEnabled,stopRoutineRun,saveRoutine};
 }
 it('searches only visible profiles and includes routine results without copying their output',async()=>{
   const s=await setup();expect((await s.app.inject('/api/search?q=dinners')).statusCode).toBe(401);
@@ -39,6 +39,13 @@ it('validates original reply identity and scoped saved references',async()=>{
 });
 it('pauses without resaving a stale prompt, schedule or recipients',async()=>{
   const s=await setup();const response=await s.app.inject({url:'/api/routines/routine/state',method:'PATCH',headers:s.headers,payload:{enabled:false}});expect(response.statusCode).toBe(200);expect(s.setRoutineEnabled).toHaveBeenCalledWith('shared','routine',false);expect(s.saveRoutine).not.toHaveBeenCalled();
+});
+it('stops a running routine for someone who can see it, and leaves its schedule alone',async()=>{
+  const s=await setup();const stop=(id:string,headers:Record<string,string>=s.headers)=>s.app.inject({url:`/api/routines/${id}/stop`,method:'POST',headers});
+  const response=await stop('routine');expect(response.statusCode).toBe(200);expect(response.json()).toEqual({stopped:true});
+  expect(s.stopRoutineRun).toHaveBeenCalledWith('shared','routine');expect(s.setRoutineEnabled).not.toHaveBeenCalled();expect(s.saveRoutine).not.toHaveBeenCalled();
+  expect((await stop('missing')).statusCode).toBe(404);
+  expect((await stop('routine',{cookie:s.headers.cookie,origin:s.headers.origin})).statusCode).toBe(403);
 });
 it('offers only enabled tool starters and always leaves sending to the composer',async()=>{
   const s=await setup();const response=await s.app.inject({url:'/api/bots/shared/starters',headers:s.headers});expect(response.json().map((row:any)=>row.id)).toEqual(['meals','document','server']);

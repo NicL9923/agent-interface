@@ -322,9 +322,12 @@ def _iso(value):
 
 
 # Hermes job and ledger words, normalized for the app. A delivery failure still ran.
-_LEDGER_STATUS = {"completed": "succeeded", "failed": "failed", "claimed": "running", "running": "running"}
+# A run stopped on request, or one Hermes skipped while it was off, is neither a success nor a failure.
+_LEDGER_STATUS = {"completed": "succeeded", "failed": "failed", "claimed": "running", "running": "running",
+                  "cancelled": "stopped", "missed": "missed"}
 _JOB_STATUS = {"ok": "succeeded", "delivery_queued": "succeeded", "delivery_failed": "succeeded",
-               "error": "failed", "failed": "failed", "interrupted": "failed", "blocked_config": "failed"}
+               "error": "failed", "failed": "failed", "interrupted": "failed", "blocked_config": "failed",
+               "cancelled": "stopped", "missed": "missed"}
 # How long a never-closed session without a ledger counts as live, as Hermes's own is_active.
 _ACTIVE_SECONDS = 300.0
 

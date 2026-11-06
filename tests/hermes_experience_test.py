@@ -571,6 +571,14 @@ class RoutineRunStatusTests(unittest.TestCase):
         # The row keeps every field older apps read.
         self.assertLessEqual({'id', 'title', 'startedAt', 'preview', 'previewOnly'}, set(rows['local-2']))
 
+    def test_a_stopped_or_missed_run_reads_as_neither_success_nor_failure(self):
+        self.sessions += [dict(id='local-3', source='cron', title='Brief', started_at=700.0, ended_at=710.0, cron_execution_id='e3'),
+            dict(id='local-4', source='cron', title='Brief', started_at=800.0, ended_at=800.0, cron_execution_id='e4')]
+        self.ledger += [dict(id='e3', status='cancelled', claimed_at='1970-01-01T00:11:40+00:00', finished_at='1970-01-01T00:11:50+00:00', error='cancelled on request (Stop)'),
+            dict(id='e4', status='missed', claimed_at='1970-01-01T00:13:20+00:00', finished_at='1970-01-01T00:13:20+00:00')]
+        rows = self.results()
+        self.assertEqual((rows['local-3']['status'], rows['local-4']['status']), ('stopped', 'missed'))
+
     def test_open_session_is_running_only_while_active(self):
         now = time.time()
         self.sessions += [dict(id='cron_routine_live', source='cron', started_at=now - 30, last_active=now - 5, ended_at=None),

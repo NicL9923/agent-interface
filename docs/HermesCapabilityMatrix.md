@@ -159,6 +159,19 @@ computer stays off rather than run a weaker metadata check. The automation
 probe now locks a skill, checks that an approved assistant edit to it is
 refused, and unlocks it again.
 
+The November 6 follow-up qualifies Hermes main `74915d7af8d3115c3eb821893f3c01ab783146a5`, which
+contains v0.23.0. Upstream commits `e9f8551` and `1fcc57e` deleted the Bot Chat mailbox helpers
+`has_mailbox`, `_scan_read`, `_next_sequence` and `complete_delivery` once the authority FIFO stopped
+reading the mailbox. The add-on's own deliveries still use that directory, so `bot_delivery.ensure_helpers`
+supplies the four over the native `_root`, `_locked`, `_read`, `_write` and `_delivery_id` that remain,
+and keeps Hermes's own where they exist. Without it the guarded gateway refused to start. The full spike,
+native and real-application probes passed against that revision in disposable homes.
+
+The same follow-up adopts the native cron cancel route (`POST /api/cron/jobs/{id}/cancel`) and the job
+list's `live_execution`. A routine with a run in flight shows Stop run on web and iOS; the schedule is
+unchanged. A run Hermes records as `cancelled` reads as Stopped and one recorded as `missed` as Didn't
+run, instead of Status unknown. Both exist at `ed1afb0` too.
+
 New full spike runs save receipts in their disposable `evidence` directory,
 printed at completion. Archive a successful run with
 `.agents/tools/archive-spike-evidence.py` into a new `docs/evidence` directory;

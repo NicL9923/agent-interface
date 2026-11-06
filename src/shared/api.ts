@@ -98,6 +98,7 @@ export interface ApiRoutes {
   "PUT /routines/:id": { body: RoutineSave; response: Routine };
   "DELETE /routines/:id": { response: Ok };
   "PATCH /routines/:id/state": { body: { enabled: boolean }; response: Ok };
+  "POST /routines/:id/stop": { response: { stopped: boolean } };
   "GET /routines/templates": { response: typeof routinePresets };
   "POST /routines/preview": { body: { botId: string; schedule: string }; response: RoutinePreview };
   "POST /routines/:id/run": { body: { requestId: string }; response: RoutineRunReceipt };
