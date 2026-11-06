@@ -13,7 +13,7 @@ export function capabilitiesFixture(changes: Partial<Capabilities> = {}): Capabi
   return { chat: unsupported, steering: unsupported, approvals: unsupported, uploads: unsupported,
     generatedFiles: unsupported, botConfiguration: unsupported, tools: unsupported, skills: unsupported,
     routines: unsupported, durableEvents: unsupported, idempotency: unsupported, imageGeneration: unsupported,
-    stop: unsupported, portraitGeneration: unsupported, avatarMetadata: unsupported, ...changes };
+    stop: unsupported, portraitGeneration: unsupported, avatarMetadata: unsupported, liveVoice: unsupported, ...changes };
 }
 export const memoryFixture = (changes: Partial<ProfileMemory> = {}): ProfileMemory => ({ botId: 'ranch', profile: 'ranch', scope: 'profile', owner: 'Hermes',
   documents: [{ target: 'memory', label: 'Assistant notes', revision: 'a'.repeat(64), enabled: true, entries: [], charLimit: 2000, charCount: 0 },

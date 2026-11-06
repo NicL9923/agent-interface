@@ -151,6 +151,10 @@
       "avatarMetadata": {
         "supported": true
       },
+      "liveVoice": {
+        "supported": false,
+        "reason": "The WildBots voice plugin is not linked into Hermes."
+      },
       "imageGeneration": {
         "supported": false,
         "reason": "The connected Hermes profile has no image provider."

@@ -18,7 +18,7 @@ const files = [
   "assets/index-a.js", "assets/index-a.css", "assets/font-f.woff2", "assets/native-n.js", "assets/native-n.css",
   "assets/shared-s.js", "assets/native-only-o.js",
   "assets/BotSettings-b.js", "assets/BotSettings-b.css", "assets/photo-p.png", "assets/lazy-shared-l.js",
-  "assets/rfb-c.js", "assets/xterm-d.js", "assets/remote-r.js",
+  "assets/rfb-c.js", "assets/xterm-d.js", "assets/remote-r.js", "voice-previews/marin.m4a", "voice-previews/cedar.m4a",
 ].sort();
 
 describe("service worker precache plan", () => {
@@ -42,9 +42,14 @@ describe("service worker precache plan", () => {
     expect([...install, ...warm].filter((file) => onDemand.includes(file))).toEqual([]);
   });
 
+  it("leaves voice previews to the network, so no visit downloads them unasked", () => {
+    const { network } = precachePlan(manifest, files);
+    expect(network).toEqual(["voice-previews/cedar.m4a", "voice-previews/marin.m4a"]);
+  });
+
   it("puts every built file in exactly one group", () => {
-    const { install, warm, onDemand } = precachePlan(manifest, files);
-    expect([...install, ...warm, ...onDemand].sort()).toEqual(files);
+    const { install, warm, onDemand, network } = precachePlan(manifest, files);
+    expect([...install, ...warm, ...onDemand, ...network].sort()).toEqual(files);
   });
 
   it("fails the build when no admin-only chunk is found, instead of quietly precaching them again", () => {

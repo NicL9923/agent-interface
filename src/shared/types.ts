@@ -4,6 +4,13 @@ import type { IntegrationRequest, IntegrationCatalog, IntegrationConnection, Int
 import type { ComputerRequest, ComputerStatus, ComputerAttachment, ComputerHandoff } from "./computer.js";
 import type { SecureRequest, VaultRequest, VaultResponse } from "./vault.js";
 import type { GroupRequest, GroupResponse, RoutineOutput, RoutineResult } from './collaboration.js';
+import type { TalkSession, TalkVoice } from "./voice.js";
+/** What the app chooses in a Realtime session. The Hermes add-on fixes the model's other settings. */
+export interface RealtimeSessionInput {
+  voice: TalkVoice;
+  instructions: string;
+  tools: { type: "function"; name: string; description: string; parameters: Record<string, unknown> }[];
+}
 export type ActivityState =
   | "idle"
   | "thinking"
@@ -143,7 +150,9 @@ export type CapabilityKey =
   | "imageGeneration"
   | "stop"
   | "portraitGeneration"
-  | "avatarMetadata";
+  | "avatarMetadata"
+  /** Live Talk: Hermes can mint OpenAI Realtime sessions on its ChatGPT sign-in. */
+  | "liveVoice";
 export type Capabilities = Record<CapabilityKey, Capability>;
 export interface Bot {
   id: string;
@@ -158,6 +167,8 @@ export interface Bot {
   shared: boolean;
   ownerId?: string;
   avatar?: Avatar;
+  /** The Realtime voice it speaks with in live Talk. Unset means the default, marin. */
+  voice?: TalkVoice;
   enabledTools?: string[];
   enabledSkills?: string[];
   sessionId?: string;
@@ -458,6 +469,10 @@ export interface Runtime {
   stop(botId: string): Promise<void>;
   generatePortrait(botId: string, prompt: string): Promise<FileRef>;
   setAvatar?(botId: string, avatar: Avatar): Promise<void>;
+  /** Saves the Talk voice with the profile, beside its avatar. */
+  setVoice?(botId: string, voice: TalkVoice): Promise<void>;
+  /** A Realtime client secret on Hermes's ChatGPT sign-in, for a session the add-on completes. */
+  realtimeSession?(input: RealtimeSessionInput): Promise<TalkSession>;
   conversation(botId: string, options?: ConversationOptions): Promise<Conversation>;
   /** An inflight notice patches live state; an omitted kind means refetch. Unsubscribe with the returned function. */
   watch?(botId: string, changed: (kind?: "inflight") => void): () => void;

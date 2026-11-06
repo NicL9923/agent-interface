@@ -35,4 +35,4 @@ await rm(join(output, '.vite'), { recursive: true });
 const slash = (list) => JSON.stringify(list.map((name) => '/' + name));
 const worker = template.replace('__BUILD_ID__', version).replace('__PRECACHE__', slash(plan.install)).replace('__WARM__', slash(plan.warm)).replace('__ON_DEMAND__', slash(plan.onDemand));
 await writeFile(join(output, 'sw.js'), worker);
-console.log(`Built service worker ${version} with ${plan.install.length} installed files, ${plan.warm.length} cached in the background and ${plan.onDemand.length} on first use.`);
+console.log(`Built service worker ${version} with ${plan.install.length} installed files, ${plan.warm.length} cached in the background, ${plan.onDemand.length} on first use and ${plan.network.length} never cached.`);

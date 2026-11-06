@@ -6,6 +6,8 @@ import type { VoiceState } from "../shared/voice";
 import { Avatar } from "../components/Avatar";
 import { Icon } from "../components/Icon";
 import { VoiceControls } from "../components/VoiceControls";
+import { TalkPanel } from "../components/TalkPanel";
+import { useTalk } from "./use-talk";
 import { request } from "../client-api";
 import { MAX_ATTACHMENTS, namePastedFile, pastedFiles, prepareUpload, UPLOAD_ACCEPT } from "../shared/uploads";
 import { AttachmentTray, DropOverlay } from "./AttachmentTray";
@@ -170,6 +172,10 @@ export const Composer = memo(function Composer({ boot, selected, botId, prompts,
   onStop(): void;
 }) {
   const [voiceState, setVoiceState] = useState<VoiceState>("idle");
+  const talk = useTalk(botId, selected.name);
+  const talking = talk.status !== "idle";
+  // An older server reports no liveVoice; its absence hides Talk entirely.
+  const liveVoice = boot.capabilities.liveVoice as Bootstrap["capabilities"]["liveVoice"] | undefined;
   // An in-flight send keeps its spinning Send button even if the draft is cleared meanwhile.
   const stopVisible = active && !sending && !draft.text.trim() && !draft.attachments.length;
   // The transcript shows a message on its way, so the composer reads empty until Hermes answers.
@@ -260,6 +266,7 @@ export const Composer = memo(function Composer({ boot, selected, botId, prompts,
     <footer className="composer-area" ref={footer}>
       {drop.over && drop.panel && createPortal(<DropOverlay botName={selected.name} unavailable={attachUnavailable} />, drop.panel)}
       <StatusDock items={notices} />
+      <TalkPanel talk={talk} name={selected.name} />
       <form
         className="composer"
         onSubmit={(event) => {
@@ -390,7 +397,13 @@ export const Composer = memo(function Composer({ boot, selected, botId, prompts,
         />
 
             <VoiceControls avatar={selected.avatar} name={selected.name} key={`${boot.user.id}:${botId}`} botId={botId}
-              disabled={!draftReady || draft.botId !== botId || pending !== null || sending || connectionLost}
+              disabled={!draftReady || draft.botId !== botId || pending !== null || sending || connectionLost || talking}
+              extra={liveVoice && <button type="button" className="talk-start" aria-label={`Talk live with ${selected.name}`}
+                aria-pressed={talking} disabled={connectionLost && !talking || voiceState !== "idle"}
+                title={talking ? "End the live conversation" : liveVoice.supported ? `Talk with ${selected.name} out loud. It hears you and answers as you go.` : liveVoice.reason}
+                onClick={() => talking ? talk.end() : liveVoice.supported ? talk.start() : talk.explain(liveVoice.reason ?? "Live talk is unavailable on this Hermes.")}>
+                <Icon name="talk" size={18} /><span className="tool-label">Talk</span>
+              </button>}
               onStateChange={setVoiceState} onTranscript={(text) => setDraft(previous => ({ ...previous, dirty: true,
                 text: previous.text.trim() ? `${previous.text}\n${text}` : text }))} />
           {stopVisible ? <button type="button" className="send-button" aria-label="Stop response"
