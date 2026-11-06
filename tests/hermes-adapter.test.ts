@@ -11,7 +11,7 @@ import type { AddressInfo } from 'node:net';
 import { Readable } from 'node:stream';
 import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
 import { gzipSync } from 'node:zlib';
-import { createHermesRuntime } from '../src/server/hermes.js';
+import { createHermesRuntime, ROSTER_REUSE_MS } from '../src/server/hermes.js';
 import { createHermesTransport } from '../src/server/hermes-transport.js';
 import type { ReadTiming, Runtime, Submission } from '../src/shared/types.js';
 
@@ -182,6 +182,40 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     rpcErrors.set('profiles.list',{code:-1,message:'Offline'});
     deferredMethods.delete('profiles.list');
     expect((await runtime.listBots())[0].id).toBe('new');
+  });
+  it('reuses a settled roster read briefly, until Hermes reports a change', async () => {
+    vi.useFakeTimers({toFake:['Date']});
+    const reads=()=>calls.filter(call=>call.method==='profiles.list').length;
+    await runtime.listBots();
+    const first=reads();
+    const reused=await runtime.listBots();
+    expect(reads()).toBe(first);
+    // Each caller gets its own list, so one cannot change what another holds.
+    reused.pop();
+    expect(await runtime.listBots()).toHaveLength(1);
+    sockets[0].receive({method:'event',params:{session_id:'',type:'sessions.changed',payload:{}}});
+    await runtime.listBots();
+    expect(reads()).toBe(first+1);
+    vi.advanceTimersByTime(ROSTER_REUSE_MS);
+    await runtime.listBots();
+    expect(reads()).toBe(first+2);
+  });
+  it('reads every profile\'s routines at once and keeps roster order', async () => {
+    beforeSend=(request,socket)=>{
+      if(request.method!=='profiles.list')return;
+      deferredMethods.add('profiles.list');
+      queueMicrotask(()=>socket.receive({jsonrpc:'2.0',id:request.id,result:{profiles:[{name:'first'},{name:'second'}]}}));
+    };
+    const pending=new Map<string,(jobs:unknown[])=>void>();
+    vi.stubGlobal('fetch',vi.fn((url:URL)=>new Promise<Response>(resolve=>{
+      pending.set(new URL(url).searchParams.get('profile')!,jobs=>resolve(Response.json(jobs)));
+    })));
+    const listed=runtime.routines();
+    await vi.waitFor(()=>expect([...pending.keys()]).toEqual(['first','second']));
+    const job=(id:string)=>({id,name:id,schedule_display:'daily',enabled:true});
+    pending.get('second')!([job('later')]);
+    pending.get('first')!([job('earlier')]);
+    expect((await listed).map(routine=>[routine.botId,routine.id])).toEqual([['first','earlier'],['second','later']]);
   });
   it('admits through one canonical submit RPC and maps interruption rejection', async () => {
     canonicalSubmission=true;

@@ -148,6 +148,17 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
     if (reply.statusCode < 400 && conversationWrites.has(`${req.method} ${routePattern(req)}`))
       for (const changed of watchers.get((req.params as { id: string }).id) ?? []) changed();
   });
+  // Each person's open streams per assistant hear their own draft's new revisions, so a chat open
+  // on another device reloads the draft at once instead of polling for it. Only the revision is
+  // sent: the stream carries no draft text, and a client that already holds it skips the read.
+  const draftStreams = new Map<string, Set<(revision: number) => void>>();
+  const draftKey = (userId: string, botId: string) => `${userId}\0${botId}`;
+  const unwatchDrafts = store.watchDrafts((userId, botId, revision) => {
+    const listeners = draftStreams.get(draftKey(userId, botId));
+    // After the writing transaction commits, so a client that reloads at once reads the new draft.
+    if (listeners) queueMicrotask(() => { for (const listener of listeners) listener(revision); });
+  });
+  app.addHook("onClose", async () => unwatchDrafts());
   app.get("/api/bots/:id/events", { exposeHeadRoute: false }, async (req, reply) => {
     // Followed before the first await, so a client that leaves during setup leaves no watcher.
     const connection = eventStreamConnection(reply);
@@ -221,17 +232,23 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
       }, Math.max(0, liveLast + 250 - Date.now()));
     };
     const listeners = watchers.get(botId) ?? new Set();
+    const ownDraft = draftKey(signedIn(req).id, botId);
+    const drafts = draftStreams.get(ownDraft) ?? new Set();
+    const draftChanged = (revision: number) => stream?.send(`event: draft\ndata: ${revision}\n\n`);
     let unwatch: (() => void) | undefined;
     const teardown = () => {
       unwatch?.();
       listeners.delete(changed);
       if (!listeners.size && watchers.get(botId) === listeners) watchers.delete(botId);
+      drafts.delete(draftChanged);
+      if (!drafts.size && draftStreams.get(ownDraft) === drafts) draftStreams.delete(ownDraft);
       clearTimeout(pending);
       clearTimeout(livePending);
     };
     stream = connection.open(streams, {
       reserve: () => {
         watchers.set(botId, listeners.add(changed));
+        draftStreams.set(ownDraft, drafts.add(draftChanged));
         unwatch = runtime.watch?.(botId, notice);
       },
       // Ends, sending nothing more, once the person signs out or the assistant becomes someone else's.

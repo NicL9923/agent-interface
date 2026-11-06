@@ -5,6 +5,15 @@ import type { StoreDatabase } from "./store-database.js";
 export class DraftRepository {
   constructor(private readonly database: StoreDatabase) {}
   private get db() { return this.database.db; }
+  readonly #listeners = new Set<(userId: string, botId: string, revision: number) => void>();
+  /**
+   * Hears every new draft revision, so open chats on the person's other devices reload it instead
+   * of polling. It runs inside the writing transaction; a listener only queues a notice.
+   */
+  watch(listener: (userId: string, botId: string, revision: number) => void) {
+    this.#listeners.add(listener);
+    return () => { this.#listeners.delete(listener); };
+  }
   /** The person's saved draft, or null if they never saved one for this assistant. */
   draft(userId: string, botId: string): SavedDraft | null {
     const row = this.db
@@ -59,5 +68,8 @@ export class DraftRepository {
     this.db
       .prepare("INSERT INTO draft_revisions(user_id,bot_id,revision,reason,sent_revision) VALUES(?,?,?,?,?) ON CONFLICT(user_id,bot_id) DO UPDATE SET revision=excluded.revision,reason=excluded.reason,sent_revision=excluded.sent_revision")
       .run(userId, botId, revision, reason, reason === "sent" ? revision : previous?.sentRevision ?? 0);
+    for (const listener of this.#listeners) {
+      try { listener(userId, botId, revision); } catch { /* A watcher never fails a draft write. */ }
+    }
   }
 }

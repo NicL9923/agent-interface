@@ -266,6 +266,32 @@ describe("conversation change stream", () => {
     await events.close();
   });
 
+  it("announces a person's new draft revisions only on their own streams, without the draft", async () => {
+    const s = await setup();
+    const login = await fetch(`${s.base}/api/auth/local`, { method: "POST", headers: { origin, "content-type": "application/json" }, body: JSON.stringify({ member: "two" }) });
+    const other = login.headers.getSetCookie()[0].split(";")[0];
+    const mine = await stream(`${s.base}/api/bots/shared/events`, s.cookie);
+    const theirs = await stream(`${s.base}/api/bots/shared/events`, other);
+    await mine.until(() => mine.text.includes("retry"));
+    await theirs.until(() => theirs.text.includes("retry"));
+    const headers = { cookie: s.cookie, origin, "x-csrf-token": s.csrfToken, "content-type": "application/json" };
+    const save = (text: string) => fetch(`${s.base}/api/bots/shared/draft`, { method: "PUT", headers, body: JSON.stringify({ text, attachments: [] }) });
+    expect((await save("Buy feed")).status).toBe(200);
+    await mine.until(() => mine.text.includes("event: draft\ndata: 1\n\n"));
+    // The same content again is no new revision.
+    expect((await save("Buy feed")).status).toBe(200);
+    // Sending clears the draft, which is the next revision.
+    const sent = await fetch(`${s.base}/api/bots/shared/messages`, { method: "POST", headers,
+      body: JSON.stringify({ requestId: randomUUID(), text: "Buy feed", draftBaseRevision: 1 }) });
+    expect(sent.status).toBe(200);
+    await mine.until(() => mine.text.includes("event: draft\ndata: 2\n\n"));
+    expect(mine.text.match(/event: draft/g)).toHaveLength(2);
+    expect(mine.text).not.toContain("Buy feed");
+    await pass(1000);
+    expect(theirs.text).not.toContain("event: draft");
+    await mine.close(); await theirs.close();
+  });
+
   it("ends the stream instead of notifying once its session is signed out", async () => {
     const s = await setup();
     const events = await stream(`${s.base}/api/bots/shared/events`, s.cookie);

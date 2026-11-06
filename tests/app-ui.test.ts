@@ -448,7 +448,9 @@ describe("conversation state", () => {
       await act(async () => sendButton().click());
       expect(container.querySelector("textarea")!.readOnly).toBe(true);
       serveClearedDraft();
-      await advance(1600);
+      // The chat's stream announces the cleared draft's revision.
+      await act(async () => { for (const stream of FakeEventSource.streams) if (stream.url.startsWith("/api/bots/shared/events")) stream.emit("draft", "1"); });
+      await advance(0);
       expect(container.querySelector("textarea")!.readOnly).toBe(false);
       await type("My saved server draft");
       expect(container.querySelector("textarea")!.value).toBe("My saved server draft");

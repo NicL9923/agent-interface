@@ -431,6 +431,21 @@ describe("private assistant notification history", () => {
     expect(store.eventPage("local-two", 0, store.latestEventFrontier(), ["family"]).frontier).toBe(before);
     expect(Number(store.eventPage("local-one", 0, store.latestEventFrontier(), ["family", secret]).frontier)).toBeGreaterThan(Number(before));
   });
+
+  it("passes over visible events before the recap start, moving the frontier past them but not past hidden ones", () => {
+    const store = seeded();
+    store.savePresentation("family", { shared: true });
+    store.recordEvents([event("old", "family"), event("recent", "family")], "1");
+    const since = Date.now() - 60_000;
+    store.db.prepare("UPDATE notification_events SET created_at=? WHERE id='old'").run(since - 1);
+    const visible = store.latestEventFrontier();
+    store.recordEvents([event("hidden")], "2");
+    const page = store.eventPage("local-two", 0, store.latestEventFrontier(), ["family", secret], new Date(since).toISOString());
+    expect(page.events.map(row => row.id)).toEqual(["recent"]);
+    expect(page).toMatchObject({ frontier: String(visible), hasMore: false });
+    // Without a recap start the same page includes the older event.
+    expect(store.eventPage("local-two", 0, store.latestEventFrontier(), ["family"]).events.map(row => row.id)).toEqual(["old", "recent"]);
+  });
 });
 
 describe("private assistant saves and agent traffic", () => {

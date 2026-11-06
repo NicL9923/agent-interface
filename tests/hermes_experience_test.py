@@ -677,7 +677,8 @@ class HistoryAttributionTests(unittest.TestCase):
         self.journal = types.SimpleNamespace(lock=threading.RLock(), db=sqlite3.connect(':memory:', check_same_thread=False))
         self.journal.db.execute('CREATE TABLE receipts(request_id TEXT,actor TEXT,run_id TEXT,attachments TEXT,input_text TEXT,stored_session TEXT,profile TEXT,row_id INTEGER,created REAL)')
         self.journal.db.execute("INSERT INTO receipts VALUES('run','one',NULL,'[]','Original ask','session','spike',1,1)")
-        self.db = types.SimpleNamespace(_read_all=lambda sql, values: [{'id':1},{'id':300}],close=lambda:None)
+        # Every clone lookup finds rows 1 and 300 as copies of the first occurrence it asks about.
+        self.db = types.SimpleNamespace(_read_all=lambda sql, values: [{'id':1,'message_uid':values[0]},{'id':300,'message_uid':values[0]}],close=lambda:None)
         self.temp = tempfile.TemporaryDirectory()
         self.store = Path(self.temp.name) / 'state.db'
         self.store.write_text('written store')
@@ -730,6 +731,27 @@ class HistoryDiscoveryTests(unittest.TestCase):
         result=self.history(False)
         self.assertEqual(result['messages'][0]['app_artifacts'],[{'path':'/fixture/old.pdf'}])
         self.assertEqual(result['app_prior_prompt']['app_sender_id'], 'one')
+    def test_page_reads_receipts_and_tool_records_once_and_attributes_each_turn(self):
+        self.journal.db.execute('CREATE TABLE tools(id INTEGER PRIMARY KEY,profile TEXT,stored_session TEXT,tool_id TEXT,run_id TEXT,result TEXT,artifacts TEXT)')
+        self.journal.db.execute("INSERT INTO receipts VALUES('second','two','run-two','[]','Second ask','session','spike',12,2)")
+        self.journal.db.execute("INSERT INTO tools VALUES(NULL,'spike','session','call','run','{\"n\":1}','[{\"path\":\"/fixture/one.pdf\"}]')")
+        self.journal.db.execute("INSERT INTO tools VALUES(NULL,'spike','session','call','run-two','{\"n\":2}','[{\"path\":\"/fixture/two.pdf\"}]')")
+        page = [{'id':1,'role':'user','content':'First'},{'id':11,'role':'tool','content':'Done','tool_call_id':'call','app_tool_result':{'n':1}},
+                {'id':12,'role':'user','content':'Second'},{'id':13,'role':'tool','content':'Done','tool_call_id':'call','app_tool_result':{'n':2}}]
+        self.db.get_messages = lambda sid, **kw: [dict(row) for row in page]
+        self.db._resume_lineage_ids = lambda sid: ['session']
+        sessions = types.SimpleNamespace(_timeline_session_id=lambda db,sid,p:sid,_history_profile_home=lambda p:'/fixture')
+        statements = []
+        self.journal.db.set_trace_callback(statements.append)
+        with patch.dict(sys.modules, {'hermes_cli.web_routers':types.SimpleNamespace(sessions=sessions,analytics=None)}):
+            result = experience.discovery({'operation':'history','profile':'spike','sessionId':'session','offset':0},self.journal,
+                                          lambda rows, **kw: [dict(row,row_id=row['_row_id'],text=row.get('content','')) for row in rows])
+        self.journal.db.set_trace_callback(None)
+        messages = result['messages']
+        self.assertEqual([message.get('app_sender_id') for message in messages], ['one', None, 'two', None])
+        self.assertEqual([message.get('app_artifacts') for message in messages], [None, [{'path':'/fixture/one.pdf'}], None, [{'path':'/fixture/two.pdf'}]])
+        self.assertEqual(sum('FROM receipts' in statement for statement in statements), 1)
+        self.assertEqual(sum('FROM tools' in statement for statement in statements), 1)
     def test_unwritten_profile_store_reads_as_empty_history(self):
         # A new bot's store stays empty until its first session; Hermes no longer creates it on read.
         self.store.write_text('')

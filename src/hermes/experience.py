@@ -711,21 +711,45 @@ class RoutineRuns:
 
 def history_receipt(journal, profile, lineage, native_row):
     """Resolve an exact user occurrence, including its native compaction clones."""
-    if native_row is None or native_row.get("role") != "user":
+    if native_row is None:
         return None
+    return history_receipts(journal, profile, lineage, [native_row]).get(native_row["id"])
+
+
+def history_receipts(journal, profile, lineage, native_rows):
+    """Resolve exact user occurrences by native row id, including native compaction clones.
+
+    A page reads every receipt in one journal query, and every clone in one session store read,
+    instead of one or two reads per message. Each occurrence takes its newest receipt.
+    """
+    users = [row for row in native_rows if row is not None and row.get("role") == "user"]
+    if not users:
+        return {}
+    sessions = ",".join("?" for _ in lineage)
     def read(ids):
         with journal.lock:
-            return journal.db.execute("SELECT request_id,actor,COALESCE(run_id,request_id),attachments,input_text,stored_session FROM receipts WHERE profile=? AND stored_session IN (" + ",".join("?" for _ in lineage) + ") AND row_id IN (" + ",".join("?" for _ in ids) + ") ORDER BY created DESC LIMIT 1", (profile, *lineage, *ids)).fetchone()
-    receipt = read([native_row["id"]])
-    if receipt or not native_row.get("message_uid"):
-        return receipt
+            return journal.db.execute("SELECT row_id,request_id,actor,COALESCE(run_id,request_id),attachments,input_text,stored_session FROM receipts WHERE profile=? AND stored_session IN (" + sessions + ") AND row_id IN (SELECT value FROM json_each(?)) ORDER BY created DESC", (profile, *lineage, json.dumps(ids))).fetchall()
+    found = {}
+    for row in read([row["id"] for row in users]):
+        found.setdefault(row[0], tuple(row[1:]))
+    cloned = {row["id"]: row["message_uid"] for row in users if row["id"] not in found and row.get("message_uid")}
+    if not cloned:
+        return found
     from hermes_cli.web_server_sessions import _open_session_db_for_profile
+    uids = sorted(set(cloned.values()))
     db = _open_session_db_for_profile(profile, read_only=True)
     try:
-        clones = db._read_all("SELECT id FROM messages WHERE message_uid=? AND role='user' AND (active=1 OR compacted=1) AND session_id IN (" + ",".join("?" for _ in lineage) + ")", (native_row["message_uid"], *lineage))
+        clones = db._read_all("SELECT id,message_uid FROM messages WHERE message_uid IN (" + ",".join("?" for _ in uids) + ") AND role='user' AND (active=1 OR compacted=1) AND session_id IN (" + sessions + ")", (*uids, *lineage))
     finally:
         db.close()
-    return read([row["id"] for row in clones]) if clones else None
+    occurrence = {clone["id"]: clone["message_uid"] for clone in clones}
+    newest = {}
+    for row in read(list(occurrence)) if occurrence else []:
+        newest.setdefault(occurrence[row[0]], tuple(row[1:]))
+    for row_id, uid in cloned.items():
+        if uid in newest:
+            found[row_id] = newest[uid]
+    return found
 
 
 def history_pointer(db, sid, identities, *, projector, profile_home):
@@ -878,21 +902,33 @@ def discovery(data, journal, projector):
                 prior_prompt["app_sender_id"] = prior[1]
             break
         before = chunk_start
+    # The page's receipts and tool records are read once, not per message.
+    raw_rows = {row["id"]: row for row in raw}
+    receipts = history_receipts(journal, profile, lineage, [raw_rows.get(message.get("row_id")) for message in native_rows])
+    tool_ids = sorted({message["tool_call_id"] for message in native_rows if message.get("role") == "tool" and type(message.get("tool_call_id")) is str})
+    tool_records = {}
+    if tool_ids:
+        with journal.lock:
+            for record in journal.db.execute("SELECT tool_id,run_id,result,artifacts FROM tools WHERE profile=? AND stored_session IN (" + ",".join("?" for _ in lineage) + ") AND tool_id IN (SELECT value FROM json_each(?)) ORDER BY id", (profile, *lineage, json.dumps(tool_ids))):
+                tool_records.setdefault((record[0], record[1]), []).append(record[2:])
     for message in native_rows:
         if message.get("role") == "user":
             current_run = None
-        row = history_receipt(journal, profile, lineage, next((row for row in raw if row["id"] == message.get("row_id")), None))
-        with journal.lock:
-            if row:
-                current_run = row[2]
-                message["app_attachments"] = json.loads(row[3] or "[]")
-                message["app_display_text"] = row[4] or ""
-                message["app_sender_id"] = row[1]
-            if message.get("role") == "tool" and current_run:
-                records = journal.db.execute("SELECT result,artifacts FROM tools WHERE profile=? AND stored_session IN (" + ",".join("?" for _ in lineage) + ") AND tool_id=? AND run_id=? ORDER BY id", (profile, *lineage, message.get("tool_call_id"), current_run)).fetchall()
-                matching = next((item for item in records if json.loads(item[0]) == message.get("app_tool_result")), None)
-                if matching:
-                    message["app_artifacts"] = json.loads(matching[1] or "[]")
+        row = receipts.get(message.get("row_id"))
+        if row:
+            current_run = row[2]
+            message["app_attachments"] = json.loads(row[3] or "[]")
+            message["app_display_text"] = row[4] or ""
+            message["app_sender_id"] = row[1]
+        if message.get("role") == "tool" and current_run:
+            if type(message.get("tool_call_id")) is str:
+                records = tool_records.get((message["tool_call_id"], current_run), [])
+            else:
+                with journal.lock:
+                    records = journal.db.execute("SELECT result,artifacts FROM tools WHERE profile=? AND stored_session IN (" + ",".join("?" for _ in lineage) + ") AND tool_id=? AND run_id=? ORDER BY id", (profile, *lineage, message.get("tool_call_id"), current_run)).fetchall()
+            matching = next((item for item in records if json.loads(item[0]) == message.get("app_tool_result")), None)
+            if matching:
+                message["app_artifacts"] = json.loads(matching[1] or "[]")
     value = {"session_id": resolved, "messages": native_rows}
     native_ids = {row["id"]: row.get("message_uid") or str(row["id"]) for row in raw}
     rows = []
