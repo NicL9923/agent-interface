@@ -141,6 +141,24 @@ class BotDeliveryTests(unittest.TestCase):
         # The counter outlives the tickets, so a later admission never reuses a sequence.
         self.assertEqual((self.home / "runtime/bot_live_delivery/.sequence").read_text(), "2")
 
+    def test_bot_chat_receipts_are_skipped_before_the_native_ticket_check(self):
+        # Hermes's Bot Chat receipts share the directory; its ticket check warned about each one.
+        self.box = mailbox()
+        store = Store()
+        self.assertTrue(delivery.install_producer(self.box, store))
+        owner = self.box.find_canonical_live_owner(self.home)
+        self.box.deliver_to_live_owner(self.home, owner, "first", delivery_id=KEY)
+        receipt = self.home / "runtime/bot_live_delivery" / ("c" * 64 + ".json")
+        receipt.write_text(json.dumps({"delivery_id": "c" * 64, "admission_id": "d" * 32, "principal_id": "p",
+                                       "profile_home": str(self.home), "session_id": "s", "status": "settled"}))
+        checked, native = [], self.box._scan_read
+        self.box._scan_read = lambda path: checked.append(path.name) or native(path)
+        server = Server({"session_key": "stored", "agent": object()})
+        self.assertTrue(self.consumer(server, store).deliver_once("penny", self.home))
+        self.assertEqual(server.turns[0][2], "first")
+        self.assertIn(KEY + ".json", checked)
+        self.assertNotIn(receipt.name, checked)
+
     def test_native_owner_mailbox_hermes_keeps_native_delivery(self):
         box = mailbox(authority=False)
         native = box.deliver_to_live_owner
