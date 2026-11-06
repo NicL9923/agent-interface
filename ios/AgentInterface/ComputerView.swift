@@ -10,18 +10,18 @@ struct DesktopTicket: Decodable, Equatable {
 
 /// The rules of the native desktop viewer, apart from the view so they can be tested.
 enum DesktopLink {
-  /// The server's native viewer page with the ticket and control mode in its fragment, which never
-  /// reaches the server or its logs. The page reconnects when the path changes and only switches
-  /// input on or off when `control` changes.
-  static func pageURL(base: URL, path: String, control: Bool) -> URL? {
+  /// The server's native viewer page with the ticket, control and touch mode in its fragment, which
+  /// never reaches the server or its logs. The page reconnects when the path changes, only switches
+  /// input on or off when `control` changes, and only its touch mode when `trackpad` does.
+  static func pageURL(base: URL, path: String, control: Bool, trackpad: Bool = false) -> URL? {
     var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
     components?.path = "/native/computer"
     components?.query = nil
-    components?.percentEncodedFragment = fragment(path: path, control: control)
+    components?.percentEncodedFragment = fragment(path: path, control: control, trackpad: trackpad)
     return components?.url
   }
-  static func fragment(path: String, control: Bool) -> String {
-    "path=\(encode(path))&control=\(control ? 1 : 0)"
+  static func fragment(path: String, control: Bool, trackpad: Bool = false) -> String {
+    "path=\(encode(path))&control=\(control ? 1 : 0)" + (trackpad ? "&trackpad=1" : "")
   }
   /// encodeURIComponent's escaping, which the page reverses.
   private static func encode(_ value: String) -> String {
@@ -68,8 +68,9 @@ enum DesktopLink {
 }
 
 /// Settings > Computer: the shared desktop in the app, through the server's native viewer page.
-/// The viewer watches until Take over; Hand back returns the desktop to the assistants. The VPS
-/// terminal stays in the browser.
+/// The viewer watches until Take over; Hand back returns the desktop to the assistants. The bottom
+/// bar has the keyboard, the clipboard and a ⋯ menu for trackpad mode and zoom; ? explains the
+/// touch controls. The VPS terminal stays in the browser.
 struct ComputerView: View {
   /// Opened from an assistant's handoff request: take control as soon as the desktop connects, once.
   var take = false
@@ -88,22 +89,41 @@ struct ComputerView: View {
   @State private var typing = DesktopTyping()
   /// The system keyboard types into the desktop while this viewer has input.
   @State private var keyboard = false
+  /// A finger moves a pointer instead of clicking where it lands. A per-device habit.
+  @AppStorage("computerTrackpad") private var trackpad = false
+  @State private var zoomed = false
+  @State private var helpShown = false
+  /// The outcome of a clipboard action, until the next one or until input stops.
+  @State private var info: String?
   private var status: ComputerStatus? { store.computerStatus }
+  private var device: String { UIDevice.current.localizedModel }
   var body: some View {
     VStack(spacing: 0) {
       toolbar
       if let message = error ?? desktop.error ?? status?.reason { notice(message) }
+      else if let info {
+        Text(info).font(.footnote).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
+          .padding(.horizontal, 12).padding(.bottom, 8).accessibilityIdentifier("computerInfo")
+      }
       screen.frame(maxWidth: .infinity, maxHeight: .infinity)
         .overlay {
           if input {
             Rectangle().strokeBorder(Palette.accent, lineWidth: 2).allowsHitTesting(false)
           }
         }
+      controlBar
       footer
     }.background(Palette.surface(scheme))
       .background { DesktopKeyboard(shown: keyboard, typing: typing) { keyboard = false }.frame(width: 0, height: 0).accessibilityHidden(true) }
-      .onChange(of: input) { _, input in if !input { keyboard = false } }
+      .onChange(of: input) { _, input in if !input { keyboard = false; info = nil } }
       .navigationTitle("Computer").navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .topBarTrailing) {
+          Button { helpShown = true } label: { Image(systemName: "questionmark") }
+            .accessibilityLabel("How to use the desktop").accessibilityIdentifier("computerHelp")
+        }
+      }
+      .sheet(isPresented: $helpShown) { ComputerHelpSheet(device: device) }
       .task { await watchStatus() }
       .task(id: store.scope) { await attach() }
       // Losing control elsewhere takes input away here at once, before the server fences it.
@@ -129,20 +149,67 @@ struct ComputerView: View {
           .font(.caption).foregroundStyle(.secondary)
       }.frame(maxWidth: .infinity, alignment: .leading).accessibilityElement(children: .combine)
         .accessibilityIdentifier("computerStatus")
-      if desktop.held {
-        Button { keyboard.toggle() } label: {
-          Image(systemName: keyboard ? "keyboard.chevron.compact.down" : "keyboard").frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
-        }.disabled(!input)
-          .accessibilityLabel(keyboard ? "Hide keyboard" : "Type on the desktop")
-          .accessibilityHint("Keys go to the field selected on the desktop")
-          .accessibilityIdentifier("computerKeyboard")
-      }
       Button(desktop.submitting ? "Updating…" : desktop.held ? "Hand back" : "Take over") {
         Task { if desktop.held { await desktop.release(store) } else { await desktop.take(store) } }
       }.buttonStyle(.accentProminent).tint(desktop.held ? Palette.muted : Palette.accent)
         .disabled(desktop.submitting || viewerId == nil || !desktop.held && (phase != .connected || !DesktopLink.canTake(status)))
         .accessibilityIdentifier("computerControl")
     }.padding(12)
+  }
+  /// The keyboard and clipboard while this person holds the desktop; the ⋯ menu's touch settings always.
+  private var controlBar: some View {
+    HStack(spacing: 4) {
+      if desktop.held {
+        Button { keyboard.toggle() } label: { barIcon(keyboard ? "keyboard.chevron.compact.down" : "keyboard") }
+          .disabled(!input)
+          .accessibilityLabel(keyboard ? "Hide keyboard" : "Type on the desktop")
+          .accessibilityHint("Keys go to the field selected on the desktop")
+          .accessibilityIdentifier("computerKeyboard")
+        Menu {
+          Button("Copy to \(device)", systemImage: "doc.on.doc") { Task { await copyToDevice() } }
+          Button("Paste from \(device)", systemImage: "doc.on.clipboard") { Task { await pasteFromDevice() } }
+        } label: { barIcon("doc.on.clipboard") }
+          .disabled(!input)
+          .accessibilityLabel("Clipboard").accessibilityIdentifier("computerClipboard")
+      }
+      Spacer(minLength: 0)
+      Menu {
+        Toggle(isOn: $trackpad) { Label("Trackpad mode", systemImage: "cursorarrow.motionlines") }
+        if trackpad { Button("Recenter pointer", systemImage: "scope") { typing.view(.recenter) } }
+        if zoomed { Button("Reset zoom", systemImage: "arrow.down.right.and.arrow.up.left") { typing.view(.resetZoom) } }
+      } label: { barIcon("ellipsis") }
+        .accessibilityLabel("More").accessibilityIdentifier("computerMore")
+    }.padding(.horizontal, 8).padding(.top, 4)
+  }
+  private func barIcon(_ symbol: String) -> some View {
+    Image(systemName: symbol).font(.title3).frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
+  }
+  private func copyToDevice() async {
+    guard input else { return }
+    guard let text = await typing.copied(), !text.isEmpty else {
+      info = "Nothing is copied on the desktop yet. Copy there first, then try again."
+      return
+    }
+    UIPasteboard.general.string = text
+    announce("Copied the desktop's clipboard to your \(device).")
+  }
+  /// Reading the clipboard asks the person first, as iOS does for any app.
+  private func pasteFromDevice() async {
+    guard input else { return }
+    guard let text = UIPasteboard.general.string, !text.isEmpty else {
+      info = "Your \(device)'s clipboard has no text."
+      return
+    }
+    if await typing.paste(text) {
+      let limit = DesktopTyping.pasteLimit
+      announce(text.unicodeScalars.count > limit ? "Pasted the first \(limit) characters." : "Pasted into the desktop.")
+    } else {
+      info = "Couldn't paste. Select a field on the desktop, then try again."
+    }
+  }
+  private func announce(_ message: String) {
+    info = message
+    AccessibilityNotification.Announcement(message).post()
   }
   private var controlHint: String {
     if desktop.held { return "Assistants are paused. Tap a field, then the keyboard to type." }
@@ -164,7 +231,7 @@ struct ComputerView: View {
     ZStack {
       Color.black.opacity(scheme == .dark ? 0.4 : 0.06)
       if let api = store.api, let ticket {
-        DesktopWebView(base: api.baseURL, path: ticket.path, control: input, typing: typing, event: received)
+        DesktopWebView(base: api.baseURL, path: ticket.path, control: input, trackpad: trackpad, typing: typing, event: received)
           .accessibilityLabel(input ? "Shared desktop. You have control." : "Shared desktop. Watching.")
           .accessibilityIdentifier("computerScreen")
       }
@@ -268,6 +335,7 @@ struct ComputerView: View {
         tookOver = true
         if !desktop.held && DesktopLink.canTake(status) { Task { await desktop.take(store) } }
       }
+    case .zoom(let zoomed): self.zoomed = zoomed
     case .disconnected(let reason), .failed(let reason):
       guard phase == .connected || phase == .opening || phase == .reconnecting else { return }
       dropped(reason ?? "Desktop disconnected. Reconnecting in watch mode.", epoch: epoch)
@@ -395,10 +463,11 @@ struct ComputerView: View {
 /// The server's native viewer page in a web view with no stored data. The page reports its
 /// connection through the `computer` message handler; navigation stays on the app server.
 struct DesktopWebView: UIViewRepresentable {
-  enum Event: Equatable { case connected, disconnected(String?), failed(String?) }
+  enum Event: Equatable { case connected, disconnected(String?), failed(String?), zoom(Bool) }
   var base: URL
   var path: String
   var control: Bool
+  var trackpad: Bool
   var typing: DesktopTyping
   var event: (Event) -> Void
   func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -417,7 +486,7 @@ struct DesktopWebView: UIViewRepresentable {
   }
   func updateUIView(_ view: WKWebView, context: Context) {
     context.coordinator.parent = self
-    let fragment = DesktopLink.fragment(path: path, control: control)
+    let fragment = DesktopLink.fragment(path: path, control: control, trackpad: trackpad)
     guard fragment != context.coordinator.applied else { return }
     if context.coordinator.loaded {
       // The page follows its fragment: a new path reconnects, a new control mode only switches input.
@@ -431,7 +500,7 @@ struct DesktopWebView: UIViewRepresentable {
           return
         }
       #endif
-      guard let url = DesktopLink.pageURL(base: base, path: path, control: control) else { return }
+      guard let url = DesktopLink.pageURL(base: base, path: path, control: control, trackpad: trackpad) else { return }
       context.coordinator.applied = fragment
       view.load(URLRequest(url: url))
     }
@@ -457,7 +526,7 @@ struct DesktopWebView: UIViewRepresentable {
       loaded = true
       loading = false
       // A page loaded without the fragment, as the fixture page is, gets it now.
-      let fragment = DesktopLink.fragment(path: parent.path, control: parent.control)
+      let fragment = DesktopLink.fragment(path: parent.path, control: parent.control, trackpad: parent.trackpad)
       if applied != fragment {
         applied = fragment
         webView.evaluateJavaScript("location.hash = \(DesktopWebView.literal(fragment))")
@@ -485,6 +554,7 @@ struct DesktopWebView: UIViewRepresentable {
       case "connected": parent.event(.connected)
       case "disconnected": parent.event(.disconnected(reason))
       case "failed": parent.event(.failed(reason))
+      case "zoom": parent.event(.zoom(body["zoomed"] as? Bool == true))
       default: break
       }
     }
@@ -511,10 +581,13 @@ struct DesktopWebView: UIViewRepresentable {
       <script>
       let control=false,typed='';
       function apply(){const p=new URLSearchParams(location.hash.slice(1));if(!p.get('path'))return;control=p.get('control')==='1';
-      document.getElementById('mode').textContent=control?'Fixture desktop · You have control':'Fixture desktop · Watching';
+      document.getElementById('mode').textContent=(control?'Fixture desktop · You have control':'Fixture desktop · Watching')+(p.get('trackpad')==='1'?' · Trackpad':'');
       window.webkit.messageHandlers.computer.postMessage({type:'connected'})}
       window.desktopInput=i=>{if(!control)return false;const k=i.key?'['+i.key+']':String(i.text).replace(/\\n/g,'[enter]');
       typed+=i.control?'[ctrl+'+k+']':k;document.getElementById('typed').textContent='Typed: '+typed;return true};
+      window.desktopPaste=t=>typeof t==='string'&&!!t&&window.desktopInput({text:t});
+      window.desktopCopied=()=>control?'Fixture clipboard':null;
+      window.desktopView=c=>c==='recenter'||c==='resetZoom';
       addEventListener('hashchange',apply);apply()
       </script>
       """
@@ -601,5 +674,71 @@ struct ComputerHandoffView: View {
         await store.refreshConversation()
       } catch { self.error = "Couldn't reach Hermes. Try Not now again." }
     }
+  }
+}
+
+/// How to use the shared desktop by touch, as the web's help shows it. `src/shared/computer-help.json`
+/// is the source; ShellFeatureTests checks these match it. `{device}` is this device's name.
+enum ComputerHelp {
+  struct Item: Equatable { var title: String; var symbol: String; var detail: String }
+  struct Section: Equatable { var title: String; var items: [Item] }
+  static let title = "Using the computer"
+  static let sections: [Section] = [
+    Section(title: "Taking control", items: [
+      Item(title: "Take over", symbol: "hand.raised", detail: "Tap Take over to use the desktop. Assistants pause until you tap Hand back."),
+    ]),
+    Section(title: "Touching the screen", items: [
+      Item(title: "Scroll", symbol: "arrow.up.and.down", detail: "Drag with two fingers."),
+      Item(title: "Click and drag", symbol: "hand.tap", detail: "Tap to click where you tapped. One finger drags."),
+      Item(title: "Right-click", symbol: "list.bullet", detail: "Tap with two fingers, or press and hold."),
+      Item(title: "Zoom in", symbol: "plus.magnifyingglass", detail: "Pinch to zoom. Zoomed in, two fingers pan instead of scrolling. Reset zoom is in the ⋯ menu."),
+    ]),
+    Section(title: "Typing and the clipboard", items: [
+      Item(title: "Type", symbol: "keyboard", detail: "Tap the keyboard button in the bottom bar."),
+      Item(title: "Copy and paste", symbol: "doc.on.clipboard", detail: "Tap the clipboard button in the bottom bar for Copy to {device} and Paste from {device}. Copy on the desktop first."),
+    ]),
+    Section(title: "When a pointer is easier", items: [
+      Item(title: "Trackpad mode", symbol: "cursorarrow.motionlines", detail: "Turn on from the ⋯ menu. Your finger moves the pointer; tap to click there, double-tap and hold to drag. Recenter pointer if it drifts."),
+    ]),
+  ]
+  static func sections(device: String) -> [Section] {
+    sections.map { section in
+      Section(title: section.title, items: section.items.map {
+        Item(title: $0.title, symbol: $0.symbol, detail: $0.detail.replacingOccurrences(of: "{device}", with: device))
+      })
+    }
+  }
+}
+
+/// The ? sheet on the Computer screen.
+struct ComputerHelpSheet: View {
+  var device: String
+  @Environment(\.dismiss) private var dismiss
+  var body: some View {
+    NavigationStack {
+      List {
+        ForEach(ComputerHelp.sections(device: device), id: \.title) { section in
+          Section(section.title) {
+            ForEach(section.items, id: \.title) { item in
+              Label {
+                VStack(alignment: .leading, spacing: 4) {
+                  Text(item.title)
+                  Text(item.detail).font(.subheadline).foregroundStyle(.secondary)
+                }
+              } icon: {
+                Image(systemName: item.symbol).foregroundStyle(.secondary)
+              }.padding(.vertical, 4).accessibilityElement(children: .combine)
+            }
+          }
+        }
+      }
+      .navigationTitle(ComputerHelp.title).navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .cancellationAction) {
+          Button { dismiss() } label: { Image(systemName: "xmark") }
+            .accessibilityLabel("Close").accessibilityIdentifier("computerHelpClose")
+        }
+      }
+    }.accessibilityIdentifier("computerHelpSheet")
   }
 }

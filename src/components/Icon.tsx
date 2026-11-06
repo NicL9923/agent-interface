@@ -69,6 +69,11 @@ const paths = {
   quote: "M5 11h4v6H5ZM5 11c0-3 1-5 4-6M14 11h4v6h-4ZM14 11c0-3 1-5 4-6",
   up: "M6 15l6-6 6 6",
   down: "M6 9l6 6 6-6",
+  hand: "M8 12V6a1.5 1.5 0 0 1 3 0v5M11 11V4.5a1.5 1.5 0 0 1 3 0V11M14 11V6a1.5 1.5 0 0 1 3 0v7a7 7 0 0 1-7 7h-.5a6 6 0 0 1-4.6-2.2L3.6 15.9a1.6 1.6 0 0 1 2.4-2L8 15.5V12",
+  scroll: "M8 4v16M5 7l3-3 3 3M16 20V4M13 17l3 3 3-3",
+  tap: "M10 14V7a1.5 1.5 0 0 1 3 0v5l4.2.9a2 2 0 0 1 1.6 2.2l-.6 4.9H11l-3.6-4a1.5 1.5 0 0 1 2.2-2.1ZM6.5 7.5a5 5 0 0 1 10 0",
+  trackpad: "M4 5h16v12H4ZM11 17v2M6 21h12M10 9l5 3-2.3.5L11.5 15Z",
+  help: "M21 12a9 9 0 1 1-18 0a9 9 0 1 1 18 0ZM9.5 9.5a2.5 2.5 0 0 1 4.9-.7c.4 1.5-.9 2.2-1.7 2.7-.5.3-.7.8-.7 1.3M12 16.5h.01",
 } as const;
 export type IconName = keyof typeof paths;
 const filledIcons: IconName[] = ["stop"];

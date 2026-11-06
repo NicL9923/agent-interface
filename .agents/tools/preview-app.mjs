@@ -641,6 +641,21 @@ server.on('upgrade', (request, socket, head) => {
   });
 });
 
+// PREVIEW_LOG_INPUT=1 prints the desktop input the viewer sends, and answers a released mouse button
+// with a desktop clipboard change, as if the click copied something, for touch and clipboard checks.
+function logFixtureInput(client, type, message) {
+  if (type === 4) console.error(`fixture key ${message[1] ? 'down' : 'up'} 0x${message.readUInt32BE(4).toString(16)}`);
+  else if (type === 6) console.error(`fixture clipboard ${JSON.stringify(message.subarray(8).toString('latin1'))}`);
+  else if (type === 5) {
+    console.error(`fixture pointer ${message.readUInt16BE(2)} ${message.readUInt16BE(4)} mask ${message[1]}`);
+    if (message[1] === 0) {
+      const text = Buffer.from('Copied on the fixture desktop');
+      const header = Buffer.alloc(8); header[0] = 3; header.writeUInt32BE(text.length, 4);
+      client.send(Buffer.concat([header, text]));
+    }
+  }
+}
+
 // Minimal RFB server with one static desktop frame for visual and takeover checks.
 function fixtureDesktop(client) {
   const width = 1024, height = 640;
@@ -686,6 +701,7 @@ function fixtureDesktop(client) {
         if (!length) return;
         if (pending.length < length) return;
         const fullRefresh = type === 3 && pending[1] === 0;
+        if (process.env.PREVIEW_LOG_INPUT === '1') logFixtureInput(client, type, pending.subarray(0, length));
         pending = pending.subarray(length);
         if (type === 3 && (!frameSent || fullRefresh)) {
           frameSent = true;

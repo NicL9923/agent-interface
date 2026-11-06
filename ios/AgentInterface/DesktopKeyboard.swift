@@ -25,6 +25,27 @@ import WebKit
     let data = (try? JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])) ?? Data("{}".utf8)
     return "window.desktopInput?.(\(String(decoding: data, as: UTF8.self))) === true"
   }
+  /// The most text one paste types, as the page and the web panel allow.
+  static let pasteLimit = 8192
+  enum ViewCommand: String, CaseIterable { case recenter, resetZoom }
+  /// Puts the trackpad pointer back on screen, or zooms the viewer back out.
+  func view(_ command: ViewCommand) {
+    webView?.evaluateJavaScript("window.desktopView?.(\"\(command.rawValue)\") === true")
+  }
+  /// The desktop's clipboard, which it shares only with a viewer that has control.
+  func copied() async -> String? {
+    guard let webView else { return nil }
+    do { return try await webView.callAsyncJavaScript("return window.desktopCopied?.() ?? null", contentWorld: .page) as? String }
+    catch { return nil }
+  }
+  /// Puts the text on the desktop's clipboard and types it into the selected field. Whether it sent.
+  func paste(_ text: String) async -> Bool {
+    guard let webView else { return false }
+    do {
+      // An argument, never part of the script, so the text cannot change what runs.
+      return try await webView.callAsyncJavaScript("return window.desktopPaste?.(text) === true", arguments: ["text": text], contentWorld: .page) as? Bool ?? false
+    } catch { return false }
+  }
   /// Whether this web view holds the first responder, as after a tap on the desktop.
   var holdsFocus: Bool {
     guard let webView else { return false }

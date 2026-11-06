@@ -8,7 +8,10 @@ import type { Terminal } from "@xterm/xterm";
 import { api, ApiError, write } from "../client-api";
 import { isChunkFailure, useRaise } from "../app/chunk-failure";
 import type { ComputerStatus, ComputerStreamTicket } from "../shared/computer";
-import { desktopKeys, keysymsFor } from "../lib/desktop-keys";
+import { desktopKeys, keysymsFor, limitPaste, pasteLimit } from "../lib/desktop-keys";
+import { attachDesktopTouch, type DesktopTouch } from "../lib/desktop-touch";
+import { useMediaQuery } from "../app/use-browser";
+import { ComputerHelp } from "./ComputerHelp";
 import { useGoogleButton } from "./google-identity";
 import { useAction } from "../app/use-action";
 import { useResource } from "../app/use-resource";
@@ -104,6 +107,14 @@ function useReconnecting(connect: (attachment: Attachment) => Promise<void>, { f
   }, [attempt, fallback]);
   const reconnect = useCallback(() => setAttempt(value => value + 1), []);
   return { connection, setConnection, error, setError, reconnect };
+}
+const TRACKPAD_KEY = "computer.trackpad";
+/** Trackpad mode is a per-device habit; storage can be missing or refuse, as in a private window. */
+function storedTrackpad() {
+  try { return localStorage.getItem(TRACKPAD_KEY) === "1"; } catch { return false; }
+}
+function storeTrackpad(on: boolean) {
+  try { if (on) localStorage.setItem(TRACKPAD_KEY, "1"); else localStorage.removeItem(TRACKPAD_KEY); } catch { /* Only this session remembers it. */ }
 }
 function ownerLabel(status: ComputerStatus | null, controlling: boolean) {
   if (controlling) return "You have control";
@@ -274,6 +285,16 @@ function DesktopView({ status, onStatus, viewerId, take }: {
   const [submitting, setSubmitting] = useState(false);
   const [textOpen, setTextOpen] = useState(false);
   const [typedText, setTypedText] = useState("");
+  const [note, setNote] = useState("");
+  const [trackpad, setTrackpad] = useState(storedTrackpad);
+  const [zoomed, setZoomed] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const touchScreen = useMediaQuery("(any-pointer: coarse)");
+  const touch = useRef<DesktopTouch | null>(null);
+  const trackpadOn = useRef(trackpad);
+  trackpadOn.current = trackpad;
+  /** The desktop's clipboard as it last told this viewer. It only tells a viewer with control. */
+  const copied = useRef("");
   const attachmentEpoch = useRef(0);
   const { connection, error, setError, reconnect } = useReconnecting(async ({ signal, connected, retry, onCleanup }) => {
     let client: RFB | null = null;
@@ -297,6 +318,19 @@ function DesktopView({ status, onStatus, viewerId, take }: {
     client.viewOnly = true;
     client.scaleViewport = true;
     client.resizeSession = false;
+    const layer = attachDesktopTouch(client, screen.current, { onZoom: setZoomed });
+    layer?.setTrackpad(trackpadOn.current);
+    touch.current = layer;
+    onCleanup(() => {
+      layer?.detach();
+      if (touch.current === layer) touch.current = null;
+      setZoomed(false);
+    });
+    copied.current = "";
+    client.addEventListener("clipboard", event => {
+      const text = (event as CustomEvent<{ text?: unknown }>).detail?.text;
+      if (typeof text === "string") copied.current = text;
+    });
     // noVNC's canvas keeps the remote framebuffer dimensions even when its CSS
     // viewport scales. Observe resolution changes without polling the desktop.
     const measure = () => {
@@ -327,11 +361,44 @@ function DesktopView({ status, onStatus, viewerId, take }: {
     }
   }, [status.control.kind, status.control.mine]);
   useEffect(() => {
-    if (!controlling) { setTextOpen(false); setTypedText(""); }
+    if (!controlling) { setTextOpen(false); setTypedText(""); setNote(""); }
   }, [controlling]);
+  useEffect(() => {
+    touch.current?.setTrackpad(trackpad);
+    storeTrackpad(trackpad);
+  }, [trackpad]);
 
   const key = (keysym: number) => {
     if (controlling && connection === "connected") rfb.current?.sendKey(keysym);
+  };
+
+  /** Sets the desktop's clipboard and types the text, so it lands in the selected field either way. */
+  const paste = (text: string) => {
+    if (!controlling || connection !== "connected" || !rfb.current) return;
+    const limited = limitPaste(text);
+    rfb.current.clipboardPasteFrom(limited.text);
+    for (const keysym of keysymsFor(limited.text)) key(keysym);
+    setNote(limited.cut ? `Pasted the first ${pasteLimit} characters.` : "Pasted into the desktop.");
+  };
+  const copyToDevice = async () => {
+    const text = copied.current;
+    if (!text) { setNote("Nothing is copied on the desktop yet. Copy there first, then try again."); return; }
+    try {
+      await navigator.clipboard.writeText(text);
+      setNote("Copied the desktop's clipboard to this device.");
+    } catch { setNote("This browser didn't allow copying. Try again, or select the text on the desktop and type it here."); }
+  };
+  const pasteFromDevice = async () => {
+    let text: string;
+    try { text = await navigator.clipboard.readText(); }
+    catch {
+      // Some browsers only paste into a field. Type text's box takes a normal paste.
+      setTextOpen(true);
+      setNote("This browser didn't share its clipboard. Paste into the box below, then Send text.");
+      return;
+    }
+    if (text) paste(text);
+    else setNote("This device's clipboard is empty.");
   };
 
   const control = async (requestedAction?: "take" | "release") => {
@@ -372,12 +439,14 @@ function DesktopView({ status, onStatus, viewerId, take }: {
       <div className="computer-ownership" role="status"><span className={`computer-state-dot ${connection === "connected" ? "ready" : ""}`} />
         <strong>{ownerLabel(status, controlling)}</strong><span>{hint}</span></div>
       <div className="computer-control-actions">
+        {touchScreen && <Button className="icon-button" aria-label="How to use the desktop" aria-haspopup="dialog" onClick={() => setHelpOpen(true)}><Icon name="help" /></Button>}
         {!controlling && status.control.kind === "human" && status.control.mine && <Button disabled={connection !== "connected" || submitting} onClick={() => void control("release")}>Hand back</Button>}
         <Button className={controlling ? "" : "primary"} disabled={connection !== "connected" || submitting || status.control.kind === "human" && !status.control.mine}
           onClick={() => void control()}>{submitting ? "Updating control…" : controlling ? "Hand back" : "Take over"}</Button>
       </div>
     </div>
     {(error || status.reason) && <p className="computer-notice" role="status">{error || status.reason}</p>}
+    {note && !error && <p className="computer-notice is-info" role="status">{note}</p>}
     <div className={`computer-screen-wrap desktop-stage${controlling ? " is-controlling" : ""}`} style={{ "--desktop-aspect": aspect } as CSSProperties}>
       <div className="computer-screen" ref={screen} aria-label={controlling ? "Shared desktop. You have control." : "Shared desktop. Watching."} />
       {connection !== "connected" && <div className="computer-connection-overlay" role="status">
@@ -390,7 +459,14 @@ function DesktopView({ status, onStatus, viewerId, take }: {
       <Button disabled={!controlling} onClick={() => key(desktopKeys.enter)}>Enter</Button>
       <Button disabled={!controlling} onClick={() => key(desktopKeys.tab)}>Tab</Button>
       <Button disabled={!controlling} onClick={() => key(desktopKeys.backspace)}>Backspace</Button>
+      <Button disabled={!controlling} onClick={() => void copyToDevice()}>Copy to device</Button>
+      <Button disabled={!controlling} onClick={() => void pasteFromDevice()}>Paste from device</Button>
     </div>
+    {touchScreen && <div className="terminal-tools desktop-touch-tools" role="group" aria-label="Touch">
+      <Button aria-pressed={trackpad} onClick={() => setTrackpad(value => !value)}><Icon name="trackpad" size={18} />Trackpad</Button>
+      {trackpad && <Button onClick={() => touch.current?.recenter()}>Recenter pointer</Button>}
+      {zoomed && <Button onClick={() => touch.current?.resetZoom()}>Reset zoom</Button>}
+    </div>}
     {textOpen && <form id="desktop-text" className="terminal-paste" onSubmit={event => {
       event.preventDefault();
       if (!controlling || connection !== "connected") return;
@@ -401,6 +477,7 @@ function DesktopView({ status, onStatus, viewerId, take }: {
       <div className="actions"><small>Select a field on the desktop first. Text is cleared after sending.</small><Button type="submit" disabled={!controlling || !typedText}>Send text</Button></div>
     </form>}
     <p className="computer-footnote">The desktop and browser logins stay on the server when you close this panel.</p>
+    {touchScreen && <ComputerHelp open={helpOpen} onClose={() => setHelpOpen(false)} />}
   </div>;
 }
 

@@ -197,6 +197,29 @@ import XCTest
     escape.waitForKeyboardLayout()
     keyboardButton.tapWhenReady()
     XCTAssertTrue(escape.waitForDisappearance(), "The keyboard button puts the keyboard away")
+    // The clipboard button copies the desktop's clipboard to this device.
+    app.buttons["computerClipboard"].tapWhenReady()
+    app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Copy to ")).firstMatch.tapWhenReady()
+    let info = app.descendants(matching: .any)["computerInfo"]
+    XCTAssertTrue(info.wait(until: "label BEGINSWITH %@", "Copied the desktop's clipboard"), app.debugDescription)
+    // The ⋯ menu switches trackpad mode, which the viewer page follows.
+    // A menu's toggle is a button or a switch, depending on the system version.
+    func trackpadItem() -> XCUIElement {
+      let button = app.buttons["Trackpad mode"]
+      return button.waitForExistence(timeout: 5) ? button : app.switches["Trackpad mode"]
+    }
+    app.buttons["computerMore"].tapWhenReady()
+    trackpadItem().tapWhenReady()
+    XCTAssertTrue(app.staticTexts["Fixture desktop · You have control · Trackpad"].waitForExistence(timeout: 10), app.debugDescription)
+    app.buttons["computerMore"].tapWhenReady()
+    trackpadItem().tapWhenReady()
+    XCTAssertTrue(app.staticTexts["Fixture desktop · You have control"].waitForExistence(timeout: 10), app.debugDescription)
+    // ? explains the touch controls.
+    app.buttons["computerHelp"].tapWhenReady()
+    XCTAssertTrue(app.staticTexts["Using the computer"].waitForExistence(timeout: 10), app.debugDescription)
+    try capture("08c-computer-help")
+    app.buttons["computerHelpClose"].tapWhenReady()
+    XCTAssertTrue(app.staticTexts["Using the computer"].waitForDisappearance(), "The help sheet closes")
     control.tapWhenReady()
     XCTAssertTrue(control.wait(until: "label == %@", "Take over"), control.label)
     XCTAssertFalse(app.buttons["computerKeyboard"].exists, "Watching offers no keyboard")

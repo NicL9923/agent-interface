@@ -3,13 +3,14 @@ import { readFileSync } from "node:fs";
 import { beforeAll, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  clients: [] as Array<EventTarget & { url: string; viewOnly: boolean; scaleViewport: boolean; disconnect: ReturnType<typeof vi.fn>; focus: ReturnType<typeof vi.fn>; sendKey: ReturnType<typeof vi.fn> }>,
+  clients: [] as Array<EventTarget & { target: HTMLElement; url: string; viewOnly: boolean; scaleViewport: boolean; disconnect: ReturnType<typeof vi.fn>; focus: ReturnType<typeof vi.fn>; sendKey: ReturnType<typeof vi.fn>; clipboardPasteFrom: ReturnType<typeof vi.fn>; _handleMouseMove: ReturnType<typeof vi.fn> }>,
   reports: [] as unknown[],
 }));
 vi.mock("@novnc/novnc", () => ({ default: class extends EventTarget {
   viewOnly = false; scaleViewport = false; resizeSession = true;
-  disconnect = vi.fn(); focus = vi.fn(); sendKey = vi.fn();
-  constructor(_target: HTMLElement, readonly url: string) { super(); mocks.clients.push(this as never); }
+  disconnect = vi.fn(); focus = vi.fn(); sendKey = vi.fn(); clipboardPasteFrom = vi.fn();
+  _handleMouseButton = vi.fn(); _handleMouseMove = vi.fn();
+  constructor(readonly target: HTMLElement, readonly url: string) { super(); mocks.clients.push(this as never); }
 } }));
 
 const ticket = (n: string) => `/api/computer/desktop/ws?ticket=${n.repeat(43)}`;
@@ -88,4 +89,35 @@ it("types for the app only while connected with control", async () => {
   client.dispatchEvent(Object.assign(new Event("disconnect"), { detail: { clean: false } }));
   expect(type({ text: "hi" })).toBe(false);
   expect(client.sendKey).not.toHaveBeenCalled();
+});
+
+it("pastes, shares the desktop's clipboard and switches touch modes for the app, only with control", async () => {
+  // Each test empties the body; the trackpad pointer goes beside the page's own screen element.
+  document.body.append(mocks.clients[0].target);
+  await go(`path=${encodeURIComponent(ticket("e"))}&control=0`);
+  await vi.waitFor(() => expect(mocks.clients.at(-1)!.url).toContain(ticket("e")));
+  const client = mocks.clients.at(-1)!;
+  client.dispatchEvent(new Event("connect"));
+  expect(window.desktopPaste!("hi")).toBe(false);
+  expect(window.desktopCopied!()).toBeNull();
+  await go(`path=${encodeURIComponent(ticket("e"))}&control=1&trackpad=1`);
+  // The trackpad pointer appears in the middle of the screen.
+  const marker = document.querySelector<HTMLElement>(".desktop-touch-pointer");
+  expect(marker).not.toBeNull();
+  expect(window.desktopCopied!()).toBeNull();
+  client.dispatchEvent(new CustomEvent("clipboard", { detail: { text: "copied there" } }));
+  expect(window.desktopCopied!()).toBe("copied there");
+  client.sendKey.mockClear();
+  expect(window.desktopPaste!("ok")).toBe(true);
+  expect(client.clipboardPasteFrom).toHaveBeenCalledWith("ok");
+  expect(client.sendKey.mock.calls).toEqual([[0x6f], [0x6b]]);
+  expect([window.desktopPaste!(""), window.desktopPaste!(42)]).toEqual([false, false]);
+  expect([window.desktopView!("recenter"), window.desktopView!("resetZoom"), window.desktopView!("explode")]).toEqual([true, true, false]);
+  await go(`path=${encodeURIComponent(ticket("e"))}&control=1&trackpad=0`);
+  expect(marker!.hidden).toBe(true);
+  // A dropped connection forgets the clipboard and stops the touch layer.
+  client.dispatchEvent(Object.assign(new Event("disconnect"), { detail: { clean: false } }));
+  expect(window.desktopCopied!()).toBeNull();
+  expect(window.desktopView!("recenter")).toBe(false);
+  expect(document.querySelector(".desktop-touch-pointer")).toBeNull();
 });
