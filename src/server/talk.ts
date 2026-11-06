@@ -18,9 +18,10 @@ const ASK_WAIT_MS = 20_000;
 const RECHECK_MS = 2_000;
 // A request Hermes admitted but no read shows for this long is gone from the chat, as after a reset.
 const MISSING_MS = 30_000;
-// Discovery reads Hermes's run endings every five seconds. A steered run that ended without one
-// reported this long after is taken as finished.
-const SETTLE_MS = 15_000;
+// Discovery reads Hermes's run endings every five seconds, but can stall behind another long run.
+// A steered run with no reported ending keeps working this long, then is reported as unconfirmed,
+// never as finished: its replies may be partial work.
+const SETTLE_MS = 180_000;
 const running = ["thinking", "working"];
 
 const clean = (text: string | undefined, limit: number) =>
@@ -206,7 +207,7 @@ export function installTalkRoutes(app: FastifyInstance, collaborators: {
         }
         if (answer === "settling" && waited(settling, requestId, SETTLE_MS)) {
           settling.delete(requestId);
-          return talkAnswer(receipt, conversation, redact.message, "completed") as TalkAnswer;
+          return { state: "refused", text: "I could not confirm this request finished. Check the chat for its answer." };
         }
         if (answer && answer !== "missing" && answer !== "settling") return answer;
         const left = deadline - now();

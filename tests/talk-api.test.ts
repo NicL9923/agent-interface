@@ -197,15 +197,34 @@ describe("talk ask", () => {
     expect((await ask(s, finished)).json()).toEqual({ state: "done", text: "Done now." });
   });
 
-  it("takes a steered run as finished when no ending is reported in time", async () => {
+  it("never takes a steered run with no reported ending as finished", async () => {
     const requestId = randomUUID();
     const s = await setup({ conversation: anchored([asked("first"), said("r0", "Earlier."), asked(requestId), said("r1", "Gate is shut.")]) });
     const pass = await fakeTime();
+    // Each ask waits about 20 seconds and keeps the request working while no ending is known.
     const first = ask(s, requestId);
-    await pass(10_000);
-    s.store.recordEvents([], "1");
-    const answer = await Promise.race([first.then(response => response.json()), pass(11_000).then(() => "still waiting")]);
-    expect(answer).toEqual({ state: "done", text: "Gate is shut." });
+    await pass(21_000);
+    expect((await first).json()).toEqual({ state: "working" });
+    let answer: unknown = { state: "working" };
+    for (let i = 0; i < 10 && (answer as { state: string }).state === "working"; i++) {
+      const next = ask(s, requestId);
+      await pass(21_000);
+      answer = (await next).json();
+    }
+    expect(answer).toMatchObject({ state: "refused", text: expect.stringContaining("could not confirm") });
+  });
+
+  it("reports a steered run's interruption discovered late", async () => {
+    const requestId = randomUUID();
+    const s = await setup({ conversation: anchored([asked("first"), said("r0", "Earlier."), asked(requestId), said("partial", "Checking the gat")]) });
+    const pass = await fakeTime();
+    const first = ask(s, requestId);
+    await pass(21_000);
+    expect((await first).json()).toEqual({ state: "working" });
+    s.store.recordEvents([event("interrupted")], "1");
+    const second = ask(s, requestId);
+    await pass(3_000);
+    expect((await second).json()).toEqual({ state: "interrupted" });
   });
 
   it("does not let unrelated work hide a lost request", async () => {
