@@ -21,7 +21,7 @@ import type { AutomationOverview as ProfileAutomationOverview, AutomationTask, E
 // The iOS app decodes these responses. Every optional field the app reads is populated, so a
 // renamed or retyped field changes a committed fixture and the Swift decoding test sees it.
 const directory = fileURLToPath(new URL("../ios/AgentInterfaceTests/Contract/", import.meta.url));
-const instruction = "If the API change is intended, run `UPDATE_CONTRACT=1 npx vitest run tests/native-contract.test.ts`, commit the fixtures, and update the Swift types and ios/AgentInterfaceTests/ContractFixtureTests.swift.";
+const instruction = "If the API change is intended, run `UPDATE_CONTRACT=1 npx vitest run tests/native-contract.test.ts`, commit the fixtures, update the Swift types and ios/AgentInterfaceTests/ContractFixtureTests.swift, then run the iOS contract tests on the Mac mini: `bash .agents/tools/validate-ios.sh SIMULATOR_UUID test -only-testing:AgentInterfaceTests/ContractFixtureTests`.";
 const now = "2026-10-01T12:00:00.000Z";
 const origin = "http://127.0.0.1:3000";
 const at = (time: string) => `2026-10-01T${time}:00.000Z`;
@@ -234,6 +234,9 @@ const runtime = {
       default: return flow;
     }
   },
+  // The shared desktop as Hermes reports it; the server adds this person's terminal access.
+  computerRequest: async () => ({ available: true, running: true, browserReady: true, label: "Household computer",
+    control: { kind: "bot", name: "garden" }, terminal: { available: false, target: "" } }),
   close: async () => {},
 } satisfies Runtime;
 const upgrades: Pick<HermesUpgrades, "status" | "maintenance" | "revisionDate"> = { status: async () => upgrade, maintenance: () => false, revisionDate: () => undefined };
@@ -314,6 +317,7 @@ it("keeps the server responses the iOS app decodes in sync with the committed co
     await record("bot-read-position", "PUT", "/api/bots/household/read-position", { messageId: "message-assistant", scrollTop: 240.5 });
     await record("bot-presence", "PUT", "/api/bots/household/presence", { client: "8F0C2F6E-1D7A-4D35-9B53-3C1E6E2F9A10", state: "active" });
     await record("conversation", "GET", "/api/bots/household/conversation");
+    await record("bot-files", "GET", "/api/bots/household/files?before=message-assistant");
     const card = "/api/bots/household/messages/message-assistant/cards/groceries/state";
     await record("card-state-save", "PUT", card, { checkedIds: ["milk"], notes: {} });
     await record("card-state", "GET", card);
@@ -378,6 +382,10 @@ it("keeps the server responses the iOS app decodes in sync with the committed co
 
     await record("upgrade", "GET", "/api/hermes/upgrade");
     await record("push-config", "GET", "/api/native/push/config");
+    await record("computer", "GET", "/api/computer");
+    // The terminal names this host's account and machine, which differ wherever the test runs.
+    const computer = fixtures.get("computer")!.response as { terminal: { target: string } };
+    if (computer.terminal.target) computer.terminal.target = "normalized-target";
     // The aggregate shows a run this person sent to and an assistant they follow, waiting first.
     store.participate("run-dinner", "local-one");
     store.savePreferences("local-one", { ...preferences, followBots: ["garden"] });

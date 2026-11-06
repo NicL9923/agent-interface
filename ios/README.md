@@ -188,7 +188,10 @@ normalized responses with `ios/AgentInterfaceTests/Contract/*.json`.
 `ContractFixtureTests` decodes each file into the app's own types and fails when a
 fixture has no decoding check. After an intended API change, regenerate the files
 with `UPDATE_CONTRACT=1 npx vitest run tests/native-contract.test.ts`, review the
-diff, and update the Swift types and checks. GitHub CI runs `npm test` and the
+diff, update the Swift types and checks, and run
+`bash .agents/tools/validate-ios.sh SIMULATOR_UUID test -only-testing:AgentInterfaceTests/ContractFixtureTests`
+on the Mac mini. Without the variable the Vitest test fails on any changed, missing or
+extra fixture, so a server change that would break iOS decoding stops in `npm test`. GitHub CI runs `npm test` and the
 Python checks. The native unit and UI tests run on the Mac mini that archives every
 TestFlight build, with its own Xcode and iOS, through `.agents/tools/validate-ios.sh`;
 an iOS change records those runs in its pull request. GitHub's macOS image runs an

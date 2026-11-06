@@ -92,6 +92,9 @@ private typealias Check = @MainActor (Data) throws -> Void
     "bot-draft": check(SavedDraft?.self) { XCTAssertEqual($0?.text, "Add basil"); XCTAssertEqual($0?.revision, 2); XCTAssertEqual($0?.reason, "edit") },
     "bot-draft-conflict": check(DraftConflict.self) { XCTAssertEqual($0.draft.revision, 2); XCTAssertEqual($0.draft.sentRevision, 1) },
     "bot-draft-save": check(SavedDraft.self) { XCTAssertEqual($0.attachments.first?.id, "pantry.signature"); XCTAssertEqual($0.revision, 2) },
+    "bot-files": check(EarlierFiles.self) {
+      XCTAssertEqual($0.messages.map(\.id), ["message-user"]); XCTAssertEqual($0.messages.first?.files?.first?.id, "pantry.signature")
+    },
     "bot-portrait": check(FileRef.self) { XCTAssertEqual($0.url, "/api/files/portrait.signature") },
     "bot-presence": check(EmptyResponse.self) { XCTAssertEqual($0.ok, true) },
     "bot-read-position": check(ReadPosition.self) { XCTAssertEqual($0.messageId, "message-assistant"); XCTAssertEqual($0.scrollTop, 240.5) },
@@ -102,6 +105,10 @@ private typealias Check = @MainActor (Data) throws -> Void
     "bot-upload": check(FileRef.self) { XCTAssertEqual($0.mime, "text/plain"); XCTAssertNotNil($0.size) },
     "card-state": check(ReplyCardState.self) { XCTAssertEqual($0.checkedIds, ["milk"]) },
     "card-state-save": check(ReplyCardState.self) { XCTAssertEqual($0.checkedIds, ["milk"]); XCTAssertTrue($0.notes.isEmpty) },
+    "computer": check(ComputerStatus.self) {
+      XCTAssertTrue($0.available); XCTAssertEqual($0.running, true); XCTAssertEqual($0.control.kind, "bot")
+      XCTAssertEqual($0.detail, "garden is using the computer")
+    },
     "connection-retry": check(RuntimeStatus.self) { XCTAssertTrue($0.connected); XCTAssertNotNil($0.retryAt) },
     "conversation": check(Conversation.self) {
       XCTAssertEqual($0.messages.first?.sender?.name, "Local member one")
