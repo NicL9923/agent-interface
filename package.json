@@ -12,8 +12,9 @@
     "build": "tsrs --noEmit && vite build && node scripts/build-worker.mjs",
     "start": "tsx src/server/index.ts",
     "typecheck": "tsrs --noEmit",
-    "lint": "oxlint --deny-warnings src scripts tests .agents/tools",
+    "lint": "oxlint --deny-warnings src scripts tests e2e .agents/tools",
     "test": "vitest run",
+    "test:e2e": "playwright test",
     "test:py": "python3 scripts/run-python-tests.py",
     "lint:py": "ruff check .",
     "setup": "tsx scripts/setup.ts",
@@ -46,6 +47,7 @@
     "zod": "4.6.7"
   },
   "devDependencies": {
+    "@playwright/test": "1.64.1",
     "@tailwindcss/vite": "4.3.3",
     "@types/mdast": "4.0.4",
     "@types/node": "26.6.6",

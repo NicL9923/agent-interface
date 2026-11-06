@@ -419,6 +419,7 @@ npm run lint
 npm run test:py
 npm run lint:py
 npm run build
+npm run test:e2e
 python3 .agents/tools/source-state.py
 ```
 
@@ -435,6 +436,16 @@ one test ran. A file whose tests all skip, such as the system terminal test
 without `tmux`, shows SKIP locally and fails when `CI=true`.
 `npm run lint:py` runs ruff for undefined names and likely bugs. Install the
 version pinned in `.github/requirements-ci.txt`. CI runs both in its Python job.
+
+`npm run test:e2e` runs a short Playwright smoke suite in real Chromium. Run `npm run build`
+first, and `npx playwright install chromium` once per Playwright version. `e2e/server.ts`
+starts the real app server and built client on loopback ports 4173 and 4174, in memory,
+with local sign-in and a scripted assistant, so it never contacts Hermes, Google or the
+network. It covers sign-in, sending a message and receiving the reply over the live event
+stream, the service worker opening the app offline and recovering, and no page errors,
+console errors or CSP violation reports. It does not cover real Hermes behavior, push
+delivery, Google sign-in, the iOS app, or other browsers. CI runs it in the `browser` job
+and uploads the report and traces when it fails.
 
 The [validation ledger](docs/ledger/README.md) distinguishes application tests,
 real Hermes execution using a deterministic local provider, visual checks, and
