@@ -41,13 +41,25 @@ it("logs no URL query or hash from a report's message or stack, whatever the cli
   expect(JSON.stringify(line)).not.toMatch(/SENTINEL|private-draft/);
   expect(line.clientError).toMatchObject({
     message: "TypeError: failed https://app.example.invalid/native/callback",
-    stack: "at load (/api/search:3:9)\nat Home (https://app.example.invalid/assets/index-abc.js:1:2)" });
+    stack: "at load (/api/search)\nat Home (https://app.example.invalid/assets/index-abc.js:1:2)" });
 });
 
 it("leaves text without a URL query alone", () => {
-  for (const text of ["Is the gate shut? yes", "either/or?maybe", "Expected 3 rows, got 2 (page 1)", "at f (index-abc.js:1:2)", "ratio 1/2#3"])
+  for (const text of ["Is the gate shut? yes", "Expected 3 rows, got 2 (page 1)", "at f (index-abc.js:1:2)", "Section #3 is missing", "What now?"])
     expect(withoutUrlQueries(text), text).toBe(text);
-  expect(withoutUrlQueries("see (https://x.invalid/a?b=1) and /p#q.")).toBe("see (https://x.invalid/a) and /p");
+});
+
+it("drops the query and hash of absolute, relative and blob URLs, keeping only a script frame's position", () => {
+  for (const [text, safe] of [
+    ["see (https://x.invalid/a?b=1) and /p#q.", "see (https://x.invalid/a) and /p"],
+    ["fetch ./api/search?q=SENTINEL failed", "fetch ./api/search failed"],
+    ["blob:null/0b8e?token=SENTINEL", "blob:null/0b8e"],
+    ["https://x.invalid/a?q=(SENTINEL)", "https://x.invalid/a"],
+    ["at load (/api/search?q=SENTINEL:3:9)", "at load (/api/search)"],
+    ["at f (https://x.invalid/assets/app-1.js?v=SENTINEL:10:5)", "at f (https://x.invalid/assets/app-1.js:10:5)"],
+    ["at f https://x.invalid/assets/app-1.js#SENTINEL:10:5", "at f https://x.invalid/assets/app-1.js:10:5"],
+    ["a/b?c either/or?maybe", "a/b either/or"],
+  ]) expect(withoutUrlQueries(text), text).toBe(safe);
 });
 
 it("requires a session, the app's Origin and the CSRF token", async () => {

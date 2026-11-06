@@ -66,14 +66,26 @@ export interface WebPushSubscription { endpoint: string; keys: { p256dh: string;
 export type PushTest = { ok: true; detail: string };
 /** Bounds the server enforces on a client error report. Clients trim to them before sending. */
 export const CLIENT_ERROR_LIMITS = { message: 1024, stack: 8192, route: 512, release: 64 } as const;
-/** An absolute URL, or a path that starts a word, followed by its query string or hash. */
-const urlWithQuery = /((?:\b[a-z][a-z\d+.-]*:\/\/|(?<![\w/.])\/)[^\s?#"'`<>()]*)([?#][^\s"'`<>()]*)/gi;
+/** A run of text with no space or quote: a URL, a path or a word. */
+const token = /[^\s"'`<>]+/g;
+/** Before its query, the token names a place: it has a scheme (`https:`, `blob:`) or a slash. */
+const place = /^\(?(?:[a-z][a-z\d+.-]*:|[^?#]*\/)/i;
+/** A stack frame's script ends its path, and may be followed by a line and a column. */
+const frame = /\.[cm]?[jt]sx?$/;
 /**
- * Drops the query string and hash from every URL in diagnostic text: they can carry a sign-in code,
- * a search or a draft. A stack frame's trailing line and column survive, as in `/app.js?v=1:10:5`.
+ * Drops the query string and hash from every URL or path in diagnostic text, whatever its form:
+ * absolute, relative or `blob:`. They can carry a sign-in code, a search or a draft. Only a script's
+ * stack frame keeps its trailing line and column, as in `(/assets/app.js?v=1:10:5)`.
  */
 export function withoutUrlQueries(text: string) {
-  return text.replace(urlWithQuery, (_match, url: string, query: string) => url + (/(?::\d+){1,2}$/.exec(query)?.[0] ?? ""));
+  return text.replace(token, word => {
+    const cut = word.search(/[?#]/);
+    if (cut < 0 || !place.test(word.slice(0, cut))) return word;
+    const base = word.slice(0, cut);
+    const position = frame.test(base) ? /(?::\d+){1,2}(?=\)?$)/.exec(word.slice(cut))?.[0] ?? "" : "";
+    const closed = word.startsWith("(") && word.endsWith(")") ? ")" : "";
+    return base + position + closed;
+  });
 }
 /** A crash or uncaught error in the web client, reported so a white screen on a phone is not silent. */
 export interface ClientErrorReport {

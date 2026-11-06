@@ -162,6 +162,24 @@ describe("group catalog watch", () => {
     watch.close();
   });
 
+  it("starts a later stream fresh when a listener ended the last stream during a check", async () => {
+    vi.useFakeTimers();
+    const { catalogs, watch } = setup();
+    let stop: () => void = () => {};
+    stop = watch.watch("one", () => stop());
+    // The first check tells the starting stream, whose listener ends it: nothing it saw may linger.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(watch.watching).toBe(0);
+    // The client reads "b" as it reconnects; the catalog is back to "a" by the first check.
+    catalogs.set("one", "b");
+    const later = vi.fn();
+    watch.watch("one", later);
+    catalogs.set("one", "a");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(later).toHaveBeenCalledTimes(1);
+    watch.close();
+  });
+
   it("keeps what it saw when Hermes fails, and tries again at the next check", async () => {
     vi.useFakeTimers();
     const { catalogs, read, watch } = setup();

@@ -117,6 +117,7 @@ export class GroupCatalogWatch {
     if (project) {
       this.project = project;
       const next = new Map<string, string | undefined>();
+      const tell: Viewer[] = [];
       for (const viewer of [...this.viewers]) {
         if (!next.has(viewer.userId)) {
           let value: string | undefined;
@@ -126,10 +127,13 @@ export class GroupCatalogWatch {
         const value = next.get(viewer.userId);
         if (value === undefined) continue;
         const before = this.seen.get(viewer.userId);
-        if (viewer.fresh) { viewer.fresh = false; viewer.changed(); }
-        else if (before !== undefined && before !== value) viewer.changed();
+        if (viewer.fresh) { viewer.fresh = false; tell.push(viewer); }
+        else if (before !== undefined && before !== value) tell.push(viewer);
       }
+      // Recorded before anyone hears: a listener that ends the last stream clears it all, and nothing
+      // from this check may be written back after that for a later stream to start from.
       for (const [userId, value] of next) if (value !== undefined) this.seen.set(userId, value);
+      for (const viewer of tell) viewer.changed();
     }
     // A listener may have ended the last stream just now.
     if (generation !== this.generation || !this.viewers.size) return;

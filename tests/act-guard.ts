@@ -2,7 +2,8 @@ import { vi } from "vitest";
 
 // React reports an update outside act, an unawaited act and overlapping acts only by logging, and the
 // suite stays green while a test races its own rendering. tests/setup-ui.ts fails the test instead.
-const actWarning = /not wrapped in act\(|overlapping act\(\)|without await/;
+// React's own wording only, so an ordinary message that mentions awaiting is never mistaken for one.
+const actWarning = /was not wrapped in act\(|You called act\(async \(\) => \.\.\.\) without await|overlapping act\(\) calls|`act` call was not awaited/;
 const found: string[] = [];
 
 /** Records `console.error` arguments that are a React act warning; says whether they were one. */
