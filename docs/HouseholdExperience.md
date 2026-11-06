@@ -103,7 +103,7 @@ Live Talk is web-only for now. The iOS app keeps recording and read aloud.
 
 ## Memory
 
-Assistant settings > Memory reads the selected Hermes profile's native notes and
+Assistant settings > Memory & learning reads the selected Hermes profile's native notes and
 user facts. Correct entries or forget them, then save. Each document has a
 revision guard checked inside Hermes's native file lock. If another person or
 native tool changes it first, your edits stay available for review instead of
@@ -218,7 +218,7 @@ run, and it blocks routine edits while a trial's outcome remains unconfirmed.
 
 ## Work and learning
 
-Assistant settings > Work provides native goals, tasks and event triggers on web
+Assistant settings > Automation provides native goals, tasks and event triggers on web
 and iOS. Each section reports whether the installed Hermes supports it. Refresh
 status after an uncertain response; the clients never replay a mutation on their
 own.
@@ -251,7 +251,8 @@ installer, and the target routine must be enabled. Hermes owns event verificatio
 filtering, admission and delivery. A lost creation response cannot reveal the
 secret again; inspect the disabled trigger and replace it if needed.
 
-Learning shows installed skill documents and pending changes. Read the actual
+Behavior's skill rows show installed skill documents and their locks. Memory &
+learning shows pending changes. Read the actual
 diff before approving or rejecting it. The decision names that diff's revision,
 so a changed skill requires another review. Oversized diffs cannot be approved
 here. An uncertain skill decision requires native inspection before another

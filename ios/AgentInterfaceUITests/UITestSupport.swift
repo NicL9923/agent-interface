@@ -119,36 +119,41 @@ extension XCUIApplication {
     }
     XCTFail("The \(key) shortcut never showed \(target) after \(attempts) tries\n\(debugDescription)", file: file, line: line)
   }
-  /// Opens an assistant settings tab from the More menu. A menu can ignore a tap while it is still
-  /// opening, as on a slower simulator, so the choice is repeated only while the menu stays open.
+  /// Where each settings page lives: its section, and the row that opens it when it is a full list
+  /// of its own. Former tab names map to where that content lives now.
+  private static let settingsPages: [String: (section: String, page: String?)] = [
+    "Profile": ("profile", nil), "Details": ("profile", nil), "Avatar": ("profile", nil),
+    "Behavior": ("behavior", nil), "Tools": ("behavior", nil), "Skills": ("behavior", nil),
+    "Access": ("access", nil), "Connections": ("access", "connections"), "Logins": ("access", "logins"),
+    "Automation": ("automation", nil), "Routines": ("automation", nil), "Work": ("automation", "work"),
+    "Memory & learning": ("memory", nil), "Memory": ("memory", "memory"), "Learning": ("memory", "learning"),
+  ]
+  /// Opens an assistant settings page as a person does: back to the list of sections, the section,
+  /// then the row for a page such as Logins or Work.
   func selectSettingsTab(_ title: String, file: StaticString = #filePath, line: UInt = #line) {
-    let more = buttons["settingsMore"], item = buttons[title]
-    more.tap()
-    XCTAssertTrue(item.waitForExistence(timeout: 5), "The More menu lists \(title)", file: file, line: line)
-    for _ in 0..<3 {
-      // A tap the menu ignored can also close it, so a later try reopens it as a person would.
-      if !item.exists { more.tap(); _ = item.waitForExistence(timeout: 5) }
-      // The item can exist while it still animates in, with no frame yet; asking whether it is
-      // hittable then fails the test outright, so wait for a real frame first.
-      let deadline = Date().addingTimeInterval(5)
-      while Date() < deadline, !(item.exists && item.frame.minX.isFinite && !item.frame.isEmpty) { usleep(100_000) }
-      guard item.exists else { continue }
-      if !item.canTap {
-        XCTContext.runActivity(named: "Offscreen settings choice: \(title)") { activity in
-          let screenshot = XCTAttachment(screenshot: self.screenshot())
-          screenshot.name = "settings-menu-before-AX-scroll"
-          screenshot.lifetime = .keepAlways; activity.add(screenshot)
-          let hierarchy = XCTAttachment(string: self.debugDescription)
-          hierarchy.name = "settings-menu-before-AX-scroll-hierarchy"
-          hierarchy.lifetime = .keepAlways; activity.add(hierarchy)
-        }
-      }
-      // XCUITest first asks the containing scroll view to reveal an offscreen choice.
-      item.tap()
-      let selected = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", title), object: more)
-      if XCTWaiter.wait(for: [selected], timeout: 2) == .completed { return }
+    guard let route = Self.settingsPages[title] else {
+      XCTFail("No settings page is named \(title)", file: file, line: line); return
     }
-    XCTAssertEqual(more.value as? String, title, "The More menu selects \(title)", file: file, line: line)
+    showSettingsSections(file: file, line: line)
+    buttons["settingsSection.\(route.section)"].tapWhenReady(file: file, line: line)
+    XCTAssertTrue(collectionViews["settingsSections"].waitForDisappearance(), "The \(route.section) section opens", file: file, line: line)
+    guard let page = route.page else { return }
+    let link = buttons["settingsPage.\(page)"]
+    // Work sits below the routines, so a long list can push it off screen.
+    for _ in 0..<8 where !link.canTap { collectionViews.firstMatch.swipeUp() }
+    link.tapWhenReady(file: file, line: line)
+    XCTAssertTrue(link.waitForDisappearance(), "Settings opens \(title)", file: file, line: line)
+  }
+  /// Goes back through settings pages until the list of sections shows.
+  func showSettingsSections(file: StaticString = #filePath, line: UInt = #line) {
+    let list = collectionViews["settingsSections"]
+    let back = navigationBars.buttons.matching(NSPredicate(format: "label IN %@",
+      ["All settings", "Profile", "Behavior", "Access", "Automation", "Memory & learning"])).firstMatch
+    for _ in 0..<3 {
+      if list.waitForExistence(timeout: 1) { return }
+      if back.exists { back.tapWhenReady(file: file, line: line) }
+    }
+    XCTAssertTrue(list.waitForExistence(timeout: 10), "Settings shows its sections", file: file, line: line)
   }
 
   /// The open chat's header: the assistant's avatar and name, which opens its card.
@@ -166,6 +171,6 @@ extension XCUIApplication {
   func openAssistantSettings(_ name: String, file: StaticString = #filePath, line: UInt = #line) {
     openBotProfile(name, file: file, line: line)
     buttons["profileSettings"].tapWhenReady(file: file, line: line)
-    XCTAssertTrue(buttons["settingsMore"].waitForExistence(timeout: 10), "Settings opens from the card", file: file, line: line)
+    XCTAssertTrue(collectionViews["settingsSections"].waitForExistence(timeout: 10), "Settings opens from the card", file: file, line: line)
   }
 }

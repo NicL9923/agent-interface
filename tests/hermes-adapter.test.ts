@@ -66,7 +66,7 @@ class WireSocket extends EventTarget {
     if(request.method==='file.attach')result={path:'/workspace/staged/portrait.png'};
     if(request.method==='agent-interface.submit')result={requestId:request.params.request_id,status:'accepted',runId:'task-one',...(canonicalSubmission?{app_run_id:'task-one',admission:'canonical'}:{})};
     if(request.method==='profiles.list')result={profiles:[{name:'shared',ui_meta:{agent_interface:{name:'Shared',unrelated:'preserve'}},ui_meta_revisions:{agent_interface:3},...(rosterSession?{canonical_session:rosterSession}:{})}]};
-    if(request.method==='profiles.describe')result={toolsets:[{name:'terminal',enabled:true}],skills:[],mcp_servers:[]};
+    if(request.method==='profiles.describe')result={toolsets:[{name:'terminal',enabled:true}],skills:[],mcp_servers:[{name:'calendar',enabled:true},{name:'notes',enabled:false}]};
     if(request.method==='profiles.configure')result=metadataConflict?{ok:false,applied:{ui_meta:false,ui_meta_conflicts:{agent_interface:{actual:4}}}}:{ok:true,applied:{ui_meta:true}};
     if(request.method==='config.get')result={value:request.params.key==='reasoning'?'high':'normal'};
     if(request.method==='image.generate')result={available:imageReady,success:false,error:'No image generation backend configured'};
@@ -265,7 +265,7 @@ describe('Hermes adapter trust and recovery boundary',()=>{
   it('lists bots without loading profile descriptions and loads detail lazily', async () => {
     await runtime.listBots(); await runtime.listBots();
     expect(calls.filter(call=>call.method==='profiles.describe')).toHaveLength(0);
-    expect((await runtime.botDetail!('shared')).enabledTools).toEqual(['terminal']);
+    expect(await runtime.botDetail!('shared')).toMatchObject({enabledTools:['terminal'],enabledMcpServers:['calendar'],availableMcpServers:['calendar','notes']});
     expect(calls.filter(call=>call.method==='profiles.describe')).toHaveLength(1);
   });
   it('streams only the unpersisted tail with the saved prompt origin and no open RPC', async () => {

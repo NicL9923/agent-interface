@@ -47,7 +47,9 @@ async ({tab,panel,fixture,reset,capture,paths,geometry,workChecks,browserErrors,
       if(!dialog)return {valid:false};
       const c=dialog.getBoundingClientRect();
       const container={top:c.top,bottom:c.bottom,left:c.left,right:c.right,width:c.width,height:c.height};
-      const selectors=[":scope > header", "#assistant-settings-title", '[aria-label="Close assistant settings"]', 'nav.settings-tabs[aria-label="Settings sections"]'];
+      const selectors=[":scope > header", "#assistant-settings-title", '[aria-label="Close assistant settings"]'];
+      // Phones show one section with a back button instead of the section tabs.
+      if(innerWidth>620)selectors.push('nav.settings-tabs[aria-label="Settings sections"]');
       const rects=selectors.map(selector=>{
         const element=dialog.querySelector(selector);
         if(!element)return null;
@@ -134,7 +136,7 @@ async ({tab,panel,fixture,reset,capture,paths,geometry,workChecks,browserErrors,
     const fail=message=>{throw Error(`200% secret coverage: ${message}`);};
     const close=(a,b)=>Number.isFinite(a)&&Number.isFinite(b)&&Math.abs(a-b)<=0.5;
     const rect=box=>box&&["top","bottom","left","right","width","height"].every(k=>Number.isFinite(box[k]))&&box.width>0&&box.height>0&&close(box.bottom-box.top,box.height)&&close(box.right-box.left,box.width);
-    const upper={heading:"Save this signing secret now",created:`${expected.id} was created and starts disabled.`,warning:"Hermes shows it once. Configure the sending service with this URL and secret. Leaving Work or reloading the page clears it from this screen.",urlLabel:"Webhook URL",url:expected.url,copyURL:"Copy URL"};
+    const upper={heading:"Save this signing secret now",created:`${expected.id} was created and starts disabled.`,warning:"Hermes shows it once. Configure the sending service with this URL and secret. Leaving Automation or reloading the page clears it from this screen.",urlLabel:"Webhook URL",url:expected.url,copyURL:"Copy URL"};
     const hidden={...upper,secretLabel:"Signing secret",hidden:"Hidden",show:"Show secret",copySecret:"Copy secret",gate:"Copy or show the secret first.",ack:"I've saved it",topBorder:"",bottomBorder:""};
     const shown={...upper,secretLabel:"Signing secret",value:expected.secret,hide:"Hide secret",copySecret:"Copy secret",ack:"I've saved it",topBorder:"",bottomBorder:""};
     const candidates=[...new Set([...Object.keys(hidden),...Object.keys(shown)])];
@@ -224,7 +226,7 @@ async ({tab,panel,fixture,reset,capture,paths,geometry,workChecks,browserErrors,
         const add=(key,elements)=>{counts[key]=elements.length;const element=elements[0];if(element)rows.push({key,text:element.textContent.trim(),disabled:element.disabled===true,rect:box(element),metrics:{scrollWidth:element.scrollWidth,clientWidth:element.clientWidth,scrollHeight:element.scrollHeight,clientHeight:element.clientHeight}});};
         add("heading",[...node.querySelectorAll("h4")]);
         add("created",paragraphs.filter(p=>p.textContent.trim()===`${config.triggerId} was created and starts disabled.`));
-        add("warning",paragraphs.filter(p=>p.textContent.trim()==="Hermes shows it once. Configure the sending service with this URL and secret. Leaving Work or reloading the page clears it from this screen."));
+        add("warning",paragraphs.filter(p=>p.textContent.trim()==="Hermes shows it once. Configure the sending service with this URL and secret. Leaving Automation or reloading the page clears it from this screen."));
         add("urlLabel",[...fields[0]?.querySelectorAll("p")||[]]);add("url",[...fields[0]?.querySelectorAll("code")||[]]);add("copyURL",findButtons(fields[0],"Copy URL"));
         add("secretLabel",[...fields[1]?.querySelectorAll("p")||[]].filter(p=>p.textContent.trim()==="Signing secret"));
         add("hidden",[...fields[1]?.querySelectorAll("p")||[]].filter(p=>p.textContent.trim()==="Hidden"));
@@ -357,12 +359,14 @@ async ({tab,panel,fixture,reset,capture,paths,geometry,workChecks,browserErrors,
   await setup({mode:"sections-unsupported"});await shot("unsupported");
   await setup({mode:"no-routines"});await shot("first-use");
   await setup({mode:"routines-error"});await shot("routines-error",section.getByRole("button",{name:"Retry routines"}));
-  const beforeRoutines=getRoutineGets();await setup({mode:"routines-loading"});
-  ensure(getRoutineGets()===beforeRoutines+1,"Expected one held routines GET");
+  // Automation shows Routines above Work, and both read the one routine list the settings sheet loads.
+  const routineLoaders=1,beforeRoutines=getRoutineGets();await setup({mode:"routines-loading"});
+  for(let wait=0;wait<50&&getRoutineGets()<beforeRoutines+routineLoaders;wait++)await new Promise(resolve=>setTimeout(resolve,40));
+  ensure(getRoutineGets()===beforeRoutines+routineLoaders,"Expected one held routines GET shared by routines and triggers");
   await shot("routines-loading");releaseRoutines();
   await section.getByText("Routine: Freezer alert check",{exact:true}).waitFor();
-  ensure(getRoutineGets()===beforeRoutines+1,"Held routines load duplicated its GET");
-  workChecks.push({check:"routines-loading-hold",count:1});
+  ensure(getRoutineGets()===beforeRoutines+routineLoaders,"Held routines load duplicated its GET");
+  workChecks.push({check:"routines-loading-hold",count:routineLoaders});
   for(const [name,options,filled] of [["create-desktop",{width:1440},false],["create-phone",{},true],["create-narrow",{width:320},true],["create-large",{large:true},true]]) {
     await setup(options);await openCreate();if(filled)await fill();
     await shot(name,form().getByLabel("Trigger ID",{exact:true}));
@@ -392,13 +396,20 @@ async ({tab,panel,fixture,reset,capture,paths,geometry,workChecks,browserErrors,
   ensure(!await secret().count(),"Acknowledged secret remained mounted");
   ensure(!getWork().triggers.items.find(x=>x.id===fixture.workFixture.newTrigger.id).enabled,"New trigger not disabled");
   await landing("created-notice",row(fixture.workFixture.newTrigger.id).locator(".automation-trigger-feedback"));await shot("created",row(fixture.workFixture.newTrigger.id).getByRole("heading"));
-  // Leaving Work is recorded honestly: it clears the current secret without another write.
+  // Leaving Automation is recorded honestly: it clears the current secret without another write.
   await setup();await create();start=getSubmissions().length;
+  // Open a settings section by label in either layout: tabs on wide screens, the section list on phones.
+  const openSection=async(scope,label)=>{
+    await scope.locator('nav[aria-label="Settings sections"], button[aria-label="All settings"]').first().waitFor();
+    const tabs=scope.locator("nav.settings-tabs");
+    if(await tabs.count()){await tabs.getByRole("button",{name:label,exact:true}).click();return;}
+    const index=scope.locator("nav.settings-index");
+    if(!await index.count())await scope.getByRole("button",{name:"All settings",exact:true}).click();
+    await index.locator(".settings-row").filter({has:scope.page().locator(".row-label").filter({hasText:new RegExp(`^${label}$`)})}).click();
+  };
   const dialog=tab.locator(".settings-dialog");
-  await dialog.getByRole("button",{name:"details",exact:true}).click();
-  const overflow=dialog.locator(".settings-tabs-overflow");
-  if(await overflow.count()&&await overflow.getAttribute("open")===null)await overflow.locator("summary").click();
-  await dialog.getByRole("button",{name:"work",exact:true}).click();
+  await openSection(dialog,"Profile");
+  await openSection(dialog,"Automation");
   await heading().waitFor();ensure(!await secret().count()&&getSubmissions().length===start,"Secret persisted or leaving wrote data");
   const storage=await tab.evaluate(token=>{
     const check=store=>({entries:store.length,containsSecret:Object.values(store).some(value=>String(value).includes(token))});

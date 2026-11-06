@@ -68,7 +68,7 @@ for tab in "$@"; do
     History) settings_tab=""; discovery_tab=history ;;
     Saved) settings_tab=""; discovery_tab=saved ;;
     Automations) settings_tab=""; discovery_tab=automations ;;
-    Details|Avatar|Connections|Tools|Skills|Routines|Work|Learning|Memory|Logins) ;;
+    Profile|Behavior|Access|Automation|Details|Avatar|Connections|Tools|Skills|Routines|Work|Learning|Memory|Logins) ;;
     *) echo "Unknown capture page: $tab" >&2; exit 2 ;;
   esac
   "$simctl" ui "$simulator" content_size "$content_size"

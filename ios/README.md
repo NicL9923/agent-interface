@@ -34,7 +34,7 @@ saves changes as you make them.
 
 New assistant is two short steps: name and look, with the full avatar editor and a
 live preview, then role and model. Create saves the assistant and then its avatar;
-if the avatar save fails, the sheet stays open on that assistant's Avatar settings
+if the avatar save fails, the sheet stays open on that assistant's Profile settings
 with the chosen look and a retry. Portraits are added after creation. In Settings,
 **Following N assistants** opens one list of assistants to follow, and **Home
 sections** lists each section with its count. Tap a section to rename it, choose its
@@ -54,9 +54,13 @@ The **Today** screen shows recent canonical events, new replies, pending decisio
 and current work. **Mark caught up** saves the signed-in account's recap position
 on the app server. When more results are waiting, mark the displayed page caught
 up to load the next page. Late imported events stay visible until acknowledged.
-Assistant settings include **Memory** for inspecting and
-editing the actual Hermes profile documents, plus routine recipes, timezone and
-next-run previews, and a single-tap **Try once** action.
+Assistant settings open on a list of five sections: **Profile**, **Behavior**,
+**Access**, **Automation** and **Memory & learning**. One **Save changes** saves the
+name, look, sharing, instructions, model, tools, skills and MCP servers; lists such as
+routines, logins and skill locks save as you change them. **Memory** inspects and
+edits the actual Hermes profile documents with its own Save memories, and Automation
+holds routine recipes, timezone and next-run previews, and a single-tap **Try once**
+action.
 
 The conversation microphone records up to two minutes. An interrupted recording stays on this device for explicit transcription or discarding, including after reopening the app. Stopping normally transcribes the recording
 and adds the text to the draft for review, as on the web. On iOS 26 and later, when Apple's speech model for

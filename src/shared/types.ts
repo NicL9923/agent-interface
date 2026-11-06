@@ -164,6 +164,8 @@ export interface Bot {
   modelName?: string;
   provider?: string;
   enabledMcpServers?: string[];
+  /** Every MCP server configured for this profile, enabled or not. Detail only. */
+  availableMcpServers?: string[];
   shared: boolean;
   ownerId?: string;
   avatar?: Avatar;

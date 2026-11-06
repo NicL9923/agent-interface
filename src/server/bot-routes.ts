@@ -36,7 +36,7 @@ export class BotDirectory {
     return { ...rest, ...this.store.presentation(bot.id), ...(nativeAvatar ? { avatar: bot.avatar } : {}), ...(voice ? { voice } : {}) };
   }
   lean(bots: Bot[]): Bot[] {
-    return bots.map(({ instructions, enabledMcpServers, enabledTools, enabledSkills, ...bot }) => bot);
+    return bots.map(({ instructions, enabledMcpServers, availableMcpServers, enabledTools, enabledSkills, ...bot }) => bot);
   }
   /** The roster this person may see, lean or with each assistant's writable configuration. */
   async rosterFor(userId: string, bots: Bot[], nativeAvatar: boolean, lean: boolean) {

@@ -112,6 +112,9 @@
             FixtureProtocol.inference = inference
           }
         }
+        if let presentation = environment["AGENT_INTERFACE_UI_PRESENTATION"] {
+          FixtureProtocol.preferences["presentation"] = presentation
+        }
         if environment["AGENT_INTERFACE_UI_AUTOMATION"] == "1" {
           FixtureProtocol.automation = AutomationDebugFixture()
           FixtureProtocol.routines = [["id": "trial", "botId": "ranch", "name": "Morning brief trial",
@@ -927,7 +930,10 @@
           status = 503
           object = ["error": "Catalog unavailable for this test"]
         } else if method == "GET" {
-          object = Self.items
+          // With the automation fixture, one catalog skill is also Hermes's installed ranch/fences skill.
+          object = path.hasSuffix("/skills") && ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_AUTOMATION"] == "1"
+            ? Self.items + [["id": "ranch/fences", "name": "ranch/fences", "description": "Fixture pasture inspection instructions", "enabled": true]]
+            : Self.items
         } else {
           let ids = body["ids"] as? [String] ?? []
           Self.items = Self.items.map {
@@ -997,8 +1003,12 @@
           object = body
         }
       } else if path.hasSuffix("/avatar") {
-        Self.avatar = body
-        object = body
+        if Self.avatarFailures > 0 {
+          Self.avatarFailures -= 1; status = 503; object = ["error": "Fixture avatar save failed"]
+        } else {
+          Self.avatar = body
+          object = body
+        }
       } else if path == "/api/routines", method == "GET", Self.designFixture?["screen"] as? String == "work", Self.designFixture?["mode"] as? String == "routines-error" {
         status = 409; object = ["error": "routines is unavailable"]
       } else if path == "/api/routines", method == "GET", Self.designFixture?["screen"] as? String == "work", Self.designFixture?["mode"] as? String == "no-routines" {
@@ -1040,6 +1050,7 @@
         var detail = Self.bots.first { $0["id"] as? String == path.components(separatedBy: "/").last } ?? Self.bots[0]
         detail["instructions"] = detail["instructions"] ?? "Be clear and useful."
         detail["enabledMcpServers"] = ["existing-calendar"]
+        detail["availableMcpServers"] = ["existing-calendar", "household-files"]
         detail["enabledTools"] = ["terminal"]
         detail["enabledSkills"] = []
         object = detail

@@ -155,6 +155,8 @@ struct Bot: Codable, Identifiable, Equatable {
   var modelName: String? = nil
   var provider: String?
   var enabledMcpServers: [String]?
+  /// Every MCP server configured for the profile, enabled or not. Only the detail read sends it; older servers omit it.
+  var availableMcpServers: [String]? = nil
   var shared: Bool
   var ownerId: String?
   var avatar: AvatarConfig?

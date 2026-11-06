@@ -2,9 +2,43 @@ import XCTest
 @testable import AgentInterface
 
 final class SettingsParityTests: XCTestCase {
-  func testMcpServerFieldKeepsOnlyNamedIdsLikeTheWebField() {
-    XCTAssertEqual(BotInput.serverIds(" github, ,calendar ,, "), ["github", "calendar"])
-    XCTAssertEqual(BotInput.serverIds(""), [])
+  func testSettingsListsFiveSectionsWithTheWebLabelsAndSummaries() {
+    XCTAssertEqual(SettingsSection.allCases.map(\.label), ["Profile", "Behavior", "Access", "Automation", "Memory & learning"])
+    XCTAssertEqual(SettingsSection.allCases.map(\.rawValue), ["profile", "behavior", "access", "automation", "memory"], "Ids match the web's section ids")
+    XCTAssertEqual(SettingsSection.profile.summary(shared: true, modelName: "x"), "Shared with your household")
+    XCTAssertEqual(SettingsSection.profile.summary(shared: false, modelName: "x"), "Personal")
+    XCTAssertEqual(SettingsSection.behavior.summary(shared: true, modelName: "Claude Sonnet"), "Claude Sonnet")
+    XCTAssertEqual(SettingsSection.access.summary(shared: true, modelName: ""), "Connections and logins")
+    XCTAssertEqual(SettingsSection.automation.summary(shared: true, modelName: ""), "Routines, goals, tasks and triggers")
+    XCTAssertEqual(SettingsSection.memory.summary(shared: true, modelName: ""), "What it remembers and learns")
+  }
+  func testFormerTabNamesOpenTheSectionThatHoldsTheirContent() {
+    XCTAssertEqual(SettingsRoute.path(for: "Avatar"), [.section(.profile)])
+    XCTAssertEqual(SettingsRoute.path(for: "Skills"), [.section(.behavior)])
+    XCTAssertEqual(SettingsRoute.path(for: "Logins"), [.section(.access), .logins])
+    XCTAssertEqual(SettingsRoute.path(for: "Work"), [.section(.automation), .work])
+    XCTAssertEqual(SettingsRoute.path(for: "Memory"), [.section(.memory), .memory])
+    XCTAssertEqual(SettingsRoute.path(for: "Learning"), [.section(.memory), .learning])
+    XCTAssertNil(SettingsRoute.path(for: "More"))
+  }
+  func testMcpSwitchesListEveryServerOnceSortedAndToggleOnlyTheirOwn() {
+    XCTAssertEqual(McpServerChoices.names(available: ["github", "calendar"], enabled: ["retired", "calendar"]), ["calendar", "github", "retired"],
+      "An enabled server the profile no longer lists stays visible so it can be turned off")
+    XCTAssertEqual(McpServerChoices.names(available: [], enabled: []), [])
+    XCTAssertEqual(McpServerChoices.toggled(["calendar"], "github", on: true), ["calendar", "github"])
+    XCTAssertEqual(McpServerChoices.toggled(["calendar", "github"], "github", on: true), ["calendar", "github"])
+    XCTAssertEqual(McpServerChoices.toggled(["calendar", "github"], "calendar", on: false), ["github"])
+  }
+  func testBotDetailDecodesAvailableMcpServersAndOlderServersOmitThem() throws {
+    let base = #"{"id":"ranch","name":"Ranch hand","model":"m","shared":true,"activity":"idle","enabledMcpServers":["calendar"]"#
+    let detail = try JSONDecoder().decode(Bot.self, from: Data((base + #","availableMcpServers":["calendar","files"]}"#).utf8))
+    XCTAssertEqual(detail.availableMcpServers, ["calendar", "files"])
+    XCTAssertNil(try JSONDecoder().decode(Bot.self, from: Data((base + "}").utf8)).availableMcpServers)
+  }
+  func testSaveNoticeMentionsSharingOnlyWhenTheAssistantItselfSaved() {
+    XCTAssertEqual(settingsSavedNotice(patched: true, shared: true), "Changes saved for both household members.")
+    XCTAssertEqual(settingsSavedNotice(patched: true, shared: false), "Assistant saved.")
+    XCTAssertEqual(settingsSavedNotice(patched: false, shared: true), "Saved")
   }
   func testNewMemoryEntriesAreSavedWithoutAnIdAndExistingOnesKeepTheirs() throws {
     let document = MemoryDocument(target: "memory", label: "Memory", revision: "r1", enabled: true, entries: [MemoryEntry(id: String(repeating: "a", count: 64), text: "Old")], charLimit: 2200, charCount: 3)
