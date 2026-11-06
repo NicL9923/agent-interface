@@ -28,6 +28,7 @@ import { installComputerRoutes } from "./computer.js";
 import { installCollaborationRoutes } from "./collaboration.js";
 import { installRoutineRoutes } from "./routine-routes.js";
 import { installBootstrapRoutes } from "./bootstrap-routes.js";
+import { installClientErrorRoutes } from "./client-errors.js";
 import { installEventRoutes } from "./event-routes.js";
 import { installSnapshotInvalidation, runtimeSnapshots } from "./runtime-snapshot.js";
 import { GroupWatch } from "./group-watch.js";
@@ -93,6 +94,7 @@ export async function createApp(
   };
   const directory = new BotDirectory(runtime, store);
   app.get("/api/health", async () => ({ ok: true }));
+  installClientErrorRoutes(app);
   installUpgradeRoutes(app, upgrades);
   const canManageIntegrations = (req: FastifyRequest) => config.localDevAuth && !config.production || Boolean(config.integrationAdmins?.includes(signedIn(req).email.toLowerCase()));
   await installIntegrationsRoutes(app, runtime, {

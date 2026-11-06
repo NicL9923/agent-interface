@@ -64,6 +64,19 @@ export interface MessageRequest {
 export interface DraftSave { text: string; attachments?: FileRef[]; baseRevision?: number }
 export interface WebPushSubscription { endpoint: string; keys: { p256dh: string; auth: string } }
 export type PushTest = { ok: true; detail: string };
+/** Bounds the server enforces on a client error report. Clients trim to them before sending. */
+export const CLIENT_ERROR_LIMITS = { message: 1024, stack: 8192, route: 512, release: 64 } as const;
+/** A crash or uncaught error in the web client, reported so a white screen on a phone is not silent. */
+export interface ClientErrorReport {
+  /** Where it was caught: the root error boundary, a window `error`, or an unhandled rejection. */
+  kind: "render" | "error" | "rejection";
+  message: string;
+  stack?: string;
+  /** The page's path, without its query string or hash. */
+  route: string;
+  /** The client build, when the page can tell. */
+  release?: string;
+}
 
 /**
  * JSON routes under /api by "METHOD /path", with what clients send and what the server answers.
@@ -132,6 +145,7 @@ export interface ApiRoutes {
   "PATCH /preferences": { body: Preferences; response: Preferences };
   "PUT /preferences/models": { body: { modelFavorites: ModelChoice[] }; response: { modelFavorites: ModelChoice[] } };
   "GET /models": { query: { botId?: string }; response: ModelCatalog };
+  "POST /client-errors": { body: ClientErrorReport; response: Ok };
 
   "GET /bots": { query: { roster?: "lean" }; response: Bot[] };
   "POST /bots": { body: BotSaveRequest; response: Bot };

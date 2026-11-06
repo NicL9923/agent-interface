@@ -5,6 +5,10 @@ let csrf = "";
 export function setCsrf(value: string) {
   csrf = value;
 }
+/** Whether a bootstrap signed this page in. Cleared on sign-out and on a lost session. */
+export function hasSession() {
+  return csrf !== "";
+}
 // GET bodies by exact path. A 304, or a 200 with identical text, returns the same object so React can skip the update.
 type Cached = { etag: string | null; text: string; data: unknown };
 const responses = new Map<string, Cached>();
