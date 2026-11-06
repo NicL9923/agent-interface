@@ -153,6 +153,8 @@ export function useSession(events: SessionEvents) {
     };
   }, [refresh]);
   useEffect(() => {
+    // A new account, or signing out, starts by assuming the server may never send `groups`.
+    setGroupsNotified(false);
     if (!boot?.user.id || auth) return;
     // The server sends `groups` once on every connect and on each catalog change, so connecting or a
     // roster notice does not read the group catalog itself.

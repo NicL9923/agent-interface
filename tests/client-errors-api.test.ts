@@ -57,7 +57,8 @@ it("drops the query and hash of absolute, relative and blob URLs, keeping only a
     ["https://x.invalid/a?q=(SENTINEL)", "https://x.invalid/a"],
     ["at load (/api/search?q=SENTINEL:3:9)", "at load (/api/search)"],
     ["at f (https://x.invalid/assets/app-1.js?v=SENTINEL:10:5)", "at f (https://x.invalid/assets/app-1.js:10:5)"],
-    ["at f https://x.invalid/assets/app-1.js#SENTINEL:10:5", "at f https://x.invalid/assets/app-1.js:10:5"],
+    // Not a frame shape any browser writes, so nothing after the hash is kept.
+    ["at f https://x.invalid/assets/app-1.js#SENTINEL:10:5", "at f https://x.invalid/assets/app-1.js"],
     ["a/b?c either/or?maybe", "a/b either/or"],
     // Chrome names an eval'd or sourceURL script without a path.
     ["at eval (app.js?token=SENTINEL:1:1)", "at eval (app.js:1:1)"],
@@ -65,6 +66,10 @@ it("drops the query and hash of absolute, relative and blob URLs, keeping only a
     // Safari and Firefox frames: name@location.
     ["load@https://x.invalid/assets/app-1.js?t=SENTINEL:10:5", "load@https://x.invalid/assets/app-1.js:10:5"],
     ['fetch "https://x.invalid/a?q=SENTINEL" failed', 'fetch "https://x.invalid/a failed'],
+    ["Failed to load manifest.webmanifest?token=SENTINEL", "Failed to load manifest.webmanifest"],
+    // Outside a stack frame, digits after a query are the query's own.
+    ["Unable to load https://x.invalid/app.js?token=account:123456", "Unable to load https://x.invalid/app.js"],
+    ["at https://x.invalid/assets/app-1.js?v=SENTINEL:10:5", "at https://x.invalid/assets/app-1.js:10:5"],
   ]) expect(withoutUrlQueries(text), text).toBe(safe);
 });
 

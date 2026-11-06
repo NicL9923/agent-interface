@@ -73,21 +73,23 @@ const token = /\S+/g;
  * Before its query, the token names a place: it has a scheme (`https:`, `blob:`), a slash, or ends in
  * a file extension, as Chrome's `eval` frames name a bare script (`app.js?token=…`).
  */
-const place = /^[("'`]*(?:[a-z][a-z\d+.-]*:|[^?#]*\/|[^?#]*\.[a-z\d]{1,8}$)/i;
+const place = /^[("'`]*(?:[a-z][a-z\d+.-]*:|[^?#]*\/|[^?#]*\.[a-z][a-z\d]*$)/i;
 /** A stack frame's script ends its path, and may be followed by a line and a column. */
 const frame = /\.[cm]?[jt]sx?$/;
 /**
  * Drops the query string and hash from every URL, path or script name in diagnostic text, whatever its
  * form, up to the next space: a query may hold quotes or parentheses. They can carry a sign-in code, a
- * search or a draft. Only a script's stack frame keeps its trailing line and column, as in
- * `(/assets/app.js?v=1:10:5)`.
+ * search or a draft. Only a script's location in a stack frame keeps its trailing line and column: in
+ * parentheses or after `at` (Chrome), or after `name@` (Safari, Firefox), as in `(/assets/app.js?v=1:10:5)`.
+ * Anywhere else digits after the query are the query's own, such as `?token=account:123456`.
  */
 export function withoutUrlQueries(text: string) {
-  return text.replace(token, word => {
+  return text.replace(token, (word: string, offset: number) => {
     const cut = word.search(/[?#]/);
     if (cut <= 0 || !place.test(word.slice(0, cut))) return word;
     const base = word.slice(0, cut);
-    const position = frame.test(base) ? /(?::\d+){1,2}(?=\)?$)/.exec(word.slice(cut))?.[0] ?? "" : "";
+    const inFrame = word.startsWith("(") || /^[^/]*@/.test(base) || /(?:^|\s)at\s+$/.test(text.slice(0, offset));
+    const position = inFrame && frame.test(base) ? /(?::\d+){1,2}(?=\)?$)/.exec(word.slice(cut))?.[0] ?? "" : "";
     const closed = word.startsWith("(") && word.endsWith(")") ? ")" : "";
     return base + position + closed;
   });

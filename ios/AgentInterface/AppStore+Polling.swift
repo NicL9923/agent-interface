@@ -77,6 +77,9 @@ extension AppStore {
           failures = 0
           // Notices sent before the subscription are lost, so connecting counts as one. A server
           // that sends `groups` also sends one on every connect, so the catalog needs no read here.
+          // A server that sends `groups` sends one on every connect, so each connect proves it again.
+          // Until then home polls as for an older server; the poll sleeps first, so this costs no read.
+          self.groupNoticeScope = nil
           await self.refreshBootstrap()
           for try await line in lines {
             guard !Task.isCancelled else { return }
