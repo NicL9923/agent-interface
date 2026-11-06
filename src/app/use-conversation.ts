@@ -223,7 +223,7 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
       holdPlace();
       setConversation(previous => previous?.botId === botId ? patch(previous, value) : previous);
     };
-    const stream = changeStream(`/bots/${encodeURIComponent(botId)}/events?inflight=2`, () => {
+    const stream = changeStream(`/bots/${encodeURIComponent(botId)}/events?inflight=2&drafts=1`, () => {
       latestInflight = undefined;
       void load();
     }, value => {

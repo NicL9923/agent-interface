@@ -336,9 +336,11 @@ and the current draft as `draft`, and saves nothing. Without `baseRevision`, as 
 older app builds, the edit always applies. Content the server already has is not a
 conflict and does not advance the revision, so a retried save is harmless.
 
-Each new revision, from an edit or the clear after a send, sends `event: draft` on
-that person's own open `GET /api/bots/:id/events` streams for the assistant, whatever
-their options. Its data is the new revision number, never the draft. A client holding
+Streams opened as `GET /api/bots/:id/events?drafts=1` also hear about the person's
+own draft: each new revision, from an edit or the clear after a send, sends `event:
+draft` on that person's streams for the assistant. Its data is the new revision
+number, never the draft. Without `drafts=1` none are sent, so a client that treats
+every data line as a change, as the iOS app does, is unaffected. A client holding
 an older revision reads the draft again, so an edit from another device appears at
 once without polling. Other household members' streams never see it. The web app
 keeps a 30-second draft read only as a fallback for a stream that fails unnoticed.

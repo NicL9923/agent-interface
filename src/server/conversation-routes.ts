@@ -167,6 +167,9 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
     // ?inflight=2 sends only what a reply grew by since the last event this stream sent.
     const mode = (req.query as { inflight?: string }).inflight;
     const optedIn = mode === "1" || mode === "2", deltas = mode === "2";
+    // ?drafts=1 adds `event: draft` notices. Without it none are sent: the iOS app reads any
+    // unnamed or unknown data line as a conversation change and would refetch on every draft save.
+    const draftNotices = (req.query as { drafts?: string }).drafts === "1";
     // The privacy version the redaction below was built for. Every change to who owns or shares an
     // assistant advances it, so comparing versions replaces re-reading and comparing the private list.
     let seen = store.privacyVersion;
@@ -248,7 +251,7 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
     stream = connection.open(streams, {
       reserve: () => {
         watchers.set(botId, listeners.add(changed));
-        draftStreams.set(ownDraft, drafts.add(draftChanged));
+        if (draftNotices) draftStreams.set(ownDraft, drafts.add(draftChanged));
         unwatch = runtime.watch?.(botId, notice);
       },
       // Ends, sending nothing more, once the person signs out or the assistant becomes someone else's.

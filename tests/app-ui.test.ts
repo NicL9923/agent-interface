@@ -154,7 +154,7 @@ describe("conversation state", () => {
     it("opts in to growth notices and applies one that continues the reply it holds", async () => {
       conversation = { ...conversation, activity: run, messages: [{ id: "u", role: "user", text: "Hello" }] };
       await render();
-      expect(FakeEventSource.created).toContain("/api/bots/shared/events?inflight=2");
+      expect(FakeEventSource.created).toContain("/api/bots/shared/events?inflight=2&drafts=1");
       await act(async () => open().emit("inflight", whole("Growing")));
       const before = vi.mocked(api).mock.calls.length;
       await act(async () => open().emit("inflight-delta", growth({ appendText: " reply" })));

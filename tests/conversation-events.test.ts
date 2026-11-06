@@ -266,14 +266,15 @@ describe("conversation change stream", () => {
     await events.close();
   });
 
-  it("announces a person's new draft revisions only on their own streams, without the draft", async () => {
+  it("announces a person's new draft revisions only on their own opted-in streams, without the draft", async () => {
     const s = await setup();
     const login = await fetch(`${s.base}/api/auth/local`, { method: "POST", headers: { origin, "content-type": "application/json" }, body: JSON.stringify({ member: "two" }) });
     const other = login.headers.getSetCookie()[0].split(";")[0];
-    const mine = await stream(`${s.base}/api/bots/shared/events`, s.cookie);
-    const theirs = await stream(`${s.base}/api/bots/shared/events`, other);
-    await mine.until(() => mine.text.includes("retry"));
-    await theirs.until(() => theirs.text.includes("retry"));
+    const mine = await stream(`${s.base}/api/bots/shared/events?drafts=1`, s.cookie);
+    const theirs = await stream(`${s.base}/api/bots/shared/events?drafts=1`, other);
+    // The iOS app reads every data line as a change, so a stream that did not ask hears no drafts.
+    const legacy = await stream(`${s.base}/api/bots/shared/events?inflight=1`, s.cookie);
+    for (const opened of [mine, theirs, legacy]) await opened.until(() => opened.text.includes("retry"));
     const headers = { cookie: s.cookie, origin, "x-csrf-token": s.csrfToken, "content-type": "application/json" };
     const save = (text: string) => fetch(`${s.base}/api/bots/shared/draft`, { method: "PUT", headers, body: JSON.stringify({ text, attachments: [] }) });
     expect((await save("Buy feed")).status).toBe(200);
@@ -289,7 +290,8 @@ describe("conversation change stream", () => {
     expect(mine.text).not.toContain("Buy feed");
     await pass(1000);
     expect(theirs.text).not.toContain("event: draft");
-    await mine.close(); await theirs.close();
+    expect(legacy.text).not.toContain("event: draft");
+    await mine.close(); await theirs.close(); await legacy.close();
   });
 
   it("ends the stream instead of notifying once its session is signed out", async () => {
