@@ -1,4 +1,4 @@
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { chmodSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
@@ -130,6 +130,31 @@ function migrate(db: DatabaseSync) {
   }
 }
 
+// Statements built from a variable number of placeholders, such as IN lists, add one entry per
+// shape; past this many the oldest is dropped and compiled again on its next use.
+const STATEMENT_CACHE = 256;
+/**
+ * A connection that compiles each SQL text once. Repositories call prepare() on every use, and
+ * compiling costs about ten times the run of a short query. Every call returns rows eagerly
+ * (all, get, run), or iterates without touching the database until it finishes, so one statement
+ * is never stepped by two callers at once.
+ */
+class CachedDatabase extends DatabaseSync {
+  readonly #statements = new Map<string, StatementSync>();
+  override prepare(sql: string): StatementSync {
+    let statement = this.#statements.get(sql);
+    if (statement) return statement;
+    statement = super.prepare(sql);
+    if (this.#statements.size >= STATEMENT_CACHE) this.#statements.delete(this.#statements.keys().next().value!);
+    this.#statements.set(sql, statement);
+    return statement;
+  }
+  override close() {
+    this.#statements.clear();
+    super.close();
+  }
+}
+
 /**
  * The one SQLite connection every store repository shares, with its one transaction helper.
  * Transactions do not nest: a repository method that runs inside another's transaction
@@ -140,9 +165,12 @@ export class StoreDatabase {
   constructor(path: string) {
     if (path !== ":memory:")
       mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-    this.db = new DatabaseSync(path);
+    this.db = new CachedDatabase(path);
     if (path !== ":memory:") chmodSync(path, 0o600);
-    this.db.exec("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;");
+    // node:sqlite blocks the event loop, so a commit that waits on fsync stalls every request and
+    // stream. In WAL mode NORMAL syncs at checkpoints instead: the database cannot corrupt, but a
+    // power loss or OS crash, not an app crash, can roll back the last few commits.
+    this.db.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;");
     migrate(this.db);
     this.db.exec(additions);
     this.db.exec("INSERT INTO notification_ingestion(event_id) SELECT id FROM notification_events e WHERE NOT EXISTS(SELECT 1 FROM notification_ingestion i WHERE i.event_id=e.id) ORDER BY e.rowid");

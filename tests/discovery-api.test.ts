@@ -23,7 +23,7 @@ async function setup() {
   const setRoutineEnabled=vi.fn(async()=>{});const stopRoutineRun=vi.fn(async()=>true);const saveRoutine=vi.fn();const routineResults=vi.fn(async()=>[{id:'output',title:'Dinners',preview:'Plan dinners',previewOnly:false}]);
   const runtime=fakeRuntime({listBots:async()=>[botFixture(),botFixture({id:'private',name:'Private',shared:false,ownerId:'two'})],experienceRequest:experience,routines:async()=>[{id:'routine',botId:'shared',name:'Dinners',schedule:'0 7 * * *',prompt:'Report',enabled:true}],routineResults,tools:async()=>[toolFixture({id:'browser',enabled:false}),toolFixture()],capabilities:async()=>capabilitiesFixture({uploads:{supported:true}}),setRoutineEnabled,stopRoutineRun,saveRoutine});
   const experienceRequest = vi.spyOn(runtime, 'experienceRequest');
-  await installDiscoveryRoutes(app,runtime,store);const headers=signIn(store,origin,'one',{email:'one@example.test',csrf:'csrf'});app.addHook('onClose',async()=>store.close());return {app,store,headers,experienceRequest,history,setRoutineEnabled,stopRoutineRun,saveRoutine};
+  await installDiscoveryRoutes(app,runtime,store);const headers=signIn(store,origin,'one',{email:'one@example.test',csrf:'csrf'});app.addHook('onClose',async()=>store.close());return {app,store,headers,experienceRequest,history,setRoutineEnabled,stopRoutineRun,saveRoutine,routineResults};
 }
 it('searches only visible profiles and includes routine results without copying their output',async()=>{
   const s=await setup();expect((await s.app.inject('/api/search?q=dinners')).statusCode).toBe(401);
@@ -31,6 +31,15 @@ it('searches only visible profiles and includes routine results without copying 
   // Snippets arrive as plain words that keep Hermes's match markers, for web and iOS alike.
   expect(response.json().hits[0].snippet).toBe('>>>Dinner<<< plan tacos');expect(s.experienceRequest).toHaveBeenCalledWith({operation:'search',profile:'shared',query:'dinners'});expect(s.experienceRequest).not.toHaveBeenCalledWith(expect.objectContaining({profile:'private'}));
   expect((await s.app.inject({url:'/api/bots/private/history/history',headers:s.headers})).statusCode).toBe(404);
+});
+it('reads routine results while the native search is still running, and lists native hits first',async()=>{
+  const s=await setup();
+  let finishSearch!:()=>void;const searching=new Promise<void>(resolve=>{finishSearch=resolve;});
+  s.experienceRequest.mockImplementation((async(input:{profile:string})=>{await searching;return [{botId:input.profile,botName:'Shared',sessionId:'history',title:'Dinners',snippet:'Dinner plan'}];}) as never);
+  const response=s.app.inject({url:'/api/search?q=dinners',headers:s.headers});
+  await vi.waitFor(()=>expect(s.routineResults).toHaveBeenCalledWith('shared','routine'));
+  finishSearch();
+  expect((await response).json().hits.map((hit:{sessionId:string})=>hit.sessionId)).toEqual(['history','routine:routine:output']);
 });
 it('validates original reply identity and scoped saved references',async()=>{
   const s=await setup();const body={kind:'session',botId:'shared',sessionId:'history',messageId:'reply',offset:100,title:'Dinner plan'};

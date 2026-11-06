@@ -5,7 +5,7 @@ import type { StoreDatabase } from "./store-database.js";
 
 /** The durable Hermes event log, its discovery cursor, and each person's Today feed over it. */
 export class EventRepository {
-  // The presentation repository registers may_receive, which eventPage filters with.
+  // The presentation repository's sharing rules decide which events eventPage returns.
   constructor(private readonly database: StoreDatabase, private readonly notifications: NotificationRepository, readonly presentation: PresentationRepository) {}
   private get db() { return this.database.db; }
   cursor(): string {
@@ -54,16 +54,32 @@ export class EventRepository {
   /**
    * One page of this person's events. Events they may not receive, by mayReceive, are
    * skipped and never move the returned frontier, so it reveals nothing about hidden activity.
+   * Older visible events before `initialSince` are passed over but do move it.
    */
   eventPage(userId: string, frontier: number, upperFrontier: number, botIds: string[], initialSince?: string) {
-    if (!botIds.length) return { events: [], frontier: String(frontier), hasMore: false };
+    const receiver = this.presentation.receiver(userId, botIds);
+    if (!receiver.botIds.length) return { events: [], frontier: String(frontier), hasMore: false };
     const since = initialSince ? Date.parse(initialSince) : null;
-    const mine = `FROM notification_ingestion i JOIN notification_events e ON e.id=i.event_id WHERE i.id>? AND i.id<=? AND json_extract(e.value,'$.botId') IN (${botIds.map(() => '?').join(',')}) AND may_receive(e.value,?)=1`;
-    const rows = this.db.prepare(`SELECT i.id,e.value ${mine} AND (? IS NULL OR e.created_at>=?) ORDER BY i.id LIMIT 101`).all(frontier, upperFrontier, ...botIds, userId, since, since) as { id: number; value: string }[];
+    // One ordered pass over light columns: whole events are read only for the page. Sharing is
+    // checked here, once per assistant, instead of per row in SQL. Past a full page the rest is
+    // never read; otherwise the pass has seen every visible event and so the newest one.
+    const candidates = this.db.prepare(`SELECT i.id,e.id AS eventId,json_extract(e.value,'$.botId') AS botId,json_extract(e.value,'$.occurredAt') AS occurredAt,e.created_at AS createdAt
+      FROM notification_ingestion i JOIN notification_events e ON e.id=i.event_id
+      WHERE i.id>? AND i.id<=? AND json_extract(e.value,'$.botId') IN (${receiver.botIds.map(() => "?").join(",")}) ORDER BY i.id`);
+    const rows: { id: number; eventId: string }[] = [];
+    let last = frontier;
+    for (const row of candidates.iterate(frontier, upperFrontier, ...receiver.botIds) as Iterable<{ id: number; eventId: string; botId: string; occurredAt: unknown; createdAt: number }>) {
+      if (!receiver.mayReceive(row.botId, row.occurredAt)) continue;
+      last = row.id;
+      if (since !== null && !(row.createdAt >= since)) continue;
+      rows.push(row);
+      if (rows.length > 100) break;
+    }
+    const hasMore = rows.length > 100;
     const page = rows.slice(0, 100);
-    // Older visible events before the recap start are passed over; hidden ones never count.
-    const last = (this.db.prepare(`SELECT max(i.id) AS id ${mine}`).get(frontier, upperFrontier, ...botIds, userId) as { id: number | null }).id ?? frontier;
-    return { events: page.map(row => JSON.parse(row.value) as RuntimeEvent), frontier: String(rows.length > 100 ? page.at(-1)!.id : Math.max(frontier, last)), hasMore: rows.length > 100 };
+    const values = new Map((this.db.prepare("SELECT id,value FROM notification_events WHERE id IN (SELECT value FROM json_each(?))")
+      .all(JSON.stringify(page.map(row => row.eventId))) as { id: string; value: string }[]).map(row => [row.id, row.value]));
+    return { events: page.map(row => JSON.parse(values.get(row.eventId)!) as RuntimeEvent), frontier: String(hasMore ? page.at(-1)!.id : Math.max(frontier, last)), hasMore };
   }
   todaySeen(userId: string): string | undefined {
     return (this.db.prepare("SELECT seen_at FROM today_seen WHERE user_id=?").get(userId) as { seen_at: string } | undefined)?.seen_at;

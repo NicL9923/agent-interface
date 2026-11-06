@@ -6,11 +6,18 @@ import type { StoreDatabase } from "./store-database.js";
  * Who may see each assistant, now and over time, its avatar and its names. Sharing writes carry
  * an in-memory version so a request can tell whether sharing changed while it ran.
  */
+// Whether someone could see an assistant with this visibility history when its event happened. An
+// event without a readable time counts as private whenever the assistant has ever been.
+function receivedAt(periods: { startedAt: number; ownerId: string | null }[], occurredAt: unknown, userId: string) {
+  if (!periods.length) return true;
+  const at = Date.parse(occurredAt as string);
+  if (Number.isNaN(at)) return periods.every(period => period.ownerId === null || period.ownerId === userId);
+  const period = periods.findLast(period => period.startedAt <= at) ?? periods[0];
+  return period.ownerId === null || period.ownerId === userId;
+}
+
 export class PresentationRepository {
-  constructor(private readonly database: StoreDatabase) {
-    // Today pages filter in SQL with the same rule notifications use.
-    database.db.function("may_receive", (value, userId) => this.mayReceive(JSON.parse(String(value)), String(userId)) ? 1 : 0);
-  }
+  constructor(private readonly database: StoreDatabase) {}
   private get db() { return this.database.db; }
   presentation(botId: string | undefined) {
     // Alerts and test pushes have no assistant; node:sqlite on Node 24 refuses to bind undefined.
@@ -65,12 +72,23 @@ export class PresentationRepository {
    */
   mayReceive(event: Pick<RuntimeEvent, "botId" | "occurredAt">, userId: string) {
     if (!visible(this.presentation(event.botId), userId)) return false;
-    const periods = this.visibilityPeriods(event.botId);
-    if (!periods.length) return true;
-    const at = Date.parse(event.occurredAt);
-    if (Number.isNaN(at)) return periods.every(period => period.ownerId === null || period.ownerId === userId);
-    const period = periods.findLast(period => period.startedAt <= at) ?? periods[0];
-    return period.ownerId === null || period.ownerId === userId;
+    return receivedAt(this.visibilityPeriods(event.botId), event.occurredAt, userId);
+  }
+  /**
+   * mayReceive for many events of these assistants, reading each one's sharing once: the
+   * assistants this person can see now, and whether they may hear about one's event.
+   */
+  receiver(userId: string, botIds: string[]) {
+    const periods = new Map<string, { startedAt: number; ownerId: string | null }[]>();
+    for (const botId of new Set(botIds))
+      if (visible(this.presentation(botId), userId)) periods.set(botId, this.visibilityPeriods(botId));
+    return {
+      botIds: [...periods.keys()],
+      mayReceive: (botId: string, occurredAt: unknown) => {
+        const history = periods.get(botId);
+        return !!history && receivedAt(history, occurredAt, userId);
+      },
+    };
   }
   /** The latest write of each assistant's sharing, so a rollback can tell its own write from a later one. */
   private versions = new Map<string, number>();
