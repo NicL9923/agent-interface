@@ -23,7 +23,7 @@ OPERATIONS = (
     ("POST", re.compile(r"/api/cron/jobs")),
     ("PUT", re.compile(r"/api/cron/jobs/[A-Za-z0-9_-]{1,200}")),
     ("DELETE", re.compile(r"/api/cron/jobs/[A-Za-z0-9_-]{1,200}")),
-    ("POST", re.compile(r"/api/cron/jobs/[A-Za-z0-9_-]{1,200}/(?:pause|resume)")),
+    ("POST", re.compile(r"/api/cron/jobs/[A-Za-z0-9_-]{1,200}/(?:pause|resume|cancel)")),
 )
 
 

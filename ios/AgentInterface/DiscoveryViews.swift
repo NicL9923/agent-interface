@@ -281,7 +281,7 @@ struct DiscoveryView: View {
         Text(row.enabled ? "Enabled" : "Paused").font(.caption.weight(.semibold)).foregroundStyle(Palette.muted)
           .padding(.horizontal, 8).padding(.vertical, 2).overlay(Capsule().strokeBorder(Palette.line))
       }
-      Text(!row.enabled ? "Paused. No runs until you resume." : row.nextRunAt.map { "Next: \(When.format($0))" } ?? "No upcoming run reported")
+      Text(row.running == true ? "Running now." : !row.enabled ? "Paused. No runs until you resume." : row.nextRunAt.map { "Next: \(When.format($0))" } ?? "No upcoming run reported")
         .font(.footnote).foregroundStyle(Palette.muted)
       if let status = row.lastStatus {
         Text("Last result: \(Self.routineResultLabel(status))").font(.footnote)
@@ -291,6 +291,12 @@ struct DiscoveryView: View {
       Text("Notify: \(notifyNames(row))").font(.footnote).foregroundStyle(Palette.muted)
       HStack {
         Button("View outputs") { store.routineResult = RoutineResultDestination(botId: row.botId, routineId: row.id) }
+        if row.running == true {
+          Button("Stop run") { Task { await perform { api in
+            let _: StopRunResponse = try await api.write("/routines/\(APIClient.component(row.id))/stop", [String: String]())
+            overview = try await api.get("/automations")
+          } } }.disabled(busy)
+        }
         Button(row.enabled ? "Pause" : "Resume") { Task { await perform { api in
           let _: EmptyResponse = try await api.write("/routines/\(APIClient.component(row.id))/state", ["enabled": !row.enabled], method: "PATCH")
           overview = try await api.get("/automations")
@@ -304,6 +310,7 @@ struct DiscoveryView: View {
     case "error", "failed": "Failed"
     case "delivery_failed": "Delivery failed"
     case "running": "Running"
+    case "missed": "Didn't run"
     case "pending": "Pending"
     case "skipped": "Skipped"
     case "cancelled": "Canceled"

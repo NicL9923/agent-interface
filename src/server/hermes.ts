@@ -866,7 +866,8 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
             roomIds: deliverRooms(job.deliver), delivery: {deliver: job.deliver, failure_deliver: job.failure_deliver, origin: job.origin},
             enabled: job.enabled !== false && job.state !== 'paused',
             nextRunAt: job.next_run_at ?? undefined, lastRunAt: job.last_run_at ?? undefined,
-            lastStatus: job.last_status ?? undefined, lastError: job.last_error ?? undefined, lastDeliveryError: job.last_delivery_error ?? undefined});
+            lastStatus: job.last_status ?? undefined, lastError: job.last_error ?? undefined, lastDeliveryError: job.last_delivery_error ?? undefined,
+            ...(job.live_execution ? {running: true} : {})});
         }
       }
       return all;
@@ -877,6 +878,14 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
       if (job.error || (job.enabled !== false && job.state !== 'paused') !== enabled) throw new Error('Hermes did not confirm the routine state. Reload before retrying.');
       discoveryFull = true;
       discoveryGeneration++;
+    },
+    async stopRoutineRun(botId, id) {
+      // Hermes ends the live run and records it as cancelled; the schedule stays as it is.
+      const response = await (await http(`/api/cron/jobs/${encodeURIComponent(id)}/cancel?profile=${encodeURIComponent(botId)}`, {method: 'POST'})).json() as Wire;
+      if (response.error) throw new Error('Hermes could not stop this routine. Reload before retrying.');
+      discoveryFull = true;
+      discoveryGeneration++;
+      return response.cancelled === true;
     },
     saveRoutine: routineMutation,
     async deleteRoutine(id, botId) {

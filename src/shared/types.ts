@@ -358,6 +358,8 @@ export interface Routine {
   noAgent?: boolean;
   /** Native job IDs in this profile, plus "self" for continuity. */
   contextFrom?: string[] | null;
+  /** A run is in flight now, which Stop run can end. Read only. */
+  running?: boolean;
   nextRunAt?: string;
   lastRunAt?: string;
   lastStatus?: string;
@@ -427,6 +429,8 @@ export interface RuntimeStatus {
 }
 export interface Runtime {
   setRoutineEnabled?(botId: string, routineId: string, enabled: boolean): Promise<void>;
+  /** Stops the routine's run in flight, leaving its schedule alone. Whether a run was stopped. */
+  stopRoutineRun?(botId: string, routineId: string): Promise<boolean>;
   routineResults?(botId: string, routineId: string): Promise<RoutineResult[]>;
   routineOutput?(botId: string, routineId: string, resultId: string): Promise<RoutineOutput>;
   groupRequest?(input: GroupRequest): Promise<GroupResponse>;
