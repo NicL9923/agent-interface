@@ -29,13 +29,18 @@ class Response:
 
 
 class FakeHermes:
-    """hermes_cli.plugin_provider_requests, recording which file made each call, as Hermes checks."""
+    """hermes_cli.plugin_provider_requests, recording which file made each call, as Hermes checks,
+    and hermes_cli.plugins's readers of plugins.enabled and plugins.disabled in config.yaml."""
 
     class ProviderNotSignedIn(Exception):
         pass
 
-    def __init__(self, answer):
+    def __init__(self, answer, enabled=("wildbots-voice",), disabled=()):
         self.answer, self.calls, self.callers = answer, [], []
+        self.plugins = types.ModuleType("hermes_cli.plugins")
+        # Hermes answers None for a missing or malformed allow-list.
+        self.plugins._get_enabled_plugins = lambda: None if enabled is None else set(enabled)
+        self.plugins._get_disabled_plugins = lambda: set(disabled)
         self.module = types.ModuleType("hermes_cli.plugin_provider_requests")
         self.module.ProviderNotSignedIn = self.ProviderNotSignedIn
         self.module.credentialed_provider_request = self.request
@@ -50,7 +55,7 @@ class FakeHermes:
     def modules(self):
         package = types.ModuleType("hermes_cli")
         package.__path__ = []
-        return {"hermes_cli": package, "hermes_cli.plugin_provider_requests": self.module}
+        return {"hermes_cli": package, "hermes_cli.plugin_provider_requests": self.module, "hermes_cli.plugins": self.plugins}
 
 
 class SessionValidationTests(unittest.TestCase):
@@ -131,9 +136,40 @@ class PluginLinkTests(unittest.TestCase):
         self.link.symlink_to(voice.PLUGIN_SOURCE)
         self.assertEqual(self.state(), (True, None))
 
+    def test_minting_needs_the_plugin_enabled_in_hermes_and_stops_once_disabled(self):
+        # Hermes mints for a linked plugin even when it is not enabled; enabling is the consent.
+        self.link.symlink_to(voice.PLUGIN_SOURCE)
+        secret = Response(200, {"value": "ek_test_secret", "expires_at": 1})
+        for enabled, disabled in ((None, ()), ((), ()), (("other",), ()), (("wildbots-voice",), ("wildbots-voice",))):
+            hermes = FakeHermes(secret, enabled, disabled)
+            with self.subTest(enabled=enabled, disabled=disabled), patch.dict(sys.modules, hermes.modules()), \
+                    patch.object(voice.importlib.util, "find_spec", lambda name: object()):
+                available, reason = voice.plugin_state(self.root)
+                self.assertFalse(available)
+                self.assertEqual(reason, "Enable the wildbots-voice plugin in Hermes. " + voice.ENABLE_HINT)
+                with self.assertRaises(voice.VoiceError) as caught:
+                    voice.mint(REQUEST, self.root)
+                self.assertEqual((caught.exception.status, hermes.calls), (503, []))
+        hermes = FakeHermes(secret)
+        with patch.dict(sys.modules, hermes.modules()), patch.object(voice.importlib.util, "find_spec", lambda name: object()):
+            self.assertEqual(voice.mint(REQUEST, self.root)["clientSecret"], "ek_test_secret")
+
+    def test_an_unreadable_enabled_state_counts_as_not_enabled(self):
+        self.link.symlink_to(voice.PLUGIN_SOURCE)
+        hermes = FakeHermes(Response(200, {}))
+        def broken():
+            raise RuntimeError("config unreadable")
+        hermes.plugins._get_enabled_plugins = broken
+        with patch.dict(sys.modules, hermes.modules()), patch.object(voice.importlib.util, "find_spec", lambda name: object()):
+            self.assertFalse(voice.plugin_state(self.root)[0])
+        modules = FakeHermes(Response(200, {})).modules()
+        del modules["hermes_cli.plugins"]
+        with patch.dict(sys.modules, modules), patch.dict(sys.modules, {"hermes_cli.plugins": None}):
+            self.assertFalse(voice.plugin_enabled())
+
     def test_an_older_hermes_without_shared_sign_in_is_named(self):
         self.link.symlink_to(voice.PLUGIN_SOURCE)
-        with patch.object(voice.importlib.util, "find_spec", lambda name: None):
+        with patch.dict(sys.modules, FakeHermes(Response(200, {})).modules()), patch.object(voice.importlib.util, "find_spec", lambda name: None):
             available, reason = voice.plugin_state(self.root)
         self.assertFalse(available)
         self.assertIn("Update Hermes", reason)

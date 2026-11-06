@@ -2,8 +2,8 @@ import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/server/app.js";
 import { loadConfig } from "../src/server/config.js";
-import { MintLimit, spokenText, talkAnswer, talkPersona } from "../src/server/talk.js";
-import type { Bot, Conversation, RealtimeSessionInput, Submission, SubmissionReceipt } from "../src/shared/types.js";
+import { MintLimit, spokenReplies, spokenText, talkAnswer, talkPersona } from "../src/server/talk.js";
+import type { Bot, Conversation, ConversationOptions, RealtimeSessionInput, Submission, SubmissionReceipt } from "../src/shared/types.js";
 import { botFixture, capabilitiesFixture, conversationFixture } from "./helpers/runtime-fixtures.js";
 import { fakeRuntime, localLogin } from "./helpers/server.js";
 
@@ -16,7 +16,8 @@ const ranch = botFixture({ id: "ranch", name: "Ranch Hand", description: "Keeps 
 const secret = botFixture({ id: "zq-ledger", name: "Moonlit Saddle Ledger", shared: false, ownerId: "local-two" });
 const on = { supported: true };
 
-async function setup(options: { native?: boolean; conversation?: () => Conversation; receipt?: (input: Submission) => SubmissionReceipt } = {}) {
+async function setup(options: { native?: boolean; conversation?: (options?: ConversationOptions) => Conversation; receipt?: (input: Submission) => SubmissionReceipt;
+  lookup?: (requestId: string) => SubmissionReceipt | null } = {}) {
   const bots: Bot[] = [ranch, secret];
   const realtimeSession = vi.fn(async (input: RealtimeSessionInput) => ({ clientSecret: "ek_fixture", expiresAt: 1_790_000_000, model: "gpt-realtime-2.1", voice: input.voice }));
   const submit = vi.fn(async (input: Submission): Promise<SubmissionReceipt> => options.receipt?.(input) ?? { requestId: input.requestId, status: "accepted", runId: "run-talk" });
@@ -27,7 +28,7 @@ async function setup(options: { native?: boolean; conversation?: () => Conversat
     status: async () => ({ connected: true }),
     capabilities: async () => capabilitiesFixture({ chat: on, steering: on, idempotency: on, liveVoice: on, avatarMetadata: { supported: options.native ?? true } }),
     listBots: async () => bots, canonicalSubmit: async () => true,
-    conversation: async () => conversation(), submit, steer: submit, lookupSubmission: async () => null,
+    conversation: async (_botId, read) => conversation(read), submit, steer: submit, lookupSubmission: async requestId => options.lookup?.(requestId) ?? null,
     realtimeSession, setVoice,
     watch: (_botId, listener) => { listeners.add(listener); return () => listeners.delete(listener); },
     close: async () => {},
@@ -37,7 +38,7 @@ async function setup(options: { native?: boolean; conversation?: () => Conversat
   store.savePresentation(secret.id, { shared: false, ownerId: "local-two" });
   const one = await localLogin(app, origin, "one"), two = await localLogin(app, origin, "two");
   return { app, store, bots, one, two, realtimeSession, submit, setVoice,
-    setConversation(next: () => Conversation) { conversation = next; for (const listener of listeners) listener(); } };
+    setConversation(next: (options?: ConversationOptions) => Conversation) { conversation = next; for (const listener of listeners) listener(); } };
 }
 
 describe("talk session", () => {
@@ -109,36 +110,45 @@ describe("talk session", () => {
 
 const run = (messages: Conversation["messages"], activity: Conversation["activity"] = { state: "idle" }, changes: Partial<Conversation> = {}) =>
   conversationFixture({ botId: "ranch", messages, activity, ...changes });
-const asked = { id: "user-1", runId: "run-talk", role: "user" as const, text: "What's the weather?" };
+// The add-on names a person's message by its request ID.
+const asked = (id = "r", runId = "run-talk") => ({ id, runId, role: "user" as const, text: "What's the weather?" });
+const said = (id: string, text: string, runId = "run-talk") => ({ id, runId, role: "assistant" as const, text });
+/** A history read as Hermes cuts it: from the start message when it is there, else the latest turns. */
+const anchored = (messages: Conversation["messages"]) => (options?: ConversationOptions) => {
+  const at = messages.findIndex(message => message.id === options?.window?.start);
+  return run(at >= 0 ? messages.slice(at) : messages.slice(-2));
+};
+const ask = (s: Awaited<ReturnType<typeof setup>>, requestId: string, request = "What's the weather?") =>
+  s.app.inject({ method: "POST", url: "/api/bots/ranch/talk/ask", headers: s.one, payload: { requestId, request } });
+async function fakeTime() {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  // The request reaches its wait through real I/O turns, so time moves a step at a time between them.
+  return async (ms: number) => { for (let left = ms; left > 0; left -= 500) { await new Promise(resolve => setImmediate(resolve)); await vi.advanceTimersByTimeAsync(Math.min(500, left)); } };
+}
 
 describe("talk ask", () => {
   it("sends once per request ID as the speaker, and returns the run's reply", async () => {
-    const s = await setup({ conversation: () => run([asked, { id: "reply-1", runId: "run-talk", role: "assistant", text: "Sunny and 72." }]) });
     const requestId = randomUUID();
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const response = await s.app.inject({ method: "POST", url: "/api/bots/ranch/talk/ask", headers: s.one, payload: { requestId, request: "What's the weather?" } });
-      expect(response.json()).toEqual({ state: "done", text: "Sunny and 72." });
-    }
+    const s = await setup({ conversation: () => run([asked(requestId), said("reply-1", "Sunny and 72.")]) });
+    for (let attempt = 0; attempt < 2; attempt++) expect((await ask(s, requestId)).json()).toEqual({ state: "done", text: "Sunny and 72." });
     expect(s.submit).toHaveBeenCalledTimes(1);
     expect(s.submit.mock.calls[0]![0]).toMatchObject({ requestId, botId: "ranch", senderId: "local-one", text: "What's the weather?", attachments: [] });
     // The same ID with other words is a different request and is refused.
-    expect((await s.app.inject({ method: "POST", url: "/api/bots/ranch/talk/ask", headers: s.one, payload: { requestId, request: "Something else" } })).statusCode).toBe(409);
+    expect((await ask(s, requestId, "Something else")).statusCode).toBe(409);
   });
 
   it("answers working after the wait, then the reply once the run settles", async () => {
-    let state = run([asked], { state: "working", runId: "run-talk" });
-    const s = await setup({ conversation: () => state });
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-    // The request reaches its wait through real I/O turns, so time moves a step at a time between them.
-    const pass = async (ms: number) => { for (let left = ms; left > 0; left -= 500) { await new Promise(resolve => setImmediate(resolve)); await vi.advanceTimersByTimeAsync(Math.min(500, left)); } };
     const requestId = randomUUID();
-    const first = s.app.inject({ method: "POST", url: "/api/bots/ranch/talk/ask", headers: s.one, payload: { requestId, request: "What's the weather?" } });
+    let state = run([asked(requestId)], { state: "working", runId: "run-talk" });
+    const s = await setup({ conversation: () => state });
+    const pass = await fakeTime();
+    const first = ask(s, requestId);
     await pass(21_000);
     expect((await first).json()).toEqual({ state: "working" });
-    const second = s.app.inject({ method: "POST", url: "/api/bots/ranch/talk/ask", headers: s.one, payload: { requestId, request: "What's the weather?" } });
+    const second = ask(s, requestId);
     await pass(500);
     // A change notice ends the wait at once.
-    s.setConversation(() => state = run([asked, { id: "reply-1", runId: "run-talk", role: "assistant", text: "Rain later." }]));
+    s.setConversation(() => state = run([asked(requestId), said("reply-1", "Rain later.")]));
     await new Promise(resolve => setImmediate(resolve));
     expect((await second).json()).toEqual({ state: "done", text: "Rain later." });
     expect(s.submit).toHaveBeenCalledTimes(1);
@@ -146,28 +156,64 @@ describe("talk ask", () => {
 
   it("maps rejected receipts to refused", async () => {
     const s = await setup({ receipt: input => ({ requestId: input.requestId, status: "rejected", message: "Images cannot be added." }) });
-    const response = await s.app.inject({ method: "POST", url: "/api/bots/ranch/talk/ask", headers: s.one, payload: { requestId: randomUUID(), request: "Hello" } });
-    expect(response.json()).toEqual({ state: "refused", text: "Images cannot be added." });
+    expect((await ask(s, randomUUID(), "Hello")).json()).toEqual({ state: "refused", text: "Images cannot be added." });
+  });
+
+  it("finds an old request after later turns, and gives up on one that is gone", async () => {
+    const requestId = randomUUID();
+    const later = [1, 2, 3].flatMap(turn => [asked(`later-${turn}`, `run-${turn}`), said(`answer-${turn}`, `Later answer ${turn}.`, `run-${turn}`)]);
+    const s = await setup({ conversation: anchored([asked(requestId), said("reply-1", "Sunny and 72."), ...later]) });
+    expect((await ask(s, requestId)).json()).toEqual({ state: "done", text: "Sunny and 72." });
+    // Hermes no longer holds the message, as after a reset: no read finds it.
+    s.setConversation(anchored(later));
+    const pass = await fakeTime();
+    const gone = ask(s, requestId);
+    await pass(21_000);
+    expect((await gone).json()).toEqual({ state: "working" });
+    const again = ask(s, requestId);
+    await pass(21_000);
+    expect((await again).json()).toMatchObject({ state: "refused", text: expect.stringContaining("no longer in the chat") });
+  });
+
+  it("honors Hermes's interrupted receipt, even once another run has started", async () => {
+    const requestId = randomUUID();
+    let receipt: SubmissionReceipt | null = null;
+    // The interrupted run left partial text; then someone else's message started a new run.
+    const s = await setup({ lookup: () => receipt, conversation: () => run([asked(requestId), said("partial", "Checking the gat"),
+      asked("someone-else", "run-next")], { state: "working", runId: "run-next" }) });
+    receipt = { requestId, status: "interrupted", runId: "run-talk" };
+    expect((await ask(s, requestId)).json()).toEqual({ state: "interrupted" });
   });
 });
 
 describe("talk answer states", () => {
   const accepted: SubmissionReceipt = { requestId: "r", status: "accepted", runId: "run-talk" };
   it("names approvals, questions and interruptions of this run", () => {
-    expect(talkAnswer(accepted, run([asked], { state: "waiting", runId: "run-talk" }, { approvals: [{ id: "a", title: "Run a command?", detail: "", status: "pending" }] })))
+    expect(talkAnswer(accepted, run([asked()], { state: "waiting", runId: "run-talk" }, { approvals: [{ id: "a", title: "Run a command?", detail: "", status: "pending" }] })))
       .toEqual({ state: "needsApproval", text: "Run a command?" });
-    expect(talkAnswer(accepted, run([asked], { state: "blocked", runId: "run-talk" }, { attention: [{ id: "q", kind: "clarify", title: "Which gate?", detail: "" }] })))
+    expect(talkAnswer(accepted, run([asked()], { state: "blocked", runId: "run-talk" }, { attention: [{ id: "q", kind: "clarify", title: "Which gate?", detail: "" }] })))
       .toEqual({ state: "needsAnswer", text: "Which gate?" });
-    expect(talkAnswer(accepted, run([asked], { state: "interrupted", runId: "run-talk" }))).toEqual({ state: "interrupted" });
+    expect(talkAnswer(accepted, run([asked()], { state: "interrupted", runId: "run-talk" }))).toEqual({ state: "interrupted" });
     expect(talkAnswer({ ...accepted, status: "interrupted" }, run([]))).toEqual({ state: "interrupted" });
+    // Hermes can report an interruption without naming its run: the request's own turn is the latest.
+    expect(talkAnswer(accepted, run([asked(), said("partial", "Checking the gat")], { state: "interrupted" }))).toEqual({ state: "interrupted" });
   });
   it("keeps waiting while the run is unseen or running, and ignores other runs and unfinished text", () => {
-    expect(talkAnswer(accepted, run([]))).toBeUndefined();
-    expect(talkAnswer(accepted, run([asked, { id: "x-inflight", runId: "run-talk", role: "assistant", text: "Partial" }], { state: "thinking", runId: "run-talk" }))).toBeUndefined();
+    expect(talkAnswer(accepted, run([]))).toBe("missing");
+    expect(talkAnswer(accepted, run([], { state: "thinking", runId: "run-talk" }))).toBeUndefined();
+    expect(talkAnswer(accepted, run([asked(), said("x-inflight", "Partial")], { state: "thinking", runId: "run-talk" }))).toBeUndefined();
     expect(talkAnswer({ ...accepted, status: "uncertain" }, run([]))).toBeUndefined();
-    const settled = run([{ id: "old", runId: "run-old", role: "assistant", text: "Old answer" }, asked, { id: "r1", runId: "run-talk", role: "assistant", text: "First." }, { id: "r2", runId: "run-talk", role: "assistant", text: "Second." }]);
+    const settled = run([said("old", "Old answer", "run-old"), asked(), said("r1", "First."), said("r2", "Second.")]);
     expect(talkAnswer(accepted, settled)).toEqual({ state: "done", text: "First.\n\nSecond." });
-    expect(talkAnswer(accepted, run([asked], { state: "failed" }))).toEqual({ state: "refused", text: "The assistant could not finish this request." });
+    expect(talkAnswer(accepted, run([asked()], { state: "failed" }))).toEqual({ state: "refused", text: "The assistant could not finish this request." });
+  });
+  it("speaks only replies after a steered request, keeping the latest when they are long", () => {
+    // A steer joins the running turn, whose earlier replies answered the first question.
+    const steered = run([asked("first"), said("r0", "Here is the feed plan."), asked("r"), said("r1", "x ".repeat(2500)), said("r2", "Corrected: feed at six.")]);
+    const answer = talkAnswer(accepted, steered) as { text: string };
+    expect(answer.text).not.toContain("feed plan");
+    expect(answer.text).toMatch(/^Corrected: feed at six\. Earlier parts are in the chat\.$/);
+    expect(spokenReplies(["One.", "Two."])).toBe("One.\n\nTwo.");
   });
   it("cuts long replies at a sentence and points to the chat", () => {
     const long = "Hay is in. ".repeat(500);
@@ -177,9 +223,9 @@ describe("talk answer states", () => {
     expect(spokenText("  Short.  ")).toBe("Short.");
   });
   it("describes only the assistant it speaks for", () => {
-    const persona = talkPersona({ name: "Ranch\u0000 Hand‮", description: "x".repeat(1000) });
+    const persona = talkPersona({ name: "Ranch\u0000 Hand\u202e", description: "x".repeat(1000) });
     expect(persona).toContain("Ranch Hand");
-    expect(persona).not.toMatch(/[\u0000‮]/);
+    expect(persona).not.toMatch(/[\u0000\u202e]/);
     expect(persona).not.toContain("x".repeat(401));
   });
 });

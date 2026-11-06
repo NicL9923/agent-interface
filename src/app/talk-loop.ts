@@ -18,6 +18,10 @@ export interface TalkLoopHost {
 }
 // A run can take a while; Talk still ends on its own idle and hard limits.
 const MAX_FOLLOW_MS = 10 * 60_000;
+// The server waits on a running request, but answers a pending decision or an unconfirmed send at
+// once, so asking again waits here first.
+export const FOLLOW_MS = 2_000;
+export const DECISION_FOLLOW_MS = 5_000;
 
 /**
  * The Realtime tool loop. The voice model calls ask_assistant; this sends the request to the
@@ -33,9 +37,19 @@ export class TalkLoop {
   private assistant = "";
   private assistantDone = false;
   private following = 0;
-  constructor(private readonly host: TalkLoopHost, private readonly name: string, private readonly now: () => number = Date.now) {}
+  constructor(private readonly host: TalkLoopHost, private readonly name: string, private readonly now: () => number = () => Date.now()) {}
 
   dispose() { this.disposed = true; this.abort.abort(); }
+
+  /** Waits before asking again, ending early when Talk ends. */
+  private pause(ms: number) {
+    const signal = this.abort.signal;
+    return new Promise<void>(resolve => {
+      const done = () => { clearTimeout(timer); signal.removeEventListener("abort", done); resolve(); };
+      const timer = setTimeout(done, ms);
+      signal.addEventListener("abort", done, { once: true });
+    });
+  }
 
   /** Asks for a spoken response now, or after the current one ends. */
   respond() {
@@ -119,6 +133,8 @@ export class TalkLoop {
       let told = answer.state;
       // Keep asking with the same ID until it is final; nothing is sent twice.
       while (!finalTalkStates.includes(answer.state) && this.now() - started < MAX_FOLLOW_MS) {
+        await this.pause(answer.state === "working" ? FOLLOW_MS : DECISION_FOLLOW_MS);
+        if (this.disposed) return;
         answer = await this.host.ask(requestId, request, this.abort.signal);
         if (this.disposed) return;
         if (finalTalkStates.includes(answer.state) || answer.state !== told && answer.state !== "working") {

@@ -70,8 +70,13 @@ The guarded activation links `<HERMES_HOME>/plugins/wildbots-voice` to
 `<app base>/current/src/hermes/wildbots_voice`. The link goes through
 `current`, so every later activation moves it with the release. Activation
 refuses before stopping anything if that path holds a folder or another link.
-It never enables the plugin. Enabling it lets the plugin use the ChatGPT
-sign-in, so a person does that once on the host, then restarts the dashboard:
+It never enables the plugin. Hermes itself lets a linked plugin make the
+credentialed request whether or not it is enabled, so the add-on checks the
+launch profile's `plugins.enabled` and `plugins.disabled` through Hermes's own
+config readers on every status check and again right before each mint. Enabling
+is the consent for the plugin to use the ChatGPT sign-in, so a person does that
+once on the host, then restarts the dashboard. Disabling it stops new sessions
+within the app's 30-second status refresh, and refuses any mint at once:
 
 ```sh
 hermes plugins enable wildbots-voice
@@ -88,12 +93,13 @@ The launch profile must be signed in to ChatGPT (`openai-codex`) in Hermes.
 | The plugin link is broken | The link's target is gone, usually a pruned release. Activate a current release. |
 | The plugin links to a different release | The link resolves to another release than the running add-on. Activate the current release again. |
 | The plugin manifest does not ask for the ChatGPT sign-in | The linked `plugin.yaml` lost `requires_auth`. Restore the release. |
+| Enable the wildbots-voice plugin in Hermes | The launch profile's config does not enable it, disables it, or cannot be read. Run the enable command above. |
 | This Hermes version cannot share its ChatGPT sign-in | Hermes lacks `hermes_cli.plugin_provider_requests`. Update Hermes. |
 
 Status does not contact OpenAI or refresh the sign-in. Starting Talk can still
 fail: signed out of ChatGPT answers 409 with "Sign in to ChatGPT in Hermes", a
-plugin Hermes refuses, such as one that is not enabled, answers 503 with the
-enable command, and an OpenAI error answers 502 with only its HTTP status. No
+plugin disabled since the last status check or refused by Hermes answers 503
+with the enable command, and an OpenAI error answers 502 with only its HTTP status. No
 secret or upstream body is logged or returned.
 
 The browser sends its WebRTC offer straight to `https://api.openai.com`, which

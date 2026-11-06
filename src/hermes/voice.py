@@ -63,9 +63,28 @@ def plugin_state(root=None, source=PLUGIN_SOURCE):
         return False, "The WildBots voice plugin has no readable manifest."
     if not declares_codex(manifest):
         return False, "The WildBots voice plugin manifest does not ask for the ChatGPT sign-in."
+    # Hermes lets a linked plugin use the sign-in whether or not it is enabled, so enabling is
+    # checked here: it is the person's consent, and disabling must stop new sessions at once.
+    if not plugin_enabled():
+        return False, "Enable the wildbots-voice plugin in Hermes. " + ENABLE_HINT
     if importlib.util.find_spec("hermes_cli.plugin_provider_requests") is None:
         return False, "This Hermes version cannot share its ChatGPT sign-in with plugins. Update Hermes."
     return True, None
+
+
+def plugin_enabled():
+    """Whether the launch profile's config enables the plugin, as Hermes's plugin loader decides.
+
+    Uses Hermes's own readers of plugins.enabled and plugins.disabled in config.yaml, read on every
+    call, so a change applies without a restart. Anything unreadable counts as not enabled.
+    """
+    try:
+        from hermes_cli.plugins import _get_disabled_plugins, _get_enabled_plugins
+        enabled, disabled = _get_enabled_plugins(), _get_disabled_plugins()
+    except Exception:
+        return False
+    # None means the allow-list is missing or malformed: Hermes then loads nothing opt-in.
+    return isinstance(enabled, set) and PLUGIN in enabled and isinstance(disabled, set) and PLUGIN not in disabled
 
 
 def declares_codex(manifest):

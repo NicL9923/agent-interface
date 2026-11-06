@@ -1,5 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
-import { TalkLoop, type TalkLoopHost } from "../src/app/talk-loop";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DECISION_FOLLOW_MS, FOLLOW_MS, TalkLoop, type TalkLoopHost } from "../src/app/talk-loop";
+
+// Follow-up asks wait between tries, so time is simulated.
+beforeEach(() => { vi.useFakeTimers(); });
+afterEach(() => { vi.useRealTimers(); });
 import type { TalkAnswer } from "../src/shared/voice";
 
 function setup(answers: (TalkAnswer | Error)[]) {
@@ -23,7 +27,7 @@ function setup(answers: (TalkAnswer | Error)[]) {
   const call = (args: unknown = { request: "Is the gate shut?" }) =>
     loop.handle({ type: "response.function_call_arguments.done", name: "ask_assistant", call_id: "call-1", arguments: JSON.stringify(args) });
   const types = () => sent.map(event => event.type);
-  const settle = () => new Promise(resolve => setTimeout(resolve, 0));
+  const settle = (ms = 0) => vi.advanceTimersByTimeAsync(ms);
   return { loop, host, sent, asks, phases, call, types, settle };
 }
 
@@ -69,7 +73,7 @@ describe("talk tool loop", () => {
     s.call({ request: "Feed the horses" });
     await s.settle();
     s.loop.handle({ type: "response.done" });
-    await s.settle(); await s.settle();
+    await s.settle(FOLLOW_MS); await s.settle(FOLLOW_MS);
     expect(s.asks.map(([id]) => id)).toEqual(["request-1", "request-1", "request-1"]);
     const outputs = s.sent.filter(event => event.type === "conversation.item.create").map(event => event.item as Record<string, unknown>);
     expect(outputs[0]).toMatchObject({ type: "function_call_output", output: expect.stringContaining("still working") });
@@ -81,11 +85,27 @@ describe("talk tool loop", () => {
   it("tells the person to check the screen for approvals and questions", async () => {
     const s = setup([{ state: "needsApproval", text: "Run the sprinkler?" }, { state: "done", text: "Sprinkler on." }]);
     s.call();
-    await s.settle(); await s.settle();
+    await s.settle(); await s.settle(DECISION_FOLLOW_MS);
     const items = s.sent.filter(event => event.type === "conversation.item.create").map(event => JSON.stringify(event.item));
     expect(items[0]).toContain("check the screen");
     expect(items[0]).toContain("Run the sprinkler?");
     expect(items[1]).toContain("Sprinkler on.");
+  });
+
+  it("waits between asks while a decision stays pending, instead of asking in a tight loop", async () => {
+    const pending = Array.from({ length: 100 }, () => ({ state: "needsApproval" as const, text: "Open the gate?" }));
+    const s = setup(pending);
+    s.call();
+    await s.settle(60_000);
+    // One ask, then one every five seconds for a minute.
+    expect(s.asks.length).toBeLessThanOrEqual(1 + 60_000 / DECISION_FOLLOW_MS);
+    expect(s.asks.length).toBeGreaterThan(5);
+    // The screen prompt is said once, not on every repeat.
+    expect(s.sent.filter(event => event.type === "conversation.item.create")).toHaveLength(1);
+    s.loop.dispose();
+    const asked = s.asks.length;
+    await s.settle(60_000);
+    expect(s.asks.length).toBe(asked);
   });
 
   it("answers a failed send once, and an empty request without asking", async () => {
