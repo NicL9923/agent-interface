@@ -16,6 +16,7 @@ Verified October 30, 2026. Direct dependencies use exact versions in
 | Web Push | 3.6.7 | [Registry](https://registry.npmjs.org/web-push/3.6.7) |
 | Vitest | 5.0.5 | [Registry and Node requirements](https://registry.npmjs.org/vitest/5.0.5) |
 | oxlint, TypeScript and JavaScript lint, verified November 6, 2026 | 1.89.0 | [Official documentation](https://oxc.rs/docs/guide/usage/linter.html), [registry](https://registry.npmjs.org/oxlint/1.89.0) |
+| Playwright test runner, development real-browser smoke suite (Chromium only), verified November 6, 2026 | 1.64.1 | [Official documentation](https://playwright.dev/docs/intro), [registry](https://registry.npmjs.org/@playwright/test/1.64.1) |
 | React Markdown | 10.1.0 | [Official documentation](https://github.com/remarkjs/react-markdown), [registry](https://registry.npmjs.org/react-markdown/10.1.0) |
 | remark-gfm | 4.0.1 | [Official documentation](https://github.com/remarkjs/remark-gfm), [registry](https://registry.npmjs.org/remark-gfm/4.0.1) |
 | mdast-util-from-markdown, micromark-extension-gfm and mdast-util-gfm, plain text for previews, Today, notifications, search snippets and saved titles (server, and a lazy client chunk), verified November 5, 2026 | 2.0.3 / 3.0.0 / 3.1.0 | [Official documentation](https://github.com/syntax-tree/mdast-util-from-markdown), [registry](https://registry.npmjs.org/mdast-util-from-markdown/2.0.3) |
