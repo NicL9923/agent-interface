@@ -97,6 +97,8 @@ const additions = `
   CREATE TABLE IF NOT EXISTS routine_profile_recipients(bot_id TEXT NOT NULL,routine_id TEXT NOT NULL,user_id TEXT NOT NULL REFERENCES users(id),PRIMARY KEY(bot_id,routine_id,user_id));
   CREATE TABLE IF NOT EXISTS routine_recipient_sets(bot_id TEXT NOT NULL,routine_id TEXT NOT NULL,PRIMARY KEY(bot_id,routine_id));
   CREATE TABLE IF NOT EXISTS routine_recipients_adopted(routine_id TEXT PRIMARY KEY);
+  -- Each assistant's live Talk voice, for a Hermes without profile metadata. Hermes keeps it otherwise.
+  CREATE TABLE IF NOT EXISTS bot_voices(bot_id TEXT PRIMARY KEY,voice TEXT NOT NULL);
   CREATE TABLE IF NOT EXISTS draft_revisions(user_id TEXT NOT NULL REFERENCES users(id),bot_id TEXT NOT NULL,revision INTEGER NOT NULL,reason TEXT NOT NULL,sent_revision INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(user_id,bot_id));
 `;
 export const schemaVersion = migrations.length;

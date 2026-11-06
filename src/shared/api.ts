@@ -8,6 +8,7 @@ import type { Routine } from "./types.js";
 import type { routinePresets } from "./routine-presets.js";
 import type { EarlierFiles } from "./history.js";
 import type { LiveState } from "./live-activity.js";
+import type { TalkAnswer, TalkSession, TalkVoice } from "./voice.js";
 import type {
   Avatar,
   Bootstrap,
@@ -174,6 +175,11 @@ export interface ApiRoutes {
   "PATCH /bots/:id": { body: BotSaveRequest; response: Bot };
   "DELETE /bots/:id": { response: Ok };
   "PUT /bots/:id/avatar": { body: Avatar; response: Avatar };
+  "PUT /bots/:id/voice": { body: { voice: TalkVoice }; response: { voice: TalkVoice } };
+  /** A Realtime credential for live Talk with this assistant. Never cached. */
+  "POST /bots/:id/talk/session": { response: TalkSession };
+  /** Sends a spoken request through the normal message path and waits briefly for its answer. */
+  "POST /bots/:id/talk/ask": { body: { requestId: string; request: string }; response: TalkAnswer };
   "POST /bots/:id/portrait": { body: { prompt: string }; response: FileRef };
   "GET /bots/:id/inference": { response: InferenceSettings };
   "PATCH /bots/:id/inference": { body: Partial<InferenceSettings>; response: InferenceSettings };

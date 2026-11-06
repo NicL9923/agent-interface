@@ -44,6 +44,7 @@ const bots = [
 const supported = { supported: true };
 const capabilities = { chat: supported, steering: supported, approvals: supported, uploads: supported, generatedFiles: supported, botConfiguration: supported, tools: supported,
   skills: supported, routines: supported, durableEvents: supported, idempotency: supported, stop: supported, portraitGeneration: supported, avatarMetadata: supported,
+  liveVoice: { supported: false, reason: "The WildBots voice plugin is not linked into Hermes." },
   imageGeneration: { supported: false, reason: "The connected Hermes profile has no image provider." } } satisfies Capabilities;
 const status = { connected: true, code: "ready", version: "0.9.4", detail: "Connected to Hermes on the household VPS.", address: "wss://hermes.example.test/agent-ui",
   retryAt: at("12:05"), lastConnectedAt: at("11:58") } satisfies RuntimeStatus;

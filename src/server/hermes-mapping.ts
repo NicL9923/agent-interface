@@ -5,6 +5,7 @@ import { connectionRequestMethod as CONNECTION_REQUEST, requestableConnectionId,
 import { messageOrigin, withMessageOrigins, wireOrigin } from '../shared/message-origin.js';
 import { excerpt } from '../shared/event-copy.js';
 import { markdownPlain } from '../shared/plain-text.js';
+import { isTalkVoice } from '../shared/voice.js';
 import type { Wire } from './hermes-transport.js';
 
 /** What a session's frames have said since its last read: streamed text, open requests and tools. */
@@ -170,6 +171,7 @@ export function bot(row: Wire, activity: ActivityState, detail?: Wire): Bot {
     provider: row.provider ?? detail?.model?.provider,
     shared: meta.shared ?? true,
     avatar: meta.avatar,
+    ...(isTalkVoice(meta.voice) ? {voice: meta.voice} : {}),
     enabledTools: enabled(detail?.toolsets),
     enabledSkills: enabled(detail?.skills),
     enabledMcpServers: enabled(detail?.mcp_servers),

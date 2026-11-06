@@ -425,7 +425,8 @@ export function createHermesTransport(options: HermesOptions, hooks: TransportHo
     let response: Response;
     try {
       const headers = new Headers(init.headers);
-      const credential = path === '/api/agent-interface/credentials' || path === '/api/agent-interface/experience' || path === '/api/agent-interface/automation';
+      const credential = path === '/api/agent-interface/credentials' || path === '/api/agent-interface/experience' || path === '/api/agent-interface/automation'
+        || path.startsWith('/api/agent-interface/voice/');
       for (const [name, value] of Object.entries(credential ? {'Authorization': `Bearer ${options.token}`} : authHeaders())) headers.set(name, value);
       const target = credential ? '/api/agent-interface/service/' + path.slice('/api/'.length) : servicePath(path);
       response = await fetch(new URL(target, origin), {...init,
@@ -449,6 +450,13 @@ export function createHermesTransport(options: HermesOptions, hooks: TransportHo
     if (!response.ok && ['/api/agent-interface/integrations', '/api/agent-interface/experience', '/api/agent-interface/automation'].includes(path)) {
       const detail = await response.json().catch(() => ({})) as {error?: unknown};
       throw httpError(response.status, typeof detail.error === 'string' ? detail.error.slice(0, 1000) : 'Hermes could not finish this connection operation.');
+    }
+    if (!response.ok && path.startsWith('/api/agent-interface/voice/')) {
+      // An add-on from before live voice has no such route, and the service bridge answers 404.
+      if (response.status === 404) { await response.body?.cancel(); throw httpError(503, 'This Hermes add-on predates live voice. Activate a current WildBots release.'); }
+      const detail = await response.json().catch(() => ({})) as {error?: unknown};
+      throw httpError([400, 409, 503].includes(response.status) ? response.status : 502,
+        typeof detail.error === 'string' ? detail.error.slice(0, 500) : 'Hermes could not start a voice session.');
     }
     if (!response.ok && path.startsWith('/api/cron/jobs') && [400, 404, 409, 422].includes(response.status)) {
       const detail = await response.json().catch(() => ({})) as {detail?: unknown; error?: unknown};

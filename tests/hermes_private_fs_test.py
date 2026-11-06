@@ -120,12 +120,15 @@ class SiblingLoaderTests(unittest.TestCase):
 
     def test_add_on_modules_load_files_only_through_sibling_module(self):
         # Loading a file under another name makes a second instance with its own state.
-        # sibling_module keeps one per process, so it is the only loader in src/hermes.
+        # sibling_module keeps one per process, so it is the only loader in src/hermes. The one
+        # exception loads the stateless voice plugin by its plugins-root path, which Hermes's
+        # credential check requires; see load_realtime in src/hermes/voice.py.
+        loaders = {"sibling_module", "load_realtime"}
         def stray(node, inside=False):
             for child in ast.iter_child_nodes(node):
                 if isinstance(child, (ast.Attribute, ast.Name)) and "spec_from_file_location" in (getattr(child, "attr", None), getattr(child, "id", None)) and not inside:
                     yield child.lineno
-                yield from stray(child, inside or isinstance(child, ast.FunctionDef) and child.name == "sibling_module")
+                yield from stray(child, inside or isinstance(child, ast.FunctionDef) and child.name in loaders)
         found = {str(path.relative_to(ROOT)) + ":" + str(line) for path in sorted(ROOT.glob("src/hermes/*.py"))
                  for line in stray(ast.parse(path.read_text()))}
         self.assertEqual(found, set())
@@ -163,8 +166,8 @@ class ShippedInputTests(unittest.TestCase):
         # A receipt binds only listed files. An unlisted module the add-on loads could
         # change after qualification without invalidating the receipt.
         inputs = set(json.loads((ROOT / "src/shared/qualification-inputs.json").read_text()))
-        shipped = {str(path.relative_to(ROOT)) for path in (*ROOT.glob("src/hermes/*.py"), *ROOT.glob("scripts/hermes-*.py"))
-                   if not path.name.endswith("-test.py")}
+        shipped = {str(path.relative_to(ROOT)) for path in (*ROOT.glob("src/hermes/**/*.py"), *ROOT.glob("src/hermes/**/*.yaml"),
+                   *ROOT.glob("scripts/hermes-*.py")) if not path.name.endswith("-test.py") and "__pycache__" not in path.parts}
         self.assertEqual(shipped - inputs, set())
 
 

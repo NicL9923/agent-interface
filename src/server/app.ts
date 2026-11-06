@@ -21,6 +21,7 @@ import { installMaintenanceGate, installUpgradeRoutes } from "./upgrade-routes.j
 import { installIntegrationsRoutes } from "./integrations.js";
 import { installVaultRoutes } from "./vault.js";
 import { registerVoiceRoutes } from "./voice.js";
+import { installTalkRoutes } from "./talk.js";
 import { installDiscoveryRoutes } from "./discovery.js";
 import { installExperienceRoutes } from "./experience.js";
 import { installAutomationRoutes } from "./automation.js";
@@ -116,7 +117,8 @@ export async function createApp(
   installBootstrapRoutes(app, { config, runtime, store, upgrades, directory, snapshot });
   installBotRoutes(app, { runtime, store, roster, directory, requireCapability });
   const streams = new Set<() => void>();
-  installConversationRoutes(app, { config, runtime, store, roster, streams, requireCapability });
+  const conversations = installConversationRoutes(app, { config, runtime, store, roster, streams, requireCapability });
+  installTalkRoutes(app, { runtime, store, roster, directory, requireCapability, send: conversations.send });
   installSnapshotInvalidation(app, snapshot);
   installEventRoutes(app, { config, runtime, store, roster, directory, snapshot, room: collaboration.room, groups, catalogs, streams });
   installRoutineRoutes(app, { config, runtime, store, roster, requireCapability });

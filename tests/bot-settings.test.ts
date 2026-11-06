@@ -550,8 +550,8 @@ describe("compact settings navigation", () => {
     await act(async () => changed());
     const nav = container.querySelector('[aria-label="Settings sections"]')!;
     expect(nav.querySelector("details")).toBeNull();
-    expect(Array.from(nav.querySelectorAll("button")).map(button => button.textContent)).toContain("logins");
-    expect(nav.querySelectorAll("button")).toHaveLength(10);
+    expect(Array.from(nav.querySelectorAll("button")).map(button => button.textContent)).toEqual(expect.arrayContaining(["voice", "logins"]));
+    expect(nav.querySelectorAll("button")).toHaveLength(11);
     await act(async () => root.unmount());
     expect(media.removeEventListener).toHaveBeenCalledWith("change", changed);
   });

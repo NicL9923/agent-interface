@@ -18,6 +18,7 @@ d=Deployment(c,operation=operation,ops=ops,log=log)
 journal,run,system,pid,wait,atomic=d.journal,d.run,d.system,d.pid,d.wait,d.atomic
 get_status,native,google,app_ready,switch=d.get_status,d.native,d.google,d.app_ready,d.switch
 gateway_state,ready_gateway=d.gateway_state,d.ready_gateway
+voice_plugin_ready,link_voice_plugin=d.voice_plugin_ready,d.link_voice_plugin
 parsed_origin=urlsplit(origin)
 fence(parsed_origin.scheme=="https" and parsed_origin.netloc and not parsed_origin.username, "app origin is plain HTTPS")
 fence(not parsed_origin.path and not parsed_origin.query and not parsed_origin.fragment, "app origin has no path, query or fragment")
@@ -26,6 +27,7 @@ fence(release.parent==base/"releases" and release.is_dir() and not release.is_sy
 fence(all(p.is_absolute() for p in (base,release,source,home,lease)), "configured paths are absolute")
 fence(str(uuid.UUID(operation))==operation, "operation ID is a UUID")
 fence(not lease.exists() and not drain.exists(), "no maintenance lease or drain request exists")
+fence(voice_plugin_ready(), "voice plugin path in Hermes is free or already this app's link")
 worker_lock=os.fdopen(os.open(Path(c["upgradeStateDir"])/"worker.lock",os.O_RDWR|os.O_CREAT|os.O_NOFOLLOW,0o600),"w")
 fcntl.flock(worker_lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
 old_state=Path(c["upgradeStateDir"])/"status.json"
@@ -111,6 +113,7 @@ with claim:
   atomic(qualification_target,qualified_bytes)
   atomic(base/"shared/hermes-worker.json",json.dumps(c["newWorkerConfig"],indent=2).encode()+b"\n")
   switch(release);journal("release-switched")
+  link_voice_plugin()
   system("start","hermes-dashboard.service","hermes-gateway.service","agent-interface.service")
   wait(lambda:ready_gateway("draining"));google();wait(app_ready)
   gate=rpc("status");fence(gate["active"] is True and gate["operationId"]==operation and gate["busy"]==[], "restarted: maintenance still held by this operation with no busy work")

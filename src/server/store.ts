@@ -129,6 +129,8 @@ export class Store {
   swapPresentation(...args: Parameters<PresentationRepository["swapPresentation"]>) { return this.presentations.swapPresentation(...args); }
   restorePresentation(...args: Parameters<PresentationRepository["restorePresentation"]>) { return this.presentations.restorePresentation(...args); }
   saveAvatar(...args: Parameters<PresentationRepository["saveAvatar"]>) { return this.presentations.saveAvatar(...args); }
+  botVoice(...args: Parameters<PresentationRepository["voice"]>) { return this.presentations.voice(...args); }
+  saveVoice(...args: Parameters<PresentationRepository["saveVoice"]>) { return this.presentations.saveVoice(...args); }
   // submissions
   intent(...args: Parameters<SubmissionRepository["intent"]>) { return this.submissions.intent(...args); }
   claimRetry(...args: Parameters<SubmissionRepository["claimRetry"]>) { return this.submissions.claimRetry(...args); }
@@ -181,6 +183,7 @@ export class Store {
   recordEvents(...args: Parameters<EventRepository["recordEvents"]>) { return this.events.recordEvents(...args); }
   enqueueKnownEvents(...args: Parameters<EventRepository["enqueueKnownEvents"]>) { return this.events.enqueueKnownEvents(...args); }
   latestEventFrontier(...args: Parameters<EventRepository["latestEventFrontier"]>) { return this.events.latestEventFrontier(...args); }
+  runOutcome(...args: Parameters<EventRepository["runOutcome"]>) { return this.events.runOutcome(...args); }
   eventPage(...args: Parameters<EventRepository["eventPage"]>) { return this.events.eventPage(...args); }
   todaySeen(...args: Parameters<EventRepository["todaySeen"]>) { return this.events.todaySeen(...args); }
   todayFrontier(...args: Parameters<EventRepository["todayFrontier"]>) { return this.events.todayFrontier(...args); }
