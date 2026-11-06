@@ -525,3 +525,27 @@ it("publishes the iOS app's universal links only when the host signs for that ap
   ] }]);
   expect(value.activitycontinuation).toEqual({ apps: ["TEAM123456.test.agentinterface"] });
 });
+
+it("lets a Live Activity's Stop act only for the account it names", async () => {
+  const stopped: string[] = [];
+  const result = await createApp(loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }), fakeRuntime({
+    listBots: async () => [{ id: "bot", name: "Bot", shared: true, model: "test", activity: "working" }],
+    capabilities: async () => capabilitiesFixture({ avatarMetadata: { supported: false }, stop: { supported: true } }), stop: async (botId: string) => { stopped.push(botId); },
+    close: async () => {},
+  }), { background: false });
+  apps.push(result);
+  const { app } = result, { token } = await connectNative(app);
+  const stop = (payload?: object) => app.inject({ method: "POST", url: "/api/bots/bot/stop", headers: { authorization: `Bearer ${token}` }, ...(payload ? { payload } : {}) });
+  // Another person signed in on the phone since the activity started: nothing stops.
+  const refused = await stop({ account: accountMarker("local-two") });
+  expect(refused.statusCode).toBe(409);
+  expect(refused.json().error).toBe("This activity belongs to a different account");
+  expect(stopped).toEqual([]);
+  const allowed = await stop({ account: accountMarker("local-one") });
+  expect(allowed.statusCode, allowed.body).toBe(200);
+  // The chat's own Stop sends nothing or an empty body, as before.
+  expect((await stop()).statusCode).toBe(200);
+  expect((await stop({})).statusCode).toBe(200);
+  expect((await stop({ account: "x".repeat(65) })).statusCode).toBe(400);
+  expect(stopped).toEqual(["bot", "bot", "bot"]);
+});

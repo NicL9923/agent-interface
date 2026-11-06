@@ -162,14 +162,15 @@ import SwiftUI
     MPNowPlayingInfoCenter.default().playbackState = .playing
     guard remoteTargets.isEmpty else { return }
     let center = MPRemoteCommandCenter.shared()
-    // iOS calls these on the main thread.
-    func handle(_ command: MPRemoteCommand, _ action: @escaping @MainActor (SpeechController) -> Void) {
-      let target = command.addTarget { [weak self] _ in
-        MainActor.assumeIsolated {
-          guard let self, self.player != nil else { return .noActionableNowPlayingItem }
+    // iOS does not promise which thread calls these, so each hops to the main actor. A command that
+    // arrives after the audio was released finds no player and does nothing.
+    func handle(_ command: MPRemoteCommand, _ action: @escaping @MainActor @Sendable (SpeechController) -> Void) {
+      let target = command.addTarget { @Sendable [weak self] _ in
+        Task { @MainActor in
+          guard let self, self.player != nil else { return }
           action(self)
-          return .success
         }
+        return .success
       }
       command.isEnabled = true
       remoteTargets.append((command, target))

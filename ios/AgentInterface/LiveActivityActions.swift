@@ -15,7 +15,7 @@ extension NotificationController {
     }
     switch action.kind {
     case .decline(let approvalId):
-      // The server also refuses a decision whose account is not the signed-in person's.
+      // The server refuses a decision whose account is not the signed-in person's.
       await decide(ApprovalDecision(botId: action.botId, approvalId: approvalId, account: NotificationActions.accountMarker(userId),
         url: "/?bot=\(APIClient.component(action.botId))", title: action.name))
     case .stop:
@@ -25,7 +25,10 @@ extension NotificationController {
         return
       }
       do {
-        let _: EmptyResponse = try await api.write("/bots/\(APIClient.component(action.botId))/stop", [String: String]())
+        // The server refuses a Stop for another account, as for a decision, so a sign-in that changed
+        // since this check cannot stop someone else's work with its own token.
+        let _: EmptyResponse = try await api.write("/bots/\(APIClient.component(action.botId))/stop",
+          ["account": NotificationActions.accountMarker(userId)])
         if let store, store.selectedBotId == action.botId, store.api === api { await store.refreshConversation() }
       } catch {
         let reason = (error as? LocalizedError)?.errorDescription ?? "WildBots couldn't reach the server."

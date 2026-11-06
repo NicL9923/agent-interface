@@ -71,6 +71,24 @@ import XCTest
     XCTAssertFalse(nobody)
   }
 
+  func testAReadThatFinishesAfterANewerSnapshotLeavesItAlone() async throws {
+    let fake = FakeServer()
+    fake.reply = .init(body: bootstrapJSON(activity: "working"))
+    let api = fake.api()
+    let url = refreshing(with: fake) { api }
+    let started = Date(timeIntervalSince1970: 1_800_000_000)
+    // The app opened during the read and wrote what it showed, a minute later.
+    let newer = WidgetSnapshot(scope: "one", generatedAt: started.addingTimeInterval(60), assistants: [])
+    XCTAssertTrue(WidgetSnapshotStore.write(newer, to: url))
+    let late = await BackgroundRefresh.refreshWidgets(at: { started })
+    XCTAssertFalse(late)
+    XCTAssertEqual(WidgetSnapshotStore.read(from: url), newer)
+    // A read that began after it replaces it, dated when the read began.
+    let current = await BackgroundRefresh.refreshWidgets(at: { started.addingTimeInterval(120) })
+    XCTAssertTrue(current)
+    XCTAssertEqual(WidgetSnapshotStore.read(from: url)?.generatedAt, started.addingTimeInterval(120))
+  }
+
   func testOnlyAWidgetRefreshPushAsksForIt() {
     XCTAssertTrue(BackgroundRefresh.requested(by: ["aps": ["content-available": 1], "refresh": ["widgets"]]))
     XCTAssertFalse(BackgroundRefresh.requested(by: ["aps": ["content-available": 1], "clear": ["tags": ["a"]]]))
@@ -141,6 +159,8 @@ import XCTest
     await controller.act(ActivityAction(kind: .stop, botId: "kitchen helper", scope: ownScope, name: "Kitchen"))
     XCTAssertEqual(fake.lastRequest?.httpMethod, "POST")
     XCTAssertEqual(fake.lastRequest?.url?.path, "/api/bots/kitchen helper/stop")
+    // The server refuses it when a different person's token is in use by now.
+    XCTAssertEqual(try fake.lastJSON() as? [String: String], ["account": NotificationActions.accountMarker("one")])
     XCTAssertTrue(notices().isEmpty)
     fake.reply = .init(status: 409, body: #"{"error":"stop is unavailable"}"#)
     await controller.act(ActivityAction(kind: .stop, botId: "kitchen", scope: ownScope, name: "Kitchen"))
@@ -200,7 +220,6 @@ import XCTest
     let bot = try! JSONDecoder().decode(Bootstrap.self, from: Data(bootstrapJSON().utf8)).bots[0]
     ChatHandoff.describe(activity, bot: bot, server: server)
     XCTAssertEqual(activity.webpageURL?.absoluteString, "https://agentui.example.test/?bot=kitchen")
-    XCTAssertEqual(activity.userInfo?["bot"] as? String, "kitchen")
     XCTAssertTrue(activity.isEligibleForHandoff)
     XCTAssertFalse(activity.isEligibleForSearch)
     XCTAssertEqual(activity.title, "Kitchen")
@@ -223,6 +242,18 @@ import XCTest
     controller.store = store
     await controller.openWebLink(URL(string: "https://other.example.test/?bot=kitchen")!)
     XCTAssertEqual(store.notice, "That link is for other.example.test, but WildBots is connected to agentui.example.test.")
+    XCTAssertNil(controller.pendingURL)
+    // A chat handed off from a phone on another household's server, even with the same assistant ID.
+    store.notice = nil
+    let handoff = NSUserActivity(activityType: ChatHandoff.activityType)
+    handoff.webpageURL = URL(string: "https://other.example.test/?bot=kitchen")
+    await controller.continueActivity(handoff)
+    XCTAssertNotNil(store.notice)
+    XCTAssertNil(controller.pendingURL)
+    // Without a link there is no telling whose chat it was.
+    store.notice = nil
+    await controller.continueActivity(NSUserActivity(activityType: ChatHandoff.activityType))
+    XCTAssertNil(store.notice)
     XCTAssertNil(controller.pendingURL)
   }
 

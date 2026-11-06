@@ -60,3 +60,14 @@ struct WildBotsFocusFilter: SetFocusFilterIntent {
     return .result()
   }
 }
+
+extension AppStore {
+  /// Takes the Focus filter iOS has on now. A Focus that changed while the app was not running never
+  /// reached `perform`, so the saved choice alone could outlast it.
+  func refreshFocus() async {
+    guard let current = try? await WildBotsFocusFilter.current else { return }
+    let choice = current.choice
+    choice.save()
+    if choice != focus { focus = choice }
+  }
+}

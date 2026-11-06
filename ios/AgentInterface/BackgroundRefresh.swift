@@ -38,15 +38,21 @@ import WidgetKit
       Task { @MainActor in try? await Task.sleep(for: patience); first.finish() }
     }
   }
+  /// Stops a read in flight, as when iOS ends the refresh task's time.
+  static func cancel() { running?.cancel() }
   private static func read(at now: @MainActor () -> Date) async -> Bool {
     guard let api = client(), let token = api.token else { return false }
+    // The roster is at least this old. A snapshot written since, such as by the app opening meanwhile,
+    // is newer and stays.
+    let started = now()
     do {
       let bootstrap: Bootstrap = try await api.get("/bootstrap?roster=lean")
       // An outage keeps the last good snapshot, as the open app does.
-      guard bootstrap.connection.connected else { return false }
+      guard !Task.isCancelled, bootstrap.connection.connected else { return false }
       // Signed out or into another account while this read was out: it is not theirs to show.
       guard let current = client(), current.baseURL == api.baseURL, current.token == token else { return false }
-      let snapshot = WidgetSnapshot(bootstrap: bootstrap, scope: AppStore.scope(server: api.baseURL, userId: bootstrap.user.id), at: now())
+      if let stored = WidgetSnapshotStore.read(from: snapshotURL), stored.generatedAt > started { return false }
+      let snapshot = WidgetSnapshot(bootstrap: bootstrap, scope: AppStore.scope(server: api.baseURL, userId: bootstrap.user.id), at: started)
       if WidgetSnapshotStore.write(snapshot, to: snapshotURL) { WidgetCenter.shared.reloadAllTimelines() }
       return true
     } catch { return false }
@@ -58,8 +64,11 @@ import WidgetKit
       let box = SentTask(task)
       MainActor.assumeIsolated {
         schedule()
-        let work = Task { @MainActor in box.task.setTaskCompleted(success: await refreshWidgets()) }
-        box.task.expirationHandler = { work.cancel() }
+        let work = Task { @MainActor in box.complete(await refreshWidgets()) }
+        // Out of time: the read stops and the task ends unsuccessfully, once, right away.
+        box.task.expirationHandler = { @Sendable in
+          Task { @MainActor in work.cancel(); cancel(); box.complete(false) }
+        }
       }
     }
   }
@@ -73,9 +82,16 @@ import WidgetKit
 }
 
 /// A refresh task handed to the main actor; iOS calls the launch handler on the main queue asked for.
+/// It is completed once, by whichever of the read and the expiration comes first.
 private final class SentTask: @unchecked Sendable {
   let task: BGTask
+  @MainActor private var completed = false
   init(_ task: BGTask) { self.task = task }
+  @MainActor func complete(_ success: Bool) {
+    guard !completed else { return }
+    completed = true
+    task.setTaskCompleted(success: success)
+  }
 }
 
 /// Resumes a wait once, for whichever of two tasks finishes first.

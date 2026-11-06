@@ -21,6 +21,7 @@ import UserNotifications
             if await DebugFixtures.configure(store) { return }
           #endif
           await store.restore()
+          await store.refreshFocus()
         }
         .onChange(of: scenePhase) { _, phase in
           if phase == .active {
@@ -29,6 +30,7 @@ import UserNotifications
               // A control that ran in the widget extension left its link for the app.
               if let link = IntentLinks.takePending() { await NotificationController.shared.open(link.url, at: link.at) }
               await store.resume()
+              await store.refreshFocus()
               await NotificationController.shared.synchronize()
               await LiveActivityController.shared.foreground()
             }

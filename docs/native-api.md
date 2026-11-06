@@ -737,7 +737,10 @@ row with an `approvalId`, or **Stop** for a `thinking` or `working` row. Both ne
 phone unlocked and run in the app, never in the widget extension. The app acts only
 when the activity's scope is the signed-in account. Decline sends the notification
 action's request, `POST /api/bots/:id/approvals/:approvalId` with
-`{ "decision": "denied", "account": ACCOUNT }`; Stop sends `POST /api/bots/:id/stop`.
+`{ "decision": "denied", "account": ACCOUNT }`; Stop sends `POST /api/bots/:id/stop` with
+`{ "account": ACCOUNT }`. The server answers 409 when the account is not the signed-in
+person's, so a sign-in that changed since the app's check cannot act with another
+person's token. Stop without a body, as the chat and the web send it, is unchanged.
 When either does not go through, a local notification says so and opens the chat.
 Approving stays in the chat, where the approval card shows what it would run.
 
@@ -833,7 +836,9 @@ every other page stay on the web. Without APNs the route answers 404.
 The app lists `applinks:` and `activitycontinuation:` for the household's domain,
 set by `LINK_DOMAIN` in `ios/tools/generate-project.py`. A link for another server
 shows a notice instead of opening. An open chat advertises Handoff with its web link,
-`https://SERVER/?bot=ID`, so a Mac without the app opens the web client there.
+`https://SERVER/?bot=ID`, so a Mac without the app opens the web client there. A device
+with the app opens it only when that link is its own server's, since another household's
+server may use the same assistant ID.
 
 ## App updates
 

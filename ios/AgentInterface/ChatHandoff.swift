@@ -14,7 +14,6 @@ enum ChatHandoff {
     activity.isEligibleForSearch = false
     activity.isEligibleForPrediction = false
     activity.targetContentIdentifier = bot.id
-    activity.userInfo = ["bot": bot.id]
     activity.webpageURL = server.flatMap { webLink(server: $0, botId: bot.id) }
     if #available(iOS 18.2, *) { activity.appEntityIdentifier = EntityIdentifier(for: AssistantEntity(id: bot.id, name: bot.name)) }
   }
@@ -38,11 +37,9 @@ enum ChatHandoff {
 }
 
 extension NotificationController {
-  /// A chat picked up from another device, from the app there by its activity or from Safari by its page.
+  /// A chat picked up from another device, from the app there or from Safari. Both carry the chat's web
+  /// link, so either opens only when it is this household server's: another server may use the same ID.
   func continueActivity(_ activity: NSUserActivity) async {
-    if activity.activityType == ChatHandoff.activityType, let botId = activity.userInfo?["bot"] as? String, !botId.isEmpty {
-      return await open(DeepLink.bot(botId))
-    }
     guard let url = activity.webpageURL else { return }
     await openWebLink(url)
   }

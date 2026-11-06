@@ -406,7 +406,13 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
       store.participate(conversation.activity.runId, signedIn(req).id);
     return { ok: true };
   });
+  // The iOS Live Activity's Stop names the account it was started for, as a notification's Decline does.
+  // The web and the chat's own Stop send no body, so it is read here rather than in the shared route map.
+  const stopAccount = z.object({ account: z.string().max(64).optional() }).strict().optional();
   apiRoute(app, "POST /bots/:id/stop", {}, async req => {
+    const account = stopAccount.parse(req.body ?? undefined)?.account;
+    if (account !== undefined && account !== accountMarker(signedIn(req).id))
+      throw httpError(409, "This activity belongs to a different account");
     await requireCapability("stop");
     await runtime.stop(req.params.id);
     return { ok: true };
