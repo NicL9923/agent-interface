@@ -249,9 +249,10 @@
     nonisolated(unsafe) static var groupEvents: [[String: Any]] = []
     /// An assistant's answer to the last group message, announced on the next watching stream.
     nonisolated(unsafe) static var groupReplyPending = false
-    /// Another member's new room, announced once with a `groups` notice on the household stream after
-    /// home first reads the catalog: on with AGENT_INTERFACE_UI_GROUP_NOTICE=1.
-    nonisolated(unsafe) static var groupNoticePending = ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_GROUP_NOTICE"] == "1"
+    /// Another member makes a room once home has read the catalog, and every household stream from
+    /// then on opens with a `groups` notice, as the server's does: on with AGENT_INTERFACE_UI_GROUP_NOTICE=1.
+    static let groupNotices = ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_GROUP_NOTICE"] == "1"
+    nonisolated(unsafe) static var groupNoticeRoomMade = false
     nonisolated(unsafe) static var groupCatalogReads = 0
     /// Who has the shared desktop: an assistant until this person takes over.
     nonisolated(unsafe) static var computerControl: [String: Any] = ["kind": "bot", "name": "Ranch hand"]
@@ -410,13 +411,15 @@
         respond(raw: Data(stream.utf8), type: "text/event-stream")
         return
       }
-      if path == "/api/events", Self.groupNoticePending, Self.groupCatalogReads > 0 {
-        // The household stream: another member made a room. One notice, then the stream ends and the
-        // app reconnects, as after a dropped connection.
-        Self.groupNoticePending = false
-        Self.groupRooms.append(["room_id": "fixture-notice-room", "name": "Garden crew", "members": [
-          ["member_id": "ranch", "profile": "ranch", "handle": "ranch", "display_name": "Ranch hand"],
-          ["member_id": "kitchen", "profile": "kitchen", "handle": "kitchen", "display_name": "Kitchen companion"]]])
+      if path == "/api/events", Self.groupNotices, Self.groupCatalogReads > 0 {
+        // The household stream: another member made a room. The notice, then the stream ends and the
+        // app reconnects, as after a dropped connection, and hears it again.
+        if !Self.groupNoticeRoomMade {
+          Self.groupNoticeRoomMade = true
+          Self.groupRooms.append(["room_id": "fixture-notice-room", "name": "Garden crew", "members": [
+            ["member_id": "ranch", "profile": "ranch", "handle": "ranch", "display_name": "Ranch hand"],
+            ["member_id": "kitchen", "profile": "kitchen", "handle": "kitchen", "display_name": "Kitchen companion"]]])
+        }
         respond(raw: Data("event: groups\ndata: groups\n\n".utf8), type: "text/event-stream")
         return
       }
