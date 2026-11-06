@@ -170,6 +170,7 @@ MANAGED_WRAPPERS = {
 MIRROR_SKIP = {".git", ".hermes", ".venv", "venv", "node_modules", "__pycache__", ".pytest_cache"}
 MIRROR_SKIP_ROOT = MIRROR_SKIP | {"build", "dist", "release"}
 UNQUALIFIED_CODE = (".py", ".pth", ".so", ".pyd", ".pyc", ".pyo")
+PRODUCT_RECEIPT = "hermes-build.json"
 
 
 def mirror_skipped(parts):
@@ -187,9 +188,26 @@ def candidate_replaces(staged, parts):
     return False
 
 
+def product_builds(live, ignored):
+    """Directories holding a Hermes product build receipt. Hermes compiles these from tracked
+    sources, such as the TUI copying its helper scripts into ui-tui/dist, and rebuilds them when the
+    receipt no longer matches those sources, so their code is never run unqualified. Only a
+    directory Git tracks nothing in counts, so a stray receipt cannot excuse source files."""
+    builds = set()
+    for name in ignored:
+        path = Path(name)
+        if path.name != PRODUCT_RECEIPT or path.parent == Path(".") or git(live, "ls-files", "-z", "--", str(path.parent)): continue
+        try: receipt = json.loads((live / path).read_text())
+        except (OSError, ValueError): continue
+        if isinstance(receipt, dict) and receipt.get("schema") == 1 and isinstance(receipt.get("product"), str):
+            builds.add(path.parent)
+    return builds
+
+
 def mirror_untracked(live, staged):
     live, staged = Path(live), Path(staged)
     ignored = [name for name in git(live, "ls-files", "--others", "--ignored", "--exclude-standard", "-z").decode().split("\0") if name]
+    builds = product_builds(live, ignored)
     for name in ignored:
         parts = Path(name).parts
         if mirror_skipped(parts) or candidate_replaces(staged, parts[:-1]) or os.path.lexists(staged / name):
@@ -197,7 +215,7 @@ def mirror_untracked(live, staged):
         origin, target = live / name, staged / name
         if origin.is_symlink() or not origin.is_file():
             raise RuntimeError("Ignored links or special files in the Hermes source require installer review")
-        if origin.suffix in UNQUALIFIED_CODE:
+        if origin.suffix in UNQUALIFIED_CODE and not any(parent in builds for parent in Path(name).parents):
             raise RuntimeError("Ignored Python or bytecode in the Hermes source would run unqualified; installer review is required")
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(origin, target)

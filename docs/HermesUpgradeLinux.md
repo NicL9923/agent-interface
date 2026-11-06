@@ -282,7 +282,11 @@ acknowledgement from the current systemd process, its exact code SHA and home,
 and zero native chat, cron, API, or deferred work. Active or unknown work blocks
 shutdown. Exit code `75` means the hook proved that its gate and drain were
 released and that source, settings, and service processes stayed unchanged.
-Other failures keep maintenance closed for installer review. A failed cold backup
+A failed baseline also exits `75`: those checks only read Hermes and run before
+the gate is taken. On Nov 6, 2026 an expired Google verification session failed
+the baseline, the hook reported it as an interrupted install, and the app refused
+chat sends until the record was reviewed by hand. The hook writes the refusal's
+cause to the private log. Other failures keep maintenance closed for installer review. A failed cold backup
 names its cause before restarting the services, and a restarted gateway gets
 `gatewayStartSeconds` to report, so a slow start cannot hide the original failure.
 Verification allows a just-started gateway its whole `verificationSeconds`.
@@ -394,7 +398,10 @@ output such as the dashboard's `web_dist`, and directories an older revision lef
 Hermes's package manager snapshots both into its editable workspace, and setuptools records
 those directories as namespace packages, so without them a qualified runtime never matches the
 installed one. Caches, `.hermes`, `venv` and the names the snapshot itself skips are not
-copied. An ignored Python file or link requires installer review. On Oct 13, 2026 this was
+copied. An ignored Python file or link requires installer review, except inside a Hermes product
+build: an untracked directory with a `hermes-build.json` receipt, such as `ui-tui/dist`, where the
+TUI copies its tracked helper scripts. Hermes rebuilds such output when its receipt no longer
+matches the tracked sources, so its code never runs unqualified. On Oct 13, 2026 this was
 proven by rebuilding the installed revision this way: its fingerprint equalled the live one.
 
 Disk space is checked twice before it can matter. A check refuses to stage without

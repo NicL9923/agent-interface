@@ -257,6 +257,26 @@ class MirrorTests(unittest.TestCase):
                     worker.mirror_untracked(self.live, self.staged)
                 (self.live / name).unlink()
 
+    def test_code_inside_a_hermes_product_build_is_mirrored(self):
+        # Hermes copies tracked TUI helpers into ui-tui/dist and rebuilds it when its receipt is stale.
+        (self.live / ".gitignore").write_text((self.live / ".gitignore").read_text() + "ui-tui/dist/\nstray/\n")
+        build = self.live / "ui-tui/dist"
+        (build / "scripts").mkdir(parents=True); (build / "scripts/gateway_bootstrap.py").write_text("helper\n")
+        receipt = {"schema": 1, "product": "tui", "inputs": {"sourceHash": "0" * 64}, "outputHash": "1" * 64}
+        (build / "hermes-build.json").write_text(json.dumps(receipt))
+        worker.mirror_untracked(self.live, self.staged)
+        self.assertEqual((self.staged / "ui-tui/dist/scripts/gateway_bootstrap.py").read_text(), "helper\n")
+        # A malformed receipt, or one beside tracked source, does not excuse the code.
+        (self.live / "stray").mkdir()
+        (self.live / "pkg/.gitignore").write_text("hermes-build.json\nextra.py\n")
+        for code, text in (("stray/run.py", json.dumps({"product": "tui"})), ("stray/run.py", "not json"), ("pkg/extra.py", json.dumps(receipt))):
+            with self.subTest(code=code, text=text):
+                code = self.live / code
+                code.write_text("unqualified\n"); (code.parent / "hermes-build.json").write_text(text)
+                with self.assertRaisesRegex(RuntimeError, "installer review"):
+                    worker.mirror_untracked(self.live, self.staged)
+                code.unlink(); (code.parent / "hermes-build.json").unlink()
+
     def test_candidate_paths_win_over_ignored_live_content(self):
         outside = self.staged.parent / "outside"; outside.mkdir()
         # The candidate tracks a file where live had ignored Python, replaces a directory with a

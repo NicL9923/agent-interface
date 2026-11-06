@@ -447,8 +447,15 @@ print(json.dumps({'ok':True,'state':'synced'}))
                 time.sleep(.25)
 
     def quiescence(self):
-        baseline = self.baseline()
-        if baseline["source"][0] != self.env.get("HERMES_UPGRADE_CURRENT"): raise RuntimeError("The original source changed before maintenance")
+        # The baseline only reads Hermes, so its failure is a harmless refusal like active work. On
+        # Nov 6, 2026 an expired verification session failed it, and treating that as an interrupted
+        # install held the app's maintenance gate until someone reviewed it by hand.
+        try:
+            baseline = self.baseline()
+            if baseline["source"][0] != self.env.get("HERMES_UPGRADE_CURRENT"): raise RuntimeError("The original source changed before maintenance")
+        except Exception as refusal:
+            print("Quiescence refused before maintenance: " + describe(refusal), file=sys.stderr)
+            raise SystemExit(75) from None
         self.save({"baseline": baseline, "phase": "acquiring"})
         marker = self.home / ".drain_request.json"
         if marker.exists(): raise RuntimeError("An existing native drain requires installer review")
@@ -467,6 +474,7 @@ print(json.dumps({'ok':True,'state':'synced'}))
             self.wait_gateway()
             if self.source_state() != tuple(baseline["source"]) or self.settings() != baseline["settings"] or any(self.unit(name)["MainPID"] != unit["MainPID"] for name, unit in baseline["units"].items()): raise RuntimeError("Quiescence refusal changed live host state") from refusal
             self.save({"baseline": baseline, "phase": "rejected"})
+            print("Quiescence refused and released maintenance: " + describe(refusal), file=sys.stderr)
             raise SystemExit(75) from None
 
     def control(self, verb):
