@@ -447,9 +447,10 @@ print(json.dumps({'ok':True,'state':'synced'}))
                 time.sleep(.25)
 
     def quiescence(self):
-        # The baseline only reads Hermes, so its failure is a harmless refusal like active work. On
-        # Nov 6, 2026 an expired verification session failed it, and treating that as an interrupted
-        # install held the app's maintenance gate until someone reviewed it by hand.
+        # The baseline takes no gate or drain and changes no Hermes source, setting or service, so its
+        # failure is a harmless refusal like active work. On Nov 6, 2026 an expired verification
+        # session failed it, and treating that as an interrupted install held the app's maintenance
+        # gate until someone reviewed it by hand.
         try:
             baseline = self.baseline()
             if baseline["source"][0] != self.env.get("HERMES_UPGRADE_CURRENT"): raise RuntimeError("The original source changed before maintenance")

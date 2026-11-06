@@ -266,16 +266,20 @@ class MirrorTests(unittest.TestCase):
         (build / "hermes-build.json").write_text(json.dumps(receipt))
         worker.mirror_untracked(self.live, self.staged)
         self.assertEqual((self.staged / "ui-tui/dist/scripts/gateway_bootstrap.py").read_text(), "helper\n")
-        # A malformed receipt, or one beside tracked source, does not excuse the code.
+        # Only a valid receipt for that product at a known output path excuses code.
         (self.live / "stray").mkdir()
-        (self.live / "pkg/.gitignore").write_text("hermes-build.json\nextra.py\n")
-        for code, text in (("stray/run.py", json.dumps({"product": "tui"})), ("stray/run.py", "not json"), ("pkg/extra.py", json.dumps(receipt))):
-            with self.subTest(code=code, text=text):
+        cases = (("stray/run.py", receipt), ("ui-tui/dist/run.py", dict(receipt, product="web")),
+                 ("ui-tui/dist/run.py", dict(receipt, outputHash="")), ("ui-tui/dist/run.py", {"schema": 1, "product": "tui"}),
+                 ("ui-tui/dist/run.py", "not json"))
+        for code, value in cases:
+            with self.subTest(code=code, receipt=value):
                 code = self.live / code
-                code.write_text("unqualified\n"); (code.parent / "hermes-build.json").write_text(text)
+                code.write_text("unqualified\n")
+                (code.parent / "hermes-build.json").write_text(value if isinstance(value, str) else json.dumps(value))
                 with self.assertRaisesRegex(RuntimeError, "installer review"):
                     worker.mirror_untracked(self.live, self.staged)
-                code.unlink(); (code.parent / "hermes-build.json").unlink()
+                code.unlink()
+        (build / "hermes-build.json").write_text(json.dumps(receipt))
 
     def test_candidate_paths_win_over_ignored_live_content(self):
         outside = self.staged.parent / "outside"; outside.mkdir()

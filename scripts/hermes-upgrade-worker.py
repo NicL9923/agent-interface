@@ -171,6 +171,8 @@ MIRROR_SKIP = {".git", ".hermes", ".venv", "venv", "node_modules", "__pycache__"
 MIRROR_SKIP_ROOT = MIRROR_SKIP | {"build", "dist", "release"}
 UNQUALIFIED_CODE = (".py", ".pth", ".so", ".pyd", ".pyc", ".pyo")
 PRODUCT_RECEIPT = "hermes-build.json"
+# Where Hermes writes each product (scripts/build/freshness.mjs) and the product its receipt names.
+PRODUCT_BUILDS = {"ui-tui/dist": "tui", "hermes_cli/web_dist": "web"}
 
 
 def mirror_skipped(parts):
@@ -189,25 +191,26 @@ def candidate_replaces(staged, parts):
 
 
 def product_builds(live, ignored):
-    """Directories holding a Hermes product build receipt. Hermes compiles these from tracked
-    sources, such as the TUI copying its helper scripts into ui-tui/dist, and rebuilds them when the
-    receipt no longer matches those sources, so their code is never run unqualified. Only a
-    directory Git tracks nothing in counts, so a stray receipt cannot excuse source files."""
+    """Hermes product builds holding a valid receipt. Hermes compiles these from tracked sources,
+    such as the TUI copying its helper scripts into ui-tui/dist, and rebuilds them when the
+    receipt's source hash no longer matches, so their code is never run unqualified. Only the
+    known output directories count, and only while Git tracks nothing in them."""
     builds = set()
-    for name in ignored:
-        path = Path(name)
-        if path.name != PRODUCT_RECEIPT or path.parent == Path(".") or git(live, "ls-files", "-z", "--", str(path.parent)): continue
-        try: receipt = json.loads((live / path).read_text())
+    for directory, product in PRODUCT_BUILDS.items():
+        if str(Path(directory) / PRODUCT_RECEIPT) not in ignored or git(live, "ls-files", "-z", "--", directory): continue
+        try: receipt = json.loads((live / directory / PRODUCT_RECEIPT).read_text())
         except (OSError, ValueError): continue
-        if isinstance(receipt, dict) and receipt.get("schema") == 1 and isinstance(receipt.get("product"), str):
-            builds.add(path.parent)
+        inputs = receipt.get("inputs") if isinstance(receipt, dict) else None
+        if (receipt.get("schema") == 1 and receipt.get("product") == product and isinstance(inputs, dict)
+                and all(isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) for value in (inputs.get("sourceHash"), receipt.get("outputHash")))):
+            builds.add(Path(directory))
     return builds
 
 
 def mirror_untracked(live, staged):
     live, staged = Path(live), Path(staged)
     ignored = [name for name in git(live, "ls-files", "--others", "--ignored", "--exclude-standard", "-z").decode().split("\0") if name]
-    builds = product_builds(live, ignored)
+    builds = product_builds(live, set(ignored))
     for name in ignored:
         parts = Path(name).parts
         if mirror_skipped(parts) or candidate_replaces(staged, parts[:-1]) or os.path.lexists(staged / name):
