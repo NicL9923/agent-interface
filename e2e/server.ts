@@ -10,7 +10,7 @@ import { controlPort, port } from "./ports.js";
 /**
  * The real app server for the browser suite: real routes, session handling, CSP, event stream and built client,
  * over a scripted assistant runtime so nothing leaves this machine. Another loopback port reports what the
- * browser told /api/csp-report, because the app only logs those.
+ * browser told /api/csp-report, because the app only logs those, and resets the conversations between tests.
  */
 if (!existsSync("dist/client/index.html")) throw new Error("Run `npm run build` first: the suite serves dist/client.");
 
@@ -18,10 +18,12 @@ const bots = [
   botFixture({ id: "ranch", name: "Ranch Hand", lastMessage: { text: "Fence check is done." } }),
   botFixture({ id: "trail", name: "Trail Cook" }),
 ];
-const messages = new Map<string, Message[]>([
+const seedMessages = () => new Map<string, Message[]>([
   ["ranch", [{ id: "seed-1", role: "assistant", text: "Morning. The north fence is fixed.", createdAt: "2026-11-05T14:00:00Z" }]],
   ["trail", []],
 ]);
+// Replaced between tests, so no test sees what another sent. A reply still pending from before holds its old thread.
+let messages = seedMessages();
 const watchers = new Map<string, Set<(kind?: "inflight") => void>>();
 const notify = (botId: string) => { for (const changed of watchers.get(botId) ?? []) changed(); };
 
@@ -70,8 +72,9 @@ const { app } = await createApp(
 );
 await app.listen({ host: "127.0.0.1", port });
 
+// GET reads the violations. DELETE starts the next test from a clean slate.
 const control = createServer((req, res) => {
-  if (req.method === "DELETE") violations.length = 0;
+  if (req.method === "DELETE") { violations.length = 0; messages = seedMessages(); }
   res.setHeader("content-type", "application/json");
   res.end(JSON.stringify(violations));
 });

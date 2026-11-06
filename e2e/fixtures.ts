@@ -1,8 +1,10 @@
 import { test as base, expect, type ConsoleMessage, type Page } from "@playwright/test";
 import { controlPort } from "./ports.js";
 
-const violationsUrl = `http://127.0.0.1:${controlPort}/csp-violations`;
-const violations = async () => await (await fetch(violationsUrl)).json() as unknown[];
+const controlUrl = `http://127.0.0.1:${controlPort}/csp-violations`;
+/** Clears recorded violations and puts the scripted conversations back as they started. */
+const resetServer = () => fetch(controlUrl, { method: "DELETE" });
+const violations = async () => await (await fetch(controlUrl)).json() as unknown[];
 
 /**
  * A signed-out page probes /api/bootstrap and Chromium logs the 401 as a console error. Nothing else is
@@ -25,7 +27,7 @@ export const test = base.extend<{ allowConsoleError: RegExp[]; pageHealth: void 
     };
     context.pages().forEach(watch);
     context.on("page", watch);
-    await fetch(violationsUrl, { method: "DELETE" });
+    await resetServer();
     await use();
     // The browser posts a report after it blocks something, so give a late one a moment to land.
     await expect.poll(violations, { timeout: 1000 }).toEqual([]).catch(() => {});
