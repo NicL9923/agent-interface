@@ -75,6 +75,8 @@ it("keeps a script's line and column only on a stack's frame lines", () => {
     "    at f (https://x.invalid/app.js?token=account:123456)",
     "load@https://x.invalid/assets/app-1.js?t=SENTINEL:10:5",
     "@https://x.invalid/assets/app-1.js#SENTINEL:7:1",
+    "global code@https://x.invalid/app.js?token=SENTINEL:12:3",
+    "Error: mail me@https://x.invalid/app.js?token=SENTINEL:12:3",
   ].join("\n");
   expect(withoutUrlQueries(stack, { stack: true }).split("\n")).toEqual([
     "Error: load failed for https://x.invalid/app.js",
@@ -85,6 +87,8 @@ it("keeps a script's line and column only on a stack's frame lines", () => {
     "    at f (https://x.invalid/app.js)",
     "load@https://x.invalid/assets/app-1.js:10:5",
     "@https://x.invalid/assets/app-1.js:7:1",
+    "global code@https://x.invalid/app.js:12:3",
+    "Error: mail me@https://x.invalid/app.js",
   ]);
 });
 

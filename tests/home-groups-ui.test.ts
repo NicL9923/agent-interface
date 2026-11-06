@@ -121,9 +121,13 @@ describe("group chats on home", () => {
     const household = [...FakeEventSource.streams].find(stream => stream.url === "/api/events")!;
     expect(household).toBeDefined();
     await act(async () => household.connect());
+    await advance(20);
+    const connected = catalogReads();
     // The server answers every connect with a groups notice, which also shows it pushes changes.
     await act(async () => household.emit("groups", "groups"));
     await advance(20);
+    // One read for the notice; the slower poll it allows restarts only its timer.
+    expect(catalogReads()).toBe(connected + 1);
     const opened = catalogReads();
     await advance(GROUP_FALLBACK_POLL_MS - 1000);
     expect(catalogReads()).toBe(opened);

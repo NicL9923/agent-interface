@@ -75,8 +75,11 @@ const token = /\S+/g;
  * `backup.7z?token=…`. Text like `1.2?` loses its `?`, which is harmless in a diagnostic.
  */
 const place = /^[("'`]*(?:[a-z][a-z\d+.-]*:|[^?#]*\/|[^?#]*\.[a-z\d]+$)/i;
-/** A stack frame line: Chrome's `at …`, or Safari's and Firefox's `name@location`. */
-const frameLine = /^\s*(?:at\s|[^\s@]*@\S)/;
+/**
+ * A stack frame line: Chrome's `at …`, or Safari's and Firefox's `name@location`, including Safari's
+ * `global code@`, `module code@` and `eval code@`. An error's `Name: message` header never matches.
+ */
+const frameLine = /^\s*(?:at\s|(?:(?:global|module|eval) code|[^\s@]*)@\S)/;
 /** A script's location in a frame ends its path and is followed by a line and a column. */
 const script = /\.[cm]?[jt]sx?$/;
 /**
