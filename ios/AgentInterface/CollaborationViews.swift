@@ -655,24 +655,6 @@ enum GroupRows {
   }
 }
 
-extension AppStore {
-  /// Reads the room catalog for home. A failure keeps the rooms already shown; the next poll tries again.
-  func refreshGroups() async {
-    let id = UUID(); groupLoadId = id
-    let result = await attempt(current: { [weak self] in self?.groupLoadId == id }) { try await $0.api.get("/groups") as GroupCatalog }
-    guard case .success(let value)? = result, value != groupCatalog else { return }
-    groupCatalog = value
-  }
-  /// A room just made shows at once; the next read of the catalog replaces this copy.
-  func groupRoomCreated(_ room: GroupRoom) {
-    guard var catalog = groupCatalog else { return }
-    catalog.rooms.removeAll { $0.id == room.id }
-    catalog.rooms.append(room)
-    groupCatalog = catalog
-    Task { await refreshGroups() }
-  }
-}
-
 /// A group's members as overlapping faces in the square one assistant's avatar takes, so rows line up.
 /// Two faces sit on a diagonal, three in a triangle; a member this person cannot see shows an initial.
 struct RoomFacesView: View {

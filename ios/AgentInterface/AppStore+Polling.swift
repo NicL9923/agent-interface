@@ -64,7 +64,8 @@ extension AppStore {
     else { return true }
     return now() - refreshed >= Self.streamFallbackInterval
   }
-  /// Refreshes the household roster when its visible assistants change.
+  /// Refreshes the household roster when its visible assistants change, and the group catalog when
+  /// the rooms this person can see change. Other notices, such as ones from a newer server, are ignored.
   private func watchRoster() {
     guard rosterTask == nil, let api else { return }
     rosterTask = Task { [weak self] in
@@ -74,10 +75,13 @@ extension AppStore {
           let lines = try await api.events("/api/events")
           guard let self, !Task.isCancelled else { return }
           failures = 0
+          // Notices sent before the subscription are lost, so connecting counts as one. A server
+          // that sends `groups` also sends one on every connect, so the catalog needs no read here.
           await self.refreshBootstrap()
           for try await line in lines {
             guard !Task.isCancelled else { return }
             if line == "data: roster" { await self.refreshBootstrap() }
+            if line == "data: groups" { await self.refreshGroups() }
           }
         } catch {}
         guard let self, !Task.isCancelled, !self.sessionExpired else { return }
@@ -267,6 +271,7 @@ extension AppStore {
       guard currentGeneration == generation else { return }
       submissionChecks = [:]
       await refreshBootstrap()
+      if groupCatalog != nil { await refreshGroups() }
       await refreshConversation()
       await reconcilePending()
     } catch { if currentGeneration == generation { report(error) } }

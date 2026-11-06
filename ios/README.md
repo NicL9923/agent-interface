@@ -313,7 +313,8 @@ detail pane, and reads it on each change notice, polling every 30 seconds while 
 1.5 seconds without one, with backoff. Home, Today and Search leave the conversation alone; it is read
 again as soon as it returns to the screen. Bootstrap refreshes every 45 seconds and on roster notices. Reads keep the last response and its ETag in memory, so an unchanged
 response arrives as an empty 304 and is not decoded or applied again; sign-out and identity changes clear them. Today,
-home's group chat rows (every 30 seconds) and an open group poll only while the app is active, and refresh once on return. An
+home's group chat rows (every 5 minutes) and an open group poll only while the app is active, and refresh once on return. A `groups`
+notice on the household stream, which the server also sends on every connect, rereads the group catalog at once. An
 unconfirmed send is checked after 1.5, 5 and 15 seconds, then every minute, and at once after a change
 notice from its conversation. The client preserves drafts and admission IDs; it never automatically resubmits a message.
 Use authenticated Quick Look previews to share or save images, PDFs, and text files.
