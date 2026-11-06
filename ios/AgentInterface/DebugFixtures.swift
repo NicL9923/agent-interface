@@ -112,6 +112,9 @@
             FixtureProtocol.inference = inference
           }
         }
+        if let presentation = environment["AGENT_INTERFACE_UI_PRESENTATION"] {
+          FixtureProtocol.preferences["presentation"] = presentation
+        }
         if environment["AGENT_INTERFACE_UI_AUTOMATION"] == "1" {
           FixtureProtocol.automation = AutomationDebugFixture()
           FixtureProtocol.routines = [["id": "trial", "botId": "ranch", "name": "Morning brief trial",
@@ -299,7 +302,16 @@
     nonisolated(unsafe) static var deletedSettingsBotIds: Set<String> = []
     nonisolated(unsafe) static var uploadedPortraits: [String: Data] = [:]
     nonisolated(unsafe) static var designAvatarSaveFailed = false
-    nonisolated(unsafe) static var avatarFailures = ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_AVATAR_FAILURE"] == "1" ? 1 : 0
+    /// How many avatar saves fail: "1", or a larger count for repeated retries.
+    nonisolated(unsafe) static var avatarFailures = Int(ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_AVATAR_FAILURE"] ?? "") ?? 0
+    nonisolated(unsafe) static var avatarFailuresSeen = 0
+    /// Each failure after the first says so, so a test can tell a retry was really sent.
+    static func avatarFailure() -> [String: Any] {
+      avatarFailures -= 1; avatarFailuresSeen += 1
+      return ["error": avatarFailuresSeen == 1 ? "Fixture avatar save failed" : "Fixture avatar save failed again"]
+    }
+    /// The first assistant detail read fails, for the settings load retry.
+    nonisolated(unsafe) static var detailFailures = ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_DETAIL_FAILURE"] == "1" ? 1 : 0
     static let currentRevision = "3f9c2a71b0d4e8f6a5c3b2d1e0f9a8b7c6d5e4f3"
     static let candidateRevision = "8e1d4c7b2a9f6e3d0c5b8a7f4e1d2c3b6a9f0e8d"
     nonisolated(unsafe) static var preferencesFailures = ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_PREFERENCES_FAILURE"] == "1" ? 1 : 0
@@ -927,7 +939,10 @@
           status = 503
           object = ["error": "Catalog unavailable for this test"]
         } else if method == "GET" {
-          object = Self.items
+          // With the automation fixture, one catalog skill is also Hermes's installed ranch/fences skill.
+          object = path.hasSuffix("/skills") && ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_AUTOMATION"] == "1"
+            ? Self.items + [["id": "ranch/fences", "name": "ranch/fences", "description": "Fixture pasture inspection instructions", "enabled": true]]
+            : Self.items
         } else {
           let ids = body["ids"] as? [String] ?? []
           Self.items = Self.items.map {
@@ -991,14 +1006,18 @@
         }
       } else if path.hasSuffix("/avatar"), let index = Self.createdBots.firstIndex(where: { path.hasPrefix("/api/bots/\($0["id"] as? String ?? "")/") }) {
         if Self.avatarFailures > 0 {
-          Self.avatarFailures -= 1; status = 503; object = ["error": "Fixture avatar save failed"]
+          status = 503; object = Self.avatarFailure()
         } else {
           Self.createdBots[index]["avatar"] = body
           object = body
         }
       } else if path.hasSuffix("/avatar") {
-        Self.avatar = body
-        object = body
+        if Self.avatarFailures > 0 {
+          status = 503; object = Self.avatarFailure()
+        } else {
+          Self.avatar = body
+          object = body
+        }
       } else if path == "/api/routines", method == "GET", Self.designFixture?["screen"] as? String == "work", Self.designFixture?["mode"] as? String == "routines-error" {
         status = 409; object = ["error": "routines is unavailable"]
       } else if path == "/api/routines", method == "GET", Self.designFixture?["screen"] as? String == "work", Self.designFixture?["mode"] as? String == "no-routines" {
@@ -1040,10 +1059,13 @@
         var detail = Self.bots.first { $0["id"] as? String == path.components(separatedBy: "/").last } ?? Self.bots[0]
         detail["instructions"] = detail["instructions"] ?? "Be clear and useful."
         detail["enabledMcpServers"] = ["existing-calendar"]
+        detail["availableMcpServers"] = ["existing-calendar", "household-files"]
         detail["enabledTools"] = ["terminal"]
         detail["enabledSkills"] = []
         object = detail
-        if Self.designFixture?["settingsLoadError"] as? Bool == true, (!Self.settingsLoadFailed || Self.designFixture?["settingsLoadAlways"] as? Bool == true) {
+        if Self.detailFailures > 0 {
+          Self.detailFailures -= 1; status = 503; object = ["error": "Fixture settings unavailable"]
+        } else if Self.designFixture?["settingsLoadError"] as? Bool == true, (!Self.settingsLoadFailed || Self.designFixture?["settingsLoadAlways"] as? Bool == true) {
           Self.settingsLoadFailed = true; status = 503
           object = ["error": Self.designFixture?["loadError"] ?? "Settings could not be loaded."]
         }

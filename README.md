@@ -247,9 +247,18 @@ The native iPhone app includes a share extension for webpages, photos, PDFs, and
 
 The iPhone and iPad app also works with Siri, Shortcuts and Spotlight: ask WildBots to open an assistant or Today, or to put a question in an assistant's draft for you to review and send. Assistant names show in Spotlight search, and the Assistants widget can be edited to show only the assistants you choose. None of these hold your sign-in token, and they clear when you sign out. An iPad with a keyboard opens pinned assistants with Cmd+1 to 9 and any destination with Cmd+K.
 
-Assistant settings > **Memory** lets you inspect, correct and forget native
+Assistant settings has five sections: **Profile** (name, description, sharing,
+avatar, live Talk voice), **Behavior** (instructions, model, tools and skills), **Access**
+(connections, logins and, in Advanced presentation, MCP servers), **Automation**
+(routines, goals, tasks and triggers) and **Memory & learning**. On a phone it
+opens on that list. One **Save changes** saves everything in Profile, Behavior and
+Access; it stays visible on other sections while those changes are unsaved.
+Memory keeps its own Save, and list actions such as adding a routine or a login
+save at once.
+
+**Memory & learning** lets you inspect, correct and forget native
 Hermes profile memory. Existing conversations keep their memory snapshot until
-a new Hermes session starts. In **Details**, enable interactive replies to add
+a new Hermes session starts. In **Behavior**, enable interactive replies to add
 checklists, itineraries and reviewed calendar proposals to assistant answers.
 Your checks and itinerary notes are saved for your account.
 
@@ -266,10 +275,12 @@ previews in the actual Hermes timezone, and **Try once** with durable run
 receipts. See the [household experience guide](docs/HouseholdExperience.md) for
 controls, supported reply cards, voice requirements and recovery behavior.
 
-Routine **Advanced** options include skills, model/provider pins, toolsets,
-profile scripts, script-only runs and context from other routines. Assistant
-settings > **Work** manages standing goals, native tasks and event triggers.
-**Learning** previews installed skills and reviews proposed changes. New work
+In Advanced presentation, routine **Advanced** options include skills,
+model/provider pins, toolsets, profile scripts, script-only runs and context from
+other routines; Simple presentation keeps saved overrides without showing them.
+**Automation** also manages standing goals, native tasks and event triggers.
+Behavior's skill rows read and lock installed skills, and **Memory & learning**
+reviews proposed skill changes. New work
 requires an explicit start. Memory edits apply to the canonical conversation at
 the next safe turn boundary, with pending/applied status and preserved history.
 
@@ -326,7 +337,7 @@ answers stay in the conversation with a Scheduled label. Decisions and requests
 for input stay visible. Unknown messages from other clients remain in chat;
 only recognized automation sources move into activity.
 
-Assistant settings > **Logins** manages the selected Hermes profile's encrypted
+Assistant settings > **Access** manages the selected Hermes profile's encrypted
 login vault. Native login, code, vault-unlock and secret requests appear inline
 with masked fields, outside chat and drafts. Each card shows when it is sending and
 when Hermes took the answer, then folds to one line. Sending a message instead

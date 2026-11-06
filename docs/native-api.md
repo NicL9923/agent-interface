@@ -124,8 +124,10 @@ latest message is newer than this person's last read of a chat they have opened
 before; chat presence reports record reads. Show the open chat as read, and treat a
 chat as read through its latest message after leaving it until the next roster.
 Optional configuration fields
-`instructions`, `enabledTools`, `enabledSkills` and `enabledMcpServers` load
-from `GET /api/bots/:id`. Fetch detail before initializing a settings form or
+`instructions`, `enabledTools`, `enabledSkills`, `enabledMcpServers` and
+`availableMcpServers` load from `GET /api/bots/:id`. `availableMcpServers` lists
+every MCP server configured for the profile, enabled or not, so settings can offer
+them as switches. Fetch detail before initializing a settings form or
 resending configuration during a model change. Model fallback from profile
 configuration is also available in detail. Without `roster=lean`, both list
 routes retain full configuration for native build 5 and cached web bundles.

@@ -607,7 +607,7 @@ import CryptoKit
         app.buttons["Close"].tapWhenReady()
       }
       app.openAssistantSettings("Ranch hand"); app.selectSettingsTab("Skills")
-      let form = app.descendants(matching: .any)["assistantSettingsForm"].firstMatch
+      let form = app.collectionViews["settings.behavior"]
       let required = app.switches.matching(NSPredicate(format: "label BEGINSWITH %@", "weekly-plan")).firstMatch
       XCTAssertTrue(required.waitForExistence(timeout: 5)); XCTAssertFalse(required.isEnabled)
       XCTAssertEqual(required.value as? String, "1")
@@ -620,11 +620,11 @@ import CryptoKit
         revealModels(packing, in: form, app: app)
         packing.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
         XCTAssertTrue(packing.wait(until: "value == %@", "1"))
-        let save = app.buttons["Save skills"]; revealModels(save, in: form, app: app); save.tapWhenReady()
+        let save = app.buttons["saveChanges"]; save.tapWhenReady()
         let error = app.staticTexts[original["skillSaveError"] as! String]
         XCTAssertTrue(error.waitForExistence(timeout: 5)); XCTAssertTrue(app.windows.firstMatch.frame.contains(error.frame))
         XCTAssertEqual(packing.value as? String, "1"); try capture(name + "-skills-save-error")
-        revealModels(save, in: form, app: app); save.tapWhenReady()
+        save.tapWhenReady()
         XCTAssertTrue(app.staticTexts["Saved"].firstMatch.waitForExistence(timeout: 5)); try capture(name + "-skills-saved")
         app.buttons["Close"].tapWhenReady()
         app.openAssistantSettings("Ranch hand"); app.selectSettingsTab("Skills")
@@ -685,7 +685,7 @@ import CryptoKit
         try capture("learning-smoke"); app.terminate(); continue
       }
       app.selectSettingsTab("Work")
-      XCTAssertEqual(app.buttons["settingsMore"].value as? String, "Work")
+      XCTAssertTrue(app.collectionViews["automation.work"].exists)
       let form = app.collectionViews["automation.work"]
       XCTAssertTrue(form.waitForExistence(timeout: 5))
       func events() throws -> [[String: Any]] {
@@ -740,7 +740,7 @@ import CryptoKit
           let save = app.buttons["Save paused"]; XCTAssertTrue(save.wait(until: "enabled == true")); save.tapWhenReady()
           XCTAssertTrue(objective.waitForDisappearance(timeout: 5), "Saving closes the goal editor")
           XCTAssertTrue(form.waitUntilHittable(), "Saving returns to interactive Work")
-          XCTAssertEqual(app.buttons["settingsMore"].value as? String, "Work")
+          XCTAssertTrue(app.collectionViews["automation.work"].exists)
           XCTAssertTrue(text("Prepare the garden for spring.").waitForExistence(timeout: 10))
         case "goal-replace":
           press(app.buttons["Replace goal"])
@@ -751,7 +751,7 @@ import CryptoKit
           else { app.sheets.buttons["Replace goal"].tapWhenReady() }
           XCTAssertTrue(app.navigationBars["Replace goal"].wait(until: "exists == false"))
           XCTAssertTrue(form.waitUntilHittable(), "Replacement returns to interactive Work")
-          XCTAssertEqual(app.buttons["settingsMore"].value as? String, "Work")
+          XCTAssertTrue(app.collectionViews["automation.work"].exists)
           XCTAssertTrue(goalHeading.waitForExistence(timeout: 10))
           XCTAssertFalse(text("Last resume:").exists, "Replacing a goal removes its receipt")
         case "goal-clear":
@@ -772,7 +772,7 @@ import CryptoKit
           else { app.sheets.buttons["Clear goal"].tapWhenReady() }
           XCTAssertTrue(text("Clear this standing goal?").waitForDisappearance(timeout: 5))
           XCTAssertTrue(form.waitUntilHittable(), "Clearing returns to interactive Work")
-          XCTAssertEqual(app.buttons["settingsMore"].value as? String, "Work")
+          XCTAssertTrue(app.collectionViews["automation.work"].exists)
           XCTAssertTrue(text("No standing goal.").waitForExistence(timeout: 10))
         case "goal-interrupted":
           let resume = app.buttons["Resume goal"], review = app.switches["automation.reviewedInterruption"]
@@ -815,7 +815,7 @@ import CryptoKit
           let start = app.buttons["Start new attempt"]; if stage == "after" { revealModels(start, in: sheet, app: app) }; XCTAssertTrue(start.wait(until: "enabled == true")); start.tapWhenReady()
           XCTAssertTrue(app.navigationBars[stage == "after" ? "New attempt" : "New resume attempt"].waitForDisappearance(timeout: 5))
           XCTAssertTrue(form.waitUntilHittable(), "A new attempt returns to interactive Work")
-          XCTAssertEqual(app.buttons["settingsMore"].value as? String, "Work")
+          XCTAssertTrue(app.collectionViews["automation.work"].exists)
           let pausedAction = app.buttons["Pause goal"]; reveal(pausedAction, up: false)
           XCTAssertTrue(pausedAction.waitForExistence(timeout: 10))
         case "goal-rejected":
@@ -940,8 +940,8 @@ import CryptoKit
       }
       func headerVisible(_ header: XCUIElement) {
         XCTAssertTrue(header.isHittable)
-        let sticky = app.buttons["settingsMore"]
-        if sticky.exists { XCTAssertGreaterThanOrEqual(header.frame.minY, sticky.frame.maxY) }
+        let bar = app.navigationBars.firstMatch
+        if bar.exists { XCTAssertGreaterThanOrEqual(header.frame.minY, bar.frame.maxY) }
       }
       switch variant {
       case "task-board", "task-board-dark", "task-board-large-text":
@@ -1324,7 +1324,7 @@ import CryptoKit
       ])
       XCTAssertTrue(app.textViews["messageComposer"].waitForExistence(timeout: 15))
       app.openAssistantSettings("Ranch hand"); app.selectSettingsTab("Work")
-      XCTAssertEqual(app.buttons["settingsMore"].value as? String, "Work")
+      XCTAssertTrue(app.collectionViews["automation.work"].exists)
       let board = app.collectionViews["automation.work"]
       XCTAssertTrue(board.waitForExistence(timeout: 5))
       func events() throws -> [[String: Any]] {
@@ -1410,7 +1410,7 @@ import CryptoKit
         }
       case "task-status-details":
         open("Running (1)", "t_00000006"); var detail = app.collectionViews["automation.taskDetail"]; reveal(detail.buttons["Start task"], detail); try capture("task-running")
-        app.navigationBars["Task details"].buttons["Done"].tapWhenReady(); XCTAssertTrue(board.waitUntilHittable()); XCTAssertEqual(app.buttons["settingsMore"].value as? String, "Work")
+        app.navigationBars["Task details"].buttons["Done"].tapWhenReady(); XCTAssertTrue(board.waitUntilHittable()); XCTAssertTrue(app.collectionViews["automation.work"].exists)
         open("Review (1)", "t_00000003"); detail = app.collectionViews["automation.taskDetail"]; let hint = text("The reviewing assistant can request changes", in: detail); reveal(hint, detail); XCTAssertTrue(hint.waitForExistence(timeout: 5)); try capture("task-review")
       case "task-empty", "task-unsupported": try capture(variant)
       case "task-create", "task-create-dark", "task-create-large-text", "task-create-uncertain":
@@ -2466,7 +2466,7 @@ import CryptoKit
         if after {
           let progress = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Saving memories in Hermes…")).firstMatch
           XCTAssertTrue(progress.waitForExistence(timeout: 3)); try capture("memory-saving"); XCTAssertTrue(progress.exists)
-          XCTAssertFalse(app.buttons["Close"].isEnabled); XCTAssertFalse(app.buttons["settingsMore"].isEnabled)
+          XCTAssertFalse(app.buttons["Close"].isEnabled); XCTAssertFalse(app.buttons["memoryBack"].isEnabled)
         }
         XCTAssertTrue(app.buttons["memoryDiscard.memory"].waitForDisappearance())
         reveal(added, up: false); XCTAssertTrue(added.wait(until: "value == %@", config["newEntry"]!))
@@ -2561,9 +2561,9 @@ import CryptoKit
       }
       if after && variant == "large-text" {
         editFirst()
-        app.buttons["settingsMore"].tapWhenReady(); app.buttons["Details"].tapWhenReady()
+        app.buttons["memoryBack"].tapWhenReady()
         XCTAssertTrue(app.buttons["confirmationKeep"].waitForExistence(timeout: 5)); try capture("memory-large-text-leave")
-        app.buttons["confirmationKeep"].tapWhenReady(); XCTAssertEqual(app.buttons["settingsMore"].value as? String, "Memory")
+        app.buttons["confirmationKeep"].tapWhenReady(); XCTAssertTrue(app.buttons["memoryBack"].waitForExistence(timeout: 5))
       }
       if after && variant == "reload-error" { try capture("memory-reload-recovered") }
       app.terminate()

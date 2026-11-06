@@ -175,6 +175,7 @@ export function bot(row: Wire, activity: ActivityState, detail?: Wire): Bot {
     enabledTools: enabled(detail?.toolsets),
     enabledSkills: enabled(detail?.skills),
     enabledMcpServers: enabled(detail?.mcp_servers),
+    availableMcpServers: detail?.mcp_servers?.map((x: Wire) => x.name),
     sessionId: row.canonical_session?.resolved_id,
     activity,
     lastMessage: preview(row.canonical_session),

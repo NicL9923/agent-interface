@@ -438,22 +438,7 @@ const server = createServer(async (request, response) => {
       if (process.env.PREVIEW_AVATAR_FAILURE === '1' && !bot.avatarFailed) { bot.avatarFailed = true; return json(response, { error: 'Fixture: Hermes is restarting.' }, 503); }
       bot.avatar = body; return json(response, bot.avatar);
     }
-    const voiceMatch = /^\/bots\/([^/]+)\/voice$/.exec(path);
-    if (voiceMatch && request.method === 'PUT') {
-      const bot = bots.find(item => item.id === decodeURIComponent(voiceMatch[1]));
-      if (!bot) return json(response, { error: 'Unknown fixture assistant.' }, 404);
-      bot.voice = body.voice; return json(response, { voice: bot.voice });
-    }
-    const talkMatch = /^\/bots\/([^/]+)\/talk\/(session|ask)$/.exec(path);
-    if (talkMatch && request.method === 'POST') {
-      const bot = bots.find(item => item.id === decodeURIComponent(talkMatch[1]));
-      if (!bot) return json(response, { error: 'Unknown fixture assistant.' }, 404);
-      // Synthetic only: PREVIEW_TALK=1 keeps the browser from contacting OpenAI with it.
-      if (talkMatch[2] === 'session') return json(response, { clientSecret: 'ek_preview_fixture', expiresAt: Math.floor(Date.now() / 1000) + 60, model: 'gpt-realtime-2.1', voice: bot.voice || 'marin' });
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      return json(response, { state: 'done', text: 'Yes. The north gate latched at six and the trail camera shows it closed.' });
-    }
-    if (/^\/bots\/[^/]+$/.test(path) && request.method === 'GET') return json(response, { ...bots.find(bot => bot.id === path.split('/')[2]), instructions: 'Be clear and useful.', enabledMcpServers: [] });
+    if (/^\/bots\/[^/]+$/.test(path) && request.method === 'GET') return json(response, { ...bots.find(bot => bot.id === path.split('/')[2]), instructions: 'Be clear and useful.', enabledMcpServers: ['calendar'], availableMcpServers: ['calendar', 'recipes'] });
     if (path === '/bootstrap') return json(response, { user: { id: 'preview', name: 'Nicolas', email: 'preview@localhost.invalid' }, household: [{ id: 'preview', name: 'Nicolas' }, { id: 'two', name: 'Jordan' }], bots, preferences, vapidPublicKey: previewPushKey, connection: { connected: process.env.PREVIEW_DISCONNECTED !== '1', version: '5c1d0e7a9b3f4c2d8e6a1b0c9d8e7f6a5b4c3d2e', revisionDate: '2026-09-18T16:20:00Z' }, csrfToken: 'fixture-only', capabilities: Object.fromEntries(['chat', 'steering', 'approvals', 'uploads', 'generatedFiles', 'botConfiguration', 'tools', 'skills', 'routines', 'stop', 'avatarMetadata', 'durableEvents', 'idempotency', 'imageGeneration', 'portraitGeneration', 'liveVoice'].map(key => [key, { supported: true }])) });
     const fixtureUser = request.headers['x-preview-user'] || 'preview';
     const experiencePath = path === '/today' || path === '/today/seen' || /\/memory(?:\/|$)|\/vault(?:\/|$)|\/secure-requests\/|\/voice\/|\/cards\/|^\/routines\//.test(path);
