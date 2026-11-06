@@ -217,9 +217,11 @@ export interface DesktopTouch {
 }
 
 /**
- * Takes the touches on `target`, the element given to noVNC, and zooms that element inside its
- * parent, which must clip it. `onZoom` reports whether the view is zoomed in. Null, leaving noVNC's
- * own gestures in place, if its pointer methods are gone.
+ * Takes the touches on `target`, the element given to noVNC, and zooms noVNC's canvas inside it.
+ * noVNC sizes the canvas from its own box, so only the canvas is transformed: its autoscale never
+ * sees the zoom. While zoomed, mouse and wheel input are mapped here too, since noVNC would read
+ * them against the zoomed canvas. `onZoom` reports whether the view is zoomed in. Null, leaving
+ * noVNC's own gestures in place, if its pointer methods are gone.
  */
 export function attachDesktopTouch(rfb: RFB, target: HTMLElement, { onZoom }: { onZoom?: (zoomed: boolean) => void } = {}): DesktopTouch | null {
   const pointer = pointerOf(rfb);
@@ -239,18 +241,21 @@ export function attachDesktopTouch(rfb: RFB, target: HTMLElement, { onZoom }: { 
   marker.innerHTML = '<svg width="22" height="22" viewBox="0 0 22 22"><path d="M3 2l14 9-6.2 1.3L7.5 19Z" fill="#fff" stroke="#111" stroke-width="1.6" stroke-linejoin="round"/></svg>';
   Object.assign(marker.style, { position: "absolute", left: "0", top: "0", pointerEvents: "none", zIndex: "2", filter: "drop-shadow(0 1px 2px #0008)" });
   target.parentElement?.append(marker);
-  const before = { transform: target.style.transform, transformOrigin: target.style.transformOrigin, touchAction: target.style.touchAction };
-  target.style.transformOrigin = "0 0";
+  const touchAction = target.style.touchAction;
   target.style.touchAction = "none";
+  /** The canvas this layer zoomed, with its frame's overflow before the zoom, to put back. */
+  let zoomedCanvas: { element: HTMLCanvasElement; overflow: string } | undefined;
 
   const canvas = () => {
     const element = target.querySelector("canvas");
     return element && element.clientWidth > 0 && element.clientHeight > 0 ? element : null;
   };
-  /** The untransformed box of `target`: what is on screen, whatever the zoom. */
-  const stage = () => {
-    const box = target.getBoundingClientRect();
-    return { left: box.left - view.x, top: box.top - view.y, width: target.offsetWidth, height: target.offsetHeight };
+  /** What is on screen: the target never moves or scales. */
+  const stage = () => target.getBoundingClientRect();
+  /** The canvas's own box without the zoom, in screen coordinates. */
+  const base = (element: HTMLCanvasElement) => {
+    const box = element.getBoundingClientRect();
+    return { left: box.left - view.x, top: box.top - view.y, width: element.clientWidth, height: element.clientHeight };
   };
   const fromScreen = (point: Point) => {
     const element = canvas();
@@ -290,14 +295,41 @@ export function attachDesktopTouch(rfb: RFB, target: HTMLElement, { onZoom }: { 
     const parent = (marker.parentElement ?? document.body).getBoundingClientRect();
     marker.style.transform = `translate(${screen.x - parent.left - 3}px, ${screen.y - parent.top - 2}px)`;
   }
+  /**
+   * The zoomed canvas covers the screen where it is big enough, and is centred where it is not, as
+   * noVNC centres it unzoomed.
+   */
   function setView(scale: number, x: number, y: number) {
-    const { width, height } = stage();
+    const element = canvas();
+    if (!element) return;
+    const own = base(element), box = stage();
     view.scale = clamp(scale, 1, maxZoom);
-    view.x = clamp(x, width - width * view.scale, 0);
-    view.y = clamp(y, height - height * view.scale, 0);
-    target.style.transform = view.scale === 1 ? "" : `translate(${view.x}px, ${view.y}px) scale(${view.scale})`;
+    const fit = (offset: number, size: number, room: number, value: number) => {
+      const scaled = size * view.scale, centred = (room - scaled) / 2;
+      return clamp(value, Math.min(room - scaled, centred) - offset, Math.max(0, centred) - offset);
+    };
+    view.x = view.scale === 1 ? 0 : fit(own.left - box.left, own.width, box.width, x);
+    view.y = view.scale === 1 ? 0 : fit(own.top - box.top, own.height, box.height, y);
+    if (view.scale === 1) unzoom();
+    else {
+      if (zoomedCanvas?.element !== element) {
+        unzoom();
+        // The frame noVNC scrolls would otherwise scroll the zoomed canvas.
+        zoomedCanvas = { element, overflow: element.parentElement?.style.overflow ?? "" };
+        if (element.parentElement) element.parentElement.style.overflow = "hidden";
+        element.style.transformOrigin = "0 0";
+      }
+      element.style.transform = `translate(${view.x}px, ${view.y}px) scale(${view.scale})`;
+    }
     onZoom?.(view.scale > 1);
     render();
+  }
+  function unzoom() {
+    if (!zoomedCanvas) return;
+    const { element, overflow } = zoomedCanvas;
+    element.style.transform = ""; element.style.transformOrigin = "";
+    if (element.parentElement) element.parentElement.style.overflow = overflow;
+    zoomedCanvas = undefined;
   }
   /** Zoomed in, the view follows a trackpad pointer that reaches its edge. */
   function follow() {
@@ -336,13 +368,14 @@ export function attachDesktopTouch(rfb: RFB, target: HTMLElement, { onZoom }: { 
         press();
         break;
       case "view": {
-        const box = stage();
-        const cx = action.center.x - box.left, cy = action.center.y - box.top;
+        const element = canvas();
+        if (!element) return;
+        const own = base(element);
+        // Scale around where the fingers' midpoint was, so the desktop under it stays under it, then
+        // follow the midpoint's travel.
+        const ax = action.center.x - action.dx - own.left, ay = action.center.y - action.dy - own.top;
         const scale = clamp(view.scale * action.scale, 1, maxZoom);
-        // Keep the desktop point under the fingers where it is, then follow their travel.
-        const x = cx - (cx - view.x) * scale / view.scale + action.dx;
-        const y = cy - (cy - view.y) * scale / view.scale + action.dy;
-        setView(scale, x, y);
+        setView(scale, ax - (ax - view.x) * scale / view.scale + action.dx, ay - (ay - view.y) * scale / view.scale + action.dy);
         break;
       }
     }
@@ -362,8 +395,41 @@ export function attachDesktopTouch(rfb: RFB, target: HTMLElement, { onZoom }: { 
       else gestures.end(id, now);
     }
   };
+  /** A held mouse button that went down on the zoomed canvas; its moves and release are ours. */
+  let mouseHeld = false;
+  let wheel = 0;
+  const mouse = (event: MouseEvent) => {
+    const inside = event.target instanceof Node && target.contains(event.target);
+    if (!mouseHeld && (view.scale === 1 || !inside)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.type === "contextmenu") return;
+    if (event.type === "mousedown" && !rfb.viewOnly) rfb.focus({ preventScroll: true });
+    at = fromScreen({ x: event.clientX, y: event.clientY }) ?? at;
+    if (event.type === "mousemove") { move(); return; }
+    // DOM buttons are left 1, right 2, middle 4; the desktop's are left 1, middle 2, right 4.
+    mask = (event.buttons & 1) | (event.buttons & 2 ? 4 : 0) | (event.buttons & 4 ? 2 : 0);
+    mouseHeld = mask !== 0;
+    press();
+  };
+  const scroll = (event: WheelEvent) => {
+    if (view.scale === 1) return;
+    event.preventDefault();
+    event.stopPropagation();
+    at = fromScreen({ x: event.clientX, y: event.clientY }) ?? at;
+    // Wheel steps as noVNC counts them: 50 pixels, or a line as 19.
+    wheel += event.deltaMode === 0 ? event.deltaY : event.deltaY * 19;
+    for (; wheel >= 50; wheel -= 50) { press(wheelButtons.down); press(); }
+    for (; wheel <= -50; wheel += 50) { press(wheelButtons.up); press(); }
+  };
   const types = ["touchstart", "touchmove", "touchend", "touchcancel"] as const;
   for (const type of types) target.addEventListener(type, handle, { capture: true, passive: false });
+  target.addEventListener("mousedown", mouse, { capture: true });
+  target.addEventListener("contextmenu", mouse, { capture: true });
+  target.addEventListener("wheel", scroll, { capture: true, passive: false });
+  // Moves and the release can happen outside the desktop during a drag.
+  window.addEventListener("mousemove", mouse, { capture: true });
+  window.addEventListener("mouseup", mouse, { capture: true });
   // A rotation or resize keeps the zoom inside the new box and the pointer on its spot.
   const resized = () => setView(view.scale, view.x, view.y);
   const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(resized);
@@ -386,9 +452,15 @@ export function attachDesktopTouch(rfb: RFB, target: HTMLElement, { onZoom }: { 
     detach() {
       gestures.cancel();
       for (const type of types) target.removeEventListener(type, handle, { capture: true });
+      target.removeEventListener("mousedown", mouse, { capture: true });
+      target.removeEventListener("contextmenu", mouse, { capture: true });
+      target.removeEventListener("wheel", scroll, { capture: true });
+      window.removeEventListener("mousemove", mouse, { capture: true });
+      window.removeEventListener("mouseup", mouse, { capture: true });
       observer?.disconnect();
       marker.remove();
-      Object.assign(target.style, before);
+      unzoom();
+      target.style.touchAction = touchAction;
     },
   };
 }

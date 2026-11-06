@@ -127,14 +127,14 @@ describe("the viewer page's touch layer", () => {
     // An 800x500 canvas at (0, 0), shown at half size until the target is zoomed.
     Object.defineProperties(canvas, { clientWidth: { value: 400 }, clientHeight: { value: 250 } });
     Object.defineProperties(target, { offsetWidth: { value: 400 }, offsetHeight: { value: 250 } });
-    const scale = () => Number(/scale\(([\d.]+)\)/.exec(target.style.transform)?.[1] ?? 1);
-    const offset = () => (/translate\((-?[\d.]+)px, (-?[\d.]+)px\)/.exec(target.style.transform) ?? [0, 0, 0]).slice(1).map(Number);
+    // Only the canvas moves and scales; the target, which noVNC measures, stays put.
+    const scale = () => Number(/scale\(([\d.]+)\)/.exec(canvas.style.transform)?.[1] ?? 1);
+    const offset = () => (/translate\((-?[\d.]+)px, (-?[\d.]+)px\)/.exec(canvas.style.transform) ?? [0, 0, 0]).slice(1).map(Number);
     canvas.getBoundingClientRect = () => {
       const [x, y] = offset();
       return { left: x, top: y, width: 400 * scale(), height: 250 * scale(), right: 0, bottom: 0, x, y, toJSON() {} } as DOMRect;
     };
-    target.getBoundingClientRect = canvas.getBoundingClientRect;
-    stage.getBoundingClientRect = () => ({ left: 0, top: 0, width: 400, height: 250 }) as DOMRect;
+    target.getBoundingClientRect = stage.getBoundingClientRect = () => ({ left: 0, top: 0, width: 400, height: 250 }) as DOMRect;
     const rfb = Object.assign(new EventTarget(), { viewOnly: false, focus: vi.fn(), _handleMouseButton: vi.fn(), _handleMouseMove: vi.fn() });
     const client = pointer ? rfb : Object.assign(new EventTarget(), { viewOnly: false, focus: vi.fn() });
     const onZoom = vi.fn();
@@ -145,7 +145,10 @@ describe("the viewer page's touch layer", () => {
       canvas.dispatchEvent(event);
       return event;
     };
-    return { stage, target, canvas, rfb, layer: layer!, nullLayer: layer, onZoom, touch };
+    const mouse = (type: string, clientX: number, clientY: number, buttons: number) => {
+      canvas.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, clientX, clientY, buttons }));
+    };
+    return { stage, target, canvas, rfb, layer: layer!, nullLayer: layer, onZoom, touch, mouse };
   }
   afterEach(() => { document.body.replaceChildren(); });
 
@@ -162,11 +165,13 @@ describe("the viewer page's touch layer", () => {
     expect(rfb._handleMouseButton.mock.calls).toEqual([[100, 50, 1], [100, 50, 0]]);
   });
   it("zooms the view under a pinch and maps taps through the zoom", () => {
-    const { target, rfb, onZoom, layer, touch } = viewer();
+    const { target, canvas, rfb, onZoom, layer, touch } = viewer();
     touch("touchstart", [[1, 100, 100], [2, 200, 100]]);
     touch("touchmove", [[1, 50, 100], [2, 250, 100]]);
     touch("touchend", [[1, 50, 100], [2, 250, 100]]);
-    expect(target.style.transform).toMatch(/scale\(2\)/);
+    expect(canvas.style.transform).toMatch(/scale\(2\)/);
+    // noVNC sizes the canvas from the target's box, which must not see the zoom.
+    expect(target.style.transform).toBe("");
     expect(onZoom).toHaveBeenLastCalledWith(true);
     rfb._handleMouseButton.mockClear();
     vi.advanceTimersByTime(1000);
@@ -174,8 +179,36 @@ describe("the viewer page's touch layer", () => {
     touch("touchstart", [[3, 150, 100]]); touch("touchend", [[3, 150, 100]]);
     expect(rfb._handleMouseButton.mock.calls[0].map(Math.round)).toEqual([150, 100, 1]);
     layer.resetZoom();
-    expect(target.style.transform).toBe("");
+    expect(canvas.style.transform).toBe("");
     expect(onZoom).toHaveBeenLastCalledWith(false);
+  });
+  it("keeps the desktop under the fingers' midpoint while a pinch also moves", () => {
+    const { canvas, rfb, touch } = viewer();
+    touch("touchstart", [[1, 100, 100], [2, 200, 100]]);
+    touch("touchmove", [[2, 300, 100]]);
+    // Canvas x 150 was under the midpoint; at 2x it is under the new midpoint, x 200.
+    expect(canvas.style.transform).toBe("translate(-100px, -100px) scale(2)");
+    touch("touchend", [[1, 100, 100], [2, 300, 100]]);
+    vi.advanceTimersByTime(1000);
+    touch("touchstart", [[3, 200, 100]]); touch("touchend", [[3, 200, 100]]);
+    expect(rfb._handleMouseButton.mock.calls[0].map(Math.round)).toEqual([150, 100, 1]);
+  });
+  it("maps a mouse through the zoom, and leaves an unzoomed mouse to noVNC", () => {
+    const { canvas, rfb, touch, mouse } = viewer();
+    const noVNC = vi.fn();
+    canvas.addEventListener("mousedown", noVNC);
+    mouse("mousedown", 100, 50, 1);
+    expect(noVNC).toHaveBeenCalledOnce();
+    expect(rfb._handleMouseButton).not.toHaveBeenCalled();
+    touch("touchstart", [[1, 100, 100], [2, 200, 100]]);
+    touch("touchmove", [[1, 50, 100], [2, 250, 100]]);
+    touch("touchend", [[1, 50, 100], [2, 250, 100]]);
+    mouse("mousedown", 150, 100, 2);
+    mouse("mousemove", 250, 100, 2);
+    mouse("mouseup", 250, 100, 0);
+    expect(noVNC).toHaveBeenCalledOnce();
+    expect(rfb._handleMouseButton.mock.calls.map(call => call.map(Math.round))).toEqual([[150, 100, 4], [200, 100, 0]]);
+    expect(rfb._handleMouseMove.mock.lastCall!.map(Math.round)).toEqual([200, 100]);
   });
   it("shows a pointer only in trackpad mode, moves it by finger travel and recenters it", () => {
     const { stage, rfb, layer, touch } = viewer();
@@ -195,7 +228,7 @@ describe("the viewer page's touch layer", () => {
     const { stage, target, canvas, layer, touch } = viewer();
     layer.detach();
     expect(stage.querySelector(".desktop-touch-pointer")).toBeNull();
-    expect([target.style.transform, target.style.touchAction]).toEqual(["", ""]);
+    expect([canvas.style.transform, target.style.touchAction]).toEqual(["", ""]);
     const noVNC = vi.fn();
     canvas.addEventListener("touchstart", noVNC);
     touch("touchstart", [[1, 1, 1]]);

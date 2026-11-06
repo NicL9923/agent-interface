@@ -102,7 +102,7 @@ async function connect(next: string) {
 }
 function input({ text, key, control }: Input) {
   if (!client || !connected || !controlling) return false;
-  const keys = typeof text === "string" ? keysymsFor(text.slice(0, 8192)) : isDesktopKey(key) ? [desktopKeys[key]] : [];
+  const keys = typeof text === "string" ? keysymsFor(limitPaste(text).text) : isDesktopKey(key) ? [desktopKeys[key]] : [];
   if (!keys.length) return false;
   const rfb = client;
   if (control === true) rfb.sendKey(controlKey, "ControlLeft", true);

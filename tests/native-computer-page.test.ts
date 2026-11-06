@@ -112,6 +112,12 @@ it("pastes, shares the desktop's clipboard and switches touch modes for the app,
   expect(client.clipboardPasteFrom).toHaveBeenCalledWith("ok");
   expect(client.sendKey.mock.calls).toEqual([[0x6f], [0x6b]]);
   expect([window.desktopPaste!(""), window.desktopPaste!(42)]).toEqual([false, false]);
+  // A paste cut at the limit keeps its last character whole, on the clipboard and as typed.
+  client.sendKey.mockClear();
+  expect(window.desktopPaste!("a".repeat(8191) + "🌵🌵")).toBe(true);
+  expect(client.clipboardPasteFrom).toHaveBeenLastCalledWith("a".repeat(8191) + "🌵");
+  expect(client.sendKey.mock.calls.at(-1)).toEqual([0x0101f335]);
+  expect(client.sendKey).toHaveBeenCalledTimes(8192);
   expect([window.desktopView!("recenter"), window.desktopView!("resetZoom"), window.desktopView!("explode")]).toEqual([true, true, false]);
   await go(`path=${encodeURIComponent(ticket("e"))}&control=1&trackpad=0`);
   expect(marker!.hidden).toBe(true);
