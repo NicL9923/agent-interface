@@ -17,11 +17,13 @@ vi.mock("../src/components/Avatar", async (original) => ({
 let container: HTMLDivElement;
 let root: Root;
 let current: Avatar;
-const render = () => act(async () => root.render(createElement(AvatarEditor, {
+const editor = () => createElement(AvatarEditor, {
   avatar: current,
-  onChange: (next: Avatar) => { current = next; void render(); },
+  // Runs inside the act scope of the click that changed the avatar, so it must not open another.
+  onChange: (next: Avatar) => { current = next; root.render(editor()); },
   portraitControls: createElement("p", null, "Portrait controls"),
-})));
+});
+const render = () => act(async () => root.render(editor()));
 const choose = async (label: string) => {
   const input = Array.from(container.querySelectorAll("label"))
     .find((element) => element.textContent?.trim() === label)?.querySelector("input");

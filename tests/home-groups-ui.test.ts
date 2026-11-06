@@ -172,7 +172,7 @@ describe("group chats on home", () => {
     await render();
     expect(container.querySelector(".chat-header h1")?.textContent).toBe("Fence repair");
     expect(roomRows()[0].getAttribute("aria-current")).toBe("page");
-    root.unmount();
+    await act(async () => root.unmount());
     history.replaceState(null, "", "/?view=groups");
     stubMatchMedia(query => query.includes("620px"));
     await render();

@@ -10,7 +10,7 @@ import { useConversation } from "../src/app/use-conversation";
 import { useTurnRetry } from "../src/app/use-turn-retry";
 import { retryRequestId } from "../src/shared/retry-id";
 import { FakeEventSource } from "./fake-event-source";
-import { advance, mountRoot, stubMatchMedia, typeInto } from "./ui-harness";
+import { advance, mountRoot, stubMatchMedia, typeInto, waitForUi } from "./ui-harness";
 
 vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(await (async (original) => ({
   ...await original<typeof import("../src/client-api")>(),
@@ -116,7 +116,7 @@ describe("retry a failed turn", () => {
   // The ID every device derives for retrying q1 after run-1 failed.
   const turnId = () => retryRequestId("shared", "q1", "run-1");
   // The ID is derived with Web Crypto, which settles outside fake timers.
-  const posted = (count: number) => vi.waitFor(() => expect(messagesWritten()).toHaveLength(count));
+  const posted = (count: number) => waitForUi(() => expect(messagesWritten()).toHaveLength(count));
   const receipts = (status: () => string) => {
     const lookups: string[] = [];
     const previous = vi.mocked(api).getMockImplementation()!;
@@ -214,11 +214,11 @@ describe("retry a failed turn", () => {
     await show("shared");
     let first!: Promise<void>;
     await act(async () => { first = hook.run(hook.message!); });
-    await vi.waitFor(() => expect(held.has("/bots/shared/messages")).toBe(true));
+    await waitForUi(() => expect(held.has("/bots/shared/messages")).toBe(true));
     await show("barn");
     expect(hook.busy).toBe(false);
     await act(async () => { void hook.run(hook.message!); });
-    await vi.waitFor(() => expect(sent("barn")).toHaveLength(1));
+    await waitForUi(() => expect(sent("barn")).toHaveLength(1));
     expect(hook.busy).toBe(true);
     // The first assistant's retry finishing leaves this one in flight, and it isn't sent twice.
     await act(async () => { held.get("/bots/shared/messages")!({ status: "accepted" }); await first; });
