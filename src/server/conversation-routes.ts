@@ -314,7 +314,7 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
       await requireCapability("idempotency");
       const known = await runtime.lookupSubmission(input.requestId);
       if (known) {
-        store.receipt(known);
+        store.receipt(known, undefined, retryInterruption);
         return known;
       }
     } else if (reviewedUncertain) {
@@ -360,7 +360,7 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
       const receipt = await (steering
         ? runtime.steer({ ...input, reviewedInterruption })
         : runtime.submit({ ...input, reviewedInterruption }));
-      store.receipt(receipt);
+      store.receipt(receipt, undefined, retryInterruption);
       if (receipt.runId) for (const userId of new Set([input.senderId, requesterId])) store.participate(receipt.runId, userId);
       return receipt;
     } catch (error) {

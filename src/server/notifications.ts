@@ -37,6 +37,7 @@ export class BackgroundWorker {
   private retainedAt = 0;
   private approvalsCheckedAt = 0;
   // When each assistant's approvals were last checked against Hermes, so every one gets its turn.
+  private submissionChecks = new Map<string, { count: number; next: number }>();
   private approvalChecks = new Map<string, number>();
   readonly createdAt = Date.now();
   lastTickAt?: number;
@@ -158,6 +159,11 @@ export class BackgroundWorker {
       const capabilities = await this.runtime.capabilities();
       if (capabilities.idempotency.supported)
         for (const pending of this.store.pending()) {
+          const id = pending.input.requestId;
+          const previous = this.submissionChecks.get(id);
+          if (previous && previous.next > Date.now()) continue;
+          const count = (previous?.count ?? 0) + 1;
+          this.submissionChecks.set(id, { count, next: Date.now() + Math.min(60_000, 5000 * 2 ** Math.min(count - 1, 4)) });
           try {
             const receipt = await this.runtime.lookupSubmission(
               pending.input.requestId,
@@ -167,6 +173,7 @@ export class BackgroundWorker {
             /* Preserve uncertain intent, never replay. */
           }
         }
+      for (const id of this.submissionChecks.keys()) if (this.store.submission(id)?.receipt.status !== "uncertain") this.submissionChecks.delete(id);
       if (!capabilities.durableEvents.supported)
         throw new Error(capabilities.durableEvents.reason ?? "Durable events are unavailable");
       const discovery = await this.runtime.discoverEvents(
@@ -226,7 +233,7 @@ export class BackgroundWorker {
         // News the person is reading in the chat, or already read there on any device, needs no alert.
         if (!security) item.items = item.items.filter(row => {
           const due = visibleTo(this.store, JSON.parse(row.payload).botId, item.user_id) && !this.store.seenInChat(row.id);
-          if (!due) this.store.finishDelivery(row.id);
+          if (!due) this.store.finishDelivery(row.id, "suppressed");
           return due;
         });
         if (!item.items.length) continue;

@@ -27,12 +27,14 @@ import SwiftUI
   /// Bumped by every new action, so a late result from an earlier one is ignored.
   @ObservationIgnored private var generation = 0
   @ObservationIgnored private var sessionActive = false
+  @ObservationIgnored private let playbackOwner = UUID()
   /// The Lock Screen's handlers while this controller holds audio, removed with it.
   @ObservationIgnored private var remoteTargets: [(MPRemoteCommand, Any)] = []
 
   /// Starts speaking the reply, plays prepared audio again, or stops this reply. Another reply's
   /// playback stops first.
   func toggle(_ reply: Message) {
+    guard MicrophoneOwnership.shared.owner == nil else { return }
     if let current, current.id == reply.id {
       if current.phase == .ready { play(reply.id, fromStart: true) } else { cancel() }
       return
@@ -40,6 +42,10 @@ import SwiftUI
     speak(reply)
   }
   func cancel() {
+    if MicrophoneOwnership.shared.playbackOwner == playbackOwner {
+      MicrophoneOwnership.shared.playbackOwner = nil
+      MicrophoneOwnership.shared.stopPlayback = nil
+    }
     generation += 1
     request?.cancel()
     request = nil
@@ -52,7 +58,8 @@ import SwiftUI
   }
 
   private func speak(_ reply: Message) {
-    guard let api else { return }
+    guard MicrophoneOwnership.shared.owner == nil, let api else { return }
+    claimPlayback()
     guard reply.text.utf16.count <= Self.maxSpokenText else {
       failure = Failure(id: reply.id, text: "This reply is too long to read aloud. Ask for a shorter summary.")
       return
@@ -99,7 +106,8 @@ import SwiftUI
   }
   /// Plays the prepared audio from the start, or, after a pause from the Lock Screen, from there.
   private func play(_ id: String, fromStart: Bool) {
-    guard let player else { return }
+    guard MicrophoneOwnership.shared.owner == nil, let player else { return }
+    claimPlayback()
     failure = nil
     current = Current(id: id, phase: .preparing)
     let session = AVAudioSession.sharedInstance()
@@ -188,6 +196,12 @@ import SwiftUI
     MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
     MPNowPlayingInfoCenter.default().playbackState = .stopped
   }
+  private func claimPlayback() {
+    let audio = MicrophoneOwnership.shared
+    if audio.playbackOwner != playbackOwner { audio.stopPlayback?() }
+    audio.playbackOwner = playbackOwner
+    audio.stopPlayback = { [weak self] in self?.cancel() }
+  }
   private func deactivateSession() {
     guard sessionActive else { return }
     sessionActive = false
@@ -268,7 +282,7 @@ struct MessageMetaRow: View {
       }.frame(width: 44, height: 44).contentShape(Rectangle())
     }.buttonStyle(.plain).accessibilityLabel(label).accessibilityIdentifier("listenToReply")
       // Preparing can be cancelled too, so the button never dead-ends while audio loads.
-      .disabled(!connected && phase == nil)
+      .disabled(MicrophoneOwnership.shared.owner != nil || !connected && phase == nil)
   }
   private func button(_ symbol: String, label: String, id: String, action: @escaping () -> Void) -> some View {
     Button(action: action) {

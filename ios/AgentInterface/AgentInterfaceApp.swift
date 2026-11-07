@@ -152,13 +152,15 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
   /// A Siri or Shortcuts question that arrived before the store was ready.
   var earlyAsk: AskRequest?
   var token: String?
-  var pendingBotId: String?
+  var navigationAt: Date?
+  var navigationScope: String?
+  var pendingBotId: String? { didSet { if pendingBotId != nil { navigationAt = Date(); navigationScope = store?.scope } } }
   var pendingRoutineId: String?
   /// The pending chat should start a voice message once open, as the Talk to assistant control asks.
   var pendingListen = false
   /// When the last link asking to listen arrived. A link that waited for sign-in is not fresh.
   var listenLinkAt: Date?
-  var pendingURL: String?
+  var pendingURL: String? { didSet { if pendingURL != nil { navigationAt = Date(); navigationScope = store?.scope } } }
   /// Text typed into notifications' Reply, in arrival order, until a signed-in store can hold it for its draft.
   var pendingReplies: [NotificationReply] = []
   /// The sign-in a notification action uses. After a launch in the background just for the action, the
@@ -397,7 +399,14 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
       await deliverNotice(notice)
     }
   }
+  func clearPendingNavigation() {
+    pendingURL = nil; pendingBotId = nil; pendingRoutineId = nil; pendingListen = false
+    navigationAt = nil; navigationScope = nil; listenLinkAt = nil
+  }
   func openPendingConversation() async {
+    if let at = navigationAt, Date().timeIntervalSince(at) > 120 || navigationScope != nil && navigationScope != store?.scope {
+      clearPendingNavigation()
+    }
     // Held by the store before anything awaits, so a second reply arriving meanwhile queues behind this one.
     if let store, store.bootstrap != nil, !pendingReplies.isEmpty {
       let replies = pendingReplies
@@ -431,9 +440,12 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     // Taken before opening the chat waits, so an account change meanwhile cannot inherit the request.
     let listen = pendingListen ? store.scope.map { ListenRequest(botId: botId, scope: $0, at: listenLinkAt ?? .distantPast) } : nil
     pendingListen = false
-    await store.select(botId)
-    if let routineId = pendingRoutineId { store.routineResult = RoutineResultDestination(botId: botId, routineId: routineId) }
+    let routineId = pendingRoutineId
     pendingRoutineId = nil
+    let generation = store.generation
+    await store.select(botId)
+    guard generation == store.generation, store.selectedBotId == botId else { return }
+    if let routineId { store.routineResult = RoutineResultDestination(botId: botId, routineId: routineId) }
     if let listen, listen.scope == store.scope { store.listenRequest = listen }
   }
 }

@@ -506,3 +506,28 @@ it("drains the worker before closing its runtime and database", async () => {
   expect(close).toHaveBeenCalledTimes(1);
   expect(() => store.users()).toThrow();
 });
+
+it("never replaces settled admission with a delayed uncertain or conflicting receipt", () => {
+  const store = storeWithUsers();
+  try {
+    for (const status of ["accepted", "rejected", "interrupted"] as const) {
+      store.intent({ requestId: status, botId: "shared", senderId: "one", text: "Hello", attachments: [] });
+      const settled = { requestId: status, status, messageId: status === "accepted" ? "message" : undefined };
+      store.receipt(settled);
+      store.receipt({ requestId: status, status: "uncertain" });
+      store.receipt({ requestId: status, status: status === "accepted" ? "rejected" : "accepted" });
+      expect(store.submission(status)?.receipt).toEqual(settled);
+    }
+  } finally { store.close(); }
+});
+
+it("preserves a reviewed interruption retry as the only explicit reopening of rejection", () => {
+  const store = storeWithUsers();
+  try {
+    store.intent({ requestId: "reviewed", botId: "shared", senderId: "one", text: "Hello", attachments: [] });
+    store.receipt({ requestId: "reviewed", status: "rejected" }, "interruption_pending");
+    store.receipt({ requestId: "reviewed", status: "accepted", runId: "run" }, undefined, true);
+    expect(store.submission("reviewed")?.receipt.status).toBe("accepted");
+    expect(store.participants("run")).toEqual(["one"]);
+  } finally { store.close(); }
+});

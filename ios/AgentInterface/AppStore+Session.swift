@@ -45,6 +45,7 @@ extension AppStore {
   }
   /// Retries a launch that could not reach the server. Called when the app returns to the foreground.
   func resume() async {
+    suspended = false
     if bootstrap != nil {
       if !sessionExpired { startPolling() }
     } else if api != nil, !sessionExpired {
@@ -205,7 +206,14 @@ extension AppStore {
       }
     }
     stopPolling()
+    resetAccountContent()
+    return true
+  }
+  /// Every account boundary clears the same account-owned content and async request identities.
+  func resetAccountContent() {
     cachedChats.removeAll()
+    interruptionReviewed = false
+    NotificationController.shared.clearPendingNavigation()
     draftTask?.cancel()
     scheduledDraftSave = nil
     fileTask?.cancel()
@@ -229,7 +237,7 @@ extension AppStore {
     earlyAdditions = []
     receipts = [:]
     submissionChecks = [:]
-    sending = false
+    sendingRequests = [:]
     uploads.reset()
     uploads.notice = []
     appUnavailable = false
@@ -238,7 +246,8 @@ extension AppStore {
     renewalAttemptedAt = nil
     upgrade.reset(); computerStatus = nil; openComputer = nil
     resetPreferenceSaves()
-    return true
+    listenRequest = nil
+    routineResult = nil
   }
   /// Returns false when the server could not be reached to revoke the session. The caller
   /// then asks before repeating with `localOnly`, which still lets the person leave.

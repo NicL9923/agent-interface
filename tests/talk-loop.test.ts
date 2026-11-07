@@ -143,3 +143,20 @@ describe("talk tool loop", () => {
     expect(s.host.captions).toHaveBeenLastCalledWith({ you: "Howdy", assistant: "Next" });
   });
 });
+
+it("allows a new response after a failed response.create", () => {
+  const s = setup([]);
+  s.loop.respond();
+  s.loop.handle({ type: "error", error: { code: "invalid_request_error", message: "Try again" } });
+  s.loop.respond();
+  expect(s.types().filter(type => type === "response.create")).toHaveLength(2);
+});
+
+it("keeps working visible when speech starts during an assistant request", async () => {
+  const s = setup([{ state: "working" }]);
+  s.call();
+  await s.settle();
+  s.loop.handle({ type: "input_audio_buffer.speech_started" });
+  expect(s.phases.at(-1)).toBe("working");
+  s.loop.dispose();
+});

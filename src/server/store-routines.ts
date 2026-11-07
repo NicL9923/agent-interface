@@ -54,7 +54,7 @@ export class RoutineRepository {
   rememberRoutineTrial(requestId: string, userId: string, routineId: string, botId: string) {
     this.db.prepare("INSERT OR IGNORE INTO routine_trials(request_id,user_id,routine_id,bot_id) VALUES(?,?,?,?)").run(requestId, userId, routineId, botId);
   }
-  recordRoutineTrialStatus(requestId: string, status: string) {
+  recordRoutineTrialStatus(requestId: string, status: "accepted" | "completed" | "failed" | "uncertain" | "settled") {
     this.db.prepare("UPDATE routine_trials SET status=? WHERE request_id=?").run(status, requestId);
   }
 }

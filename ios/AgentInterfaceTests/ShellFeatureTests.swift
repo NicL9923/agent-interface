@@ -65,7 +65,7 @@ import XCTest
     store.draft = Draft(text: "Sent words")
     store.pendings["ranch"] = PendingSubmission(requestId: "r1", botId: "ranch", text: "Sent words", attachments: [],
       reviewedInterruption: false, draftBaseRevision: 0)
-    store.sending = true
+    store.sendingRequests[store.selectedBotId ?? "bot"] = "test-request"
     XCTAssertTrue(store.sendingDraft)
     store.editComposer { $0.text = "Recalled words" }
     XCTAssertEqual(store.draft.text, "Sent words", "The sent copy stays as it was sent")

@@ -351,6 +351,16 @@ describe("system terminal", () => {
     expect(Socket.instances).toHaveLength(2);
   });
 
+  it("does not reopen a shell when End shell supersedes a scheduled reconnect", async () => {
+    const client = await connectedTerminal();
+    await act(async () => client.close());
+    await click("End shell");
+    await click("End this shell");
+    await act(async () => vi.advanceTimersByTimeAsync(6000));
+    expect(Socket.instances).toHaveLength(1);
+    expect(container.textContent).toContain("Your shell has ended");
+  });
+
   it("requires an explicit shell-ending action and passes its session identity", async () => {
     const client = await connectedTerminal();
     await click("End shell");

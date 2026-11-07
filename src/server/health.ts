@@ -111,8 +111,7 @@ export class HealthMonitor {
   }
   private async hermes(now: number): Promise<Check> {
     if (this.deps.maintenance()) {
-      this.hermesDownSince = undefined;
-      return { status: "ok", detail: "A Hermes update is in progress" };
+      return { status: "unconfigured", detail: "A Hermes update is in progress" };
     }
     let timer: ReturnType<typeof setTimeout> | undefined;
     const status = await Promise.race([
@@ -179,6 +178,7 @@ export class HealthMonitor {
   private track(checks: Record<Name, Check>, now: number) {
     const log = this.deps.log ?? quietLog;
     for (const name of Object.keys(checks) as Name[]) {
+      if (name === "hermes" && checks.hermes.status === "unconfigured") continue;
       const { status, detail } = checks[name];
       const incident = this.incidents.get(name);
       if (status !== "warn" && status !== "fail") {

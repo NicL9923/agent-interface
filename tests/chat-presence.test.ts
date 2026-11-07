@@ -126,3 +126,15 @@ it("forgets presence and reads with a deleted assistant", () => {
   expect(store.db.prepare("SELECT count(*) AS n FROM chat_presence UNION ALL SELECT count(*) FROM chat_reads").all()).toEqual([{ n: 0 }, { n: 0 }]);
   store.close();
 });
+
+it("records a queued notification suppressed by reading separately from delivery", async () => {
+  const { store, worker, web, native } = household();
+  try {
+    store.recordEvents([reply("queued-before-reading")], "cursor");
+    store.chatPresence("one", "shared", "desk-tab", "active");
+    await worker.tick();
+    expect([web, native]).toEqual([[], []]);
+    expect(store.db.prepare("SELECT state FROM outbox WHERE event_id=?").get("queued-before-reading"))
+      .toEqual({ state: "suppressed" });
+  } finally { await worker.stop(); store.close(); }
+});

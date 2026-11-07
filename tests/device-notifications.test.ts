@@ -213,3 +213,19 @@ it("offers another account its own invitation when browser permission was alread
   expect(requestPermission).not.toHaveBeenCalled();
   expect(write).not.toHaveBeenCalledWith("/push/subscriptions", expect.anything());
 });
+
+it("leaves checking after Enable supersedes a refresh and then fails", async () => {
+  await render();
+  let finishRead!: (subscription: PushSubscription | null) => void;
+  vi.mocked(worker.pushManager.getSubscription).mockImplementationOnce(() => new Promise(resolve => { finishRead = resolve; }));
+  let refresh!: Promise<void>;
+  await act(async () => { refresh = notifications.refresh(); });
+  expect(notifications.checking).toBe(true);
+  subscribe.mockRejectedValueOnce(new Error("Push service unavailable"));
+  await act(async () => { await notifications.enable(); });
+  expect(notifications.checking).toBe(false);
+  expect(notifications.busy).toBe(false);
+  expect(notifications.error).toBe("Push service unavailable");
+  await act(async () => { finishRead(null); await refresh; });
+  expect(notifications.checking).toBe(false);
+});

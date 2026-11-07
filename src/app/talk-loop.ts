@@ -57,14 +57,15 @@ export class TalkLoop {
     if (this.active) { this.queued = true; return; }
     // Counted active at once, so a second call before response.created waits its turn.
     this.active = true;
-    this.host.send({ type: "response.create" });
+    try { this.host.send({ type: "response.create" }); }
+    catch (error) { this.active = false; throw error; }
   }
 
   handle(event: { type?: unknown; [key: string]: unknown }) {
     if (this.disposed) return;
     switch (event.type) {
       case "input_audio_buffer.speech_started":
-        this.host.activity(); this.host.phase("listening"); break;
+        this.host.activity(); this.host.phase(this.following ? "working" : "listening"); break;
       case "conversation.item.input_audio_transcription.completed":
         this.you = String(event.transcript ?? "").trim(); this.assistant = ""; this.show(); break;
       case "response.created":
@@ -87,6 +88,9 @@ export class TalkLoop {
         const error = (event.error ?? {}) as { code?: unknown; message?: unknown };
         // Our response.create raced one the server started itself; send it after that one ends.
         if (error.code === "conversation_already_has_active_response") { this.queued = true; break; }
+        this.active = false;
+        this.queued = false;
+        this.host.phase(this.following ? "working" : "listening");
         this.host.problem(typeof error.message === "string" ? error.message.slice(0, 300) : "The voice service reported a problem.");
         break;
       }
