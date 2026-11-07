@@ -18,7 +18,16 @@ struct ReplyCard: Decodable, Identifiable {
   var start: String?
   var end: String?
   var location: String?
+  /// An event's details, or a form's introduction.
   var description: String?
+  // An email draft.
+  var to: [String]?
+  var cc: [String]?
+  var subject: String?
+  var body: String?
+  // A form.
+  var submitLabel: String?
+  var fields: [FormField]?
 }
 struct ReplyCardDocument: Decodable { var version: Int; var cards: [ReplyCard] }
 struct ReplyCardState: Codable, Equatable { var checkedIds: [String] = []; var notes: [String: String] = [:] }
@@ -34,7 +43,8 @@ enum ReplyCards {
       if let prose = part.markdown { return prose }
       if let inline = part.inline { return inline.title }
       return (part.cards ?? []).map { card in
-        ([card.title] + (card.items ?? []).map { $0.text ?? $0.title ?? "" }).joined(separator: ". ")
+        ([card.title] + (card.items ?? []).map { $0.text ?? $0.title ?? "" } + [card.subject].compactMap { $0 }
+          + (card.fields ?? []).map(\.label)).joined(separator: ". ")
       }.joined(separator: "\n")
     }.joined(separator: "\n")
   }
@@ -80,7 +90,7 @@ enum ReplyCards {
         let data = String(text[payload]).data(using: .utf8), strictJSON(data),
         let doc = try? JSONDecoder().decode(ReplyCardDocument.self, from: data), valid(doc) else { continue }
       if cursor < whole.lowerBound { parts.append(.init(id: parts.count, markdown: String(text[cursor..<whole.lowerBound]))) }
-      parts.append(.init(id: parts.count, cards: doc.cards)); cursor = whole.upperBound
+      parts.append(.init(id: parts.count, cards: doc.cards.map(ReplyActionRules.normalized))); cursor = whole.upperBound
     }
     if cursor < text.endIndex || parts.isEmpty { parts.append(.init(id: parts.count, markdown: String(text[cursor...]))) }
     let cards = parts.flatMap { $0.cards ?? [] }
@@ -127,12 +137,23 @@ enum ReplyCards {
     guard data.count <= 100_000, let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any], Set(object.keys) == ["version", "cards"], let cards = object["cards"] as? [[String: Any]] else { return false }
     return cards.allSatisfy { card in
       let type = card["type"] as? String ?? ""
-      let allowed: Set<String> = type == "event" ? ["id", "type", "title", "start", "end", "location", "description"] : ["id", "type", "title", "items"]
+      let allowed: Set<String> = switch type {
+      case "event": ["id", "type", "title", "start", "end", "location", "description"]
+      case "email": ["id", "type", "title", "to", "cc", "subject", "body"]
+      case "form": ["id", "type", "title", "description", "submitLabel", "fields"]
+      default: ["id", "type", "title", "items"]
+      }
       guard Set(card.keys).isSubset(of: allowed) else { return false }
-      if type == "event" { return true }
-      guard let items = card["items"] as? [[String: Any]] else { return false }
-      let itemKeys: Set<String> = type == "checklist" ? ["id", "text"] : ["id", "title", "time", "detail", "url"]
-      return items.allSatisfy { Set($0.keys).isSubset(of: itemKeys) }
+      switch type {
+      case "event", "email": return true
+      case "form":
+        guard let fields = card["fields"] as? [[String: Any]] else { return false }
+        return fields.allSatisfy { Set($0.keys).isSubset(of: ["id", "label", "kind", "required", "help", "placeholder", "options", "value"]) }
+      default:
+        guard let items = card["items"] as? [[String: Any]] else { return false }
+        let itemKeys: Set<String> = type == "checklist" ? ["id", "text"] : ["id", "title", "time", "detail", "url"]
+        return items.allSatisfy { Set($0.keys).isSubset(of: itemKeys) }
+      }
     }
   }
   static func validId(_ id: String) -> Bool { !id.isEmpty && id.count <= 80 && id.range(of: "^[a-zA-Z0-9_-]+$", options: .regularExpression) != nil }
@@ -154,6 +175,8 @@ enum ReplyCards {
         guard let raw = card.start, absoluteDate(raw), let start = ServerDate.parse(raw) else { return false }
         if let end = card.end { guard absoluteDate(end), let date = ServerDate.parse(end), date > start else { return false } }
         return true
+      case "email": return ReplyActionRules.validEmail(card)
+      case "form": return ReplyActionRules.validForm(card)
       default: return false
       }
     }
@@ -197,7 +220,9 @@ struct InteractiveReplyCard: View {
   @State private var eventOpen = false
   enum Status { case loading, ready, saving, failed }
   private var busy: Bool { status == .loading || status == .saving || !connected }
-  private var typeLabel: String { card.type == "event" ? "Calendar proposal" : card.type == "itinerary" ? "Itinerary" : "Checklist" }
+  private var typeLabel: String {
+    switch card.type { case "event": "Calendar proposal"; case "itinerary": "Itinerary"; case "email": "Email draft"; case "form": "Questions"; default: "Checklist" }
+  }
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
       HStack {
@@ -214,6 +239,10 @@ struct InteractiveReplyCard: View {
         if let description = card.description { Text(description).font(.footnote) }
         Button("Review calendar event", systemImage: "calendar.badge.plus") { eventOpen = true }.buttonStyle(.bordered)
         Text("Review and choose Save in Apple's event editor to add it to your calendar.").font(.caption).foregroundStyle(.secondary)
+      } else if card.type == "email" {
+        EmailDraftCardView(card: card)
+      } else if card.type == "form" {
+        FormReplyCardView(card: card, messageId: messageId)
       } else {
         ForEach(card.items ?? []) { item in
           if card.type == "checklist" {
@@ -260,7 +289,8 @@ struct InteractiveReplyCard: View {
   }
   private var path: String { "/bots/\(APIClient.component(store?.selectedBotId ?? ""))/messages/\(APIClient.component(messageId))/cards/\(APIClient.component(card.id))/state" }
   private func load() async {
-    guard card.type != "event", let store, store.api != nil else { return }
+    // Only checklists and itineraries save per-person state on the server.
+    guard card.type == "checklist" || card.type == "itinerary", let store, store.api != nil else { return }
     status = .loading; error = nil
     switch await store.attempt({ (context) -> ReplyCardState in try await context.api.get(path) }) {
     case .success(let value)?: saved = value; draft = value; status = .ready

@@ -802,6 +802,8 @@ struct Bootstrap: Codable, Equatable {
   subscript(capability key: CapabilityKey) -> Capability? { capabilities[key.rawValue] }
   var connection: RuntimeStatus
   var csrfToken: String?
+  /// This person's private key for deriving form request IDs. A server from before form cards omits it.
+  var formKey: String?
   /// Present when the host publishes the latest distributed iOS build.
   var nativeApp: NativeAppInfo?
 }

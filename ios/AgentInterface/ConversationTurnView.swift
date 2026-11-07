@@ -89,7 +89,10 @@ struct ConversationTurnView: View, Equatable {
     VStack(alignment: .leading, spacing: 18) {
       ForEach(turn.transcriptRows(advanced: advanced)) { row in
         switch row {
-        case .work: work
+        case .work:
+          work
+          // A T3 Code thread the work started stays in view, so Open is one tap away.
+          ForEach(turn.t3Threads) { T3ThreadCardView(thread: $0) }
         case .message(let index, let message):
         let run = turn.replyRun(at: index, in: visible)
         MessageView(message: message, continued: run.continued, endsRun: run.endsRun, when: run.when,
