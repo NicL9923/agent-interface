@@ -27,7 +27,18 @@ describe("retry request IDs", () => {
   });
 });
 
+// The iOS app derives the same IDs; docs/native-api.md lists these vectors for it.
+const formVectors: [formKey: string, botId: string, messageId: string, cardId: string, attempt: number, id: string][] = [
+  ["k3y_A-b", "ranch", "msg-42", "trip", 0, "1ab28536-230d-4777-84cf-8dcda31bb28c"],
+  ["k3y_A-b", "ranch", "msg-42", "trip", 3, "76bbd8a5-8259-4c9e-8b2b-3b3fa7bec9d2"],
+  ["café", "👋", "m", "c", 1, "f2ec6d4c-7663-410f-88ba-49c4a6921df8"],
+];
+
 describe("form request IDs", () => {
+  it.each(formVectors)("derives the fixed ID for %s, %s, %s, %s, attempt %i", async (formKey, botId, messageId, cardId, attempt, id) => {
+    expect(await formRequestId(formKey, botId, messageId, cardId, attempt)).toBe(id);
+  });
+
   it("makes one version 4 UUID per person, assistant, message, card and attempt, never a retry's", async () => {
     const parts: [string, string, string, string, number][] = [["one", "ranch", "m", "c", 0], ["two", "ranch", "m", "c", 0], ["one", "barn", "m", "c", 0],
       ["one", "ranch", "n", "c", 0], ["one", "ranch", "m", "d", 0], ["one", "ranch", "m", "c", 1]];

@@ -1,3 +1,4 @@
+import { createHmac, randomBytes } from "node:crypto";
 import type { User } from "../shared/types.js";
 import { httpError } from "./http-error.js";
 import type { StoreDatabase } from "./store-database.js";
@@ -13,6 +14,16 @@ export class AccountRepository {
       )
       .run(user.id, user.email, user.name, user.picture ?? null);
     return user;
+  }
+  /**
+   * A key only this person's clients receive, for deriving their form request IDs. It is an HMAC of
+   * the person's ID under one random secret kept for this installation, so nobody else can work out
+   * those IDs and claim one first, and every device of the same person derives the same ones.
+   */
+  formKey(userId: string): string {
+    this.db.prepare("INSERT OR IGNORE INTO metadata VALUES('form_key_secret',?)").run(randomBytes(32).toString("base64url"));
+    const { value } = this.db.prepare("SELECT value FROM metadata WHERE key='form_key_secret'").get() as { value: string };
+    return createHmac("sha256", value).update(`wildbots-form-key\u0000${userId}`).digest("base64url");
   }
   users(): User[] {
     return this.db

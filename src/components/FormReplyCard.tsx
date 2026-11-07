@@ -62,6 +62,9 @@ const lookupLimit = 100;
 export function FormReplyCard({ card, botId, messageId, userId, unavailable }: { card: FormCard; botId: string; messageId: string; userId: string; unavailable?: boolean }) {
   const key = formReplyKey(userId, botId, messageId, card.id);
   const tools = useContext(TranscriptTools);
+  // Every client of this server has the key. Outside a conversation, as in a lone preview, the ID
+  // falls back to the person's ID: still one per person, though not private.
+  const personKey = tools?.formKey ?? userId;
   const [first] = useState(() => readSaved(key));
   const [answers, setAnswers] = useState<FormAnswers>(() => first ? restore(card, first.answers) : formStart(card));
   const [attempt, setAttempt] = useState(first?.attempt ?? 0);
@@ -86,7 +89,7 @@ export function FormReplyCard({ card, botId, messageId, userId, unavailable }: {
   useEffect(() => {
     if (!recovering || !first) return;
     let live = true;
-    void formRequestId(userId, botId, messageId, card.id, first.attempt).then(id => {
+    void formRequestId(personKey, botId, messageId, card.id, first.attempt).then(id => {
       if (live) setPending({ id, attempt: first.attempt, answers: restore(card, first.answers), elsewhere: !!first.elsewhere });
     });
     return () => { live = false; };
@@ -102,7 +105,7 @@ export function FormReplyCard({ card, botId, messageId, userId, unavailable }: {
       for (let next = 0; ; next++) {
         if (next === lookupLimit) { setAttempt(next); setStatus("editing"); return; }
         let receipt: SubmissionReceipt | null = null;
-        try { receipt = await request("GET /submissions/:id", { params: { id: await formRequestId(userId, botId, messageId, card.id, next) } }); }
+        try { receipt = await request("GET /submissions/:id", { params: { id: await formRequestId(personKey, botId, messageId, card.id, next) } }); }
         catch { /* Unknown: the person may send, and the server admits the request once. */ }
         if (!live) return;
         if (receipt?.status === "rejected") continue;
@@ -157,7 +160,7 @@ export function FormReplyCard({ card, botId, messageId, userId, unavailable }: {
     }
     inFlight.current = true; setStatus("sending"); setError("");
     try {
-      const from: Pending = { id: await formRequestId(userId, botId, messageId, card.id, attempt), attempt, answers, elsewhere: false };
+      const from: Pending = { id: await formRequestId(personKey, botId, messageId, card.id, attempt), attempt, answers, elsewhere: false };
       // Saved first, so leaving while the request is out checks it on return. If saving fails, the
       // same request ID still keeps a second Send from being admitted.
       save({ attempt, answers, state: "checking", requestId: from.id });

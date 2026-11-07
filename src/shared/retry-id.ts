@@ -11,12 +11,14 @@ export function retryRequestId(botId: string, messageId: string, runId = ""): Pr
 /**
  * The request ID for one person's answers to one form card, the same in every tab and on every
  * device, so the server's submission record admits them once. Built like a retry ID over
- * `wildbots-form`, the person's, assistant's, message's and card's IDs and the attempt number,
- * but with version 4, so it can never take a retry's version 8 ID. The attempt grows only after
- * Hermes refuses an attempt, whose ID then stays refused.
+ * `wildbots-form`, the person's form key from bootstrap, the assistant's, message's and card's IDs
+ * and the attempt number, but with version 4, so it can never take a retry's version 8 ID. The key
+ * is private to that person, so nobody else can derive the ID and claim it first. The attempt grows
+ * only after Hermes refuses an attempt, whose ID then stays refused. iOS computes the same;
+ * docs/native-api.md has a test vector.
  */
-export function formRequestId(userId: string, botId: string, messageId: string, cardId: string, attempt: number): Promise<string> {
-  return derivedId(["wildbots-form", userId, botId, messageId, cardId, String(attempt)], 0x40);
+export function formRequestId(formKey: string, botId: string, messageId: string, cardId: string, attempt: number): Promise<string> {
+  return derivedId(["wildbots-form", formKey, botId, messageId, cardId, String(attempt)], 0x40);
 }
 async function derivedId(parts: string[], version: number): Promise<string> {
   const input = new TextEncoder().encode(parts.join("\u0000"));

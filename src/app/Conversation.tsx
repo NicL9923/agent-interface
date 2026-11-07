@@ -129,8 +129,8 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
   // Live Talk owns the speaker, so replies are not read aloud while it runs.
   const talking = useTalkLive();
   const speech = useReplySpeech(botId, connectionLost || talking);
-  const tools = useMemo<TranscriptTools>(() => ({ botId, sessionId: conversation?.sessionId, unavailable: connectionLost, quote, announce, speech, reviewedInterruption: reviewed }),
-    [botId, conversation?.sessionId, connectionLost, quote, announce, speech, reviewed]);
+  const tools = useMemo<TranscriptTools>(() => ({ botId, sessionId: conversation?.sessionId, unavailable: connectionLost, quote, announce, speech, reviewedInterruption: reviewed, formKey: boot.formKey }),
+    [botId, conversation?.sessionId, connectionLost, quote, announce, speech, reviewed, boot.formKey]);
   const frame = useRef<HTMLDivElement>(null);
   const retry = useTurnRetry({ botId, userId: boot.user.id, canonical, blocked: !!echo || connectionLost || !boot.capabilities.chat.supported,
     resendable: boot.capabilities.idempotency.supported, report: setError });

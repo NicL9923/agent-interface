@@ -387,6 +387,8 @@ export interface Bootstrap {
   capabilities: Capabilities;
   connection: RuntimeStatus;
   csrfToken: string | null;
+  /** This person's private key for deriving form request IDs; see formRequestId. Absent from an older server. */
+  formKey?: string;
   vapidPublicKey?: string;
   /** The newest distributed iOS build, when the host advertises one. */
   nativeApp?: { latestBuild: number; updateUrl: string };

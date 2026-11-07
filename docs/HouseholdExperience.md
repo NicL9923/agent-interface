@@ -163,8 +163,9 @@ durable admission as the message box and never reads or changes your draft. If
 you ticked "I've reviewed the task's last actions" after an interruption, the
 answers go under that review too.
 
-The request ID is derived from you, the message, the card and an attempt number,
-so every tab and device sends the same request and the server admits it once. An
+The request ID is derived from a key only your devices receive, the message, the
+card and an attempt number, so every tab and device sends the same request, the
+server admits it once, and nobody else can work out the ID to claim it first. An
 answer whose outcome is unknown is checked by that ID, across reloads, until
 Hermes settles it. Answers you have typed are kept on the device until you send
 them. A refusal before Hermes sees the answers keeps the same attempt; a refusal
@@ -173,9 +174,7 @@ interrupted, which does not say whether the answers arrived, so the card asks yo
 to check the conversation and offers to send them again as a new attempt. A sent
 form folds into a read-only list of your answers. Another tab or device that
 opens the form skips refused attempts and finds the one that was sent or
-interrupted. A household member who knows those IDs
-could claim your form's ID first, which leaves your card checking; nothing they
-send appears as yours.
+interrupted.
 
 These two types are web-only for now. The iOS app shows their JSON as code.
 

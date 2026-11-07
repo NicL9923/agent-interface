@@ -65,6 +65,7 @@ export class Store {
   set botNames(names: Map<string, string>) { this.notifications.botNames = names; }
   // accounts
   user(...args: Parameters<AccountRepository["user"]>) { return this.accounts.user(...args); }
+  formKey(userId: string) { return this.accounts.formKey(userId); }
   users(...args: Parameters<AccountRepository["users"]>) { return this.accounts.users(...args); }
   getUser(...args: Parameters<AccountRepository["getUser"]>) { return this.accounts.getUser(...args); }
   session(...args: Parameters<AccountRepository["session"]>) { return this.accounts.session(...args); }

@@ -37,6 +37,7 @@ const bootstrap: Bootstrap = {
   ].map((key) => [key, { supported: true }])) as Bootstrap["capabilities"],
   connection: { connected: true },
   csrfToken: "test",
+  formKey: "form-key-one",
 };
 const savedDraft = { text: "My saved draft", attachments: [] };
 const writeText = vi.fn<(value: string) => Promise<void>>();
@@ -1101,7 +1102,7 @@ describe("form replies", () => {
   const answers = 'My answers to "Trip details":\n- Destination: Marfa\n- Pace: Packed\n- Bringing the dog: Yes';
   const saved = "agent-interface:form-reply:one:shared:a:trip";
   // The ID every tab and device derives for this person's attempt at this form.
-  const formId = (attempt: number) => formRequestId("one", "shared", "a", "trip", attempt);
+  const formId = (attempt: number) => formRequestId("form-key-one", "shared", "a", "trip", attempt);
   const fill = async () => {
     await typeInto(card().querySelector<HTMLInputElement>('input[type="text"]')!, "Marfa");
     await act(async () => field("Packed").querySelector("input")!.click());

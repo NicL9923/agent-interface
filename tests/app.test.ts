@@ -1033,3 +1033,40 @@ describe("submission records", () => {
     }
   });
 });
+
+describe("form keys", () => {
+  // A form's request ID is derived from this key, so it must be private to its person, the same on
+  // every device, and stable across restarts, or a second device would send the answers again.
+  it("gives each person a private key that stays the same across restarts", () => {
+    const dir = mkdtempSync(join(tmpdir(), "form-key-"));
+    const path = join(dir, "app.db");
+    try {
+      let store = new Store(path);
+      for (const id of ["one", "two"]) store.user({ id, name: id, email: `${id}@example.test` });
+      const one = store.formKey("one"), two = store.formKey("two");
+      expect(one).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      expect(two).not.toBe(one);
+      expect(store.formKey("one")).toBe(one);
+      store.close();
+      store = new Store(path);
+      expect(store.formKey("one")).toBe(one);
+      store.close();
+      // Another installation's secret gives the same person a different key.
+      const elsewhere = new Store(join(dir, "other.db"));
+      expect(elsewhere.formKey("one")).not.toBe(one);
+      elsewhere.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("hands each signed-in person only their own key in bootstrap", async () => {
+    const { app, store } = await createApp(config(), runtimeDouble().runtime, { background: false });
+    try {
+      const keys = await Promise.all(["one", "two"].map(async member =>
+        (await app.inject({ url: "/api/bootstrap", headers: await login(app, member) })).json()));
+      expect(keys.map(boot => boot.formKey)).toEqual(keys.map(boot => store.formKey(boot.user.id)));
+      expect(keys[0].formKey).not.toBe(keys[1].formKey);
+    } finally { await app.close(); }
+  });
+});
