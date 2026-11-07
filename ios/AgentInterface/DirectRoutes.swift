@@ -76,10 +76,11 @@ final class APISessionDelegate: NSObject, URLSessionTaskDelegate, Sendable {
     }
     completionHandler(request)
   }
-  /// Whether a challenge comes from the primary origin, which keeps the system's own evaluation.
-  func isOrigin(host: String, port: Int) -> Bool {
-    DirectRoutePins.endpoint(host: host, port: port)
-      == DirectRoutePins.endpoint(host: origin.host, port: origin.port ?? (origin.scheme == "http" ? 80 : 443))
+  /// Whether a challenge comes from the primary origin's host, which keeps the system's own
+  /// evaluation. The host alone decides, so no reading of a default port can lock the app out of
+  /// its own server; route requests never reach this, since their own delegate answers first.
+  func isOrigin(host: String) -> Bool {
+    host.lowercased() == origin.host?.lowercased()
   }
   // Task level only: without a session-level method, URLSession sends connection challenges such
   // as server trust here, after the request's own delegate. The async form has no completion
@@ -89,7 +90,7 @@ final class APISessionDelegate: NSObject, URLSessionTaskDelegate, Sendable {
   {
     let space = challenge.protectionSpace
     guard space.authenticationMethod == NSURLAuthenticationMethodServerTrust else { return (.performDefaultHandling, nil) }
-    return isOrigin(host: space.host, port: space.port) ? (.performDefaultHandling, nil) : (.cancelAuthenticationChallenge, nil)
+    return isOrigin(host: space.host) ? (.performDefaultHandling, nil) : (.cancelAuthenticationChallenge, nil)
   }
 }
 

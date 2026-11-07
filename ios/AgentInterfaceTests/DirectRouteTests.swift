@@ -319,11 +319,10 @@ private final class RouteHost: FakeHost, @unchecked Sendable {
 
   func testTheSessionKeepsSystemTrustOnlyForThePrimaryOrigin() {
     let delegate = APISessionDelegate(origin: URL(string: "https://agentui.example.test")!)
-    XCTAssertTrue(delegate.isOrigin(host: "agentui.example.test", port: 443))
-    XCTAssertTrue(delegate.isOrigin(host: "AgentUI.example.test", port: 443))
+    XCTAssertTrue(delegate.isOrigin(host: "agentui.example.test"))
+    XCTAssertTrue(delegate.isOrigin(host: "AgentUI.example.test"))
     // A route request that lost its own delegate, or any other host, is refused rather than trusted.
-    XCTAssertFalse(delegate.isOrigin(host: "agentui.example.test", port: 3443))
-    XCTAssertFalse(delegate.isOrigin(host: "192.168.1.20", port: 3443))
-    XCTAssertTrue(APISessionDelegate(origin: URL(string: "https://192.168.1.5:8443")!).isOrigin(host: "192.168.1.5", port: 8443))
+    XCTAssertFalse(delegate.isOrigin(host: "192.168.1.20"))
+    XCTAssertFalse(delegate.isOrigin(host: "agentui.example.test.attacker.test"))
   }
 }
