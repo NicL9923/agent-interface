@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import type { ActivityState, Bootstrap, Bot } from "../shared/types";
 import type { GroupRoom } from "../shared/collaboration";
 import { memberNames } from "./home-rooms";
@@ -42,6 +43,7 @@ export function ChatHeader({ view, boot, selected, room, avatarState, offline = 
 }) {
   // Simple presentation never shows a model.
   const model = boot.preferences.presentation === "advanced";
+  const identityButton = useRef<HTMLButtonElement>(null);
   const identity = view === "conversation" && selected;
   return (
     <header className={`chat-header${identity ? " chat-header-identity" : view === "today" ? " chat-header-today" : ""}`}>
@@ -59,11 +61,12 @@ export function ChatHeader({ view, boot, selected, room, avatarState, offline = 
         /* Avatar, name and model chip each own a grid cell, so no control's box covers another's. */
         <div className={`chat-identity-wrap${model ? " with-model" : ""}`}>
           {/* A larger place to click for pointers; the name button is the one control for keyboards and screen readers. */}
-          <span className="chat-identity-avatar" aria-hidden="true" onClick={() => onDetails(selected)}>
+          {/* It focuses the name button first, so closing details returns there, as from the name. */}
+          <span className="chat-identity-avatar" aria-hidden="true" onClick={() => { identityButton.current?.focus({ preventScroll: true }); onDetails(selected); }}>
             <Avatar avatar={selected.avatar} state={avatarState === "blocked" ? "idle" : avatarState} size={42} offline={offline} name={selected.name} botId={selected.id} />
           </span>
           <h1 className="chat-identity-heading">
-            <button className="chat-identity" aria-haspopup="dialog" aria-label={selected.name}
+            <button ref={identityButton} className="chat-identity" aria-haspopup="dialog" aria-label={selected.name}
               title="Details, pin, artifacts and settings" onClick={() => onDetails(selected)}>
               <span className="chat-title">
                 {/* The chevron follows the name, so it never floats between the name and a wider model chip. */}

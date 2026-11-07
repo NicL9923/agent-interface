@@ -37,8 +37,11 @@ it("opens details from the avatar too, while the name button stays the one contr
   expect(avatar.querySelector("button, [tabindex]")).toBeNull();
   // The chip sits beside the name button, not over a spare line inside it.
   expect(mount.container.querySelector(".chat-identity .chat-summary, .chat-model-reserve")).toBeNull();
+  (document.activeElement as HTMLElement | null)?.blur();
   await act(async () => avatar.click());
   expect(onDetails).toHaveBeenCalledWith(bot);
+  // Details returns focus to whatever held it when it opened, so that must be the name button.
+  expect(document.activeElement).toBe(mount.container.querySelector(".chat-identity"));
 });
 it("never shows the model in Simple", async () => {
   await render("simple");
