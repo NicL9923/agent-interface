@@ -531,3 +531,20 @@ it("preserves a reviewed interruption retry as the only explicit reopening of re
     expect(store.participants("run")).toEqual(["one"]);
   } finally { store.close(); }
 });
+
+it.each([404, 410, 500])("handles web push status %i for queued notifications", async status => {
+  const store = storeWithUsers();
+  const endpoint = "https://push.example.test/device";
+  store.subscribe("one", { endpoint, keys: { p256dh: "key", auth: "auth" } });
+  queue(store, "first-push", Date.now());
+  const sender = vi.fn(async () => { throw Object.assign(new Error("push failure"), { statusCode: status }); });
+  try {
+    await new BackgroundWorker(store, offline, household(), sender).tick();
+    expect(sender).toHaveBeenCalled();
+    expect(store.subscriptions("one").map(item => item.endpoint)).toEqual(status === 500 ? [endpoint] : []);
+    for (const id of ["first-push"]) {
+      expect(store.delivered(id, endpoint)).toBe(status !== 500);
+      expect(outboxRow(store, id)?.state).toBe(status === 500 ? "pending" : "delivered");
+    }
+  } finally { store.close(); }
+});
