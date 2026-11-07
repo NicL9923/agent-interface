@@ -106,6 +106,31 @@ Until that menu has loaded, `src/app/BotMenu.tsx` stands in for it and catches t
 right click, menu key or long press, so none is lost. `npm run build` fails when Base UI
 returns to the entry's static imports.
 
+### Motion and ambience
+
+`src/motion.css` holds the web client's motion layer and loads after `src/styles.css`. Every
+animation in it runs only when the system allows motion, and the existing reduced-motion rules
+still win.
+
+- On a phone, opening a chat from home and going Back use the View Transitions API. The avatar
+  flies between its home row and the chat header while the screens slide. Browsers without the
+  API change screens at once.
+- A chat with a drawn avatar takes a light tint from the avatar's color in its header, your own
+  messages and the composer's focus ring. Photo avatars keep the app's green.
+- The chat header lifts with a border and shadow once messages scroll under it. This uses
+  scroll-driven animations where the browser supports them.
+- While a turn runs, the live row shows its tools as a strip that fills in as each finishes. While
+  an assistant uses the computer, a small watch-only view of the desktop docks in the transcript's
+  corner. It opens the full computer view and can be dismissed for the turn.
+- On a computer, pinned avatars glance at a nearby mouse pointer. When a pinned assistant finishes,
+  it hops and the other pinned ones look over. Approving a request or answering a question makes
+  the assistant cheer, and settled approval cards fold away.
+- Dark mode adds a faint glow, rail grain and lit edges on raised panels.
+- Home shows the season with a slight accent shift and a few faint drifting shapes. The calendar
+  decides first. Between holidays, a pinned seasonal character brings its own season.
+
+These are web-only. The avatar conductor and pose math that iOS mirrors are unchanged.
+
 ### Crash reports
 
 A render failure anywhere outside a lazy screen shows a "Something went wrong" page with

@@ -1,6 +1,6 @@
 import { approvalAttempt, type ApprovalAttempt } from "./approval-attempt";
 import { matchCombo, shortcuts } from "./shortcuts";
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode, RefCallback, RefObject } from "react";
 import type { ActivityState, Approval, Bootstrap, Bot, FileRef, Message, ToolCall } from "../shared/types";
 import { ApiError, request as apiRequest } from "../client-api";
@@ -16,6 +16,11 @@ import { AgentExchange, isAgentExchange } from "../components/AgentExchange";
 import { ActionReceipt } from "../components/ActionReceipt";
 import { When } from "../components/When";
 import { Shimmer } from "../components/Shimmer";
+import { ComputerPeek } from "../components/ComputerPeek";
+import { reactAvatar } from "../components/avatar-attention";
+import { WorkTape } from "./WorkTape";
+import { useLeaving } from "./use-leaving";
+import { prefersReducedMotion } from "./reduced-motion";
 import { receipt } from "../shared/discovery";
 import { activityAction } from "../shared/activity-sentence";
 import { MAX_ATTACHMENTS } from "../shared/uploads";
@@ -37,7 +42,7 @@ import { placeRuns, type RoutineRun } from "../shared/routine-runs";
 import { useRoutineRuns } from "./use-routine-runs";
 import "./transcript.css";
 const activeStates: ActivityState[] = ["thinking", "working", "waiting", "blocked"];
-export function Conversation({ boot, selected, botId, conversation, canonical, echo, state, showActivity, avatarState, connectionLost, offline, appUnavailable, checkingConnection, reconnect, error, setError, notifications, scroll, endSpace, content, history, reply, onScroll, onCreate, onDraft, onRoutineResults, onHideRoutineRuns }: {
+export function Conversation({ boot, selected, botId, conversation, canonical, echo, state, showActivity, avatarState, connectionLost, offline, appUnavailable, checkingConnection, reconnect, error, setError, notifications, scroll, endSpace, content, history, reply, onScroll, onCreate, onDraft, onRoutineResults, onHideRoutineRuns, computerOpen = false }: {
   boot: Bootstrap;
   selected?: Bot;
   botId: string;
@@ -71,6 +76,8 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
   onRoutineResults(routineId: string, resultId: string): void;
   /** Keeps a routine's runs out of this chat, with a way back. */
   onHideRoutineRuns(routineId: string, routineName: string): void;
+  /** The full computer view is open, so the transcript's small live view steps aside. */
+  computerOpen?: boolean;
 }) {
   const prefs = boot.preferences;
   const advanced = prefs.presentation === "advanced";
@@ -88,6 +95,12 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
   // The running turn's one live row: the current tool's receipt, and in Advanced, the latest reasoning line.
   const liveTool = runningCall ? `${receipt(runningCall).label} · ${runningCall.name}` : undefined;
   const liveThought = advanced && running && !connectionLost ? latestReasoning(conversation!.messages) : undefined;
+  // The running turn's tools so far. Hermes lists only the current turn's calls while it runs.
+  const turnCalls = running && !connectionLost ? conversation!.toolCalls ?? [] : [];
+  const peeking = !!selected && !computerOpen && turnCalls.some(call => usesComputer(call.name));
+  // Settled decisions fold away instead of vanishing; Reduce Motion removes them at once.
+  const pendingApprovals = useMemo(() => conversation?.approvals.filter(approval => approval.status === "pending") ?? [], [conversation?.approvals]);
+  const approvals = useLeaving(pendingApprovals, approval => approval.id, prefersReducedMotion() ? 0 : 420, `${boot.user.id}:${botId}`);
   // Short results of reply actions, each its own node so a repeat still reads out.
   const [notice, setNotice] = useState<{ id: number; text: string } | null>(null);
   const announce = useStableCallback((text: string) => setNotice(previous => ({ id: (previous?.id ?? 0) + 1, text })));
@@ -249,7 +262,8 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
                   {state === "interrupted" && <p className="recovery-guidance">Review the last actions above before continuing.</p>}
                 </> : <Shimmer text={`${selected.name} is ${action}...`} />}
               </div>
-              {running && (liveTool || liveThought) && <div className="activity-live">
+              {running && (liveTool || liveThought || turnCalls.length > 0) && <div className="activity-live">
+                <WorkTape calls={turnCalls} />
                 {liveTool && (usesComputer(runningCall?.name) ? <div className="activity-live-computer">
                   <p className="activity-live-tool">{liveTool}</p>
                   <button type="button" className="activity-watch" aria-label={`Watch ${selected.name} on the computer`}
@@ -276,10 +290,8 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
         )}
         <AttentionList conversation={conversation} botId={botId} userId={boot.user.id} bots={boot.bots} assistantName={selected?.name}
           disconnected={connectionLost} report={setError} />
-        {conversation?.approvals
-          .filter((approval) => approval.status === "pending")
-          .map((approval) => <ApprovalCard key={`${boot.user.id}:${botId}:${approval.id}`} approval={approval} botId={botId} userId={boot.user.id} disconnected={connectionLost}
-            supported={boot.capabilities.approvals.supported} unavailableReason={boot.capabilities.approvals.reason} report={setError} />)}
+        {approvals.map(({ item: approval, leavingSince }) => <ApprovalCard key={`${boot.user.id}:${botId}:${approval.id}`} approval={approval} botId={botId} userId={boot.user.id} disconnected={connectionLost}
+            supported={boot.capabilities.approvals.supported} unavailableReason={boot.capabilities.approvals.reason} report={setError} leaving={leavingSince !== undefined} />)}
       </div>
       {/* Room for a message just sent to sit near the top while its reply grows; see use-conversation. */}
       <div className="transcript-end-space" ref={endSpace} aria-hidden="true" />
@@ -295,6 +307,7 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
           {history.unseen ? `${history.unseen} new ${history.unseen === 1 ? "message" : "messages"}` : "Jump to latest"}
         </button>
       )}
+      {peeking && selected && <ComputerPeek name={selected.name} />}
       </div>
     </TranscriptTools.Provider>
   );
@@ -516,9 +529,16 @@ function Reasoning({ parts }: { parts: string[] }) {
     <div className="tool-calls-content">{parts.map((part, index) => <p className="reasoning-part" key={index}>{part}</p>)}</div>
   </details>;
 }
-function ApprovalCard({ approval, botId, userId, disconnected, supported, unavailableReason, report }: {
+function ApprovalCard({ approval, botId, userId, disconnected, supported, unavailableReason, report, leaving = false }: {
   approval: Approval; botId: string; userId: string; disconnected: boolean; supported: boolean; unavailableReason?: string; report(message: string): void;
+  /** Hermes no longer lists it; the card folds away for a moment before it goes. */
+  leaving?: boolean;
 }) {
+  const card = useRef<HTMLElement>(null);
+  // The fold starts from the card's own height, measured as it begins.
+  useLayoutEffect(() => {
+    if (leaving && card.current) card.current.style.setProperty("--leave-height", `${card.current.offsetHeight}px`);
+  }, [leaving]);
   const saved = approvalAttempt(userId, botId, approval.id);
   const [attempt, setAttempt] = useState<ApprovalAttempt | undefined>(() => saved.read());
   const [sending, setSending] = useState(false);
@@ -537,6 +557,7 @@ function ApprovalCard({ approval, botId, userId, disconnected, supported, unavai
       await apiRequest("POST /bots/:id/approvals/:approvalId", { params: { id: botId, approvalId: approval.id }, body: { decision: value } });
       const sent: ApprovalAttempt = { decision: value, state: "sent" };
       saved.save(sent); setAttempt(sent);
+      reactAvatar(botId, value === "approved" ? "cheer" : "nod");
     } catch (error) {
       if (error instanceof ApiError && error.status < 500 && (error.status !== 409 || error.code === "hermes_maintenance") && !previous) {
         saved.save(undefined); setAttempt(undefined); report(error.code === "hermes_maintenance" ? "Hermes is being updated. Try your decision again when the update finishes." : error.message);
@@ -549,7 +570,8 @@ function ApprovalCard({ approval, botId, userId, disconnected, supported, unavai
       }
     } finally { pending.current = false; setSending(false); }
   }
-  return <article className="approval-card decision-card" aria-busy={sending} {...attentionAnchor("approval", approval.id)}>
+  return <article ref={card} className={`approval-card decision-card${leaving ? " leaving" : ""}`} aria-busy={sending} inert={leaving}
+    data-settled={attempt?.state === "sent" ? attempt.decision : undefined} {...(leaving ? {} : attentionAnchor("approval", approval.id))}>
     <p className="eyebrow">{attempt?.state === "closed" ? "Decision status" : "Your decision needed"}</p><h2>{approval.title}</h2><p>{approval.detail}</p>
     {approval.expiresAt && <small>Expires <When value={approval.expiresAt} inline /></small>}
     {attempt?.state !== "closed" && <div className="actions">{(["approved", "denied"] as const).map(value => <button key={value} type="button"

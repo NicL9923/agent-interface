@@ -1,0 +1,326 @@
+/* Motion and ambience: spring timing, the scroll-lifted chat header, per-assistant tints, dark-mode
+   depth, the phone navigation morph, live work, reactions and seasonal chrome. Loads after styles.css.
+   Everything that moves here is gated on prefers-reduced-motion: no-preference, so the existing
+   reduced-motion rules keep winning. */
+
+:root {
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  /* Springs fall back to the app's ease-out where linear() easing is unsupported. */
+  --ease-spring-soft: var(--ease-out);
+  --ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
+  --depth-glow: none;
+  --depth-grain: none;
+  --depth-edge: transparent;
+}
+/* Sampled damped springs: soft overshoots about 2%, the livelier one about 12%. */
+@supports (animation-timing-function: linear(0, 1)) {
+  :root {
+    --ease-spring-soft: linear(0, 0.078, 0.242, 0.419, 0.591, 0.728, 0.837, 0.911, 0.961, 0.993, 1.009, 1.017, 1.019, 1.017, 1.014, 1.011, 1.007, 1.005, 1.003, 1.002, 1.001, 1);
+    --ease-spring: linear(0, 0.165, 0.464, 0.764, 0.979, 1.092, 1.124, 1.107, 1.07, 1.033, 1.005, 0.99, 0.985, 0.986, 0.991, 0.996, 0.999, 1.001, 1.002, 1.001, 1);
+  }
+}
+
+/* Dark mode depth: a faint glow from above the chat, a fine grain on the rail and a lit top edge on raised panels. */
+:root[data-theme="dark"] {
+  --depth-glow: radial-gradient(1100px 520px at 72% -12%, #8bd2b214, transparent 62%), radial-gradient(800px 480px at -10% 110%, #ebc18809, transparent 60%);
+  --depth-grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 .07 0 0 0 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  --depth-edge: #ffffff12;
+}
+@media (prefers-color-scheme: dark) {
+  :root[data-theme="system"] {
+    --depth-glow: radial-gradient(1100px 520px at 72% -12%, #8bd2b214, transparent 62%), radial-gradient(800px 480px at -10% 110%, #ebc18809, transparent 60%);
+    --depth-grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 .07 0 0 0 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    --depth-edge: #ffffff12;
+  }
+}
+.app-shell { background-color: var(--surface); background-image: var(--depth-glow); }
+.bot-rail { background-image: var(--depth-grain); }
+.composer, .approval-card, .settings-sheet, .command-palette, .today-attention-list, .bot-menu, .home-new-menu, .jump-latest {
+  box-shadow: inset 0 1px 0 var(--depth-edge);
+}
+.composer { box-shadow: inset 0 1px 0 var(--depth-edge), 0 5px 18px #1b251a05; }
+.composer:focus-within {
+  box-shadow: inset 0 1px 0 var(--depth-edge), 0 0 0 3px color-mix(in srgb, var(--focus-glow, var(--accent)) 16%, transparent), 0 5px 18px #1b251a08;
+}
+.settings-sheet { box-shadow: inset 0 1px 0 var(--depth-edge), 0 24px 90px #0005; }
+.command-palette { box-shadow: inset 0 1px 0 var(--depth-edge), 0 24px 90px #0006; }
+.bot-menu { box-shadow: inset 0 1px 0 var(--depth-edge), 0 14px 40px #0000003d; }
+.home-new-menu { box-shadow: inset 0 1px 0 var(--depth-edge), 0 12px 36px #0003; }
+
+/* Per-assistant tint: one color from the avatar, turned into washes at fixed lightness so text keeps its contrast. */
+@supports (color: oklch(from red l c h)) {
+  .conversation-panel[data-tint] {
+    --tint-wash: oklch(from var(--bot-tint) 0.955 min(c, 0.035) h);
+    --tint-edge: oklch(from var(--bot-tint) 0.86 min(c, 0.06) h);
+    --tint-glow: oklch(from var(--bot-tint) 0.6 max(c, 0.08) h);
+    --user: color-mix(in oklab, var(--tint-wash) 60%, #e7eee4);
+    --focus-glow: var(--tint-glow);
+  }
+  :root[data-theme="dark"] .conversation-panel[data-tint] {
+    --tint-wash: oklch(from var(--bot-tint) 0.3 min(c, 0.04) h);
+    --tint-edge: oklch(from var(--bot-tint) 0.42 min(c, 0.06) h);
+    --tint-glow: oklch(from var(--bot-tint) 0.78 max(c, 0.08) h);
+    --user: color-mix(in oklab, var(--tint-wash) 60%, #2a3a2e);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root[data-theme="system"] .conversation-panel[data-tint] {
+      --tint-wash: oklch(from var(--bot-tint) 0.3 min(c, 0.04) h);
+      --tint-edge: oklch(from var(--bot-tint) 0.42 min(c, 0.06) h);
+      --tint-glow: oklch(from var(--bot-tint) 0.78 max(c, 0.08) h);
+      --user: color-mix(in oklab, var(--tint-wash) 60%, #2a3a2e);
+    }
+  }
+  .conversation-panel[data-tint] .chat-header-identity {
+    background-image: linear-gradient(to bottom, var(--tint-wash), transparent);
+  }
+  .conversation-panel[data-tint] .conversation-activity:not(.recovery-activity) .activity-live {
+    border-left: 2px solid var(--tint-edge);
+    padding-left: 8px;
+  }
+}
+
+/* The chat header sits flat on the page at the top of a chat and lifts once messages pass under it. */
+@supports (animation-timeline: scroll()) and (timeline-scope: none) {
+  .conversation-panel { timeline-scope: --transcript; }
+  .transcript { scroll-timeline: --transcript block; }
+  .chat-header-identity {
+    position: relative;
+    z-index: 2;
+    border-bottom-color: transparent;
+    animation: header-lift linear both;
+    animation-timeline: --transcript;
+    animation-range: 0 72px;
+  }
+}
+@keyframes header-lift {
+  to {
+    border-bottom-color: var(--line);
+    background-color: color-mix(in srgb, var(--raised) 55%, var(--surface));
+    box-shadow: 0 10px 24px -18px #0006;
+  }
+}
+
+/* Live work: the running turn's tools as a strip that fills in. */
+.work-tape {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin: 2px 0 4px;
+  padding: 0;
+  list-style: none;
+}
+.work-tape-step, .work-tape-more {
+  display: inline-grid;
+  place-items: center;
+  min-width: 24px;
+  height: 24px;
+  border-radius: 8px;
+  background: var(--rail);
+  color: var(--muted);
+}
+.work-tape-more { padding: 0 6px; font-size: 0.6875rem; font-variant-numeric: tabular-nums; }
+.work-tape-step.is-completed { background: var(--accent-soft); color: var(--accent); }
+.work-tape-step.is-failed { background: color-mix(in srgb, var(--danger) 14%, var(--raised)); color: var(--danger); }
+.work-tape-step.is-running { position: relative; overflow: hidden; color: var(--ink); box-shadow: inset 0 0 0 1.5px var(--accent); }
+
+/* The live desktop docked in the transcript's corner while an assistant uses the computer. */
+.computer-peek {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  z-index: 3;
+  width: clamp(150px, 22vw, 240px);
+}
+.computer-peek-screen {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #101614;
+  box-shadow: inset 0 1px 0 var(--depth-edge), 0 16px 36px -14px #0007;
+}
+.computer-peek-screen:hover:enabled { background: #101614; border-color: var(--accent); }
+.computer-peek-canvas { position: absolute; inset: 0; display: block; pointer-events: none; }
+.computer-peek-canvas > div { width: 100% !important; height: 100% !important; background: transparent !important; }
+.computer-peek-wait { position: absolute; inset: 0; display: grid; place-items: center; color: #d8e2dc; }
+.computer-peek-label {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: #000a;
+  color: #fff;
+  font-size: 0.6875rem;
+  font-weight: 600;
+}
+.computer-peek-label::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: #e5534b; }
+.computer-peek[data-state="connecting"] .computer-peek-label::before { background: #9aa4ae; }
+.computer-peek-close {
+  position: absolute;
+  top: -10px;
+  right: -10px;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 50%;
+  background: var(--raised);
+  color: var(--ink);
+  box-shadow: 0 2px 8px #0003;
+}
+@media (max-width: 620px) {
+  .computer-peek { right: 12px; bottom: 12px; width: 132px; }
+  .computer-peek-close { width: 32px; height: 32px; }
+}
+@media (pointer: coarse) {
+  /* The visible circle stays small; the pseudo-element gives a finger the full target. */
+  .computer-peek-close::after { content: ""; position: absolute; inset: -8px; }
+}
+
+/* A cheer's sparks burst from the avatar's center. */
+.avatar-burst { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
+.avatar-burst > i {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  margin: -3px;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0;
+}
+.avatar-burst > i:nth-child(even) { background: var(--attention); width: 4px; height: 4px; margin: -2px; }
+
+/* Seasonal chrome on home: a slight accent shift and a few faint shapes drifting behind the list. */
+/* The rail isolates its layers, so the shapes paint over its background and under everything in it. */
+.bot-rail { isolation: isolate; }
+@media (min-width: 621px) { .bot-rail { position: relative; } }
+.bot-rail[data-season="winter"] { --season-color: #7aa9cc; }
+.bot-rail[data-season="clover"] { --season-color: #3f9b58; }
+.bot-rail[data-season="spring"] { --season-color: #d98bb0; }
+.bot-rail[data-season="stars"] { --season-color: #c8463e; }
+.bot-rail[data-season="spooky"] { --season-color: #d9752b; }
+.bot-rail[data-season="harvest"] { --season-color: #c46f2c; }
+.bot-rail[data-season] {
+  --season-accent: color-mix(in oklab, var(--accent) 88%, var(--season-color));
+  --season-accent-soft: color-mix(in oklab, var(--accent-soft) 82%, var(--season-color));
+}
+.bot-rail[data-season] > * { --accent: var(--season-accent); --accent-soft: var(--season-accent-soft); }
+.season-ambience {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  pointer-events: none;
+  color: var(--season-color);
+  opacity: 0.22;
+}
+.season-mote {
+  position: absolute;
+  left: var(--x);
+  top: var(--y);
+  width: var(--size);
+  height: var(--size);
+}
+.season-mote svg { display: block; width: 100%; height: 100%; }
+
+@media (prefers-reduced-motion: no-preference) {
+  /* Springs on the small pops that do not touch a screen edge. Sheets from the bottom keep ease-out. */
+  @media (min-width: 621px) {
+    .command-palette[open] { animation: palette-in 320ms var(--ease-spring-soft); }
+    .settings-sheet[open] { animation: settings-in 380ms var(--ease-spring-soft); }
+  }
+  dialog[open] { animation-duration: 340ms; animation-timing-function: var(--ease-spring-soft); }
+  .bot-menu { animation: bot-menu-in 260ms var(--ease-spring-soft); }
+  .home-new-menu { transform-origin: top right; animation: bot-menu-in 280ms var(--ease-spring-soft); }
+  .dock-item { animation: dock-in 380ms var(--ease-spring); }
+  .toast { animation: toast-in 420ms var(--ease-spring); }
+  .jump-latest { animation: jump-latest-in 420ms var(--ease-spring); }
+  .message-outgoing { animation: message-send 460ms var(--ease-spring) both; }
+
+  .work-tape-step, .work-tape-more { animation: tape-in 420ms var(--ease-spring) both; }
+  .work-tape-step.is-running::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(100deg, transparent 30%, color-mix(in srgb, var(--accent) 22%, transparent) 50%, transparent 70%);
+    background-size: 250% 100%;
+    animation: tape-shimmer 1.4s linear infinite;
+  }
+  .work-tape-step.is-completed, .work-tape-step.is-failed { animation: tape-settle 420ms var(--ease-spring); }
+
+  .computer-peek { animation: peek-in 460ms var(--ease-spring) both; transform-origin: bottom right; }
+
+  .avatar-burst > i { animation: spark 720ms var(--ease-out) forwards; }
+
+  .decision-card[data-settled="approved"] { animation: decision-settle 520ms var(--ease-spring); border-left-color: var(--accent); }
+  .decision-card.leaving {
+    overflow: hidden;
+    pointer-events: none;
+    animation: decision-leave 420ms var(--ease-out) forwards;
+  }
+
+  .season-mote { animation: mote-fall var(--duration) linear var(--delay) infinite; }
+  .bot-rail[data-season="stars"] .season-mote { animation: mote-twinkle calc(var(--duration) / 4) ease-in-out var(--delay) infinite alternate; }
+  .bot-rail[data-season="spooky"] .season-mote { animation: mote-flit var(--duration) ease-in-out var(--delay) infinite alternate; }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* A still scatter would read as stray marks, so the shapes appear only while they can move. */
+  .season-ambience { display: none; }
+}
+
+@keyframes tape-in { from { opacity: 0; transform: scale(0.4); } }
+@keyframes tape-settle { 40% { transform: scale(1.18); } }
+@keyframes tape-shimmer { from { background-position: 100% 0; } to { background-position: -150% 0; } }
+@keyframes peek-in { from { opacity: 0; transform: translateY(12px) scale(0.86); } }
+@keyframes spark {
+  0% { opacity: 1; transform: rotate(var(--spark-turn)) translateY(0) scale(1); }
+  100% { opacity: 0; transform: rotate(var(--spark-turn)) translateY(calc(var(--avatar-size, 48px) * -0.75)) scale(0.4); }
+}
+@keyframes decision-settle { 0% { transform: scale(0.985); } 45% { transform: scale(1.012); } }
+@keyframes decision-leave {
+  0% { max-height: var(--leave-height, 400px); opacity: 1; transform: scale(1); }
+  35% { opacity: 1; transform: scale(1.01); }
+  100% { max-height: 0; opacity: 0; transform: scale(0.94); margin-bottom: 0; padding-block: 0; border-width: 0; }
+}
+@keyframes mote-fall {
+  0% { transform: translate(0, -40vh) rotate(0deg); }
+  50% { transform: translate(var(--sway), 0) rotate(160deg); }
+  100% { transform: translate(0, 40vh) rotate(320deg); }
+}
+@keyframes mote-twinkle { from { opacity: 0.25; transform: scale(0.7); } to { opacity: 1; transform: scale(1.1); } }
+@keyframes mote-flit {
+  0% { transform: translate(calc(var(--sway) * -2), 0) scaleX(1); }
+  50% { transform: translate(0, -10px) scaleX(0.7); }
+  100% { transform: translate(calc(var(--sway) * 2), 6px) scaleX(1); }
+}
+
+/* Phone navigation: the chat pushes in from the right over home, and Back reverses it, while the
+   avatar flies between its row and the header. The rail's own slide stands down meanwhile. */
+:root[data-navigation] .bot-rail { transition: none !important; }
+::view-transition-group(wildbots-avatar) { animation-duration: 420ms; animation-timing-function: var(--ease-spring-soft); z-index: 3; }
+::view-transition-old(wildbots-avatar), ::view-transition-new(wildbots-avatar) { height: 100%; object-fit: contain; }
+:root[data-navigation]::view-transition-old(root), :root[data-navigation]::view-transition-new(root) {
+  mix-blend-mode: normal;
+  animation-duration: 360ms;
+  animation-timing-function: var(--ease-out);
+}
+:root[data-navigation="forward"]::view-transition-old(root) { animation-name: nav-recede; }
+:root[data-navigation="forward"]::view-transition-new(root) { animation-name: nav-enter; }
+:root[data-navigation="back"]::view-transition-old(root) { animation-name: nav-leave; z-index: 2; }
+:root[data-navigation="back"]::view-transition-new(root) { animation-name: nav-return; }
+@keyframes nav-enter { from { transform: translateX(100%); } }
+@keyframes nav-recede { to { transform: translateX(-28%); opacity: 0.6; } }
+@keyframes nav-leave { to { transform: translateX(100%); } }
+@keyframes nav-return { from { transform: translateX(-28%); opacity: 0.6; } }

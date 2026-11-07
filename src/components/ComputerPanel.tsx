@@ -10,6 +10,7 @@ import { isChunkFailure, useRaise } from "../app/chunk-failure";
 import type { ComputerStatus, ComputerStreamTicket } from "../shared/computer";
 import { desktopKeys, keysymsFor, limitPaste, pasteLimit } from "../lib/desktop-keys";
 import { attachDesktopTouch, type DesktopTouch } from "../lib/desktop-touch";
+import { computerSocketUrl } from "../lib/socket-url";
 import { useMediaQuery } from "../app/use-browser";
 import { ComputerHelp } from "./ComputerHelp";
 import { useGoogleButton } from "./google-identity";
@@ -24,14 +25,7 @@ type Connection = "connecting" | "connected" | "reconnecting" | "ended" | "faile
 type Tab = "desktop" | "terminal";
 const RETRY_DELAY = 2500;
 
-function socketUrl(path: string) {
-  const url = new URL(path, location.href);
-  if (url.origin !== location.origin || !url.pathname.startsWith("/api/computer/")) {
-    throw new Error("The computer returned an invalid connection address.");
-  }
-  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  return url.href;
-}
+const socketUrl = computerSocketUrl;
 function failure(cause: unknown, fallback: string) {
   // The general request helper discusses chat drafts. Computer errors need their own context.
   return cause instanceof ApiError && cause.code === "CONNECTION_UNAVAILABLE"

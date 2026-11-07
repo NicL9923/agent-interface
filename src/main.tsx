@@ -5,6 +5,7 @@ import { installErrorReporting } from "./app/error-reports";
 import { RootBoundary } from "./app/RootBoundary";
 import "./ui.css";
 import "./styles.css";
+import "./motion.css";
 installErrorReporting();
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

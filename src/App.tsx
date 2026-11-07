@@ -32,6 +32,8 @@ import { ShortcutsDialog } from "./app/ShortcutsDialog";
 import { StopConfirm } from "./app/StopConfirm";
 import { Toast, useToast } from "./app/Toast";
 import { useShortcuts } from "./app/shortcuts";
+import { headerAvatar, morphNavigate, railAvatar } from "./app/navigation-morph";
+import { tintProps } from "./app/bot-tint";
 import { waitingPlaceholder } from "./app/waiting-input";
 import { badgeCount, useAppBadge } from "./app/badge";
 import { ConnectionPanel } from "./components/ConnectionPanel";
@@ -155,6 +157,16 @@ export function App() {
     setBotId(id);
     setRailOpen(false);
     setError("");
+  });
+  // On a phone, choosing an assistant on home pushes its chat in, carrying the avatar to the header.
+  const selectFromHome = useStableCallback((id: string) => {
+    if (!mobile || !railOpen) return selectBot(id);
+    morphNavigate(() => selectBot(id), railAvatar(id), headerAvatar, "forward");
+  });
+  // Back reverses it, returning the avatar to its place on home.
+  const backToHome = useStableCallback(() => {
+    if (!mobile || railOpen || view !== "conversation" || !botId) return setRailOpen(true);
+    morphNavigate(() => setRailOpen(true), headerAvatar, railAvatar(botId), "back");
   });
   const selectRoom = useStableCallback((id: string) => {
     persistPosition(true);
@@ -308,11 +320,11 @@ export function App() {
     <div className="app-shell">
       <Sidebar boot={boot} botId={botId} shownBotId={shownBotId} readThrough={readThrough} groups={homeGroups} view={view} state={state}
         connectionLost={connectionLost} offline={offline} mobile={mobile} open={railOpen} update={update}
-        onSelectBot={selectBot} onView={showView} onNewBot={newBot} onSettings={openPreferences} onPin={togglePin}
+        onSelectBot={selectFromHome} onView={showView} onNewBot={newBot} onSettings={openPreferences} onPin={togglePin}
         onBotSettings={botSettings} onMoveToSection={moveToSection} onNewSection={newSection} />
-      <main className="conversation-panel" inert={mobile && railOpen}>
+      <main className="conversation-panel" inert={mobile && railOpen} {...(view === "conversation" ? tintProps(selected) : {})}>
         <ChatHeader offline={offline} view={view} boot={boot} selected={selected} room={rooms.find(room => room.room_id === roomId)} modelLocked={connectionLost || sending} onModelSaved={refreshSession} avatarState={avatarState} railOpen={railOpen}
-          onOpenRail={() => setRailOpen(true)}
+          onOpenRail={backToHome}
           onDetails={bot => open({ kind: "details", botId: bot.id })} />
         {/* On a computer the rail is always beside this, so its notice is enough. In a chat it joins the composer's dock. */}
         {mobile && !(view === "conversation" && selected) && <UpdateNotice update={update} />}
@@ -322,7 +334,7 @@ export function App() {
             offline={offline} appUnavailable={appUnavailable} checkingConnection={session.checkingConnection}
             reconnect={session.reconnect} error={error} setError={setError}
             notifications={notifications} scroll={scroll} endSpace={endSpace} content={content} history={history} reply={reply} onScroll={scrolled}
-            onRoutineResults={openRoutineRun} onHideRoutineRuns={hideRoutineRuns}
+            onRoutineResults={openRoutineRun} onHideRoutineRuns={hideRoutineRuns} computerOpen={panel?.kind === "computer"}
             onDraft={(text, files = []) => {
               // Drafts are known by their text, so one on its way must not change.
               if (sendingDraft(draft, pending, sending)) return false;
