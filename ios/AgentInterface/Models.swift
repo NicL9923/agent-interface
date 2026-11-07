@@ -1086,6 +1086,8 @@ enum DeviceDefaults {
   static let signedInScope = "connection.signedInScope"
   /// When the sign-in to `server` expires.
   static func expiry(_ server: URL) -> String { "connection.expiry.\(server.absoluteString)" }
+  /// The LAN and tailnet routes `server` advertised last. Not secret: addresses and certificate pins.
+  static func directRoutes(_ server: URL) -> String { "connection.directRoutes.\(server.absoluteString)" }
 }
 
 enum ConnectionAddress {

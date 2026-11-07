@@ -128,6 +128,16 @@ export type RoutineSave = Pick<Routine, "botId" | "name" | "prompt" | "schedule"
 type WorkInput<O extends AutomationRequest["operation"]> = Omit<Extract<AutomationRequest, { operation: O }>, "operation" | "profile" | "visibleProfiles">;
 type MemorySave = { revision: string; entries: { id?: string; text: string }[] };
 
+export type DirectRouteKind = "lan" | "tailnet";
+/** Another address of this same server that the iOS app may prefer; see docs/native-api.md. */
+export interface DirectRoute {
+  kind: DirectRouteKind;
+  /** `https://ADDRESS:PORT`, no trailing slash. */
+  url: string;
+  /** base64url SHA-256 of the listener certificate's DER bytes. The app accepts no other certificate there. */
+  certificateSha256: string;
+}
+
 export interface ApiRoutes {
   "GET /today": { query: { since?: string }; response: TodayOverview };
   "PUT /today/seen": { body: { seenAt: string; frontier: string }; response: Ok };
@@ -225,6 +235,7 @@ export interface ApiRoutes {
   /** A service worker's notification action, authorized by the single-use token in its push. */
   "POST /push/actions": { body: { token: string }; response: Ok };
   // The native app's routes. docs/native-api.md is the contract the iOS app decodes.
+  "GET /native/routes": { response: { routes: DirectRoute[] } };
   "GET /native/push/config": { response: { available: boolean; environment?: "sandbox" | "production" } };
   "PUT /native/push/device": { body: { deviceId: string; token: string }; response: Ok };
   "DELETE /native/push/device": { body: { deviceId: string }; response: Ok };

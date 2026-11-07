@@ -31,6 +31,8 @@ extension AppStore {
         "Your sign-in is expiring. Sign in again to keep using this server. Your drafts are saved."
       return false
     }
+    // Finds a LAN or tailnet route to this server, at most every couple of minutes.
+    api?.checkRoutes()
     watchRoster()
     watchConversation()
     await refreshBootstrap(ifDue: true)

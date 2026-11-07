@@ -262,6 +262,41 @@ because clearing only local storage cannot revoke the server session. When the
 server stays unreachable, the app lets the person clear the local session anyway
 after warning that the server-side session remains valid until it expires.
 
+## Direct routes
+
+A server can offer the app shorter paths to itself, such as its household LAN or
+tailnet address, beside the primary origin. The app prefers one it can reach and
+falls back to the primary origin. The primary origin stays the server's identity:
+the Keychain, caches, links, sign-in and every web page use it.
+
+`GET /api/native/routes` returns `{ "routes": [ROUTE] }`, LAN routes before tailnet
+routes, or an empty list when the server offers none. A server from before direct
+routes answers 404; treat that as an empty list. Each route is
+`{ "kind": "lan" | "tailnet", "url": "https://ADDRESS:PORT", "certificateSha256": PIN }`.
+Skip a route with another kind, scheme, a path or no port, rather than failing the list.
+
+`PIN` is the base64url SHA-256 of the route listener's certificate, in DER form. The
+certificate is self-signed and names no host. On a route's address, accept exactly
+that certificate and no other, whatever a certificate authority says, and cancel the
+handshake otherwise, so the session token is never sent to an impostor. Every other
+address keeps the system's own HTTPS evaluation. Learn routes and pins only over the
+primary origin or another pinned route.
+
+A route listener serves only the signed-in native API: an `/api/` path with
+`Authorization: Bearer TOKEN` and neither a cookie nor an Origin header. Anything
+else, including signed-out requests and WebSockets, returns 403 with
+`code: "direct_route_refused"` before it is handled; send it to the primary origin
+instead. An unknown or expired bearer returns the usual 401 `session_expired`.
+
+The app probes each route with `GET /api/native/routes` and a three-second timeout,
+uses the best one that answers 200 (LAN, then tailnet, then the primary origin), and
+checks again when the app returns to the foreground, when the device's network
+changes, and every two minutes while it polls. When a request on a route fails at
+the network, the app stops using that route for a minute and sends the request
+again on the primary origin if it cannot have reached the server: the connection
+never opened, or the handshake failed, or the request is a GET. A write that timed
+out or lost its connection is not repeated; the app's usual retry rules apply.
+
 ## Retrying a failed turn
 
 `POST /api/bots/:id/messages` accepts `retryOf`, the ID of a user message in this

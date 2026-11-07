@@ -1,6 +1,7 @@
 import { experienceRequester, automationRequester } from "./helpers/runtime-fixtures.js";
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
@@ -268,7 +269,11 @@ it("keeps the server responses the iOS app decodes in sync with the committed co
   const config = loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" });
   config.apns = { teamId: "TEAM123456", keyId: "KEY1234567", topic: "dev.agentinterface.ios", privateKeyFile: "unused-by-contract-test", environment: "sandbox" };
   config.nativeApp = { latestBuild: 12, updateUrl: "https://testflight.apple.com/join/CONTRACT" };
-  const { app, store } = await createApp(config, runtime, { background: false, sendApns: async () => {}, upgrades: upgrades as HermesUpgrades });
+  const tlsDirectory = mkdtempSync(join(tmpdir(), "contract-direct-"));
+  config.directRoutes = { kinds: ["lan", "tailnet"], port: 0, stateDirectory: tlsDirectory };
+  const { app, store, directRoutes } = await createApp(config, runtime, { background: false, sendApns: async () => {}, upgrades: upgrades as HermesUpgrades,
+    directAddresses: () => [{ kind: "tailnet", address: "127.0.0.2" }, { kind: "lan", address: "127.0.0.1" }] });
+  await directRoutes!.start(3_600_000);
   const fixtures = new Map<string, { request: string; response: unknown }>();
   try {
     const signIn = async (member: "one" | "two") => {
@@ -383,6 +388,12 @@ it("keeps the server responses the iOS app decodes in sync with the committed co
 
     await record("upgrade", "GET", "/api/hermes/upgrade");
     await record("push-config", "GET", "/api/native/push/config");
+    // Listeners take any free port and make a new key each run, so both are normalized.
+    await record("native-routes", "GET", "/api/native/routes");
+    for (const route of (fixtures.get("native-routes")!.response as { routes: { url: string; certificateSha256: string }[] }).routes) {
+      route.url = route.url.replace(/:\d+$/, route.url.includes("127.0.0.1") ? ":3443" : ":3444");
+      route.certificateSha256 = "q1Ue7mHzv1bS0n9yKXGJmWjv2sQxRZbL0dYc3Hc8V2E";
+    }
     await record("computer", "GET", "/api/computer");
     // The terminal names this host's account and machine, which differ wherever the test runs.
     const computer = fixtures.get("computer")!.response as { terminal: { target: string } };
@@ -394,6 +405,7 @@ it("keeps the server responses the iOS app decodes in sync with the committed co
     await record("live-activity", "GET", "/api/native/live-activity");
   } finally {
     await app.close();
+    rmSync(tlsDirectory, { recursive: true, force: true });
   }
 
   const files = new Map([...fixtures].map(([name, fixture]) => [`${name}.json`, JSON.stringify(normalize(fixture), null, 2) + "\n"]));
