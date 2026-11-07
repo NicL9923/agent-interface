@@ -8,7 +8,7 @@ import { defaultPreferences } from "../src/shared/types";
 import type { AttentionRequest, Bootstrap, Conversation, Message, ToolCall } from "../src/shared/types";
 import { useConversation } from "../src/app/use-conversation";
 import { useTurnRetry } from "../src/app/use-turn-retry";
-import { retryRequestId } from "../src/shared/retry-id";
+import { formRequestId, retryRequestId } from "../src/shared/retry-id";
 import { FakeEventSource } from "./fake-event-source";
 import { advance, mountRoot, stubMatchMedia, typeInto, waitForUi } from "./ui-harness";
 
@@ -1092,33 +1092,68 @@ describe("form replies", () => {
     { id: "pace", label: "Pace", kind: "choice", options: ["Relaxed", "Packed"], value: "Relaxed" },
     { id: "dog", label: "Bringing the dog", kind: "toggle" },
   ] };
-  const reply = () => answer("a", "A few details first.\n\n```agent-ui\n" + JSON.stringify({ version: 1, cards: [form] }) + "\n```");
+  const reply = (card: object = form) => answer("a", "A few details first.\n\n```agent-ui\n" + JSON.stringify({ version: 1, cards: [card] }) + "\n```");
   const composer = () => container.querySelector<HTMLTextAreaElement>("#message")!;
   const card = () => container.querySelector<HTMLElement>(".reply-card-form")!;
   const field = (label: string) => [...card().querySelectorAll("label")].find(item => item.textContent?.startsWith(label))!;
   const send = () => act(async () => buttonText("Send answers")!.click());
+  const sent = () => card().querySelector(".form-reply-sent")?.textContent?.trim();
   const answers = 'My answers to "Trip details":\n- Destination: Marfa\n- Pace: Packed\n- Bringing the dog: Yes';
+  const saved = "agent-interface:form-reply:one:shared:a:trip";
+  // The ID every tab and device derives for this person's attempt at this form.
+  const formId = (attempt: number) => formRequestId("one", "shared", "a", "trip", attempt);
   const fill = async () => {
     await typeInto(card().querySelector<HTMLInputElement>('input[type="text"]')!, "Marfa");
     await act(async () => field("Packed").querySelector("input")!.click());
     await act(async () => field("Bringing the dog").querySelector("input")!.click());
   };
+  // The ID is derived with Web Crypto, which settles outside fake timers.
+  const posted = (count: number) => waitForUi(() => expect(messagesWritten()).toHaveLength(count));
+  const reload = async () => { await act(async () => root.unmount()); await render(); };
+  /** Answers GET /submissions/:id from a table of receipts by ID, "uncertain" for any other. */
+  const receipts = (statuses: Map<string, string>) => {
+    const previous = vi.mocked(api).getMockImplementation()!;
+    vi.mocked(api).mockImplementation(async <T>(path: string, ...rest: unknown[]) => {
+      if (!path.startsWith("/submissions/")) return previous(path, ...rest as []) as T;
+      const id = path.split("/")[2];
+      return { requestId: id, status: statuses.get(id) ?? "uncertain" } as T;
+    });
+  };
+  const accept = () => vi.mocked(write).mockImplementation(async <T>(path: string, body: unknown) =>
+    (path === "/bots/shared/messages" ? { requestId: (body as { requestId: string }).requestId, status: "accepted" } : {}) as T);
   beforeEach(() => { conversation = { ...conversation, messages: [prompt("q", "Plan a trip"), reply()] }; });
 
-  it("sends the answers as the person's message under a new request ID, never touching the draft", async () => {
-    vi.mocked(write).mockImplementation(async <T>(path: string, body: unknown) =>
-      (path === "/bots/shared/messages" ? { requestId: (body as { requestId: string }).requestId, status: "accepted" } : {}) as T);
+  it("sends the answers as the person's message under the form's own ID, never touching the draft", async () => {
+    accept();
     await render();
     expect(composer().value).toBe("My saved draft");
     await fill();
     await send();
-    expect(messagesWritten()).toHaveLength(1);
+    await posted(1);
     const body = messagesWritten()[0][1] as Record<string, unknown>;
-    expect(body).toEqual({ requestId: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4/), text: answers, attachments: [] });
-    expect(card().querySelector(".form-reply-sent")?.textContent?.trim()).toBe("Sent");
+    expect(body).toEqual({ requestId: await formId(0), text: answers, attachments: [] });
+    await waitForUi(() => expect(sent()).toBe("Sent"));
     expect(card().querySelector("form")).toBeNull();
+    expect(card().querySelector(".form-reply-answers")?.textContent).toContain("Marfa");
     expect(composer().value).toBe("My saved draft");
     expect(vi.mocked(write).mock.calls.some(([path]) => String(path).endsWith("/draft"))).toBe(false);
+  });
+
+  it("starts over from the card's suggestions when the saved answers are malformed", async () => {
+    localStorage.setItem(saved, JSON.stringify({ attempt: -1, answers: { city: "Marfa" }, state: "sent" }));
+    await render();
+    await waitForUi(() => expect(buttonText("Send answers")?.disabled).toBe(false));
+    expect(card().querySelector<HTMLInputElement>('input[type="text"]')!.value).toBe("");
+    expect(field("Relaxed").querySelector("input")!.checked).toBe(true);
+  });
+
+  it("keeps unsent answers across leaving the chat", async () => {
+    await render();
+    await fill();
+    await reload();
+    await waitForUi(() => expect(card().querySelector<HTMLInputElement>('input[type="text"]')!.value).toBe("Marfa"));
+    expect(field("Packed").querySelector("input")!.checked).toBe(true);
+    expect(messagesWritten()).toHaveLength(0);
   });
 
   it("names a required field left empty and sends nothing", async () => {
@@ -1131,50 +1166,140 @@ describe("form replies", () => {
     expect(document.activeElement).toBe(input);
   });
 
-  it("gives refused answers back to the form with the server's reason", async () => {
+  it("shows a form sent from another tab or device as sent, and sends nothing", async () => {
+    receipts(new Map([[await formId(0), "rejected"], [await formId(1), "accepted"]]));
+    await render();
+    await waitForUi(() => expect(sent()).toBe("Sent"));
+    expect(card().textContent).toContain("Your answers were sent from another tab or device.");
+    expect(messagesWritten()).toHaveLength(0);
+  });
+
+  it("keeps a refused answer's words in the form across leaving the chat, under the same ID", async () => {
     vi.mocked(write).mockImplementation(async <T>(path: string) => {
-      if (path === "/bots/shared/messages") throw new ApiError("Review the interrupted task before sending another message.", 409);
+      if (path === "/bots/shared/messages") throw new ApiError("Review the interrupted task before starting another message.", 409);
       return {} as T;
     });
     await render();
     await fill();
     await send();
-    expect(card().querySelector('[role="alert"]')?.textContent).toBe("Review the interrupted task before sending another message.");
-    expect(card().querySelector<HTMLInputElement>('input[type="text"]')!.value).toBe("Marfa");
+    await waitForUi(() => expect(card().querySelector('[role="alert"]')?.textContent).toBe("Review the interrupted task before starting another message."));
     expect(buttonText("Send answers")!.disabled).toBe(false);
-    expect(localStorage.getItem("agent-interface:form-reply:one:shared:a:trip")).toBeNull();
+    await reload();
+    await waitForUi(() => expect(card().querySelector<HTMLInputElement>('input[type="text"]')!.value).toBe("Marfa"));
+    expect(field("Packed").querySelector("input")!.checked).toBe(true);
+    await send();
+    await posted(2);
+    // The server never recorded the refused request, so the same attempt is free.
+    expect(messagesWritten().map(([, body]) => (body as { requestId: string }).requestId)).toEqual([await formId(0), await formId(0)]);
   });
 
-  it("checks answers whose outcome is unknown by their ID, across a reload, and never sends them twice", async () => {
-    let status = "uncertain";
+  it("moves to a new attempt only after Hermes refuses one", async () => {
+    let status = "rejected";
+    vi.mocked(write).mockImplementation(async <T>(path: string, body: unknown) =>
+      (path === "/bots/shared/messages" ? { requestId: (body as { requestId: string }).requestId, status, message: "Hermes is busy." } : {}) as T);
+    await render();
+    await fill();
+    await send();
+    await waitForUi(() => expect(card().querySelector('[role="alert"]')?.textContent).toBe("Hermes didn't take your answers. Hermes is busy."));
+    status = "accepted";
+    await send();
+    await posted(2);
+    expect(messagesWritten().map(([, body]) => (body as { requestId: string }).requestId)).toEqual([await formId(0), await formId(1)]);
+    await waitForUi(() => expect(sent()).toBe("Sent"));
+  });
+
+  it("sends the same request again when browser storage failed, so the server admits it once", async () => {
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new DOMException("Full", "QuotaExceededError"); });
     vi.mocked(write).mockImplementation(async <T>(path: string) => {
       if (path === "/bots/shared/messages") throw new TypeError("Failed to fetch");
       return {} as T;
     });
-    const lookups: string[] = [];
-    const previous = vi.mocked(api).getMockImplementation()!;
-    vi.mocked(api).mockImplementation(async <T>(path: string, ...rest: unknown[]) => {
-      if (!path.startsWith("/submissions/")) return previous(path, ...rest as []) as T;
-      lookups.push(path.split("/")[2]);
-      return { requestId: path.split("/")[2], status } as T;
+    await render();
+    await fill();
+    await send();
+    await posted(1);
+    await reload();
+    await waitForUi(() => expect(buttonText("Send answers")?.disabled).toBe(false));
+    await fill();
+    await send();
+    await posted(2);
+    const [firstId, secondId] = messagesWritten().map(([, body]) => (body as { requestId: string }).requestId);
+    expect(secondId).toBe(firstId);
+  });
+
+  it("checks answers whose outcome is unknown by their ID, across a reload, and never sends them twice", async () => {
+    const statuses = new Map<string, string>();
+    receipts(statuses);
+    vi.mocked(write).mockImplementation(async <T>(path: string) => {
+      if (path === "/bots/shared/messages") throw new TypeError("Failed to fetch");
+      return {} as T;
     });
     await render();
     await fill();
     await send();
-    const requestId = (messagesWritten()[0][1] as { requestId: string }).requestId;
-    expect(card().querySelector('[role="alert"]')?.textContent).toContain("won't be sent twice");
+    await waitForUi(() => expect(card().querySelector('[role="alert"]')?.textContent).toContain("won't be sent twice"));
     expect(buttonText("Checking…")!.disabled).toBe(true);
-    // A reload finds the saved attempt and checks it rather than offering Send again.
-    await act(async () => root.unmount());
-    await render();
+    await reload();
     await advance(2100);
-    expect(lookups.every(id => id === requestId) && lookups.length > 0).toBe(true);
     expect(buttonText("Send answers")).toBeUndefined();
-    status = "accepted";
+    statuses.set(await formId(0), "accepted");
     await advance(4100);
-    expect(card().querySelector(".form-reply-sent")?.textContent?.trim()).toBe("Sent");
+    await waitForUi(() => expect(sent()).toBe("Sent"));
     expect(card().querySelector(".form-reply-answers")?.textContent).toContain("Marfa");
     expect(messagesWritten()).toHaveLength(1);
+  });
+
+  it("follows another tab's different answers under the same ID instead of reporting a failure", async () => {
+    const statuses = new Map<string, string>();
+    receipts(statuses);
+    vi.mocked(write).mockImplementation(async <T>(path: string) => {
+      if (path === "/bots/shared/messages") throw new ApiError("This submission ID was already used for different content", 409, "submission_conflict");
+      return {} as T;
+    });
+    await render();
+    await fill();
+    await send();
+    await waitForUi(() => expect(buttonText("Checking…")).toBeDefined());
+    expect(card().querySelector('[role="alert"]')).toBeNull();
+    statuses.set(await formId(0), "accepted");
+    await advance(2100);
+    await waitForUi(() => expect(sent()).toBe("Sent"));
+    expect(card().textContent).toContain("Your answers were sent from another tab or device.");
+  });
+
+  it("sends under the person's review of an interrupted task", async () => {
+    accept();
+    conversation = { ...conversation, activity: { state: "interrupted", runId: "r" } };
+    await render();
+    const review = [...container.querySelectorAll("label")].find(label => label.textContent?.includes("I've reviewed the task's last actions"))!;
+    await act(async () => review.querySelector("input")!.click());
+    await fill();
+    await send();
+    await posted(1);
+    expect(messagesWritten()[0][1]).toMatchObject({ reviewedInterruption: true });
+  });
+
+  it("works with field IDs that name what every object inherits", async () => {
+    accept();
+    conversation = { ...conversation, messages: [prompt("q", "Plan"), reply({ ...form, fields: [
+      { id: "__proto__", label: "Destination", kind: "text", required: true }, { id: "constructor", label: "Notes", kind: "text" },
+    ] })] };
+    await render();
+    await send();
+    expect(messagesWritten()).toHaveLength(0);
+    await typeInto(card().querySelector<HTMLInputElement>('input[type="text"]')!, "Marfa");
+    await send();
+    await posted(1);
+    expect((messagesWritten()[0][1] as { text: string }).text).toBe('My answers to "Trip details":\n- Destination: Marfa');
+  });
+
+  it("refuses answers longer than a message can be, saying by how much", async () => {
+    conversation = { ...conversation, messages: [prompt("q", "Plan"), reply({ ...form, fields: Array.from({ length: 20 }, (_, i) => ({ id: `f${i}`, label: `Field ${i}`, kind: "textarea" })) })] };
+    await render();
+    for (const area of card().querySelectorAll("textarea")) await typeInto(area, "x".repeat(3000));
+    await send();
+    expect(messagesWritten()).toHaveLength(0);
+    expect(card().querySelector('[role="alert"]')?.textContent).toMatch(/^Your answers are [\d,]+ characters too long to send\./);
   });
 });
 

@@ -18,6 +18,8 @@ export type TranscriptTools = {
   announce(text: string): void;
   /** Reading replies aloud. One reply plays at a time across the transcript. */
   speech: ReplySpeech;
+  /** The person ticked "I've reviewed the task's last actions", so a message may start after an interruption. */
+  reviewedInterruption?: boolean;
 };
 export const TranscriptTools = createContext<TranscriptTools | null>(null);
 

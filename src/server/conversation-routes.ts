@@ -1,11 +1,12 @@
 import type { FastifyInstance } from "fastify";
 import { Readable } from "node:stream";
 import { z } from "zod";
-import { interruptionPendingMessage } from "../shared/errors.js";
+import { interruptionPendingMessage, submissionConflictMessage } from "../shared/errors.js";
 import { filesBefore, historyWindow, MAX_HISTORY_TURNS, windowFiles } from "../shared/history.js";
 import { messageOrigin } from "../shared/message-origin.js";
 import { isRetryRequestId, retryRequestId } from "../shared/retry-id.js";
 import type { CapabilityKey, InflightDelta, ReadTiming, Runtime, Submission, SubmissionReceipt } from "../shared/types.js";
+import { MAX_MESSAGE_TEXT } from "../shared/api.js";
 import { formatBytes, MAX_ATTACHMENTS, MAX_DOWNLOAD_BYTES, MAX_UPLOAD_BYTES, UPLOAD_KINDS, UPLOAD_MIME_TYPES } from "../shared/uploads.js";
 import { accountMarker } from "./apns.js";
 import { apiRoute, type ApiRequest } from "./api-route.js";
@@ -262,7 +263,7 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
   const message = z
     .object({
       requestId: z.string().uuid(),
-      text: z.string().max(50000),
+      text: z.string().max(MAX_MESSAGE_TEXT),
       attachments: z.array(fileRef).max(MAX_ATTACHMENTS).default([]),
       reviewedInterruption: z.boolean().default(false),
       reviewedUncertain: z.boolean().default(false),
@@ -303,10 +304,7 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
         input = previous.input;
       }
       if (JSON.stringify(previous.input) !== JSON.stringify(input))
-        throw httpError(
-          409,
-          "This submission ID was already used for different content",
-        );
+        throw httpError(409, submissionConflictMessage, { code: "submission_conflict" });
       if (interruptionRejected && !reviewedInterruption)
         throw httpError(409, interruptionPendingMessage);
       if (!retryInterruption && (!reviewedUncertain || previous.receipt.status !== "uncertain"))
@@ -450,7 +448,7 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
     return { ok: true };
   });
   apiRoute(app, "GET /bots/:id/draft", {}, async req => store.draft(signedIn(req).id, req.params.id));
-  const draft = z.object({ text: z.string().max(50000), attachments: z.array(fileRef).max(MAX_ATTACHMENTS).default([]), baseRevision: z.number().int().min(0).optional() });
+  const draft = z.object({ text: z.string().max(MAX_MESSAGE_TEXT), attachments: z.array(fileRef).max(MAX_ATTACHMENTS).default([]), baseRevision: z.number().int().min(0).optional() });
   apiRoute(app, "PUT /bots/:id/draft", { body: draft }, async (req, { baseRevision, ...value }, reply) => {
     const result = store.saveDraft(signedIn(req).id, req.params.id, value, baseRevision);
     if (!result.saved)

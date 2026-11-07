@@ -596,16 +596,9 @@ describe("safe admission, steering, and approvals", () => {
     expect((await submit()).json().status).toBe("uncertain");
     expect((await submit()).json().status).toBe("uncertain");
     expect(fake.calls).toBe(1);
-    expect(
-      (
-        await result.app.inject({
-          method: "POST",
-          url: "/api/bots/shared/messages",
-          headers,
-          payload: { ...payload, text: "Changed" },
-        })
-      ).statusCode,
-    ).toBe(409);
+    // The code tells a client that another tab or device already sent under this ID.
+    const changed = await result.app.inject({ method: "POST", url: "/api/bots/shared/messages", headers, payload: { ...payload, text: "Changed" } });
+    expect([changed.statusCode, changed.json().code]).toEqual([409, "submission_conflict"]);
     await result.app.close();
     result = await createApp(c, fake.runtime, { background: false });
     expect((await submit()).json().status).toBe("uncertain");
@@ -1023,4 +1016,20 @@ it("requires production identity and HTTPS on any public listener or origin, eve
     HOUSEHOLD_EMAILS: "family@example.test",
   });
   expect(configured.production).toBe(true);
+});
+
+describe("submission records", () => {
+  // Two requests with one ID can both pass the route's check before either is recorded; the store decides.
+  it("refuses a request ID reused for other content with the code clients follow", () => {
+    const store = new Store(":memory:");
+    try {
+      store.user({ id: "local-one", name: "One", email: "one@example.test" });
+      const input: Submission = { requestId: randomUUID(), botId: "shared", senderId: "local-one", text: "A", attachments: [] };
+      expect(store.intent(input).created).toBe(true);
+      expect(store.intent(input).created).toBe(false);
+      expect(() => store.intent({ ...input, text: "B" })).toThrow(expect.objectContaining({ statusCode: 409, code: "submission_conflict" }));
+    } finally {
+      store.close();
+    }
+  });
 });

@@ -300,6 +300,15 @@ again on the primary origin if it cannot have reached the server: the connection
 never opened, or the handshake failed, or the request is a GET. A write that timed
 out or lost its connection is not repeated; the app's usual retry rules apply.
 
+## Reusing a request ID
+
+`POST /api/bots/:id/messages` and `/steer` admit one message per `requestId`. The same
+ID with the same content answers that message's receipt again. The same ID with
+different text, files or sender answers 409 with `code: "submission_conflict"`, even
+when both arrive at once. The web's form cards rely on this: they derive one ID per
+person, message, card and attempt, so a second tab or device that sends different
+answers learns that the first one already went and follows its receipt.
+
 ## Retrying a failed turn
 
 `POST /api/bots/:id/messages` accepts `retryOf`, the ID of a user message in this

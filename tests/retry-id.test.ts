@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { retryRequestId } from "../src/shared/retry-id.js";
+import { formRequestId, isRetryRequestId, retryRequestId } from "../src/shared/retry-id.js";
 
 // The iOS app derives the same IDs; docs/native-api.md lists these vectors for it.
 const vectors: [botId: string, messageId: string, runId: string, id: string][] = [
@@ -24,5 +24,23 @@ describe("retry request IDs", () => {
     }
     // Field boundaries count: "ab" + "c" is not "a" + "bc".
     expect(await retryRequestId("ab", "c")).not.toBe(await retryRequestId("a", "bc"));
+  });
+});
+
+describe("form request IDs", () => {
+  it("makes one version 4 UUID per person, assistant, message, card and attempt, never a retry's", async () => {
+    const parts: [string, string, string, string, number][] = [["one", "ranch", "m", "c", 0], ["two", "ranch", "m", "c", 0], ["one", "barn", "m", "c", 0],
+      ["one", "ranch", "n", "c", 0], ["one", "ranch", "m", "d", 0], ["one", "ranch", "m", "c", 1]];
+    const ids = await Promise.all(parts.map(part => formRequestId(...part)));
+    expect(new Set(ids).size).toBe(ids.length);
+    for (const id of ids) {
+      expect(z.string().uuid().safeParse(id).success).toBe(true);
+      expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+      expect(isRetryRequestId(id)).toBe(false);
+    }
+    // Every tab and device derives the same ID, so the server admits the answers once.
+    expect(await formRequestId("one", "ranch", "m", "c", 0)).toBe(ids[0]);
+    // The prefix keeps a form's ID apart from a retry's over the same words.
+    expect(ids[0]).not.toBe(await retryRequestId("one", "ranch", "m"));
   });
 });

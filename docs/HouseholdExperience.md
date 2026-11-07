@@ -159,12 +159,20 @@ view instructions in every WildBots conversation.
 
 **Send answers** posts the answers as your own message, written as the form's
 title and one "Label: answer" line per answered field. It goes through the same
-durable admission as the message box under its own request ID, and never reads
-or changes your draft. The browser saves the request before sending it. An
+durable admission as the message box and never reads or changes your draft. If
+you ticked "I've reviewed the task's last actions" after an interruption, the
+answers go under that review too.
+
+The request ID is derived from you, the message, the card and an attempt number,
+so every tab and device sends the same request and the server admits it once. An
 answer whose outcome is unknown is checked by that ID, across reloads, until
-Hermes settles it, and is never sent twice. A refused answer returns to the form
-with the reason. A sent form folds into a read-only list of your answers on that
-browser; other devices show your answers as the message that follows.
+Hermes settles it. Answers you have typed are kept on the device until you send
+them. A refusal before Hermes sees the answers keeps the same attempt; a refusal
+from Hermes moves to the next one. A sent form folds into a read-only list of
+your answers. Another tab or device that opens the form finds the sent attempt
+and says the answers were already sent. A household member who knows those IDs
+could claim your form's ID first, which leaves your card checking; nothing they
+send appears as yours.
 
 These two types are web-only for now. The iOS app shows their JSON as code.
 

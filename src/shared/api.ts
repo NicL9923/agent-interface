@@ -46,6 +46,8 @@ export type ConversationPage = Omit<Conversation, "window" | "requestSessionId">
    */
   retry?: SubmissionReceipt & { retryOf: string };
 };
+/** The longest message or draft text the server accepts. The composer and form cards stay within it. */
+export const MAX_MESSAGE_TEXT = 50_000;
 export interface MessageRequest {
   requestId: string;
   text: string;

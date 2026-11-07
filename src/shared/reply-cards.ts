@@ -123,6 +123,8 @@ function email(card: Fields): EmailCard | null {
 const choiceKinds: readonly FormFieldKind[] = ["select", "choice", "multi"];
 // A real calendar day, as a date input reports it.
 const day = new RegExp(`^${date.source}$`);
+// HTML's valid floating-point number, the only text a number input shows: no hex, no "Infinity", no "1.".
+const decimal = /^-?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?$/;
 /** Whether a starting value suits its field: one of its options, a real day, a number, or a switch. */
 function fitsField(field: Omit<FormField, "value">, value: unknown): value is FormValue {
   switch (field.kind) {
@@ -131,7 +133,7 @@ function fitsField(field: Omit<FormField, "value">, value: unknown): value is Fo
       && value.every(entry => typeof entry === "string" && field.options!.includes(entry));
     case "select": case "choice": return typeof value === "string" && field.options!.includes(value);
     case "date": return typeof value === "string" && day.test(value);
-    case "number": return typeof value === "string" && value.trim() !== "" && Number.isFinite(Number(value));
+    case "number": return typeof value === "string" && decimal.test(value) && Number.isFinite(Number(value));
     default: return typeof value === "string" && value.length <= 4000;
   }
 }
@@ -262,6 +264,11 @@ export function emailText(card: EmailCard): string {
 
 /** A person's answers, by field ID. */
 export type FormAnswers = Record<string, FormValue>;
+/**
+ * A field's entry in a map keyed by field ID. Field IDs are the assistant's words, so one named
+ * `constructor` or `__proto__` must never read what every object inherits.
+ */
+export const fieldEntry = <T>(map: Record<string, T>, id: string): T | undefined => Object.hasOwn(map, id) ? map[id] : undefined;
 /** Where a form starts: each field's suggested value, or empty. */
 export function formStart(card: FormCard): FormAnswers {
   return Object.fromEntries(card.fields.map(field => [field.id, field.value ?? (field.kind === "multi" ? [] : field.kind === "toggle" ? false : "")]));
@@ -269,11 +276,11 @@ export function formStart(card: FormCard): FormAnswers {
 const answered = (value: FormValue | undefined) => Array.isArray(value) ? value.length > 0 : typeof value === "string" ? value.trim() !== "" : value !== undefined;
 /** What stops the answers from going, by field ID: a required field left empty, or a value that doesn't fit its field. */
 export function formProblems(card: FormCard, answers: FormAnswers): Record<string, string> {
-  const problems: Record<string, string> = {};
+  const problems: Record<string, string> = Object.create(null);
   const reasons: Record<FormFieldKind, string> = { text: "Keep this under 4,000 characters.", textarea: "Keep this under 4,000 characters.", number: "Enter a number.",
     date: "Enter a real date.", select: "Choose one of the options.", choice: "Choose one of the options.", multi: "Choose from the options.", toggle: "Turn this on or off." };
   for (const field of card.fields) {
-    const value = answers[field.id];
+    const value = fieldEntry(answers, field.id);
     if (field.kind !== "toggle" && !answered(value)) {
       if (field.required) problems[field.id] = field.kind === "multi" ? "Choose at least one." : "This one needs an answer.";
     } else if (!fitsField(field, value)) problems[field.id] = reasons[field.kind];
@@ -287,9 +294,9 @@ export function formProblems(card: FormCard, answers: FormAnswers): Record<strin
  */
 export function formAnswerText(card: FormCard, answers: FormAnswers): string {
   const lines = card.fields.flatMap(field => {
-    const value = answers[field.id];
+    const value = fieldEntry(answers, field.id);
     if (field.kind !== "toggle" && !answered(value)) return [];
-    const shown = typeof value === "boolean" ? value ? "Yes" : "No" : Array.isArray(value) ? value.join(", ") : value!.trim();
+    const shown = value === undefined || typeof value === "boolean" ? value ? "Yes" : "No" : Array.isArray(value) ? value.join(", ") : value.trim();
     return shown.includes("\n") ? [`- ${field.label}:`, ...shown.split(/\r\n|\r|\n/).map(line => `  ${line}`)] : [`- ${field.label}: ${shown}`];
   });
   return [`My answers to "${card.title}":`, ...(lines.length ? lines : ["- (No answers given)"])].join("\n");

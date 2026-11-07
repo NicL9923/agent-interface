@@ -159,8 +159,21 @@ describe("interactive reply contracts", () => {
       ["a blank label", { label: " " }, 0],
       ["an invalid field ID", { id: "has space" }, 0],
       ["an unknown field property", { max: 3 }, 1],
+      ["an empty option list", { options: [] }, 4],
+      ["a blank option", { options: ["King", "  "] }, 4],
+      ["an option over 200 characters", { options: ["King", "x".repeat(201)] }, 4],
+      ["a starting multi value that repeats an option", { value: ["Parking", "Parking"] }, 5],
+      ["help over 500 characters", { help: "x".repeat(501) }, 7],
+      ["a placeholder over 200 characters", { placeholder: "x".repeat(201) }, 0],
+      ["a starting number a number input cannot show", { value: "0x10" }, 1],
+      ["a starting number with a trailing point", { value: "1." }, 1],
+      ["a starting number that is infinite", { value: "Infinity" }, 1],
     ])("keeps a form with %s as code", (_, change, index) => {
       expect(parseReplyDocument(field(change, index))).toBeNull();
+    });
+    it("accepts every number a number input can show", () => {
+      for (const value of ["0", "-2", "2.5", ".5", "1e3", "-1.5E-2"])
+        expect(parseReplyDocument(field({ value }, 1)), value).not.toBeNull();
     });
     it("keeps a choosing field without options as code", () => {
       expect(parseReplyDocument(document([{ ...formCard, fields: [{ id: "pace", label: "Pace", kind: "choice" }] }]))).toBeNull();
@@ -179,6 +192,11 @@ describe("interactive reply contracts", () => {
         .toEqual({ nights: "Enter a number.", when: "Enter a real date.", room: "Choose one of the options.", pets: "Turn this on or off." });
       expect(formProblems(card, { ...formStart(card), city: "x".repeat(4001), extras: ["Parking"] })).toEqual({ city: "Keep this under 4,000 characters." });
       expect(formProblems(card, { ...formStart(card), city: "Marfa", extras: ["Parking"] })).toEqual({});
+    });
+    it("never reads an inherited value as an answer to a field named like one", () => {
+      const card: FormCard = { id: "f", type: "form", title: "F", fields: [{ id: "constructor", label: "A", kind: "text", required: true }] };
+      expect(formProblems(card, {})).toEqual({ constructor: "This one needs an answer." });
+      expect(formAnswerText(card, {})).toBe('My answers to "F":\n- (No answers given)');
     });
     it("writes the answers as one readable message, leaving out unanswered optional fields", () => {
       const card = parsed();
