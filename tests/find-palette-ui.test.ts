@@ -52,7 +52,7 @@ it("navigates the palette, selects a command and restores focus", async () => {
 it("finds loaded messages and navigates older and newer matches with Enter", async () => {
   vi.useFakeTimers();
   const scroll = document.createElement("div");
-  scroll.innerHTML = '<article data-message-id="a"><div class="message-text">Fence one</div></article><article data-message-id="b"><div class="message-text">Fence two</div></article>';
+  scroll.innerHTML = '<article data-message-id="a"><div class="message-text">Fence one</div></article><article data-message-id="b"><div class="message-text">Fence two</div></article><article data-message-id="c"><div class="message-text">Fence three</div></article>';
   document.body.append(scroll);
   const open = vi.fn(), close = vi.fn();
   const mount = mountRoot();
@@ -60,11 +60,13 @@ it("finds loaded messages and navigates older and newer matches with Enter", asy
   const input = mount.container.querySelector<HTMLInputElement>("input")!;
   expect(document.activeElement).toBe(input);
   await typeInto(input, "fence");
-  expect(mount.container.querySelector('[role=status]')?.textContent).toBe("2 of 2");
+  expect(mount.container.querySelector('[role=status]')?.textContent).toBe("3 of 3");
+  // Enter walks older, Shift+Enter walks newer; three matches make the direction observable.
   await key(input, "Enter");
-  expect(open).toHaveBeenCalledWith("a", true, "fence");
+  await key(input, "Enter");
   await key(input, "Enter", { shiftKey: true });
-  expect(open).toHaveBeenCalledWith("b", true, "fence");
+  // Explicit navigation passes scroll=true; the effect that reveals the current match passes false.
+  expect(open.mock.calls.filter(call => call[1] === true).map(call => call[0])).toEqual(["b", "a", "b"]);
   await key(input, "Escape");
   expect(close).toHaveBeenCalledOnce();
 });

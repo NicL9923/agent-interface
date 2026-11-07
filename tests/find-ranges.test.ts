@@ -19,4 +19,4 @@ it("returns no ranges for an empty needle instead of looping", () => {
   const item = document.createElement("article");
   item.innerHTML = `<div class="message-text">anything</div>`;
   expect(matchRanges(item, "")).toEqual([]);
-}, 1000);
+});

@@ -77,6 +77,10 @@ class ServiceAuthTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_rejects_disallowed_or_encoded_operations(self):
         for case in ({"method": "DELETE"}, {"raw_path": b"/api/agent-interface/service/pro%2ffiles"},
+                     {"raw_path": b"/api/agent-interface/service/pro%2Ffiles"},
+                     {"raw_path": b"/api/agent-interface/service/pro%5cfiles"},
+                     {"raw_path": b"/api/agent-interface/service/pro%25files"},
+                     {"path": service.PREFIX + "profiles/extra"},
                      {"path": service.TICKET_PATH}, {"path": service.TICKET_PATH, "method": "POST", "query": b"bad=1"}):
             with self.subTest(case=case):
                 calls, responses = await self.invoke(**case)
