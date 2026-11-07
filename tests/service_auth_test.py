@@ -20,7 +20,7 @@ class JSONResponse:
 
 
 class ServiceAuthTests(unittest.IsolatedAsyncioTestCase):
-    async def invoke(self, *, headers=None, client=("127.0.0.1", 1234), path=None, method="GET", raw_path=None):
+    async def invoke(self, *, headers=None, client=("127.0.0.1", 1234), path=None, method="GET", raw_path=None, query=b""):
         calls, responses = [], []
 
         async def app(scope, receive, send):
@@ -38,7 +38,7 @@ class ServiceAuthTests(unittest.IsolatedAsyncioTestCase):
         auth_module.TokenPrincipal = lambda **kwargs: kwargs
         scope = {"type": "http", "path": path or service.PREFIX + "profiles", "method": method,
                  "headers": headers if headers is not None else [(b"authorization", b"Bearer " + SECRET.encode())],
-                 "client": client, "state": {"existing": True}, "query_string": b""}
+                 "client": client, "state": {"existing": True}, "query_string": query}
         if raw_path is not None:
             scope["raw_path"] = raw_path
         with patch.dict(sys.modules, {"starlette.responses": responses_module, "hermes_cli.dashboard_auth.base": auth_module}):
@@ -61,6 +61,8 @@ class ServiceAuthTests(unittest.IsolatedAsyncioTestCase):
                 calls, responses = await self.invoke(**case)
                 self.assertEqual(calls, [])
                 self.assertEqual(responses[0]["status"], 401)
+                forwarded = any(key.lower().startswith(b"x-forwarded-") or key.lower() == b"forwarded" for key, _ in case.get("headers", []))
+                self.assertEqual(responses[0]["body"], {"error": "Service access must be direct" if forwarded else "Service authentication required"})
                 self.assertEqual(responses[0]["headers"], {"Cache-Control": "no-store"})
 
     async def test_accepts_loopback_and_sets_trusted_state(self):
@@ -74,11 +76,13 @@ class ServiceAuthTests(unittest.IsolatedAsyncioTestCase):
                 "principal": "agent-interface", "provider": "agent-interface-service", "scopes": ("executor",)}})
 
     async def test_rejects_disallowed_or_encoded_operations(self):
-        for case in ({"method": "DELETE"}, {"raw_path": b"/api/agent-interface/service/pro%2ffiles"}):
+        for case in ({"method": "DELETE"}, {"raw_path": b"/api/agent-interface/service/pro%2ffiles"},
+                     {"path": service.TICKET_PATH}, {"path": service.TICKET_PATH, "method": "POST", "query": b"bad=1"}):
             with self.subTest(case=case):
                 calls, responses = await self.invoke(**case)
                 self.assertEqual(calls, [])
                 self.assertEqual(responses[0]["status"], 404)
+                self.assertEqual(responses[0]["body"], {"error": "Service operation not available"})
 
 
 if __name__ == "__main__":
