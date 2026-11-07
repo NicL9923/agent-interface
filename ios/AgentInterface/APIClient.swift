@@ -94,7 +94,7 @@ extension Data {
   let baseURL: URL
   var token: String? {
     // A cached body belongs to the identity that fetched it. A route is chosen per sign-in.
-    didSet { if token != oldValue { clearConditionalCache(); activeRoute = nil } }
+    didSet { if token != oldValue { clearConditionalCache(); activeRoute = nil; routeGeneration += 1 } }
   }
   var csrf: String?
   var localCookieAuth = false
@@ -119,6 +119,8 @@ extension Data {
   var routesCheckedAt: Date?
   var routeCheck: Task<Void, Never>?
   var routeRecheckQueued = false
+  /// Bumped by a network change or another sign-in, so a route check that began before it is ignored.
+  var routeGeneration = 0
   var pathWatch: NetworkPathWatch?
   /// Tests replace the clock; they also supply their own session, which turns off path watching.
   var now: () -> Date = Date.init
@@ -182,6 +184,8 @@ extension Data {
   }
   private func request(path: String, method: String, contentType: String?, authenticated: Bool, route: DirectRoute? = nil) throws -> URLRequest {
     var request = URLRequest(url: try transportURL(path, on: route))
+    // A direct route refuses cookies; it takes only the bearer.
+    if route != nil { request.httpShouldHandleCookies = false }
     request.httpMethod = method
     request.timeoutInterval = method == "GET" ? 20 : 60
     // Without a local HTTP cache, a 304 reaches the app instead of being replaced by a cached body.
@@ -242,7 +246,7 @@ extension Data {
     }
     // The server stopped serving this route to the app before handling the request.
     if let route, Self.refusedByRoute(response.statusCode, data) {
-      _ = directRouteFailed(route, error: URLError(.cancelled), method: method)
+      _ = directRouteFailed(route, refused: true, method: method)
       return try await exchange(
         path: path, method: method, body: body, contentType: contentType,
         authenticated: authenticated, conditional: conditional)
@@ -291,6 +295,7 @@ extension Data {
   func events(_ path: String) async throws -> AsyncLineSequence<URLSession.AsyncBytes> {
     let route = token != nil ? activeRoute : nil
     var request = URLRequest(url: try transportURL(path, on: route))
+    if route != nil { request.httpShouldHandleCookies = false }
     request.cachePolicy = .reloadIgnoringLocalCacheData
     request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
     if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
@@ -304,7 +309,7 @@ extension Data {
     // route is the listener refusing it.
     if let route, http?.statusCode == 403 {
       bytes.task.cancel()
-      _ = directRouteFailed(route, error: URLError(.cancelled), method: "GET")
+      _ = directRouteFailed(route, refused: true, method: "GET")
       return try await events(path)
     }
     guard http?.statusCode == 200, http?.mimeType == "text/event-stream" else {
@@ -434,7 +439,7 @@ extension Data {
       throw APIError(message: "The server returned an invalid response.", status: 502)
     }
     if let route, Self.refusedByRoute(response.statusCode, result) {
-      _ = directRouteFailed(route, error: URLError(.cancelled), method: "POST")
+      _ = directRouteFailed(route, refused: true, method: "POST")
       return try await upload(botId: botId, name: name, mime: mime, data: data, progress: progress)
     }
     guard (200..<300).contains(response.statusCode) else { throw Self.failure(response.statusCode, result) }

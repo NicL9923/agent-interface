@@ -538,7 +538,10 @@ can, instead of the public origin. The server opens an HTTPS listener on
 them as addresses change. It finds LAN addresses on ordinary adapters, never
 container bridges or other VPNs, and tailnet addresses on Tailscale's adapter. A
 cloud server should list only `tailnet`, since its provider's private network is no
-household's LAN. Allow `DIRECT_PORT` through the host firewall on those interfaces.
+household's LAN. Allow `DIRECT_PORT` through the host firewall on those interfaces
+only, and through the tailnet's access rules for the phones that should use it. Linux
+accepts a packet for any of its addresses on any interface, so the firewall, not the
+listener's address, decides who can connect.
 
 Each listener uses a self-signed certificate kept in `DIRECT_TLS_DIR`, by default
 `direct-tls` beside the database. The app learns each route and the certificate's

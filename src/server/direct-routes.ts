@@ -6,7 +6,6 @@ import { networkInterfaces, type NetworkInterfaceInfo } from "node:os";
 import { join } from "node:path";
 import type { FastifyBaseLogger, FastifyInstance } from "fastify";
 import type { DirectRoute, DirectRouteKind } from "../shared/api.js";
-import { routePattern } from "./route-path.js";
 import { safeError } from "./logging.js";
 import type { DirectRoutesConfig } from "./config.js";
 
@@ -151,16 +150,23 @@ const directRequests = new WeakSet<IncomingMessage>();
 /** Why a direct listener refused a request. Native clients fall back to the primary origin on it. */
 export const directRouteRefused = { error: "This address serves only the iOS app's signed-in API.", code: "direct_route_refused" };
 
+/** The only sign-in routes a direct listener serves: a signed-in app renewing or ending its session. */
+const directAuthRoutes = new Set(["/api/auth/native/renew", "/api/auth/logout"]);
+
 /**
- * Registered before authentication. A direct listener answers only matched or unknown /api/ paths
- * that carry a well-formed bearer and neither a cookie nor an Origin, so browser sessions, CSRF
- * checks, local sign-in by loopback address and static files never apply to it.
+ * Registered before authentication. A direct listener answers only registered /api/ routes that
+ * carry a well-formed bearer and neither a cookie nor an Origin, so browser sessions, CSRF checks,
+ * static files and unknown paths never apply to it. Sign-in routes, including the native code
+ * exchange and local sign-in by loopback address, stay on the primary origin.
  */
 export function installDirectRouteGate(app: FastifyInstance) {
   app.addHook("onRequest", async (req, reply) => {
     if (!directRequests.has(req.raw)) return;
+    // The registered pattern, never the raw URL: Fastify decodes percent-escapes when it routes.
+    const route = req.routeOptions.url;
+    const api = route !== undefined && route.startsWith("/api/") && (!route.startsWith("/api/auth/") || directAuthRoutes.has(route));
     const bearer = /^Bearer [A-Za-z0-9_-]{43}$/.test(req.headers.authorization ?? "");
-    if (!routePattern(req).startsWith("/api/") || !bearer || req.headers.cookie !== undefined || req.headers.origin !== undefined)
+    if (!api || !bearer || req.headers.cookie !== undefined || req.headers.origin !== undefined)
       return reply.code(403).header("Cache-Control", "no-store").send(directRouteRefused);
   });
 }
@@ -213,12 +219,16 @@ export class DirectRoutes {
     }));
     await Promise.all(wanted.filter(entry => !this.listeners.has(entry.address)).map(async entry => {
       if (this.closed) return;
-      const server = createServer({ key: this.identity.key, cert: this.identity.cert, minVersion: "TLSv1.2" }, (req, res) => {
+      // No reverse proxy stands in front of these, so the listener sets its own limits. Node's
+      // request timeout covers receiving a request, not an event stream's response, so it stays.
+      const server = createServer({ key: this.identity.key, cert: this.identity.cert, minVersion: "TLSv1.2", handshakeTimeout: 10_000 }, (req, res) => {
         directRequests.add(req);
         this.handle(req, res);
       });
-      // Long-lived event streams must not be cut by Node's default request timeout.
-      server.requestTimeout = 0;
+      server.headersTimeout = 20_000;
+      server.maxHeadersCount = 100;
+      // A household's devices, each with a few requests and event streams.
+      server.maxConnections = 256;
       const listener: Listener = { ...entry, server };
       this.listeners.set(entry.address, listener);
       try {

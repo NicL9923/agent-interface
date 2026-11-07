@@ -15,10 +15,12 @@ struct DirectRoute: Codable, Hashable, Sendable {
   /// LAN before tailnet; both before the primary origin.
   var rank: Int { kind == .lan ? 0 : 1 }
   var endpoint: String? { DirectRoutePins.endpoint(host: url.host, port: url.port) }
-  /// A route the app can use: HTTPS to an explicit port with nothing but an origin, and a pin.
+  /// A route the app can use: HTTPS to an IPv4 address and explicit port with nothing but an origin,
+  /// and a 32-byte pin. The server advertises only addresses, never names a resolver could redirect.
   var usable: Bool {
-    url.scheme == "https" && endpoint != nil && ["", "/"].contains(url.path) && url.query == nil
-      && url.user == nil && certificateSha256.count == 43
+    url.scheme == "https" && url.host.flatMap { IPv4Address($0) } != nil && endpoint != nil
+      && ["", "/"].contains(url.path) && url.query == nil && url.user == nil
+      && certificateSha256.count == 43 && certificateSha256.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == "_") }
   }
 }
 
@@ -40,6 +42,7 @@ struct DirectRoutesResponse: Decodable, Sendable {
 final class DirectRoutePins: @unchecked Sendable {
   private let lock = NSLock()
   private var pins: [String: String] = [:]
+  private var refused: Set<String> = []
   func set(_ routes: [DirectRoute]) {
     let next = Dictionary(routes.compactMap { route in route.endpoint.map { ($0, route.certificateSha256) } }) { first, _ in first }
     lock.withLock { pins = next }
@@ -47,6 +50,16 @@ final class DirectRoutePins: @unchecked Sendable {
   func pin(host: String, port: Int) -> String? {
     guard let key = Self.endpoint(host: host, port: port) else { return nil }
     return lock.withLock { pins[key] }
+  }
+  /// The delegate records each handshake it cancels, so a cancelled request on that route is known
+  /// to be a refusal that sent nothing, not the person cancelling it.
+  func noteRefusal(host: String, port: Int) {
+    guard let key = Self.endpoint(host: host, port: port) else { return }
+    _ = lock.withLock { refused.insert(key) }
+  }
+  func takeRefusal(_ endpoint: String?) -> Bool {
+    guard let endpoint else { return false }
+    return lock.withLock { refused.remove(endpoint) != nil }
   }
   static func endpoint(host: String?, port: Int?) -> String? {
     guard let host, !host.isEmpty, let port, port > 0 else { return nil }
@@ -110,7 +123,9 @@ final class APISessionDelegate: NSObject, URLSessionTaskDelegate, Sendable {
     case .standard: return (.performDefaultHandling, nil)
     case .trust: return (.useCredential, URLCredential(trust: trust))
     // Ends the handshake before any request, so the bearer token never reaches that address.
-    case .refuse: return (.cancelAuthenticationChallenge, nil)
+    case .refuse:
+      pins.noteRefusal(host: space.host, port: space.port)
+      return (.cancelAuthenticationChallenge, nil)
     }
   }
 }
@@ -195,6 +210,8 @@ extension APIClient {
 
   func runRouteCheck() async {
     routesCheckedAt = now()
+    // A network change or another sign-in while this runs makes its answers stale.
+    let generation = routeGeneration
     do {
       let response: DirectRoutesResponse = try await get("/native/routes")
       directRoutes = response.routes
@@ -214,8 +231,8 @@ extension APIClient {
     }
     // The server lists LAN first; among routes of one kind its order decides.
     let best = candidates.filter(answered.contains).enumerated().min { ($0.element.rank, $0.offset) < ($1.element.rank, $1.offset) }?.element
-    // A sign-out or another identity while probing leaves the primary origin in use.
-    activeRoute = token == nil ? nil : best
+    guard routeGeneration == generation, token != nil else { return }
+    activeRoute = best
   }
 
   /// Whether `route` answers the signed-in API with its pinned certificate within the probe timeout.
@@ -225,6 +242,7 @@ extension APIClient {
     request.timeoutInterval = Self.routeProbeTimeout
     request.cachePolicy = .reloadIgnoringLocalCacheData
     request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+    request.httpShouldHandleCookies = false
     guard let answer = try? await session.data(for: request),
       (answer.1 as? HTTPURLResponse)?.statusCode == 200,
       (try? JSONDecoder().decode(DirectRoutesResponse.self, from: answer.0)) != nil
@@ -234,28 +252,33 @@ extension APIClient {
 
   /// Records that `route` failed a request and returns whether the request may be sent again on the
   /// primary origin. The route stops being used at once and is skipped by checks for a while.
-  func directRouteFailed(_ route: DirectRoute, error: Error, method: String) -> Bool {
+  /// `refused` is the listener's 403 refusal, which it sends before handling anything.
+  func directRouteFailed(_ route: DirectRoute, error: Error? = nil, refused: Bool = false, method: String) -> Bool {
     let code = (error as? URLError)?.code
-    // The person's own cancellation, not the route's failure.
-    if error is CancellationError || (code == .cancelled && Task.isCancelled) { return false }
+    // A cancelled request is the pin's refusal only if the delegate recorded one for this route;
+    // otherwise someone cancelled it, and the route did nothing wrong.
+    let pinRefused = code == .cancelled && pins.takeRefusal(route.endpoint)
+    if !refused && !pinRefused && (error is CancellationError || code == .cancelled) { return false }
     if activeRoute == route { activeRoute = nil }
     routeCooldowns[route] = now().addingTimeInterval(Self.routeCooldown)
     checkRoutes(force: true)
+    if refused || pinRefused { return true }
     guard let code else { return false }
     return Self.neverSent.contains(code) || ["GET", "HEAD"].contains(method)
   }
 
-  /// Transport failures that end before the request leaves the device, so sending it again cannot
-  /// repeat it. `cancelled` here is a pin refusal, which cancels the handshake. A timeout or a lost
-  /// connection may come after the server acted, so only reads are sent again after those.
+  /// Failures to open the connection or finish the handshake, which end before the request leaves
+  /// the device, so sending it again cannot repeat it. A timeout or a lost connection may come after
+  /// the server acted, so only reads are sent again after those; writes keep their usual retry rules.
   static let neverSent: Set<URLError.Code> = [
-    .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed, .notConnectedToInternet, .cancelled,
+    .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed, .notConnectedToInternet,
     .secureConnectionFailed, .serverCertificateUntrusted, .serverCertificateHasBadDate,
     .serverCertificateHasUnknownRoot, .serverCertificateNotYetValid, .appTransportSecurityRequiresSecureConnection,
   ]
 
   /// The device joined or left a network: what was reachable may not be now, and the reverse.
   func networkChanged() {
+    routeGeneration += 1
     routeCooldowns.removeAll()
     activeRoute = nil
     checkRoutes(force: true)

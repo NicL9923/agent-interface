@@ -151,10 +151,50 @@ private final class RouteHost: FakeHost, @unchecked Sendable {
     let lan = RouteHost()
     let (primary, api, _) = installation([(lan, .lan)])
     await api.runRouteCheck()
-    // A pin refusal cancels the handshake; nothing was sent.
+    // A pin refusal cancels the handshake before anything is sent; the delegate records it.
     lan.failing = URLError(.cancelled)
+    api.pins.noteRefusal(host: lan.origin.host!, port: 3443)
     _ = try await api.data(path: "/api/bots/household/messages", method: "POST", body: Data("{}".utf8), contentType: "application/json")
     XCTAssertEqual(primary.requests.filter { $0.httpMethod == "POST" }.map { $0.url?.path }, ["/api/bots/household/messages"])
+    XCTAssertNil(api.activeRoute)
+  }
+
+  func testACancelledRequestIsNotTakenForARefusedRoute() async throws {
+    let lan = RouteHost()
+    let (primary, api, routes) = installation([(lan, .lan)])
+    await api.runRouteCheck()
+    // Cancelled with no refusal recorded: someone cancelled it, and it may have been sent.
+    lan.failing = URLError(.cancelled)
+    do {
+      _ = try await api.data(path: "/api/bots/household/messages", method: "POST", body: Data("{}".utf8), contentType: "application/json")
+      XCTFail("expected the cancellation")
+    } catch is CancellationError {}
+    XCTAssertFalse(primary.requests.contains { $0.httpMethod == "POST" })
+    XCTAssertEqual(api.activeRoute, routes[0])
+    XCTAssertNil(api.routeCooldowns[routes[0]])
+  }
+
+  func testAnswersFromBeforeAnotherSignInAreIgnored() async {
+    let lan = RouteHost()
+    let routes = [lan.route(.lan)]
+    let body = json(routes)
+    let asked = expectation(description: "route list requested")
+    let release = DispatchSemaphore(value: 0)
+    let primary = FakeServer { _ in
+      asked.fulfill()
+      release.wait()
+      return .init(body: body)
+    }
+    servers.append(primary.origin)
+    FakeExchange.register(lan)
+    lan.answer(status: 200, body: body)
+    let api = primary.api()
+    let check = Task { await api.runRouteCheck() }
+    await fulfillment(of: [asked], timeout: 5)
+    api.token = "another-account-token"
+    release.signal()
+    await check.value
+    XCTAssertNil(api.activeRoute)
   }
 
   func testARouteTheServerRefusesIsLeftForThePrimaryOrigin() async throws {
@@ -212,6 +252,8 @@ private final class RouteHost: FakeHost, @unchecked Sendable {
         {"kind":"lan","url":"http://192.168.1.22:3443","certificateSha256":"\(pin)"},
         {"kind":"lan","url":"https://192.168.1.23","certificateSha256":"\(pin)"},
         {"kind":"lan","url":"https://192.168.1.24:3443/api","certificateSha256":"\(pin)"},
+        {"kind":"lan","url":"https://nas.example.test:3443","certificateSha256":"\(pin)"},
+        {"kind":"lan","url":"https://192.168.1.25:3443","certificateSha256":"\(String(repeating: "+", count: 43))"},
         {"kind":"tailnet","url":"https://100.100.0.6:3443","certificateSha256":"short"},
         {"kind":"tailnet","url":"https://100.100.0.6:3443"}
       ]}

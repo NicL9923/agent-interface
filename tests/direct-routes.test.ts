@@ -126,9 +126,9 @@ describe("direct route listener", () => {
   }
 
   /** A request to a direct route that trusts only the advertised certificate, as the app does. */
-  function call(url: string, path: string, headers: Record<string, string>, pin: string) {
-    return new Promise<{ status: number; body: { code?: string; routes?: unknown[] } }>((resolve, reject) => {
-      const req = request(`${url}${path}`, { headers, rejectUnauthorized: false }, res => {
+  function call(url: string, path: string, headers: Record<string, string>, pin: string, method = "GET", body?: string) {
+    return new Promise<{ status: number; body: { code?: string; routes?: unknown[]; expiresAt?: string } }>((resolve, reject) => {
+      const req = request(`${url}${path}`, { method, headers: body === undefined ? headers : { ...headers, "content-type": "application/json" }, rejectUnauthorized: false }, res => {
         const presented = (res.socket as TLSSocket).getPeerCertificate().raw;
         if (createHash("sha256").update(presented).digest("base64url") !== pin) return reject(new Error("Pin mismatch"));
         let text = "";
@@ -136,7 +136,7 @@ describe("direct route listener", () => {
         res.on("end", () => resolve({ status: res.statusCode!, body: text ? JSON.parse(text) : {} }));
       });
       req.on("error", reject);
-      req.end();
+      req.end(body);
     });
   }
 
@@ -167,11 +167,22 @@ describe("direct route listener", () => {
     ["a browser Origin beside the bearer", "/api/native/routes", (token: string) => ({ ...bearer(token), origin: "https://192.168.1.20:3443" })],
     ["a web page", "/", bearer],
     ["the native viewer page", "/native/computer", bearer],
-  ])("refuses %s", async (_reason, path, headers: (token: string) => Record<string, string>) => {
+    ["an unknown API path", "/api/nothing-here", bearer],
+    ["the native sign-in exchange", "/api/auth/native/exchange", bearer, "POST"],
+    ["the sign-in configuration", "/api/auth/config", bearer],
+  ] as [string, string, (token: string) => Record<string, string>, string?][])("refuses %s", async (_reason, path, headers, method = "GET") => {
     const { directRoutes, token } = await installation();
     const [route] = directRoutes!.routes();
-    const result = await call(route.url, path, headers(token), route.certificateSha256);
+    const result = await call(route.url, path, headers(token), route.certificateSha256, method, method === "POST" ? "{}" : undefined);
     expect(result).toEqual({ status: 403, body: expect.objectContaining({ code: "direct_route_refused" }) });
+  });
+
+  it("lets a signed-in app renew its session there", async () => {
+    const { directRoutes, token } = await installation();
+    const [route] = directRoutes!.routes();
+    const result = await call(route.url, "/api/auth/native/renew", bearer(token), route.certificateSha256, "POST", "{}");
+    expect(result.status).toBe(200);
+    expect(Date.parse(result.body.expiresAt!)).toBeGreaterThan(Date.now());
   });
 
   it("leaves a well-formed but unknown bearer to sign-in, which reports the session gone", async () => {

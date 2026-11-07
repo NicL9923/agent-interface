@@ -273,7 +273,8 @@ the Keychain, caches, links, sign-in and every web page use it.
 routes, or an empty list when the server offers none. A server from before direct
 routes answers 404; treat that as an empty list. Each route is
 `{ "kind": "lan" | "tailnet", "url": "https://ADDRESS:PORT", "certificateSha256": PIN }`.
-Skip a route with another kind, scheme, a path or no port, rather than failing the list.
+Each `ADDRESS` is an IPv4 literal. Skip a route with another kind or scheme, a host
+name, a path, no port or a malformed pin, rather than failing the list.
 
 `PIN` is the base64url SHA-256 of the route listener's certificate, in DER form. The
 certificate is self-signed and names no host. On a route's address, accept exactly
@@ -282,9 +283,11 @@ handshake otherwise, so the session token is never sent to an impostor. Every ot
 address keeps the system's own HTTPS evaluation. Learn routes and pins only over the
 primary origin or another pinned route.
 
-A route listener serves only the signed-in native API: an `/api/` path with
-`Authorization: Bearer TOKEN` and neither a cookie nor an Origin header. Anything
-else, including signed-out requests and WebSockets, returns 403 with
+A route listener serves only the signed-in native API: a registered `/api/` route
+with `Authorization: Bearer TOKEN` and neither a cookie nor an Origin header. Of the
+`/api/auth/` routes it serves only `POST /api/auth/native/renew` and
+`POST /api/auth/logout`. Anything else, including sign-in, unknown paths and
+WebSockets, returns 403 with
 `code: "direct_route_refused"` before it is handled; send it to the primary origin
 instead. An unknown or expired bearer returns the usual 401 `session_expired`.
 
