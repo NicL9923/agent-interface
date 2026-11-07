@@ -1747,6 +1747,7 @@ describe('owned Hermes operation response decoding', () => {
     expect(await runtime.automationRequest!(input)).toEqual(result);
   });
   it.each([
+    {input:{operation:'search',profile,query:'fence'},result:[{botId:profile,botName:'Shared',sessionId:42,title:'Fence',snippet:'Fixed'}]},
     {input:{operation:'memory',profile},result:preview},
     {input:{operation:'usage',profile,days:30},result:[]},
     {input:{operation:'history',profile,sessionId:'stored',offset:0},result:{...history,messages:[{id:'row',role:'unexpected',text:'private-canary'}]}},
@@ -1758,6 +1759,7 @@ describe('owned Hermes operation response decoding', () => {
     expect(fetcher).toHaveBeenCalledOnce();
   });
   it.each([
+    {input:{operation:'task_get',profile,taskId:'task'},result:{...task,id:42}},
     {input:{operation:'overview',profile},result:{ok:true}},
     {input:{operation:'task_get',profile,taskId:'task'},result:overview},
     {input:{operation:'goal_pause',profile},result:{...overview,tasks:{supported:true,items:[{id:'invalid'}]}}},
