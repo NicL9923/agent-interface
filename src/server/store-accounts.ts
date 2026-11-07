@@ -21,9 +21,18 @@ export class AccountRepository {
    * those IDs and claim one first, and every device of the same person derives the same ones.
    */
   formKey(userId: string): string {
-    this.db.prepare("INSERT OR IGNORE INTO metadata VALUES('form_key_secret',?)").run(randomBytes(32).toString("base64url"));
-    const { value } = this.db.prepare("SELECT value FROM metadata WHERE key='form_key_secret'").get() as { value: string };
-    return createHmac("sha256", value).update(`wildbots-form-key\u0000${userId}`).digest("base64url");
+    return createHmac("sha256", this.formSecret()).update(`wildbots-form-key\u0000${userId}`).digest("base64url");
+  }
+  private secret?: string;
+  /**
+   * The installation's form-key secret, read once per process. Only the first read ever writes, so
+   * bootstrap never waits on another connection's write lock. Two processes creating it at once
+   * keep whichever row landed first; the loser reads that one.
+   */
+  private formSecret(): string {
+    const read = () => (this.db.prepare("SELECT value FROM metadata WHERE key='form_key_secret'").get() as { value: string } | undefined)?.value;
+    this.secret ??= read() ?? (this.db.prepare("INSERT OR IGNORE INTO metadata VALUES('form_key_secret',?)").run(randomBytes(32).toString("base64url")), read()!);
+    return this.secret;
   }
   users(): User[] {
     return this.db

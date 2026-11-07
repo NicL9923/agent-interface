@@ -117,10 +117,44 @@ final class ReplyActionCardsTests: XCTestCase {
     XCTAssertEqual(T3Thread.url("<t3-thread://v2/env-1/thread.1>")?.absoluteString, "https://app.t3.codes/threads/env-1/thread%2E1")
     XCTAssertEqual(T3Thread.url("t3-thread://v2/env%201/t(2)")?.absoluteString, "https://app.t3.codes/threads/env%201/t%282%29")
     XCTAssertEqual(T3Thread.url("https://t3.example.com/threads/env/thread")?.absoluteString, "https://t3.example.com/threads/env/thread")
+    XCTAssertEqual(T3Thread.url("https://app.t3.codes/threads/env-1/thread%2E1")?.absoluteString, "https://app.t3.codes/threads/env-1/thread%2E1",
+      "A hosted link keeps its escaped IDs")
     for link: Any in ["t3-thread://v1/thread_1", "http://app.t3.codes/threads/env/thread", "javascript:alert(1)//threads/a/b", "https://app.t3.codes/settings",
       "https://user:secret@app.t3.codes/threads/env/thread", "https://app.t3.codes/threads/env/thread/extra", 42] {
       XCTAssertNil(T3Thread.url(link), "\(link)")
     }
+  }
+
+  /// Where Swift's own string rules differ from JavaScript's, the cards follow JavaScript's.
+  func testCardsMeasureTrimCompareAndWriteAsJavaScriptDoes() throws {
+    // Explicit nulls are not absent fields, and only a number field may start with a JSON number.
+    for change: [String: Any] in [["subject": NSNull()], ["to": NSNull()]] { XCTAssertNil(cards([draft.merging(change) { $1 }]), "\(change)") }
+    for (change, index) in [(["required": NSNull()], 0), (["options": NSNull()], 0), (["value": NSNull()], 0), (["value": 42], 0)] as [([String: Any], Int)] {
+      XCTAssertNil(cards([field(change, at: index)]), "\(change)")
+    }
+    // Lengths are UTF-16 units: 10,001 emoji are 20,002 of them.
+    XCTAssertNil(cards([draft.merging(["body": String(repeating: "🐎", count: 10_001)]) { $1 }]))
+    XCTAssertNotNil(cards([draft.merging(["body": String(repeating: "🐎", count: 10_000)]) { $1 }]))
+    // A label is measured after trimming, and trimming takes JavaScript's spaces, U+FEFF among them.
+    let padded = try XCTUnwrap(cards([field(["label": "\u{FEFF} Destination " + String(repeating: " ", count: 300)], at: 0)])?.first)
+    XCTAssertEqual(padded.fields?.first?.label, "Destination")
+    XCTAssertEqual(JS.trim("\u{85}Trip\u{85}"), "\u{85}Trip\u{85}", "JavaScript does not trim NEL")
+    // Canonically equivalent options are still two different strings.
+    let composed = "Caf\u{E9}", decomposed = "Cafe\u{301}"
+    XCTAssertNotNil(cards([field(["options": [composed, decomposed]], at: 4)]))
+    XCTAssertNil(cards([field(["options": [composed, "Twin"], "value": decomposed], at: 4)]))
+    // A JSON number reads as JavaScript's String(number) writes it.
+    for (value, text) in [(2.0, "2"), (2.5, "2.5"), (1e-7, "1e-7"), (0.000001, "0.000001"), (1.5e20, "150000000000000000000"), (1e21, "1e+21"), (-0.25, "-0.25")] {
+      XCTAssertEqual(JS.number(value), text)
+    }
+    XCTAssertNil(cards([field(["value": "\u{0663}"], at: 1)]), "Arabic-Indic digits are not a number to JavaScript")
+  }
+
+  func testAnswerTextSplitsAndTrimsAsTheWebDoes() throws {
+    let card = try XCTUnwrap(cards([["id": "f", "type": "form", "title": "  Trip  ", "fields": [["id": "a", "label": "A", "kind": "textarea"]]]])?.first)
+    XCTAssertEqual(FormAnswers.text(card, ["a": .text("one\r\ntwo")]), "My answers to \"Trip\":\n- A:\n  one\n  two")
+    XCTAssertEqual(FormAnswers.text(card, ["a": .text("one\rtwo")]), "My answers to \"Trip\":\n- A: one\rtwo", "Without a line feed it stays on one line")
+    XCTAssertEqual(FormAnswers.text(card, ["a": .text("\u{FEFF}Marfa\u{2028}")]), "My answers to \"Trip\":\n- A: Marfa")
   }
 
   func testModelNamesMatchTheWebsFormatter() {

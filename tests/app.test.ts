@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
+import { DatabaseSync } from "node:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1049,7 +1050,11 @@ describe("form keys", () => {
       expect(store.formKey("one")).toBe(one);
       store.close();
       store = new Store(path);
-      expect(store.formKey("one")).toBe(one);
+      // Reading an existing key never writes, so it works while another connection holds the write lock.
+      const locker = new DatabaseSync(path);
+      locker.exec("BEGIN IMMEDIATE");
+      try { expect(store.formKey("one")).toBe(one); }
+      finally { locker.exec("ROLLBACK"); locker.close(); }
       store.close();
       // Another installation's secret gives the same person a different key.
       const elsewhere = new Store(join(dir, "other.db"));

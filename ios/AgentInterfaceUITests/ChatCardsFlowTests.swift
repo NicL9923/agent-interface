@@ -58,14 +58,17 @@ import XCTest
     XCTAssertTrue(send.waitForExistence(timeout: 10))
     // A required field left empty is named, and nothing is sent.
     send.tap()
-    XCTAssertTrue(app.staticTexts["This one needs an answer."].waitForExistence(timeout: 5))
+    // Each problem is read with its field's name, so VoiceOver says which field it is about.
+    let problems = app.staticTexts.matching(NSPredicate(format: "label ENDSWITH %@", ": This one needs an answer."))
+    XCTAssertTrue(app.staticTexts["Destination: This one needs an answer."].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.staticTexts["Lodging: This one needs an answer."].exists)
     // Both required fields say so, and focusing the first does not clear its message.
-    XCTAssertEqual(app.staticTexts.matching(NSPredicate(format: "label == %@", "This one needs an answer.")).count, 2)
+    XCTAssertEqual(problems.count, 2)
     center(element(app, "form.trip.city"), in: app)
     capture(app, name: "Native form required answer")
     let destination = element(app, "form.trip.city").textFields.firstMatch
     destination.tap()
-    XCTAssertEqual(app.staticTexts.matching(NSPredicate(format: "label == %@", "This one needs an answer.")).count, 2)
+    XCTAssertEqual(problems.count, 2)
     destination.typeText("Marfa")
     element(app, "form.trip.lodging.Cabin outside town").tap()
     reveal(send, in: app)

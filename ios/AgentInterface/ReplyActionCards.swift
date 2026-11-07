@@ -6,7 +6,8 @@ import UIKit
 // src/shared/t3-code.ts, EmailDraftCard.tsx, FormReplyCard.tsx and T3ThreadCard.tsx show them.
 
 /// A form field's starting value or a person's answer: text for most kinds, a list for multi and a
-/// switch for toggle. A JSON number, which an assistant may give a number field, reads as its text.
+/// switch for toggle. A JSON number reads as the text JavaScript's `String(number)` gives it; only a
+/// number field may start with one, which `ReplyCards.strictJSON` checks on the raw JSON.
 enum FormValue: Codable, Equatable {
   case text(String), list([String]), toggle(Bool)
   init(from decoder: Decoder) throws {
@@ -14,9 +15,8 @@ enum FormValue: Codable, Equatable {
     if let value = try? container.decode(String.self) { self = .text(value) }
     else if let value = try? container.decode([String].self) { self = .list(value) }
     else if let value = try? container.decode(Bool.self) { self = .toggle(value) }
-    else if let value = try? container.decode(Double.self) {
-      self = .text(value.rounded() == value && abs(value) < 1e15 ? String(Int64(value)) : String(value))
-    } else { throw DecodingError.dataCorruptedError(in: container, debugDescription: "Not a form value") }
+    else if let value = try? container.decode(Double.self) { self = .text(JS.number(value)) }
+    else { throw DecodingError.dataCorruptedError(in: container, debugDescription: "Not a form value") }
   }
   func encode(to encoder: Encoder) throws {
     var container = encoder.singleValueContainer()
@@ -29,6 +29,47 @@ enum FormValue: Codable, Equatable {
   var text: String? { if case .text(let value) = self { value } else { nil } }
   var list: [String]? { if case .list(let value) = self { value } else { nil } }
   var toggle: Bool? { if case .toggle(let value) = self { value } else { nil } }
+}
+
+/// JavaScript's string rules, so a card is accepted, measured and written exactly as on the web.
+enum JS {
+  /// `String.prototype.length`: UTF-16 code units, not Swift's characters.
+  static func length(_ value: String) -> Int { value.utf16.count }
+  /// `String.prototype.trim`: JavaScript's white space and line terminators. Foundation's set also
+  /// holds U+0085 and lacks U+FEFF, so it would trim differently.
+  private static let space: Set<Unicode.Scalar> = Set("\t\n\u{0B}\u{0C}\r \u{A0}\u{1680}\u{2028}\u{2029}\u{202F}\u{205F}\u{3000}\u{FEFF}".unicodeScalars)
+    .union((0x2000...0x200A).compactMap(Unicode.Scalar.init))
+  static func trim(_ value: String) -> String {
+    let scalars = value.unicodeScalars
+    guard let first = scalars.firstIndex(where: { !space.contains($0) }), let last = scalars.lastIndex(where: { !space.contains($0) }) else { return "" }
+    return String(scalars[first...last])
+  }
+  /// `===` on strings: the same code units. Swift's `==` also matches canonically equivalent text.
+  static func same(_ a: String, _ b: String) -> Bool { a.utf16.elementsEqual(b.utf16) }
+  static func distinct(_ values: [String]) -> Bool { Set(values.map { Array($0.utf16) }).count == values.count }
+  static func contains(_ values: [String], _ value: String) -> Bool { values.contains { same($0, value) } }
+  /// `String(number)`: the shortest digits that round-trip, written with an exponent only below
+  /// 1e-6 or from 1e21. Swift's description agrees on the digits but not on where exponents start.
+  static func number(_ value: Double) -> String {
+    if value == 0 { return "0" }
+    var text = "\(abs(value))", exponent = 0
+    if let mark = text.firstIndex(where: { $0 == "e" || $0 == "E" }) { exponent = Int(text[text.index(after: mark)...]) ?? 0; text = String(text[..<mark]) }
+    let halves = text.split(separator: ".", omittingEmptySubsequences: false)
+    var digits = String(halves[0]) + (halves.count > 1 ? String(halves[1]) : "")
+    var point = halves[0].count + exponent
+    while digits.count > 1 && digits.hasPrefix("0") { digits.removeFirst(); point -= 1 }
+    while digits.count > 1 && digits.hasSuffix("0") { digits.removeLast() }
+    let count = digits.count
+    let written: String
+    if count <= point && point <= 21 { written = digits + String(repeating: "0", count: point - count) }
+    else if 0 < point && point <= 21 { written = String(digits.prefix(point)) + "." + String(digits.dropFirst(point)) }
+    else if -6 < point && point <= 0 { written = "0." + String(repeating: "0", count: -point) + digits }
+    else {
+      let power = point - 1
+      written = (count == 1 ? digits : String(digits.prefix(1)) + "." + String(digits.dropFirst())) + "e" + (power >= 0 ? "+" : "-") + String(abs(power))
+    }
+    return (value < 0 ? "-" : "") + written
+  }
 }
 
 struct FormField: Codable, Identifiable, Equatable {
@@ -46,20 +87,23 @@ struct FormField: Codable, Identifiable, Equatable {
 enum ReplyActionRules {
   static let fieldKinds: Set<String> = ["text", "textarea", "number", "date", "select", "choice", "multi", "toggle"]
   static let choosing: Set<String> = ["select", "choice", "multi"]
-  static func trimmed(_ value: String) -> String { value.trimmingCharacters(in: .whitespacesAndNewlines) }
+  static func trimmed(_ value: String) -> String { JS.trim(value) }
+  /// Trimmed text of 1 to `max` UTF-16 units, as the web's `text(value, max, 1, true)` accepts it.
+  static func title(_ value: String, _ max: Int) -> Bool { (1...max).contains(JS.length(trimmed(value))) }
   /// A single address, as people write them: no display names, spaces or list separators.
   static func address(_ value: String) -> Bool {
     let value = trimmed(value)
-    return (3...254).contains(value.count) && value.range(of: #"^[^\s@<>()\[\],;:"]+@[^\s@<>()\[\],;:"]+\.[^\s@<>()\[\],;:"]+$"#, options: .regularExpression) != nil
+    return (3...254).contains(JS.length(value)) && value.range(of: #"^[^\s@<>()\[\],;:"]+@[^\s@<>()\[\],;:"]+\.[^\s@<>()\[\],;:"]+$"#, options: .regularExpression) != nil
   }
-  /// HTML's valid floating-point number, the only text a number field shows, and finite.
+  /// HTML's valid floating-point number, the only text a number field shows, and finite. ASCII digits
+  /// only: the pattern's `\d` would also match other scripts' digits, which JavaScript's does not.
   static func decimal(_ value: String) -> Bool {
-    value.range(of: #"^-?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?$"#, options: .regularExpression) != nil
+    value.range(of: #"^-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$"#, options: .regularExpression) != nil
       && Double(value).map { $0.isFinite } == true
   }
   /// A real calendar day as YYYY-MM-DD, so 2026-02-30 is not one.
   static func day(_ value: String) -> Bool {
-    guard value.range(of: #"^\d{4}-\d{2}-\d{2}$"#, options: .regularExpression) != nil else { return false }
+    guard value.range(of: #"^[0-9]{4}-[0-9]{2}-[0-9]{2}$"#, options: .regularExpression) != nil else { return false }
     let formatter = DateFormatter()
     formatter.calendar = Calendar(identifier: .gregorian); formatter.locale = Locale(identifier: "en_US_POSIX")
     formatter.timeZone = TimeZone(identifier: "UTC"); formatter.dateFormat = "yyyy-MM-dd"; formatter.isLenient = false
@@ -71,34 +115,33 @@ enum ReplyActionRules {
     case "toggle": return value.toggle != nil
     case "multi":
       guard let list = value.list, let options = field.options else { return false }
-      return list.count <= options.count && Set(list).count == list.count && list.allSatisfy(options.contains)
-    case "select", "choice": return value.text.map { field.options?.contains($0) == true } == true
+      return list.count <= options.count && JS.distinct(list) && list.allSatisfy { JS.contains(options, $0) }
+    case "select", "choice": return value.text.map { JS.contains(field.options ?? [], $0) } == true
     case "date": return value.text.map(day) == true
     case "number": return value.text.map(decimal) == true
-    default: return value.text.map { $0.count <= 4000 } == true
+    default: return value.text.map { JS.length($0) <= 4000 } == true
     }
   }
   static func validField(_ field: FormField) -> Bool {
-    guard ReplyCards.validId(field.id), fieldKinds.contains(field.kind), !trimmed(field.label).isEmpty, field.label.count <= 200,
-      (field.help?.count ?? 0) <= 500, (field.placeholder?.count ?? 0) <= 200 else { return false }
+    guard ReplyCards.validId(field.id), fieldKinds.contains(field.kind), title(field.label, 200),
+      JS.length(field.help ?? "") <= 500, JS.length(field.placeholder ?? "") <= 200 else { return false }
     // Options belong to the kinds that choose among them, and those kinds need at least one.
     if choosing.contains(field.kind) {
-      guard let options = field.options, (1...20).contains(options.count) else { return false }
-      let clean = options.map(trimmed)
-      guard clean.allSatisfy({ !$0.isEmpty && $0.count <= 200 }), Set(clean).count == clean.count else { return false }
+      guard let options = field.options, (1...20).contains(options.count), options.allSatisfy({ title($0, 200) }),
+        JS.distinct(options.map(trimmed)) else { return false }
     } else if field.options != nil { return false }
     return field.value.map { fits(normalized(field), $0) } ?? true
   }
   static func validEmail(_ card: ReplyCard) -> Bool {
     for list in [card.to, card.cc] { if let list { guard (1...20).contains(list.count), list.allSatisfy(address) else { return false } } }
-    if let subject = card.subject { guard !trimmed(subject).isEmpty, subject.count <= 500 else { return false } }
-    guard let body = card.body, !trimmed(body).isEmpty, body.count <= 20_000 else { return false }
+    if let subject = card.subject { guard title(subject, 500) else { return false } }
+    guard let body = card.body, !trimmed(body).isEmpty, (1...20_000).contains(JS.length(body)) else { return false }
     return true
   }
   static func validForm(_ card: ReplyCard) -> Bool {
-    guard (card.description?.count ?? 0) <= 2000, let fields = card.fields, (1...20).contains(fields.count),
-      Set(fields.map(\.id)).count == fields.count, fields.allSatisfy(validField) else { return false }
-    if let label = card.submitLabel { guard !trimmed(label).isEmpty, trimmed(label).count <= 40 else { return false } }
+    guard JS.length(card.description ?? "") <= 2000, let fields = card.fields, (1...20).contains(fields.count),
+      JS.distinct(fields.map(\.id)), fields.allSatisfy(validField) else { return false }
+    if let label = card.submitLabel { guard title(label, 40) else { return false } }
     return true
   }
   /// The field as the web keeps it: label and options trimmed.
@@ -107,9 +150,10 @@ enum ReplyActionRules {
     field.label = trimmed(field.label); field.options = field.options?.map(trimmed)
     return field
   }
-  /// The card as the web keeps it: headers, labels and options trimmed; the body as written.
+  /// The card as the web keeps it: title, headers, labels and options trimmed; the body as written.
   static func normalized(_ card: ReplyCard) -> ReplyCard {
     var card = card
+    card.title = trimmed(card.title)
     card.to = card.to?.map(trimmed); card.cc = card.cc?.map(trimmed); card.subject = card.subject.map(trimmed)
     card.submitLabel = card.submitLabel.map(trimmed); card.fields = card.fields?.map(normalized)
     return card
@@ -199,8 +243,11 @@ enum FormAnswers {
       case .text(let text)?: shown = ReplyActionRules.trimmed(text)
       case nil: shown = "No"
       }
-      let parts = shown.components(separatedBy: CharacterSet.newlines)
-      return parts.count > 1 ? ["- \(field.label):"] + parts.map { "  " + $0 } : ["- \(field.label): \(shown)"]
+      // As the web: a value holding a line feed starts on its own line, split at CRLF, CR or LF.
+      // Foundation's string methods here work on UTF-16, where Swift's own would see CRLF as one character.
+      guard shown.utf16.contains(10) else { return ["- \(field.label): \(shown)"] }
+      let lines = shown.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n").components(separatedBy: "\n")
+      return ["- \(field.label):"] + lines.map { "  " + $0 }
     }
     return (["My answers to \"\(card.title)\":"] + (lines.isEmpty ? ["- (No answers given)"] : lines)).joined(separator: "\n")
   }
@@ -283,7 +330,9 @@ struct T3Thread: Equatable, Identifiable {
       return URL(string: "\(hostedApp)/threads/\(segment(ids[0]))/\(segment(ids[1]))")
     }
     guard let url = URL(string: written), url.scheme == "https", url.user == nil, url.password == nil,
-      url.path.range(of: #"^/threads/[A-Za-z0-9_%-]+/[A-Za-z0-9_%-]+/?$"#, options: .regularExpression) != nil else { return nil }
+      // The encoded path, as the web reads it: a hosted link escapes its IDs, and the decoded path
+      // would turn %2E back into a dot the pattern refuses.
+      url.path(percentEncoded: true).range(of: #"^/threads/[A-Za-z0-9_%-]+/[A-Za-z0-9_%-]+/?$"#, options: .regularExpression) != nil else { return nil }
     return url
   }
   private static func model(_ selection: Any?) -> String? {
@@ -444,12 +493,17 @@ struct FormReplyCardView: View {
   @State private var problems: [String: String] = [:]
   @State private var error: String?
   @FocusState private var focused: String?
+  /// The first field with a problem takes VoiceOver focus, whatever its kind.
+  @AccessibilityFocusState private var spokenProblem: String?
+  /// The assistant this form belongs to, kept from when it opened: a send can finish after the
+  /// person has opened another assistant, and must still save under this one.
+  @State private var bot: String?
   private static let refused = "Hermes didn't take your answers."
   private static let unconfirmed = "Hermes hasn't confirmed your answers yet. They're being checked and won't be sent twice."
   /// Attempts checked on open; each one past the first exists only because Hermes refused the one before.
   private static let lookupLimit = 100
 
-  private var botId: String { store?.selectedBotId ?? "" }
+  private var botId: String { bot ?? store?.selectedBotId ?? "" }
   private var storageKey: String? { store?.key(.formReply, "\(botId).\(messageId).\(card.id)") }
   /// Every client of this server has the key. An older server has none, and the person's ID stands in.
   private var formKey: String { store?.bootstrap?.formKey ?? store?.bootstrap?.user.id ?? "" }
@@ -513,18 +567,29 @@ struct FormReplyCardView: View {
   @ViewBuilder private func fieldView(_ field: FormField) -> some View {
     let problem = problems[field.id]
     let locked = status != .editing
+    let grouped = field.kind == "choice" || field.kind == "multi"
     VStack(alignment: .leading, spacing: 6) {
       if field.kind != "toggle" {
         HStack(spacing: 2) {
           Text(field.label).font(.subheadline.weight(.semibold))
           if field.isRequired { Text("*").foregroundStyle(Palette.danger).accessibilityHidden(true) }
-        }.accessibilityElement(children: .combine).accessibilityLabel(field.isRequired ? "\(field.label), required" : field.label)
+        }.accessibilityElement(children: .combine).accessibilityLabel(Self.spoken(field))
+          // A single control carries the field's name itself; a group of choices keeps it as a heading.
+          .accessibilityHidden(!grouped).accessibilityAddTraits(.isHeader)
       }
-      if let help = field.help { Text(help).font(.caption).foregroundStyle(Palette.muted) }
+      // Help and the problem are read with the control, as its hint, so they are not read twice.
+      if let help = field.help { Text(help).font(.caption).foregroundStyle(Palette.muted).accessibilityHidden(true) }
       control(field).disabled(locked)
-      if let problem { Text(problem).font(.caption).foregroundStyle(Palette.danger) }
+      if let problem {
+        Text(problem).font(.caption).foregroundStyle(Palette.danger)
+          .accessibilityLabel("\(field.label): \(problem)").accessibilityFocused($spokenProblem, equals: field.id)
+      }
     }.accessibilityElement(children: .contain).accessibilityIdentifier("form.\(card.id).\(field.id)")
   }
+  /// The field's name as VoiceOver reads it, with "required" where it is.
+  private static func spoken(_ field: FormField) -> String { field.isRequired ? "\(field.label), required" : field.label }
+  /// What a control's hint reads after its name: the problem first, then the help.
+  private func hint(_ field: FormField) -> String { [problems[field.id], field.help].compactMap { $0 }.joined(separator: ". ") }
   @ViewBuilder private func control(_ field: FormField) -> some View {
     switch field.kind {
     case "choice", "multi":
@@ -542,34 +607,38 @@ struct FormReplyCardView: View {
             }.padding(12).contentShape(Rectangle())
               .background(RoundedRectangle(cornerRadius: 10).fill(on ? Palette.accentSoft : Color.clear))
               .overlay(RoundedRectangle(cornerRadius: 10).stroke(on ? Palette.accent : Palette.line))
-          }.buttonStyle(.plain).accessibilityAddTraits(on ? .isSelected : []).accessibilityIdentifier("form.\(card.id).\(field.id).\(option)")
+          }.buttonStyle(.plain).accessibilityAddTraits(on ? .isSelected : []).accessibilityHint(hint(field))
+            .accessibilityIdentifier("form.\(card.id).\(field.id).\(option)")
         }
       }
     case "toggle":
       Toggle(isOn: Binding(get: { answers[field.id]?.toggle ?? false }, set: { set(field, .toggle($0)) })) {
         Text(field.label).font(.subheadline.weight(.semibold))
-      }.tint(Palette.accent)
+      }.tint(Palette.accent).accessibilityHint(hint(field))
     case "select":
       Picker(field.label, selection: Binding(get: { answers[field.id]?.text ?? "" }, set: { set(field, .text($0)) })) {
         Text("Choose…").tag("")
         ForEach(field.options ?? [], id: \.self) { Text($0).tag($0) }
-      }.pickerStyle(.menu)
+      }.pickerStyle(.menu).accessibilityLabel(Self.spoken(field)).accessibilityHint(hint(field))
     case "date":
       let text = answers[field.id]?.text ?? ""
       if let date = Self.dayFormatter.date(from: text) {
         HStack {
-          DatePicker(field.label, selection: Binding(get: { date }, set: { set(field, .text(Self.dayFormatter.string(from: $0))) }), displayedComponents: .date).labelsHidden()
+          DatePicker(Self.spoken(field), selection: Binding(get: { date }, set: { set(field, .text(Self.dayFormatter.string(from: $0))) }), displayedComponents: .date)
+            .labelsHidden().accessibilityHint(hint(field))
           Button("Clear") { set(field, .text("")) }.buttonStyle(.borderless)
         }
       } else {
         Button("Choose a date", systemImage: "calendar") { set(field, .text(Self.dayFormatter.string(from: Date()))) }.buttonStyle(.bordered)
+          .accessibilityLabel("\(Self.spoken(field)): choose a date").accessibilityHint(hint(field))
       }
     default:
       let binding = Binding(get: { answers[field.id]?.text ?? "" }, set: { set(field, .text(String($0.prefix(4000)))) })
       Group {
-        if field.kind == "textarea" { TextField(field.placeholder ?? "", text: binding, axis: .vertical).lineLimit(3...8) }
-        else { TextField(field.placeholder ?? "", text: binding).keyboardType(field.kind == "number" ? .decimalPad : .default) }
-      }.textFieldStyle(.roundedBorder).focused($focused, equals: field.id)
+        // The field's name labels the control; the placeholder is only its prompt.
+        if field.kind == "textarea" { TextField(Self.spoken(field), text: binding, prompt: Text(field.placeholder ?? ""), axis: .vertical).lineLimit(3...8) }
+        else { TextField(Self.spoken(field), text: binding, prompt: Text(field.placeholder ?? "")).keyboardType(field.kind == "number" ? .decimalPad : .default) }
+      }.textFieldStyle(.roundedBorder).focused($focused, equals: field.id).accessibilityHint(hint(field))
     }
   }
   private static let dayFormatter: DateFormatter = {
@@ -599,6 +668,7 @@ struct FormReplyCardView: View {
   private func open() async {
     guard !loaded else { return }
     loaded = true
+    bot = store?.selectedBotId
     let start = FormAnswers.start(card)
     guard let saved = readSaved() else { answers = start; await lookUp(); return }
     answers = start.merging(saved.answers.filter { start.keys.contains($0.key) }) { $1 }
@@ -635,7 +705,11 @@ struct FormReplyCardView: View {
     guard status == .editing, connected, let store else { return }
     let found = FormAnswers.problems(card, answers)
     problems = found
-    if let first = (card.fields ?? []).first(where: { found[$0.id] != nil }) { error = nil; focused = first.id; return }
+    if let first = (card.fields ?? []).first(where: { found[$0.id] != nil }) {
+      error = nil; spokenProblem = first.id
+      if !["choice", "multi", "toggle", "select", "date"].contains(first.kind) { focused = first.id }
+      return
+    }
     let text = FormAnswers.text(card, answers)
     if text.utf16.count > AppStore.maxMessageLength {
       error = "Your answers are \((text.utf16.count - AppStore.maxMessageLength).formatted()) characters too long to send. Shorten the longest one."
@@ -697,7 +771,9 @@ struct FormReplyCardView: View {
     guard let from = pending, status == .checking, let store else { return }
     var delay = Duration.seconds(2)
     while !Task.isCancelled, pending == from {
-      if connected, case .success(let receipt)? = await store.attempt({ (context) -> Receipt in
+      // The store's own connection, not this view's: a view the transcript no longer redraws would
+      // keep the snapshot it started with and never notice reconnecting.
+      if store.connected, case .success(let receipt)? = await store.attempt({ (context) -> Receipt in
         try await context.api.get("/submissions/\(APIClient.component(from.id))")
       }), receipt.status != "uncertain" {
         settle(from, receipt); return

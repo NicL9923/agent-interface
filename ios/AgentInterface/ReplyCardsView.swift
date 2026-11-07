@@ -133,9 +133,18 @@ enum ReplyCards {
     closings.setObject(compiled, forKey: delimiter as NSString)
     return compiled
   }
+  /// Whether a JSON value is a number and not a switch, which JSONSerialization also hands back as NSNumber.
+  private static func isNumber(_ value: Any) -> Bool {
+    guard let number = value as? NSNumber else { return false }
+    return CFGetTypeID(number) != CFBooleanGetTypeID()
+  }
   static func strictJSON(_ data: Data) -> Bool {
     guard data.count <= 100_000, let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any], Set(object.keys) == ["version", "cards"], let cards = object["cards"] as? [[String: Any]] else { return false }
+    // An explicit null is not an absent field: the web rejects it, while Swift's decoding would read
+    // it as absent. A JSON number may start only a number field.
+    func clean(_ value: [String: Any]) -> Bool { !value.values.contains { $0 is NSNull } }
     return cards.allSatisfy { card in
+      guard clean(card) else { return false }
       let type = card["type"] as? String ?? ""
       let allowed: Set<String> = switch type {
       case "event": ["id", "type", "title", "start", "end", "location", "description"]
@@ -148,11 +157,14 @@ enum ReplyCards {
       case "event", "email": return true
       case "form":
         guard let fields = card["fields"] as? [[String: Any]] else { return false }
-        return fields.allSatisfy { Set($0.keys).isSubset(of: ["id", "label", "kind", "required", "help", "placeholder", "options", "value"]) }
+        return fields.allSatisfy { field in
+          Set(field.keys).isSubset(of: ["id", "label", "kind", "required", "help", "placeholder", "options", "value"]) && clean(field)
+            && (field["value"].map { !isNumber($0) || field["kind"] as? String == "number" } ?? true)
+        }
       default:
         guard let items = card["items"] as? [[String: Any]] else { return false }
         let itemKeys: Set<String> = type == "checklist" ? ["id", "text"] : ["id", "title", "time", "detail", "url"]
-        return items.allSatisfy { Set($0.keys).isSubset(of: itemKeys) }
+        return items.allSatisfy { Set($0.keys).isSubset(of: itemKeys) && clean($0) }
       }
     }
   }
@@ -160,7 +172,7 @@ enum ReplyCards {
   static func valid(_ doc: ReplyCardDocument) -> Bool {
     guard doc.version == 1, !doc.cards.isEmpty, doc.cards.count <= 8, Set(doc.cards.map(\.id)).count == doc.cards.count else { return false }
     return doc.cards.allSatisfy { card in
-      guard validId(card.id), !card.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, card.title.count <= 200 else { return false }
+      guard validId(card.id), ReplyActionRules.title(card.title, 200) else { return false }
       switch card.type {
       case "checklist", "itinerary":
         guard let items = card.items, !items.isEmpty, items.count <= 60, Set(items.map(\.id)).count == items.count else { return false }
