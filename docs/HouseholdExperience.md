@@ -143,6 +143,47 @@ and item IDs against that message before saving state. Calendar proposals requir
 review. Web opens an editable Google Calendar draft or downloads an ICS file;
 iOS opens the system event editor, where you choose whether to save.
 
+### Email drafts and forms
+
+Two more card types need no setting. Hermes receives their format with the inline
+view instructions in every WildBots conversation.
+
+- `email`, with a title, a body, and optional `to` and `cc` address lists and
+  subject. **Open in Mail** opens a `mailto:` draft in the device's mail app,
+  **Open in Gmail** opens Gmail's compose window, and **Copy** copies the whole
+  draft as text. Nothing is sent from WildBots.
+- `form`, with a title, optional description and submit label, and 1 to 20
+  fields. Field kinds are `text`, `textarea`, `number`, `date`, `select`,
+  `choice`, `multi` and `toggle`. `select`, `choice` and `multi` carry 1 to 20
+  options. A field can be `required` and can suggest a starting `value`.
+
+**Send answers** posts the answers as your own message, written as the form's
+title and one "Label: answer" line per answered field. It goes through the same
+durable admission as the message box under its own request ID, and never reads
+or changes your draft. The browser saves the request before sending it. An
+answer whose outcome is unknown is checked by that ID, across reloads, until
+Hermes settles it, and is never sent twice. A refused answer returns to the form
+with the reason. A sent form folds into a read-only list of your answers on that
+browser; other devices show your answers as the message that follows.
+
+These two types are web-only for now. The iOS app shows their JSON as code.
+
+### T3 Code threads
+
+An assistant connected to T3 Code's MCP server can start a T3 Code thread with
+`t3_thread_launch`. The conversation then shows a card between the turn's folded
+work and its reply: the thread's title, the start of its first prompt, the model,
+the workspace and **Open in T3 Code**. While the launch runs, the card says the
+thread is starting; a failed launch shows T3 Code's reason. WildBots does not read
+T3 Code, so the card describes the launch, not the thread's later progress.
+
+T3 Code gives outside MCP clients a hosted `https://app.t3.codes/threads/...`
+link, which offers the desktop app, the mobile app or the browser. A
+`t3-thread://v2/` link is rewritten to that hosted link. Any other link, or one
+that is not HTTPS, opens nothing. The card recognizes the tool under any MCP
+server name Hermes gives it, such as `mcp_t3code_t3_thread_launch`. See
+[connecting T3 Code](Integrations.md#t3-code).
+
 ## Inline views
 
 Web and iOS conversations render an assistant's `wildbots-html` fence as an
@@ -161,7 +202,7 @@ External libraries, fonts and images cannot load. A view has no app API access,
 cookies, local storage or action bridge to Hermes. Controls can calculate,
 filter, expand or draw within the view. They cannot send messages, approve work,
 or save changes. Use the existing checklist, itinerary and calendar cards when
-those saved actions are needed. Keep a short text explanation outside the view
+those saved actions are needed, and a form card to collect answers. Keep a short text explanation outside the view
 for notifications and other clients.
 
 The host supplies `--background`, `--foreground`, `--muted-foreground`, `--card`,

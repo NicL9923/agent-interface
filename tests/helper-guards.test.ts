@@ -27,7 +27,7 @@ describe("web data loads", () => {
     "src/app/use-conversation.ts": { count: 1, reason: "Coalesces stream notices into one more load instead of dropping them, and its query follows the reader's scroll position." },
     "src/app/use-draft.ts": { count: 1, reason: "Merges the server copy into a draft the person may be editing, so the result is never stored as-is." },
     "src/app/use-submission.ts": { count: 1, reason: "Reconciles a send receipt bound to the identity epoch and settles the draft it sent." },
-    "src/app/use-turn-retry.ts": { count: 1, reason: "Checks a saved retry's receipt by its ID until it settles, as a send's is, updating browser storage as well as state." },
+    "src/app/use-receipt-check.ts": { count: 1, reason: "Checks a request's receipt by its ID on a backing-off timer until it settles, for a retry or a form's answers." },
     "src/app/use-browser.ts": { count: 1, reason: "Registers the service worker; it makes no API request." },
     "src/components/google-identity.ts": { count: 1, reason: "Loads Google's sign-in script; it makes no API request." },
   };

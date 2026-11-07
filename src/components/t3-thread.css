@@ -1,0 +1,16 @@
+/* A T3 Code thread card sits in the turn, between its folded work and the reply. */
+.t3-thread-card { border: 1px solid var(--line); background: var(--raised); border-radius: 14px; padding: 16px 18px; margin: 10px 0 14px; max-width: 34rem; }
+.t3-thread-card.is-failed { border-color: color-mix(in srgb, var(--danger) 45%, var(--line)); }
+.t3-thread-card .t3-thread-eyebrow { display: flex; align-items: center; gap: 6px; margin: 0 0 6px; }
+.t3-thread-card.is-started .t3-thread-eyebrow { color: var(--accent); }
+.t3-thread-card h3 { margin: 0 0 6px; font-size: 1.0625rem; overflow-wrap: anywhere; }
+.t3-thread-prompt { margin: 0 0 10px; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 3; line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.t3-thread-facts { list-style: none; display: flex; flex-wrap: wrap; gap: 6px; padding: 0; margin: 0 0 12px; }
+.t3-thread-facts li { border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; font-size: 0.8125rem; color: var(--muted); }
+.t3-thread-card .form-error { margin: 0 0 8px; }
+.t3-thread-card .muted { margin: 0; }
+.t3-thread-open { gap: 7px; min-height: 40px; }
+@media (max-width: 620px) {
+  .t3-thread-card { padding: 14px; max-width: none; }
+  .t3-thread-open { width: 100%; justify-content: center; box-sizing: border-box; }
+}

@@ -36,6 +36,7 @@ local connection; it does not claim to revoke an account-wide grant at the vendo
 | Home Assistant | Connect the home's configured HTTPS `/api/mcp` endpoint using a long-lived access token. OAuth additionally needs the native client's IndieAuth settings. |
 | Models, search and images | Manage supported native provider sign-ins and API keys. Existing native tool and model configuration continues to control execution. |
 | Custom MCP | Add an HTTPS server with OAuth, a bearer token or no authentication. Hermes owns discovery and tool execution. Local command installation is not exposed. |
+| T3 Code | Add T3 Code's `/mcp` endpoint as a Custom MCP server with OAuth. T3 Code asks its owner to approve the client with read-only access or a runtime-mode ceiling. See [T3 Code](#t3-code). |
 | Apple Calendar and Reminders | In iOS, grant device permission, select calendars or reminder lists and a date range, preview the selection, then add it to a bot's draft. Send the draft to share it. Refresh explicitly to share newer data. |
 
 ## Connection requests in chat
@@ -186,3 +187,19 @@ the exact revision, successful checks and remaining external acceptance.
 Live Google consent, MCP vendor authorization and physical iPhone permission
 behavior require the configured installation and intended accounts/devices.
 They remain part of [external acceptance issue #1](https://github.com/NicL9923/agent-interface/issues/1).
+
+## T3 Code
+
+T3 Code serves MCP at `/mcp` on the machine that runs it, reachable over T3
+Connect, Tailscale Serve or loopback. Add that HTTPS address as a Custom MCP
+server with OAuth, and add its hostname to `HERMES_AGENT_INTERFACE_MCP_HOSTS`.
+T3 Code's approval page names the host that gets access; approve it with a
+runtime-mode ceiling, or read-only to let the assistant list and read threads
+without starting any. Turn the server on for the assistants that should use it.
+
+An outside client can start threads with `t3_thread_launch`, read and wait on
+them, and send them messages. Tools that act as a calling T3 thread, such as
+`delegate_task` and `create_threads`, refuse a client signed in from outside
+T3 Code. A launched thread shows in the conversation as a card with
+**Open in T3 Code**; see
+[T3 Code threads](HouseholdExperience.md#t3-code-threads).

@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import type { Message, SubmissionReceipt } from "../shared/types";
 import type { MessageRequest } from "../shared/api";
 import { retryRequestId } from "../shared/retry-id";
 import { ApiError, request as apiRequest } from "../client-api";
 import type { SavedConversation } from "./storage";
 import { retryTarget } from "./transcript-logic";
+import { useReceiptCheck } from "./use-receipt-check";
 
 /** What this view knows about the retry of one failed turn. */
 type Attempt = {
@@ -15,8 +16,6 @@ type Attempt = {
   receipt?: SubmissionReceipt;
 };
 const refused = "Hermes didn't take the retry.";
-// Receipt checks start every 2 seconds and slow to every 30 while nothing settles them.
-const firstCheck = 2000, slowestCheck = 30000;
 
 /**
  * Retry for a failed turn: resends the person's latest message as a request naming it. Every
@@ -68,26 +67,7 @@ export function useTurnRetry({ botId, userId, canonical, blocked, resendable, re
     ? { state: "checking", requestId: result.requestId }
     : { state: "settled", requestId: result.requestId, receipt: result });
   // Checked by its ID, never sent as a new request, until a receipt settles it or the turn changes.
-  useEffect(() => {
-    if (!checking || !followed || !turn) return;
-    let live = true, delay = firstCheck, timer: ReturnType<typeof setTimeout> | undefined;
-    const check = async () => {
-      if (navigator.onLine !== false && document.visibilityState !== "hidden") {
-        try {
-          const result = await apiRequest("GET /submissions/:id", { params: { id: followed } });
-          if (!live) return;
-          if (result.status !== "uncertain") { settle(turn, result); return; }
-        } catch {
-          /* Unconfirmed until a reliable receipt. */
-        }
-      }
-      if (!live) return;
-      timer = setTimeout(() => void check(), delay);
-      delay = Math.min(delay * 2, slowestCheck);
-    };
-    void check();
-    return () => { live = false; clearTimeout(timer); };
-  }, [checking, followed, turn]);
+  useReceiptCheck(checking && turn ? followed : undefined, result => settle(turn!, result), turn);
   const run = async (original: Message) => {
     if (!turn || sending.current.has(turn) || checking && !resendable) return;
     const forTurn = turn, again = checking;

@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
 import { ApiError, api, write } from "../src/client-api";
 import { defaultPreferences } from "../src/shared/types";
-import type { AttentionRequest, Bootstrap, Conversation, Message } from "../src/shared/types";
+import type { AttentionRequest, Bootstrap, Conversation, Message, ToolCall } from "../src/shared/types";
 import { useConversation } from "../src/app/use-conversation";
 import { useTurnRetry } from "../src/app/use-turn-retry";
 import { retryRequestId } from "../src/shared/retry-id";
@@ -1034,5 +1034,162 @@ describe("live work", () => {
       await changed();
       expect(container.querySelector(".work-tape")).toBeNull();
     } finally { bootstrap.bots = original; }
+  });
+});
+
+describe("T3 Code threads", () => {
+  // As Hermes records an MCP call to T3 Code's t3_thread_launch: the tool's text wrapped as {"result": ...}.
+  const launch = (status: "running" | "completed" | "failed", extra: Partial<ToolCall> = {}): ToolCall => ({ id: "launch", name: "mcp_t3code_t3_thread_launch", status,
+    arguments: JSON.stringify({ title: "Fix the gate sensor", message: "Find out why the north gate reads open.", workspaceStrategy: { type: "worktree", branch: "fix/gate" } }),
+    ...status === "completed" ? { result: JSON.stringify({ result: JSON.stringify({ threadId: "t-1", link: "https://app.t3.codes/threads/env-1/t-1", projectId: "p",
+      modelSelection: { model: "claude-opus-5-5" }, runId: "r", status: "queued" }) }) } : {}, ...extra });
+
+  it("shows the started thread between the folded work and the reply, with Open in T3 Code", async () => {
+    conversation = { ...conversation, messages: [prompt("q", "Start a thread to fix the gate"), { id: "t", role: "tool", text: "", toolCall: launch("completed") },
+      answer("a", "Started a thread for it.")] };
+    await render();
+    const fold = container.querySelector(".turn-work")!;
+    const card = container.querySelector<HTMLElement>(".t3-thread-card")!;
+    expect(fold.nextElementSibling).toBe(card);
+    expect(card.nextElementSibling?.getAttribute("data-message-id")).toBe("a");
+    expect(fold.contains(card)).toBe(false);
+    expect(card.textContent).toContain("T3 Code thread started");
+    expect(card.querySelector("h3")?.textContent).toBe("Fix the gate sensor");
+    expect([...card.querySelectorAll(".t3-thread-facts li")].map(item => item.textContent)).toEqual(["Claude Opus 5.5", "New worktree on fix/gate"]);
+    const open = card.querySelector<HTMLAnchorElement>("a")!;
+    expect(open.textContent?.trim()).toBe("Open in T3 Code");
+    expect(open.href).toBe("https://app.t3.codes/threads/env-1/t-1");
+    expect(open.target).toBe("_blank");
+    expect(open.rel).toContain("noopener");
+  });
+
+  it("shows the thread starting while the call runs, then its link once T3 Code answers", async () => {
+    conversation = { ...conversation, activity: { state: "working", runId: "r" }, messages: [prompt("q", "Start a thread")], toolCalls: [launch("running")] };
+    await render();
+    const card = () => container.querySelector<HTMLElement>(".t3-thread-card")!;
+    expect(card().textContent).toContain("Starting a T3 Code thread");
+    expect(card().querySelector("a")).toBeNull();
+    conversation = { ...conversation, activity: { state: "idle" }, toolCalls: [launch("completed")] };
+    await changed();
+    expect(card().textContent).toContain("T3 Code thread started");
+    expect(card().querySelector("a")?.getAttribute("href")).toBe("https://app.t3.codes/threads/env-1/t-1");
+  });
+
+  it("says why a launch failed and offers no link", async () => {
+    conversation = { ...conversation, messages: [prompt("q", "Start a thread"),
+      { id: "t", role: "tool", text: "", toolCall: launch("failed", { error: "Runtime mode exceeds this client's ceiling" }) }, answer("a", "That didn't work.")] };
+    await render();
+    const card = container.querySelector<HTMLElement>(".t3-thread-card")!;
+    expect(card.textContent).toContain("T3 Code thread didn't start");
+    expect(card.querySelector(".form-error")?.textContent).toBe("Runtime mode exceeds this client's ceiling");
+    expect(card.querySelector("a")).toBeNull();
+  });
+});
+
+describe("form replies", () => {
+  const form = { id: "trip", type: "form", title: "Trip details", fields: [
+    { id: "city", label: "Destination", kind: "text", required: true },
+    { id: "pace", label: "Pace", kind: "choice", options: ["Relaxed", "Packed"], value: "Relaxed" },
+    { id: "dog", label: "Bringing the dog", kind: "toggle" },
+  ] };
+  const reply = () => answer("a", "A few details first.\n\n```agent-ui\n" + JSON.stringify({ version: 1, cards: [form] }) + "\n```");
+  const composer = () => container.querySelector<HTMLTextAreaElement>("#message")!;
+  const card = () => container.querySelector<HTMLElement>(".reply-card-form")!;
+  const field = (label: string) => [...card().querySelectorAll("label")].find(item => item.textContent?.startsWith(label))!;
+  const send = () => act(async () => buttonText("Send answers")!.click());
+  const answers = 'My answers to "Trip details":\n- Destination: Marfa\n- Pace: Packed\n- Bringing the dog: Yes';
+  const fill = async () => {
+    await typeInto(card().querySelector<HTMLInputElement>('input[type="text"]')!, "Marfa");
+    await act(async () => field("Packed").querySelector("input")!.click());
+    await act(async () => field("Bringing the dog").querySelector("input")!.click());
+  };
+  beforeEach(() => { conversation = { ...conversation, messages: [prompt("q", "Plan a trip"), reply()] }; });
+
+  it("sends the answers as the person's message under a new request ID, never touching the draft", async () => {
+    vi.mocked(write).mockImplementation(async <T>(path: string, body: unknown) =>
+      (path === "/bots/shared/messages" ? { requestId: (body as { requestId: string }).requestId, status: "accepted" } : {}) as T);
+    await render();
+    expect(composer().value).toBe("My saved draft");
+    await fill();
+    await send();
+    expect(messagesWritten()).toHaveLength(1);
+    const body = messagesWritten()[0][1] as Record<string, unknown>;
+    expect(body).toEqual({ requestId: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4/), text: answers, attachments: [] });
+    expect(card().querySelector(".form-reply-sent")?.textContent?.trim()).toBe("Sent");
+    expect(card().querySelector("form")).toBeNull();
+    expect(composer().value).toBe("My saved draft");
+    expect(vi.mocked(write).mock.calls.some(([path]) => String(path).endsWith("/draft"))).toBe(false);
+  });
+
+  it("names a required field left empty and sends nothing", async () => {
+    await render();
+    await send();
+    expect(messagesWritten()).toHaveLength(0);
+    const input = card().querySelector<HTMLInputElement>('input[type="text"]')!;
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+    expect(document.getElementById(input.getAttribute("aria-describedby")!)?.textContent).toBe("This one needs an answer.");
+    expect(document.activeElement).toBe(input);
+  });
+
+  it("gives refused answers back to the form with the server's reason", async () => {
+    vi.mocked(write).mockImplementation(async <T>(path: string) => {
+      if (path === "/bots/shared/messages") throw new ApiError("Review the interrupted task before sending another message.", 409);
+      return {} as T;
+    });
+    await render();
+    await fill();
+    await send();
+    expect(card().querySelector('[role="alert"]')?.textContent).toBe("Review the interrupted task before sending another message.");
+    expect(card().querySelector<HTMLInputElement>('input[type="text"]')!.value).toBe("Marfa");
+    expect(buttonText("Send answers")!.disabled).toBe(false);
+    expect(localStorage.getItem("agent-interface:form-reply:one:shared:a:trip")).toBeNull();
+  });
+
+  it("checks answers whose outcome is unknown by their ID, across a reload, and never sends them twice", async () => {
+    let status = "uncertain";
+    vi.mocked(write).mockImplementation(async <T>(path: string) => {
+      if (path === "/bots/shared/messages") throw new TypeError("Failed to fetch");
+      return {} as T;
+    });
+    const lookups: string[] = [];
+    const previous = vi.mocked(api).getMockImplementation()!;
+    vi.mocked(api).mockImplementation(async <T>(path: string, ...rest: unknown[]) => {
+      if (!path.startsWith("/submissions/")) return previous(path, ...rest as []) as T;
+      lookups.push(path.split("/")[2]);
+      return { requestId: path.split("/")[2], status } as T;
+    });
+    await render();
+    await fill();
+    await send();
+    const requestId = (messagesWritten()[0][1] as { requestId: string }).requestId;
+    expect(card().querySelector('[role="alert"]')?.textContent).toContain("won't be sent twice");
+    expect(buttonText("Checking…")!.disabled).toBe(true);
+    // A reload finds the saved attempt and checks it rather than offering Send again.
+    await act(async () => root.unmount());
+    await render();
+    await advance(2100);
+    expect(lookups.every(id => id === requestId) && lookups.length > 0).toBe(true);
+    expect(buttonText("Send answers")).toBeUndefined();
+    status = "accepted";
+    await advance(4100);
+    expect(card().querySelector(".form-reply-sent")?.textContent?.trim()).toBe("Sent");
+    expect(card().querySelector(".form-reply-answers")?.textContent).toContain("Marfa");
+    expect(messagesWritten()).toHaveLength(1);
+  });
+});
+
+describe("email drafts", () => {
+  it("opens the draft in the mail app or Gmail and copies it, saying nothing was sent", async () => {
+    const draft = { id: "reply", type: "email", title: "Reply to Sam", to: ["sam@example.com"], subject: "Saturday", body: "Hi Sam,\nSee you then." };
+    conversation = { ...conversation, messages: [prompt("q", "Draft a reply to Sam"), answer("a", "Here's a draft.\n\n```agent-ui\n" + JSON.stringify({ version: 1, cards: [draft] }) + "\n```")] };
+    await render();
+    const card = container.querySelector<HTMLElement>(".reply-card-email")!;
+    const links = Object.fromEntries([...card.querySelectorAll("a")].map(link => [link.textContent?.trim(), link.getAttribute("href")]));
+    expect(links["Open in Mail"]).toBe("mailto:sam@example.com?subject=Saturday&body=Hi%20Sam%2C%0D%0ASee%20you%20then.");
+    expect(new URL(links["Open in Gmail"]!).searchParams.get("su")).toBe("Saturday");
+    expect(card.textContent).toContain("Nothing has been sent.");
+    await act(async () => buttonText("Copy")!.click());
+    expect(writeText).toHaveBeenCalledWith("To: sam@example.com\nSubject: Saturday\n\nHi Sam,\nSee you then.");
+    expect(buttonText("Copied")).toBeDefined();
   });
 });

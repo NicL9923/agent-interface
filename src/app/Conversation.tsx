@@ -14,6 +14,8 @@ import type { useDeviceNotifications } from "../components/use-device-notificati
 import { openComputer, usesComputer } from "../components/ComputerHandoffCard";
 import { AgentExchange, isAgentExchange } from "../components/AgentExchange";
 import { ActionReceipt } from "../components/ActionReceipt";
+import { T3ThreadCard } from "../components/T3ThreadCard";
+import { t3ThreadLaunch } from "../shared/t3-code";
 import { When } from "../components/When";
 import { Shimmer } from "../components/Shimmer";
 import { ComputerPeek } from "../components/ComputerPeek";
@@ -457,6 +459,12 @@ const TurnView = memo(function TurnView({ block, advanced, disconnected, name, b
   const fold = work.length || block.reasoning.length ? <TurnWork key="turn-work" work={work} reasoning={block.reasoning}
     messages={block.messages} advanced={advanced} disconnected={disconnected} recipient={name} live={running} /> : null;
   const foldAt = work.length ? block.replyAt : block.messages.find(message => message.role !== "user")?.id;
+  // Work the person should see without opening the fold, such as a T3 Code thread it started, follows it.
+  const shown = work.flatMap(message => {
+    const thread = message.toolCall && t3ThreadLaunch(message.toolCall);
+    return thread ? [<T3ThreadCard key={`t3:${message.id}`} thread={thread} />] : [];
+  });
+  const afterFold = fold ? [fold, ...shown] : [];
   // One keyed list, so the fold keeps its open state when finishing moves it above the reply.
   const rows = block.messages.flatMap((message, position) => {
     // The conversation is with one assistant, so its replies need no name. Consecutive reply parts
@@ -498,9 +506,9 @@ const TurnView = memo(function TurnView({ block, advanced, disconnected, name, b
         when={endsRun ? when : undefined} delivery={delivery}
         actions={!!message.text.trim() && (message.role === "assistant" || own)} />}
     </article>;
-    return message.id === foldAt && fold ? [fold, article] : [article];
+    return message.id === foldAt && fold ? [...afterFold, article] : [article];
   });
-  if (foldAt === undefined && fold) rows.push(fold);
+  if (foldAt === undefined && fold) rows.push(...afterFold);
   return <div className="conversation-turn">{rows}</div>;
 }, sameTurnProps);
 /**
