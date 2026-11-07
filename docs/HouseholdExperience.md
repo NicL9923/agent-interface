@@ -176,7 +176,9 @@ form folds into a read-only list of your answers. Another tab or device that
 opens the form skips refused attempts and finds the one that was sent or
 interrupted.
 
-These two types are web-only for now. The iOS app shows their JSON as code.
+Web and iOS show both types. iOS opens a draft in Mail or Gmail and sends a form's
+answers under the same request IDs as the web, so a form sent from one is shown as
+sent on the other.
 
 ### T3 Code threads
 

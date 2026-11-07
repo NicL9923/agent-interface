@@ -298,8 +298,8 @@ the reply format and supported behavior.
 Assistants can also hand you an email draft to open in your mail app or Gmail, or
 a short form to fill in. **Send answers** posts your answers as your own message
 without touching your draft. When an assistant connected to T3 Code starts a
-thread, the chat shows a card with **Open in T3 Code**. These are web-only for
-now. See [email drafts and forms](docs/HouseholdExperience.md#email-drafts-and-forms)
+thread, the chat shows a card with **Open in T3 Code**. These work on web and
+iOS. See [email drafts and forms](docs/HouseholdExperience.md#email-drafts-and-forms)
 and [T3 Code threads](docs/HouseholdExperience.md#t3-code-threads).
 
 **Routines** includes morning brief, meal plan and VPS health recipes, schedule

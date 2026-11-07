@@ -129,25 +129,32 @@ enum EmailDraft {
     component(value.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n").replacingOccurrences(of: "\n", with: "\r\n"))
   }
   static func mailto(_ card: ReplyCard) -> URL? {
-    let query = [card.cc.map { "cc=" + $0.map(component).joined(separator: ",") }, card.subject.map { "subject=" + mailText($0) }, "body=" + mailText(card.body ?? "")]
-      .compactMap { $0 }.joined(separator: "&")
+    var fields: [String] = []
+    if let cc = card.cc { fields.append("cc=" + cc.map(component).joined(separator: ",")) }
+    if let subject = card.subject { fields.append("subject=" + mailText(subject)) }
+    fields.append("body=" + mailText(card.body ?? ""))
+    let query = fields.joined(separator: "&")
     let to = (card.to ?? []).map(component).joined(separator: ",")
     return URL(string: ("mailto:" + to + "?" + query).replacingOccurrences(of: "%40", with: "@"))
   }
   /// Gmail's compose window with the draft filled in. Nothing sends until the person presses Send.
   static func gmail(_ card: ReplyCard) -> URL? {
     var parts = URLComponents(string: "https://mail.google.com/mail/")!
-    parts.queryItems = [URLQueryItem(name: "view", value: "cm"), URLQueryItem(name: "fs", value: "1")]
-      + (card.to.map { [URLQueryItem(name: "to", value: $0.joined(separator: ","))] } ?? [])
-      + (card.cc.map { [URLQueryItem(name: "cc", value: $0.joined(separator: ","))] } ?? [])
-      + (card.subject.map { [URLQueryItem(name: "su", value: $0)] } ?? [])
-      + [URLQueryItem(name: "body", value: card.body ?? "")]
+    var items = [URLQueryItem(name: "view", value: "cm"), URLQueryItem(name: "fs", value: "1")]
+    if let to = card.to { items.append(URLQueryItem(name: "to", value: to.joined(separator: ","))) }
+    if let cc = card.cc { items.append(URLQueryItem(name: "cc", value: cc.joined(separator: ","))) }
+    if let subject = card.subject { items.append(URLQueryItem(name: "su", value: subject)) }
+    items.append(URLQueryItem(name: "body", value: card.body ?? ""))
+    parts.queryItems = items
     // URLComponents leaves "+" alone, which Gmail reads as a space.
     parts.percentEncodedQuery = parts.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
     return parts.url
   }
   static func text(_ card: ReplyCard) -> String {
-    let headers = [card.to.map { "To: " + $0.joined(separator: ", ") }, card.cc.map { "Cc: " + $0.joined(separator: ", ") }, card.subject.map { "Subject: " + $0 }].compactMap { $0 }
+    var headers: [String] = []
+    if let to = card.to { headers.append("To: " + to.joined(separator: ", ")) }
+    if let cc = card.cc { headers.append("Cc: " + cc.joined(separator: ", ")) }
+    if let subject = card.subject { headers.append("Subject: " + subject) }
     return headers.isEmpty ? card.body ?? "" : headers.joined(separator: "\n") + "\n\n" + (card.body ?? "")
   }
 }
@@ -579,6 +586,8 @@ struct FormReplyCardView: View {
     }
   }
   private func set(_ field: FormField, _ value: FormValue) {
+    // A text field writes its unchanged value back when it takes focus; that is not an answer.
+    guard answers[field.id] != value else { return }
     answers[field.id] = value
     problems[field.id] = nil
     if status == .editing { save(SavedFormReply(attempt: attempt, answers: answers, state: "editing")) }
