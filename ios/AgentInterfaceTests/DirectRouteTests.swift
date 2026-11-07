@@ -165,6 +165,27 @@ private final class RouteHost: FakeHost, @unchecked Sendable {
     XCTAssertNil(api.activeRoute)
   }
 
+  func testAStreamTheRouteRefusesIsNotReopenedUnderAnotherSignIn() async throws {
+    let lan = RouteHost()
+    let (primary, api, _) = installation([(lan, .lan)])
+    await api.runRouteCheck()
+    lan.answer(status: 403, body: #"{"error":"This address serves only the iOS app's signed-in API.","code":"direct_route_refused"}"#)
+    let arrived = expectation(description: "stream reached the route")
+    let release = DispatchSemaphore(value: 0)
+    lan.hold = (arrived, release)
+    let stream = Task { _ = try await api.events("/api/bots/household/events") }
+    await fulfillment(of: [arrived], timeout: 5)
+    api.token = "another-account-token"
+    release.signal()
+    do {
+      try await stream.value
+      XCTFail("A stream refused for one account must not be reopened for another")
+    } catch let error as APIError {
+      XCTAssertEqual(error.status, 403)
+    }
+    XCTAssertFalse(primary.requests.contains { $0.url?.path == "/api/bots/household/events" })
+  }
+
   func testOnlyTheRequestsOwnCertificateRefusalMakesACancelledWriteSafeToResend() {
     let api = FakeServer().api()
     let route = RouteHost().route(.lan)

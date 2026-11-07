@@ -314,6 +314,8 @@ extension Data {
     if let route, http?.statusCode == 403 {
       bytes.task.cancel()
       _ = directRouteFailed(route, unsent: true, method: "GET")
+      // Reopened only for the account that asked; another sign-in opens its own stream.
+      guard token == sentToken else { throw APIError(message: "The change stream is unavailable.", status: 403) }
       return try await events(path)
     }
     guard http?.statusCode == 200, http?.mimeType == "text/event-stream" else {
