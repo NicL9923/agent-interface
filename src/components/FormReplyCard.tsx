@@ -17,17 +17,21 @@ import { Icon } from "./Icon";
 
 /**
  * What this browser keeps for one form: the answers as the person left them, which attempt they
- * are on, and whether that attempt is on its way or sent. `elsewhere` marks an attempt another
- * tab or device sent, whose answers this one never saw.
+ * are on, and whether that attempt is on its way, sent, or caught by a Hermes restart. A checking
+ * attempt keeps the exact request ID it went under. `elsewhere` marks an attempt another tab or
+ * device sent, whose answers this one never saw.
  */
-type Saved = { attempt: number; answers: FormAnswers; state: "editing" | "checking" | "sent"; elsewhere?: boolean };
-type Status = "looking" | "editing" | "sending" | "checking" | "sent";
+type Saved = { attempt: number; answers: FormAnswers; state: "editing" | "checking" | "sent" | "interrupted"; requestId?: string; elsewhere?: boolean };
+type Status = "looking" | "editing" | "sending" | "checking" | "sent" | "interrupted";
+/** The one request a check follows: its ID, attempt and the answers it carried. */
+type Pending = { id: string; attempt: number; answers: FormAnswers; elsewhere: boolean };
 const isAnswers = (value: unknown): value is FormAnswers => typeof value === "object" && value !== null && !Array.isArray(value)
   && Object.values(value).every(entry => typeof entry === "string" || typeof entry === "boolean" || Array.isArray(entry) && entry.every(item => typeof item === "string"));
 function readSaved(key: string): Saved | null {
   const value = localRead<Partial<Saved>>(key);
   return value && Number.isInteger(value.attempt) && value.attempt! >= 0 && isAnswers(value.answers)
-    && (value.state === "editing" || value.state === "checking" || value.state === "sent") ? value as Saved : null;
+    && (value.state === "editing" || value.state === "sent" || value.state === "interrupted" || value.state === "checking" && typeof value.requestId === "string")
+    ? value as Saved : null;
 }
 // Answers saved for an earlier version of the card keep only the fields it still has.
 const restore = (card: FormCard, answers: FormAnswers): FormAnswers => {
@@ -36,15 +40,15 @@ const restore = (card: FormCard, answers: FormAnswers): FormAnswers => {
 };
 const refused = "Hermes didn't take your answers.";
 const unconfirmed = "Hermes hasn't confirmed your answers yet. They're being checked and won't be sent twice.";
-// A form refused this many times by Hermes is past any lookup worth making on open.
-const lookups = 5;
 
 /**
  * A form the assistant asked the person to fill in. Send posts the answers as the person's own
  * message through the message box's admission path, never reading or changing the draft. The
  * request ID comes from the person, message, card and attempt, so every tab and device sends the
  * same request and the server admits it once. An answer that may have reached Hermes is checked by
- * that ID until a receipt settles it. Only a refusal from Hermes moves the form to a new attempt.
+ * that ID until a receipt settles it. Only a refusal from Hermes moves the form to a new attempt on
+ * its own. A Hermes restart marks an admitted request interrupted, so the answers may have arrived:
+ * the person checks the conversation and chooses to send them again.
  */
 export function FormReplyCard({ card, botId, messageId, userId, unavailable }: { card: FormCard; botId: string; messageId: string; userId: string; unavailable?: boolean }) {
   const key = formReplyKey(userId, botId, messageId, card.id);
@@ -55,57 +59,60 @@ export function FormReplyCard({ card, botId, messageId, userId, unavailable }: {
   const [elsewhere, setElsewhere] = useState(!!first?.elsewhere);
   // With nothing saved here, another tab or device may already have sent this form.
   const [status, setStatus] = useState<Status>(first ? first.state : "looking");
-  const [requestId, setRequestId] = useState<string>();
+  const [pending, setPending] = useState<Pending | null>(() => first?.state === "checking"
+    ? { id: first.requestId!, attempt: first.attempt, answers: first.answers, elsewhere: !!first.elsewhere } : null);
   const [problems, setProblems] = useState<Record<string, string>>(() => Object.create(null));
   const [error, setError] = useState("");
   const inFlight = useRef(false);
   const formId = useId();
   const save = (next: Saved) => localSave(key, next);
 
-  useEffect(() => {
-    let live = true;
-    void formRequestId(userId, botId, messageId, card.id, attempt).then(id => { if (live) setRequestId(id); });
-    return () => { live = false; };
-  }, [userId, botId, messageId, card.id, attempt]);
-
-  // Each attempt Hermes refused is skipped; the first one accepted means the form was sent.
+  // Attempts run in order and each one only after Hermes refused the one before, so the lookup
+  // skips refusals until the first attempt that was not refused, which tells where the form stands.
   const looking = status === "looking";
   useEffect(() => {
     if (!looking) return;
     let live = true;
     void (async () => {
-      let next = 0;
-      for (; next < lookups; next++) {
+      for (let next = 0; ; next++) {
         let receipt: SubmissionReceipt | null = null;
         try { receipt = await request("GET /submissions/:id", { params: { id: await formRequestId(userId, botId, messageId, card.id, next) } }); }
         catch { /* Unknown: the person may send, and the server admits the request once. */ }
         if (!live) return;
-        if (receipt?.status === "accepted") {
-          setAttempt(next); setElsewhere(true); setStatus("sent");
-          save({ attempt: next, answers: formStart(card), state: "sent", elsewhere: true });
-          return;
-        }
-        if (receipt?.status !== "rejected" && receipt?.status !== "interrupted") break;
+        if (receipt?.status === "rejected") continue;
+        const found: Saved = { attempt: next, answers: formStart(card), state: receipt?.status === "accepted" ? "sent" : receipt?.status === "interrupted" ? "interrupted" : "editing",
+          ...(receipt?.status === "accepted" || receipt?.status === "interrupted" ? { elsewhere: true } : {}) };
+        setAttempt(next); setElsewhere(!!found.elsewhere); setStatus(found.state);
+        if (found.state !== "editing") save(found);
+        return;
       }
-      setAttempt(next); setStatus("editing");
     })();
     return () => { live = false; };
   }, [looking]);
 
-  const settle = (from: { attempt: number; answers: FormAnswers }, receipt: SubmissionReceipt, sentElsewhere: boolean) => {
+  /** Settles the one request `from` names, with the attempt and answers it carried. */
+  const settle = (from: Pending, receipt: SubmissionReceipt) => {
+    const kept = { attempt: from.attempt, answers: from.answers, ...(from.elsewhere && { elsewhere: true }) };
     if (receipt.status === "accepted") {
-      setStatus("sent"); setError(""); save({ ...from, state: "sent", ...(sentElsewhere && { elsewhere: true }) });
+      setPending(null); setStatus("sent"); setError(""); save({ ...kept, state: "sent" });
       reactAvatar(botId, "cheer");
-    } else if (receipt.status === "rejected" || receipt.status === "interrupted") {
+    } else if (receipt.status === "rejected") {
       // A refused ID stays refused, so the person's next Send is a new attempt.
-      setAttempt(from.attempt + 1); setStatus("editing"); setElsewhere(false); setAnswers(from.answers);
+      setPending(null); setAttempt(from.attempt + 1); setStatus("editing"); setElsewhere(false); setAnswers(from.answers);
       setError(receipt.message ? `${refused} ${receipt.message}` : refused);
       save({ attempt: from.attempt + 1, answers: from.answers, state: "editing" });
+    } else if (receipt.status === "interrupted") {
+      setPending(null); setStatus("interrupted"); setError(""); save({ ...kept, state: "interrupted" });
     } else {
-      setStatus("checking"); setError(unconfirmed); save({ ...from, state: "checking", ...(sentElsewhere && { elsewhere: true }) });
+      setPending(from); setStatus("checking"); setError(unconfirmed); save({ ...kept, state: "checking", requestId: from.id });
     }
   };
-  useReceiptCheck(status === "checking" ? requestId : undefined, receipt => settle({ attempt, answers }, receipt, elsewhere));
+  useReceiptCheck(status === "checking" ? pending?.id : undefined, receipt => { if (pending) settle(pending, receipt); });
+  // After a restart, the person decides whether the answers arrived; sending again is a new attempt.
+  const sendAgain = () => {
+    setAttempt(attempt + 1); setElsewhere(false); setStatus("editing"); setError("");
+    save({ attempt: attempt + 1, answers, state: "editing" });
+  };
 
   async function send() {
     if (inFlight.current || status !== "editing" || unavailable) return;
@@ -123,23 +130,26 @@ export function FormReplyCard({ card, botId, messageId, userId, unavailable }: {
       return;
     }
     inFlight.current = true; setStatus("sending"); setError("");
-    const from = { attempt, answers };
-    // Saved first, so leaving while the request is out checks it on return. If saving fails, the
-    // same request ID still keeps a second Send from being admitted.
-    save({ ...from, state: "checking" });
     try {
-      const id = await formRequestId(userId, botId, messageId, card.id, attempt);
-      settle(from, await request("POST /bots/:id/messages", { params: { id: botId },
-        body: { requestId: id, text, attachments: [], ...(tools?.reviewedInterruption && { reviewedInterruption: true }) } }), false);
-    } catch (cause) {
-      if (cause instanceof ApiError && cause.code === "submission_conflict") {
-        // Another tab or device sent different answers under this attempt's ID. Follow that one.
-        setElsewhere(true); setStatus("checking"); setError(""); save({ ...from, state: "checking", elsewhere: true });
-      } else if (cause instanceof ApiError && cause.status < 500) {
-        // Refused before Hermes saw it, so this attempt's ID is still free.
-        setStatus("editing"); setError(cause.message || refused); save({ ...from, state: "editing" });
-      } else {
-        setStatus("checking"); setError(unconfirmed);
+      const from: Pending = { id: await formRequestId(userId, botId, messageId, card.id, attempt), attempt, answers, elsewhere: false };
+      // Saved first, so leaving while the request is out checks it on return. If saving fails, the
+      // same request ID still keeps a second Send from being admitted.
+      save({ attempt, answers, state: "checking", requestId: from.id });
+      try {
+        settle(from, await request("POST /bots/:id/messages", { params: { id: botId },
+          body: { requestId: from.id, text, attachments: [], ...(tools?.reviewedInterruption && { reviewedInterruption: true }) } }));
+      } catch (cause) {
+        if (cause instanceof ApiError && cause.code === "submission_conflict") {
+          // Another tab or device sent different answers under this attempt's ID. Follow that one.
+          const theirs = { ...from, elsewhere: true };
+          setElsewhere(true); setPending(theirs); setStatus("checking"); setError("");
+          save({ attempt, answers, state: "checking", requestId: from.id, elsewhere: true });
+        } else if (cause instanceof ApiError && cause.status < 500) {
+          // Refused before Hermes saw it, so this attempt's ID is still free.
+          setStatus("editing"); setError(cause.message || refused); save({ attempt, answers, state: "editing" });
+        } else {
+          setPending(from); setStatus("checking"); setError(unconfirmed);
+        }
       }
     } finally {
       inFlight.current = false;
@@ -156,6 +166,11 @@ export function FormReplyCard({ card, botId, messageId, userId, unavailable }: {
       return rest;
     });
   };
+  if (status === "interrupted") return <>
+    {card.description && <p className="preserve-lines">{card.description}</p>}
+    <p role="status">Hermes restarted while it had {elsewhere ? "answers to this form" : "your answers"}, so they may or may not have arrived. Check the conversation above.</p>
+    <div className="actions"><Button type="button" disabled={unavailable} onClick={sendAgain}>They didn't arrive. Edit and send again</Button></div>
+  </>;
   if (status === "sent") return <>
     {card.description && <p className="preserve-lines">{card.description}</p>}
     {elsewhere ? <p className="muted">Your answers were sent from another tab or device.</p>

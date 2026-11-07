@@ -28,7 +28,7 @@ describe("web data loads", () => {
     "src/app/use-draft.ts": { count: 1, reason: "Merges the server copy into a draft the person may be editing, so the result is never stored as-is." },
     "src/app/use-submission.ts": { count: 1, reason: "Reconciles a send receipt bound to the identity epoch and settles the draft it sent." },
     "src/app/use-receipt-check.ts": { count: 1, reason: "Checks a request's receipt by its ID on a backing-off timer until it settles, for a retry or a form's answers." },
-    "src/components/FormReplyCard.tsx": { count: 2, reason: "Derives its request ID with Web Crypto, and on open looks up each earlier attempt's receipt in order, stopping at the first that settles it." },
+    "src/components/FormReplyCard.tsx": { count: 1, reason: "On open, looks up each attempt's receipt in order, skipping refusals, until one says where the form stands." },
     "src/app/use-browser.ts": { count: 1, reason: "Registers the service worker; it makes no API request." },
     "src/components/google-identity.ts": { count: 1, reason: "Loads Google's sign-in script; it makes no API request." },
   };

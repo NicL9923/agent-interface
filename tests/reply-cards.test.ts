@@ -167,7 +167,8 @@ describe("interactive reply contracts", () => {
       ["a placeholder over 200 characters", { placeholder: "x".repeat(201) }, 0],
       ["a starting number a number input cannot show", { value: "0x10" }, 1],
       ["a starting number with a trailing point", { value: "1." }, 1],
-      ["a starting number that is infinite", { value: "Infinity" }, 1],
+      ["a starting number spelled as a word", { value: "Infinity" }, 1],
+      ["a starting number too large to be finite", { value: "1e309" }, 1],
     ])("keeps a form with %s as code", (_, change, index) => {
       expect(parseReplyDocument(field(change, index))).toBeNull();
     });

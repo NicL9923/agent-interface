@@ -1174,6 +1174,52 @@ describe("form replies", () => {
     expect(messagesWritten()).toHaveLength(0);
   });
 
+  it("finds a form sent after many refusals, however many", async () => {
+    const statuses = new Map<string, string>();
+    for (let attempt = 0; attempt < 7; attempt++) statuses.set(await formId(attempt), "rejected");
+    statuses.set(await formId(7), "accepted");
+    receipts(statuses);
+    await render();
+    await waitForUi(() => expect(sent()).toBe("Sent"));
+    expect(messagesWritten()).toHaveLength(0);
+  });
+
+  it("treats a Hermes restart as maybe arrived, and sends again only when the person says so", async () => {
+    receipts(new Map([[await formId(0), "interrupted"]]));
+    accept();
+    await render();
+    await waitForUi(() => expect(card().textContent).toContain("may or may not have arrived"));
+    expect(buttonText("Send answers")).toBeUndefined();
+    expect(messagesWritten()).toHaveLength(0);
+    await act(async () => buttonText("They didn't arrive. Edit and send again")!.click());
+    await fill();
+    await send();
+    await posted(1);
+    expect((messagesWritten()[0][1] as { requestId: string }).requestId).toBe(await formId(1));
+  });
+
+  it("follows the attempt it sent, not a refused earlier one, while Hermes hasn't confirmed it", async () => {
+    const statuses = new Map<string, string>();
+    receipts(statuses);
+    let status = "rejected";
+    vi.mocked(write).mockImplementation(async <T>(path: string, body: unknown) =>
+      (path === "/bots/shared/messages" ? { requestId: (body as { requestId: string }).requestId, status } : {}) as T);
+    await render();
+    await fill();
+    await send();
+    await waitForUi(() => expect(card().querySelector('[role="alert"]')?.textContent).toBe("Hermes didn't take your answers."));
+    statuses.set(await formId(0), "rejected");
+    status = "uncertain";
+    await send();
+    await posted(2);
+    await advance(2100);
+    await advance(4100);
+    // Attempt 0's refusal must not reopen the form while attempt 1 is unconfirmed.
+    expect(buttonText("Checking…")?.disabled).toBe(true);
+    expect(buttonText("Send answers")).toBeUndefined();
+    expect(messagesWritten()).toHaveLength(2);
+  });
+
   it("keeps a refused answer's words in the form across leaving the chat, under the same ID", async () => {
     vi.mocked(write).mockImplementation(async <T>(path: string) => {
       if (path === "/bots/shared/messages") throw new ApiError("Review the interrupted task before starting another message.", 409);

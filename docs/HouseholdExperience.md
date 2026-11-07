@@ -168,9 +168,12 @@ so every tab and device sends the same request and the server admits it once. An
 answer whose outcome is unknown is checked by that ID, across reloads, until
 Hermes settles it. Answers you have typed are kept on the device until you send
 them. A refusal before Hermes sees the answers keeps the same attempt; a refusal
-from Hermes moves to the next one. A sent form folds into a read-only list of
-your answers. Another tab or device that opens the form finds the sent attempt
-and says the answers were already sent. A household member who knows those IDs
+from Hermes moves to the next one. A Hermes restart marks the request
+interrupted, which does not say whether the answers arrived, so the card asks you
+to check the conversation and offers to send them again as a new attempt. A sent
+form folds into a read-only list of your answers. Another tab or device that
+opens the form skips refused attempts and finds the one that was sent or
+interrupted. A household member who knows those IDs
 could claim your form's ID first, which leaves your card checking; nothing they
 send appears as yours.
 
