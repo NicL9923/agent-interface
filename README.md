@@ -529,6 +529,28 @@ including an iOS simulator on the server's Mac. A physical phone needs an HTTPS
 address it can reach. Household sign-in opens the system authentication browser;
 the resulting app token stays in Keychain, scoped to that server.
 
+### LAN and tailnet routes
+
+Set `DIRECT_ROUTES=lan`, `tailnet` or `lan,tailnet` to let the iOS app reach this
+server over the household network or a Tailscale (or Headscale) tailnet when it
+can, instead of the public origin. The server opens an HTTPS listener on
+`DIRECT_PORT` (default 3443) on each matching private address, and adds and drops
+them as addresses change. It finds LAN addresses on ordinary adapters, never
+container bridges or other VPNs, and tailnet addresses on Tailscale's adapter. A
+cloud server should list only `tailnet`, since its provider's private network is no
+household's LAN. Allow `DIRECT_PORT` through the host firewall on those interfaces
+only, and through the tailnet's access rules for the phones that should use it. Linux
+accepts a packet for any of its addresses on any interface, so the firewall, not the
+listener's address, decides who can connect.
+
+Each listener uses a self-signed certificate kept in `DIRECT_TLS_DIR`, by default
+`direct-tls` beside the database. The app learns each route and the certificate's
+fingerprint over the HTTPS origin, then pins it. The listener serves only the signed-in
+native API; sign-in and the web app stay on the origin. Deleting the directory makes
+a new certificate at the next start, and the app picks it up the next time it
+reaches the origin. See [direct routes](docs/native-api.md#direct-routes) for the
+contract.
+
 Native notifications require the `APNS_*` settings in `.env.example` and a signed
 app whose bundle ID and APNs environment match the server. The
 [native API contract](docs/native-api.md) documents sign-in, expiry and device

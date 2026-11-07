@@ -9,7 +9,9 @@ Open `AgentInterface.xcodeproj` in Xcode and choose the shared `AgentInterface`
 scheme. Connect to the self-hosted **app server**, for example
 `https://agentui.wildflowersranch.com`. A bare host defaults to HTTPS. HTTP is
 accepted only for localhost development. Hermes and provider credentials stay on
-the server.
+the server. When the server offers LAN or tailnet routes, the app uses the best one
+it can reach, pinned to the certificate the server advertised, and falls back to
+that address; see `docs/native-api.md`.
 
 **Settings > Computer** shows the shared desktop in the app through the server's
 native viewer page, watching until **Take over**. With control, the keyboard

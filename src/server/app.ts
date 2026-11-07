@@ -43,6 +43,8 @@ import { installInlineUi } from "./inline-ui.js";
 import { immutableCacheControl, isHashedAsset } from "./static-cache.js";
 import { isApiRequest } from "./route-path.js";
 import { MAX_UPLOAD_BYTES } from "../shared/uploads.js";
+import { DirectRoutes, installDirectRouteGate, loadDirectIdentity, type DirectAddress } from "./direct-routes.js";
+import { apiRoute } from "./api-route.js";
 
 /**
  * Builds the app: plugins and hooks, the collaborators routes share, each route group's install,
@@ -61,6 +63,8 @@ export async function createApp(
     logStream?: { write(line: string): void };
     clientRoot?: string;
     metadataProbe?: MetadataProbe;
+    /** Replaces interface discovery for direct routes, so tests choose the addresses. */
+    directAddresses?: () => DirectAddress[];
   } = {},
 ) {
   const store = options.store ?? new Store(config.database);
@@ -75,6 +79,8 @@ export async function createApp(
   app.addHook("onRoute", (route) => {
     for (const method of [route.method].flat()) routes.push({ method, url: route.url });
   });
+  // Before authentication, so a direct listener refuses anything but the native bearer API first.
+  installDirectRouteGate(app);
   installSecurityHeaders(app, config.origin);
   installInlineUi(app);
   installEtags(app);
@@ -96,6 +102,11 @@ export async function createApp(
   };
   const directory = new BotDirectory(runtime, store);
   app.get("/api/health", async () => ({ ok: true }));
+  // Listeners open in start(), after the primary origin listens; until then the app is told of none.
+  const directRoutes = config.directRoutes && new DirectRoutes(
+    config.directRoutes, loadDirectIdentity(config.directRoutes.stateDirectory, app.log),
+    (req, res) => app.routing(req, res), app.log, options.directAddresses);
+  apiRoute(app, "GET /native/routes", {}, async () => ({ routes: directRoutes?.routes() ?? [] }));
   installClientErrorRoutes(app);
   installUpgradeRoutes(app, upgrades);
   const canManageIntegrations = (req: FastifyRequest) => config.localDevAuth && !config.production || Boolean(config.integrationAdmins?.includes(signedIn(req).email.toLowerCase()));
@@ -164,6 +175,7 @@ export async function createApp(
     health.start();
   }
   app.addHook("onClose", async () => {
+    await directRoutes?.close();
     groups.close();
     catalogs?.close();
     health.stop();
@@ -171,7 +183,7 @@ export async function createApp(
     await runtime.close();
     store.close();
   });
-  return { app, store, worker, health, routes };
+  return { app, store, worker, health, routes, directRoutes };
 }
 
 /** The association file Apple's CDN fetches for universal links and Handoff from Safari. */
