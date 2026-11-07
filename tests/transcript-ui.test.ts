@@ -1265,6 +1265,21 @@ describe("form replies", () => {
     expect(JSON.parse(localStorage.getItem(saved)!)).toEqual(newer);
   });
 
+  it("never lets a late refusal of an earlier attempt overwrite a later attempt that was sent", async () => {
+    let finish!: (value: unknown) => void;
+    vi.mocked(write).mockImplementation(async <T>(path: string) => path === "/bots/shared/messages"
+      ? await new Promise<T>(resolve => { finish = value => resolve(value as T); }) : {} as T);
+    await render();
+    await fill();
+    await send();
+    await posted(1);
+    // Another copy of this card saw attempt 0 refused and sent attempt 1.
+    const newer = { attempt: 1, answers: { city: "Austin", pace: "Relaxed", dog: false }, state: "sent" };
+    localStorage.setItem(saved, JSON.stringify(newer));
+    await act(async () => finish({ requestId: await formId(0), status: "rejected" }));
+    expect(JSON.parse(localStorage.getItem(saved)!)).toEqual(newer);
+  });
+
   it("keeps a refused answer's words in the form across leaving the chat, under the same ID", async () => {
     vi.mocked(write).mockImplementation(async <T>(path: string) => {
       if (path === "/bots/shared/messages") throw new ApiError("Review the interrupted task before starting another message.", 409);

@@ -74,11 +74,12 @@ export function FormReplyCard({ card, botId, messageId, userId, unavailable }: {
   const [error, setError] = useState("");
   const inFlight = useRef(false);
   const formId = useId();
-  // Never back to an earlier attempt: a late answer to one must not overwrite a newer one's record,
-  // such as from a copy of this card that closed while its request was out.
-  const save = (next: Saved) => {
+  // Never back from a newer attempt: what happens to one attempt, `from`, must not overwrite a later
+  // attempt's record, such as a late answer to a copy of this card that closed while its request was
+  // out. Moving on from `from` to the next attempt counts as happening to `from`.
+  const save = (next: Saved, from = next.attempt) => {
     const stored = readSaved(key);
-    if (!stored || stored.attempt <= next.attempt) localSave(key, next);
+    if (!stored || stored.attempt <= from) localSave(key, next);
   };
   // A checking record saved without a usable ID follows the ID its attempt derives.
   const recovering = status === "checking" && !pending;
@@ -125,7 +126,7 @@ export function FormReplyCard({ card, botId, messageId, userId, unavailable }: {
       // A refused ID stays refused, so the person's next Send is a new attempt.
       setPending(null); setAttempt(from.attempt + 1); setStatus("editing"); setElsewhere(false); setAnswers(from.answers);
       setError(receipt.message ? `${refused} ${receipt.message}` : refused);
-      save({ attempt: from.attempt + 1, answers: from.answers, state: "editing" });
+      save({ attempt: from.attempt + 1, answers: from.answers, state: "editing" }, from.attempt);
     } else if (receipt.status === "interrupted") {
       setPending(null); setStatus("interrupted"); setError(""); save({ ...kept, state: "interrupted" });
     } else {
@@ -136,7 +137,7 @@ export function FormReplyCard({ card, botId, messageId, userId, unavailable }: {
   // After a restart, the person decides whether the answers arrived; sending again is a new attempt.
   const sendAgain = () => {
     setAttempt(attempt + 1); setElsewhere(false); setStatus("editing"); setError("");
-    save({ attempt: attempt + 1, answers, state: "editing" });
+    save({ attempt: attempt + 1, answers, state: "editing" }, attempt);
   };
 
   async function send() {
