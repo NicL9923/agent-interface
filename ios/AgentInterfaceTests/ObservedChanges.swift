@@ -14,7 +14,7 @@ extension AppStore {
       "selectedBotId": \.selectedBotId, "routineResult": \.routineResult, "todayRequest": \.todayRequest, "listenRequest": \.listenRequest, "focus": \.focus,
       "draft": \.draft, "draftReady": \.draftReady, "pendings": \.pendings, "receipts": \.receipts,
       "error": \.error, "notice": \.notice, "leftBotId": \.leftBotId, "signingIn": \.signingIn, "loading": \.loading,
-      "sending": \.sending, "appUnavailable": \.appUnavailable, "interruptionReviewed": \.interruptionReviewed,
+      "sendingRequests": \.sendingRequests, "appUnavailable": \.appUnavailable, "interruptionReviewed": \.interruptionReviewed,
       "authConfig": \.authConfig, "restoring": \.restoring, "sessionExpired": \.sessionExpired,
       "conversationRequest": \.conversationRequest, "preferencesSaving": \.preferencesSaving,
       "preferencesSaveFailed": \.preferencesSaveFailed, "preferencesDraft": \.preferencesDraft, "groupCatalog": \.groupCatalog, "groupNoticeScope": \.groupNoticeScope, "homeRequest": \.homeRequest,

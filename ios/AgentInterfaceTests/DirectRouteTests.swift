@@ -43,7 +43,11 @@ private final class RouteHost: FakeHost, @unchecked Sendable {
 
 @MainActor final class DirectRouteTests: XCTestCase {
   private var servers: [URL] = []
+  /// FakeExchange holds its hosts weakly, so a host the test body no longer names can be freed
+  /// before its request arrives and answer `.badURL`. Every host stays alive until tearDown.
+  private var hosts: [FakeHost] = []
   override func tearDown() async throws {
+    hosts = []
     for server in servers { UserDefaults.standard.removeObject(forKey: DeviceDefaults.directRoutes(server)) }
   }
 
@@ -58,7 +62,9 @@ private final class RouteHost: FakeHost, @unchecked Sendable {
       request.url?.path == "/api/native/routes" ? .init(body: body) : .init(body: #"{"ok":true}"#)
     }
     servers.append(primary.origin)
+    hosts.append(primary)
     for (host, _) in routes {
+      hosts.append(host)
       FakeExchange.register(host)
       host.answer(status: 200, body: body)
     }
@@ -103,6 +109,7 @@ private final class RouteHost: FakeHost, @unchecked Sendable {
     // An older server, or one with direct routes turned off since.
     let older = FakeServer(answer: { _ in .init(status: 404, body: #"{"error":"API endpoint not found"}"#) })
     servers.append(older.origin)
+    hosts.append(older)
     let client = older.api()
     client.directRoutes = [lan.route(.lan)]
     await client.runRouteCheck()
@@ -129,7 +136,10 @@ private final class RouteHost: FakeHost, @unchecked Sendable {
     await api.runRouteCheck()
     lan.failing = URLError(.timedOut)
     _ = try await api.data(path: "/api/bootstrap")
-    XCTAssertEqual(primary.lastRequest?.url?.path, "/api/bootstrap")
+    // The failure forces a route check in the background. Let it finish, so its route-list
+    // request and its answer cannot land among the checks below.
+    await api.routeCheck?.value
+    XCTAssertTrue(primary.requests.contains { $0.url?.path == "/api/bootstrap" }, "the read was sent again on the primary origin")
     XCTAssertNil(api.activeRoute)
     // The route answers again, but a route that just failed is not trusted for a while.
     lan.failing = nil
@@ -248,6 +258,7 @@ private final class RouteHost: FakeHost, @unchecked Sendable {
       return .init(body: body)
     }
     servers.append(primary.origin)
+    hosts += [primary, lan]
     FakeExchange.register(lan)
     lan.answer(status: 200, body: body)
     let api = primary.api()
