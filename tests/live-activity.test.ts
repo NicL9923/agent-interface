@@ -443,6 +443,30 @@ describe("push-to-start", () => {
     expect(starts()).toHaveLength(1);
   });
 
+  it("covers an unreadable dismissed assistant even while another assistant has an active run", async () => {
+    registerStart();
+    store.savePreferences("one", { ...defaultPreferences, followBots: ["garden"] });
+    store.participate("run-k", "one");
+    set("kitchen", "working", { runId: "run-k" });
+    set("garden", "working", { runId: "run-g" });
+    const token = "one".repeat(32).slice(0, 64);
+    register("one", [], token);
+    store.dismissLiveActivity("one", "one-device", token);
+    const read = live["runtime"].conversation;
+    live["runtime"].conversation = async (botId, options) => {
+      if (botId === "kitchen") throw new Error("Hermes could not read the conversation");
+      return read(botId, options);
+    };
+    await tick();
+    expect(covered()).toEqual(["garden", "kitchen"]);
+    live["runtime"].conversation = read;
+    await tick(5_000);
+    expect(starts()).toEqual([]);
+    expect(store.liveActivityStarts("sandbox", clock)[0].started).toEqual(expect.arrayContaining([
+      { botId: "kitchen", runId: "run-k" }, { botId: "garden", runId: "run-g" },
+    ]));
+  });
+
   it("covers a run dismissed while its conversation could not be read once it can be", async () => {
     registerStart();
     store.savePreferences("one", { ...defaultPreferences, followBots: [] });
