@@ -537,12 +537,15 @@ it.each([404, 410, 500])("handles web push status %i for queued notifications", 
   const endpoint = "https://push.example.test/device";
   store.subscribe("one", { endpoint, keys: { p256dh: "key", auth: "auth" } });
   queue(store, "first-push", Date.now());
+  queue(store, "second-push", Date.now());
+  store.db.prepare("INSERT INTO notification_batches VALUES(?,?,?)").run("push-batch", "one", JSON.stringify({ title: "Batch", body: "", url: "/", tag: "batch" }));
+  for (const id of ["first-push", "second-push"]) store.db.prepare("INSERT INTO notification_batch_items VALUES(?,?)").run(id, "push-batch");
   const sender = vi.fn(async () => { throw Object.assign(new Error("push failure"), { statusCode: status }); });
   try {
     await new BackgroundWorker(store, offline, household(), sender).tick();
-    expect(sender).toHaveBeenCalled();
+    expect(sender).toHaveBeenCalledWith(expect.objectContaining({ endpoint }), expect.any(String));
     expect(store.subscriptions("one").map(item => item.endpoint)).toEqual(status === 500 ? [endpoint] : []);
-    for (const id of ["first-push"]) {
+    for (const id of ["first-push", "second-push"]) {
       expect(store.delivered(id, endpoint)).toBe(status !== 500);
       expect(outboxRow(store, id)?.state).toBe(status === 500 ? "pending" : "delivered");
     }
