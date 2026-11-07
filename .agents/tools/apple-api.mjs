@@ -96,6 +96,27 @@ export async function setupIdentifiers(api) {
   }
 }
 
+/** Apple is still ingesting or processing: the same command can succeed later without a new upload. */
+export class AppleNotReady extends Error {}
+
+/**
+ * Retries only while Apple is still processing, about once a minute for up to 45 minutes, so a release
+ * needs one distribute command. Any other refusal stops at once. Re-running distribute is safe: it
+ * attaches the build to the group only when it is not already a member.
+ */
+export async function untilReady(attempt, { wait = true, minutes = 45, log = () => {}, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), now = Date.now } = {}) {
+  const deadline = now() + minutes * 60_000;
+  for (;;) {
+    try { return await attempt(); }
+    catch (error) {
+      if (!(error instanceof AppleNotReady)) throw error;
+      if (!wait || now() >= deadline) throw new Error(`${error.message} Run distribute again later.`);
+      log(`${error.message} Checking again in a minute.`);
+      await sleep(60_000);
+    }
+  }
+}
+
 export function requireReadyBuild(build, expectedVersion, expectedBuild, appId) {
   if (build.attributes.version !== String(expectedBuild) || build.attributes.processingState !== 'VALID' || build.attributes.expired) throw new Error('The exact uploaded build is not valid and unexpired');
   const linkedApp = build.relationships.app?.data?.id;
@@ -109,7 +130,13 @@ export async function distribute(api, buildNumber, version, expectedTesters) {
   const result = await api('GET', `/builds?filter[app]=${selectedApp.id}&filter[version]=${buildNumber}&include=app,preReleaseVersion,buildBetaDetail&limit=200`);
   const builds = result.data.map(build => ({ ...build, marketingVersion: result.included?.find(item => item.type === 'preReleaseVersions' && item.id === build.relationships.preReleaseVersion?.data?.id)?.attributes.version }));
   const selected = builds.find(build => build.marketingVersion === version);
-  if (!selected) throw new Error('The exact build has not finished processing. Re-run status/distribute after Apple processing completes; do not upload it twice.');
+  if (!selected) {
+    // Waiting would never fix a build uploaded under another marketing version.
+    const other = builds.find(build => build.marketingVersion && build.marketingVersion !== version);
+    if (other) throw new Error(`Build ${buildNumber} belongs to marketing version ${other.marketingVersion}, not ${version}. Check the version you passed; do not upload it twice.`);
+    throw new AppleNotReady(`Apple has not listed build ${buildNumber} for ${version} yet. It usually appears 5 to 20 minutes after upload; do not upload it twice.`);
+  }
+  if (selected.attributes.processingState === 'PROCESSING') throw new AppleNotReady(`Apple is still processing build ${buildNumber}.`);
   requireReadyBuild(selected, version, buildNumber, selectedApp.id);
   const groups = await all(api, `/apps/${selectedApp.id}/betaGroups?limit=200`);
   let group = groups.find(item => item.attributes.name === 'Household' && item.attributes.isInternalGroup);
@@ -119,13 +146,14 @@ export async function distribute(api, buildNumber, version, expectedTesters) {
   const actual = testers.map(tester => tester.attributes.email.toLowerCase()).sort();
   if (JSON.stringify(actual) !== JSON.stringify(expectedTesters.map(email => email.toLowerCase()).sort())) throw new Error('The internal group must contain exactly the two configured household testers before distribution');
   const before = (await api('GET', `/builds/${selected.id}/buildBetaDetail`)).data.attributes;
+  if (['PROCESSING', 'IN_EXPORT_COMPLIANCE_REVIEW'].includes(before.internalBuildState)) throw new AppleNotReady(`Build ${buildNumber} is not ready for internal testing yet: ${before.internalBuildState}.`);
   if (!['READY_FOR_BETA_TESTING', 'IN_BETA_TESTING'].includes(before.internalBuildState)) throw new Error(`Build is not ready for internal distribution: ${before.internalBuildState}`);
   const existing = await all(api, `/betaGroups/${group.id}/builds?limit=200`);
   if (!existing.some(item => item.id === selected.id)) await api('POST', `/betaGroups/${group.id}/relationships/builds`, { data: [{ type: 'builds', id: selected.id }] });
   const membership = await all(api, `/betaGroups/${group.id}/builds?limit=200`);
   if (!membership.some(item => item.id === selected.id)) throw new Error('Apple did not confirm the build in the internal group');
   const detail = (await api('GET', `/builds/${selected.id}/buildBetaDetail`)).data.attributes;
-  if (detail.internalBuildState !== 'IN_BETA_TESTING') throw new Error(`Build is attached but not yet installable: ${detail.internalBuildState}. Re-run distribute later.`);
+  if (detail.internalBuildState !== 'IN_BETA_TESTING') throw new AppleNotReady(`Build is attached but not yet installable: ${detail.internalBuildState}.`);
   // This is only an announcement proposal. Changing the host is a separate guarded release.
   return { appId: selectedApp.id, buildId: selected.id, build: buildNumber, version, groupId: group.id, testerCount: testers.length, expirationDate: selected.attributes.expirationDate, confirmedAt: new Date().toISOString(), announcement: { IOS_APP_LATEST_BUILD: String(buildNumber), IOS_APP_UPDATE_URL: `https://testflight.apple.com/v1/app/${selectedApp.id}` } };
 }

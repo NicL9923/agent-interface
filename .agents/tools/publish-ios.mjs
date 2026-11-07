@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { all, app, appleApi, appGroup, bundleId, configuration, distribute, identifiers, runPrivate, setupIdentifiers } from './apple-api.mjs';
+import { all, app, appleApi, appGroup, bundleId, configuration, distribute, identifiers, runPrivate, setupIdentifiers, untilReady } from './apple-api.mjs';
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const scratch = '/Volumes/DevSSD/scratch/wildbots-testflight';
@@ -152,8 +152,8 @@ async function archive(api, config, version, build) {
 }
 
 async function main() {
-  const [command, version, number] = process.argv.slice(2);
-  fail(['status', 'setup', 'prepare', 'archive', 'upload', 'distribute'].includes(command), 'Usage: node .agents/tools/publish-ios.mjs status|setup|prepare|archive VERSION BUILD|upload VERSION BUILD|distribute VERSION BUILD');
+  const [command, version, number, ...flags] = process.argv.slice(2);
+  fail(['status', 'setup', 'prepare', 'archive', 'upload', 'distribute'].includes(command) && flags.every(flag => command === 'distribute' && flag === '--no-wait'), 'Usage: node .agents/tools/publish-ios.mjs status|setup|prepare|archive VERSION BUILD|upload VERSION BUILD|distribute VERSION BUILD [--no-wait]');
   checkHost();
   const config = configuration(), api = appleApi(config);
   if (command === 'setup') { await setupIdentifiers(api); return; }
@@ -187,7 +187,7 @@ async function main() {
     console.log('Uploaded. Apple processing and group distribution are still pending. Run distribute with the same version and build.');
   } else {
     fail(release.uploadAttemptedAt, 'No upload recorded for this artifact');
-    const distributed = await distribute(api, build, version, config.testerEmails);
+    const distributed = await untilReady(() => distribute(api, build, version, config.testerEmails), { wait: !flags.includes('--no-wait'), log: console.log });
     privateJson(join(destination, 'distributed.json'), { ...distributed, commit: release.commit, sha256: release.sha256 });
     console.log(JSON.stringify(distributed, null, 2));
   }

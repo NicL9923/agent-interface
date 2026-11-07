@@ -323,7 +323,10 @@ The archive command uses the same version and build for all four bundles and
 checks the exported IPA's signatures, profiles, App Group, push and notification entitlements.
 Artifacts and private logs stay under `/Volumes/DevSSD/scratch/wildbots-testflight`.
 An uncertain upload requires inspection, never an automatic second upload.
-`distribute` may need to run later while Apple processes the build. It attaches
+`distribute` waits while Apple processes the build, checking about once a minute for up to 45
+minutes; `--no-wait` makes one attempt. Apple can take 10 minutes or more after upload to list a
+build, so the earlier "not finished processing" refusal was usually only that delay. A build number
+uploaded under another marketing version stops at once instead of waiting. It attaches
 only the exact build to the internal **Household** group, then checks Apple's
 installable state and reads back group membership. It writes `distributed.json`
 only after those checks pass. Its update settings are a proposal for the next
