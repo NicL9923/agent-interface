@@ -6,14 +6,14 @@ import { FindBar } from "../src/app/FindBar";
 import { defaultPreferences, type Bootstrap } from "../src/shared/types";
 import { mountRoot, stubMatchMedia, typeInto } from "./ui-harness";
 
-vi.mock("../src/components/Avatar", async original => ({ ...await original<typeof import("../src/components/Avatar")>(), Avatar: () => null }));
-
 const key = (element: Element, key: string, options: KeyboardEventInit = {}) => act(async () => {
   element.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, ...options }));
 });
 
 it("navigates the palette, selects a command and restores focus", async () => {
   stubMatchMedia();
+  vi.stubGlobal("IntersectionObserver", class { observe() {} disconnect() {} });
+  Object.assign(SVGElement.prototype, { getTotalLength: () => 100, getPointAtLength: (length: number) => ({ x: length, y: 0 }) });
   Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: function(this: HTMLDialogElement) { this.open = true; } });
   Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: function(this: HTMLDialogElement) { this.open = false; } });
   const select = vi.fn();
@@ -41,6 +41,10 @@ it("navigates the palette, selects a command and restores focus", async () => {
   await act(async () => opener.click());
   input = mount.container.querySelector<HTMLInputElement>("[role=combobox]")!;
   await key(input, "k", { ctrlKey: true });
+  expect(mount.container.querySelector("dialog")).toBeNull();
+  expect(document.activeElement).toBe(opener);
+  await act(async () => opener.click());
+  await act(async () => { mount.container.querySelector("dialog")!.dispatchEvent(new Event("cancel", { bubbles: false, cancelable: true })); });
   expect(mount.container.querySelector("dialog")).toBeNull();
   expect(document.activeElement).toBe(opener);
 });
