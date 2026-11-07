@@ -39,6 +39,7 @@ const login = (app: Awaited<ReturnType<typeof createApp>>["app"], member = "one"
 
 it("keeps upgrades opt-in, restricts administrators, and rejects client commands or refs", async () => {
   const disabled = await setup(false), disabledHeaders = await login(disabled.app);
+  expect(await disabled.upgrades["workerHeld"]()).toBe(false);
   expect((await disabled.app.inject({ url: "/api/hermes/upgrade", headers: disabledHeaders })).json()).toMatchObject({ available: false, canCheck: false, canInstall: false });
   expect((await disabled.app.inject({ method: "POST", url: "/api/hermes/upgrade/check", headers: disabledHeaders, payload: {} })).statusCode).toBe(409);
   const installation = await setup(), member = await login(installation.app, "two"), admin = await login(installation.app);
@@ -295,4 +296,31 @@ it("offers safe recovery after an admitted install worker failed before starting
   // A failure after a hook may have changed Hermes still requires recovery evidence.
   installation.save({ ...installation.state(), checks: [{ id: "install", label: "Install", status: "running" }] });
   expect(await installation.upgrades.status(administrator)).toMatchObject({ canRetry: false, canCancel: false });
+});
+
+it("keeps the installation gate closed if pending requests cannot be read", async () => {
+  const installation = await setup();
+  rmSync(join(installation.directory, "requests"), { recursive: true });
+  expect(installation.upgrades.maintenance()).toBe(true);
+});
+
+it("offers restore and restart only for receipts that attest the appropriate revision", async () => {
+  const installation = await setup();
+  const operationId = randomUUID(), stage = join(installation.directory, "stages", "decision-table");
+  mkdirSync(stage, { recursive: true });
+  const current = "a".repeat(40), receiptPath = join(installation.directory, "receipt.json"), digest = "b".repeat(64);
+  const qualification = { stage, currentRevision: current, currentPatchSha256: null, candidateRevision: revision, candidatePatchSha256: null, integrationDigest: digest };
+  const receipt = (rev: string) => ({ schemaVersion: 1, revision: rev, trackedPatchSha256: null, qualifiedAt: "2026-10-01", checks: { realIntegration: true, hostRegressions: true }, integrationDigest: digest });
+  const baseline = receipt(current), candidate = receipt(revision), invalidCandidate = { ...candidate, checks: { ...candidate.checks, hostRegressions: false } };
+  writeFileSync(installation.workerConfig, JSON.stringify({ stageRoot: join(installation.directory, "stages"), qualificationReceipt: receiptPath, hooks: { recover: ["/bin/true"], restart_service: ["/bin/true"] } }));
+  writeFileSync(join(stage, "platform.json"), JSON.stringify({ operationId, phase: "installed" }));
+  const state = { phase: "failed", operationId, requestId: randomUUID(), maintenance: true, qualification, checks: [], message: "Interrupted" };
+  for (const [previous, deployed, restore, restart] of [
+    [baseline, candidate, true, true], [null, baseline, true, true], [baseline, invalidCandidate, true, false],
+    [null, candidate, false, true], [null, invalidCandidate, false, false], [baseline, receipt("c".repeat(40)), true, false],
+  ] as const) {
+    writeFileSync(join(stage, "recovery.json"), JSON.stringify({ operationId, hostHookStarted: true, previousReceipt: previous && Buffer.from(JSON.stringify(previous)).toString("base64") }));
+    writeFileSync(receiptPath, JSON.stringify(deployed));
+    expect(installation.upgrades["recoveryEligibility"](state as Parameters<typeof installation.upgrades["recoveryEligibility"]>[0])).toMatchObject({ restore, restart });
+  }
 });

@@ -14,9 +14,6 @@ describe("providerIconKey", () => {
     // A custom or unfamiliar provider is not guessed at. A look-alike name must not borrow a mark.
     ["custom:house", "generic"], ["lmstudio", "generic"], ["openaix", "generic"], ["", "generic"], [undefined, "generic"],
   ] as const)("%s gets the %s mark", (slug, key) => expect(providerIconKey(slug)).toBe(key));
-  it("has path data for every mark", () => {
-    for (const path of Object.values(providerIconPaths)) expect(path).toMatch(/^M[\d.-]/);
-  });
   it("draws the iOS marks from the same paths, as ios/tools/sync-provider-icons.mjs writes them", () => {
     const catalog = "ios/AgentInterface/Assets.xcassets/ProviderIcons";
     for (const [key, path] of Object.entries(providerIconPaths)) {

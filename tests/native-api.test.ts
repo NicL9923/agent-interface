@@ -543,6 +543,7 @@ it("lets a Live Activity's Stop act only for the account it names", async () => 
   expect(stopped).toEqual([]);
   const allowed = await stop({ account: accountMarker("local-one") });
   expect(allowed.statusCode, allowed.body).toBe(200);
+  expect(allowed.json()).toEqual({ ok: true });
   // The chat's own Stop sends nothing or an empty body, as before.
   expect((await stop()).statusCode).toBe(200);
   expect((await stop({})).statusCode).toBe(200);

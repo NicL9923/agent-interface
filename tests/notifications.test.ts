@@ -531,3 +531,29 @@ it("preserves a reviewed interruption retry as the only explicit reopening of re
     expect(store.participants("run")).toEqual(["one"]);
   } finally { store.close(); }
 });
+
+it.each([404, 410, 500])("handles web push status %i for queued notifications", async status => {
+  const store = storeWithUsers();
+  const endpoint = "https://push.example.test/device", healthy = "https://push.example.test/healthy";
+  store.subscribe("one", { endpoint, keys: { p256dh: "key", auth: "auth" } });
+  store.subscribe("one", { endpoint: healthy, keys: { p256dh: "key", auth: "auth" } });
+  queue(store, "first-push", Date.now());
+  queue(store, "second-push", Date.now());
+  store.db.prepare("INSERT INTO notification_batches VALUES(?,?,?)").run("push-batch", "one", JSON.stringify({ title: "Batch", body: "", url: "/", tag: "batch" }));
+  for (const id of ["first-push", "second-push"]) store.db.prepare("INSERT INTO notification_batch_items VALUES(?,?)").run(id, "push-batch");
+  const sender = vi.fn(async (subscription: { endpoint: string }) => {
+    if (subscription.endpoint === endpoint) throw Object.assign(new Error("push failure"), { statusCode: status });
+  });
+  try {
+    await new BackgroundWorker(store, offline, household(), sender).tick();
+    // One batched send per endpoint; only the dead endpoint is pruned, and only on 404/410.
+    expect(sender).toHaveBeenCalledTimes(2);
+    expect(sender.mock.calls.map(call => call[0].endpoint).sort()).toEqual([endpoint, healthy].sort());
+    expect(store.subscriptions("one").map(item => item.endpoint).sort()).toEqual((status === 500 ? [endpoint, healthy] : [healthy]).sort());
+    for (const id of ["first-push", "second-push"]) {
+      expect(store.delivered(id, healthy)).toBe(true);
+      expect(store.delivered(id, endpoint)).toBe(status !== 500);
+      expect(outboxRow(store, id)?.state).toBe(status === 500 ? "pending" : "delivered");
+    }
+  } finally { store.close(); }
+});
