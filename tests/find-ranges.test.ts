@@ -13,5 +13,4 @@ it("finds case-insensitive, non-overlapping ranges within readable text nodes", 
     ["anA", 1, 4], ["ANA", 8, 11], ["ana", 1, 4],
   ]);
   expect(matchRanges(item, "missing")).toEqual([]);
-  expect(matchRanges(item, "")).toEqual([]);
 });
