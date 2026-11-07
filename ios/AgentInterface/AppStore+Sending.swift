@@ -22,10 +22,10 @@ extension AppStore {
     // A retry sends the same request again; the copy it came from is already marked, and a copy
     // edited since is not it.
     if !reviewedUncertain { markSent(submission, true) }
-    sending = true
+    sendingRequests[id] = submission.requestId
     error = nil
     let currentGeneration = generation
-    defer { if currentGeneration == generation { sending = false } }
+    defer { if currentGeneration == generation, sendingRequests[id] == submission.requestId { sendingRequests[id] = nil } }
     do {
       let value: Receipt = try await api.write(
         "/bots/\(APIClient.component(id))/messages", submission)
@@ -57,14 +57,16 @@ extension AppStore {
   /// message that arrived clears that assistant's draft before it is opened again.
   /// Each check waits longer for an answer that stays uncertain, but never resubmits.
   func reconcilePending() async {
-    guard let api, !sending else { return }
+    guard let api else { return }
     let currentGeneration = generation
     for pending in pendings.values.sorted(by: { $0.botId < $1.botId }) {
+      if sendingRequests[pending.botId] != nil { continue }
       if let check = submissionChecks[pending.requestId], now() < check.next { continue }
       do {
         let value: Receipt = try await api.get(
           "/submissions/\(APIClient.component(pending.requestId))")
-        guard currentGeneration == generation, !sending else { return }
+        guard currentGeneration == generation else { return }
+        if sendingRequests[pending.botId] != nil { continue }
         checkedSubmission(pending.requestId)
         pollSucceeded(.submissions)
         await handleReceipt(value, botId: pending.botId)
@@ -103,7 +105,7 @@ extension AppStore {
   private func handleReceipt(_ value: Receipt, botId: String) async {
     if receipts[botId] != value { receipts[botId] = value }
     guard let original = pendings[botId], value.requestId == original.requestId else { return }
-    guard value.status != "uncertain" else { return }
+    guard ["accepted", "rejected", "interrupted"].contains(value.status) else { return }
     if value.status == "accepted" {
       // The server clears its copy for this send, which a later save here must not mistake
       // for a send from another device.

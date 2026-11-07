@@ -3,7 +3,7 @@ import SwiftUI
 // The poll loop, the household and conversation change streams, and the bootstrap they refresh.
 extension AppStore {
   func startPolling() {
-    suspended = false
+    guard !suspended else { return }
     stopPolling()
     pollTask = Task { [weak self] in
       while !Task.isCancelled {
@@ -19,7 +19,7 @@ extension AppStore {
     await renewSignInIfDue()
     // Signing out, switching accounts or suspending during renewal ends this pass before it
     // starts any stream for a session that is gone.
-    guard !Task.isCancelled, generation == currentGeneration, api?.token != nil else { return false }
+    guard !suspended, !Task.isCancelled, generation == currentGeneration, api?.token != nil else { return false }
     if let api,
       let expiry = UserDefaults.standard.string(forKey: DeviceDefaults.expiry(api.baseURL)),
       let date = ServerDate.parse(expiry), date.timeIntervalSinceNow < 60
@@ -213,28 +213,7 @@ extension AppStore {
         if let previous = bootstrap, previous.user.id != value.user.id {
           clearOfflineLibrary()
           persistDraft()
-          draftTask?.cancel()
-          scheduledDraftSave = nil
-          selectionGeneration = UUID()
-          generation = UUID()
-          selectedBotId = nil
-          stayHome = false
-          conversation = nil
-          conversationCache.removeAll()
-          conversationCapturedAt.removeAll()
-          resetPrefetch()
-          historyStarts.removeAll()
-          earlierFileCache.removeAll()
-          draft = Draft()
-          draftReady = false
-          pendings = [:]
-          receipts = [:]
-          submissionChecks = [:]
-          sending = false
-          uploads.reset()
-          interruptionReviewed = false
-          upgrade.reset(); computerStatus = nil; openComputer = nil
-          resetPreferenceSaves()
+          resetAccountContent()
         }
         if bootstrap != value { bootstrap = value; applied = true }
         appliedBootstrapTag = response.etag

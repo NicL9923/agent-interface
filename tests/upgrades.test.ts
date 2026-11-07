@@ -283,3 +283,16 @@ it("keeps each worker launch's startup output privately instead of discarding it
     expect(readdirSync(directory).filter(name => name.startsWith("worker-launch-"))).toHaveLength(10);
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
+
+it("offers safe recovery after an admitted install worker failed before starting a host hook", async () => {
+  const installation = await setup();
+  const stageRoot = join(installation.directory, "stages"), stage = join(stageRoot, "qualified");
+  mkdirSync(stage, { recursive: true });
+  writeFileSync(installation.workerConfig, JSON.stringify({ stageRoot, hooks: { recover: ["recover"], restart_service: ["restart"] } }));
+  installation.save({ phase: "failed", maintenance: true, operationId: randomUUID(), error: "worker_start_failed", message: "Worker failed", checks: [], qualification: { stage } });
+  expect(await installation.upgrades.status(administrator)).toMatchObject({ canRetry: true, canCancel: true });
+  expect(installation.upgrades.maintenance()).toBe(true);
+  // A failure after a hook may have changed Hermes still requires recovery evidence.
+  installation.save({ ...installation.state(), checks: [{ id: "install", label: "Install", status: "running" }] });
+  expect(await installation.upgrades.status(administrator)).toMatchObject({ canRetry: false, canCancel: false });
+});

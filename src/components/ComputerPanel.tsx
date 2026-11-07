@@ -69,12 +69,14 @@ function useReconnecting(connect: (attachment: Attachment) => Promise<void>, { f
   const [error, setError] = useState("");
   const [attempt, setAttempt] = useState(0);
   const raise = useRaise();
+  const cancelConnection = useRef<() => void>(() => {});
   const latest = useRef({ connect, onReauthenticate, onRetry, canRetry, raise });
   latest.current = { connect, onReauthenticate, onRetry, canRetry, raise };
   useEffect(() => {
     const controller = new AbortController();
     const teardowns: Array<() => void> = [];
     let timer: ReturnType<typeof setTimeout> | undefined;
+    cancelConnection.current = () => { controller.abort(); clearTimeout(timer); };
     const attachment: Attachment = {
       signal: controller.signal,
       connected: () => {
@@ -86,7 +88,9 @@ function useReconnecting(connect: (attachment: Attachment) => Promise<void>, { f
         latest.current.onRetry?.();
         setError(message); setConnection("reconnecting");
         clearTimeout(timer);
-        timer = setTimeout(() => setAttempt(value => value + 1), RETRY_DELAY);
+        timer = setTimeout(() => {
+          if (!controller.signal.aborted && latest.current.canRetry?.() !== false) setAttempt(value => value + 1);
+        }, RETRY_DELAY);
       },
       onCleanup: teardown => { teardowns.push(teardown); },
     };
@@ -106,7 +110,8 @@ function useReconnecting(connect: (attachment: Attachment) => Promise<void>, { f
     };
   }, [attempt, fallback]);
   const reconnect = useCallback(() => setAttempt(value => value + 1), []);
-  return { connection, setConnection, error, setError, reconnect };
+  const stop = useCallback(() => cancelConnection.current(), []);
+  return { connection, setConnection, error, setError, reconnect, stop };
 }
 const TRACKPAD_KEY = "computer.trackpad";
 /** Trackpad mode is a per-device habit; storage can be missing or refuse, as in a private window. */
@@ -498,7 +503,7 @@ function TerminalView({ target, active, onReauthenticate }: { target: string; ac
     if (socket.current?.readyState === WebSocket.OPEN) socket.current.send(JSON.stringify(message));
   }, []);
 
-  const { connection, setConnection, error, setError, reconnect } = useReconnecting(async ({ signal, connected, retry, onCleanup }) => {
+  const { connection, setConnection, error, setError, reconnect, stop } = useReconnecting(async ({ signal, connected, retry, onCleanup }) => {
     let client: WebSocket | undefined;
     let emulator: Terminal | undefined;
     let observer: ResizeObserver | undefined;
@@ -578,12 +583,19 @@ function TerminalView({ target, active, onReauthenticate }: { target: string; ac
   const end = async () => {
     if (!sessionId.current || ending) return;
     setEnding(true);
+    stopped.current = true;
+    stop();
+    socket.current?.close();
     try {
       await write("/computer/terminal/end", { sessionId: sessionId.current });
       stopped.current = true;
       socket.current?.close();
       setConnection("ended"); setConfirmEnd(false); setError("");
-    } catch (cause) { setError(failure(cause, "Couldn't confirm whether your shell ended. Check the connection before trying again.")); }
+    } catch (cause) {
+      stopped.current = false;
+      reconnect();
+      setError(failure(cause, "Couldn't confirm whether your shell ended. Check the connection before trying again."));
+    }
     finally { setEnding(false); }
   };
   const connected = connection === "connected";

@@ -116,7 +116,8 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   @ObservationIgnored var stayHome = false
   var signingIn = false
   var loading = false
-  var sending = false { didSet { updateEcho() } }
+  var sendingRequests: [String: String] = [:] { didSet { updateEcho() } }
+  var sending: Bool { selectedBotId.map { sendingRequests[$0] != nil } ?? false }
   /// Files on their way into drafts; see `AttachmentUploads.swift`.
   let uploads = AttachmentUploads()
   /// The household's Hermes update; see `HermesUpgrade.swift`.

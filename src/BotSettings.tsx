@@ -111,7 +111,10 @@ function LoadedBotSettings({
   const section: SettingsTab | null = existing && !showingIndex ? tab : null;
   const [memoryDirty, setMemoryDirty] = useState(false);
   const [memorySaving, setMemorySaving] = useState(false);
-  const [pendingMemoryPlace, setPendingMemoryPlace] = useState<SettingsPlace | null>(null);
+  type Confirmation = { kind: "discard" | "personal" } | { kind: "model"; message: string } | { kind: "memory"; place: SettingsPlace };
+  const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
+  const pendingMemoryPlace = confirmation?.kind === "memory" ? confirmation.place : null;
+  const setPendingMemoryPlace = (place: SettingsPlace | null) => setConfirmation(current => place ? { kind: "memory", place } : current?.kind === "memory" ? null : current);
   useEffect(() => { if (!memoryDirty) setPendingMemoryPlace(null); }, [memoryDirty]);
   const advanced = bootstrap.preferences.presentation === "advanced";
   // What the form and avatar last matched on the server; saves move it forward.
@@ -145,7 +148,8 @@ function LoadedBotSettings({
   const configDirty = formDirty || avatarDirty || toolsDraft.staged || skillsDraft.staged;
   const unsaved = configDirty || memoryDirty;
   const portraitIncomplete = avatar.mode === "portrait" && !avatar.src;
-  const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const confirmDiscard = confirmation?.kind === "discard";
+  const setConfirmDiscard = (show: boolean) => setConfirmation(current => show ? { kind: "discard" } : current?.kind === "discard" ? null : current);
   const keepEditing = useRef<HTMLButtonElement>(null);
   const beforePrompt = useRef<HTMLElement | null>(null);
   useEffect(() => {
@@ -165,9 +169,11 @@ function LoadedBotSettings({
   const requestClose = () => memorySaving ? undefined : unsaved ? setConfirmDiscard(true) : onClose();
   const routinesResource = useResource(existing && section === "automation" && bootstrap.capabilities.routines.supported ? routeUrl("GET /routines", {}) : null, { load: (_, signal) => request("GET /routines", { signal }) });
   const routines = (routinesResource.data || []).filter(routine => routine.botId === existing?.id);
-  const [confirmModel, setConfirmModel] = useState<string | null>(null);
+  const confirmModel = confirmation?.kind === "model" ? confirmation.message : null;
+  const setConfirmModel = (message: string | null) => setConfirmation(current => message ? { kind: "model", message } : current?.kind === "model" ? null : current);
   // Making a shared or ownerless assistant personal hides it from everyone else, so it asks first.
-  const [confirmPersonal, setConfirmPersonal] = useState(false);
+  const confirmPersonal = confirmation?.kind === "personal";
+  const setConfirmPersonal = (show: boolean) => setConfirmation(current => show ? { kind: "personal" } : current?.kind === "personal" ? null : current);
   const [personalConfirmed, setPersonalConfirmed] = useState(false);
   const shownError = error || routinesResource.error;
   const [prompt, setPrompt] = useState("");
