@@ -19,10 +19,10 @@ Web and server, at this commit:
 iOS, on the Mac mini:
 
 - Unit: ReplyActionCardsTests (9), ExperienceTests, ConversationParityTests, ContractFixtureTests
-  and FixedWaitRuleTests passed, 41 tests. The form request ID vectors match the web's.
+  and FixedWaitRuleTests passed, 39 tests. The form request ID vectors match the web's.
 - UI: ChatCardsFlowTests passed three times across the fixes, and
   ExperienceFlowTests.testInteractiveChecklistMemoryAndRoutineSchedulePreview passed.
-- Mutants: nine Swift guards broken one batch at a time; each failed its own assertion except
+- Mutants: eight Swift guards broken in two batches; each failed its own assertion except
   the ASCII-digit pattern, which Swift's Double parsing already guards. Removing the
   unchanged-value guard in the form's setter failed the UI test's focus check (1 of 2 errors).
 - Pre-existing on `a3dfff6` too, not changed here: DirectRouteTests (two tests),
