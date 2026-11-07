@@ -374,34 +374,48 @@ a {
   font-weight: inherit;
   letter-spacing: normal;
 }
-/* In Advanced, the model chip is a second control over the identity button's second line. */
+/* The avatar spans both rows; the name sits beside it, with the Advanced model chip under the name. */
 .chat-identity-wrap {
   display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  grid-template-rows: auto;
+  column-gap: 14px;
+  row-gap: 4px;
+  align-items: center;
   flex: 1;
   min-width: 0;
 }
-.chat-identity-wrap > * {
-  grid-area: 1 / 1;
+.chat-identity-wrap.with-model {
+  grid-template-rows: auto auto;
+}
+.chat-identity-avatar {
+  grid-column: 1;
+  grid-row: 1 / -1;
+  display: flex;
+  cursor: pointer;
+}
+.chat-identity-heading {
+  grid-column: 2;
+  grid-row: 1;
+}
+.chat-identity-wrap:not(.with-model) .chat-identity-heading {
+  grid-row: 1 / -1;
 }
 .chat-model-slot {
-  z-index: 1;
-  align-self: end;
+  grid-column: 2;
+  grid-row: 2;
   justify-self: start;
-  max-width: calc(100% - 56px);
-  /* The name starts after the avatar: its 42 px, the 14 px gap, less the chip's own 8 px padding. */
-  margin-left: 48px;
-}
-.chat-model-reserve {
-  display: block;
-  height: 24px;
+  max-width: 100%;
+  /* The chip's own padding would push its text past the name's start. */
+  margin-left: -8px;
 }
 .chat-identity {
   display: flex;
   align-items: center;
-  gap: 14px;
   max-width: 100%;
-  margin: -6px 0 -6px -8px;
-  padding: 6px 12px 6px 8px;
+  /* Its padding stays inside the row gap, so the name's box never reaches the chip under it. */
+  margin: -2px 0 -2px -8px;
+  padding: 2px 12px 2px 8px;
   border: 0;
   border-radius: 16px;
   color: var(--ink);
@@ -1185,20 +1199,33 @@ a {
   }
   .chat-header-identity .chat-identity-wrap {
     grid-column: 2;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto;
     justify-items: center;
+    row-gap: 3px;
   }
-  .chat-header-identity .chat-identity-heading {
+  .chat-header-identity .chat-identity-wrap.with-model {
+    grid-template-rows: auto auto auto;
+  }
+  .chat-header-identity .chat-identity-avatar {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .chat-header-identity .chat-identity-heading,
+  .chat-header-identity .chat-identity-wrap:not(.with-model) .chat-identity-heading {
+    grid-column: 1;
+    grid-row: 2;
     display: flex;
     justify-content: center;
-  }
-  .chat-model-slot {
-    justify-self: center;
     max-width: 100%;
+  }
+  .chat-header-identity .chat-model-slot {
+    grid-column: 1;
+    grid-row: 3;
+    justify-self: center;
     margin-left: 0;
   }
   .chat-header-identity .chat-identity {
-    flex-direction: column;
-    gap: 3px;
     margin: 0;
     padding: 2px 10px 4px;
     border-radius: 14px;

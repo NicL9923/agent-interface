@@ -13,6 +13,7 @@
 
 - `node --env-file=PRIVATE_APP_ENV --import tsx .agents/tools/check-native-release.mjs BUILD PRIVATE_RECEIPT` runs from the deployed Linux release to verify authenticated bootstrap, Hermes connectivity, the announced TestFlight build/link and exact service-worker bytes. It removes its temporary session and writes an owner-private sanitized receipt.
 - `python3 .agents/tools/benchmark-native-markdown.py` compares fresh and cached native Markdown parsing with an optimized macOS executable; outputs CPU work timings, not iPhone scrolling measurements.
+- `check-header-hit-areas.js` is a Playwright CLI run-code function for the loopback preview on port 3000. Run it once with `PREVIEW_PRESENTATION=advanced` and once with `simple`. At phone and desktop widths it fails if any point of the chat header's name button or model chip reaches another control, or if closing details opened from the avatar does not return focus to the name button.
 - `check-search-pointer-browser.js` is a Playwright CLI run-code function for the loopback preview on port 3017; verifies exact-message history requests, highlighting and scrolling at phone and desktop widths.
 
 - `PREVIEW_LONG_TOOL=1 node .agents/tools/preview-app.mjs` shows short, long and unstructured tool-output fixtures for scrolling checks; combine with `PREVIEW_PRESENTATION=advanced` for raw tool details.
