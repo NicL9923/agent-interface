@@ -104,11 +104,9 @@ extension Data {
   /// Bumped on every clear, so a response that was in flight for an earlier identity is not cached.
   private var validatedGeneration = 0
   // Direct routes (DirectRoutes.swift). `baseURL` stays this server's identity; only API requests
-  // travel over `activeRoute` when one is set.
-  let pins = DirectRoutePins()
+  // travel over `activeRoute` when one is set, each with its route's pin in its own delegate.
   var directRoutes: [DirectRoute] = [] {
     didSet {
-      pins.set(directRoutes)
       if directRoutes != oldValue { storeRoutes() }
       if let activeRoute, !directRoutes.contains(activeRoute) { self.activeRoute = nil }
     }
@@ -138,13 +136,11 @@ extension Data {
       config.timeoutIntervalForResource = 60
       config.httpCookieStorage = HTTPCookieStorage()
       self.session = URLSession(
-        configuration: config, delegate: APISessionDelegate(origin: baseURL, pins: pins),
+        configuration: config, delegate: APISessionDelegate(origin: baseURL),
         delegateQueue: nil)
     }
     token = SecureToken.read(host: baseURL.absoluteString)
-    // Property observers do not run in init, so the pins are set here.
     directRoutes = Self.storedRoutes(for: baseURL)
-    pins.set(directRoutes)
   }
   nonisolated static func component(_ value: String) -> String {
     value.addingPercentEncoding(
@@ -227,14 +223,17 @@ extension Data {
   ) async throws -> (data: Data, etag: String?) {
     // Signed-out requests, such as sign-in, stay on the primary origin; a direct route refuses them.
     let route = authenticated && token != nil ? activeRoute : nil
+    // A request sent again on the primary origin goes only under the identity that first sent it.
+    let sentToken = token
+    let pinning = route.map { DirectTaskDelegate(pin: $0.certificateSha256) }
     var request = try self.request(path: path, method: method, contentType: contentType, authenticated: authenticated, route: route)
     request.httpBody = body
     let sent = conditional ? validated[path] : nil
     let generation = validatedGeneration
     if let sent { request.setValue(sent.etag, forHTTPHeaderField: "If-None-Match") }
     let (data, response): (Data, URLResponse)
-    do { (data, response) = try await session.data(for: request) } catch {
-      if let route, directRouteFailed(route, error: error, method: method) {
+    do { (data, response) = try await session.data(for: request, delegate: pinning) } catch {
+      if let route, token == sentToken, directRouteFailed(route, error: error, unsent: pinning?.refused == true, method: method) {
         return try await exchange(
           path: path, method: method, body: body, contentType: contentType,
           authenticated: authenticated, conditional: conditional)
@@ -246,7 +245,8 @@ extension Data {
     }
     // The server stopped serving this route to the app before handling the request.
     if let route, Self.refusedByRoute(response.statusCode, data) {
-      _ = directRouteFailed(route, refused: true, method: method)
+      _ = directRouteFailed(route, unsent: true, method: method)
+      guard token == sentToken else { throw Self.failure(response.statusCode, data) }
       return try await exchange(
         path: path, method: method, body: body, contentType: contentType,
         authenticated: authenticated, conditional: conditional)
@@ -289,19 +289,23 @@ extension Data {
     config.timeoutIntervalForRequest = 70
     config.timeoutIntervalForResource = 24 * 60 * 60
     config.httpCookieStorage = session.configuration.httpCookieStorage
-    return URLSession(configuration: config, delegate: APISessionDelegate(origin: baseURL, pins: pins), delegateQueue: nil)
+    return URLSession(configuration: config, delegate: APISessionDelegate(origin: baseURL), delegateQueue: nil)
   }()
   /// The lines of a server event stream. Anything but an open stream throws.
   func events(_ path: String) async throws -> AsyncLineSequence<URLSession.AsyncBytes> {
     let route = token != nil ? activeRoute : nil
+    let sentToken = token
+    let pinning = route.map { DirectTaskDelegate(pin: $0.certificateSha256) }
     var request = URLRequest(url: try transportURL(path, on: route))
     if route != nil { request.httpShouldHandleCookies = false }
     request.cachePolicy = .reloadIgnoringLocalCacheData
     request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
     if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
     let (bytes, response): (URLSession.AsyncBytes, URLResponse)
-    do { (bytes, response) = try await streamSession.bytes(for: request) } catch {
-      if let route, directRouteFailed(route, error: error, method: "GET") { return try await events(path) }
+    do { (bytes, response) = try await streamSession.bytes(for: request, delegate: pinning) } catch {
+      if let route, token == sentToken, directRouteFailed(route, error: error, unsent: pinning?.refused == true, method: "GET") {
+        return try await events(path)
+      }
       throw error
     }
     let http = response as? HTTPURLResponse
@@ -309,7 +313,7 @@ extension Data {
     // route is the listener refusing it.
     if let route, http?.statusCode == 403 {
       bytes.task.cancel()
-      _ = directRouteFailed(route, refused: true, method: "GET")
+      _ = directRouteFailed(route, unsent: true, method: "GET")
       return try await events(path)
     }
     guard http?.statusCode == 200, http?.mimeType == "text/event-stream" else {
@@ -414,6 +418,11 @@ extension Data {
     body.append(Data("\r\n--\(boundary)--\r\n".utf8))
     let path = "/api/bots/\(Self.component(botId))/uploads"
     let route = token != nil ? activeRoute : nil
+    let sentToken = token
+    let pinning = route.map { DirectTaskDelegate(pin: $0.certificateSha256, report: progress) }
+    // A direct route's delegate also reports progress; only one delegate fits a task.
+    let taskDelegate: (any URLSessionTaskDelegate)?
+    if let pinning { taskDelegate = pinning } else { taskDelegate = progress.map { UploadProgressDelegate(report: $0) } }
     var request = try self.request(
       path: path, method: "POST", contentType: "multipart/form-data; boundary=\(boundary)", authenticated: true, route: route)
     #if DEBUG
@@ -428,9 +437,9 @@ extension Data {
     let (result, response): (Data, URLResponse)
     do {
       (result, response) = try await session.upload(
-        for: request, from: body, delegate: progress.map { UploadProgressDelegate(report: $0) })
+        for: request, from: body, delegate: taskDelegate)
     } catch {
-      if let route, directRouteFailed(route, error: error, method: "POST") {
+      if let route, token == sentToken, directRouteFailed(route, error: error, unsent: pinning?.refused == true, method: "POST") {
         return try await upload(botId: botId, name: name, mime: mime, data: data, progress: progress)
       }
       throw Self.unreachable(error)
@@ -439,7 +448,8 @@ extension Data {
       throw APIError(message: "The server returned an invalid response.", status: 502)
     }
     if let route, Self.refusedByRoute(response.statusCode, result) {
-      _ = directRouteFailed(route, refused: true, method: "POST")
+      _ = directRouteFailed(route, unsent: true, method: "POST")
+      guard token == sentToken else { throw Self.failure(response.statusCode, result) }
       return try await upload(botId: botId, name: name, mime: mime, data: data, progress: progress)
     }
     guard (200..<300).contains(response.statusCode) else { throw Self.failure(response.statusCode, result) }

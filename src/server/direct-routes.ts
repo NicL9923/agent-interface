@@ -195,7 +195,10 @@ export class DirectRoutes {
   }
 
   async start(intervalMs = 60_000) {
+    if (this.timer || this.closed) return;
     await this.reconcile();
+    // A close during that first pass wins; another start may also have won the race.
+    if (this.timer || this.closed) return;
     // Addresses come and go with DHCP leases and Tailscale restarts.
     this.timer = setInterval(() => void this.reconcile(), intervalMs);
     this.timer.unref();

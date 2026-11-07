@@ -37,55 +37,31 @@ struct DirectRoutesResponse: Decodable, Sendable {
   }
 }
 
-/// The pinned certificate of each direct route, read by the session delegate on URLSession's queue.
-/// Checked Sendable: its only state is guarded by the lock.
-final class DirectRoutePins: @unchecked Sendable {
-  private let lock = NSLock()
-  private var pins: [String: String] = [:]
-  private var refused: Set<String> = []
-  func set(_ routes: [DirectRoute]) {
-    let next = Dictionary(routes.compactMap { route in route.endpoint.map { ($0, route.certificateSha256) } }) { first, _ in first }
-    lock.withLock { pins = next }
-  }
-  func pin(host: String, port: Int) -> String? {
-    guard let key = Self.endpoint(host: host, port: port) else { return nil }
-    return lock.withLock { pins[key] }
-  }
-  /// The delegate records each handshake it cancels, so a cancelled request on that route is known
-  /// to be a refusal that sent nothing, not the person cancelling it.
-  func noteRefusal(host: String, port: Int) {
-    guard let key = Self.endpoint(host: host, port: port) else { return }
-    _ = lock.withLock { refused.insert(key) }
-  }
-  func takeRefusal(_ endpoint: String?) -> Bool {
-    guard let endpoint else { return false }
-    return lock.withLock { refused.remove(endpoint) != nil }
-  }
+enum DirectRoutePins {
   static func endpoint(host: String?, port: Int?) -> String? {
     guard let host, !host.isEmpty, let port, port > 0 else { return nil }
     return "\(host.lowercased()):\(port)"
   }
 
-  enum Decision: Equatable { case standard, trust, refuse }
+  enum Decision: Equatable { case trust, refuse }
   /// A direct route's address accepts exactly the certificate the server advertised over a trusted
-  /// route, whatever any certificate authority says. Every other address gets the system's own
-  /// evaluation, so the primary origin never trusts a pinned certificate.
-  static func decide(pin: String?, leaf: Data?) -> Decision {
-    guard let pin else { return .standard }
+  /// route, whatever any certificate authority says.
+  static func decide(pin: String, leaf: Data?) -> Decision {
     guard let leaf else { return .refuse }
     return Data(SHA256.hash(data: leaf)).base64URLEncoded == pin ? .trust : .refuse
   }
+  static func leaf(of trust: SecTrust) -> Data? {
+    (SecTrustCopyCertificateChain(trust) as? [SecCertificate])?.first.map { SecCertificateCopyData($0) as Data }
+  }
 }
 
-/// The API sessions' delegate: redirects stay on the primary origin, and direct routes are pinned.
-/// Checked Sendable: URLSession calls it on its own queue; its state is immutable or lock-guarded.
+/// The API sessions' delegate: redirects stay on the primary origin, and a TLS handshake with any
+/// other host is refused. Requests on a direct route carry their own `DirectTaskDelegate`, which
+/// answers first, so reaching this for another host means a request lost its pin: fail closed.
+/// Checked Sendable: URLSession calls it on its own queue; its state is immutable.
 final class APISessionDelegate: NSObject, URLSessionTaskDelegate, Sendable {
   let origin: URL
-  let pins: DirectRoutePins
-  init(origin: URL, pins: DirectRoutePins) {
-    self.origin = origin
-    self.pins = pins
-  }
+  init(origin: URL) { self.origin = origin }
   func urlSession(
     _ session: URLSession, task: URLSessionTask,
     willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
@@ -100,33 +76,60 @@ final class APISessionDelegate: NSObject, URLSessionTaskDelegate, Sendable {
     }
     completionHandler(request)
   }
-  // The async forms have no completion closure whose Sendable annotation could drift from the
-  // SDK's and leave an optional requirement silently unmatched.
-  func urlSession(_ session: URLSession, didReceive challenge: URLAuthenticationChallenge) async
+  /// Whether a challenge comes from the primary origin, which keeps the system's own evaluation.
+  func isOrigin(host: String, port: Int) -> Bool {
+    DirectRoutePins.endpoint(host: host, port: port)
+      == DirectRoutePins.endpoint(host: origin.host, port: origin.port ?? (origin.scheme == "http" ? 80 : 443))
+  }
+  // Task level only: without a session-level method, URLSession sends connection challenges such
+  // as server trust here, after the request's own delegate. The async form has no completion
+  // closure whose Sendable annotation could drift from the SDK's and leave it silently unmatched.
+  func urlSession(_ session: URLSession, task: URLSessionTask, didReceive challenge: URLAuthenticationChallenge) async
     -> (URLSession.AuthChallengeDisposition, URLCredential?)
   {
-    answer(challenge)
+    let space = challenge.protectionSpace
+    guard space.authenticationMethod == NSURLAuthenticationMethodServerTrust else { return (.performDefaultHandling, nil) }
+    return isOrigin(host: space.host, port: space.port) ? (.performDefaultHandling, nil) : (.cancelAuthenticationChallenge, nil)
+  }
+}
+
+/// One request's delegate on a direct route. The route's pin travels with the request, so a route
+/// list refreshed mid-flight cannot loosen it, and the delegate remembers refusing a certificate,
+/// which proves the request was never sent. It also reports upload progress.
+/// Checked Sendable: `refusedCertificate` is lock-guarded; everything else is immutable.
+final class DirectTaskDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+  let pin: String
+  let report: (@MainActor @Sendable (Double) -> Void)?
+  private let lock = NSLock()
+  private var refusedCertificate = false
+  init(pin: String, report: (@MainActor @Sendable (Double) -> Void)? = nil) {
+    self.pin = pin
+    self.report = report
+  }
+  var refused: Bool { lock.withLock { refusedCertificate } }
+  /// Whether `leaf` is the pinned certificate. A refusal is remembered.
+  func accepts(_ leaf: Data?) -> Bool {
+    let trusted = DirectRoutePins.decide(pin: pin, leaf: leaf) == .trust
+    if !trusted { lock.withLock { refusedCertificate = true } }
+    return trusted
   }
   func urlSession(_ session: URLSession, task: URLSessionTask, didReceive challenge: URLAuthenticationChallenge) async
     -> (URLSession.AuthChallengeDisposition, URLCredential?)
   {
-    answer(challenge)
-  }
-  private func answer(_ challenge: URLAuthenticationChallenge) -> (URLSession.AuthChallengeDisposition, URLCredential?) {
     let space = challenge.protectionSpace
     guard space.authenticationMethod == NSURLAuthenticationMethodServerTrust, let trust = space.serverTrust else {
       return (.performDefaultHandling, nil)
     }
-    let pin = pins.pin(host: space.host, port: space.port)
-    let leaf = pin == nil ? nil : (SecTrustCopyCertificateChain(trust) as? [SecCertificate])?.first.map { SecCertificateCopyData($0) as Data }
-    switch DirectRoutePins.decide(pin: pin, leaf: leaf) {
-    case .standard: return (.performDefaultHandling, nil)
-    case .trust: return (.useCredential, URLCredential(trust: trust))
-    // Ends the handshake before any request, so the bearer token never reaches that address.
-    case .refuse:
-      pins.noteRefusal(host: space.host, port: space.port)
-      return (.cancelAuthenticationChallenge, nil)
-    }
+    // Cancelling ends the handshake before any request, so the bearer token never reaches that address.
+    return accepts(DirectRoutePins.leaf(of: trust)) ? (.useCredential, URLCredential(trust: trust)) : (.cancelAuthenticationChallenge, nil)
+  }
+  func urlSession(
+    _ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64,
+    totalBytesSent: Int64, totalBytesExpectedToSend: Int64
+  ) {
+    guard let report, totalBytesExpectedToSend > 0 else { return }
+    let fraction = Double(totalBytesSent) / Double(totalBytesExpectedToSend)
+    Task { @MainActor in report(fraction) }
   }
 }
 
@@ -243,7 +246,7 @@ extension APIClient {
     request.cachePolicy = .reloadIgnoringLocalCacheData
     request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
     request.httpShouldHandleCookies = false
-    guard let answer = try? await session.data(for: request),
+    guard let answer = try? await session.data(for: request, delegate: DirectTaskDelegate(pin: route.certificateSha256)),
       (answer.1 as? HTTPURLResponse)?.statusCode == 200,
       (try? JSONDecoder().decode(DirectRoutesResponse.self, from: answer.0)) != nil
     else { return false }
@@ -252,17 +255,16 @@ extension APIClient {
 
   /// Records that `route` failed a request and returns whether the request may be sent again on the
   /// primary origin. The route stops being used at once and is skipped by checks for a while.
-  /// `refused` is the listener's 403 refusal, which it sends before handling anything.
-  func directRouteFailed(_ route: DirectRoute, error: Error? = nil, refused: Bool = false, method: String) -> Bool {
+  /// `unsent` means the request provably never reached the server: its own delegate refused the
+  /// certificate, or the listener answered with its refusal before handling anything.
+  func directRouteFailed(_ route: DirectRoute, error: Error? = nil, unsent: Bool = false, method: String) -> Bool {
     let code = (error as? URLError)?.code
-    // A cancelled request is the pin's refusal only if the delegate recorded one for this route;
-    // otherwise someone cancelled it, and the route did nothing wrong.
-    let pinRefused = code == .cancelled && pins.takeRefusal(route.endpoint)
-    if !refused && !pinRefused && (error is CancellationError || code == .cancelled) { return false }
+    // Cancelled without a refusal of its own: someone cancelled it, and the route did nothing wrong.
+    if !unsent && (error is CancellationError || code == .cancelled) { return false }
     if activeRoute == route { activeRoute = nil }
     routeCooldowns[route] = now().addingTimeInterval(Self.routeCooldown)
     checkRoutes(force: true)
-    if refused || pinRefused { return true }
+    if unsent { return true }
     guard let code else { return false }
     return Self.neverSent.contains(code) || ["GET", "HEAD"].contains(method)
   }

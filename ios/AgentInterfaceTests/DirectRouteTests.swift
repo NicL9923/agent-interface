@@ -9,6 +9,12 @@ private final class RouteHost: FakeHost, @unchecked Sendable {
   private let lock = NSLock()
   private var seen: [URLRequest] = []
   private var failure: URLError?
+  private var held: (arrived: XCTestExpectation, release: DispatchSemaphore)?
+  /// When set, a request waits here before it is answered, so a test can act while it is in flight.
+  var hold: (arrived: XCTestExpectation, release: DispatchSemaphore)? {
+    get { lock.withLock { held } }
+    set { lock.withLock { held = newValue } }
+  }
   private var status = 200
   private var body = #"{"routes":[]}"#
   init() {
@@ -19,6 +25,10 @@ private final class RouteHost: FakeHost, @unchecked Sendable {
   func answer(status: Int, body: String) { lock.withLock { self.status = status; self.body = body } }
   var requests: [URLRequest] { lock.withLock { seen } }
   func receive(_ exchange: FakeExchange) {
+    if let hold {
+      hold.arrived.fulfill()
+      hold.release.wait()
+    }
     let (failure, status, body) = lock.withLock { () -> (URLError?, Int, String) in
       seen.append(exchange.request)
       return (self.failure, self.status, self.body)
@@ -33,9 +43,8 @@ private final class RouteHost: FakeHost, @unchecked Sendable {
 
 @MainActor final class DirectRouteTests: XCTestCase {
   private var servers: [URL] = []
-  override func tearDown() {
+  override func tearDown() async throws {
     for server in servers { UserDefaults.standard.removeObject(forKey: DeviceDefaults.directRoutes(server)) }
-    super.tearDown()
   }
 
   private func json(_ routes: [DirectRoute]) -> String {
@@ -110,7 +119,6 @@ private final class RouteHost: FakeHost, @unchecked Sendable {
     let relaunched = APIClient(baseURL: primary.origin, session: URLSession(configuration: config))
     XCTAssertEqual(relaunched.directRoutes, routes)
     XCTAssertNil(relaunched.activeRoute, "a route is probed before it is used")
-    XCTAssertEqual(relaunched.pins.pin(host: lan.origin.host!, port: 3443), routes[0].certificateSha256)
   }
 
   func testAReadThatFailsOnTheRouteIsSentOnThePrimaryOriginAndTheRouteRests() async throws {
@@ -151,12 +159,45 @@ private final class RouteHost: FakeHost, @unchecked Sendable {
     let lan = RouteHost()
     let (primary, api, _) = installation([(lan, .lan)])
     await api.runRouteCheck()
-    // A pin refusal cancels the handshake before anything is sent; the delegate records it.
-    lan.failing = URLError(.cancelled)
-    api.pins.noteRefusal(host: lan.origin.host!, port: 3443)
+    lan.failing = URLError(.cannotConnectToHost)
     _ = try await api.data(path: "/api/bots/household/messages", method: "POST", body: Data("{}".utf8), contentType: "application/json")
     XCTAssertEqual(primary.requests.filter { $0.httpMethod == "POST" }.map { $0.url?.path }, ["/api/bots/household/messages"])
     XCTAssertNil(api.activeRoute)
+  }
+
+  func testOnlyTheRequestsOwnCertificateRefusalMakesACancelledWriteSafeToResend() {
+    let api = FakeServer().api()
+    let route = RouteHost().route(.lan)
+    api.activeRoute = route
+    // Cancelled by someone: it may have been sent, and the route did nothing wrong.
+    XCTAssertFalse(api.directRouteFailed(route, error: URLError(.cancelled), method: "POST"))
+    XCTAssertEqual(api.activeRoute, route)
+    // Cancelled by its own delegate refusing the certificate: the handshake ended before sending.
+    XCTAssertTrue(api.directRouteFailed(route, error: URLError(.cancelled), unsent: true, method: "POST"))
+    XCTAssertNil(api.activeRoute)
+    XCTAssertNotNil(api.routeCooldowns[route])
+    api.routeCheck?.cancel()
+  }
+
+  func testARequestIsNotSentAgainUnderAnotherSignIn() async throws {
+    let lan = RouteHost()
+    let (primary, api, _) = installation([(lan, .lan)])
+    await api.runRouteCheck()
+    let arrived = expectation(description: "read reached the route")
+    let release = DispatchSemaphore(value: 0)
+    lan.hold = (arrived, release)
+    lan.failing = URLError(.timedOut)
+    let read = Task { try await api.data(path: "/api/bootstrap") }
+    await fulfillment(of: [arrived], timeout: 5)
+    api.token = "another-account-token"
+    release.signal()
+    do {
+      _ = try await read.value
+      XCTFail("A read sent for one account must not be repeated for another")
+    } catch let error as APIError {
+      XCTAssertEqual(error.code, "CONNECTION_UNAVAILABLE")
+    }
+    XCTAssertFalse(primary.requests.contains { $0.url?.path == "/api/bootstrap" })
   }
 
   func testACancelledRequestIsNotTakenForARefusedRoute() async throws {
@@ -262,18 +303,27 @@ private final class RouteHost: FakeHost, @unchecked Sendable {
     XCTAssertEqual(decoded.routes.map(\.url.absoluteString), ["https://192.168.1.20:3443"])
   }
 
-  func testOnlyAPinnedAddressAcceptsItsOwnCertificate() {
+  func testARouteRequestAcceptsOnlyItsPinnedCertificateAndRemembersARefusal() {
     // SHA-256("abc"), base64url: FIPS 180-2's test vector, computed independently of the app.
     let abc = "ungWv48Bz-pBQUDeXa4iI7ADYaOWF3qctBD_YfIAFa0"
-    XCTAssertEqual(DirectRoutePins.decide(pin: abc, leaf: Data("abc".utf8)), .trust)
-    XCTAssertEqual(DirectRoutePins.decide(pin: abc, leaf: Data("abd".utf8)), .refuse)
-    XCTAssertEqual(DirectRoutePins.decide(pin: abc, leaf: nil), .refuse)
-    // The primary origin, and any address no route names, keeps the system's evaluation.
-    XCTAssertEqual(DirectRoutePins.decide(pin: nil, leaf: Data("abc".utf8)), .standard)
-    let pins = DirectRoutePins()
-    pins.set([DirectRoute(kind: .lan, url: URL(string: "https://192.168.1.20:3443")!, certificateSha256: abc)])
-    XCTAssertEqual(pins.pin(host: "192.168.1.20", port: 3443), abc)
-    XCTAssertNil(pins.pin(host: "192.168.1.20", port: 443))
-    XCTAssertNil(pins.pin(host: "agentui.example.test", port: 443))
+    let accepting = DirectTaskDelegate(pin: abc)
+    XCTAssertTrue(accepting.accepts(Data("abc".utf8)))
+    XCTAssertFalse(accepting.refused)
+    let impostor = DirectTaskDelegate(pin: abc)
+    XCTAssertFalse(impostor.accepts(Data("abd".utf8)))
+    XCTAssertTrue(impostor.refused)
+    let missing = DirectTaskDelegate(pin: abc)
+    XCTAssertFalse(missing.accepts(nil))
+    XCTAssertTrue(missing.refused)
+  }
+
+  func testTheSessionKeepsSystemTrustOnlyForThePrimaryOrigin() {
+    let delegate = APISessionDelegate(origin: URL(string: "https://agentui.example.test")!)
+    XCTAssertTrue(delegate.isOrigin(host: "agentui.example.test", port: 443))
+    XCTAssertTrue(delegate.isOrigin(host: "AgentUI.example.test", port: 443))
+    // A route request that lost its own delegate, or any other host, is refused rather than trusted.
+    XCTAssertFalse(delegate.isOrigin(host: "agentui.example.test", port: 3443))
+    XCTAssertFalse(delegate.isOrigin(host: "192.168.1.20", port: 3443))
+    XCTAssertTrue(APISessionDelegate(origin: URL(string: "https://192.168.1.5:8443")!).isOrigin(host: "192.168.1.5", port: 8443))
   }
 }

@@ -212,6 +212,21 @@ describe("direct route listener", () => {
     })).rejects.toMatchObject({ code: "ECONNREFUSED" });
   });
 
+  it("stops rechecking addresses when it closes while starting", async () => {
+    const config = loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:", DIRECT_ROUTES: "lan", DIRECT_TLS_DIR: scratch() });
+    config.directRoutes!.port = 0;
+    const discover = vi.fn((): DirectAddress[] => [{ kind: "lan", address: "127.0.0.1" }]);
+    const { app, directRoutes } = await createApp(config, fakeRuntime({ close: async () => {} }), { background: false, directAddresses: discover });
+    closers.push(() => app.close());
+    const starting = directRoutes!.start(5);
+    await directRoutes!.close();
+    await starting;
+    const calls = discover.mock.calls.length;
+    await new Promise(resolve => setTimeout(resolve, 40));
+    expect(discover.mock.calls.length).toBe(calls);
+    expect(directRoutes!.routes()).toEqual([]);
+  });
+
   it("keeps serving the routes that listen when another address cannot", async () => {
     const { directRoutes, setAddresses, app } = await installation();
     const warn = vi.spyOn(app.log, "warn");
