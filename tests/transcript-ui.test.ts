@@ -439,6 +439,34 @@ describe("questions", () => {
 });
 
 describe("approval decisions", () => {
+  it("cheers the assistant on an approval, nods on a decline and folds a settled card away", async () => {
+    const reactions: unknown[] = [];
+    const heard = (event: Event) => reactions.push((event as CustomEvent).detail);
+    window.addEventListener("wildbots:avatar-react", heard);
+    try {
+      conversation = { ...conversation, approvals: [
+        { id: "gate", title: "Open the gate?", detail: "", status: "pending" },
+        { id: "lights", title: "Turn on the lights?", detail: "", status: "pending" },
+      ] };
+      await render();
+      const [first, second] = [...container.querySelectorAll(".approval-card")];
+      await act(async () => first.querySelector<HTMLButtonElement>("button")!.click());
+      await act(async () => second.querySelectorAll<HTMLButtonElement>("button")[1].click());
+      expect(reactions).toEqual([{ botId: "shared", kind: "cheer" }, { botId: "shared", kind: "nod" }]);
+      expect(first.getAttribute("data-settled")).toBe("approved");
+      // Hermes stops listing the first: it stays a moment as a folding, inert card that no longer counts as pending.
+      conversation = { ...conversation, approvals: conversation.approvals.filter(approval => approval.id !== "gate") };
+      await act(async () => FakeEventSource.notifyAll());
+      await advance(50);
+      const leaving = container.querySelector(".approval-card.leaving");
+      expect(leaving?.textContent).toContain("Open the gate?");
+      expect(leaving?.hasAttribute("inert")).toBe(true);
+      expect(leaving?.getAttribute("data-attention-id")).toBeNull();
+      await advance(500);
+      expect(container.querySelector(".approval-card.leaving")).toBeNull();
+      expect([...container.querySelectorAll(".approval-card h2")].map(node => node.textContent)).toEqual(["Turn on the lights?"]);
+    } finally { window.removeEventListener("wildbots:avatar-react", heard); }
+  });
   for (const decision of ["approved", "denied"] as const) {
     it(`retries a failed ${decision} decision, clears the error and prevents another send`, async () => {
       conversation = { ...conversation, approvals: [{ id: "gate", title: "Create the reminder?", detail: "Notify both household members.", status: "pending" }] };
@@ -976,5 +1004,35 @@ describe("send anchor", () => {
     hook.history.sentAs("request-1", "mine");
     await show([...interim, prompt("mine", "My new question")]);
     expect(top("mine")).toBe(24);
+  });
+});
+
+describe("live work", () => {
+  it("shows the turn's tools as a tape, docks a live desktop while a computer tool runs and tints the chat", async () => {
+    const original = bootstrap.bots;
+    bootstrap.bots = [{ ...original[0], avatar: { mode: "mascot", family: "fox", color: "#C46F2C", eyes: "round", accessory: "none" } }];
+    // The desktop ticket never arrives here, so the preview stays as it first appears.
+    const fallback = vi.mocked(api).getMockImplementation()!;
+    vi.mocked(api).mockImplementation(async <T>(path: string, init?: RequestInit) =>
+      path === "/computer/desktop" ? new Promise<T>(() => {}) : fallback(path, init) as Promise<T>);
+    try {
+      conversation = { ...conversation, activity: { state: "working" }, messages: [prompt("q", "Find the feed store's hours")], toolCalls: [
+        { id: "search", name: "web_search", status: "completed" },
+        { id: "browse", name: "browser_navigate", status: "running" },
+      ] };
+      await render();
+      expect([...container.querySelectorAll(".work-tape li")].map(item => item.className)).toEqual(["work-tape-step is-completed", "work-tape-step is-running"]);
+      expect(labelled("Watch Shared on the computer")).not.toBeNull();
+      expect(container.querySelector(".computer-peek")).not.toBeNull();
+      const panel = container.querySelector<HTMLElement>(".conversation-panel")!;
+      expect(panel.hasAttribute("data-tint")).toBe(true);
+      expect(panel.style.getPropertyValue("--bot-tint")).toBe("#C46F2C");
+      await act(async () => container.querySelector<HTMLButtonElement>(".computer-peek-close")!.click());
+      expect(container.querySelector(".computer-peek")).toBeNull();
+      // The run ends: the tape and the preview go with it.
+      conversation = { ...conversation, activity: { state: "idle" }, toolCalls: [] };
+      await changed();
+      expect(container.querySelector(".work-tape")).toBeNull();
+    } finally { bootstrap.bots = original; }
   });
 });

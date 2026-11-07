@@ -190,3 +190,53 @@ it("moves an assistant to one home section from its menu, or starts a new sectio
   expect(props.onNewSection).toHaveBeenCalledExactlyOnceWith(props.boot.bots[1]);
   expect(props.onSelectBot).not.toHaveBeenCalled();
 });
+
+it("cheers a pinned assistant that finishes its work and has the other pinned ones glance at it", async () => {
+  const events: string[] = [];
+  const reacted = (event: Event) => events.push(`react:${(event as CustomEvent).detail.botId}:${(event as CustomEvent).detail.kind}`);
+  const glanced = (event: Event) => events.push(`glance:${(event as CustomEvent).detail.botId}`);
+  window.addEventListener("wildbots:avatar-react", reacted);
+  window.addEventListener("wildbots:avatar-glance", glanced);
+  try {
+    await render();
+    expect(events).toEqual([]);
+    // The selected chat finishes; the other moves on to waiting, which is not a finish.
+    props = { ...props, state: "idle", boot: { ...props.boot, bots: props.boot.bots.map(bot => ({ ...bot, activity: bot.id === "garden" ? "waiting" : bot.activity })) } };
+    await render();
+    expect(events).toEqual(["react:ranch:cheer", "glance:ranch"]);
+    await render();
+    expect(events).toHaveLength(2);
+  } finally {
+    window.removeEventListener("wildbots:avatar-react", reacted);
+    window.removeEventListener("wildbots:avatar-glance", glanced);
+  }
+});
+
+it("marks home with the season and draws its drifting shapes, hidden from assistive technology", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  try {
+    vi.setSystemTime(new Date(2026, 9, 20, 12));
+    await render();
+    const rail = container.querySelector(".bot-rail")!;
+    expect(rail.getAttribute("data-season")).toBe("spooky");
+    expect(rail.querySelector(".season-ambience")?.getAttribute("aria-hidden")).toBe("true");
+    expect(rail.querySelectorAll(".season-mote")).toHaveLength(9);
+    await act(async () => root.unmount());
+    vi.setSystemTime(new Date(2026, 7, 15, 12));
+    await render();
+    expect(container.querySelector(".bot-rail")?.hasAttribute("data-season")).toBe(false);
+    expect(container.querySelector(".season-ambience")).toBeNull();
+    // Outside every calendar season, a pinned seasonal character brings its own.
+    await act(async () => root.unmount());
+    props = { ...props, boot: { ...props.boot, bots: props.boot.bots.map(bot => bot.id === "garden"
+      ? { ...bot, avatar: { mode: "mascot", family: "snowman", color: "#F4F8FB", eyes: "round", accessory: "none" } } : bot) } };
+    await render();
+    expect(container.querySelector(".bot-rail")?.getAttribute("data-season")).toBe("winter");
+  } finally { vi.useRealTimers(); }
+});
+
+it("gives the avatar morph and glances a place on home", async () => {
+  await render();
+  expect([...container.querySelectorAll(".pinned-avatar")].map(node => [node.getAttribute("data-morph"), node.getAttribute("data-glance-target")]))
+    .toEqual([["ranch", "ranch"], ["garden", "garden"]]);
+});
