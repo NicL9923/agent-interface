@@ -27,11 +27,14 @@ type Status = "looking" | "editing" | "sending" | "checking" | "sent" | "interru
 type Pending = { id: string; attempt: number; answers: FormAnswers; elsewhere: boolean };
 const isAnswers = (value: unknown): value is FormAnswers => typeof value === "object" && value !== null && !Array.isArray(value)
   && Object.values(value).every(entry => typeof entry === "string" || typeof entry === "boolean" || Array.isArray(entry) && entry.every(item => typeof item === "string"));
+const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+/** The saved record, or null. A checking record whose ID is missing or malformed keeps its answers and derives the ID again. */
 function readSaved(key: string): Saved | null {
   const value = localRead<Partial<Saved>>(key);
-  return value && Number.isInteger(value.attempt) && value.attempt! >= 0 && isAnswers(value.answers)
-    && (value.state === "editing" || value.state === "sent" || value.state === "interrupted" || value.state === "checking" && typeof value.requestId === "string")
-    ? value as Saved : null;
+  if (!value || !Number.isInteger(value.attempt) || value.attempt! < 0 || !isAnswers(value.answers)
+    || !["editing", "checking", "sent", "interrupted"].includes(value.state!)) return null;
+  const { requestId, ...rest } = value as Saved;
+  return typeof requestId === "string" && uuid.test(requestId) ? { ...rest, requestId } : rest;
 }
 // Answers saved for an earlier version of the card keep only the fields it still has.
 const restore = (card: FormCard, answers: FormAnswers): FormAnswers => {
@@ -40,6 +43,12 @@ const restore = (card: FormCard, answers: FormAnswers): FormAnswers => {
 };
 const refused = "Hermes didn't take your answers.";
 const unconfirmed = "Hermes hasn't confirmed your answers yet. They're being checked and won't be sent twice.";
+/**
+ * Attempts checked on open. Each attempt past the first exists only because Hermes refused the one
+ * before, so a real form never comes near this. Stopping here is still safe: Send uses this
+ * attempt's ID, which the server admits at most once.
+ */
+const lookupLimit = 100;
 
 /**
  * A form the assistant asked the person to fill in. Send posts the answers as the person's own
@@ -59,13 +68,28 @@ export function FormReplyCard({ card, botId, messageId, userId, unavailable }: {
   const [elsewhere, setElsewhere] = useState(!!first?.elsewhere);
   // With nothing saved here, another tab or device may already have sent this form.
   const [status, setStatus] = useState<Status>(first ? first.state : "looking");
-  const [pending, setPending] = useState<Pending | null>(() => first?.state === "checking"
-    ? { id: first.requestId!, attempt: first.attempt, answers: first.answers, elsewhere: !!first.elsewhere } : null);
+  const [pending, setPending] = useState<Pending | null>(() => first?.state === "checking" && first.requestId
+    ? { id: first.requestId, attempt: first.attempt, answers: first.answers, elsewhere: !!first.elsewhere } : null);
   const [problems, setProblems] = useState<Record<string, string>>(() => Object.create(null));
   const [error, setError] = useState("");
   const inFlight = useRef(false);
   const formId = useId();
-  const save = (next: Saved) => localSave(key, next);
+  // Never back to an earlier attempt: a late answer to one must not overwrite a newer one's record,
+  // such as from a copy of this card that closed while its request was out.
+  const save = (next: Saved) => {
+    const stored = readSaved(key);
+    if (!stored || stored.attempt <= next.attempt) localSave(key, next);
+  };
+  // A checking record saved without a usable ID follows the ID its attempt derives.
+  const recovering = status === "checking" && !pending;
+  useEffect(() => {
+    if (!recovering || !first) return;
+    let live = true;
+    void formRequestId(userId, botId, messageId, card.id, first.attempt).then(id => {
+      if (live) setPending({ id, attempt: first.attempt, answers: restore(card, first.answers), elsewhere: !!first.elsewhere });
+    });
+    return () => { live = false; };
+  }, [recovering]);
 
   // Attempts run in order and each one only after Hermes refused the one before, so the lookup
   // skips refusals until the first attempt that was not refused, which tells where the form stands.
@@ -75,6 +99,7 @@ export function FormReplyCard({ card, botId, messageId, userId, unavailable }: {
     let live = true;
     void (async () => {
       for (let next = 0; ; next++) {
+        if (next === lookupLimit) { setAttempt(next); setStatus("editing"); return; }
         let receipt: SubmissionReceipt | null = null;
         try { receipt = await request("GET /submissions/:id", { params: { id: await formRequestId(userId, botId, messageId, card.id, next) } }); }
         catch { /* Unknown: the person may send, and the server admits the request once. */ }

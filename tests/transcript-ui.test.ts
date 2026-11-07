@@ -1110,14 +1110,17 @@ describe("form replies", () => {
   // The ID is derived with Web Crypto, which settles outside fake timers.
   const posted = (count: number) => waitForUi(() => expect(messagesWritten()).toHaveLength(count));
   const reload = async () => { await act(async () => root.unmount()); await render(); };
-  /** Answers GET /submissions/:id from a table of receipts by ID, "uncertain" for any other. */
-  const receipts = (statuses: Map<string, string>) => {
+  /** Answers GET /submissions/:id from a table of receipts by ID, "uncertain" for any other. Returns the IDs looked up, in order. */
+  const receipts = (statuses: Map<string, string>, otherwise = "uncertain") => {
+    const looked: string[] = [];
     const previous = vi.mocked(api).getMockImplementation()!;
     vi.mocked(api).mockImplementation(async <T>(path: string, ...rest: unknown[]) => {
       if (!path.startsWith("/submissions/")) return previous(path, ...rest as []) as T;
       const id = path.split("/")[2];
-      return { requestId: id, status: statuses.get(id) ?? "uncertain" } as T;
+      looked.push(id);
+      return { requestId: id, status: statuses.get(id) ?? otherwise } as T;
     });
+    return looked;
   };
   const accept = () => vi.mocked(write).mockImplementation(async <T>(path: string, body: unknown) =>
     (path === "/bots/shared/messages" ? { requestId: (body as { requestId: string }).requestId, status: "accepted" } : {}) as T);
@@ -1184,6 +1187,18 @@ describe("form replies", () => {
     expect(messagesWritten()).toHaveLength(0);
   });
 
+  it("stops looking after 100 refused attempts and offers the next one", async () => {
+    const looked = receipts(new Map(), "rejected");
+    accept();
+    await render();
+    await waitForUi(() => expect(buttonText("Send answers")?.disabled).toBe(false), 5000);
+    expect(looked).toHaveLength(100);
+    await fill();
+    await send();
+    await posted(1);
+    expect((messagesWritten()[0][1] as { requestId: string }).requestId).toBe(await formId(100));
+  });
+
   it("treats a Hermes restart as maybe arrived, and sends again only when the person says so", async () => {
     receipts(new Map([[await formId(0), "interrupted"]]));
     accept();
@@ -1200,7 +1215,7 @@ describe("form replies", () => {
 
   it("follows the attempt it sent, not a refused earlier one, while Hermes hasn't confirmed it", async () => {
     const statuses = new Map<string, string>();
-    receipts(statuses);
+    const looked = receipts(statuses);
     let status = "rejected";
     vi.mocked(write).mockImplementation(async <T>(path: string, body: unknown) =>
       (path === "/bots/shared/messages" ? { requestId: (body as { requestId: string }).requestId, status } : {}) as T);
@@ -1212,12 +1227,42 @@ describe("form replies", () => {
     status = "uncertain";
     await send();
     await posted(2);
+    const checkedFrom = looked.length;
     await advance(2100);
     await advance(4100);
     // Attempt 0's refusal must not reopen the form while attempt 1 is unconfirmed.
     expect(buttonText("Checking…")?.disabled).toBe(true);
     expect(buttonText("Send answers")).toBeUndefined();
     expect(messagesWritten()).toHaveLength(2);
+    // Every check after the second send asks about the request that send made.
+    expect(looked.slice(checkedFrom).length).toBeGreaterThan(0);
+    expect(new Set(looked.slice(checkedFrom))).toEqual(new Set([(messagesWritten()[1][1] as { requestId: string }).requestId]));
+  });
+
+  it.each([["no", undefined], ["an empty", ""], ["a malformed", "not-an-id"]])("checks a saved request with %s ID under the ID its attempt derives, keeping its answers", async (_, requestId) => {
+    const looked = receipts(new Map([[await formId(1), "accepted"]]));
+    localStorage.setItem(saved, JSON.stringify({ attempt: 1, answers: { city: "Marfa", pace: "Packed", dog: true }, state: "checking", ...(requestId !== undefined && { requestId }) }));
+    await render();
+    await advance(2100);
+    await waitForUi(() => expect(sent()).toBe("Sent"));
+    expect(looked).toContain(await formId(1));
+    expect(card().querySelector(".form-reply-answers")?.textContent).toContain("Marfa");
+    expect(messagesWritten()).toHaveLength(0);
+  });
+
+  it("never lets a late answer to an earlier attempt overwrite a newer attempt's saved record", async () => {
+    let finish!: (value: unknown) => void;
+    vi.mocked(write).mockImplementation(async <T>(path: string) => path === "/bots/shared/messages"
+      ? await new Promise<T>(resolve => { finish = value => resolve(value as T); }) : {} as T);
+    await render();
+    await fill();
+    await send();
+    await posted(1);
+    // Another copy of this card moved on to attempt 1 while attempt 0 was out.
+    const newer = { attempt: 1, answers: { city: "Austin", pace: "Relaxed", dog: false }, state: "editing" };
+    localStorage.setItem(saved, JSON.stringify(newer));
+    await act(async () => finish({ requestId: await formId(0), status: "accepted" }));
+    expect(JSON.parse(localStorage.getItem(saved)!)).toEqual(newer);
   });
 
   it("keeps a refused answer's words in the form across leaving the chat, under the same ID", async () => {
