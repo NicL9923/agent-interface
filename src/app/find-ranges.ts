@@ -9,6 +9,8 @@ export function shownMessages(container: HTMLElement) {
 /** Text ranges of each match inside a message, for the CSS highlight registry. */
 export function matchRanges(item: HTMLElement, needle: string) {
   const ranges: Range[] = [];
+  // An empty needle matches at every index forever; callers guard it, and so does this.
+  if (!needle) return ranges;
   for (const block of item.querySelectorAll(readable)) {
     const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
     for (let node = walker.nextNode(); node; node = walker.nextNode()) {
