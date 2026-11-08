@@ -2,7 +2,7 @@ import webpush from "web-push";
 import { fromPromise, makeJobs } from "./effect-support.js";
 import { allowedIdentity, type Config } from "./config.js";
 import { maxDeliveryAttempts, type Store } from "./store.js";
-import type { Runtime } from "../shared/types.js";
+import type { Runtime, RuntimeEvent } from "../shared/types.js";
 import { visibleTo } from "./bot-access.js";
 import { accountMarker, ApnsError, createApnsSender, type ApnsBadgeSender, type ApnsClearSender, type ApnsRefreshSender, type ApnsSender, type NativeDevice } from "./apns.js";
 import { WidgetRefresh } from "./widget-refresh.js";
@@ -75,6 +75,11 @@ export class BackgroundWorker {
   readonly clears: FailureTracker;
   readonly live: LiveActivities;
   readonly widgets: WidgetRefresh;
+  /**
+   * Learns which discovered routine runs are check-ins before they are stored, so a check-in this
+   * server has not reconciled yet is still quiet. A failure leaves the events for the next tick.
+   */
+  identify?: (events: RuntimeEvent[]) => Promise<void>;
   constructor(
     private store: Store,
     private runtime: Runtime,
@@ -213,6 +218,7 @@ export class BackgroundWorker {
       if (discovery.events.length) try {
         this.store.botNames = new Map((await this.runtime.listBots()).map(bot => [bot.id, bot.name]));
       } catch { /* Fall back to the last known names. */ }
+      if (this.identify) await this.identify(discovery.events);
       this.store.recordEvents(discovery.events, discovery.cursor);
       this.discovery.success();
     } catch (error) {

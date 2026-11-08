@@ -1,6 +1,7 @@
 import type { FastifyError, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { ErrorCode } from "../shared/errors.js";
+import type { Preferences } from "../shared/types.js";
 import { RepeatFilter, safeError } from "./logging.js";
 
 export interface HttpErrorOptions {
@@ -8,6 +9,8 @@ export interface HttpErrorOptions {
   /** A 5xx whose fixed message tells the person what to do next. */
   expose?: boolean;
   confirmRequired?: boolean;
+  /** The member's preferences as saved, for a failure that happens after a change was saved, so a client shows what was. */
+  preferences?: Preferences;
 }
 export type HttpError = Error & HttpErrorOptions & { statusCode: number };
 
@@ -48,6 +51,7 @@ export function errorHandler(options: { production?: boolean } = {}) {
       detail: options.production ? undefined : err.message,
       code: err.code,
       confirmRequired: err.confirmRequired,
+      preferences: err.preferences,
     });
   };
 }

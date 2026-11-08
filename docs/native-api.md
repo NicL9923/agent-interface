@@ -575,6 +575,43 @@ the web does, and refuses replies over 12,000 characters; transcription uses Her
 Live Talk is web-only for now. iOS decodes the `liveVoice` capability and ignores
 a bot's `voice`.
 
+<!-- Main assistant: begin -->
+### Main assistant and check-ins
+
+`mainBotId`, `checkIns: { "enabled", "everyHours", "timezone" }` and
+`mainSuggestionDismissed` are optional `Preferences` fields; servers before them
+omit all three. The server owns `mainBotId` and `checkIns`: `PATCH /api/preferences`
+ignores whatever a client sends for them, so an older client's save can neither
+change nor clear them. Send `mainSuggestionDismissed: true` there; an omitted value
+keeps the saved one.
+
+| Method and route | Body or response |
+| --- | --- |
+| `PUT /api/preferences/main` | `{ "botId": "ID" }` or `{ "botId": null }` to clear; the key is required, so encode null explicitly. Returns `Preferences`. 409 `main_not_personal` for an assistant that isn't the caller's own personal one, with the reason; 404 for one they can't see. A new main assistant starts with check-ins off |
+| `PUT /api/preferences/check-ins` | `{ "enabled": true, "everyHours": 1-4, "timezone": "IANA_NAME" }`. Returns `Preferences`. 400 `check_in_hours`; 409 `main_required`, or when Hermes has no routines; 502 `check_in_unavailable` when Hermes couldn't create or update the routine (the switch is saved off), 502 `check_in_removal_pending` when it is off but Hermes still has the routine, which the server keeps removing |
+| `PATCH /api/bots/:id` | Sharing the caller's main assistant, or a personal assistant a check-in is still on, answers 409 `main_share_confirmation_required` until the body has `"confirmMainCleared": true`; then check-ins end first, or 502 `check_in_removal_pending` leaves it personal. Any change to who sees an assistant answers 502 `roster_update_failed`, changing nothing, when Hermes did not take the narrowed roster first |
+
+For a main assistant's routine, saving (paused or not), resuming, a trial run or an event trigger answers
+409 `routine_chats` unless its only destination is its own chat. `PUT /api/preferences/main` making an
+assistant main records nothing unless Hermes first takes, and enforces, its main assistant's limits:
+502 `main_activation_failed` when Hermes didn't take them, 409 `main_activation_failed` when its add-on
+can't enforce them. It then answers 409 `main_routine_delivery`, naming them, while any of that assistant's
+routines posts anywhere else, and when its routines or the deliveries Hermes holds can't be read; 409
+`main_routine_busy`, naming them, while one is running or Hermes still holds a delivery from it, wherever it
+posts. Show the message and let the member try again. Clearing or changing it answers 502
+`main_clear_pending` when Hermes still has the previous main assistant's check-in: the change is saved, and
+that assistant keeps a main assistant's limits until the server removes it.
+
+A refusal that comes after the server saved the member's preferences carries them as `preferences` in its
+error body: `main_clear_pending`, `check_in_removal_pending` (from `PUT /api/preferences/check-ins` and from
+sharing in `PATCH /api/bots/:id`) and `check_in_unavailable`. Apply them, or reload, so the screen shows
+what was saved, and keep showing the message. A routine with `managed: "check-in"` is a member's check-ins: show it without Edit,
+Pause or Delete, which answer 409 `check_in_managed`. A transcript `message_agent`
+handoff or incoming agent envelope may offer the other assistant's chat when its
+`target` or sender names, by ID or name, an assistant in the caller's bootstrap
+`bots`; a comma-separated fan-out names none.
+<!-- Main assistant: end -->
+
 ## Work and learning
 
 `GET /api/bots/:id/automation` returns the shared `AutomationOverview` contract

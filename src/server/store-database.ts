@@ -113,6 +113,9 @@ const additions = `
   -- came from a client that sends no device ID and is never on an active device.
   CREATE TABLE IF NOT EXISTS push_subscription_devices(endpoint TEXT PRIMARY KEY,device_id TEXT NOT NULL);
   -- END device activity
+  -- Each member's managed check-in routine, by assistant and Hermes job ID. removed_at is set once the
+  -- job is gone; the row stays so a run that settles later is still known as a check-in.
+  CREATE TABLE IF NOT EXISTS check_in_jobs(bot_id TEXT NOT NULL,job_id TEXT NOT NULL,user_id TEXT NOT NULL REFERENCES users(id),created_at INTEGER NOT NULL,removed_at INTEGER,PRIMARY KEY(bot_id,job_id));
   CREATE TABLE IF NOT EXISTS draft_revisions(user_id TEXT NOT NULL REFERENCES users(id),bot_id TEXT NOT NULL,revision INTEGER NOT NULL,reason TEXT NOT NULL,sent_revision INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(user_id,bot_id));
 `;
 export const schemaVersion = migrations.length;

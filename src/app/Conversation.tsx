@@ -10,7 +10,7 @@ import { Icon } from "../components/Icon";
 import { NotificationOnboarding } from "../components/DeviceNotifications";
 import type { useDeviceNotifications } from "../components/use-device-notifications";
 import { openComputer, usesComputer } from "../components/ComputerHandoffCard";
-import { AgentExchange, isAgentExchange } from "../components/AgentExchange";
+import { AgentExchange, ExchangeBots, isAgentExchange } from "../components/AgentExchange";
 import { ActionReceipt } from "../components/ActionReceipt";
 import { T3ThreadCard } from "../components/T3ThreadCard";
 import { t3ThreadLaunch } from "../shared/t3-code";
@@ -181,6 +181,7 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
     window.addEventListener("wildbots:find", requested);
     return () => { window.removeEventListener("keydown", open); window.removeEventListener("wildbots:find", requested); };
   }, [findable, scroll, botId]);
+  const exchangeBots = useMemo(() => ({ bots: boot.bots, currentBotId: botId }), [boot.bots, botId]);
   const closeFind = useStableCallback(() => {
     setFinding(false);
     const back = findReturn.current;
@@ -189,7 +190,7 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
   });
   return (
     <DraftRevisions.Provider value={revisions}>
-    <TranscriptTools.Provider value={tools}>
+    <TranscriptTools.Provider value={tools}><ExchangeBots.Provider value={exchangeBots}>
       {error && (
         <div className="notice error" role="alert">
           {error}
@@ -336,7 +337,7 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
       {artifactFocus && selected && <Suspense fallback={null}><ArtifactsPanel bot={selected} conversation={conversation} unavailable={connectionLost}
         focus={artifactFocus.fileId} onClose={() => setArtifactFocus(null)} /></Suspense>}
       </div>
-    </TranscriptTools.Provider>
+    </ExchangeBots.Provider></TranscriptTools.Provider>
     </DraftRevisions.Provider>
   );
 }

@@ -3,6 +3,8 @@ import SwiftUI
 /// A place the quick switcher can open.
 enum QuickSwitchTarget: Hashable {
   case bot(String), room(String), today, search, settings
+  /// The typed words go into this assistant's draft, the main assistant's.
+  case ask(String, String)
 }
 
 /// What the quick switcher lists for a query: matching assistants, pinned first, then the
@@ -19,14 +21,18 @@ enum QuickSwitch {
     Entry(target: .search, title: "Search & saved", symbol: "magnifyingglass"),
     Entry(target: .settings, title: "Settings", symbol: "gearshape"),
   ]
-  static func entries(query: String, bots: [Bot], pinned: [String], rooms: [GroupRoom] = []) -> [Entry] {
+  static func entries(query: String, bots: [Bot], pinned: [String], rooms: [GroupRoom] = [], main: String? = nil) -> [Entry] {
     let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
     func matches(_ title: String) -> Bool { needle.isEmpty || title.localizedStandardContains(needle) }
-    let ordered = bots.filter { pinned.contains($0.id) }.sorted { (pinned.firstIndex(of: $0.id) ?? 0) < (pinned.firstIndex(of: $1.id) ?? 0) }
-      + bots.filter { !pinned.contains($0.id) }
+    let mainBot = main.flatMap { id in bots.first { $0.id == id } }
+    let rest = bots.filter { $0.id != mainBot?.id }
+    let ordered = (mainBot.map { [$0] } ?? []) + rest.filter { pinned.contains($0.id) }.sorted { (pinned.firstIndex(of: $0.id) ?? 0) < (pinned.firstIndex(of: $1.id) ?? 0) }
+      + rest.filter { !pinned.contains($0.id) }
     let assistants = ordered.filter { matches($0.name) }.map { Entry(target: .bot($0.id), title: $0.name, symbol: "person.crop.circle") }
     let chats = GroupRows.ordered(rooms).filter { matches($0.name) }.map { Entry(target: .room($0.id), title: $0.name, symbol: "bubble.left.and.bubble.right") }
-    return assistants + chats + places.filter { matches($0.title) }
+    // With a main assistant, typed words can go straight to it, after everything they name.
+    let ask = mainBot.flatMap { bot in needle.isEmpty ? nil : Entry(target: .ask(bot.id, needle), title: "Ask \(bot.name): \u{201C}\(needle)\u{201D}", symbol: "sparkles") }
+    return assistants + chats + places.filter { matches($0.title) } + (ask.map { [$0] } ?? [])
   }
 }
 
@@ -39,7 +45,8 @@ struct QuickSwitcher: View {
   @State private var query = ""
   @FocusState private var focused: Bool
   private var entries: [QuickSwitch.Entry] {
-    QuickSwitch.entries(query: query, bots: store.bootstrap?.bots ?? [], pinned: store.homePreferences?.favorites ?? [], rooms: store.groupCatalog?.rooms ?? [])
+    QuickSwitch.entries(query: query, bots: store.bootstrap?.bots ?? [], pinned: store.homePreferences?.favorites ?? [], rooms: store.groupCatalog?.rooms ?? [],
+      main: store.bootstrap?.preferences.mainBotId)
   }
   var body: some View {
     NavigationStack {
@@ -80,6 +87,7 @@ struct QuickSwitcher: View {
     case .room(let id): "quickSwitch.room.\(id)"
     case .search: "quickSwitch.search"
     case .settings: "quickSwitch.settings"
+    case .ask: "quickSwitch.ask"
     }
   }
 }

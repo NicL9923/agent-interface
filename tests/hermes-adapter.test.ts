@@ -28,6 +28,8 @@ let addonReady:boolean;
 let explicitCredentials:boolean;
 let canonicalSubmission:boolean;
 let incrementalDiscovery:boolean;
+let delegation:Record<string,unknown>;
+let heldDeliveries:unknown;
 let metadataConflict:boolean;
 let connectionFails:boolean;
 let imageReady:boolean;
@@ -61,7 +63,7 @@ class WireSocket extends EventTarget {
       return;
     }
     let result:unknown={};
-    if(request.method==='agent-interface.capabilities')result={revision:reportedRevision,durable_admission:true,durable_events:addonReady,canonical_open:addonReady,executor_epoch:'epoch-one',...(incrementalDiscovery?{incremental_discovery:true}:{}),...(canonicalSubmission?{canonical_submit:true}:{}),...(explicitCredentials?{explicit_credentials:true}:{})};
+    if(request.method==='agent-interface.capabilities')result={revision:reportedRevision,durable_admission:true,durable_events:addonReady,canonical_open:addonReady,executor_epoch:'epoch-one',...(incrementalDiscovery?{incremental_discovery:true}:{}),...(canonicalSubmission?{canonical_submit:true}:{}),...(explicitCredentials?{explicit_credentials:true}:{}),...delegation};
     if(request.method==='agent-interface.open')result=structuredClone(snapshot);
     if(request.method==='file.attach')result={path:'/workspace/staged/portrait.png'};
     if(request.method==='agent-interface.submit')result={requestId:request.params.request_id,status:'accepted',runId:'task-one',...(canonicalSubmission?{app_run_id:'task-one',admission:'canonical'}:{})};
@@ -71,6 +73,8 @@ class WireSocket extends EventTarget {
     if(request.method==='config.get')result={value:request.params.key==='reasoning'?'high':'normal'};
     if(request.method==='image.generate')result={available:imageReady,success:false,error:'No image generation backend configured'};
     if(request.method==='profiles.set_asset')result={ok:true};
+    if(request.method==='agent-interface.delegation')result={ok:true};
+    if(request.method==='agent-interface.routine_deliveries')result=heldDeliveries;
     if(request.method==='agent-interface.discover')result={cursor:'2',events:[{id:'2',botId:'routine-bot',kind:'completed',title:'Routine result',occurredAt:'2026-10-14T12:00:00Z'}]};
     queueMicrotask(()=>this.receive({jsonrpc:'2.0',id:request.id,result}));
   }
@@ -78,7 +82,7 @@ class WireSocket extends EventTarget {
 }
 beforeEach(()=>{
   reportedRevision=revision;
-  snapshot={session_id:'live-one',canonical_stored_session_id:'stored-one',info:{running:false},messages:[]};calls=[];sockets=[];addonReady=true;explicitCredentials=true;canonicalSubmission=false;incrementalDiscovery=false;metadataConflict=false;connectionFails=false;imageReady=false;rosterSession=undefined;opening='open';deferredMethods=new Set();rpcErrors=new Map();beforeSend=undefined;
+  snapshot={session_id:'live-one',canonical_stored_session_id:'stored-one',info:{running:false},messages:[]};calls=[];sockets=[];addonReady=true;explicitCredentials=true;canonicalSubmission=false;incrementalDiscovery=false;delegation={};metadataConflict=false;connectionFails=false;imageReady=false;rosterSession=undefined;opening='open';deferredMethods=new Set();rpcErrors=new Map();beforeSend=undefined;
   vi.stubGlobal('WebSocket',WireSocket);
   vi.stubGlobal('fetch',vi.fn(async()=>Response.json({profiles:[]})));
   runtime=createHermesRuntime({url:'http://127.0.0.1:19119',token});
@@ -124,6 +128,43 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     deferredMethods.delete('agent-interface.discover');
     await runtime.discoverEvents('1');
     expect(calls.filter(call=>call.method==='agent-interface.discover').at(-1)?.params).toEqual({cursor:'1',full:true});
+  });
+  it('sends each add-on the roster protocol it reports, and none to one without the gate', async () => {
+    const policies = {main:{member:'Mom',main:true,owned:true,personal:[],shared:[{id:'ranch',name:'Ranch'}]},
+      ranch:{member:'the household',main:false,owned:false,personal:[],shared:[]}};
+    const sent = () => calls.filter(call => call.method === 'agent-interface.delegation').map(call => call.params);
+    // Nothing enforces a roster here, and the answer says so, so no assistant can be made main.
+    expect(await runtime.delegationPolicy!(policies)).toBe(0);
+    expect(sent()).toEqual([]);
+    for (const [reported, expected, enforced] of [
+      // The first protocol takes main assistants' rosters only, without the fields it predates.
+      [{delegation:true}, {policies:{main:{member:'Mom',personal:[],shared:[{id:'ranch',name:'Ranch'}]}}}, 1],
+      [{delegation:true, delegation_version:2}, {version:2, policies}, 2],
+    ] as const) {
+      delegation = reported; calls = [];
+      runtime = createHermesRuntime({url:'http://127.0.0.1:19119',token});
+      await runtime.status();
+      expect(await runtime.delegationPolicy!(policies)).toBe(enforced);
+      expect(sent()).toEqual([expected]);
+    }
+  });
+  it('reads the routine deliveries Hermes holds for one profile, and refuses an answer without them', async () => {
+    const answer = (result: unknown) => { heldDeliveries = result; };
+    answer({pending: [{id: 'job-a', name: '[bot:shared] Digest'}, {}]});
+    expect(await runtime.routineDeliveries!('shared')).toEqual([{id: 'job-a', name: '[bot:shared] Digest'}, {id: '', name: ''}]);
+    expect(calls.find(call => call.method === 'agent-interface.routine_deliveries')?.params).toEqual({profile: 'shared'});
+    answer({ok: true});
+    await expect(runtime.routineDeliveries!('shared')).rejects.toThrow('did not list');
+    rpcErrors.set('agent-interface.routine_deliveries', {code: -32000, message: 'Routine deliveries could not be read'});
+    await expect(runtime.routineDeliveries!('shared')).rejects.toThrow();
+  });
+  it('marks a routine Hermes has claimed a run of, or holds a Bot Chat delivery for, as in flight', async () => {
+    rosterSession = undefined;
+    const jobs = [{id: 'idle', name: 'Idle', schedule_display: '1h'}, {id: 'claimed', name: 'Claimed', schedule_display: '1h', fire_claim: {owner: 'x'}},
+      {id: 'held', name: 'Held', schedule_display: '1h', last_delivery_queued: {'bot-chat:ranch': {status: 'queued'}}}, {id: 'live', name: 'Live', schedule_display: '1h', live_execution: {id: 'e'}}];
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json(jobs)));
+    const routines = await runtime.routines();
+    expect(routines.map(row => [row.id, !!row.inFlight, !!row.running])).toEqual([['idle', false, false], ['claimed', true, false], ['held', true, false], ['live', false, true]]);
   });
   it('keeps older discovery add-ons free of new parameters', async () => {
     await runtime.discoverEvents('1');

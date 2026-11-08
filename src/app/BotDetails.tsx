@@ -16,6 +16,8 @@ import type { SavedConversation } from "./storage";
 import { usePreferenceEdits, type PreferenceEdit } from "./use-preference-edits";
 import "./home.css";
 import { FormMessage } from "../components/ui/form-message";
+import { CHECK_IN_HOURS, checkInFrequencyLabel, mainEligible } from "../shared/main-assistant";
+import type { CheckInSettings, Preferences } from "../shared/types";
 
 const newSectionValue = "\u0000new";
 
@@ -25,7 +27,7 @@ const sharing = (bot: Bot) => bot.shared ? "Shared with your household" : bot.ow
  * One assistant's card, like a contact in a messaging app: who it is, quick actions, what it
  * runs on and when it last spoke, and the per-assistant home and notification choices.
  */
-export function BotDetails({ boot, bot, avatarState, conversation, connectionLost, startNewSection, editPreferences, onSettings, onFind, onClose }: {
+export function BotDetails({ boot, bot, avatarState, conversation, connectionLost, startNewSection, editPreferences, onMain, onCheckIns, onSettings, onFind, onClose }: {
   boot: Bootstrap;
   bot: Bot;
   avatarState: ActivityState;
@@ -35,6 +37,9 @@ export function BotDetails({ boot, bot, avatarState, conversation, connectionLos
   /** Opens with the new section field ready, as from the home menu. */
   startNewSection?: boolean;
   editPreferences(edit: PreferenceEdit): Promise<void>;
+  /** Makes this assistant the main one, or clears it with null; rejects with the reason it couldn't. */
+  onMain?(botId: string | null): Promise<Preferences>;
+  onCheckIns?(change: Partial<CheckInSettings>): Promise<Preferences>;
   onSettings(bot: Bot): void;
   /** Opens this assistant's chat with Find in chat ready. */
   onFind(botId: string): void;
@@ -56,6 +61,18 @@ export function BotDetails({ boot, bot, avatarState, conversation, connectionLos
     opened.current = true;
   }, [creating]);
   const ownConversation = conversation?.botId === bot.id ? conversation : null;
+  // Only your own personal assistant can be your main one; see src/shared/main-assistant.ts.
+  const isMain = boot.preferences.mainBotId === bot.id;
+  const canBeMain = !!onMain && mainEligible(bot, boot.user.id);
+  const checkIns = boot.preferences.checkIns;
+  const checkingIn = isMain && !!checkIns?.enabled;
+  const [mainBusy, setMainBusy] = useState(false);
+  const [mainError, setMainError] = useState("");
+  const act = (work: () => Promise<unknown>) => {
+    setMainBusy(true); setMainError("");
+    void work().catch((error: unknown) => setMainError(error instanceof Error ? error.message : "That didn't save. Try again."))
+      .finally(() => setMainBusy(false));
+  };
   const working = !["idle", "done", "disconnected"].includes(avatarState);
   const create = () => {
     const checked = checkSectionName(prefs, name);
@@ -80,6 +97,11 @@ export function BotDetails({ boot, bot, avatarState, conversation, connectionLos
         <Button className={`bot-details-action${pinned ? " on" : ""}`} aria-pressed={pinned} onClick={() => commit(value => ({ ...value, favorites: pinned ? value.favorites.filter(id => id !== bot.id) : [...value.favorites, bot.id] }))}>
           <Icon name="pin" filled={pinned} />{pinned ? "Unpin" : "Pin"}
         </Button>
+        {canBeMain && <Button className={`bot-details-action${isMain ? " on" : ""}`} aria-pressed={isMain} disabled={mainBusy}
+          title={isMain ? "Your main assistant. Choose again to stop." : "Make this your main assistant"}
+          onClick={() => act(() => onMain!(isMain ? null : bot.id))}>
+          <Icon name="star" filled={isMain} />{isMain ? "Main" : "Make main"}
+        </Button>}
         <Button className="bot-details-action" title={`Find in chat (${formatCombo(shortcuts.find)})`} onClick={() => onFind(bot.id)}>
           <Icon name="search" />Find
         </Button>
@@ -95,6 +117,23 @@ export function BotDetails({ boot, bot, avatarState, conversation, connectionLos
           <dd>{bot.lastMessage?.at ? <><When value={bot.lastMessage.at} inline />{bot.lastMessage.text && <small>{excerpt(bot.lastMessage.text)}</small>}</>
             : bot.lastMessage?.text ? <small>{excerpt(bot.lastMessage.text)}</small> : "No messages yet"}</dd></div>
       </dl>
+      {isMain && onCheckIns && boot.capabilities.routines.supported && <div className="settings-group main-check-ins">
+        <label className="settings-row">
+          <span className="row-text"><span className="row-label">Check in with me</span>
+            <small>{bot.name} looks over your calendar, email and tasks and messages you only when something needs you. Quiet overnight.</small></span>
+          <Input type="checkbox" role="switch" className="switch" checked={checkingIn} disabled={mainBusy || connectionLost}
+            onChange={event => { const enabled = event.target.checked; act(() => onCheckIns({ enabled })); }} />
+        </label>
+        {checkingIn && <label className="settings-row">
+          <span className="row-label">How often</span>
+          <NativeSelect value={String(checkIns!.everyHours)} disabled={mainBusy || connectionLost}
+            onChange={event => { const everyHours = Number(event.target.value); act(() => onCheckIns({ enabled: true, everyHours })); }}>
+            {Array.from({ length: CHECK_IN_HOURS.max - CHECK_IN_HOURS.min + 1 }, (_, index) => CHECK_IN_HOURS.min + index)
+              .map(hours => <option key={hours} value={hours}>{checkInFrequencyLabel(hours)}</option>)}
+          </NativeSelect>
+        </label>}
+      </div>}
+      {mainError && <FormMessage tone="error" className="settings-footnote">{mainError}</FormMessage>}
       <div className="settings-group">
         <label className="settings-row">
           <span className="row-text"><span className="row-label">Notify me about all activity</span>

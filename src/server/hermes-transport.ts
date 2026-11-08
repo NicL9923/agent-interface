@@ -43,6 +43,11 @@ export interface Contract {
   requiredSkills: Set<string>;
   /** An add-on that lists and removes always-allowed commands and sets approval review. */
   approvalSettings: boolean;
+  /**
+   * The roster protocol the add-on speaks: 0 none, 1 main assistants' rosters only, 2 every
+   * assistant's, each marked main or not. See src/hermes/delegation.py.
+   */
+  delegation: number;
 }
 export interface TransportHooks {
   /** A frame that is not a response: a session event or a request from Hermes. */
@@ -100,6 +105,7 @@ export function createHermesTransport(options: HermesOptions, hooks: TransportHo
     incrementalDiscovery: false,
     requiredSkills: new Set(),
     approvalSettings: false,
+    delegation: 0,
   };
   const serviceAuth = options.authMode === 'service';
   const servicePath = (path: string) => serviceAuth ? '/api/agent-interface/service/' + path.slice('/api/'.length) : path;
@@ -154,6 +160,7 @@ export function createHermesTransport(options: HermesOptions, hooks: TransportHo
     contract.canonicalSubmit = false;
     contract.incrementalDiscovery = false;
     contract.approvalSettings = false;
+    contract.delegation = 0;
     // A reconnected socket receives a session's frames only after reopening it. Watchers reload,
     // but failed attempts during an outage, which never carried frames, stay quiet.
     hooks.disconnected(current.verified);
@@ -186,6 +193,8 @@ export function createHermesTransport(options: HermesOptions, hooks: TransportHo
     contract.canonicalSubmit = capabilities.canonical_submit === true;
     contract.incrementalDiscovery = capabilities.incremental_discovery === true;
     contract.approvalSettings = capabilities.approval_settings === true;
+    contract.delegation = capabilities.delegation !== true ? 0
+      : Number.isInteger(capabilities.delegation_version) && capabilities.delegation_version >= 2 ? 2 : 1;
     contract.requiredSkills = new Set(Array.isArray(capabilities.essential_skills)
       ? capabilities.essential_skills.filter((value: unknown) => typeof value === 'string')
       : []);

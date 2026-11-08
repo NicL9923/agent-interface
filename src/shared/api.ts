@@ -21,6 +21,7 @@ import type {
   ModelCatalog,
   ModelChoice,
   Preferences,
+  CheckInSettings,
   RuntimeStatus,
   SavedDraft,
   Skill,
@@ -32,6 +33,8 @@ export type Ok = { ok: true };
 export type BotSaveRequest = BotInput & {
   /** Making an assistant personal hides it from everyone else, so the person confirms that. */
   confirmPrivate?: boolean;
+  /** Sharing your main assistant ends it being your main one and turns off its check-ins. */
+  confirmMainCleared?: boolean;
 };
 export interface ReadPosition { messageId?: string; scrollTop?: number }
 /** A conversation read, with this person's draft and read position. */
@@ -193,6 +196,10 @@ export interface ApiRoutes {
   "POST /connection/retry": { response: RuntimeStatus };
   "PATCH /preferences": { body: Preferences; response: Preferences };
   "PUT /preferences/models": { body: { modelFavorites: ModelChoice[] }; response: { modelFavorites: ModelChoice[] } };
+  // --- Main assistant: null clears it. ---
+  "PUT /preferences/main": { body: { botId: string | null }; response: Preferences };
+  "PUT /preferences/check-ins": { body: CheckInSettings; response: Preferences };
+  // --- End main assistant ---
   "GET /models": { query: { botId?: string }; response: ModelCatalog };
   "POST /client-errors": { body: ClientErrorReport; response: Ok };
 

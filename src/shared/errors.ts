@@ -26,6 +26,22 @@ export type ErrorCode =
   | "approval_settings_unsupported"
   | "approval_policy_forbidden"
   | "approvals_off"
+  // --- Main assistant and check-ins ---
+  | "main_not_personal"
+  | "main_required"
+  | "main_share_confirmation_required"
+  | "check_in_hours"
+  | "check_in_managed"
+  | "check_in_marker"
+  | "check_in_unavailable"
+  | "check_in_removal_pending"
+  | "roster_update_failed"
+  | "routine_chats"
+  | "main_routine_delivery"
+  | "main_routine_busy"
+  | "main_activation_failed"
+  | "main_clear_pending"
+  // --- End main assistant ---
   // A Hermes transport failure carries its connection diagnosis.
   | NonNullable<RuntimeStatus["code"]>
   // The web client sets these for failures that never reached the server.

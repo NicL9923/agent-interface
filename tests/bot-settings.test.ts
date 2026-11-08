@@ -262,6 +262,20 @@ describe("making an assistant personal", () => {
     expect(write).toHaveBeenLastCalledWith("/bots/mine", expect.objectContaining({ shared: false, confirmPrivate: true }), "PATCH");
   });
 
+  it("reloads what the server saved when sharing ended main but Hermes kept the check-in, and says why", async () => {
+    await act(async () => root.unmount());
+    ({ container, root } = mountRoot());
+    await render({ bot: { ...bot, id: "mine", shared: false, ownerId: "one" }, bootstrap: { ...bootstrap, preferences: { ...bootstrap.preferences, mainBotId: "mine" } } });
+    vi.mocked(write).mockRejectedValueOnce(new ApiError("Hermes hasn't removed this assistant's check-ins yet, so it stays personal.", 502, "check_in_removal_pending", undefined,
+      { code: "check_in_removal_pending", preferences: { ...bootstrap.preferences, mainBotId: undefined } }));
+    await act(async () => checkbox("Shared with your household").click());
+    await click("Save changes");
+    await click("Share it");
+    expect(write).toHaveBeenLastCalledWith("/bots/mine", expect.objectContaining({ shared: true, confirmMainCleared: true }), "PATCH");
+    expect(onSaved).toHaveBeenCalledTimes(1);
+    expect(container.textContent).toContain("so it stays personal");
+  });
+
   it("asks again after the assistant is re-shared instead of reusing old consent", async () => {
     await uncheckShared(); await submit(); await click("Make it personal");
     await uncheckShared(); await submit();

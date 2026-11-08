@@ -8,7 +8,7 @@ import { notFound, visibleBots } from './bot-access.js';
 import { httpError } from './http-error.js';
 import { apiRoute } from './api-route.js';
 import type { Store } from './store.js';
-import { assertDeliveryPrivate } from './collaboration.js';
+import { assertDeliveryPrivate, assertMainOwnChat, isMainAssistant } from './collaboration.js';
 import { routineTargets } from './delivery-targets.js';
 import { serialDelivery } from './routine-delivery.js';
 
@@ -46,12 +46,17 @@ export async function installAutomationRoutes(app: FastifyInstance, runtime: Run
   apiRoute(app, "PUT /bots/:id/automation/tasks/:taskId/dependencies/:dependencyId", { body: z.object({ remove: z.boolean() }).strict() }, async (req, body) => request(req, { operation: 'task_dependency', ...z.object({ taskId: id, dependencyId: id }).parse(req.params), ...body }));
   // An event trigger runs its routine, which then delivers, so the routine's rooms are checked as Hermes has
   // them, in turn with sharing changes and routine saves. Turning a trigger off always goes ahead.
-  const delivering = async <T>(req: FastifyRequest, routineId: string, work: () => Promise<T>) => !runtime.groupRequest ? work() : serialDelivery(store, async () => {
+  // In turn with routine saves, sharing changes and making an assistant main, which all read and write the same state.
+  const delivering = async <T>(req: FastifyRequest, routineId: string, work: () => Promise<T>) => serialDelivery(store, async () => {
     // The trigger runs the routine in its own assistant's profile, so that assistant's copy is the one checked.
     const profile = z.object({ id }).parse(req.params).id;
+    const main = isMainAssistant(store, profile);
+    if (!main && !runtime.groupRequest) return work();
     const routine = (await runtime.routines()).find(row => row.id === routineId && row.botId === profile);
+    // A main assistant's routine posts only in its own chat, whether or not this Hermes has group chats.
+    if (main) assertMainOwnChat(store, profile, routine && routineTargets(routine));
     // A routine the app cannot find cannot be checked, so the trigger is refused.
-    await assertDeliveryPrivate(runtime, store, routine?.botId ?? '', routine && routineTargets(routine));
+    if (runtime.groupRequest) await assertDeliveryPrivate(runtime, store, routine?.botId ?? '', routine && routineTargets(routine));
     return work();
   });
   apiRoute(app, "POST /bots/:id/automation/triggers", { body: z.object({ id: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,79}$/), ...triggerFields }).strict() }, async (req, trigger, reply) => { reply.header('Cache-Control', 'no-store'); return delivering(req, trigger.routineId, () => request(req, { operation: 'trigger_create', trigger })); });

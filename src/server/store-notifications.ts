@@ -70,7 +70,9 @@ export class NotificationRepository {
   }
   /** Assistant display names for notification titles, refreshed by the background worker. */
   botNames = new Map<string, string>();
-  enqueue(event: RuntimeEvent) {
+  enqueue(event: RuntimeEvent & { quiet?: boolean }) {
+    // A silent check-in run: see CheckInRepository.quiet.
+    if (event.quiet) return;
     // A notification is plain text, so the reply's Markdown becomes its words.
     const copy = notificationCopy({ ...event, body: event.body && markdownPlain(event.body) }, this.botNames.get(event.botId));
     for (const userId of this.recipients(event))
