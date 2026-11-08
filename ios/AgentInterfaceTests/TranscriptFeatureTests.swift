@@ -136,6 +136,15 @@ import XCTest
     XCTAssertEqual(answers.answer(several), "", "Nothing chosen is no answer, so Send stays off")
   }
 
+  func testAnApprovalOffersOnlyWhatHermesListedAndAnOlderHermesOffersOnceAndDecline() {
+    var approval = Approval(id: "a", title: "Action approval", detail: "recursive delete", status: "pending")
+    XCTAssertEqual(["once", "session", "always", "deny"].map(approval.offers), [true, false, false, true])
+    approval.choices = ["once", "deny"]
+    XCTAssertFalse(approval.offers("always"), "A guardian-denied request offers one operation")
+    approval.choices = ["once", "session", "always", "deny"]
+    XCTAssertTrue(approval.offers("always"))
+  }
+
   func testTheRecommendedOptionIsTaggedAndChosenForOneChoiceOnly() {
     let pick = Question(id: "feed", prompt: "Feed", options: ["Hay (Recommended)", "Pellets"], recommended: 0)
     let many = Question(id: "chores", prompt: "Chores", options: ["Water (recommended)", "Fence"], multiple: true, recommended: 0)
