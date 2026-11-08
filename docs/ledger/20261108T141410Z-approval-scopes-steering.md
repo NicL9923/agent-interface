@@ -89,3 +89,13 @@ An independent GPT-6.1 Sol review of `846ec70..d2157aa` found four issues; all f
 After the fixes: `npm test` 151 files and 2,103 tests passed on six of seven runs; the one
 failing run started right after a hand mutation was restored and did not recur. Typecheck,
 lint, Python (37 files) and ruff passed.
+
+iOS after the fixes, on the Mac mini (iPhone 17 simulator, Xcode 27.2), through
+`mac-heavy-lock.sh`: NativeContractTests (137, including the new lookup-recovery test),
+TranscriptFeatureTests (29), SentEchoTests (15) and ContractFixtureTests (3) ran; 183 passed.
+`testTheObservedListNamesEveryTrackedProperty` fails only on `sendingRequests` against the
+listed `sending`, which predates this branch; `declinedApprovals` is now listed. With the
+handoff clear removed from the shared receipt handler, the lookup-recovery test failed
+("approval" still set) and passed again once restored. TranscriptFlowTests: the approval scope
+flow passed; `testQuestionOptionsAdvanceAndSendEveryAnswer` fails as it does on `846ec70`; the
+screenshot test skipped without a screenshot directory.
