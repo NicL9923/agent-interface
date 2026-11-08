@@ -530,6 +530,9 @@ export function installMainAssistantRoutes(app: FastifyInstance, collaborators: 
     }
     return preferences(userId);
   });
+  // Each member's latest check-ins save, so a failed setup's rollback never undoes a newer request, even
+  // one that asked for identical settings.
+  const checkInRevisions = new Map<string, number>();
   apiRoute(app, "PUT /preferences/check-ins", {
     before: () => requireCapability("routines"),
     body: z.object({ enabled: z.boolean(), everyHours: z.number(), timezone }).strict(),
@@ -538,11 +541,14 @@ export function installMainAssistantRoutes(app: FastifyInstance, collaborators: 
     if (!validCheckInHours(settings.everyHours)) throw httpError(400, "Check in every 1 to 4 hours.", { code: "check_in_hours" });
     // Read, checked and written in turn with main changes, so a clear can't land between the read and the
     // write and be undone by it. Reconciled after the turn, since a pass takes its own.
-    await serialDelivery(store, async () => {
+    const revision = await serialDelivery(store, async () => {
       const mainBotId = store.preferences(userId).mainBotId;
       if (!mainBotId) throw httpError(409, "Choose a main assistant before turning on check-ins.", { code: "main_required" });
       if (settings.enabled) await eligibleBot(userId, mainBotId);
       store.savePreferences(userId, { ...store.preferences(userId), checkIns: settings });
+      const saved = (checkInRevisions.get(userId) ?? 0) + 1;
+      checkInRevisions.set(userId, saved);
+      return saved;
     });
     let failed = await mains.reconcile().then(() => undefined, (error: unknown) => error);
     // A create whose answer was lost may still have made the job, which one more pass adopts.
@@ -551,11 +557,12 @@ export function installMainAssistantRoutes(app: FastifyInstance, collaborators: 
     const job = store.checkIns.current().find(row => row.userId === userId);
     const mine = !!failed && (!(failed instanceof ReconcileError) || failed.affects(userId));
     if (settings.enabled && !job) {
-      // Nothing runs, so the switch must not say it does, unless a later request already changed it.
-      // A job Hermes made after all goes on the next pass.
+      // Nothing runs, so the switch must not say it does, unless a later request saved since, even with the
+      // same settings. A job Hermes made after all goes on the next pass.
       await serialDelivery(store, async () => {
+        if (checkInRevisions.get(userId) !== revision) return;
         const now = store.preferences(userId);
-        if (JSON.stringify(now.checkIns) === JSON.stringify(settings)) store.savePreferences(userId, { ...now, checkIns: { ...settings, enabled: false } });
+        store.savePreferences(userId, { ...now, checkIns: { ...settings, enabled: false } });
       });
       void mains.reconcile().catch(() => {});
       throw httpError(502, "Hermes couldn't set up check-ins. Try again.", { code: "check_in_unavailable", expose: true, preferences: preferences(userId) });

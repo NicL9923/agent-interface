@@ -525,3 +525,17 @@ Checks at `098e84a`:
 - With `HERMES_SOURCE` at the `ed1afb0` clone, `tests/hermes_delegation_test.py` ran 34 tests and
   `tests/hermes_bot_delivery_test.py` ran 17 (one skip, the `6ebd92d` rollback case), all passing.
 - No iOS source changed.
+
+## Final re-review fix (coordinator)
+
+The last scoped GPT-6.1 Sol re-review (`114cc06..cba802c`) confirmed the disconnect and
+check-in-settings fixes and the writer audit. It found one P2, reproduced through the real app:
+a failed setup's rollback compared settings, so it turned off a newer request that asked for
+the same settings. Both requests returned 502 and check-ins stayed off after Hermes
+recovered. The rollback now applies only while its own save is the member's latest
+(a per-member revision taken inside the main lane).
+
+Test: "never lets a failed setup turn off a newer request that asked for the same settings".
+Restoring the settings-equality rule made it fail (newer request 502, not 200); with the
+revision rule it passed, then passed three more runs. `tests/main-assistant-api.test.ts`:
+70 passed.

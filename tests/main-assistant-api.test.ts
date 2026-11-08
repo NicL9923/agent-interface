@@ -887,6 +887,30 @@ describe("protection while check-ins are unknown, and requests that race", () =>
     expect((await later).statusCode).toBe(200);
     expect(prefs().checkIns).toMatchObject({ enabled: false, everyHours: 4 });
   });
+  it("never lets a failed setup turn off a newer request that asked for the same settings", async () => {
+    await main("mom-main");
+    fail.create = "refused";
+    const wait = () => new Promise(resolve => setTimeout(resolve, 100));
+    // The first request's two setup passes both fail; the second, identical request saves between them and its rollback.
+    let first!: () => void, second!: () => void, third!: () => void;
+    holdRoutines = new Promise(resolve => { first = resolve; });
+    const older = checkIns();
+    await wait();
+    holdRoutines = new Promise(resolve => { second = resolve; });
+    first();
+    await wait();
+    const newer = checkIns();
+    await wait();
+    holdRoutines = new Promise(resolve => { third = resolve; });
+    second();
+    await wait();
+    // Hermes recovers before the newer request's own pass.
+    fail.create = undefined;
+    third();
+    expect((await older).json().code).toBe("check_in_unavailable");
+    expect((await newer).statusCode).toBe(200);
+    expect(prefs().checkIns?.enabled).toBe(true);
+  });
   it("keeps a check-in's assistant protected when main is cleared while Hermes can't list routines, whether it was just made or kept", async () => {
     // Just made: the last inventory that succeeded is the one that created it.
     await main("mom-main");
