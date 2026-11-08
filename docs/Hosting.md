@@ -39,17 +39,21 @@ To change it, as [issue #210](https://github.com/NicL9923/agent-interface/issues
    ```
 
    The empty `ExecStart=` clears the unit's own command; without it systemd refuses a second one.
+   Set `PATH` here only. systemd applies an `EnvironmentFile` after `Environment=`, so a file that
+   sets `PATH` would override this, and releases refuse a service that has one.
    Run `systemctl --user daemon-reload`, since a restart alone keeps the command systemd already
    loaded. Then run `systemctl --user restart agent-interface.service` and check
    `/api/health/ready`. Confirm the process runs the new binary:
    `readlink -f /proc/$(systemctl --user show -p MainPID --value agent-interface.service)/exe`.
    To roll back, remove the drop-in, then reload and restart the same way.
 3. Prepare the next release with `release-app.py prepare COMMIT --node ABSOLUTE_PATH`. The
-   release records that path, and qualification and activation use it.
+   release records the binary that path resolved to when the host built it, and qualification,
+   activation and recovery run that binary even if a symlink in the path is retargeted later.
 
 Preparation refuses a runtime outside `package.json`'s `engines`, and one the app service is not
-wholly on: by real path, its running process, its `ExecStart` and the `node` its `PATH` finds must
-all be that binary. Activation and recovery check again before they change anything, and the build
+wholly on: by real path, its running process, the `node` that process's `PATH` finds, its
+`ExecStart` and the `node` its configured `PATH` finds must all be that binary, and no
+`EnvironmentFile` may set `PATH`. Activation and recovery check again before they change anything, and the build
 and qualification refuse when `node` on their `PATH` is any other binary. A release can't build,
 qualify or deploy with a different Node than production runs.
 

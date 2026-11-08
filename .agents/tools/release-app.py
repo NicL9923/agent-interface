@@ -128,10 +128,15 @@ def satisfies_engines(version, engines):
 
 def runtime_problems(runtime, node):
     """Why the app service is not running `node`, a real path on the host: its live process, the
-    command its next start would use, and the `node` its PATH finds must all be that binary."""
+    `node` that process's PATH finds, the command its next start would use and the `node` that
+    start's PATH finds must all be that binary."""
     runtime = runtime or {}
-    names = {"running": "its running process", "execStart": "its ExecStart", "path": "the node on its PATH"}
+    names = {"running": "its running process", "livePath": "the node on its running process's PATH",
+             "execStart": "its ExecStart", "path": "the node on its PATH"}
     wrong = [f"{text} is {runtime.get(key) or 'unknown'}" for key, text in names.items() if runtime.get(key) != node]
+    # systemd applies environment files after Environment=, so one that sets PATH decides the next
+    # start's PATH. The release checks only the drop-in's Environment=PATH.
+    wrong += [f"its EnvironmentFile {path} sets PATH or cannot be read" for path in runtime.get("pathFiles") or []]
     if not wrong:
         return []
     return [f"The app service does not run {node}: {'; '.join(wrong)}. Switch it to the release's Node, "
@@ -335,22 +340,48 @@ def metadata_floor(probe):
 
 # The app service as systemd has it loaded, drop-ins included: its running process, the command it
 # starts and its environment. A release must build, qualify and deploy with the Node it runs.
-SERVICE_COMMAND = ["systemctl", "--user", "show", "agent-interface.service", "-p", "MainPID", "-p", "ExecStart", "-p", "Environment"]
+SERVICE_COMMAND = ["systemctl", "--user", "show", "agent-interface.service", "-p", "MainPID", "-p", "ExecStart",
+                   "-p", "Environment", "-p", "EnvironmentFiles"]
 
 REMOTE_FACTS = """
-import re
+import re, shlex
 def service_runtime(command):
-    # Real paths, so a symlink or a second path to one binary compares as that binary. `running` is
-    # the executable of the live process, which a reload without a restart or a retargeted symlink
+    # Real paths, so a symlink or a second path to one binary compares as that binary. `running` and
+    # `livePath` are the live process, which a reload without a restart or a retargeted symlink
     # leaves as it was; `execStart` and `path` are what the next start would use.
-    shown = dict(line.split("=", 1) for line in subprocess.run(command, capture_output=True, text=True, check=False).stdout.splitlines() if "=" in line)
+    shown = {}
+    for line in subprocess.run(command, capture_output=True, text=True, check=False).stdout.splitlines():
+        if "=" in line:
+            key, value = line.split("=", 1)
+            shown.setdefault(key, []).append(value)
+    one = lambda key: (shown.get(key) or [""])[0]
     real = lambda path: os.path.realpath(path) if path and os.path.exists(path) else None
-    start = re.search(r"path=(\\S+)", shown.get("ExecStart", ""))
-    pid = shown.get("MainPID", "0").strip()
-    path = next((value for value in shown.get("Environment", "").split() if value.startswith("PATH=")), "PATH=")[5:]
+    node_on = lambda path: real(shutil.which("node", path=path)) if path else None
+    # systemd prints an ExecStart path with spaces as is, and quotes an Environment entry with spaces.
+    start = re.search(r"path=(.+?) ; argv\\[\\]=", one("ExecStart"))
+    path = next((value[5:] for value in shlex.split(one("Environment")) if value.startswith("PATH=")), "")
+    pid = one("MainPID").strip()
+    live = ""
+    if pid.isdigit() and pid != "0":
+        try:
+            variables = Path("/proc/" + pid + "/environ").read_bytes().decode(errors="replace").split("\\0")
+            live = next((value[5:] for value in variables if value.startswith("PATH=")), "")
+        except OSError:
+            pass
+    def sets_path(file, ignored):
+        try:
+            return any(re.match(r"\\s*(export\\s+)?PATH\\s*=", line) for line in Path(file).read_text().splitlines())
+        except OSError:
+            return not ignored
+    path_files = []
+    for entry in shown.get("EnvironmentFiles", []):
+        listed = re.fullmatch(r"(.+) \\(ignore_errors=(yes|no)\\)", entry)
+        file, ignored = (listed.group(1), listed.group(2) == "yes") if listed else (entry, False)
+        if sets_path(file, ignored):
+            path_files.append(file)
     return {"running": real("/proc/" + pid + "/exe") if pid.isdigit() and pid != "0" else None,
-            "execStart": real(start.group(1)) if start else None,
-            "path": real(shutil.which("node", path=path)) if path else None}
+            "livePath": node_on(live), "execStart": real(start.group(1)) if start else None,
+            "path": node_on(path), "pathFiles": path_files}
 
 
 base = Path(PAYLOAD["appBase"]); operations = base / "operations"
@@ -680,7 +711,10 @@ def prepare(args):
         "qualificationReceipt": prior["qualificationReceipt"], "hermesRevision": facts["hermesRevision"],
         "repairSha256": facts["repairSha256"]})
     built["webBuild"] = built_web_version(built["buildLog"])
-    manifest.update(webBuild=built["webBuild"], nodeVersion=built["nodeVersion"], nodeRealpath=built["nodeRealpath"],
+    # Qualification, the deploy and recovery run the binary the host built with, not the path that
+    # named it: a symlink retargeted after preparation would otherwise swap the runtime under them.
+    node = built["nodeRealpath"]
+    manifest.update(node=node, webBuild=built["webBuild"], nodeVersion=built["nodeVersion"], nodeRealpath=node,
                     helperChanged=built["helperSha256"] != prior["fixedHelperSha256"])
     save_manifest(manifest)
     problems = preparation_problems(facts, built, local_web_build=local_web_build, engines=engines,
