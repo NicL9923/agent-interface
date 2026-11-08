@@ -257,6 +257,8 @@ struct Message: Codable, Identifiable, Equatable {
   var toolName: String?
   var toolCall: ToolCall?
   var origin: MessageOrigin?
+  /// The add-on admitted this person's message into the task already running. Nil when unknown.
+  var steered: Bool? = nil
   var presentationOrigin: MessageOrigin? {
     if role == "user", sender != nil { return nil }
     if let origin { return origin }
@@ -336,6 +338,14 @@ struct Approval: Codable, Identifiable, Equatable {
   var detail: String
   var status: String
   var expiresAt: String?
+  /// The choices Hermes offered for this request, in its order (once, session, always, deny).
+  /// Nil from an older Hermes, which keeps Approve and Decline.
+  var choices: [String]? = nil
+  /// The command patterns a session or always grant covers, such as "recursive delete".
+  var patterns: [String]? = nil
+  /// The command as Hermes shows it, already redacted, when the description is not the command itself.
+  var command: String? = nil
+  func offers(_ choice: String) -> Bool { (choices ?? ["once", "deny"]).contains(choice) }
 }
 struct Activity: Codable, Equatable {
   var state: ActivityState
@@ -349,6 +359,19 @@ struct Question: Codable, Identifiable, Equatable {
   var options: [String]?
   /// The shared `multiple` field (src/shared/types.ts): several options may be chosen. Absent means one.
   var multiple: Bool? = nil
+  /// The one option Hermes marked " (Recommended)", by index (src/shared/recommended.ts). Nil when none or several.
+  var recommended: Int? = nil
+  /// What option `index` reads as. The recommended one drops its suffix, which a tag shows instead;
+  /// its answer stays the raw option, which Hermes strips itself.
+  func label(_ index: Int) -> String {
+    guard let options, options.indices.contains(index) else { return "" }
+    guard index == recommended else { return options[index] }
+    let trimmed = options[index].trimmingCharacters(in: .whitespacesAndNewlines)
+    let suffix = "(recommended)"
+    guard trimmed.lowercased().hasSuffix(suffix) else { return options[index] }
+    let label = String(trimmed.dropLast(suffix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+    return label.isEmpty ? options[index] : label
+  }
 }
 struct Attention: Codable, Identifiable, Equatable {
   var id: String
@@ -904,6 +927,15 @@ struct Routine: Codable, Identifiable {
       id: "", botId: botId, name: "", prompt: "", schedule: "", enabled: true, recipientIds: [], roomIds: [], contextFrom: ["self"])
   }
 }
+/// An assistant's always-allowed command patterns and Hermes's own review of routine commands
+/// (src/shared/types.ts ApprovalSettings). `mode` is Hermes's approvals.mode: manual, smart or off.
+struct ApprovalSettings: Codable, Equatable {
+  var supported: Bool
+  var reason: String? = nil
+  var allowlist: [String]
+  var mode: String
+  var canManageAutoReview: Bool
+}
 struct Receipt: Codable, Equatable {
   var requestId: String
   var status: String
@@ -912,6 +944,8 @@ struct Receipt: Codable, Equatable {
   var message: String?
   /// The text the server recorded under this request ID, sent only to its sender by `GET /submissions/:id`.
   var text: String? = nil
+  /// Whether the message joined the running task. Nil from an older add-on.
+  var steered: Bool? = nil
 }
 /// A failed turn's retry as the server records it: the receipt of the request that claimed the turn.
 struct RetryClaim: Codable, Equatable {
@@ -952,6 +986,8 @@ struct SentEcho: Equatable {
   var acceptedAt: Date?
   /// The conversation has shown activity since Hermes accepted it.
   var ran = false
+  /// Hermes admitted it into the task that was already running.
+  var steered = false
   /// The message drawn from an echo and how far it got.
   struct Delivery: Equatable {
     var id: String
@@ -1000,6 +1036,7 @@ struct SentEcho: Equatable {
       next.status = .accepted
       next.messageId = receipt.messageId
       next.acceptedAt = now
+      next.steered = receipt.steered == true
     }
     guard let conversation, conversation.botId == next.request.botId else { return next }
     if next.shown(in: conversation) { return nil }
@@ -1020,7 +1057,8 @@ struct SentEcho: Equatable {
     for echo in echoes where echo.request.botId == saved.botId && !echo.shown(in: saved) {
       conversation.messages.append(Message(
         id: echo.request.requestId, role: "user", text: echo.request.text, createdAt: echo.sentAt,
-        sender: echo.sender, files: echo.request.attachments.isEmpty ? nil : echo.request.attachments))
+        sender: echo.sender, files: echo.request.attachments.isEmpty ? nil : echo.request.attachments,
+        steered: echo.steered ? true : nil))
     }
     return conversation
   }

@@ -1823,3 +1823,99 @@ it('does not expose native contents when an owned response is not JSON', async (
   await expect(runtime.automationRequest!({operation:'overview',profile:'shared'})).rejects.toMatchObject({statusCode:502,message:'Hermes returned an invalid automation response for overview.'});
   await expect(runtime.experienceRequest!({operation:'memory',profile:'shared'})).rejects.toMatchObject({statusCode:502,message:'Hermes returned an invalid experience response for memory.'});
 });
+
+describe('approval scopes, question shapes and the steering decision on the wire', () => {
+  const capabilities = (extra: Record<string, unknown>) => {
+    deferredMethods.add('agent-interface.capabilities');
+    beforeSend = (request, socket) => {
+      if (request.method === 'agent-interface.capabilities')
+        queueMicrotask(() => socket.receive({id: request.id, result: {revision, durable_admission: true, durable_events: true, canonical_open: true, executor_epoch: 'epoch-one', ...extra}}));
+    };
+  };
+  it('keeps the choices and patterns Hermes offered, and an older Hermes offers none', async () => {
+    snapshot.open_requests = [
+      {id: 'scoped', method: 'approval', params: {description: 'recursive delete', command: 'rm -rf build', choices: ['once', 'session', 'always', 'deny'], pattern_keys: ['recursive delete', 'recursive delete', '']}},
+      // A guardian-denied command offers one operation only; an unknown future choice is dropped.
+      {id: 'guarded', method: 'approval', params: {description: 'wipe', choices: ['once', 'later', 'deny'], smart_denied: true}},
+      {id: 'older', method: 'approval', params: {description: 'older Hermes'}},
+      {id: 'unknown', method: 'approval', params: {description: 'nothing known', choices: ['later']}},
+    ];
+    // An add-on that can't remove always-allowed commands never offers Always allow.
+    const older = await runtime.conversation('shared', {history: false});
+    expect(older.approvals.map(({id, choices}) => ({id, choices}))).toEqual([
+      {id: 'scoped', choices: ['once', 'session', 'deny']}, {id: 'guarded', choices: ['once', 'deny']},
+      {id: 'older', choices: undefined}, {id: 'unknown', choices: undefined}]);
+    await runtime.close();
+    capabilities({approval_settings: true});
+    runtime = createHermesRuntime({url: 'http://127.0.0.1:19119', token});
+    const {approvals} = await runtime.conversation('shared', {history: false});
+    expect(approvals.map(({id, choices, patterns, command}) => ({id, choices, patterns, command}))).toEqual([
+      {id: 'scoped', choices: ['once', 'session', 'always', 'deny'], patterns: ['recursive delete'], command: 'rm -rf build'},
+      {id: 'guarded', choices: ['once', 'deny'], patterns: undefined, command: undefined},
+      {id: 'older', choices: undefined, patterns: undefined, command: undefined},
+      {id: 'unknown', choices: undefined, patterns: undefined, command: undefined},
+    ]);
+  });
+  it('answers an approval with its scope, once by default and deny for a decline', async () => {
+    snapshot.open_requests = [{id: 'scoped', method: 'approval', params: {choices: ['once', 'session', 'always', 'deny']}}];
+    await runtime.approve('shared', 'scoped', 'approved', 'person-one', 'always');
+    await runtime.approve('shared', 'scoped', 'approved', 'person-one');
+    await runtime.approve('shared', 'scoped', 'denied', 'person-one', 'session');
+    expect(calls.filter(call => call.method === 'request.answer').map(call => call.params.result.choice)).toEqual(['always', 'once', 'deny']);
+  });
+  it('keeps native multi-select and marks exactly one recommended option', async () => {
+    snapshot.open_requests = [{id: 'ask', method: 'clarify', params: {questions: [
+      {qid: 'q0', question: 'Chores?', choices: ['Feed (Recommended)', 'Water'], multi_select: true},
+      {qid: 'q1', question: 'Pasture?', choices: ['North', 'South (recommended)']},
+      {qid: 'q2', question: 'Two marked?', choices: ['A (Recommended)', 'B (Recommended)']},
+      {qid: 'q3', question: 'Only a label?', choices: ['(Recommended)', 'Other']},
+      {qid: 'q4', question: 'Free text', multi_select: true},
+    ]}}];
+    const {attention} = await runtime.conversation('shared', {history: false});
+    expect(attention![0].questions).toEqual([
+      {id: 'q0', prompt: 'Chores?', options: ['Feed (Recommended)', 'Water'], multiple: true, recommended: 0},
+      {id: 'q1', prompt: 'Pasture?', options: ['North', 'South (recommended)'], recommended: 1},
+      {id: 'q2', prompt: 'Two marked?', options: ['A (Recommended)', 'B (Recommended)']},
+      {id: 'q3', prompt: 'Only a label?', options: ['(Recommended)', 'Other']},
+      {id: 'q4', prompt: 'Free text', options: undefined},
+    ]);
+  });
+  it('carries the steering decision through admission, receipt lookup and history, and an older add-on reports none', async () => {
+    beforeSend = (request, socket) => {
+      if (request.method === 'agent-interface.submit') {
+        deferredMethods.add('agent-interface.submit');
+        const steering = request.params.text === 'Older' ? undefined : request.params.steer === true;
+        const status = request.params.text === 'Refused' ? 'rejected' : 'accepted';
+        queueMicrotask(() => socket.receive({id: request.id, result: {requestId: request.params.request_id, status, runId: 'task-one', ...(steering === undefined ? {} : {steering})}}));
+      }
+      if (request.method === 'agent-interface.receipt') {
+        deferredMethods.add('agent-interface.receipt');
+        queueMicrotask(() => socket.receive({id: request.id, result: {receipt: {requestId: 'r', status: 'accepted', runId: 'task-one', steering: true}}}));
+      }
+    };
+    expect((await runtime.steer({...input(), text: 'Turn left'})).steered).toBe(true);
+    expect((await runtime.submit({...input(), requestId: 'two', text: 'Start'})).steered).toBe(false);
+    expect(await runtime.submit({...input(), requestId: 'three', text: 'Older'})).not.toHaveProperty('steered');
+    expect(await runtime.steer({...input(), requestId: 'four', text: 'Refused'})).not.toHaveProperty('steered');
+    expect((await runtime.lookupSubmission('r'))?.steered).toBe(true);
+    snapshot.messages = [
+      {role: 'user', row_id: 1, text: 'Start', app_request_id: 'two'},
+      {role: 'user', row_id: 2, text: 'Turn left', app_request_id: 'one', app_steering: true},
+      {role: 'assistant', row_id: 3, text: 'Turning', app_steering: true},
+    ];
+    const {messages} = await runtime.conversation('shared');
+    expect(messages.map(message => message.steered)).toEqual([undefined, true, undefined]);
+  });
+  it('refuses approval settings on an add-on that cannot manage them, before contacting it', async () => {
+    const fetched = vi.fn(async () => Response.json({allowlist: ['recursive delete'], mode: 'smart'}));
+    vi.stubGlobal('fetch', fetched);
+    await expect(runtime.automationRequest!({operation: 'approval_settings', profile: 'shared'}))
+      .rejects.toMatchObject({statusCode: 409, code: 'approval_settings_unsupported'});
+    expect(fetched).not.toHaveBeenCalled();
+    await runtime.close();
+    capabilities({approval_settings: true});
+    runtime = createHermesRuntime({url: 'http://127.0.0.1:19119', token});
+    expect(await runtime.automationRequest!({operation: 'approval_settings', profile: 'shared'})).toEqual({allowlist: ['recursive delete'], mode: 'smart'});
+    expect(JSON.parse(String((fetched.mock.calls.at(-1) as unknown as [string, RequestInit])[1].body))).toEqual({operation: 'approval_settings', profile: 'shared'});
+  });
+});

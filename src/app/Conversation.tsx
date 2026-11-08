@@ -1,9 +1,7 @@
-import { approvalAttempt, type ApprovalAttempt } from "./approval-attempt";
 import { matchCombo, shortcuts } from "./shortcuts";
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode, RefCallback, RefObject } from "react";
-import type { ActivityState, Approval, Bootstrap, Bot, FileRef, Message, ToolCall } from "../shared/types";
-import { ApiError, request as apiRequest } from "../client-api";
+import type { ActivityState, Bootstrap, Bot, FileRef, Message, ToolCall } from "../shared/types";
 import { Avatar } from "../components/Avatar";
 import { avatarProp } from "../components/avatar-motion";
 import { MessageMarkdown, StreamingMarkdown } from "../components/MessageMarkdown";
@@ -19,7 +17,6 @@ import { t3ThreadLaunch } from "../shared/t3-code";
 import { When } from "../components/When";
 import { Shimmer } from "../components/Shimmer";
 import { ComputerPeek } from "../components/ComputerPeek";
-import { reactAvatar } from "../components/avatar-attention";
 import { WorkTape } from "./WorkTape";
 import { useLeaving } from "./use-leaving";
 import { prefersReducedMotion } from "./reduced-motion";
@@ -34,11 +31,13 @@ import type { useConversation } from "./use-conversation";
 import { useStableCallback } from "./use-stable-callback";
 import { useTurnRetry } from "./use-turn-retry";
 import { AttentionList } from "./AttentionList";
+import { ApprovalCard, DeclinedStep } from "./ApprovalCard";
+import { useDeclined } from "./decline-handoff";
 import { FindBar } from "./FindBar";
 import { MessageMeta, QuoteSelection, TranscriptTools } from "./ReplyActions";
 import { useReplySpeech } from "./use-reply-speech";
 import { useTalkLive } from "./talk-live";
-import { attentionAnchor, foldSummary, isHumanMessage, quoteBlock, turnDuration, workGroups } from "./transcript-logic";
+import { foldSummary, isHumanMessage, quoteBlock, turnDuration, workGroups } from "./transcript-logic";
 import { RoutineRunCard } from "../components/RoutineRunCard";
 import { placeRuns, type RoutineRun } from "../shared/routine-runs";
 import { useRoutineRuns } from "./use-routine-runs";
@@ -105,6 +104,7 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
   // Settled decisions fold away instead of vanishing; Reduce Motion removes them at once.
   const pendingApprovals = useMemo(() => conversation?.approvals.filter(approval => approval.status === "pending") ?? [], [conversation?.approvals]);
   const approvals = useLeaving(pendingApprovals, approval => approval.id, prefersReducedMotion() ? 0 : 420, `${boot.user.id}:${botId}`);
+  const declined = useDeclined(botId);
   // Short results of reply actions, each its own node so a repeat still reads out.
   const [notice, setNotice] = useState<{ id: number; text: string } | null>(null);
   const announce = useStableCallback((text: string) => setNotice(previous => ({ id: (previous?.id ?? 0) + 1, text })));
@@ -295,7 +295,9 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
         <AttentionList conversation={conversation} botId={botId} userId={boot.user.id} bots={boot.bots} assistantName={selected?.name}
           disconnected={connectionLost} report={setError} />
         {approvals.map(({ item: approval, leavingSince }) => <ApprovalCard key={`${boot.user.id}:${botId}:${approval.id}`} approval={approval} botId={botId} userId={boot.user.id} disconnected={connectionLost}
+            assistantName={selected?.name ?? "The assistant"}
             supported={boot.capabilities.approvals.supported} unavailableReason={boot.capabilities.approvals.reason} report={setError} leaving={leavingSince !== undefined} />)}
+        {declined && !approvals.some(({ item }) => item.id === declined) && <DeclinedStep name={selected?.name ?? "The assistant"} />}
       </div>
       {/* Room for a message just sent to sit near the top while its reply grows; see use-conversation. */}
       <div className="transcript-end-space" ref={endSpace} aria-hidden="true" />
@@ -503,6 +505,7 @@ const TurnView = memo(function TurnView({ block, advanced, disconnected, name, b
       ) : message.role !== "tool" && (
         own ? <div className="message-bubble"><div className="message-text">{message.text}</div>{files}</div> : <div className="message-text">{message.text}</div>
       )}
+      {own && message.steered && <p className="message-steered">Added to the current task</p>}
       {!own && files}
       {!exchange && !streaming && (reply || own) && <MessageMeta message={message} own={own}
         when={endsRun ? when : undefined} delivery={delivery}
@@ -538,68 +541,6 @@ function Reasoning({ parts }: { parts: string[] }) {
     <summary><Icon name="brain" size={16} /><span>Reasoning</span>{parts.length > 1 && <span className="tool-count">{parts.length}</span>}</summary>
     <div className="tool-calls-content">{parts.map((part, index) => <p className="reasoning-part" key={index}>{part}</p>)}</div>
   </details>;
-}
-function ApprovalCard({ approval, botId, userId, disconnected, supported, unavailableReason, report, leaving = false }: {
-  approval: Approval; botId: string; userId: string; disconnected: boolean; supported: boolean; unavailableReason?: string; report(message: string): void;
-  /** Hermes no longer lists it; the card folds away for a moment before it goes. */
-  leaving?: boolean;
-}) {
-  const card = useRef<HTMLElement>(null);
-  // The fold starts from the card's own height, measured as it begins.
-  useLayoutEffect(() => {
-    if (leaving && card.current) card.current.style.setProperty("--leave-height", `${card.current.offsetHeight}px`);
-  }, [leaving]);
-  const saved = approvalAttempt(userId, botId, approval.id);
-  const [attempt, setAttempt] = useState<ApprovalAttempt | undefined>(() => saved.read());
-  const [sending, setSending] = useState(false);
-  const pending = useRef(false);
-  async function decide(value: "approved" | "denied") {
-    const previous = saved.read();
-    if (!supported || disconnected || pending.current || previous && (previous.state !== "unconfirmed" || previous.decision !== value)) return;
-    report("");
-    pending.current = true;
-    setSending(true);
-    const next: ApprovalAttempt = { decision: value, state: "unconfirmed" };
-    // Save before sending: leaving this chat while the POST is in flight must
-    // never offer the opposite decision when the person returns.
-    saved.save(next); setAttempt(next);
-    try {
-      await apiRequest("POST /bots/:id/approvals/:approvalId", { params: { id: botId, approvalId: approval.id }, body: { decision: value } });
-      const sent: ApprovalAttempt = { decision: value, state: "sent" };
-      saved.save(sent); setAttempt(sent);
-      reactAvatar(botId, value === "approved" ? "cheer" : "nod");
-    } catch (error) {
-      if (error instanceof ApiError && error.status < 500 && (error.status !== 409 || error.code === "hermes_maintenance") && !previous) {
-        saved.save(undefined); setAttempt(undefined); report(error.code === "hermes_maintenance" ? "Hermes is being updated. Try your decision again when the update finishes." : error.message);
-      } else {
-        const retained: ApprovalAttempt = { decision: value, state: error instanceof ApiError && error.status === 409 && error.code !== "hermes_maintenance" ? "closed" : "unconfirmed" };
-        saved.save(retained); setAttempt(retained);
-        // Refreshes can remove a resolved card, but a still-pending read cannot
-        // prove an earlier answer isn't still being processed. Never auto-send.
-        window.dispatchEvent(new Event("agent-interface:reconnect"));
-      }
-    } finally { pending.current = false; setSending(false); }
-  }
-  return <article ref={card} className={`approval-card decision-card${leaving ? " leaving" : ""}`} aria-busy={sending} inert={leaving}
-    data-settled={attempt?.state === "sent" ? attempt.decision : undefined} {...(leaving ? {} : attentionAnchor("approval", approval.id))}>
-    <p className="eyebrow">{attempt?.state === "closed" ? "Decision status" : "Your decision needed"}</p><h2>{approval.title}</h2><p>{approval.detail}</p>
-    {approval.expiresAt && <small>Expires <When value={approval.expiresAt} inline /></small>}
-    {attempt?.state !== "closed" && <div className="actions">{(["approved", "denied"] as const).map(value => <button key={value} type="button"
-      className={value === "approved" ? "primary" : undefined}
-      disabled={!supported || disconnected || sending || !!attempt && (attempt.state !== "unconfirmed" || value !== attempt.decision)} onClick={() => void decide(value)}>
-      {attempt?.decision === value && (sending || attempt.state === "sent") && <Icon name={sending ? "spinner" : "check"} className={sending ? "spin" : undefined} size={16} />}
-      {attempt?.decision === value ? sending ? value === "approved" ? "Approving…" : "Declining…"
-        : attempt.state === "sent" ? value === "approved" ? "Approved" : "Declined"
-        : value === "approved" ? "Send approval again" : "Send decline again"
-        : value === "approved" ? "Approve" : "Decline"}
-    </button>)}</div>}
-    {!supported && <p className="approval-unavailable">{unavailableReason || "This Hermes connection does not support approval decisions. Open the official Hermes interface to answer."}</p>}
-    {disconnected && !attempt && supported && <p className="decision-status" role="status">Reconnect to Hermes to answer.</p>}
-    {attempt && <p className="decision-status" role="status">{sending ? "Sending decision…"
-      : attempt.state === "sent" ? attempt.decision === "approved" ? "Approval sent." : "Decline sent."
-      : attempt.state === "closed" ? "This request is no longer available to answer. Its status will update with the conversation."
-      : `Hermes hasn't confirmed your ${attempt.decision === "approved" ? "approval" : "decline"}. It may still go through, so the other choice stays off. After reconnecting, you can send the same decision again.`}</p>}
-  </article>;
 }
 function ToolCalls({ messages, advanced, disconnected, recipient }: { messages: Message[]; advanced: boolean; disconnected: boolean; recipient: string }): ReactNode {
   return workGroups(messages).map(group => <details className="tool-calls" key={group.label}>

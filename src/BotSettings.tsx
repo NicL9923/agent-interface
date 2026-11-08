@@ -27,6 +27,7 @@ import { AvatarEditor } from "./components/AvatarEditor";
 import { ModelSelector } from "./components/ModelSelector";
 import { MemoryPanel } from "./components/MemoryPanel";
 import { AutomationPanel, LearningPanel, SkillLocks } from "./components/AutomationPanel";
+import { ApprovalSettingsPanel } from "./components/ApprovalSettingsPanel";
 import { VaultPanel } from "./components/VaultPanel";
 import { VoicePicker } from "./components/VoicePicker";
 import { RoutineEnhancements, RoutineSchedulePreview } from "./components/RoutineEnhancements";
@@ -619,6 +620,7 @@ function LoadedBotSettings({
             <IntegrationList profile={existing.id} bots={bootstrap.bots} accountScope={bootstrap.user.id} />
           </section>
           <section className="settings-section"><VaultPanel key={existing.id} botId={existing.id} /></section>
+          <section className="settings-section" aria-labelledby="settings-approvals-heading"><ApprovalSettingsPanel key={existing.id} botId={existing.id} name={savedName} /></section>
           {advanced && <section className="settings-section mcp-servers" role="group" aria-labelledby="settings-mcp-heading">
             <h2 id="settings-mcp-heading">MCP servers</h2>
             <p className="muted">Turn on the MCP servers this assistant may use. Save changes to apply them.</p>

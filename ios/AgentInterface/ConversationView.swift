@@ -467,6 +467,10 @@ struct ConversationView: View {
         approvalCard(approval, proxy).id(target)
           .onGeometryChange(for: OpeningCardMetrics?.self) { OpeningCardMetrics($0) } action: { openingCardMoved($0, target, proxy) }
       }
+      if let declined = store.declinedApprovals[bot.id],
+        !(store.conversation?.approvals.contains { $0.id == declined && $0.status == "pending" } ?? false) {
+        DeclinedStepView(botName: bot.name)
+      }
       // The end of the real content, then room for a sent message to sit at the top.
       Color.clear.frame(height: 0)
         .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(SentAnchorTop.space)).minY } action: { contentEnd = $0 }
@@ -739,11 +743,11 @@ struct ConversationView: View {
     }
   }
   private func approvalCard(_ approval: Approval, _ proxy: ScrollViewProxy) -> some View {
-    ApprovalDecisionView(approval: approval, botId: bot.id, sendStarted: {
+    ApprovalDecisionView(approval: approval, botId: bot.id, botName: bot.name, sendStarted: {
       openingCard = nil; attentionPosition = nil
       following = true
       scrollToLatest(proxy)
-    })
+    }, declined: { composerFocused = true })
   }
 }
 /// A conversation row. Tool calls and reasoning render in the turn's groups, not here.
@@ -784,6 +788,10 @@ struct MessageView: View {
       )
         // The outline hugs the message itself, inside a person's indent.
         .overlay { if foundMessage == message.id { RoundedRectangle(cornerRadius: 14).stroke(Palette.accent, lineWidth: 2) } }
+      if own && message.steered == true {
+        Text("Added to the current task").font(.caption).foregroundStyle(Palette.messageMetadata)
+          .frame(maxWidth: .infinity, alignment: .trailing).accessibilityIdentifier("steeredLabel")
+      }
       if showsMeta {
         MessageMetaRow(message: message, own: own, when: endsRun ? when ?? message.createdAt : nil, delivery: delivery,
           actions: (message.role == "assistant" && !message.isInternalActivity || own) && !message.id.hasSuffix("-inflight")
@@ -954,7 +962,11 @@ struct AttentionView: View {
   @Environment(AppStore.self) private var store
   @Environment(\.colorScheme) private var scheme
   @Environment(\.scrollTranscript) private var scrollTranscript
-  @State private var answers = QuestionAnswers()
+  @State private var answers: QuestionAnswers
+  init(request: Attention, botId: String, interacted: @escaping () -> Void = {}, sendStarted: @escaping () -> Void = {}) {
+    self.request = request; self.botId = botId; self.interacted = interacted; self.sendStarted = sendStarted
+    _answers = State(initialValue: QuestionAnswers(recommending: request.questions ?? []))
+  }
   @State private var busy = false
   @State private var settled = false
   @FocusState private var focusedQuestion: String?
@@ -1017,7 +1029,8 @@ struct AttentionView: View {
       if !options.isEmpty {
         VStack(spacing: 6) {
           ForEach(options.indices, id: \.self) { index in
-            QuestionOption(text: options[index], selected: answers.isSelected(index, question), multiple: multiple) {
+            QuestionOption(text: question.label(index), selected: answers.isSelected(index, question), multiple: multiple,
+              recommended: index == question.recommended) {
               if answers.choose(index, in: question) { advance(after: question) }
             }.accessibilityIdentifier("questionOption-\(question.id)-\(index)")
           }
@@ -1062,7 +1075,7 @@ struct AttentionView: View {
       do {
         try await store.perform(
           "/bots/\(APIClient.component(botId))/requests/\(APIClient.component(request.id))",
-          ["answers": answers.payload(questions)])
+          QuestionAnswers.Submission(answers: answers.payload(questions)))
         guard scope == store.scope else { return }
         settled = true
         AccessibilityNotification.Announcement("Answers sent.").post()
@@ -1077,6 +1090,7 @@ private struct QuestionOption: View {
   var text: String
   var selected: Bool
   var multiple: Bool
+  var recommended = false
   var action: () -> Void
   @Environment(\.colorScheme) private var scheme
   var body: some View {
@@ -1085,21 +1099,40 @@ private struct QuestionOption: View {
         Image(systemName: multiple ? selected ? "checkmark.square.fill" : "square" : selected ? "largecircle.fill.circle" : "circle")
           .foregroundStyle(selected ? Palette.accent : Palette.muted).accessibilityHidden(true)
         Text(text).multilineTextAlignment(.leading).frame(maxWidth: .infinity, alignment: .leading)
+        if recommended {
+          Text("Recommended").font(.caption.weight(.semibold)).foregroundStyle(Palette.accent)
+            .padding(.horizontal, 8).padding(.vertical, 2)
+            .background(selected ? Palette.raised(scheme) : Palette.accentSoft, in: Capsule())
+        }
       }.padding(.horizontal, 12).padding(.vertical, 10).frame(minHeight: 44).contentShape(RoundedRectangle(cornerRadius: 10))
         .background(selected ? Palette.accentSoft : Palette.surface(scheme), in: RoundedRectangle(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(selected ? Palette.accent : Palette.line))
     }.buttonStyle(.plain)
       .accessibilityAddTraits(selected ? .isSelected : [])
+      .accessibilityLabel(recommended ? "\(text), recommended" : text)
   }
 }
 /// The person's answers to a question card: chosen options, written answers, and which questions
 /// they chose to answer in their own words. One answer per question, as the server takes them; a
-/// question with several choices sends them joined with commas.
+/// question with several choices sends them as one JSON array, which Hermes's clarify tool reads.
 struct QuestionAnswers: Equatable {
+  /// What `POST /bots/:id/requests/:id` takes. `answerFormat` says multi-select answers are JSON arrays.
+  struct Submission: Encodable {
+    var answers: [String: String]
+    var answerFormat = "json"
+  }
   /// Chosen option indices per question, in the order they were chosen.
   var chosen: [String: [Int]] = [:]
   var writing: Set<String> = []
   var text: [String: String] = [:]
+  init() {}
+  /// Hermes's recommended option starts chosen for a single-choice question, so one tap sends it.
+  /// Several picks are the person's to make, so a multi-select question starts empty.
+  init(recommending questions: [Question]) {
+    for question in questions where question.multiple != true {
+      if let index = question.recommended, question.options?.indices.contains(index) == true { chosen[question.id] = [index] }
+    }
+  }
   /// Changes with each choice, for the selection haptic. Typing does not change it.
   var choices: [String: [Int]] { chosen.merging(Dictionary(uniqueKeysWithValues: writing.map { ($0, [-1]) })) { $0 + $1 } }
   func isSelected(_ index: Int, _ question: Question) -> Bool { chosen[question.id]?.contains(index) == true }
@@ -1131,7 +1164,11 @@ struct QuestionAnswers: Equatable {
     let written = (text[question.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
     if options.isEmpty { return written }
     let picked = (chosen[question.id] ?? []).sorted().compactMap { options.indices.contains($0) ? options[$0] : nil }
-    if question.multiple == true { return (picked + (writing.contains(question.id) && !written.isEmpty ? [written] : [])).joined(separator: ", ") }
+    if question.multiple == true {
+      let all = picked + (writing.contains(question.id) && !written.isEmpty ? [written] : [])
+      guard !all.isEmpty, let data = try? JSONEncoder().encode(all) else { return "" }
+      return String(decoding: data, as: UTF8.self)
+    }
     return writing.contains(question.id) ? written : picked.first ?? ""
   }
   func complete(_ questions: [Question]) -> Bool { questions.allSatisfy { !answer($0).isEmpty } }

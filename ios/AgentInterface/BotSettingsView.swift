@@ -38,12 +38,13 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
 /// A page in the settings stack: one section, or a full list that a section opens.
 enum SettingsRoute: Hashable {
   case section(SettingsSection)
-  case connections, logins, work, memory, learning
+  case connections, logins, approvals, work, memory, learning
   var title: String {
     switch self {
     case .section(let section): section.label
     case .connections: "Connections"
     case .logins: "Logins"
+    case .approvals: "Always-allowed commands"
     case .work: "Work"
     case .memory: "Memory"
     case .learning: "Learning"
@@ -57,6 +58,7 @@ enum SettingsRoute: Hashable {
     case "access": [.section(.access)]
     case "connections": [.section(.access), .connections]
     case "logins": [.section(.access), .logins]
+    case "approvals", "always-allowed commands": [.section(.access), .approvals]
     case "automation", "routines": [.section(.automation)]
     case "work": [.section(.automation), .work]
     case "memory & learning", "memoryandlearning": [.section(.memory)]
@@ -335,6 +337,7 @@ struct BotSettingsView: View {
         case .section(.memory): memoryAndLearningPage
         case .connections: IntegrationsView(botId: bot.id)
         case .logins: VaultView(botId: bot.id)
+        case .approvals: ApprovalSettingsView(botId: bot.id, botName: bot.name).id("approvals|\(store.scope ?? "")|\(bot.id)")
         case .work:
           HermesWorkView(botId: bot.id).id("work|\(store.scope ?? "")|\(bot.id)").id(store.api.map(ObjectIdentifier.init))
         case .memory:
@@ -408,6 +411,7 @@ struct BotSettingsView: View {
       Section {
         pageLink(.connections, detail: "Accounts and services this assistant can use", systemImage: "link")
         pageLink(.logins, detail: "Passwords saved for this assistant's profile", systemImage: "person.badge.key")
+        pageLink(.approvals, detail: "Commands it runs without asking, and auto-review", systemImage: "checkmark.shield")
       }
       if advanced { mcpSection.disabled(busy || !detailLoaded) }
     }.householdListBackground().accessibilityIdentifier("settings.access")
@@ -1794,5 +1798,92 @@ enum SettingsLimits {
     if count > limit { return "\(subject) \((count - limit).formatted()) character\(count - limit == 1 ? "" : "s") over the \(limit.formatted()) limit. Shorten the text to \(action)." }
     if count * 10 >= limit * 9 { return "\(count.formatted()) of \(limit.formatted()) characters" }
     return nil
+  }
+}
+
+// MARK: - Always-allowed commands (Workstream B)
+
+/// The reverse of "Always allow" (src/components/ApprovalSettingsPanel.tsx): the command patterns
+/// Hermes runs for this assistant without asking, each with Remove, and Hermes's own review of
+/// routine commands. An older add-on reports it can't, and the page says so.
+struct ApprovalSettingsView: View {
+  var botId: String
+  var botName: String
+  @Environment(AppStore.self) private var store
+  @State private var settings: ApprovalSettings?
+  @State private var busy = false
+  @State private var error: String?
+  @State private var notice: String?
+  @State private var confirmingAutoReview = false
+  private var path: String { "/bots/\(APIClient.component(botId))/approval-settings" }
+  var body: some View {
+    Form {
+      if let error { Section { ErrorBanner(message: error, dismiss: { self.error = nil }) } }
+      if let notice { Section { Text(notice).foregroundStyle(Palette.accent).accessibilityIdentifier("approvalSettingsNotice") } }
+      if let settings, !settings.supported {
+        Section { Text(settings.reason ?? "This Hermes integration can't list always-allowed commands.").foregroundStyle(.secondary) }
+      } else if let settings {
+        Section {
+          if settings.allowlist.isEmpty {
+            Text("Nothing yet. Choose Always allow on an approval to add one.").foregroundStyle(.secondary)
+          }
+          ForEach(settings.allowlist, id: \.self) { pattern in
+            HStack {
+              Text(pattern).font(.body.monospaced()).textSelection(.enabled)
+              Spacer()
+              Button("Remove", role: .destructive) { remove(pattern) }.buttonStyle(.borderless)
+                .accessibilityLabel("Remove \(pattern)").accessibilityIdentifier("approvalRemove.\(pattern)")
+            }
+          }
+        } header: { Text("Always-allowed commands") } footer: {
+          Text("\(botName) runs these kinds of commands without asking, in every conversation. Each one is a kind Hermes flags, so it covers more than the command you first allowed."
+            + (settings.allowlist.isEmpty ? "" : " Removing one takes effect at \(botName)'s next command in this app. Another Hermes app, such as Discord, may keep allowing it until its chat ends or Hermes restarts."))
+        }
+        Section {
+          Toggle("Auto-review routine commands", isOn: Binding(
+            get: { settings.mode == "smart" },
+            set: { on in if on { confirmingAutoReview = true } else { review(false) } }))
+            .disabled(!settings.canManageAutoReview || settings.mode == "off")
+            .accessibilityIdentifier("approvalAutoReview")
+        } footer: {
+          Text("Hermes checks each flagged command first and runs the ones it judges safe without asking. Anything it doubts still comes to you, and only for once."
+            + (settings.mode == "off" ? " Hermes doesn't ask before commands for this assistant. Change that in Hermes."
+              : settings.canManageAutoReview ? "" : " Only an integration administrator can change auto-review."))
+        }
+      } else { Section { ProgressView() } }
+    }.disabled(busy).householdListBackground().accessibilityIdentifier("settings.approvals")
+      .navigationTitle("Always-allowed commands")
+      .task { await load() }
+      .alert("Let Hermes approve routine commands?", isPresented: $confirmingAutoReview) {
+        Button("Keep asking me", role: .cancel) {}
+        Button("Turn on auto-review") { review(true) }
+      } message: { Text("Hermes will run commands it judges safe for \(botName) without asking you. You'll still be asked about anything it doubts.") }
+  }
+  private func load() async {
+    guard let api = store.api else { return }
+    do { settings = try await api.get(path) } catch { self.error = error.localizedDescription }
+  }
+  private func remove(_ pattern: String) {
+    change(success: "Removed “\(pattern)”. Hermes will ask again next time.") { api in
+      try await api.write(path + "/allowlist", ["pattern": pattern], method: "DELETE")
+    }
+  }
+  private func review(_ on: Bool) {
+    change(success: on ? "Hermes now reviews routine commands itself." : "Hermes now asks before every flagged command.") { api in
+      try await api.write(path, ["autoReview": on], method: "PUT")
+    }
+  }
+  private func change(success: String, _ work: @escaping (APIClient) async throws -> ApprovalSettings) {
+    guard let api = store.api, !busy else { return }
+    busy = true; error = nil; notice = nil
+    let scope = store.scope
+    Task {
+      defer { busy = false }
+      do {
+        let value = try await work(api)
+        guard scope == store.scope else { return }
+        settings = value; notice = success
+      } catch { if scope == store.scope { self.error = error.localizedDescription } }
+    }
   }
 }

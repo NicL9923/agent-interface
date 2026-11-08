@@ -51,6 +51,9 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   @ObservationIgnored var commandCount = 0
   /// Search should take the keyboard when it appears, as after Cmd+F from anywhere else.
   var searchFocusPending = false
+  /// The approval each chat's person just declined, until their next message there is accepted. The
+  /// transcript says the assistant stopped that step and the message box asks what to do instead.
+  var declinedApprovals: [String: String] = [:]
   var conversation: Conversation? {
     didSet {
       appliedConversationTag = nil

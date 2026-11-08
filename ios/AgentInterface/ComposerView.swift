@@ -127,7 +127,8 @@ struct ComposerView: View {
   }
   private var placeholder: String {
     store.sendingDraft ? "Sending…"
-      : WaitingInput.placeholder(store.conversation, userId: store.bootstrap?.user.id) ?? (store.active ? "Guide…" : "Message…")
+      : WaitingInput.placeholder(store.conversation, userId: store.bootstrap?.user.id)
+        ?? (store.declinedApprovals[bot.id] != nil ? "Tell \(bot.name) what to do instead" : store.active ? "Guide…" : "Message…")
   }
   /// Always there while typing, so the keyboard can be put away without finding a spot to drag.
   private var hideKeyboardButton: some View {

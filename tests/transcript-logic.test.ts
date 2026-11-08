@@ -83,7 +83,7 @@ describe("questions", () => {
     const options = ["Hay", "Water", "Pellets"];
     expect(toggleOption(options, toggleOption(options, [], "Pellets"), "Hay")).toEqual(["Hay", "Pellets"]);
     expect(toggleOption(options, ["Hay", "Pellets"], "Hay")).toEqual(["Pellets"]);
-    expect(joinAnswer(["Hay", "Pellets"], "  fresh greens ")).toBe("Hay, Pellets, fresh greens");
+    expect(JSON.parse(joinAnswer(["Hay, square bales", "Pellets"], "  fresh greens "))).toEqual(["Hay, square bales", "Pellets", "fresh greens"]);
     expect(joinAnswer([], " ")).toBe("");
   });
   it("addresses each card by kind and ID for the status dock", () => {

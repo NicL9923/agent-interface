@@ -189,6 +189,26 @@ as `cancelled` reads as Stopped and one recorded as `missed` as Didn't run where
 attempt exactly: session execution IDs, ledger rows and native `exec:N` output rows. Output documents
 matched by time still pair only with finished runs, so a stopped run never takes another run's document. Both routes exist at `ed1afb0` too.
 
+The November 8 approval scopes work verified Hermes `ed1afb082eb3` with
+`scripts/spike/approval_scope_probe.py`, which `run.py` now runs after the automation probe,
+in a disposable home with the deterministic provider. An ordinary dangerous command offers
+`once`, `session`, `always` and `deny`, keyed by its pattern (`recursive delete`). `session`
+grants only that session; `always` also writes the pattern to the profile's
+`command_allowlist`. The add-on's `approval_allowlist_remove` withdrew both the saved pattern
+and the live session grant, so Hermes asked again at once, and `deny` blocked the command. With
+`approvals.mode: smart` the guardian ran a command it approved without asking, and a command
+it denied offered only `once` and `deny`; an unoffered `always` sent anyway was not saved
+but still ran once, which is why the app server refuses unoffered choices. Clarify carried
+`multi_select`, marked the first of several choices ` (Recommended)`, took a JSON array for a
+multi-select answer and stripped the suffix from a picked answer. The add-on returned its
+steering decision in the admission response, receipt lookup and history row. The older
+qualified revisions `b9cb268` and `d23cc6b` build the same approval `choices` and clarify wire. They
+do not reread `command_allowlist` once loaded, so the add-on also drops a removed pattern from
+the dashboard process's permanent cache. `tests/hermes_automation_test.py` checks that removal
+against the real `tools.approval` of each qualified revision when `HERMES_SOURCE` names its
+checkout.
+[Evidence](evidence/hermes-approval-scope-probe-ed1afb0.json).
+
 New full spike runs save receipts in their disposable `evidence` directory,
 printed at completion. Archive a successful run with
 `.agents/tools/archive-spike-evidence.py` into a new `docs/evidence` directory;

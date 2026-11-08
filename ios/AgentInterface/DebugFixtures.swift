@@ -255,6 +255,10 @@
     nonisolated(unsafe) static var questionFailed = false
     nonisolated(unsafe) static var approvalFailed = false
     nonisolated(unsafe) static var approvalChoice: String?
+    /// AGENT_INTERFACE_UI_APPROVAL_SCOPES: the decision sent for the scoped approval, and the saved allowlist.
+    nonisolated(unsafe) static var scopedDecision: [String: Any]?
+    nonisolated(unsafe) static var scopedAllowlist = ["recursive delete", "SQL DROP"]
+    nonisolated(unsafe) static var scopedMode = "manual"
     nonisolated(unsafe) static var retried = false
     nonisolated(unsafe) static var retryClaim: [String: Any]?
     nonisolated(unsafe) static var draft: [String: Any] = ["text": "", "attachments": []]
@@ -644,6 +648,9 @@
           window["sessionId"] = TranscriptFixtures.longSession
           object = window
         }
+        if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_APPROVAL_SCOPES"] == "1" {
+          object = TranscriptFixtures.approvalScopes(decision: Self.scopedDecision, draft: Self.draft)
+        }
         if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_LIVE_ACTIVITY"] == "1" {
           object = [
             "botId": path.components(separatedBy: "/")[3],
@@ -717,6 +724,12 @@
           }
           object = ["botId": path.components(separatedBy: "/")[3], "sessionId": "fixture-session", "messages": [["id": "vault-fixture", "role": "assistant", "text": "Fixture browser task needs a login. Enter it in the secure request below."]], "activity": ["state": attention.isEmpty ? "idle" : "blocked"], "approvals": [], "files": [], "attention": attention, "draft": Self.draft, "readPosition": Self.readPosition]
         }
+      } else if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_APPROVAL_SCOPES"] == "1", path.hasSuffix("/approvals/scoped-approval"), method == "POST" {
+        Self.scopedDecision = body; object = ["ok": true]
+      } else if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_APPROVAL_SCOPES"] == "1", path.contains("/approval-settings") {
+        if method == "DELETE", let pattern = body["pattern"] as? String { Self.scopedAllowlist.removeAll { $0 == pattern } }
+        if method == "PUT", let on = body["autoReview"] as? Bool { Self.scopedMode = on ? "smart" : "manual" }
+        object = ["supported": true, "allowlist": Self.scopedAllowlist, "mode": Self.scopedMode, "canManageAutoReview": true]
       } else if path.hasSuffix("/vault") {
         object = ["botId": path.components(separatedBy: "/")[3], "profile": "default", "scope": "profile", "owner": "Hermes", "notice": "Explicit simulator fixture. Logins belong to this Hermes profile and follow its household access.", "items": Self.vaultItems, "sources": [
           ["name": "local", "displayName": "Hermes saved logins", "enabled": true, "needsUnlock": false, "unlocked": true, "installed": true, "canToggle": false, "canUnlock": false, "canLock": false],
@@ -1307,6 +1320,20 @@
       "rr-feed": "This run is still in progress.",
     ]
     static let longSession = "fixture-long-session"
+    /// A working turn with a steered message, an approval offering every scope and a question with a
+    /// recommended answer. Once a decision is sent, Hermes stops listing the approval.
+    static func approvalScopes(decision: [String: Any]?, draft: [String: Any]) -> [String: Any] {
+      let member: [String: Any] = ["id": "native-test", "name": "Local test member"]
+      let approval: [String: Any] = ["id": "scoped-approval", "title": "Action approval", "detail": "recursive delete", "status": "pending",
+        "command": "rm -rf ./build", "choices": ["once", "session", "always", "deny"], "patterns": ["recursive delete"]]
+      let question: [String: Any] = ["id": "scope-question", "kind": "clarify", "title": "The assistant needs your answer", "detail": "Answer the question to continue this task.",
+        "questions": [["id": "feed", "prompt": "Which feed should go out?", "options": ["Hay (Recommended)", "Pellets", "Sweet feed"], "recommended": 0]]]
+      return ["botId": "ranch", "sessionId": "scope-session", "messages": [
+        ["id": "scope-prompt", "role": "user", "text": "Clean out the old build folder.", "createdAt": "2026-11-07T15:00:00.000Z", "sender": member],
+        ["id": "scope-steer", "role": "user", "text": "Keep the logs folder.", "createdAt": "2026-11-07T15:00:20.000Z", "sender": member, "steered": true],
+      ], "activity": ["state": decision == nil ? "waiting" : "thinking"], "approvals": decision == nil ? [approval] : [], "files": [],
+        "attention": decision == nil ? [question] : [], "draft": draft]
+    }
     static var questions: [[String: Any]] { [
       ["id": "plan", "prompt": "Your plan", "options": ["First", "Second"]],
       ["id": "extras", "prompt": "What should come along?", "options": ["Hay", "Water", "Feed"], "multiple": true],

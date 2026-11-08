@@ -1106,6 +1106,18 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
         XCTAssertEqual(server.requestCount("/api/auth/config"), 0)
     }
 
+    func testAnAcceptanceLearnedByLookupEndsTheDeclineHandoff() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        value.declinedApprovals["bot"] = "approval"
+        server.sendStatus = 503
+        await value.send()
+        XCTAssertEqual(value.declinedApprovals["bot"], "approval", "An unconfirmed send still leaves the question")
+        server.answerSubmissions("accepted")
+        await value.reconcilePending()
+        XCTAssertNil(value.pending)
+        XCTAssertNil(value.declinedApprovals["bot"], "The recovered acceptance answers the declined step")
+    }
+
     func testUnknownSubmissionStatusKeepsTheUnconfirmedSend() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
         server.sendStatus = 503

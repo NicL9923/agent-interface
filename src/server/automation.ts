@@ -1,7 +1,8 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import type { Runtime } from '../shared/types.js';
-import type { AutomationRequest, AutomationResult } from '../shared/automation.js';
+import type { ApprovalPolicy, AutomationRequest, AutomationResult } from '../shared/automation.js';
+import type { ApprovalSettings } from '../shared/types.js';
 import { signedIn } from './auth.js';
 import { notFound, visibleBots } from './bot-access.js';
 import { httpError } from './http-error.js';
@@ -27,7 +28,7 @@ export async function installAutomationRoutes(app: FastifyInstance, runtime: Run
     if (input.operation === 'skill_policy' && !canManage(req)) throw httpError(403, 'Only an integration administrator can change learned skill approval policy.');
     if (input.operation === 'skill_lock' && !canManage(req)) throw httpError(403, 'Only an integration administrator can lock or unlock skills.');
     if (!runtime.automationRequest) throw httpError(409, 'Update and qualify the Hermes integration to use goals, tasks, event triggers and learned skill review.');
-    if (input.operation !== 'overview' && !['task_get', 'skill_content', 'skill_diff'].includes(input.operation) && maintenance()) throw httpError(409, 'Hermes is being upgraded. Automation changes are paused.');
+    if (input.operation !== 'overview' && !['task_get', 'skill_content', 'skill_diff', 'approval_settings'].includes(input.operation) && maintenance()) throw httpError(409, 'Hermes is being upgraded. Automation changes are paused.');
     const task = 'task' in input ? input.task : undefined;
     for (const candidate of ['assignee' in input ? input.assignee : undefined, 'reviewer' in input ? input.reviewer : undefined, task?.assignee])
       if (typeof candidate === 'string' && !bots.some(bot => bot.id === candidate)) throw httpError(404, notFound.error);
@@ -72,4 +73,28 @@ export async function installAutomationRoutes(app: FastifyInstance, runtime: Run
   apiRoute(app, "POST /bots/:id/automation/skills/pending/:pendingId", { body: z.object({ revision, decision: z.enum(['approve', 'reject']) }).strict() }, async (req, body) => request(req, { operation: 'skill_decide', pendingId: z.object({ pendingId: z.string().regex(/^[a-f0-9]{8}$/) }).parse(req.params).pendingId, ...body }));
   apiRoute(app, "PUT /bots/:id/automation/skills/lock", { body: z.object({ name: skillName, locked: z.boolean() }).strict() }, async (req, body) => request(req, { operation: 'skill_lock', ...body }));
   apiRoute(app, "PUT /bots/:id/automation/skills/policy", { body: z.object({ approvalRequired: z.boolean() }).strict() }, async (req, body) => request(req, { operation: 'skill_policy', ...body }));
+  // --- Approval settings (Workstream B) ---
+  // Removing an always-allowed pattern only narrows what runs unasked, so anyone who sees the assistant may.
+  // Letting Hermes's guardian approve commands widens it, so that follows the learned skill policy's rule.
+  const settings = (req: FastifyRequest, policy: ApprovalPolicy): ApprovalSettings =>
+    ({ supported: true, allowlist: policy.allowlist, mode: policy.mode, canManageAutoReview: canManage(req) });
+  const unsupported = (error: unknown): ApprovalSettings | undefined =>
+    (error as { code?: string }).code === 'approval_settings_unsupported'
+      ? { supported: false, reason: (error as Error).message, allowlist: [], mode: 'manual', canManageAutoReview: false } : undefined;
+  apiRoute(app, "GET /bots/:id/approval-settings", {}, async (req, _, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    if (!runtime.automationRequest) return { supported: false, reason: "This Hermes integration can't list always-allowed commands.", allowlist: [], mode: 'manual', canManageAutoReview: false };
+    try { return settings(req, await request(req, { operation: 'approval_settings' })); }
+    catch (error) { const result = unsupported(error); if (result) return result; throw error; }
+  });
+  apiRoute(app, "PUT /bots/:id/approval-settings", { body: z.object({ autoReview: z.boolean() }).strict() }, async (req, { autoReview }) => {
+    if (!canManage(req)) throw httpError(403, 'Only an integration administrator can change how Hermes reviews commands.', { code: 'approval_policy_forbidden' });
+    const current = await request(req, { operation: 'approval_settings' });
+    // Hermes set to never ask stays a choice made in Hermes; turning review on here would quietly start asking again.
+    if (current.mode === 'off') throw httpError(409, "Hermes doesn't ask before commands for this assistant. Change that in Hermes.", { code: 'approvals_off' });
+    return settings(req, await request(req, { operation: 'approval_mode', mode: autoReview ? 'smart' : 'manual' }));
+  });
+  apiRoute(app, "DELETE /bots/:id/approval-settings/allowlist", { body: z.object({ pattern: z.string().trim().min(1).max(200) }).strict() }, async (req, { pattern }) =>
+    settings(req, await request(req, { operation: 'approval_allowlist_remove', pattern })));
+  // --- End approval settings ---
 }

@@ -412,6 +412,61 @@ person decides whether to send again, and anything else means not sent yet.
 | `k3y_A-b` | `ranch` | `msg-42` | `trip` | 3 | `76bbd8a5-8259-4c9e-8b2b-3b3fa7bec9d2` |
 | `café` | `👋` | `m` | `c` | 1 | `f2ec6d4c-7663-410f-88ba-49c4a6921df8` |
 
+## Approval scopes, recommended answers and steering
+
+<!-- Workstream B: approval scopes, the decline handoff, recommended answers and the steering label. -->
+
+Every field below is additive. A client that ignores them keeps today's behavior.
+
+**Approval choices.** A pending `Approval` may carry `choices`, the `request.answer` choices
+Hermes offered for that request in its order (`once`, `session`, `always`, `deny`), plus
+`patterns`, the Hermes pattern keys a session or always grant covers (such as
+`recursive delete`), and `command`, the command as Hermes shows it, already redacted.
+Without `choices` the request comes from a Hermes that offers approve once or decline.
+A request Hermes's smart guardian denied offers only `once` and `deny`. The server
+leaves `always` out when the add-on cannot list and remove always-allowed commands
+(it reports no `approval_settings`), so no client can save a grant nobody could
+remove in the app, and the server refuses `always` there too.
+
+`POST /api/bots/:id/approvals/:approvalId` takes an optional `scope`: `once` (the
+default when absent), `session` (this conversation) or `always` (this assistant, from
+now on, in every conversation). `scope` is valid only with `decision: "approved"`.
+The server refuses a choice Hermes did not offer with 409 and
+`code: "approval_choice_unavailable"`, naming the choice; Hermes itself runs an
+unoffered `always` as a one-time approval, so a client must never show a scope the
+request does not list. `always` saves each pattern to the assistant's Hermes
+`command_allowlist` and also grants the current session. Ask before sending
+`always` and name the patterns, since a pattern covers commands other than this one.
+A notification's Decline is unchanged and never carries a scope.
+
+**Always-allowed commands.** These need an add-on that reports `approval_settings`.
+
+| Route | Request and response |
+| --- | --- |
+| `GET /api/bots/:id/approval-settings` | `{ "supported", "reason"?, "allowlist": [pattern], "mode": "manual" \| "smart" \| "off", "canManageAutoReview" }`. An older add-on answers `supported: false` with a reason and an empty list |
+| `DELETE /api/bots/:id/approval-settings/allowlist` | `{ "pattern" }`; any member who sees the assistant. Removes the pattern from the config and withdraws the matching permanent and session grants the Hermes dashboard process holds, so Hermes asks again at the next command in the app. Another Hermes process, such as the Discord gateway, may keep allowing it until its chat ends or, on Hermes before `ed1afb0`, until it restarts. Answers the settings |
+| `PUT /api/bots/:id/approval-settings` | `{ "autoReview": true \| false }` sets Hermes's `approvals.mode` to `smart` or `manual`. Integration administrators only (403, `approval_policy_forbidden`); 409 `approvals_off` when Hermes is set never to ask. Answers the settings |
+
+**Recommended answers.** A clarify question may carry `multiple: true` (Hermes's
+`multi_select`) and `recommended`, the index of the one option Hermes marked with a
+trailing ` (Recommended)`; Hermes marks the first of several choices. Several marked
+options, or a suffix with nothing before it, carry no `recommended`. Show the option
+without the suffix and a Recommended tag, pre-select it for a single-choice question,
+and never pre-select a multi-select one. Answer with the raw option text, which Hermes
+strips. A multi-select answer is one JSON array of strings, such as `["Hay","Feed"]`,
+with any written answer as one more item. Send `answerFormat: "json"` with the answers
+to say so; the server then refuses a multi-select answer that is not a non-empty JSON
+array of strings with 400, naming the question. Without it, the server reads the
+answer as an older client's: picks joined with `, ` in option order and any written
+text last, which it turns into that array for Hermes. When an option itself contains
+`, `, that answer goes to Hermes unchanged, as the person's typed text.
+
+**Steering.** A `SubmissionReceipt` from an add-on that reports `steering_decision`
+carries `steered`: whether the add-on admitted the message into the task that was
+already running, decided under its submission lock. A user `Message` it admitted that
+way carries `steered: true`, in every history read and on every device. Show "Added to
+the current task" under it. Absent means unknown, so show nothing.
+
 ## Drafts
 
 Each person has one draft per assistant, shared by their devices.

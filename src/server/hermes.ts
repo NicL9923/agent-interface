@@ -11,6 +11,8 @@ import type { AutomationRequest, AutomationResult } from '../shared/automation.j
 import { formatBytes } from '../shared/uploads.js';
 import { IncompleteCreationError, interruptionPendingMessage } from '../shared/errors.js';
 import { httpError } from './http-error.js';
+
+const approvalSettingsUnsupported = "This Hermes integration can't list always-allowed commands. Update it to manage them here.";
 import { createModelNames } from './model-names.js';
 import { createHermesTransport, TransportError, type Connection, type HermesOptions, type Wire } from './hermes-transport.js';
 import { fileSigner, safeStagedPath, type RegisteredFile } from './hermes-files.js';
@@ -375,7 +377,7 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
       state.tools = [];
     }
     if (active && state && settledStates.includes(state.state)) settleSoon(botId);
-    const {approvals, attention} = openRequests(value, sid);
+    const {approvals, attention} = openRequests(value, sid, {revocable: contract.approvalSettings});
     const toolCalls: ToolCall[] = Array.isArray(value.app_tool_calls) ? value.app_tool_calls.map(unbridged) : state?.tools ?? [];
     if (active && state && generation === structuralGenerationOf(botId)) state.tools = toolCalls;
     const runningTool = toolCalls.find(tool => tool.status === 'running');
@@ -764,9 +766,9 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     },
     // Routes verify profile and request kind with one light read. Native answers prove
     // final staleness, so do not repeat that read here.
-    async approve(botId, approvalId, decision, _senderId) {
+    async approve(botId, approvalId, decision, _senderId, scope = 'once') {
       await checkRequest(botId, approvalId, 'approval');
-      const result = await rpc('request.answer', {id: approvalId, profile: botId, result: {choice: decision === 'approved' ? 'once' : 'deny'}})
+      const result = await rpc('request.answer', {id: approvalId, profile: botId, result: {choice: decision === 'approved' ? scope : 'deny'}})
         .finally(() => touched(botId));
       if (result.status === 'expired') throw new Error('That approval expired before it was answered.');
     },
@@ -822,6 +824,11 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
       return { data, mime: match[1], ...(typeof value.provider === 'string' ? { provider: value.provider.slice(0, 100) } : {}) };
     },
     async automationRequest<R extends AutomationRequest>(input: R): Promise<AutomationResult<R['operation']>> {
+      if (input.operation.startsWith('approval_')) {
+        await connect();
+        // An older add-on refuses these operations as unknown, which would read as a failure.
+        if (!contract.approvalSettings) throw httpError(409, approvalSettingsUnsupported, {code: 'approval_settings_unsupported'});
+      }
       const response = await http('/api/agent-interface/automation', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) });
       const value = await readOperationJson(response, 'automation', input.operation);
       return decodeAutomation<R['operation']>(input.operation, value);
