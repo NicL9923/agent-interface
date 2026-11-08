@@ -64,3 +64,12 @@ appearance capture) and `SettingsPolishTests`: 71 passed, 0 failed. Removing the
 `testAReadThatStartedBeforeAResetNeverReplacesTheAccountItChanged` fail (2 banked resets instead of 1); the
 check was restored. The earlier `resetWouldBeWasted` hand-break was not rerun.
 
+## After merging main
+
+On the merged branch the same suite plus `main`'s new `DailyFlowTests` ran 79 tests: 78 passed and
+`DailyFlowTests.testHomePushesKeepDraftAndFindOpensMessageActions` failed at line 69 (Today's "Needs your
+attention" never appeared). A `git archive` of `origin/main` without this change fails the same assertion,
+so it is not caused by the profile menu. Removing the reset-completion generation bump made
+`testAReadThatStartsDuringAResetAndLandsAfterItNeverReplacesTheAccountItChanged` fail (2 banked resets
+instead of 1); it was restored.
+
