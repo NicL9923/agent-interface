@@ -47,6 +47,7 @@ import { isApiRequest } from "./route-path.js";
 import { MAX_UPLOAD_BYTES } from "../shared/uploads.js";
 import { DirectRoutes, installDirectRouteGate, loadDirectIdentity, type DirectAddress } from "./direct-routes.js";
 import { apiRoute } from "./api-route.js";
+import { installShutdown } from "./shutdown.js";
 
 /**
  * Builds the app: plugins and hooks, the collaborators routes share, each route group's install,
@@ -76,6 +77,7 @@ export async function createApp(
     trustProxy: false,
     routerOptions: { maxParamLength: 8192 },
   });
+  installShutdown(app);
   // Every registered route, so tests can prove each one is gated rather than sample a few.
   const routes: { method: string; url: string }[] = [];
   app.addHook("onRoute", (route) => {
