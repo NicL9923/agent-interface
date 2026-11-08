@@ -811,6 +811,14 @@ out there first." }` until that session signs out or expires, as switching accou
 on the device does. An `inactive` report keeps the account's hold, and one account's
 `inactive` never ends another's.
 
+The device ID is the only proof of the installation: a random UUID kept on the device,
+never returned to anyone but its own account. A member who copied another member's ID
+off their device could hold it while that ID's own session is idle or signed out. The
+real device's reports would get the 409 until the holder's session ends, so its alerts
+might arrive as a badge on that device and as alerts on the owner's other devices. The
+alerts still go only to their owner. Reading the ID needs the unlocked device, which
+already gives far more than this, so no separate installation credential is issued.
+
 When the person has a device in use that can receive the notification (an iOS device
 registered for push, or a browser subscription that named its device), only those get
 the alert. Each other iOS device gets the badge alone, `{ "aps": { "badge": N } }` at
