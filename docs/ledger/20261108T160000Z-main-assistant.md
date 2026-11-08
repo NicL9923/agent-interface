@@ -314,3 +314,63 @@ Checks at `0efa0ee`:
 - With `HERMES_SOURCE` at the `ed1afb0` clone, `tests/hermes_delegation_test.py` ran 24 tests and
   `tests/hermes_bot_delivery_test.py` ran 17 (one skip, the `6ebd92d` rollback case), all passing.
 - No iOS source changed, so iOS was not rerun.
+
+## Review fixes, round six
+
+A GPT-6.1 Sol review of the re-scope (`a98ea55..4edd56a`) confirmed the removal was clean. It found
+three P1 issues, all on moving into and out of main, and all reproduced. Commit `852fd69` fixes them.
+
+1. Main activation ran ahead of Hermes. Making an assistant main now runs in turn with routine
+   saves and triggers (`serialDelivery`), and the event trigger route now always runs in that
+   turn too. The order is:
+   1. Its roster goes to Hermes as a main one.
+   2. The send must succeed, and Hermes must enforce protocol 2. The runtime now returns the
+      protocol it sent and 0 when no gate is installed, and the add-on answers only after its
+      rosters are saved.
+   3. Its routines are checked.
+   4. Only then is the choice recorded.
+   Any failure sends the roster back as it was and refuses with `main_activation_failed`,
+   `main_routine_delivery` or `main_routine_busy`. A test that adds a routine posting elsewhere
+   while the roster is on its way shows the check runs after Hermes holds the limits.
+2. Promotion missed copies held by work in flight. It is now refused while any of the
+   assistant's routines meets one of these conditions, whatever its destination:
+   - it is running (`live_execution`);
+   - it has a claimed fire or a Bot Chat delivery Hermes still holds (`fire_claim`,
+     `last_delivery_queued`);
+   - Hermes still holds a delivery from it: an unfinished row in `cron/deliveries.db`, or a
+     parked output in `cron/bot_chat_pending`. These count even after the routine is deleted.
+   The add-on reads both stores through a new `agent-interface.routine_deliveries` RPC. If they
+   can't be read, or the runtime can't read them, promotion is refused. A real-Hermes test queues
+   and parks deliveries through `ed1afb0`'s own `cron.delivery_queue` and
+   `cron.bot_chat_legacy.defer`, and sees each until it is sent.
+3. Clearing main dropped protection from a check-in cleanup missed. Two fixes:
+   - (a) An assistant stays main in Hermes while a check-in is on it. That covers ones recorded
+     here and ones found by their signed marker that a pass failed to delete, and it holds from a
+     restarted server before its first pass. Clearing or changing main answers 502
+     `main_clear_pending` until the check-in is gone.
+   - (b) The add-on refuses update, resume and run, including their aliases, on any job whose prompt
+     carries the check-in marker, for every assistant and with no rosters at all. Pausing and
+     removing stay allowed. The job is found with Hermes's own resolver and the call is pinned to
+     the ID checked. An ambiguous or unreadable reference is refused. Tested against the real
+     resolver.
+
+Clients show the 502's message and keep their old view until the next reload; a retry converges.
+This matches `check_in_removal_pending` and needed no client change.
+
+Hand-breaks: 34 lines broke and all went red, across the API, adapter and add-on tests. Two
+runs needed fixing first:
+- The serialization mutants first ran with a syntax-breaking edit, so they were redone with a
+  stand-in that keeps the syntax.
+- The activation one survived until its test held the roster send long enough for an
+  unserialized trigger to finish first.
+Two lines added during the work were redundant with the current main's preference and could not
+fail a test, so they were removed.
+
+Checks at `852fd69`:
+- `npm test`: 152 files and 2,157 tests passed. `tests/main-assistant-api.test.ts` passed five more
+  runs in a row.
+- Typecheck, lint, build, Ruff and the e2e smoke suite (2) passed.
+- `npm run test:py`: 38 files passed.
+- With `HERMES_SOURCE` at the `ed1afb0` clone, `tests/hermes_delegation_test.py` ran 32 tests and
+  `tests/hermes_bot_delivery_test.py` ran 17 (one skip, the `6ebd92d` rollback case), all passing.
+- No iOS source changed, so iOS was not rerun.
