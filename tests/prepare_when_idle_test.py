@@ -1,4 +1,5 @@
 """Busy preflights retry; unrelated release failures stop without another attempt."""
+import argparse
 import subprocess
 import sys
 import unittest
@@ -12,11 +13,11 @@ idle = load_source('.agents/tools/prepare-when-idle.py', 'prepare_when_idle')
 
 
 class IdlePreparationTests(unittest.TestCase):
-    def invoke(self, results, reports=None, interval='120', extra=(), restart=None):
+    def invoke(self, results, reports=None, interval='120', extra=(), restart=None, argv=None):
         # A fake clock that only sleeping advances, so waits are exact and instant.
         now = [0.0]
         def sleep(seconds): now[0] += seconds
-        argv = ['prepare-when-idle.py', 'commit', '--host', 'host', '--app-base', '/app', '--interval', interval, *extra]
+        argv = argv or ['prepare-when-idle.py', 'commit', '--host', 'host', '--app-base', '/app', '--interval', interval, *extra]
         with patch.object(sys, 'argv', argv), \
                 patch.object(idle.subprocess, 'run', side_effect=results) as run, \
                 patch.object(idle, 'gateway_report', side_effect=self.host(reports, restart)) as report, \
@@ -100,21 +101,27 @@ class IdlePreparationTests(unittest.TestCase):
         self.assertEqual(result, 1)
         sleep.assert_not_called()
 
-    def test_prepare_options_reach_every_prepare_attempt(self):
-        # Options the wrapper doesn't define, current or future, go to prepare unchanged.
-        options = ['--node', '/srv/runtime/bin/node', '--qualification', '/srv/q.json', '--accept-helper-change']
+    def test_prepare_options_reach_every_prepare_attempt_as_prepare_parses_them(self):
+        # Options in any order, before the commit too, and in either form. Each attempt's command
+        # must parse, with prepare's own definitions, to exactly what was asked for.
+        argv = ['prepare-when-idle.py', '--qualification', '/srv/q.json', '--node=/srv/runtime/bin/node',
+                'commit', '--accept-helper-change', '--host', 'host', '--interval', '120', '--app-base', '/app']
         with patch('sys.stdout'):
-            result, run, sleep = self.invoke([self.REFUSED, self.DISCARDED, self.READY], extra=options)
+            result, run, sleep = self.invoke([self.REFUSED, self.DISCARDED, self.READY], argv=argv)
         self.assertEqual(result, 0)
         prepares = [call.args[0] for call in run.call_args_list if call.args[0][2] == 'prepare']
         self.assertEqual(len(prepares), 2)
-        self.assertTrue(all(command[3:] == ['commit', '--host', 'host', '--app-base', '/app', *options] for command in prepares), prepares)
+        parser = argparse.ArgumentParser()
+        idle.RELEASE_APP.add_prepare_arguments(parser)
+        for command in prepares:
+            self.assertEqual(vars(parser.parse_args(command[3:])), {
+                'commit': 'commit', 'host': 'host', 'app_base': '/app', 'qualification': '/srv/q.json',
+                'accept_helper_change': True, 'node': '/srv/runtime/bin/node'})
 
-    def test_a_wrapper_option_is_never_abbreviated_out_of_a_prepare_option(self):
-        # With abbreviations, --min would set --minutes; here it reaches prepare, which rejects it.
-        with patch('sys.stdout'):
-            result, run, sleep = self.invoke([self.READY], extra=['--min', '5'])
-        self.assertEqual(run.call_args_list[0].args[0][-2:], ['--min', '5'])
+    def test_an_option_prepare_does_not_take_is_refused_before_any_attempt(self):
+        with patch('sys.stderr'), self.assertRaises(SystemExit) as stopped:
+            self.invoke([], extra=['--runtime', '/srv/node'])
+        self.assertEqual(stopped.exception.code, 2)
 
     def test_integrity_failure_stops_without_discard_or_retry(self):
         failed = subprocess.CompletedProcess([], 1, '', 'Fence: household profile settings unchanged\nDiscard with: release-app.py discard release-test')

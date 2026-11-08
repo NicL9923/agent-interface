@@ -988,18 +988,37 @@ def run_recovery(args):
     print(json.dumps(outcome, indent=2))
 
 
+def add_prepare_arguments(parser):
+    """prepare's arguments, which prepare-when-idle.py takes too, so the two can't drift apart
+    (Nov 8, 2026: the wrapper listed them by hand, lacked --node, and a release stopped)."""
+    return [
+        parser.add_argument("commit"),
+        parser.add_argument("--host", required=True, help="SSH alias of the app host"),
+        parser.add_argument("--app-base", required=True, help="absolute application directory on the host"),
+        parser.add_argument("--qualification", help="fresh qualification receipt on the host, when integration inputs changed"),
+        parser.add_argument("--accept-helper-change", action="store_true",
+                            help="confirm a reviewed change to scripts/hermes-upgrade-linux.py"),
+        parser.add_argument("--node", help="absolute host path to the app runtime's node; defaults to the last release's. "
+                                           "The app service must already run it"),
+    ]
+
+
+def prepare_argv(actions, args):
+    """The prepare arguments that parse back to `args`: each option as --name=value, so no value is
+    read as an option, and the commit last after --, so it is never read as one either."""
+    argv = []
+    for action in actions:
+        value = getattr(args, action.dest)
+        if action.option_strings and value not in (None, False):
+            argv.append(action.option_strings[0] if action.nargs == 0 else f"{action.option_strings[0]}={value}")
+    return argv + ["--", *(getattr(args, action.dest) for action in actions if not action.option_strings)]
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = parser.add_subparsers(dest="command", required=True)
     step = commands.add_parser("prepare", help="build and preflight a merged commit")
-    step.add_argument("commit")
-    step.add_argument("--host", required=True, help="SSH alias of the app host")
-    step.add_argument("--app-base", required=True, help="absolute application directory on the host")
-    step.add_argument("--qualification", help="fresh qualification receipt on the host, when integration inputs changed")
-    step.add_argument("--accept-helper-change", action="store_true",
-                      help="confirm a reviewed change to scripts/hermes-upgrade-linux.py")
-    step.add_argument("--node", help="absolute host path to the app runtime's node; defaults to the last release's. "
-                                     "The app service must already run it")
+    add_prepare_arguments(step)
     step.set_defaults(run=prepare)
     for name, run, text in (("activate", activate, "activate a prepared release"),
                             ("record", record, "verify an activated release and write its records"),
