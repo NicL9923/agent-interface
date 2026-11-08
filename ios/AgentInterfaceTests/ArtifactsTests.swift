@@ -55,10 +55,11 @@ import XCTest
     XCTAssertEqual(store.conversationArtifacts.first { $0.id == "photo" }?.source, .shared, "The list agrees")
   }
 
-  private func window(_ start: String, _ replies: [(String, FileRef)], earlier: Int) -> Conversation {
-    var value = conversation(files: replies.map(\.1), messages: replies.flatMap { reply, file in
-      [Message(id: reply == replies[0].0 ? start : "q-" + reply, role: "user", text: "Go", sender: Sender(id: "one", name: "One")),
-       Message(id: reply, role: "assistant", text: "Done", files: [file])]
+  /// A window of turns, each a person's prompt and a reply carrying one file.
+  private func window(_ turns: [(prompt: String, reply: String, file: FileRef)], earlier: Int) -> Conversation {
+    var value = conversation(files: turns.map(\.file), messages: turns.flatMap { turn in
+      [Message(id: turn.prompt, role: "user", text: "Go", sender: Sender(id: "one", name: "One")),
+       Message(id: turn.reply, role: "assistant", text: "Done", files: [turn.file])]
     })
     value.earlier = earlier
     return value
@@ -74,10 +75,10 @@ import XCTest
     let store = AppStore(); store.widgetSnapshotURL = nil; store.api = server.api()
     defer { FakeExchange.remove(host: server.origin.host!) }
     store.selectedBotId = "bot"
-    store.conversation = window("q9", [("a9", recent)], earlier: 2)
+    store.conversation = window([("q9", "a9", recent)], earlier: 2)
     try await until { store.replyFiles["a9"]?.map(\.id) == ["recent"] }
-    // Older turns load: the window now starts at q1 and shows a1 itself.
-    store.conversation = window("q1", [("a1", old), ("a9", recent)], earlier: 1)
+    // Older turns load: the window now starts at q1, shows a1 itself, and still holds q9.
+    store.conversation = window([("q1", "a1", old), ("q9", "a9", recent)], earlier: 1)
     try await until { store.replyFiles["a1"]?.map(\.id) == ["old"] }
     XCTAssertEqual(store.replyFiles["a9"]?.map(\.id), ["recent"])
     XCTAssertTrue(server.requests.contains { $0.url?.query == "before=q1" }, "The new start is read, not the old page reused")
@@ -89,12 +90,12 @@ import XCTest
     defer { FakeExchange.remove(host: server.origin.host!) }
     let photo = file("photo", "image/png"), other = file("other", "image/png")
     store.selectedBotId = "a"
-    store.conversation = window("qa", [("aa", photo)], earlier: 3)
+    store.conversation = window([("qa", "aa", photo)], earlier: 3)
     try await until { server.requests.count == 1 }
     // Another assistant opens while the first one's read is still out.
     store.selectionGeneration = UUID()
     store.selectedBotId = "b"
-    store.conversation = window("qb", [("ab", other)], earlier: 3)
+    store.conversation = window([("qb", "ab", other)], earlier: 3)
     XCTAssertEqual(server.requests.count, 1, "Only one read at a time")
     server.releaseNext(body: #"{"messages":[]}"#)
     // The first read's answer is for a closed chat; the open one reads its own and gets its chips.

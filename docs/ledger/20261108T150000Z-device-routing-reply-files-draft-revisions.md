@@ -134,3 +134,38 @@ source restored. All 17 failed their tests:
 - 5: no legacy retry; retrying on any error.
 - 4: not seeding first appearance from earlier files; chips before the history is known; chips
   or the panel attributing without the earlier files.
+
+## Re-review round: GPT-6.1 Sol, 64080adb..8f35f7d
+
+Five findings, all reproduced and fixed at `7305ddc` plus the test and ledger commit after it.
+Checks: `npm test` 153 files and 2,142 tests passed; typecheck, lint, build and e2e (2) passed;
+`npm run test:py` 37 passed. iOS on a fresh WildBots-C simulator through `mac-heavy-lock.sh`: the
+full `AgentInterfaceTests` suite ran 635 tests, 2 skipped, 4 failed, all pre-existing on
+`846ec70` (three `DirectRouteTests`, and the observed list's `sending` versus `sendingRequests`,
+checked to be the only difference); UI `ReplyExtrasFlowTests` (2) and `ChatCardsFlowTests` (1)
+passed. After the test fix below, `ArtifactsTests`, `DraftDiffTests` and `DeviceActivityTests`
+ran again: 19 passed.
+
+1. iOS reused an earlier-files page whose start was anywhere in an expanded window. It now
+   takes only the page for the window's exact first message. The web cache was already keyed by
+   the window's first message, so it had no such flaw.
+2, 3. Device ownership is now session-bound only: the account whose live session last reported
+   the device. Push registrations name a device but never hold one, so another member's label
+   cannot lock out its owner, and an expired session frees a shared browser.
+4. Any finished iOS earlier-files read, including one for an assistant left midway, now looks
+   at the window on screen again, so that window's own read is no longer lost. The web keeps
+   one cache entry and one listener set per window, so it had no such race.
+5. The guidance gives the 80-character id budget and its fallback, a new short id without
+   lineage. Shared `budget` vectors pin 80 accepted, 81 refused, by the current parser on both
+   clients and the released parser.
+
+Hand-breaks, each alone:
+
+- Web (`.private/mutants3.py`): letting a labelled subscription hold a device, letting a
+  registered iOS device hold one, and removing the budget from the guidance each failed their
+  tests. The registered-device variant first survived because the test never had the owner use
+  that device; the owner now reports from it, and it fails.
+- iOS: restoring the "boundary anywhere in the window" check first passed, because the
+  expanded test window did not contain the old boundary. With the test window corrected it
+  failed (lines 82 and 84). Removing the refresh when a read finishes failed the
+  assistant-switch test (lines 102 to 105).
