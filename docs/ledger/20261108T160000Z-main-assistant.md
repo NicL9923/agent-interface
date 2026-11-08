@@ -374,3 +374,44 @@ Checks at `852fd69`:
 - With `HERMES_SOURCE` at the `ed1afb0` clone, `tests/hermes_delegation_test.py` ran 32 tests and
   `tests/hermes_bot_delivery_test.py` ran 17 (one skip, the `6ebd92d` rollback case), all passing.
 - No iOS source changed, so iOS was not rerun.
+
+## Saved state after a refusal, round six follow-up
+
+After `main_clear_pending` the server had saved the change, but the web and iOS apps kept showing the
+old main assistant until their next reload. `check_in_removal_pending` and `check_in_unavailable`
+had the same gap. Commits `ae94388` and `bdf5dcc` close it:
+- The server's error body now carries `preferences`, the member's preferences as saved. It does so
+  on `main_clear_pending`, on `check_in_removal_pending` from both check-ins and sharing, and on both
+  `check_in_unavailable` cases.
+- Web: `chooseMain` and `saveCheckIns` apply them on failure as on success and still reject with
+  the message. Bot settings reloads the bootstrap when a sharing refusal carries them.
+- iOS: `AppStore.setMainAssistant` and `setCheckIns` apply them on failure for the same store
+  generation. Bot settings applies them from a failed save.
+
+Tests that fail without the change:
+- Web: `tests/main-assistant-ui.test.ts` covers clearing main and turning check-ins off, each
+  refused after saving. The saved preferences are applied and the message stays visible. A
+  refusal that saved nothing applies nothing.
+- Web: `tests/bot-settings.test.ts` covers a sharing refusal that ended main. Bot settings reloads
+  and shows the message.
+- Server: `tests/main-assistant-api.test.ts` asserts each error body carries what was saved,
+  including a new case for a frequency change Hermes refused.
+- iOS: `MainAssistantTests.testARefusalAfterTheServerSavedShowsWhatItSavedAndKeepsTheReason`.
+
+Hand-breaks: 10 lines broke and all went red.
+- Web and server, 9 lines: the web apply on failure, the error reader, the Bot settings reload,
+  the error handler's `preferences` field, and each of the five throw sites.
+- iOS: `applyingSaved` stopped applying on the Mac copy. `MainAssistantTests` failed 3 assertions,
+  exit 65, and the file was restored.
+
+Checks at `bdf5dcc`:
+- `npm test`: 152 files and 2,160 tests passed. Typecheck, lint, build and the e2e smoke suite (2)
+  passed.
+- No Python changed, so the add-on tests were not rerun.
+- iOS on the Mac mini, through `validate-ios.sh`, which takes `mac-heavy-lock.sh` itself, in the
+  foreground. The first build failed on a type error: the store generation is a UUID. It was fixed
+  in `bdf5dcc`. The rerun exited 0 with 43 tests and no failures:
+  - `MainAssistantTests`: 8
+  - `SettingsParityTests`: 24
+  - `MainAssistantFlowTests`: 2, light and dark
+  - `SettingsPolishTests`: 9
