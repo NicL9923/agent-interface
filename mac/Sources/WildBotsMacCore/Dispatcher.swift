@@ -165,6 +165,9 @@ public final class Dispatcher: @unchecked Sendable {
   private let maxConcurrent: Int
   private let lock = NSLock()
   private var running: [String: CancellationFlag] = [:]
+  /// Bumped by every `cancelAll`. An invocation admitted under a different value than it read
+  /// its snapshot under was authorized before a Pause or Unlink, so it does not start.
+  private var cancelEpoch = 0
 
   public init(
     journal: InvocationJournal, activity: ActivityLog, environment: HostEnvironment, runner: CommandRunner = CommandRunner(),
@@ -185,9 +188,15 @@ public final class Dispatcher: @unchecked Sendable {
 
   /// Stops every running action, for Pause and when the link is revoked.
   public func cancelAll() {
-    let flags = lock.withLock { Array(running.values) }
+    let flags = lock.withLock { () -> [CancellationFlag] in
+      cancelEpoch += 1
+      return Array(running.values)
+    }
     flags.forEach { $0.cancel() }
   }
+
+  static let stoppedBeforeStart = ActionError(
+    .paused, "The action did not start because assistants were paused or this Mac was unlinked.")
 
   /// The result to send for an `invoke` or a malformed one; nil for any other message.
   public func handle(_ message: InboundMessage) async -> (id: String, outcome: ActionOutcome)? {
@@ -229,6 +238,8 @@ public final class Dispatcher: @unchecked Sendable {
   public func handle(_ invocation: Invocation) async -> ActionOutcome {
     if let early = begin(id: invocation.id, fingerprint: invocation.fingerprint) { return early }
     let started = Date()
+    // Read before the snapshot: a Pause that lands after this changes it, whatever the snapshot says.
+    let epoch = lock.withLock { cancelEpoch }
     let current = snapshot()
     let request: ActionRequest
     switch Authorizer.evaluate(invocation, snapshot: current) {
@@ -239,16 +250,16 @@ public final class Dispatcher: @unchecked Sendable {
     }
 
     let flag = CancellationFlag()
-    let admitted: Bool = lock.withLock {
-      guard running.count < maxConcurrent else { return false }
+    let refusal: ActionError? = lock.withLock {
+      guard cancelEpoch == epoch else { return Self.stoppedBeforeStart }
+      guard running.count < maxConcurrent else {
+        return ActionError(.busy, "This Mac is already running \(maxConcurrent) actions. Try again shortly.")
+      }
       running[invocation.id] = flag
-      return true
+      return nil
     }
-    guard admitted else {
-      return finish(
-        invocation, request: request,
-        outcome: .failure(ActionError(.busy, "This Mac is already running \(maxConcurrent) actions. Try again shortly.")),
-        started: started)
+    if let refusal {
+      return finish(invocation, request: request, outcome: .failure(refusal), started: started)
     }
     onEvent(.activeCount(activeCount))
     var outcome = await perform(request, snapshot: current, cancel: flag)
@@ -291,6 +302,8 @@ public final class Dispatcher: @unchecked Sendable {
       case .screenshot:
         guard let screenshots else { throw ActionError(.permissionNeeded, "Screenshots are not available.") }
         let shot = try await screenshots.capture(maxWidth: 1920)
+        // Capture cannot be interrupted; a Pause during it still keeps the image from leaving.
+        if cancel.isCancelled { throw SafeFiles.stopped }
         return .success([
           "pngBase64": .string(shot.png.base64EncodedString()), "width": .int(shot.width), "height": .int(shot.height),
         ])
@@ -299,13 +312,14 @@ public final class Dispatcher: @unchecked Sendable {
       case .readFile(let path, let offset, let length):
         return try await background {
           let (folder, resolved) = try PathResolver.resolve(path, folders: snapshot.folders, home: self.environment.home)
-          return .success(try SafeFiles.readFile(folder: folder, path: resolved, offset: offset, length: length))
+          return .success(try SafeFiles.readFile(folder: folder, path: resolved, offset: offset, length: length, cancel: cancel))
         }
       case .writeFile(let path, let content, let expected, let createOnly):
         return try await background {
           let (folder, resolved) = try PathResolver.resolve(path, folders: snapshot.folders, home: self.environment.home)
           return .success(
-            try SafeFiles.writeFile(folder: folder, path: resolved, content: content, expectedSha256: expected, createOnly: createOnly))
+            try SafeFiles.writeFile(
+              folder: folder, path: resolved, content: content, expectedSha256: expected, createOnly: createOnly, cancel: cancel))
         }
       case .listDir(let path, let offset, let limit):
         return try await background {

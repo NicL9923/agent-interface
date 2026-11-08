@@ -45,6 +45,32 @@ final class SafeFilesTests: XCTestCase {
     }
   }
 
+  /// With overlapping folders an assistant that can write the outer one can swap a folder above
+  /// the inner one for a link. Neither the handle granted earlier nor a rebuilt one may follow it.
+  func testAFolderAboveAGrantedFolderSwappedForALinkIsRefused() throws {
+    let innerPath = box.granted + "/project/Documents"
+    try FileManager.default.createDirectory(atPath: innerPath, withIntermediateDirectories: true)
+    box.write(box.outside + "/Documents/secret.txt", "secret")
+    let inner = try FolderHandle(name: "Documents", path: innerPath)
+    try FileManager.default.moveItem(atPath: box.granted + "/project", toPath: box.granted + "/project-real")
+
+    // A link back to the same directory still makes the granted path go through a link.
+    try FileManager.default.createSymbolicLink(atPath: box.granted + "/project", withDestinationPath: box.granted + "/project-real")
+    let (chosen, resolved) = try PathResolver.resolve(innerPath + "/a.txt", folders: [folder, inner], home: box.home)
+    XCTAssertEqual(chosen.path, innerPath)
+    assertActionError(.notFound, containing: "moved or replaced") {
+      try SafeFiles.writeFile(folder: chosen, path: resolved, content: Data("x".utf8), expectedSha256: nil, createOnly: false)
+    }
+    XCTAssertNil(box.read(box.granted + "/project-real/Documents/a.txt"))
+
+    // Rebuilding the folder list after the link points elsewhere refuses to open the folder.
+    try FileManager.default.removeItem(atPath: box.granted + "/project")
+    try FileManager.default.createSymbolicLink(atPath: box.granted + "/project", withDestinationPath: box.outside)
+    assertActionError(.notFound, containing: "/project is a symbolic link") {
+      try FolderHandle(name: "Documents", path: innerPath)
+    }
+  }
+
   func testPrefersTheMostSpecificFolder() throws {
     try FileManager.default.createDirectory(atPath: box.granted + "/inner", withIntermediateDirectories: true)
     let inner = try FolderHandle(name: "inner", path: box.granted + "/inner")
@@ -125,9 +151,12 @@ final class SafeFilesTests: XCTestCase {
 
   func testCreateOnlyAndExpectedVersionGuards() throws {
     box.write(box.granted + "/a.txt", "v1")
+    let inode = try FileManager.default.attributesOfItem(atPath: box.granted + "/a.txt")[.systemFileNumber] as? Int
     assertActionError(.exists, containing: "already exists") { try write("a.txt", "x", createOnly: true) }
     assertActionError(.conflict, containing: "changed since") { try write("a.txt", "x", expected: sha("other")) }
     XCTAssertEqual(box.read(box.granted + "/a.txt"), "v1")
+    // A refused version is never swapped in, even for a moment: the file is the same one.
+    XCTAssertEqual(try FileManager.default.attributesOfItem(atPath: box.granted + "/a.txt")[.systemFileNumber] as? Int, inode)
     XCTAssertEqual(try write("a.txt", "v2", expected: sha("v1"))["created"], false)
     XCTAssertEqual(box.read(box.granted + "/a.txt"), "v2")
     assertActionError(.conflict, containing: "no longer exists") { try write("gone.txt", "x", expected: sha("v1")) }
@@ -156,6 +185,73 @@ final class SafeFilesTests: XCTestCase {
     assertActionError(.notAFile, containing: "is a folder") { try write(".", "x") }
     XCTAssertEqual(box.read(box.outside + "/target.txt"), "keep")
     XCTAssertNil(box.read(box.outside + "/new.txt"))
+  }
+
+  /// Writes that expect the same version take turns, so exactly one replaces it and the rest
+  /// see the winner's content and get `conflict`. The file is large so every writer is still
+  /// hashing when the others start.
+  func testConcurrentWritesExpectingTheSameVersionLetExactlyOneWin() throws {
+    let original = Data(repeating: 0x61, count: 16 << 20)
+    FileManager.default.createFile(atPath: box.granted + "/v.txt", contents: original)
+    let expected = SHA256.hash(data: original).map { String(format: "%02x", $0) }.joined()
+    let (folder, resolved) = try resolve("v.txt")
+    let lock = NSLock()
+    var winners: [Int] = []
+    var losers: [ErrorCode] = []
+    DispatchQueue.concurrentPerform(iterations: 6) { index in
+      do {
+        _ = try SafeFiles.writeFile(
+          folder: folder, path: resolved, content: Data("writer \(index)".utf8), expectedSha256: expected, createOnly: false)
+        lock.withLock { winners.append(index) }
+      } catch {
+        lock.withLock { losers.append((error as? ActionError)?.code ?? .failed) }
+      }
+    }
+    XCTAssertEqual(winners.count, 1, "winners: \(winners)")
+    XCTAssertEqual(losers, Array(repeating: .conflict, count: 5))
+    XCTAssertEqual(box.read(box.granted + "/v.txt"), "writer \(winners.first ?? -1)")
+    let leftovers = try FileManager.default.contentsOfDirectory(atPath: box.granted).filter { $0.hasPrefix(".wildbots-write-") }
+    XCTAssertEqual(leftovers, [])
+  }
+
+  func testHashingRefusesFilesOverOneGiBAtEveryEntryPoint() throws {
+    let huge = box.granted + "/huge.bin"
+    FileManager.default.createFile(atPath: huge, contents: nil)
+    XCTAssertEqual(truncate(huge, off_t(SafeFiles.maxHashedFileSize + 1)), 0)
+    assertActionError(.tooLarge, containing: "larger than 1 GiB") { try read("huge.bin") }
+    assertActionError(.tooLarge, containing: "larger than 1 GiB") { try write("huge.bin", "x", expected: sha("x")) }
+    let size = try FileManager.default.attributesOfItem(atPath: huge)[.size] as? Int64
+    XCTAssertEqual(size, SafeFiles.maxHashedFileSize + 1)
+  }
+
+  /// The size passed in is the one the caller validated; a file that grew or shrank since then
+  /// is a conflict, not a hash of something else.
+  func testHashingReadsTheValidatedSizeAndRefusesAFileThatChangedSize() throws {
+    box.write(box.granted + "/ten.txt", "0123456789")
+    let fd = open(box.granted + "/ten.txt", O_RDONLY)
+    defer { close(fd) }
+    XCTAssertEqual(try SafeFiles.sha256(fd: fd, size: 10, display: "ten.txt"), sha("0123456789"))
+    assertActionError(.conflict, containing: "changed size") { try SafeFiles.sha256(fd: fd, size: 4, display: "ten.txt") }
+    assertActionError(.conflict, containing: "got shorter") { try SafeFiles.sha256(fd: fd, size: 20, display: "ten.txt") }
+  }
+
+  func testCancellationStopsHashingAndKeepsAWriteFromLanding() throws {
+    let cancelled = CancellationFlag()
+    cancelled.cancel()
+    box.write(box.granted + "/ten.txt", "0123456789")
+    let fd = open(box.granted + "/ten.txt", O_RDONLY)
+    defer { close(fd) }
+    assertActionError(.paused, containing: "stopped") {
+      try SafeFiles.sha256(fd: fd, size: 10, display: "ten.txt", cancel: cancelled)
+    }
+    let (folder, resolved) = try resolve("new.txt")
+    assertActionError(.paused, containing: "stopped") {
+      try SafeFiles.writeFile(
+        folder: folder, path: resolved, content: Data("x".utf8), expectedSha256: nil, createOnly: false, cancel: cancelled)
+    }
+    XCTAssertNil(box.read(box.granted + "/new.txt"))
+    let leftovers = try FileManager.default.contentsOfDirectory(atPath: box.granted).filter { $0.hasPrefix(".wildbots-write-") }
+    XCTAssertEqual(leftovers, [])
   }
 
   // MARK: list_dir

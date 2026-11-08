@@ -6,6 +6,8 @@ import Foundation
 /// - An ID is written, and synced, before any work starts, so it never runs twice.
 /// - Its result is written when it finishes and kept until the server acknowledges it.
 /// - An ID that was accepted but has no result when the app starts again gets `uncertain`.
+/// - A journal that exists but cannot be read stops the app from starting rather than being
+///   replaced by an empty one, which would forget every ID it held.
 public final class InvocationJournal: @unchecked Sendable {
   public enum Lookup: Equatable {
     /// Recorded now; the caller runs it.
@@ -25,10 +27,13 @@ public final class InvocationJournal: @unchecked Sendable {
     var acked = false
   }
 
-  /// Acknowledged IDs are remembered this long so a repeat is still answered, not rerun.
+  /// Every accepted ID is remembered this long from its acceptance, so a repeat is answered, not rerun.
   public static let ackedRetention: TimeInterval = 30 * 24 * 3600
-  /// An unacknowledged result older than this is dropped; the server's call ended long ago.
+  /// An unacknowledged result older than this loses its value, because the server's call ended
+  /// long ago. Its ID stays for `ackedRetention` and a repeat answers `uncertain`.
   public static let unackedRetention: TimeInterval = 7 * 24 * 3600
+  static let expiredOutcome = ActionOutcome.failure(
+    ActionError(.uncertain, "This action finished more than 7 days ago and its result is no longer available."))
   static let compactAfterLines = 4000
 
   private let url: URL
@@ -122,12 +127,36 @@ public final class InvocationJournal: @unchecked Sendable {
     linesSinceCompaction += 1
   }
 
+  /// Reads the journal record by record. Only a torn final record, cut off by a crash in the
+  /// middle of an append, is skipped; any other damage, or a journal that exists but cannot be
+  /// read, throws so nothing is compacted over it and no action runs.
   private func load() throws {
-    guard let data = FileManager.default.contents(atPath: url.path), let text = String(data: data, encoding: .utf8)
-    else { return }
-    for line in text.split(separator: "\n") {
-      // A torn last line from a crash mid-write is skipped; everything before it stands.
-      guard let record = try? JSONValue.parse(String(line)), let id = record["id"]?.stringValue else { continue }
+    let fd = open(url.path, O_RDONLY | O_CLOEXEC)
+    if fd < 0 {
+      let code = errno
+      if code == ENOENT { return }
+      throw unreadable(String(cString: strerror(code)))
+    }
+    defer { close(fd) }
+    var data = Data()
+    var buffer = [UInt8](repeating: 0, count: 1 << 16)
+    while true {
+      let count = buffer.withUnsafeMutableBytes { read(fd, $0.baseAddress, $0.count) }
+      if count < 0 {
+        if errno == EINTR { continue }
+        throw unreadable(String(cString: strerror(errno)))
+      }
+      if count == 0 { break }
+      data.append(contentsOf: buffer[0..<count])
+    }
+    let records = data.split(separator: UInt8(ascii: "\n"), omittingEmptySubsequences: false)
+    for (index, raw) in records.enumerated() where !raw.isEmpty {
+      guard let text = String(data: Data(raw), encoding: .utf8), let record = try? JSONValue.parse(text) else {
+        // Only the last record can lack its newline, and only a crash mid-append leaves it so.
+        if index == records.count - 1 { continue }
+        throw unreadable("record \(index + 1) is damaged")
+      }
+      guard let id = record["id"]?.stringValue else { continue }
       switch record["t"]?.stringValue {
       case "accepted":
         guard entries[id] == nil, let fingerprint = record["fp"]?.stringValue else { continue }
@@ -147,20 +176,32 @@ public final class InvocationJournal: @unchecked Sendable {
     }
   }
 
-  /// Rewrites the journal with only what is still needed: unacknowledged results in full, and
-  /// the IDs and fingerprints of recently acknowledged ones.
+  private func unreadable(_ reason: String) -> ActionError {
+    ActionError(
+      .failed,
+      "The invocation journal at \(ActionError.quoted(url.path)) could not be read (\(reason)). WildBots for Mac runs no "
+        + "actions until it can, so that none runs twice.")
+  }
+
+  /// Rewrites the journal with only what is still needed: unacknowledged results in full for 7
+  /// days, and every ID with its fingerprint and whether it finished for 30 days from acceptance.
   public func compact() throws {
     try lock.withLock {
       let current = now()
       var keptOrder: [String] = []
       var lines: [String] = []
       for id in order {
-        guard let entry = entries[id] else { continue }
+        guard var entry = entries[id] else { continue }
         let finished = entry.finishedAt ?? entry.acceptedAt
-        if entry.acked, current.timeIntervalSince(finished) > Self.ackedRetention { entries[id] = nil; continue }
-        if !entry.acked, entry.outcome != nil, current.timeIntervalSince(finished) > Self.unackedRetention {
+        if entry.outcome != nil, current.timeIntervalSince(entry.acceptedAt) > Self.ackedRetention {
           entries[id] = nil
           continue
+        }
+        if !entry.acked, entry.outcome != nil, current.timeIntervalSince(finished) > Self.unackedRetention {
+          // The value goes; the ID stays, so a late repeat is answered and never rerun.
+          entry.outcome = Self.expiredOutcome
+          entry.acked = true
+          entries[id] = entry
         }
         keptOrder.append(id)
         lines.append(
@@ -170,7 +211,9 @@ public final class InvocationJournal: @unchecked Sendable {
           ]).serialized)
         if let outcome = entry.outcome {
           // An acknowledged value is no longer needed in full; keep only that it finished.
-          let stored = entry.acked ? ActionOutcome.failure(ActionError(.failed, "This action already finished and its result was delivered.")) : outcome
+          let stored =
+            !entry.acked || outcome == Self.expiredOutcome
+            ? outcome : ActionOutcome.failure(ActionError(.failed, "This action already finished and its result was delivered."))
           lines.append(
             JSONValue.object([
               "t": "result", "id": .string(id), "outcome": stored.json,

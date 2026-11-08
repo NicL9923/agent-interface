@@ -99,7 +99,11 @@ public actor LinkClient {
   private let timing: Timing
 
   private var loop: Task<Void, Never>?
+  /// The open socket, set once its hello is sent, so a result never goes out before hello.
   private var socket: LinkSocket?
+  /// The device `socket` speaks for. A result is only sent as the device that ran it.
+  private var socketDeviceId: String?
+  private var restartRequested = false
   private var generation = 0
   private var failures = 0
   private var lastActivity = Date()
@@ -137,15 +141,24 @@ public actor LinkClient {
     loop = nil
     socket?.close(code: 1000)
     socket = nil
+    socketDeviceId = nil
     generation += 1
     wakeUp()
     publish(.unlinked(reason: nil))
   }
 
-  /// After wake or a network change: reconnect at once instead of waiting out the backoff.
+  /// After wake or a network change: reconnect at once. A socket that looks open may have died
+  /// with the old network, so an open one is closed and replaced rather than trusted until the
+  /// heartbeat gives up on it. Actions still running deliver on the new socket; finished results
+  /// not yet acknowledged go out after its hello.
   public func nudge() {
     failures = 0
-    wakeUp()
+    guard let socket else { return wakeUp() }
+    restartRequested = true
+    generation += 1
+    self.socket = nil
+    socketDeviceId = nil
+    socket.close(code: 1000)
   }
 
   /// Tells the server the Mac's state changed (pause, lock, folders, grants).
@@ -164,6 +177,7 @@ public actor LinkClient {
         return
       }
       publish(.connecting)
+      restartRequested = false
       let code = await session(url: url, credential: credential)
       if Task.isCancelled { return }
       let reason: String
@@ -182,6 +196,10 @@ public actor LinkClient {
       case LinkCloseCode.unavailable:
         reason = "The server has Mac links turned off."
       default:
+        if restartRequested {
+          restartRequested = false
+          continue
+        }
         reason = "Could not reach the server."
       }
       failures += 1
@@ -195,6 +213,7 @@ public actor LinkClient {
     credentials.delete()
     dispatcher.cancelAll()
     socket = nil
+    socketDeviceId = nil
     loop = nil
     publish(.unlinked(reason: reason))
     onRevoked()
@@ -214,31 +233,42 @@ public actor LinkClient {
     }
     generation += 1
     let current = generation
-    self.socket = socket
     revokedByServer = false
     lastActivity = Date()
     do {
       try await socket.send(LinkCodec.hello(appVersion: appVersion, state: state()))
+      // From here every result that finishes is sent on this socket by `deliver`, and every one
+      // that finished earlier is in the journal read just below; none waits for a reconnect.
+      self.socket = socket
+      socketDeviceId = credential.deviceId
       for (id, outcome) in journal.unacknowledged() {
         try await socket.send(LinkCodec.result(id: id, outcome: outcome))
       }
     } catch {
       socket.close(code: 1000)
+      if self.socket === socket {
+        self.socket = nil
+        socketDeviceId = nil
+      }
       return (error as? LinkClosed)?.code
     }
+    let deviceId = credential.deviceId
     let code = await withTaskGroup(of: Int?.self) { group -> Int? in
-      group.addTask { await self.receiveLoop(socket, generation: current) }
+      group.addTask { await self.receiveLoop(socket, deviceId: deviceId) }
       group.addTask { await self.heartbeat(socket, generation: current) }
       let first = await group.next() ?? nil
       group.cancelAll()
       return first
     }
     socket.close(code: 1000)
-    if self.socket === socket { self.socket = nil }
+    if self.socket === socket {
+      self.socket = nil
+      socketDeviceId = nil
+    }
     return revokedByServer ? LinkCloseCode.unauthorized : code
   }
 
-  private func receiveLoop(_ socket: LinkSocket, generation: Int) async -> Int? {
+  private func receiveLoop(_ socket: LinkSocket, deviceId: String) async -> Int? {
     while !Task.isCancelled {
       let text: String
       do {
@@ -263,7 +293,7 @@ public actor LinkClient {
       case .invoke, .malformedInvoke:
         Task {
           guard let answer = await dispatcher.handle(message) else { return }
-          await self.deliver(id: answer.id, outcome: answer.outcome, generation: generation)
+          await self.deliver(id: answer.id, outcome: answer.outcome, deviceId: deviceId)
         }
       case .ignored:
         continue
@@ -272,10 +302,19 @@ public actor LinkClient {
     return nil
   }
 
-  /// Sends a result on the socket it arrived on. If that socket is gone, the result waits in the
-  /// journal and goes out after the next hello.
-  private func deliver(id: String, outcome: ActionOutcome, generation: Int) async {
-    guard generation == self.generation, let socket else { return }
+  /// Sends a result on whichever socket is open now, which may be newer than the one the
+  /// invocation arrived on: the server's call is still waiting for it. With no socket open, the
+  /// result waits in the journal and goes out after the next hello. A result for a device this
+  /// Mac no longer is (it linked again) means nothing to the new link and is dropped.
+  private func deliver(id: String, outcome: ActionOutcome, deviceId: String) async {
+    guard let socket else {
+      if let current = credentials.load()?.deviceId, current != deviceId { try? journal.acknowledge(id: id) }
+      return
+    }
+    guard socketDeviceId == deviceId else {
+      try? journal.acknowledge(id: id)
+      return
+    }
     try? await socket.send(LinkCodec.result(id: id, outcome: outcome))
   }
 

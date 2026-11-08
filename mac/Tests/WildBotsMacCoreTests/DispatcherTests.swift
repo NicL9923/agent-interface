@@ -47,11 +47,14 @@ final class DispatcherTests: XCTestCase {
     screenshots = HeldScreenshots()
   }
 
-  func dispatcher(journal: InvocationJournal? = nil) throws -> Dispatcher {
+  func dispatcher(journal: InvocationJournal? = nil, onSnapshot: @escaping @Sendable () -> Void = {}) throws -> Dispatcher {
     let snapshot = LiveSnapshot(policy: policy, folders: [try box.folder()], screenLocked: false, screenPermission: .granted)
     return Dispatcher(
       journal: journal ?? self.journal, activity: activity, environment: box.environment, screenshots: screenshots,
-      snapshot: { snapshot })
+      snapshot: {
+        onSnapshot()
+        return snapshot
+      })
   }
 
   func invoke(_ id: String, _ action: String, _ args: [String: JSONValue], scheduled: Bool = false) -> Invocation {
@@ -143,6 +146,60 @@ final class DispatcherTests: XCTestCase {
     assertFailure(await task.value, .paused, containing: "stopped")
   }
 
+  /// Pause lands after the invocation read an unpaused snapshot and before it was admitted. It
+  /// must not start, though its authorization saw no pause.
+  func testAnInvocationAuthorizedJustBeforePauseDoesNotStart() async throws {
+    let late = LateDispatcher()
+    let dispatcher = try dispatcher(onSnapshot: { late.value?.cancelAll() })
+    late.value = dispatcher
+    let outcome = await dispatcher.handle(invoke("w1", "write_file", ["path": "a.txt", "content": "x"]))
+    assertFailure(outcome, .paused, containing: "did not start")
+    XCTAssertNil(box.read(box.granted + "/a.txt"))
+    XCTAssertEqual(journal.unacknowledged().first?.outcome, outcome)
+  }
+
+  func testPauseDuringAVersionedWriteOfALargeFileLeavesItUnchanged() async throws {
+    let big = box.granted + "/big.bin"
+    let size: Int64 = 512 << 20
+    FileManager.default.createFile(atPath: big, contents: nil)
+    XCTAssertEqual(truncate(big, off_t(size)), 0)
+    let fd = open(big, O_RDONLY)
+    let expected = try SafeFiles.sha256(fd: fd, size: size, display: "big.bin")
+    close(fd)
+    let dispatcher = try dispatcher()
+    let task = Task {
+      await dispatcher.handle(
+        self.invoke("w1", "write_file", ["path": "big.bin", "content": "small", "expectedSha256": .string(expected)]))
+    }
+    try await waitUntil { dispatcher.activeCount == 1 }
+    dispatcher.cancelAll()
+    assertFailure(await task.value, .paused, containing: "stopped")
+    XCTAssertEqual(try FileManager.default.attributesOfItem(atPath: big)[.size] as? Int64, size)
+  }
+
+  func testPauseDuringAScreenshotKeepsTheImageFromLeaving() async throws {
+    let dispatcher = try dispatcher()
+    let task = Task { await dispatcher.handle(self.invoke("s1", "screenshot", [:])) }
+    try await waitUntil { self.screenshots.count == 1 }
+    dispatcher.cancelAll()
+    screenshots.release()
+    assertFailure(await task.value, .paused, containing: "stopped")
+  }
+
+  /// A 4096-byte path is valid input; its error quotes it shortened and stays within the
+  /// server's 2000-character limit, in the reply and in the journal.
+  func testALongPathIsQuotedShortInItsError() async throws {
+    let dispatcher = try dispatcher()
+    let long = "/" + String(repeating: "a", count: 4095)
+    let outcome = await dispatcher.handle(invoke("long", "read_file", ["path": .string(long)]))
+    assertFailure(outcome, .outsideFolders, containing: "is outside the folders shared on this Mac")
+    guard case .failure(let error) = outcome else { return }
+    XCTAssertLessThanOrEqual(error.message.utf16.count, ActionError.maxMessageLength)
+    XCTAssertTrue(error.message.hasPrefix("/aaa"), error.message)
+    XCTAssertTrue(error.message.contains("a…a"), error.message)
+    XCTAssertEqual(journal.unacknowledged().first { $0.id == "long" }?.outcome, outcome)
+  }
+
   func testRunResolvesItsWorkingFolderInsideTheFolders() async throws {
     let dispatcher = try dispatcher()
     try FileManager.default.createDirectory(atPath: box.granted + "/sub", withIntermediateDirectories: true)
@@ -176,6 +233,11 @@ final class DispatcherTests: XCTestCase {
     XCTAssertEqual(entries.last?.assistantName, "Patch")
     XCTAssertEqual(entries.first?.note, "exit code 0")
   }
+}
+
+/// Lets a snapshot closure reach the dispatcher it is passed to.
+final class LateDispatcher: @unchecked Sendable {
+  var value: Dispatcher?
 }
 
 func waitUntil(timeout: TimeInterval = 10, _ condition: @escaping () async -> Bool) async throws {

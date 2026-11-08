@@ -70,6 +70,84 @@ final class JournalTests: XCTestCase {
     XCTAssertEqual(try reopened.begin(id: "b", fingerprint: "f"), .started)
   }
 
+  /// A crash in the middle of a multi-byte character used to make the whole file undecodable,
+  /// and the empty result was compacted over it, so accepted IDs could run again.
+  func testATornMultiByteFinalRecordKeepsEveryEarlierRecord() throws {
+    do {
+      let journal = try InvocationJournal(url: url)
+      _ = try journal.begin(id: "a", fingerprint: "f")
+      try journal.finish(id: "a", outcome: .success("café"))
+      _ = try journal.begin(id: "b", fingerprint: "g")
+    }
+    let handle = try FileHandle(forWritingTo: url)
+    try handle.seekToEnd()
+    try handle.write(contentsOf: Data(#"{"t":"result","id":"b","outcome":{"ok":true,"value":"caf"#.utf8) + Data([0xC3]))
+    try handle.close()
+    let reopened = try InvocationJournal(url: url)
+    XCTAssertEqual(try reopened.begin(id: "a", fingerprint: "f"), .finished(.success("café")))
+    let pending = Dictionary(uniqueKeysWithValues: reopened.unacknowledged().map { ($0.id, $0.outcome) })
+    XCTAssertEqual(pending["a"], .success("café"))
+    XCTAssertEqual(pending["b"]?.errorCode, .uncertain, "the torn result is not trusted; b may have run")
+  }
+
+  /// A journal that exists but cannot be read, or is damaged before its last record, must not be
+  /// replaced by an empty one: the app does not start, and the file is left as it was.
+  func testAJournalThatCannotBeReadStopsStartupAndIsLeftAlone() throws {
+    do {
+      let journal = try InvocationJournal(url: url)
+      _ = try journal.begin(id: "a", fingerprint: "f")
+      try journal.finish(id: "a", outcome: .success(1))
+    }
+    let before = try Data(contentsOf: url)
+    chmod(url.path, 0o000)
+    defer { chmod(url.path, 0o600) }
+    XCTAssertThrowsError(try InvocationJournal(url: url)) { error in
+      XCTAssertEqual((error as? ActionError)?.code, .failed)
+      XCTAssertTrue((error as? ActionError)?.message.contains("could not be read") == true, "\(error)")
+    }
+    chmod(url.path, 0o600)
+    XCTAssertEqual(try Data(contentsOf: url), before)
+
+    let damaged = Data("not a record\n".utf8) + before
+    try damaged.write(to: url)
+    XCTAssertThrowsError(try InvocationJournal(url: url)) { error in
+      XCTAssertTrue((error as? ActionError)?.message.contains("record 1 is damaged") == true, "\(error)")
+    }
+    XCTAssertEqual(try Data(contentsOf: url), damaged)
+  }
+
+  /// After 7 days an unacknowledged result loses its value but not its ID: a late repeat is
+  /// answered `uncertain`, not run. The ID itself is forgotten 30 days after it was accepted.
+  func testAnUnacknowledgedResultLosesItsValueAfter7DaysAndItsIdAfter30() throws {
+    let start = Date(timeIntervalSince1970: 1_000_000)
+    let clock = TestClock(start)
+    do {
+      let journal = try InvocationJournal(url: url, now: { clock.now })
+      _ = try journal.begin(id: "x", fingerprint: "f")
+      try journal.finish(id: "x", outcome: .success(["content": "payload"]))
+    }
+    func reopen(after seconds: TimeInterval) throws -> InvocationJournal {
+      clock.now = start.addingTimeInterval(seconds)
+      return try InvocationJournal(url: url, now: { clock.now })
+    }
+    let day: TimeInterval = 24 * 3600
+
+    let beforeWeek = try reopen(after: 7 * day - 1)
+    XCTAssertEqual(beforeWeek.unacknowledged().first?.outcome, .success(["content": "payload"]))
+
+    let afterWeek = try reopen(after: 7 * day + 1)
+    XCTAssertTrue(afterWeek.unacknowledged().isEmpty, "an expired result is not sent again")
+    guard case .finished(let expired) = try afterWeek.begin(id: "x", fingerprint: "f") else {
+      return XCTFail("an expired id would run again")
+    }
+    assertFailure(expired, .uncertain, containing: "no longer available")
+    XCTAssertEqual(try afterWeek.begin(id: "x", fingerprint: "other"), .mismatch)
+    XCTAssertFalse(try String(contentsOf: url, encoding: .utf8).contains("payload"))
+
+    XCTAssertEqual(try reopen(after: 30 * day - 1).begin(id: "x", fingerprint: "f"), .finished(expired))
+    XCTAssertEqual(try reopen(after: 30 * day + 1).begin(id: "x", fingerprint: "f"), .started)
+  }
+
   func testCompactionForgetsOldEntriesButKeepsRecentOnes() throws {
     let clock = TestClock(Date(timeIntervalSince1970: 1_000_000))
     do {

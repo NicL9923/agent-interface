@@ -31,13 +31,53 @@ public enum ErrorCode: String, Sendable, CaseIterable, Codable {
 }
 
 public struct ActionError: Error, Equatable, Sendable, CustomStringConvertible {
+  /// The longest message the Mac journals or sends, in UTF-16 code units as the server counts.
+  public static let maxMessageLength = 2000
+  /// The longest path quoted inside a message; longer ones keep their start and end.
+  public static let maxQuotedPathLength = 300
+
   public var code: ErrorCode
-  public var message: String
+  /// Always at most `maxMessageLength`, however it is set.
+  public var message: String {
+    didSet { if message.utf16.count > Self.maxMessageLength { message = Self.bounded(message) } }
+  }
   public init(_ code: ErrorCode, _ message: String) {
     self.code = code
-    self.message = message
+    self.message = Self.bounded(message)
   }
   public var description: String { "\(code.rawValue): \(message)" }
+
+  /// Cuts `text` to `maxMessageLength` with a trailing ellipsis, never inside a character.
+  static func bounded(_ text: String) -> String {
+    guard text.utf16.count > maxMessageLength else { return text }
+    return prefix(text, utf16Budget: maxMessageLength - 1) + "…"
+  }
+
+  /// A path short enough to quote: its start and end around an ellipsis.
+  public static func quoted(_ path: String) -> String {
+    guard path.utf16.count > maxQuotedPathLength else { return path }
+    let half = (maxQuotedPathLength - 1) / 2
+    let head = prefix(path, utf16Budget: half)
+    var tail = ""
+    var used = 0
+    for character in path.reversed() {
+      used += character.utf16.count
+      if used > half { break }
+      tail.insert(character, at: tail.startIndex)
+    }
+    return head + "…" + tail
+  }
+
+  private static func prefix(_ text: String, utf16Budget: Int) -> String {
+    var result = ""
+    var used = 0
+    for character in text {
+      used += character.utf16.count
+      if used > utf16Budget { break }
+      result.append(character)
+    }
+    return result
+  }
 }
 
 /// What a finished invocation answers: a value or an error. Stored verbatim in the journal so a

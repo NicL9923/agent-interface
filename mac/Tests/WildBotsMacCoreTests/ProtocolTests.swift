@@ -3,6 +3,18 @@ import XCTest
 @testable import WildBotsMacCore
 
 final class ProtocolTests: XCTestCase {
+  /// The server stores and shows at most 2000 characters (UTF-16, as JavaScript counts them).
+  func testErrorMessagesAreCappedAt2000CharactersHoweverTheyAreSet() {
+    let long = String(repeating: "🙂", count: 1500)
+    let error = ActionError(.failed, long)
+    XCTAssertLessThanOrEqual(error.message.utf16.count, ActionError.maxMessageLength)
+    XCTAssertTrue(error.message.hasSuffix("🙂…"), "cut between characters, with an ellipsis")
+    var changed = ActionError(.failed, "short")
+    changed.message = long
+    XCTAssertLessThanOrEqual(changed.message.utf16.count, ActionError.maxMessageLength)
+    XCTAssertEqual(ActionError(.failed, "short").message, "short")
+  }
+
   func testIgnoresFramesThatAreNotUsableMessages() {
     let cases: [(String, String)] = [
       ("not json", "not a JSON object"),

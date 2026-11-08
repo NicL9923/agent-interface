@@ -13,13 +13,18 @@ public final class FolderHandle: @unchecked Sendable {
   private let device: dev_t
   private let inode: ino_t
 
+  /// Opens the folder from `/` one component at a time with `O_NOFOLLOW`. A symbolic link
+  /// anywhere in the path is refused, not only at its end: with overlapping folders an assistant
+  /// could otherwise swap an ancestor it can write for a link to somewhere it was never given.
   public init(name: String, path: String) throws {
     self.name = name
     self.path = path
     components = pathComponents(path)
-    let descriptor = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
-    guard descriptor >= 0 else {
-      throw ActionError(.notFound, "The folder \(path) could not be opened (\(String(cString: strerror(errno)))).")
+    let descriptor: Int32
+    do {
+      descriptor = try Self.openWithoutLinks(components)
+    } catch let refusal as FolderOpenRefusal {
+      throw ActionError(.notFound, "The folder \(ActionError.quoted(path)) could not be opened: \(refusal.reason).")
     }
     var info = stat()
     fstat(descriptor, &info)
@@ -29,15 +34,41 @@ public final class FolderHandle: @unchecked Sendable {
   }
   deinit { close(fd) }
 
-  /// Refuses when the folder was moved or replaced since it was granted. The command sandbox
-  /// confines by path, so file actions must agree with that path, not follow the old directory.
+  /// Refuses when the folder was moved or replaced since it was granted, including when a folder
+  /// above it became a symbolic link. The command sandbox confines by path, so file actions must
+  /// agree with that path, not follow the old directory.
   func verify() throws {
     var current = stat()
-    guard lstat(path, &current) == 0, (current.st_mode & S_IFMT) == S_IFDIR, current.st_dev == device,
-      current.st_ino == inode
-    else {
-      throw ActionError(.notFound, "The folder \(path) was moved or replaced. Add it again in WildBots.")
+    let descriptor = try? Self.openWithoutLinks(components)
+    defer { if let descriptor { close(descriptor) } }
+    guard let descriptor, fstat(descriptor, &current) == 0, current.st_dev == device, current.st_ino == inode else {
+      throw ActionError(.notFound, "The folder \(ActionError.quoted(path)) was moved or replaced. Add it again in WildBots.")
     }
+  }
+
+  struct FolderOpenRefusal: Error { var reason: String }
+
+  /// Walks `components` from `/` with `openat` and `O_NOFOLLOW | O_DIRECTORY` on every step.
+  static func openWithoutLinks(_ components: [String]) throws -> Int32 {
+    var current = open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+    guard current >= 0 else { throw FolderOpenRefusal(reason: String(cString: strerror(errno))) }
+    var walked = ""
+    for component in components {
+      walked += "/" + component
+      let next = openat(current, component, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+      if next < 0 {
+        let code = errno
+        var info = stat()
+        let isLink = fstatat(current, component, &info, AT_SYMLINK_NOFOLLOW) == 0 && (info.st_mode & S_IFMT) == S_IFLNK
+        close(current)
+        throw FolderOpenRefusal(
+          reason: isLink || code == ELOOP
+            ? "\(ActionError.quoted(walked)) is a symbolic link" : String(cString: strerror(code)).lowercased())
+      }
+      close(current)
+      current = next
+    }
+    return current
   }
 }
 
@@ -46,6 +77,8 @@ public struct ResolvedPath: Equatable {
   public var folder: String
   public var relative: [String]
   public var absolute: String { ([folder] + relative).joined(separator: "/") }
+  /// The absolute path shortened for quoting in an error message.
+  public var display: String { ActionError.quoted(absolute) }
 }
 
 public enum PathResolver {
@@ -74,13 +107,13 @@ public enum PathResolver {
       }
     }
     if let pattern = ProtectedPaths.match(components) {
-      throw ActionError(.protectedPath, "\(pattern.joined(separator: "/")) is protected and never shared with assistants.")
+      throw ActionError(.protectedPath, "\(ActionError.quoted(pattern.joined(separator: "/"))) is protected and never shared with assistants.")
     }
     let containing = folders.filter {
       components.count >= $0.components.count && Array(components.prefix($0.components.count)) == $0.components
     }
     guard let folder = containing.max(by: { $0.components.count < $1.components.count }) else {
-      throw ActionError(.outsideFolders, "/\(components.joined(separator: "/")) is outside the folders shared on this Mac.")
+      throw ActionError(.outsideFolders, "\(ActionError.quoted("/" + components.joined(separator: "/"))) is outside the folders shared on this Mac.")
     }
     return (folder, ResolvedPath(folder: folder.path, relative: Array(components.dropFirst(folder.components.count))))
   }
@@ -90,31 +123,36 @@ public enum PathResolver {
 /// `O_NOFOLLOW` per component, refuses symbolic links, special files and files with more than
 /// one hard link, and writes through a temporary file renamed into place.
 public enum SafeFiles {
-  /// Hashing a whole file is the cost of `read_file`; bigger files are refused up front.
+  /// Hashing a whole file is the cost of `read_file` and of a versioned write; bigger files are
+  /// refused before any of it is read.
   public static let maxHashedFileSize: Int64 = 1 << 30
+
+  /// What a file action answers when Pause or Unlink stopped it before it finished.
+  static let stopped = ActionError(.paused, "The action was stopped because assistants were paused or this Mac was unlinked.")
 
   // MARK: Actions
 
-  public static func readFile(folder: FolderHandle, path: ResolvedPath, offset: Int, length: Int) throws -> JSONValue {
+  public static func readFile(
+    folder: FolderHandle, path: ResolvedPath, offset: Int, length: Int, cancel: CancellationFlag? = nil
+  ) throws -> JSONValue {
     try folder.verify()
-    guard let name = path.relative.last else { throw ActionError(.notAFile, "\(path.absolute) is a folder.") }
+    guard let name = path.relative.last else { throw ActionError(.notAFile, "\(path.display) is a folder.") }
     let parent = try openParent(folder, path)
     defer { close(parent) }
-    let fd = try openRegularFile(parent, name, display: path.absolute)
+    let fd = try openRegularFile(parent, name, display: path.display)
     defer { close(fd) }
     var info = stat()
     fstat(fd, &info)
     let size = Int64(info.st_size)
-    guard size <= maxHashedFileSize else { throw ActionError(.tooLarge, "\(path.absolute) is larger than 1 GiB.") }
     guard Int64(offset) <= size else {
       throw ActionError(.invalidArguments, "offset \(offset) is past the end of the file (\(size) bytes).")
     }
-    let digest = try sha256(fd: fd, size: size)
+    let digest = try sha256(fd: fd, size: size, display: path.display, cancel: cancel)
     let count = Int(min(Int64(length), size - Int64(offset)))
     var slice = Data(count: count)
     if count > 0 {
       let read = slice.withUnsafeMutableBytes { pread(fd, $0.baseAddress, count, off_t(offset)) }
-      guard read == count else { throw ActionError(.failed, "\(path.absolute) changed while it was read.") }
+      guard read == count else { throw ActionError(.failed, "\(path.display) changed while it was read.") }
     }
     let text = String(data: slice, encoding: .utf8)
     return [
@@ -124,41 +162,63 @@ public enum SafeFiles {
     ]
   }
 
+  /// Writes through a temporary file in the same folder, renamed over the target.
+  ///
+  /// Writes from this app to one file take turns (`WriteTurns`), and the version check, the
+  /// temporary file and the rename all happen in one turn, so two versioned writes that expect
+  /// the same version cannot both succeed. A process outside this app that changes the file
+  /// between the hash and the rename is not fenced: POSIX has no compare-and-swap rename, and
+  /// swapping the file out to inspect it would lose that process's newer content instead.
   public static func writeFile(
-    folder: FolderHandle, path: ResolvedPath, content: Data, expectedSha256: String?, createOnly: Bool
+    folder: FolderHandle, path: ResolvedPath, content: Data, expectedSha256: String?, createOnly: Bool,
+    cancel: CancellationFlag? = nil
   ) throws -> JSONValue {
     try folder.verify()
-    guard let name = path.relative.last else { throw ActionError(.notAFile, "\(path.absolute) is a folder.") }
+    guard let name = path.relative.last else { throw ActionError(.notAFile, "\(path.display) is a folder.") }
     let parent = try openParent(folder, path)
     defer { close(parent) }
+    var parentInfo = stat()
+    guard fstat(parent, &parentInfo) == 0 else { throw posixError(errno, display: path.display) }
+    // APFS is usually case- and normalization-insensitive; a wider key only makes more writes wait.
+    let key = "\(parentInfo.st_dev):\(parentInfo.st_ino)/\(name.precomposedStringWithCanonicalMapping.lowercased())"
+    return try WriteTurns.shared.take(key) {
+      try writeInTurn(parent: parent, name: name, path: path, content: content, expectedSha256: expectedSha256,
+        createOnly: createOnly, cancel: cancel)
+    }
+  }
+
+  private static func writeInTurn(
+    parent: Int32, name: String, path: ResolvedPath, content: Data, expectedSha256: String?, createOnly: Bool,
+    cancel: CancellationFlag?
+  ) throws -> JSONValue {
     var existing = stat()
     let exists: Bool
     if fstatat(parent, name, &existing, AT_SYMLINK_NOFOLLOW) == 0 {
       exists = true
-      if createOnly { throw ActionError(.exists, "\(path.absolute) already exists.") }
-      try checkReplaceable(existing, display: path.absolute)
+      if createOnly { throw ActionError(.exists, "\(path.display) already exists.") }
+      try checkReplaceable(existing, display: path.display)
       if let expectedSha256 {
-        let fd = try openRegularFile(parent, name, display: path.absolute)
+        let fd = try openRegularFile(parent, name, display: path.display)
         defer { close(fd) }
         var info = stat()
         fstat(fd, &info)
-        guard try sha256(fd: fd, size: Int64(info.st_size)) == expectedSha256 else {
-          throw ActionError(.conflict, "\(path.absolute) has changed since that version.")
+        guard try sha256(fd: fd, size: Int64(info.st_size), display: path.display, cancel: cancel) == expectedSha256 else {
+          throw ActionError(.conflict, "\(path.display) has changed since that version.")
         }
       }
     } else if errno == ENOENT {
       exists = false
       if expectedSha256 != nil {
-        throw ActionError(.conflict, "\(path.absolute) no longer exists, so that version cannot be replaced.")
+        throw ActionError(.conflict, "\(path.display) no longer exists, so that version cannot be replaced.")
       }
     } else {
-      throw posixError(errno, display: path.absolute)
+      throw posixError(errno, display: path.display)
     }
 
     let temp = ".wildbots-write-\(UUID().uuidString)"
     let mode = exists ? mode_t(existing.st_mode & 0o777) : 0o644
     let tempFd = openat(parent, temp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, mode)
-    guard tempFd >= 0 else { throw posixError(errno, display: path.absolute) }
+    guard tempFd >= 0 else { throw posixError(errno, display: path.display) }
     var renamed = false
     defer { if !renamed { unlinkat(parent, temp, 0) } }
     do {
@@ -169,49 +229,27 @@ public enum SafeFiles {
           let result = write(tempFd, buffer.baseAddress! + written, buffer.count - written)
           if result < 0 {
             if errno == EINTR { continue }
-            throw posixError(errno, display: path.absolute)
+            throw posixError(errno, display: path.display)
           }
           written += result
         }
       }
       fchmod(tempFd, mode)
-      guard fsync(tempFd) == 0 else { throw posixError(errno, display: path.absolute) }
+      guard fsync(tempFd) == 0 else { throw posixError(errno, display: path.display) }
     }
 
-    if let expectedSha256 {
-      // Swap atomically, then check what was swapped out. Another writer between the hash check
-      // above and here is caught, and its file is swapped back.
-      guard renameatx_np(parent, temp, parent, name, UInt32(RENAME_SWAP)) == 0 else {
-        throw errno == ENOENT
-          ? ActionError(.conflict, "\(path.absolute) no longer exists, so that version cannot be replaced.")
-          : posixError(errno, display: path.absolute)
-      }
-      var swapped = stat()
-      var still = false
-      if fstatat(parent, temp, &swapped, AT_SYMLINK_NOFOLLOW) == 0, (swapped.st_mode & S_IFMT) == S_IFREG,
-        swapped.st_nlink == 1
-      {
-        let fd = openat(parent, temp, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
-        if fd >= 0 {
-          defer { close(fd) }
-          still = (try? sha256(fd: fd, size: Int64(swapped.st_size))) == expectedSha256
-        }
-      }
-      if !still {
-        renameatx_np(parent, temp, parent, name, UInt32(RENAME_SWAP))
-        throw ActionError(.conflict, "\(path.absolute) changed while it was being replaced.")
-      }
-    } else if !exists {
+    // Last point where Pause or Unlink can still keep the write from happening.
+    if cancel?.isCancelled == true { throw stopped }
+    if !exists {
       guard renameatx_np(parent, temp, parent, name, UInt32(RENAME_EXCL)) == 0 else {
         throw errno == EEXIST
-          ? ActionError(.exists, "\(path.absolute) was created by something else at the same time.")
-          : posixError(errno, display: path.absolute)
+          ? ActionError(.exists, "\(path.display) was created by something else at the same time.")
+          : posixError(errno, display: path.display)
       }
-      renamed = true
     } else {
-      guard renameat(parent, temp, parent, name) == 0 else { throw posixError(errno, display: path.absolute) }
-      renamed = true
+      guard renameat(parent, temp, parent, name) == 0 else { throw posixError(errno, display: path.display) }
     }
+    renamed = true
     fsync(parent)
     let digest = SHA256.hash(data: content).map { String(format: "%02x", $0) }.joined()
     return [
@@ -225,12 +263,12 @@ public enum SafeFiles {
     if let name = path.relative.last {
       let parent = try openParent(folder, path)
       defer { close(parent) }
-      directory = try openDirectory(parent, name, display: path.absolute)
+      directory = try openDirectory(parent, name, display: path.display)
     } else {
       directory = dup(folder.fd)
     }
     defer { close(directory) }
-    let names = try entryNames(directory, display: path.absolute)
+    let names = try entryNames(directory, display: path.display)
     guard offset <= names.count else {
       throw ActionError(.invalidArguments, "offset \(offset) is past the end of the listing (\(names.count) entries).")
     }
@@ -265,13 +303,13 @@ public enum SafeFiles {
   /// Opens the directory that holds the last component, walking from the folder descriptor.
   static func openParent(_ folder: FolderHandle, _ path: ResolvedPath) throws -> Int32 {
     var current = dup(folder.fd)
-    guard current >= 0 else { throw posixError(errno, display: path.absolute) }
+    guard current >= 0 else { throw posixError(errno, display: path.display) }
     var walked = folder.path
     for component in path.relative.dropLast() {
       walked += "/" + component
       let next: Int32
       do {
-        next = try openDirectory(current, component, display: walked)
+        next = try openDirectory(current, component, display: ActionError.quoted(walked))
       } catch {
         close(current)
         throw error
@@ -348,19 +386,29 @@ public enum SafeFiles {
     return names.sorted()
   }
 
-  static func sha256(fd: Int32, size: Int64) throws -> String {
+  /// Hashes exactly the first `size` bytes, the size the caller validated. Refuses a file over
+  /// `maxHashedFileSize` before reading any of it, stops between chunks when cancelled, and
+  /// refuses a file whose size changed while it was read.
+  static func sha256(fd: Int32, size: Int64, display: String, cancel: CancellationFlag? = nil) throws -> String {
+    guard size <= maxHashedFileSize else { throw ActionError(.tooLarge, "\(display) is larger than 1 GiB.") }
     var hasher = SHA256()
     var buffer = [UInt8](repeating: 0, count: 1 << 20)
     var position: Int64 = 0
-    while true {
-      let count = buffer.withUnsafeMutableBytes { pread(fd, $0.baseAddress, $0.count, off_t(position)) }
+    while position < size {
+      if cancel?.isCancelled == true { throw stopped }
+      let want = Int(min(Int64(buffer.count), size - position))
+      let count = buffer.withUnsafeMutableBytes { pread(fd, $0.baseAddress, want, off_t(position)) }
       if count < 0 {
         if errno == EINTR { continue }
-        throw posixError(errno, display: "the file")
+        throw posixError(errno, display: display)
       }
-      if count == 0 { break }
+      if count == 0 { throw ActionError(.conflict, "\(display) got shorter while it was being read.") }
       hasher.update(data: buffer[0..<count])
       position += Int64(count)
+    }
+    var after = stat()
+    guard fstat(fd, &after) == 0, Int64(after.st_size) == size else {
+      throw ActionError(.conflict, "\(display) changed size while it was being read.")
     }
     return hasher.finalize().map { String(format: "%02x", $0) }.joined()
   }
@@ -381,5 +429,27 @@ public enum SafeFiles {
     case ENAMETOOLONG: return ActionError(.invalidArguments, "\(display) is too long.")
     default: return ActionError(.failed, "\(display): \(String(cString: strerror(code))).")
     }
+  }
+}
+
+/// Lets writes from this app to one file take turns, so a version check and the rename that
+/// depends on it are never interleaved with another write from this app.
+final class WriteTurns: @unchecked Sendable {
+  static let shared = WriteTurns()
+  private let condition = NSCondition()
+  private var busy: Set<String> = []
+
+  func take<T>(_ key: String, _ body: () throws -> T) throws -> T {
+    condition.lock()
+    while busy.contains(key) { condition.wait() }
+    busy.insert(key)
+    condition.unlock()
+    defer {
+      condition.lock()
+      busy.remove(key)
+      condition.broadcast()
+      condition.unlock()
+    }
+    return try body()
   }
 }

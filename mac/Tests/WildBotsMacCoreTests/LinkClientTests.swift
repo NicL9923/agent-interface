@@ -118,14 +118,14 @@ final class LinkClientTests: XCTestCase {
     statuses = StatusLog()
   }
 
-  func client(_ connector: FakeConnector, timing: LinkClient.Timing? = nil) throws -> LinkClient {
+  func client(_ connector: FakeConnector, timing: LinkClient.Timing? = nil, screenshots: HeldScreenshots? = nil) throws -> LinkClient {
     var policy = PolicyDocument()
     policy.folders = [FolderGrant(name: "dev", path: box.granted)]
-    policy.grants = [Grant(assistantId: "patch", assistantName: "Patch", abilities: [.filesRead])]
-    let snapshot = LiveSnapshot(policy: policy, folders: [try box.folder()])
+    policy.grants = [Grant(assistantId: "patch", assistantName: "Patch", abilities: [.filesRead, .screenshot])]
+    let snapshot = LiveSnapshot(policy: policy, folders: [try box.folder()], screenPermission: .granted)
     let dispatcher = Dispatcher(
       journal: journal, activity: ActivityLog(url: URL(fileURLWithPath: box.appData + "/activity.jsonl")),
-      environment: box.environment, screenshots: nil, snapshot: { snapshot })
+      environment: box.environment, screenshots: screenshots, snapshot: { snapshot })
     var defaults = LinkClient.Timing()
     defaults.backoffScale = 0.001
     let statuses = self.statuses!
@@ -175,6 +175,55 @@ final class LinkClientTests: XCTestCase {
     let second = connector.sockets[1]
     XCTAssertEqual(types(second), ["hello", "result"])
     XCTAssertEqual(second.sent[1], first.sent[1])
+    await link.stop()
+  }
+
+  static let screenshotInvoke = #"{"type":"invoke","id":"s1","assistantId":"patch","scheduled":false,"action":"screenshot","args":{}}"#
+
+  /// The server's call is still waiting after a reconnect; a result that finishes then goes out
+  /// on the new socket, not on the one after it.
+  func testAResultThatFinishesAfterAReconnectGoesOutOnTheNewSocket() async throws {
+    let shots = HeldScreenshots()
+    let connector = FakeConnector()
+    let link = try client(connector, screenshots: shots)
+    await link.start()
+    try await waitUntil { connector.sockets.count == 1 }
+    let first = connector.sockets[0]
+    first.push(Self.screenshotInvoke)
+    try await waitUntil { shots.count == 1 }
+    first.serverClose(1006)
+    try await waitUntil { connector.sockets.count == 2 && connector.sockets[1].sent.count == 1 }
+    let second = connector.sockets[1]
+    shots.release()
+    try await waitUntil { second.sent.count == 2 }
+    XCTAssertEqual(types(second), ["hello", "result"])
+    XCTAssertEqual(second.sent[1]["id"], "s1")
+    XCTAssertEqual(second.sent[1]["ok"], true)
+    await link.stop()
+  }
+
+  /// After wake or a network change an open socket may be dead. It is replaced at once, with no
+  /// backoff, and an action still running answers on the replacement.
+  func testANudgeReplacesAnOpenSocketAndKeepsRunningResults() async throws {
+    let shots = HeldScreenshots()
+    let connector = FakeConnector()
+    var timing = LinkClient.Timing()
+    timing.backoffScale = 1000
+    let link = try client(connector, timing: timing, screenshots: shots)
+    await link.start()
+    try await waitUntil { connector.sockets.count == 1 }
+    let first = connector.sockets[0]
+    first.push(#"{"type":"welcome","protocol":1}"#)
+    try await waitUntil { self.statuses.last == .linked }
+    first.push(Self.screenshotInvoke)
+    try await waitUntil { shots.count == 1 }
+    await link.nudge()
+    try await waitUntil(timeout: 5) { connector.sockets.count == 2 }
+    XCTAssertEqual(first.closedByClient, 1000)
+    let second = connector.sockets[1]
+    shots.release()
+    try await waitUntil { second.sent.contains { $0["id"] == "s1" } }
+    XCTAssertEqual(types(second).first, "hello")
     await link.stop()
   }
 
