@@ -80,6 +80,18 @@ export function keepKnownAnswers(stored: Saved | null, next: Saved): Saved {
   const { elsewhere: _, ...known } = next;
   return { ...known, answers: stored.answers };
 }
+/**
+ * What to save when `next` arrives: `next` itself when it may replace the record, with any answers
+ * the record already knew; otherwise, when `next` holds admitted answers the record lacks, the record
+ * as it stands with those answers in it, since its status may not go back but the answers still
+ * belong to it; otherwise nothing.
+ */
+export function nextRecord(stored: Saved | null, next: Saved, change: Change = {}): Saved | null {
+  if (mayReplace(stored, next, change)) return keepKnownAnswers(stored, next);
+  if (!stored?.elsewhere || next.elsewhere || stored.attempt !== next.attempt || progress[next.state] < progress.sent) return null;
+  const { elsewhere: _, ...known } = stored;
+  return { ...known, answers: next.answers };
+}
 const refused = "Hermes didn't take your answers.";
 const unconfirmed = "Hermes hasn't confirmed your answers yet. They're being checked and won't be sent twice.";
 /**
@@ -117,8 +129,8 @@ export function FormReplyCard({ card, botId, messageId, userId, unavailable }: {
   const inFlight = useRef(false);
   const formId = useId();
   const save = (next: Saved, change: Change = {}) => {
-    const stored = readSaved(key);
-    if (mayReplace(stored, next, change)) localSave(key, keepKnownAnswers(stored, next));
+    const record = nextRecord(readSaved(key), next, change);
+    if (record) localSave(key, record);
   };
   // A checking record saved without a usable ID follows the ID its attempt derives.
   const recovering = status === "checking" && !pending;

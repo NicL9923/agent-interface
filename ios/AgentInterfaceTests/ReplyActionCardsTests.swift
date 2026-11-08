@@ -195,6 +195,12 @@ final class ReplyActionCardsTests: XCTestCase {
     var checking = known; checking.state = "checking"
     var otherAttempt = known; otherAttempt.attempt = 0
     for stored in [checking, otherAttempt, elsewhere(known)] { XCTAssertEqual(FormRecords.keepingKnownAnswers(stored, restart), restart) }
+    // Whichever arrives first, the admitted answers and the later status end up in one record.
+    let interruptedKnown = SavedFormReply(attempt: 1, answers: ["city": .text("Austin")], state: "interrupted")
+    XCTAssertEqual(FormRecords.nextRecord(restart, known), interruptedKnown)
+    XCTAssertEqual(FormRecords.nextRecord(known, restart), interruptedKnown)
+    XCTAssertNil(FormRecords.nextRecord(restart, checking))
+    XCTAssertNil(FormRecords.nextRecord(restart, elsewhere(known)))
   }
 
   func testAnswerTextSplitsAndTrimsAsTheWebDoes() throws {

@@ -500,6 +500,16 @@ enum FormRecords {
     var known = next; known.answers = stored.answers; known.elsewhere = nil
     return known
   }
+  /// What to save when `next` arrives, as the web's `nextRecord`: `next` when it may replace the
+  /// record, keeping answers the record knew; otherwise, when `next` holds admitted answers the
+  /// record lacks, the record as it stands with those answers in it; otherwise nothing.
+  static func nextRecord(_ stored: SavedFormReply?, _ next: SavedFormReply, from: Int? = nil, owns: String? = nil) -> SavedFormReply? {
+    if mayReplace(stored, with: next, from: from, owns: owns) { return keepingKnownAnswers(stored, next) }
+    guard let stored, stored.elsewhere == true, next.elsewhere != true, stored.attempt == next.attempt,
+      progress[next.state, default: 0] >= progress["sent"]! else { return nil }
+    var known = stored; known.answers = next.answers; known.elsewhere = nil
+    return known
+  }
   static func mayReplace(_ stored: SavedFormReply?, with next: SavedFormReply, from: Int? = nil, owns: String? = nil) -> Bool {
     guard let stored else { return true }
     if stored.attempt > (from ?? next.attempt) { return false }
@@ -564,9 +574,8 @@ struct FormReplyCardView: View {
   }
   /// Saves unless that would undo another copy's progress; see `FormRecords.mayReplace`.
   private func save(_ next: SavedFormReply, from: Int? = nil, owns: String? = nil) {
-    let stored = readSaved()
-    guard let store, FormRecords.mayReplace(stored, with: next, from: from, owns: owns) else { return }
-    store.save(FormRecords.keepingKnownAnswers(stored, next), storageKey)
+    guard let store, let record = FormRecords.nextRecord(readSaved(), next, from: from, owns: owns) else { return }
+    store.save(record, storageKey)
   }
 
 

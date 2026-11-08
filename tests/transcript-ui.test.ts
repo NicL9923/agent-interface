@@ -3,7 +3,7 @@ import { act, createElement } from "react";
 import type { Root } from "react-dom/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
-import { keepKnownAnswers, mayReplace, type Saved } from "../src/components/FormReplyCard";
+import { keepKnownAnswers, mayReplace, nextRecord, type Saved } from "../src/components/FormReplyCard";
 import { ApiError, api, write } from "../src/client-api";
 import { defaultPreferences } from "../src/shared/types";
 import type { AttentionRequest, Bootstrap, Conversation, Message, ToolCall } from "../src/shared/types";
@@ -1337,6 +1337,38 @@ describe("form replies", () => {
     expect(card().textContent).toContain("Your answers were sent from another tab or device.");
     expect(card().querySelector(".form-reply-answers")).toBeNull();
     expect(JSON.parse(localStorage.getItem(saved)!)).toMatchObject({ state: "sent", elsewhere: true });
+  });
+
+  it("merges admitted answers into a record that only knew they went, whichever arrives first", () => {
+    const record = (state: Saved["state"], answers: Record<string, string>, elsewhere?: boolean): Saved =>
+      ({ attempt: 0, answers, state, ...(elsewhere && { elsewhere: true }) });
+    const marfa = { city: "Marfa" }, blank = { city: "" };
+    // The known acceptance arrives after the restart was saved: the status stays, the answers join it.
+    expect(nextRecord(record("interrupted", blank, true), record("sent", marfa))).toEqual(record("interrupted", marfa));
+    // The restart arrives after the known acceptance: the status moves on, the answers stay.
+    expect(nextRecord(record("sent", marfa), record("interrupted", blank, true))).toEqual(record("interrupted", marfa));
+    // Nothing admitted to merge: another copy's unconfirmed or unknown answers, or another attempt's.
+    expect(nextRecord(record("interrupted", blank, true), record("checking", marfa))).toBeNull();
+    expect(nextRecord(record("interrupted", blank, true), record("sent", blank, true))).toBeNull();
+    expect(nextRecord(record("interrupted", blank, true), { ...record("sent", marfa), attempt: 1 }, { from: 0 })).toEqual({ ...record("sent", marfa), attempt: 1 });
+  });
+
+  it("keeps this copy's admitted answers when a restart was saved before its acceptance arrived", async () => {
+    let finish!: (value: unknown) => void;
+    vi.mocked(write).mockImplementation(async <T>(path: string) => path === "/bots/shared/messages"
+      ? await new Promise<T>(resolve => { finish = value => resolve(value as T); }) : {} as T);
+    await render();
+    await fill();
+    await send();
+    await posted(1);
+    // Meanwhile another copy learned of a restart and saved it, knowing only that answers went.
+    localStorage.setItem(saved, JSON.stringify({ attempt: 0, answers: { city: "", pace: "Relaxed", dog: false }, state: "interrupted", elsewhere: true }));
+    await act(async () => finish({ requestId: await formId(0), status: "accepted" }));
+    expect(JSON.parse(localStorage.getItem(saved)!)).toEqual({ attempt: 0, answers: { city: "Marfa", pace: "Packed", dog: true }, state: "interrupted" });
+    await reload();
+    await waitForUi(() => expect(buttonText("They didn't arrive. Edit and send again")).toBeDefined());
+    await act(async () => buttonText("They didn't arrive. Edit and send again")!.click());
+    expect(card().querySelector<HTMLInputElement>('input[type="text"]')!.value).toBe("Marfa");
   });
 
   it("records a restart learned from another copy's request through a reload, keeping that copy's answers", async () => {
