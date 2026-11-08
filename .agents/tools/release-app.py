@@ -344,7 +344,7 @@ SERVICE_COMMAND = ["systemctl", "--user", "show", "agent-interface.service", "-p
                    "-p", "Environment", "-p", "EnvironmentFiles"]
 
 REMOTE_FACTS = """
-import re, shlex
+import glob, re, shlex
 def service_runtime(command):
     # Real paths, so a symlink or a second path to one binary compares as that binary. `running` and
     # `livePath` are the live process, which a reload without a restart or a retargeted symlink
@@ -377,8 +377,11 @@ def service_runtime(command):
     for entry in shown.get("EnvironmentFiles", []):
         listed = re.fullmatch(r"(.+) \\(ignore_errors=(yes|no)\\)", entry)
         file, ignored = (listed.group(1), listed.group(2) == "yes") if listed else (entry, False)
-        if sets_path(file, ignored):
+        # systemd expands a wildcard and reads each match; no match fails a required entry.
+        matches = sorted(glob.glob(file)) if glob.has_magic(file) else [file]
+        if not matches and not ignored:
             path_files.append(file)
+        path_files += [match for match in matches if sets_path(match, ignored)]
     return {"running": real("/proc/" + pid + "/exe") if pid.isdigit() and pid != "0" else None,
             "livePath": node_on(live), "execStart": real(start.group(1)) if start else None,
             "path": node_on(path), "pathFiles": path_files}

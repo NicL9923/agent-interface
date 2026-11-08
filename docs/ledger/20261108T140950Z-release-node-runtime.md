@@ -19,3 +19,12 @@ Python 3.14.10. No release host, production service or Mac was touched.
   environment files ignored, a missing optional environment file counted as setting `PATH`,
   runtime problems skipping `pathFiles` or `livePath`, and the `EnvironmentFiles` property
   dropped from the systemctl query.
+
+## Review follow-up: environment file wildcards
+
+The GPT-6.1 Sol re-review of `a63b4ea..49ddd0d` closed the symlink and quoting findings and
+found one gap: systemd expands a wildcard `EnvironmentFile`, which the check opened literally.
+Real systemd lists the pattern itself in `EnvironmentFiles=` and applies `PATH` from a match.
+The check now expands the pattern, reads each match, and flags a required pattern with no match.
+Both mutants, no expansion and a required no-match allowed, were confirmed red, then restored.
+`release_app_test`: 49 tests passed.

@@ -799,6 +799,10 @@ class HostPrograms(unittest.TestCase):
             "environment files": (service_show(files=[f"{files / 'path.env'} (ignore_errors=no)", f"{files / 'plain.env'} (ignore_errors=no)",
                                                       f"{files / 'gone.env'} (ignore_errors=yes)", f"{files / 'needed.env'} (ignore_errors=no)"]),
                                   {**on_node, "pathFiles": [str(files / "path.env"), str(files / "needed.env")]}),
+            # A wildcard is expanded as systemd does: each match is read, and a required one with no match fails.
+            "environment file wildcards": (service_show(files=[f"{files / '*.env'} (ignore_errors=yes)", f"{files / 'pl*.env'} (ignore_errors=no)",
+                                                               f"{files / 'none-*.env'} (ignore_errors=yes)", f"{files / 'gone-*.env'} (ignore_errors=no)"]),
+                                           {**on_node, "pathFiles": [str(files / "path.env"), str(files / "gone-*.env")]}),
         }
         for name, (shown, expected) in cases.items():
             code, output, error = run_remote(release_app.REMOTE_FACTS, facts_payload(self.host.base, shown=shown))
