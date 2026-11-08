@@ -169,3 +169,35 @@ Hand-breaks, each alone:
   expanded test window did not contain the old boundary. With the test window corrected it
   failed (lines 82 and 84). Removing the refresh when a read finishes failed the
   assistant-switch test (lines 102 to 105).
+
+## Screenshot review: chips that repeated a reply's attachments
+
+The coordinator saw `pasture-map.png` and `repair-notes.md` both as the reply's attachment rows
+and as chips under it. The shared attribution (`replyArtifacts`, mirrored by
+`Artifacts.replyFiles`) now leaves out every file a reply row of the turn already shows as an
+attachment: the anchor reply's own files, and an earlier reply part's in the same turn, which shows
+them just above. The 4-chip limit and "+N more" count the rest; a turn with nothing left has no
+chip row. The reply-artifacts vectors were rewritten around the rule, with new cases for a reply
+that shows every file and for an earlier reply part.
+
+The recaptured phone screenshot of the panel opened from a chip showed the chosen file selected but
+its row below the visible part of the list: the dialog focuses without scrolling. The panel now
+scrolls that row into view a frame after opening. A first attempt in a layout effect passed in
+jsdom but did nothing in Chromium, because it ran before the parent dialog's `showModal`; the phone
+screenshot caught it.
+
+Checks: `npm test` 153 files and 2,143 tests passed at `86c31cc`; typecheck, lint and build
+passed. iOS, through `mac-heavy-lock.sh` on a fresh WildBots-C simulator: `ArtifactsTests` (10)
+and `ReplyExtrasFlowTests` (2) passed, the UI flow again in dark appearance.
+
+Hand-breaks, each alone and restored:
+
+- Web: letting chips keep files a reply shows failed four vectors and the transcript test.
+  Dropping the panel's scroll call failed the transcript test, at both the first and final version.
+- iOS: the same break in `Artifacts.replyFiles` failed `testReplyFilesMatchTheSharedVectors`. The
+  first try passed only because the source was restored while that build still waited for the
+  lock; rerun with the restore after the run, it failed three vectors.
+
+Screenshots replaced in `shots/C/`: the web chips, focused-from-chip and from-more captures at
+desktop and phone in light and dark, and the iOS chips and focused-from-chip captures in light and
+dark.
