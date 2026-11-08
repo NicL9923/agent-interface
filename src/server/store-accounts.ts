@@ -1,3 +1,4 @@
+import { createHmac, randomBytes } from "node:crypto";
 import type { User } from "../shared/types.js";
 import { httpError } from "./http-error.js";
 import type { StoreDatabase } from "./store-database.js";
@@ -13,6 +14,31 @@ export class AccountRepository {
       )
       .run(user.id, user.email, user.name, user.picture ?? null);
     return user;
+  }
+  /**
+   * A key only this person's clients receive, for deriving their form request IDs. It is an HMAC of
+   * the person's ID under one random secret kept for this installation, so nobody else can work out
+   * those IDs and claim one first, and every device of the same person derives the same ones.
+   */
+  formKey(userId: string): string {
+    return createHmac("sha256", this.formSecret()).update(`wildbots-form-key\u0000${userId}`).digest("base64url");
+  }
+  private secret?: string;
+  /**
+   * Creates the installation's form-key secret if it is missing. The store calls this once when it
+   * opens, beside its other startup writes, so bootstrap only ever reads the secret and never needs
+   * the write lock. Two processes opening at once keep whichever row landed first.
+   */
+  ensureFormSecret() {
+    // Read first: even an ignored INSERT takes the write lock, which only a new installation needs.
+    if (this.db.prepare("SELECT 1 FROM metadata WHERE key='form_key_secret'").get()) return;
+    this.db.prepare("INSERT OR IGNORE INTO metadata VALUES('form_key_secret',?)").run(randomBytes(32).toString("base64url"));
+  }
+  /** The secret, read once per process. A store that opened without creating it is a programming error. */
+  private formSecret(): string {
+    this.secret ??= (this.db.prepare("SELECT value FROM metadata WHERE key='form_key_secret'").get() as { value: string } | undefined)?.value;
+    if (this.secret === undefined) throw new Error("The form-key secret is missing; the store creates it when it opens.");
+    return this.secret;
   }
   users(): User[] {
     return this.db

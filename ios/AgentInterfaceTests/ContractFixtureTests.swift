@@ -210,7 +210,7 @@ private typealias Check = @MainActor (Data) throws -> Void
     "search": check(SearchResponse.self) {
       XCTAssertEqual($0.hits.map(\.routineId), [nil, "routine-morning"]); XCTAssertEqual($0.unavailableBots, ["archive"])
     },
-    "submission": check(Receipt.self) { XCTAssertEqual($0.runId, "run-dinner"); XCTAssertNotNil($0.message) },
+    "submission": check(Receipt.self) { XCTAssertEqual($0.runId, "run-dinner"); XCTAssertNotNil($0.message); XCTAssertEqual($0.text, "Plan five dinners") },
     "today": check(TodayOverview.self) { overview in
       XCTAssertEqual(overview.items.map(\.botId), ["household", "garden", "archive"])
       XCTAssertEqual(overview.recentMessage(overview.items[0])?.id, "message-assistant")

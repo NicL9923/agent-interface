@@ -170,6 +170,7 @@
       "lastConnectedAt": "2026-10-01T11:58:00.000Z"
     },
     "csrfToken": null,
+    "formKey": "normalized-formKey",
     "nativeApp": {
       "latestBuild": 12,
       "updateUrl": "https://testflight.apple.com/join/CONTRACT"

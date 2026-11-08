@@ -331,7 +331,17 @@ describe("private assistants under concurrency and side channels", () => {
     const theirs = (await s.app.inject({ url: `/api/submissions/${requestId}`, headers: s.member })).json();
     expect(theirs).toMatchObject({ status: "uncertain" });
     expect(JSON.stringify(theirs)).not.toContain("run-x");
-    expect((await s.app.inject({ url: `/api/submissions/${requestId}`, headers: s.owner })).json()).toMatchObject({ runId: "run-x" });
+    expect((await s.app.inject({ url: `/api/submissions/${requestId}`, headers: s.owner })).json()).toMatchObject({ runId: "run-x", text: "Hi" });
+    expect(theirs).not.toHaveProperty("text");
+    // Anyone who sees the assistant can follow a retry's receipt, but only its sender learns its text.
+    const retry = randomUUID();
+    s.store.intent({ requestId: retry, botId: "family", senderId: "local-one", text: "Try again", attachments: [], retryOf: "m1" });
+    s.store.receipt({ requestId: retry, status: "accepted", runId: "run-r" });
+    s.runtime.lookupSubmission = async () => null;
+    const followed = (await s.app.inject({ url: `/api/submissions/${retry}`, headers: s.member })).json();
+    expect(followed).toMatchObject({ status: "accepted", runId: "run-r" });
+    expect(followed).not.toHaveProperty("text");
+    expect((await s.app.inject({ url: `/api/submissions/${retry}`, headers: s.owner })).json()).toMatchObject({ text: "Try again" });
     // Kim ran a trial while the assistant was shared; it became private and the routine was deleted.
     const trial = randomUUID();
     s.store.rememberRoutineTrial(trial, "local-two", "r-gone", "family");

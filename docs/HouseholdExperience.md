@@ -143,6 +143,59 @@ and item IDs against that message before saving state. Calendar proposals requir
 review. Web opens an editable Google Calendar draft or downloads an ICS file;
 iOS opens the system event editor, where you choose whether to save.
 
+### Email drafts and forms
+
+Two more card types need no setting. Hermes receives their format with the inline
+view instructions in every WildBots conversation.
+
+- `email`, with a title, a body, and optional `to` and `cc` address lists and
+  subject. **Open in Mail** opens a `mailto:` draft in the device's mail app,
+  **Open in Gmail** opens Gmail's compose window, and **Copy** copies the whole
+  draft as text. Nothing is sent from WildBots.
+- `form`, with a title, optional description and submit label, and 1 to 20
+  fields. Field kinds are `text`, `textarea`, `number`, `date`, `select`,
+  `choice`, `multi` and `toggle`. `select`, `choice` and `multi` carry 1 to 20
+  options. A field can be `required` and can suggest a starting `value`.
+
+**Send answers** posts the answers as your own message, written as the form's
+title and one "Label: answer" line per answered field. It goes through the same
+durable admission as the message box and never reads or changes your draft. If
+you ticked "I've reviewed the task's last actions" after an interruption, the
+answers go under that review too.
+
+The request ID is derived from a key only your devices receive, the message, the
+card and an attempt number, so every tab and device sends the same request, the
+server admits it once, and nobody else can work out the ID to claim it first. An
+answer whose outcome is unknown is checked by that ID, across reloads, until
+Hermes settles it. Answers you have typed are kept on the device until you send
+them. A refusal before Hermes sees the answers keeps the same attempt; a refusal
+from Hermes moves to the next one. A Hermes restart marks the request
+interrupted, which does not say whether the answers arrived, so the card asks you
+to check the conversation and offers to send them again as a new attempt. A sent
+form folds into a read-only list of your answers. Another tab or device that
+opens the form skips refused attempts and finds the one that was sent or
+interrupted.
+
+Web and iOS show both types. iOS opens a draft in Mail or Gmail and sends a form's
+answers under the same request IDs as the web, so a form sent from one is shown as
+sent on the other.
+
+### T3 Code threads
+
+An assistant connected to T3 Code's MCP server can start a T3 Code thread with
+`t3_thread_launch`. The conversation then shows a card between the turn's folded
+work and its reply: the thread's title, the start of its first prompt, the model,
+the workspace and **Open in T3 Code**. While the launch runs, the card says the
+thread is starting; a failed launch shows T3 Code's reason. WildBots does not read
+T3 Code, so the card describes the launch, not the thread's later progress.
+
+T3 Code gives outside MCP clients a hosted `https://app.t3.codes/threads/...`
+link, which offers the desktop app, the mobile app or the browser. A
+`t3-thread://v2/` link is rewritten to that hosted link. Any other link, or one
+that is not HTTPS, opens nothing. The card recognizes the tool under any MCP
+server name Hermes gives it, such as `mcp_t3code_t3_thread_launch`. See
+[connecting T3 Code](Integrations.md#t3-code).
+
 ## Inline views
 
 Web and iOS conversations render an assistant's `wildbots-html` fence as an
@@ -161,7 +214,7 @@ External libraries, fonts and images cannot load. A view has no app API access,
 cookies, local storage or action bridge to Hermes. Controls can calculate,
 filter, expand or draw within the view. They cannot send messages, approve work,
 or save changes. Use the existing checklist, itinerary and calendar cards when
-those saved actions are needed. Keep a short text explanation outside the view
+those saved actions are needed, and a form card to collect answers. Keep a short text explanation outside the view
 for notifications and other clients.
 
 The host supplies `--background`, `--foreground`, `--muted-foreground`, `--card`,

@@ -14,6 +14,8 @@ import type { useDeviceNotifications } from "../components/use-device-notificati
 import { openComputer, usesComputer } from "../components/ComputerHandoffCard";
 import { AgentExchange, isAgentExchange } from "../components/AgentExchange";
 import { ActionReceipt } from "../components/ActionReceipt";
+import { T3ThreadCard } from "../components/T3ThreadCard";
+import { t3ThreadLaunch } from "../shared/t3-code";
 import { When } from "../components/When";
 import { Shimmer } from "../components/Shimmer";
 import { ComputerPeek } from "../components/ComputerPeek";
@@ -42,7 +44,7 @@ import { placeRuns, type RoutineRun } from "../shared/routine-runs";
 import { useRoutineRuns } from "./use-routine-runs";
 import "./transcript.css";
 const activeStates: ActivityState[] = ["thinking", "working", "waiting", "blocked"];
-export function Conversation({ boot, selected, botId, conversation, canonical, echo, state, showActivity, avatarState, connectionLost, offline, appUnavailable, checkingConnection, reconnect, error, setError, notifications, scroll, endSpace, content, history, reply, onScroll, onCreate, onDraft, onRoutineResults, onHideRoutineRuns, computerOpen = false }: {
+export function Conversation({ boot, selected, botId, conversation, canonical, echo, state, showActivity, avatarState, connectionLost, offline, appUnavailable, checkingConnection, reconnect, error, setError, notifications, scroll, endSpace, content, history, reply, onScroll, onCreate, onDraft, onRoutineResults, onHideRoutineRuns, computerOpen = false, reviewed = false }: {
   boot: Bootstrap;
   selected?: Bot;
   botId: string;
@@ -78,6 +80,8 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
   onHideRoutineRuns(routineId: string, routineName: string): void;
   /** The full computer view is open, so the transcript's small live view steps aside. */
   computerOpen?: boolean;
+  /** The person reviewed an interrupted task in the message box; form cards send under the same review. */
+  reviewed?: boolean;
 }) {
   const prefs = boot.preferences;
   const advanced = prefs.presentation === "advanced";
@@ -125,8 +129,8 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
   // Live Talk owns the speaker, so replies are not read aloud while it runs.
   const talking = useTalkLive();
   const speech = useReplySpeech(botId, connectionLost || talking);
-  const tools = useMemo<TranscriptTools>(() => ({ botId, sessionId: conversation?.sessionId, unavailable: connectionLost, quote, announce, speech }),
-    [botId, conversation?.sessionId, connectionLost, quote, announce, speech]);
+  const tools = useMemo<TranscriptTools>(() => ({ botId, sessionId: conversation?.sessionId, unavailable: connectionLost, quote, announce, speech, reviewedInterruption: reviewed, formKey: boot.formKey }),
+    [botId, conversation?.sessionId, connectionLost, quote, announce, speech, reviewed, boot.formKey]);
   const frame = useRef<HTMLDivElement>(null);
   const retry = useTurnRetry({ botId, userId: boot.user.id, canonical, blocked: !!echo || connectionLost || !boot.capabilities.chat.supported,
     resendable: boot.capabilities.idempotency.supported, report: setError });
@@ -457,6 +461,12 @@ const TurnView = memo(function TurnView({ block, advanced, disconnected, name, b
   const fold = work.length || block.reasoning.length ? <TurnWork key="turn-work" work={work} reasoning={block.reasoning}
     messages={block.messages} advanced={advanced} disconnected={disconnected} recipient={name} live={running} /> : null;
   const foldAt = work.length ? block.replyAt : block.messages.find(message => message.role !== "user")?.id;
+  // Work the person should see without opening the fold, such as a T3 Code thread it started, follows it.
+  const shown = work.flatMap(message => {
+    const thread = message.toolCall && t3ThreadLaunch(message.toolCall);
+    return thread ? [<T3ThreadCard key={`t3:${message.id}`} thread={thread} />] : [];
+  });
+  const afterFold = fold ? [fold, ...shown] : [];
   // One keyed list, so the fold keeps its open state when finishing moves it above the reply.
   const rows = block.messages.flatMap((message, position) => {
     // The conversation is with one assistant, so its replies need no name. Consecutive reply parts
@@ -498,9 +508,9 @@ const TurnView = memo(function TurnView({ block, advanced, disconnected, name, b
         when={endsRun ? when : undefined} delivery={delivery}
         actions={!!message.text.trim() && (message.role === "assistant" || own)} />}
     </article>;
-    return message.id === foldAt && fold ? [fold, article] : [article];
+    return message.id === foldAt && fold ? [...afterFold, article] : [article];
   });
-  if (foldAt === undefined && fold) rows.push(fold);
+  if (foldAt === undefined && fold) rows.push(...afterFold);
   return <div className="conversation-turn">{rows}</div>;
 }, sameTurnProps);
 /**

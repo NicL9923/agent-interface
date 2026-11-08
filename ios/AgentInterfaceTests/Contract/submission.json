@@ -5,6 +5,7 @@
     "status": "accepted",
     "runId": "run-dinner",
     "messageId": "message-user",
-    "message": "Hermes accepted the message."
+    "message": "Hermes accepted the message.",
+    "text": "Plan five dinners"
   }
 }
