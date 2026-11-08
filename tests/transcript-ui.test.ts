@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, createElement } from "react";
 import type { Root } from "react-dom/client";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
 import { mayReplace, type Saved } from "../src/components/FormReplyCard";
 import { ApiError, api, write } from "../src/client-api";
@@ -1503,6 +1503,12 @@ describe("reply file chips", () => {
     Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: function(this: HTMLDialogElement) { this.open = false; } });
   });
   const chips = () => [...container.querySelectorAll<HTMLButtonElement>(".reply-file")];
+  const scrolled: string[] = [];
+  beforeEach(() => {
+    scrolled.length = 0;
+    Object.defineProperty(Element.prototype, "scrollIntoView", { configurable: true, value: function(this: Element) { scrolled.push(this.getAttribute("data-file-id") ?? this.tagName); } });
+  });
+  afterEach(() => { Reflect.deleteProperty(Element.prototype, "scrollIntoView"); });
   it("shows a turn's generated files under its last reply and opens the panel on the one chosen", async () => {
     conversation = { ...conversation, messages: [
       prompt("q1", "Photos please", { files: [png("mine")] }),
@@ -1528,6 +1534,8 @@ describe("reply file chips", () => {
     const dialog = container.querySelector<HTMLDialogElement>(".artifacts-dialog")!;
     expect(dialog.open).toBe(true);
     expect(dialog.querySelector('[aria-current="true"]')!.textContent).toContain("p3.png");
+    // Its row is scrolled into the list's view, which on a phone shows only the first rows.
+    expect(scrolled).toEqual(["p3"]);
     expect(dialog.querySelector(".artifact-detail h3")!.textContent).toBe("p3.png");
     await act(async () => labelled("Close artifacts").click());
     expect(container.querySelector(".artifacts-dialog")).toBeNull();
