@@ -1,6 +1,6 @@
 import { approvalAttempt, type ApprovalAttempt } from "./approval-attempt";
 import { matchCombo, shortcuts } from "./shortcuts";
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { lazy, memo, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode, RefCallback, RefObject } from "react";
 import type { ActivityState, Approval, Bootstrap, Bot, FileRef, Message, ToolCall } from "../shared/types";
 import { ApiError, request as apiRequest } from "../client-api";
@@ -42,7 +42,11 @@ import { attentionAnchor, foldSummary, isHumanMessage, quoteBlock, turnDuration,
 import { RoutineRunCard } from "../components/RoutineRunCard";
 import { placeRuns, type RoutineRun } from "../shared/routine-runs";
 import { useRoutineRuns } from "./use-routine-runs";
+import { ReplyFiles } from "./ReplyFiles";
+import { conversationArtifacts, replyArtifacts, type Artifact } from "../shared/artifacts";
 import "./transcript.css";
+// The panel loads when a file chip first opens it, as it does from the assistant's details.
+const ArtifactsPanel = lazy(() => import("../components/Artifacts").then(module => ({ default: module.ArtifactsPanel })));
 const activeStates: ActivityState[] = ["thinking", "working", "waiting", "blocked"];
 export function Conversation({ boot, selected, botId, conversation, canonical, echo, state, showActivity, avatarState, connectionLost, offline, appUnavailable, checkingConnection, reconnect, error, setError, notifications, scroll, endSpace, content, history, reply, onScroll, onCreate, onDraft, onRoutineResults, onHideRoutineRuns, computerOpen = false, reviewed = false }: {
   boot: Bootstrap;
@@ -86,6 +90,11 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
   const prefs = boot.preferences;
   const advanced = prefs.presentation === "advanced";
   const blocks = useMemo(() => turns(conversation, advanced), [conversation, advanced]);
+  // Each reply's files, attributed the same way the Artifacts panel lists them.
+  const replyFiles = useMemo(() => conversation ? replyArtifacts(conversation.messages, conversationArtifacts(conversation.messages, [], conversation.files)) : new Map<string, Artifact[]>(), [conversation]);
+  // The Artifacts panel opened from a chip, on one file or, from "+N more", on the first.
+  const [artifactFocus, setArtifactFocus] = useState<{ fileId?: string } | null>(null);
+  const openFile = useStableCallback((fileId?: string) => setArtifactFocus({ fileId }));
   // Routine runs sit among the turns by time. See src/shared/routine-runs.ts for the rules.
   const hiddenRoutines = useMemo(() => (prefs.hiddenRoutineRuns ?? []).filter(entry => entry.botId === botId).map(entry => entry.routineId), [prefs.hiddenRoutineRuns, botId]);
   const runs = useRoutineRuns({ botId, messages: canonical?.botId === botId ? canonical.messages : undefined, complete: history.complete,
@@ -235,7 +244,8 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
           <>
             <HistoryEdge history={history} scroll={scroll} name={selected.name} disabled={connectionLost} />
             <Turns blocks={blocks} advanced={advanced} disconnected={connectionLost} name={selected.name} botId={botId} userId={boot.user.id}
-              running={running} outgoingId={echo?.request.requestId} outgoing={echo?.status} runSlots={runSlots} runActions={runActions} />
+              running={running} outgoingId={echo?.request.requestId} outgoing={echo?.status} runSlots={runSlots} runActions={runActions}
+              replyFiles={replyFiles} onOpenFile={openFile} />
           </>
         ) : !showActivity ? (
           <div className="empty-state">
@@ -312,6 +322,8 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
         </button>
       )}
       {peeking && selected && <ComputerPeek name={selected.name} />}
+      {artifactFocus && selected && <Suspense fallback={null}><ArtifactsPanel bot={selected} conversation={conversation} unavailable={connectionLost}
+        focus={artifactFocus.fileId} onClose={() => setArtifactFocus(null)} /></Suspense>}
       </div>
     </TranscriptTools.Provider>
   );
@@ -402,6 +414,9 @@ type TurnProps = {
   live: boolean;
   /** The person's sent message still shown from this device, and how far it got. Only the turn that holds it gets these. */
   outgoingId?: string; outgoing?: SentEcho["status"];
+  /** The files this turn produced and the reply they show under, when it has both. */
+  files?: { replyId: string; artifacts: Artifact[] };
+  onOpenFile(fileId?: string): void;
 };
 /** When a turn started, for placing routine runs: its first dated message, shown or folded. */
 const turnTime = (block: Turn) => block.messages.find(message => message.createdAt)?.createdAt
@@ -410,7 +425,8 @@ type RunActions = { onResults(routineId: string, resultId: string): void; onHide
 const runCards = (runs: RoutineRun[] | undefined, botId: string, actions: RunActions) => (runs ?? []).map(run =>
   <RoutineRunCard key={`run:${run.routineId}:${run.id}`} run={run} botId={botId} onResults={actions.onResults} onHide={actions.onHide} />);
 // Memoized so typing in the composer does not re-render the whole transcript.
-const Turns = memo(function Turns({ blocks, running, outgoingId, outgoing, runSlots, runActions, ...shared }: Omit<TurnProps, "block" | "live" | "outgoingId" | "outgoing"> & {
+const Turns = memo(function Turns({ blocks, running, outgoingId, outgoing, runSlots, runActions, replyFiles, ...shared }: Omit<TurnProps, "block" | "live" | "outgoingId" | "outgoing" | "files"> & {
+  replyFiles: Map<string, Artifact[]>;
   blocks: Turn[];
   /** The latest turn is still working. */
   running: boolean;
@@ -423,8 +439,10 @@ const Turns = memo(function Turns({ blocks, running, outgoingId, outgoing, runSl
   return <>
     {blocks.flatMap((block, index) => {
       const holdsEcho = outgoingId !== undefined && block.messages.some(message => message.id === outgoingId);
+      const reply = block.messages.findLast(message => replyFiles.has(message.id));
       return [...runCards(runSlots[index], shared.botId, runActions), <TurnView key={block.messages[0]?.id || `tools-${index}`} block={block} {...shared} live={running && index === blocks.length - 1}
-        outgoingId={holdsEcho ? outgoingId : undefined} outgoing={holdsEcho ? outgoing : undefined} />];
+        outgoingId={holdsEcho ? outgoingId : undefined} outgoing={holdsEcho ? outgoing : undefined}
+        files={reply && { replyId: reply.id, artifacts: replyFiles.get(reply.id)! }} />];
     })}
     {runCards(runSlots[blocks.length], shared.botId, runActions)}
   </>;
@@ -453,8 +471,10 @@ function sameTurn(a: Turn, b: Turn) {
 }
 const sameTurnProps = (a: TurnProps, b: TurnProps) => a.advanced === b.advanced && a.disconnected === b.disconnected && a.name === b.name
   && a.botId === b.botId && a.userId === b.userId && a.live === b.live && a.outgoingId === b.outgoingId && a.outgoing === b.outgoing
-  && sameTurn(a.block, b.block);
-const TurnView = memo(function TurnView({ block, advanced, disconnected, name, botId, userId, live: running, outgoingId, outgoing }: TurnProps) {
+  && a.onOpenFile === b.onOpenFile && sameFiles(a.files, b.files) && sameTurn(a.block, b.block);
+const sameFiles = (a: TurnProps["files"], b: TurnProps["files"]) => a === b || !!a && !!b && a.replyId === b.replyId
+  && a.artifacts.length === b.artifacts.length && a.artifacts.every((artifact, index) => sameFile(artifact.file, b.artifacts[index].file));
+const TurnView = memo(function TurnView({ block, advanced, disconnected, name, botId, userId, live: running, outgoingId, outgoing, files: turnFiles, onOpenFile }: TurnProps) {
   const work = [...block.tools.values()];
   // A turn's intermediate work folds into one row: before the reply that follows the work, before the
   // first reply when there is only reasoning, or at the end.
@@ -504,6 +524,7 @@ const TurnView = memo(function TurnView({ block, advanced, disconnected, name, b
         own ? <div className="message-bubble"><div className="message-text">{message.text}</div>{files}</div> : <div className="message-text">{message.text}</div>
       )}
       {!own && files}
+      {turnFiles?.replyId === message.id && !streaming && <ReplyFiles artifacts={turnFiles.artifacts} onOpen={onOpenFile} />}
       {!exchange && !streaming && (reply || own) && <MessageMeta message={message} own={own}
         when={endsRun ? when : undefined} delivery={delivery}
         actions={!!message.text.trim() && (message.role === "assistant" || own)} />}

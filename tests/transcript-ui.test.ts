@@ -1462,3 +1462,49 @@ describe("email drafts", () => {
     expect(buttonText("Copied")).toBeDefined();
   });
 });
+
+describe("reply file chips", () => {
+  const png = (id: string) => ({ id, name: `${id}.png`, mime: "image/png", url: `/api/files/${id}` });
+  beforeEach(() => {
+    Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: function(this: HTMLDialogElement) { this.open = true; } });
+    Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: function(this: HTMLDialogElement) { this.open = false; } });
+  });
+  const chips = () => [...container.querySelectorAll<HTMLButtonElement>(".reply-file")];
+  it("shows a turn's generated files under its last reply and opens the panel on the one chosen", async () => {
+    conversation = { ...conversation, messages: [
+      prompt("q1", "Photos please", { files: [png("mine")] }),
+      { id: "t1", role: "tool", text: "rendered", files: [png("tool-made")] },
+      answer("a1", "Working on it"),
+      answer("a2", "Here they are", { files: [png("p1"), png("p2"), png("p3"), png("p4")] }),
+      prompt("q2", "Thanks"), answer("a3", "Anytime"),
+    ] };
+    await render();
+    // Only the turn's last reply carries them; the person's own photo is never one.
+    const group = container.querySelector('[data-message-id="a2"] .reply-files')!;
+    expect(container.querySelectorAll(".reply-files")).toHaveLength(1);
+    expect([...group.querySelectorAll(".reply-file-name")].map(name => name.textContent)).toEqual(["tool-made.png", "p1.png", "p2.png", "p3.png"]);
+    const more = chips().at(-1)!;
+    expect(more.textContent).toBe("+1 more");
+    await act(async () => chips()[2].click());
+    // The panel loads on first use.
+    await waitForUi(() => expect(container.querySelector(".artifacts-dialog")).not.toBeNull(), 5000);
+    const dialog = container.querySelector<HTMLDialogElement>(".artifacts-dialog")!;
+    expect(dialog.open).toBe(true);
+    expect(dialog.querySelector('[aria-current="true"]')!.textContent).toContain("p2.png");
+    expect(dialog.querySelector(".artifact-detail h3")!.textContent).toBe("p2.png");
+    await act(async () => labelled("Close artifacts").click());
+    expect(container.querySelector(".artifacts-dialog")).toBeNull();
+    // "+N more" opens the whole list on its first file.
+    await act(async () => more.click());
+    await waitForUi(() => expect(container.querySelector(".artifacts-dialog")).not.toBeNull());
+    expect(container.querySelector('.artifacts-dialog [aria-current="true"]')!.textContent).toContain("mine.png");
+  });
+  it("shows no chips for a turn that produced no files or has no reply yet", async () => {
+    conversation = { ...conversation, activity: { state: "working", runId: "r" }, messages: [
+      prompt("q1", "Hi"), answer("a1", "Hello"),
+      prompt("q2", "Make one"), { id: "t1", role: "tool", text: "", files: [png("pending")] },
+    ] };
+    await render();
+    expect(container.querySelector(".reply-files")).toBeNull();
+  });
+});

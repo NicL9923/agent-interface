@@ -1,0 +1,471 @@
+{
+ "comment": "Shared by tests/reply-artifacts.test.ts (src/shared/artifacts.ts) and ArtifactsTests.swift (Artifacts.list and Artifacts.replyFiles). Each case lists the panel's files with their source, and the file IDs whose chips show under each reply.",
+ "cases": [
+  {
+   "name": "a tool's file and the reply's file show under the reply",
+   "messages": [
+    {
+     "id": "u1",
+     "role": "user",
+     "text": "Chart it"
+    },
+    {
+     "id": "t1",
+     "role": "tool",
+     "text": "done",
+     "files": [
+      {
+       "id": "chart",
+       "name": "chart.png",
+       "mime": "image/png"
+      }
+     ]
+    },
+    {
+     "id": "a1",
+     "role": "assistant",
+     "text": "Here it is",
+     "files": [
+      {
+       "id": "notes",
+       "name": "notes.plain",
+       "mime": "text/plain"
+      }
+     ]
+    }
+   ],
+   "artifacts": [
+    [
+     "chart",
+     "Generated"
+    ],
+    [
+     "notes",
+     "Generated"
+    ]
+   ],
+   "replies": {
+    "a1": [
+     "chart",
+     "notes"
+    ]
+   }
+  },
+  {
+   "name": "a file the person shared is never a chip, even when the assistant hands it back",
+   "messages": [
+    {
+     "id": "u1",
+     "role": "user",
+     "text": "Fix this",
+     "files": [
+      {
+       "id": "photo",
+       "name": "photo.png",
+       "mime": "image/png"
+      }
+     ]
+    },
+    {
+     "id": "a1",
+     "role": "assistant",
+     "text": "Fixed",
+     "files": [
+      {
+       "id": "photo",
+       "name": "photo.png",
+       "mime": "image/png"
+      },
+      {
+       "id": "fixed",
+       "name": "fixed.png",
+       "mime": "image/png"
+      }
+     ]
+    }
+   ],
+   "artifacts": [
+    [
+     "photo",
+     "Shared"
+    ],
+    [
+     "fixed",
+     "Generated"
+    ]
+   ],
+   "replies": {
+    "a1": [
+     "fixed"
+    ]
+   }
+  },
+  {
+   "name": "a file mentioned again in a later turn stays with the turn it first appeared in",
+   "messages": [
+    {
+     "id": "u1",
+     "role": "user",
+     "text": "One"
+    },
+    {
+     "id": "a1",
+     "role": "assistant",
+     "text": "First",
+     "files": [
+      {
+       "id": "plan",
+       "name": "plan.pdf",
+       "mime": "application/pdf"
+      }
+     ]
+    },
+    {
+     "id": "u2",
+     "role": "user",
+     "text": "Again"
+    },
+    {
+     "id": "a2",
+     "role": "assistant",
+     "text": "Same file",
+     "files": [
+      {
+       "id": "plan",
+       "name": "plan.pdf",
+       "mime": "application/pdf"
+      }
+     ]
+    }
+   ],
+   "artifacts": [
+    [
+     "plan",
+     "Generated"
+    ]
+   ],
+   "replies": {
+    "a1": [
+     "plan"
+    ]
+   }
+  },
+  {
+   "name": "a turn still working without a reply has no chips",
+   "messages": [
+    {
+     "id": "u1",
+     "role": "user",
+     "text": "Go"
+    },
+    {
+     "id": "t1",
+     "role": "tool",
+     "text": "",
+     "files": [
+      {
+       "id": "draft",
+       "name": "draft.markdown",
+       "mime": "text/markdown"
+      }
+     ]
+    }
+   ],
+   "artifacts": [
+    [
+     "draft",
+     "Generated"
+    ]
+   ],
+   "replies": {}
+  },
+  {
+   "name": "chips go under the last reply of a turn with several",
+   "messages": [
+    {
+     "id": "u1",
+     "role": "user",
+     "text": "Go"
+    },
+    {
+     "id": "a1",
+     "role": "assistant",
+     "text": "Starting",
+     "files": [
+      {
+       "id": "early",
+       "name": "early.png",
+       "mime": "image/png"
+      }
+     ]
+    },
+    {
+     "id": "t1",
+     "role": "tool",
+     "text": "",
+     "files": [
+      {
+       "id": "late",
+       "name": "late.mpeg",
+       "mime": "audio/mpeg"
+      }
+     ]
+    },
+    {
+     "id": "a2",
+     "role": "assistant",
+     "text": "Done"
+    }
+   ],
+   "artifacts": [
+    [
+     "early",
+     "Generated"
+    ],
+    [
+     "late",
+     "Generated"
+    ]
+   ],
+   "replies": {
+    "a2": [
+     "early",
+     "late"
+    ]
+   }
+  },
+  {
+   "name": "a subagent row filed as a user message continues the turn",
+   "messages": [
+    {
+     "id": "u1",
+     "role": "user",
+     "text": "Research"
+    },
+    {
+     "id": "a1",
+     "role": "assistant",
+     "text": "Asking a helper",
+     "files": [
+      {
+       "id": "brief",
+       "name": "brief.plain",
+       "mime": "text/plain"
+      }
+     ]
+    },
+    {
+     "id": "s1",
+     "role": "user",
+     "text": "Subagent Task Completed: notes attached"
+    },
+    {
+     "id": "a2",
+     "role": "assistant",
+     "text": "Summary",
+     "files": [
+      {
+       "id": "report",
+       "name": "report.pdf",
+       "mime": "application/pdf"
+      }
+     ]
+    }
+   ],
+   "artifacts": [
+    [
+     "brief",
+     "Generated"
+    ],
+    [
+     "report",
+     "Generated"
+    ]
+   ],
+   "replies": {
+    "a2": [
+     "brief",
+     "report"
+    ]
+   }
+  },
+  {
+   "name": "a scheduled delivery starts its own turn",
+   "messages": [
+    {
+     "id": "u1",
+     "role": "user",
+     "text": "Hi"
+    },
+    {
+     "id": "a1",
+     "role": "assistant",
+     "text": "Hello"
+    },
+    {
+     "id": "c1",
+     "role": "user",
+     "text": "[Cron delivery: Morning brief]"
+    },
+    {
+     "id": "a2",
+     "role": "assistant",
+     "text": "Your brief",
+     "files": [
+      {
+       "id": "brief",
+       "name": "brief.markdown",
+       "mime": "text/markdown"
+      }
+     ]
+    }
+   ],
+   "artifacts": [
+    [
+     "brief",
+     "Generated"
+    ]
+   ],
+   "replies": {
+    "a2": [
+     "brief"
+    ]
+   }
+  },
+  {
+   "name": "every generated file is listed; the chip limit is the view's",
+   "messages": [
+    {
+     "id": "u1",
+     "role": "user",
+     "text": "Many"
+    },
+    {
+     "id": "a1",
+     "role": "assistant",
+     "text": "Five",
+     "files": [
+      {
+       "id": "p1",
+       "name": "p1.png",
+       "mime": "image/png"
+      },
+      {
+       "id": "p2",
+       "name": "p2.png",
+       "mime": "image/png"
+      },
+      {
+       "id": "p3",
+       "name": "p3.png",
+       "mime": "image/png"
+      },
+      {
+       "id": "p4",
+       "name": "p4.png",
+       "mime": "image/png"
+      },
+      {
+       "id": "p5",
+       "name": "p5.png",
+       "mime": "image/png"
+      }
+     ]
+    }
+   ],
+   "artifacts": [
+    [
+     "p1",
+     "Generated"
+    ],
+    [
+     "p2",
+     "Generated"
+    ],
+    [
+     "p3",
+     "Generated"
+    ],
+    [
+     "p4",
+     "Generated"
+    ],
+    [
+     "p5",
+     "Generated"
+    ]
+   ],
+   "replies": {
+    "a1": [
+     "p1",
+     "p2",
+     "p3",
+     "p4",
+     "p5"
+    ]
+   }
+  },
+  {
+   "name": "a conversation file on no message is listed but never a chip",
+   "messages": [
+    {
+     "id": "u1",
+     "role": "user",
+     "text": "Hi"
+    },
+    {
+     "id": "a1",
+     "role": "assistant",
+     "text": "Hello"
+    }
+   ],
+   "files": [
+    {
+     "id": "loose",
+     "name": "loose.png",
+     "mime": "image/png"
+    }
+   ],
+   "artifacts": [
+    [
+     "loose",
+     "Artifact"
+    ]
+   ],
+   "replies": {}
+  },
+  {
+   "name": "a reply that is only a file anchors its chips",
+   "messages": [
+    {
+     "id": "u1",
+     "role": "user",
+     "text": "Image please"
+    },
+    {
+     "id": "a1",
+     "role": "assistant",
+     "text": "",
+     "files": [
+      {
+       "id": "only",
+       "name": "only.png",
+       "mime": "image/png"
+      }
+     ]
+    }
+   ],
+   "artifacts": [
+    [
+     "only",
+     "Generated"
+    ]
+   ],
+   "replies": {
+    "a1": [
+     "only"
+    ]
+   }
+  }
+ ]
+}
