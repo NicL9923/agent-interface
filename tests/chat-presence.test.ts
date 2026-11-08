@@ -40,7 +40,7 @@ it("sends nothing anywhere while the person is reading that chat on any device",
     expect([web, native]).toEqual([[], []]);
     expect(store.outbox()).toHaveLength(0);
     // Another chat and a routine result still notify while this one is open.
-    store.routineRecipients("routine", ["one"]);
+    store.routineRecipients("shared", "routine", ["one"]);
     store.recordEvents([reply("other-chat", { botId: "elsewhere" }), reply("routine", { routineId: "routine" })], "cursor");
     await worker.tick();
     expect(web).toHaveLength(2);
@@ -125,4 +125,16 @@ it("forgets presence and reads with a deleted assistant", () => {
   store.forgetBot("shared");
   expect(store.db.prepare("SELECT count(*) AS n FROM chat_presence UNION ALL SELECT count(*) FROM chat_reads").all()).toEqual([{ n: 0 }, { n: 0 }]);
   store.close();
+});
+
+it("records a queued notification suppressed by reading separately from delivery", async () => {
+  const { store, worker, web, native } = household();
+  try {
+    store.recordEvents([reply("queued-before-reading")], "cursor");
+    store.chatPresence("one", "shared", "desk-tab", "active");
+    await worker.tick();
+    expect([web, native]).toEqual([[], []]);
+    expect(store.db.prepare("SELECT state FROM outbox WHERE event_id=?").get("queued-before-reading"))
+      .toEqual({ state: "suppressed" });
+  } finally { await worker.stop(); store.close(); }
 });

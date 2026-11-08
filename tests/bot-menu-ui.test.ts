@@ -4,7 +4,7 @@ import type { ComponentProps } from "react";
 import type { Root } from "react-dom/client";
 import { beforeEach, expect, it, vi } from "vitest";
 import { defaultPreferences, type Bootstrap } from "../src/shared/types";
-import { mountRoot } from "./ui-harness";
+import { mountRoot, waitForUi } from "./ui-harness";
 
 // The menu code is held back to play a slow network, so these are gestures that beat it.
 const gate = { hold: undefined as Promise<void> | undefined };
@@ -55,7 +55,7 @@ const items = () => [...document.body.querySelectorAll<HTMLElement>('[role="menu
 const wait = (milliseconds: number) => act(async () => { await new Promise(resolve => setTimeout(resolve, milliseconds)); });
 /** Lets the held menu code arrive, as the network eventually delivers it. */
 const arrive = async () => { release(); await act(async () => { await vi.dynamicImportSettled(); }); };
-const opened = (name: string) => vi.waitFor(() => expect(menu()?.getAttribute("aria-label")).toBe(name), { timeout: 5000 });
+const opened = (name: string) => waitForUi(() => expect(menu()?.getAttribute("aria-label")).toBe(name), 5000);
 const touch = (row: Element, type: string, x = 30, y = 40) => act(async () => {
   const event = new Event(type, { bubbles: true, cancelable: true });
   Object.defineProperty(event, "touches", { value: type === "touchend" || type === "touchcancel" ? [] : [{ clientX: x, clientY: y }] });
@@ -74,16 +74,16 @@ it("opens the first right-click menu once the code arrives, without ever showing
   const origin = () => /--transform-origin: ([^;]+)/.exec(menu()?.parentElement?.getAttribute("style") ?? "")?.[1];
   const closeMenu = async () => {
     await act(async () => { document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); });
-    await vi.waitFor(() => expect(menu()).toBeNull());
+    await waitForUi(() => expect(menu()).toBeNull());
   };
   const rightClick = (x: number, y: number) => act(async () => rows()[1].dispatchEvent(new MouseEvent("contextmenu", { clientX: x, clientY: y, button: 2, bubbles: true, cancelable: true })));
-  await vi.waitFor(() => expect(origin()).toBe("1px 168px"));
+  await waitForUi(() => expect(origin()).toBe("1px 168px"));
   await closeMenu();
   await rightClick(100, 180);
-  await vi.waitFor(() => expect(origin()).toBe("1px 168px"));
+  await waitForUi(() => expect(origin()).toBe("1px 168px"));
   await closeMenu();
   await rightClick(300, 400);
-  await vi.waitFor(() => expect(origin()).toBeDefined());
+  await waitForUi(() => expect(origin()).toBeDefined());
   await wait(30);
   expect(origin()).not.toBe("1px 168px");
   await act(async () => items()[0].click());
@@ -137,7 +137,7 @@ it("treats a quick tap or a scroll as a tap or a scroll, never as a long press",
   await wait(520);
   await touch(row, "touchend");
   await arrive();
-  await vi.waitFor(() => expect(rows()[0]).not.toBe(row), { timeout: 5000 });
+  await waitForUi(() => expect(rows()[0]).not.toBe(row), 5000);
   expect(menu()).toBeNull();
   await touch(row, "touchstart");
   await touch(row, "touchend");
@@ -156,7 +156,7 @@ it("keeps focus on a row when the real menu replaces it, but not under a finger"
   expect(rows()[1]).toBe(second);
   expect(rows()[0]).toBe(first);
   await touch(second, "touchend");
-  await vi.waitFor(() => expect(rows()[1]).not.toBe(second), { timeout: 5000 });
+  await waitForUi(() => expect(rows()[1]).not.toBe(second), 5000);
   expect(document.activeElement).toBe(rows()[0]);
   expect(rows()[0].matches(":focus")).toBe(true);
 });

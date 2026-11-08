@@ -158,7 +158,7 @@ private final class AutomationFixtureServer: @unchecked Sendable {
 
   private let path = "/api/bots/ranch/automation"
   // Wire fixture for src/shared/automation.ts and src/server/automation.ts.
-  private func overview(resume: [String: Any]? = nil, canManage: Bool? = true, goalStatus: String = "paused", interrupted: Bool = false) throws -> Data {
+  private func overview(resume: [String: Any]? = nil, canManage: Bool? = true, goalStatus: String = "paused", interrupted: Bool = false, locked: Bool? = nil) throws -> Data {
     var goals: [String: Any] = ["supported": true, "goal": [
       "title": "Maintain the pasture", "status": goalStatus, "turnsUsed": 4, "maxTurns": 20,
       "pausedReason": "Waiting for your approval"]]
@@ -175,6 +175,10 @@ private final class AutomationFixtureServer: @unchecked Sendable {
         "approvalRequired": true],
     ]
     if let canManage { value["canManageTriggers"] = canManage }
+    if let locked {
+      value["skills"] = ["supported": true, "lockSupported": true, "approvalRequired": true, "pending": [] as [Any],
+        "installed": [["name": "ranch/fences", "description": "Fence inspection", "locked": locked]]]
+    }
     return try JSONSerialization.data(withJSONObject: value)
   }
   private var subscription: [String: Any] { [
@@ -254,6 +258,25 @@ private final class AutomationFixtureServer: @unchecked Sendable {
     XCTAssertFalse(absent.goals.supported); XCTAssertNil(absent.goals.goal)
     XCTAssertEqual(absent.goals.reason, "Update Hermes")
     XCTAssertTrue(absent.tasks.items.isEmpty)
+  }
+  func testSkillLockSendsNameAndStateThenShowsWhatHermesSaved() async throws {
+    let older: HermesAutomationOverview = try APIClient.decode(overview(), from: path)
+    XCTAssertNil(older.skills.lockSupported); XCTAssertNil(older.skills.installed.first?.locked)
+    let server = AutomationFixtureServer(), store = try makeStore(client(server))
+    defer { AutomationFixtureProtocol.remove(server) }
+    server.enqueue("GET", path, try overview(locked: false))
+    server.enqueue("PUT", path + "/skills/lock", Data(#"{"ok":true,"name":"ranch/fences","locked":true}"#.utf8))
+    server.enqueue("GET", path, try overview(locked: true))
+    let control = HermesAutomationControls(botId: "ranch")
+    let loaded = await control.refresh(store); XCTAssertTrue(loaded)
+    XCTAssertEqual(control.value?.skills.lockSupported, true); XCTAssertEqual(control.value?.skills.installed.first?.locked, false)
+    let result: HermesSkillLock? = await control.change(store, "/skills/lock", HermesSkillLockInput(name: "ranch/fences", locked: true), method: "PUT")
+    XCTAssertEqual(result?.locked, true)
+    let sent = try XCTUnwrap(server.requests.first { $0.httpMethod == "PUT" })
+    XCTAssertEqual(sent.url?.path, path + "/skills/lock")
+    XCTAssertEqual(try body(sent) as NSDictionary, ["name": "ranch/fences", "locked": true] as NSDictionary)
+    XCTAssertEqual(control.value?.skills.installed.first?.locked, true)
+    XCTAssertEqual(control.notice, "Saved in Hermes.")
   }
   func testDetailRevisionDrivesDecisionsAndTruncatedDiffCannotBeApproved() throws {
     let list: HermesAutomationOverview = try APIClient.decode(overview(), from: path)

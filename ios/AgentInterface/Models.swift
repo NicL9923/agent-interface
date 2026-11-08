@@ -126,6 +126,8 @@ enum CapabilityKey: String, CaseIterable {
   case chat, steering, approvals, uploads, generatedFiles, botConfiguration, tools, skills
   case routines, durableEvents, idempotency, imageGeneration, stop, portraitGeneration
   case avatarMetadata
+  /// Live Talk is web-only for now; the app decodes it so the contract stays exact.
+  case liveVoice
 }
 /// The bot settings tabs that load a catalog from the server; each is named for its capability.
 enum CatalogKind: String, CaseIterable {
@@ -153,6 +155,8 @@ struct Bot: Codable, Identifiable, Equatable {
   var modelName: String? = nil
   var provider: String?
   var enabledMcpServers: [String]?
+  /// Every MCP server configured for the profile, enabled or not. Only the detail read sends it; older servers omit it.
+  var availableMcpServers: [String]? = nil
   var shared: Bool
   var ownerId: String?
   var avatar: AvatarConfig?
@@ -354,6 +358,8 @@ struct Attention: Codable, Identifiable, Equatable {
   var questions: [Question]?
   var secure: SecureRequest? = nil
   var computer: ComputerHandoff? = nil
+  var connection: ConnectionRequest? = nil
+  var terminal: TerminalRequest? = nil
 }
 /// What this device reports about the chat on screen: reading it, or gone after reading it.
 struct ChatPresenceReport: Codable, Equatable {
@@ -766,6 +772,27 @@ struct ComputerStatus: Decodable, Equatable {
   var running: Bool? = nil
   var reason: String?
   var control: Control
+  /// Absent from older servers. The system terminal, for terminal administrators.
+  var terminal: Terminal? = nil
+  struct Terminal: Decodable, Equatable {
+    var available: Bool
+    /// Blank when this person may not use the shell.
+    var target: String = ""
+    var reason: String? = nil
+    /// The server wants a sign-in confirmed in the last 2 hours before it opens a shell.
+    var confirmationRequired: Bool? = nil
+    init(from decoder: Decoder) throws {
+      let values = try decoder.container(keyedBy: CodingKeys.self)
+      available = try values.decode(Bool.self, forKey: .available)
+      target = try values.decodeIfPresent(String.self, forKey: .target) ?? ""
+      reason = try values.decodeIfPresent(String.self, forKey: .reason)
+      confirmationRequired = try values.decodeIfPresent(Bool.self, forKey: .confirmationRequired)
+    }
+    init(available: Bool, target: String = "", reason: String? = nil, confirmationRequired: Bool? = nil) {
+      self.available = available; self.target = target; self.reason = reason; self.confirmationRequired = confirmationRequired
+    }
+    private enum CodingKeys: String, CodingKey { case available, target, reason, confirmationRequired }
+  }
   /// What the Settings row says under "Computer", worded like the web panel.
   var detail: String {
     guard available else { return reason?.isEmpty == false ? reason! : "Desktop unavailable" }
@@ -797,6 +824,8 @@ struct Bootstrap: Codable, Equatable {
   subscript(capability key: CapabilityKey) -> Capability? { capabilities[key.rawValue] }
   var connection: RuntimeStatus
   var csrfToken: String?
+  /// This person's private key for deriving form request IDs. A server from before form cards omits it.
+  var formKey: String?
   /// Present when the host publishes the latest distributed iOS build.
   var nativeApp: NativeAppInfo?
 }
@@ -825,6 +854,8 @@ struct Routine: Codable, Identifiable {
   var schedule: String
   var enabled: Bool
   var recipientIds: [String]?
+  /// Group chats this routine also posts its results in. Nil when the server could not say, and then never sent.
+  var roomIds: [String]?
   var skills: [String]?
   var model: String?
   var provider: String?
@@ -837,9 +868,11 @@ struct Routine: Codable, Identifiable {
   var lastStatus: String?
   var lastError: String?
   var lastDeliveryError: String?
+  /// A run is in flight now, which Stop run can end. Read only.
+  var running: Bool?
   enum CodingKeys: String, CodingKey {
-    case id, botId, name, prompt, schedule, enabled, recipientIds, skills, model, provider
-    case enabledToolsets, script, noAgent, contextFrom, nextRunAt, lastRunAt, lastStatus, lastError, lastDeliveryError
+    case id, botId, name, prompt, schedule, enabled, recipientIds, roomIds, skills, model, provider
+    case enabledToolsets, script, noAgent, contextFrom, nextRunAt, lastRunAt, lastStatus, lastError, lastDeliveryError, running
   }
   // Explicit null releases an override; synthesized encodeIfPresent would omit it
   // and native PUT would retain the old value. Unknown native fields stay server-side.
@@ -852,6 +885,7 @@ struct Routine: Codable, Identifiable {
     try c.encode(schedule, forKey: .schedule)
     try c.encode(enabled, forKey: .enabled)
     try c.encodeIfPresent(recipientIds, forKey: .recipientIds)
+    try c.encodeIfPresent(roomIds, forKey: .roomIds)
     try c.encodeIfPresent(skills, forKey: .skills)
     try c.encode(model, forKey: .model)
     try c.encode(provider, forKey: .provider)
@@ -867,7 +901,7 @@ struct Routine: Codable, Identifiable {
   }
   static func empty(botId: String) -> Routine {
     Routine(
-      id: "", botId: botId, name: "", prompt: "", schedule: "", enabled: true, recipientIds: [], contextFrom: ["self"])
+      id: "", botId: botId, name: "", prompt: "", schedule: "", enabled: true, recipientIds: [], roomIds: [], contextFrom: ["self"])
   }
 }
 struct Receipt: Codable, Equatable {
@@ -876,6 +910,8 @@ struct Receipt: Codable, Equatable {
   var runId: String?
   var messageId: String?
   var message: String?
+  /// The text the server recorded under this request ID, sent only to its sender by `GET /submissions/:id`.
+  var text: String? = nil
 }
 /// A failed turn's retry as the server records it: the receipt of the request that claimed the turn.
 struct RetryClaim: Codable, Equatable {
@@ -1044,6 +1080,8 @@ enum SignInRenewal {
   }
 }
 struct EmptyResponse: Codable { var ok: Bool? }
+/// `POST /routines/:id/stop`: whether a run was in flight to stop.
+struct StopRunResponse: Decodable { var stopped: Bool }
 struct PushConfig: Codable {
   var available: Bool
   var environment: String?
@@ -1074,6 +1112,8 @@ enum DeviceDefaults {
   static let signedInScope = "connection.signedInScope"
   /// When the sign-in to `server` expires.
   static func expiry(_ server: URL) -> String { "connection.expiry.\(server.absoluteString)" }
+  /// The LAN and tailnet routes `server` advertised last. Not secret: addresses and certificate pins.
+  static func directRoutes(_ server: URL) -> String { "connection.directRoutes.\(server.absoluteString)" }
 }
 
 enum ConnectionAddress {

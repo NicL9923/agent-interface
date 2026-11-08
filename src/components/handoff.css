@@ -7,6 +7,10 @@
 .handoff-state { margin: 12px 0 0; padding: 10px 12px; border-radius: 10px; background: var(--rail); font-size: .875rem; line-height: 1.5; }
 .computer-handoff .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
 .computer-handoff .actions button { min-height: 44px; }
+.terminal-request-command { display: flex; align-items: flex-start; gap: 10px; }
+.terminal-request-command code { flex: 1 1 auto; min-width: 0; padding: 8px 10px; border-radius: 8px; background: var(--rail);
+  font-family: var(--font-mono); font-size: .875rem; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.terminal-request-command button { flex: none; min-height: 36px; }
 .activity-live-computer { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .activity-live-computer .activity-live-tool { min-width: 0; }
 .activity-watch { display: inline-flex; flex: none; align-items: center; gap: 6px; min-height: 32px; padding: 4px 12px;
@@ -15,4 +19,9 @@
   .activity-watch { min-height: 44px; }
   .handoff-ask { grid-template-columns: 1fr; }
   .handoff-ask dd { margin-bottom: .4rem; }
+  .terminal-request-command button { min-height: 44px; }
 }
+/* An assistant's request to set up a connection holds that connection's own setup. */
+.connection-request-setup { margin-top: 12px; }
+.connection-request-setup .integration-group > h3 { display: none; }
+.connection-request-setup .integration-cards { grid-template-columns: minmax(0, 1fr); }

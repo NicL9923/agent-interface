@@ -230,6 +230,24 @@ async def main():
         assert status == 200, decided
         assert call('skill_content', name=name)[1]['content'] == content
         assert call('skill_diff', pendingId=pending_id)[0] == 404
+        # Native skill locks: the lock is profile-scoped, and a locked skill refuses even an approved assistant edit.
+        overview_skills = call('overview')[1]['skills']
+        assert overview_skills.get('lockSupported') is True, overview_skills
+        assert call('skill_lock', profile=OTHER, name=name, locked=True)[0] == 404
+        assert call('skill_lock', name=name, locked=True)[1] == dict(ok=True, name=name, locked=True)
+        assert next(row for row in call('overview')[1]['skills']['installed'] if row['name'] == name)['locked'] is True
+        with _profile_scope(PROFILE):
+            record = wa.stage_write(wa.SKILLS, dict(action='patch', name=name, old_string='Public synthetic skill content.', new_string='Changed while locked.'),
+                                    summary='Public synthetic lock proof', origin='background_review')
+        detail = call('skill_diff', pendingId=record['id'])[1]
+        status, refused = call('skill_decide', pendingId=record['id'], revision=detail['revision'], decision='approve')
+        assert status == 409 and 'locked' in refused['error'], refused
+        assert call('skill_content', name=name)[1]['content'] == content
+        detail = call('skill_diff', pendingId=record['id'])[1]
+        assert call('skill_decide', pendingId=record['id'], revision=detail['revision'], decision='reject')[0] == 200
+        assert call('skill_lock', name=name, locked=False)[0] == 200
+        assert next(row for row in call('overview')[1]['skills']['installed'] if row['name'] == name)['locked'] is False
+        checks['native_skill_lock_refuses_assistant_edits'] = True
         with _profile_scope(PROFILE):
             record = wa.stage_write(wa.SKILLS, dict(action='delete', name=name), summary='Public synthetic reject proof', origin='foreground')
         detail = call('skill_diff', pendingId=record['id'])[1]

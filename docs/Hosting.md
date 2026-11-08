@@ -19,11 +19,43 @@ The shared desktop/browser and the administrators' VPS terminal are documented i
 [Shared computer](SharedComputer.md). Their supervisor is independent of chat
 sessions; its browser data stays in the private shared resource directory.
 
-The app's last recorded runtime pin is Node 24.21.0. Before the next production
-release, verify the app-specific host runtime and update it to Node 24.22.2 if
-needed. The release tool builds with that host binary, and 24.21.0 is outside
-the updated package engine range. Track this prerequisite in [issue #210](https://github.com/NicL9923/agent-interface/issues/210).
-This dependency update does not change the production host.
+The app runs its own Node binary, kept under the application directory's `runtime/`.
+`agent-interface.service` names it in `ExecStart` and `PATH`. Release builds, qualification and
+the guarded deploy use the same binary, recorded as `node` in each release's deploy configuration.
+To change it, as [issue #210](https://github.com/NicL9923/agent-interface/issues/210) asks for
+24.22.2:
+
+1. Install the new release from nodejs.org beside the old one under `runtime/`, after checking
+   the archive against the official `SHASUMS256.txt`.
+2. Point the service at it with a drop-in,
+   `~/.config/systemd/user/agent-interface.service.d/20-node.conf`, keeping the unit's own
+   arguments:
+
+   ```ini
+   [Service]
+   Environment=PATH=APP_BASE/runtime/node-vX.Y.Z-linux-x64/bin:/usr/local/bin:/usr/bin:/bin
+   ExecStart=
+   ExecStart=APP_BASE/runtime/node-vX.Y.Z-linux-x64/bin/node --env-file=APP_BASE/shared/app.env --import tsx src/server/index.ts
+   ```
+
+   The empty `ExecStart=` clears the unit's own command; without it systemd refuses a second one.
+   Set `PATH` here only. systemd applies an `EnvironmentFile` after `Environment=`, so a file that
+   sets `PATH` would override this, and releases refuse a service that has one.
+   Run `systemctl --user daemon-reload`, since a restart alone keeps the command systemd already
+   loaded. Then run `systemctl --user restart agent-interface.service` and check
+   `/api/health/ready`. Confirm the process runs the new binary:
+   `readlink -f /proc/$(systemctl --user show -p MainPID --value agent-interface.service)/exe`.
+   To roll back, remove the drop-in, then reload and restart the same way.
+3. Prepare the next release with `release-app.py prepare COMMIT --node ABSOLUTE_PATH`. The
+   release records the binary that path resolved to when the host built it, and qualification,
+   activation and recovery run that binary even if a symlink in the path is retargeted later.
+
+Preparation refuses a runtime outside `package.json`'s `engines`, and one the app service is not
+wholly on: by real path, its running process, the `node` that process's `PATH` finds, its
+`ExecStart` and the `node` its configured `PATH` finds must all be that binary, and no
+`EnvironmentFile` may set `PATH`. Activation and recovery check again before they change anything, and the build
+and qualification refuse when `node` on their `PATH` is any other binary. A release can't build,
+qualify or deploy with a different Node than production runs.
 
 The app has its own pinned runtime, release directories, private
 configuration and SQLite database under the host user's application directory.
@@ -54,6 +86,204 @@ release was activated.
 
 Secrets, household email addresses, host access details, backups and rollback
 receipts belong in private operating notes. They are not release artifacts.
+
+## Live voice plugin
+
+Live Talk mints short-lived OpenAI Realtime client secrets on the household
+ChatGPT sign-in that Hermes holds for its launch profile. Hermes lets only code
+inside an installed plugin whose `plugin.yaml` declares
+`requires_auth: [openai-codex]` make such a request, and it attaches the
+credential itself. The app's plugin is `src/hermes/wildbots_voice`. Its
+`realtime.py` makes the one request; the add-on in `src/hermes/voice.py` loads
+that file through the plugins link, so the frame Hermes checks is under the
+plugins folder.
+
+The guarded activation links `<HERMES_HOME>/plugins/wildbots-voice` to
+`<app base>/current/src/hermes/wildbots_voice`. The link goes through
+`current`, so every later activation moves it with the release. Activation
+refuses before stopping anything if that path holds a folder or another link.
+It never enables the plugin. Hermes itself lets a linked plugin make the
+credentialed request whether or not it is enabled, so the add-on checks the
+launch profile's `plugins.enabled` and `plugins.disabled` through Hermes's own
+config readers on every status check and again right before each mint. Enabling
+is the consent for the plugin to use the ChatGPT sign-in, so a person does that
+once on the host, then restarts the dashboard. Disabling it stops new sessions
+within the app's 30-second status refresh, and refuses any mint at once:
+
+```sh
+hermes plugins enable wildbots-voice
+systemctl --user restart hermes-dashboard.service
+```
+
+The launch profile must be signed in to ChatGPT (`openai-codex`) in Hermes.
+`GET /api/agent-interface/voice/status` on the service bridge reports
+`{available, reason}`, and the app shows the reason in place of Talk:
+
+| Reason | Meaning and fix |
+| --- | --- |
+| The plugin is not linked into Hermes | The link is missing. Activate a current release. |
+| The plugin link is broken | The link's target is gone, usually a pruned release. Activate a current release. |
+| The plugin links to a different release | The link resolves to another release than the running add-on. Activate the current release again. |
+| The plugin manifest does not ask for the ChatGPT sign-in | The linked `plugin.yaml` lost `requires_auth`. Restore the release. |
+| Enable the wildbots-voice plugin in Hermes | The launch profile's config does not enable it, disables it, or cannot be read. Run the enable command above. |
+| This Hermes version cannot share its ChatGPT sign-in | Hermes lacks `hermes_cli.plugin_provider_requests`. Update Hermes. |
+
+Status does not contact OpenAI or refresh the sign-in. Starting Talk can still
+fail: signed out of ChatGPT answers 409 with "Sign in to ChatGPT in Hermes", a
+plugin disabled since the last status check or refused by Hermes answers 503
+with the enable command, and an OpenAI error answers 502 with only its HTTP status. No
+secret or upstream body is logged or returned.
+
+The browser sends its WebRTC offer straight to `https://api.openai.com`, which
+the document Content-Security-Policy allows in `connect-src`. Caddy needs no
+change.
+
+## Metadata egress floor
+
+The host is an OpenStack instance, and its metadata service at
+`169.254.169.254` serves cloud-init user data and instance details to any local
+process that asks. One Unix account runs everything household-facing: the Hermes
+gateway and dashboard, this app, the shared-computer browser and agent terminal
+tools. URL checks in the browser paths cannot see runtime-built URLs, `curl` or
+Python tools, so the host blocks that account at the network layer.
+
+`.agents/tools/metadata-egress-floor.py` installs a dedicated nftables table,
+`inet agent_interface_metadata`. Its output-hook chain rejects every packet the
+service account's sockets send to `169.254.169.254` or OpenStack's IPv6
+link-local `fe80::a9fe:a9fe`. TCP gets a reset, and everything else gets
+admin-prohibited, so clients fail at once instead of hanging. Only those two
+addresses are blocked. The rest of `169.254.0.0/16` stays reachable, and root,
+including cloud-init, is not affected. The rules file loads only its own table in
+one transaction and never flushes the ruleset, so ufw's iptables-nft rules stay
+untouched.
+
+`install` puts the floor in place five ways:
+
+- The rules live in root-owned `/etc/nftables.d/agent-interface-metadata.nft`.
+- When `/etc/nftables.conf` exists, a marked block at its end includes that file.
+  Ubuntu's `nftables.conf` starts with `flush ruleset`, so the floor then loads in
+  the same transaction as the flush, and any `nftables.service` start, restart or
+  reload brings it back with no gap. The tool backs up the original file once to
+  `/etc/nftables.conf.agent-interface.bak` and checks the edited file with
+  `nft -c` before writing it. The markers are exact whole lines. The same text
+  inside another line is ordinary content. The tool edits the file only when it
+  holds no markers, or exactly one BEGIN line followed by one END line, and then
+  removes exactly those lines. Otherwise it refuses and changes nothing, so a
+  damaged or quoted marker can never make it delete other rules.
+- Debian's `nftables.service` stops with a bare `nft flush ruleset`, and a
+  restart stops it first. A managed drop-in,
+  `/etc/systemd/system/nftables.service.d/agent-interface-metadata-floor.conf`,
+  clears that `ExecStop=`. It runs `nft -f /etc/agent-interface/nftables-stop.nft`
+  instead, which holds `flush ruleset` and an include of the floor file. The flush
+  and the floor commit as one transaction, so no packet passes between them, and
+  a stopped nftables leaves only the floor loaded. The stop file is checked with
+  `nft -c` at install. It lives outside `/etc/nftables.d`, so a wildcard include
+  there can never load its flush.
+- The root oneshot `agent-interface-metadata-floor.service` loads the rules at boot
+  either way, after `nftables.service` and `ufw.service`. It does not follow
+  `nftables.service`: the include already covers that, and following it would
+  carry an nftables restart into the household services. `RefuseManualStop=yes`
+  blocks `systemctl stop` and `restart` of the unit. Reapply it with
+  `systemctl reload`.
+- A drop-in makes the service account's systemd manager, `user@UID.service`,
+  require that unit and start after it.
+- A sudo rule lets the service account run exactly
+  `nft -j list table inet agent_interface_metadata`, read-only, so release checks
+  can compare the live rules.
+
+**The drop-in fails closed.** If the floor cannot load at boot, the service
+account's manager does not start, and Hermes, the app and the shared browser stay
+down. Find the cause with `sudo journalctl -b -u agent-interface-metadata-floor`,
+fix it, then run
+`sudo systemctl start agent-interface-metadata-floor.service user@UID.service`.
+SSH sign-in and `sudo` for that account should still work without its manager,
+but that is untested here, so keep the provider's console as the fallback. In an
+emergency, `sudo metadata-egress-floor.py remove`, or deleting
+`/etc/systemd/system/user@UID.service.d/agent-interface-metadata-floor.conf` and
+running `systemctl daemon-reload`, starts the services without the floor.
+
+Install it before preparing a release, from any checkout that has the tool. Before
+the first release that carries it, copy the tool from the merged commit:
+
+```sh
+git show origin/main:.agents/tools/metadata-egress-floor.py | ssh <host> 'umask 077 && cat > ~/metadata-egress-floor.py'
+ssh -t <host> 'sudo systemctl is-enabled nftables.service ufw.service; sudo nft list ruleset > ~/nft-before.txt'
+ssh -t <host> 'sudo python3 ~/metadata-egress-floor.py install --user <service user>'
+ssh -t <host> 'sudo python3 ~/metadata-egress-floor.py check --user <service user>'
+```
+
+Install is idempotent. A rerun rewrites nothing unless the uid changed, then
+reloads the table, and it never restarts the unit. It checks the rules with
+`nft -c` and the sudo rule with `visudo -c` before anything goes live, and it
+refuses uid 0. `check` reports `mode.persistence`, either
+`nftables.conf include and boot unit` or `boot unit only`. It exits 1 unless all
+of these hold:
+
+- The installed files are current.
+- `nftables.conf` includes the floor last whenever that file exists or
+  `nftables.service` is enabled.
+- The unit is enabled and active, and the user manager requires it.
+- The live table, read with `nft -j`, has exactly the expected uid, addresses,
+  output hook and reject verdicts.
+- As the service user, `169.254.169.254:80` is refused within a second, and
+  `fe80::a9fe:a9fe` is refused on every interface with a link-local address,
+  unless that interface has no route.
+- DNS resolves and `github.com:443` connects. `--egress HOST:PORT` picks a
+  different target.
+
+Only a fast `ECONNREFUSED`, `EACCES`, `EPERM` or `EHOSTUNREACH` proves the floor.
+A timeout, a slow error or anything else, such as `EMFILE`, is inconclusive and
+fails. `check` warns when the service account can run `sudo` without a password,
+because any agent could then remove the floor. `remove` drops the user-manager
+requirement first, then the include, the table and the tool's files. It finds
+every managed `user@*.service.d` drop-in by name rather than trusting the rules
+file, so it also works when that file is missing. It never stops a unit.
+
+When this was written, the household host had `nftables.service` disabled, so
+the boot unit is what loads the floor there. The include and the stop file only
+take effect if nftables is enabled later. None of this stops root: an
+administrator can still delete the table on purpose, and readiness and release
+checks report it when that happens.
+
+Confirm the rest of the ruleset is unchanged and that the service account now
+fails fast:
+
+```sh
+ssh -t <host> 'sudo nft list ruleset | diff ~/nft-before.txt -'
+ssh <host> 'curl -sS -m 5 http://169.254.169.254/; echo "exit $?"'
+```
+
+The diff should show only the added `agent_interface_metadata` table, and curl
+should report a refused connection with exit 7, not a timeout. Three checks keep
+a missing floor visible:
+
+- App readiness reports `metadataFloor` as `fail` and returns 503 unless every
+  metadata attempt from the app process is explicitly refused.
+- `release-app.py prepare` refuses the host unless the floor is enforcing live.
+  That means the unit is enabled and active, the user manager requires it, the
+  live rules match, and metadata is refused on IPv4 and on each link-local IPv6
+  interface. The check runs as the SSH user, which is the service user.
+- `release-app.py verify` and the post-activation record step check the same
+  thing as `metadataEgressFloor`.
+
+### Limits
+
+The floor matches the uid that owns each socket, in the host's output hook. It
+does not cover:
+
+- A relay that runs as root or as another account and accepts connections from
+  the service account, such as an open forward proxy on loopback. The relay's own
+  connection to metadata is not the service account's.
+- Containers with their own network namespace, whose traffic passes through the
+  forward hook instead.
+- Root processes, other accounts and anything run through `sudo`.
+
+The host documentation lists Caddy, which runs as its own account, as a reverse
+proxy to fixed upstreams. That makes it not an open relay. It also lists WireGuard
+and the Hermes services, which run as the service account and are inside the
+floor. It documents no forward proxy or container runtime. This repository cannot
+prove that none exist, so review the listeners after installing:
+`sudo ss -ltnup | grep -v 'users:(("<service user>"'`.
 
 ## Google setup
 
@@ -118,6 +348,15 @@ runs. Deploys depend on that, including during a Hermes drain.
 - hermes: Hermes has been disconnected for 5 minutes or longer. A Hermes update
   in progress counts as healthy.
 - worker: no successful background pass for 2 minutes, after a 2-minute startup grace.
+- metadataFloor: the app process connected to metadata, so the
+  [metadata egress floor](#metadata-egress-floor) is missing, or could not
+  confirm the floor. It tries `169.254.169.254:80` and `fe80::a9fe:a9fe` on each
+  interface with a link-local address. Only `ECONNREFUSED`, `EACCES`, `EPERM` or
+  `EHOSTUNREACH` within a second counts as refused. A timeout, `EMFILE` or any
+  other error fails as inconclusive, except that a link-local interface with no
+  route passes. The result is reused for 50 seconds, so every minute's check
+  probes afresh. Only production probes; development and tests report
+  `unconfigured`.
 
 It also reports two checks that warn but never fail readiness:
 

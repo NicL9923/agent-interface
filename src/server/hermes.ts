@@ -1,8 +1,10 @@
 import { botIdFor, reasoningLevels, serviceTiers } from "../shared/types.js";
 import type { ActivityState, Avatar, Bot, BotInput, Capabilities, Conversation, ConversationOptions, Inflight, Message, ReadTiming, Routine, Runtime, RuntimeDiscovery, Skill, Submission, SubmissionReceipt, Tool, ToolCall } from '../shared/types.js';
 import ClientWebSocket from 'ws';
+import { TALK_MODEL } from '../shared/voice.js';
 import type { ComputerAttachment, ComputerStatus } from '../shared/computer.js';
-import { withMessageOrigins, wireOrigin } from "../shared/message-origin.js";
+import type { ConnectionRequestResult } from '../shared/integrations.js';
+import { withMessageOrigins } from "../shared/message-origin.js";
 import { decodeAutomation, decodeExperience, readOperationJson } from './hermes-operation-contracts.js';
 import type { ExperienceRequest, ExperienceResult } from '../shared/experience.js';
 import type { AutomationRequest, AutomationResult } from '../shared/automation.js';
@@ -12,11 +14,14 @@ import { httpError } from './http-error.js';
 import { createModelNames } from './model-names.js';
 import { createHermesTransport, TransportError, type Connection, type HermesOptions, type Wire } from './hermes-transport.js';
 import { fileSigner, safeStagedPath, type RegisteredFile } from './hermes-files.js';
-import { applyFrame, bot, emptyLiveState, exposedText, historyMessages, inflightMessage, openRequests, receipt, toolDetails, unbridged, type LiveState } from './hermes-mapping.js';
+import { deliverRooms, withDeliverRooms } from './delivery-targets.js';
+import { applyFrame, bot, emptyLiveState, historyMessages, inflightMessage, openRequests, receipt, unbridged, type LiveState } from './hermes-mapping.js';
 
 export type { HermesOptions } from './hermes-transport.js';
 
-const keys = ['chat', 'steering', 'approvals', 'uploads', 'generatedFiles', 'botConfiguration', 'tools', 'skills', 'routines', 'durableEvents', 'idempotency', 'imageGeneration', 'stop', 'portraitGeneration', 'avatarMetadata'] as const;
+const keys = ['chat', 'steering', 'approvals', 'uploads', 'generatedFiles', 'botConfiguration', 'tools', 'skills', 'routines', 'durableEvents', 'idempotency', 'imageGeneration', 'stop', 'portraitGeneration', 'avatarMetadata', 'liveVoice'] as const;
+// The voice plugin's state changes outside this socket, as when someone enables it, so it is read again this often.
+const LIVE_VOICE_MS = 30_000;
 const supported = (value: boolean, reason?: string) => ({supported: value,
   ...(!value ? {reason: reason ?? 'The connected Hermes backend does not expose this capability.'} : {})});
 // Frames that only extend a running turn. Anything else changes the conversation's structure.
@@ -28,6 +33,8 @@ const SHARED_READ_MS = 3_000;
 // Lazy detail reads share expensive profile files for ten seconds. This app's
 // profile edits invalidate them, and settings catalog reads ask for fresh detail.
 const DESCRIPTION_MS = 10_000;
+// How long a roster read answers later requests when Hermes reported no change meanwhile.
+export const ROSTER_REUSE_MS = 2_000;
 
 export function createHermesRuntime(options: HermesOptions = {}): Runtime {
   let discoveryFull = false;
@@ -41,6 +48,7 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
   const rosterWatchers = new Set<() => void>();
   const rosterChanged = () => {
     rosterRequest = undefined;
+    rosterReuse = undefined;
     for (const listener of rosterWatchers) {
       try { listener(); } catch { /* Isolate listeners. */ }
     }
@@ -51,6 +59,8 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
   const structurallyChanged = (botId: string) => { structuralGenerations.set(botId, (structuralGenerations.get(botId) ?? 0) + 1); };
   const snapshots = new Map<string, {value: Wire; rows: Message[]; activity: Conversation["activity"]}>();
   let capabilityCache: Capabilities | undefined;
+  let voiceStatus: {at: number; value: Capabilities['liveVoice']} | undefined;
+  let voiceRead: Promise<Capabilities['liveVoice']> | undefined;
   let changeEpoch = 0;
   const changeGenerations = new Map<string, number>();
   const sharedReads = new Map<string, {generation: string; at: number; value: Promise<Conversation>}>();
@@ -67,6 +77,9 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
   const descriptionEdits = new Map<string, number>();
   let capabilityRequest: Promise<Capabilities> | undefined;
   let rosterRequest: Promise<Bot[]> | undefined;
+  // The last roster read, reused briefly: one page load asks for it from several routes, and each
+  // read costs Hermes about 50 ms. Every change Hermes reports, and every edit here, drops it.
+  let rosterReuse: {at: number; bots: Bot[]} | undefined;
   const serviceAuth = options.authMode === 'service';
   // Without a bot, every watched conversation may have changed, as when the connection drops or returns.
   function changed(botId?: string, kind?: "inflight"): void {
@@ -87,8 +100,11 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     frame: sessionFrame,
     disconnected(verified) {
       live.clear();
+      owners.clear();
       descriptions.clear();
       capabilityCache = undefined;
+      rosterReuse = undefined;
+      voiceStatus = undefined;
       // A disconnected stream cannot identify which turn is now active. Fresh
       // native snapshots restore current activity, reasoning and tools.
       transient.clear();
@@ -98,7 +114,20 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     connected: () => changed(),
     watching: () => watchers.size > 0 || rosterWatchers.size > 0,
   });
-  const {contract, connect, rpc, http} = transport;
+  const {contract, connect, http} = transport;
+  // Any profile write can change the roster, so once it settles, succeeded or not, the next
+  // roster read goes to Hermes. Covering every write here means a new one cannot forget to.
+  const profileReads = new Set(['profiles.list', 'profiles.describe']);
+  const rpc: typeof transport.rpc = (method, ...rest) => {
+    const call = transport.rpc(method, ...rest);
+    if (method.startsWith('profiles.') && !profileReads.has(method))
+      call.then(dropRoster, dropRoster);
+    return call;
+  };
+  function dropRoster(): void {
+    rosterRequest = undefined;
+    rosterReuse = undefined;
+  }
   const {signFile, fileValue, artifacts} = fileSigner(options.token);
   const toBot = (row: Wire, detail?: Wire) => bot(row, transient.get(live.get(row.name) ?? '')?.state ?? 'idle', detail);
   // Display names come from Hermes's models.dev cache through the add-on. An older add-on answers with an
@@ -183,7 +212,10 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     }
     const superseded = generation !== structuralGenerationOf(botId) || sequence < (appliedOpens.get(botId) ?? 0);
     if (!superseded || !live.has(botId)) live.set(botId, value.session_id);
-    owners.set(value.session_id, botId);
+    for (const [session, owner] of owners) {
+      if (owner === botId && session !== live.get(botId)) owners.delete(session);
+    }
+    if (live.get(botId) === value.session_id) owners.set(value.session_id, botId);
     if (superseded) {
       supersededOpens.add(value);
       return value;
@@ -222,6 +254,7 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
   }
   function edited(name: string): void {
     rosterRequest = undefined;
+    rosterReuse = undefined;
     descriptions.delete(name);
     descriptionEdits.set(name, (descriptionEdits.get(name) ?? 0) + 1);
   }
@@ -275,8 +308,18 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     const profile = `?profile=${encodeURIComponent(input.botId)}`;
     const body: Wire = {
       name: `[bot:${input.botId}] ${input.name}`, prompt: input.prompt,
-      schedule: input.schedule, ...(!id ? {deliver: `bot-chat:${input.botId}`, context_from: ['self']} : {}),
+      schedule: input.schedule, ...(!id ? {deliver: withDeliverRooms(`bot-chat:${input.botId}`, input.roomIds ?? [])!, context_from: ['self']} : {}),
     };
+    // Group chats change only the room targets. The rest of `deliver` is read now, since native PUT replaces it
+    // whole. The profile's job list is read, as routines() does: the service route admits no single-job read.
+    if (id && input.roomIds !== undefined) {
+      const jobs = await (await http(`/api/cron/jobs${profile}`)).json().catch(() => undefined) as Wire;
+      const current = Array.isArray(jobs) ? jobs.find((job: Wire) => (job.id ?? job.job_id) === id) : undefined;
+      if (!current) throw new Error('Hermes did not return the routine. Reload before retrying.');
+      const deliver = withDeliverRooms(current.deliver, input.roomIds);
+      if (deliver === undefined) throw new Error('Hermes returned a delivery setting the app cannot read. Edit this routine in Hermes.');
+      body.deliver = deliver;
+    }
     // Native PUT merges updates. Omitted fields, including future native settings,
     // must stay omitted. null/[] explicitly clear the corresponding override.
     for (const [app, native] of [['skills', 'skills'], ['model', 'model'], ['provider', 'provider'],
@@ -375,6 +418,49 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
       files: rows.flatMap(x => x.files ?? []),
     };
   }
+  async function liveVoice(): Promise<Capabilities['liveVoice']> {
+    if (voiceStatus && Date.now() - voiceStatus.at < LIVE_VOICE_MS) return voiceStatus.value;
+    const at = Date.now();
+    const value = voiceRead ??= (async () => {
+      try {
+        const response = await http('/api/agent-interface/voice/status');
+        const status = await response.json() as Wire;
+        return supported(status.available === true, typeof status.reason === 'string' ? status.reason.slice(0, 500) : 'Hermes live voice is unavailable.');
+      } catch (error) {
+        return supported(false, error instanceof Error && 'statusCode' in error ? error.message : 'Hermes could not report live voice.');
+      }
+    })().finally(() => { voiceRead = undefined; });
+    const result = await value;
+    voiceStatus = {at, value: result};
+    return result;
+  }
+  async function baseCapabilities(): Promise<Capabilities> {
+    if (capabilityRequest) return capabilityRequest;
+    const request = (async () => {
+      let connected = false;
+      try { await connect(); connected = true; } catch { /* Diagnostic supplies the reason. */ }
+      if (connected && capabilityCache) return capabilityCache;
+      const current = transport.connection;
+      const result = Object.fromEntries(keys.map(key => [key, supported(connected && contract.extension, transport.detail ?? 'Hermes is disconnected.')])) as Capabilities;
+      result.idempotency = supported(connected && contract.extension, 'The verified durable admission add-on is required.');
+      result.chat = result.idempotency;
+      result.steering = result.idempotency;
+      result.durableEvents = supported(connected && contract.extension, 'The durable lifecycle journal add-on is required.');
+      let image = false;
+      if (connected) try { image = (await rpc('image.generate', {probe: true})).available === true; } catch { /* A failed probe never enables generation. */ }
+      const usable = connected && transport.connection === current && current?.verified === true &&
+        current.ws.readyState === WebSocket.OPEN && contract.extension;
+      if (!usable) {
+        for (const key of keys) result[key] = supported(false, transport.detail ?? 'Hermes is disconnected.');
+      } else {
+        result.imageGeneration = result.portraitGeneration = supported(image, 'A verified Hermes add-on and a usable image-generation provider are required.');
+        capabilityCache = result;
+      }
+      return result;
+    })();
+    capabilityRequest = request;
+    try { return await request; } finally { if (capabilityRequest === request) capabilityRequest = undefined; }
+  }
   return {
     async routineResults(botId, routineId) {
       return this.experienceRequest!({ operation: 'routine_results', profile: botId, routineId });
@@ -401,12 +487,22 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
           offset = value.next_offset;
         }
         const canSend = capability.driver === true && ['groups.create', 'groups.send', 'groups.stop', 'groups.approve'].every(method => capability.methods?.includes(method));
-        return { supported: true, canSend, rooms, ...(!canSend ? { reason: 'Hermes group history is available. Its group coordinator must be running to create rooms or send messages.' } : {}) };
+        // Room settings and routine posts into rooms arrived in the same Hermes change, behind groups.context.
+        const settings = capability.methods?.includes('groups.context') === true;
+        return { supported: true, canSend, rooms, settings, routineDelivery: settings, ...(!canSend ? { reason: 'Hermes group history is available. Its group coordinator must be running to create rooms or send messages.' } : {}) };
       }
       const room_id = input.roomId;
       if (input.operation === 'state') return rpc('groups.state', { room_id });
       if (input.operation === 'log') return rpc('groups.log', { room_id, since_seq: input.since, limit: 200 });
       const catalog = await rpc('groups.capabilities', {});
+      if (input.operation === 'context') {
+        // Room settings are a room-log write, not a discussion turn, so they need no running coordinator.
+        if (catalog.protocol_version !== 2 || !catalog.methods?.includes('groups.context'))
+          throw httpError(409, 'This Hermes version cannot save group settings. Update Hermes to change them.');
+        // Routing is always sent: Hermes keeps the room's current routing only when it is omitted.
+        return rpc('groups.context', { room_id, event_id: input.requestId, purpose: input.purpose, notes: input.notes,
+          routing: input.routing, lead_member_id: input.leadMemberId });
+      }
       if (catalog.protocol_version !== 2 || catalog.driver !== true) throw httpError(409, 'The Hermes group coordinator is unavailable. Refresh before trying again.');
       if (input.operation === 'create') return rpc('groups.create', { room_id, name: input.name, members: input.members });
       if (input.operation === 'send') return rpc('groups.send', { room_id, event_id: input.requestId, payload: { text: input.text, thread_id: input.threadId } });
@@ -452,31 +548,28 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     status: transport.status,
     reconnect: transport.reconnect,
     async capabilities() {
-      if (capabilityRequest) return capabilityRequest;
-      const request = (async () => {
-        let connected = false;
-        try { await connect(); connected = true; } catch { /* Diagnostic supplies the reason. */ }
-        if (connected && capabilityCache) return capabilityCache;
-        const current = transport.connection;
-        const result = Object.fromEntries(keys.map(key => [key, supported(connected && contract.extension, transport.detail ?? 'Hermes is disconnected.')])) as Capabilities;
-        result.idempotency = supported(connected && contract.extension, 'The verified durable admission add-on is required.');
-        result.chat = result.idempotency;
-        result.steering = result.idempotency;
-        result.durableEvents = supported(connected && contract.extension, 'The durable lifecycle journal add-on is required.');
-        let image = false;
-        if (connected) try { image = (await rpc('image.generate', {probe: true})).available === true; } catch { /* A failed probe never enables generation. */ }
-        const usable = connected && transport.connection === current && current?.verified === true &&
-          current.ws.readyState === WebSocket.OPEN && contract.extension;
-        if (!usable) {
-          for (const key of keys) result[key] = supported(false, transport.detail ?? 'Hermes is disconnected.');
-        } else {
-          result.imageGeneration = result.portraitGeneration = supported(image, 'A verified Hermes add-on and a usable image-generation provider are required.');
-          capabilityCache = result;
-        }
-        return result;
-      })();
-      capabilityRequest = request;
-      try { return await request; } finally { if (capabilityRequest === request) capabilityRequest = undefined; }
+      const base = await baseCapabilities();
+      return {...base, liveVoice: base.chat.supported ? await liveVoice() : supported(false, base.chat.reason)};
+    },
+    async setVoice(botId, voice) {
+      const roster = await rpc('profiles.list', {include_sessions: false});
+      const row = roster.profiles.find((x: Wire) => x.name === botId);
+      if (!row) throw new Error('Unknown Hermes bot.');
+      const meta = row.ui_meta?.agent_interface ?? {};
+      try {
+        const result = await rpc('profiles.configure', {name: botId, ui_meta: {agent_interface: {...meta, voice}},
+          ui_meta_expected_revisions: {agent_interface: row.ui_meta_revisions?.agent_interface ?? 0}});
+        if (!result.ok || result.applied?.ui_meta === false || Object.keys(result.applied?.ui_meta_conflicts ?? {}).length)
+          throw httpError(409, 'This assistant changed on another device. Reload, then choose the voice again.');
+      } finally { edited(botId); }
+    },
+    async realtimeSession(input) {
+      const response = await http('/api/agent-interface/voice/client-secret', {method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({model: TALK_MODEL, ...input})});
+      const value = await response.json().catch(() => undefined) as Wire;
+      if (typeof value?.clientSecret !== 'string' || !Number.isSafeInteger(value.expiresAt) || value.model !== TALK_MODEL || value.voice !== input.voice)
+        throw httpError(502, 'Hermes returned an unreadable voice session.');
+      return {clientSecret: value.clientSecret, expiresAt: value.expiresAt, model: value.model, voice: input.voice};
     },
     async canonicalSubmit() {
       await connect();
@@ -484,6 +577,7 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     },
     async listBots() {
       try { await connect(); } catch { return botCache.map(row => ({...row, activity: 'disconnected' as const})); }
+      if (rosterReuse && Date.now() - rosterReuse.at < ROSTER_REUSE_MS) return rosterReuse.bots.slice();
       if (rosterRequest) return rosterRequest;
       let request!: Promise<Bot[]>;
       request = (async () => {
@@ -492,7 +586,8 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
           const names = new Set(roster.profiles.map((row: Wire) => row.name));
           for (const name of descriptions.keys()) if (!names.has(name)) descriptions.delete(name);
           const bots = await named(roster.profiles.map((row: Wire) => toBot(row)));
-          if (rosterRequest === request) botCache = bots;
+          // A change reported meanwhile cleared rosterRequest, so this read is not reused.
+          if (rosterRequest === request) { botCache = bots; rosterReuse = {at: Date.now(), bots}; }
           return bots;
         } catch { return botCache.map(row => ({...row, activity: 'disconnected' as const})); }
       })();
@@ -765,6 +860,16 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
         if (!['list', 'check'].includes(input.operation)) edited(input.profile);
       }
     },
+    async connectionRequest(input) {
+      try {
+        return await rpc('agent-interface.connection-request', {...input, ...(serviceAuth ? {service_key: options.token} : {})}) as ConnectionRequestResult;
+      } catch (error) {
+        // The add-on's 409 explains a request that changed; keep it for the card.
+        if (error instanceof TransportError && error.rpcCode === 409)
+          throw httpError(409, error.rpcMessage || error.message);
+        throw error;
+      }
+    },
     async computerRequest(input) {
       try {
         return await rpc('agent-interface.computer', {...input, ...(serviceAuth ? {service_key: options.token} : {})}) as ComputerStatus | ComputerAttachment;
@@ -819,10 +924,12 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     async routines(): Promise<Routine[]> {
       const roster = await rpc('profiles.list', {include_sessions: false});
       const all: Routine[] = [];
-      for (const row of roster.profiles) {
-        // Dashboard listing reads native jobs directly. The tool-facing list also
-        // probes machine-wide gateway processes, which is unsuitable for polling.
-        const jobs = await (await http(`/api/cron/jobs?profile=${encodeURIComponent(row.name)}`)).json() as Wire[];
+      // Dashboard listing reads native jobs directly. The tool-facing list also
+      // probes machine-wide gateway processes, which is unsuitable for polling.
+      // Every profile is read at once; results keep roster order.
+      const listings = await Promise.all(roster.profiles.map(async (row: Wire) =>
+        [row, await (await http(`/api/cron/jobs?profile=${encodeURIComponent(row.name)}`)).json() as Wire[]] as const));
+      for (const [row, jobs] of listings) {
         for (const job of jobs) {
           const prefix = `[bot:${row.name}] `;
           all.push({id: job.id ?? job.job_id, botId: row.name,
@@ -831,9 +938,11 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
             skills: job.skills ?? (job.skill ? [job.skill] : []), model: job.model ?? null, provider: job.provider ?? null,
             enabledToolsets: job.enabled_toolsets ?? null, script: job.script ?? null, noAgent: job.no_agent === true,
             contextFrom: typeof job.context_from === 'string' ? [job.context_from] : job.context_from ?? null,
+            roomIds: deliverRooms(job.deliver), delivery: {deliver: job.deliver, failure_deliver: job.failure_deliver, origin: job.origin},
             enabled: job.enabled !== false && job.state !== 'paused',
             nextRunAt: job.next_run_at ?? undefined, lastRunAt: job.last_run_at ?? undefined,
-            lastStatus: job.last_status ?? undefined, lastError: job.last_error ?? undefined, lastDeliveryError: job.last_delivery_error ?? undefined});
+            lastStatus: job.last_status ?? undefined, lastError: job.last_error ?? undefined, lastDeliveryError: job.last_delivery_error ?? undefined,
+            ...(job.live_execution ? {running: true} : {})});
         }
       }
       return all;
@@ -845,9 +954,18 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
       discoveryFull = true;
       discoveryGeneration++;
     },
+    async stopRoutineRun(botId, id) {
+      // Hermes ends the live run and records it as cancelled; the schedule stays as it is.
+      const response = await (await http(`/api/cron/jobs/${encodeURIComponent(id)}/cancel?profile=${encodeURIComponent(botId)}`, {method: 'POST'})).json() as Wire;
+      if (response.error) throw new Error('Hermes could not stop this routine. Reload before retrying.');
+      discoveryFull = true;
+      discoveryGeneration++;
+      return response.cancelled === true;
+    },
     saveRoutine: routineMutation,
-    async deleteRoutine(id) {
-      await http(`/api/cron/jobs/${encodeURIComponent(id)}`, {method: 'DELETE'});
+    async deleteRoutine(id, botId) {
+      // The profile names which assistant's job: Hermes allows one ID in several profiles.
+      await http(`/api/cron/jobs/${encodeURIComponent(id)}?profile=${encodeURIComponent(botId)}`, {method: 'DELETE'});
       discoveryFull = true;
       discoveryGeneration++;
     },

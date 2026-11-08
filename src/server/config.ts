@@ -1,3 +1,11 @@
+import { dirname, join } from "node:path";
+import type { DirectRouteKind } from "../shared/api.js";
+export interface DirectRoutesConfig {
+  kinds: DirectRouteKind[];
+  port: number;
+  /** Holds the listeners' private key and certificate. Owner-private. */
+  stateDirectory: string;
+}
 export interface Config {
   production: boolean;
   host: string;
@@ -26,6 +34,8 @@ export interface Config {
     python: string;
     adminEmails: string[];
   };
+  /** Optional LAN and tailnet listeners the iOS app prefers when it can reach them. */
+  directRoutes?: DirectRoutesConfig;
   /** The newest distributed iOS build and where to get it, for the app's update banner. */
   nativeApp?: { latestBuild: number; updateUrl: string };
   apns?: {
@@ -147,6 +157,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     config.apns = { teamId: env.APNS_TEAM_ID!, keyId: env.APNS_KEY_ID!, topic: env.APNS_TOPIC!,
       privateKeyFile: env.APNS_PRIVATE_KEY_FILE!, environment: env.APNS_ENVIRONMENT as "sandbox" | "production" };
   } else if (env.APNS_ENVIRONMENT) throw new Error("APNs signing settings are required with APNS_ENVIRONMENT");
+  if (env.DIRECT_ROUTES) {
+    const kinds = [...new Set(env.DIRECT_ROUTES.split(",").map(kind => kind.trim()).filter(Boolean))];
+    if (!kinds.length || kinds.some(kind => kind !== "lan" && kind !== "tailnet"))
+      throw new Error("DIRECT_ROUTES must list lan, tailnet or both, separated by commas");
+    const port = Number(env.DIRECT_PORT || 3443);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("DIRECT_PORT must be a port number");
+    if (port === config.port) throw new Error("DIRECT_PORT must differ from PORT");
+    const stateDirectory = env.DIRECT_TLS_DIR || (config.database === ":memory:" ? "" : join(dirname(config.database), "direct-tls"));
+    if (!stateDirectory) throw new Error("DIRECT_TLS_DIR is required when APP_DATABASE is in memory");
+    config.directRoutes = { kinds: kinds as DirectRoutesConfig["kinds"], port, stateDirectory };
+  } else if (env.DIRECT_PORT || env.DIRECT_TLS_DIR) throw new Error("DIRECT_PORT and DIRECT_TLS_DIR require DIRECT_ROUTES");
   if (env.IOS_APP_LATEST_BUILD || env.IOS_APP_UPDATE_URL) {
     if (!env.IOS_APP_LATEST_BUILD || !env.IOS_APP_UPDATE_URL)
       throw new Error("IOS_APP_LATEST_BUILD and IOS_APP_UPDATE_URL must be supplied together");

@@ -86,7 +86,7 @@ struct HermesTriggerSection: View {
           Button("New event trigger", action: create)
             .disabled(disabled || control.loadingTriggerRoutines || control.triggerRoutines.isEmpty || control.secret.value != nil)
           if !control.loadingTriggerRoutines && control.triggerRoutineError == nil && control.triggerRoutines.isEmpty {
-            Text("Create a routine in this assistant's Routines settings first.").font(.footnote).foregroundStyle(Palette.muted)
+            Text("Add a routine in Automation first.").font(.footnote).foregroundStyle(Palette.muted)
           }
         }
       }

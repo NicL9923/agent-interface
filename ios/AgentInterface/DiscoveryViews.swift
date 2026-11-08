@@ -12,6 +12,53 @@ struct SavedPointer: Encodable { var botId: String; var kind: String; var sessio
 struct UsageSummary: Decodable { var botId: String; var sessions: Int; var inputTokens: Int; var outputTokens: Int; var actualCost: Double?; var estimatedCost: Double?; var partial: Bool }
 struct AutomationOverview: Decodable { var routines: [Routine]; var usage: [UsageSummary]; var unavailableBots: [String] }
 struct Starter: Decodable, Identifiable { var id: String; var title: String; var prompt: String }
+/// Mirrors snippetParts in src/shared/discovery.ts. The server sends a search snippet as plain words
+/// that keep Hermes's >>>match<<< markers. Markers count only in order, an opening one then its
+/// closing one, so a stray marker stays as written. Reads at most `limit` characters.
+enum SearchSnippet {
+  struct Part: Equatable { var text: String; var match: Bool }
+  static func parts(_ snippet: String, limit: Int = 300) -> [Part] {
+    var pieces: [Part] = []
+    var rest = Substring(snippet.prefix(limit * 4))
+    while !rest.isEmpty {
+      guard let open = rest.range(of: ">>>"), let close = rest[open.upperBound...].range(of: "<<<") else {
+        pieces.append(Part(text: String(rest), match: false)); break
+      }
+      pieces.append(Part(text: String(rest[..<open.lowerBound]), match: false))
+      pieces.append(Part(text: String(rest[open.upperBound..<close.lowerBound]), match: true))
+      rest = rest[close.upperBound...]
+    }
+    var parts: [Part] = []
+    var used = 0
+    for piece in pieces {
+      var words = piece.text.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+      if parts.isEmpty { words = String(words.drop { $0 == " " }) }
+      if words.isEmpty { continue }
+      // Something is left out, so the last part says so.
+      if used >= limit {
+        if let last = parts.indices.last, !parts[last].text.hasSuffix("…") { parts[last].text += "…" }
+        break
+      }
+      if used + words.count > limit {
+        words = String(words.prefix(limit - used))
+        while words.last == " " { words.removeLast() }
+        words += "…"
+      }
+      used += words.count
+      if let last = parts.indices.last, parts[last].match == piece.match { parts[last].text += words }
+      else { parts.append(Part(text: words, match: piece.match)) }
+    }
+    return parts
+  }
+  /// The snippet with its matches in bold, in the primary color against the muted rest.
+  static func attributed(_ snippet: String) -> AttributedString {
+    parts(snippet).reduce(into: AttributedString()) { result, part in
+      var run = AttributedString(part.text)
+      if part.match { run.inlinePresentationIntent = .stronglyEmphasized; run.foregroundColor = Color.primary }
+      result += run
+    }
+  }
+}
 /// Searches on their way. Any change to the query makes every one still pending stale, and an
 /// answer applies only while the query is still the one it was asked for, success or failure. So a
 /// submitted search overtaken by typing, even back to the query already shown, never replaces it.
@@ -107,7 +154,7 @@ struct DiscoveryView: View {
                 VStack(alignment: .leading, spacing: 4) {
                   Text(hit.title).font(.headline).foregroundStyle(Color.primary)
                   Text(searchMeta(hit)).font(.caption).foregroundStyle(Palette.muted)
-                  Text(String(hit.snippet.replacingOccurrences(of: "<[^>]*>", with: "", options: .regularExpression).prefix(300)))
+                  Text(SearchSnippet.attributed(hit.snippet))
                     .lineLimit(4).font(.footnote).foregroundStyle(Palette.muted)
                 }.frame(maxWidth: .infinity, alignment: .leading)
                 Image(systemName: "chevron.right").font(.caption).foregroundStyle(Palette.muted)
@@ -234,7 +281,7 @@ struct DiscoveryView: View {
         Text(row.enabled ? "Enabled" : "Paused").font(.caption.weight(.semibold)).foregroundStyle(Palette.muted)
           .padding(.horizontal, 8).padding(.vertical, 2).overlay(Capsule().strokeBorder(Palette.line))
       }
-      Text(!row.enabled ? "Paused. No runs until you resume." : row.nextRunAt.map { "Next: \(When.format($0))" } ?? "No upcoming run reported")
+      Text(row.running == true ? "Running now." : !row.enabled ? "Paused. No runs until you resume." : row.nextRunAt.map { "Next: \(When.format($0))" } ?? "No upcoming run reported")
         .font(.footnote).foregroundStyle(Palette.muted)
       if let status = row.lastStatus {
         Text("Last result: \(Self.routineResultLabel(status))").font(.footnote)
@@ -244,6 +291,12 @@ struct DiscoveryView: View {
       Text("Notify: \(notifyNames(row))").font(.footnote).foregroundStyle(Palette.muted)
       HStack {
         Button("View outputs") { store.routineResult = RoutineResultDestination(botId: row.botId, routineId: row.id) }
+        if row.running == true {
+          Button("Stop run") { Task { await perform { api in
+            let _: StopRunResponse = try await api.write("/routines/\(APIClient.component(row.id))/stop", [String: String]())
+            overview = try await api.get("/automations")
+          } } }.disabled(busy)
+        }
         Button(row.enabled ? "Pause" : "Resume") { Task { await perform { api in
           let _: EmptyResponse = try await api.write("/routines/\(APIClient.component(row.id))/state", ["enabled": !row.enabled], method: "PATCH")
           overview = try await api.get("/automations")
@@ -257,6 +310,7 @@ struct DiscoveryView: View {
     case "error", "failed": "Failed"
     case "delivery_failed": "Delivery failed"
     case "running": "Running"
+    case "missed": "Didn't run"
     case "pending": "Pending"
     case "skipped": "Skipped"
     case "cancelled": "Canceled"

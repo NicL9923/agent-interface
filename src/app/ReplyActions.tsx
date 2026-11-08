@@ -6,7 +6,6 @@ import { Icon } from "../components/Icon";
 import { When } from "../components/When";
 import { useAction } from "./use-action";
 import type { ReplySpeech } from "./use-reply-speech";
-import { replyTitle } from "./transcript-logic";
 
 /** What reply actions need from the conversation around them. Kept in context so the memoized transcript never re-renders for it. */
 export type TranscriptTools = {
@@ -19,6 +18,10 @@ export type TranscriptTools = {
   announce(text: string): void;
   /** Reading replies aloud. One reply plays at a time across the transcript. */
   speech: ReplySpeech;
+  /** The person ticked "I've reviewed the task's last actions", so a message may start after an interruption. */
+  reviewedInterruption?: boolean;
+  /** This person's form key from bootstrap, for form request IDs. */
+  formKey?: string;
 };
 export const TranscriptTools = createContext<TranscriptTools | null>(null);
 
@@ -70,8 +73,9 @@ function MessageActions({ message }: { message: Message }) {
     } catch { tools.announce(`Couldn't copy. Select the ${reply ? "reply" : "message"} and copy it manually.`); }
   };
   const share = () => navigator.share({ text: message.text }).catch(() => { /* Dismissing the share sheet is not an error. */ });
-  const keep = () => void save.run(() => apiRequest("POST /saved", { body: {
-    kind: "session", botId: tools.botId, sessionId: tools.sessionId!, messageId: message.id, title: replyTitle(message.text),
+  // The Markdown parser that titles a reply loads only when someone saves one.
+  const keep = () => void save.run(async () => apiRequest("POST /saved", { body: {
+    kind: "session", botId: tools.botId, sessionId: tools.sessionId!, messageId: message.id, title: (await import("../shared/plain-text")).replyTitle(message.text),
   } }), {
     onSuccess: () => { setSaved(true); tools.announce("Reply saved. Find it in Search under Saved items."); },
     onError: cause => { tools.announce(`Couldn't save this reply. ${(cause as Error).message}`); return null; },

@@ -88,6 +88,7 @@ def main():
         sibling_module("automation").install(web, journal)
         sibling_module("vault").install(web, journal)
         sibling_module("integrations").install(web)
+        sibling_module("voice").install(web)
         service.install_service_auth(web, secret)
     cli.main()
 

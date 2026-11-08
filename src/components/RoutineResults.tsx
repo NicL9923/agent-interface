@@ -7,13 +7,12 @@ import { request } from '../client-api';
 import { useAction } from '../app/use-action';
 import { useResource } from '../app/use-resource';
 import { FormMessage } from './ui/form-message';
-import type { RoutineOutput, RoutineResult } from '../shared/collaboration';
 import { MessageMarkdown } from './MessageMarkdown';
 import './collaboration.css';
 import { formatWhen } from '../time';
 import { useMinute } from './When';
 
-export function RoutineResults({ botId, routineId, userId, resultId, onClose }: { botId: string; routineId: string; userId: string; resultId?: string; onClose: () => void }) {
+export function RoutineResults({ botId, routineId, resultId, onClose }: { botId: string; routineId: string; resultId?: string; onClose: () => void }) {
   useMinute();
   const [selected, setSelected] = useState(resultId || '');
   const params = { botId, routineId };

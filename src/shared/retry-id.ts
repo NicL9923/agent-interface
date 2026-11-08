@@ -5,10 +5,25 @@
  * bytes of the digest get version 8 in the high nibble of byte 6 and the RFC 9562 variant in
  * the top two bits of byte 8. iOS computes the same; docs/native-api.md has a test vector.
  */
-export async function retryRequestId(botId: string, messageId: string, runId = ""): Promise<string> {
-  const input = new TextEncoder().encode(["wildbots-retry", botId, messageId, runId].join("\u0000"));
+export function retryRequestId(botId: string, messageId: string, runId = ""): Promise<string> {
+  return derivedId(["wildbots-retry", botId, messageId, runId], 0x80);
+}
+/**
+ * The request ID for one person's answers to one form card, the same in every tab and on every
+ * device, so the server's submission record admits them once. Built like a retry ID over
+ * `wildbots-form`, the person's form key from bootstrap, the assistant's, message's and card's IDs
+ * and the attempt number, but with version 4, so it can never take a retry's version 8 ID. The key
+ * is private to that person, so nobody else can derive the ID and claim it first. The attempt grows
+ * only after Hermes refuses an attempt, whose ID then stays refused. iOS computes the same;
+ * docs/native-api.md has a test vector.
+ */
+export function formRequestId(formKey: string, botId: string, messageId: string, cardId: string, attempt: number): Promise<string> {
+  return derivedId(["wildbots-form", formKey, botId, messageId, cardId, String(attempt)], 0x40);
+}
+async function derivedId(parts: string[], version: number): Promise<string> {
+  const input = new TextEncoder().encode(parts.join("\u0000"));
   const bytes = new Uint8Array(await crypto.subtle.digest("SHA-256", input)).slice(0, 16);
-  bytes[6] = (bytes[6] & 0x0f) | 0x80;
+  bytes[6] = (bytes[6] & 0x0f) | version;
   bytes[8] = (bytes[8] & 0x3f) | 0x80;
   const hex = [...bytes].map(byte => byte.toString(16).padStart(2, "0")).join("");
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;

@@ -7,7 +7,7 @@ import { IDLE_MS, useChatPresence } from "../src/app/use-chat-presence";
 import { advance, mountRoot } from "./ui-harness";
 
 vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(await (async original => ({ ...await original<typeof import("../src/client-api")>(), write: vi.fn() }))(original)));
-let root: Root, container: HTMLDivElement, visibility: DocumentVisibilityState, focused: boolean;
+let root: Root, visibility: DocumentVisibilityState, focused: boolean;
 const closed: string[] = [];
 function Chat({ botId }: { botId?: string }) {
   useChatPresence(botId, "one");
@@ -25,7 +25,7 @@ beforeEach(() => {
   Object.defineProperty(navigator, "serviceWorker", { configurable: true, value: { getRegistration: async () => ({
     getNotifications: async () => [notification("https://app.test/?bot=ranch"), notification("https://app.test/?bot=ranch&routine=brief"), notification("https://app.test/?bot=barn")],
   }) } });
-  ({ container, root } = mountRoot());
+  ({ root } = mountRoot());
 });
 afterEach(() => { Reflect.deleteProperty(document, "visibilityState"); Reflect.deleteProperty(navigator, "serviceWorker"); });
 

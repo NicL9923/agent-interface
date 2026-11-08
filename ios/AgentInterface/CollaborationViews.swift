@@ -85,14 +85,45 @@ struct GroupRoom: Decodable, Identifiable, Hashable {
   var latest: GroupLatest? = nil
   var id: String { room_id }
 }
-struct GroupCatalog: Decodable, Equatable { var supported: Bool; var canSend: Bool; var reason: String?; var rooms: [GroupRoom] }
+struct GroupCatalog: Decodable, Equatable {
+  var supported: Bool; var canSend: Bool; var reason: String?; var rooms: [GroupRoom]
+  /// Hermes saves a room's purpose, shared notes and lead. Older servers omit it.
+  var settings: Bool? = nil
+  /// Routines can post their results in a group chat. Older servers omit it.
+  var routineDelivery: Bool? = nil
+}
 struct GroupCreated: Decodable { var room: GroupRoom }
 struct GroupCreate: Codable { var requestId: String; var name: String; var botIds: [String] }
 struct GroupSend: Codable { var requestId: String; var threadId: String; var text: String }
 struct GroupAccepted: Decodable { var accepted: Bool }
 struct GroupApproved: Decodable { var approved: Bool }
-struct GroupEventPayload: Decodable { var text: String?; var thread_id: String?; var member_id: String? }
-struct GroupActor: Decodable { var kind: String?; var id: String? }
+struct GroupEventPayload: Decodable {
+  var text: String?; var thread_id: String?; var member_id: String?
+  /// A lead's hand-off (`room.assignment`). Read leniently, so an unexpected shape never fails the page.
+  var lead_member_id: String? = nil; var member_ids: [String]? = nil
+  private enum CodingKeys: String, CodingKey { case text, thread_id, member_id, lead_member_id, member_ids }
+  init(text: String? = nil, thread_id: String? = nil, member_id: String? = nil) { self.text = text; self.thread_id = thread_id; self.member_id = member_id }
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    text = try container.decodeIfPresent(String.self, forKey: .text)
+    thread_id = try container.decodeIfPresent(String.self, forKey: .thread_id)
+    member_id = try container.decodeIfPresent(String.self, forKey: .member_id)
+    lead_member_id = try? container.decodeIfPresent(String.self, forKey: .lead_member_id)
+    member_ids = try? container.decodeIfPresent([String].self, forKey: .member_ids)
+  }
+}
+/// `display_name` names a member or, on a routine's post, the routine. Read leniently, so it never fails the page.
+struct GroupActor: Decodable {
+  var kind: String?; var id: String?; var display_name: String? = nil
+  private enum CodingKeys: String, CodingKey { case kind, id, display_name }
+  init(kind: String? = nil, id: String? = nil, display_name: String? = nil) { self.kind = kind; self.id = id; self.display_name = display_name }
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    kind = try container.decodeIfPresent(String.self, forKey: .kind)
+    id = try container.decodeIfPresent(String.self, forKey: .id)
+    display_name = try? container.decodeIfPresent(String.self, forKey: .display_name)
+  }
+}
 /// The household member who sent a `message.user` event through this app. Older servers omit it.
 struct GroupSender: Decodable, Equatable { var id: String; var name: String }
 struct GroupEvent: Decodable, Identifiable {
@@ -155,8 +186,38 @@ struct GroupAction: Decodable, Identifiable {
   var kind: String; var task_id: String; var member_id: String?; var execution_generation: Int?; var request_id: String?; var approval: GroupApproval?
   var id: String { task_id }
 }
-struct GroupDriver: Decodable { var working: Bool; var blocked: Bool; var pending_actions: [GroupAction] }
-struct GroupState: Decodable { var room: GroupRoom; var driver_status: GroupDriver? }
+struct GroupDriver: Decodable {
+  var working: Bool; var blocked: Bool; var pending_actions: [GroupAction]
+  /// Who is working, from Hermes versions that report it.
+  var member_activity: [GroupMemberActivity]? = nil
+  var max_rounds: Int? = nil
+  private enum CodingKeys: String, CodingKey { case working, blocked, pending_actions, member_activity, max_rounds }
+  init(working: Bool, blocked: Bool, pending_actions: [GroupAction], member_activity: [GroupMemberActivity]? = nil, max_rounds: Int? = nil) {
+    self.working = working; self.blocked = blocked; self.pending_actions = pending_actions; self.member_activity = member_activity; self.max_rounds = max_rounds
+  }
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    working = try container.decode(Bool.self, forKey: .working)
+    blocked = try container.decode(Bool.self, forKey: .blocked)
+    pending_actions = try container.decode([GroupAction].self, forKey: .pending_actions)
+    // Live detail this version cannot read is left out rather than failing the room.
+    member_activity = try? container.decodeIfPresent([GroupMemberActivity].self, forKey: .member_activity)
+    max_rounds = try? container.decodeIfPresent(Int.self, forKey: .max_rounds)
+  }
+}
+struct GroupState: Decodable {
+  var room: GroupRoom; var driver_status: GroupDriver?
+  /// Absent from Hermes versions without room settings, and for a disbanded room.
+  var context: GroupContext? = nil
+  private enum CodingKeys: String, CodingKey { case room, driver_status, context }
+  init(room: GroupRoom, driver_status: GroupDriver?, context: GroupContext? = nil) { self.room = room; self.driver_status = driver_status; self.context = context }
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    room = try container.decode(GroupRoom.self, forKey: .room)
+    driver_status = try container.decodeIfPresent(GroupDriver.self, forKey: .driver_status)
+    context = try? container.decodeIfPresent(GroupContext.self, forKey: .context)
+  }
+}
 struct GroupDecision: Encodable { var taskId: String; var memberId: String; var generation: Int; var choice: String; var requestId: String }
 
 struct GroupCreateView: View {
@@ -183,6 +244,9 @@ struct GroupCreateView: View {
                 Text(bot.name)
               }
             }
+              // The hidden avatar's own label ("Ranch hand: Ready") still reached the switch's label on the
+              // iOS 27 simulator, so VoiceOver would read the name twice with a status. Name the switch directly.
+              .accessibilityLabel(Text(bot.name))
               .disabled(busy || botIds.count >= 6 && !botIds.contains(bot.id))
           }
         } header: { Text("Choose 2–6 assistants · \(botIds.count) chosen") } footer: {
@@ -236,9 +300,13 @@ struct GroupConversationView: View {
   @State private var loadGeneration = 0
   private var path: String { "/groups/\(APIClient.component(room.id))" }
   private var key: String { "group.send.\(store.scope ?? ""):\(room.id)" }
-  private var status: String {
-    state?.driver_status?.blocked == true ? "Discussion needs attention." : state?.driver_status?.working == true ? "Assistants are discussing…" : "Type @ to address one assistant."
-  }
+  /// The room's members as Hermes last reported them, or as home listed them before the first read.
+  private var members: [GroupMember] { state?.room.members ?? room.members }
+  private var advanced: Bool { store.bootstrap?.preferences.presentation == "advanced" }
+  private var status: String { GroupActivity.status(state?.driver_status, context: state?.context, members: members) }
+  /// Who is working right now. Advanced adds each one's tool and round.
+  private var working: [GroupActivity.Line] { GroupActivity.lines(state?.driver_status, members: members, advanced: advanced) }
+  @State private var settingsOpen = false
   /// A group that disappeared keeps none of its name, members or messages on screen.
   static func identity(_ room: GroupRoom, missing: Bool) -> (title: String, members: String?) {
     missing ? ("Group chat", nil) : (room.name, room.members.map { "\($0.display_name ?? $0.profile) (@\($0.handle))" }.joined(separator: " · "))
@@ -256,17 +324,25 @@ struct GroupConversationView: View {
         }
       }
       Section {
-        ForEach(Array(messages.enumerated()), id: \.element.id) { index, event in
-          let previousThread = index > 0 ? messages[index - 1].payload.thread_id : nil
-          let startsThreadRun = event.payload.thread_id != previousThread
-          messageRow(event, root: startsThreadRun ? event.payload.thread_id.flatMap { roots[$0] } : nil).id(event.id)
+        ForEach(transcript) { entry in
+          if let handoff = GroupActivity.assignment(entry.event, members: members) {
+            Text(handoff).font(.footnote).foregroundStyle(Palette.muted).listRowBackground(Color.clear).id(entry.id)
+          } else {
+            let startsThreadRun = entry.event.payload.thread_id != entry.previousThread
+            messageRow(entry.event, root: startsThreadRun ? entry.event.payload.thread_id.flatMap { roots[$0] } : nil).id(entry.id)
+          }
         }
         if more { Button("Load more messages") { Task { await load() } }.listRowBackground(Color.clear) }
         if state != nil && !missing && messages.isEmpty {
           Text("Start a discussion. Use @handle to address an assistant.").font(.footnote).foregroundStyle(Palette.muted).listRowBackground(Color.clear)
         }
       } header: {
-        if let members = identity.members { Text(members).textCase(nil).font(.footnote).foregroundStyle(Palette.muted) }
+        if let members = identity.members {
+          VStack(alignment: .leading, spacing: 4) {
+            Text(members).font(.footnote).foregroundStyle(Palette.muted)
+            if let purpose = state?.context?.purpose, !purpose.isEmpty { Text(purpose).font(.footnote).foregroundStyle(.primary) }
+          }.textCase(nil)
+        }
       }
       if state?.driver_status?.working == true || !(state?.driver_status?.pending_actions.isEmpty ?? true) {
         Section {
@@ -280,6 +356,19 @@ struct GroupConversationView: View {
           }
         }
       }
+      if !working.isEmpty && !missing {
+        Section {
+          ForEach(working) { line in
+            HStack(spacing: 8) {
+              assistantAvatar(line.memberId)
+              VStack(alignment: .leading, spacing: 2) {
+                Text(line.sentence).font(.subheadline).foregroundStyle(Palette.muted)
+                if let round = line.round { Text(round).font(.caption).foregroundStyle(Palette.muted) }
+              }
+            }.accessibilityElement(children: .combine).accessibilityIdentifier("groupActivity.\(line.memberId)")
+          }
+        }
+      }
       if state != nil {
         Color.clear.frame(height: 1).id("group-end").listRowInsets(EdgeInsets()).listRowSeparator(.hidden).listRowBackground(Color.clear)
           .onAppear { followingLatest = true }.onDisappear { followingLatest = false }
@@ -287,8 +376,22 @@ struct GroupConversationView: View {
     }
     .householdListBackground()
     .safeAreaInset(edge: .bottom) { composer }
-    .navigationTitle(identity.title).refreshable { await load() }.task(id: "\(store.scope ?? ""):\(room.id)") {
+    .navigationTitle(identity.title).refreshable { await load() }
+    .toolbar {
+      if state?.context != nil && !missing {
+        ToolbarItem(placement: .primaryAction) {
+          Button { settingsOpen = true } label: { Label("Group settings", systemImage: "gearshape") }.accessibilityIdentifier("groupSettings")
+        }
+      }
+    }
+    .sheet(isPresented: $settingsOpen) {
+      if let state, let context = state.context {
+        NavigationStack { GroupSettingsView(roomId: room.id, name: state.room.name, members: state.room.members, context: context) { Task { await load() } } }
+      }
+    }
+    .task(id: "\(store.scope ?? ""):\(room.id)") {
       loadGeneration += 1
+      settingsOpen = false
       state = nil; events = []; cursor = 0; more = false; applied = nil; threadId = ""; replyToId = ""; sentScrollRequest = nil; followingLatest = false; suppressPageFollow = false
       draft = UserDefaults.standard.string(forKey: key + ":draft") ?? ""
       if let data = UserDefaults.standard.data(forKey: key) { pending = try? JSONDecoder().decode(GroupSend.self, from: data) }
@@ -350,6 +453,21 @@ struct GroupConversationView: View {
     }.padding(12).background(.regularMaterial)
   }
   private var messages: [GroupEvent] { events.filter { ["message.user", "message.member"].contains($0.kind) } }
+  /// One row of the room: a message, knowing the thread of the message before it, or the lead's hand-off.
+  struct TranscriptEntry: Identifiable { var event: GroupEvent; var previousThread: String?; var id: String { event.id } }
+  /// Messages, with the lead's hand-offs between them.
+  private var transcript: [TranscriptEntry] { Self.transcript(events) }
+  static func transcript(_ events: [GroupEvent]) -> [TranscriptEntry] {
+    var previous: String?
+    var entries: [TranscriptEntry] = []
+    for event in events {
+      if event.kind == "room.assignment" { entries.append(TranscriptEntry(event: event, previousThread: nil)) }
+      else if ["message.user", "message.member"].contains(event.kind) {
+        entries.append(TranscriptEntry(event: event, previousThread: previous)); previous = event.payload.thread_id
+      }
+    }
+    return entries
+  }
   private var threadRoots: [String: GroupEvent] {
     var roots: [String: GroupEvent] = [:]
     for event in messages { if let thread = event.payload.thread_id, roots[thread] == nil { roots[thread] = event } }
@@ -373,6 +491,10 @@ struct GroupConversationView: View {
       HStack(alignment: .center, spacing: 8) {
         if event.kind == "message.member" { assistantAvatar(event.payload.member_id ?? event.actor?.id) }
         Text(author(event)).font(.subheadline.bold())
+        if let routine = GroupActivity.scheduledPost(event) {
+          Text(routine.failed ? "Routine failed" : "Routine").font(.caption.weight(.semibold)).foregroundStyle(Palette.muted)
+            .padding(.horizontal, 8).padding(.vertical, 2).overlay(Capsule().strokeBorder(Palette.line))
+        }
         Spacer()
         Text(When.format(Date(timeIntervalSince1970: event.created_at))).font(.caption).foregroundStyle(Palette.muted)
       }
@@ -391,6 +513,7 @@ struct GroupConversationView: View {
     }.listRowBackground(replyToId == event.id ? Palette.accentSoft : event.kind == "message.user" && author(event) == "You" ? Palette.rail(scheme) : Palette.raised(scheme))
   }
   private func author(_ event: GroupEvent) -> String {
+    if let routine = GroupActivity.scheduledPost(event) { return routine.name }
     if event.kind == "message.user" { return (event.sender?.id ?? event.actor?.id) == store.bootstrap?.user.id ? "You" : Self.memberName(event) }
     return Self.assistantName(event, in: room)
   }
@@ -532,24 +655,6 @@ enum GroupRows {
   static func creationHint(_ catalog: GroupCatalog?, connected: Bool) -> String? {
     if catalog?.canSend != true { return catalog?.reason ?? "The Hermes group coordinator must be running to make a group chat." }
     return connected ? nil : "Reconnect to Hermes to make a group chat."
-  }
-}
-
-extension AppStore {
-  /// Reads the room catalog for home. A failure keeps the rooms already shown; the next poll tries again.
-  func refreshGroups() async {
-    let id = UUID(); groupLoadId = id
-    let result = await attempt(current: { [weak self] in self?.groupLoadId == id }) { try await $0.api.get("/groups") as GroupCatalog }
-    guard case .success(let value)? = result, value != groupCatalog else { return }
-    groupCatalog = value
-  }
-  /// A room just made shows at once; the next read of the catalog replaces this copy.
-  func groupRoomCreated(_ room: GroupRoom) {
-    guard var catalog = groupCatalog else { return }
-    catalog.rooms.removeAll { $0.id == room.id }
-    catalog.rooms.append(room)
-    groupCatalog = catalog
-    Task { await refreshGroups() }
   }
 }
 

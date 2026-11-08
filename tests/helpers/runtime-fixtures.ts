@@ -13,7 +13,7 @@ export function capabilitiesFixture(changes: Partial<Capabilities> = {}): Capabi
   return { chat: unsupported, steering: unsupported, approvals: unsupported, uploads: unsupported,
     generatedFiles: unsupported, botConfiguration: unsupported, tools: unsupported, skills: unsupported,
     routines: unsupported, durableEvents: unsupported, idempotency: unsupported, imageGeneration: unsupported,
-    stop: unsupported, portraitGeneration: unsupported, avatarMetadata: unsupported, ...changes };
+    stop: unsupported, portraitGeneration: unsupported, avatarMetadata: unsupported, liveVoice: unsupported, ...changes };
 }
 export const memoryFixture = (changes: Partial<ProfileMemory> = {}): ProfileMemory => ({ botId: 'ranch', profile: 'ranch', scope: 'profile', owner: 'Hermes',
   documents: [{ target: 'memory', label: 'Assistant notes', revision: 'a'.repeat(64), enabled: true, entries: [], charLimit: 2000, charCount: 0 },
@@ -72,6 +72,7 @@ export function automationRequester(handlers: AutomationHandlers): AutomationReq
       case 'skill_diff': return configured(handlers.skill_diff, input.operation)(input);
       case 'skill_decide': return configured(handlers.skill_decide, input.operation)(input);
       case 'skill_policy': return configured(handlers.skill_policy, input.operation)(input);
+      case 'skill_lock': return configured(handlers.skill_lock, input.operation)(input);
     }
   }
   return request;

@@ -1,8 +1,9 @@
 import { Avatar } from "./Avatar";
 import type { Avatar as AvatarConfig } from "../shared/types";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api } from "../client-api.js";
 import { Icon } from "./Icon.js";
+import { talkLive } from "../app/talk-live.js";
 import { MAX_RECORDING_SECONDS, MAX_VOICE_BYTES, STOP_SPEECH } from "../shared/voice.js";
 import type { VoiceState, VoiceTranscript } from "../shared/voice.js";
 import "./voice-controls.css";
@@ -14,11 +15,13 @@ export interface VoiceControlsProps {
   disabled?: boolean;
   onTranscript(text: string): void;
   onStateChange?(state: VoiceState): void;
+  /** A control shown beside Record voice, such as live Talk. */
+  extra?: ReactNode;
 }
 const labels: Record<VoiceState, string> = { idle: "", requesting: "Waiting for microphone permission…", recording: "Recording", transcribing: "Transcribing…" };
 const message = (error: unknown) => error instanceof Error ? error.message : "Voice could not be completed. Your draft is kept.";
 
-export function VoiceControls({ botId, disabled = false, onTranscript, onStateChange, avatar, name }: VoiceControlsProps) {
+export function VoiceControls({ botId, disabled = false, onTranscript, onStateChange, avatar, name, extra }: VoiceControlsProps) {
   const [state, setState] = useState<VoiceState>("idle");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -67,7 +70,7 @@ export function VoiceControls({ botId, disabled = false, onTranscript, onStateCh
     } finally { if (generation.current === run) { request.current = null; transition("idle"); } }
   }
   async function startRecording() {
-    if (active.current !== "idle" || disabled) return;
+    if (active.current !== "idle" || disabled || talkLive()) return;
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
       setError("Recording needs a browser with microphone support and a secure connection. You can still type your message."); return;
     }
@@ -124,6 +127,7 @@ export function VoiceControls({ botId, disabled = false, onTranscript, onStateCh
     <div className="voice-actions">
       {state === "recording" ? <button type="button" className="voice-recording" aria-label={`Stop recording, ${elapsed} seconds`} onClick={stopRecording}><span className="sr-only">Stop recording · </span><Icon name="stop" size={16} /><span>{elapsed}s</span></button>
         : <button type="button" aria-label="Record voice" disabled={disabled || busy} title={!supported ? "Microphone recording is unavailable in this browser. You can still type." : "Record up to two minutes. Review the transcript before sending."} onClick={() => void startRecording()}><Icon name="mic" size={18} /><span className="tool-label">Record voice</span></button>}
+      {extra}
     </div>
     <div className="voice-panel">
       {busy && <span className={`voice-avatar voice-${state}`}><Avatar avatar={avatar} name={name} state="idle" size={24} reducedMotion /></span>}

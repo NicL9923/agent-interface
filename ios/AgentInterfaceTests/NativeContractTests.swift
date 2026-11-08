@@ -139,12 +139,32 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
             stream.send("event: inflight\ndata: {\"botId\":\"bot\",\"message\":{\"id\":\"sid-inflight\",\"role\":\"assistant\",\"text\":\"Live native reply\"},\"activity\":{\"state\":\"thinking\",\"runId\":\"live-run\"},\"toolCalls\":[]}\n\n")
         }
     }
-    func notifyRoster() { for stream in lock.withLock({ streams }).filter({ $0.request.url?.path == "/api/events" }) { stream.send("event: roster\ndata: roster\n\n") } }
+    func notifyRoster() { notifyHousehold("roster") }
+    /// A named notice on the household stream, such as `roster`, `groups` or one this app does not know.
+    func notifyHousehold(_ name: String) { for stream in householdStreams() { stream.send("event: \(name)\ndata: \(name)\n\n") } }
+    /// Ends the household streams. Notices sent until the app reconnects are lost.
+    func endHouseholdStreams() {
+        let ended = lock.withLock { () -> [FakeExchange] in
+            let ended = streams.filter { $0.request.url?.path == "/api/events" }
+            streams.removeAll { $0.request.url?.path == "/api/events" }
+            return ended
+        }
+        for stream in ended { stream.endStream() }
+    }
+    private func householdStreams() -> [FakeExchange] { lock.withLock { streams }.filter { $0.request.url?.path == "/api/events" } }
+    private var groupRooms: [String]?
+    private var groupsOnConnect = false
+    /// Sends a `groups` notice as each household stream opens, as the server does once its first check lands.
+    func announceGroupsOnConnect() { lock.withLock { groupsOnConnect = true } }
+    /// Answers `GET /api/groups` with rooms of these names, as the server's catalog does.
+    func serveGroups(_ names: [String]) { lock.withLock { groupRooms = names } }
     func receive(_ protocolInstance: FakeExchange) {
         let path = protocolInstance.request.url!.path
         if path.hasSuffix("/events"), lock.withLock({ streaming }) {
             lock.withLock { recorded.append(protocolInstance.request); streams.append(protocolInstance) }
-            protocolInstance.openStream(); return
+            protocolInstance.openStream()
+            if path == "/api/events", lock.withLock({ groupsOnConnect }) { protocolInstance.send("event: groups\ndata: groups\n\n") }
+            return
         }
         let delay = lock.withLock {
             recorded.append(protocolInstance.request)
@@ -317,6 +337,11 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
             data = Self.json(["url": "/api/voice/audio/\(UUID().uuidString.lowercased())", "mime": "audio/wav", "expiresAt": "2026-10-17T12:05:00Z"])
         }
         else if path.hasPrefix("/api/voice/audio/") { data = Self.silence }
+        else if path == "/api/groups", request.httpMethod == "GET", let rooms = lock.withLock({ groupRooms }) {
+            data = Self.json(["supported": true, "canSend": true, "rooms": rooms.map { name -> [String: Any] in
+                ["room_id": name.lowercased().replacingOccurrences(of: " ", with: "-"), "name": name,
+                 "members": [["member_id": "bot", "profile": "bot", "handle": "bot"], ["member_id": "family", "profile": "family", "handle": "family"]]] }])
+        }
         else if path == "/api/native/push/config" { data = Self.json(["available": lock.withLock { pushAvailable }]) }
         else if path == "/api/preferences" { data = FakeExchange.body(request) ?? Data() }
         else if path == "/api/auth/logout" {
@@ -720,10 +745,10 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
         try Data("Attachment to keep".utf8).write(to: file); defer { try? FileManager.default.removeItem(at: file) }
         server.failUploads(true)
         // As on the web, a message on its way must finish sending before files can be attached.
-        value.sending = true
+        value.sendingRequests[value.selectedBotId ?? "bot"] = "test-request"
         await value.uploads.attach(urls: [file])
         XCTAssertEqual(value.uploads.notice, [AppStore.attachWhileSending]); XCTAssertTrue(value.uploads.items.isEmpty)
-        value.sending = false
+        value.sendingRequests = [:]
         await value.uploads.attach(urls: [file])
         XCTAssertEqual(value.uploads.items.count, 1); XCTAssertNotNil(value.uploads.items.first?.error)
         XCTAssertFalse(value.canSend); XCTAssertTrue(value.draft.attachments.isEmpty)
@@ -1081,6 +1106,35 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
         XCTAssertEqual(server.requestCount("/api/auth/config"), 0)
     }
 
+    func testUnknownSubmissionStatusKeepsTheUnconfirmedSend() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.sendStatus = 503
+        await value.send()
+        let pending = value.pending
+        XCTAssertNotNil(pending)
+        server.answerSubmissions("future-status")
+        await value.reconcilePending()
+        XCTAssertEqual(value.pending?.requestId, pending?.requestId)
+    }
+
+    func testSuspendedStoreCannotRestartPollingUntilResume() throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        value.suspend()
+        value.startPolling()
+        XCTAssertTrue(value.suspended)
+        XCTAssertNil(value.pollTask)
+    }
+    func testSendingBelongsToTheSelectedAssistant() throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        value.sendingRequests["bot"] = "request-a"
+        XCTAssertTrue(value.sending)
+        value.selectedBotId = "other"
+        XCTAssertFalse(value.sending)
+        value.sendingRequests["other"] = "request-b"
+        value.sendingRequests["bot"] = nil
+        XCTAssertTrue(value.sending)
+    }
+
     func testPollingRefreshesBootstrapOnlyWhenDueButTheConversationEveryPass() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
         var time = ContinuousClock.now
@@ -1100,7 +1154,7 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
         XCTAssertEqual(bootstraps(), 3, "An action's refresh restarts the timer")
         await tick(2)
         XCTAssertEqual(bootstraps(), 4)
-        value.suspend(); _ = await value.pollOnce()
+        value.suspend(); value.suspended = false; _ = await value.pollOnce()
         XCTAssertEqual(bootstraps(), 5, "Returning to the foreground refreshes at once")
         XCTAssertEqual(polls(), 10)
     }
@@ -1243,6 +1297,45 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
         try await until { server.requestCount("/api/bootstrap") > bootstraps }
         XCTAssertEqual(server.requestCount("/api/bootstrap"), bootstraps + 1)
         XCTAssertEqual(server.conversationQueries.count, reads, "Neither notice reads the conversation")
+    }
+
+    func testAGroupsNoticeRereadsTheGroupCatalogAndUnknownNoticesChangeNothing() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.serveGroups(["Supper planning"])
+        server.serveEventStreams()
+        _ = await value.pollOnce()
+        try await until { server.requestCount("/api/events") == 1 && server.requestCount("/api/bootstrap") == 2 }
+        let bootstraps = server.requestCount("/api/bootstrap")
+        // Older servers never send `groups`, and a newer server may send notices this app does not know.
+        XCTAssertEqual(value.groupsPollInterval, AppStore.groupsUnnotifiedInterval, "A server that may never send groups keeps the 30-second poll")
+        server.notifyHousehold("someday")
+        server.notifyHousehold("groups")
+        try await until { value.groupCatalog?.rooms.map(\.name) == ["Supper planning"] }
+        XCTAssertEqual(value.groupsPollInterval, AppStore.groupsFallbackInterval, "A server that sends groups needs only the slow fallback")
+        server.serveGroups(["Supper planning", "Garden crew"])
+        server.notifyHousehold("groups")
+        try await until { value.groupCatalog?.rooms.map(\.name) == ["Supper planning", "Garden crew"] }
+        XCTAssertEqual(server.requestCount("/api/groups"), 2, "One read per groups notice, none for the unknown one or for connecting")
+        XCTAssertEqual(server.requestCount("/api/bootstrap"), bootstraps, "Neither notice is a roster change")
+        // The stream still delivers notices after the ones it ignored.
+        server.notifyRoster()
+        try await until { server.requestCount("/api/bootstrap") == bootstraps + 1 }
+    }
+
+    func testEachHouseholdConnectRereadsTheGroupCatalogThroughItsNoticeOnly() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.serveGroups(["Supper planning"])
+        server.announceGroupsOnConnect()
+        server.serveEventStreams()
+        _ = await value.pollOnce()
+        try await until { value.groupCatalog?.rooms.count == 1 }
+        // A room made while the stream is down announces itself to nobody listening.
+        server.serveGroups(["Supper planning", "Garden crew"])
+        server.endHouseholdStreams()
+        // The stream reconnects after a 3-second backoff, and the server's connect notice brings the room.
+        try await until({ value.groupCatalog?.rooms.count == 2 }, timeout: .seconds(15))
+        XCTAssertEqual(server.requestCount("/api/events"), 2)
+        XCTAssertEqual(server.requestCount("/api/groups"), 2, "One read per connect notice; connecting itself reads nothing more")
     }
 
     func testALiveChangeStreamReplacesFastConversationPollingLikeTheWeb() async throws {

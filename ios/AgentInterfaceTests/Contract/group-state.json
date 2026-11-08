@@ -47,7 +47,31 @@
             "command": "grocer order --items 12"
           }
         }
-      ]
+      ],
+      "member_activity": [
+        {
+          "member_id": "garden",
+          "status": "running",
+          "thread_id": "thread-1",
+          "round_index": 1,
+          "started_at": 1790852410.25,
+          "tool": "web_search",
+          "progress_at": 1790852415.5
+        },
+        {
+          "member_id": "household",
+          "status": "queued",
+          "thread_id": "thread-1",
+          "round_index": 1
+        }
+      ],
+      "max_rounds": 3
+    },
+    "context": {
+      "purpose": "Plan the week's dinners.",
+      "notes": "No mushrooms.\nBudget is $120.",
+      "routing": "lead",
+      "lead_member_id": "garden"
     }
   }
 }

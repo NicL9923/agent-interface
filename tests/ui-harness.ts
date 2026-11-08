@@ -67,6 +67,30 @@ export function advance(milliseconds: number) {
   return act(async () => { await vi.advanceTimersByTimeAsync(milliseconds); });
 }
 
+// Captured before any test installs fake timers, so waiting can always take real time.
+const realSetTimeout = globalThis.setTimeout;
+
+/**
+ * Like vi.waitFor, for UI that settles through React updates. vi.waitFor polls outside act, so every
+ * update that lands between polls is unwrapped. This waits inside act, which also flushes them. Under
+ * fake timers it moves them forward each poll, as vi.waitFor does, while still waiting in real time.
+ */
+export async function waitForUi(check: () => unknown, timeout = 1000, interval = 10) {
+  const deadline = Date.now() + timeout;
+  for (;;) {
+    try {
+      await check();
+      return;
+    } catch (error) {
+      if (Date.now() >= deadline) throw error;
+    }
+    await act(async () => {
+      if (vi.isFakeTimers()) await vi.advanceTimersByTimeAsync(interval);
+      await new Promise(resolve => realSetTimeout(resolve, interval));
+    });
+  }
+}
+
 /** Replaces matchMedia; `matches` may be fixed or decided per query. */
 export function stubMatchMedia(matches: boolean | ((query: string) => boolean) = false) {
   vi.stubGlobal("matchMedia", vi.fn((query: string) => ({

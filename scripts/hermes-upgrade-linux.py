@@ -28,6 +28,8 @@ import uuid
 
 ACTIONS = ("regressions", "quiescence", "backup", "install", "verify", "rollback", "finish", "recover", "restart_service")
 MAX_QUALIFIED_PACK_BYTES = 4 * 1024 * 1024 * 1024
+# Packing 133,000 missing objects took 4 min 18 s on the Hermes host; indexing them took 1 min.
+OBJECT_TRANSFER_SECONDS = 900
 # Repair hashes cover `git diff` text, whose abbreviated object names grow with the repository
 # unless pinned. Every recorded hash used ten characters.
 GIT_ABBREV = ("-c", "core.abbrev=10")
@@ -409,6 +411,25 @@ print(json.dumps({'ok':True,'state':'synced'}))
         python = self.env.get("HERMES_UPGRADE_QUALIFICATION_PYTHON")
         if not python or not Path(python).is_absolute(): raise RuntimeError("Regression checks require the qualified candidate interpreter")
         for argv in self.config["regressionCommands"].values(): self.run([python, *argv[1:]], env=environment)
+        # Copy the candidate's objects now, while the household works normally. The backup hook
+        # repeats this after the drain, and then finds little left. On Nov 4, 2026 a candidate
+        # 1,100 commits ahead lacked 133,000 objects; packing them took over four minutes, the
+        # backup's attempt timed out, and the gateway had been draining the whole time.
+        # Hermes is serving, so keep the same live reserve the backup keeps. The staged object
+        # store bounds both the temporary pack in staging and what lands in the live store.
+        objects = tree_bytes(self.target / ".git")
+        self.require_space(objects, objects + self.config.get("backupReserveBytes", 5 * 1024 ** 3))
+        try: self.materialize_candidate()
+        except Exception as error: raise RuntimeError("Copying the candidate's Git objects failed: " + describe(error)) from None
+
+    def require_space(self, staging, live):
+        """Refuse before writing when staging or the live Hermes filesystem lacks the bytes needed."""
+        budgets = {self.stage: staging + live} if os.stat(self.stage).st_dev == os.stat(self.home).st_dev else {self.stage: staging, self.home: live}
+        for location, needed in budgets.items():
+            free = shutil.disk_usage(location).free
+            if free < needed:
+                raise RuntimeError("The update needs about %d GB free at %s and only %d GB is free. Free space on the Hermes host before updating"
+                                   % (-(-needed // 1024 ** 3), location, free // 1024 ** 3))
 
     def clear_drain(self):
         marker = self.home / ".drain_request.json"
@@ -426,8 +447,16 @@ print(json.dumps({'ok':True,'state':'synced'}))
                 time.sleep(.25)
 
     def quiescence(self):
-        baseline = self.baseline()
-        if baseline["source"][0] != self.env.get("HERMES_UPGRADE_CURRENT"): raise RuntimeError("The original source changed before maintenance")
+        # The baseline takes no gate or drain and changes no Hermes source, setting or service, so its
+        # failure is a harmless refusal like active work. On Nov 6, 2026 an expired verification
+        # session failed it, and treating that as an interrupted install held the app's maintenance
+        # gate until someone reviewed it by hand.
+        try:
+            baseline = self.baseline()
+            if baseline["source"][0] != self.env.get("HERMES_UPGRADE_CURRENT"): raise RuntimeError("The original source changed before maintenance")
+        except Exception as refusal:
+            print("Quiescence refused before maintenance: " + describe(refusal), file=sys.stderr)
+            raise SystemExit(75) from None
         self.save({"baseline": baseline, "phase": "acquiring"})
         marker = self.home / ".drain_request.json"
         if marker.exists(): raise RuntimeError("An existing native drain requires installer review")
@@ -446,6 +475,7 @@ print(json.dumps({'ok':True,'state':'synced'}))
             self.wait_gateway()
             if self.source_state() != tuple(baseline["source"]) or self.settings() != baseline["settings"] or any(self.unit(name)["MainPID"] != unit["MainPID"] for name, unit in baseline["units"].items()): raise RuntimeError("Quiescence refusal changed live host state") from refusal
             self.save({"baseline": baseline, "phase": "rejected"})
+            print("Quiescence refused and released maintenance: " + describe(refusal), file=sys.stderr)
             raise SystemExit(75) from None
 
     def control(self, verb):
@@ -485,12 +515,7 @@ print(json.dumps({'ok':True,'state':'synced'}))
         objects = tree_bytes(self.target / ".git")
         install = tree_bytes(self.target, excluded=self.target / ".git") + tree_bytes(self.stage / "pm-home/installs")
         staging, live = archives + objects, objects + install + self.config.get("backupReserveBytes", 5 * 1024 ** 3)
-        budgets = {self.stage: staging + live} if os.stat(self.stage).st_dev == os.stat(self.home).st_dev else {self.stage: staging, self.home: live}
-        for location, needed in budgets.items():
-            free = shutil.disk_usage(location).free
-            if free < needed:
-                raise RuntimeError("The update needs about %d GB free at %s and only %d GB is free. Free space on the Hermes host before updating"
-                                   % (-(-needed // 1024 ** 3), location, free // 1024 ** 3))
+        self.require_space(staging, live)
         self.materialize_candidate()
         self.gateway(draining=True)
         try:
@@ -583,11 +608,11 @@ print(json.dumps({'ok':True,'state':'synced'}))
                     def bounded_pack(): resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_QUALIFIED_PACK_BYTES, MAX_QUALIFIED_PACK_BYTES))
                     subprocess.run(["git", "-C", str(self.target), "pack-objects", "--stdout"],
                         input=b"".join(missing), stdout=output, stderr=subprocess.PIPE, env=offline,
-                        check=True, timeout=180, preexec_fn=bounded_pack)
+                        check=True, timeout=OBJECT_TRANSFER_SECONDS, preexec_fn=bounded_pack)
                     output.flush(); os.fsync(output.fileno())
                 with pack.open("rb") as payload:
                     subprocess.run(["git", "-C", str(self.source), "index-pack", "--stdin"], stdin=payload,
-                        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=offline, check=True, timeout=180)
+                        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=offline, check=True, timeout=OBJECT_TRANSFER_SECONDS)
             finally:
                 pack.unlink(missing_ok=True)
         subprocess.run(["git", "-C", str(self.source), "rev-list", "--objects", "--missing=error", self.candidate],
@@ -861,7 +886,22 @@ def describe(error):
         named = re.match(r"([A-Za-z_][\w.]*)\s*(?::|$)", lines[-1]) if lines else None
         known = named.group(1).rsplit(".", 1)[-1] if named else None
         return "CalledProcessError (exit " + str(error.returncode) + ", " + (known if known in KNOWN_ERRORS else "unrecognized error") + ")"
+    if isinstance(error, subprocess.TimeoutExpired):
+        return "TimeoutExpired after %gs (%s)" % (error.timeout, command_name(error.cmd))
     return type(error).__name__
+
+
+def command_name(argv):
+    """The program and, for git, its subcommand. Never paths or other arguments."""
+    argv = [str(part) for part in argv] if isinstance(argv, (list, tuple)) else str(argv or "").split()
+    if not argv: return "unknown command"
+    program = os.path.basename(argv[0])
+    if program != "git": return program
+    rest = iter(argv[1:])
+    for part in rest:
+        if part in ("-C", "-c"): next(rest, None)
+        elif not part.startswith("-"): return "git " + part
+    return "git"
 
 
 def verifying(step, work):

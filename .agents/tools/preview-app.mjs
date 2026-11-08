@@ -15,6 +15,43 @@ const { inlineUiShell, inlineUiShellPolicy } = await tsImport('../../src/server/
 const port = Number(process.env.PREVIEW_PORT || 3000);
 const host = process.env.PREVIEW_HOST || '127.0.0.1';
 const root = resolve(process.env.PREVIEW_CLIENT_DIR || 'dist/client');
+// PREVIEW_TALK=1 stands in for the microphone, WebRTC and OpenAI, so live Talk runs offline: the
+// person asks one question, the voice calls ask_assistant, and the fixture answer is spoken back.
+const talkFixture = `(() => {
+  const silent = () => { const context = new AudioContext(); return context.createMediaStreamDestination().stream; };
+  navigator.mediaDevices.getUserMedia = async () => silent();
+  const realFetch = window.fetch.bind(window);
+  window.fetch = (url, init) => String(url).startsWith('https://api.openai.com/') ? Promise.resolve(new Response('v=0 preview answer', { status: 201 })) : realFetch(url, init);
+  window.RTCPeerConnection = class {
+    constructor() { this.connectionState = 'new'; }
+    addTrack() {} close() { this.connectionState = 'closed'; }
+    async createOffer() { return { type: 'offer', sdp: 'v=0 preview offer' }; }
+    async setLocalDescription() {}
+    async setRemoteDescription() { setTimeout(() => this.channel.open(), 300); }
+    createDataChannel() {
+      let output = '';
+      const channel = this.channel = { readyState: 'connecting', onopen: null, onmessage: null, onclose: null,
+        emit: (event, delay) => setTimeout(() => channel.readyState === 'open' && channel.onmessage?.({ data: JSON.stringify(event) }), delay),
+        open() { channel.readyState = 'open'; channel.onopen?.();
+          channel.emit({ type: 'input_audio_buffer.speech_started' }, 600);
+          channel.emit({ type: 'conversation.item.input_audio_transcription.completed', transcript: 'Is the north gate shut tonight?' }, 2200);
+          channel.emit({ type: 'response.created' }, 2400);
+          channel.emit({ type: 'response.output_audio_transcript.done', transcript: 'Let me check with Ranch hand.' }, 2600);
+          channel.emit({ type: 'response.function_call_arguments.done', name: 'ask_assistant', call_id: 'preview-call', arguments: JSON.stringify({ request: 'Is the north gate shut tonight?' }) }, 2800);
+          channel.emit({ type: 'response.done' }, 2900); },
+        close() { channel.readyState = 'closed'; },
+        send(raw) { const event = JSON.parse(raw);
+          if (event.item?.output) output = event.item.output;
+          if (event.type !== 'response.create') return;
+          const words = output ? output.replace(/^[^:]*answered: /, '') : 'Howdy.';
+          channel.emit({ type: 'response.created' }, 50);
+          words.split(' ').forEach((word, index) => channel.emit({ type: 'response.output_audio_transcript.delta', delta: (index ? ' ' : '') + word }, 200 + index * 120));
+          channel.emit({ type: 'response.output_audio_transcript.done', transcript: words }, 300 + words.split(' ').length * 120);
+          channel.emit({ type: 'response.done' }, 400 + words.split(' ').length * 120); } };
+      return channel;
+    }
+  };
+})();`;
 // LAN previews need request IDs even when HTTPS-only randomUUID is unavailable.
 // Microphone and push remain subject to the browser's real secure-context rules.
 // Served as a file, not inline, so the app's own Content-Security-Policy applies unchanged.
@@ -24,7 +61,8 @@ const fixtureScript = `if (!crypto.randomUUID) crypto.randomUUID = () => {
   const hex = Array.from(bytes, value => value.toString(16).padStart(2, '0')).join('');
   return [hex.slice(0,8), hex.slice(8,12), hex.slice(12,16), hex.slice(16,20), hex.slice(20)].join('-');
 };
-${process.env.PREVIEW_NOTIFICATION_PROMPT === '1' ? 'if(window.Notification)Object.defineProperty(Notification,"permission",{get:()=>"default",configurable:true});' : ''}`;
+${process.env.PREVIEW_NOTIFICATION_PROMPT === '1' ? 'if(window.Notification)Object.defineProperty(Notification,"permission",{get:()=>"default",configurable:true});' : ''}
+${process.env.PREVIEW_TALK === '1' ? talkFixture : ''}`;
 const fixtureHtml = async () => (await readFile(resolve(root, 'index.html'), 'utf8'))
   .replace('<head>', '<head><script src="/preview-fixture.js"></script>');
 const documentHeaders = request => ({ 'Content-Security-Policy': contentSecurityPolicy(`http://${request.headers.host || `${host}:${port}`}`),
@@ -166,6 +204,8 @@ if (process.env.PREVIEW_LONG_TOOL === '1') {
 const previewRoom = { room_id: 'fixture-group', name: 'Weekend at the ranch', members: ['ranch', 'garden'].map(id => ({ member_id: id, profile: id, handle: id, display_name: bots.find(bot => bot.id === id)?.name || id })) };
 const supperRoom = { room_id: 'fixture-supper', name: 'Supper planning', members: ['kitchen', 'trail', 'ranch'].map(id => ({ member_id: id, profile: id, handle: id, display_name: bots.find(bot => bot.id === id)?.name || id })) };
 const groupRooms = [previewRoom, supperRoom];
+/** Room purpose, notes and lead by room ID, as Group settings saves them. */
+const groupContexts = new Map();
 const groupEvents = [{ event_id: 'group-user', seq: 1, kind: 'message.user', actor: { kind: 'user', id: 'preview' }, sender: { id: 'preview', name: 'Nicolas' }, payload: { text: 'Can we fit a short nature walk around the gate repair? Explicit preview fixture.', thread_id: 'a624af77-b3de-46f9-a583-626018476e41' }, created_at: Date.now() / 1000 }, { event_id: 'group-reply', seq: 2, kind: 'message.member', actor: { kind: 'member', id: 'ranch' }, payload: { member_id: 'ranch', text: 'Replace the battery before breakfast, then take the shady trail. Bring water and check the weather before leaving.', thread_id: 'a624af77-b3de-46f9-a583-626018476e41' }, created_at: Date.now() / 1000 }];
 const groupRequests = new Set();
 // The catalog previews each room's newest message, as the app server does. Supper planning keeps a fixed one so home shows an older row.
@@ -398,8 +438,8 @@ const server = createServer(async (request, response) => {
       if (process.env.PREVIEW_AVATAR_FAILURE === '1' && !bot.avatarFailed) { bot.avatarFailed = true; return json(response, { error: 'Fixture: Hermes is restarting.' }, 503); }
       bot.avatar = body; return json(response, bot.avatar);
     }
-    if (/^\/bots\/[^/]+$/.test(path) && request.method === 'GET') return json(response, { ...bots.find(bot => bot.id === path.split('/')[2]), instructions: 'Be clear and useful.', enabledMcpServers: [] });
-    if (path === '/bootstrap') return json(response, { user: { id: 'preview', name: 'Nicolas', email: 'preview@localhost.invalid' }, household: [{ id: 'preview', name: 'Nicolas' }, { id: 'two', name: 'Jordan' }], bots, preferences, vapidPublicKey: previewPushKey, connection: { connected: process.env.PREVIEW_DISCONNECTED !== '1', version: '5c1d0e7a9b3f4c2d8e6a1b0c9d8e7f6a5b4c3d2e', revisionDate: '2026-09-18T16:20:00Z' }, csrfToken: 'fixture-only', capabilities: Object.fromEntries(['chat', 'steering', 'approvals', 'uploads', 'generatedFiles', 'botConfiguration', 'tools', 'skills', 'routines', 'stop', 'avatarMetadata', 'durableEvents', 'idempotency', 'imageGeneration', 'portraitGeneration'].map(key => [key, { supported: true }])) });
+    if (/^\/bots\/[^/]+$/.test(path) && request.method === 'GET') return json(response, { ...bots.find(bot => bot.id === path.split('/')[2]), instructions: 'Be clear and useful.', enabledMcpServers: ['calendar'], availableMcpServers: ['calendar', 'recipes'] });
+    if (path === '/bootstrap') return json(response, { user: { id: 'preview', name: 'Nicolas', email: 'preview@localhost.invalid' }, household: [{ id: 'preview', name: 'Nicolas' }, { id: 'two', name: 'Jordan' }], bots, preferences, vapidPublicKey: previewPushKey, connection: { connected: process.env.PREVIEW_DISCONNECTED !== '1', version: '5c1d0e7a9b3f4c2d8e6a1b0c9d8e7f6a5b4c3d2e', revisionDate: '2026-09-18T16:20:00Z' }, csrfToken: 'fixture-only', capabilities: Object.fromEntries(['chat', 'steering', 'approvals', 'uploads', 'generatedFiles', 'botConfiguration', 'tools', 'skills', 'routines', 'stop', 'avatarMetadata', 'durableEvents', 'idempotency', 'imageGeneration', 'portraitGeneration', 'liveVoice'].map(key => [key, { supported: true }])) });
     const fixtureUser = request.headers['x-preview-user'] || 'preview';
     const experiencePath = path === '/today' || path === '/today/seen' || /\/memory(?:\/|$)|\/vault(?:\/|$)|\/secure-requests\/|\/voice\/|\/cards\/|^\/routines\//.test(path);
     if (experiencePath && !signedIn) return json(response, { error: 'Sign in to use the preview fixture.' }, 401);
@@ -509,15 +549,25 @@ const server = createServer(async (request, response) => {
     if (resultsMatch) return json(response, resultsMatch[3] ? { previewOnly: false, messages: [{ id: 'fixture-run-output', role: 'assistant', text: '## Morning gate check\n\nThe north gate battery needs replacing. The east gate is at **62%** and the barn gate is at **48%**.\n\nExplicit fixture output. No routine was executed.' }] } : [{ id: 'fixture-run', title: 'Morning gate check', startedAt: new Date().toISOString(), previewOnly: false }]);
     if (path === '/groups') {
       if (request.method === 'POST') { let room = groupRooms.find(room => room.room_id === body.requestId); if (!room) { room = { room_id: body.requestId, name: body.name, members: body.botIds.map(id => ({ member_id: id, profile: id, handle: id, display_name: bots.find(bot => bot.id === id)?.name || id })) }; groupRooms.push(room); } return json(response, { room }); }
-      return json(response, { supported: true, canSend: process.env.PREVIEW_GROUP_DRIVER_OFF !== '1', rooms: groupRooms.map(roomWithLatest), ...(process.env.PREVIEW_GROUP_DRIVER_OFF === '1' ? { reason: 'Fixture group coordinator is unavailable. History is still readable.' } : {}) });
+      return json(response, { supported: true, canSend: process.env.PREVIEW_GROUP_DRIVER_OFF !== '1', settings: true, routineDelivery: true, rooms: groupRooms.map(roomWithLatest), ...(process.env.PREVIEW_GROUP_DRIVER_OFF === '1' ? { reason: 'Fixture group coordinator is unavailable. History is still readable.' } : {}) });
     }
-    const groupMatch = /^\/groups\/([^/]+)(?:\/(log|messages|stop|approve))?$/.exec(path);
+    const groupMatch = /^\/groups\/([^/]+)(?:\/(log|messages|stop|approve|context))?$/.exec(path);
     if (groupMatch) {
       const room = groupRooms.find(room => room.room_id === groupMatch[1]); if (!room) return json(response, { error: 'Fixture room not found.' }, 404);
+      if (groupMatch[2] === 'context') {
+        const context = { purpose: body.purpose, notes: body.notes, routing: body.leadMemberId ? 'lead' : 'everyone', lead_member_id: body.leadMemberId || '' };
+        groupContexts.set(room.room_id, context);
+        return json(response, { context, event: { event_id: body.requestId, seq: groupEvents.length + 1, kind: 'room.context_set', actor: { kind: 'system', id: 'room-control' }, payload: context, created_at: Date.now() / 1000 } });
+      }
       if (groupMatch[2] === 'messages') { if (!groupRequests.has(body.requestId)) { groupRequests.add(body.requestId); groupEvents.push({ event_id: body.requestId, seq: groupEvents.length + 1, kind: 'message.user', actor: { kind: 'user', id: 'preview' }, sender: { id: 'preview', name: 'Nicolas' }, payload: { text: body.text, thread_id: body.threadId }, created_at: Date.now() / 1000 }); } return json(response, { accepted: true }); }
       if (groupMatch[2] === 'log') return json(response, { events: groupEvents.filter(event => event.seq > Number(url.searchParams.get('since') || 0)), cursor: groupEvents.length, latest_seq: groupEvents.length, has_more: false });
       if (groupMatch[2]) return json(response, { cancelled: 0, approved: true });
-      return json(response, { room, driver_status: { running: true, working: false, blocked: false, pending_actions: [] } });
+      // PREVIEW_GROUP_WORKING=1 shows two members at work, one in a tool, for the activity lines.
+      const working = process.env.PREVIEW_GROUP_WORKING === '1';
+      const member_activity = working ? [{ member_id: room.members[0].member_id, status: 'running', round_index: 1, tool: 'web_search', started_at: Date.now() / 1000 - 40 },
+        ...room.members.slice(1, 2).map(member => ({ member_id: member.member_id, status: 'queued', round_index: 1 }))] : [];
+      return json(response, { room, context: groupContexts.get(room.room_id) ?? { purpose: '', notes: '', routing: 'everyone', lead_member_id: '' },
+        driver_status: { running: true, working, blocked: false, pending_actions: [], member_activity, max_rounds: 3 } });
     }
     const botMatch = /^\/bots\/([^/]+)$/.exec(path);
     if (botMatch && request.method === 'PATCH') {
@@ -600,7 +650,7 @@ const server = createServer(async (request, response) => {
     return json(response, {});
   }
   if (url.pathname === '/inline-ui') { response.writeHead(200, { 'Content-Type': 'text/html', 'Content-Security-Policy': inlineUiShellPolicy, 'X-Frame-Options': 'SAMEORIGIN' }); return response.end(inlineUiShell); }
-  try { const file = resolve(root, '.' + url.pathname); if (!file.startsWith(root + '/') && file !== root) throw Error(); const content = url.pathname === '/' ? await fixtureHtml() : await readFile(file); response.writeHead(200, { ...documentHeaders(request), 'Content-Type': ({ '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.html': 'text/html', '.webmanifest': 'application/manifest+json' })[extname(file)] || 'text/html' }); response.end(content); }
+  try { const file = resolve(root, '.' + url.pathname); if (!file.startsWith(root + '/') && file !== root) throw Error(); const content = url.pathname === '/' ? await fixtureHtml() : await readFile(file); response.writeHead(200, { ...documentHeaders(request), 'Content-Type': ({ '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.html': 'text/html', '.webmanifest': 'application/manifest+json', '.m4a': 'audio/mp4' })[extname(file)] || 'text/html' }); response.end(content); }
   catch { try { const fallback = await fixtureHtml(); response.writeHead(200, { ...documentHeaders(request), 'Content-Type': 'text/html' }); response.end(fallback); } catch { response.writeHead(404); response.end('Run npm run build first.'); } }
 }).listen(port, host, () => process.stdout.write(`Fixture-only preview: http://${host}:${port}\n`));
 
@@ -628,6 +678,21 @@ server.on('upgrade', (request, socket, head) => {
     });
   });
 });
+
+// PREVIEW_LOG_INPUT=1 prints the desktop input the viewer sends, and answers a released mouse button
+// with a desktop clipboard change, as if the click copied something, for touch and clipboard checks.
+function logFixtureInput(client, type, message) {
+  if (type === 4) console.error(`fixture key ${message[1] ? 'down' : 'up'} 0x${message.readUInt32BE(4).toString(16)}`);
+  else if (type === 6) console.error(`fixture clipboard ${JSON.stringify(message.subarray(8).toString('latin1'))}`);
+  else if (type === 5) {
+    console.error(`fixture pointer ${message.readUInt16BE(2)} ${message.readUInt16BE(4)} mask ${message[1]}`);
+    if (message[1] === 0) {
+      const text = Buffer.from('Copied on the fixture desktop');
+      const header = Buffer.alloc(8); header[0] = 3; header.writeUInt32BE(text.length, 4);
+      client.send(Buffer.concat([header, text]));
+    }
+  }
+}
 
 // Minimal RFB server with one static desktop frame for visual and takeover checks.
 function fixtureDesktop(client) {
@@ -674,6 +739,7 @@ function fixtureDesktop(client) {
         if (!length) return;
         if (pending.length < length) return;
         const fullRefresh = type === 3 && pending[1] === 0;
+        if (process.env.PREVIEW_LOG_INPUT === '1') logFixtureInput(client, type, pending.subarray(0, length));
         pending = pending.subarray(length);
         if (type === 3 && (!frameSent || fullRefresh)) {
           frameSent = true;

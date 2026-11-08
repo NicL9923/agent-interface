@@ -1,5 +1,9 @@
 // Packages whose code only administrators run: the terminal and the remote desktop.
 const onDemandSources = /^node_modules\/@(?:novnc|xterm)\//;
+// Voice previews in assistant settings: 300 KB of audio that few visits play. Media elements fetch
+// with Range requests, which a cached full response would answer wrongly in Safari, so the worker
+// leaves them to the network.
+const networkOnly = /^voice-previews\//;
 // The context menu's popup library: its production build names its error page and tags its markup.
 const popupLibraryMarkers = /base-ui\.com\/production-error|data-base-ui-/;
 
@@ -34,6 +38,7 @@ export function assertPopupLibraryIsLazy(manifest, read) {
  * - `warm`: the other chunks, such as lazy screens. Fetched in the background after activation.
  * - `onDemand`: chunks loaded only through the admin-only dynamic imports, and anything only they
  *   import. Fetched when first used.
+ * - `network`: files the worker never caches or intercepts, such as the voice previews.
  */
 export function precachePlan(manifest, files) {
   const roots = Object.keys(manifest).filter((key) => onDemandSources.test(key) && manifest[key].isDynamicEntry);
@@ -43,9 +48,11 @@ export function precachePlan(manifest, files) {
   if (!eager.size) throw new Error('The build has no HTML entries to install.');
   const adminOnly = new Set([...filesOf(manifest, reach(manifest, roots))].filter((file) => !eager.has(file)));
   const lazy = new Set([...filesOf(manifest, Object.keys(manifest))].filter((file) => !eager.has(file) && !adminOnly.has(file)));
+  const cached = files.filter((file) => !networkOnly.test(file));
   return {
-    install: files.filter((file) => !lazy.has(file) && !adminOnly.has(file)),
-    warm: files.filter((file) => lazy.has(file)),
-    onDemand: files.filter((file) => adminOnly.has(file)),
+    install: cached.filter((file) => !lazy.has(file) && !adminOnly.has(file)),
+    warm: cached.filter((file) => lazy.has(file)),
+    onDemand: cached.filter((file) => adminOnly.has(file)),
+    network: files.filter((file) => networkOnly.test(file)),
   };
 }

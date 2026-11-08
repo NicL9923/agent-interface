@@ -5,7 +5,7 @@ async (page, { origin, outputDir }) => {
   const tab = await context.newPage();
   const paths = [];
   const checks = [];
-  let initialPreferences;
+  let initialPreferences, restoreFailed = false;
   const shot = async name => {
     await tab.mouse.move(0, 0);
     await tab.evaluate(async () => {
@@ -127,7 +127,6 @@ async (page, { origin, outputDir }) => {
       await find.press('Escape');
       if (await find.count()) throw new Error('Escape did not close Find');
     }
-    return { paths, checks };
   } catch (error) {
     await tab.screenshot({ path: `${outputDir}/capture-failure.png` }).catch(() => {});
     throw error;
@@ -135,8 +134,11 @@ async (page, { origin, outputDir }) => {
     try {
       if (initialPreferences) {
         const restored = await context.request.patch(`${origin}/api/preferences`, { data: initialPreferences });
-        if (!restored.ok()) throw new Error('Fixture preferences could not be restored');
+        restoreFailed = !restored.ok();
       }
     } finally { await context.close(); }
   }
+  // Reached only when the capture itself succeeded, so a restore failure never hides its error.
+  if (restoreFailed) throw new Error('Fixture preferences could not be restored');
+  return { paths, checks };
 }

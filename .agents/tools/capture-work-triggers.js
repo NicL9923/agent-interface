@@ -9,7 +9,7 @@ async ({tab,panel,fixture,reset,capture,paths,geometry,workChecks,browserErrors,
     const data=getWork().triggers.items.find(item=>item.id===id) || fixture.work.triggers.items.find(item=>item.id===id) || fixture.workFixture.newTrigger;
     return section.locator("article.automation-item").filter({has:tab.getByRole("heading",{name:data.description||id,exact:true})});
   };
-  let width=390,theme="light",large=false;
+  let width=390,theme="light";
   const ensure=(value,message)=>{if(!value)throw Error(message);};
   const bounds=async target=>target.evaluate(node=>{
     const r=node.getBoundingClientRect(),v=node.closest(".settings-content").getBoundingClientRect();
@@ -18,7 +18,7 @@ async ({tab,panel,fixture,reset,capture,paths,geometry,workChecks,browserErrors,
       fullyVisible:r.top>=Math.max(0,v.top)&&r.bottom<=Math.min(innerHeight,v.bottom)&&r.left>=0&&r.right<=innerWidth};
   });
   const setup=async(options={})=>{
-    releaseRoutines();width=options.width||390;theme=options.theme||"light";large=!!options.large;
+    releaseRoutines();width=options.width||390;theme=options.theme||"light";
     const routineStarted=options.mode==="routines-loading"?nextRoutineRequest():null;
     // reset can fail first; keep its pending request timeout from becoming an unhandled rejection.
     routineStarted?.catch(()=>{});
@@ -175,13 +175,20 @@ async ({tab,panel,fixture,reset,capture,paths,geometry,workChecks,browserErrors,
   ensure(!await secret().count(),"Acknowledged secret remained mounted");
   ensure(!getWork().triggers.items.find(x=>x.id===fixture.workFixture.newTrigger.id).enabled,"New trigger not disabled");
   await landing("created-notice",notice);await shot("created",row(fixture.workFixture.newTrigger.id).getByRole("heading"));
-  // Leaving Work is recorded honestly: it clears the current secret without another write.
+  // Leaving Automation is recorded honestly: it clears the current secret without another write.
   await setup();await create();start=getSubmissions().length;
+  // Open a settings section by label in either layout: tabs on wide screens, the section list on phones.
+  const openSection=async(scope,label)=>{
+    await scope.locator('nav[aria-label="Settings sections"], button[aria-label="All settings"]').first().waitFor();
+    const tabs=scope.locator("nav.settings-tabs");
+    if(await tabs.count()){await tabs.getByRole("button",{name:label,exact:true}).click();return;}
+    const index=scope.locator("nav.settings-index");
+    if(!await index.count())await scope.getByRole("button",{name:"All settings",exact:true}).click();
+    await index.locator(".settings-row").filter({has:scope.page().locator(".row-label").filter({hasText:new RegExp(`^${label}$`)})}).click();
+  };
   const dialog=tab.locator(".settings-dialog");
-  await dialog.getByRole("button",{name:"details",exact:true}).click();
-  const overflow=dialog.locator(".settings-tabs-overflow");
-  if(await overflow.count()&&await overflow.getAttribute("open")===null)await overflow.locator("summary").click();
-  await dialog.getByRole("button",{name:"work",exact:true}).click();
+  await openSection(dialog,"Profile");
+  await openSection(dialog,"Automation");
   await heading().waitFor();ensure(!await secret().count()&&getSubmissions().length===start,"Secret persisted or leaving wrote data");
   const storage=await tab.evaluate(token=>{
     const check=store=>({entries:store.length,containsSecret:Object.values(store).some(value=>String(value).includes(token))});

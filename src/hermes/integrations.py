@@ -6,6 +6,7 @@ proxy, shell installation, environment editor, or credential reveal is exposed.
 import asyncio
 import datetime
 import hashlib
+import hmac
 import importlib.util
 import ipaddress
 import json
@@ -100,29 +101,122 @@ def fingerprint(home):
         path = Path(home) / name
         digest.update(name.encode())
         digest.update(path.read_bytes() if path.exists() else b"missing")
+    # Which MCP servers hold OAuth tokens, by file name only: finishing or losing a sign-in changes
+    # their status, so a check cached before must not outlive it. Token refreshes keep the names.
+    tokens = Path(home) / "mcp-tokens"
+    digest.update(b"mcp-tokens\0" + "\0".join(sorted(path.name for path in tokens.iterdir())).encode() if tokens.is_dir() else b"no-mcp-tokens")
     return digest.hexdigest()
 
 
-def cache_check(home, result):
+def token_stamp(home):
+    """When any MCP OAuth token file last changed. A sign-in that reuses a server's file names still moves it."""
+    digest = hashlib.sha256()
+    tokens = Path(home) / "mcp-tokens"
+    if tokens.is_dir():
+        for path in sorted(tokens.iterdir()):
+            try:
+                stat_result = path.stat()
+            except OSError:
+                continue
+            digest.update(f"{path.name}\0{stat_result.st_mtime_ns}\0{stat_result.st_size}\0".encode())
+    return digest.hexdigest()
+
+
+NEEDS_AUTH_DETAIL = "Hermes stopped using this server because its sign-in was rejected. Reconnect to sign in again."
+
+
+def mcp_runtime(profile):
+    """Hermes's cached runtime state for this profile's MCP servers, keyed by connection ID.
+
+    Native ``mcp.servers.status`` never connects, probes or starts a sign-in. Its ``needs_auth`` says
+    the live server is parked on a rejected OAuth credential. An older Hermes omits the field, and a
+    process that doesn't hold the profile's runtime reports every server as never tried, so only
+    ``needs_auth: true`` and a live connection count as evidence. Empty when the status can't be read.
+    """
+    try:
+        from tui_gateway import server
+        response = server.handle_request({"jsonrpc": "2.0", "id": "agent-interface-mcp-status", "method": "mcp.servers.status", "params": {"profile": profile}})
+    except Exception:
+        return {}
+    result = response.get("result") if isinstance(response, dict) else None
+    rows = result.get("servers") if isinstance(result, dict) else None
+    if not isinstance(rows, list):
+        return {}
+    return {(row["name"] if row["name"] in PRESETS else "mcp:" + row["name"]): row
+            for row in rows if isinstance(row, dict) and isinstance(row.get("name"), str)}
+
+
+def auth_episodes(home, runtime):
+    """The rejected sign-in episode each MCP connection is in, as an opaque ID.
+
+    An episode starts when the app first reads ``needs_auth: true`` for a server and ends when Hermes
+    reports ``needs_auth: false``, so a later rejection is a new episode even with unchanged tokens.
+    A row without the field, or no status at all, leaves the record as it was. The app sees only the
+    states it reads: a recovery and a new rejection between two reads look like one episode.
+    """
+    path = Path(home) / "agent_interface_mcp_auth_episodes.json"
+    try:
+        saved = private_json(path)
+    except (ValueError, OSError):
+        saved = {}
+    episodes = {key: value for key, value in saved.items() if isinstance(value, str)} if isinstance(saved, dict) else {}
+    for row_id, row in (runtime or {}).items():
+        if not isinstance(row, dict):
+            continue
+        if row.get("needs_auth") is True and row_id not in episodes:
+            episodes[row_id] = secrets.token_hex(8)
+        elif row.get("needs_auth") is False:
+            episodes.pop(row_id, None)
+    if episodes != saved:
+        private_fs.atomic_json(path, episodes)
+    return episodes
+
+
+def cache_check(home, result, episode=None):
     path = Path(home) / "agent_interface_integration_checks.json"
     try:
         cached = private_json(path)
     except (ValueError, OSError):
         cached = {}
-    cached[result["id"]] = dict(fingerprint=fingerprint(home), checked=result)
+    # needsAuthEpisode: the rejected sign-in episode Hermes still reported when this check ran.
+    cached[result["id"]] = dict(fingerprint=fingerprint(home), tokens=token_stamp(home), checked=result, **({"needsAuthEpisode": episode} if episode else {}))
     private_fs.atomic_json(path, cached)
 
 
-def apply_checks(home, rows):
+def apply_checks(home, rows, runtime=None):
+    """Lay saved check results and Hermes's live MCP state over the configuration rows.
+
+    For an MCP server, Hermes's own ``needs_auth`` decides the reconnect state when it reports one. Only a
+    successful check made during the same rejection episode, with the same OAuth tokens, outranks it: a
+    sign-in finished in another profile's process clears the park at that assistant's next turn. A live
+    connection retires a saved failure. Without either signal, a failed check stops counting once OAuth
+    tokens are rewritten.
+    """
     try:
         saved = private_json(Path(home) / "agent_interface_integration_checks.json")
     except (ValueError, OSError):
-        return rows
-    current = fingerprint(home)
+        saved = {}
+    current, tokens = fingerprint(home), token_stamp(home)
+    episodes = auth_episodes(home, runtime)
     for row in rows:
         checked = saved.get(row["id"], {})
-        if checked.get("fingerprint") == current:
-            evidence = checked.get("checked", {})
+        evidence = checked.get("checked", {})
+        mcp_row = row["id"] in PRESETS or row["id"].startswith("mcp:")
+        live = (runtime or {}).get(row["id"]) if mcp_row else None
+        live = live if isinstance(live, dict) else {}
+        failed = evidence.get("status") != "connected"
+        if live.get("needs_auth") is True:
+            episode = checked.get("needsAuthEpisode")
+            if failed or not episode or episode != episodes.get(row["id"]) or checked.get("tokens") != tokens or checked.get("fingerprint") != current:
+                row.update(status="expired", detail=NEEDS_AUTH_DETAIL)
+                continue
+            stale = False
+        elif live.get("connected") is True:
+            stale = failed
+        else:
+            # A success survives routine token refreshes, which keep the same files.
+            stale = mcp_row and failed and checked.get("tokens") != tokens
+        if checked.get("fingerprint") == current and not stale:
             for field in ("status", "detail", "checkedAt", "account", "capabilities"):
                 if field in evidence:
                     row[field] = evidence[field]
@@ -351,7 +445,7 @@ def begin_google(home, profile, redirect_uri, fields=None):
                 if expected_account != existing.get("expected_account", ""):
                     raise IntegrationError("Cancel the existing Google authorization before choosing another account.")
                 return flow_summary(existing_id, existing)
-        FLOWS[flow_id] = dict(kind="google", profile=profile, home=str(home), state=state, flow=flow, client=client, expires=time.time()+600, status="pending", manual=manual, public_url=url, flow_kind="redirect", callbackInput=manual, expected_account=expected_account, original_token=(Path(home) / "google_token.json").read_bytes() if (Path(home) / "google_token.json").exists() else None)
+        FLOWS[flow_id] = dict(kind="google", connection="google_workspace", profile=profile, home=str(home), state=state, flow=flow, client=client, expires=time.time()+600, status="pending", manual=manual, public_url=url, flow_kind="redirect", callbackInput=manual, expected_account=expected_account, original_token=(Path(home) / "google_token.json").read_bytes() if (Path(home) / "google_token.json").exists() else None)
     return dict(kind="redirect", status="pending", flowId=flow_id, url=url, callbackInput=manual,
                 message="Authorize Google, then return to check this connection." if not manual else "This existing installed OAuth client uses an advanced manual flow. Copy the entire localhost redirect URL and paste it here. A registered web client enables automatic completion.")
 
@@ -375,7 +469,7 @@ def google_callback(callback_url, flow_id=None, profile=None):
         entry["status"] = "exchanging"
     if query.get("error"):
         entry["status"] = "error"
-        return dict(kind="instructions", status="error", flowId=key, message="Google consent was declined. Your previous grant remains available.")
+        return dict(kind="instructions", status="error", flowId=key, connectionId="google_workspace", message="Google consent was declined. Your previous grant remains available.")
     if not query.get("code"):
         entry["status"] = "error"
         raise IntegrationError("The full Google callback URL must include its code and state.")
@@ -433,7 +527,7 @@ def google_callback(callback_url, flow_id=None, profile=None):
                     entry["status"] = "approved"
             finally:
                 retirement.cancel(permit["token"])
-        return dict(kind="connected", status="approved", flowId=key, message="Google Workspace is connected to " + account + ". Enable the Google Tasks toolset on this bot to read its task lists and tasks.")
+        return dict(kind="connected", status="approved", flowId=key, connectionId="google_workspace", message="Google Workspace is connected to " + account + ". Enable the Google Tasks toolset on this bot to read its task lists and tasks.")
     except Exception:
         with FLOW_LOCK:
             if entry["status"] != "cancelled":
@@ -565,15 +659,15 @@ async def inventory(profile):
     server_map = {row["name"]: row for row in servers}
     for key, (label, category) in PRESETS.items():
         native = server_map.get(key)
-        rows.append(card(key, label, category, profile, "configured" if native else "not_connected",
-                         "MCP server saved in this Hermes profile. Check verifies tool discovery." if native else "Connect this service's MCP endpoint. Credentials stay in Hermes.",
+        rows.append(card(key, label, category, profile, *mcp_status(home, native),
                          setup=[dict(key="url", label="HTTPS MCP endpoint", kind="url", required=key not in DEFAULT_URLS, defaultValue=DEFAULT_URLS.get(key, "")), dict(key="auth", label="Authentication", kind="text", required=True, defaultValue="bearer" if key in ("github", "home_assistant") else "oauth", options=[dict(value="oauth", label="Browser sign-in"), dict(value="bearer", label="Access token"), dict(value="none", label="No sign-in")]), dict(key="token", label="Bearer token", kind="secret", required=False)] if not native else [dict(key="token", label="New bearer token", kind="secret", required=True)] if native.get("auth") == "header" else [],
                          actions=dict(connect=not native or native.get("auth") in ("oauth", "header"), check=bool(native), disconnect=bool(native) and native.get("source") != "plugin"), capabilities=["Tools provided by the connected MCP server"] ))
     for native in servers:
         if native["name"] in PRESETS:
             continue
-        rows.append(card("mcp:" + native["name"], native["name"], "custom", profile, "configured",
-                         "Configured MCP server. A saved configuration does not prove live access.",
+        status, detail = mcp_status(home, native)
+        rows.append(card("mcp:" + native["name"], native["name"], "custom", profile, status,
+                         detail if status != "configured" else "Configured MCP server. A saved configuration does not prove live access.",
                          setup=[dict(key="token", label="New bearer token", kind="secret", required=True)] if native.get("auth") == "header" else [],
                          actions=dict(connect=native.get("auth") in ("oauth", "header") and native.get("source") != "plugin", check=True, disconnect=native.get("source") != "plugin"), capabilities=["Native MCP tools"]))
     rows.append(card("selected_files", "Selected files and folders", "files", profile, "configured" if roots else "not_connected",
@@ -599,7 +693,27 @@ async def inventory(profile):
         rows.append(card("provider:" + provider["id"], provider["name"], "providers", profile, "configured" if connected else "not_connected",
                          "Hermes has provider credentials. Its native provider status is configuration evidence." if connected else "Authorize this model provider through its native Hermes flow." if provider["flow"] == "device_code" else "This provider's account is owned by its official CLI. Complete sign-in there, then refresh this list.",
                          actions=dict(connect=provider["flow"] == "device_code", check=False, disconnect=bool(provider.get("disconnectable") and connected)), capabilities=["Models"]))
-    return dict(profile=profile, canManage=False, connections=apply_checks(home, rows))
+    runtime = await asyncio.to_thread(mcp_runtime, profile)
+    return dict(profile=profile, canManage=False, connections=apply_checks(home, rows, runtime))
+
+
+def oauth_signed_in(home, name):
+    """Whether Hermes holds OAuth tokens for this MCP server, which may be expired. None when this
+    revision can't say. Saving an OAuth server comes before its sign-in, so saved alone isn't usable."""
+    try:
+        from tools.mcp_oauth import HermesTokenStorage
+        return HermesTokenStorage(name, hermes_home=home).has_cached_tokens()
+    except Exception:
+        return None
+
+
+def mcp_status(home, native):
+    """A saved server reads as configured unless it uses OAuth and its sign-in never finished."""
+    if not native:
+        return "not_connected", "Connect this service's MCP endpoint. Credentials stay in Hermes."
+    if native.get("auth") == "oauth" and oauth_signed_in(home, native["name"]) is False:
+        return "not_connected", "Saved in this Hermes profile, but its sign-in hasn't finished. Connect to sign in."
+    return "configured", "MCP server saved in this Hermes profile. Check verifies tool discovery."
 
 
 def flow_summary(key, entry):
@@ -607,7 +721,7 @@ def flow_summary(key, entry):
     status = "expired" if expired else entry["status"]
     pending = status in ("pending", "exchanging")
     result = dict(kind=entry.get("flow_kind", "redirect") if pending else "connected" if status == "approved" else "instructions", status="pending" if status == "exchanging" else status,
-                  flowId=key, expiresAt=datetime.datetime.fromtimestamp(entry["expires"], datetime.timezone.utc).isoformat(),
+                  flowId=key, connectionId=entry.get("connection"), expiresAt=datetime.datetime.fromtimestamp(entry["expires"], datetime.timezone.utc).isoformat(),
                   message="Authorization completed. Refresh the connection status." if status == "approved" else "Authorization expired. Start again." if status == "expired" else "Waiting for authorization." if pending else "Authorization cancelled. Refresh connection status." if status == "cancelled" else "Authorization did not complete. Check connection status before retrying.")
     if pending:
         for field in ("userCode", "callbackInput"):
@@ -773,7 +887,7 @@ async def dispatch(data, request):
             result = await mcp.auth_mcp_server(name, request, profile)
             key = secrets.token_urlsafe(24)
             with FLOW_LOCK:
-                FLOWS[key] = dict(kind="mcp", profile=profile, home=home, native_id=result["flow_id"], public_url=clean_url(result.get("authorization_url")), flow_kind="redirect", expires=time.time()+600, status="pending")
+                FLOWS[key] = dict(kind="mcp", connection=name if name in PRESETS else identity, profile=profile, home=home, native_id=result["flow_id"], public_url=clean_url(result.get("authorization_url")), flow_kind="redirect", expires=time.time()+600, status="pending")
             url = clean_url(result.get("authorization_url"))
             if not url:
                 raise IntegrationError("Hermes did not return a safe authorization URL. Review the native MCP connection.")
@@ -783,7 +897,7 @@ async def dispatch(data, request):
             result = await oauth.start_oauth_login(provider, request, profile)
             key = secrets.token_urlsafe(24)
             with FLOW_LOCK:
-                FLOWS[key] = dict(kind="provider", profile=profile, home=home, provider=provider, native_id=result["session_id"], public_url=clean_url(result.get("verification_url")), flow_kind="device_code", userCode=result.get("user_code"), expires=time.time()+min(result.get("expires_in", 600), 900), status="pending")
+                FLOWS[key] = dict(kind="provider", connection=identity, profile=profile, home=home, provider=provider, native_id=result["session_id"], public_url=clean_url(result.get("verification_url")), flow_kind="device_code", userCode=result.get("user_code"), expires=time.time()+min(result.get("expires_in", 600), 900), status="pending")
             url = clean_url(result.get("verification_url"))
             if not url:
                 raise IntegrationError("The provider did not return a safe authorization URL.")
@@ -876,6 +990,11 @@ async def dispatch(data, request):
             error = str(checked.get("error", "")).lower()
             failure_status = "expired" if any(word in error for word in ("401", "oauth authentication required", "unauthorized", "invalid_token")) else "missing_permission" if any(word in error for word in ("403", "forbidden", "permission")) else "unavailable"
             result.update(status="connected" if checked.get("ok") else failure_status, detail="Hermes connected and discovered the MCP tools." if checked.get("ok") else "MCP discovery failed. Review authentication and service availability in Hermes.", capabilities=[tool["name"] for tool in checked.get("tools", [])][:100])
+            result["checkedAt"] = now()
+            runtime = await asyncio.to_thread(mcp_runtime, profile)
+            episode = (await asyncio.to_thread(auth_episodes, home, runtime)).get(identity) if runtime.get(identity, {}).get("needs_auth") is True else None
+            await asyncio.to_thread(cache_check, home, result, episode)
+            return result
         elif identity.startswith("key:") and identity[4:] in KEYS:
             env_key = KEYS[identity[4:]][1]
             def read_key():
@@ -986,3 +1105,145 @@ def install(web):
     # FastAPI's annotation resolver needs Request in module globals.
     globals()["Request"] = Request
     web.app.add_api_route("/api/agent-interface/integrations", endpoint, methods=["POST"])
+
+
+CONNECTION_REQUEST = "agent_interface.connection_request"
+CONNECTION_TOOL = "request_connection"
+# A card nobody finishes closes after this long. Browser sign-ins and finding a token take a while.
+CONNECTION_WAIT = 900
+# Catalog IDs an assistant may ask for; src/shared/integrations.ts requestableConnectionId must match.
+REQUESTABLE = re.compile(r"(google_workspace|github|synology|supabase|cloudflare|vps|home_assistant|selected_files|discord|key:[a-z0-9_]{1,40}|provider:[A-Za-z0-9_-]{1,80}|mcp:[A-Za-z0-9_-]{1,80})")
+# Control, zero-width and bidirectional characters can disguise what a card shows.
+HIDDEN = re.compile(r"[\x00-\x1f\x7f-\x9f​-‏ -‮⁠-⁯﻿]")
+_journal = None
+
+
+def connection_failure(error_type, message):
+    return json.dumps({"success": False, "error_type": error_type, "error": message})
+
+
+CONNECTION_RESULTS = {
+    "connected": dict(success=True, status="connected", next=(
+        "The person set up the connection and WildBots confirmed Hermes has it saved. Continue the task with it. "
+        "Tools from a newly added MCP server can appear only at the start of your next turn: if they are not in your "
+        "tools yet, tell the user it is connected and ask them to reply so you can continue. If using it fails, say "
+        "what failed instead of asking again.")),
+    "declined": dict(success=False, error_type="declined", error=(
+        "The person chose Not now, so nothing was connected. Continue without it, or tell them what it blocks. Do not "
+        "ask again unless they ask you to.")),
+    "timed_out": dict(success=False, error_type="timed_out", error=(
+        "Nobody finished the connection within 15 minutes, so the request closed. Tell the user what is waiting and "
+        "that they can connect it from this assistant's Connections settings, then ask them to reply.")),
+}
+
+
+def request_connection(args, **_kwargs):
+    """Asks a person in WildBots to set up one of this assistant's connections, and waits for them."""
+    vault, computer = sibling_module("vault"), sibling_module("computer")
+    if not isinstance(args, dict) or set(args) - {"connection", "reason"}:
+        return connection_failure("invalid_arguments", "Pass only connection and reason.")
+    connection = args.get("connection").strip() if isinstance(args.get("connection"), str) else ""
+    reason = " ".join(args.get("reason").split()) if isinstance(args.get("reason"), str) else ""
+    if not REQUESTABLE.fullmatch(connection):
+        return connection_failure("invalid_arguments", "Give connection as one catalog ID from this tool's description, "
+                                  "such as google_workspace, github or key:brave.")
+    if not 1 <= len(reason) <= 200 or HIDDEN.search(reason):
+        return connection_failure("invalid_arguments", "Give reason as 1 to 200 visible characters.")
+    from gateway.session_context import get_session_env
+    sid = get_session_env("HERMES_UI_SESSION_ID")
+    if not sid or not computer.person_waiting(sid, _journal):
+        return connection_failure("no_person", "Nobody is waiting in this WildBots conversation to see a connection card, "
+                                  "as in a scheduled or messaging run. Tell the user which connection you need and that "
+                                  "they can add it from this assistant's Connections settings in WildBots.")
+    from tui_gateway import server_requests
+    started = time.monotonic()
+    with vault.watched_asks() as asks:
+        result = server_requests.send(CONNECTION_REQUEST, sid, {"connection": connection, "reason": reason},
+                                      timeout=CONNECTION_WAIT)
+    value = (result or {}).get("value", "")
+    if value in ("connected", "declined"):
+        return json.dumps(CONNECTION_RESULTS[value])
+    if vault.replied_in_chat(asks):
+        return connection_failure("user_replied_in_chat", "The user sent a chat message instead of finishing the "
+                                  "connection card, so it closed. Their message is the next user message: read it before "
+                                  "doing anything else. If they still want this, ask again with what they corrected.")
+    if result is None and time.monotonic() - started >= CONNECTION_WAIT - 1:
+        return json.dumps(CONNECTION_RESULTS["timed_out"])
+    return connection_failure("cancelled", "The request closed without an answer, for example because the task was "
+                              "stopped. Do not continue the step that needed this connection.")
+
+
+CONNECTION_SCHEMA = dict(name=CONNECTION_TOOL, description=(
+    "Ask the user to connect a service inline in the chat. Use it when your task needs an account, MCP server or API "
+    "key this assistant does not have yet, or a connection that expired or lacks a permission, such as Gmail access "
+    "for an email task. The user sees a card in WildBots with your reason and that connection's own sign-in or setup "
+    "form, plus Continue and Not now. Credentials go straight to Hermes; never ask for tokens, keys or passwords in "
+    "chat. The call waits until the user finishes or declines, up to 15 minutes. "
+    "connection is a catalog ID: google_workspace (Gmail, Calendar, Drive, Tasks, Contacts), github, supabase, "
+    "cloudflare, home_assistant, synology, vps, selected_files (server folders), discord, key:openai, key:anthropic_key, "
+    "key:gemini, key:openrouter, key:brave, key:exa, key:firecrawl, key:fal, provider:<Hermes model provider id>, or "
+    "mcp:<name of a custom MCP server already added>. "
+    "Results: status connected: continue with it; a new MCP server's tools may appear only next turn. declined: they "
+    "chose Not now; continue without it or explain what it blocks, and do not ask again unless they ask you to. "
+    "user_replied_in_chat: they sent a message instead; read it next. timed_out: nobody finished within 15 minutes; "
+    "tell them what is waiting. no_person: nobody can see a card now, as in a scheduled run; tell them what to "
+    "connect in Settings. invalid_arguments: fix the arguments and call again. cancelled: the task was stopped."),
+    parameters=dict(type="object", additionalProperties=False, required=["connection", "reason"], properties=dict(
+        connection=dict(type="string", description="The catalog ID of the connection to set up, such as google_workspace."),
+        reason=dict(type="string", description="Why you need it, in one short sentence the user sees, such as "
+                    "I need Gmail access to find your flight confirmation. At most 200 characters."))))
+
+
+def settle_connection_request(params):
+    """Continue or Not now on a connection card. Only this executor's open ask in that profile's conversation settles.
+
+    The app confirms the connection reads as set up before it sends connected.
+    """
+    from tui_gateway import server_requests
+    request_id, sid, epoch, profile = (params.get(key) for key in ("requestId", "sessionId", "epoch", "profile"))
+    decision = {"connected": "connected", "decline": "declined"}.get(params.get("decision"))
+    if decision is None or not all(isinstance(value, str) and 1 <= len(value) <= 200 for value in (request_id, sid, epoch, profile)):
+        raise IntegrationError("This connection request is invalid.")
+    with server_requests._lock:
+        request = server_requests._open.get(request_id)
+    if request is None:
+        return {"status": "expired"}
+    journal = _journal
+    if (journal is None or request.method != CONNECTION_REQUEST or request.sid != sid or epoch != journal.epoch
+            or journal.live_profile_for_session(sid) != profile or journal.canonical_session(profile) != sid):
+        raise IntegrationError("This connection request changed. Refresh the conversation.")
+    if params.get("connection") != request.params.get("connection"):
+        raise IntegrationError("This connection request changed. Refresh the conversation.")
+    resolved = server_requests.resolve_response({"jsonrpc": "2.0", "id": request_id, "result": {"value": decision}})
+    return {"status": "ok" if resolved else "expired"}
+
+
+def install_requests(server, journal):
+    """Registers the connection ask, its tool and the app's settle method. Older revisions without the seam get no tool."""
+    global _journal
+    _journal = journal
+    def settle(rid, params):
+        params = params if isinstance(params, dict) else {}
+        secret, supplied = os.environ.get("HERMES_AGENT_INTERFACE_TOKEN", ""), params.get("service_key", "")
+        if not secret or not isinstance(supplied, str) or not hmac.compare_digest(supplied, secret):
+            return server._err(rid, 403, "Private application authentication is required.")
+        try:
+            return server._ok(rid, settle_connection_request(params))
+        except IntegrationError as exc:
+            return server._err(rid, 409, str(exc))
+    server.register_method("agent-interface.connection-request", settle)
+    try:
+        from tui_gateway.contracts import registry as contracts
+        from tui_gateway.contracts.server_requests import ServerRequestParams, ValueResult
+    except ImportError:
+        return
+    if CONNECTION_REQUEST not in contracts.SERVER_REQUESTS:
+        class ConnectionRequestParams(ServerRequestParams):
+            connection: str
+            reason: str
+        contracts.server_request(CONNECTION_REQUEST, params=ConnectionRequestParams, result=ValueResult,
+                                 doc="WildBots: ask a person to set up one of this assistant's connections inline.")
+    from tools.registry import registry
+    # An ask-the-user tool: it rides with clarify, and a session nobody can answer refuses at call time.
+    registry.register(name=CONNECTION_TOOL, toolset="clarify", schema=CONNECTION_SCHEMA, emoji="🔗",
+                      handler=request_connection)

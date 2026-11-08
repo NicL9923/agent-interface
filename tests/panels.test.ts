@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 import { act, createElement, lazy } from "react";
 import type { Root } from "react-dom/client";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { Loading } from "../src/app/panels";
 import { mountRoot } from "./ui-harness";
+import { quietConsoleErrors } from "./act-guard";
 
 let container: HTMLDivElement;
 let root: Root;
@@ -24,7 +25,7 @@ describe("lazy screens", () => {
   });
 
   it("offer a reload instead of blanking the app when a screen cannot load", async () => {
-    vi.spyOn(console, "error").mockImplementation(() => {});
+    quietConsoleErrors();
     const Screen = lazy(() => Promise.reject(new Error("Failed to fetch dynamically imported module")));
     await act(async () => root.render(createElement("div", null, createElement("p", { id: "app" }, "App"), createElement(Loading, null, createElement(Screen)))));
     expect(container.querySelector("#app")?.textContent).toBe("App");

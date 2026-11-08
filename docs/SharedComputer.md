@@ -12,6 +12,24 @@ A second household member can watch, but cannot steal another person's control.
 After a lost connection, the desktop reconnects in watch mode; take over explicitly
 to resume input. Closing the last desktop attachment normally hands control back.
 
+On a phone or tablet, in the web app and the iOS app, touch works like this:
+
+- Tap clicks where you tapped, and one finger drags. A quick second tap on the same
+  spot double-clicks.
+- Two-finger tap, or press and hold, right-clicks. Two fingers scroll.
+- Pinch zooms the view, not the desktop. Zoomed in, two fingers pan instead of
+  scrolling. **Reset zoom** zooms back out.
+- **Trackpad mode** turns a finger into a trackpad: it moves a pointer, a tap
+  clicks there, and double-tap and hold drags. **Recenter pointer** brings the
+  pointer back on screen.
+- **Copy to** this device copies what was last copied on the desktop. **Paste
+  from** this device puts the device's clipboard on the desktop's clipboard and
+  types it into the selected field, up to 8192 characters.
+
+The **?** button explains these. On the web, the touch buttons sit below the
+desktop; in the iOS app, the bottom bar holds the keyboard and clipboard, and its
+**⋯** menu holds trackpad mode and zoom. Mouse and keyboard input are unchanged.
+
 An assistant can ask for a person from the conversation with its
 `computer_request_handoff` tool, for a CAPTCHA, a sign-in that needs a phone, a
 purchase confirmation or a choice only a person should make. The tool exists only
@@ -29,6 +47,28 @@ open handoff, since each asked a person to use the same computer.
 While an assistant's running tool uses the browser or desktop, its live row in
 the conversation offers **Watch**, which opens the computer without taking control.
 
+An assistant can also ask for a person at the system terminal with its
+`computer_request_terminal` tool, for a step that needs a real shell on the Hermes
+host, such as a command that needs `sudo` or an interactive sign-in like
+`gh auth login`. The tool exists only when the household computer is configured. It
+takes a reason, what to do and an optional one-line command of up to 500 visible
+characters. Its card shows all three, with a **Copy** button for the command, and
+warns that the assistant cannot see the terminal. **Open terminal** opens the
+Terminal tab with the command offered beside the shell. **Paste at prompt** pastes it
+without running it, and the person reads it and presses Enter. Nothing is pasted on
+its own, because the persistent shell may still be running a program that waits for
+a single key, which pasted text could answer. A command with a line break or a
+hidden character is refused by both the add-on and the app, because a pasted newline
+would run it. **Done** tells the assistant the person finished; its result says the
+assistant cannot see the terminal or its output and must check the outcome itself.
+Every other result tells the assistant that whether anything ran is unknown.
+**Not now** declines, and sending a message instead closes the card. A request
+nobody answers closes after 30 minutes. Only terminal administrators can open the
+terminal or press Done, so everyone else sees why the buttons are off and can still
+choose Not now. Opening the terminal from the card follows the usual rules,
+including the sign-in confirmed in the last 2 hours. The ask never pauses the
+assistant's desktop and browser actions, because the terminal is a separate shell.
+
 The **Terminal** tab opens a real shell on the Hermes VPS. Its host and starting
 folder appear above it. Each terminal administrator gets a separate persistent tmux
 session. Closing the panel or reconnecting preserves the shell and running commands;
@@ -42,19 +82,24 @@ the shell. It defaults to the integration administrators, must be part of
 `HOUSEHOLD_EMAILS` in production, and an empty value turns the shell off for
 everyone. Other members see why the Terminal tab is unavailable.
 
-Opening or reconnecting a shell needs a browser sign-in confirmed in the last
-2 hours. Signing in counts. After that, the Terminal tab asks you to confirm it's
-you with Google again. An open shell is not cut at the 2 hour mark; only a new
+Opening or reconnecting a shell needs a sign-in confirmed in the last 2 hours, in
+the browser or app that opens it. Signing in counts. After that, the Terminal tab
+asks you to confirm it's you with Google again. An open shell is not cut at the 2 hour mark; only a new
 attachment asks again. Each attachment is logged with the person, address and
-browser, never the ticket, and sends one "System terminal opened" alert to every
+browser or app, never the ticket, and sends one "System terminal opened" alert to every
 terminal administrator per confirmed sign-in, even during quiet hours. When the
 app starts, it ends shells that belong to anyone who is no longer a terminal
 administrator. It skips that cleanup until at least one administrator has signed
 in, so a new database or a mistyped list cannot end the owner's shell.
 
-The iOS app's Preferences offers **Open computer in browser**. It opens the same web
-workspace in the system browser, which needs its own household Google sign-in.
-The shell opens only there; the iOS app's own session cannot request one.
+The iOS app's **Settings > Computer** shows the desktop through `/native/computer`
+and types with the system keyboard while the person has control. The page's
+`desktopInput` sends nothing unless that viewer is connected with control. The
+terminal opens in the app too, through `/native/terminal`, for terminal
+administrators. The app first asks you to confirm it's you with Google in its own
+sign-in sheet, which follows the same 2 hour rule. The page never shows the web
+keyboard; the app's keyboard types, with Escape, Tab, Control, the arrows and Paste
+above it. See [the native API](native-api.md#system-terminal).
 
 ## Host setup
 
@@ -83,7 +128,8 @@ terminal detach/reconnect. VNC uses a private Unix socket; CDP listens only on
 loopback. Neither needs a public firewall or Caddy port.
 
 Control and attachment requests require household authentication. Terminal
-requests also require a terminal administrator's recent browser sign-in. Browser writes
+requests also require a terminal administrator's recent sign-in, confirmed in the
+browser or iOS app that asks. Browser writes
 use the app's existing Origin and CSRF checks. Streaming uses a session-bound,
 single-use ticket expiring after 30 seconds and checks session revocation while
 connected. The permanent Hermes service key remains on the server.
@@ -136,15 +182,81 @@ The record shares the existing service-account trust boundary. Processes with
 that Unix account's full authority are not isolated from one another.
 
 This is native local-network behavior for the authorized profile, including
-private/LAN/Headnet addresses. It is not a KVM hostname allowlist. Hermes still
-keeps the metadata floor in navigation, redirect checks and `browser_exec`.
-The add-on dispatch wrapper also blocks metadata URL literals in
-`browser_console(expression=...)`, CDP `Page.navigate` and CDP `Runtime.evaluate`,
-using native Hermes's URL-literal scanner and always-blocked matcher. These are
-literal checks, not an egress firewall. Native local classification skips the
+private/LAN/Headnet addresses. It is not a KVM hostname allowlist.
+
+The control that keeps agents away from the cloud metadata service is the host's
+metadata egress floor, an nftables table that rejects every connection the
+service account's processes open to `169.254.169.254` or `fe80::a9fe:a9fe`.
+That account runs Hermes, the app, this browser and agent terminal tools, so the
+floor also covers runtime-built URLs, `curl` and Python tools. The app's
+readiness check fails unless its metadata attempts are explicitly refused.
+Release preparation and verification refuse a host whose live floor does not
+match. A relay running as root or another account, such as an open proxy on
+loopback, is outside this boundary. See
+[Hosting](Hosting.md#metadata-egress-floor) for installation and limits.
+
+The literal checks below are defense in depth. Hermes keeps the metadata floor in
+navigation, redirect checks and `browser_exec`. The add-on dispatch wrapper also
+blocks metadata URL literals in `browser_cdp` before the household browser
+operation starts.
+
+The wrapper applies native Hermes's own CDP metadata floor.
+`browser_cdp_tool._fetched_param_urls` names every URL a fetching method's
+parameters carry, including scheme-relative `//host` and `\\host` forms and
+hosts after userinfo. `browser_url_policy.literal_targets_metadata` judges each
+one, including IPv6 and decimal, hex and octal IPv4 spellings, without DNS.
+
+The wrapper also finds special-scheme forms that native's scan misses but
+WHATWG URL parsing still reads as an authority. For `http`, `https`, `ws` and
+`wss`, these are zero or one slash (`http:/169.254.169.254/`,
+`HTTP:169.254.169.254/`), backslashes (`http:\\169.254.169.254`), and the
+JavaScript spellings `\/`, `\t`, `\n` and `\r`. It reads each authority as
+WHATWG does:
+
+- The userinfo ends at the last `@` before the first `/`, `\`, `?` or `#`.
+- A bracketed IPv6 host stays whole.
+- When an `@` follows a quote or space, the wrapper judges both readings. It
+  never judges a host cut short.
+- CSS `url()` and `@import`, unquoted HTML attributes and `srcset` end a URL
+  at `)`, `;`, a quote, `,`, `>`, `}` or whitespace. The authority is also
+  read cut at the first of those, before the userinfo split, so an `@media`
+  rule after the URL is not taken for userinfo. Each host is also judged
+  cut at the same characters.
+- Every scheme occurrence is read on its own, including one inside another
+  URL's query, so an earlier URL in the same text never hides a later one.
+- Delimiter positions are found once per text, so the scan stays near
+  linear: a 1 MiB script holding 58,252 schemes takes about 0.1 s. A host
+  over 1,024 characters is blocked unless it holds a character no IPv4 or
+  metadata-name spelling has, so leading zeros, percent-encoding or long
+  userinfo can't hide an address.
+
+A host WHATWG rejects can't fetch anything and passes. So `{https:[]}` and
+`JSON.stringify({http:[]})` still run. Rejected hosts include an unclosed,
+empty or invalid bracketed host, an empty host, a non-numeric port and a
+forbidden code point.
+
+An accepted host is judged by native in its plain form, after
+percent-decoding. A non-ASCII host first goes through the `idna` package's
+UTS 46 mapping, the mapping WHATWG domain-to-ASCII uses. So `%E1%B4%B9` and
+mathematical or fullwidth digits read as WHATWG reads them. If `idna` is
+missing or can't map the host, the call is blocked. An IPv6 host is also
+judged by any IPv4 address it embeds: mapped, translated, IPv4-compatible,
+NAT64 `64:ff9b::/96` and 6to4.
+
+Hostnames are judged literally, as native judges `//host`, so a name that
+only resolves to a metadata address is not caught here. JavaScript `\u` and
+`\x` escapes, and URLs built at run time, are not decoded.
+Text input, block lists and cookie scopes stay unscanned, as in native.
+Native `browser_cdp` repeats its own floor, which lacks the extra forms. A
+`tools.browser_session` revision without these helpers fails the seam check,
+so the shared computer stays off until it is qualified. The
+older `browser_tool_*` revisions keep the earlier check of
+`browser_console(expression=...)`, CDP `Page.navigate` and CDP
+`Runtime.evaluate` with the http(s) literal scanner. These are literal
+checks, not an egress firewall. Native local classification skips the
 current-page metadata check before content tools, and computed or obfuscated
-JavaScript URLs can escape the literal scan. Do not claim metadata isolation for
-those paths. Native website-policy checks and their caching are unchanged. Human
+JavaScript URLs can escape the literal scan. The nftables floor is what stops
+those. Native website-policy checks and their caching are unchanged. Human
 takeover, operation locks, recovery fences,
 and TLS validation also remain in force. The wrapper uses the revision-qualified
 `browser_tool_cloud._is_local_backend` seam because this native revision has no

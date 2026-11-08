@@ -11,7 +11,7 @@ import { MessageMarkdown } from './MessageMarkdown';
 import { isActivityMessage, messageOrigin } from '../shared/message-origin';
 import { withoutBotTag } from '../shared/event-copy';
 import { Icon } from "./Icon";
-import { routineResultLabel, savedReplyTitle } from "../shared/discovery";
+import { routineResultLabel, snippetParts } from "../shared/discovery";
 import { When } from './When';
 /** Incremental search waits this long after typing stops, and starts at this many characters. */
 type HistorySave = Extract<SaveItem, {kind:"session"}>;
@@ -60,6 +60,8 @@ export function DiscoveryPanel({ bootstrap, search, onRoutine, onOpenMessage }: 
     const timer=setTimeout(()=>{if(text!==searched.current)void find(text);},SEARCH_DEBOUNCE_MS);
     return()=>clearTimeout(timer);
   },[query,tab]);
+  // A pointer user opens search to type. On touch, focusing would cover the page with the keyboard.
+  useEffect(()=>{ if(window.matchMedia?.('(pointer: fine)').matches)searchInput.current?.focus(); },[]);
   useEffect(()=>{ if(!search)return; changeTab('search');setQuery(search.text);if(search.text.trim())void find(search.text); },[search?.id]);
   const live=(hit:SearchHit)=>!!onOpenMessage&&!!hit.messageId&&bootstrap.bots.find(bot=>bot.id===hit.botId)?.sessionId===hit.sessionId;
   useEffect(()=> { setPage(null); void run(async({current})=> {
@@ -90,20 +92,23 @@ export function DiscoveryPanel({ bootstrap, search, onRoutine, onOpenMessage }: 
   useEffect(()=>{if(savedMessage&&page)document.getElementById(`history-${savedMessage}`)?.scrollIntoView?.({block:"center"});},[page,savedMessage]);
   useEffect(()=>{if(!page&&returning.current){activeTab.current?.focus();returning.current=false;}},[page]);
   const back = () => { reset();setSavingKey(null);returning.current=true;setPage(null); };
-  async function pin(item: HistorySave) {
+  /** Saves a conversation, or a reply titled from `reply`, its Markdown. */
+  async function pin(item: HistorySave, reply?: string) {
     const key=pinKey(item.botId,item.sessionId!,item.messageId);
     if(busy||pinned.has(key))return;
     await run(async({current})=>{
       setSavingKey(key);
       try {
-        await request("POST /saved", { body: item });
+        // The Markdown parser that titles a reply loads only when someone saves one.
+        const title=reply===undefined?item.title:(await import("../shared/plain-text")).replyTitle(reply);
+        await request("POST /saved", { body: {...item,title} });
         if(current())setPinned(previous=>new Set([...previous,key]));
       } finally { if(current())setSavingKey(null); }
     },{success:'Saved. Find it in Saved items.'});
   }
-  const saveControl = (item: HistorySave) => {
+  const saveControl = (item: HistorySave, reply?: string) => {
     const key=pinKey(item.botId,item.sessionId!,item.messageId), done=pinned.has(key);
-    return <button className="history-save" aria-disabled={busy||done} onClick={()=>void pin(item)}>{done?"Saved":savingKey===key?"Saving…":item.messageId?"Save reply":"Save conversation"}</button>;
+    return <button className="history-save" aria-disabled={busy||done} onClick={()=>void pin(item,reply)}>{done?"Saved":savingKey===key?"Saving…":item.messageId?"Save reply":"Save conversation"}</button>;
   };
   const speaker = (message:Message) => messageOrigin(message)?.kind==='scheduled'?'Scheduled':isActivityMessage(message)?'Activity':message.toolCall||isAgentExchange(message)?null:message.role==='assistant'?name(page!.botId):message.role==='user'?(message.sender?.id===bootstrap.user.id?'You':message.sender?.name||'User'):message.role==='system'?'System':'Tool';
   return <div className="discovery-panel">
@@ -122,7 +127,7 @@ export function DiscoveryPanel({ bootstrap, search, onRoutine, onOpenMessage }: 
       {page.messages.map(message=><article className="history-message" id={`history-${message.id}`} key={message.id} style={savedMessage===message.id?{borderLeft:"3px solid var(--accent)",paddingLeft:12}:undefined}>
         {(speaker(message)||message.role==='assistant'&&!isActivityMessage(message))&&<div className="history-message-heading">
           {speaker(message)&&<small>{speaker(message)}</small>}
-          {message.role==='assistant'&&!isActivityMessage(message)&&saveControl({kind:'session',botId:page.botId,sessionId:page.sessionId,messageId:message.id,offset:page.offset,title:savedReplyTitle(message.text)})}
+          {message.role==='assistant'&&!isActivityMessage(message)&&saveControl({kind:'session',botId:page.botId,sessionId:page.sessionId,messageId:message.id,offset:page.offset,title:'Saved reply'},message.text)}
         </div>}
         {isActivityMessage(message)?<details><summary>{withoutBotTag(messageOrigin(message)?.title ?? "") || "Activity details"}</summary><MessageMarkdown text={message.text}/></details>:isAgentExchange(message)?<AgentExchange message={message} recipient={name(page.botId)}/>:message.toolCall?<ActionReceipt call={message.toolCall}/>:<MessageMarkdown text={message.text}/>}
         {message.files?.map(file=><a key={file.id} href={`/api/files/${encodeURIComponent(file.id)}`} target="_blank" rel="noreferrer">{file.name}</a>)}
@@ -138,7 +143,7 @@ export function DiscoveryPanel({ bootstrap, search, onRoutine, onOpenMessage }: 
         <p className="sr-only" role="status">{searching?'Searching…':searched.current&&hits.length?`${hits.length} ${hits.length===1?'result':'results'}`:''}</p>
         <p className="muted discovery-hint">Searches answers, attachment names and routine previews across your assistants.</p>
         <div className="discovery-results" aria-busy={searching}>{hits.map(hit=><button className="today-row" key={`${hit.botId}:${hit.sessionId}`} onClick={()=>hit.routineId?onRoutine(hit.botId,hit.routineId,hit.resultId):live(hit)?onOpenMessage!(hit.botId,hit.messageId!):void history(hit.botId,hit.sessionId,hit.offset??0,hit.messageId,true,hit.title)}>
-          <span className="today-row-copy"><strong>{hit.title}</strong><small>{name(hit.botId,hit.botName)} · {hit.routineId?'Routine output':live(hit)?'Current chat':'Past conversation'}{hit.updatedAt&&<> <span className="discovery-meta-part">· Updated <When value={hit.updatedAt}/></span></>}</small><small>{hit.snippet.replace(/<[^>]*>/g,'').slice(0,300)}</small></span><span aria-hidden="true">›</span>
+          <span className="today-row-copy"><strong>{hit.title}</strong><small>{name(hit.botId,hit.botName)} · {hit.routineId?'Routine output':live(hit)?'Current chat':'Past conversation'}{hit.updatedAt&&<> <span className="discovery-meta-part">· Updated <When value={hit.updatedAt}/></span></>}</small><small className="discovery-snippet">{snippetParts(hit.snippet).map((part,index)=>part.match?<mark key={index}>{part.text}</mark>:<span key={index}>{part.text}</span>)}</small></span><span aria-hidden="true">›</span>
         </button>)}</div>
       </>}
       {tab==='saved'&&<>
@@ -152,11 +157,11 @@ export function DiscoveryPanel({ bootstrap, search, onRoutine, onOpenMessage }: 
         <div className="discovery-toolbar"><p className="muted discovery-hint">Upcoming work, recent failures, recipients and 30-day usage.</p><button disabled={busy} onClick={()=>void run(async()=>setOverview(await request("GET /automations")))}>Refresh</button></div>
         {overview?.routines.map(row=><article className="automation-row" key={row.id}>
           <h3>{row.name}</h3><p>{name(row.botId)} · <span className={`discovery-state${row.enabled?'':' paused'}`}>{row.enabled?'Enabled':'Paused'}</span></p>
-          <p>{!row.enabled?'Paused. No runs until you resume.':row.nextRunAt?<>Next: <When value={row.nextRunAt}/></>:'No upcoming run reported'}</p>
+          <p>{row.running?'Running now.':!row.enabled?'Paused. No runs until you resume.':row.nextRunAt?<>Next: <When value={row.nextRunAt}/></>:'No upcoming run reported'}</p>
           {row.lastStatus&&<p><span className={row.lastError||row.lastDeliveryError?'automation-failure':undefined}>Last result: {routineResultLabel(row.lastStatus)}</span></p>}
           {(row.lastError||row.lastDeliveryError)&&<p role="status" className="form-error">{row.lastError||row.lastDeliveryError}</p>}
           <p>Notify: {row.recipientIds?.map(id=>bootstrap.household.find(user=>user.id===id)?.name||'Household member').join(', ')||'No routine recipients selected'}</p>
-          <div className="discovery-actions"><button onClick={()=>onRoutine(row.botId,row.id)}>View outputs</button><button disabled={busy} onClick={()=>void run(async()=>{await request("PATCH /routines/:id/state", { params: { id: row.id }, body: { enabled: !row.enabled } });setOverview(await request("GET /automations"));})}>{row.enabled?'Pause':'Resume'}</button></div>
+          <div className="discovery-actions"><button onClick={()=>onRoutine(row.botId,row.id)}>View outputs</button>{row.running&&<button disabled={busy} onClick={()=>void run(async()=>{const {stopped}=await request("POST /routines/:id/stop", { params: { id: row.id } });setNotice(stopped?`Stopped ${row.name}.`:`${row.name} had already finished.`);setOverview(await request("GET /automations"));})}>Stop run</button>}<button disabled={busy} onClick={()=>void run(async()=>{await request("PATCH /routines/:id/state", { params: { id: row.id }, body: { enabled: !row.enabled } });setOverview(await request("GET /automations"));})}>{row.enabled?'Pause':'Resume'}</button></div>
         </article>)}
         {overview&&!overview.routines.length&&<p className="discovery-empty">No routines yet. Create one in assistant settings.</p>}
         <h3>Usage over 30 days</h3><p className="muted discovery-hint">Recorded main-session usage. Estimates and provider invoices may differ. Auxiliary calls are not included.</p>

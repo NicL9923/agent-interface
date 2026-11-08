@@ -5,6 +5,10 @@ let csrf = "";
 export function setCsrf(value: string) {
   csrf = value;
 }
+/** Whether a bootstrap signed this page in. Cleared on sign-out and on a lost session. */
+export function hasSession() {
+  return csrf !== "";
+}
 // GET bodies by exact path. A 304, or a 200 with identical text, returns the same object so React can skip the update.
 type Cached = { etag: string | null; text: string; data: unknown };
 const responses = new Map<string, Cached>();
@@ -107,8 +111,9 @@ export async function api<T>(path: string, init: RequestInit = {}, retried = fal
     return data as T;
   } catch (error) {
     if (error instanceof ApiError || init.signal?.aborted) throw error;
+    // Only a write has a draft and a sent message to reassure about; a slow read just needs another try.
     throw new ApiError(controller.signal.aborted
-      ? "The app took too long to respond. Your draft is kept; sent messages will be checked before retrying."
+      ? get ? "The app took too long to respond. Try again in a moment." : "The app took too long to respond. Your draft is kept; sent messages will be checked before retrying."
       : "Can't reach the app. Your draft is kept. We'll reconnect automatically.",
     controller.signal.aborted ? 504 : 503, "CONNECTION_UNAVAILABLE");
   } finally {

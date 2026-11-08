@@ -20,6 +20,23 @@ const state = (roomId: string, latest_seq: number, working = false): GroupState 
 afterEach(() => { vi.useRealTimers(); });
 
 describe("group room watcher", () => {
+  it("announces who works in which tool, but not each step's timestamp", async () => {
+    vi.useFakeTimers();
+    let activity = { member_id: "ranch", status: "running", round_index: 0, tool: "terminal", progress_at: 1 };
+    const groupRequest = vi.fn(async () => ({ ...state("ranch", 1, true), driver_status: { running: true, working: true, blocked: false, pending_actions: [], member_activity: [activity], max_rounds: 3 } }));
+    const watch = new GroupWatch({ groupRequest });
+    const heard = vi.fn();
+    const stop = watch.watch("ranch", "one", heard);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(heard).toHaveBeenCalledTimes(1);
+    activity = { ...activity, progress_at: 2 };
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(heard).toHaveBeenCalledTimes(1);
+    activity = { ...activity, tool: "web_search", progress_at: 3 };
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(heard).toHaveBeenCalledTimes(2);
+    stop();
+  });
   it("polls each watched room once however many watch it, announcing only changes", async () => {
     vi.useFakeTimers();
     let seq = 1, working = false;
@@ -140,18 +157,6 @@ describe("watching a group chat on the app event stream", () => {
     return { app, store, base, cookie, groupRequest, setSeq: (value: number) => { seq = value; },
       holdNextLookup: () => { let release!: () => void; gate = new Promise<void>(resolve => { release = resolve; }); return release; } };
   }
-  const read = async (response: Response, until: (text: string) => boolean, ms = 4000) => {
-    const reader = response.body!.pipeThrough(new TextDecoderStream()).getReader();
-    let text = "";
-    const deadline = Date.now() + ms;
-    while (!until(text)) {
-      if (Date.now() > deadline) throw new Error(`Stream never got there: ${JSON.stringify(text)}`);
-      const chunk = await Promise.race([reader.read(), new Promise<null>(resolve => setTimeout(() => resolve(null), 50))]);
-      if (chunk?.done) return { text, done: true, reader };
-      if (chunk) text += chunk.value;
-    }
-    return { text, done: false, reader };
-  };
 
   // Sends a stream request over a real socket and disconnects once the server is handling it.
   async function abandon(s: Awaited<ReturnType<typeof setup>>, path: string) {

@@ -79,10 +79,10 @@ export function CommandPalette({ boot, botId, rooms = [], onSelectRoom, onNewGro
       { id: "action:new", group: "Actions", label: "New assistant", keywords: ["create", "add"], icon: icon("plus"), run: onNewBot },
       ...onNewGroup ? [{ id: "action:new-group", group: "Actions", label: "New group chat", keywords: ["create", "add", "room", "discussion"], icon: icon("groups"), run: onNewGroup }] : [],
       { id: "action:settings", group: "Actions", label: "Settings", keywords: ["preferences", "account", "notifications"], icon: icon("gear"), run: onSettings },
+      { id: "action:shortcuts", group: "Actions", label: "Keyboard shortcuts", keywords: ["keys", "help"], icon: icon("keyboard"), hint: formatCombo(shortcuts.help), run: onShortcuts },
       { id: "settings:following", group: "Settings", label: "Following", icon: icon("gear"), run: () => onSettings({ kind: "following" }) },
       ...boot.preferences.sections.map(section => ({ id: `settings:section:${section.id}`, group: "Settings", label: `Home section: ${section.name}`, icon: icon("gear"), run: () => onSettings({ kind: "section", id: section.id }) })),
       { id: "settings:signout", group: "Settings", label: "Sign out", icon: icon("gear"), run: () => onSettings({ kind: "signout" }) },
-      { id: "action:shortcuts", group: "Actions", label: "Keyboard shortcuts", keywords: ["keys", "help"], icon: icon("keyboard"), hint: formatCombo(shortcuts.help), run: onShortcuts },
       ...themes.map(([theme, name]): Command => ({
         id: `theme:${theme}`, group: "Appearance", label: `Appearance: ${name}`, keywords: [name, "theme", `${name} mode`],
         icon: icon(theme === "dark" ? "sparkle" : theme === "light" ? "sun" : "computer"),
@@ -150,7 +150,8 @@ export function CommandPalette({ boot, botId, rooms = [], onSelectRoom, onNewGro
       <kbd className="palette-escape" aria-hidden="true">Esc</kbd>
     </div>
     <div ref={list} id={listId} role="listbox" aria-label="Results" className="palette-list">
-      {groups ? groups.map(group => <div key={group.name} role="group" aria-label={group.name}>
+      {/* Keyed by position too: a name that ever repeats must not leave a stale group behind when filtering starts. */}
+      {groups ? groups.map((group, position) => <div key={`${position}:${group.name}`} role="group" aria-label={group.name}>
         <div className="palette-heading" aria-hidden="true">{group.name}</div>
         {group.items.map(command => option(command, index++))}
       </div>) : results.map((command, position) => option(command, position))}

@@ -154,7 +154,7 @@ describe("conversation state", () => {
     it("opts in to growth notices and applies one that continues the reply it holds", async () => {
       conversation = { ...conversation, activity: run, messages: [{ id: "u", role: "user", text: "Hello" }] };
       await render();
-      expect(FakeEventSource.created).toContain("/api/bots/shared/events?inflight=2");
+      expect(FakeEventSource.created).toContain("/api/bots/shared/events?inflight=2&drafts=1");
       await act(async () => open().emit("inflight", whole("Growing")));
       const before = vi.mocked(api).mock.calls.length;
       await act(async () => open().emit("inflight-delta", growth({ appendText: " reply" })));
@@ -448,7 +448,9 @@ describe("conversation state", () => {
       await act(async () => sendButton().click());
       expect(container.querySelector("textarea")!.readOnly).toBe(true);
       serveClearedDraft();
-      await advance(1600);
+      // The chat's stream announces the cleared draft's revision.
+      await act(async () => { for (const stream of FakeEventSource.streams) if (stream.url.startsWith("/api/bots/shared/events")) stream.emit("draft", "1"); });
+      await advance(0);
       expect(container.querySelector("textarea")!.readOnly).toBe(false);
       await type("My saved server draft");
       expect(container.querySelector("textarea")!.value).toBe("My saved server draft");

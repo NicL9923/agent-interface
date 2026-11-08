@@ -127,6 +127,7 @@ function askToken(existing: boolean): Promise<string> {
       if (key?.ctrl && ['c', 'd'].includes(key.name ?? '')) { done(); reject(new Error('Setup cancelled. No settings were saved.')); }
       else if (key?.name === 'return' || key?.name === 'enter') { done(); resolve(value); }
       else if (key?.name === 'backspace') { if (value) { value = value.slice(0, -1); process.stdout.write('\b \b'); } }
+      // oxlint-disable-next-line no-control-regex -- masked input ignores control keys
       else if (text && !/[\x00-\x1f\x7f]/.test(text)) { value += text; process.stdout.write('*'.repeat(text.length)); }
     };
     input.on('keypress', keypress);

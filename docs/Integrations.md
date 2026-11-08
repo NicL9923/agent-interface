@@ -36,7 +36,48 @@ local connection; it does not claim to revoke an account-wide grant at the vendo
 | Home Assistant | Connect the home's configured HTTPS `/api/mcp` endpoint using a long-lived access token. OAuth additionally needs the native client's IndieAuth settings. |
 | Models, search and images | Manage supported native provider sign-ins and API keys. Existing native tool and model configuration continues to control execution. |
 | Custom MCP | Add an HTTPS server with OAuth, a bearer token or no authentication. Hermes owns discovery and tool execution. Local command installation is not exposed. |
+| T3 Code | Add T3 Code's `/mcp` endpoint as a Custom MCP server with OAuth. T3 Code asks its owner to approve the client with read-only access or a runtime-mode ceiling. See [T3 Code](#t3-code). |
 | Apple Calendar and Reminders | In iOS, grant device permission, select calendars or reminder lists and a date range, preview the selection, then add it to a bot's draft. Send the draft to share it. Refresh explicitly to share newer data. |
+
+## Connection requests in chat
+
+An assistant can ask for a connection from the conversation with its
+`request_connection` tool. Examples: Gmail access for an email task, a search key
+or a GitHub repository. The card shows the assistant's reason and that one
+connection's own controls, the same ones as in Settings: Connect or Reconnect,
+setup fields, the sign-in flow and Check connection. Once the connection reads
+as set up, the card tells the assistant to continue on its own. If it was
+already set up when the card opened, the person presses **Continue**, because
+a saved grant can still be expired. **Not now** declines it, and sending a
+message instead closes it. A request nobody finishes closes after 15 minutes.
+
+An OAuth MCP server counts as set up only once Hermes holds its sign-in
+tokens. Settings shows a saved server whose sign-in never finished as **Not
+connected**, with Connect to sign in.
+
+When Hermes stops using an MCP server because the provider rejected its OAuth
+sign-in, native `mcp.servers.status` reports `needs_auth` and the card reads
+**Expired** with Reconnect. That signal outranks a saved check, except a
+successful Check made after the rejection with the same tokens: Hermes clears
+the flag when it reconnects, which happens right after an in-app sign-in for
+the process's own profile and at the assistant's next turn for the others.
+That exception belongs to one rejection episode. The episode ends when the app
+reads `needs_auth: false`, so a later rejection of the same tokens shows
+Reconnect again. The app sees only the states it reads: a recovery and a new
+rejection between two reads look like one episode. A live connection retires
+a saved failed check. When the field is missing, as on
+an older Hermes, or Hermes reports the server as never tried, which is what a
+process that doesn't hold that profile's runtime reports, the app treats it as
+no evidence and keeps the earlier rule: a failed Check stops counting once the
+OAuth token files change.
+
+Any member can decline or continue. Connecting still needs an integration
+administrator, and the card says so to everyone else. The server checks the
+catalog before it tells the assistant a connection is set up. Apple data is
+chosen on the iPhone and is never requested this way. The tool rides with the
+`clarify` toolset and refuses when nobody is waiting in the conversation, as in
+a routine. Tools from a newly added MCP server can appear only on the
+assistant's next turn; its result tells it so.
 
 Apple access is labeled **On this iPhone**. A selected snapshot is an ordinary
 attachment in the shared bot conversation once sent. The server cannot continue
@@ -146,3 +187,19 @@ the exact revision, successful checks and remaining external acceptance.
 Live Google consent, MCP vendor authorization and physical iPhone permission
 behavior require the configured installation and intended accounts/devices.
 They remain part of [external acceptance issue #1](https://github.com/NicL9923/agent-interface/issues/1).
+
+## T3 Code
+
+T3 Code serves MCP at `/mcp` on the machine that runs it, reachable over T3
+Connect, Tailscale Serve or loopback. Add that HTTPS address as a Custom MCP
+server with OAuth, and add its hostname to `HERMES_AGENT_INTERFACE_MCP_HOSTS`.
+T3 Code's approval page names the host that gets access; approve it with a
+runtime-mode ceiling, or read-only to let the assistant list and read threads
+without starting any. Turn the server on for the assistants that should use it.
+
+An outside client can start threads with `t3_thread_launch`, read and wait on
+them, and send them messages. Tools that act as a calling T3 thread, such as
+`delegate_task` and `create_threads`, refuse a client signed in from outside
+T3 Code. A launched thread shows in the conversation as a card with
+**Open in T3 Code**; see
+[T3 Code threads](HouseholdExperience.md#t3-code-threads).

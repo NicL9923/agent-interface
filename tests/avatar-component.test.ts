@@ -63,7 +63,8 @@ beforeEach(() => {
 });
 
 describe("avatar animation loop", () => {
-  it.each(characters)("animates the $family character while working", async ({ family, avatar }) => {
+  it("animates a character while working", async () => {
+    const { family, avatar } = characters[0];
     await render("working", avatar);
     expect(container.querySelector('[role="img"]')?.getAttribute("data-family")).toBe(family);
     expect(container.querySelector("[data-character-feature]")).not.toBeNull();

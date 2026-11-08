@@ -262,11 +262,28 @@ def history_window(messages, sid, start=None, turns=0):
     return rows, {"earlier": first, "context": len(kept)}
 
 
+FIRST_CONTACT_NOTE = "[System note: This is the user's very first message ever."
+
+
+def without_first_contact_note(notes):
+    """Turn context notes without Hermes's first-contact note, which native joins on blank lines."""
+    if not isinstance(notes, str) or FIRST_CONTACT_NOTE not in notes:
+        return notes
+    return "\n\n".join(part for part in notes.split("\n\n") if not part.lstrip().startswith(FIRST_CONTACT_NOTE))
+
+
 def event_body(value):
-    """A bounded, single-line excerpt for event bodies; the app shortens it further for display."""
+    """A bounded excerpt for event bodies that keeps its line breaks.
+
+    The app reads it as Markdown, which needs lines and indentation to tell a table, a
+    heading or a list from prose, and shows it as one plain line. Spaces after a line's
+    indentation and runs of blank lines collapse.
+    """
     if not isinstance(value, str):
         value = "" if value is None else str(value)
-    text = " ".join(value.split())
+    # Leading indentation stays: it places a line inside a list or code block.
+    lines = [line[:len(line) - len(line.lstrip())] + " ".join(line.split()) if line.strip() else "" for line in value.splitlines()]
+    text = re.sub(r"\n{3,}", "\n\n", "\n".join(lines).strip("\n"))
     return text[:500] or None
 
 
@@ -717,6 +734,12 @@ class Bridge:
     def with_inline_guidance(self, original, eligible, agent, *args, **kwargs):
         if not eligible or agent is None:
             return original(*args, **kwargs)
+        # Hermes stages its first-contact note before the turn. It points at /help and offers a
+        # profile interview, which suit a terminal, not an app chat with its own first-run flow.
+        notes = getattr(agent, "_gateway_turn_context_notes", None)
+        kept = without_first_contact_note(notes)
+        if kept != notes:
+            agent._gateway_turn_context_notes = kept
         prior = getattr(agent, "ephemeral_system_prompt", None)
         if self.inline_instructions not in (prior or ""):
             agent.ephemeral_system_prompt = "\n\n".join(part for part in (prior, self.inline_instructions) if part)
@@ -1472,6 +1495,7 @@ def install(path=None):
     computer.install(server)
     journal = Journal(path or Path(get_hermes_home()) / "runtime" / "agent-interface.db")
     computer.bind_journal(journal)
+    sibling_module("integrations").install_requests(server, journal)
     bridge = Bridge(server, journal, get_hermes_home=get_hermes_home, profile_name_for_home=profile_name_for_home,
                     maintenance_file=os.environ.get("HERMES_AGENT_INTERFACE_MAINTENANCE_FILE"))
     from hermes_cli.backend_retirement import retirement

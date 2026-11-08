@@ -4,7 +4,7 @@ import type { Root } from "react-dom/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { IntegrationList } from "../src/components/IntegrationsPanel";
 import { ApiError, api, write } from "../src/client-api";
-import type { IntegrationCatalog, IntegrationConnection, IntegrationFlow } from "../src/shared/integrations";
+import type { IntegrationCatalog, IntegrationConnection } from "../src/shared/integrations";
 import { advance, button, click, mountRoot, typeInto } from "./ui-harness";
 vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(await (async original => ({ ...await original<typeof import("../src/client-api")>(), api: vi.fn(), write: vi.fn() }))(original)));
 let root: Root;

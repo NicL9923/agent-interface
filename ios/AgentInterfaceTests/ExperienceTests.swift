@@ -8,14 +8,22 @@ private func experienceServer() -> FakeServer {
   }
 }
 final class ExperienceTests: XCTestCase {
-  func testTodayHeadlinesRemoveMarkdownAndKeepApprovalSecretsInChat() {
+  func testTodayHeadlinesKeepTheServersPlainWordsAndApprovalSecretsInChat() {
     let approval = TodayEvent(id: "a", botId: "b", kind: "approval", title: "Approval requested", body: "Run secret-token=123", occurredAt: "2026-10-01")
     XCTAssertEqual(EventCopy.headline(approval), "Needs your approval to continue.")
     var custom = approval; custom.title = "A custom approval with secret-token=123"
     XCTAssertEqual(EventCopy.headline(custom), "Needs your approval to continue.")
-    let result = TodayEvent(id: "r", botId: "b", kind: "completed", title: "Hermes completed", body: "# Done\n\n**Check** the [gate](https://example.test).\n```sh\nsecret command\n```", occurredAt: "2026-10-01")
-    XCTAssertEqual(EventCopy.headline(result), "Done Check the gate.")
+    // The server reads Markdown into words, so literal marks such as __init__ stay as written.
+    let result = TodayEvent(id: "r", botId: "b", kind: "completed", title: "Hermes completed", body: "Done\n Call __init__ with **kwargs.", occurredAt: "2026-10-01")
+    XCTAssertEqual(EventCopy.headline(result), "Done Call __init__ with **kwargs.")
     XCTAssertEqual(EventCopy.excerpt(String(repeating: "word ", count: 100)).suffix(1), "…")
+  }
+  func testSearchSnippetsMarkMatchesInOrderAndKeepStrayMarkers() {
+    XCTAssertEqual(SearchSnippet.parts("the >>>grocery<<< store"), [.init(text: "the ", match: false), .init(text: "grocery", match: true), .init(text: " store", match: false)])
+    XCTAssertEqual(SearchSnippet.parts("Use <<< before >>>query<<< and >>>tail"), [.init(text: "Use <<< before ", match: false), .init(text: "query", match: true), .init(text: " and >>>tail", match: false)])
+    XCTAssertEqual(SearchSnippet.parts("Use <device> here"), [.init(text: "Use <device> here", match: false)])
+    XCTAssertTrue(SearchSnippet.parts(String(repeating: "a", count: 300) + ">>>hidden tail<<<").last!.text.hasSuffix("…"))
+    XCTAssertLessThanOrEqual(SearchSnippet.parts(String(repeating: "word ", count: 100), limit: 40).map(\.text).joined().count, 41)
   }
   func testRoutineHeadlinesDropTheOwnerTagAndSayWhenARunFailed() {
     var routine = TodayEvent(id: "r", botId: "patch", kind: "completed", title: "[bot:patch] Daily AI news", body: "Three model launches.", occurredAt: "2026-10-01", routineId: "job")

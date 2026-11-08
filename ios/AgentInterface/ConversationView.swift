@@ -140,6 +140,11 @@ struct ConversationView: View {
         ComputerView(take: opening.take).toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { store.openComputer = nil } } }
       }.appStore(store).coveringChat(store)
     }
+    .sheet(item: Bindable(store).openTerminal) { opening in
+      NavigationStack {
+        TerminalView(command: opening.command).toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { store.openTerminal = nil }.accessibilityIdentifier("terminalClose") } }
+      }.appStore(store).coveringChat(store)
+    }
     .sheet(isPresented: $profileOpen, onDismiss: profileClosed) { profileSheet }
     // On screen, even under a sheet, the conversation is polled and streamed; elsewhere it is not.
     .onAppear { if !visible { store.conversationShown(bot.id, true) }; visible = true }
@@ -149,11 +154,16 @@ struct ConversationView: View {
       if visible, let error { AccessibilityNotification.Announcement(error).post() }
     }
     .task(id: "\(findOpen):\(findQuery)") { await searchHistory() }
+    // Handoff to another device, and the assistant on screen for Siri.
+    .userActivity(ChatHandoff.activityType, isActive: store.api != nil && !store.sessionExpired) { activity in
+      ChatHandoff.describe(activity, bot: bot, server: store.api?.baseURL)
+    }
     .findShortcut(botId: bot.id, open: openFind)
   }
   private func configureSpeech() {
     speech.api = store.api
     speech.botId = bot.id
+    speech.botName = bot.name
   }
   /// Advanced only: the model chip under the assistant's name. Simple never shows the model.
   @ViewBuilder private var modelBar: some View {
@@ -950,6 +960,8 @@ struct AttentionView: View {
   @FocusState private var focusedQuestion: String?
   private var secure: Bool { request.kind == "secure" && request.secure?.supported == true }
   private var handoff: ComputerHandoff? { request.kind == "computer" ? request.computer : nil }
+  private var connection: ConnectionRequest? { request.kind == "connection" ? request.connection : nil }
+  private var terminalRequest: TerminalRequest? { request.kind == "terminal" ? request.terminal : nil }
   private var questions: [Question] { request.questions ?? [] }
   var body: some View {
     // A request this device settled folds to one line until Hermes stops listing it.
@@ -959,10 +971,10 @@ struct AttentionView: View {
   }
   private var card: some View {
     VStack(alignment: .leading, spacing: 12) {
-      Text(request.kind == "clarify" ? "A question for you" : secure ? "Secure input for Hermes" : handoff != nil ? "Household computer" : "Continue in Hermes")
+      Text(request.kind == "clarify" ? "A question for you" : secure ? "Secure input for Hermes" : handoff != nil ? "Household computer" : terminalRequest != nil ? "System terminal" : connection != nil ? "Connection" : "Continue in Hermes")
         .font(.caption.weight(.semibold)).foregroundStyle(Palette.attention)
-      // A handoff card names the assistant and its reason itself.
-      if handoff == nil {
+      // A handoff or connection card names the assistant and its reason itself.
+      if handoff == nil && connection == nil && terminalRequest == nil {
         Text(request.title).font(.headline)
         Text(request.detail).textSelection(.enabled)
       }
@@ -979,6 +991,10 @@ struct AttentionView: View {
           .id(request.id + value.binding)
       } else if let handoff {
         ComputerHandoffView(request: request, handoff: handoff, botId: botId)
+      } else if let terminalRequest {
+        TerminalRequestView(request: request, terminal: terminalRequest, botId: botId)
+      } else if let connection {
+        ConnectionRequestView(request: request, connection: connection, botId: botId)
       } else {
         Text("Open the official Hermes interface to handle this request. Return here when it is complete.").font(.footnote)
           .foregroundStyle(Palette.muted)

@@ -69,7 +69,8 @@ it("sends the document policy on pages, the API policy on JSON, and leaves files
   cleanups.push(() => app.close());
   const page = await app.inject("/");
   expect(page.headers["content-security-policy"]).toBe(contentSecurityPolicy("https://app.example.invalid"));
-  expect(page.headers["content-security-policy"]).toContain("connect-src 'self' wss://app.example.invalid https://accounts.google.com/gsi/;");
+  // Live Talk posts its WebRTC offer to OpenAI; nothing else on that origin is allowed.
+  expect(page.headers["content-security-policy"]).toContain("connect-src 'self' wss://app.example.invalid https://accounts.google.com/gsi/ https://api.openai.com;");
   expect(page.headers["content-security-policy"]).toContain("script-src 'self' https://accounts.google.com/gsi/client;");
   expect(page.headers["strict-transport-security"]).toBe("max-age=31536000");
   expect(page.headers["permissions-policy"]).toContain("microphone=(self)");

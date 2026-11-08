@@ -1,9 +1,16 @@
 import type { AutomationRequester } from './automation.js';
 import type { ExperienceRequester } from "./experience.js";
-import type { IntegrationRequest, IntegrationCatalog, IntegrationConnection, IntegrationFlow } from "./integrations.js";
-import type { ComputerRequest, ComputerStatus, ComputerAttachment, ComputerHandoff } from "./computer.js";
+import type { IntegrationRequest, IntegrationCatalog, IntegrationConnection, IntegrationFlow, ConnectionRequestSettle, ConnectionRequestResult, ConnectionRequest } from "./integrations.js";
+import type { ComputerRequest, ComputerStatus, ComputerAttachment, ComputerHandoff, TerminalRequest } from "./computer.js";
 import type { SecureRequest, VaultRequest, VaultResponse } from "./vault.js";
 import type { GroupRequest, GroupResponse, RoutineOutput, RoutineResult } from './collaboration.js';
+import type { TalkSession, TalkVoice } from "./voice.js";
+/** What the app chooses in a Realtime session. The Hermes add-on fixes the model's other settings. */
+export interface RealtimeSessionInput {
+  voice: TalkVoice;
+  instructions: string;
+  tools: { type: "function"; name: string; description: string; parameters: Record<string, unknown> }[];
+}
 export type ActivityState =
   | "idle"
   | "thinking"
@@ -143,7 +150,9 @@ export type CapabilityKey =
   | "imageGeneration"
   | "stop"
   | "portraitGeneration"
-  | "avatarMetadata";
+  | "avatarMetadata"
+  /** Live Talk: Hermes can mint OpenAI Realtime sessions on its ChatGPT sign-in. */
+  | "liveVoice";
 export type Capabilities = Record<CapabilityKey, Capability>;
 export interface Bot {
   id: string;
@@ -155,9 +164,13 @@ export interface Bot {
   modelName?: string;
   provider?: string;
   enabledMcpServers?: string[];
+  /** Every MCP server configured for this profile, enabled or not. Detail only. */
+  availableMcpServers?: string[];
   shared: boolean;
   ownerId?: string;
   avatar?: Avatar;
+  /** The Realtime voice it speaks with in live Talk. Unset means the default, marin. */
+  voice?: TalkVoice;
   enabledTools?: string[];
   enabledSkills?: string[];
   sessionId?: string;
@@ -249,13 +262,15 @@ export interface Activity {
 }
 export interface AttentionRequest {
   id: string;
-  kind: "clarify" | "official" | "secure" | "computer";
+  kind: "clarify" | "official" | "secure" | "computer" | "terminal" | "connection";
   title: string;
   detail: string;
   /** `multiple` lets a person choose several options, sent as one comma-separated answer. Absent means one. */
   questions?: { id: string; prompt: string; options?: string[]; multiple?: boolean }[];
   secure?: SecureRequest;
   computer?: ComputerHandoff;
+  terminal?: TerminalRequest;
+  connection?: ConnectionRequest;
 }
 export interface Conversation {
   attention?: AttentionRequest[];
@@ -338,6 +353,16 @@ export interface Routine {
   schedule: string;
   enabled: boolean;
   recipientIds?: string[];
+  /**
+   * Group chats this routine also posts its results in, as a message from the routine. Only rooms the
+   * viewer can open are listed; saving keeps the ones they cannot see. Undefined leaves them unchanged.
+   */
+  roomIds?: string[];
+  /**
+   * Server only, never sent to clients: the delivery fields as Hermes stores them, which the server reads
+   * (src/server/delivery-targets.ts) to check every group chat the routine posts in.
+   */
+  delivery?: { deliver?: unknown; failure_deliver?: unknown; origin?: unknown };
   skills?: string[];
   model?: string | null;
   provider?: string | null;
@@ -347,6 +372,8 @@ export interface Routine {
   noAgent?: boolean;
   /** Native job IDs in this profile, plus "self" for continuity. */
   contextFrom?: string[] | null;
+  /** A run is in flight now, which Stop run can end. Read only. */
+  running?: boolean;
   nextRunAt?: string;
   lastRunAt?: string;
   lastStatus?: string;
@@ -361,6 +388,8 @@ export interface Bootstrap {
   capabilities: Capabilities;
   connection: RuntimeStatus;
   csrfToken: string | null;
+  /** This person's private key for deriving form request IDs; see formRequestId. Absent from an older server. */
+  formKey?: string;
   vapidPublicKey?: string;
   /** The newest distributed iOS build, when the host advertises one. */
   nativeApp?: { latestBuild: number; updateUrl: string };
@@ -383,6 +412,12 @@ export interface SubmissionReceipt {
   runId?: string;
   messageId?: string;
   message?: string;
+  /**
+   * The text the server recorded under this request ID, from `GET /submissions/:id` and only to the
+   * person who sent it. A form card compares it with its own answers, since another tab or device
+   * may have sent different answers under the same derived ID.
+   */
+  text?: string;
 }
 export interface RuntimeEvent {
   id: string;
@@ -416,6 +451,8 @@ export interface RuntimeStatus {
 }
 export interface Runtime {
   setRoutineEnabled?(botId: string, routineId: string, enabled: boolean): Promise<void>;
+  /** Stops the routine's run in flight, leaving its schedule alone. Whether a run was stopped. */
+  stopRoutineRun?(botId: string, routineId: string): Promise<boolean>;
   routineResults?(botId: string, routineId: string): Promise<RoutineResult[]>;
   routineOutput?(botId: string, routineId: string, resultId: string): Promise<RoutineOutput>;
   groupRequest?(input: GroupRequest): Promise<GroupResponse>;
@@ -429,6 +466,8 @@ export interface Runtime {
   inferenceSettings?(botId: string, update?: Partial<InferenceSettings>): Promise<InferenceSettings>;
   modelOptions?(profile?: string): Promise<ModelCatalog>;
   integrationRequest?(input: IntegrationRequest): Promise<IntegrationCatalog | IntegrationConnection | IntegrationFlow | {ok: true}>;
+  /** Continue or Not now on an assistant's connection request. Hermes checks it belongs to that profile's conversation. */
+  connectionRequest?(input: ConnectionRequestSettle): Promise<ConnectionRequestResult>;
   status(): Promise<RuntimeStatus>;
   reconnect?(): Promise<RuntimeStatus>;
   capabilities(): Promise<Capabilities>;
@@ -441,6 +480,10 @@ export interface Runtime {
   stop(botId: string): Promise<void>;
   generatePortrait(botId: string, prompt: string): Promise<FileRef>;
   setAvatar?(botId: string, avatar: Avatar): Promise<void>;
+  /** Saves the Talk voice with the profile, beside its avatar. */
+  setVoice?(botId: string, voice: TalkVoice): Promise<void>;
+  /** A Realtime client secret on Hermes's ChatGPT sign-in, for a session the add-on completes. */
+  realtimeSession?(input: RealtimeSessionInput): Promise<TalkSession>;
   conversation(botId: string, options?: ConversationOptions): Promise<Conversation>;
   /** An inflight notice patches live state; an omitted kind means refetch. Unsubscribe with the returned function. */
   watch?(botId: string, changed: (kind?: "inflight") => void): () => void;
@@ -473,7 +516,8 @@ export interface Runtime {
   setSkills(botId: string, ids: string[]): Promise<void>;
   routines(): Promise<Routine[]>;
   saveRoutine(input: Omit<Routine, "id">, id?: string): Promise<Routine>;
-  deleteRoutine(id: string): Promise<void>;
+  /** `botId` names the assistant whose job this is: Hermes lets several hold one ID. */
+  deleteRoutine(id: string, botId: string): Promise<void>;
   discoverEvents(cursor: string): Promise<RuntimeDiscovery>;
   close(): Promise<void>;
 }

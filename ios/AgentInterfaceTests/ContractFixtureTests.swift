@@ -57,6 +57,7 @@ private typealias Check = @MainActor (Data) throws -> Void
       XCTAssertEqual($0.tasks.items.first?.dependencies, ["task-supplies"])
       XCTAssertFalse($0.triggers.platformEnabled); XCTAssertEqual($0.triggers.items.first?.revision, String(repeating: "b", count: 64))
       XCTAssertTrue($0.skills.approvalRequired); XCTAssertEqual($0.skills.installed.first?.name, "ranch/fences")
+      XCTAssertEqual($0.skills.lockSupported, true); XCTAssertEqual($0.skills.installed.map(\.locked), [true, false])
       XCTAssertEqual($0.skills.pending.first?.revision, String(repeating: "c", count: 64))
     },
     "bot-goal-resume": check(HermesAutomationOverview.self) {
@@ -81,6 +82,9 @@ private typealias Check = @MainActor (Data) throws -> Void
     "bot-skill-content": check(HermesSkillContent.self) {
       XCTAssertEqual($0.name, "ranch/fences"); XCTAssertTrue($0.content.contains("Check the north gate.")); XCTAssertFalse($0.truncated)
     },
+    "bot-skill-lock": check(HermesSkillLock.self) {
+      XCTAssertTrue($0.ok); XCTAssertEqual($0.name, "ranch/fences"); XCTAssertFalse($0.locked)
+    },
     "bot-skill-diff": check(HermesSkillDiff.self) {
       XCTAssertEqual($0.id, "deadbeef"); XCTAssertTrue($0.diff.contains("+Check the north gate.")); XCTAssertFalse($0.truncated)
       XCTAssertEqual($0.decision(.approve)?.revision, String(repeating: "d", count: 64))
@@ -88,6 +92,9 @@ private typealias Check = @MainActor (Data) throws -> Void
     "bot-draft": check(SavedDraft?.self) { XCTAssertEqual($0?.text, "Add basil"); XCTAssertEqual($0?.revision, 2); XCTAssertEqual($0?.reason, "edit") },
     "bot-draft-conflict": check(DraftConflict.self) { XCTAssertEqual($0.draft.revision, 2); XCTAssertEqual($0.draft.sentRevision, 1) },
     "bot-draft-save": check(SavedDraft.self) { XCTAssertEqual($0.attachments.first?.id, "pantry.signature"); XCTAssertEqual($0.revision, 2) },
+    "bot-files": check(EarlierFiles.self) {
+      XCTAssertEqual($0.messages.map(\.id), ["message-user"]); XCTAssertEqual($0.messages.first?.files?.first?.id, "pantry.signature")
+    },
     "bot-portrait": check(FileRef.self) { XCTAssertEqual($0.url, "/api/files/portrait.signature") },
     "bot-presence": check(EmptyResponse.self) { XCTAssertEqual($0.ok, true) },
     "bot-read-position": check(ReadPosition.self) { XCTAssertEqual($0.messageId, "message-assistant"); XCTAssertEqual($0.scrollTop, 240.5) },
@@ -98,6 +105,10 @@ private typealias Check = @MainActor (Data) throws -> Void
     "bot-upload": check(FileRef.self) { XCTAssertEqual($0.mime, "text/plain"); XCTAssertNotNil($0.size) },
     "card-state": check(ReplyCardState.self) { XCTAssertEqual($0.checkedIds, ["milk"]) },
     "card-state-save": check(ReplyCardState.self) { XCTAssertEqual($0.checkedIds, ["milk"]); XCTAssertTrue($0.notes.isEmpty) },
+    "computer": check(ComputerStatus.self) {
+      XCTAssertTrue($0.available); XCTAssertEqual($0.running, true); XCTAssertEqual($0.control.kind, "bot")
+      XCTAssertEqual($0.detail, "garden is using the computer")
+    },
     "connection-retry": check(RuntimeStatus.self) { XCTAssertTrue($0.connected); XCTAssertNotNil($0.retryAt) },
     "conversation": check(Conversation.self) {
       XCTAssertEqual($0.messages.first?.sender?.name, "Local member one")
@@ -123,6 +134,9 @@ private typealias Check = @MainActor (Data) throws -> Void
     },
     "live-activity-register": check(EmptyResponse.self) { XCTAssertEqual($0.ok, true) },
     "group-approve": check(GroupApproved.self) { XCTAssertTrue($0.approved) },
+    "group-context": check(GroupContextSaved.self) {
+      XCTAssertEqual($0.context, GroupContext(purpose: "Plan the week's dinners.", notes: "No mushrooms.", routing: "lead", lead_member_id: "garden"))
+    },
     "group-create": check(GroupCreated.self) { XCTAssertEqual($0.room.members.map(\.display_name), ["Household", "Garden"]) },
     "group-log": check(GroupPage.self) {
       XCTAssertEqual($0.events.first?.payload.thread_id, "thread-1"); XCTAssertEqual($0.events.first?.created_at, 1790852400.5)
@@ -131,15 +145,22 @@ private typealias Check = @MainActor (Data) throws -> Void
     "group-log-state": check(GroupPage.self) {
       XCTAssertEqual($0.events.map(\.seq), [1]); XCTAssertEqual($0.state?.room.id, "room-dinner")
       XCTAssertEqual($0.state?.driver_status?.pending_actions.first?.execution_generation, 1)
+      XCTAssertEqual($0.state?.context?.lead_member_id, "garden"); XCTAssertEqual($0.state?.driver_status?.member_activity?.count, 2)
     },
     "group-message": check(GroupAccepted.self) { XCTAssertTrue($0.accepted) },
     "group-state": check(GroupState.self) {
       let action = try XCTUnwrap($0.driver_status?.pending_actions.first)
       XCTAssertEqual(action.execution_generation, 1); XCTAssertEqual(action.approval?.command, "grocer order --items 12")
       XCTAssertEqual($0.driver_status?.blocked, true)
+      XCTAssertEqual($0.driver_status?.max_rounds, 3)
+      XCTAssertEqual($0.driver_status?.member_activity?.first, GroupMemberActivity(member_id: "garden", status: "running", thread_id: "thread-1", round_index: 1, started_at: 1790852410.25, tool: "web_search"))
+      XCTAssertEqual($0.context?.routing, "lead"); XCTAssertEqual($0.context?.notes, "No mushrooms.\nBudget is $120.")
     },
     "group-stop": check([String: Int].self) { XCTAssertEqual($0["cancelled"], 1) },
-    "groups": check(GroupCatalog.self) { XCTAssertTrue($0.canSend); XCTAssertEqual($0.rooms.first?.members.count, 2); XCTAssertNotNil($0.reason) },
+    "groups": check(GroupCatalog.self) {
+      XCTAssertTrue($0.canSend); XCTAssertEqual($0.rooms.first?.members.count, 2); XCTAssertNotNil($0.reason)
+      XCTAssertEqual($0.settings, true); XCTAssertEqual($0.routineDelivery, true)
+    },
     "history": check(HistoryPage.self) { XCTAssertEqual($0.messages.first?.sender?.id, "local-two"); XCTAssertTrue($0.hasMore) },
     "integration-callback": check(IntegrationFlow.self) { XCTAssertEqual($0.kind, "redirect") },
     "integration-check": check(IntegrationConnection.self) {
@@ -166,16 +187,22 @@ private typealias Check = @MainActor (Data) throws -> Void
     "preferences": check(Preferences.self) {
       XCTAssertEqual($0.presentation, "advanced"); XCTAssertEqual($0.startPage, "today"); XCTAssertEqual($0.notifications?.quietStart, "22:00")
     },
+    "native-routes": check(DirectRoutesResponse.self) {
+      XCTAssertEqual($0.routes.map(\.kind), [.lan, .tailnet])
+      XCTAssertEqual($0.routes.first?.url, URL(string: "https://127.0.0.1:3443"))
+      XCTAssertEqual($0.routes.first?.certificateSha256, "q1Ue7mHzv1bS0n9yKXGJmWjv2sQxRZbL0dYc3Hc8V2E")
+    },
     "push-config": check(PushConfig.self) { XCTAssertTrue($0.available); XCTAssertEqual($0.environment, "sandbox") },
     "routine-output": check(RoutineOutput.self) { XCTAssertEqual($0.messages.first?.role, "assistant"); XCTAssertFalse($0.previewOnly) },
     "routine-preview": check(SchedulePreview.self) { XCTAssertEqual($0.timezone, "America/Chicago"); XCTAssertEqual($0.nextRuns.count, 2) },
     "routine-results": check([RoutineResultRow].self) { XCTAssertEqual($0.first?.preview, "Five dinners and a grocery list.") },
     "routine-run": check(RoutineRunReceipt.self) { XCTAssertEqual($0.status, "completed") },
     "routine-run-receipt": check(RoutineRunReceipt.self) { XCTAssertNotNil($0.finishedAt); XCTAssertEqual($0.routineId, "routine-morning") },
-    "routine-save": check(Routine.self) { XCTAssertEqual($0.recipientIds, ["local-one", "local-two"]) },
+    "routine-save": check(Routine.self) { XCTAssertEqual($0.recipientIds, ["local-one", "local-two"]); XCTAssertEqual($0.roomIds, ["room-dinner"]) },
     "routine-templates": check([RoutineTemplate].self) { XCTAssertEqual($0.map(\.id), ["morning", "meals", "health"]) },
     "routines": check([Routine].self) {
       XCTAssertEqual($0.first?.recipientIds, ["local-one", "local-two"]); XCTAssertNotNil($0.first?.lastDeliveryError)
+      XCTAssertEqual($0.first?.roomIds, ["room-dinner"]); XCTAssertNil($0.last?.roomIds)
     },
     "saved": check([SavedItem].self) { XCTAssertEqual($0.map(\.kind), ["routine", "session"]) },
     "saved-routine": check(SavedItem.self) { XCTAssertEqual($0.resultId, "result-1") },
@@ -183,7 +210,7 @@ private typealias Check = @MainActor (Data) throws -> Void
     "search": check(SearchResponse.self) {
       XCTAssertEqual($0.hits.map(\.routineId), [nil, "routine-morning"]); XCTAssertEqual($0.unavailableBots, ["archive"])
     },
-    "submission": check(Receipt.self) { XCTAssertEqual($0.runId, "run-dinner"); XCTAssertNotNil($0.message) },
+    "submission": check(Receipt.self) { XCTAssertEqual($0.runId, "run-dinner"); XCTAssertNotNil($0.message); XCTAssertEqual($0.text, "Plan five dinners") },
     "today": check(TodayOverview.self) { overview in
       XCTAssertEqual(overview.items.map(\.botId), ["household", "garden", "archive"])
       XCTAssertEqual(overview.recentMessage(overview.items[0])?.id, "message-assistant")

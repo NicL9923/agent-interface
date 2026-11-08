@@ -3,18 +3,15 @@ import type { RuntimeEvent } from "./types.js";
 // The add-on titles task events generically; the assistant's name and its own words say more.
 const generic = /^(Hermes (completed|failed|interrupted)|Approval requested)$/;
 
-/** Plain, single-line text from a Markdown reply, cut at a word near `limit`. */
+/**
+ * Plain text on one line, cut at a word near `limit`. Callers pass words, not Markdown: the server
+ * flattens replies with `markdownPlain` before they reach notifications, Today and previews.
+ */
 export function excerpt(text: string | undefined, limit = 180) {
-  const plain = (text ?? "")
-    .replace(/```[\s\S]*?(```|$)/g, " ")
-    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
-    .replace(/^\s{0,3}(#{1,6}|[-*+]|\d+[.)]|>)\s+/gm, "")
-    .replace(/(\*\*|__|`|~~)/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
+  const plain = (text ?? "").replace(/\s+/g, " ").trim();
   if (plain.length <= limit) return plain;
   const cut = plain.slice(0, limit);
-  return `${cut.slice(0, Math.max(cut.lastIndexOf(" "), limit * 0.6)).replace(/[\s,;:.–-]+$/, "")}…`;
+  return `${cut.slice(0, Math.max(cut.lastIndexOf(" "), limit * 0.6)).replace(/[\s,;:.–·-]+$/, "")}…`;
 }
 
 /** A routine's name as people know it, without the "[bot:<id>] " owner tag Hermes keeps on it. */

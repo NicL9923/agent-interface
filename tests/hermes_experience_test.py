@@ -377,6 +377,20 @@ class TrialTests(unittest.TestCase):
         self.assertEqual(self.runs.lookup(self.data)['status'],'completed')
         self.assertFalse(self.job['enabled'])
         self.runs.start(self.data); self.assertEqual(self.fires,1)
+    def test_a_stopped_trial_ends_its_wait_and_releases_native_admission(self):
+        self.runs.start(self.data); self.assertTrue(self.started.wait(2))
+        self.assertEqual(self.reservations,1)
+        # Stop run cancels the live execution; the trial must not wait for a completion that never comes.
+        self.execution.update(status='cancelled', finished_at='2026-10-02T00:00:00+00:00')
+        self.wait_done()
+        receipt=self.runs.lookup(self.data)
+        self.assertEqual((receipt['status'],receipt['message']),('failed','This trial was stopped before it finished.'))
+    def test_restarted_receipt_reconciles_a_stopped_trial_as_finished(self):
+        receipt=dict(requestId='request',routineId='routine',botId='default',status='accepted',executionId='execution',startedAt=experience.timestamp())
+        self.journal.db.execute('INSERT INTO experience_runs VALUES(?,?,?,?,?)',('request','default','routine','one',json.dumps(receipt))); self.journal.db.commit()
+        self.execution=dict(id='execution',status='cancelled')
+        reconciled=experience.RoutineRuns(self.journal).reconcile(self.data)
+        self.assertEqual((reconciled['status'],reconciled['message']),('failed','This trial was stopped before it finished.'))
     def test_native_resume_before_claim_is_preserved_and_trial_does_not_execute(self):
         before=copy.deepcopy(self.job)
         self.job.update(enabled=True,state='scheduled',paused_at=None)
@@ -571,6 +585,14 @@ class RoutineRunStatusTests(unittest.TestCase):
         # The row keeps every field older apps read.
         self.assertLessEqual({'id', 'title', 'startedAt', 'preview', 'previewOnly'}, set(rows['local-2']))
 
+    def test_a_stopped_or_missed_run_reads_as_neither_success_nor_failure(self):
+        self.sessions += [dict(id='local-3', source='cron', title='Brief', started_at=700.0, ended_at=710.0, cron_execution_id='e3'),
+            dict(id='local-4', source='cron', title='Brief', started_at=800.0, ended_at=800.0, cron_execution_id='e4')]
+        self.ledger += [dict(id='e3', status='cancelled', claimed_at='1970-01-01T00:11:40+00:00', finished_at='1970-01-01T00:11:50+00:00', error='cancelled on request (Stop)'),
+            dict(id='e4', status='missed', claimed_at='1970-01-01T00:13:20+00:00', finished_at='1970-01-01T00:13:20+00:00')]
+        rows = self.results()
+        self.assertEqual((rows['local-3']['status'], rows['local-4']['status']), ('stopped', 'missed'))
+
     def test_open_session_is_running_only_while_active(self):
         now = time.time()
         self.sessions += [dict(id='cron_routine_live', source='cron', started_at=now - 30, last_active=now - 5, ended_at=None),
@@ -593,6 +615,24 @@ class RoutineRunStatusTests(unittest.TestCase):
         self.attempts += [dict(id='e3', status='failed', claimed_at=2000.0, finished_at=2006.0, error='x'),
             dict(id='e2', status='completed', claimed_at=1000.0, finished_at=1004.0, error='')]
         self.assertEqual(self.results()['cron_output:routine:exec:1']['status'], 'succeeded')
+
+    def test_metadata_rows_read_stopped_and_missed_attempts_after_newer_runs(self):
+        # Hermes's own reconciliation writes exec:N rows for a stopped script run and a missed occurrence.
+        self.docs += [dict(id='cron_output:routine:exec:0', source='cron_output', title='Stopped run', started_at=1000.0),
+            dict(id='cron_output:routine:exec:1', source='cron_output', title='Missed run', started_at=1500.0)]
+        self.attempts += [dict(id='e1', status='cancelled', claimed_at=1000.0, finished_at=1002.0, error='cancelled on request (Stop)'),
+            dict(id='e2', status='missed', claimed_at=1500.0, finished_at=1500.0, error=''),
+            dict(id='e3', status='completed', claimed_at=2000.0, finished_at=2006.0, error='')]
+        rows = self.results()
+        self.assertEqual((rows['cron_output:routine:exec:0']['status'], rows['cron_output:routine:exec:1']['status']), ('stopped', 'missed'))
+
+    def test_an_overlapping_stopped_run_never_takes_a_finished_runs_document(self):
+        # Hermes pairs each output document once: A's document stays A's though B started later.
+        self.docs.append(dict(id='cron_output:routine:2026-10-02_07-00-19', source='cron_output', title='COMPLETED · A', started_at=1019.0))
+        (self.directory / '2026-10-02_07-00-19.md').write_text('A finished')
+        self.attempts += [dict(id='a', status='completed', claimed_at=1000.0, finished_at=1020.0, error=''),
+            dict(id='b', status='cancelled', claimed_at=1005.0, finished_at=1025.0, error='cancelled on request (Stop)')]
+        self.assertEqual(self.results()['cron_output:routine:2026-10-02_07-00-19']['status'], 'succeeded')
 
     def test_metadata_row_index_counts_unknown_attempts_as_hermes_does(self):
         # Hermes numbers exec:N by position in the whole attempts list, so exec:1 is e2, not e3.
@@ -637,7 +677,8 @@ class HistoryAttributionTests(unittest.TestCase):
         self.journal = types.SimpleNamespace(lock=threading.RLock(), db=sqlite3.connect(':memory:', check_same_thread=False))
         self.journal.db.execute('CREATE TABLE receipts(request_id TEXT,actor TEXT,run_id TEXT,attachments TEXT,input_text TEXT,stored_session TEXT,profile TEXT,row_id INTEGER,created REAL)')
         self.journal.db.execute("INSERT INTO receipts VALUES('run','one',NULL,'[]','Original ask','session','spike',1,1)")
-        self.db = types.SimpleNamespace(_read_all=lambda sql, values: [{'id':1},{'id':300}],close=lambda:None)
+        # Every clone lookup finds rows 1 and 300 as copies of the first occurrence it asks about.
+        self.db = types.SimpleNamespace(_read_all=lambda sql, values: [{'id':1,'message_uid':values[0]},{'id':300,'message_uid':values[0]}],close=lambda:None)
         self.temp = tempfile.TemporaryDirectory()
         self.store = Path(self.temp.name) / 'state.db'
         self.store.write_text('written store')
@@ -690,6 +731,27 @@ class HistoryDiscoveryTests(unittest.TestCase):
         result=self.history(False)
         self.assertEqual(result['messages'][0]['app_artifacts'],[{'path':'/fixture/old.pdf'}])
         self.assertEqual(result['app_prior_prompt']['app_sender_id'], 'one')
+    def test_page_reads_receipts_and_tool_records_once_and_attributes_each_turn(self):
+        self.journal.db.execute('CREATE TABLE tools(id INTEGER PRIMARY KEY,profile TEXT,stored_session TEXT,tool_id TEXT,run_id TEXT,result TEXT,artifacts TEXT)')
+        self.journal.db.execute("INSERT INTO receipts VALUES('second','two','run-two','[]','Second ask','session','spike',12,2)")
+        self.journal.db.execute("INSERT INTO tools VALUES(NULL,'spike','session','call','run','{\"n\":1}','[{\"path\":\"/fixture/one.pdf\"}]')")
+        self.journal.db.execute("INSERT INTO tools VALUES(NULL,'spike','session','call','run-two','{\"n\":2}','[{\"path\":\"/fixture/two.pdf\"}]')")
+        page = [{'id':1,'role':'user','content':'First'},{'id':11,'role':'tool','content':'Done','tool_call_id':'call','app_tool_result':{'n':1}},
+                {'id':12,'role':'user','content':'Second'},{'id':13,'role':'tool','content':'Done','tool_call_id':'call','app_tool_result':{'n':2}}]
+        self.db.get_messages = lambda sid, **kw: [dict(row) for row in page]
+        self.db._resume_lineage_ids = lambda sid: ['session']
+        sessions = types.SimpleNamespace(_timeline_session_id=lambda db,sid,p:sid,_history_profile_home=lambda p:'/fixture')
+        statements = []
+        self.journal.db.set_trace_callback(statements.append)
+        with patch.dict(sys.modules, {'hermes_cli.web_routers':types.SimpleNamespace(sessions=sessions,analytics=None)}):
+            result = experience.discovery({'operation':'history','profile':'spike','sessionId':'session','offset':0},self.journal,
+                                          lambda rows, **kw: [dict(row,row_id=row['_row_id'],text=row.get('content','')) for row in rows])
+        self.journal.db.set_trace_callback(None)
+        messages = result['messages']
+        self.assertEqual([message.get('app_sender_id') for message in messages], ['one', None, 'two', None])
+        self.assertEqual([message.get('app_artifacts') for message in messages], [None, [{'path':'/fixture/one.pdf'}], None, [{'path':'/fixture/two.pdf'}]])
+        self.assertEqual(sum('FROM receipts' in statement for statement in statements), 1)
+        self.assertEqual(sum('FROM tools' in statement for statement in statements), 1)
     def test_unwritten_profile_store_reads_as_empty_history(self):
         # A new bot's store stays empty until its first session; Hermes no longer creates it on read.
         self.store.write_text('')

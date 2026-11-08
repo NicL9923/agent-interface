@@ -374,34 +374,48 @@ a {
   font-weight: inherit;
   letter-spacing: normal;
 }
-/* In Advanced, the model chip is a second control over the identity button's second line. */
+/* The avatar spans both rows; the name sits beside it, with the Advanced model chip under the name. */
 .chat-identity-wrap {
   display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  grid-template-rows: auto;
+  column-gap: 14px;
+  row-gap: 4px;
+  align-items: center;
   flex: 1;
   min-width: 0;
 }
-.chat-identity-wrap > * {
-  grid-area: 1 / 1;
+.chat-identity-wrap.with-model {
+  grid-template-rows: auto auto;
+}
+.chat-identity-avatar {
+  grid-column: 1;
+  grid-row: 1 / -1;
+  display: flex;
+  cursor: pointer;
+}
+.chat-identity-heading {
+  grid-column: 2;
+  grid-row: 1;
+}
+.chat-identity-wrap:not(.with-model) .chat-identity-heading {
+  grid-row: 1 / -1;
 }
 .chat-model-slot {
-  z-index: 1;
-  align-self: end;
+  grid-column: 2;
+  grid-row: 2;
   justify-self: start;
-  max-width: calc(100% - 56px);
-  /* The name starts after the avatar: its 42 px, the 14 px gap, less the chip's own 8 px padding. */
-  margin-left: 48px;
-}
-.chat-model-reserve {
-  display: block;
-  height: 24px;
+  max-width: 100%;
+  /* The chip's own padding would push its text past the name's start. */
+  margin-left: -8px;
 }
 .chat-identity {
   display: flex;
   align-items: center;
-  gap: 14px;
   max-width: 100%;
-  margin: -6px 0 -6px -8px;
-  padding: 6px 12px 6px 8px;
+  /* Its padding stays inside the row gap, so the name's box never reaches the chip under it. */
+  margin: -2px 0 -2px -8px;
+  padding: 2px 12px 2px 8px;
   border: 0;
   border-radius: 16px;
   color: var(--ink);
@@ -410,6 +424,12 @@ a {
 .chat-identity .chat-title {
   display: grid;
   gap: 4px;
+}
+.chat-name-line {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
 }
 .chat-name {
   overflow: hidden;
@@ -427,6 +447,7 @@ a {
   color: var(--muted);
 }
 .chat-identity-chevron {
+  flex: none;
   color: var(--muted);
   transition: transform 140ms ease;
 }
@@ -441,6 +462,8 @@ a {
   min-height: 0;
 }
 .transcript {
+  /* Positioned, so visually hidden text inside it is clipped here instead of growing the page. */
+  position: relative;
   min-height: 0;
   overflow: auto;
   flex: 1;
@@ -974,6 +997,7 @@ a {
   flex-direction: column;
 }
 .settings-dialog > header > div {
+  flex: 1;
   min-width: 0;
   overflow-wrap: anywhere;
 }
@@ -995,20 +1019,17 @@ a {
   position: relative;
   z-index: 1;
   background: var(--surface);
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, auto));
+  justify-content: start;
   padding: 0 24px;
   border-bottom: 1px solid var(--line);
   gap: 2px;
   min-width: 0;
   flex-shrink: 0;
 }
-.settings-tabs:not(.settings-tabs-mobile) {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-}
 .settings-tabs button {
   font-size: 0.875rem;
-  text-transform: capitalize;
   border: 0;
   border-radius: 0;
   padding: 14px 12px;
@@ -1019,70 +1040,15 @@ a {
   border-bottom-color: var(--accent);
   color: var(--accent);
 }
-.settings-tabs-mobile {
-  position: relative;
-  z-index: 1;
-  flex-wrap: wrap;
-}
-.settings-tabs-overflow {
-  position: relative;
-  min-width: 0;
-  margin-left: auto;
-  flex-shrink: 0;
-}
-.settings-more-trigger {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-height: 46px;
-  padding: 14px 12px;
-  border-bottom: 2px solid transparent;
-  font-size: 0.875rem;
-  text-transform: capitalize;
-  cursor: pointer;
-  list-style: none;
-}
-.settings-more-trigger::-webkit-details-marker {
-  display: none;
-}
-.settings-more-trigger > span {
-  white-space: nowrap;
-}
-.settings-more-trigger[aria-current="page"] {
-  color: var(--accent);
-  border-bottom-color: var(--accent);
-}
-.settings-tabs-overflow[open] .settings-more-trigger,
-.settings-more-trigger:hover {
-  background: var(--accent-soft);
-}
-.settings-more-menu {
-  display: flex;
-  flex-direction: column;
-  position: absolute;
-  top: calc(100% + 4px);
-  right: 0;
-  width: 200px;
-  max-width: calc(100vw - 48px);
-  max-height: min(240px, calc(100dvh - 200px));
-  overflow-y: auto;
-  padding: 6px;
-  background: var(--raised);
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  box-shadow: 0 8px 24px #0003;
-}
-.settings-more-menu button {
-  min-height: 44px;
-  text-align: left;
-  border: 0;
-  border-radius: 8px;
-  white-space: normal;
-}
-.settings-more-menu button[aria-current="page"] {
-  background: var(--accent-soft);
-}
+.settings-dialog > header > .settings-back { margin-right: -4px; }
+.settings-index .settings-group { border: 1px solid var(--line); }
+.settings-index .settings-row { min-height: 60px; }
+.settings-section + .settings-section { margin-top: 28px; padding-top: 24px; border-top: 1px solid var(--line); }
+.settings-section > h2 { margin: 0 0 12px; font-size: 1.125rem; }
+.settings-profile .settings-danger-zone { margin-top: 28px; }
+.settings-profile > .settings-profile-group { margin-top: 12px; padding-top: 22px; border-top: 1px solid var(--line); }
+.settings-profile > .settings-profile-heading { margin: 12px 0 0; padding-top: 22px; border-top: 1px solid var(--line); font-size: 1.125rem; }
+.settings-dialog .catalog-editor + .catalog-editor { margin-top: 24px; }
 .settings-content {
   padding: 26px;
   overflow: auto;
@@ -1233,20 +1199,33 @@ a {
   }
   .chat-header-identity .chat-identity-wrap {
     grid-column: 2;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto;
     justify-items: center;
+    row-gap: 3px;
   }
-  .chat-header-identity .chat-identity-heading {
+  .chat-header-identity .chat-identity-wrap.with-model {
+    grid-template-rows: auto auto auto;
+  }
+  .chat-header-identity .chat-identity-avatar {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .chat-header-identity .chat-identity-heading,
+  .chat-header-identity .chat-identity-wrap:not(.with-model) .chat-identity-heading {
+    grid-column: 1;
+    grid-row: 2;
     display: flex;
     justify-content: center;
-  }
-  .chat-model-slot {
-    justify-self: center;
     max-width: 100%;
+  }
+  .chat-header-identity .chat-model-slot {
+    grid-column: 1;
+    grid-row: 3;
+    justify-self: center;
     margin-left: 0;
   }
   .chat-header-identity .chat-identity {
-    flex-direction: column;
-    gap: 3px;
     margin: 0;
     padding: 2px 10px 4px;
     border-radius: 14px;
