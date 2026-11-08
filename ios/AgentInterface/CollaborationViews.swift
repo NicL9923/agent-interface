@@ -244,6 +244,8 @@ struct GroupCreateView: View {
                 Text(bot.name)
               }
             }
+              // The hidden avatar's own label still joins a toggle's label on iOS 27, so name the bot alone.
+              .accessibilityLabel(bot.name)
               .disabled(busy || botIds.count >= 6 && !botIds.contains(bot.id))
           }
         } header: { Text("Choose 2–6 assistants · \(botIds.count) chosen") } footer: {

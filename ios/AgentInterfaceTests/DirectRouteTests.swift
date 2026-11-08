@@ -42,9 +42,11 @@ private final class RouteHost: FakeHost, @unchecked Sendable {
 }
 
 @MainActor final class DirectRouteTests: XCTestCase {
-  private var servers: [URL] = []
+  /// Held until tearDown: `FakeExchange` keeps hosts weakly, so a primary origin a test does not
+  /// name again would stop answering before its route list is read.
+  private var servers: [FakeServer] = []
   override func tearDown() async throws {
-    for server in servers { UserDefaults.standard.removeObject(forKey: DeviceDefaults.directRoutes(server)) }
+    for server in servers { UserDefaults.standard.removeObject(forKey: DeviceDefaults.directRoutes(server.origin)) }
   }
 
   private func json(_ routes: [DirectRoute]) -> String {
@@ -57,7 +59,7 @@ private final class RouteHost: FakeHost, @unchecked Sendable {
     let primary = FakeServer { request in
       request.url?.path == "/api/native/routes" ? .init(body: body) : .init(body: #"{"ok":true}"#)
     }
-    servers.append(primary.origin)
+    servers.append(primary)
     for (host, _) in routes {
       FakeExchange.register(host)
       host.answer(status: 200, body: body)
@@ -102,7 +104,7 @@ private final class RouteHost: FakeHost, @unchecked Sendable {
     XCTAssertNotNil(api.activeRoute)
     // An older server, or one with direct routes turned off since.
     let older = FakeServer(answer: { _ in .init(status: 404, body: #"{"error":"API endpoint not found"}"#) })
-    servers.append(older.origin)
+    servers.append(older)
     let client = older.api()
     client.directRoutes = [lan.route(.lan)]
     await client.runRouteCheck()
@@ -247,7 +249,7 @@ private final class RouteHost: FakeHost, @unchecked Sendable {
       release.wait()
       return .init(body: body)
     }
-    servers.append(primary.origin)
+    servers.append(primary)
     FakeExchange.register(lan)
     lan.answer(status: 200, body: body)
     let api = primary.api()
