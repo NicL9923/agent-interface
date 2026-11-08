@@ -90,7 +90,7 @@ struct MainSuggestionCard: View {
       (Text("Choose a main assistant: ").bold() + Text("it checks in on what's coming up and hands work to your other assistants."))
         .font(.subheadline).fixedSize(horizontal: false, vertical: true)
       HStack(spacing: 10) {
-        Button("Choose", action: choose).buttonStyle(.borderedProminent).tint(Palette.accent).accessibilityIdentifier("chooseMain")
+        Button("Choose", action: choose).buttonStyle(.borderedProminent).tint(Palette.accent).foregroundStyle(Palette.onAccent).accessibilityIdentifier("chooseMain")
         Button("Not now") { store.dismissMainSuggestion() }.buttonStyle(.bordered).accessibilityIdentifier("dismissMainSuggestion")
       }
     }.padding(14).frame(maxWidth: .infinity, alignment: .leading)
@@ -118,7 +118,7 @@ struct MainAssistantPicker: View {
           if own.isEmpty { Text("You don't have a personal assistant yet. Make one of these personal, or create a new personal assistant.") }
           ForEach(own) { bot in
             row(bot, note: bot.description ?? "Your personal assistant") {
-              Button(busy == bot.id ? "Saving…" : "Make main") { choose(bot) }.buttonStyle(.borderedProminent).tint(Palette.accent)
+              Button(busy == bot.id ? "Saving…" : "Make main") { choose(bot) }.buttonStyle(.borderedProminent).tint(Palette.accent).foregroundStyle(Palette.onAccent)
                 .disabled(busy != nil).accessibilityIdentifier("makeMain.\(bot.id)")
             }
           }

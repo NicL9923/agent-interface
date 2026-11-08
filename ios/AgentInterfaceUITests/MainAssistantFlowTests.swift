@@ -65,8 +65,11 @@ import XCTest
       XCTAssertTrue(app.buttons["checkInFrequency"].exists || app.descendants(matching: .any)["checkInFrequency"].exists)
       try capture("ios-details-checkins-\(theme)")
       if theme == "light" {
-        checkIns.tap()
-        XCTAssertTrue(checkIns.wait(until: "value == %@", "0"), "Check-ins turn off")
+        // A tap on an iOS 27 list switch row lands on its label, so drag the thumb, as AutomationFlowTests does.
+        let control = checkIns.switches.firstMatch
+        XCTAssertTrue(control.waitForExistence(timeout: 5) && control.waitUntilHittable(), checkIns.debugDescription)
+        control.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.5)).press(forDuration: 0.1, thenDragTo: control.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.5)))
+        if !checkIns.wait(until: "value == %@", "0") { try capture("ios-details-checkins-off-failed"); XCTFail("Check-ins turn off: \(app.debugDescription)") }
         XCTAssertFalse(app.descendants(matching: .any)["checkInFrequency"].exists)
         app.buttons["closeBotProfile"].tapWhenReady()
         open.tapWhenReady()

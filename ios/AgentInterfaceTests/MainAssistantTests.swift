@@ -19,7 +19,7 @@ import XCTest
 
   func testHomeShowsTheMainAssistantOnlyOnItsOwnRow() throws {
     let bots = try [bot("ranch", shared: true, owner: nil), bot("sage"), bot("notes")]
-    var preferences = try JSONDecoder().decode(Preferences.self, from: Data(#"{"favorites":["sage","ranch"],"sections":[],"followBots":[],"mainBotId":"sage"}"#.utf8))
+    var preferences = try JSONDecoder().decode(Preferences.self, from: Data(#"{"presentation":"simple","theme":"system","favorites":["sage","ranch"],"sections":[],"followBots":[],"mainBotId":"sage"}"#.utf8))
     XCTAssertEqual(preferences.mainAssistant(bots)?.id, "sage")
     XCTAssertEqual(preferences.pinnedAssistants(bots).map(\.id), ["ranch"])
     XCTAssertEqual(preferences.assistantGroups(bots).flatMap(\.bots).map(\.id), ["notes"])
@@ -30,10 +30,10 @@ import XCTest
   }
 
   func testOlderServersPreferencesDecodeWithoutAMainAssistant() throws {
-    let preferences = try JSONDecoder().decode(Preferences.self, from: Data(#"{"favorites":[],"sections":[],"followBots":[]}"#.utf8))
+    let preferences = try JSONDecoder().decode(Preferences.self, from: Data(#"{"presentation":"simple","theme":"system","favorites":[],"sections":[],"followBots":[]}"#.utf8))
     XCTAssertNil(preferences.mainBotId)
     XCTAssertNil(preferences.checkIns)
-    let current = try JSONDecoder().decode(Preferences.self, from: Data(#"{"favorites":[],"sections":[],"followBots":[],"checkIns":{"enabled":true,"everyHours":3,"timezone":"America/Chicago"}}"#.utf8))
+    let current = try JSONDecoder().decode(Preferences.self, from: Data(#"{"presentation":"simple","theme":"system","favorites":[],"sections":[],"followBots":[],"checkIns":{"enabled":true,"everyHours":3,"timezone":"America/Chicago"}}"#.utf8))
     XCTAssertEqual(current.checkIns, CheckInSettings(enabled: true, everyHours: 3, timezone: "America/Chicago"))
   }
 
