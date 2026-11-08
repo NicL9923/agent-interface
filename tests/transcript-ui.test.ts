@@ -1535,7 +1535,7 @@ describe("reply file chips", () => {
     expect(dialog.open).toBe(true);
     expect(dialog.querySelector('[aria-current="true"]')!.textContent).toContain("p3.png");
     // Its row is scrolled into the list's view, which on a phone shows only the first rows.
-    expect(scrolled).toEqual(["p3"]);
+    await waitForUi(() => expect(scrolled).toEqual(["p3"]));
     expect(dialog.querySelector(".artifact-detail h3")!.textContent).toBe("p3.png");
     await act(async () => labelled("Close artifacts").click());
     expect(container.querySelector(".artifacts-dialog")).toBeNull();

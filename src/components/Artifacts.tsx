@@ -2,7 +2,7 @@ import { Dialog } from "./ui/dialog";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { NativeSelect } from "./ui/native-select";
-import { useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useResource } from "../app/use-resource";
 import { useEarlierFiles } from "../app/use-earlier-files";
 import type { EarlierFiles } from "../shared/history";
@@ -96,10 +96,13 @@ function ArtifactsView({ bot, artifacts, reloading, earlier, unavailable, focus,
   const selected = filtered.find(({ file }) => file.id === selectedId) || filtered[0];
   // Opened from a chip, the chosen file's row takes focus, so the list starts where the reader was.
   const focused = focus && artifacts.some(({ file }) => file.id === focus) ? `[data-file-id="${CSS.escape(focus)}"]` : undefined;
-  // The dialog focuses without scrolling, and on a phone the list shows only its first rows.
+  // The dialog focuses without scrolling, and on a phone the list shows only its first rows. The
+  // dialog opens after its children's effects run, so the row is brought into view a frame later.
   const list = useRef<HTMLElement>(null);
-  useLayoutEffect(() => {
-    if (focused) list.current?.querySelector<HTMLElement>(focused)?.scrollIntoView?.({ block: "nearest" });
+  useEffect(() => {
+    if (!focused) return;
+    const frame = requestAnimationFrame(() => list.current?.querySelector<HTMLElement>(focused)?.scrollIntoView?.({ block: "nearest" }));
+    return () => cancelAnimationFrame(frame);
   }, []);
   return <Dialog className="artifacts-dialog" aria-labelledby={titleId} initialFocus={focused}
     onCancel={onClose} onClose={onClose}>
