@@ -65,7 +65,7 @@ extension AppStore {
   }
   /// Applies the preferences a failed request reports the server saved first, as when Hermes hasn't
   /// removed a check-in yet, so the screen shows what was saved beside the error. True when it did.
-  @discardableResult func applySavedPreferences(from error: Error, generation expected: Int? = nil) -> Bool {
+  @discardableResult func applySavedPreferences(from error: Error, generation expected: UUID? = nil) -> Bool {
     struct Saved: Decodable { var preferences: Preferences }
     guard let body = (error as? APIError)?.body, let saved = try? JSONDecoder().decode(Saved.self, from: body),
       expected.map({ $0 == generation }) ?? true, bootstrap != nil
@@ -73,7 +73,7 @@ extension AppStore {
     bootstrap?.preferences = saved.preferences
     return true
   }
-  private func applyingSaved<T>(_ expected: Int, _ work: () async throws -> T) async throws -> T {
+  private func applyingSaved<T>(_ expected: UUID, _ work: () async throws -> T) async throws -> T {
     do { return try await work() } catch { applySavedPreferences(from: error, generation: expected); throw error }
   }
   /// Turns check-ins on or off, or changes how often, keeping the other setting.
