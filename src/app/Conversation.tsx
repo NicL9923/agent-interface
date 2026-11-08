@@ -1,5 +1,5 @@
 import { matchCombo, shortcuts } from "./shortcuts";
-import { lazy, memo, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { lazy, memo, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode, RefCallback, RefObject } from "react";
 import type { ActivityState, Bootstrap, Bot, FileRef, Message, ToolCall } from "../shared/types";
 import { Avatar } from "../components/Avatar";
