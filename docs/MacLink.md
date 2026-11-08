@@ -17,8 +17,8 @@ refuse a request early, but it can never allow more than the Mac allows.
    account. The app enrolls the Mac and keeps its own credential in the Keychain;
    your sign-in session is ended once the Mac is linked.
 3. Add folders under **Folders**. Assistants can read and write only inside them.
-   Your home folder itself, `~/Library`, `/Applications` and the system folders
-   cannot be added.
+   Your home folder itself, `~/Library`, `/Applications`, `/opt`, volume roots and
+   the system folders cannot be added.
 4. Under **Assistants**, allow each personal assistant what it may do:
    - **Files**: read and list files, and separately **Write files**.
    - **Run commands**: a shell confined to your folders.
@@ -43,8 +43,10 @@ assistants are told so. Commands and files work while the screen is locked;
 screenshots do not. After a restart the app reconnects once you log in.
 
 To unlink, choose **Unlink this Mac** in the app, or **Revoke** beside the Mac in
-WildBots Settings > Macs on the web or iPhone. Revoking from WildBots disconnects
-the Mac at once, stops its running actions and deletes its credential.
+WildBots Settings > Macs on the web or iPhone. Either one revokes the Mac on the
+server, stops its running actions and deletes its credential. If the app cannot
+reach the server, it still forgets its credential and asks you to revoke it in
+Settings.
 
 ## What confines an assistant
 
@@ -52,16 +54,21 @@ the Mac at once, stops its running actions and deletes its credential.
   `O_NOFOLLOW`, so a symbolic link or a renamed directory cannot lead outside it. A
   file with more than one hard link is refused, because another name for it may
   live outside your folders. Protected paths are refused even inside a granted
-  folder: `.ssh`, `.gnupg`, `.aws`, `.netrc`, `.config/gh`, Keychains, browser
+  folder: `.ssh`, `.gnupg`, `.aws`, `.gcloud`, `.azure`, `.kube`, `.docker`, `.netrc`,
+  `.git-credentials`, `.config/gh`, Keychains, `~/Library/LaunchAgents`, browser
   profiles, Mail, Messages and this app's own settings.
 - **Commands** run with `sandbox-exec` under a closed-by-default policy adapted from
   [Codex's macOS sandbox](https://github.com/openai/codex/tree/main/codex-rs/sandboxing/src)
   (Apache-2.0). They can read the system and developer tool folders, read and write
-  your granted folders and a private temporary folder, and use the network. They
-  cannot read the rest of your home folder, send Apple Events to other apps, reach
-  other services by Mach lookup, or change this app's settings. Each command runs
-  `/bin/zsh -f` with a clean environment and no startup files. A timeout ends its
-  whole process group. A command that cannot be sandboxed does not run.
+  your granted folders and a private temporary folder, which `TMPDIR` names, and
+  open network connections. They cannot write `/tmp`, read the rest of your home
+  folder, connect to local Unix sockets such as `ssh-agent` or Docker, send Apple
+  Events to other apps, reach other services by Mach lookup, or change this app's
+  settings. Each command runs `/bin/zsh -f` with a clean environment and no startup
+  files; Git and Python come straight from the selected Xcode's tools, because the
+  `xcrun` shims write a cache outside the sandbox. A timeout, or the command
+  finishing, ends its whole process group. A command that cannot be sandboxed does
+  not run.
 - **Unattended** is a separate switch per assistant. Hermes marks scheduled runs,
   and the Mac refuses them unless that switch is on.
 
@@ -77,7 +84,7 @@ Limits worth knowing:
 - A command can leave behind a script, Git hook or build step in your folder that
   you later run outside the sandbox. Review changes in granted folders as you would
   any contributor's.
-- A process that starts its own session can outlive the command's timeout.
+- A process that starts its own session can outlive its command.
 
 ## Server setup
 
@@ -148,10 +155,16 @@ Server to Mac:
 - `{"type":"revoked"}`, then close 4401. The Mac deletes its credential and stops
   running actions.
 
+The Mac pings every 20 seconds as well and drops a link that has been silent for 60.
+After 4403 or 4409 it waits for the person to reconnect; after 4404 it keeps trying.
+`DELETE /api/mac/link` with the same `Authorization: Device …` header revokes the
+Mac itself, for **Unlink this Mac**.
+
 The Mac journals each invocation ID before it starts work. An ID it has already
 accepted is never run again: it answers with the recorded result, or
 `in_progress`. If the app quit during an action, that action's result is
-`uncertain`. The Mac runs at most 4 actions at once and answers `busy` beyond that.
+`uncertain`. Unacknowledged results are kept for 7 days and accepted IDs for 30.
+The Mac runs at most 4 actions at once and answers `busy` beyond that.
 It starts or refuses an invocation as it arrives and never queues one. The server
 sends invocations only over a live link and never holds one for a Mac that is
 asleep or offline.
@@ -162,12 +175,14 @@ asleep or offline.
 | --- | --- | --- | --- |
 | `run` | `run` | `command` (1 to 16384 characters), `cwd` (absolute, or relative to the first folder; default the first folder), `timeoutSeconds` (1 to 600, default 120) | `exitCode`, `timedOut`, `stdout`, `stderr`, `stdoutTruncated`, `stderrTruncated`, `durationMs`, `cwd`. Each stream keeps its last 64 KiB. |
 | `read_file` | `files_read` | `path`, `offset` (default 0), `length` (1 to 1048576, default 262144) | `path`, `size`, `sha256` of the whole file, `offset`, `encoding` (`utf8` or `base64`), `content`, `eof` |
-| `write_file` | `files_write` | `path`, `content`, `encoding` (`utf8` default or `base64`), `expectedSha256` (replace only that version), `createOnly` (fail if it exists). Content up to 1 MiB decoded. | `path`, `size`, `sha256`, `created` |
-| `list_dir` | `files_read` | `path`, `offset` (default 0), `limit` (1 to 500, default 200) | `path`, `entries` of `name`, `type` (`file`, `dir`, `link`, `other`), `size`, `modified`; `total`; `nextOffset` when more remain |
+| `write_file` | `files_write` | `path`, `content`, `encoding` (`utf8` default or `base64`), `expectedSha256` (replace only that version), `createOnly` (fail if it exists). Content up to 1 MiB decoded. Its folder must already exist. | `path`, `size`, `sha256`, `created` |
+| `list_dir` | `files_read` | `path` (default the first folder), `offset` (default 0), `limit` (1 to 500, default 200) | `path`, `entries` of `name`, `type` (`file`, `dir`, `link`, `other`), `size`, `modified`; `total`; `nextOffset` when more remain |
 | `screenshot` | `screenshot` | none | `pngBase64`, `width`, `height`, at most 1920 pixels wide |
 
 Paths are absolute or start with `~/`; relative paths resolve against the first
-folder. Error codes from the Mac: `not_allowed`, `unattended_not_allowed`,
+folder. A file over 1 GiB is `too_large`, because its whole content is hashed. The
+Mac refuses argument names an action does not take, and a result too large for an
+8 MiB frame is `too_large`. Error codes from the Mac: `not_allowed`, `unattended_not_allowed`,
 `paused`, `outside_folders`, `protected_path`, `not_found`, `not_a_file`,
 `not_a_directory`, `too_large`, `conflict`, `exists`, `hard_link`, `busy`,
 `in_progress`, `uncertain`, `permission_needed`, `screen_locked`,

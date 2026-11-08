@@ -133,6 +133,22 @@ describe("linking a Mac", () => {
   });
 });
 
+describe("a Mac unlinking itself", () => {
+  it("revokes only with its own device credential, and leaves the owner's list at once", async () => {
+    const s = await setup();
+    const mac = await s.enroll();
+    const device = `Device ${mac.deviceId}.${mac.credential}`;
+    const unlink = (headers: Record<string, string>) => s.app.inject({ method: "DELETE", url: "/api/mac/link", headers });
+    const refused: Record<string, string>[] = [{}, { authorization: `Device ${mac.deviceId}.${"C".repeat(43)}` }, { authorization: device, origin },
+      { authorization: s.native().authorization }];
+    for (const headers of refused)
+      expect({ headers, status: (await unlink(headers)).statusCode }).toEqual({ headers, status: 401 });
+    expect((await unlink({ authorization: device })).json()).toEqual({ ok: true });
+    expect((await s.app.inject({ url: "/api/mac/devices", headers: s.native() })).json().devices).toEqual([]);
+    expect((await unlink({ authorization: device })).statusCode).toBe(401);
+  });
+});
+
 describe("the link socket", () => {
   it("never upgrades without a device credential, from a browser, or with a session token", async () => {
     const s = await setup();

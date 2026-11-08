@@ -121,7 +121,9 @@ export class MacBroker {
     this.links.set(device.id, link);
     if (previous) previous.socket.close(4409, "Replaced by a newer connection");
     const current = () => this.links.get(device.id) === link;
+    // The app pings on its own schedule too; either direction proves the link is alive.
     socket.on("pong", () => { if (current()) link.heard = this.now(); });
+    socket.on("ping", () => { if (current()) link.heard = this.now(); });
     socket.on("message", (data: RawData, binary: boolean) => {
       if (!current()) return;
       link.heard = this.now();
@@ -357,6 +359,18 @@ export function installMacLink(app: FastifyInstance, config: Config, store: Stor
     const user = store.getUser(device.userId);
     if (!user || !allowedIdentity(config, user)) { socket.close(4403, "This Mac's owner is not a household member"); return; }
     broker.attach(device, socket);
+  });
+
+  // The Mac's own Unlink: its device credential revokes itself, so it leaves the owner's list at once.
+  app.delete("/api/mac/link", async (req, reply) => {
+    const match = deviceCredential.exec(req.headers.authorization ?? "");
+    const device = match && req.headers.origin === undefined && req.headers.cookie === undefined
+      ? store.macs.authenticate(match[1], match[2]) : undefined;
+    if (!device) return reply.code(401).send({ error: "Mac link authentication required", code: "link_auth_required" });
+    store.macs.revoke(device.id, device.userId);
+    broker.revoked(device.id);
+    app.log.info({ deviceId: device.id, userId: device.userId }, "Mac unlinked itself");
+    return { ok: true };
   });
 
   app.post("/api/agent-link/mac", { bodyLimit: 2 * 1024 * 1024 }, async (req, reply) => {
