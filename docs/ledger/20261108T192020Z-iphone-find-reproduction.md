@@ -359,3 +359,148 @@ alone, including normal typing, system shortcuts and iPad command-menu behavior.
 The production implementation and orchestration remain GPT-6.1 Sol high.
 PR 273 stays draft; issue 178 stays open. No final review, production fix,
 red-to-green regression or production mutation result exists yet.
+
+### Continued diagnosis after the scheduled refresh
+
+The scheduled follow-up refreshed both PRs and confirmed PR 271 is already merged
+at `3150bca03708cb0eab4ea9a501f329eb984dd289`. Its completed native checks and
+eligible Grok 4.7 high review were reused. PR 273 remains draft at published head
+`7a9881dff715d248357e70ed3c3fd20b5b30e22f`.
+
+SSH file access recovered. Reading the lock script and running Git in the Mac
+repository both succeeded. Xcode remains 27.2, build 27B52, and the mounted DevSSD
+UUID is `A6506932-2021-45AD-8C2E-91FCFD595A87`. T3 reports the linked Mac environment
+unreachable; device discovery exposes only the Linux host and no iOS device.
+No direct device interaction or manual app testing is claimed.
+
+Current main `af601cea7bd88fdd17261e044305596d5af5424f` was merged normally into
+the task branch as `15fa1a23c55d2a59537a923e8cf4a6573c72cfbf`. The existing
+uncommitted diagnostics were saved, reapplied and transferred to the isolated
+Mac checkout. The first bundle lacked the Mac's missing published prerequisite;
+a corrected bundle transferred the full required history. A queued invocation
+was canceled before it acquired the lock or created a simulator. No test result
+comes from that invocation.
+
+Two previously requested Opus 5.5 pressure-tests arrived during this continuation.
+Their effort was unconfirmed, so neither satisfies the final review gate. They
+identify untested keyboard-attachment state, a possible Settings key conflict,
+and a possible stale SwiftUI command menu after bootstrap. These are hypotheses,
+not established causes. A newly started overlapping pressure-test was canceled.
+Implementation and orchestration remain GPT-6.1 Sol high.
+
+The next diagnostic matrix retains the independent UIKit control and adds
+focused Cmd+K, unfocused tapped-chat Cmd+F, an always-enabled SwiftUI Cmd+8 item,
+and a launch that omits the Settings shortcut. It also selects the existing
+ShellFlowTests Cmd+K flow. Traces record hardware-keyboard detection through
+GCKeyboard, complete composer key codes and phases, responder commands, Find
+validation queries and AssistantCommands body evaluations. These temporary
+probes can affect command evaluation and must be removed before accepting any
+production red-to-green evidence.
+
+The parent and Mac match at diagnostic iOS fingerprint
+`sha256:631a0b8945d2d5988b1547ea047c13d94579a2dd58113d07f9fba9607d358a13`.
+The exact patch is retained in the parent audit as `native-273/diagnostics-v8.patch`.
+The locked command is `~/.agents/tools/mac-heavy-lock.sh bash
+/Volumes/DevSSD/scratch/agent-interface-followup-20261108/run-273-matrix-v8.sh`.
+Its log is `273-matrix-v8.log` in that directory. This invocation is queued;
+compilation and test results are not yet available. Its private runner preserves
+signing, omits `shutdown all`, and creates and deletes only owned devices.
+
+The first matrix build failed in the temporary logging code because a UIKit
+key-command action is optional. The corrected trace source fingerprint is
+`sha256:6d7b70a8d1306d384e88a053056ee0bb43a73c851aedc9c5a4335995b9817c6a`.
+That signed build and all seven selected controls ran on both owned devices.
+Each platform reported 2 passed, 5 failed and 0 skipped tests. Omitting the
+Settings menu button made the single Cmd+K control pass, and the independent
+UIKit Cmd+7 control also passed. Focused Cmd+K, focused Cmd+F after plain-key
+entry, always-enabled SwiftUI Cmd+8, tapped-chat unfocused Cmd+F, and the full
+ShellFlowTests Cmd+K flow failed with the ordinary menu. The always-enabled item
+also failing, together with menu evaluations after bootstrap, rules against a
+stale `.disabled` value as the explanation for this diagnostic result.
+
+The phone was `12747AC6-82D6-43BE-9C59-5C17F7E28132`; the iPad was
+`60FD2876-0751-4896-A2FB-90F6C640A45F`. Both used iOS 27.0, build 24A434, on
+Xcode 27.2, build 27B52. Their bundles are respectively
+`.private/ios-test-20261108T222353Z-11714.xcresult` and
+`.private/ios-test-20261108T222748Z-26518.xcresult`. The parent audit retains
+`native-273/273-matrix-v8-fixed.log`, both `273-matrix-v8-*-summary.txt` files
+and both `273-key-trace-matrix-v8-*.log` files. Both owned devices were deleted.
+
+GCKeyboard reported an attached keyboard during the failed focused-command
+presses, although it reported none at initial fixture setup. Visible software
+keyboard state alone therefore did not establish absent hardware-keyboard
+attachment. AssistantCommands evaluated with bootstrap present before failed
+Find dispatch, and the omitted-Settings launch logged `command quickSwitch`.
+These results justify isolating Settings registration before adding a UIKit
+responder integration. They do not yet prove why the framework rejects that menu.
+
+All temporary diagnostic source, swizzling, logging and launch-variable controls
+were removed from the candidate. The proposed production change moves the
+existing Settings button and Cmd+, binding from the custom Assistants menu into
+`CommandGroup(replacing: .appSettings)`. Apple documents that placement for app
+settings and preferences at
+https://developer.apple.com/documentation/swiftui/commandgroupplacement.
+No command action, focus assignment or responder implementation changes.
+The strengthened navigation precondition remains, with permanent focused-Find
+and Settings/quick-switcher shortcut checks added.
+
+The candidate iOS fingerprint is
+`sha256:0d28d4d897259ac0a902c4e5d856c6097e874d980493694f4b87b6627de4175f`.
+With the identical permanent tests and the original production menu, the
+baseline fingerprint is
+`sha256:0e2ce99064531630fca592409fb9ae7325b7c5b7849278491eed490f571a4f78`.
+The Mac and parent candidate fingerprints match. A locked baseline-then-candidate
+phone run is starting through `run-273-appsettings-check.sh`. Its exact source
+copies, script and log live in the same Mac scratch directory and parent audit.
+No candidate result, mutation result or final eligible review exists yet.
+
+The clean baseline built and reported 0 passed, 4 failed and 0 skipped checks.
+Find did not appear after one Cmd+F with the composer focused. Cmd+, from home
+did not show Settings. The strengthened pin test did not navigate after three
+Cmd+1 presses, and ShellFlowTests Cmd+K did not show its field after three presses.
+The baseline bundle is `.private/ios-test-20261108T223413Z-37050.xcresult`.
+
+The standard Settings-group candidate built on the same owned iPhone simulator
+and reported 2 passed, 2 failed and 0 skipped checks. Focused Find preserved the
+draft and passed, and the complete ShellFlowTests Cmd+K flow passed. Cmd+, from
+home still did not show Settings. The strict pin flow now genuinely navigated to
+Ranch hand in one Cmd+1 attempt, but its single Cmd+F did not show Find. This is
+an unmasked reproduction after verified shortcut navigation. Its bundle is
+`.private/ios-test-20261108T223717Z-39595.xcresult`. These runs used owned iPhone
+`4F9C0F59-0FFC-41CB-B069-2F5133A0E314`. Both were iOS 27.0 with Xcode 27.2 and signed builds.
+The script deleted its owned device, restored the candidate file and stopped
+before broader validation. The parent audit retains `273-appsettings-check.log`
+and both `273-appsettings-*-summary.txt` files under `native-273`.
+
+The candidate is not accepted. Moving Settings restores some command delivery
+but does not resolve issue 178. A separate control retains the Settings menu
+button and removes only its Cmd+, binding. It runs focused Find, the strict pin
+sequence and the full Cmd+K flow, without diagnostics or forced focus. This
+separates a reserved-key binding problem from the remaining navigation failure.
+The strict test now also attaches its actual Cmd+1 attempt count and an after
+screenshot on success. Those additions do not change its assertions. They are
+not part of the preceding baseline or candidate results. The next script is
+`run-273-no-comma-control.sh`; its log is `273-no-comma-control.log` in the same
+Mac scratch directory. PR 273 remains draft and issue 178 stays open.
+
+Removing only the Settings Cmd+, binding built and ran at iOS fingerprint
+`sha256:0661d943c5770baeb328490d77edb1492a3608c6df741ced2535a2cb5ec2fec1`.
+Focused Find and the full ShellFlowTests Cmd+K flow passed. The strict pin flow
+still failed to show Find after actual Cmd+1 navigation. XCTest reported
+2 passed, 1 failed and 0 skipped tests. This control therefore does not fix issue
+178 either. Its summary and complete log are retained in the parent audit as
+`native-273/273-no-comma-summary.txt` and `native-273/273-no-comma-control.log`.
+Its exact owned simulator and result bundle are recorded in that summary.
+
+The next temporary trace keeps the no-comma control and logs only command
+callbacks, Find-handler delivery, chat visibility updates and passive key-window,
+first-responder and GCKeyboard snapshots. It does not swizzle methods, enumerate
+responder commands, move focus or add key bindings. Its iOS fingerprint is
+`sha256:040e977e88243a67bd138c719a32417d3aa8e60f10e00d49ae5538e81c8a0d3e`.
+The parent retains `native-273/navigation-delivery-trace.patch`. The Mac command
+is `~/.agents/tools/mac-heavy-lock.sh bash
+/Volumes/DevSSD/scratch/agent-interface-followup-20261108/run-273-navigation-delivery.sh`.
+Its log is `273-navigation-delivery.log`. The selected tests are the permanent
+focused-Find control and the strict pin sequence. The test remains limited to
+one Cmd+F. The trace is pending; no production fix is accepted, and no final
+review or merge gate has passed. The completion schedule stays enabled.
