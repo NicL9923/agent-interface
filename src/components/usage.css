@@ -1,0 +1,33 @@
+/* Self-contained: the Integrations sheet's styles load only with that sheet. */
+.usage-panel { width: min(640px, calc(100vw - max(16px, env(safe-area-inset-left)) - max(16px, env(safe-area-inset-right)))); max-height: calc(100dvh - 40px); overflow: auto;
+  background: var(--raised); color: var(--ink); border: 1px solid var(--line); border-radius: 24px; padding: 26px; box-shadow: 0 24px 90px #14201926; }
+.usage-panel::backdrop { background: #14201955; }
+.usage-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.usage-header h2 { margin: 4px 0 8px; }
+.usage-intro { max-width: 58ch; margin: 0; font-size: 0.875rem; }
+.usage-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 16px 0; font-size: 0.875rem; }
+.usage-toolbar > button, .usage-resets > button { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 7px 12px; font-size: 0.8125rem; flex-shrink: 0; }
+.usage-accounts { display: grid; gap: 12px; }
+.usage-card { min-width: 0; padding: 18px; border: 1px solid var(--line); border-radius: 16px; }
+.usage-card-heading { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
+.usage-card h3 { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 0; font-size: 1rem; }
+.usage-plan, .usage-tag { padding: 2px 8px; border-radius: 999px; font-size: 0.8125rem; font-weight: 600; }
+.usage-plan { background: var(--accent-soft); color: var(--accent); }
+.usage-tag { background: var(--rail); color: var(--muted); }
+.usage-windows { display: grid; gap: 14px; margin: 16px 0 6px; padding: 0; list-style: none; }
+.usage-window small { display: block; margin-top: 4px; color: var(--muted); font-size: 0.8125rem; }
+.usage-window-row { display: flex; justify-content: space-between; gap: 12px; font-size: 0.875rem; }
+.usage-window-row strong { font-weight: 600; font-variant-numeric: tabular-nums; }
+.usage-bar { height: 8px; margin-top: 6px; overflow: hidden; border-radius: 999px; background: var(--rail); }
+.usage-bar > span { display: block; height: 100%; border-radius: inherit; background: var(--accent); }
+.usage-window[data-level="warn"] .usage-bar > span { background: var(--attention); }
+.usage-window[data-level="alarm"] .usage-bar > span { background: var(--danger); }
+.usage-window[data-level="alarm"] .usage-window-row strong { color: var(--danger); }
+.usage-card > .usage-detail { margin: 8px 0 0; color: var(--ink); font-size: 0.875rem; overflow-wrap: anywhere; }
+.usage-card > .usage-detail.muted { color: var(--muted); }
+.usage-resets { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); font-size: 0.875rem; }
+.usage-resets > [data-slot="form-message"] { flex-basis: 100%; margin: 0; }
+.usage-card > .usage-outcome { margin: 10px 0 0; color: var(--ink); font-size: 0.875rem; }
+.usage-card > .usage-users { margin: 12px 0 0; color: var(--muted); font-size: 0.8125rem; }
+.usage-empty, .usage-unavailable { margin-top: 16px; font-size: 0.875rem; }
+@media (prefers-reduced-motion: no-preference) { .usage-bar > span { transition: width 300ms ease; } }

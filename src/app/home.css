@@ -181,6 +181,12 @@
 .home-new-menu button:hover:enabled, .home-new-menu button:focus-visible { background: var(--accent-soft); color: var(--accent); }
 .home-new-menu button:disabled { color: var(--muted); }
 .home-new-menu small { padding: 4px 12px 8px; color: var(--muted); font-size: 0.8125rem; line-height: 1.4; }
+/* The profile menu opens from the avatar at the bar's left edge. */
+.account-menu-who { display: flex; flex-direction: column; gap: 2px; padding: 8px 12px 10px; margin-bottom: 4px; border-bottom: 1px solid var(--line); min-width: 0; }
+.account-menu-who strong { font-size: 0.9375rem; }
+.account-menu-who small, .account-menu-text small { padding: 0; color: var(--muted); font-size: 0.8125rem; overflow-wrap: anywhere; }
+.account-menu-text { display: flex; flex-direction: column; gap: 1px; }
+.home-new-menu.account-menu-list { left: 0; right: auto; min-width: 240px; max-width: min(320px, calc(100vw - 32px)); }
 .home-links {
   display: flex;
   flex-wrap: wrap;

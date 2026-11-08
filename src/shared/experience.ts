@@ -1,6 +1,7 @@
 import type { Activity, Approval, AttentionRequest, FileRef, Message, RuntimeEvent } from './types.js';
 import type { HistoryPage, SearchHit, UsageSummary } from './discovery.js';
 import type { RoutineOutput, RoutineResult } from './collaboration.js';
+import type { AccountSnapshot, ResetOutcome } from './account-usage.js';
 export interface TodayItem {
   botId: string;
   botName: string;
@@ -70,7 +71,10 @@ type ExperienceRequestUnion =
   | { operation: 'model_names'; profile: string; models: { provider: string; model: string }[] }
   | { operation: 'preview'; profile: string; schedule: string }
   | { operation: 'run'; profile: string; routineId: string; requestId: string; senderId: string }
-  | { operation: 'run_receipt'; profile: string; routineId: string; requestId: string; senderId: string };
+  | { operation: 'run_receipt'; profile: string; routineId: string; requestId: string; senderId: string }
+  | { operation: 'accounts'; profile: string }
+  | { operation: 'account_usage'; profile: string; key: string }
+  | { operation: 'account_reset'; profile: string; key: string; requestId: string; force: boolean };
 /** The result belongs to the requested operation. Missing receipts are HTTP 404 errors. */
 export interface ExperienceResults {
   search: SearchHit[];
@@ -86,6 +90,10 @@ export interface ExperienceResults {
   model_names: { names: { provider: string; model: string; name: string | null }[] };
   run: RoutineRunReceipt;
   run_receipt: RoutineRunReceipt;
+  /** The provider accounts a profile runs on, read without the network. */
+  accounts: { accounts: { key: string; provider: string; role: 'main' | 'fallback' }[] };
+  account_usage: AccountSnapshot;
+  account_reset: ResetOutcome;
 }
 export type ExperienceOperation = ExperienceRequestUnion['operation'];
 export type ExperienceRequests = { [O in ExperienceOperation]: Extract<ExperienceRequestUnion, { operation: O }> };

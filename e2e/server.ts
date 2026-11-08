@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { createApp } from "../src/server/app.js";
 import { loadConfig } from "../src/server/config.js";
-import { botFixture, capabilitiesFixture, conversationFixture } from "../tests/helpers/runtime-fixtures.js";
+import { botFixture, capabilitiesFixture, conversationFixture, experienceRequester } from "../tests/helpers/runtime-fixtures.js";
 import type { Message, Runtime } from "../src/shared/types.js";
 import { controlPort, port } from "./ports.js";
 
@@ -27,6 +27,22 @@ let messages = seedMessages();
 const watchers = new Map<string, Set<(kind?: "inflight") => void>>();
 const notify = (botId: string) => { for (const changed of watchers.get(botId) ?? []) changed(); };
 
+// Both assistants run on one ChatGPT account with a used-up session; the Ranch Hand falls back to OpenRouter.
+const chatgpt = "c".repeat(32), openrouter = "b".repeat(32);
+const inHours = (hours: number) => new Date(Date.now() + hours * 3_600_000).toISOString();
+const experienceRequest = experienceRequester({
+  accounts: input => ({ accounts: [{ key: chatgpt, provider: "openai-codex", role: "main" as const },
+    ...input.profile === "ranch" ? [{ key: openrouter, provider: "openrouter", role: "fallback" as const }] : []] }),
+  account_usage: input => input.key === chatgpt
+    ? { key: chatgpt, provider: "openai-codex", plan: "Pro", title: "Account limits", fetchedAt: new Date().toISOString(), details: ["Credits balance: $4.00"],
+      windows: [{ label: "Session", usedPercent: 100, resetsAt: inHours(3.4), detail: null, scope: "account" as const },
+        { label: "Weekly", usedPercent: 64, resetsAt: inHours(70), detail: null, scope: "account" as const }],
+      unavailableReason: null, bankedResets: 2, identity: null }
+    : { key: openrouter, provider: "openrouter", plan: null, title: "Account limits", fetchedAt: new Date().toISOString(), details: ["Credits balance: $12.40"],
+      windows: [{ label: "API key quota", usedPercent: 22, resetsAt: null, detail: "$15.60 of $20.00 remaining", scope: "account" as const }],
+      unavailableReason: null, bankedResets: 0, identity: null },
+});
+
 // Members the suite does not script fail at their name, as tests/helpers/server.ts does for the unit tests.
 const unscripted = (name: string) => async (): Promise<never> => { throw new Error(`The e2e runtime double does not script ${name}.`); };
 const runtime: Runtime = {
@@ -38,6 +54,7 @@ const runtime: Runtime = {
   status: async () => ({ connected: true, code: "ready" }),
   capabilities: async () => capabilitiesFixture({ chat: { supported: true }, durableEvents: { supported: true }, idempotency: { supported: true } }),
   listBots: async () => bots,
+  experienceRequest,
   botDetail: async botId => bots.find(bot => bot.id === botId)!,
   conversation: async botId => conversationFixture({ botId, messages: [...messages.get(botId) ?? []] }),
   routines: async () => [],

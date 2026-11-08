@@ -88,6 +88,7 @@ final class FakeServer: FakeHost, @unchecked Sendable {
   private var answer: ((URLRequest) -> Reply)?
   private var fixed = Reply()
   private var failure: URLError?
+  private var held: [String: DispatchSemaphore] = [:]
   init(answer: ((URLRequest) -> Reply)? = nil) { self.answer = answer }
 
   /// Answers every request with this, unless an `answer` closure decides per request.
@@ -104,14 +105,22 @@ final class FakeServer: FakeHost, @unchecked Sendable {
     return try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
   }
   @MainActor func api(token: String = "synthetic-session-token") -> APIClient { FakeExchange.client(for: self, token: token) }
+  /// Holds the answer to the next request for `path`, decided when it arrives, until the returned closure runs,
+  /// so a test can make that answer land after another request's.
+  func hold(path: String) -> () -> Void {
+    let gate = DispatchSemaphore(value: 0)
+    lock.withLock { held[path] = gate }
+    return { gate.signal() }
+  }
 
   func receive(_ exchange: FakeExchange) {
     let body = FakeExchange.body(exchange.request)
-    let (reply, failure) = lock.withLock { () -> (Reply, URLError?) in
+    let (reply, failure, gate) = lock.withLock { () -> (Reply, URLError?, DispatchSemaphore?) in
       seen.append((exchange.request, body))
-      return (answer?(exchange.request) ?? fixed, self.failure)
+      return (answer?(exchange.request) ?? fixed, self.failure, held.removeValue(forKey: exchange.request.url?.path ?? ""))
     }
     if let failure { exchange.fail(failure); return }
-    exchange.respond(status: reply.status, data: Data(reply.body.utf8))
+    guard let gate else { exchange.respond(status: reply.status, data: Data(reply.body.utf8)); return }
+    DispatchQueue.global().async { gate.wait(); exchange.respond(status: reply.status, data: Data(reply.body.utf8)) }
   }
 }

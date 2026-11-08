@@ -4,11 +4,14 @@ The actual Hermes store/scheduler qualification lives in experience_probe.py.
 """
 import contextlib
 import copy
+import datetime
 import json
+import re
 import sqlite3
 import sys
 import threading
 import time
+import uuid
 import tempfile
 import types
 import unittest
@@ -856,6 +859,395 @@ class ModelNamesTests(unittest.TestCase):
                        [dict(provider='p', model='m')] * (experience.MAX_MODEL_NAMES + 1)):
             with self.subTest(models=str(models)[:40]), self.assertRaises(experience.ExperienceError):
                 experience.model_names(dict(models=models))
+
+
+def strict(**configured):
+    """A stand-in Hermes module whose unconfigured attributes fail loudly."""
+    class Module(types.SimpleNamespace):
+        def __getattr__(self, name):
+            if name.startswith('__'): raise AttributeError(name)
+            raise AssertionError(f'unexpected Hermes call: {name}')
+    return Module(**configured)
+
+
+class AccountUsageTests(unittest.TestCase):
+    """Hermes's provider config, credential pool and usage fetchers are faked at the module boundary; the add-on runs for real.
+
+    The pool fake has no select(): a listing or read that rotated or refreshed a credential would fail loudly.
+    """
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.journal = types.SimpleNamespace(lock=threading.RLock(), db=sqlite3.connect(Path(self.directory.name) / 'journal.db', check_same_thread=False))
+        self.resets = experience.AccountResets(self.journal)
+        experience._account_locks.clear()
+
+    def tearDown(self):
+        self.journal.db.close()
+        self.directory.cleanup()
+
+    def entry(self, token, base_url=None, status=None):
+        return types.SimpleNamespace(runtime_api_key=token, runtime_base_url=base_url, last_status=status)
+
+    def hermes(self, *, main='openai-codex', fallback=(), pools=None, auto='openrouter', snapshots=None, supported=None,
+               portal=None, chatgpt=None, refresh=None, legacy=False, home='/srv/hermes/profiles/ranch'):
+        pools = {'openai-codex': [self.entry('codex-acct1-a')], 'openrouter': [self.entry('sk-or-1')], 'anthropic': [self.entry('sk-ant-oat-1')], **(pools or {})}
+        self.fetched, self.network, self.refreshed = [], [], []
+        # Filled in place, so a test holding the dict sees ChatGPT's state and can change it between calls.
+        chatgpt = {} if chatgpt is None else chatgpt
+        for name, value in (('banked', 2), ('exhausted', True), ('code', None), ('consumed', set())):
+            chatgpt.setdefault(name, value)
+        config = {'fallback_providers': list(fallback)}
+        def fetch(provider, base_url=None, api_key=None, read_only=False, identity_id=None):
+            self.fetched.append(dict(provider=provider, base_url=base_url, api_key=api_key, read_only=read_only, identity_id=identity_id))
+            value = (snapshots or {})[provider]
+            return value(api_key) if callable(value) else value
+        def legacy_fetch(provider, *, base_url=None, api_key=None):
+            self.fetched.append(dict(provider=provider, api_key=api_key))
+            return (snapshots or {})[provider]
+        # ChatGPT's reset endpoints, faked at the HTTP client: the add-on's own spend runs for real.
+        class Response:
+            def __init__(self, body): self.body = body
+            def raise_for_status(self): pass
+            def json(self): return self.body
+        class Client:
+            def __init__(self, timeout): pass
+            def __enter__(self): return self
+            def __exit__(self, *exc): return False
+            def get(this, url, headers):
+                self.network.append(('GET', url, headers['Authorization'], None))
+                if chatgpt.get('on_get'): chatgpt['on_get']()
+                if chatgpt.get('get_error'): raise chatgpt['get_error']
+                return Response({'banked': chatgpt['banked'], 'exhausted': chatgpt['exhausted']})
+            def post(this, url, headers, json):
+                # ChatGPT spends once per redeem_request_id and answers a repeat with already_redeemed.
+                self.network.append(('POST', url, headers['Authorization'], json))
+                code = chatgpt['code']
+                if code is None:
+                    code = 'already_redeemed' if json['redeem_request_id'] in chatgpt['consumed'] else 'reset'
+                    if code == 'reset':
+                        chatgpt['consumed'].add(json['redeem_request_id']); chatgpt['banked'] -= 1
+                lost = chatgpt.get('lost_answers', 0)
+                if lost:
+                    # The consume landed; only its answer is lost.
+                    chatgpt['lost_answers'] = lost - 1
+                    raise RuntimeError('connection reset after send')
+                return Response({'code': code})
+        guard = lambda payload, available, force: None if force or payload['exhausted'] else types.SimpleNamespace(status='not_exhausted', available_count=available)
+        outcome = lambda body, available: types.SimpleNamespace(status=body['code'], available_count=available - 1, windows_reset=2)
+        def refresh_matching(api_key_hint=None):
+            self.refreshed.append(api_key_hint)
+            token = (refresh or {}).get(api_key_hint)
+            return self.entry(token) if token else None
+        def portal_account(timeout):
+            if isinstance(portal, Exception): raise portal
+            return portal
+        usage = strict(fetch_account_usage=legacy_fetch if legacy else fetch,
+                       _fetch_portal_account=portal_account, build_nous_credits_snapshot=lambda account: account.snapshot,
+                       _USAGE_FETCHERS={'openai-codex': 1, 'openrouter': 1, 'anthropic': 1},
+                       _codex_backend_urls=lambda base: (base + '/usage', base + '/credits', base + '/consume'),
+                       _codex_headers=lambda token, account_id: {'Authorization': token},
+                       _codex_banked_resets=lambda payload: payload['banked'], _codex_reset_guard=guard, _codex_reset_outcome=outcome)
+        cache = strict(has_account_usage=lambda provider: provider in (supported or ('openai-codex', 'openrouter', 'anthropic')))
+        pool = strict(STATUS_DEAD='dead', load_pool=lambda provider: strict(entries=lambda: list(pools.get(provider, [])), try_refresh_matching=refresh_matching),
+                      _codex_principal_identity=lambda token: ('acct1', 'user') if 'acct1' in token else ('acct2', 'user') if 'acct2' in token else None)
+        modules = {
+            'hermes_cli': types.SimpleNamespace(), 'hermes_cli.config': strict(load_config_readonly=lambda: config),
+            'hermes_cli.runtime_provider': strict(resolve_requested_provider=lambda requested: main),
+            'hermes_cli.auth': strict(resolve_provider=lambda requested: auto),
+            'hermes_cli.fallback_config': strict(get_fallback_chain=lambda cfg: [dict(entry) for entry in cfg['fallback_providers']],
+                                                 resolve_entry_api_key=lambda entry: entry.get('api_key')),
+            # Hermes sends pooled ChatGPT rows through its configured route (HERMES_CODEX_BASE_URL); here that route is gateway A.
+            'hermes_cli.auth_codex': strict(_codex_pool_route_base_url=lambda base: (base or 'https://chatgpt.com/backend-api/codex').replace('gateway-b', 'gateway-a')),
+            'agent': types.SimpleNamespace(account_usage=usage, account_usage_cache=cache, credential_pool=pool),
+            'agent.account_usage': usage, 'agent.account_usage_cache': None if legacy else cache, 'agent.credential_pool': pool,
+            'hermes_constants': strict(get_hermes_home=lambda: Path(home)),
+            'httpx': strict(Client=Client),
+        }
+        return patch.dict(sys.modules, modules)
+
+    def accounts(self, **options):
+        with self.hermes(**options):
+            return experience.account_list()['accounts']
+
+    def snapshot(self, **fields):
+        return types.SimpleNamespace(**{'plan': None, 'title': 'Account limits', 'windows': (), 'details': (), 'unavailable_reason': None,
+            'identity': None, 'raw': None, 'fetched_at': datetime.datetime(2026, 11, 8, 12, tzinfo=datetime.timezone.utc), **fields})
+
+    def test_lists_the_main_route_then_the_effective_fallback_chain_without_selecting_a_credential(self):
+        rows = self.accounts(main='auto', fallback=[dict(provider='openai-codex', model='m'), dict(provider='OpenRouter', model='m'), dict(provider='custom', model='m')])
+        self.assertEqual([(row['provider'], row['role']) for row in rows], [('openrouter', 'main'), ('openai-codex', 'fallback'), ('custom', 'fallback')])
+        self.assertTrue(all(re.fullmatch('[0-9a-f]{32}', row['key']) for row in rows))
+        self.assertNotIn('sk-or-1', json.dumps(rows))
+        self.assertEqual(rows, self.accounts(main='auto', fallback=[dict(provider='openai-codex', model='m'), dict(provider='OpenRouter', model='m'), dict(provider='custom', model='m')]))
+
+    def test_one_row_per_account_in_a_pool_and_one_for_several_sign_ins_to_the_same_account(self):
+        rows = self.accounts(pools={'openai-codex': [self.entry('codex-acct1-a'), self.entry('codex-acct1-b'), self.entry('codex-acct2-a'), self.entry('codex-other-dead', status='dead'), self.entry('')]})
+        self.assertEqual(len(rows), 2)
+        # A route that names another host is another account, even with the same sign-in.
+        rows = self.accounts(pools={'openai-codex': [self.entry('codex-acct1-a'), self.entry('codex-acct1-b', base_url='https://gateway.example/codex')]})
+        self.assertEqual(len(rows), 2)
+
+    def test_a_fallback_with_its_own_key_is_its_own_account_and_a_route_without_a_credential_still_shows(self):
+        rows = self.accounts(main='openrouter', fallback=[dict(provider='openrouter', model='other', api_key='sk-or-route')], pools={'anthropic': []})
+        self.assertEqual([(row['provider'], row['role']) for row in rows], [('openrouter', 'main'), ('openrouter', 'fallback')])
+        self.assertNotEqual(*(row['key'] for row in rows))
+        empty = self.accounts(main='anthropic')
+        self.assertEqual([(row['provider'], row['role']) for row in empty], [('anthropic', 'main')])
+        # The same credential as main is the same account, and keeps the main role.
+        same = self.accounts(main='openrouter', fallback=[dict(provider='openrouter', model='other')])
+        self.assertEqual([row['role'] for row in same], ['main'])
+
+    def test_keys_follow_the_credential_across_profiles(self):
+        first, same, other = (self.accounts(main='openrouter', pools={'openrouter': [self.entry(key)]})[0]['key'] for key in ('sk-or-1', 'sk-or-1', 'sk-or-2'))
+        self.assertEqual(first, same)
+        self.assertNotEqual(first, other)
+
+    def test_reads_each_account_with_its_own_credential_and_never_repairs_it(self):
+        snapshot = lambda token: self.snapshot(details=(f'read {token[-1]}',))
+        with self.hermes(pools={'openai-codex': [self.entry('codex-acct1-a'), self.entry('codex-acct2-b', base_url='https://gw.example/codex')]}, snapshots={'openai-codex': snapshot}):
+            first, second = (row['key'] for row in experience.account_list()['accounts'])
+            self.assertEqual(experience.account_usage(dict(key=second))['details'], ['read b'])
+            self.assertEqual(experience.account_usage(dict(key=first))['details'], ['read a'])
+        # Read-only: Hermes never repairs a failed read by picking or refreshing a credential itself.
+        self.assertEqual(self.fetched[0], dict(provider='openai-codex', base_url='https://gw.example/codex', api_key='codex-acct2-b', read_only=True, identity_id='codex:acct2:user'))
+        self.assertEqual(self.fetched[1]['api_key'], 'codex-acct1-a')
+
+    def test_normalizes_a_codex_snapshot_and_turns_banked_resets_into_a_count(self):
+        window = lambda label, used, scope='account': types.SimpleNamespace(label=label, used_percent=used, scope=scope, detail=None,
+            reset_at=datetime.datetime(2026, 11, 8, 17, tzinfo=datetime.timezone.utc))
+        codex = self.snapshot(plan='Pro', identity='codex:acct:user', raw={'rate_limit_reset_credits': {'available_count': 2}},
+            windows=(window('Session', 120.0), window('Weekly', float('nan'), 'model'), window('Odd', 5, 'weird')),
+            details=('You have 2 resets banked - use /usage reset to activate', 'Credits balance: $4.00', 'Top up via /topup'))
+        with self.hermes(snapshots={'openai-codex': codex}):
+            result = experience.account_usage(dict(key=experience.account_list()['accounts'][0]['key']))
+        self.assertEqual(result['bankedResets'], 2)
+        self.assertEqual(result['details'], ['Credits balance: $4.00'])
+        self.assertEqual([(row['usedPercent'], row['scope']) for row in result['windows']], [(100.0, 'account'), (None, 'model'), (5.0, 'account')])
+        self.assertEqual(result['windows'][0]['resetsAt'], '2026-11-08T17:00:00+00:00')
+        self.assertEqual((result['plan'], result['unavailableReason'], result['transient']), ('Pro', None, False))
+        self.assertRegex(result['identity'], '^[0-9a-f]{32}$')
+        self.assertNotIn('acct', json.dumps(result))
+
+    def test_explains_an_account_hermes_cannot_read_and_marks_only_failures_to_retry(self):
+        cases = [
+            (dict(main='custom', pools={'custom': [self.entry('k')]}), 'does not report', False),
+            (dict(main='anthropic', pools={'anthropic': []}), 'no signed-in account', False),
+            (dict(main='openrouter', snapshots={'openrouter': None}), 'could not read', True),
+            (dict(main='nous', portal=types.SimpleNamespace(logged_in=False)), 'Sign in to Nous Portal', False),
+            (dict(main='nous', portal=None), 'Sign in to Nous Portal', False),
+            (dict(main='nous', portal=RuntimeError('portal down')), 'could not read', True),
+        ]
+        for options, reason, transient in cases:
+            with self.subTest(reason=reason), self.hermes(**options):
+                result = experience.account_usage(dict(key=experience.account_list()['accounts'][0]['key']))
+                self.assertIn(reason, result['unavailableReason'])
+                self.assertEqual((result['windows'], result['bankedResets'], result['transient']), ([], 0, transient))
+
+    def test_reads_nous_credits_through_the_portal_resolver_whatever_login_it_finds(self):
+        account = types.SimpleNamespace(logged_in=True, user_id='portal-user', org_id='org', snapshot=self.snapshot(details=('Top-up credits: $3.00', 'Top up: https://portal')))
+        with self.hermes(main='nous', portal=account):
+            result = experience.account_usage(dict(key=experience.account_list()['accounts'][0]['key']))
+        self.assertEqual(result['details'], ['Top-up credits: $3.00'])
+        # The app merges profiles signed in to one Portal account by this digest; the user id never leaves.
+        self.assertRegex(result['identity'], '^[0-9a-f]{32}$')
+        self.assertNotIn('portal-user', json.dumps(result))
+
+    def test_each_profile_has_its_own_nous_account_until_the_portal_says_whose_it_is(self):
+        ranch, garden = (self.accounts(main='nous', home=home)[0]['key'] for home in ('/srv/hermes/profiles/ranch', '/srv/hermes/profiles/garden'))
+        self.assertNotEqual(ranch, garden)
+
+    def test_an_explicit_chatgpt_fallback_key_is_read_and_spent_where_the_fallback_names(self):
+        with self.hermes(main='openrouter', fallback=[dict(provider='openai-codex', model='m', api_key='codex-acct2-route', base_url='https://gateway-b.example/codex')],
+                         snapshots={'openai-codex': self.snapshot()}):
+            key = experience.account_list()['accounts'][1]['key']
+            experience.account_usage(dict(key=key))
+            self.reset(key)
+        self.assertEqual(self.fetched[0]['base_url'], 'https://gateway-b.example/codex')
+        self.assertEqual({call[1] for call in self.network}, {'https://gateway-b.example/codex/usage', 'https://gateway-b.example/codex/consume'})
+
+    def test_an_older_hermes_without_the_usage_cache_or_read_only_fetches_still_reads(self):
+        with self.hermes(main='openrouter', fallback=[dict(provider='spike-fixture', model='m')], pools={'spike-fixture': [self.entry('k')]},
+                         snapshots={'openrouter': self.snapshot(details=('Credits balance: $1.00',))}, legacy=True):
+            router, fixture = (row['key'] for row in experience.account_list()['accounts'])
+            self.assertEqual(experience.account_usage(dict(key=router))['details'], ['Credits balance: $1.00'])
+            self.assertIn('does not report', experience.account_usage(dict(key=fixture))['unavailableReason'])
+        self.assertEqual(self.fetched, [dict(provider='openrouter', api_key='sk-or-1')])
+        # Without read-only fetches, Hermes's resolver can answer a 401 with another pooled ChatGPT account, so it is not asked.
+        with self.hermes(legacy=True):
+            result = experience.account_usage(dict(key=experience.account_list()['accounts'][0]['key']))
+        self.assertIn('Update Hermes', result['unavailableReason'])
+        self.assertEqual(self.fetched, [])
+
+    def test_refuses_a_malformed_key_or_one_this_profile_does_not_use(self):
+        with self.hermes():
+            for key in (None, 'x' * 32, 'A' * 32, 3):
+                with self.subTest(key=key), self.assertRaisesRegex(experience.ExperienceError, 'Invalid account') as caught:
+                    experience.account_usage(dict(key=key))
+                self.assertEqual(caught.exception.status, 400)
+            with self.assertRaisesRegex(experience.ExperienceError, 'no longer uses') as caught:
+                experience.account_usage(dict(key='0' * 32))
+            self.assertEqual(caught.exception.status, 404)
+        self.assertEqual(self.fetched, [])
+
+    REQUEST = '6f1d2c3b-4a59-4e7d-8c1b-2a3f4e5d6c7b'
+
+    def reset(self, key, request_id=REQUEST, force=False):
+        return self.resets.spend(dict(key=key, requestId=request_id, force=force))
+
+    def jwt(self, who, expires_in):
+        claims = __import__('base64').urlsafe_b64encode(json.dumps({'exp': time.time() + expires_in}).encode()).decode().rstrip('=')
+        return f'header.{claims}.{who}'
+
+    def test_spends_a_reset_with_the_accounts_own_token_and_chatgpts_own_request_id(self):
+        with self.hermes(fallback=[dict(provider='openrouter', model='m')]):
+            codex, openrouter = (row['key'] for row in experience.account_list()['accounts'])
+            first = self.reset(codex)
+            self.assertEqual(first, dict(status='reset', message="ChatGPT reset this account's limits.", availableCount=1, windowsReset=2))
+            # A retry of the same request answers from its receipt without asking ChatGPT.
+            self.assertEqual(self.reset(codex), first)
+            with self.assertRaisesRegex(experience.ExperienceError, 'Only ChatGPT') as caught:
+                self.reset(openrouter, '7f1d2c3b-4a59-4e7d-8c1b-2a3f4e5d6c7b')
+            self.assertEqual(caught.exception.status, 409)
+            for request_id, force, reason in ((None, False, 'request ID'), ('request-0001', False, 'request ID'), ('8f1d2c3b-4a59-4e7d-8c1b-2a3f4e5d6c7b', 'yes', 'Choose whether')):
+                with self.subTest(request_id=request_id, force=force), self.assertRaisesRegex(experience.ExperienceError, reason):
+                    self.reset(codex, request_id, force)
+        base = 'https://chatgpt.com/backend-api/codex'
+        self.assertEqual(self.network, [('GET', base + '/usage', 'codex-acct1-a', None), ('POST', base + '/consume', 'codex-acct1-a', {'redeem_request_id': self.REQUEST}),
+                                        ('GET', base + '/usage', 'codex-acct1-a', None)])
+
+    def test_hermes_guard_refuses_a_wasted_reset_unless_forced(self):
+        with self.hermes(chatgpt={'exhausted': False}):
+            key = experience.account_list()['accounts'][0]['key']
+            self.assertEqual(self.reset(key)['status'], 'not_exhausted')
+            self.assertEqual(self.reset(key, '7f1d2c3b-4a59-4e7d-8c1b-2a3f4e5d6c7b', force=True)['status'], 'reset')
+        self.assertEqual([call[0] for call in self.network], ['GET', 'GET', 'POST', 'GET'])
+
+    def test_a_consume_whose_answer_was_lost_is_settled_only_by_sending_the_same_id_again(self):
+        chatgpt = {'lost_answers': 2}
+        with self.hermes(chatgpt=chatgpt):
+            key = experience.account_list()['accounts'][0]['key']
+            self.assertEqual(self.reset(key)['status'], 'uncertain')
+            # A retry never asks Hermes's guard or a usage read to decide it: the first consume may already have
+            # emptied the bank. Even with ChatGPT's usage read now failing, it stays uncertain until the consume answers.
+            chatgpt['get_error'] = RuntimeError('ChatGPT usage read failed')
+            self.assertEqual(self.reset(key)['status'], 'uncertain')
+            chatgpt['get_error'] = None
+            result = self.reset(key)
+            self.assertEqual((result['status'], result['availableCount']), ('already_redeemed', 1))
+            # Now recorded: another try never reaches ChatGPT.
+            self.assertEqual(self.reset(key), result)
+        consumes = [call[3] for call in self.network if call[0] == 'POST']
+        self.assertEqual(consumes, [{'redeem_request_id': self.REQUEST}] * 3)
+        self.assertEqual(chatgpt['banked'], 1, 'One reset was spent')
+
+    def test_a_failure_before_the_consume_is_a_definite_no(self):
+        with self.hermes(chatgpt={'get_error': RuntimeError('ChatGPT unreachable')}):
+            key = experience.account_list()['accounts'][0]['key']
+            self.assertEqual(self.reset(key)['status'], 'unavailable')
+            self.assertEqual(self.reset(key)['status'], 'unavailable')
+        self.assertEqual([call[0] for call in self.network], ['GET'])
+
+    def test_a_request_hermes_stopped_during_resumes_where_it_stopped(self):
+        owner = experience._digest('openai-codex', 'identity', 'codex:acct1:user')
+        for sent, calls in ((0, ['GET', 'POST', 'GET']), (1, ['POST', 'GET'])):
+            with self.subTest(sent=sent), self.hermes():
+                key = experience.account_list()['accounts'][0]['key']
+                request_id = str(uuid.uuid4())
+                # A receipt with no answer is what a stop before (sent 0) or after (sent 1) the consume went out leaves.
+                with self.journal.lock, self.journal.db:
+                    self.journal.db.execute('INSERT INTO account_resets(request_id,account,sent) VALUES(?,?,?)', (request_id, owner, sent))
+                self.assertEqual(self.reset(key, request_id)['status'], 'reset')
+                self.assertEqual([call[0] for call in self.network], calls)
+
+    def test_an_unrenewable_token_leaves_a_maybe_consumed_reset_uncertain(self):
+        old = self.jwt('acct1-old', 30)
+        owner = experience._digest('openai-codex', 'identity', 'codex:acct1:user')
+        with self.hermes(pools={'openai-codex': [self.entry(old)]}):
+            key = experience.account_list()['accounts'][0]['key']
+            with self.journal.lock, self.journal.db:
+                self.journal.db.execute('INSERT INTO account_resets(request_id,account,sent) VALUES(?,?,1)', (self.REQUEST, owner))
+            self.assertEqual(self.reset(key)['status'], 'uncertain')
+        self.assertEqual(self.network, [])
+
+    def test_a_request_id_cannot_be_reused_for_another_account(self):
+        with self.hermes(pools={'openai-codex': [self.entry('codex-acct1-a'), self.entry('codex-acct2-a')]}):
+            first, second = (row['key'] for row in experience.account_list()['accounts'])
+            self.reset(first)
+            with self.assertRaisesRegex(experience.ExperienceError, 'another reset') as caught:
+                self.reset(second)
+        self.assertEqual(caught.exception.status, 409)
+        self.assertEqual(len([call for call in self.network if call[0] == 'POST']), 1)
+
+    def test_one_reset_at_a_time_per_account_whichever_sign_in_it_comes_through(self):
+        holder = {}
+        def during():
+            # While this spend is out, a second request through the account's other sign-in is refused.
+            with self.assertRaisesRegex(experience.ExperienceError, 'already in progress'):
+                self.reset(holder['other'], '7f1d2c3b-4a59-4e7d-8c1b-2a3f4e5d6c7b')
+        with self.hermes(pools={'openai-codex': [self.entry('codex-acct1-a'), self.entry('codex-acct1-b', base_url='https://gw.example/codex')]}, chatgpt={'on_get': during}):
+            first, holder['other'] = (row['key'] for row in experience.account_list()['accounts'])
+            self.assertEqual(self.reset(first)['status'], 'reset')
+        self.assertEqual(len([call for call in self.network if call[0] == 'POST']), 1)
+
+    def test_a_consume_answer_chatgpt_does_not_document_leaves_the_request_open_and_never_quotes_it(self):
+        chatgpt = {'code': 'queued'}
+        with self.hermes(chatgpt=chatgpt):
+            key = experience.account_list()['accounts'][0]['key']
+            result = self.reset(key)
+            self.assertEqual(result, dict(status='uncertain', message=experience._RESET_MESSAGES['uncertain'], availableCount=0, windowsReset=0))
+            # Unrecorded, so trying again resends the same consume.
+            chatgpt['code'] = None
+            self.assertEqual(self.reset(key)['status'], 'reset')
+        self.assertEqual([call[3] for call in self.network if call[0] == 'POST'], [{'redeem_request_id': self.REQUEST}] * 2)
+
+    def test_a_count_chatgpt_could_not_be_asked_for_is_unknown_not_zero(self):
+        chatgpt = {}
+        def after_consume():
+            if any(call[0] == 'POST' for call in self.network):
+                raise RuntimeError('usage read failed after the consume')
+        chatgpt['on_get'] = after_consume
+        with self.hermes(chatgpt=chatgpt):
+            result = self.reset(experience.account_list()['accounts'][0]['key'])
+        self.assertEqual((result['status'], result['availableCount']), ('reset', None))
+
+    def test_an_open_receipt_from_before_the_sent_column_is_treated_as_maybe_consumed(self):
+        owner = experience._digest('openai-codex', 'identity', 'codex:acct1:user')
+        db = sqlite3.connect(Path(self.directory.name) / 'old.db', check_same_thread=False)
+        db.execute('CREATE TABLE account_resets(request_id TEXT PRIMARY KEY,account TEXT NOT NULL,result TEXT)')
+        db.execute('INSERT INTO account_resets VALUES(?,?,NULL)', (self.REQUEST, owner))
+        db.execute('INSERT INTO account_resets VALUES(?,?,?)', ('7f1d2c3b-4a59-4e7d-8c1b-2a3f4e5d6c7b', owner, '{"status":"reset"}'))
+        db.commit()
+        resets = experience.AccountResets(types.SimpleNamespace(lock=threading.RLock(), db=db))
+        self.assertEqual(dict(db.execute('SELECT request_id,sent FROM account_resets').fetchall()), {self.REQUEST: 1, '7f1d2c3b-4a59-4e7d-8c1b-2a3f4e5d6c7b': 0})
+        # Its consume may already have emptied the bank, so it is resent rather than refused by the guard.
+        with self.hermes(chatgpt={'exhausted': False}):
+            result = resets.spend(dict(key=experience.account_list()['accounts'][0]['key'], requestId=self.REQUEST, force=False))
+        self.assertEqual(result['status'], 'reset')
+        self.assertEqual([call[0] for call in self.network], ['POST', 'GET'])
+        db.close()
+
+    def test_an_expiring_token_is_renewed_only_through_its_own_pool_entry_and_only_as_the_same_account(self):
+        old, renewed, other = self.jwt('acct1-old', 30), self.jwt('acct1-new', 3600), self.jwt('acct2-new', 3600)
+        with self.hermes(pools={'openai-codex': [self.entry(old)]}, refresh={old: renewed}, snapshots={'openai-codex': self.snapshot()}):
+            key = experience.account_list()['accounts'][0]['key']
+            self.assertIsNone(experience.account_usage(dict(key=key))['unavailableReason'])
+            self.assertEqual(self.reset(key)['status'], 'reset')
+        self.assertEqual(self.refreshed, [old, old])
+        self.assertEqual((self.fetched[0]['api_key'], self.network[0][2], self.network[1][2]), (renewed, renewed, renewed))
+        # A renewal that comes back as another account, or not at all, is never used.
+        for refresh in ({old: other}, {}):
+            with self.subTest(refresh=refresh), self.hermes(pools={'openai-codex': [self.entry(old)]}, refresh=refresh, snapshots={'openai-codex': self.snapshot()}):
+                key = experience.account_list()['accounts'][0]['key']
+                self.assertIn('could not renew', experience.account_usage(dict(key=key))['unavailableReason'])
+                self.assertEqual(self.reset(key, '7f1d2c3b-4a59-4e7d-8c1b-2a3f4e5d6c7b')['status'], 'unavailable')
+                self.assertEqual((self.fetched, self.network), ([], []))
+
+    def test_an_expiring_explicit_fallback_key_is_never_renewed(self):
+        old = self.jwt('acct2-route', 30)
+        with self.hermes(main='openrouter', fallback=[dict(provider='openai-codex', model='m', api_key=old)], snapshots={'openai-codex': self.snapshot()}):
+            key = experience.account_list()['accounts'][1]['key']
+            self.assertIn('could not renew', experience.account_usage(dict(key=key))['unavailableReason'])
+        self.assertEqual((self.refreshed, self.fetched), ([], []))
 
 
 if __name__ == '__main__': unittest.main()

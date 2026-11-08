@@ -42,7 +42,7 @@ import XCTest
     app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label BEGINSWITH %@", "homeSection.", name)).firstMatch
   }
   private func openSettings(_ app: XCUIApplication) {
-    app.buttons["openSettings"].tap()
+    app.openSettingsFromProfileMenu()
     XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
   }
   private func back(_ app: XCUIApplication) {

@@ -49,6 +49,11 @@
       let environment = ProcessInfo.processInfo.environment
       return environment["AGENT_INTERFACE_UI_FIXTURE"] == "1" && environment["AGENT_INTERFACE_UI_CAPTURE_PREFERENCES"] == "1"
     }
+    /// Direct captures can open the Usage sheet without XCTest navigation.
+    static var captureUsagePage: Bool {
+      ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_FIXTURE"] == "1"
+        && ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_CAPTURE_USAGE"] == "1"
+    }
     static var captureGroupPage: Bool {
       let environment = ProcessInfo.processInfo.environment
       return environment["AGENT_INTERFACE_UI_FIXTURE"] == "1" && environment["AGENT_INTERFACE_UI_CAPTURE_GROUP"] == "1"
@@ -417,6 +422,33 @@
     nonisolated(unsafe) static let designFixture = (ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_DESIGN_FIXTURE"] ?? ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_TODAY_DESIGN"])
       .flatMap { $0.data(using: .utf8) }
       .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+    /// The Usage sheet's synthetic accounts: the contract's shape and values, with times relative to now so the phrases read.
+    nonisolated(unsafe) static var usageBankedResets = 2
+    static var usageOverview: [String: Any] {
+      func iso(_ seconds: TimeInterval) -> String { ISO8601DateFormatter().string(from: Date().addingTimeInterval(seconds)) }
+      let fetched = iso(-120)
+      let chatgpt: [String: Any] = [
+        "key": String(repeating: "c", count: 32), "provider": "openai-codex", "plan": "Pro", "title": "Account limits", "fetchedAt": fetched,
+        "windows": [
+          ["label": "Session", "usedPercent": 100, "resetsAt": iso(2 * 3600 + 20 * 60), "detail": NSNull(), "scope": "account"],
+          ["label": "Weekly", "usedPercent": 62.5, "resetsAt": iso(3 * 86400), "detail": NSNull(), "scope": "account"],
+        ], "details": ["Credits balance: $4.00"], "unavailableReason": NSNull(), "bankedResets": usageBankedResets,
+        "botIds": ["ranch", "kitchen"], "fallbackOnly": false,
+      ]
+      let openrouter: [String: Any] = [
+        "key": String(repeating: "b", count: 32), "provider": "openrouter", "plan": NSNull(), "title": "Account limits", "fetchedAt": fetched,
+        "windows": [
+          ["label": "API key quota", "usedPercent": 25, "resetsAt": NSNull(), "detail": "$15.00 of $20.00 remaining", "scope": "account"],
+          ["label": "Opus week", "usedPercent": NSNull(), "resetsAt": NSNull(), "detail": NSNull(), "scope": "model"],
+        ], "details": ["Credits balance: $12.00"], "unavailableReason": NSNull(), "bankedResets": 0, "botIds": ["ranch"], "fallbackOnly": true,
+      ]
+      let custom: [String: Any] = [
+        "key": String(repeating: "d", count: 32), "provider": "custom", "plan": NSNull(), "title": "Account limits", "fetchedAt": fetched,
+        "windows": [], "details": [], "unavailableReason": "This provider does not report plan limits or credits to Hermes.",
+        "bankedResets": 0, "botIds": ["kitchen"], "fallbackOnly": true,
+      ]
+      return ["accounts": [chatgpt, openrouter, custom], "unavailableBots": ["archive"]]
+    }
     static var bots: [[String: Any]] {
       if let bots = designFixture?["bots"] as? [[String: Any]] {
         return (bots.map { settingsOverrides[$0["id"] as? String ?? ""] ?? $0 } + createdBots)
@@ -574,6 +606,14 @@
           ["id":"saved-2","botId":"ranch","kind":"session","sessionId":"history-1","messageId":"history-saved","offset":0,"title":"Brisket reply","createdAt":"2026-10-02T12:05:00Z"]] }
       } else if path.hasSuffix("/starters") {
         object = [["id":"meals","title":"Plan dinners","prompt":"Help me plan five easy dinners. Ask about our preferences first."]]
+      } else if path == "/api/usage/accounts" {
+        object = Self.usageOverview
+      } else if path.hasPrefix("/api/usage/accounts/"), path.hasSuffix("/reset"), method == "POST" {
+        // Spends one banked reset, as the server answers it: the outcome, and the account as Hermes reads it afterwards.
+        if Self.usageBankedResets > 0 { Self.usageBankedResets -= 1 }
+        let account = (Self.usageOverview["accounts"] as? [[String: Any]])?.first { path.contains($0["key"] as? String ?? "?") }
+        object = ["status": "reset", "message": "Reset redeemed.", "availableCount": Self.usageBankedResets, "windowsReset": 2,
+          "account": (account as Any?) ?? NSNull()]
       } else if path == "/api/automations" {
         object = ["routines":[["id":"routine-1","botId":"ranch","name":"Morning report","prompt":"Report","schedule":"0 7 * * *","enabled":true,"recipientIds":["fixture-user"],"nextRunAt":"2026-10-03T12:00:00Z","lastStatus":"delivery_failed","lastDeliveryError":"Fixture: notification destination unavailable"]],"usage":[["botId":"ranch","sessions":4,"inputTokens":1200,"outputTokens":400,"actualCost":NSNull(),"estimatedCost":0.02,"partial":true]],"unavailableBots":[]]
       } else if path == "/api/bootstrap" {

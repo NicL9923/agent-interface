@@ -93,6 +93,18 @@ extension XCUIElementQuery {
 }
 
 extension XCUIApplication {
+  /// Home's profile menu button. It opens a menu of Usage, Settings and Sign out, so Settings is one more tap.
+  var profileMenu: XCUIElement { buttons["openSettings"] }
+  /// A profile menu item by its label. iOS gives menu items no accessibility identifier, and the
+  /// Usage item's label carries its subtitle, so it is matched by its start.
+  func profileMenuItem(_ title: String) -> XCUIElement {
+    buttons.matching(NSPredicate(format: "label == %@ OR label BEGINSWITH %@", title, title + ",")).firstMatch
+  }
+  /// Opens Settings from home the way a person does: the profile menu, then its Settings item.
+  func openSettingsFromProfileMenu(timeout: TimeInterval = 10) {
+    profileMenu.tapWhenReady(timeout: timeout)
+    profileMenuItem("Settings").tapWhenReady(timeout: 5)
+  }
   /// Home's New button: a menu of New assistant and New group chat while Hermes can host groups, else
   /// the New assistant button itself. True once either is on screen.
   func newAssistantReady(timeout: TimeInterval) -> Bool {
