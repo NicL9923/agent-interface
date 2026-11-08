@@ -28,7 +28,10 @@ export function useMenu<Wrap extends HTMLElement = HTMLSpanElement>() {
     const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1 : (at + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
     items[next]?.focus();
   }, [close]);
-  /** Closes the menu, then runs what the item does. */
-  const choose = useCallback((run: () => void) => { setOpen(false); run(); }, []);
+  /**
+   * Closes the menu, then runs what the item does. Focus goes back to the trigger first, so a dialog the
+   * item opens returns focus there when it closes, not to the item that is gone.
+   */
+  const choose = useCallback((run: () => void) => { setOpen(false); trigger.current?.focus(); run(); }, []);
   return { open, setOpen, wrap, trigger, menuId, keys, close, choose };
 }

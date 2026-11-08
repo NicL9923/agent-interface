@@ -384,7 +384,7 @@ it("keeps the server responses the iOS app decodes in sync with the committed co
     await record("saved", "GET", "/api/saved");
     await record("automations", "GET", "/api/automations");
     await record("usage-accounts", "GET", "/api/usage/accounts");
-    await record("usage-reset", "POST", `/api/usage/accounts/${accountKeys.chatgpt}/reset`, { confirmed: true, force: false });
+    await record("usage-reset", "POST", `/api/usage/accounts/${accountKeys.chatgpt}/reset`, { confirmed: true, requestId: ids.operation, force: false });
 
     await record("groups", "GET", "/api/groups");
     await record("group-create", "POST", "/api/groups", { requestId: ids.group, name: "Dinner team", botIds: ["household", "garden"] });

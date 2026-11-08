@@ -147,29 +147,83 @@ it('forgets a failed read so the next one tries again', async () => {
   expect(claude.windows[0].usedPercent).toBe(10);
 });
 
+it('keeps a read Hermes says failed for only 15 seconds, and an answer that it cannot report for a minute', async () => {
+  const s = await setup({ usage: { [CLAUDE]: snapshotFixture(CLAUDE, 'anthropic', { unavailableReason: "Hermes could not read this account's limits right now.", transient: true }),
+    [ROUTER]: snapshotFixture(ROUTER, 'openrouter', { unavailableReason: 'This provider does not report plan limits or credits to Hermes.' }) } });
+  const reads = (key: string) => s.usageCalls().filter(input => input.key === key).length;
+  const first = (await s.get()).json() as { accounts: UsageAccount[] };
+  expect(first.accounts.find(row => row.key === CLAUDE)).not.toHaveProperty('transient');
+  s.advance(USAGE_REFRESH_MS);
+  await s.get();
+  expect([reads(CLAUDE), reads(ROUTER)]).toEqual([2, 1]);
+});
+
+it('shares a read still running however long it takes, and counts freshness from when it answered', async () => {
+  let answer!: (value: AccountSnapshot) => void;
+  const s = await setup();
+  s.usage[CLAUDE] = new Promise<AccountSnapshot>(resolve => { answer = resolve; }) as never;
+  const first = s.get();
+  await vi.waitFor(() => expect(s.usageCalls().some(input => input.key === CLAUDE)).toBe(true));
+  s.advance(USAGE_KEPT_MS);
+  const second = s.get('?refresh=1');
+  // Let the second request list the accounts again and reach the read that is still out.
+  await vi.waitFor(() => expect(s.ask.mock.calls.filter(([input]) => input.operation === 'accounts')).toHaveLength(6));
+  await new Promise(resolve => setTimeout(resolve, 20));
+  s.advance(1);
+  answer(snapshotFixture(CLAUDE, 'anthropic', { windows: [window('Current week', 30)] }));
+  await Promise.all([first, second]);
+  s.advance(USAGE_REFRESH_MS - 1);
+  await s.get('?refresh=1');
+  expect(s.usageCalls().filter(input => input.key === CLAUDE)).toHaveLength(1);
+});
+
+const REQUEST = '6f1d2c3b-4a59-4e7d-8c1b-2a3f4e5d6c7b';
 it('spends a ChatGPT reset only after the person confirms, and returns the account read again', async () => {
   const s = await setup();
   await s.get();
-  s.usage[CODEX] = snapshotFixture(CODEX, 'openai-codex', { windows: [window('Weekly', 0)], bankedResets: 1 });
-  const response = await s.redeem(CODEX, { confirmed: true, force: false });
+  s.usage[CODEX] = snapshotFixture(CODEX, 'openai-codex', { windows: [window('Weekly', 0)], bankedResets: 1, identity: 'i'.repeat(32) });
+  s.usage[SECOND_CODEX] = snapshotFixture(SECOND_CODEX, 'openai-codex', { windows: [window('Weekly', 0)], bankedResets: 1, identity: 'i'.repeat(32) });
+  const response = await s.redeem(CODEX, { confirmed: true, requestId: REQUEST, force: false });
   expect(response.statusCode).toBe(200);
-  expect(s.reset).toHaveBeenCalledWith({ operation: 'account_reset', profile: 'ranch', key: CODEX, force: false });
+  expect(s.reset).toHaveBeenCalledWith({ operation: 'account_reset', profile: 'ranch', key: CODEX, requestId: REQUEST, force: false });
   // The kept read from before the reset is dropped, so the answer shows the restored limit.
   expect(response.json()).toMatchObject({ status: 'reset', availableCount: 1, account: { key: CODEX, bankedResets: 1, windows: [{ usedPercent: 0 }], botIds: ['ranch', 'garden', 'helper'] } });
-  await s.redeem(CODEX, { confirmed: true, force: true });
-  expect(s.reset).toHaveBeenLastCalledWith(expect.objectContaining({ force: true }));
+  // So is the kept read of the same account through its other sign-in.
+  const before = s.usageCalls().filter(input => input.key === SECOND_CODEX).length;
+  await s.get();
+  expect(s.usageCalls().filter(input => input.key === SECOND_CODEX)).toHaveLength(before + 1);
+  await s.redeem(CODEX, { confirmed: true, requestId: REQUEST, force: true });
+  expect(s.reset).toHaveBeenLastCalledWith(expect.objectContaining({ requestId: REQUEST, force: true }));
 });
 
-it('refuses a reset without confirmation, for an account the person cannot see, or for a provider without resets', async () => {
+it('never keeps a read that started before a reset and answered after it', async () => {
   const s = await setup();
-  const cases: [string, unknown, number, RegExp | string, Record<string, string>?][] = [
-    [CODEX, { force: false }, 400, 'confirmed'],
-    [CODEX, { confirmed: false, force: false }, 400, 'confirmed'],
-    [CODEX, { confirmed: true }, 400, 'force'],
-    [CODEX, { confirmed: true, force: false, extra: 1 }, 400, ''],
-    ['not-a-key', { confirmed: true, force: false }, 400, 'key'],
-    [PRIVATE, { confirmed: true, force: false }, 404, /None of your assistants/],
-    [ROUTER, { confirmed: true, force: false }, 409, /Only ChatGPT/],
+  await s.get();
+  s.advance(USAGE_KEPT_MS);
+  let late!: (value: AccountSnapshot) => void;
+  s.usage[CODEX] = new Promise<AccountSnapshot>(resolve => { late = resolve; }) as never;
+  const before = s.get();
+  await vi.waitFor(() => expect(s.usageCalls().filter(input => input.key === CODEX)).toHaveLength(2));
+  s.usage[CODEX] = snapshotFixture(CODEX, 'openai-codex', { windows: [window('Weekly', 0)], bankedResets: 1, identity: 'i'.repeat(32) });
+  expect((await s.redeem(CODEX, { confirmed: true, requestId: REQUEST, force: false })).statusCode).toBe(200);
+  late(snapshotFixture(CODEX, 'openai-codex', { windows: [window('Weekly', 100)], bankedResets: 2, identity: 'i'.repeat(32) }));
+  await before;
+  const after = (await s.get()).json() as { accounts: UsageAccount[] };
+  expect(after.accounts.find(row => row.key === CODEX)?.bankedResets).toBe(1);
+});
+
+it('refuses a reset without confirmation or a request ID, for an account the person cannot see, or for a provider without resets', async () => {
+  const s = await setup();
+  const cases: [string, unknown, number, RegExp | string][] = [
+    [CODEX, { requestId: REQUEST, force: false }, 400, 'confirmed'],
+    [CODEX, { confirmed: false, requestId: REQUEST, force: false }, 400, 'confirmed'],
+    [CODEX, { confirmed: true, force: false }, 400, 'requestId'],
+    [CODEX, { confirmed: true, requestId: 'again', force: false }, 400, 'requestId'],
+    [CODEX, { confirmed: true, requestId: REQUEST }, 400, 'force'],
+    [CODEX, { confirmed: true, requestId: REQUEST, force: false, extra: 1 }, 400, ''],
+    ['not-a-key', { confirmed: true, requestId: REQUEST, force: false }, 400, 'key'],
+    [PRIVATE, { confirmed: true, requestId: REQUEST, force: false }, 404, /None of your assistants/],
+    [ROUTER, { confirmed: true, requestId: REQUEST, force: false }, 409, /Only ChatGPT/],
   ];
   for (const [key, payload, status, reason] of cases) {
     const response = await s.redeem(key, payload);
@@ -179,33 +233,37 @@ it('refuses a reset without confirmation, for an account the person cannot see, 
     else expect(body.details.map((issue: { path: string[] }) => issue.path.join('.') || 'body')).toContain(reason || 'body');
   }
   // Without the page's CSRF token the request never reaches Hermes.
-  expect((await s.redeem(CODEX, { confirmed: true, force: false }, { cookie: s.headers.cookie, origin: s.headers.origin })).statusCode).toBe(403);
+  expect((await s.redeem(CODEX, { confirmed: true, requestId: REQUEST, force: false }, { cookie: s.headers.cookie, origin: s.headers.origin })).statusCode).toBe(403);
   expect(s.reset).not.toHaveBeenCalled();
 });
 
-it('refuses a second reset while the first is still out', async () => {
+it('refuses a second reset of an account while the first is out, through either of its sign-ins', async () => {
   const s = await setup();
+  await s.get();
   let finish!: () => void;
   s.reset.mockImplementationOnce(async () => { await new Promise<void>(resolve => { finish = resolve; }); return { status: 'reset', message: 'Done', availableCount: 0, windowsReset: 2 }; });
-  const first = s.redeem(CODEX, { confirmed: true, force: false });
+  const first = s.redeem(CODEX, { confirmed: true, requestId: REQUEST, force: false });
   await vi.waitFor(() => expect(s.reset).toHaveBeenCalledOnce());
-  const second = await s.redeem(CODEX, { confirmed: true, force: false });
-  expect(second.statusCode).toBe(409);
-  expect(second.json().error).toMatch(/already in progress/);
+  for (const key of [CODEX, SECOND_CODEX]) {
+    const second = await s.redeem(key, { confirmed: true, requestId: crypto.randomUUID(), force: false });
+    expect(second.statusCode, key).toBe(409);
+    expect(second.json().error).toMatch(/already in progress/);
+  }
   finish();
   expect((await first).statusCode).toBe(200);
   // Once the first settles, the account can be reset again.
-  expect((await s.redeem(CODEX, { confirmed: true, force: false })).statusCode).toBe(200);
+  expect((await s.redeem(CODEX, { confirmed: true, requestId: crypto.randomUUID(), force: false })).statusCode).toBe(200);
   expect(s.reset).toHaveBeenCalledTimes(2);
 });
 
-it('lets a failed reset be tried again', async () => {
+it('lets a failed reset be tried again with the same request', async () => {
   const s = await setup();
   s.reset.mockRejectedValueOnce(httpError(409, 'Hermes is being upgraded. Try the reset again in a minute.'));
-  const response = await s.redeem(CODEX, { confirmed: true, force: false });
+  const response = await s.redeem(CODEX, { confirmed: true, requestId: REQUEST, force: false });
   expect(response.statusCode).toBe(409);
   expect(response.json().error).toMatch(/being upgraded/);
-  expect((await s.redeem(CODEX, { confirmed: true, force: false })).statusCode).toBe(200);
+  expect((await s.redeem(CODEX, { confirmed: true, requestId: REQUEST, force: false })).statusCode).toBe(200);
+  expect(s.reset.mock.calls.map(([input]) => input.requestId)).toEqual([REQUEST, REQUEST]);
 });
 
 it('requires sign-in', async () => {

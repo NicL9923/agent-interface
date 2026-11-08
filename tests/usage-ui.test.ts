@@ -7,7 +7,7 @@ import { AccountMenu } from '../src/app/AccountMenu';
 import { UsagePanel } from '../src/components/UsagePanel';
 import type { AccountUsageOverview, UsageAccount, UsageWindow } from '../src/shared/account-usage';
 import type { Bot } from '../src/shared/types';
-import { button, click, mountRoot } from './ui-harness';
+import { click, mountRoot } from './ui-harness';
 
 vi.mock('../src/client-api', async original => (await import('./helpers/request-mock')).withRequest({ ...await original<typeof import('../src/client-api')>(), api: vi.fn(), write: vi.fn() }));
 
@@ -52,6 +52,8 @@ it('opens the profile menu with how close the nearest account is to a limit, and
   await act(async () => [...menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(item => item.textContent?.startsWith('Usage'))!.click());
   expect(handlers.onUsage).toHaveBeenCalledOnce();
   expect(container.querySelector('[role="menu"]')).toBeNull();
+  // Focus is back on the avatar before Usage opens, so closing Usage returns there.
+  expect(document.activeElement).toBe(container.querySelector('[aria-label="Account"]'));
   await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Account"]')!.click());
   await act(async () => [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(item => item.textContent === 'Sign out')!.click());
   expect(handlers.onSignOut).toHaveBeenCalledOnce();
@@ -111,7 +113,7 @@ it('spends a reset on a used-up account only after confirming, then shows the ac
   expect(dialog.textContent).toContain("You'll have 1 reset left.");
   expect(write).not.toHaveBeenCalled();
   await click('Use reset', dialog);
-  expect(write).toHaveBeenCalledWith(`/usage/accounts/${CODEX}/reset`, { confirmed: true, force: false });
+  expect(write).toHaveBeenCalledWith(`/usage/accounts/${CODEX}/reset`, { confirmed: true, requestId: expect.stringMatching(/^[0-9a-f-]{36}$/), force: false });
   expect(container.querySelector('[role="alertdialog"]')).toBeNull();
   expect(card('ChatGPT').textContent).toContain('Limits reset. 1 banked reset left.');
   expect(meter(card('ChatGPT'), 'Session')?.getAttribute('aria-valuenow')).toBe('0');
@@ -127,17 +129,26 @@ it('warns that an early reset is wasted, and sends force only when the person go
   expect(write).not.toHaveBeenCalled();
   await click('Use a reset', card('ChatGPT'));
   await click('Use reset anyway', container.querySelector('[role="alertdialog"]')!);
-  expect(write).toHaveBeenCalledWith(`/usage/accounts/${CODEX}/reset`, { confirmed: true, force: true });
+  expect(write).toHaveBeenCalledWith(`/usage/accounts/${CODEX}/reset`, { confirmed: true, requestId: expect.any(String), force: true });
   // Without a fresh account in the answer, the page reads the accounts again.
   expect(api).toHaveBeenCalledTimes(2);
 });
 
-it('closes the question and says why when a reset fails', async () => {
-  vi.mocked(write).mockRejectedValue(new ApiError('A reset for this account is already in progress.', 409));
+it('closes the question and says why when a reset fails, and retries it as the same reset', async () => {
+  vi.mocked(write).mockRejectedValueOnce(new ApiError('A reset for this account is already in progress.', 409))
+    .mockResolvedValueOnce({ status: 'reset', message: 'Done', availableCount: 1, windowsReset: 2 }).mockResolvedValueOnce({ status: 'reset', message: 'Done', availableCount: 0, windowsReset: 2 });
   await panel();
   await click('Use a reset', card('ChatGPT'));
   await click('Use reset', container.querySelector('[role="alertdialog"]')!);
   expect(container.querySelector('[role="alertdialog"]')).toBeNull();
   expect(card('ChatGPT').querySelector('[role="alert"]')?.textContent).toBe('A reset for this account is already in progress.');
-  expect(button('Use a reset', card('ChatGPT')).disabled).toBe(false);
+  await click('Use a reset', card('ChatGPT'));
+  await click('Use reset', container.querySelector('[role="alertdialog"]')!);
+  // The retry may be the same spend whose answer was lost, so it carries the same request ID.
+  const ids = vi.mocked(write).mock.calls.map(([, body]) => (body as { requestId: string }).requestId);
+  expect(ids[1]).toBe(ids[0]);
+  // A reset that went through is done; the next one is a new request.
+  await click('Use a reset', card('ChatGPT'));
+  await click('Use reset', container.querySelector('[role="alertdialog"]')!);
+  expect(vi.mocked(write).mock.calls.map(([, body]) => (body as { requestId: string }).requestId)[2]).not.toBe(ids[0]);
 });

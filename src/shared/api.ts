@@ -151,8 +151,11 @@ export interface ApiRoutes {
   "DELETE /saved/:id": { response: Ok };
   "GET /automations": { query: { days?: number }; response: AutomationOverview };
   "GET /usage/accounts": { query: { refresh?: "1" }; response: AccountUsageOverview };
-  /** Spends one banked ChatGPT reset. `confirmed` is the person's answer to the confirmation; `force` spends one before a limit is used up. */
-  "POST /usage/accounts/:key/reset": { body: { confirmed: true; force: boolean }; response: ResetResult };
+  /**
+   * Spends one banked ChatGPT reset. `confirmed` is the person's answer to the confirmation; `force` spends one before a
+   * limit is used up. Reuse `requestId` to retry the same reset: it is never spent twice.
+   */
+  "POST /usage/accounts/:key/reset": { body: { confirmed: true; requestId: string; force: boolean }; response: ResetResult };
   "GET /bots/:id/starters": { response: Starter[] };
   "GET /bots/:id/memory": { response: ProfileMemory };
   "PUT /bots/:id/memory/:target": { body: MemorySave; response: ProfileMemory };

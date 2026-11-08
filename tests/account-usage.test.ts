@@ -55,7 +55,7 @@ it('names accounts as people know them and spells out an unknown slug', () => {
   expect(['openai-codex', 'anthropic', 'nous', 'my_custom-endpoint'].map(accountName)).toEqual(['ChatGPT', 'Claude', 'Nous Portal', 'My Custom Endpoint']);
 });
 
-it('words every reset outcome, and uses Hermes words only where the app has none', () => {
+it('words every reset outcome in the app\'s own words', () => {
   const message = (status: ResetStatus, availableCount = 0, text = 'Codex backend error (HTTP 500)') => resetOutcomeMessage({ status, message: text, availableCount, windowsReset: 0 });
   expect(message('reset', 1)).toBe('Limits reset. 1 banked reset left.');
   expect(message('reset', 0)).toBe('Limits reset. 0 banked resets left.');
@@ -64,6 +64,7 @@ it('words every reset outcome, and uses Hermes words only where the app has none
   expect(message('no_credit')).toBe('This account has no banked resets.');
   expect(message('no_credits_banked')).toBe('This account has no banked resets.');
   expect(message('not_exhausted')).toMatch(/would be wasted/);
-  expect(message('unavailable')).toBe('Codex backend error (HTTP 500)');
-  expect(message('unavailable', 0, '')).toBe('Hermes could not reach ChatGPT. No reset was used.');
+  // The add-on's sentence is fixed per status; the app's own copy never repeats it, so a provider body cannot reach the page.
+  expect(message('unavailable', 0, "Unexpected response: {'account_id': 'private'}")).toMatch(/did not confirm the reset/);
+  expect(message('uncertain')).toMatch(/outcome was never recorded/);
 });

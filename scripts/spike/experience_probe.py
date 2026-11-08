@@ -199,7 +199,7 @@ async def main():
         assert status == 200 and read["key"] == account["key"] and read["windows"] == [] and "does not report" in read["unavailableReason"], read
         assert call("account_usage", key="0" * 32)[0] == 404
         assert call("account_usage", key="not-a-key")[0] == 400
-        assert call("account_reset", key=account["key"], force=False)[0] == 409, "A provider without resets accepted one"
+        assert call("account_reset", key=account["key"], requestId=str(uuid.uuid4()), force=False)[0] == 409, "A provider without resets accepted one"
         checks.update(native_account_list=True, native_account_usage_unsupported=True, account_reset_provider_scope=True)
         checks.update(native_profile_search=True, native_history_read=True, history_profile_scope=True, native_usage_unknown_cost=True)
         checks.update(native_routine_history=True, native_routine_output=True, routine_output_profile_scope=True)

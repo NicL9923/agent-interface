@@ -74,7 +74,7 @@ type ExperienceRequestUnion =
   | { operation: 'run_receipt'; profile: string; routineId: string; requestId: string; senderId: string }
   | { operation: 'accounts'; profile: string }
   | { operation: 'account_usage'; profile: string; key: string }
-  | { operation: 'account_reset'; profile: string; key: string; force: boolean };
+  | { operation: 'account_reset'; profile: string; key: string; requestId: string; force: boolean };
 /** The result belongs to the requested operation. Missing receipts are HTTP 404 errors. */
 export interface ExperienceResults {
   search: SearchHit[];

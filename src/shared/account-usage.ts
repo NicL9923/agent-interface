@@ -30,10 +30,12 @@ export interface AccountSnapshot {
   bankedResets: number;
   /** One-way digest of the account Hermes identified, so two credentials for one account show once. */
   identity: string | null;
+  /** A failed read worth trying again soon, rather than an answer to keep. */
+  transient?: boolean;
 }
 
 /** An account as the app shows it: the snapshot, and the visible assistants that use it. */
-export interface UsageAccount extends Omit<AccountSnapshot, 'identity'> {
+export interface UsageAccount extends Omit<AccountSnapshot, 'identity' | 'transient'> {
   botIds: string[];
   /** Every assistant listed uses it only after its main provider fails. */
   fallbackOnly: boolean;
@@ -45,11 +47,11 @@ export interface AccountUsageOverview {
   unavailableBots: string[];
 }
 
-export type ResetStatus = 'reset' | 'nothing_to_reset' | 'no_credit' | 'already_redeemed' | 'not_exhausted' | 'no_credits_banked' | 'unavailable';
+export type ResetStatus = 'reset' | 'nothing_to_reset' | 'no_credit' | 'already_redeemed' | 'not_exhausted' | 'no_credits_banked' | 'unavailable' | 'uncertain';
 
 export interface ResetOutcome {
   status: ResetStatus;
-  /** Hermes's own words, for an outcome the app has no copy for. */
+  /** The add-on's fixed sentence for the status. Never Hermes's or the provider's words. */
   message: string;
   availableCount: number;
   windowsReset: number;
@@ -110,6 +112,7 @@ export function resetOutcomeMessage(result: ResetOutcome) {
     case 'already_redeemed': return 'That reset was already used. No other reset was spent.';
     case 'no_credit': case 'no_credits_banked': return 'This account has no banked resets.';
     case 'not_exhausted': return 'Not reset: no limit is used up yet, so a reset would be wasted.';
-    case 'unavailable': return result.message || 'Hermes could not reach ChatGPT. No reset was used.';
+    case 'unavailable': return "ChatGPT did not confirm the reset. Refresh to see whether it went through before trying again.";
+    case 'uncertain': return "This reset was sent but its outcome was never recorded. Refresh to see whether it went through before trying again.";
   }
 }

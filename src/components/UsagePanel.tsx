@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Dialog } from "./ui/dialog";
 import { Button } from "./ui/button";
 import { FormMessage } from "./ui/form-message";
@@ -43,8 +43,8 @@ export function UsagePanel({ bots, onClose }: { bots: Bot[]; onClose(): void }) 
     <div className="usage-accounts">
       {accounts.map(account => <AccountCard key={account.key} account={account} names={account.botIds.map(name).filter((value): value is string => !!value)}
         outcome={outcome?.key === account.key ? outcome.text : ""}
-        onReset={async force => {
-          const result = await request("POST /usage/accounts/:key/reset", { params: { key: account.key }, body: { confirmed: true, force } });
+        onReset={async (force, requestId) => {
+          const result = await request("POST /usage/accounts/:key/reset", { params: { key: account.key }, body: { confirmed: true, requestId, force } });
           setOutcome({ key: account.key, text: resetOutcomeMessage(result) });
           if (result.account) replace(result.account); else void usage.reload();
         }} />)}
@@ -53,7 +53,7 @@ export function UsagePanel({ bots, onClose }: { bots: Bot[]; onClose(): void }) 
   </Dialog>;
 }
 
-function AccountCard({ account, names, outcome, onReset }: { account: UsageAccount; names: string[]; outcome: string; onReset(force: boolean): Promise<void> }) {
+function AccountCard({ account, names, outcome, onReset }: { account: UsageAccount; names: string[]; outcome: string; onReset(force: boolean, requestId: string): Promise<void> }) {
   const title = accountName(account.provider);
   return <article className="usage-card" aria-label={title}>
     <div className="usage-card-heading">
@@ -82,13 +82,16 @@ function Allowance({ window }: { window: UsageWindow }) {
 }
 
 /** Banked ChatGPT resets, spent only after a confirmation that says plainly when one would be wasted. */
-function Resets({ account, onReset }: { account: UsageAccount; onReset(force: boolean): Promise<void> }) {
+function Resets({ account, onReset }: { account: UsageAccount; onReset(force: boolean, requestId: string): Promise<void> }) {
   const [asking, setAsking] = useState(false);
   const action = useAction();
+  // One ID per reset the person asked for. A failed attempt keeps it, so trying again can never spend a second reset.
+  const requestId = useRef<string | null>(null);
   const early = resetWouldBeWasted(account);
   const left = account.bankedResets - 1;
   // Either way the question is answered: a failure closes it too and says why beside the button.
-  const confirm = () => action.run(async () => { await onReset(early); }, { onSuccess: () => setAsking(false), onError: () => { setAsking(false); } });
+  const confirm = () => action.run(async () => { await onReset(early, requestId.current ??= crypto.randomUUID()); },
+    { onSuccess: () => { requestId.current = null; setAsking(false); }, onError: () => { setAsking(false); } });
   return <div className="usage-resets">
     <span>{plural(account.bankedResets, "banked reset")}</span>
     <Button id={`reset-${account.key}`} disabled={action.busy} onClick={() => setAsking(true)}>Use a reset</Button>

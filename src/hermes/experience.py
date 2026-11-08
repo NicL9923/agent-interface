@@ -424,70 +424,147 @@ def run_outcome(row, attempts, ledger, job, newest, now=None):
         deliveryFailed=delivery_failed, error=error[:500] if error and status == "failed" else None)
 
 
-MAX_ACCOUNT_PROVIDERS = 8
+MAX_ACCOUNT_ROUTES = 8
+MAX_ACCOUNTS = 20
 # Hermes's usage lines end with CLI instructions such as "/usage reset" or "/topup". The app offers its
 # own actions, so those lines are dropped rather than shown as commands nobody can type here.
 _CLI_HINTS = ("/usage", "/topup", "(or run", "Top up via", "Top up:")
 _ACCOUNT_KEY = re.compile(r"^[0-9a-f]{32}$")
-_RESET_STATUSES = ("reset", "nothing_to_reset", "no_credit", "already_redeemed", "not_exhausted", "no_credits_banked", "unavailable")
+_REQUEST_ID = re.compile(r"^[0-9A-Za-z-]{8,100}$")
+# Hermes's own reset messages can quote the provider's response, so the app sends only these.
+_RESET_MESSAGES = {
+    "reset": "ChatGPT reset this account's limits.",
+    "nothing_to_reset": "ChatGPT reports nothing to reset. No reset was spent.",
+    "no_credit": "ChatGPT reports no banked reset on this account.",
+    "already_redeemed": "This reset was already used. No other reset was spent.",
+    "not_exhausted": "No limit is used up yet, so Hermes did not spend a reset.",
+    "no_credits_banked": "This account has no banked resets.",
+    "unavailable": "ChatGPT did not confirm the reset. Refresh to see whether it went through before trying again.",
+    "uncertain": "This reset was sent but its outcome was never recorded. Refresh to see whether it went through before trying again.",
+}
+_account_locks = {}
+_account_locks_guard = threading.Lock()
 
 
 def _digest(*parts):
     return hashlib.sha256("\0".join(("wildbots-account", *parts)).encode()).hexdigest()[:32]
 
 
-def _account_providers():
-    """(provider, role) for the profile's main provider, then each fallback provider, each once.
+def _hermes(module, name):
+    """A Hermes helper that older revisions may not have, or None."""
+    try:
+        return getattr(__import__(module, fromlist=[name]), name)
+    except (ImportError, AttributeError):
+        return None
 
-    "auto" resolves to the provider Hermes would pick. The fetchers resolve their own credentials,
-    as ``hermes usage`` does, so nothing here touches the network or a usage endpoint.
+
+def _account_routes():
+    """(provider, role, base_url, explicit key) for the main route, then Hermes's effective fallback chain.
+
+    "auto" resolves the way Hermes picks a provider, without selecting a credential. A fallback entry
+    keeps its own base URL and inline or ``key_env`` key, as the fallback client uses them.
     """
     from hermes_cli.config import load_config_readonly
-    from hermes_cli.runtime_provider import resolve_requested_provider, resolve_runtime_provider
+    from hermes_cli.runtime_provider import resolve_requested_provider
+    config = load_config_readonly()
     main = resolve_requested_provider(None)
     if main == "auto":
+        resolve = _hermes("hermes_cli.auth", "resolve_provider")
         try:
-            main = str(resolve_runtime_provider().get("provider") or "")
+            main = resolve("auto") if resolve else ""
         except Exception:
             main = ""
-    pairs = [(main, "main")]
-    fallback = load_config_readonly().get("fallback_model")
-    for entry in fallback if isinstance(fallback, list) else [fallback]:
-        provider = entry.get("provider") if isinstance(entry, dict) else None
-        if isinstance(provider, str):
-            pairs.append((provider, "fallback"))
-    roles = {}
-    for provider, role in pairs:
+    routes = [(main, "main", None, None)]
+    chain = _hermes("hermes_cli.fallback_config", "get_fallback_chain")
+    entry_key = _hermes("hermes_cli.fallback_config", "resolve_entry_api_key")
+    if chain:
+        entries = chain(config)
+    else:
+        legacy = config.get("fallback_model")
+        entries = [entry for entry in (legacy if isinstance(legacy, list) else [legacy]) if isinstance(entry, dict)]
+    for entry in entries:
+        base_url = str(entry.get("base_url") or "").strip().rstrip("/") or None
+        key = entry_key(entry) if entry_key else (str(entry.get("api_key") or "").strip() or None)
+        routes.append((entry.get("provider"), "fallback", base_url, key))
+    found = []
+    for provider, role, base_url, key in routes:
         provider = provider.strip().lower() if isinstance(provider, str) else ""
-        if provider and provider != "auto" and 0 < len(provider) <= 100:
-            roles.setdefault(provider, role)
-    return list(roles.items())[:MAX_ACCOUNT_PROVIDERS]
+        if provider and provider != "auto" and len(provider) <= 100:
+            found.append((provider, role, base_url, key))
+    return found[:MAX_ACCOUNT_ROUTES]
 
 
-def _credential_key(provider):
-    """A stable, one-way account key: the provider and a digest of the credential it resolves to.
+def _identity(provider, token):
+    """Hermes's account identity for a credential: the decoded ChatGPT principal, else a token fingerprint."""
+    if provider == "openai-codex":
+        principal_of = _hermes("agent.credential_pool", "_codex_principal_identity")
+        principal = principal_of(token) if principal_of else None
+        if principal:
+            return f"codex:{principal[0]}:{principal[1]}"
+    return "fp:" + hashlib.sha256(token.encode()).hexdigest()[:16]
 
-    Profiles that share a credential share a key, so the app reads that account once. The credential
-    never leaves Hermes; only the truncated digest does.
-    """
+
+def _route_base(provider, base_url):
+    if provider == "openai-codex":
+        route = _hermes("hermes_cli.auth_codex", "_codex_pool_route_base_url")
+        if route:
+            return route(base_url)
+    return base_url or None
+
+
+def _credentials(provider, base_url, explicit):
+    """Each credential a route can run on, read from the pool without selecting, rotating or refreshing one."""
+    if explicit:
+        return [(explicit, base_url)]
+    from agent.credential_pool import STATUS_DEAD, load_pool
     try:
-        from hermes_cli.runtime_provider import resolve_runtime_provider
-        secret = str(resolve_runtime_provider(requested=provider).get("api_key") or "")
+        entries = load_pool(provider).entries()
     except Exception:
-        secret = ""
-    return _digest(provider, "credential", hashlib.sha256(secret.encode()).hexdigest() if secret else "none")
+        return []
+    found = []
+    for entry in entries:
+        token = str(getattr(entry, "runtime_api_key", "") or "").strip()
+        if token and getattr(entry, "last_status", None) != STATUS_DEAD:
+            found.append((token, base_url or getattr(entry, "runtime_base_url", None)))
+    return found
+
+
+def _accounts():
+    """This profile's accounts, one per provider account, with the exact credential each is read and spent with.
+
+    Several credentials Hermes identifies as one account are one account. A route with no usable credential
+    still appears, so the app can say why it shows nothing. Nous Portal is read through its account endpoint,
+    which finds its own login, so it is one account per profile.
+    """
+    accounts = {}
+    for provider, role, base_url, explicit in _account_routes():
+        if provider == "nous":
+            found = [dict(key=_digest("nous", "portal"), provider="nous", role=role, token=None, base_url=None, identity=None)]
+        else:
+            found = []
+            for token, base in _credentials(provider, base_url, explicit):
+                identity = _identity(provider, token)
+                route = _route_base(provider, base)
+                found.append(dict(key=_digest(provider, (route or "").lower(), identity), provider=provider, role=role,
+                                  token=token, base_url=route, identity=identity))
+            if not found:
+                found = [dict(key=_digest(provider, "none", base_url or ""), provider=provider, role=role, token=None, base_url=None, identity=None)]
+        # The main route comes first, so an account it shares with a fallback keeps the main role.
+        for account in found:
+            accounts.setdefault(account["key"], account)
+    return list(accounts.values())[:MAX_ACCOUNTS]
 
 
 def account_list():
-    return dict(accounts=[dict(key=_credential_key(provider), provider=provider, role=role) for provider, role in _account_providers()])
+    return dict(accounts=[dict(key=row["key"], provider=row["provider"], role=row["role"]) for row in _accounts()])
 
 
 def _account_for(key):
     if not isinstance(key, str) or not _ACCOUNT_KEY.match(key):
         raise ExperienceError("Invalid account.")
-    for provider, role in _account_providers():
-        if _credential_key(provider) == key:
-            return provider, role
+    for account in _accounts():
+        if account["key"] == key:
+            return account
     raise ExperienceError("This assistant no longer uses that account.", 404)
 
 
@@ -495,10 +572,11 @@ def _finite(value):
     return isinstance(value, (int, float)) and not isinstance(value, bool) and value == value and value not in (float("inf"), float("-inf"))
 
 
-def _usage_document(provider, key, snapshot, reason):
+def _usage_document(provider, key, snapshot, reason, transient=False):
+    """The app's account shape. ``transient`` marks a failed read the app should try again soon, not keep."""
     if snapshot is None:
         return dict(key=key, provider=provider, plan=None, title="Account limits", fetchedAt=timestamp(), windows=[], details=[],
-                    unavailableReason=reason, bankedResets=0, identity=None)
+                    unavailableReason=reason, bankedResets=0, identity=None, transient=transient)
     windows = []
     for window in getattr(snapshot, "windows", ())[:12]:
         used = getattr(window, "used_percent", None)
@@ -522,47 +600,87 @@ def _usage_document(provider, key, snapshot, reason):
                 title=str(getattr(snapshot, "title", None) or "Account limits")[:100],
                 fetchedAt=fetched.isoformat() if isinstance(fetched, datetime.datetime) else timestamp(),
                 windows=windows, details=details, unavailableReason=str(unavailable)[:500] if unavailable else None,
-                bankedResets=banked, identity=_digest(provider, "identity", identity) if isinstance(identity, str) and identity else None)
+                bankedResets=banked, identity=_digest(provider, "identity", identity) if isinstance(identity, str) and identity else None,
+                transient=False)
 
 
 def account_usage(data):
-    """One account's limits, read the way ``hermes usage`` reads them, normalized for the app."""
+    """One account's limits, read with that account's own credential and never repaired on failure."""
     from agent import account_usage as usage
-    key = data.get("key")
-    provider, _ = _account_for(key)
+    account = _account_for(data.get("key"))
+    provider, key = account["provider"], account["key"]
     if provider == "nous":
-        # Nous Portal reports credits through its account endpoint, not a usage fetcher.
-        if not usage._nous_logged_in():
-            return _usage_document(provider, key, None, "Sign in to Nous Portal in Hermes to see its credits.")
+        # The Portal resolver finds a singleton, OAuth-pool or inference-key login itself.
         try:
-            snapshot = usage.build_nous_credits_snapshot(usage._fetch_portal_account(10.0))
+            info = usage._fetch_portal_account(10.0)
         except Exception:
-            snapshot = None
-        return _usage_document(provider, key, snapshot, "Hermes could not read this account's credits right now.")
-    try:
-        from agent.account_usage_cache import has_account_usage
-    except ImportError:
+            return _usage_document(provider, key, None, "Hermes could not read this account's credits right now.", transient=True)
+        if info is None or not getattr(info, "logged_in", False):
+            return _usage_document(provider, key, None, "Sign in to Nous Portal in Hermes to see its credits.")
+        return _usage_document(provider, key, usage.build_nous_credits_snapshot(info), "Hermes could not read this account's credits right now.", transient=True)
+    supported = _hermes("agent.account_usage_cache", "has_account_usage")
+    if supported is None:
         # Hermes before the usage cache (late September 2026) has only the built-in fetchers.
-        def has_account_usage(slug):
+        def supported(slug):
             return slug in getattr(usage, "_USAGE_FETCHERS", {})
-    if not has_account_usage(provider):
+    if not supported(provider):
         return _usage_document(provider, key, None, "This provider does not report plan limits or credits to Hermes.")
-    return _usage_document(provider, key, usage.fetch_account_usage(provider), "Hermes could not read this account's limits right now.")
+    if account["token"] is None:
+        return _usage_document(provider, key, None, "Hermes has no signed-in account for this provider.")
+    options = dict(base_url=account["base_url"], api_key=account["token"])
+    accepted = __import__("inspect").signature(usage.fetch_account_usage).parameters
+    # A read never refreshes or rotates a credential it does not own, as Hermes's own model picker reads.
+    options.update({name: value for name, value in (("read_only", True), ("identity_id", account["identity"])) if name in accepted})
+    snapshot = usage.fetch_account_usage(provider, **options)
+    return _usage_document(provider, key, snapshot, "Hermes could not read this account's limits right now.", transient=snapshot is None)
 
 
-def account_reset(data):
-    """Spend one banked ChatGPT reset. Hermes refuses a wasted reset unless ``force`` is set, and never retries the spend."""
-    from agent.account_usage import redeem_codex_reset_credit
-    force = data.get("force")
-    if not isinstance(force, bool):
-        raise ExperienceError("Choose whether to use a reset before the limit is reached.")
-    provider, _ = _account_for(data.get("key"))
-    if provider != "openai-codex":
-        raise ExperienceError("Only ChatGPT accounts have banked resets.", 409)
-    result = redeem_codex_reset_credit(force=force)
-    status = result.status if result.status in _RESET_STATUSES else "unavailable"
-    return dict(status=status, message=str(result.message)[:500], availableCount=max(0, int(result.available_count)),
-                windowsReset=max(0, int(result.windows_reset)))
+class AccountResets:
+    """Banked ChatGPT resets, spent at most once per request ID and once at a time per account.
+
+    The receipt is written before ChatGPT is asked, so a retried request returns what happened, or
+    "uncertain" when Hermes stopped before it could record the answer, and never spends again.
+    """
+    def __init__(self, journal):
+        self.journal = journal
+        with journal.lock, journal.db:
+            journal.db.execute("CREATE TABLE IF NOT EXISTS account_resets(request_id TEXT PRIMARY KEY,account TEXT NOT NULL,result TEXT)")
+
+    def spend(self, data):
+        from agent.account_usage import redeem_codex_reset_credit
+        request_id, force = data.get("requestId"), data.get("force")
+        if not isinstance(request_id, str) or not _REQUEST_ID.match(request_id):
+            raise ExperienceError("A reset needs its request ID.")
+        if not isinstance(force, bool):
+            raise ExperienceError("Choose whether to use a reset before the limit is reached.")
+        account = _account_for(data.get("key"))
+        if account["provider"] != "openai-codex" or account["token"] is None:
+            raise ExperienceError("Only ChatGPT accounts have banked resets.", 409)
+        owner = _digest(account["provider"], "identity", account["identity"])
+        with _account_locks_guard:
+            lock = _account_locks.setdefault(owner, threading.Lock())
+        if not lock.acquire(blocking=False):
+            raise ExperienceError("A reset for this account is already in progress.", 409)
+        try:
+            with self.journal.lock, self.journal.db:
+                row = self.journal.db.execute("SELECT account,result FROM account_resets WHERE request_id=?", (request_id,)).fetchone()
+                if row is None:
+                    self.journal.db.execute("INSERT INTO account_resets(request_id,account) VALUES(?,?)", (request_id, owner))
+            if row is not None:
+                if row[0] != owner:
+                    raise ExperienceError("That request ID belongs to another reset.", 409)
+                if row[1] is not None:
+                    return json.loads(row[1])
+                return dict(status="uncertain", message=_RESET_MESSAGES["uncertain"], availableCount=0, windowsReset=0)
+            outcome = redeem_codex_reset_credit(base_url=account["base_url"], api_key=account["token"], force=force)
+            status = outcome.status if outcome.status in _RESET_MESSAGES else "unavailable"
+            result = dict(status=status, message=_RESET_MESSAGES[status], availableCount=max(0, int(outcome.available_count)),
+                          windowsReset=max(0, int(outcome.windows_reset)))
+            with self.journal.lock, self.journal.db:
+                self.journal.db.execute("UPDATE account_resets SET result=? WHERE request_id=?", (json.dumps(result), request_id))
+            return result
+        finally:
+            lock.release()
 
 
 MAX_MODEL_NAMES = 4000
@@ -1092,6 +1210,7 @@ def install(web, journal, projector):
     from hermes_cli.web_routers._common import config_scoped_to_thread
     from hermes_cli.backend_retirement import retirement
     runs = RoutineRuns(journal)
+    resets = AccountResets(journal)
     original_require_token = web._require_token
     def require_token(request):
         principal = getattr(request.state, "token_principal", None)
@@ -1127,7 +1246,7 @@ def install(web, journal, projector):
                 with retirement.work() as admitted:
                     if not admitted:
                         raise ExperienceError("Hermes is being upgraded. Try the reset again in a minute.", 409)
-                    result = await config_scoped_to_thread(profile, lambda: account_reset(data))
+                    result = await config_scoped_to_thread(profile, lambda: resets.spend(data))
             elif operation == "model_names":
                 # Cache-only reads need no profile scope, and an earlier add-on answers "Unknown experience operation."
                 result = await asyncio.to_thread(model_names, data)
