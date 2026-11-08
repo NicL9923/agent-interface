@@ -29,25 +29,25 @@ import XCTest
   }
   func testReplyFileChipsOpenTheArtifactsSheetOnTheirFile() {
     let app = launch()
-    let chip = element(app, "replyFile-pasture-map")
+    let chip = element(app, "replyFile-supply-quote")
     for _ in 0..<8 where !chip.exists { app.swipeDown() }
     XCTAssertTrue(chip.waitForExistence(timeout: 15), app.debugDescription)
     center(chip, in: app)
-    // Four chips, the tool's files first, then "+2 more"; the person's message carries none.
-    for id in ["fence-chart", "fence-csv", "pasture-map", "repair-notes"] { XCTAssertTrue(element(app, "replyFile-" + id).exists, id) }
-    XCTAssertFalse(element(app, "replyFile-supply-quote").exists)
+    // Four of the tool's six files, then "+2 more". The reply's own attachments are never chips.
+    for id in ["fence-chart", "fence-csv", "supply-quote", "gate-audio"] { XCTAssertTrue(element(app, "replyFile-" + id).exists, id) }
+    for id in ["post-photos", "pasture-map", "repair-notes"] { XCTAssertFalse(element(app, "replyFile-" + id).exists, id) }
     XCTAssertTrue(element(app, "replyFilesMore").exists)
     capture(app, name: "Native reply file chips")
     chip.tap()
-    let row = element(app, "artifact-pasture-map")
+    let row = element(app, "artifact-supply-quote")
     XCTAssertTrue(row.waitForExistence(timeout: 5))
     XCTAssertEqual(row.value as? String, "From the reply")
     XCTAssertTrue(row.isSelected)
     capture(app, name: "Native artifacts sheet focused from a chip")
     app.buttons["Close"].tap()
     element(app, "replyFilesMore").tap()
-    XCTAssertTrue(element(app, "artifact-supply-quote").waitForExistence(timeout: 5))
-    XCTAssertNotEqual(element(app, "artifact-pasture-map").value as? String, "From the reply")
+    XCTAssertTrue(element(app, "artifact-fence-chart").waitForExistence(timeout: 5))
+    XCTAssertNotEqual(element(app, "artifact-supply-quote").value as? String, "From the reply")
     app.buttons["Close"].tap()
   }
   func testARevisedDraftShowsAndHidesItsChanges() {

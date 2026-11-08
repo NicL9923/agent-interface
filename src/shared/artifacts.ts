@@ -50,15 +50,21 @@ const startsTurn = (message: Message) => message.role === "user" && [undefined, 
 /**
  * The files each turn generated, keyed by the ID of the turn's last reply, where its chips go. A file
  * belongs to the turn it first appears in, and only Generated files count: a file the person shared
- * is theirs, even when the assistant hands it back. A turn with no reply yet has no chips. `earlier`
+ * is theirs, even when the assistant hands it back. Files a reply row of the turn already shows as
+ * its attachments are left out, so chips list only what the turn's work made out of sight. A turn with no reply yet has no chips. `earlier`
  * holds the file-bearing messages before `messages`, as the panel reads them.
  */
 export function replyArtifacts(messages: Message[], artifacts: Artifact[], earlier: EarlierFiles["messages"] = []): Map<string, Artifact[]> {
   const listed = new Map(artifacts.map(artifact => [artifact.file.id, artifact]));
   // A file that first appeared before these messages belongs to that earlier turn.
   const seen = new Set(earlier.flatMap(message => (message.files ?? []).map(file => file.id))), result = new Map<string, Artifact[]>();
-  let files: Artifact[] = [], reply: string | undefined;
-  const close = () => { if (reply && files.length) result.set(reply, files); files = []; reply = undefined; };
+  let files: Artifact[] = [], shown = new Set<string>(), reply: string | undefined;
+  const close = () => {
+    // A reply row shows its own files as attachments, so a chip would repeat them.
+    const chips = files.filter(artifact => !shown.has(artifact.file.id));
+    if (reply && chips.length) result.set(reply, chips);
+    files = []; shown = new Set(); reply = undefined;
+  };
   for (const message of withMessageOrigins(messages)) {
     if (startsTurn(message)) close();
     for (const file of message.files || []) {
@@ -67,7 +73,10 @@ export function replyArtifacts(messages: Message[], artifacts: Artifact[], earli
       const artifact = listed.get(file.id);
       if (artifact?.source === "Generated") files.push(artifact);
     }
-    if (isConversationReply(message)) reply = message.id;
+    if (isConversationReply(message)) {
+      reply = message.id;
+      for (const file of message.files || []) shown.add(file.id);
+    }
   }
   close();
   return result;

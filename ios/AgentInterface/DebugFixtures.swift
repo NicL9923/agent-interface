@@ -256,10 +256,12 @@
       return [
         ["id": "extra-q1", "role": "user", "text": "Walk the north fence and send me what you found.", "sender": me],
         ["id": "extra-t1", "role": "tool", "text": "Rendered the survey.", "toolName": "image_generate",
-          "files": [file("fence-chart", "north-fence-posts.png", "image/png"), file("fence-csv", "fence-inspection.csv", "text/csv")]],
+          "files": [file("fence-chart", "north-fence-posts.png", "image/png"), file("fence-csv", "fence-inspection.csv", "text/csv"),
+            file("supply-quote", "supply-quote.pdf", "application/pdf"), file("gate-audio", "gate-hinge.m4a", "audio/mp4"),
+            file("post-photos", "post-photos.png", "image/png"), file("weather", "weather-window.txt", "text/plain")]],
+        // The reply's own attachments show once, as attachment rows, never again as chips.
         ["id": "extra-a1", "role": "assistant", "text": "Done. Post 2 was leaning and post 3 was rotted through, so I replaced it.",
-          "files": [file("pasture-map", "pasture-map.pdf", "application/pdf"), file("repair-notes", "repair-notes.md", "text/markdown"),
-            file("supply-quote", "supply-quote.pdf", "application/pdf"), file("gate-audio", "gate-hinge.m4a", "audio/mp4")]],
+          "files": [file("pasture-map", "pasture-map.pdf", "application/pdf"), file("repair-notes", "repair-notes.md", "text/markdown")]],
         ["id": "extra-q2", "role": "user", "text": "Draft a note asking Sam to help.", "sender": me],
         ["id": "extra-a2", "role": "assistant", "text": "Here's a draft.\n\n" + fence(first)],
         ["id": "extra-q3", "role": "user", "text": "Make it Sunday at 10 and copy Kim.", "sender": me],

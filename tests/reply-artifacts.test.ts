@@ -20,7 +20,7 @@ it.each(cases)("$name", ({ messages, files, earlier, artifacts, replies }) => {
 
 it("shows no chips for a window after the start until the history before it is known, then the panel's own", () => {
   const photo = { id: "photo", name: "photo.png", mime: "image/png" };
-  const messages: Message[] = [{ id: "u1", role: "user", text: "Fix it" }, { id: "a1", role: "assistant", text: "Fixed", files: [photo] }];
+  const messages: Message[] = [{ id: "u1", role: "user", text: "Fix it" }, { id: "t1", role: "tool", text: "", files: [photo] }, { id: "a1", role: "assistant", text: "Fixed" }];
   const window = { messages, files: [photo], earlier: 4 };
   // Unknown history: the photo could be the person's, so no chip rather than a wrong one.
   expect(windowReplyArtifacts(window).size).toBe(0);
