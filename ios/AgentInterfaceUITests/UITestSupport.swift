@@ -111,13 +111,29 @@ extension XCUIApplication {
   /// Sends a hardware keyboard shortcut and waits for `target` to appear. A shortcut sent while the
   /// screen is still settling can be dropped on a slow simulator, so it is sent again, up to
   /// `attempts` times, while `target` has not appeared.
+  @discardableResult
   func shortcut(_ key: String, modifiers: XCUIElement.KeyModifierFlags = .command, shows target: XCUIElement,
-                attempts: Int = 3, timeout: TimeInterval = 5, file: StaticString = #filePath, line: UInt = #line) {
-    for _ in 0..<attempts {
+                attempts: Int = 3, timeout: TimeInterval = 5, failureContext: String? = nil,
+                file: StaticString = #filePath, line: UInt = #line) -> Int {
+    for attempt in 0..<attempts {
       typeKey(key, modifierFlags: modifiers)
-      if target.waitForExistence(timeout: timeout) { return }
+      if target.waitForExistence(timeout: timeout) { return attempt + 1 }
     }
-    XCTFail("The \(key) shortcut never showed \(target) after \(attempts) tries\n\(debugDescription)", file: file, line: line)
+    if let failureContext {
+      attachShortcutDiagnostics(failureContext)
+    }
+    XCTFail("The \(key) shortcut never showed \(target) after \(attempts) tries\n\(failureContext ?? "")\n\(debugDescription)", file: file, line: line)
+    return attempts
+  }
+  func attachShortcutDiagnostics(_ context: String) {
+    XCTContext.runActivity(named: "Keyboard shortcut failure") { activity in
+      let hierarchy = XCTAttachment(string: context + "\n" + debugDescription)
+      hierarchy.name = "Shortcut context and hierarchy"; hierarchy.lifetime = .keepAlways
+      activity.add(hierarchy)
+      let screen = XCTAttachment(screenshot: screenshot())
+      screen.name = "Shortcut failure screen"; screen.lifetime = .keepAlways
+      activity.add(screen)
+    }
   }
   /// Where each settings page lives: its section, and the row that opens it when it is a full list
   /// of its own. Former tab names map to where that content lives now.
