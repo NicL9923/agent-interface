@@ -238,8 +238,11 @@ export interface ApiRoutes {
   /** Multipart: the client sends it through uploadFile. */
   "POST /bots/:id/uploads": { response: FileRef };
 
-  "POST /push/subscriptions/status": { body: { endpoint: string }; response: { registered: boolean } };
-  "POST /push/subscriptions": { body: WebPushSubscription; response: Ok };
+  "POST /push/subscriptions/status": { body: { endpoint: string; deviceId?: string }; response: { registered: boolean } };
+  "POST /push/subscriptions": { body: WebPushSubscription & { deviceId?: string }; response: Ok };
+  // BEGIN device activity
+  "PUT /devices/activity": { body: { deviceId: string; state: "active" | "inactive"; idleMs?: number }; response: Ok };
+  // END device activity
   "DELETE /push/subscriptions": { body: { endpoint: string }; response: Ok };
   "POST /push/test": { body: { botId: string }; response: PushTest };
   /** A service worker's notification action, authorized by the single-use token in its push. */

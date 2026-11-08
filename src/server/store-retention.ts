@@ -1,4 +1,5 @@
 import type { AccountRepository } from "./store-accounts.js";
+import { deviceBeatTtl } from "../shared/device-activity.js";
 import { presenceTtl } from "./store-notifications.js";
 import type { PersonalRepository } from "./store-personal.js";
 import type { StoreDatabase } from "./store-database.js";
@@ -45,6 +46,8 @@ export class RetentionRepository {
     return this.database.transaction(() => {
       const sessions = this.db.prepare("DELETE FROM sessions WHERE expires<=?").run(now).changes;
       this.db.prepare("DELETE FROM chat_presence WHERE updated_at<?").run(now - presenceTtl);
+      this.db.prepare("DELETE FROM device_activity WHERE beat_at<?").run(now - deviceBeatTtl);
+      this.db.prepare("DELETE FROM push_subscription_devices WHERE NOT EXISTS(SELECT 1 FROM subscriptions s WHERE s.endpoint=push_subscription_devices.endpoint)").run();
       this.db.prepare("DELETE FROM push_action_tokens WHERE expires<=?").run(now);
       // Pending decisions look back a day.
       this.db.prepare("DELETE FROM approval_resolutions WHERE resolved_at<?").run(now - 2 * 86400000);

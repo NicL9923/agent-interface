@@ -177,6 +177,21 @@ view instructions in every WildBots conversation.
   subject. **Open in Mail** opens a `mailto:` draft in the device's mail app,
   **Open in Gmail** opens Gmail's compose window, and **Copy** copies the whole
   draft as text. Nothing is sent from WildBots.
+  <!-- BEGIN draft revisions -->
+  An email card may also carry `draftId` and `revises`, each 1 to 80 letters,
+  digits, underscores or hyphens. A card whose `revises` names the `draftId` of
+  an earlier email card in the same conversation shows the recipients, subject
+  and body words it added and removed, with **Hide changes** and **Show changes**.
+  Only that explicit lineage links drafts; subjects and recipients are never
+  matched. When several earlier cards share the ID, the latest wins; a card
+  cannot revise itself or a later card. A malformed `draftId` or `revises` drops
+  the link and keeps the draft. Changes compare word by word: runs of spaces,
+  tabs and line breaks, and runs of everything else. Past a million compared word
+  pairs the changed middle shows as replaced whole. The rules are in
+  `src/shared/draft-diff.ts`, mirrored by iOS's `DraftDiff.swift` with shared
+  vectors in `ios/AgentInterfaceTests/Vectors/draft-diff.json`. Clients from
+  before email cards show the block as code, as they already do for email.
+  <!-- END draft revisions -->
 - `form`, with a title, optional description and submit label, and 1 to 20
   fields. Field kinds are `text`, `textarea`, `number`, `date`, `select`,
   `choice`, `multi` and `toggle`. `select`, `choice` and `multi` carry 1 to 20

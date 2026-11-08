@@ -104,6 +104,15 @@ const additions = `
   CREATE TABLE IF NOT EXISTS routine_recipients_adopted(routine_id TEXT PRIMARY KEY);
   -- Each assistant's live Talk voice, for a Hermes without profile metadata. Hermes keeps it otherwise.
   CREATE TABLE IF NOT EXISTS bot_voices(bot_id TEXT PRIMARY KEY,voice TEXT NOT NULL);
+  -- BEGIN device activity (notify only the device in use)
+  -- Each installation a person is using now, by its stable device ID: a browser profile or an iOS
+  -- install. beat_at is the last heartbeat; used_at is the last input it reported. A row counts
+  -- only while the session that wrote it is still signed in, so signing out ends it.
+  CREATE TABLE IF NOT EXISTS device_activity(device_id TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),session_hash TEXT NOT NULL,platform TEXT NOT NULL,beat_at INTEGER NOT NULL,used_at INTEGER NOT NULL);
+  -- Which installation registered each Web Push subscription. A subscription without a row here
+  -- came from a client that sends no device ID and is never on an active device.
+  CREATE TABLE IF NOT EXISTS push_subscription_devices(endpoint TEXT PRIMARY KEY,device_id TEXT NOT NULL);
+  -- END device activity
   CREATE TABLE IF NOT EXISTS draft_revisions(user_id TEXT NOT NULL REFERENCES users(id),bot_id TEXT NOT NULL,revision INTEGER NOT NULL,reason TEXT NOT NULL,sent_revision INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(user_id,bot_id));
 `;
 export const schemaVersion = migrations.length;

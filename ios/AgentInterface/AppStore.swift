@@ -70,6 +70,9 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   private(set) var transcript: Conversation?
   /// The transcript grouped into turns, computed once per change instead of on every render.
   private(set) var turns: [ConversationTurn] = []
+  /// Each reply's file chips and each revised email draft's changes, computed with the turns.
+  private(set) var replyFiles: [String: [Artifact]] = [:]
+  private(set) var draftRevisions: [String: DraftRevision] = [:]
   /// The open assistant's sent messages, shown in the transcript at once while Send keeps spinning
   /// until Hermes answers, and each kept until Hermes's own copy arrives, as on the web.
   private(set) var echoes: [SentEcho] = []
@@ -379,6 +382,9 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     if changed || conversationChanged {
       transcript = SentEcho.transcript(conversation, echoes)
       turns = transcript?.presentationTurns ?? []
+      let messages = transcript?.messages ?? []
+      replyFiles = Artifacts.replyFiles(messages, artifacts: Artifacts.list(transcript))
+      draftRevisions = DraftDiff.revisions(messages)
     }
     // An accepted message that never shows is checked again once its patience runs out. Only the
     // open conversation can retire one, so another assistant's echo waits for its return.

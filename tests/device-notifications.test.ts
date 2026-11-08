@@ -6,6 +6,7 @@ import { write } from "../src/client-api";
 import { useDeviceNotifications } from "../src/components/use-device-notifications";
 import { NotificationSettings, NotificationOnboarding } from "../src/components/DeviceNotifications";
 import { mountRoot, stubMatchMedia } from "./ui-harness";
+import { deviceIdPattern } from "../src/shared/device-activity";
 
 vi.mock("../src/client-api", async () => (await import("./helpers/request-mock")).withRequest(await (() => ({ write: vi.fn() }))()));
 let container: HTMLDivElement, root: Root;
@@ -63,7 +64,7 @@ it("uses browser permission, subscription and this user's server registration to
   permission = "granted"; subscription = fakeSubscription(); registered = true;
   await render();
   expect(toggle().checked).toBe(true);
-  expect(write).toHaveBeenCalledExactlyOnceWith("/push/subscriptions/status", { endpoint });
+  expect(write).toHaveBeenCalledExactlyOnceWith("/push/subscriptions/status", { endpoint, deviceId: expect.stringMatching(deviceIdPattern) });
   expect(container.querySelector(".notification-onboarding")).toBeNull();
   registered = false;
   await act(async () => notifications.refresh());

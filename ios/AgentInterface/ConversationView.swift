@@ -52,6 +52,8 @@ struct ConversationView: View {
   @State private var unseen = 0
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var fileSheetOpen = false
+  /// The file a reply's chip opened the artifacts sheet on.
+  @State private var fileFocus: String?
   @State private var profileOpen = false
   @State private var modelOpen = false
   /// Reads replies aloud, one at a time, from each reply's own row.
@@ -134,7 +136,7 @@ struct ConversationView: View {
     // Audio belongs to a reachable chat on screen, so it stops when the connection drops or the chat closes.
     .onChange(of: store.connected) { _, connected in if !connected { speech.cancel() } }
     .sheet(isPresented: $modelOpen) { ChatModelSheet(botId: bot.id).appStore(store) }
-    .sheet(isPresented: $fileSheetOpen) { ConversationFilesView().appStore(store).coveringChat(store) }
+    .sheet(isPresented: $fileSheetOpen) { ConversationFilesView(focus: fileFocus).appStore(store).coveringChat(store) }
     .sheet(item: Bindable(store).openComputer) { opening in
       NavigationStack {
         ComputerView(take: opening.take).toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { store.openComputer = nil } } }
@@ -236,7 +238,7 @@ struct ConversationView: View {
     profileAction = nil
     switch action {
     case .find: openFind()
-    case .artifacts: fileSheetOpen = true
+    case .artifacts: fileFocus = nil; fileSheetOpen = true
     case .settings: edit()
     case nil: break
     }
@@ -439,7 +441,9 @@ struct ConversationView: View {
       }
       emptyState
       TranscriptTurns(turns: store.turns, advanced: advanced, delivery: store.outgoing,
-        liveTurn: store.activity.active ? store.turns.last?.id : nil, runSlots: runSlots, botId: bot.id)
+        liveTurn: store.activity.active ? store.turns.last?.id : nil, runSlots: runSlots, botId: bot.id,
+        replyFiles: store.replyFiles, revisions: store.draftRevisions)
+        .environment(\.openReplyFile, { id in fileFocus = id; fileSheetOpen = true })
         .environment(\.foundMessage, findTarget ?? highlighted)
         .environment(\.hideRoutineRuns, { run in
           store.setRunsShown(botId: bot.id, routineId: run.routineId, shown: false)
@@ -761,6 +765,8 @@ struct MessageView: View {
   /// Set while the person's sent message is on its way: faint while sending, with its progress
   /// in place of the time.
   var delivery: SentEcho.Status? = nil
+  /// The files this reply's turn produced, shown as chips under it.
+  var replyFiles: [Artifact]? = nil
   @Environment(\.transcriptRecipient) private var recipient
   @Environment(\.transcriptUserId) private var userId
   @Environment(\.colorScheme) private var scheme
@@ -782,6 +788,7 @@ struct MessageView: View {
           ReplyContentView(message: message)
         }
         ForEach(message.files ?? []) { FileAttachmentView(file: $0) }
+        if let replyFiles, !message.id.hasSuffix("-inflight") { ReplyFilesView(artifacts: replyFiles) }
       }.padding(bubble ? 14 : 0).background(
         bubble ? Palette.user(scheme) : Color.clear,
         in: RoundedRectangle(cornerRadius: 14)
