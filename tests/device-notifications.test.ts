@@ -2,13 +2,14 @@
 import { act, createElement } from "react";
 import type { Root } from "react-dom/client";
 import { beforeEach, expect, it, vi } from "vitest";
-import { write } from "../src/client-api";
+import { ApiError, write } from "../src/client-api";
 import { useDeviceNotifications } from "../src/components/use-device-notifications";
 import { NotificationSettings, NotificationOnboarding } from "../src/components/DeviceNotifications";
 import { mountRoot, stubMatchMedia } from "./ui-harness";
 import { deviceIdPattern } from "../src/shared/device-activity";
 
-vi.mock("../src/client-api", async () => (await import("./helpers/request-mock")).withRequest(await (() => ({ write: vi.fn() }))()));
+vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(
+  { write: vi.fn(), ApiError: (await original<typeof import("../src/client-api")>()).ApiError }));
 let container: HTMLDivElement, root: Root;
 let notifications: ReturnType<typeof useDeviceNotifications>;
 let subscription: PushSubscription | null;
@@ -46,6 +47,24 @@ beforeEach(() => {
     return { ok: true } as T;
   });
   ({ container, root } = mountRoot());
+});
+
+it("asks an older server, which refuses the device ID, again without it instead of reporting a broken registration", async () => {
+  permission = "granted"; subscription = fakeSubscription(); registered = true;
+  // The status route before device IDs is strict: an extra field is a 400.
+  vi.mocked(write).mockImplementation(async <T>(path: string, value: unknown) => {
+    if (path.endsWith("/status") && Object.hasOwn(value as object, "deviceId")) throw new ApiError("Invalid request", 400);
+    return { registered } as T;
+  });
+  await render();
+  expect(toggle().checked).toBe(true);
+  expect(toggle().disabled).toBe(false);
+  expect(vi.mocked(write).mock.calls.map(([, body]) => Object.keys(body as object).sort().join())).toEqual(["deviceId,endpoint", "endpoint"]);
+  // Any other failure is still a failure, asked once.
+  vi.mocked(write).mockReset().mockRejectedValue(new ApiError("Server error", 500));
+  await act(async () => notifications.refresh());
+  expect(toggle().checked).toBe(false);
+  expect(write).toHaveBeenCalledOnce();
 });
 
 it("remembers an answered invitation for its account without requesting permission for another account", async () => {
