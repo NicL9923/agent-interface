@@ -19,11 +19,22 @@ The shared desktop/browser and the administrators' VPS terminal are documented i
 [Shared computer](SharedComputer.md). Their supervisor is independent of chat
 sessions; its browser data stays in the private shared resource directory.
 
-The app's last recorded runtime pin is Node 24.21.0. Before the next production
-release, verify the app-specific host runtime and update it to Node 24.22.2 if
-needed. The release tool builds with that host binary, and 24.21.0 is outside
-the updated package engine range. Track this prerequisite in [issue #210](https://github.com/NicL9923/agent-interface/issues/210).
-This dependency update does not change the production host.
+The app runs its own Node binary, kept under the application directory's `runtime/`.
+`agent-interface.service` names it in `ExecStart` and `PATH`. Release builds, qualification and
+the guarded deploy use the same binary, recorded as `node` in each release's deploy configuration.
+To change it, as [issue #210](https://github.com/NicL9923/agent-interface/issues/210) asks for
+24.22.2:
+
+1. Install the new release from nodejs.org beside the old one under `runtime/`, after checking
+   the archive against the official `SHASUMS256.txt`.
+2. Point the service's `ExecStart` and `PATH` at it, restart only `agent-interface.service`, and
+   check `/api/health/ready`. Rolling back means pointing them at the old binary again and
+   restarting.
+3. Prepare the next release with `release-app.py prepare COMMIT --node ABSOLUTE_PATH`. The
+   release records that path, and qualification and activation use it.
+
+Preparation refuses a runtime outside `package.json`'s `engines`, and one the app service does
+not run. A release can't build, qualify or deploy with a different Node than production runs.
 
 The app has its own pinned runtime, release directories, private
 configuration and SQLite database under the host user's application directory.

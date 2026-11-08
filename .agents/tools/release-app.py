@@ -81,7 +81,7 @@ def helper_hooks(value, release):
 
 
 def derive_config(prior, *, release, current, operation, web_build, worker, profile_hashes,
-                  helper_sha, hermes_revision, repair_sha, qualification=None, managed_python=None):
+                  helper_sha, hermes_revision, repair_sha, qualification=None, managed_python=None, node=None):
     """The next guarded deploy configuration.
 
     Settings are carried from the last successful release. Live state supplies the
@@ -104,15 +104,39 @@ def derive_config(prior, *, release, current, operation, web_build, worker, prof
     )
     if managed_python:
         config["managedPython"] = str(managed_python)
+    if node:
+        # The runtime the service now runs, which the guarded deploy also uses for its backup and checks.
+        config["node"] = str(node)
     if qualification:
         config["newQualificationReceipt"] = str(qualification)
     return config
 
 
-def preparation_problems(facts, built, *, local_web_build, qualification, accept_helper_change):
+def satisfies_engines(version, engines):
+    """Whether a Node version such as v24.22.2 meets package.json engines written as caret ranges
+    joined by ||, such as ^24.22.2 || ^26.13.0. Anything else in the range counts as unmet."""
+    found = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)", version or "")
+    if not found:
+        return False
+    have = tuple(int(part) for part in found.groups())
+    for clause in (engines or "").split("||"):
+        need = re.fullmatch(r"\s*\^(\d+)\.(\d+)\.(\d+)\s*", clause)
+        if need and have[0] == int(need.group(1)) and have >= tuple(int(part) for part in need.groups()):
+            return True
+    return False
+
+
+def preparation_problems(facts, built, *, local_web_build, qualification, accept_helper_change, node=None, engines=None):
     """Reasons a prepared release must not proceed to the guarded preflight."""
     problems = []
     prior = facts["prior"]
+    node = node or prior["node"]
+    if engines is not None and not satisfies_engines(built.get("nodeVersion"), engines):
+        problems.append(f"The host built with Node {built.get('nodeVersion') or 'of unknown version'}, outside package.json's "
+                        f"engines ({engines}). Install a supported app runtime and pass --node (see docs/Hosting.md).")
+    if facts.get("serviceNode") != node:
+        problems.append(f"The app service runs {facts.get('serviceNode') or 'an unknown Node'}, but this release builds and "
+                        f"deploys with {node}. Switch the service to the release's Node first (see docs/Hosting.md).")
     if facts["maintenance"] or facts["leasePresent"] or facts["drainPresent"]:
         problems.append("Maintenance is active. Resolve the recorded operation before releasing.")
     if facts["upgradePhase"] in RUNNING_PHASES:
@@ -300,7 +324,18 @@ def metadata_floor(probe):
             "probe": floor_probe(probe["v4"], probe["v6"], probe["port"], probe["timeoutSeconds"], probe["interfaces"])}
 """
 
+# The app service's ExecStart as systemd resolves it, drop-ins included. Its `path=` is the Node
+# binary the live app runs, which a release must build, qualify and deploy with.
+SERVICE_COMMAND = ["systemctl", "--user", "show", "agent-interface.service", "-p", "ExecStart", "--value"]
+
 REMOTE_FACTS = """
+import re
+def service_node(command):
+    shown = subprocess.run(command, capture_output=True, text=True, check=False).stdout
+    match = re.search(r"path=(\\S+)", shown)
+    return match.group(1) if match else None
+
+
 base = Path(PAYLOAD["appBase"]); operations = base / "operations"
 best = None
 for path in operations.glob("*/deploy-config.json"):
@@ -329,6 +364,7 @@ finish({
     "leasePresent": Path(prior["maintenanceFile"]).exists(),
     "drainPresent": (Path(prior["hermesHome"]) / ".drain_request.json").exists(),
     "metadataFloor": metadata_floor(PAYLOAD["metadataProbe"]),
+    "serviceNode": service_node(PAYLOAD["serviceCommand"]),
 })
 """
 
@@ -351,7 +387,7 @@ try:
     receipt_result = {"valid": valid, "error": None if valid else "revision or repair differs"}
 except Exception as error:
     receipt_result = {"valid": False, "error": f"{type(error).__name__}: {error}"}
-finish({"buildLog": (operation / "build.log").read_text()[-4000:],
+finish({"buildLog": (operation / "build.log").read_text()[-4000:], "nodeVersion": subprocess.check_output([PAYLOAD["node"], "--version"], text=True).strip(),
         "helperSha256": sha(release / "scripts/hermes-upgrade-linux.py"), "receipt": receipt_result})
 """
 
@@ -514,7 +550,7 @@ def host_facts(host, app_base):
     """The live host facts every release tool starts from. One caller shape, so a key REMOTE_FACTS
     reads can never be missing from one tool's payload (Nov 4, 2026: qualification sent no
     metadataProbe and stopped with a KeyError on the host)."""
-    return remote(host, REMOTE_FACTS, {"appBase": str(app_base), "metadataProbe": METADATA_PROBE})
+    return remote(host, REMOTE_FACTS, {"appBase": str(app_base), "metadataProbe": METADATA_PROBE, "serviceCommand": SERVICE_COMMAND})
 
 
 def remote(host, program, payload, timeout=900):
@@ -593,6 +629,10 @@ def prepare(args):
     facts = host_facts(args.host, base)
     prior = facts["prior"]
     print(f"Carrying settings from {facts['priorPath']}; live release {Path(facts['current']).name}.")
+    if args.node and not Path(args.node).is_absolute():
+        raise SystemExit("--node must be an absolute path on the host.")
+    node = args.node or prior["node"]
+    engines = json.loads(git("show", f"{commit}:package.json")).get("engines", {}).get("node")
     operation_dir = base / "operations" / name
     release = base / "releases" / name
     manifest = {
@@ -600,6 +640,7 @@ def prepare(args):
         "release": str(release), "operationDir": str(operation_dir), "origin": prior["appOrigin"],
         "hermesRevision": facts["hermesRevision"], "qualification": "new" if args.qualification else "reused",
         "pullRequest": merged_pull_request(git("log", "-1", "--format=%s", commit)),
+        "node": node,
     }
     with tempfile.TemporaryDirectory() as temporary:
         work = Path(temporary)
@@ -611,13 +652,13 @@ def prepare(args):
         host_access.scp(str(work / "release.tar.gz"), f"{args.host}:{operation_dir}/release.tar.gz", timeout=900)
     built = remote(args.host, REMOTE_BUILD, {
         "appBase": str(base), "release": str(release), "operationDir": str(operation_dir),
-        "archiveSha256": archive_sha, "node": prior["node"], "qualification": args.qualification,
+        "archiveSha256": archive_sha, "node": node, "qualification": args.qualification,
         "qualificationReceipt": prior["qualificationReceipt"], "hermesRevision": facts["hermesRevision"],
         "repairSha256": facts["repairSha256"]})
     built["webBuild"] = built_web_version(built["buildLog"])
-    manifest.update(webBuild=built["webBuild"], helperChanged=built["helperSha256"] != prior["fixedHelperSha256"])
+    manifest.update(webBuild=built["webBuild"], nodeVersion=built["nodeVersion"], helperChanged=built["helperSha256"] != prior["fixedHelperSha256"])
     save_manifest(manifest)
-    problems = preparation_problems(facts, built, local_web_build=local_web_build,
+    problems = preparation_problems(facts, built, local_web_build=local_web_build, node=node, engines=engines,
                                     qualification=args.qualification, accept_helper_change=args.accept_helper_change)
     if problems:
         raise SystemExit("Not ready to release:\n- " + "\n- ".join(problems)
@@ -626,7 +667,7 @@ def prepare(args):
                            web_build=built["webBuild"], worker=facts["worker"],
                            profile_hashes=facts["profileHashes"], helper_sha=built["helperSha256"],
                            hermes_revision=facts["hermesRevision"], repair_sha=facts["repairSha256"],
-                           qualification=args.qualification, managed_python=facts["managedPython"])
+                           qualification=args.qualification, managed_python=facts["managedPython"], node=node)
     config_path = operation_dir / "deploy-config.json"
     remote(args.host, REMOTE_WRITE_CONFIG, {"path": str(config_path), "config": config})
     manifest.update(configPath=str(config_path), operationId=config["operationId"],
@@ -884,6 +925,8 @@ def main(argv=None):
     step.add_argument("--qualification", help="fresh qualification receipt on the host, when integration inputs changed")
     step.add_argument("--accept-helper-change", action="store_true",
                       help="confirm a reviewed change to scripts/hermes-upgrade-linux.py")
+    step.add_argument("--node", help="absolute host path to the app runtime's node; defaults to the last release's. "
+                                     "The app service must already run it")
     step.set_defaults(run=prepare)
     for name, run, text in (("activate", activate, "activate a prepared release"),
                             ("record", record, "verify an activated release and write its records"),

@@ -56,6 +56,15 @@ def closed_probe(listing_uid=None):
             "unit": "agent-interface-test-absent.service", "liveRulesCommand": [sys.executable, "-c", f"print({listing!r})"]}
 
 
+SERVICE_SHOW = "{ path=/srv/app/runtime/node-v24.22.2/bin/node ; argv[]=/srv/app/runtime/node-v24.22.2/bin/node src/server/index.ts ; }"
+
+
+def facts_payload(base, probe=None, shown=SERVICE_SHOW):
+    """REMOTE_FACTS's payload, with the app service's ExecStart answered by a fixture command."""
+    return {"appBase": str(base), "metadataProbe": probe or closed_probe(),
+            "serviceCommand": [sys.executable, "-c", f"print({shown!r})"]}
+
+
 def healthy_floor(**overrides):
     unit = release_app.FLOOR.UNIT
     return {"uid": 1001, "user": "nicolas", "enabled": "enabled", "active": "active",
@@ -148,6 +157,15 @@ if __name__ == "__main__":
             payload = qualify_call.args[2]
             self.assertEqual(payload["computerProbeBrowser"], "/host-only/chrome")
             self.assertEqual(payload["node"], "/pm/node")
+            # A release prepared with --node qualifies with that runtime, not the last release's.
+            manifest["node"] = "/srv/app/runtime/node-v24.22.2/bin/node"
+            remote.side_effect = [{"prior": {"node": "/pm/node"}}, {"qualificationComplete": True}]
+            with patch.object(module, "remote", remote), patch.object(module, "load_manifest", lambda _: manifest), \
+                    patch.object(module, "MANIFESTS", Path(directory)), \
+                    patch.object(qualify_app.importlib.util, "spec_from_file_location", return_value=spec), \
+                    patch.object(qualify_app.importlib.util, "module_from_spec", return_value=module):
+                qualify_app.main(["release-test"])
+            self.assertEqual(remote.call_args_list[-1].args[2]["node"], "/srv/app/runtime/node-v24.22.2/bin/node")
 
 
 class Host:
@@ -254,16 +272,20 @@ class ReleaseRules(unittest.TestCase):
         self.assertFalse(release_app.maintenance_clear({**clear, "phase": "idle", "maintenance": True}))
         self.assertFalse(release_app.maintenance_clear({**clear, "phase": "idle", "drainPresent": True}))
 
+    def test_a_chosen_runtime_replaces_the_carried_one(self):
+        self.assertEqual(self.config()["node"], PRIOR["node"])
+        self.assertEqual(self.config(node="/srv/app/runtime/node-v24.22.2/bin/node")["node"], "/srv/app/runtime/node-v24.22.2/bin/node")
+
     def test_supplied_qualification_is_activated_with_the_release(self):
         self.assertEqual(self.config(qualification="/srv/q.json")["newQualificationReceipt"], "/srv/q.json")
 
     def facts(self, **overrides):
-        return {"prior": PRIOR, "maintenance": False, "leasePresent": False, "drainPresent": False,
+        return {"prior": PRIOR, "serviceNode": PRIOR["node"], "maintenance": False, "leasePresent": False, "drainPresent": False,
                 "upgradePhase": "idle", "managedPython": "/home/.hermes/tools/python/bin/python3",
                 "metadataFloor": healthy_floor(), **overrides}
 
     def built(self, **overrides):
-        return {"webBuild": "bbbbbbbbbbbbbbbb", "helperSha256": "helper",
+        return {"webBuild": "bbbbbbbbbbbbbbbb", "nodeVersion": "v24.22.2", "helperSha256": "helper",
                 "receipt": {"valid": True, "error": None}, **overrides}
 
     def problems(self, facts=None, built=None, **options):
@@ -282,6 +304,29 @@ class ReleaseRules(unittest.TestCase):
         self.assertIn("--qualification", self.problems(built=stale)[0])
         self.assertIn("did not report an interpreter", self.problems(self.facts(managedPython=None))[0])
         self.assertNotIn("--qualification", self.problems(built=stale, qualification="/srv/q.json")[0])
+
+    def test_refuses_a_runtime_outside_the_engines_or_not_the_one_the_service_runs(self):
+        engines = "^24.22.2 || ^26.13.0"
+        self.assertEqual(self.problems(engines=engines), [])
+        stale = self.problems(built=self.built(nodeVersion="v24.21.0"), engines=engines)
+        self.assertEqual(len(stale), 1)
+        self.assertIn("Node v24.21.0, outside package.json's engines (^24.22.2 || ^26.13.0)", stale[0])
+        new = "/srv/app/runtime/node-v24.22.2/bin/node"
+        # A release built with a new runtime while the service still runs the old one.
+        mismatch = self.problems(node=new, engines=engines)
+        self.assertEqual(len(mismatch), 1)
+        self.assertIn(f"The app service runs {PRIOR['node']}, but this release builds and deploys with {new}", mismatch[0])
+        self.assertEqual(self.problems(self.facts(serviceNode=new), node=new, engines=engines), [])
+        self.assertIn("runs an unknown Node", self.problems(self.facts(serviceNode=None))[0])
+
+    def test_engine_ranges_are_met_only_by_the_same_major_at_or_above_its_floor(self):
+        engines = "^24.22.2 || ^26.13.0"
+        for version, met in (("v24.22.2", True), ("v24.30.0", True), ("v26.13.0", True), ("24.22.2", True),
+                             ("v24.21.0", False), ("v26.10.0", False), ("v25.0.0", False), ("v27.0.0", False),
+                             ("v24.22", False), ("", False), (None, False)):
+            self.assertEqual(release_app.satisfies_engines(version, engines), met, version)
+        self.assertFalse(release_app.satisfies_engines("v24.22.2", ">=24"), "Only caret ranges are understood")
+        self.assertFalse(release_app.satisfies_engines("v24.22.2", None))
 
     def test_refuses_a_host_without_a_live_enforcing_metadata_egress_floor(self):
         v4 = lambda outcome, ms=1: {"metadataV4": {"outcome": outcome, "ms": ms}, "metadataV6": {}}
@@ -526,10 +571,11 @@ class HostPrograms(unittest.TestCase):
         os.utime(self.host.base / "operations/continued-op-1/result.json", (time.time() - 60,) * 2)
         self.host.deployment("latest", "op-2", True, node="new-node")
         self.host.deployment("abandoned", "op-3", False, node="abandoned-node")
-        code, output, error = run_remote(release_app.REMOTE_FACTS, {"appBase": str(self.host.base), "metadataProbe": closed_probe()})
+        code, output, error = run_remote(release_app.REMOTE_FACTS, facts_payload(self.host.base))
         self.assertEqual(code, 0, error)
         facts = json.loads(output)
         self.assertEqual(facts["prior"]["node"], "new-node")
+        self.assertEqual(facts["serviceNode"], "/srv/app/runtime/node-v24.22.2/bin/node")
         self.assertEqual(facts["current"], str((self.host.base / "releases/release-live").resolve()))
         self.assertEqual(facts["profileHashes"], {str(self.host.profile): hashlib.sha256(b"model: default\n").hexdigest()})
         self.assertFalse(facts["maintenance"] or facts["leasePresent"] or facts["drainPresent"])
@@ -552,7 +598,7 @@ class HostPrograms(unittest.TestCase):
         with socket.socket() as metadata:
             metadata.bind(("127.0.0.1", 0)); metadata.listen()
             probe = {**closed_probe(listing_uid=1), "port": metadata.getsockname()[1]}
-            code, output, error = run_remote(release_app.REMOTE_FACTS, {"appBase": str(self.host.base), "metadataProbe": probe})
+            code, output, error = run_remote(release_app.REMOTE_FACTS, facts_payload(self.host.base, probe))
         self.assertEqual(code, 0, error)
         problems = release_app.metadata_floor_problems(json.loads(output)["metadataFloor"])
         self.assertTrue(any("was connected" in problem for problem in problems), problems)
@@ -580,16 +626,22 @@ class HostPrograms(unittest.TestCase):
         self.assertEqual([name for name, passed in checks.items() if not passed], ["metadataEgressFloor"])
         self.assertEqual(sent[0]["metadataProbe"], release_app.METADATA_PROBE)
 
+    def test_facts_report_no_service_node_when_systemd_shows_none(self):
+        self.host.deployment("latest", "op-2", True)
+        code, output, error = run_remote(release_app.REMOTE_FACTS, facts_payload(self.host.base, shown=""))
+        self.assertEqual(code, 0, error)
+        self.assertIsNone(json.loads(output)["serviceNode"])
+
     def test_facts_report_active_maintenance(self):
         self.host.deployment("latest", "op-2", True)
         self.host.status({"phase": "blocked", "maintenance": True})
         (self.host.home / ".drain_request.json").write_text("{}")
-        facts = json.loads(run_remote(release_app.REMOTE_FACTS, {"appBase": str(self.host.base), "metadataProbe": closed_probe()})[1])
+        facts = json.loads(run_remote(release_app.REMOTE_FACTS, facts_payload(self.host.base))[1])
         self.assertTrue(facts["maintenance"] and facts["drainPresent"])
 
     def test_facts_refuse_without_a_successful_release(self):
         self.host.deployment("abandoned", "op-3", False)
-        code, _, error = run_remote(release_app.REMOTE_FACTS, {"appBase": str(self.host.base), "metadataProbe": closed_probe()})
+        code, _, error = run_remote(release_app.REMOTE_FACTS, facts_payload(self.host.base))
         self.assertNotEqual(code, 0)
         self.assertIn("No successful guarded release", error)
 
