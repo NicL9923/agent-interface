@@ -26,6 +26,7 @@ import { installDiscoveryRoutes } from "./discovery.js";
 import { installExperienceRoutes } from "./experience.js";
 import { installAutomationRoutes } from "./automation.js";
 import { installComputerRoutes } from "./computer.js";
+import { installTerminalRequestRoutes } from "./terminal-requests.js";
 import { installCollaborationRoutes } from "./collaboration.js";
 import { installRoutineRoutes } from "./routine-routes.js";
 import { installBootstrapRoutes } from "./bootstrap-routes.js";
@@ -43,6 +44,8 @@ import { installInlineUi } from "./inline-ui.js";
 import { immutableCacheControl, isHashedAsset } from "./static-cache.js";
 import { isApiRequest } from "./route-path.js";
 import { MAX_UPLOAD_BYTES } from "../shared/uploads.js";
+import { DirectRoutes, installDirectRouteGate, loadDirectIdentity, type DirectAddress } from "./direct-routes.js";
+import { apiRoute } from "./api-route.js";
 
 /**
  * Builds the app: plugins and hooks, the collaborators routes share, each route group's install,
@@ -61,6 +64,8 @@ export async function createApp(
     logStream?: { write(line: string): void };
     clientRoot?: string;
     metadataProbe?: MetadataProbe;
+    /** Replaces interface discovery for direct routes, so tests choose the addresses. */
+    directAddresses?: () => DirectAddress[];
   } = {},
 ) {
   const store = options.store ?? new Store(config.database);
@@ -75,6 +80,8 @@ export async function createApp(
   app.addHook("onRoute", (route) => {
     for (const method of [route.method].flat()) routes.push({ method, url: route.url });
   });
+  // Before authentication, so a direct listener refuses anything but the native bearer API first.
+  installDirectRouteGate(app);
   installSecurityHeaders(app, config.origin);
   installInlineUi(app);
   installEtags(app);
@@ -96,6 +103,11 @@ export async function createApp(
   };
   const directory = new BotDirectory(runtime, store);
   app.get("/api/health", async () => ({ ok: true }));
+  // Listeners open in start(), after the primary origin listens; until then the app is told of none.
+  const directRoutes = config.directRoutes && new DirectRoutes(
+    config.directRoutes, loadDirectIdentity(config.directRoutes.stateDirectory, app.log),
+    (req, res) => app.routing(req, res), app.log, options.directAddresses);
+  apiRoute(app, "GET /native/routes", {}, async () => ({ routes: directRoutes?.routes() ?? [] }));
   installClientErrorRoutes(app);
   installUpgradeRoutes(app, upgrades);
   const canManageIntegrations = (req: FastifyRequest) => config.localDevAuth && !config.production || Boolean(config.integrationAdmins?.includes(signedIn(req).email.toLowerCase()));
@@ -104,6 +116,7 @@ export async function createApp(
     canManage: canManageIntegrations,
   });
   await installComputerRoutes(app, config, store, runtime, () => upgrades.maintenance());
+  await installTerminalRequestRoutes(app, config, store, runtime);
   await installExperienceRoutes(app, runtime, store, roster);
   await installAutomationRoutes(app, runtime, store, () => upgrades.maintenance(), canManageIntegrations);
   await installDiscoveryRoutes(app, runtime, store, roster);
@@ -124,6 +137,13 @@ export async function createApp(
   installRoutineRoutes(app, { config, runtime, store, roster, requireCapability });
   // The worker owns the aggregate so a push and this read agree; handlers run after it exists.
   installPushRoutes(app, { config, runtime, store, live: () => worker.live });
+  // Universal links and Handoff for the iOS app, whose bundle ID is the APNs topic. Only chat and Today
+  // links open the app; sign-in and everything else stay on the web.
+  app.get("/.well-known/apple-app-site-association", (_req, reply) => {
+    if (!config.apns) return reply.code(404).send({ error: "Not found" });
+    const appID = `${config.apns.teamId}.${config.apns.topic}`;
+    return reply.type("application/json").header("Cache-Control", "public, max-age=3600").send(appleAppSiteAssociation(appID));
+  });
   const clientRoot = options.clientRoot ?? resolve("dist/client");
   if (existsSync(clientRoot)) {
     await app.register(staticFiles, {
@@ -131,16 +151,18 @@ export async function createApp(
       cacheControl: true,
       maxAge: "1h",
       setHeaders: (reply, path) => {
-        if (path.endsWith("index.html") || path.endsWith("native-computer.html") || path.endsWith("sw.js"))
+        if (path.endsWith("index.html") || path.endsWith("native-computer.html") || path.endsWith("native-terminal.html") || path.endsWith("sw.js"))
           reply.header("Cache-Control", "no-cache");
         else if (isHashedAsset(clientRoot, path))
           reply.header("Cache-Control", immutableCacheControl);
       },
     });
-    // The iOS app's shared desktop viewer. It holds nothing private: the app hands it a ticket in the hash.
+    // The iOS app's shared desktop viewer and system terminal. They hold nothing private: the app hands
+    // each a ticket in the hash.
     // These handlers send without returning the reply: a returned reply is thenable, so Fastify
     // would add one more finished-watcher to every static response for nothing.
     app.get("/native/computer", (_req, reply) => { reply.sendFile("native-computer.html"); });
+    app.get("/native/terminal", (_req, reply) => { reply.sendFile("native-terminal.html"); });
     app.setNotFoundHandler((req, reply) => {
       if (isApiRequest(req)) reply.code(404).send({ error: "API endpoint not found" });
       else reply.type("text/html").sendFile("index.html");
@@ -157,6 +179,7 @@ export async function createApp(
     health.start();
   }
   app.addHook("onClose", async () => {
+    await directRoutes?.close();
     groups.close();
     catalogs?.close();
     health.stop();
@@ -164,5 +187,21 @@ export async function createApp(
     await runtime.close();
     store.close();
   });
-  return { app, store, worker, health, routes };
+  return { app, store, worker, health, routes, directRoutes };
+}
+
+/** The association file Apple's CDN fetches for universal links and Handoff from Safari. */
+export function appleAppSiteAssociation(appID: string) {
+  return {
+    applinks: {
+      details: [{
+        appIDs: [appID],
+        components: [
+          { "/": "/", "?": { bot: "?*" }, comment: "A chat, as notifications and the web link it" },
+          { "/": "/", "?": { view: "today" }, comment: "Today" },
+        ],
+      }],
+    },
+    activitycontinuation: { apps: [appID] },
+  };
 }

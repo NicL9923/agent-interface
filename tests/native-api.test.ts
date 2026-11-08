@@ -11,7 +11,7 @@ import { accountMarker, ApnsError, apnsCollapseId, createApnsSender, apnsClearPa
 import { BackgroundWorker } from "../src/server/notifications.js";
 import { Store } from "../src/server/store.js";
 import { defaultPreferences, type RuntimeEvent } from "../src/shared/types.js";
-import { fakeRuntime } from "./helpers/server.js";
+import { fakeRuntime, localLogin } from "./helpers/server.js";
 import Fastify from "fastify";
 import { errorHandler } from "../src/server/http-error.js";
 
@@ -23,9 +23,9 @@ async function setup(config = loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE:
   const result = await createApp(config, runtime, { background: false, verifyGoogle, sendApns: config.apns ? async () => {} : undefined });
   apps.push(result); return result;
 }
-async function flow(app: Awaited<ReturnType<typeof createApp>>["app"]) {
+async function flow(app: Awaited<ReturnType<typeof createApp>>["app"], purpose?: "confirm") {
   const state = randomBytes(32).toString("base64url"), codeVerifier = randomBytes(32).toString("base64url");
-  const query = new URLSearchParams({ state, code_challenge: createHash("sha256").update(codeVerifier).digest("base64url"), code_challenge_method: "S256" });
+  const query = new URLSearchParams({ state, code_challenge: createHash("sha256").update(codeVerifier).digest("base64url"), code_challenge_method: "S256", ...(purpose ? { purpose } : {}) });
   const response = await app.inject(`/native/sign-in?${query}`);
   expect(response.statusCode).toBe(200);
   return { state, codeVerifier, cookie: `native_flow=${response.cookies[0].value}`, cookieValue: response.cookies[0].value, response };
@@ -105,6 +105,94 @@ it("verifies the Google flow nonce and rechecks the household on each native req
   config.householdEmails = [];
   expect((await app.inject({ url: "/api/bootstrap", headers })).statusCode).toBe(401);
   expect(store.getNativeSession(hash(result.json().token))).toBeUndefined();
+});
+
+/** A completed native sign-in page: the code the app receives, with its state and verifier. */
+async function nativeCode(app: Awaited<ReturnType<typeof createApp>>["app"], body: Record<string, string>, purpose?: "confirm") {
+  const started = await flow(app, purpose);
+  const completed = await app.inject({ method: "POST", url: "/api/auth/native/complete", headers: { origin, cookie: started.cookie }, payload: body });
+  expect(completed.statusCode).toBe(200);
+  return { code: new URL(completed.json().callback).searchParams.get("code")!, state: started.state, codeVerifier: started.codeVerifier };
+}
+
+it("records signing in to the app as confirming it's you, from Google's issue time", async () => {
+  const config = loadConfig({ GOOGLE_CLIENT_ID: "google", HOUSEHOLD_EMAILS: "one@example.test", APP_DATABASE: ":memory:" });
+  let identity: { iat?: number } = {};
+  const { app, store } = await setup(config, async () => ({ sub: "google-one", email: "one@example.test", email_verified: true, nonce: store.getNativeFlow(hash(flowCookie))!.nonce, ...identity }));
+  let flowCookie = "";
+  const signIn = async () => {
+    const started = await flow(app);
+    flowCookie = started.cookieValue;
+    const completed = await app.inject({ method: "POST", url: "/api/auth/native/complete", headers: { origin, cookie: started.cookie }, payload: { credential: "verified-test-token" } });
+    const payload = { code: new URL(completed.json().callback).searchParams.get("code"), state: started.state, codeVerifier: started.codeVerifier };
+    return hash((await app.inject({ method: "POST", url: "/api/auth/native/exchange", payload })).json().token);
+  };
+  identity = { iat: Math.floor(Date.now() / 1000) - 120 };
+  expect(store.nativeSessionConfirmedAt(await signIn())).toBe(identity.iat! * 1000);
+  // A credential from the future counts from now; one without an issue time proves nothing.
+  identity = { iat: Math.floor(Date.now() / 1000) + 3600 };
+  expect(store.nativeSessionConfirmedAt(await signIn())).toBeLessThanOrEqual(Date.now());
+  identity = {};
+  expect(store.nativeSessionConfirmedAt(await signIn())).toBeUndefined();
+});
+
+it("confirms a signed-in app's person with a fresh PKCE-bound code for the same account, never signing it out", async () => {
+  const { app, store } = await setup();
+  const { token } = await connectNative(app, "one");
+  const headers = { authorization: `Bearer ${token}` };
+  // Signing in with a local member counts as confirming now.
+  expect(Date.now() - store.nativeSessionConfirmedAt(hash(token))!).toBeLessThan(5000);
+  store.db.prepare("DELETE FROM native_session_confirmations").run();
+  const confirm = (payload: unknown, extra: Record<string, string> = headers) =>
+    app.inject({ method: "POST", url: "/api/auth/native/confirm", headers: extra, payload: payload as object });
+  // The confirmation page says what it is for; any other purpose is refused.
+  const page = (await flow(app, "confirm")).response.body;
+  expect(page).toContain("<h1>Confirm it's you</h1><p>Choose the same household account to open the terminal.</p>");
+  const query = (purpose: string) => `/native/sign-in?state=${"s".repeat(32)}&code_challenge=${"c".repeat(43)}&code_challenge_method=S256&purpose=${purpose}`;
+  expect((await app.inject(query("sign-in"))).statusCode).toBe(400);
+
+  const good = await nativeCode(app, { member: "one" }, "confirm");
+  // Only the app's own bearer, without a browser Origin, reaches it; a browser session is refused.
+  expect((await confirm(good, {})).json()).toEqual({ error: "Sign in required", code: "session_expired" });
+  expect((await confirm(good, { ...headers, origin })).statusCode).toBe(403);
+  const browser = await localLogin(app, origin);
+  expect((await confirm(good, browser)).json()).toEqual({ error: "Confirm your identity in the iOS app." });
+  // Malformed bodies fail validation before anything is spent.
+  for (const bad of [{ ...good, code: "short" }, { ...good, extra: true }, { code: good.code, state: good.state }])
+    expect((await confirm(bad)).statusCode).toBe(400);
+  // A wrong verifier leaves the code unspent, and the refusal never says session_expired, so the app stays signed in.
+  const wrong = await confirm({ ...good, codeVerifier: randomBytes(32).toString("base64url") });
+  expect([wrong.statusCode, wrong.json()]).toEqual([401, { error: "That confirmation expired. Try again.", code: "confirmation_expired" }]);
+  expect(store.nativeSessionConfirmedAt(hash(token))).toBeUndefined();
+  const confirmed = await confirm(good);
+  expect(confirmed.statusCode).toBe(200);
+  const at = Date.parse(confirmed.json().confirmedAt);
+  expect(store.nativeSessionConfirmedAt(hash(token))).toBe(at);
+  expect(Math.abs(Date.now() - at)).toBeLessThan(5000);
+  // Each code works once, for confirming or for signing in.
+  expect((await confirm(good)).json().code).toBe("confirmation_expired");
+  expect((await app.inject({ method: "POST", url: "/api/auth/native/exchange", payload: good })).statusCode).toBe(401);
+  expect((await app.inject({ url: "/api/bootstrap", headers })).statusCode).toBe(200);
+
+  // Another household member's code never confirms this person.
+  const theirs = await nativeCode(app, { member: "two" }, "confirm");
+  expect((await confirm(theirs)).json()).toEqual({ error: "Use the same Google account you signed in with." });
+  // An expired code, and a code whose proof is missing or more than ten minutes old, are refused.
+  const expired = await nativeCode(app, { member: "one" }, "confirm");
+  store.db.prepare("UPDATE native_codes SET expires=0").run();
+  expect((await confirm(expired)).json().code).toBe("confirmation_expired");
+  const old = await nativeCode(app, { member: "one" }, "confirm");
+  store.db.prepare("UPDATE native_code_confirmations SET confirmed_at=?").run(Date.now() - 10 * 60000 - 1000);
+  expect((await confirm(old)).json()).toEqual({ error: "That confirmation is too old. Try again.", code: "confirmation_expired" });
+  const unproven = await nativeCode(app, { member: "one" }, "confirm");
+  store.db.prepare("DELETE FROM native_code_confirmations").run();
+  expect((await confirm(unproven)).json().error).toBe("That confirmation is too old. Try again.");
+  // Just inside ten minutes counts, and never moves a later confirmation back.
+  const recent = await nativeCode(app, { member: "one" }, "confirm");
+  store.db.prepare("UPDATE native_code_confirmations SET confirmed_at=?").run(Date.now() - 10 * 60000 + 30000);
+  expect((await confirm(recent)).statusCode).toBe(200);
+  expect(store.nativeSessionConfirmedAt(hash(token))).toBe(at);
+  expect((await app.inject({ url: "/api/bootstrap", headers })).statusCode).toBe(200);
 });
 
 it("keeps device ownership explicit, controls APNs environment on the host, and unregisters on native logout", async () => {
@@ -284,6 +372,11 @@ it("signs cached ES256 APNs provider requests and bounds multibyte payloads", as
     expect(JSON.parse(Buffer.from(jwt[0], "base64url").toString()).alg).toBe("ES256");
     expect(verify("sha256", Buffer.from(jwt.slice(0, 2).join(".")), { key: publicKey, dsaEncoding: "ieee-p1363" }, Buffer.from(jwt[2], "base64url"))).toBe(true);
     expect(JSON.parse(seen[0].body)).toMatchObject({ aps: { alert: { title: "Done" } }, url: "/?bot=bot" });
+    await sender.refresh(device);
+    expect(seen[2].headers).toMatchObject({ "apns-topic": "test.agentinterface", "apns-push-type": "background", "apns-priority": "5" });
+    // Only a nudge: the app reads names and states itself, with its own sign-in.
+    expect(JSON.parse(seen[2].body)).toEqual({ aps: { "content-available": 1 }, refresh: ["widgets"] });
+    seen.splice(2);
     await sender.clear(device, ["event"]);
     expect(seen[2].headers).toMatchObject({ "apns-topic": "test.agentinterface", "apns-push-type": "background", "apns-priority": "5" });
     expect(JSON.parse(seen[2].body)).toEqual({ aps: { "content-available": 1 }, clear: { tags: ["event"] } });
@@ -364,10 +457,11 @@ it("shares durable participant/routine notifications across web/APNs without ret
 it("groups iOS notifications per assistant and adds actions only where they make sense", () => {
   const base = { title: "Kitchen", body: "Done", url: "/?bot=kitchen", tag: "event-1", botId: "kitchen", account: "0123456789abcdef" };
   const reply = JSON.parse(apnsPayload(JSON.stringify({ ...base, kind: "completed" })));
-  expect(reply).toEqual({ aps: { alert: { title: "Kitchen", body: "Done" }, sound: "default", "thread-id": "kitchen", "mutable-content": 1, category: "REPLY" },
+  expect(reply).toEqual({ aps: { alert: { title: "Kitchen", body: "Done" }, sound: "default", "filter-criteria": "kitchen", "thread-id": "kitchen", "mutable-content": 1, category: "REPLY" },
     url: "/?bot=kitchen", tag: "event-1", botId: "kitchen", account: "0123456789abcdef" });
   const approval = JSON.parse(apnsPayload(JSON.stringify({ ...base, kind: "approval", approvalId: "request-7" })));
-  expect(approval.aps).toMatchObject({ "thread-id": "kitchen", category: "APPROVAL", "interruption-level": "time-sensitive" });
+  // A Focus filter can let every assistant's approvals through while it quiets the rest of their news.
+  expect(approval.aps).toMatchObject({ "thread-id": "kitchen", category: "APPROVAL", "interruption-level": "time-sensitive", "filter-criteria": "approval:kitchen" });
   expect(approval).toMatchObject({ botId: "kitchen", approvalId: "request-7", account: "0123456789abcdef" });
   // An add-on without approval IDs still sends a time-sensitive approval, which only opens the chat.
   const unnamed = JSON.parse(apnsPayload(JSON.stringify({ ...base, kind: "approval" })));
@@ -381,7 +475,7 @@ it("groups iOS notifications per assistant and adds actions only where they make
   // Routine results open their results sheet, not a chat to reply in; digests and host alerts have no assistant.
   expect(JSON.parse(apnsPayload(JSON.stringify({ ...base, kind: "completed", url: "/?bot=kitchen&routine=daily" }))).aps.category).toBeUndefined();
   const digest = JSON.parse(apnsPayload(JSON.stringify({ title: "2 assistant updates", body: "A · B", url: "/?view=today", tag: "batch", account: "0123456789abcdef" })));
-  expect(digest.aps).toEqual({ alert: { title: "2 assistant updates", body: "A · B" }, sound: "default" });
+  expect(digest.aps).toEqual({ alert: { title: "2 assistant updates", body: "A · B" }, sound: "default", "filter-criteria": "household" });
   // Without the account marker an action could be taken by whoever is signed in, so there is none,
   // and the extension cannot tell whose avatar to show.
   const anonymous = JSON.parse(apnsPayload(JSON.stringify({ ...base, account: undefined, kind: "completed" })));
@@ -502,4 +596,45 @@ it("stops a delivery mid-way when its assistant turns private, before any other 
   expect(sent).toEqual(["https://push.test/phone"]);
   expect(store.outbox()).toHaveLength(0);
   store.close();
+});
+
+it("publishes the iOS app's universal links only when the host signs for that app", async () => {
+  const unsigned = await setup();
+  expect((await unsigned.app.inject("/.well-known/apple-app-site-association")).statusCode).toBe(404);
+  const config = loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }); config.apns = apnsConfig();
+  const signed = await setup(config);
+  // Apple's CDN fetches it without a session.
+  const response = await signed.app.inject("/.well-known/apple-app-site-association");
+  expect(response.statusCode).toBe(200);
+  expect(response.headers["content-type"]).toMatch(/^application\/json/);
+  const value = response.json();
+  expect(value.applinks.details).toEqual([{ appIDs: ["TEAM123456.test.agentinterface"], components: [
+    expect.objectContaining({ "/": "/", "?": { bot: "?*" } }), expect.objectContaining({ "/": "/", "?": { view: "today" } }),
+  ] }]);
+  expect(value.activitycontinuation).toEqual({ apps: ["TEAM123456.test.agentinterface"] });
+});
+
+it("lets a Live Activity's Stop act only for the account it names", async () => {
+  const stopped: string[] = [];
+  const result = await createApp(loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }), fakeRuntime({
+    listBots: async () => [{ id: "bot", name: "Bot", shared: true, model: "test", activity: "working" }],
+    capabilities: async () => capabilitiesFixture({ avatarMetadata: { supported: false }, stop: { supported: true } }), stop: async (botId: string) => { stopped.push(botId); },
+    close: async () => {},
+  }), { background: false });
+  apps.push(result);
+  const { app } = result, { token } = await connectNative(app);
+  const stop = (payload?: object) => app.inject({ method: "POST", url: "/api/bots/bot/stop", headers: { authorization: `Bearer ${token}` }, ...(payload ? { payload } : {}) });
+  // Another person signed in on the phone since the activity started: nothing stops.
+  const refused = await stop({ account: accountMarker("local-two") });
+  expect(refused.statusCode).toBe(409);
+  expect(refused.json().error).toBe("This activity belongs to a different account");
+  expect(stopped).toEqual([]);
+  const allowed = await stop({ account: accountMarker("local-one") });
+  expect(allowed.statusCode, allowed.body).toBe(200);
+  expect(allowed.json()).toEqual({ ok: true });
+  // The chat's own Stop sends nothing or an empty body, as before.
+  expect((await stop()).statusCode).toBe(200);
+  expect((await stop({})).statusCode).toBe(200);
+  expect((await stop({ account: "x".repeat(65) })).statusCode).toBe(400);
+  expect(stopped).toEqual(["bot", "bot", "bot"]);
 });

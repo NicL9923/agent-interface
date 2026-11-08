@@ -1,6 +1,7 @@
 import type { Bot, Conversation } from "../shared/types";
 import { SecureRequestCard, SettledReceipt } from "../components/SecureRequestCard";
 import { ComputerHandoffCard } from "../components/ComputerHandoffCard";
+import { TerminalRequestCard } from "../components/TerminalRequestCard";
 import { ConnectionRequestCard } from "../components/ConnectionRequestCard";
 import { AttentionCard } from "./AttentionCard";
 import { useSettledRequests } from "./waiting-input";
@@ -23,6 +24,9 @@ export function AttentionList({ conversation, botId, userId, bots = [], assistan
       title={request.title} detail={request.detail} assistantName={assistantName}
     /> : request.kind === "computer" && request.computer ? <ComputerHandoffCard
       key={`${userId}:${botId}:${request.id}`} handoff={request.computer} requestId={request.id} botId={botId}
+      assistantName={assistantName} disconnected={disconnected}
+    /> : request.kind === "terminal" && request.terminal ? <TerminalRequestCard
+      key={`${userId}:${botId}:${request.id}`} request={request.terminal} requestId={request.id} botId={botId}
       assistantName={assistantName} disconnected={disconnected}
     /> : request.kind === "connection" && request.connection ? <ConnectionRequestCard
       key={`${userId}:${botId}:${request.id}`} request={request.connection} requestId={request.id} botId={botId} bots={bots}

@@ -22,7 +22,7 @@ import XCTest
     }
   }
   /// Chooses a context menu item. A menu can ignore a tap while it is still opening, so the choice
-  /// is repeated only while the menu stays open, as `selectSettingsTab` does.
+  /// is repeated only while the menu stays open.
   private func choose(_ item: XCUIElement, file: StaticString = #filePath, line: UInt = #line) {
     for _ in 0..<3 {
       item.tapWhenReady(file: file, line: line)

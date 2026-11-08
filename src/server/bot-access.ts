@@ -157,6 +157,7 @@ export const assistantRoutes: Readonly<Record<string, BotScope>> = {
   "POST /api/auth/native/complete": "none",
   "POST /api/auth/native/exchange": "none",
   "POST /api/auth/native/renew": "none",
+  "POST /api/auth/native/confirm": "none",
   "POST /api/csp-report": "none",
   "POST /api/client-errors": "none",
   "GET /api/health": "none",
@@ -225,6 +226,8 @@ export const assistantRoutes: Readonly<Record<string, BotScope>> = {
   "POST /api/push/test": "body",
   // The token names the assistant; the handler checks this person still sees it.
   "POST /api/push/actions": "none",
+  // This server's own addresses; no assistant is involved.
+  "GET /api/native/routes": "none",
   "GET /api/native/push/config": "none",
   "PUT /api/native/push/device": "none",
   "DELETE /api/native/push/device": "none",

@@ -175,13 +175,20 @@ async ({tab,panel,fixture,reset,capture,paths,geometry,workChecks,browserErrors,
   ensure(!await secret().count(),"Acknowledged secret remained mounted");
   ensure(!getWork().triggers.items.find(x=>x.id===fixture.workFixture.newTrigger.id).enabled,"New trigger not disabled");
   await landing("created-notice",notice);await shot("created",row(fixture.workFixture.newTrigger.id).getByRole("heading"));
-  // Leaving Work is recorded honestly: it clears the current secret without another write.
+  // Leaving Automation is recorded honestly: it clears the current secret without another write.
   await setup();await create();start=getSubmissions().length;
+  // Open a settings section by label in either layout: tabs on wide screens, the section list on phones.
+  const openSection=async(scope,label)=>{
+    await scope.locator('nav[aria-label="Settings sections"], button[aria-label="All settings"]').first().waitFor();
+    const tabs=scope.locator("nav.settings-tabs");
+    if(await tabs.count()){await tabs.getByRole("button",{name:label,exact:true}).click();return;}
+    const index=scope.locator("nav.settings-index");
+    if(!await index.count())await scope.getByRole("button",{name:"All settings",exact:true}).click();
+    await index.locator(".settings-row").filter({has:scope.page().locator(".row-label").filter({hasText:new RegExp(`^${label}$`)})}).click();
+  };
   const dialog=tab.locator(".settings-dialog");
-  await dialog.getByRole("button",{name:"details",exact:true}).click();
-  const overflow=dialog.locator(".settings-tabs-overflow");
-  if(await overflow.count()&&await overflow.getAttribute("open")===null)await overflow.locator("summary").click();
-  await dialog.getByRole("button",{name:"work",exact:true}).click();
+  await openSection(dialog,"Profile");
+  await openSection(dialog,"Automation");
   await heading().waitFor();ensure(!await secret().count()&&getSubmissions().length===start,"Secret persisted or leaving wrote data");
   const storage=await tab.evaluate(token=>{
     const check=store=>({entries:store.length,containsSecret:Object.values(store).some(value=>String(value).includes(token))});

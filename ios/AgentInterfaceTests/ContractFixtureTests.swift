@@ -187,6 +187,11 @@ private typealias Check = @MainActor (Data) throws -> Void
     "preferences": check(Preferences.self) {
       XCTAssertEqual($0.presentation, "advanced"); XCTAssertEqual($0.startPage, "today"); XCTAssertEqual($0.notifications?.quietStart, "22:00")
     },
+    "native-routes": check(DirectRoutesResponse.self) {
+      XCTAssertEqual($0.routes.map(\.kind), [.lan, .tailnet])
+      XCTAssertEqual($0.routes.first?.url, URL(string: "https://127.0.0.1:3443"))
+      XCTAssertEqual($0.routes.first?.certificateSha256, "q1Ue7mHzv1bS0n9yKXGJmWjv2sQxRZbL0dYc3Hc8V2E")
+    },
     "push-config": check(PushConfig.self) { XCTAssertTrue($0.available); XCTAssertEqual($0.environment, "sandbox") },
     "routine-output": check(RoutineOutput.self) { XCTAssertEqual($0.messages.first?.role, "assistant"); XCTAssertFalse($0.previewOnly) },
     "routine-preview": check(SchedulePreview.self) { XCTAssertEqual($0.timezone, "America/Chicago"); XCTAssertEqual($0.nextRuns.count, 2) },
@@ -205,7 +210,7 @@ private typealias Check = @MainActor (Data) throws -> Void
     "search": check(SearchResponse.self) {
       XCTAssertEqual($0.hits.map(\.routineId), [nil, "routine-morning"]); XCTAssertEqual($0.unavailableBots, ["archive"])
     },
-    "submission": check(Receipt.self) { XCTAssertEqual($0.runId, "run-dinner"); XCTAssertNotNil($0.message) },
+    "submission": check(Receipt.self) { XCTAssertEqual($0.runId, "run-dinner"); XCTAssertNotNil($0.message); XCTAssertEqual($0.text, "Plan five dinners") },
     "today": check(TodayOverview.self) { overview in
       XCTAssertEqual(overview.items.map(\.botId), ["household", "garden", "archive"])
       XCTAssertEqual(overview.recentMessage(overview.items[0])?.id, "message-assistant")

@@ -1,11 +1,12 @@
 import type { FastifyInstance } from "fastify";
 import { Readable } from "node:stream";
 import { z } from "zod";
-import { interruptionPendingMessage } from "../shared/errors.js";
+import { interruptionPendingMessage, submissionConflictMessage } from "../shared/errors.js";
 import { filesBefore, historyWindow, MAX_HISTORY_TURNS, windowFiles } from "../shared/history.js";
 import { messageOrigin } from "../shared/message-origin.js";
 import { isRetryRequestId, retryRequestId } from "../shared/retry-id.js";
 import type { CapabilityKey, InflightDelta, ReadTiming, Runtime, Submission, SubmissionReceipt } from "../shared/types.js";
+import { MAX_MESSAGE_TEXT } from "../shared/api.js";
 import { formatBytes, MAX_ATTACHMENTS, MAX_DOWNLOAD_BYTES, MAX_UPLOAD_BYTES, UPLOAD_KINDS, UPLOAD_MIME_TYPES } from "../shared/uploads.js";
 import { accountMarker } from "./apns.js";
 import { apiRoute, type ApiRequest } from "./api-route.js";
@@ -142,7 +143,7 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
   // and assistant access are the conversation read's own hooks; each notice rechecks the session.
   const watchers = new Map<string, Set<() => void>>();
   // The app's own conversation writes notify at once, before Hermes reports their effect.
-  const conversationWrites = new Set(["messages", "steer", "talk/ask", "stop", "requests/:approvalId", "approvals/:approvalId", "secure-requests/:requestId", "computer-handoffs/:requestId", "connection-requests/:requestId"]
+  const conversationWrites = new Set(["messages", "steer", "talk/ask", "stop", "requests/:approvalId", "approvals/:approvalId", "secure-requests/:requestId", "computer-handoffs/:requestId", "terminal-requests/:requestId", "connection-requests/:requestId"]
     .map(path => `POST /api/bots/:id/${path}`));
   app.addHook("onResponse", async (req, reply) => {
     if (reply.statusCode < 400 && conversationWrites.has(`${req.method} ${routePattern(req)}`))
@@ -262,7 +263,7 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
   const message = z
     .object({
       requestId: z.string().uuid(),
-      text: z.string().max(50000),
+      text: z.string().max(MAX_MESSAGE_TEXT),
       attachments: z.array(fileRef).max(MAX_ATTACHMENTS).default([]),
       reviewedInterruption: z.boolean().default(false),
       reviewedUncertain: z.boolean().default(false),
@@ -303,10 +304,7 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
         input = previous.input;
       }
       if (JSON.stringify(previous.input) !== JSON.stringify(input))
-        throw httpError(
-          409,
-          "This submission ID was already used for different content",
-        );
+        throw httpError(409, submissionConflictMessage, { code: "submission_conflict" });
       if (interruptionRejected && !reviewedInterruption)
         throw httpError(409, interruptionPendingMessage);
       if (!retryInterruption && (!reviewedUncertain || previous.receipt.status !== "uncertain"))
@@ -314,7 +312,7 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
       await requireCapability("idempotency");
       const known = await runtime.lookupSubmission(input.requestId);
       if (known) {
-        store.receipt(known);
+        store.receipt(known, undefined, retryInterruption);
         return known;
       }
     } else if (reviewedUncertain) {
@@ -360,7 +358,7 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
       const receipt = await (steering
         ? runtime.steer({ ...input, reviewedInterruption })
         : runtime.submit({ ...input, reviewedInterruption }));
-      store.receipt(receipt);
+      store.receipt(receipt, undefined, retryInterruption);
       if (receipt.runId) for (const userId of new Set([input.senderId, requesterId])) store.participate(receipt.runId, userId);
       return receipt;
     } catch (error) {
@@ -384,12 +382,15 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
     const previous = recorded && (recorded.input.senderId === signedIn(req).id || recorded.input.retryOf !== undefined)
       && visibleTo(store, recorded.input.botId, signedIn(req).id) ? recorded : undefined;
     if (recorded && !previous) return { requestId, status: "uncertain", message: "No admission receipt was found yet. A delayed original request may still arrive. Preserve this request ID and review before retrying the same message." };
+    // The sender also learns what text the request carried; anyone else following a retry does not.
+    const own = previous && previous.input.senderId === signedIn(req).id ? previous.input.text : undefined;
+    const told = (receipt: SubmissionReceipt): SubmissionReceipt => own === undefined ? receipt : { ...receipt, text: own };
     try {
       if ((await runtime.capabilities()).idempotency.supported) {
         const receipt = await runtime.lookupSubmission(requestId);
         if (receipt) {
           if (previous) store.receipt(receipt);
-          return receipt;
+          return told(receipt);
         }
         if (!previous)
           return {
@@ -403,7 +404,7 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
       /* Missing transport evidence stays uncertain, never replay. */
     }
     return (
-      previous?.receipt ?? {
+      (previous && told(previous.receipt)) ?? {
         requestId,
         status: "uncertain",
         message:
@@ -428,7 +429,13 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
       store.participate(conversation.activity.runId, signedIn(req).id);
     return { ok: true };
   });
+  // The iOS Live Activity's Stop names the account it was started for, as a notification's Decline does.
+  // The web and the chat's own Stop send no body, so it is read here rather than in the shared route map.
+  const stopAccount = z.object({ account: z.string().max(64).optional() }).strict().optional();
   apiRoute(app, "POST /bots/:id/stop", {}, async req => {
+    const account = stopAccount.parse(req.body ?? undefined)?.account;
+    if (account !== undefined && account !== accountMarker(signedIn(req).id))
+      throw httpError(409, "This activity belongs to a different account");
     await requireCapability("stop");
     await runtime.stop(req.params.id);
     return { ok: true };
@@ -444,7 +451,7 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
     return { ok: true };
   });
   apiRoute(app, "GET /bots/:id/draft", {}, async req => store.draft(signedIn(req).id, req.params.id));
-  const draft = z.object({ text: z.string().max(50000), attachments: z.array(fileRef).max(MAX_ATTACHMENTS).default([]), baseRevision: z.number().int().min(0).optional() });
+  const draft = z.object({ text: z.string().max(MAX_MESSAGE_TEXT), attachments: z.array(fileRef).max(MAX_ATTACHMENTS).default([]), baseRevision: z.number().int().min(0).optional() });
   apiRoute(app, "PUT /bots/:id/draft", { body: draft }, async (req, { baseRevision, ...value }, reply) => {
     const result = store.saveDraft(signedIn(req).id, req.params.id, value, baseRevision);
     if (!result.saved)

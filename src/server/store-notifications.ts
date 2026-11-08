@@ -272,8 +272,8 @@ export class NotificationRepository {
       .prepare("INSERT OR IGNORE INTO delivered VALUES(?,?)")
       .run(id, endpoint);
   }
-  finishDelivery(id: string) {
-    this.db.prepare("UPDATE outbox SET state='delivered' WHERE id=?").run(id);
+  finishDelivery(id: string, state: "delivered" | "suppressed" = "delivered") {
+    this.db.prepare("UPDATE outbox SET state=? WHERE id=?").run(state, id);
   }
   /** Returns true when the notification has used its last attempt and is now failed. */
   retryDelivery(id: string, attempts: number, error?: string) {

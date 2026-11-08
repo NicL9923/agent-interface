@@ -406,10 +406,10 @@ import XCTest
     // Never while the draft is on its way.
     value.pending = PendingSubmission(requestId: "r", botId: "bot", text: value.draft.text, attachments: value.draft.attachments,
       reviewedInterruption: false)
-    value.sending = true
+    value.sendingRequests[value.selectedBotId ?? "bot"] = "test-request"
     XCTAssertNil(value.putRetriedMessageInDraft(try XCTUnwrap(value.retryRefusal?.message)))
     XCTAssertEqual(value.draft.text, "Keep my words\n\nIs the gate closed?")
-    value.sending = false; value.pending = nil
+    value.sendingRequests = [:]; value.pending = nil
   }
 
   func testTheServersRefusedClaimExplainsItselfAfterAReload() async throws {

@@ -20,8 +20,10 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   /// The signed-in account on this server, kept apart from `bootstrap` so views keyed by the
   /// account, such as every image in the transcript, render again only when it changes.
   private(set) var scope: String?
+  /// The account on a server, as drafts, widgets and the Live Activity name it.
+  nonisolated static func scope(server: URL, userId: String) -> String { Data((server.absoluteString + "|" + userId).utf8).base64URLEncoded }
   private func updateScope() {
-    let next = bootstrap.flatMap { boot in api.map { Data(($0.baseURL.absoluteString + "|" + boot.user.id).utf8).base64URLEncoded } }
+    let next = bootstrap.flatMap { boot in api.map { Self.scope(server: $0.baseURL, userId: boot.user.id) } }
     guard next != scope else { return }
     scope = next
     // Another account's rooms never show.
@@ -78,6 +80,8 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   var todayRequest: UUID?
   /// A voice message to start in this assistant's chat, from the Talk to assistant control.
   var listenRequest: ListenRequest?
+  /// The assistants the current Focus lets through; see `FocusFilter.swift`.
+  var focus = FocusChoice.saved()
   var draft = Draft()
   var draftReady = false { didSet { if draftReady && !oldValue { scheduleAdditions() } } }
   /// Unconfirmed sends, one per assistant, as the web keeps one per assistant.
@@ -112,7 +116,8 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   @ObservationIgnored var stayHome = false
   var signingIn = false
   var loading = false
-  var sending = false { didSet { updateEcho() } }
+  var sendingRequests: [String: String] = [:] { didSet { updateEcho() } }
+  var sending: Bool { selectedBotId.map { sendingRequests[$0] != nil } ?? false }
   /// Files on their way into drafts; see `AttachmentUploads.swift`.
   let uploads = AttachmentUploads()
   /// The household's Hermes update; see `HermesUpgrade.swift`.
@@ -150,6 +155,10 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   var computerStatus: ComputerStatus?
   /// The computer screen the transcript asked for: Watch on the live row, or Take over on a handoff.
   var openComputer: ComputerOpening?
+  /// The terminal screen the transcript asked for: Open terminal on an assistant's terminal request.
+  var openTerminal: TerminalOpening?
+  /// A confirm-it's-you sign-in is on screen, so a second one does not start.
+  @ObservationIgnored var confirmingIdentity = false
   /// Builds the client for a server address. Tests substitute a client with a mock transport.
   @ObservationIgnored var makeClient: (URL) -> APIClient = { APIClient(baseURL: $0) }
   @ObservationIgnored var authSession: ASWebAuthenticationSession?
@@ -274,7 +283,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   /// What the app keeps in UserDefaults per scope, optionally per assistant. `DeviceDefaults` holds
   /// the keys that outlive a scope.
   enum StorageKind: String {
-    case draft, draftAdditions, sharedTextReceipts, pending, recovered, selected, notifications, notificationPrompt, goalResume
+    case draft, draftAdditions, sharedTextReceipts, pending, recovered, selected, notifications, notificationPrompt, goalResume, formReply
   }
   func key(_ kind: StorageKind, _ bot: String? = nil) -> String? {
     scope.map { "native.\($0).\(kind.rawValue)\(bot.map { ".\($0)" } ?? "")" }

@@ -82,6 +82,13 @@ describe("touching the desktop directly", () => {
     gestures.cancel();
     expect(actions.at(-1)).toEqual(left(false));
   });
+  it("does not move a drag when only the second finger moves", () => {
+    gestures.start(1, p(10, 10), clock); gestures.move([[1, p(60, 10)]]);
+    gestures.start(2, p(90, 90), clock);
+    actions = [];
+    gestures.move([[2, p(110, 110)]]);
+    expect(actions).toEqual([]);
+  });
   it("ignores a second finger once a drag has started", () => {
     gestures.start(1, p(10, 10), clock); gestures.move([[1, p(60, 10)]]);
     gestures.start(2, p(90, 90), clock); gestures.end(2, clock);

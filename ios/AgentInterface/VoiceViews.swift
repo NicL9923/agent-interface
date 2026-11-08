@@ -17,6 +17,13 @@ enum VoiceState: Equatable {
 
 /// The web's VoiceControls: a recording is transcribed as soon as it stops and its text joins the
 /// draft. Replies are read aloud by `SpeechController`, from each reply's own action row.
+@MainActor @Observable final class MicrophoneOwnership {
+  static let shared = MicrophoneOwnership()
+  var owner: UUID?
+  @ObservationIgnored var playbackOwner: UUID?
+  @ObservationIgnored var stopPlayback: (() -> Void)?
+}
+
 @MainActor @Observable final class VoiceController: NSObject, AVAudioRecorderDelegate {
   static let maxRecordingSeconds = 120
   static let maxVoiceBytes = 8 * 1024 * 1024
@@ -65,6 +72,7 @@ enum VoiceState: Equatable {
   @ObservationIgnored private var generation = 0
   @ObservationIgnored private var discarded = false
   @ObservationIgnored private var sessionActive = false
+  @ObservationIgnored private let microphoneOwner = UUID()
 
   /// Inactivity ends capture, but the captured speech stays available for review.
   /// Unlike Stop, this never starts a network request in the background.
@@ -117,7 +125,9 @@ enum VoiceState: Equatable {
   }
 
   func startRecording() async {
-    guard state == .idle else { return }
+    guard state == .idle, MicrophoneOwnership.shared.owner == nil else { return }
+    MicrophoneOwnership.shared.stopPlayback?()
+    MicrophoneOwnership.shared.owner = microphoneOwner
     generation += 1
     let run = generation
     discarded = false
@@ -134,6 +144,7 @@ enum VoiceState: Equatable {
     #endif
     guard await AVAudioApplication.requestRecordPermission() else {
       if generation == run {
+        deactivateSession()
         state = .idle
         error = "Microphone permission was denied. Allow it in iOS Settings, then try again."
       }
@@ -213,6 +224,7 @@ enum VoiceState: Equatable {
     }
   }
   private func finishRecording(_ data: Data) {
+    deactivateSession()
     guard !data.isEmpty else {
       state = .idle
       notice = "No audio was captured. Try recording again."
@@ -282,6 +294,7 @@ enum VoiceState: Equatable {
     deactivateSession()
   }
   private func deactivateSession() {
+    if MicrophoneOwnership.shared.owner == microphoneOwner { MicrophoneOwnership.shared.owner = nil }
     guard sessionActive else { return }
     sessionActive = false
     try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)

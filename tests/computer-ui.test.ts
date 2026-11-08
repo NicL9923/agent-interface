@@ -332,6 +332,44 @@ describe("system terminal", () => {
     expect(write).not.toHaveBeenCalled();
   });
 
+  describe("opened from an assistant's terminal card", () => {
+    const open = (terminal: { at: number; command?: string }, key = "card") =>
+      act(async () => { root.render(createElement(ComputerPanel, { open: true, onClose, key, terminal, initialTab: "terminal" })); });
+
+    it("offers the suggested command and pastes it only when the person asks, without running it", async () => {
+      await open({ at: 1000, command: "sudo systemctl restart hermes" });
+      const client = Socket.instances.at(-1)!;
+      await act(async () => client.open());
+      // The shell may be running a program waiting for one key, so nothing arrives on its own.
+      expect(mocks.terminals.at(-1)!.paste).not.toHaveBeenCalled();
+      expect(client.sent.filter(message => (message as { type?: string }).type === "input")).toEqual([]);
+      expect(container.querySelector(".terminal-offer code")?.textContent).toBe("sudo systemctl restart hermes");
+      await click("Paste at prompt");
+      expect(mocks.terminals.at(-1)!.paste).toHaveBeenCalledWith("sudo systemctl restart hermes");
+      expect(client.sent).toContainEqual({ type: "input", data: "sudo systemctl restart hermes" });
+      expect(client.sent.some(message => JSON.stringify(message).includes("\\r"))).toBe(false);
+      expect(container.querySelector(".terminal-offer")).toBeNull();
+    });
+
+    it("does not offer a command with a line break, because a pasted newline would run it", async () => {
+      await open({ at: 2000, command: "ls\nrm -rf ~" }, "newline");
+      await act(async () => Socket.instances.at(-1)!.open());
+      expect(container.querySelector(".terminal-offer")).toBeNull();
+      expect(mocks.terminals.at(-1)!.paste).not.toHaveBeenCalled();
+    });
+
+    it("moves a panel that is already open on the desktop to the Terminal tab with the command offered", async () => {
+      await render(true, "already-open");
+      expect(button("Desktop").getAttribute("aria-selected")).toBe("true");
+      await act(async () => { root.render(createElement(ComputerPanel, { open: true, onClose, key: "already-open", terminal: { at: 3000, command: "id" } })); });
+      expect(button("Terminal").getAttribute("aria-selected")).toBe("true");
+      await act(async () => Socket.instances.at(-1)!.open());
+      await click("Dismiss");
+      expect(container.querySelector(".terminal-offer")).toBeNull();
+      expect(mocks.terminals.at(-1)!.paste).not.toHaveBeenCalled();
+    });
+  });
+
   it("keeps both attachments across tabs and never allocates a second shell just to switch tabs", async () => {
     const client = await connectedTerminal(); const desktop = mocks.desktops.at(-1)!;
     await click("Desktop"); await click("Terminal");
@@ -349,6 +387,16 @@ describe("system terminal", () => {
     expect(container.textContent).not.toContain("Closing this panel keeps your shell running.");
     await click("Start terminal");
     expect(Socket.instances).toHaveLength(2);
+  });
+
+  it("does not reopen a shell when End shell supersedes a scheduled reconnect", async () => {
+    const client = await connectedTerminal();
+    await act(async () => client.close());
+    await click("End shell");
+    await click("End this shell");
+    await act(async () => vi.advanceTimersByTimeAsync(6000));
+    expect(Socket.instances).toHaveLength(1);
+    expect(container.textContent).toContain("Your shell has ended");
   });
 
   it("requires an explicit shell-ending action and passes its session identity", async () => {

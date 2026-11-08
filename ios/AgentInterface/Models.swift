@@ -155,6 +155,8 @@ struct Bot: Codable, Identifiable, Equatable {
   var modelName: String? = nil
   var provider: String?
   var enabledMcpServers: [String]?
+  /// Every MCP server configured for the profile, enabled or not. Only the detail read sends it; older servers omit it.
+  var availableMcpServers: [String]? = nil
   var shared: Bool
   var ownerId: String?
   var avatar: AvatarConfig?
@@ -357,6 +359,7 @@ struct Attention: Codable, Identifiable, Equatable {
   var secure: SecureRequest? = nil
   var computer: ComputerHandoff? = nil
   var connection: ConnectionRequest? = nil
+  var terminal: TerminalRequest? = nil
 }
 /// What this device reports about the chat on screen: reading it, or gone after reading it.
 struct ChatPresenceReport: Codable, Equatable {
@@ -769,6 +772,27 @@ struct ComputerStatus: Decodable, Equatable {
   var running: Bool? = nil
   var reason: String?
   var control: Control
+  /// Absent from older servers. The system terminal, for terminal administrators.
+  var terminal: Terminal? = nil
+  struct Terminal: Decodable, Equatable {
+    var available: Bool
+    /// Blank when this person may not use the shell.
+    var target: String = ""
+    var reason: String? = nil
+    /// The server wants a sign-in confirmed in the last 2 hours before it opens a shell.
+    var confirmationRequired: Bool? = nil
+    init(from decoder: Decoder) throws {
+      let values = try decoder.container(keyedBy: CodingKeys.self)
+      available = try values.decode(Bool.self, forKey: .available)
+      target = try values.decodeIfPresent(String.self, forKey: .target) ?? ""
+      reason = try values.decodeIfPresent(String.self, forKey: .reason)
+      confirmationRequired = try values.decodeIfPresent(Bool.self, forKey: .confirmationRequired)
+    }
+    init(available: Bool, target: String = "", reason: String? = nil, confirmationRequired: Bool? = nil) {
+      self.available = available; self.target = target; self.reason = reason; self.confirmationRequired = confirmationRequired
+    }
+    private enum CodingKeys: String, CodingKey { case available, target, reason, confirmationRequired }
+  }
   /// What the Settings row says under "Computer", worded like the web panel.
   var detail: String {
     guard available else { return reason?.isEmpty == false ? reason! : "Desktop unavailable" }
@@ -800,6 +824,8 @@ struct Bootstrap: Codable, Equatable {
   subscript(capability key: CapabilityKey) -> Capability? { capabilities[key.rawValue] }
   var connection: RuntimeStatus
   var csrfToken: String?
+  /// This person's private key for deriving form request IDs. A server from before form cards omits it.
+  var formKey: String?
   /// Present when the host publishes the latest distributed iOS build.
   var nativeApp: NativeAppInfo?
 }
@@ -884,6 +910,8 @@ struct Receipt: Codable, Equatable {
   var runId: String?
   var messageId: String?
   var message: String?
+  /// The text the server recorded under this request ID, sent only to its sender by `GET /submissions/:id`.
+  var text: String? = nil
 }
 /// A failed turn's retry as the server records it: the receipt of the request that claimed the turn.
 struct RetryClaim: Codable, Equatable {
@@ -1084,6 +1112,8 @@ enum DeviceDefaults {
   static let signedInScope = "connection.signedInScope"
   /// When the sign-in to `server` expires.
   static func expiry(_ server: URL) -> String { "connection.expiry.\(server.absoluteString)" }
+  /// The LAN and tailnet routes `server` advertised last. Not secret: addresses and certificate pins.
+  static func directRoutes(_ server: URL) -> String { "connection.directRoutes.\(server.absoluteString)" }
 }
 
 enum ConnectionAddress {

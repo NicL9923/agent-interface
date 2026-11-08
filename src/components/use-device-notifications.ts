@@ -93,7 +93,7 @@ export function useDeviceNotifications(userId?: string, vapid?: string) {
     rememberPrompt(account); setPrompt(false);
     busy.current = true;
     ++readEpoch.current;
-    setState((previous) => ({ ...previous, busy: true, error: "" }));
+    setState((previous) => ({ ...previous, busy: true, checking: false, error: "" }));
     let created: PushSubscription | undefined;
     try {
       // Run before any await so browsers receive the explicit Enable gesture.
@@ -133,7 +133,7 @@ export function useDeviceNotifications(userId?: string, vapid?: string) {
     const account = userId;
     busy.current = true;
     ++readEpoch.current;
-    setState((previous) => ({ ...previous, busy: true, error: "" }));
+    setState((previous) => ({ ...previous, busy: true, checking: false, error: "" }));
     let removed = false;
     let subscription: PushSubscription | null = null;
     try {

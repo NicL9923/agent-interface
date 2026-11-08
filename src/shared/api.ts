@@ -46,6 +46,8 @@ export type ConversationPage = Omit<Conversation, "window" | "requestSessionId">
    */
   retry?: SubmissionReceipt & { retryOf: string };
 };
+/** The longest message or draft text the server accepts. The composer and form cards stay within it. */
+export const MAX_MESSAGE_TEXT = 50_000;
 export interface MessageRequest {
   requestId: string;
   text: string;
@@ -127,6 +129,16 @@ export type RoutineSave = Pick<Routine, "botId" | "name" | "prompt" | "schedule"
   & Partial<Pick<Routine, "roomIds" | "skills" | "model" | "provider" | "enabledToolsets" | "script" | "noAgent" | "contextFrom">>;
 type WorkInput<O extends AutomationRequest["operation"]> = Omit<Extract<AutomationRequest, { operation: O }>, "operation" | "profile" | "visibleProfiles">;
 type MemorySave = { revision: string; entries: { id?: string; text: string }[] };
+
+export type DirectRouteKind = "lan" | "tailnet";
+/** Another address of this same server that the iOS app may prefer; see docs/native-api.md. */
+export interface DirectRoute {
+  kind: DirectRouteKind;
+  /** `https://ADDRESS:PORT`, no trailing slash. */
+  url: string;
+  /** base64url SHA-256 of the listener certificate's DER bytes. The app accepts no other certificate there. */
+  certificateSha256: string;
+}
 
 export interface ApiRoutes {
   "GET /today": { query: { since?: string }; response: TodayOverview };
@@ -225,6 +237,7 @@ export interface ApiRoutes {
   /** A service worker's notification action, authorized by the single-use token in its push. */
   "POST /push/actions": { body: { token: string }; response: Ok };
   // The native app's routes. docs/native-api.md is the contract the iOS app decodes.
+  "GET /native/routes": { response: { routes: DirectRoute[] } };
   "GET /native/push/config": { response: { available: boolean; environment?: "sandbox" | "production" } };
   "PUT /native/push/device": { body: { deviceId: string; token: string }; response: Ok };
   "DELETE /native/push/device": { body: { deviceId: string }; response: Ok };

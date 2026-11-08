@@ -1,4 +1,4 @@
-import { memo, type CSSProperties } from "react";
+import { memo, useEffect, useRef, useState, type CSSProperties } from "react";
 import { Button } from "../components/ui/button";
 import type { ActivityState, Bootstrap, Bot } from "../shared/types";
 import type { GroupRoom } from "../shared/collaboration";
@@ -14,6 +14,9 @@ import { prefetchFirstPage } from "./conversation-page";
 import { NewMenu } from "./NewMenu";
 import { memberNames, roomFaces, roomPreview, type PendingGroup } from "./home-rooms";
 import { isUnread, type ReadThrough } from "./unread";
+import { glanceAtAvatar, reactAvatar } from "../components/avatar-attention";
+import { homeSeason } from "./season";
+import { SeasonalAmbience } from "./SeasonalAmbience";
 import "./home.css";
 
 /** Group chats on home: the rooms in order, what is open, and how to make or finish one. */
@@ -73,6 +76,28 @@ export const Sidebar = memo(function Sidebar({ boot, botId, shownBotId, readThro
   const activity = (bot: Bot): ActivityState => connectionLost ? "disconnected" : bot.id === botId ? state : bot.activity;
   const current = (bot: Bot) => bot.id === botId && view === "conversation";
   const unread = (bot: Bot) => isUnread(bot, shownBotId, readThrough);
+  // A pinned assistant that finishes its work hops, and the other pinned ones look over at it.
+  const before = useRef(new Map<string, ActivityState>());
+  const pinnedStates = JSON.stringify(pinned.map(bot => [bot.id, activity(bot)]));
+  useEffect(() => {
+    const seen = before.current, next = new Map<string, ActivityState>();
+    for (const [id, now] of JSON.parse(pinnedStates) as [string, ActivityState][]) {
+      next.set(id, now);
+      const was = seen.get(id);
+      if ((was === "working" || was === "thinking") && (now === "done" || now === "idle")) {
+        reactAvatar(id, "cheer");
+        glanceAtAvatar(id);
+      }
+    }
+    before.current = next;
+  }, [pinnedStates]);
+  // The date is read again every hour, so a season starts without a reload.
+  const [today, setToday] = useState(() => new Date());
+  useEffect(() => {
+    const timer = setInterval(() => setToday(new Date()), 3_600_000);
+    return () => clearInterval(timer);
+  }, []);
+  const season = homeSeason(today, pinned);
   // Pointing at, pressing or focusing a row reads its chat before the click opens it.
   const intent = (bot: Bot) => {
     const prefetch = () => { if (!current(bot)) prefetchFirstPage(bot.id); };
@@ -86,7 +111,7 @@ export const Sidebar = memo(function Sidebar({ boot, botId, shownBotId, readThro
         onMove={sectionId => onMoveToSection(bot, sectionId)} onNewSection={() => onNewSection(bot)}>
         <Button className={`bot-item bot-row${current(bot) ? " selected" : ""}${unread(bot) ? " unread" : ""}`} aria-current={current(bot) ? "page" : undefined}
           {...intent(bot)} onClick={() => onSelectBot(bot.id)}>
-          <span className="home-row-avatar" aria-hidden="true"><Avatar avatar={bot.avatar} state={botState === "done" || botState === "blocked" ? "idle" : botState} size={mobile ? 52 : 44} name={bot.name} reducedMotion /></span>
+          <span className="home-row-avatar" aria-hidden="true" data-morph={bot.id}><Avatar avatar={bot.avatar} state={botState === "done" || botState === "blocked" ? "idle" : botState} size={mobile ? 52 : 44} name={bot.name} reducedMotion /></span>
           <span className="bot-row-text">
             <span className="bot-row-top"><span className="bot-row-name"><strong>{bot.name}</strong></span>
               {(unread(bot) || bot.lastMessage?.at) && <span className="bot-row-meta">
@@ -128,7 +153,8 @@ export const Sidebar = memo(function Sidebar({ boot, botId, shownBotId, readThro
   const chatRows = rest.length > 0 || groups.rooms.length > 0 || !!finishRow;
   const status = connectionLost ? offline ? "offline" : "reconnecting" : "connected";
   return (
-    <aside id="assistant-navigation" className={`bot-rail home${open ? " open" : ""}`} aria-label="Assistants" inert={mobile && !open}>
+    <aside id="assistant-navigation" className={`bot-rail home${open ? " open" : ""}`} aria-label="Assistants" inert={mobile && !open} data-season={season ?? undefined}>
+      {season && <SeasonalAmbience season={season} />}
       <header className="home-bar">
         <Button className="home-account" aria-label="Settings" title="Settings" onClick={onSettings}>
           {boot.user.picture ? <img src={boot.user.picture} alt="" referrerPolicy="no-referrer" /> : initials(boot.user.name)}
@@ -154,9 +180,9 @@ export const Sidebar = memo(function Sidebar({ boot, botId, shownBotId, readThro
                 onMove={sectionId => onMoveToSection(bot, sectionId)} onNewSection={() => onNewSection(bot)}>
                 <Button className={`bot-item pinned-bot${current(bot) ? " selected" : ""}${unread(bot) ? " unread" : ""}`} aria-current={current(bot) ? "page" : undefined}
                   {...intent(bot)} onClick={() => onSelectBot(bot.id)}>
-                  <span className="pinned-avatar" aria-hidden="true">
-                    {/* Pinned assistants are few and featured, so they stay alive; the system Reduce Motion setting still applies. */}
-                    <Avatar avatar={bot.avatar} state={botState === "done" || botState === "blocked" ? "idle" : botState} size={mobile ? 92 : 60} name={bot.name} botId={bot.id} offline={offline} />
+                  <span className="pinned-avatar" aria-hidden="true" data-morph={bot.id} data-glance-target={bot.id}>
+                    {/* Pinned assistants are few and featured, so they stay alive and notice the pointer; the system Reduce Motion setting still applies. */}
+                    <Avatar avatar={bot.avatar} state={botState === "done" || botState === "blocked" ? "idle" : botState} size={mobile ? 92 : 60} name={bot.name} botId={bot.id} offline={offline} aware={!mobile} />
                   </span>
                   <span className="pinned-copy">
                     <span className="pinned-name">{unread(bot) && <UnreadMark />}{bot.name}</span>

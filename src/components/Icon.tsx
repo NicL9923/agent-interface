@@ -78,6 +78,8 @@ const paths = {
   talk: "M4 10.5v3M8 7.5v9M12 4.5v15M16 7.5v9M20 10.5v3",
   micOff: "M9 5a3 3 0 0 1 6 0v6a3 3 0 0 1-.9 2.1M9 9v2a3 3 0 0 0 4.5 2.6M5.5 11a6.5 6.5 0 0 0 10.4 5.2M18.5 11a6.5 6.5 0 0 1-.6 2.7M12 17.5V21M4 4l16 16",
   play: "M8 5.5v13l10.5-6.5Z",
+  pencil: "M4.5 19.5l1-4.2L15.8 5a2 2 0 0 1 2.9 0l.3.3a2 2 0 0 1 0 2.9L8.7 18.5ZM13.8 7l3.2 3.2",
+  mail: "M3.5 6h17v12h-17ZM4 6.5l8 6.5 8-6.5",
 } as const;
 export type IconName = keyof typeof paths;
 const filledIcons: IconName[] = ["stop", "play"];

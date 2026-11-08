@@ -100,6 +100,7 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     frame: sessionFrame,
     disconnected(verified) {
       live.clear();
+      owners.clear();
       descriptions.clear();
       capabilityCache = undefined;
       rosterReuse = undefined;
@@ -211,7 +212,10 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     }
     const superseded = generation !== structuralGenerationOf(botId) || sequence < (appliedOpens.get(botId) ?? 0);
     if (!superseded || !live.has(botId)) live.set(botId, value.session_id);
-    owners.set(value.session_id, botId);
+    for (const [session, owner] of owners) {
+      if (owner === botId && session !== live.get(botId)) owners.delete(session);
+    }
+    if (live.get(botId) === value.session_id) owners.set(value.session_id, botId);
     if (superseded) {
       supersededOpens.add(value);
       return value;

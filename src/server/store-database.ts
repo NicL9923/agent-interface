@@ -79,6 +79,11 @@ const additions = `
   -- When each native session's person last signed in with Google, which caps its renewals. A
   -- session without a row here, from before renewal, started a session lifetime before it expires.
   CREATE TABLE IF NOT EXISTS native_session_starts(hash TEXT PRIMARY KEY REFERENCES native_sessions(hash) ON DELETE CASCADE,signed_in_at INTEGER NOT NULL);
+  -- When each native session's person last proved who they are, for the terminal's step-up, and
+  -- when the person behind each unexchanged native code did. Signing in counts; a row is missing
+  -- when the sign-in carried no proof time.
+  CREATE TABLE IF NOT EXISTS native_session_confirmations(hash TEXT PRIMARY KEY REFERENCES native_sessions(hash) ON DELETE CASCADE,confirmed_at INTEGER NOT NULL);
+  CREATE TABLE IF NOT EXISTS native_code_confirmations(hash TEXT PRIMARY KEY REFERENCES native_codes(hash) ON DELETE CASCADE,confirmed_at INTEGER NOT NULL);
   -- Which household member sent each group chat message through this app, by Hermes event ID.
   CREATE TABLE IF NOT EXISTS group_senders(room_id TEXT NOT NULL,event_id TEXT NOT NULL,user_id TEXT NOT NULL REFERENCES users(id),created_at INTEGER NOT NULL,PRIMARY KEY(room_id,event_id));
   -- Single-use web push notification actions, by token hash, each bound to one person, approval and decision.

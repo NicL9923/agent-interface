@@ -454,6 +454,8 @@ struct BotListView: View {
   @State private var pendingGroup: GroupCreate?
   /// Undo for the last pin or section move made from a row here.
   @State private var undo = UndoQueue()
+  /// Everyone on home despite the Focus, until the Focus changes.
+  @State private var ignoringFocus = false
   private var pinnedMinimum: CGFloat { sizeClass == .compact ? pinColumn : pinColumn * 0.76 }
   private var lost: Bool { store.householdConnectionLost(offline: reachability.offline) }
   private var selectionVisible: Bool { sizeClass != .compact }
@@ -477,7 +479,11 @@ struct BotListView: View {
           }
         }
         if let bootstrap = store.bootstrap {
-          let pinned = bootstrap.preferences.pinnedAssistants(bootstrap.bots)
+          let focused = store.focus.shown(bootstrap.bots)
+          let filtering = focused.count < bootstrap.bots.count
+          let bots = filtering && !ignoringFocus ? focused : bootstrap.bots
+          if filtering { focusBanner(showing: focused.count, of: bootstrap.bots.count) }
+          let pinned = bootstrap.preferences.pinnedAssistants(bots)
           if !pinned.isEmpty {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: pinnedMinimum), spacing: 8, alignment: .top)], alignment: .center, spacing: 12) {
               ForEach(pinned) { bot in pinnedTile(bot) }
@@ -489,7 +495,7 @@ struct BotListView: View {
             HStack(spacing: 10) { householdLinks }
             VStack(alignment: .leading, spacing: 8) { householdLinks }
           }
-          let assistantGroups = bootstrap.preferences.assistantGroups(bootstrap.bots)
+          let assistantGroups = bootstrap.preferences.assistantGroups(bots)
           let rooms = GroupRows.ordered(store.groupCatalog?.rooms ?? [])
           let hasChats = !rooms.isEmpty || pendingGroup != nil
           ForEach(assistantGroups) { group in
@@ -549,6 +555,18 @@ struct BotListView: View {
       .pollWhileActive(id: "\(store.scope ?? "")|\(store.groupsPollInterval)", every: store.groupsPollInterval) { await store.refreshGroups() }
       .newSectionAlert(for: $sectionFor)
       .undoToast($undo) { change in Task { await store.undo(change) } }
+      .onChange(of: store.focus) { _, _ in ignoringFocus = false }
+  }
+  /// Says home is narrowed by the Focus, and lets everyone back for now.
+  private func focusBanner(showing count: Int, of total: Int) -> some View {
+    HStack(spacing: 10) {
+      Image(systemName: "moon.fill").foregroundStyle(Palette.accent).accessibilityHidden(true)
+      Text(ignoringFocus ? "Showing everyone during this Focus" : "This Focus shows \(count) of \(total) assistants")
+        .font(.footnote).frame(maxWidth: .infinity, alignment: .leading)
+      Button(ignoringFocus ? "Focus only" : "Show all") { ignoringFocus.toggle() }
+        .font(.footnote.weight(.semibold)).accessibilityIdentifier("focusShowAll")
+    }.padding(12).background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 12))
+      .accessibilityElement(children: .contain).accessibilityIdentifier("focusBanner")
   }
   /// The person's own avatar is the button, with the connection dot on it; no capsule around it.
   private var accountButton: some View {

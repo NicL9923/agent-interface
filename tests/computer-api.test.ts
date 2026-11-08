@@ -48,6 +48,13 @@ async function setup(options: {admins?: string; terminals?: ReturnType<typeof te
   return {app, store, runtime, upstream, computerRequest, logs, one: login("one"), two: login("two"), setMaintenance: (value: boolean) => {maintenance = value;}};
 }
 const sessionHash = (headers: {cookie: string}) => hash(headers.cookie.slice("session=".length));
+/** Bearer headers for an iOS app session, confirmed now unless told otherwise. */
+function nativeLogin(store: Store, id: string, options: {confirmed?: boolean} = {}) {
+  const token = randomBytes(32).toString("base64url");
+  store.nativeSession(hash(token), id, Date.now() + 600_000);
+  if (options.confirmed) store.confirmNativeSession(hash(token), Date.now());
+  return {headers: {authorization: `Bearer ${token}`, "user-agent": "fixture-app"}, hash: hash(token)};
+}
 const attachment = (s: Awaited<ReturnType<typeof setup>>, headers = s.one) => s.app.inject({method: "POST", url: "/api/computer/desktop", headers, payload: {}});
 
 it("requires explicit terminal opt-in and absolute private configuration", () => {
@@ -122,7 +129,7 @@ it("keeps a second same-member watch tab from surrendering another attached tab'
   expect((await aClosed)[0]).toBe(1000);
 });
 
-it("lets every household member use the desktop but only terminal administrators in a browser open the shell", async () => {
+it("lets every household member use the desktop but only terminal administrators open the shell", async () => {
   const s = await setup({admins: "one@example.invalid", terminals: terminalDouble()});
   const terminal = async (headers: Record<string, string>) => (await s.app.inject({url: "/api/computer", headers})).json().terminal;
   const open = (headers: Record<string, string>) => s.app.inject({method: "POST", url: "/api/computer/terminal", headers, payload: {}});
@@ -130,11 +137,10 @@ it("lets every household member use the desktop but only terminal administrators
   expect(await terminal(s.two)).toEqual({available: false, target: "", reason: "The system terminal is limited to household administrators."});
   expect((await open(s.two)).statusCode).toBe(403);
   expect((await s.app.inject({method: "POST", url: "/api/computer/terminal/end", headers: s.two, payload: {sessionId: shellId("two")}})).statusCode).toBe(403);
-  const token = randomBytes(32).toString("base64url");
-  s.store.nativeSession(hash(token), "one", Date.now() + 60000);
-  const native = {authorization: `Bearer ${token}`};
-  expect(await terminal(native)).toEqual({available: false, target: "", reason: "Open the computer in a browser to use the system terminal."});
-  expect((await open(native)).statusCode).toBe(403);
+  // The iOS app follows the same rule with its bearer token.
+  const native = nativeLogin(s.store, "two", {confirmed: true}).headers;
+  expect(await terminal(native)).toEqual({available: false, target: "", reason: "The system terminal is limited to household administrators."});
+  expect((await open(native)).json()).toEqual({error: "The system terminal is limited to household administrators."});
   expect(await terminal(s.one)).toEqual({available: true, target: "hermes@vps · /workspace"});
   const ticket = await open(s.one);
   expect(ticket.statusCode).toBe(200);
@@ -231,6 +237,86 @@ it("lets the iOS app attach with its bearer token and its desktop page connect w
   ws.close();
 });
 
+it("opens the shell for an administrator in the iOS app only after confirming there within two hours", async () => {
+  const s = await setup({admins: "one@example.invalid", terminals: terminalDouble()});
+  const native = nativeLogin(s.store, "one");
+  const terminal = async () => (await s.app.inject({url: "/api/computer", headers: native.headers})).json().terminal;
+  const open = () => s.app.inject({method: "POST", url: "/api/computer/terminal", headers: native.headers, payload: {}});
+  // Never confirmed, then confirmed too long ago: the app is asked to confirm, not refused.
+  expect(await terminal()).toEqual({available: true, target: "hermes@vps · /workspace", confirmationRequired: true});
+  expect((await open()).json()).toEqual({error: "Confirm it's you to open the terminal.", code: "reauthentication_required"});
+  s.store.confirmNativeSession(native.hash, Date.now() - 2 * 3600000 - 1000);
+  expect((await open()).json().code).toBe("reauthentication_required");
+  // A browser confirmation for the same person does not stand in for the app's own.
+  s.store.confirmSession(sessionHash(s.one), Date.now());
+  expect((await open()).statusCode).toBe(401);
+  s.store.confirmNativeSession(native.hash, Date.now() - 2 * 3600000 + 60000);
+  expect(await terminal()).toEqual({available: true, target: "hermes@vps · /workspace"});
+  const ticket = await open();
+  expect(ticket.statusCode).toBe(200);
+  expect(ticket.json()).toEqual(expect.objectContaining({sessionId: shellId("one"), target: "hermes@vps · /workspace"}));
+  // Ending works with the bearer too, and only for the member's own shell.
+  const end = (sessionId: string) => s.app.inject({method: "POST", url: "/api/computer/terminal/end", headers: native.headers, payload: {sessionId}});
+  expect((await end(shellId("two"))).json()).toEqual({error: "This terminal belongs to another household member."});
+  expect((await end(shellId("one"))).json()).toEqual({ok: true});
+});
+
+it("lets the iOS terminal page attach with its ticket alone, once, from this Origin, for that session and type", async () => {
+  const s = await setup({admins: "one@example.invalid,two@example.invalid", terminals: terminalDouble()});
+  const native = nativeLogin(s.store, "one", {confirmed: true}), other = nativeLogin(s.store, "two", {confirmed: true});
+  const ticket = async (headers: Record<string, string> = native.headers) =>
+    (await s.app.inject({method: "POST", url: "/api/computer/terminal", headers, payload: {}})).json().path as string;
+  const path = await ticket();
+  // The page's socket carries no bearer and no cookie, only the app's Origin.
+  await expect(s.app.injectWS(path, {headers: {origin: "https://other.invalid"}})).rejects.toThrow("403");
+  await expect(s.app.injectWS(path, {headers: {}})).rejects.toThrow("403");
+  // The app itself presenting another session's bearer cannot use this ticket.
+  await expect(s.app.injectWS(path, {headers: other.headers})).rejects.toThrow("401");
+  // A terminal ticket never opens the desktop, and a desktop ticket never opens the shell.
+  await expect(s.app.injectWS(path.replace("/terminal/", "/desktop/"), {headers: {origin}})).rejects.toThrow("401");
+  const desktop = (await s.app.inject({method: "POST", url: "/api/computer/desktop", headers: native.headers, payload: {}})).json().path as string;
+  await expect(s.app.injectWS(desktop.replace("/desktop/", "/terminal/"), {headers: {origin}})).rejects.toThrow("401");
+  // A browser's terminal ticket still needs its session cookie.
+  const web = (await s.app.inject({method: "POST", url: "/api/computer/terminal", headers: s.one, payload: {}})).json().path as string;
+  await expect(s.app.injectWS(web, {headers: {origin}})).rejects.toThrow("401");
+  const ws = await s.app.injectWS(path, {headers: {origin}});
+  await expect(s.app.injectWS(path, {headers: {origin}})).rejects.toThrow("401");
+  // An expired ticket is refused like a used one.
+  const late = await ticket();
+  vi.useFakeTimers({now: Date.now() + 31_000, toFake: ["Date"]});
+  try { await expect(s.app.injectWS(late, {headers: {origin}})).rejects.toThrow("401"); } finally { vi.useRealTimers(); }
+  // Signing the app out ends the page's shell connection like any other.
+  const closed = once(ws, "close");
+  s.store.deleteNativeSession(native.hash);
+  ws.send(JSON.stringify({type: "resize", columns: 80, rows: 24}));
+  expect((await closed)[0]).toBe(4401);
+});
+
+it("audits and alerts administrators when the iOS page attaches, once per confirmation", async () => {
+  const s = await setup({admins: "one@example.invalid,two@example.invalid", terminals: terminalDouble()});
+  const native = nativeLogin(s.store, "one", {confirmed: true});
+  const base = (await s.app.listen({port: 0, host: "127.0.0.1"})).replace("http:", "ws:");
+  const attach = async () => {
+    const {path} = (await s.app.inject({method: "POST", url: "/api/computer/terminal", headers: native.headers, payload: {}})).json();
+    const ws = new WebSocket(base + path, {headers: {origin, "user-agent": "fixture-page"}});
+    await once(ws, "open");
+    const closed = once(ws, "close"); ws.close(1000); await closed;
+  };
+  const alerts = () => s.store.db.prepare("SELECT event_id,user_id,payload FROM outbox ORDER BY user_id").all() as {event_id: string; user_id: string; payload: string}[];
+  await attach(); await attach();
+  const confirmedAt = s.store.nativeSessionConfirmedAt(native.hash)!;
+  expect(alerts().map(row => [row.event_id, row.user_id])).toEqual([
+    [`terminal-open:${native.hash.slice(0, 16)}:${confirmedAt}`, "one"], [`terminal-open:${native.hash.slice(0, 16)}:${confirmedAt}`, "two"]]);
+  expect(JSON.parse(alerts()[1].payload)).toEqual(expect.objectContaining({title: "System terminal opened", body: "one opened the system terminal."}));
+  s.store.confirmNativeSession(native.hash, confirmedAt + 1000);
+  await attach();
+  expect(alerts()).toHaveLength(4);
+  await vi.waitFor(() => expect(s.logs.filter(line => line.audit === "terminal" && line.action === "detach")).toHaveLength(3));
+  const page = s.logs.filter(line => line.audit === "terminal" && line.action !== "ticket");
+  expect(page[0]).toEqual(expect.objectContaining({action: "attach", userId: "one", email: "one@example.invalid", userAgent: "fixture-page",
+    session: native.hash.slice(0, 16)}));
+});
+
 it("declines a handoff only for an assistant the member can see, with a validated binding", async () => {
   const s = await setup();
   s.computerRequest.mockImplementation(async input => (input.action === "handoff" ? {status: "ok"} : {}) as never);
@@ -260,6 +346,24 @@ it("names the same handoff method as the Hermes add-on", async () => {
   const source = await readFile(new URL("../src/hermes/computer.py", import.meta.url), "utf8");
   expect(source).toContain(`HANDOFF = "${computerHandoffMethod}"`);
   expect(await readFile(new URL("../src/hermes/vault.py", import.meta.url), "utf8")).toContain(`HANDOFF = "${computerHandoffMethod}"`);
+});
+
+it("names the same terminal request method as the Hermes add-on", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const { terminalRequestMethod, terminalCommandPattern } = await import("../src/shared/computer.js");
+  expect(await readFile(new URL("../src/hermes/computer.py", import.meta.url), "utf8")).toContain(`TERMINAL_REQUEST = "${terminalRequestMethod}"`);
+  expect(await readFile(new URL("../src/hermes/vault.py", import.meta.url), "utf8")).toContain(`TERMINAL_REQUEST = "${terminalRequestMethod}"`);
+  // The add-on refuses a command with a line break; so must the app, because a pasted newline runs the command.
+  expect(terminalCommandPattern.test("ls -la")).toBe(true);
+  for (const bad of ["", "ls\nrm -rf ~", "ls\r", "ls\u202e", "x".repeat(501)]) expect(terminalCommandPattern.test(bad), JSON.stringify(bad)).toBe(false);
+});
+
+it("keeps a terminal request open instead of refusing it as an unknown bridge", async () => {
+  const { applyFrame, emptyLiveState } = await import("../src/server/hermes-mapping.js");
+  const { terminalRequestMethod } = await import("../src/shared/computer.js");
+  const state = emptyLiveState();
+  expect(applyFrame(state, {jsonrpc: "2.0", id: "srq-term", method: terminalRequestMethod, params: {session_id: "s", reason: "r", what_to_do: "w"}}, 1)).toBe(true);
+  expect(state.state).toBe("blocked");
 });
 
 it("keeps a handoff request open instead of refusing it as an unknown bridge", async () => {

@@ -283,7 +283,7 @@ and zero native chat, cron, API, or deferred work. Active or unknown work blocks
 shutdown. Exit code `75` means the hook proved that its gate and drain were
 released and that source, settings, and service processes stayed unchanged.
 A failed baseline also exits `75`: those checks run before the gate is taken and
-change no Hermes source, setting or service. On Nov 6, 2026 an expired Google verification session failed
+change no Hermes source, setting or service. Renew that session with `.agents/tools/renew-google-verification-session.py`. On Nov 6, 2026 an expired Google verification session failed
 the baseline, the hook reported it as an interrupted install, and the app refused
 chat sends until the record was reviewed by hand. The hook writes the refusal's
 cause to the private log. Other failures keep maintenance closed for installer review. A failed cold backup

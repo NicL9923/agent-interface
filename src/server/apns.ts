@@ -8,6 +8,8 @@ export interface NativeDevice { deviceId: string; token: string; environment: "s
 export type ApnsSender = (device: NativeDevice, payload: string) => Promise<unknown>;
 /** Asks a device to remove these delivered notifications, named by tag, and to show this badge if known. */
 export type ApnsClearSender = (device: NativeDevice, tags: string[], badge?: number) => Promise<unknown>;
+/** Wakes the app in the background to refresh what its widgets show. */
+export type ApnsRefreshSender = (device: NativeDevice) => Promise<unknown>;
 export type ApnsTransport = (origin: string, headers: Record<string, string>, body: string) => Promise<{ statusCode: number; reason?: string }>;
 /**
  * A push Apple refused, with Apple's status and reason for the workers to judge the token by.
@@ -49,6 +51,9 @@ export function apnsPayload(payload: string) {
   const botId = short(value.botId) ? value.botId : undefined, account = short(value.account) ? value.account : undefined;
   // Approval requests break through Focus; the app carries the Time Sensitive Notifications entitlement.
   const urgent = value.kind === "approval" ? { "interruption-level": "time-sensitive" } : {};
+  // What the app's Focus filter matches: the assistant, with approvals marked so a filter can let every
+  // assistant's approvals through, and "household" for digests and host alerts, which every filter allows.
+  const criteria = { "filter-criteria": !botId ? "household" : value.kind === "approval" ? `approval:${botId}` : botId };
   // Actions the app registers: APPROVAL decides from the notification, REPLY starts a reviewed draft. Routine results,
   // digests and alerts without an assistant get none. Older app builds ignore categories they never registered.
   const routine = /[?&]routine=/.test(typeof value.url === "string" ? value.url : "");
@@ -58,12 +63,12 @@ export function apnsPayload(payload: string) {
   // The app's notification service extension shows the assistant as the sender, with its avatar,
   // when it knows which assistant and account this is. It reads both from the App Group only.
   const sender = botId && account ? { botId, account } : undefined;
-  const build = (thread: boolean, act: boolean) => JSON.stringify({
-    aps: { alert, sound: "default", ...(count(value.badge) ? { badge: value.badge } : {}), ...(thread && botId ? { "thread-id": botId } : {}), ...(thread && sender ? { "mutable-content": 1 } : {}),
+  const build = (thread: boolean, act: boolean, focus = true) => JSON.stringify({
+    aps: { alert, sound: "default", ...(focus ? criteria : {}), ...(count(value.badge) ? { badge: value.badge } : {}), ...(thread && botId ? { "thread-id": botId } : {}), ...(thread && sender ? { "mutable-content": 1 } : {}),
       ...urgent, ...(act && actions ? { category: actions.category } : {}) },
     url, tag, ...(thread && sender ? sender : {}), ...(act && actions ? actions.fields : {}) });
-  // Grouping and actions are extras: drop them before the alert itself would exceed the limit.
-  return [build(true, true), build(true, false)].find(body => Buffer.byteLength(body) <= 4000) ?? build(false, false);
+  // Grouping, actions and the Focus criteria are extras: drop them before the alert itself would exceed the limit.
+  return [build(true, true), build(true, false), build(false, false)].find(body => Buffer.byteLength(body) <= 4000) ?? build(false, false, false);
 }
 
 /**
@@ -82,10 +87,15 @@ export function apnsClearPayload(tags: string[], badge?: number) {
   }
   return JSON.stringify({ aps: { "content-available": 1 }, clear: { tags: kept }, ...extra });
 }
+/**
+ * A background push that asks the app to read the household again and rewrite its widget snapshot.
+ * It carries no names or previews: the app fetches them with its own sign-in.
+ */
+export const apnsRefreshPayload = () => JSON.stringify({ aps: { "content-available": 1 }, refresh: ["widgets"] });
 /** A silent alert push that only sets the app icon's badge, which iOS applies even while the app is closed. */
 export const apnsBadgePayload = (badge: number) => JSON.stringify({ aps: { badge } });
 
-export function createApnsSender(config: Config["apns"], transport?: ApnsTransport): (ApnsSender & { close(): void; liveActivity: LiveActivitySender; clear: ApnsClearSender }) | undefined {
+export function createApnsSender(config: Config["apns"], transport?: ApnsTransport): (ApnsSender & { close(): void; liveActivity: LiveActivitySender; clear: ApnsClearSender; refresh: ApnsRefreshSender }) | undefined {
   if (!config) return undefined;
   const key = createPrivateKey(readFileSync(config.privateKeyFile));
   if (key.asymmetricKeyType !== "ec" || key.asymmetricKeyDetails?.namedCurve !== "prime256v1")
@@ -156,5 +166,12 @@ export function createApnsSender(config: Config["apns"], transport?: ApnsTranspo
       "apns-push-type": "alert", "apns-priority": "5", "apns-expiration": String(Math.floor(Date.now() / 1000) + 86400), "content-type": "application/json" }, apnsBadgePayload(badge));
     if (shown.statusCode !== 200) throw new ApnsError(`APNs rejected badge update (${shown.statusCode})`, shown.statusCode, shown.reason);
   };
-  return Object.assign(send, { close() { session?.destroy(); }, liveActivity, clear });
+  // Budgeted by iOS like a clear; WidgetRefresh sends at most one per device every 15 minutes.
+  const refresh: ApnsRefreshSender = async device => {
+    if (device.environment !== config.environment) throw new Error("APNs device environment does not match this host");
+    const result = await sendRequest(origin, { ":method": "POST", ":path": `/3/device/${device.token}`, authorization: `bearer ${providerToken()}`, "apns-topic": config.topic,
+      "apns-push-type": "background", "apns-priority": "5", "apns-expiration": String(Math.floor(Date.now() / 1000) + 3600), "content-type": "application/json" }, apnsRefreshPayload());
+    if (result.statusCode !== 200) throw new ApnsError(`APNs rejected widget refresh (${result.statusCode})`, result.statusCode, result.reason);
+  };
+  return Object.assign(send, { close() { session?.destroy(); }, liveActivity, clear, refresh });
 }

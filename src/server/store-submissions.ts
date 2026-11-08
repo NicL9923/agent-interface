@@ -1,4 +1,4 @@
-import type { ErrorCode } from "../shared/errors.js";
+import { submissionConflictMessage, type ErrorCode } from "../shared/errors.js";
 import type { Submission, SubmissionReceipt } from "../shared/types.js";
 import { httpError } from "./http-error.js";
 import type { DraftRepository } from "./store-drafts.js";
@@ -53,7 +53,7 @@ export class SubmissionRepository {
     const previous = this.submission(input.requestId);
     if (previous) {
       if (JSON.stringify(previous.input) !== JSON.stringify(input))
-        throw httpError(409, "This submission ID was already used for different content");
+        throw httpError(409, submissionConflictMessage, { code: "submission_conflict" });
       return { created: false, ...previous };
     }
     const receipt: SubmissionReceipt = {
@@ -99,9 +99,17 @@ export class SubmissionRepository {
     ).map((r) => this.submission(r.request_id)!);
   }
   /** A reason stays with the stored receipt, never with the one clients receive. */
-  receipt(receipt: SubmissionReceipt, reason?: RejectionReason) {
+  receipt(receipt: SubmissionReceipt, reason?: RejectionReason, reviewedInterruption = false) {
     this.database.transaction(() => {
       const previous = this.submission(receipt.requestId);
+      // Settled admission is final. Late lookups and failed transport callbacks cannot undo it.
+      if (previous && previous.receipt.status !== "uncertain") {
+        if (previous.receipt.status === receipt.status) {
+          // A later authoritative receipt can fill in IDs without erasing earlier evidence.
+          receipt = { ...receipt, ...previous.receipt };
+          reason ??= previous.reason;
+        } else if (!(reviewedInterruption && previous.reason === "interruption_pending")) return;
+      }
       const stored: StoredReceipt = reason ? { ...receipt, reason } : receipt;
       this.db
         .prepare("UPDATE submissions SET receipt=? WHERE request_id=?")

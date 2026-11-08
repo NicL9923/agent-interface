@@ -154,7 +154,7 @@ export class HermesUpgrades {
       if (journal?.releaseStarted) return { ...none, reason: "Admission release may have started. The installer must review Hermes before any restart or rollback." };
       if (journal && !journal.hostHookStarted) return { restore: true, restart: false };
       // An admitted worker which has not started a hook can be cancelled safely.
-      if (!journal && !existsSync(platformPath) && state.phase === "installing" && !state.checks.some(check => ["quiescence", "backup", "install"].includes(check.id))) return { restore: true, restart: false };
+      if (!journal && !existsSync(platformPath) && (state.phase === "installing" || state.phase === "failed" && state.error === "worker_start_failed") && !state.checks.some(check => ["quiescence", "backup", "install"].includes(check.id))) return { restore: true, restart: false };
       if (!existsSync(platformPath)) return none;
       const platform = JSON.parse(readFileSync(platformPath, "utf8"));
       if (Array.isArray(finish) && finish.includes("--config")) {

@@ -66,7 +66,7 @@ class WireSocket extends EventTarget {
     if(request.method==='file.attach')result={path:'/workspace/staged/portrait.png'};
     if(request.method==='agent-interface.submit')result={requestId:request.params.request_id,status:'accepted',runId:'task-one',...(canonicalSubmission?{app_run_id:'task-one',admission:'canonical'}:{})};
     if(request.method==='profiles.list')result={profiles:[{name:'shared',ui_meta:{agent_interface:{name:'Shared',unrelated:'preserve'}},ui_meta_revisions:{agent_interface:3},...(rosterSession?{canonical_session:rosterSession}:{})}]};
-    if(request.method==='profiles.describe')result={toolsets:[{name:'terminal',enabled:true}],skills:[],mcp_servers:[]};
+    if(request.method==='profiles.describe')result={toolsets:[{name:'terminal',enabled:true}],skills:[],mcp_servers:[{name:'calendar',enabled:true},{name:'notes',enabled:false}]};
     if(request.method==='profiles.configure')result=metadataConflict?{ok:false,applied:{ui_meta:false,ui_meta_conflicts:{agent_interface:{actual:4}}}}:{ok:true,applied:{ui_meta:true}};
     if(request.method==='config.get')result={value:request.params.key==='reasoning'?'high':'normal'};
     if(request.method==='image.generate')result={available:imageReady,success:false,error:'No image generation backend configured'};
@@ -265,7 +265,7 @@ describe('Hermes adapter trust and recovery boundary',()=>{
   it('lists bots without loading profile descriptions and loads detail lazily', async () => {
     await runtime.listBots(); await runtime.listBots();
     expect(calls.filter(call=>call.method==='profiles.describe')).toHaveLength(0);
-    expect((await runtime.botDetail!('shared')).enabledTools).toEqual(['terminal']);
+    expect(await runtime.botDetail!('shared')).toMatchObject({enabledTools:['terminal'],enabledMcpServers:['calendar'],availableMcpServers:['calendar','notes']});
     expect(calls.filter(call=>call.method==='profiles.describe')).toHaveLength(1);
   });
   it('streams only the unpersisted tail with the saved prompt origin and no open RPC', async () => {
@@ -325,6 +325,28 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     expect(result.attention![0]).toEqual({id:'srq-handoff',kind:'computer',title:'Take over the computer?',detail:'r'.repeat(200),secure:undefined,
       questions:undefined,computer:{epoch:'epoch-one',sessionId:'live-one',reason:'r'.repeat(200),whatToDo:'Enter the code.'}});
     expect(result.attention!.slice(1).map(request=>[request.kind,request.computer])).toEqual([['official',undefined],['official',undefined]]);
+    expect(result.activity.state).toBe('blocked');
+  });
+
+  it('shows an assistant\'s terminal request only when this executor owns it and its command is one visible line', async () => {
+    snapshot.executor_epoch='epoch-one';
+    const asks=(id:string,params:Record<string,unknown>,owned=true)=>({id,method:'agent_interface.terminal_request',...(owned?{app_local_secure:true}:{}),params});
+    snapshot.open_requests=[
+      asks('srq-term',{reason:'r'.repeat(250),what_to_do:'Run it, then press Done.',command:'sudo systemctl restart hermes'}),
+      asks('srq-bare',{reason:'No command',what_to_do:'Look around.'}),
+      asks('srq-mirrored',{reason:'Mirrored',what_to_do:'Nothing'},false),
+      asks('srq-malformed',{reason:'No action'}),
+      asks('srq-newline',{reason:'Runs on paste',what_to_do:'Press Done.',command:'ls\nrm -rf ~'}),
+      asks('srq-hidden',{reason:'Disguised',what_to_do:'Press Done.',command:'ls\u202e'}),
+      asks('srq-long',{reason:'Too long',what_to_do:'Press Done.',command:'x'.repeat(501)}),
+      asks('srq-typed',{reason:'Not text',what_to_do:'Press Done.',command:7}),
+    ];
+    const result=await runtime.conversation('shared');
+    expect(result.attention![0]).toEqual({id:'srq-term',kind:'terminal',title:'Use the terminal?',detail:'r'.repeat(200),secure:undefined,
+      questions:undefined,terminal:{epoch:'epoch-one',sessionId:'live-one',reason:'r'.repeat(200),whatToDo:'Run it, then press Done.',command:'sudo systemctl restart hermes'}});
+    expect(result.attention![1].terminal).toEqual({epoch:'epoch-one',sessionId:'live-one',reason:'No command',whatToDo:'Look around.'});
+    // Anything that is not an owned, well-formed ask stays an official-client request with no terminal card.
+    expect(result.attention!.slice(2).map(request=>[request.kind,request.terminal])).toEqual(Array(6).fill(['official',undefined]));
     expect(result.activity.state).toBe('blocked');
   });
 
@@ -1747,6 +1769,7 @@ describe('owned Hermes operation response decoding', () => {
     expect(await runtime.automationRequest!(input)).toEqual(result);
   });
   it.each([
+    {input:{operation:'search',profile,query:'fence'},result:[{botId:profile,botName:'Shared',sessionId:42,title:'Fence',snippet:'Fixed'}]},
     {input:{operation:'memory',profile},result:preview},
     {input:{operation:'usage',profile,days:30},result:[]},
     {input:{operation:'history',profile,sessionId:'stored',offset:0},result:{...history,messages:[{id:'row',role:'unexpected',text:'private-canary'}]}},
@@ -1758,6 +1781,7 @@ describe('owned Hermes operation response decoding', () => {
     expect(fetcher).toHaveBeenCalledOnce();
   });
   it.each([
+    {input:{operation:'task_get',profile,taskId:'task'},result:{...task,id:42}},
     {input:{operation:'overview',profile},result:{ok:true}},
     {input:{operation:'task_get',profile,taskId:'task'},result:overview},
     {input:{operation:'goal_pause',profile},result:{...overview,tasks:{supported:true,items:[{id:'invalid'}]}}},

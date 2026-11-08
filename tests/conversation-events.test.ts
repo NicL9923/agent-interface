@@ -33,7 +33,7 @@ function runtimeDouble() {
   const bots: Bot[] = [{ id: "shared", name: "Shared", model: "test", shared: true, activity: "idle" }];
   const fixed: Partial<Runtime> = {
     watchRoster(changed) { rosterWatchers.add(changed); return () => { rosterWatchers.delete(changed); }; },
-    botDetail: async botId => ({id:botId,name:"Shared",model:"test",shared:true,activity:"idle",instructions:"Saved soul",enabledMcpServers:["calendar"],enabledTools:["terminal"],enabledSkills:["research"]}),
+    botDetail: async botId => ({id:botId,name:"Shared",model:"test",shared:true,activity:"idle",instructions:"Saved soul",enabledMcpServers:["calendar"],availableMcpServers:["calendar","notes"],enabledTools:["terminal"],enabledSkills:["research"]}),
     status: async () => ({ connected: true }),
     capabilities: async () => new Proxy({}, { get: () => ({ supported: true }) }) as never,
     listBots: vi.fn(async () => bots),
@@ -342,10 +342,10 @@ describe("roster compatibility and household events", () => {
         return route === "bootstrap" ? value.bots[0] : value[0];
       };
       const full = await read("");
-      expect(full).toMatchObject({ instructions: "Saved soul", enabledMcpServers: ["calendar"],
+      expect(full).toMatchObject({ instructions: "Saved soul", enabledMcpServers: ["calendar"], availableMcpServers: ["calendar", "notes"],
         enabledTools: ["terminal"], enabledSkills: ["research"] });
       const lean = await read("?roster=lean");
-      for (const key of ["instructions", "enabledMcpServers", "enabledTools", "enabledSkills"]) expect(lean).not.toHaveProperty(key);
+      for (const key of ["instructions", "enabledMcpServers", "availableMcpServers", "enabledTools", "enabledSkills"]) expect(lean).not.toHaveProperty(key);
     }
   });
 

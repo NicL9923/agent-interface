@@ -52,6 +52,11 @@
 .terminal-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 12px 20px 16px; flex-shrink: 0; }
 .terminal-tools button { min-height: 40px; font-size: 0.75rem; padding: 8px 12px; }
 .terminal-paste { margin: 0 20px 16px; flex-shrink: 0; }
+.terminal-offer { margin: 12px 20px 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; display: grid; gap: 6px; flex-shrink: 0; }
+.terminal-offer code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.8125rem; overflow-wrap: anywhere; }
+.terminal-offer small { font-size: 0.75rem; color: var(--muted); }
+.terminal-offer .actions { display: flex; justify-content: flex-end; gap: 8px; }
+.terminal-offer button { min-height: 44px; font-size: 0.75rem; }
 .terminal-paste > label { font-size: 0.75rem; margin-bottom: 6px; }
 .terminal-paste .actions { margin-top: 8px; justify-content: space-between; gap: 12px; }
 .terminal-paste small { font-size: 0.75rem; color: var(--muted); }

@@ -2,8 +2,9 @@ import XCTest
 import CryptoKit
 
 @MainActor final class AutomationFlowTests: XCTestCase {
-  private func launch(_ options: [String] = []) -> XCUIApplication {
+  private func launch(_ options: [String] = [], presentation: String? = nil) -> XCUIApplication {
     let app = XCUIApplication()
+    if let presentation { app.launchEnvironment["AGENT_INTERFACE_UI_PRESENTATION"] = presentation }
     app.launchEnvironment["AGENT_INTERFACE_UI_FIXTURE"] = "1"
     app.launchEnvironment["AGENT_INTERFACE_UI_RESET"] = "1"
     app.launchEnvironment["AGENT_INTERFACE_UI_EXPERIENCE"] = "1"
@@ -114,7 +115,7 @@ import CryptoKit
       XCTAssertTrue(editor.waitForDisappearance(timeout: 10), "Replace closes only the goal editor, cycle \(cycle)")
       XCTAssertTrue(text(suffix, app: app).waitForExistence(timeout: 10), "Replacement reconciles the edited title")
       XCTAssertTrue(form.waitForExistence(timeout: 5))
-      XCTAssertEqual(app.buttons["settingsMore"].value as? String, "Work")
+      XCTAssertTrue(app.collectionViews["automation.work"].exists, "Work stays open")
       let clear = app.buttons["automation.goal.clear"]
       reveal(clear, in: form); clear.tapWhenReady()
       let prompt = app.staticTexts["Clear this standing goal?"]
@@ -124,7 +125,7 @@ import CryptoKit
       keep.tapWhenReady()
       XCTAssertTrue(prompt.wait(until: "exists == false"))
       XCTAssertTrue(form.exists)
-      XCTAssertEqual(app.buttons["settingsMore"].value as? String, "Work")
+      XCTAssertTrue(app.collectionViews["automation.work"].exists, "Work stays open")
       let resume = app.buttons["Resume goal"]
       // Resume precedes Clear, whose opener was just scrolled into view.
       reveal(resume, in: form, downward: true)
@@ -242,11 +243,12 @@ import CryptoKit
     XCTAssertTrue(create.wait(until: "enabled == true"))
   }
   func testLearningUsesLoadedDiffRevisionWithReadOnlyPolicy() {
-    let app = launch(["READONLY_POLICY"])
+    let app = launch(["READONLY_POLICY"], presentation: "advanced")
     app.selectSettingsTab("Learning")
     let policy = app.switches["automation.learningPolicy"]
     XCTAssertTrue(policy.waitForExistence(timeout: 10)); XCTAssertFalse(policy.isEnabled)
     XCTAssertTrue(text("Only an integration administrator can change the skill write policy.", app: app).exists)
+    XCTAssertFalse(app.staticTexts["Installed skills"].exists, "Installed skills moved to Behavior")
     let pending = app.buttons["automation.pendingSkill.deadbeef"]
     reveal(pending, in: app.collectionViews["automation.learning"]); pending.tapWhenReady()
     let approve = app.buttons["automation.approveSkill"]
@@ -256,35 +258,72 @@ import CryptoKit
     capture(app, "Native skill diff ready for review")
     approve.tapWhenReady()
     XCTAssertTrue(app.staticTexts["No skill changes waiting for review."].waitForExistence(timeout: 10), "The fixture accepts only the detail's revision")
-    let installed = app.buttons["automation.installedSkill.ranch/fences"]
-    // The section footer sits below the last skill.
-    reveal(text("Only an integration administrator can lock or unlock skills.", app: app), in: app.collectionViews["automation.learning"])
-    reveal(installed, in: app.collectionViews["automation.learning"], downward: true)
-    installed.tapWhenReady()
+    app.selectSettingsTab("Skills")
+    let behavior = app.collectionViews["settings.behavior"]
+    let lock = app.buttons["skill.lock.ranch/fences"]
+    reveal(lock, in: behavior)
+    XCTAssertTrue(lock.waitForExistence(timeout: 10)); XCTAssertFalse(lock.isEnabled)
+    let note = text("Only an integration administrator can lock or unlock skills.", app: app)
+    reveal(note, in: behavior)
+    let read = app.buttons["skill.read.ranch/fences"]
+    reveal(read, in: behavior, downward: true); read.tapWhenReady()
     XCTAssertTrue(text("# Fixture fence inspection", app: app).waitForExistence(timeout: 10))
-    let lock = app.switches["automation.skillLock"]
-    XCTAssertTrue(lock.waitForExistence(timeout: 5)); XCTAssertFalse(lock.isEnabled)
+    let readerLock = app.switches["automation.skillLock"]
+    XCTAssertTrue(readerLock.waitForExistence(timeout: 5)); XCTAssertFalse(readerLock.isEnabled)
     capture(app, "Native installed skill content")
   }
-  func testLearningLocksAndUnlocksAnInstalledSkill() {
+  func testBehaviorSkillRowLocksReadsAndUnlocksAnInstalledSkill() {
+    let app = launch()
+    app.selectSettingsTab("Skills")
+    let behavior = app.collectionViews["settings.behavior"]
+    let lock = app.buttons["skill.lock.ranch/fences"]
+    reveal(lock, in: behavior)
+    XCTAssertTrue(lock.wait(until: "enabled == true")); XCTAssertEqual(lock.label, "Lock ranch/fences", "VoiceOver hears which skill")
+    XCTAssertFalse(app.descendants(matching: .any)["skill.locked.ranch/fences"].exists)
+    lock.tapWhenReady()
+    XCTAssertTrue(lock.wait(until: "label == %@", "Unlock ranch/fences"), "The row shows the lock Hermes saved")
+    XCTAssertTrue(app.descendants(matching: .any)["skill.locked.ranch/fences"].exists)
+    XCTAssertTrue(text("Assistants can't change this skill while it's locked.", app: app).exists)
+    XCTAssertTrue(text("Saved in Hermes.", app: app).exists)
+    XCTAssertFalse(app.buttons["saveChanges"].isEnabled, "A lock saves at once, not with Save changes")
+    capture(app, "Native locked skill row")
+    app.buttons["skill.read.ranch/fences"].tapWhenReady()
+    XCTAssertTrue(text("# Fixture fence inspection", app: app).waitForExistence(timeout: 10))
+    XCTAssertTrue(app.switches["automation.skillLock"].wait(until: "value == %@", "1"))
+    app.navigationBars["Installed skill"].buttons["Done"].tapWhenReady()
+    lock.tapWhenReady()
+    XCTAssertTrue(lock.wait(until: "label == %@", "Lock ranch/fences"))
+    XCTAssertFalse(app.descendants(matching: .any)["skill.locked.ranch/fences"].exists)
+  }
+  /// A skill status that never loaded says why and offers a way back, instead of dropping the lock controls silently.
+  func testBehaviorOffersRetryWhenSkillStatusFailsToLoad() {
+    let app = launch(["OVERVIEW_FAILURE"])
+    app.selectSettingsTab("Skills")
+    let behavior = app.collectionViews["settings.behavior"]
+    let refresh = app.buttons["skill.refreshStatus"]
+    reveal(refresh, in: behavior)
+    XCTAssertTrue(refresh.wait(until: "enabled == true"), app.debugDescription)
+    XCTAssertTrue(text("Fixture automation status unavailable", app: app).exists)
+    XCTAssertFalse(app.buttons["skill.lock.ranch/fences"].exists)
+    refresh.tapWhenReady()
+    let lock = app.buttons["skill.lock.ranch/fences"]
+    reveal(lock, in: behavior)
+    XCTAssertTrue(lock.wait(until: "enabled == true"), "The lock controls return once status loads")
+    XCTAssertTrue(refresh.waitForDisappearance())
+  }
+  func testSimplePresentationHidesSkillPolicyAndRoutineOverrides() {
     let app = launch()
     app.selectSettingsTab("Learning")
-    let installed = app.buttons["automation.installedSkill.ranch/fences"]
-    reveal(installed, in: app.collectionViews["automation.learning"])
-    XCTAssertTrue(installed.waitForExistence(timeout: 10)); XCTAssertFalse(installed.label.contains("Locked"))
-    installed.tapWhenReady()
-    let reader = app.collectionViews["automation.skillReader"]
-    let lock = app.switches["automation.skillLock"]
-    guard setSwitch(lock, in: reader, to: true) else { return }
-    XCTAssertTrue(text("Assistants can't change this skill while it's locked.", app: app).waitForExistence(timeout: 10))
-    XCTAssertTrue(text("Saved in Hermes.", app: app).exists)
-    capture(app, "Native locked skill")
-    app.navigationBars["Installed skill"].buttons["Done"].tapWhenReady()
-    XCTAssertTrue(installed.waitForExistence(timeout: 10))
-    XCTAssertTrue(installed.wait(until: "label CONTAINS %@", "Locked"), "The list shows the lock Hermes saved.\n\(installed.debugDescription)")
-    installed.tapWhenReady()
-    guard setSwitch(lock, in: reader, to: false) else { return }
-    XCTAssertTrue(text("Lock this skill to keep assistants from changing it.", app: app).waitForExistence(timeout: 10))
+    XCTAssertTrue(app.buttons["automation.pendingSkill.deadbeef"].waitForExistence(timeout: 10))
+    XCTAssertFalse(app.switches["automation.learningPolicy"].exists)
+    app.selectSettingsTab("Routines")
+    let edit = app.buttons["Edit"].firstMatch
+    reveal(edit, in: app.collectionViews["settings.automation"]); edit.tapWhenReady()
+    let form = app.collectionViews["routineEditorForm"]
+    XCTAssertTrue(form.waitForExistence(timeout: 10))
+    for _ in 0..<3 { form.swipeUp() }
+    XCTAssertFalse(app.buttons["Advanced"].exists)
+    XCTAssertFalse(app.switches["routine.runScriptWithoutModel"].exists)
   }
   func testTriggerEditorStaysPresentedDuringKeyboardInputAndCancel() {
     let app = launch()
@@ -308,7 +347,7 @@ import CryptoKit
     app.buttons["Cancel"].tapWhenReady()
     XCTAssertTrue(editor.waitForDisappearance(timeout: 10))
     XCTAssertTrue(form.waitForExistence(timeout: 10))
-    XCTAssertEqual(app.buttons["settingsMore"].value as? String, "Work")
+    XCTAssertTrue(app.collectionViews["automation.work"].exists, "Work stays open")
     reveal(create, in: form)
     XCTAssertTrue(create.isEnabled)
     capture(app, "Native trigger editor returns to Work")
@@ -528,7 +567,7 @@ import CryptoKit
     XCTAssertTrue(menu.firstMatch.waitForExistence(timeout: 5))
     var selected = false
     for _ in 0..<10 {
-      let visible = menu.allElementsBoundByIndex.filter { $0.isHittable }
+      let visible = menu.allElementsBoundByIndex.filter { $0.canTap }
       if visible.count == 1 { visible[0].tapWhenReady(); selected = true; break }
       usleep(100_000)
     }
@@ -621,7 +660,7 @@ import CryptoKit
   }
 
   func testPolicyFailureRequiresStatusRefreshBeforeAnotherChange() {
-    let app = launch(["POLICY_FAILURE"])
+    let app = launch(["POLICY_FAILURE"], presentation: "advanced")
     app.selectSettingsTab("Learning")
     let policy = app.switches["automation.learningPolicy"]
     let message = text("Nothing will be sent again automatically.", app: app)
@@ -646,7 +685,7 @@ import CryptoKit
     XCTAssertFalse(message.exists)
   }
   func testAdvancedRoutineSavesScriptAndKeepsInheritedModel() {
-    let app = launch()
+    let app = launch(presentation: "advanced")
     app.selectSettingsTab("Routines")
     let edit = app.buttons["Edit"].firstMatch
     reveal(edit, in: app.collectionViews.firstMatch); edit.tapWhenReady()

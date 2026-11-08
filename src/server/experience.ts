@@ -32,7 +32,7 @@ export async function assertRoutineEditable(runtime: Runtime, store: Store, rout
       if ('status' in response && response.status === 'accepted') throw httpError(409, 'This routine has a trial running. Wait for its result before changing or deleting it.');
       if ('status' in response && response.status === 'uncertain' && 'executionId' in response && (!('ownerStatus' in response) || response.ownerStatus !== 'unknown')) throw httpError(409, 'The native trial owner is still unconfirmed. Check the trial result before changing this routine.');
     } catch (error) {
-      if ((error as { statusCode?: number }).statusCode === 404) continue;
+      if ((error as { statusCode?: number }).statusCode === 404) { store.recordRoutineTrialStatus(trial.requestId, "settled"); continue; }
       throw error;
     }
   }

@@ -7,8 +7,10 @@ import { useId, useState } from "react";
 import { request } from "../client-api";
 import { useAction } from "../app/use-action";
 import { useResource } from "../app/use-resource";
-import { eventCalendarFile, eventGoogleCalendarUrl } from "../shared/reply-cards";
-import type { EventCard, ReplyCard, ReplyCardState, ReplyDocument } from "../shared/reply-cards";
+import { eventCalendarFile, eventGoogleCalendarUrl, savesState } from "../shared/reply-cards";
+import type { ChecklistCard, EventCard, ItineraryCard, ReplyCard, ReplyCardState, ReplyDocument } from "../shared/reply-cards";
+import { EmailDraftCard } from "./EmailDraftCard";
+import { FormReplyCard } from "./FormReplyCard";
 import "./experience.css";
 import { When } from "./When";
 
@@ -38,14 +40,29 @@ function CalendarProposal({ card }: { card: EventCard }) {
     </Dialog>
   </>;
 }
-function InteractiveCard({ card, botId, messageId, userId, unavailable }: { card: ReplyCard; botId?: string; messageId?: string; userId?: string; unavailable?: boolean }) {
+type CardProps<T extends ReplyCard = ReplyCard> = { card: T; botId?: string; messageId?: string; userId?: string; unavailable?: boolean };
+const eyebrows: Record<ReplyCard["type"], string> = { checklist: "Checklist", itinerary: "Itinerary", event: "Calendar proposal", email: "Email draft", form: "Questions" };
+/** Cards that save nothing for the person: a calendar proposal, an email draft and a form. */
+function PlainCard({ card, botId, messageId, userId, unavailable }: CardProps) {
+  return <section className={`reply-card reply-card-${card.type}`} aria-label={card.title}>
+    <div className="reply-card-heading"><span className="eyebrow">{eyebrows[card.type]}</span></div>
+    <h3>{card.title}</h3>
+    {card.type === "event" && <CalendarProposal card={card} />}
+    {card.type === "email" && <EmailDraftCard card={card} />}
+    {card.type === "form" && <FormReplyCard card={card} botId={botId ?? ""} messageId={messageId ?? ""} userId={userId ?? ""} unavailable={unavailable || !botId || !messageId || !userId} />}
+  </section>;
+}
+function InteractiveCard(props: CardProps) {
+  return savesState(props.card) ? <SavedCard {...props} card={props.card} /> : <PlainCard {...props} />;
+}
+function SavedCard({ card, botId, messageId, userId, unavailable }: CardProps<ChecklistCard | ItineraryCard>) {
   const [saved, setSaved] = useState<ReplyCardState>(emptyState);
   const [draft, setDraft] = useState<ReplyCardState>(emptyState);
   const [editing, setEditing] = useState<string | null>(null);
   const params = { id: botId ?? "", messageId: messageId ?? "", cardId: card.id };
   const path = botId && messageId && userId ? routeUrl("GET /bots/:id/messages/:messageId/cards/:cardId/state", params) : undefined;
   const accept = (state: ReplyCardState) => { setSaved(state); setDraft(state); };
-  const stored = useResource<ReplyCardState>(card.type === "event" ? null : path ?? null, { load: (_, signal) => request("GET /bots/:id/messages/:messageId/cards/:cardId/state", { params, signal }), onData: accept });
+  const stored = useResource<ReplyCardState>(path ?? null, { load: (_, signal) => request("GET /bots/:id/messages/:messageId/cards/:cardId/state", { params, signal }), onData: accept });
   const saving = useAction();
   function save(next: ReplyCardState) {
     if (!path || saving.busy) return;
@@ -60,7 +77,7 @@ function InteractiveCard({ card, botId, messageId, userId, unavailable }: { card
   const busy = stored.loading || saving.busy || unavailable || !path;
   const failedSave = !!saving.error && JSON.stringify(saved) !== JSON.stringify(draft);
   return <section className={`reply-card reply-card-${card.type}`} aria-label={card.title}>
-    <div className="reply-card-heading"><span className="eyebrow">{card.type === "event" ? "Calendar proposal" : card.type === "itinerary" ? "Itinerary" : "Checklist"}</span>
+    <div className="reply-card-heading"><span className="eyebrow">{eyebrows[card.type]}</span>
       {card.type === "checklist" && <span className="muted">{saved.checkedIds.length} / {card.items.length}</span>}</div>
     <h3>{card.title}</h3>
     {card.type === "checklist" && <ul className="reply-checklist">{card.items.map(item => <li key={item.id}><label>
@@ -77,8 +94,7 @@ function InteractiveCard({ card, botId, messageId, userId, unavailable }: { card
           onClick={() => { setDraft(saved); setEditing(null); }}>Cancel</Button></div></div>
         : <Button type="button" className="itinerary-note-button" disabled={busy || !!error} onClick={() => setEditing(item.id)}>{draft.notes[item.id] ? "Edit note" : "Add note"}</Button>}
     </li>)}</ol>}
-    {card.type === "event" && <CalendarProposal card={card} />}
-    {card.type !== "event" && <small className="muted">Checks and notes are saved for your account. The assistant's proposal stays in the conversation.</small>}
+    <small className="muted">Checks and notes are saved for your account. The assistant's proposal stays in the conversation.</small>
     {error && <div role="alert" className="form-error"><p>{error}</p>{failedSave ? <Button type="button" disabled={unavailable} onClick={() => void save(draft)}>Retry saving</Button>
       : <Button type="button" disabled={unavailable} onClick={reload}>Reload saved state</Button>}</div>}
     {saving.busy && <span role="status">Saving...</span>}

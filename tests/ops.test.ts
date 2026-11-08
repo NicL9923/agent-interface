@@ -117,7 +117,7 @@ describe("health", () => {
     const { app: maintained } = await setup({}, { runtime: draining.value, maintenance: true });
     response = await maintained.inject("/api/health/ready");
     expect(response.statusCode).toBe(200);
-    expect(response.json().checks.hermes).toEqual({ status: "ok", detail: "A Hermes update is in progress" });
+    expect(response.json().checks.hermes).toEqual({ status: "unconfigured", detail: "A Hermes update is in progress" });
   });
 
   it("warns about push failures without failing readiness", async () => {
@@ -246,6 +246,11 @@ describe("health", () => {
       title: "WildBots needs attention", url: "/", kind: "failed",
       body: expect.stringMatching(/^The Hermes connection needs attention\. Disconnected for 10 min: Hermes is unreachable\./),
     });
+    // A maintenance window cannot close an existing incident.
+    const maintenance = vi.spyOn(health['deps'], 'maintenance').mockReturnValue(true);
+    await at(12 * minute);
+    expect(alerts()).toHaveLength(1);
+    maintenance.mockReturnValue(false);
     hermes.status = { connected: true };
     await at(12 * minute);
     await at(13 * minute);

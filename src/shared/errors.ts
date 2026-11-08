@@ -19,12 +19,16 @@ export type ErrorCode =
   | "routine_rooms_unknown"
   | "session_expired"
   | "sharing_changed"
+  // A request ID came back with different content: another tab or device already sent under it.
+  | "submission_conflict"
   // A Hermes transport failure carries its connection diagnosis.
   | NonNullable<RuntimeStatus["code"]>
   // The web client sets these for failures that never reached the server.
   | "CONNECTION_UNAVAILABLE"
   | "INVALID_RESPONSE";
 
+/** Sent when a request ID already names a different message. */
+export const submissionConflictMessage = "This submission ID was already used for different content";
 /** Sent when a conversation's interrupted task needs review before another message starts. */
 export const interruptionPendingMessage = "Review the interrupted task before starting another message.";
 

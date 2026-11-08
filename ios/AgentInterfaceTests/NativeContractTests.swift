@@ -745,10 +745,10 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
         try Data("Attachment to keep".utf8).write(to: file); defer { try? FileManager.default.removeItem(at: file) }
         server.failUploads(true)
         // As on the web, a message on its way must finish sending before files can be attached.
-        value.sending = true
+        value.sendingRequests[value.selectedBotId ?? "bot"] = "test-request"
         await value.uploads.attach(urls: [file])
         XCTAssertEqual(value.uploads.notice, [AppStore.attachWhileSending]); XCTAssertTrue(value.uploads.items.isEmpty)
-        value.sending = false
+        value.sendingRequests = [:]
         await value.uploads.attach(urls: [file])
         XCTAssertEqual(value.uploads.items.count, 1); XCTAssertNotNil(value.uploads.items.first?.error)
         XCTAssertFalse(value.canSend); XCTAssertTrue(value.draft.attachments.isEmpty)
@@ -1106,6 +1106,35 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
         XCTAssertEqual(server.requestCount("/api/auth/config"), 0)
     }
 
+    func testUnknownSubmissionStatusKeepsTheUnconfirmedSend() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.sendStatus = 503
+        await value.send()
+        let pending = value.pending
+        XCTAssertNotNil(pending)
+        server.answerSubmissions("future-status")
+        await value.reconcilePending()
+        XCTAssertEqual(value.pending?.requestId, pending?.requestId)
+    }
+
+    func testSuspendedStoreCannotRestartPollingUntilResume() throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        value.suspend()
+        value.startPolling()
+        XCTAssertTrue(value.suspended)
+        XCTAssertNil(value.pollTask)
+    }
+    func testSendingBelongsToTheSelectedAssistant() throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        value.sendingRequests["bot"] = "request-a"
+        XCTAssertTrue(value.sending)
+        value.selectedBotId = "other"
+        XCTAssertFalse(value.sending)
+        value.sendingRequests["other"] = "request-b"
+        value.sendingRequests["bot"] = nil
+        XCTAssertTrue(value.sending)
+    }
+
     func testPollingRefreshesBootstrapOnlyWhenDueButTheConversationEveryPass() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
         var time = ContinuousClock.now
@@ -1125,7 +1154,7 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
         XCTAssertEqual(bootstraps(), 3, "An action's refresh restarts the timer")
         await tick(2)
         XCTAssertEqual(bootstraps(), 4)
-        value.suspend(); _ = await value.pollOnce()
+        value.suspend(); value.suspended = false; _ = await value.pollOnce()
         XCTAssertEqual(bootstraps(), 5, "Returning to the foreground refreshes at once")
         XCTAssertEqual(polls(), 10)
     }

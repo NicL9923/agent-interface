@@ -12,6 +12,8 @@ struct AutomationDebugFixture {
   private var skillLocked = false
   private var interruptionPending = ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_AUTOMATION_INTERRUPTED"] == "1"
   private var policyFailures = ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_AUTOMATION_POLICY_FAILURE"] == "1" ? 1 : 0
+  /// The first status read fails, for the skill status retry on Behavior.
+  private var overviewFailures = ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_AUTOMATION_OVERVIEW_FAILURE"] == "1" ? 1 : 0
   private var readOnlyPolicy: Bool { ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_AUTOMATION_READONLY_POLICY"] == "1" }
   private let detailRevision = String(repeating: "d", count: 64)
   private let base = "/api/bots/ranch/automation"
@@ -29,7 +31,10 @@ struct AutomationDebugFixture {
   mutating func response(path: String, method: String, body: [String: Any], url: URL) -> (status: Int, object: Any)? {
     guard ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_AUTOMATION"] == "1",
       path == base || path.hasPrefix(base + "/") else { return nil }
-    if path == base { return (200, overview) }
+    if path == base {
+      if overviewFailures > 0 { overviewFailures -= 1; return (503, ["error": "Fixture automation status unavailable"]) }
+      return (200, overview)
+    }
     if path == base + "/goal/resume" {
       guard let id = body["requestId"] as? String, UUID(uuidString: id) != nil else {
         return (400, ["error": "A stable resume UUID is required."])

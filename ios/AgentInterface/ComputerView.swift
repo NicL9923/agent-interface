@@ -24,13 +24,14 @@ enum DesktopLink {
     "path=\(encode(path))&control=\(control ? 1 : 0)" + (trackpad ? "&trackpad=1" : "")
   }
   /// encodeURIComponent's escaping, which the page reverses.
-  private static func encode(_ value: String) -> String {
+  static func encode(_ value: String) -> String {
     value.addingPercentEncoding(withAllowedCharacters: CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.!~*'()")) ?? ""
   }
   /// How long a page may take to connect with a ticket: until the ticket expires, and at least a
   /// second. A page that has not connected by then needs a fresh ticket. Nil for an unreadable expiry.
-  static func connectWait(_ ticket: DesktopTicket, now: Date) -> Duration? {
-    guard let expires = ServerDate.parse(ticket.expiresAt) else { return nil }
+  static func connectWait(_ ticket: DesktopTicket, now: Date) -> Duration? { connectWait(expiresAt: ticket.expiresAt, now: now) }
+  static func connectWait(expiresAt: String, now: Date) -> Duration? {
+    guard let expires = ServerDate.parse(expiresAt) else { return nil }
     return .milliseconds(Int((max(1, expires.timeIntervalSince(now)) * 1000).rounded()))
   }
   /// How long to wait before reconnecting after a drop, growing with each failed attempt, or nil
@@ -70,7 +71,8 @@ enum DesktopLink {
 /// Settings > Computer: the shared desktop in the app, through the server's native viewer page.
 /// The viewer watches until Take over; Hand back returns the desktop to the assistants. The bottom
 /// bar has the keyboard, the clipboard and a ⋯ menu for trackpad mode and zoom; ? explains the
-/// touch controls. The VPS terminal stays in the browser.
+/// touch controls. The Terminal button opens the system terminal in a sheet, so the desktop keeps
+/// running behind it.
 struct ComputerView: View {
   /// Opened from an assistant's handoff request: take control as soon as the desktop connects, once.
   var take = false
@@ -93,6 +95,7 @@ struct ComputerView: View {
   @AppStorage("computerTrackpad") private var trackpad = false
   @State private var zoomed = false
   @State private var helpShown = false
+  @State private var terminalShown = false
   /// The outcome of a clipboard action, until the next one or until input stops.
   @State private var info: String?
   private var status: ComputerStatus? { store.computerStatus }
@@ -124,6 +127,11 @@ struct ComputerView: View {
         }
       }
       .sheet(isPresented: $helpShown) { ComputerHelpSheet(device: device) }
+      .sheet(isPresented: $terminalShown) {
+        NavigationStack {
+          TerminalView().toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { terminalShown = false }.accessibilityIdentifier("terminalClose") } }
+        }.appStore(store)
+      }
       .task { await watchStatus() }
       .task(id: store.scope) { await attach() }
       // Losing control elsewhere takes input away here at once, before the server fences it.
@@ -261,19 +269,19 @@ struct ComputerView: View {
   }
   private var footer: some View {
     VStack(alignment: .leading, spacing: 8) {
-      if let url = try? store.api?.url("/?computer=1"), let terminalURL = try? store.api?.url("/?computer=1&computerTab=terminal") {
-        ViewThatFits(in: .horizontal) {
-          HStack(spacing: 16) { browserLinks(url, terminalURL) }.fixedSize(horizontal: true, vertical: false)
-          VStack(alignment: .leading, spacing: 12) { browserLinks(url, terminalURL) }
-        }.font(.footnote)
-      }
+      ViewThatFits(in: .horizontal) {
+        HStack(spacing: 16) { links }.fixedSize(horizontal: true, vertical: false)
+        VStack(alignment: .leading, spacing: 12) { links }
+      }.font(.footnote)
       Text("The desktop and browser logins stay on the server when you leave this screen.").font(.caption).foregroundStyle(.secondary)
     }.padding(12).frame(maxWidth: .infinity, alignment: .leading)
   }
-  @ViewBuilder private func browserLinks(_ url: URL, _ terminalURL: URL) -> some View {
-    Link(destination: url) { Label("Open in Safari", systemImage: "safari") }.accessibilityIdentifier("computerSafari")
-    Link(destination: terminalURL) { Label("Terminal in Safari", systemImage: "terminal") }.accessibilityIdentifier("computerTerminal")
-      .accessibilityHint("Opens the VPS terminal in Safari, with its own sign-in")
+  @ViewBuilder private var links: some View {
+    if let url = try? store.api?.url("/?computer=1") {
+      Link(destination: url) { Label("Open in Safari", systemImage: "safari") }.accessibilityIdentifier("computerSafari")
+    }
+    Button { terminalShown = true } label: { Label("Terminal", systemImage: "terminal") }.accessibilityIdentifier("computerTerminal")
+      .accessibilityHint("Opens the system terminal on the Hermes host")
   }
   /// The desktop's status every few seconds while this screen is open, as the web panel polls.
   private func watchStatus() async {
@@ -474,7 +482,7 @@ struct DesktopWebView: UIViewRepresentable {
   func makeUIView(context: Context) -> WKWebView {
     let configuration = WKWebViewConfiguration()
     configuration.websiteDataStore = .nonPersistent()
-    configuration.userContentController.add(WeakHandler(context.coordinator), name: "computer")
+    configuration.userContentController.add(WeakScriptHandler(context.coordinator), name: "computer")
     let view = WKWebView(frame: .zero, configuration: configuration)
     view.navigationDelegate = context.coordinator
     view.isOpaque = false
@@ -559,13 +567,14 @@ struct DesktopWebView: UIViewRepresentable {
       }
     }
   }
-  /// The content controller keeps its handlers alive; this keeps it from keeping the coordinator.
-  private final class WeakHandler: NSObject, WKScriptMessageHandler {
-    weak var target: WKScriptMessageHandler?
-    init(_ target: WKScriptMessageHandler) { self.target = target }
-    func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
-      target?.userContentController(controller, didReceive: message)
-    }
+}
+
+/// The content controller keeps its handlers alive; this keeps it from keeping the coordinator.
+final class WeakScriptHandler: NSObject, WKScriptMessageHandler {
+  weak var target: WKScriptMessageHandler?
+  init(_ target: WKScriptMessageHandler) { self.target = target }
+  func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+    target?.userContentController(controller, didReceive: message)
   }
 }
 

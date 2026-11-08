@@ -11,10 +11,10 @@ extension AppStore {
       "host": \.host, "api": \.api, "bootstrap": \.bootstrap, "scope": \.scope, "additions": \.additions,
       "haptic": \.haptic, "keyboardCommand": \.keyboardCommand, "searchFocusPending": \.searchFocusPending,
       "conversation": \.conversation, "transcript": \.transcript, "turns": \.turns, "echoes": \.echoes,
-      "selectedBotId": \.selectedBotId, "routineResult": \.routineResult, "todayRequest": \.todayRequest, "listenRequest": \.listenRequest,
+      "selectedBotId": \.selectedBotId, "routineResult": \.routineResult, "todayRequest": \.todayRequest, "listenRequest": \.listenRequest, "focus": \.focus,
       "draft": \.draft, "draftReady": \.draftReady, "pendings": \.pendings, "receipts": \.receipts,
       "error": \.error, "notice": \.notice, "leftBotId": \.leftBotId, "signingIn": \.signingIn, "loading": \.loading,
-      "sending": \.sending, "appUnavailable": \.appUnavailable, "interruptionReviewed": \.interruptionReviewed,
+      "sendingRequests": \.sendingRequests, "appUnavailable": \.appUnavailable, "interruptionReviewed": \.interruptionReviewed,
       "authConfig": \.authConfig, "restoring": \.restoring, "sessionExpired": \.sessionExpired,
       "conversationRequest": \.conversationRequest, "preferencesSaving": \.preferencesSaving,
       "preferencesSaveFailed": \.preferencesSaveFailed, "preferencesDraft": \.preferencesDraft, "groupCatalog": \.groupCatalog, "groupNoticeScope": \.groupNoticeScope, "homeRequest": \.homeRequest,
@@ -24,7 +24,7 @@ extension AppStore {
       "earlierFilesFailure": \.earlierFilesFailure, "loadingEarlier": \.loadingEarlier,
       "conversationScreens": \.conversationScreens, "chatCovers": \.chatCovers,
       "connectionError": \.connectionError, "activity": \.activity,
-      "readHere": \.readHere, "openComputer": \.openComputer,
+      "readHere": \.readHere, "openComputer": \.openComputer, "openTerminal": \.openTerminal,
       // Transcript entry points (I1): Retry, opening at a message, and the attention scroll.
       "retryAttempt": \.retryAttempt, "focusedMessage": \.focusedMessage, "attentionScrollRequest": \.attentionScrollRequest,
     ]

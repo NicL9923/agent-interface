@@ -417,6 +417,7 @@ class HandoffTests(unittest.TestCase):
         self.computer = types.SimpleNamespace(_lease=lambda: self.lease, lease=Lease, status=lambda: dict(self.status),
                                               suspend_for_prompt=contextlib.nullcontext)
         self.native.tools["handoff"] = lambda args: self.computer_module.request_handoff(self.computer, args)
+        self.native.tools["terminal"] = lambda args: self.computer_module.request_terminal(args)
 
     def tearDown(self):
         sys.modules.pop("agent_interface_vault", None)
@@ -515,6 +516,103 @@ class HandoffTests(unittest.TestCase):
             self.assertEqual(self.result(*self.call(args))["error_type"], "invalid_arguments")
         with self.native.requests._lock:
             self.assertEqual([request for request in self.native.requests._open.values()], [])
+
+    def ask_terminal(self, args=None):
+        done = {}
+        args = args or {"reason": "The install needs sudo.", "what_to_do": "Run it, enter your password, press Done.", "command": "sudo apt install ripgrep"}
+        thread = threading.Thread(target=lambda: done.setdefault("result", self.native.registry.dispatch("terminal", args)))
+        thread.start()
+        return thread, done
+
+    def test_a_terminal_request_carries_the_command_and_done_tells_the_agent_to_verify(self):
+        thread, done = self.ask_terminal()
+        request = self.native.wait_open(self.computer_module.TERMINAL_REQUEST)
+        self.assertEqual(request.params, {"reason": "The install needs sudo.", "what_to_do": "Run it, enter your password, press Done.",
+                                          "command": "sudo apt install ripgrep"})
+        settle = self.computer_module.settle_terminal_request
+        base = dict(decision="done", requestId=request.id, sessionId="live", epoch="epoch", profile="one")
+        self.assertEqual(settle(base), {"status": "ok"})
+        result = self.result(thread, done)
+        self.assertEqual(result["status"], "done")
+        self.assertIn("cannot see that terminal", result["next"])
+        self.assertEqual(settle(base), {"status": "expired"})
+
+    def test_a_terminal_request_without_a_command_sends_none_and_never_suspends_the_desktop(self):
+        suspended = []
+        self.computer.suspend_for_prompt = lambda: suspended.append(True) or contextlib.nullcontext()
+        thread, done = self.ask_terminal({"reason": "Sign in to GitHub.", "what_to_do": "Run gh auth login."})
+        request = self.native.wait_open(self.computer_module.TERMINAL_REQUEST)
+        self.assertEqual(request.params, {"reason": "Sign in to GitHub.", "what_to_do": "Run gh auth login."})
+        self.computer_module.settle_terminal_request(dict(decision="decline", requestId=request.id, sessionId="live", epoch="epoch", profile="one"))
+        self.assertEqual(self.result(thread, done)["error_type"], "declined")
+        self.assertEqual(suspended, [])
+
+    def test_a_terminal_request_settles_only_for_its_own_conversation_and_a_known_decision(self):
+        thread, done = self.ask_terminal()
+        request = self.native.wait_open(self.computer_module.TERMINAL_REQUEST)
+        settle = self.computer_module.settle_terminal_request
+        base = dict(decision="done", requestId=request.id, sessionId="live", epoch="epoch", profile="one")
+        for key, value in [("sessionId", "other"), ("epoch", "old"), ("profile", "two"), ("decision", "take"), ("decision", None), ("requestId", 7)]:
+            with self.assertRaises(self.computer_module.ComputerError, msg=key):
+                settle({**base, key: value})
+        self.assertEqual(settle({**base, "requestId": "srq-missing"}), {"status": "expired"})
+        with self.native.requests._lock:
+            self.assertIn(request.id, self.native.requests._open)
+        settle(base)
+        self.assertEqual(self.result(thread, done)["status"], "done")
+
+    def test_a_handoff_card_cannot_be_settled_as_a_terminal_request_or_the_reverse(self):
+        thread, done = self.call()
+        handoff = self.native.wait_open(self.computer_module.HANDOFF)
+        with self.assertRaises(self.computer_module.ComputerError):
+            self.computer_module.settle_terminal_request(dict(decision="done", requestId=handoff.id, sessionId="live", epoch="epoch", profile="one"))
+        with self.assertRaises(self.computer_module.ComputerError):
+            self.computer_module.decline_handoff(dict(decision="done", requestId=handoff.id, sessionId="live", epoch="epoch", profile="one"))
+        self.computer_module.decline_handoff(dict(decision="decline", requestId=handoff.id, sessionId="live", epoch="epoch", profile="one"))
+        self.assertEqual(self.result(thread, done)["error_type"], "declined")
+        thread, done = self.ask_terminal()
+        terminal = self.native.wait_open(self.computer_module.TERMINAL_REQUEST)
+        with self.assertRaises(self.computer_module.ComputerError):
+            self.computer_module.decline_handoff(dict(decision="decline", requestId=terminal.id, sessionId="live", epoch="epoch", profile="one"))
+        self.computer_module.settle_terminal_request(dict(decision="decline", requestId=terminal.id, sessionId="live", epoch="epoch", profile="one"))
+        self.result(thread, done)
+
+    def test_a_chat_reply_closes_the_terminal_request(self):
+        thread, done = self.ask_terminal()
+        self.native.wait_open(self.computer_module.TERMINAL_REQUEST)
+        self.assertEqual(self.native.vault.close_for_chat("live", "member-b"), 1)
+        result = self.result(thread, done)
+        self.assertEqual(result["error_type"], "user_replied_in_chat")
+        # The person may have run the command before replying, so the assistant must not assume it did not run.
+        self.assertIn("may or may not have run", result["error"])
+
+    def test_nobody_answering_a_terminal_request_times_out(self):
+        with patch.object(self.computer_module, "TERMINAL_WAIT", 1.5):
+            thread, done = self.ask_terminal()
+            result = self.result(thread, done)
+        self.assertEqual(result["error_type"], "timed_out")
+        self.assertIn("is unknown", result["error"])
+
+    def test_a_terminal_request_refuses_without_a_person_and_bad_arguments(self):
+        self.sid = "routine"
+        self.assertEqual(self.result(*self.ask_terminal())["error_type"], "no_person")
+        self.sid = "live"
+        good = {"reason": "x", "what_to_do": "y"}
+        for args in ({"reason": "x"}, {**good, "password": "z"}, {"reason": "a‮b", "what_to_do": "y"}, {**good, "reason": "x" * 201},
+                     {**good, "command": ""}, {**good, "command": "   "}, {**good, "command": 7}, {**good, "command": "ls\nrm -rf ~"},
+                     {**good, "command": "ls\r"}, {**good, "command": "ls‮"}, {**good, "command": "x" * 501}):
+            result = self.result(*self.ask_terminal(args))
+            self.assertEqual(result["error_type"], "invalid_arguments", msg=args)
+        with self.native.requests._lock:
+            self.assertEqual(list(self.native.requests._open.values()), [])
+
+    def test_the_terminal_tool_names_every_result_and_its_method_matches_the_vault(self):
+        schema = self.computer_module.TERMINAL_SCHEMA
+        self.assertEqual(schema["parameters"]["required"], ["reason", "what_to_do"])
+        for outcome in ("done", "declined", "user_replied_in_chat", "timed_out", "no_person", "invalid_arguments", "cancelled"):
+            self.assertIn(outcome, schema["description"])
+        self.assertEqual(self.computer_module.TERMINAL_REQUEST, self.native.vault.TERMINAL_REQUEST)
+        self.assertIn(self.native.vault.TERMINAL_REQUEST, self.native.vault.CHAT_CLOSES)
 
     def test_the_catalog_sentence_fits_and_every_result_is_named(self):
         schema = self.computer_module.HANDOFF_SCHEMA
