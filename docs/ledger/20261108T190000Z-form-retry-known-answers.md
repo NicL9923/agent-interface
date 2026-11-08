@@ -136,6 +136,22 @@ The complete log is retained in the parent audit as `native-271/mutant.log`.
 The mutation script's post-test `rg` command failed because `rg` is not installed
 on the Mac. Its exit trap still restored the original source and deleted the
 owned simulator. Byte-for-byte restoration was verified against the saved source
-before starting a separate restored `ReplyActionCardsTests` run. That restored
-run is pending at this checkpoint. The earlier full native pass remains tied to
-the identical restored iOS fingerprint.
+before starting a separate restored `ReplyActionCardsTests` run.
+
+At 21:05 UTC, the restored run unit-passed all 12 `ReplyActionCardsTests`, with
+0 failures and 0 skips. It used the same signed runner, derived data, Xcode and
+iOS 27.0 runtime on owned iPhone 18 Pro simulator
+`CCA4FD32-5AAA-4104-8E7D-FBBDE37249A2`. The outer script deleted that simulator
+afterward. Its command selected `-only-testing:AgentInterfaceTests/ReplyActionCardsTests`.
+The run acquired the global lock after waiting about 7 minutes. That queue time
+is separate from the native build and test execution.
+
+The result bundle is `.private/ios-test-20261108T210348Z-42241.xcresult` in the
+Mac checkout. Its summary and full log are retained as
+`native-271/restored-summary.txt` and `native-271/restored.log` in the parent audit.
+The restored iOS fingerprint remains
+`sha256:0cea72a5dcf9581e91449b04a654063bdad8bafad00afcddf6abaa73177cd335`,
+which also identifies the source in published head
+`012b900a08bbdf8fca48c863a89781211fa84f5c`. The prior full native pass and eligible
+Grok 4.7 high review therefore cover the same source. This follow-up changes only
+the evidence record. No native checks were repeated after that restored pass.
