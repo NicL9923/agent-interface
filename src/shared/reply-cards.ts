@@ -8,6 +8,7 @@ export interface ItineraryCard {
 }
 export interface EventCard { id: string; type: "event"; title: string; start: string; end?: string; location?: string; description?: string }
 /** An email the assistant drafted. Nothing is sent: the person copies it or opens it in their mail app. */
+// Released clients refuse any field outside this shape, so revision lineage lives in `id`; see draft-diff.ts.
 export interface EmailCard { id: string; type: "email"; title: string; to?: string[]; cc?: string[]; subject?: string; body: string }
 export const formFieldKinds = ["text", "textarea", "number", "date", "select", "choice", "multi", "toggle"] as const;
 export type FormFieldKind = (typeof formFieldKinds)[number];
@@ -112,11 +113,13 @@ function addresses(card: Fields, name: string) {
   const parsed = value.map(address);
   return parsed.every(entry => entry !== null) ? parsed as string[] : null;
 }
+/** The email card's fields as the first clients to show it accept them. Adding one breaks those clients. */
+export const emailFields = ["id", "type", "title", "to", "cc", "subject", "body"];
 function email(card: Fields): EmailCard | null {
   const id = identifier(card.id), name = title(card.title), to = addresses(card, "to"), cc = addresses(card, "cc");
   const subject = Object.hasOwn(card, "subject") ? text(card.subject, 500, 1, true) : undefined;
   const body = text(card.body, 20_000, 1);
-  if (!only(card, ["id", "type", "title", "to", "cc", "subject", "body"]) || id === null || name === null || to === null || cc === null
+  if (!only(card, emailFields) || id === null || name === null || to === null || cc === null
     || subject === null || body === null || !body.trim()) return null;
   return { id, type: "email", title: name, ...(to && { to }), ...(cc && { cc }), ...(subject !== undefined && { subject }), body };
 }

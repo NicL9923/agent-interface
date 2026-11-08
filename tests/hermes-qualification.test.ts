@@ -44,6 +44,7 @@ describe("exact Hermes upgrade qualification", () => {
       "src/server/route-path.ts": "route pattern lookup",
       "src/server/security-headers.ts": "HTTP headers",
       "src/server/static-cache.ts": "static asset caching",
+      "src/shared/device-activity.ts": "which device a person is using, for notification routing",
     };
     const unbound = new Map<string, string>();
     for (const path of qualificationInputs.filter(path => /\.(ts|mjs|js)$/.test(path)))

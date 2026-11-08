@@ -10,7 +10,7 @@ extension AppStore {
     [
       "host": \.host, "api": \.api, "bootstrap": \.bootstrap, "scope": \.scope, "additions": \.additions,
       "haptic": \.haptic, "keyboardCommand": \.keyboardCommand, "searchFocusPending": \.searchFocusPending,
-      "conversation": \.conversation, "transcript": \.transcript, "turns": \.turns, "echoes": \.echoes,
+      "conversation": \.conversation, "transcript": \.transcript, "turns": \.turns, "replyFiles": \.replyFiles, "draftRevisions": \.draftRevisions, "echoes": \.echoes,
       "selectedBotId": \.selectedBotId, "routineResult": \.routineResult, "todayRequest": \.todayRequest, "listenRequest": \.listenRequest, "focus": \.focus,
       "draft": \.draft, "draftReady": \.draftReady, "pendings": \.pendings, "receipts": \.receipts,
       "error": \.error, "notice": \.notice, "leftBotId": \.leftBotId, "signingIn": \.signingIn, "loading": \.loading,
@@ -27,6 +27,8 @@ extension AppStore {
       "readHere": \.readHere, "openComputer": \.openComputer, "openTerminal": \.openTerminal,
       // Transcript entry points (I1): Retry, opening at a message, and the attention scroll.
       "retryAttempt": \.retryAttempt, "focusedMessage": \.focusedMessage, "attentionScrollRequest": \.attentionScrollRequest,
+      // The decline handoff (Workstream B).
+      "declinedApprovals": \.declinedApprovals,
     ]
   }
   /// The names of the stored properties the Observation macro tracks, read from the backing storage it generates.

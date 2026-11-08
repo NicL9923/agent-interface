@@ -6,6 +6,7 @@ import { loadConfig } from "./config.js";
 import { createHermesRuntime } from "./hermes.js";
 import { schemaVersion } from "./store.js";
 import { safeError } from "./logging.js";
+import { SHUTDOWN_EXIT_MS } from "./shutdown.js";
 if (existsSync(".env")) loadEnvFile(".env");
 const config = loadConfig();
 const runtime = createHermesRuntime({
@@ -27,7 +28,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const)
     const deadline = setTimeout(() => {
       app.log.error("WildBots shutdown deadline reached");
       process.exit(1);
-    }, 30000);
+    }, SHUTDOWN_EXIT_MS);
     stopping = app.close().then(
       () => { clearTimeout(deadline); app.log.info("WildBots stopped"); process.exit(0); },
       error => { clearTimeout(deadline); app.log.error({ error: safeError(error) }, "WildBots did not stop cleanly"); process.exit(1); },

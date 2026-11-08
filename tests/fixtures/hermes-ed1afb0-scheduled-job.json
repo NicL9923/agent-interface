@@ -1,0 +1,674 @@
+{
+ "source": "Hermes ed1afb082eb3e46cf2edae9d8f68fb67b09ee4df: cron.jobs.create_job, then cron.scheduler_tick.tick dispatching it (a script-only job, so no model is needed), read with cron.jobs.list_jobs while running and after completion. Regenerate with tests/hermes_delegation_test.py's real-scheduler test. `failures` are the same job's set fields after each call to cron.jobs.mark_job_run for a provider outage (model_unreachable), a failed retry rung, a quota hold past the next run and a daily routine's quota recovery fire, a timeout, and the recoveries between them.",
+ "running": {
+  "id": "4224d8620f91",
+  "name": "[bot:mom-main] Check-ins",
+  "prompt": "",
+  "skills": [],
+  "skill": null,
+  "model": null,
+  "provider": null,
+  "base_url": null,
+  "script": "slow.sh",
+  "no_agent": true,
+  "monitor_script": null,
+  "monitor_url": null,
+  "monitor_state": null,
+  "context_from": [
+   "self"
+  ],
+  "schedule": {
+   "kind": "interval",
+   "minutes": 120,
+   "display": "every 120m"
+  },
+  "schedule_display": "every 120m",
+  "repeat": {
+   "times": null,
+   "completed": 0
+  },
+  "enabled": true,
+  "state": "scheduled",
+  "paused_at": null,
+  "paused_reason": null,
+  "created_at": "2026-11-08T09:42:19.793872-06:00",
+  "next_run_at": "2026-11-08T11:42:19.842329-06:00",
+  "last_run_at": null,
+  "last_status": null,
+  "last_error": null,
+  "last_delivery_error": null,
+  "last_delivery_unverified": null,
+  "last_failure": null,
+  "failure_streak": 0,
+  "deliver": "bot-chat",
+  "origin": null,
+  "enabled_toolsets": null,
+  "workdir": null,
+  "last_dispatch": {
+   "scheduled_at": "2026-11-08T09:42:14.801339-06:00",
+   "dispatched_at": "2026-11-08T09:42:19.819359-06:00",
+   "lateness_seconds": 5.0,
+   "kind": "on_time"
+  },
+  "fire_claim": {
+   "at": "2026-11-08T09:42:19.842329-06:00",
+   "by": "NicolasLaptop:3306945:c72bdb7909b6477f96acbbd77880f4e9"
+  },
+  "latest_execution": {
+   "id": "ac158b5b2c784d6a8963c5df5f4d2c29",
+   "job_id": "4224d8620f91",
+   "source": "builtin",
+   "process_id": "11a752682f0a4516aeb2430b03038e9c",
+   "pid": 3306945,
+   "process_started_at": 39237296,
+   "status": "claimed",
+   "handoff_pending": 0,
+   "handoff_started_at": null,
+   "claimed_at": "2026-11-08T09:42:19.825548-06:00",
+   "started_at": null,
+   "finished_at": null,
+   "error": null,
+   "delivery_outcome": null,
+   "scheduled_instant": "2026-11-08T15:42:14.801339+00:00",
+   "progress_at": null
+  },
+  "live_execution": {
+   "id": "ac158b5b2c784d6a8963c5df5f4d2c29",
+   "job_id": "4224d8620f91",
+   "source": "builtin",
+   "process_id": "11a752682f0a4516aeb2430b03038e9c",
+   "pid": 3306945,
+   "process_started_at": 39237296,
+   "status": "claimed",
+   "handoff_pending": 0,
+   "handoff_started_at": null,
+   "claimed_at": "2026-11-08T09:42:19.825548-06:00",
+   "started_at": null,
+   "finished_at": null,
+   "error": null,
+   "delivery_outcome": null,
+   "scheduled_instant": "2026-11-08T15:42:14.801339+00:00",
+   "progress_at": null
+  }
+ },
+ "completed": {
+  "id": "4224d8620f91",
+  "name": "[bot:mom-main] Check-ins",
+  "prompt": "",
+  "skills": [],
+  "skill": null,
+  "model": null,
+  "provider": null,
+  "base_url": null,
+  "script": "slow.sh",
+  "no_agent": true,
+  "monitor_script": null,
+  "monitor_url": null,
+  "monitor_state": null,
+  "context_from": [
+   "self"
+  ],
+  "schedule": {
+   "kind": "interval",
+   "minutes": 120,
+   "display": "every 120m"
+  },
+  "schedule_display": "every 120m",
+  "repeat": {
+   "times": null,
+   "completed": 1
+  },
+  "enabled": true,
+  "state": "scheduled",
+  "paused_at": null,
+  "paused_reason": null,
+  "created_at": "2026-11-08T09:42:19.793872-06:00",
+  "next_run_at": "2026-11-08T11:42:22.956508-06:00",
+  "last_run_at": "2026-11-08T09:42:22.956508-06:00",
+  "last_status": "ok",
+  "last_error": null,
+  "last_delivery_error": null,
+  "last_delivery_unverified": null,
+  "last_failure": null,
+  "failure_streak": 0,
+  "deliver": "bot-chat",
+  "origin": null,
+  "enabled_toolsets": null,
+  "workdir": null,
+  "last_dispatch": {
+   "scheduled_at": "2026-11-08T09:42:14.801339-06:00",
+   "dispatched_at": "2026-11-08T09:42:19.819359-06:00",
+   "lateness_seconds": 5.0,
+   "kind": "on_time"
+  },
+  "fire_claim": null,
+  "latest_execution": {
+   "id": "ac158b5b2c784d6a8963c5df5f4d2c29",
+   "job_id": "4224d8620f91",
+   "source": "builtin",
+   "process_id": "11a752682f0a4516aeb2430b03038e9c",
+   "pid": 3306945,
+   "process_started_at": 39237296,
+   "status": "completed",
+   "handoff_pending": 0,
+   "handoff_started_at": null,
+   "claimed_at": "2026-11-08T09:42:19.825548-06:00",
+   "started_at": "2026-11-08T09:42:19.919694-06:00",
+   "finished_at": "2026-11-08T09:42:22.958416-06:00",
+   "error": null,
+   "delivery_outcome": "suppressed",
+   "scheduled_instant": "2026-11-08T15:42:14.801339+00:00",
+   "progress_at": null
+  },
+  "live_execution": null
+ },
+ "failures": {
+  "every 2h: network failure": {
+   "id": "d9359f80046d",
+   "name": "[bot:mom-main] Check-ins every 2h",
+   "prompt": "hi",
+   "context_from": [
+    "self"
+   ],
+   "schedule": {
+    "kind": "interval",
+    "minutes": 120,
+    "display": "every 120m"
+   },
+   "schedule_display": "every 120m",
+   "repeat": {
+    "times": null,
+    "completed": 1
+   },
+   "enabled": true,
+   "state": "scheduled",
+   "created_at": "2026-11-08T09:58:03.254134-06:00",
+   "next_run_at": "2026-11-08T10:03:03.262103-06:00",
+   "last_run_at": "2026-11-08T09:58:03.261712-06:00",
+   "last_status": "error",
+   "last_error": "Connection error: provider unreachable",
+   "last_failure": {
+    "at": "2026-11-08T09:58:03.261712-06:00",
+    "detail": "Connection error: provider unreachable"
+   },
+   "failure_streak": 1,
+   "deliver": "bot-chat",
+   "unreachable_retry": {
+    "attempt": 1,
+    "at": "2026-11-08T10:03:03.262103-06:00",
+    "expr": null
+   }
+  },
+  "every 2h: retry rung failed": {
+   "id": "d9359f80046d",
+   "name": "[bot:mom-main] Check-ins every 2h",
+   "prompt": "hi",
+   "context_from": [
+    "self"
+   ],
+   "schedule": {
+    "kind": "interval",
+    "minutes": 120,
+    "display": "every 120m"
+   },
+   "schedule_display": "every 120m",
+   "repeat": {
+    "times": null,
+    "completed": 1
+   },
+   "enabled": true,
+   "state": "scheduled",
+   "created_at": "2026-11-08T09:58:03.254134-06:00",
+   "next_run_at": "2026-11-08T10:13:03.272553-06:00",
+   "last_run_at": "2026-11-08T09:58:03.272483-06:00",
+   "last_status": "error",
+   "last_error": "Connection error: provider unreachable",
+   "last_failure": {
+    "at": "2026-11-08T09:58:03.272483-06:00",
+    "detail": "Connection error: provider unreachable"
+   },
+   "failure_streak": 2,
+   "deliver": "bot-chat",
+   "unreachable_retry": {
+    "attempt": 2,
+    "at": "2026-11-08T10:13:03.272553-06:00",
+    "expr": null
+   }
+  },
+  "every 2h: recovered": {
+   "id": "d9359f80046d",
+   "name": "[bot:mom-main] Check-ins every 2h",
+   "prompt": "hi",
+   "context_from": [
+    "self"
+   ],
+   "schedule": {
+    "kind": "interval",
+    "minutes": 120,
+    "display": "every 120m"
+   },
+   "schedule_display": "every 120m",
+   "repeat": {
+    "times": null,
+    "completed": 2
+   },
+   "enabled": true,
+   "state": "scheduled",
+   "created_at": "2026-11-08T09:58:03.254134-06:00",
+   "next_run_at": "2026-11-08T11:58:03.278204-06:00",
+   "last_run_at": "2026-11-08T09:58:03.278204-06:00",
+   "last_status": "ok",
+   "last_failure": {
+    "at": "2026-11-08T09:58:03.272483-06:00",
+    "detail": "Connection error: provider unreachable"
+   },
+   "deliver": "bot-chat"
+  },
+  "every 2h: quota exhausted past the next run": {
+   "id": "d9359f80046d",
+   "name": "[bot:mom-main] Check-ins every 2h",
+   "prompt": "hi",
+   "context_from": [
+    "self"
+   ],
+   "schedule": {
+    "kind": "interval",
+    "minutes": 120,
+    "display": "every 120m"
+   },
+   "schedule_display": "every 120m",
+   "repeat": {
+    "times": null,
+    "completed": 3
+   },
+   "enabled": true,
+   "state": "scheduled",
+   "created_at": "2026-11-08T09:58:03.254134-06:00",
+   "next_run_at": "2026-11-08T12:59:03.282928-06:00",
+   "last_run_at": "2026-11-08T09:58:03.282869-06:00",
+   "last_status": "error",
+   "last_error": "429 insufficient_quota",
+   "last_failure": {
+    "at": "2026-11-08T09:58:03.282869-06:00",
+    "detail": "429 insufficient_quota"
+   },
+   "failure_streak": 1,
+   "deliver": "bot-chat",
+   "quota_hold_until": "2026-11-08T12:59:03.282928-06:00"
+  },
+  "every 2h: recovered after a long hold": {
+   "id": "d9359f80046d",
+   "name": "[bot:mom-main] Check-ins every 2h",
+   "prompt": "hi",
+   "context_from": [
+    "self"
+   ],
+   "schedule": {
+    "kind": "interval",
+    "minutes": 120,
+    "display": "every 120m"
+   },
+   "schedule_display": "every 120m",
+   "repeat": {
+    "times": null,
+    "completed": 4
+   },
+   "enabled": true,
+   "state": "scheduled",
+   "created_at": "2026-11-08T09:58:03.254134-06:00",
+   "next_run_at": "2026-11-08T11:58:03.287659-06:00",
+   "last_run_at": "2026-11-08T09:58:03.287659-06:00",
+   "last_status": "ok",
+   "last_failure": {
+    "at": "2026-11-08T09:58:03.282869-06:00",
+    "detail": "429 insufficient_quota"
+   },
+   "deliver": "bot-chat"
+  },
+  "every 2h: quota exhausted, recovery fire": {
+   "id": "d9359f80046d",
+   "name": "[bot:mom-main] Check-ins every 2h",
+   "prompt": "hi",
+   "context_from": [
+    "self"
+   ],
+   "schedule": {
+    "kind": "interval",
+    "minutes": 120,
+    "display": "every 120m"
+   },
+   "schedule_display": "every 120m",
+   "repeat": {
+    "times": null,
+    "completed": 5
+   },
+   "enabled": true,
+   "state": "scheduled",
+   "created_at": "2026-11-08T09:58:03.254134-06:00",
+   "next_run_at": "2026-11-08T11:58:03.292339-06:00",
+   "last_run_at": "2026-11-08T09:58:03.292339-06:00",
+   "last_status": "error",
+   "last_error": "429 insufficient_quota",
+   "last_failure": {
+    "at": "2026-11-08T09:58:03.292339-06:00",
+    "detail": "429 insufficient_quota"
+   },
+   "failure_streak": 1,
+   "deliver": "bot-chat"
+  },
+  "every 2h: recovered after quota": {
+   "id": "d9359f80046d",
+   "name": "[bot:mom-main] Check-ins every 2h",
+   "prompt": "hi",
+   "context_from": [
+    "self"
+   ],
+   "schedule": {
+    "kind": "interval",
+    "minutes": 120,
+    "display": "every 120m"
+   },
+   "schedule_display": "every 120m",
+   "repeat": {
+    "times": null,
+    "completed": 6
+   },
+   "enabled": true,
+   "state": "scheduled",
+   "created_at": "2026-11-08T09:58:03.254134-06:00",
+   "next_run_at": "2026-11-08T11:58:03.296966-06:00",
+   "last_run_at": "2026-11-08T09:58:03.296966-06:00",
+   "last_status": "ok",
+   "last_failure": {
+    "at": "2026-11-08T09:58:03.292339-06:00",
+    "detail": "429 insufficient_quota"
+   },
+   "deliver": "bot-chat"
+  },
+  "every 2h: timeout": {
+   "id": "d9359f80046d",
+   "name": "[bot:mom-main] Check-ins every 2h",
+   "prompt": "hi",
+   "context_from": [
+    "self"
+   ],
+   "schedule": {
+    "kind": "interval",
+    "minutes": 120,
+    "display": "every 120m"
+   },
+   "schedule_display": "every 120m",
+   "repeat": {
+    "times": null,
+    "completed": 7
+   },
+   "enabled": true,
+   "state": "scheduled",
+   "created_at": "2026-11-08T09:58:03.254134-06:00",
+   "next_run_at": "2026-11-08T11:58:03.301619-06:00",
+   "last_run_at": "2026-11-08T09:58:03.301619-06:00",
+   "last_status": "timeout",
+   "last_error": "Job timed out after 600s",
+   "last_failure": {
+    "at": "2026-11-08T09:58:03.301619-06:00",
+    "detail": "Job timed out after 600s"
+   },
+   "failure_streak": 1,
+   "deliver": "bot-chat"
+  },
+  "0 7 * * *: network failure": {
+   "id": "815ca0f53021",
+   "name": "[bot:mom-main] Check-ins 0 7 * * *",
+   "prompt": "hi",
+   "context_from": [
+    "self"
+   ],
+   "schedule": {
+    "kind": "cron",
+    "expr": "0 7 * * *",
+    "display": "0 7 * * *"
+   },
+   "schedule_display": "0 7 * * *",
+   "repeat": {
+    "times": null,
+    "completed": 1
+   },
+   "enabled": true,
+   "state": "scheduled",
+   "created_at": "2026-11-08T09:58:03.311901-06:00",
+   "next_run_at": "2026-11-08T10:03:03.314993-06:00",
+   "last_run_at": "2026-11-08T09:58:03.314799-06:00",
+   "last_status": "error",
+   "last_error": "Connection error: provider unreachable",
+   "last_failure": {
+    "at": "2026-11-08T09:58:03.314799-06:00",
+    "detail": "Connection error: provider unreachable"
+   },
+   "failure_streak": 1,
+   "deliver": "bot-chat",
+   "unreachable_retry": {
+    "attempt": 1,
+    "at": "2026-11-08T10:03:03.314993-06:00",
+    "expr": "0 7 * * *"
+   }
+  },
+  "0 7 * * *: retry rung failed": {
+   "id": "815ca0f53021",
+   "name": "[bot:mom-main] Check-ins 0 7 * * *",
+   "prompt": "hi",
+   "context_from": [
+    "self"
+   ],
+   "schedule": {
+    "kind": "cron",
+    "expr": "0 7 * * *",
+    "display": "0 7 * * *"
+   },
+   "schedule_display": "0 7 * * *",
+   "repeat": {
+    "times": null,
+    "completed": 1
+   },
+   "enabled": true,
+   "state": "scheduled",
+   "created_at": "2026-11-08T09:58:03.311901-06:00",
+   "next_run_at": "2026-11-08T10:13:03.321817-06:00",
+   "last_run_at": "2026-11-08T09:58:03.321633-06:00",
+   "last_status": "error",
+   "last_error": "Connection error: provider unreachable",
+   "last_failure": {
+    "at": "2026-11-08T09:58:03.321633-06:00",
+    "detail": "Connection error: provider unreachable"
+   },
+   "failure_streak": 2,
+   "deliver": "bot-chat",
+   "unreachable_retry": {
+    "attempt": 2,
+    "at": "2026-11-08T10:13:03.321817-06:00",
+    "expr": "0 7 * * *"
+   }
+  },
+  "0 7 * * *: recovered": {
+   "id": "815ca0f53021",
+   "name": "[bot:mom-main] Check-ins 0 7 * * *",
+   "prompt": "hi",
+   "context_from": [
+    "self"
+   ],
+   "schedule": {
+    "kind": "cron",
+    "expr": "0 7 * * *",
+    "display": "0 7 * * *"
+   },
+   "schedule_display": "0 7 * * *",
+   "repeat": {
+    "times": null,
+    "completed": 2
+   },
+   "enabled": true,
+   "state": "scheduled",
+   "created_at": "2026-11-08T09:58:03.311901-06:00",
+   "next_run_at": "2026-11-09T07:00:00-06:00",
+   "last_run_at": "2026-11-08T09:58:03.327561-06:00",
+   "last_status": "ok",
+   "last_failure": {
+    "at": "2026-11-08T09:58:03.321633-06:00",
+    "detail": "Connection error: provider unreachable"
+   },
+   "deliver": "bot-chat"
+  },
+  "0 7 * * *: quota exhausted past the next run": {
+   "id": "815ca0f53021",
+   "name": "[bot:mom-main] Check-ins 0 7 * * *",
+   "prompt": "hi",
+   "context_from": [
+    "self"
+   ],
+   "schedule": {
+    "kind": "cron",
+    "expr": "0 7 * * *",
+    "display": "0 7 * * *"
+   },
+   "schedule_display": "0 7 * * *",
+   "repeat": {
+    "times": null,
+    "completed": 3
+   },
+   "enabled": true,
+   "state": "scheduled",
+   "created_at": "2026-11-08T09:58:03.311901-06:00",
+   "next_run_at": "2026-11-09T07:00:00-06:00",
+   "last_run_at": "2026-11-08T09:58:03.332446-06:00",
+   "last_status": "error",
+   "last_error": "429 insufficient_quota",
+   "last_failure": {
+    "at": "2026-11-08T09:58:03.332446-06:00",
+    "detail": "429 insufficient_quota"
+   },
+   "failure_streak": 1,
+   "deliver": "bot-chat"
+  },
+  "0 7 * * *: recovered after a long hold": {
+   "id": "815ca0f53021",
+   "name": "[bot:mom-main] Check-ins 0 7 * * *",
+   "prompt": "hi",
+   "context_from": [
+    "self"
+   ],
+   "schedule": {
+    "kind": "cron",
+    "expr": "0 7 * * *",
+    "display": "0 7 * * *"
+   },
+   "schedule_display": "0 7 * * *",
+   "repeat": {
+    "times": null,
+    "completed": 4
+   },
+   "enabled": true,
+   "state": "scheduled",
+   "created_at": "2026-11-08T09:58:03.311901-06:00",
+   "next_run_at": "2026-11-09T07:00:00-06:00",
+   "last_run_at": "2026-11-08T09:58:03.337350-06:00",
+   "last_status": "ok",
+   "last_failure": {
+    "at": "2026-11-08T09:58:03.332446-06:00",
+    "detail": "429 insufficient_quota"
+   },
+   "deliver": "bot-chat"
+  },
+  "0 7 * * *: quota exhausted, recovery fire": {
+   "id": "815ca0f53021",
+   "name": "[bot:mom-main] Check-ins 0 7 * * *",
+   "prompt": "hi",
+   "context_from": [
+    "self"
+   ],
+   "schedule": {
+    "kind": "cron",
+    "expr": "0 7 * * *",
+    "display": "0 7 * * *"
+   },
+   "schedule_display": "0 7 * * *",
+   "repeat": {
+    "times": null,
+    "completed": 5
+   },
+   "enabled": true,
+   "state": "scheduled",
+   "created_at": "2026-11-08T09:58:03.311901-06:00",
+   "next_run_at": "2026-11-08T10:59:03.342566-06:00",
+   "last_run_at": "2026-11-08T09:58:03.342380-06:00",
+   "last_status": "error",
+   "last_error": "429 insufficient_quota",
+   "last_failure": {
+    "at": "2026-11-08T09:58:03.342380-06:00",
+    "detail": "429 insufficient_quota"
+   },
+   "failure_streak": 1,
+   "deliver": "bot-chat",
+   "quota_hold_cron_expr": "0 7 * * *",
+   "quota_hold_until": "2026-11-08T10:59:03.342566-06:00"
+  },
+  "0 7 * * *: recovered after quota": {
+   "id": "815ca0f53021",
+   "name": "[bot:mom-main] Check-ins 0 7 * * *",
+   "prompt": "hi",
+   "context_from": [
+    "self"
+   ],
+   "schedule": {
+    "kind": "cron",
+    "expr": "0 7 * * *",
+    "display": "0 7 * * *"
+   },
+   "schedule_display": "0 7 * * *",
+   "repeat": {
+    "times": null,
+    "completed": 6
+   },
+   "enabled": true,
+   "state": "scheduled",
+   "created_at": "2026-11-08T09:58:03.311901-06:00",
+   "next_run_at": "2026-11-09T07:00:00-06:00",
+   "last_run_at": "2026-11-08T09:58:03.347913-06:00",
+   "last_status": "ok",
+   "last_failure": {
+    "at": "2026-11-08T09:58:03.342380-06:00",
+    "detail": "429 insufficient_quota"
+   },
+   "deliver": "bot-chat"
+  },
+  "0 7 * * *: timeout": {
+   "id": "815ca0f53021",
+   "name": "[bot:mom-main] Check-ins 0 7 * * *",
+   "prompt": "hi",
+   "context_from": [
+    "self"
+   ],
+   "schedule": {
+    "kind": "cron",
+    "expr": "0 7 * * *",
+    "display": "0 7 * * *"
+   },
+   "schedule_display": "0 7 * * *",
+   "repeat": {
+    "times": null,
+    "completed": 7
+   },
+   "enabled": true,
+   "state": "scheduled",
+   "created_at": "2026-11-08T09:58:03.311901-06:00",
+   "next_run_at": "2026-11-09T07:00:00-06:00",
+   "last_run_at": "2026-11-08T09:58:03.353210-06:00",
+   "last_status": "timeout",
+   "last_error": "Job timed out after 600s",
+   "last_failure": {
+    "at": "2026-11-08T09:58:03.353210-06:00",
+    "detail": "Job timed out after 600s"
+   },
+   "failure_streak": 1,
+   "deliver": "bot-chat"
+  }
+ }
+}

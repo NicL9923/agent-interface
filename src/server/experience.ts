@@ -124,9 +124,10 @@ export async function installExperienceRoutes(app: FastifyInstance, runtime: Run
     });
     for (const key of recaps.keys()) if (key.startsWith(`${userId}\0`) && !bots.some(bot => key === `${userId}\0${bot.id}`)) recaps.delete(key);
     const ids = new Set(bots.map(bot => bot.id));
-    const upcoming = ((await routines) ?? []).filter(row => ids.has(row.botId) && row.enabled && row.nextRunAt).sort((a,b)=>Date.parse(a.nextRunAt!) - Date.parse(b.nextRunAt!)).slice(0,10)
+    // Check-ins run every few hours and usually say nothing, so they are not scheduled work to show.
+    const upcoming = ((await routines) ?? []).filter(row => ids.has(row.botId) && row.enabled && row.nextRunAt && !store.checkIns.isCheckIn(row.botId, row.id)).sort((a,b)=>Date.parse(a.nextRunAt!) - Date.parse(b.nextRunAt!)).slice(0,10)
       // Today never shows where a routine posts, so it never reads the room catalog to hide rooms someone cannot open.
-      .map(({ roomIds: _, delivery: __, ...row }) => row);
+      .map(({ roomIds: _, delivery: __, nativeOverrides: ___, inFlight: ____, ...row }) => row);
     const content = { since, frontier: page.frontier, hasMore: page.hasMore, items,
       // Today shows each result as one plain line on web and iOS, so a reply's Markdown becomes its words.
       events: page.events.filter(event => ids.has(event.botId)).map(event => ({ ...event, ...(event.body ? { body: markdownPlain(event.body) } : {}), ...(eventFiles.has(event.id) ? { files: eventFiles.get(event.id) } : {}) })).sort((a, b) => Date.parse(b.occurredAt) - Date.parse(a.occurredAt)),

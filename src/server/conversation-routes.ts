@@ -5,7 +5,7 @@ import { interruptionPendingMessage, submissionConflictMessage } from "../shared
 import { filesBefore, historyWindow, MAX_HISTORY_TURNS, windowFiles } from "../shared/history.js";
 import { messageOrigin } from "../shared/message-origin.js";
 import { isRetryRequestId, retryRequestId } from "../shared/retry-id.js";
-import type { CapabilityKey, InflightDelta, ReadTiming, Runtime, Submission, SubmissionReceipt } from "../shared/types.js";
+import type { Approval, ApprovalChoice, ApprovalScope, CapabilityKey, InflightDelta, ReadTiming, Runtime, Submission, SubmissionReceipt } from "../shared/types.js";
 import { MAX_MESSAGE_TEXT } from "../shared/api.js";
 import { formatBytes, MAX_ATTACHMENTS, MAX_DOWNLOAD_BYTES, MAX_UPLOAD_BYTES, UPLOAD_KINDS, UPLOAD_MIME_TYPES } from "../shared/uploads.js";
 import { accountMarker } from "./apns.js";
@@ -38,8 +38,49 @@ export function readTimingHeader(timing: ReadTiming, runtime: number, total: num
   ].join(", ");
 }
 
+/**
+ * A client's answers as Hermes's clarify tool reads them. A multi-select answer is one JSON array of
+ * strings. A client that says so sends exactly that, and anything else, including an empty answer, is
+ * refused. An older client sends its picks joined with ", " in option order and any written answer last.
+ * Hermes would read that as one typed answer, so an answer made only of offered options becomes their
+ * array. Anything else passes unchanged as Hermes's typed text: "Water, only if the trough is empty" is
+ * written text that starts with an option, and nothing in the payload tells it apart from a pick plus
+ * writing. That is how these clients behaved before, so no answer becomes a pick the person didn't make.
+ * When an option itself contains ", " the split could be wrong, so that answer also passes unchanged.
+ */
+export function multiSelectAnswers(questions: { id: string; options?: string[]; multiple?: boolean }[],
+  answers: Record<string, string>, format?: "json"): Record<string, string> {
+  const result = { ...answers };
+  for (const question of questions) {
+    const answer = answers[question.id], options = question.options ?? [];
+    if (!question.multiple || answer === undefined) continue;
+    if (format === "json") {
+      let picks: unknown;
+      try { picks = JSON.parse(answer); } catch { picks = undefined; }
+      if (!Array.isArray(picks) || !picks.length || picks.some(pick => typeof pick !== "string" || !pick.trim()))
+        throw httpError(400, `Send the answer to "${question.id}" as a JSON array of strings.`);
+      continue;
+    }
+    if (!answer || options.some(option => option.includes(", "))) continue;
+    const pieces = answer.split(", ");
+    if (pieces.every(piece => options.includes(piece))) result[question.id] = JSON.stringify(pieces);
+  }
+  return result;
+}
+
+/** Why an approval choice cannot be sent, or undefined when Hermes offered it. An older Hermes offers once and deny. */
+export function unofferedChoice(approval: Approval, decision: "approved" | "denied", scope?: ApprovalScope): string | undefined {
+  if (decision === "denied" && scope !== undefined) return "Decline has no scope.";
+  const choice: ApprovalChoice = decision === "denied" ? "deny" : scope ?? "once";
+  const offered = approval.choices ?? ["once", "deny"];
+  if (offered.includes(choice)) return undefined;
+  return choice === "always" ? "Hermes didn't offer Always allow for this request."
+    : choice === "session" ? "Hermes didn't offer Allow for this conversation for this request."
+    : "Hermes didn't offer that choice for this request.";
+}
+
 /** Decides a pending approval for this person, as the chat and notification actions do. */
-export async function decideApproval(runtime: Runtime, store: Store, botId: string, approvalId: string, decision: "approved" | "denied", userId: string) {
+export async function decideApproval(runtime: Runtime, store: Store, botId: string, approvalId: string, decision: "approved" | "denied", userId: string, scope?: ApprovalScope) {
   const readAt = Date.now();
   const conversation = await runtime.conversation(botId, { history: false });
   store.reconcileApprovals(botId, conversation.requestSessionId, conversation.approvals.map(approval => approval.id), readAt);
@@ -51,7 +92,10 @@ export async function decideApproval(runtime: Runtime, store: Store, botId: stri
     (approval.expiresAt && Date.parse(approval.expiresAt) < Date.now())
   )
     throw httpError(409, "This approval is no longer pending");
-  await runtime.approve(botId, approvalId, decision, userId);
+  // Hermes runs an unoffered "always" as a one-time approval, so the person would believe in a grant that never existed.
+  const refusal = unofferedChoice(approval, decision, scope);
+  if (refusal) throw httpError(409, refusal, { code: "approval_choice_unavailable" });
+  await runtime.approve(botId, approvalId, decision, userId, ...(scope && scope !== "once" ? [scope] : []));
   store.attributeApproval(approvalId, botId, userId, decision);
   if (conversation.activity.runId)
     store.participate(conversation.activity.runId, userId);
@@ -412,8 +456,8 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
       }
     );
   });
-  const answers = z.object({ answers: z.record(z.string().max(200), z.string().max(10000)) });
-  apiRoute(app, "POST /bots/:id/requests/:approvalId", { body: answers }, async (req, { answers }) => {
+  const answers = z.object({ answers: z.record(z.string().max(200), z.string().max(10000)), answerFormat: z.literal("json").optional() });
+  apiRoute(app, "POST /bots/:id/requests/:approvalId", { body: answers }, async (req, { answers, answerFormat }) => {
     const p = req.params;
     const conversation = await runtime.conversation(p.id, { history: false });
     const attention = conversation.attention?.find(
@@ -424,7 +468,7 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
         409,
         "This request must be handled in the official Hermes interface or is no longer pending",
       );
-    await runtime.answerRequest(p.id, p.approvalId, answers);
+    await runtime.answerRequest(p.id, p.approvalId, multiSelectAnswers(attention.questions ?? [], answers, answerFormat));
     if (conversation.activity.runId)
       store.participate(conversation.activity.runId, signedIn(req).id);
     return { ok: true };
@@ -440,14 +484,14 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
     await runtime.stop(req.params.id);
     return { ok: true };
   });
-  const decision = z.object({ decision: z.enum(["approved", "denied"]), account: z.string().max(64).optional() });
+  const decision = z.object({ decision: z.enum(["approved", "denied"]), scope: z.enum(["once", "session", "always"]).optional(), account: z.string().max(64).optional() });
   apiRoute(app, "POST /bots/:id/approvals/:approvalId", { before: () => requireCapability("approvals"), body: decision },
-    async (req, { decision, account }) => {
+    async (req, { decision, scope, account }) => {
     const p = req.params;
     // An iOS notification action names the account it was sent to. Another person signed in on that phone must not decide it.
     if (account !== undefined && account !== accountMarker(signedIn(req).id))
       throw httpError(409, "This approval was sent to a different account");
-    await decideApproval(runtime, store, p.id, p.approvalId, decision, signedIn(req).id);
+    await decideApproval(runtime, store, p.id, p.approvalId, decision, signedIn(req).id, scope);
     return { ok: true };
   });
   apiRoute(app, "GET /bots/:id/draft", {}, async req => store.draft(signedIn(req).id, req.params.id));

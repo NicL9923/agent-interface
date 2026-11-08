@@ -2,11 +2,13 @@ import type { RuntimeEvent } from "../shared/types.js";
 import type { NotificationRepository } from "./store-notifications.js";
 import type { PresentationRepository } from "./store-presentation.js";
 import type { StoreDatabase } from "./store-database.js";
+import type { CheckInRepository } from "./store-check-ins.js";
 
 /** The durable Hermes event log, its discovery cursor, and each person's Today feed over it. */
 export class EventRepository {
   // The presentation repository's sharing rules decide which events eventPage returns.
-  constructor(private readonly database: StoreDatabase, private readonly notifications: NotificationRepository, readonly presentation: PresentationRepository) {}
+  constructor(private readonly database: StoreDatabase, private readonly notifications: NotificationRepository, readonly presentation: PresentationRepository,
+    private readonly checkIns?: CheckInRepository) {}
   private get db() { return this.database.db; }
   cursor(): string {
     return (
@@ -19,8 +21,10 @@ export class EventRepository {
   }
   recordEvents(events: RuntimeEvent[], cursor: string) {
     this.database.transaction(() => {
-      for (const event of events)
-        if (event.kind !== "activity") {
+      for (const found of events)
+        if (found.kind !== "activity") {
+          // A silent check-in is kept, for run settlement, but marked so nothing tells anyone about it.
+          const event = this.checkIns?.quiet(found) ? { ...found, quiet: true } : found;
           this.db
             .prepare("INSERT OR IGNORE INTO notification_events VALUES(?,?,?)")
             .run(event.id, JSON.stringify(event), Date.now());
@@ -69,14 +73,15 @@ export class EventRepository {
     // One ordered pass over light columns: whole events are read only for the page. Sharing is
     // checked here, once per assistant, instead of per row in SQL. Past a full page the rest is
     // never read; otherwise the pass has seen every visible event and so the newest one.
-    const candidates = this.db.prepare(`SELECT i.id,e.id AS eventId,json_extract(e.value,'$.botId') AS botId,json_extract(e.value,'$.occurredAt') AS occurredAt,e.created_at AS createdAt
+    const candidates = this.db.prepare(`SELECT i.id,e.id AS eventId,json_extract(e.value,'$.botId') AS botId,json_extract(e.value,'$.occurredAt') AS occurredAt,e.created_at AS createdAt,json_extract(e.value,'$.quiet') AS quiet
       FROM notification_ingestion i JOIN notification_events e ON e.id=i.event_id
       WHERE i.id>? AND i.id<=? AND json_extract(e.value,'$.botId') IN (${receiver.botIds.map(() => "?").join(",")}) ORDER BY i.id`);
     const rows: { id: number; eventId: string }[] = [];
     let last = frontier;
-    for (const row of candidates.iterate(frontier, upperFrontier, ...receiver.botIds) as Iterable<{ id: number; eventId: string; botId: string; occurredAt: unknown; createdAt: number }>) {
+    for (const row of candidates.iterate(frontier, upperFrontier, ...receiver.botIds) as Iterable<{ id: number; eventId: string; botId: string; occurredAt: unknown; createdAt: number; quiet: unknown }>) {
       if (!receiver.mayReceive(row.botId, row.occurredAt)) continue;
       last = row.id;
+      if (row.quiet) continue;
       if (since !== null && !(row.createdAt >= since)) continue;
       rows.push(row);
       if (rows.length > 100) break;

@@ -16,6 +16,7 @@ import { StatusDock, type DockItem } from "./StatusDock";
 import { ownPrompts, recallStep, type Recall } from "./prompt-recall";
 import { largePasteFile } from "./large-paste";
 import { formatBytes } from "../shared/uploads";
+import { clearDecline, useDeclined } from "./decline-handoff";
 
 /** Stops the open assistant's current response. The composer's Stop button and Cmd+. share it. */
 export function useStopResponse(botId: string, report: (message: string) => void) {
@@ -208,6 +209,12 @@ export const Composer = memo(function Composer({ boot, selected, botId, prompts,
   };
   const footer = useRef<HTMLElement>(null);
   const drop = useFileDrop(footer, addFiles);
+  // After a declined approval the message box asks what to do instead, until Hermes accepts the next message.
+  const declinedStep = useDeclined(botId);
+  // Only a receipt arriving after the decline counts: the one already showing belongs to an earlier message.
+  useEffect(() => {
+    if (declinedStep && receipt?.status === "accepted") clearDecline(botId);
+  }, [receipt?.requestId, receipt?.status]);
   // Up and Down in an empty composer browse this person's earlier messages here, newest first.
   const [recall, setRecall] = useState<Recall>(null);
   const caret = useRef<"start" | "end" | null>(null);
@@ -321,7 +328,8 @@ export const Composer = memo(function Composer({ boot, selected, botId, prompts,
           value={shown.text}
           placeholder={
             handedOff ? "Sending…"
-              : waiting ?? (active
+              : waiting ?? (declinedStep ? `Tell ${selected.name} what to do instead`
+              : active
               ? "Guide…"
               : "Message…")
           }

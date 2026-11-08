@@ -8,7 +8,12 @@
 export interface RoutineDelivery { deliver?: unknown; failure_deliver?: unknown; origin?: unknown }
 
 /** The rooms a routine posts in, by room identity, or `unknown` when Hermes's reading cannot be mirrored. */
-export type DeliveryRooms = { rooms: string[]; unknown: false } | { rooms: string[]; unknown: true };
+export type DeliveryRooms = ({ rooms: string[]; unknown: false } | { rooms: string[]; unknown: true }) & {
+  /** Other assistants' Bot Chats it delivers into, by profile, from `bot-chat:<profile>` tokens. */
+  chats?: string[];
+  /** It also posts somewhere outside WildBots: a platform chat, home channels, or an origin that is not a room. */
+  outward?: boolean;
+};
 
 /**
  * Python's str.strip(): the characters str.isspace() accepts, which JavaScript's trim() does not match
@@ -82,12 +87,13 @@ function origin(job: RoutineDelivery): { platform: string; chat: string } | unde
  * origin chat. Routing tokens such as `all` expand to home channels, which are never rooms.
  */
 export function deliveryRooms(job: RoutineDelivery): DeliveryRooms {
-  const rooms = new Set<string>();
-  let unknown = false;
+  const rooms = new Set<string>(), chats = new Set<string>();
+  let unknown = false, outward = false;
   const from = origin(job);
   const originRoom = () => {
     if (from === "unknown") { unknown = true; return; }
-    if (from?.platform !== "room") return;
+    // Without a recorded origin Hermes falls back to a configured platform's home channel.
+    if (from?.platform !== "room") { outward = true; return; }
     const room = roomOfAddress(from.chat);
     if (room) rooms.add(room);
   };
@@ -104,10 +110,14 @@ export function deliveryRooms(job: RoutineDelivery): DeliveryRooms {
         if (room) rooms.add(room);
         continue;
       }
-      if (part === "origin" || part === "room") originRoom();
+      if (part === "origin" || part === "room") { originRoom(); continue; }
+      const [kind, ...rest] = part.split(":");
+      const target = strip(rest.join(":"));
+      if (strip(kind).toLowerCase() === "bot-chat") { if (target) chats.add(target); continue; }
+      outward = true;
     }
   }
-  return { rooms: [...rooms], unknown } as DeliveryRooms;
+  return { rooms: [...rooms], unknown, chats: [...chats], outward } as DeliveryRooms;
 }
 
 /**

@@ -738,4 +738,183 @@ class SkillLockTests(unittest.TestCase):
         self.assertEqual((raised.exception.status, self.writes), (409, []))
 
 
+class ApprovalSettingsTests(unittest.TestCase):
+    """Always-allowed patterns and auto-review go through the profile's own config, inside its write scope."""
+    def setUp(self):
+        self.config = {'command_allowlist': ['recursive delete', 'SQL DROP'], 'approvals': {'mode': 'manual'}}
+        self.scope, self.saves = [], []
+        @contextlib.contextmanager
+        def write_scope(profile):
+            self.scope.append(profile)
+            try:
+                yield
+            finally:
+                self.scope.pop()
+        def save(config):
+            self.assertEqual(self.scope, [self.profile], 'config written outside the profile write scope')
+            self.saves.append(copy.deepcopy(config))
+            self.config = copy.deepcopy(config)
+        approval = module('tools.approval', _lock=threading.Lock(),
+            _session_approved={'ranch-chat': {'recursive delete', 'rm -r', 'SQL DROP'}, 'other-chat': {'recursive delete'}, 'launch-chat': {'recursive delete'}},
+            _read_permanent_allowlist=lambda: set(self.config.get('command_allowlist') or []),
+            # Hermes b9cb268 and d23cc6b read these once and keep them: the launch profile's grants
+            # under "", a routed profile's under its home key.
+            _permanent_approved={'recursive delete', 'rm -r', 'SQL DROP'},
+            _permanent_approved_by_home={'/hermes/profiles/ranch': {'recursive delete', 'SQL DROP'}, '/hermes/profiles/other': {'recursive delete'}},
+            _permanent_baseline_by_home={'': {'recursive delete'}, '/hermes/profiles/ranch': {'recursive delete', 'SQL DROP'}})
+        self.approval = approval
+        context = module('tools.approval_context', _get_approval_config=lambda: self.config.get('approvals') or {},
+            _normalize_approval_mode=lambda mode: 'off' if mode is False else mode if mode in ('manual', 'smart', 'off') else 'manual')
+        detection = module('tools.approval_detection', _approval_key_aliases=lambda key: {key, 'rm -r'} if key == 'recursive delete' else {key})
+        profiles = module('hermes_cli.profiles', get_profile_dir=lambda name: Path('/hermes') if name == 'default' else Path('/hermes/profiles') / name)
+        config = module('hermes_cli.config', load_config=lambda: copy.deepcopy(self.config), save_config=save)
+        self.server = types.SimpleNamespace(_hermes_home='/hermes', _sessions={
+            'a': dict(session_key='ranch-chat', profile_home='/hermes/profiles/ranch'),
+            'b': dict(session_key='other-chat', profile_home='/hermes/profiles/other'),
+            # The launch profile's sessions carry no profile_home.
+            'c': dict(session_key='launch-chat', profile_home=None)})
+        self.patcher = patch.dict(sys.modules, {
+            'tools': module('tools', approval=approval, approval_context=context, approval_detection=detection),
+            'tools.approval': approval, 'tools.approval_context': context, 'tools.approval_detection': detection,
+            'hermes_cli': module('hermes_cli'), 'hermes_cli.profiles': profiles, 'hermes_cli.config': config,
+            'hermes_constants': module('hermes_constants', hermes_home_key=lambda path: str(path)),
+            'hermes_cli.web_routers._common': module('hermes_cli.web_routers._common', config_write_scope=write_scope)})
+        self.patcher.start()
+        self.addCleanup(self.patcher.stop)
+
+    def run_operation(self, operation, profile='ranch', **fields):
+        self.profile = profile
+        return automation.approval_operation(dict(operation=operation, profile=profile, **fields), self.server)
+
+    def test_settings_list_the_allowlist_sorted_with_the_review_mode(self):
+        self.assertEqual(self.run_operation('approval_settings'), dict(allowlist=['SQL DROP', 'recursive delete'], mode='manual'))
+
+    def test_removing_a_pattern_saves_the_rest_and_withdraws_its_session_grants_in_that_profile_only(self):
+        result = self.run_operation('approval_allowlist_remove', pattern='recursive delete')
+        self.assertEqual(result, dict(ok=True, allowlist=['SQL DROP'], mode='manual'))
+        self.assertEqual(self.saves[-1]['command_allowlist'], ['SQL DROP'])
+        # Every key the pattern has had leaves this profile's sessions; other grants and profiles stay.
+        self.assertEqual(self.approval._session_approved['ranch-chat'], {'SQL DROP'})
+        self.assertEqual(self.approval._session_approved['other-chat'], {'recursive delete'})
+        self.assertEqual(self.approval._session_approved['launch-chat'], {'recursive delete'})
+        # The permanent cache an older Hermes never rereads loses it too, for this profile only.
+        self.assertEqual(self.approval._permanent_approved_by_home['/hermes/profiles/ranch'], {'SQL DROP'})
+        self.assertEqual(self.approval._permanent_baseline_by_home['/hermes/profiles/ranch'], {'SQL DROP'})
+        self.assertEqual(self.approval._permanent_approved_by_home['/hermes/profiles/other'], {'recursive delete'})
+        self.assertIn('recursive delete', self.approval._permanent_approved)
+
+    def test_the_launch_profile_matches_sessions_without_a_profile_home(self):
+        self.run_operation('approval_allowlist_remove', profile='default', pattern='recursive delete')
+        self.assertEqual(self.approval._session_approved['launch-chat'], set())
+        self.assertIn('recursive delete', self.approval._session_approved['ranch-chat'])
+        # Its grants live in the module-level set, under every key the pattern has had.
+        self.assertEqual(self.approval._permanent_approved, {'SQL DROP'})
+        self.assertEqual(self.approval._permanent_baseline_by_home[''], set())
+        self.assertIn('recursive delete', self.approval._permanent_approved_by_home['/hermes/profiles/ranch'])
+
+    def test_removing_a_pattern_not_on_disk_still_withdraws_its_session_grant_without_writing(self):
+        self.config['command_allowlist'] = ['SQL DROP']
+        self.run_operation('approval_allowlist_remove', pattern='recursive delete')
+        self.assertEqual(self.saves, [])
+        self.assertEqual(self.approval._session_approved['ranch-chat'], {'SQL DROP'})
+
+    def test_auto_review_writes_smart_or_manual_and_nothing_else(self):
+        self.assertEqual(self.run_operation('approval_mode', mode='smart')['mode'], 'smart')
+        self.assertEqual(self.saves[-1]['approvals'], {'mode': 'smart'})
+        self.config['approvals'] = None
+        self.assertEqual(self.run_operation('approval_mode', mode='manual')['mode'], 'manual')
+        self.assertEqual(self.saves[-1]['approvals'], {'mode': 'manual'})
+
+    def test_invalid_patterns_and_modes_refuse_before_any_write(self):
+        for operation, fields, reason in (
+            ('approval_allowlist_remove', dict(pattern=''), 'always-allowed command pattern'),
+            ('approval_allowlist_remove', dict(pattern='   '), 'always-allowed command pattern'),
+            ('approval_allowlist_remove', dict(pattern=['recursive delete']), 'always-allowed command pattern'),
+            ('approval_allowlist_remove', dict(pattern='x' * 201), 'always-allowed command pattern'),
+            ('approval_allowlist_remove', dict(pattern='rm\n-rf'), 'always-allowed command pattern'),
+            # Turning approvals off entirely stays a native-only choice.
+            ('approval_mode', dict(mode='off'), 'manual or smart'),
+            ('approval_mode', dict(mode=None), 'manual or smart'),
+        ):
+            with self.subTest(fields=fields), self.assertRaisesRegex(automation.AutomationError, reason) as raised:
+                self.run_operation(operation, **fields)
+            self.assertEqual(raised.exception.status, 400)
+        self.assertEqual(self.saves, [])
+        self.assertIn('recursive delete', self.approval._session_approved['ranch-chat'])
+
+    def test_controller_routes_approval_operations_and_pauses_writes_for_maintenance(self):
+        maintenance = [False]
+        self.server._sessions['a']['running'] = True
+        controller = automation.Controller(self.server, lambda *_: {'profiles': [{'name': 'ranch'}]}, None,
+            threading.RLock(), threading.RLock(), lambda: maintenance[0], types.SimpleNamespace(lock=threading.RLock(), db=sqlite3.connect(':memory:')))
+        run = lambda operation, **fields: controller.run(dict(operation=operation, profile='ranch', visibleProfiles=['ranch'], **fields))
+        self.profile = 'ranch'
+        # A busy chat does not hold up a policy change.
+        self.assertEqual(run('approval_mode', mode='smart')['mode'], 'smart')
+        with self.assertRaises(automation.AutomationError) as raised:
+            controller.run(dict(operation='approval_settings', profile='ranch', visibleProfiles=['other']))
+        self.assertEqual(raised.exception.status, 404)
+        maintenance[0] = True
+        self.assertEqual(run('approval_settings')['allowlist'], ['SQL DROP', 'recursive delete'])
+        with self.assertRaisesRegex(automation.AutomationError, 'upgraded'):
+            run('approval_allowlist_remove', pattern='SQL DROP')
+        self.assertEqual(len(self.saves), 1)
+
+
+
+SOURCE = os.environ.get('HERMES_SOURCE')
+
+
+@unittest.skipUnless(SOURCE, 'Set HERMES_SOURCE to a Hermes checkout to run against its real approval cache')
+class RealApprovalCacheTests(unittest.TestCase):
+    """Removal against the real tools.approval of the checkout HERMES_SOURCE names, in a temp home.
+
+    Run it on every qualified revision: b9cb268 and d23cc6b keep the permanent set without
+    rereading config.yaml, ed1afb0 resyncs it on each check.
+    """
+    def setUp(self):
+        import tempfile
+        self.directory = tempfile.TemporaryDirectory()
+        self.home = Path(self.directory.name).resolve()
+        (self.home / 'profiles' / 'ranch').mkdir(parents=True)
+        for home in (self.home, self.home / 'profiles' / 'ranch'):
+            (home / 'config.yaml').write_text('command_allowlist:\n- recursive delete\napprovals:\n  mode: manual\n')
+        self.environment = patch.dict(os.environ, {'HERMES_HOME': str(self.home), 'HOME': str(self.home)})
+        self.environment.start()
+        sys.path.insert(0, SOURCE)
+        for name in [name for name in sys.modules if name.split('.')[0] in ('tools', 'hermes_cli', 'hermes_constants', 'agent', 'gateway')]:
+            del sys.modules[name]
+        from tools import approval
+        from hermes_cli.web_routers._common import config_write_scope
+        self.approval, self.scope = approval, config_write_scope
+        self.server = types.SimpleNamespace(_hermes_home=str(self.home), _sessions={
+            'launch': dict(session_key='launch-chat', profile_home=None),
+            'ranch': dict(session_key='ranch-chat', profile_home=str(self.home / 'profiles' / 'ranch'))})
+
+    def tearDown(self):
+        sys.path.remove(SOURCE)
+        self.environment.stop()
+        self.directory.cleanup()
+
+    def approved(self, profile, session):
+        with self.scope(profile):
+            return self.approval.is_approved(session, 'recursive delete')
+
+    def test_removal_revokes_the_live_permanent_and_session_grants_for_each_profile(self):
+        self.approval.load_permanent_allowlist()
+        self.approval.approve_session('launch-chat', 'recursive delete')
+        # Each check warms the profile's cache, as a command check in a live chat would.
+        self.assertTrue(self.approval.is_approved('fresh-launch-chat', 'recursive delete'))
+        self.assertTrue(self.approved('ranch', 'fresh-ranch-chat'))
+        self.assertTrue(self.approved('default', 'fresh-launch-chat'))
+        automation.approval_operation(dict(operation='approval_allowlist_remove', profile='ranch', pattern='recursive delete'), self.server)
+        self.assertFalse(self.approved('ranch', 'fresh-ranch-chat'), 'The routed profile still allows it from its cache')
+        self.assertTrue(self.approval.is_approved('fresh-launch-chat', 'recursive delete'), 'Another profile keeps its own grant')
+        result = automation.approval_operation(dict(operation='approval_allowlist_remove', profile='default', pattern='recursive delete'), self.server)
+        self.assertEqual(result['allowlist'], [])
+        self.assertFalse(self.approval.is_approved('launch-chat', 'recursive delete'), 'The live session keeps it')
+        self.assertFalse(self.approval.is_approved('fresh-launch-chat', 'recursive delete'), 'The launch profile still allows it from its cache')
+        self.assertFalse(self.approved('default', 'fresh-launch-chat'))
+
+
 if __name__ == '__main__': unittest.main()

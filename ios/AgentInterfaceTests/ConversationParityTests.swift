@@ -157,6 +157,16 @@ import XCTest
     XCTAssertEqual(sending.delivery, SentEcho.Delivery(id: "req", status: .sending))
   }
 
+  func testASteeredSendSaysSoBeforeHermessCopyArrivesAndAnUnknownOneSaysNothing() throws {
+    var steered = accepted; steered.steered = true
+    let echo = try XCTUnwrap(step(sending, receipt: steered))
+    XCTAssertEqual(SentEcho.transcript(conversation(), [echo])?.messages.last?.steered, true)
+    for receipt in [accepted, Receipt(requestId: "req", status: "accepted", messageId: "row-9", steered: false)] {
+      let plain = try XCTUnwrap(step(sending, receipt: receipt))
+      XCTAssertNil(SentEcho.transcript(conversation(), [plain])?.messages.last?.steered)
+    }
+  }
+
   func testWaitsUnconfirmedWhenTheRequestEndsWithoutAReceipt() {
     let echo = step(sending, pending: request)
     XCTAssertEqual(echo?.status, .unconfirmed)

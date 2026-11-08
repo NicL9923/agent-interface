@@ -59,7 +59,64 @@ import XCTest
     if !send.canTap { app.scrollViews["conversationTranscript"].swipeUp() }
     XCTAssertTrue(send.wait(until: "isEnabled == true"))
     send.tapWhenReady()
-    XCTAssertTrue(app.staticTexts["extras: Hay, Feed; note: Bring gloves; plan: Second"].waitForExistence(timeout: 10))
+    XCTAssertTrue(app.staticTexts[#"extras: ["Hay","Feed"]; note: Bring gloves; plan: Second"#].waitForExistence(timeout: 10),
+      "Several choices go to Hermes as one JSON array")
+  }
+
+  func testApprovalScopesTheDeclineHandoffARecommendedAnswerAndSteering() throws {
+    let app = launch(["AGENT_INTERFACE_UI_APPROVAL_SCOPES": "1"])
+    let once = app.buttons["approvalAllowOnce"]
+    XCTAssertTrue(once.waitForExistence(timeout: 15), app.debugDescription)
+    XCTAssertTrue(app.buttons["approvalAllowSession"].exists, "Hermes offered this conversation, so it shows")
+    XCTAssertTrue(app.staticTexts["steeredLabel"].exists, "A steered message says it joined the running task")
+    XCTAssertTrue(app.buttons["questionOption-feed-0"].wait(until: "isSelected == true"), "The recommended answer starts chosen")
+    XCTAssertTrue(app.buttons["questionOption-feed-0"].label.hasSuffix("recommended"))
+    try capture(app, "approval-scopes")
+    app.buttons["approvalMore"].tapWhenReady()
+    app.buttons["Always allow…"].tapWhenReady()
+    let alert = app.alerts.firstMatch
+    XCTAssertTrue(alert.waitForExistence(timeout: 5))
+    XCTAssertTrue(alert.label.hasPrefix("Always allow this for"))
+    XCTAssertTrue(alert.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "“recursive delete”")).firstMatch.exists, "It names the pattern it saves")
+    try capture(app, "approval-always-confirm")
+    alert.buttons["Cancel"].tapWhenReady()
+    XCTAssertTrue(alert.waitForDisappearance())
+    app.buttons["approvalDecline"].tapWhenReady()
+    XCTAssertTrue(app.descendants(matching: .any)["declinedStep"].waitForExistence(timeout: 10))
+    XCTAssertTrue(app.textViews["messageComposer"].waitForKeyboardFocus(true), "The message box takes the next step")
+    try capture(app, "approval-declined")
+  }
+
+  /// The approval scope states for visual review, in light and dark. Runs only when screenshots are written.
+  func testApprovalScopeScreens() throws {
+    try XCTSkipIf(ProcessInfo.processInfo.environment["AGENT_INTERFACE_SCREENSHOT_DIR"] == nil, "Set AGENT_INTERFACE_SCREENSHOT_DIR to capture")
+    for appearance in [XCUIDevice.Appearance.light, .dark] {
+      XCUIDevice.shared.appearance = appearance
+      let theme = appearance == .dark ? "dark" : "light"
+      let app = launch(["AGENT_INTERFACE_UI_APPROVAL_SCOPES": "1"])
+      XCTAssertTrue(app.buttons["approvalAllowOnce"].waitForExistence(timeout: 15))
+      try capture(app, "ios-approval-choices-and-steered-\(theme)")
+      app.scrollViews["conversationTranscript"].swipeUp()
+      try capture(app, "ios-question-recommended-\(theme)")
+      app.buttons["approvalMore"].tapWhenReady()
+      app.buttons["Always allow…"].tapWhenReady()
+      XCTAssertTrue(app.alerts.firstMatch.waitForExistence(timeout: 5))
+      try capture(app, "ios-always-allow-confirm-\(theme)")
+      app.alerts.firstMatch.buttons["Cancel"].tapWhenReady()
+      app.buttons["approvalDecline"].tapWhenReady()
+      XCTAssertTrue(app.descendants(matching: .any)["declinedStep"].waitForExistence(timeout: 10))
+      XCTAssertTrue(app.textViews["messageComposer"].waitForKeyboardFocus(true))
+      try capture(app, "ios-declined-composer-focused-\(theme)")
+      app.buttons["hideKeyboard"].tapWhenReady()
+      app.buttons["botProfile"].tapWhenReady()
+      app.buttons["profileSettings"].tapWhenReady()
+      app.descendants(matching: .any)["settingsSection.access"].tapWhenReady()
+      app.descendants(matching: .any)["settingsPage.always-allowed commands"].tapWhenReady()
+      XCTAssertTrue(app.descendants(matching: .any)["approvalAutoReview"].waitForExistence(timeout: 10))
+      try capture(app, "ios-always-allowed-settings-\(theme)")
+      app.terminate()
+    }
+    XCUIDevice.shared.appearance = .light
   }
 
   func testAFailedTurnRetriesAndLeavesTheDraftAlone() throws {

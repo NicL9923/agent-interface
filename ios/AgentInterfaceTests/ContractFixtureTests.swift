@@ -82,6 +82,11 @@ private typealias Check = @MainActor (Data) throws -> Void
     "bot-skill-content": check(HermesSkillContent.self) {
       XCTAssertEqual($0.name, "ranch/fences"); XCTAssertTrue($0.content.contains("Check the north gate.")); XCTAssertFalse($0.truncated)
     },
+    "approval-settings": check(ApprovalSettings.self) {
+      XCTAssertTrue($0.supported); XCTAssertEqual($0.allowlist, ["grocery order", "recursive delete"])
+      XCTAssertEqual($0.mode, "manual"); XCTAssertTrue($0.canManageAutoReview)
+    },
+    "approval-settings-remove": check(ApprovalSettings.self) { XCTAssertEqual($0.allowlist, ["grocery order"]) },
     "bot-skill-lock": check(HermesSkillLock.self) {
       XCTAssertTrue($0.ok); XCTAssertEqual($0.name, "ranch/fences"); XCTAssertFalse($0.locked)
     },
@@ -115,11 +120,16 @@ private typealias Check = @MainActor (Data) throws -> Void
       XCTAssertEqual($0.activity.state, .working); XCTAssertEqual($0.activity.runId, "run-dinner")
       XCTAssertEqual($0.attention?.compactMap(\.secure).filter(\.supported).count, 4)
       XCTAssertEqual($0.attention?.first?.questions?.first?.options, ["Market", "Co-op"])
+      let extras = try XCTUnwrap($0.attention?.first?.questions?.last)
+      XCTAssertEqual([extras.multiple, extras.recommended.map { $0 == 0 }], [true, true]); XCTAssertEqual(extras.label(0), "Basil")
       XCTAssertNotNil($0.approvals.first?.expiresAt.flatMap(ServerDate.parse))
+      XCTAssertEqual($0.approvals.first?.choices, ["once", "session", "always", "deny"])
+      XCTAssertEqual($0.approvals.first?.patterns, ["grocery order"]); XCTAssertEqual($0.approvals.first?.command, "grocer order --items 12")
+      XCTAssertEqual($0.messages.filter { $0.steered == true }.map(\.id), ["message-steer"])
       XCTAssertEqual($0.activityMessages.compactMap(\.toolCall).map(\.id), ["call-search", "call-calendar"])
       XCTAssertEqual($0.toolCalls?.last?.error, "Calendar access expired.")
       XCTAssertEqual($0.draft?.text, "Add basil"); XCTAssertEqual($0.readPosition?.scrollTop, 240.5)
-      let reply = try XCTUnwrap($0.messages.last)
+      let reply = try XCTUnwrap($0.messages.last { $0.role == "assistant" })
       XCTAssertEqual(reply.reasoning, "Balanced the week around the pantry list."); XCTAssertEqual(reply.files?.first?.size, 18432)
       XCTAssertEqual(ReplyCards.parse(reply.text).compactMap(\.cards).flatMap { $0 }.map(\.id), ["groceries"])
     },

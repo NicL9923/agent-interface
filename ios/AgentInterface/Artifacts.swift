@@ -102,6 +102,49 @@ enum Artifacts {
     }
     return order.compactMap { byId[$0] }
   }
+  /// Chips under one reply; past this many a "+N more" chip opens the whole list.
+  static let replyChipLimit = 4
+  /// The files each turn generated, keyed by the ID of the turn's last reply, where its chips go,
+  /// as the web's `replyArtifacts` in src/shared/artifacts.ts. A file belongs to the turn it first
+  /// appears in, and only Generated files count; files a reply row of the turn already shows as its
+  /// attachments are left out. A person's message or a scheduled prompt starts a turn; subagent and
+  /// agent rows filed as user messages do not.
+  static func replyFiles(_ messages: [Message], artifacts: [Artifact], earlier: [EarlierFiles.Entry] = []) -> [String: [Artifact]] {
+    let listed = Dictionary(artifacts.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+    // A file that first appeared before these messages belongs to that earlier turn.
+    var seen = Set(earlier.flatMap { ($0.files ?? []).map(\.id) }), result: [String: [Artifact]] = [:], files: [Artifact] = [], reply: String?
+    var shown = Set<String>()
+    func close() {
+      // A reply row shows its own files as attachments, so a chip would repeat them.
+      let chips = files.filter { !shown.contains($0.id) }
+      if let reply, !chips.isEmpty { result[reply] = chips }
+      files = []; shown = []; reply = nil
+    }
+    for message in messages {
+      if message.role == "user" && [nil, "human", "scheduled"].contains(message.presentationOrigin?.kind) { close() }
+      for file in message.files ?? [] where seen.insert(file.id).inserted {
+        if let artifact = listed[file.id], artifact.source == .generated { files.append(artifact) }
+      }
+      if message.role == "assistant" && !message.isInternalActivity
+        && (!message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !(message.files ?? []).isEmpty) {
+        reply = message.id
+        for file in message.files ?? [] { shown.insert(file.id) }
+      }
+    }
+    close()
+    return result
+  }
+  /// The chips for a loaded window, attributed exactly as the file list shows the same files, as the
+  /// web's `windowReplyArtifacts`. A window that starts after the beginning needs the file-bearing
+  /// messages before it: until they are known it has no chips.
+  static func windowReplyFiles(_ conversation: Conversation?, earlier: [EarlierFiles.Entry]?) -> [String: [Artifact]] {
+    guard let conversation else { return [:] }
+    if needsEarlier(conversation) && earlier == nil { return [:] }
+    let older = earlier ?? []
+    return replyFiles(conversation.messages, artifacts: list(conversation, earlier: older), earlier: older)
+  }
+  /// Whether a window starts after the beginning, so attributing its files needs the history before it.
+  static func needsEarlier(_ conversation: Conversation) -> Bool { (conversation.earlier ?? 0) > 0 || (conversation.earlierFiles ?? 0) > 0 }
   /// The web's size label: bytes, then KB and MB with one decimal.
   static func size(_ bytes: Int?) -> String {
     guard let bytes, bytes >= 0 else { return "" }
@@ -118,6 +161,8 @@ enum Artifacts {
 }
 
 struct ConversationFilesView: View {
+  /// The file a reply's chip opened the list on: scrolled to and marked when the list appears.
+  var focus: String? = nil
   @Environment(AppStore.self) private var store
   @Environment(\.dismiss) private var dismiss
   @State private var kind = ArtifactKind.all
@@ -131,6 +176,7 @@ struct ConversationFilesView: View {
     let artifacts = store.conversationArtifacts
     let filtered = Artifacts.filter(artifacts, query: search, kind: kind)
     NavigationStack {
+      ScrollViewReader { proxy in
       List {
         Section {
           Picker("File type", selection: $kind) { ForEach(ArtifactKind.allCases) { Text($0.label).tag($0) } }
@@ -138,10 +184,12 @@ struct ConversationFilesView: View {
           if let openingFile { ProgressView("Opening \(openingFile.name)…").font(.subheadline).foregroundStyle(Palette.muted) }
         }
         content(artifacts, filtered)
-      }.householdListBackground().accessibilityIdentifier("artifactsList").searchable(text: $search, isPresented: $searchPresented, prompt: "Find a filename")
+      }.onAppear { if let focus { proxy.scrollTo(focus, anchor: .center) } }
+      .householdListBackground().accessibilityIdentifier("artifactsList").searchable(text: $search, isPresented: $searchPresented, prompt: "Find a filename")
         .navigationTitle("Artifacts").navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
         .task { await store.loadEarlierFiles() }
+      }
     }.sheet(item: $preview) { FilePreview(file: $0).ignoresSafeArea().coveringChat(store) }
       .alert("Couldn't open file", isPresented: Binding(get: { previewError != nil }, set: { if !$0 { previewError = nil } })) {
         Button("OK", role: .cancel) { previewError = nil }
@@ -184,7 +232,10 @@ struct ConversationFilesView: View {
         Button("Clear filters") { search = ""; kind = .all; searchPresented = false }.buttonStyle(.accentProminent).controlSize(.large)
       }
     } else {
-      ForEach(filtered) { ArtifactRow(artifact: $0, openManaged: openPreview, opening: openingFile?.id == $0.id) }
+      ForEach(filtered) { artifact in
+        ArtifactRow(artifact: artifact, openManaged: openPreview, opening: openingFile?.id == artifact.id, focused: focus == artifact.id)
+          .listRowBackground(focus == artifact.id ? Palette.accent.opacity(0.14) : nil)
+      }
     }
   }
 }
@@ -193,6 +244,8 @@ struct ArtifactRow: View {
   var artifact: Artifact
   var openManaged: (FileRef) -> Void
   var opening = false
+  /// The file a reply's chip opened the list on.
+  var focused = false
   @Environment(\.dynamicTypeSize) private var typeSize
   @Environment(AppStore.self) private var store
   @Environment(\.openURL) private var openURL
@@ -209,7 +262,8 @@ struct ArtifactRow: View {
         }.frame(maxWidth: .infinity, alignment: .leading)
       }.frame(minHeight: 44).contentShape(Rectangle())
     }.disabled(location == .unsupported).accessibilityIdentifier("artifact-" + artifact.file.id)
-      .accessibilityHint(hint(location)).accessibilityValue(opening ? "Opening file" : "")
+      .accessibilityHint(hint(location)).accessibilityValue(opening ? "Opening file" : focused ? "From the reply" : "")
+      .accessibilityAddTraits(focused ? .isSelected : [])
   }
   private var detail: String {
     let size = Artifacts.size(artifact.file.size)
@@ -236,5 +290,55 @@ struct ArtifactRow: View {
   private func hint(_ location: FileLocation) -> String {
     if case .external = location { return "Opens the file's source in your browser." }
     return "Download and preview this file. Share or save it from the preview."
+  }
+}
+
+/// Opens the artifacts sheet from a reply's file chips: on one file, or on the whole list for "+N more".
+private struct OpenReplyFileKey: EnvironmentKey { static let defaultValue: @MainActor (String?) -> Void = { _ in } }
+extension EnvironmentValues {
+  var openReplyFile: @MainActor (String?) -> Void {
+    get { self[OpenReplyFileKey.self] }
+    set { self[OpenReplyFileKey.self] = newValue }
+  }
+}
+/// The files a reply's turn produced, as chips under it, as the web's ReplyFiles shows them.
+struct ReplyFilesView: View {
+  var artifacts: [Artifact]
+  @Environment(\.openReplyFile) private var open
+  @Environment(\.colorScheme) private var scheme
+  var body: some View {
+    let shown = Array(artifacts.prefix(Artifacts.replyChipLimit)), more = artifacts.count - shown.count
+    WrapLayout(spacing: 6, lineSpacing: 6) {
+      ForEach(shown) { artifact in
+        let kind = ArtifactKind.of(artifact.file)
+        chip { open(artifact.id) } label: {
+          Label { Text(artifact.file.name).lineLimit(1).truncationMode(.middle) } icon: {
+            Image(systemName: Self.symbol(kind)).foregroundStyle(Palette.accent)
+          }
+        }.accessibilityLabel("\(artifact.file.name), \(kind.typeName)").accessibilityHint("Opens it in Artifacts")
+          .accessibilityIdentifier("replyFile-" + artifact.id)
+      }
+      if more > 0 {
+        chip { open(nil) } label: { Text("+\(more) more").foregroundStyle(Palette.muted) }
+          .accessibilityLabel("\(more) more \(more == 1 ? "file" : "files")").accessibilityHint("Opens Artifacts")
+          .accessibilityIdentifier("replyFilesMore")
+      }
+    }.accessibilityElement(children: .contain).accessibilityLabel("Files from this reply")
+  }
+  private func chip(_ action: @escaping () -> Void, @ViewBuilder label: () -> some View) -> some View {
+    Button(action: action) {
+      // Sized to its name; a name too long for the line truncates in the middle.
+      label().font(.footnote).padding(.horizontal, 11).frame(minHeight: 36)
+        .background(Palette.surface(scheme), in: Capsule()).overlay(Capsule().stroke(Palette.line))
+    }.buttonStyle(.plain)
+  }
+  static func symbol(_ kind: ArtifactKind) -> String {
+    switch kind {
+    case .image: "photo"
+    case .text: "doc.text"
+    case .audio: "waveform"
+    case .video: "film"
+    case .all, .document, .other: "doc"
+    }
   }
 }

@@ -37,8 +37,9 @@ def goal_document(state):
     return None if not state or state.status == "cleared" else dict(title=text(state.goal, 10000), status=text(state.status, 40), turnsUsed=state.turns_used, maxTurns=state.max_turns, **({"pausedReason": text(state.paused_reason, 1000)} if state.paused_reason else {}))
 
 
-READS = frozenset(("overview", "task_get", "skill_content", "skill_diff"))
-OPERATIONS = READS | frozenset(("goal_set", "goal_pause", "goal_resume", "goal_clear", "task_create", "task_update", "task_action", "task_dependency", "trigger_create", "trigger_update", "trigger_toggle", "trigger_delete", "skill_decide", "skill_policy", "skill_lock"))
+READS = frozenset(("overview", "task_get", "skill_content", "skill_diff", "approval_settings"))
+OPERATIONS = READS | frozenset(("goal_set", "goal_pause", "goal_resume", "goal_clear", "task_create", "task_update", "task_action", "task_dependency", "trigger_create", "trigger_update", "trigger_toggle", "trigger_delete", "skill_decide", "skill_policy", "skill_lock", "approval_allowlist_remove", "approval_mode"))
+APPROVAL_OPERATIONS = frozenset(("approval_settings", "approval_allowlist_remove", "approval_mode"))
 SKILL_NAME = re.compile(r"[A-Za-z0-9_./-]{1,200}")
 
 
@@ -268,6 +269,8 @@ class Controller:
             visible = self.roster(data)
             if operation == "overview":
                 return self.overview(data["profile"], visible)
+            if operation == "approval_settings":
+                return approval_operation(data, self.server)
             if operation in READS:
                 return task_operation(data, visible) if operation == "task_get" else skill_operation(data, self.journal)
             if operation == "goal_resume":
@@ -297,6 +300,9 @@ class Controller:
                     return task_operation(data, visible)
                 if operation.startswith("trigger_"):
                     return trigger_operation(data)
+                if operation in APPROVAL_OPERATIONS:
+                    # Approval policy, like skill policy, needs no idle chat.
+                    return approval_operation(data, self.server)
                 return skill_operation(data, self.journal)
 
     def overview(self, profile, visible):
@@ -682,6 +688,110 @@ def skill_operation(data, journal=None):
     with journal.lock, journal.db:
         journal.db.execute("UPDATE automation_skill_decisions SET status='completed' WHERE profile=? AND pending_id=?", (data["profile"], pending_id))
     return dict(ok=True)
+
+
+# --- Approval scopes (WildBots B1) -----------------------------------------------------------
+# "Always allow" writes a pattern key to the profile's command_allowlist through native
+# tools.approval._persist_choice, and also grants the live session. Removing one here edits
+# the same config list and withdraws the matching session grants this process holds, so the
+# removal takes effect at the next command check. Grants held by another Hermes process,
+# such as the messaging gateway, last until that process's chat ends.
+APPROVAL_PATTERN = re.compile(r"[^\x00-\x1f\x7f]{1,200}")
+
+
+def approval_pattern(data):
+    pattern = data.get("pattern")
+    if not isinstance(pattern, str) or not APPROVAL_PATTERN.fullmatch(pattern) or not pattern.strip():
+        raise AutomationError("Choose an always-allowed command pattern.")
+    return pattern
+
+
+def approval_settings():
+    from tools import approval
+    from tools import approval_context
+    return dict(allowlist=sorted(approval._read_permanent_allowlist()),
+                mode=approval_context._normalize_approval_mode(approval_context._get_approval_config().get("mode", "manual")))
+
+
+def profile_sessions(server, profile):
+    """Session keys of this process's live sessions that run in the profile."""
+    from pathlib import Path
+    from hermes_cli.profiles import get_profile_dir
+    # A session without profile_home runs in the launch profile. The caller is inside this
+    # profile's config scope, so the scoped home cannot stand in for the launch home.
+    launch = Path(server._hermes_home).resolve()
+    home = Path(get_profile_dir(profile)).resolve()
+    keys = []
+    for session in list(server._sessions.values()):
+        if not isinstance(session, dict) or not session.get("session_key"):
+            continue
+        if (Path(session["profile_home"]).resolve() if session.get("profile_home") else launch) == home:
+            keys.append(session["session_key"])
+    return keys
+
+
+def withdraw_permanent(approval, server, profile, aliases):
+    """Drops the patterns from this process's permanent grant cache for the profile. Callers hold
+    approval._lock.
+
+    Hermes ed1afb0 resyncs that cache from config.yaml on every check, but qualified b9cb268 and
+    d23cc6b read it once and keep it, so the saved file alone would leave the grant live. The
+    launch profile's grants live in the module-level set under baseline key "", and a routed
+    profile's under its home key; the profile write scope can name either, so both are cleared.
+    The baselines lose the patterns too, so a later save can't read them as this process's grants.
+    """
+    from pathlib import Path
+    from hermes_cli.profiles import get_profile_dir
+    from hermes_constants import hermes_home_key
+    home = Path(get_profile_dir(profile))
+    keys = {hermes_home_key(home)}
+    caches = [getattr(approval, "_permanent_approved_by_home", {}).get(key) for key in keys]
+    if home.resolve() == Path(server._hermes_home).resolve():
+        keys.add("")
+        caches.append(getattr(approval, "_permanent_approved", None))
+    baselines = getattr(approval, "_permanent_baseline_by_home", {})
+    for granted in caches + [baselines.get(key) for key in keys]:
+        if granted:
+            granted.difference_update(aliases)
+
+
+def approval_operation(data, server):
+    from hermes_cli.web_routers._common import config_write_scope
+    if data["operation"] == "approval_settings":
+        return approval_settings()
+    if data["operation"] == "approval_mode":
+        # Only manual review and Hermes's smart guardian. Turning approvals off stays a native-only choice.
+        if data.get("mode") not in ("manual", "smart"):
+            raise AutomationError("Choose manual or smart approval review.")
+        from hermes_cli.config import load_config, save_config
+        with config_write_scope(data["profile"]):
+            config = load_config()
+            approvals = config.get("approvals")
+            if not isinstance(approvals, dict):
+                approvals = config["approvals"] = {}
+            approvals["mode"] = data["mode"]
+            save_config(config)
+            return dict(ok=True, **approval_settings())
+    pattern = approval_pattern(data)
+    from hermes_cli.config import load_config, save_config
+    from tools import approval
+    from tools.approval_detection import _approval_key_aliases
+    with config_write_scope(data["profile"]):
+        config = load_config()
+        current = approval._read_permanent_allowlist()
+        if pattern in current:
+            config["command_allowlist"] = sorted(current - {pattern})
+            save_config(config)
+        # The native lock guards every grant map. A pattern granted "always" was also granted
+        # to its session, so withdraw that too, under each key the pattern has had.
+        aliases = _approval_key_aliases(pattern) | {pattern}
+        with approval._lock:
+            withdraw_permanent(approval, server, data["profile"], aliases)
+            for key in profile_sessions(server, data["profile"]):
+                granted = approval._session_approved.get(key)
+                if granted:
+                    granted.difference_update(aliases)
+        return dict(ok=True, **approval_settings())
 
 
 def install_runtime(server, native, open_bot, submission_lock, maintenance_lock, maintenance_state, journal, submit):
