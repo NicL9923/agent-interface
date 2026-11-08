@@ -28,6 +28,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     scope = next
     // Another account's rooms never show.
     groupCatalog = nil
+    accountUsage = nil
     // Only a loaded account replaces it; launching, before the account loads, leaves it alone.
     if let next { UserDefaults.standard.set(next, forKey: DeviceDefaults.signedInScope) }
     additions = savedAdditions()
@@ -140,6 +141,8 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   var homeRequest: UUID?
   /// The household's group chats, which home lists beside the assistants. Nil until the first read for this account.
   var groupCatalog: GroupCatalog?
+  /// The provider accounts' limits and credits, read for the profile menu and the Usage sheet. Nil until the first read for this account.
+  var accountUsage: UsageOverview?
   /// The account scope whose household stream has sent a `groups` notice: that server pushes catalog changes.
   var groupNoticeScope: String?
   @ObservationIgnored var groupLoadId = UUID()

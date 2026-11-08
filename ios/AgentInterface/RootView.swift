@@ -34,6 +34,7 @@ struct RootView: View {
   /// The room just made, opened once its sheet is gone.
   @State private var createdRoom: GroupRoom?
   @State private var preferencesOpen = false
+  @State private var usageOpen = false
   #if DEBUG
     @State private var captureConnectionOpen = false
     @State private var captureAppleOpen = false
@@ -51,6 +52,7 @@ struct RootView: View {
     @State private var captureRoomWhenListed = false
   #endif
   @State private var quickSettingsRequested = false
+  @State private var quickUsageRequested = false
   var body: some View {
     Group {
       if store.bootstrap == nil {
@@ -63,6 +65,7 @@ struct RootView: View {
     .background { AppBadgeSync() }
     .sheet(isPresented: $quickSwitcherOpen, onDismiss: {
       if quickSettingsRequested { quickSettingsRequested = false; preferencesOpen = true }
+      if quickUsageRequested { quickUsageRequested = false; usageOpen = true }
     }) {
       QuickSwitcher(choose: go).appStore(store).coveringChat(store)
     }
@@ -121,7 +124,7 @@ struct RootView: View {
   private var splitNavigation: some View {
     NavigationSplitView(columnVisibility: $columnVisibility, preferredCompactColumn: $compactColumn) {
       BotListView(
-        destination: destination, openedRoomId: openedRoom?.id, openPreferences: { preferencesOpen = true }, edit: { settingsBot = $0 }, create: { creatingBot = true },
+        destination: destination, openedRoomId: openedRoom?.id, openPreferences: { preferencesOpen = true }, openUsage: { usageOpen = true }, edit: { settingsBot = $0 }, create: { creatingBot = true },
         openBot: { destination = .conversation; compactColumn = .detail },
         openToday: { destination = .today; compactColumn = .detail },
         openRoom: { open($0) }, newGroup: { creatingGroup = true }, creatingGroup: creatingGroup,
@@ -146,7 +149,7 @@ struct RootView: View {
     }
   }
   private var sheets: RootSheets {
-    RootSheets(store: store, sharedCapture: $sharedCapture, settingsBot: $settingsBot, creatingBot: $creatingBot, creatingGroup: $creatingGroup, preferencesOpen: $preferencesOpen,
+    RootSheets(store: store, sharedCapture: $sharedCapture, settingsBot: $settingsBot, creatingBot: $creatingBot, creatingGroup: $creatingGroup, preferencesOpen: $preferencesOpen, usageOpen: $usageOpen,
       groupCreated: { room in createdRoom = room; store.groupRoomCreated(room) },
       groupDismissed: { if let room = createdRoom { createdRoom = nil; open(room) } })
   }
@@ -172,6 +175,7 @@ struct RootView: View {
     }
     if let mode = DebugFixtures.captureSurvival, mode != "empty" { captureSurvivalOpen = true; return }
     if DebugFixtures.captureApplePage { captureAppleOpen = true; return }
+    if DebugFixtures.captureUsagePage { usageOpen = true; return }
     if DebugFixtures.captureConnectionPage { captureConnectionOpen = true; return }
     if DebugFixtures.capturePreferencesPage || DebugFixtures.captureComputerPage || DebugFixtures.captureUpgradePage || DebugFixtures.captureNotificationsPage { preferencesOpen = true; return }
     if DebugFixtures.captureGroupPage {
@@ -202,6 +206,7 @@ struct RootView: View {
     destination = .conversation
     path = []
     preferencesOpen = false
+    usageOpen = false
     settingsBot = nil
     creatingBot = false
     store.openedFile = nil
@@ -211,7 +216,7 @@ struct RootView: View {
   /// cannot stack the same screen twice.
   private var compactNavigation: some View {
     NavigationStack(path: $path) {
-      BotListView(destination: destination, openedRoomId: openedRoom?.id, openPreferences: { preferencesOpen = true },
+      BotListView(destination: destination, openedRoomId: openedRoom?.id, openPreferences: { preferencesOpen = true }, openUsage: { usageOpen = true },
         edit: { settingsBot = $0 }, create: { creatingBot = true },
         openBot: { destination = .conversation; path = [.chat] },
         openToday: { path = [.today] },
@@ -265,6 +270,7 @@ struct RootView: View {
       if phone { path = [.chat] } else { compactColumn = .detail }
       Task { await store.select(id) }
     case .settings: quickSettingsRequested = true
+    case .usage: quickUsageRequested = true
     case .today: destination = .today; path = [.today]; compactColumn = .detail
     case .room(let id):
       if let room = store.groupCatalog?.rooms.first(where: { $0.id == id }) { open(room) }
@@ -285,6 +291,7 @@ private struct RootSheets: ViewModifier {
   @Binding var creatingBot: Bool
   @Binding var creatingGroup: Bool
   @Binding var preferencesOpen: Bool
+  @Binding var usageOpen: Bool
   var groupCreated: (GroupRoom) -> Void
   var groupDismissed: () -> Void
   func body(content: Content) -> some View {
@@ -295,6 +302,7 @@ private struct RootSheets: ViewModifier {
       .sheet(isPresented: $creatingBot) { BotSettingsView(bot: nil, close: { creatingBot = false }).appStore(store).coveringChat(store) }
       .sheet(isPresented: $creatingGroup, onDismiss: groupDismissed) { NavigationStack { GroupCreateView(onCreated: groupCreated) }.appStore(store).coveringChat(store) }
       .sheet(isPresented: $preferencesOpen) { PreferencesView(close: { preferencesOpen = false }).appStore(store).coveringChat(store) }
+      .sheet(isPresented: $usageOpen) { UsageView(close: { usageOpen = false }).appStore(store).coveringChat(store) }
       .sheet(item: $store.openedFile) { FilePreview(file: $0).ignoresSafeArea().coveringChat(store) }
       .sheet(item: $store.routineResult) { target in
         NavigationStack { RoutineResultsView(botId: target.botId, routineId: target.routineId, resultId: target.resultId) }.appStore(store).coveringChat(store)
@@ -437,6 +445,7 @@ struct BotListView: View {
   /// The group chat open now, which its row shows as selected beside home.
   var openedRoomId: String? = nil
   var openPreferences: () -> Void
+  var openUsage: () -> Void
   var edit: (Bot) -> Void
   var create: () -> Void
   var openBot: () -> Void
@@ -456,6 +465,7 @@ struct BotListView: View {
   @State private var undo = UndoQueue()
   /// Everyone on home despite the Focus, until the Focus changes.
   @State private var ignoringFocus = false
+  @State private var signOutConfirm = false
   private var pinnedMinimum: CGFloat { sizeClass == .compact ? pinColumn : pinColumn * 0.76 }
   private var lost: Bool { store.householdConnectionLost(offline: reachability.offline) }
   private var selectionVisible: Bool { sizeClass != .compact }
@@ -547,13 +557,18 @@ struct BotListView: View {
       // Rooms come with the catalog, read on appearing, on returning to the foreground and on each `groups`
       // notice from the household stream; a slow poll covers a notice lost to a stream that failed unnoticed.
       // Split-view reparenting can cancel a view task during a phone push, so the first read does not depend on one.
-      .onAppear { pendingGroup = GroupCreation.pending(scope: store.scope); Task { await store.refreshGroups() }; store.prefetchLikelyChats() }
+      .onAppear {
+        pendingGroup = GroupCreation.pending(scope: store.scope); Task { await store.refreshGroups() }; store.prefetchLikelyChats()
+        // The profile menu's Usage line reads from this, so it is ready before the menu opens.
+        if store.accountUsage == nil { Task { await store.refreshAccountUsage() } }
+      }
       // A reply that makes a chat unread is the likeliest next tap, so it is read ahead too.
       .onChange(of: store.likelyChatIds) { _, _ in store.prefetchLikelyChats() }
       .onChange(of: store.scope) { _, scope in pendingGroup = GroupCreation.pending(scope: scope); Task { await store.refreshGroups() } }
       .onChange(of: creatingGroup) { _, _ in pendingGroup = GroupCreation.pending(scope: store.scope) }
       .pollWhileActive(id: "\(store.scope ?? "")|\(store.groupsPollInterval)", every: store.groupsPollInterval) { await store.refreshGroups() }
       .newSectionAlert(for: $sectionFor)
+      .signOutConfirmation(isPresented: $signOutConfirm, store: store)
       .undoToast($undo) { change in Task { await store.undo(change) } }
       .onChange(of: store.focus) { _, _ in ignoringFocus = false }
   }
@@ -568,15 +583,31 @@ struct BotListView: View {
     }.padding(12).background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 12))
       .accessibilityElement(children: .contain).accessibilityIdentifier("focusBanner")
   }
-  /// The person's own avatar is the button, with the connection dot on it; no capsule around it.
+  /// The person's own avatar is the button, with the connection dot on it; no capsule around it. It opens the
+  /// profile menu: who is signed in, Usage, Settings and Sign out.
   private var accountButton: some View {
-    Button(action: openPreferences) {
+    Menu {
+      let user = store.bootstrap?.user
+      Section {
+        Button {} label: { Text(user?.name ?? ""); Text(user?.email ?? "") }.disabled(true)
+      }
+      Section {
+        Button(action: openUsage) {
+          Label("Usage", systemImage: "gauge.with.dots.needle.50percent")
+          Text(store.accountUsage.flatMap { AccountUsage.summary($0.accounts) } ?? "Plans, limits and credits")
+        }
+        Button(action: openPreferences) { Label("Settings", systemImage: "gearshape") }
+      }
+      Section {
+        Button(role: .destructive) { signOutConfirm = true } label: { Label("Sign out", systemImage: "rectangle.portrait.and.arrow.right") }
+      }
+    } label: {
       AccountAvatar(member: store.bootstrap?.user, size: 40)
         .overlay(alignment: .bottomTrailing) {
           Circle().fill(HomeConnectionStatus.of(lost: lost, offline: reachability.offline).color)
             .frame(width: 10, height: 10).overlay(Circle().stroke(homeBackground, lineWidth: 2))
         }.contentShape(Circle())
-    }.buttonStyle(.plain).accessibilityLabel("Settings").accessibilityIdentifier("openSettings")
+    }.buttonStyle(.plain).accessibilityLabel("Account menu").accessibilityIdentifier("openSettings")
   }
   /// Home while there are no assistants: the setup panel if Hermes is out of reach, else the web's empty list.
   @ViewBuilder private var emptyHome: some View {

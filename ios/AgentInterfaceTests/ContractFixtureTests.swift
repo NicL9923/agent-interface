@@ -223,6 +223,22 @@ private typealias Check = @MainActor (Data) throws -> Void
       XCTAssertEqual($0.title, "Update tested and ready"); XCTAssertEqual($0.candidate?.displayVersion, "0.9.5")
       XCTAssertEqual($0.checks.first?.status, "passed"); XCTAssertEqual($0.busyBots, ["Household"])
     },
+    "usage-accounts": check(UsageOverview.self) {
+      XCTAssertEqual($0.accounts.map(\.provider), ["openai-codex", "openrouter", "custom"]); XCTAssertEqual($0.unavailableBots, ["archive"])
+      XCTAssertEqual($0.accounts[0].plan, "Pro"); XCTAssertEqual($0.accounts[0].bankedResets, 2); XCTAssertEqual($0.accounts[0].botIds, ["household", "garden"])
+      XCTAssertFalse($0.accounts[0].fallbackOnly); XCTAssertTrue($0.accounts[1].fallbackOnly)
+      XCTAssertEqual($0.accounts[0].windows.map(\.usedPercent), [100, 62.5]); XCTAssertNotNil($0.accounts[0].windows[0].resetsAt.flatMap(ServerDate.parse))
+      XCTAssertNil($0.accounts[1].windows[1].usedPercent); XCTAssertEqual($0.accounts[1].windows[1].scope, .model)
+      XCTAssertEqual($0.accounts[1].windows[0].detail, "$15.00 of $20.00 remaining"); XCTAssertNil($0.accounts[1].plan)
+      XCTAssertEqual($0.accounts[0].details, ["Credits balance: $4.00"])
+      XCTAssertTrue($0.accounts[2].windows.isEmpty); XCTAssertNotNil($0.accounts[2].unavailableReason)
+      XCTAssertEqual(AccountUsage.summary($0.accounts), "ChatGPT \u{B7} 100% of session")
+    },
+    "usage-reset": check(ResetResult.self) {
+      XCTAssertEqual($0.status, .reset); XCTAssertEqual($0.availableCount, 1); XCTAssertEqual($0.windowsReset, 2)
+      XCTAssertEqual($0.account?.key, String(repeating: "c", count: 32)); XCTAssertEqual($0.account?.bankedResets, 2)
+      XCTAssertEqual(AccountUsage.resetOutcome($0), "Limits reset. 1 banked reset left.")
+    },
     "vault": check(ProfileVault.self) { XCTAssertEqual($0.items.first?.hasOtp, true); XCTAssertEqual($0.sources.map(\.name), ["local", "bitwarden"]) },
     "vault-login-add": check(AddedVaultLogin.self) { XCTAssertEqual($0.id, "login-new") },
     "vault-login-remove": check(RemovedVaultLogin.self) { XCTAssertTrue($0.removed) },

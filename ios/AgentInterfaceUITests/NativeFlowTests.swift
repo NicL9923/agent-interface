@@ -165,8 +165,8 @@ import XCTest
   func testNativeUpgradeQualificationAndUncertainInstallRecovery() {
     let app = app(upgradeUncertain: true)
     XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 10))
-    if !app.buttons["Settings"].exists { app.navigationBars.buttons.firstMatch.tap() }
-    app.buttons["Settings"].tap()
+    if !app.profileMenu.exists { app.navigationBars.buttons.firstMatch.tap() }
+    app.openSettingsFromProfileMenu()
     for _ in 0..<5 {
       if app.buttons["Hermes updates"].canTap { break }
       app.swipeUp()
@@ -285,8 +285,8 @@ import XCTest
   func testNativeFailedUpdateOffersGuardedRecovery() {
     let app = app(upgradeFailed: true)
     XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 10))
-    if !app.buttons["Settings"].exists { app.navigationBars.buttons.firstMatch.tap() }
-    app.buttons["Settings"].tap()
+    if !app.profileMenu.exists { app.navigationBars.buttons.firstMatch.tap() }
+    app.openSettingsFromProfileMenu()
     for _ in 0..<6 { if app.buttons["Hermes updates"].canTap { break }; app.swipeUp() }
     app.buttons["Hermes updates"].tap()
     XCTAssertTrue(app.buttons["restartHermesService"].waitForExistence(timeout: 10))
