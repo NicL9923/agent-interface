@@ -220,7 +220,8 @@ export interface ApiRoutes {
   "POST /bots/:id/messages": { body: MessageRequest; response: SubmissionReceipt };
   "POST /bots/:id/steer": { body: MessageRequest; response: SubmissionReceipt };
   "GET /submissions/:id": { response: SubmissionReceipt };
-  "POST /bots/:id/requests/:approvalId": { body: { answers: Record<string, string> }; response: Ok };
+  /** `answerFormat: "json"` says multi-select answers are JSON arrays; without it they are read as an older client's comma-joined picks. */
+  "POST /bots/:id/requests/:approvalId": { body: { answers: Record<string, string>; answerFormat?: "json" }; response: Ok };
   "POST /bots/:id/stop": { response: Ok };
   /** `scope` reaches past this one command only when Hermes offered it for this approval. Absent means once. */
   "POST /bots/:id/approvals/:approvalId": { body: { decision: "approved" | "denied"; scope?: ApprovalScope; account?: string }; response: Ok };

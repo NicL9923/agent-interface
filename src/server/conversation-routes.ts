@@ -39,6 +39,36 @@ export function readTimingHeader(timing: ReadTiming, runtime: number, total: num
 }
 
 /** Decides a pending approval for this person, as the chat and notification actions do. */
+/**
+ * A client's answers as Hermes's clarify tool reads them. A multi-select answer is one JSON array of
+ * strings. A client that says so sends exactly that, and anything else is refused. An older client sends
+ * its picks joined with ", " in option order and any written answer last; Hermes would read that as one
+ * typed answer, so it is split into the options it names, then the rest as written text. When an option
+ * itself contains ", " the split could be wrong, so that answer passes unchanged, as Hermes's typed text.
+ */
+export function multiSelectAnswers(questions: { id: string; options?: string[]; multiple?: boolean }[],
+  answers: Record<string, string>, format?: "json"): Record<string, string> {
+  const result = { ...answers };
+  for (const question of questions) {
+    const answer = answers[question.id], options = question.options ?? [];
+    if (!question.multiple || !answer) continue;
+    if (format === "json") {
+      let picks: unknown;
+      try { picks = JSON.parse(answer); } catch { picks = undefined; }
+      if (!Array.isArray(picks) || !picks.length || picks.some(pick => typeof pick !== "string" || !pick.trim()))
+        throw httpError(400, `Send the answer to "${question.id}" as a JSON array of strings.`);
+      continue;
+    }
+    if (options.some(option => option.includes(", "))) continue;
+    const pieces = answer.split(", ");
+    let named = 0;
+    while (named < pieces.length && options.includes(pieces[named])) named++;
+    const written = pieces.slice(named).join(", ").trim();
+    result[question.id] = JSON.stringify([...pieces.slice(0, named), ...written ? [written] : []]);
+  }
+  return result;
+}
+
 /** Why an approval choice cannot be sent, or undefined when Hermes offered it. An older Hermes offers once and deny. */
 export function unofferedChoice(approval: Approval, decision: "approved" | "denied", scope?: ApprovalScope): string | undefined {
   if (decision === "denied" && scope !== undefined) return "Decline has no scope.";
@@ -423,8 +453,8 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
       }
     );
   });
-  const answers = z.object({ answers: z.record(z.string().max(200), z.string().max(10000)) });
-  apiRoute(app, "POST /bots/:id/requests/:approvalId", { body: answers }, async (req, { answers }) => {
+  const answers = z.object({ answers: z.record(z.string().max(200), z.string().max(10000)), answerFormat: z.literal("json").optional() });
+  apiRoute(app, "POST /bots/:id/requests/:approvalId", { body: answers }, async (req, { answers, answerFormat }) => {
     const p = req.params;
     const conversation = await runtime.conversation(p.id, { history: false });
     const attention = conversation.attention?.find(
@@ -435,7 +465,7 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
         409,
         "This request must be handled in the official Hermes interface or is no longer pending",
       );
-    await runtime.answerRequest(p.id, p.approvalId, answers);
+    await runtime.answerRequest(p.id, p.approvalId, multiSelectAnswers(attention.questions ?? [], answers, answerFormat));
     if (conversation.activity.runId)
       store.participate(conversation.activity.runId, signedIn(req).id);
     return { ok: true };

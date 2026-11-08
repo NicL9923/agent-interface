@@ -1067,7 +1067,7 @@ struct AttentionView: View {
       do {
         try await store.perform(
           "/bots/\(APIClient.component(botId))/requests/\(APIClient.component(request.id))",
-          ["answers": answers.payload(questions)])
+          QuestionAnswers.Submission(answers: answers.payload(questions)))
         guard scope == store.scope else { return }
         settled = true
         AccessibilityNotification.Announcement("Answers sent.").post()
@@ -1108,6 +1108,11 @@ private struct QuestionOption: View {
 /// they chose to answer in their own words. One answer per question, as the server takes them; a
 /// question with several choices sends them as one JSON array, which Hermes's clarify tool reads.
 struct QuestionAnswers: Equatable {
+  /// What `POST /bots/:id/requests/:id` takes. `answerFormat` says multi-select answers are JSON arrays.
+  struct Submission: Encodable {
+    var answers: [String: String]
+    var answerFormat = "json"
+  }
   /// Chosen option indices per question, in the order they were chosen.
   var chosen: [String: [Int]] = [:]
   var writing: Set<String> = []

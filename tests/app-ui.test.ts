@@ -115,13 +115,13 @@ describe("conversation state", () => {
     await typeInto(custom, "A different plan");
     vi.mocked(write).mockRejectedValueOnce(new Error("Try again"));
     await act(async () => submit.click());
-    expect(write).toHaveBeenCalledWith("/bots/shared/requests/ask", { answers: { plan: "A different plan", note: "Keep the draft" } });
+    expect(write).toHaveBeenCalledWith("/bots/shared/requests/ask", { answers: { plan: "A different plan", note: "Keep the draft" }, answerFormat: "json" });
     expect(custom.value).toBe("A different plan");
     // An option that happens to read "Write my own answer" is still an option, not the field.
     await act(async () => options()[1].click());
     expect(container.querySelector('[aria-label="Your answer: Which plan?"]')).toBeNull();
     await act(async () => submit.click());
-    expect(write).toHaveBeenLastCalledWith("/bots/shared/requests/ask", { answers: { plan: "Write my own answer", note: "Keep the draft" } });
+    expect(write).toHaveBeenLastCalledWith("/bots/shared/requests/ask", { answers: { plan: "Write my own answer", note: "Keep the draft" }, answerFormat: "json" });
   });
 
   it("reopens a refused household stream at the fallback interval", async () => {

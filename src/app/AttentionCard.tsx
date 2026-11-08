@@ -82,7 +82,7 @@ export function AttentionCard({ request, botId, report, disconnected = false }: 
           if (disconnected || busy || settled) return;
           setBusy(true);
           report("");
-          void apiRequest("POST /bots/:id/requests/:approvalId", { params: { id: botId, approvalId: request.id }, body: { answers } })
+          void apiRequest("POST /bots/:id/requests/:approvalId", { params: { id: botId, approvalId: request.id }, body: { answers, answerFormat: "json" } })
             .then(() => { setSettled(true); reactAvatar(botId, "cheer"); })
             .catch((error) => report(error.message))
             .finally(() => setBusy(false));

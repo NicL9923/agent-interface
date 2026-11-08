@@ -448,8 +448,12 @@ options, or a suffix with nothing before it, carry no `recommended`. Show the op
 without the suffix and a Recommended tag, pre-select it for a single-choice question,
 and never pre-select a multi-select one. Answer with the raw option text, which Hermes
 strips. A multi-select answer is one JSON array of strings, such as `["Hay","Feed"]`,
-with any written answer as one more item; an older client's comma-joined text reaches
-Hermes as a single typed answer.
+with any written answer as one more item. Send `answerFormat: "json"` with the answers
+to say so; the server then refuses a multi-select answer that is not a non-empty JSON
+array of strings with 400, naming the question. Without it, the server reads the
+answer as an older client's: picks joined with `, ` in option order and any written
+text last, which it turns into that array for Hermes. When an option itself contains
+`, `, that answer goes to Hermes unchanged, as the person's typed text.
 
 **Steering.** A `SubmissionReceipt` from an add-on that reports `steering_decision`
 carries `steered`: whether the add-on admitted the message into the task that was

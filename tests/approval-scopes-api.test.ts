@@ -67,3 +67,47 @@ describe("approval scopes", () => {
     expect(approve).not.toHaveBeenCalled();
   });
 });
+
+describe("multi-select answers", () => {
+  const questions = [
+    { id: "chores", prompt: "Chores?", options: ["Feed (Recommended)", "Water", "Fence"], multiple: true },
+    { id: "pasture", prompt: "Pasture?", options: ["North (Recommended)", "South"] },
+    { id: "loads", prompt: "Loads?", options: ["Hay, square bales", "Straw"], multiple: true },
+  ];
+  async function asking() {
+    const answerRequest = vi.fn<Runtime["answerRequest"]>(async () => {});
+    const runtime = fakeRuntime({
+      listBots: async () => [{ id: "shared", name: "Shared", shared: true, model: "test", activity: "idle" }],
+      capabilities: async () => capabilitiesFixture({ approvals: { supported: true } }),
+      status: async () => ({ connected: true, code: "ready" }),
+      conversation: async () => conversationFixture({ botId: "shared", activity: { state: "blocked" },
+        attention: [{ id: "ask", kind: "clarify", title: "Questions", detail: "", questions }] }),
+      answerRequest, close: async () => {},
+    });
+    const { app } = await createApp(loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }), runtime, { background: false });
+    apps.push(app);
+    const headers = await localLogin(app, origin);
+    return { answerRequest, answer: (payload: Record<string, unknown>) => app.inject({ method: "POST", url: "/api/bots/shared/requests/ask", headers, payload }) };
+  }
+  it("turns an older client's comma-joined picks into the JSON array Hermes reads, written text last", async () => {
+    const { answerRequest, answer } = await asking();
+    expect((await answer({ answers: { chores: "Feed (Recommended), Water", pasture: "North (Recommended)", loads: "Straw" } })).statusCode).toBe(200);
+    expect(answerRequest.mock.calls[0][2]).toEqual({ chores: JSON.stringify(["Feed (Recommended)", "Water"]), pasture: "North (Recommended)",
+      // An option with ", " in it could be split wrongly, so that answer stays as the person's text.
+      loads: "Straw" });
+    await answer({ answers: { chores: "Water, Salt block, loose" } });
+    expect(answerRequest.mock.calls[1][2]).toEqual({ chores: JSON.stringify(["Water", "Salt block, loose"]) });
+  });
+  it("passes a client's JSON array unchanged and refuses anything else from a client that said JSON", async () => {
+    const { answerRequest, answer } = await asking();
+    const picks = JSON.stringify(["Feed (Recommended)", "Water, extra"]);
+    expect((await answer({ answers: { chores: picks, pasture: "South" }, answerFormat: "json" })).statusCode).toBe(200);
+    expect(answerRequest.mock.calls[0][2]).toEqual({ chores: picks, pasture: "South" });
+    for (const chores of ["Feed (Recommended), Water", "[]", JSON.stringify(["Feed", 3]), JSON.stringify(["  "]), "{\"a\":1}"]) {
+      const refused = await answer({ answers: { chores }, answerFormat: "json" });
+      expect([refused.statusCode, refused.json().error], chores).toEqual([400, 'Send the answer to "chores" as a JSON array of strings.']);
+    }
+    expect((await answer({ answers: { chores: picks }, answerFormat: "xml" })).statusCode).toBe(400);
+    expect(answerRequest).toHaveBeenCalledTimes(1);
+  });
+});

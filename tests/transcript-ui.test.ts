@@ -358,7 +358,7 @@ describe("questions", () => {
     await typeInto(second.querySelector<HTMLTextAreaElement>('[aria-label="Your answer: Anything else?"]')!, "fresh greens");
     expect(submit.disabled).toBe(false);
     await act(async () => submit.click());
-    expect(write).toHaveBeenCalledWith("/bots/shared/requests/ask", { answers: { feed: "Pellets", extras: JSON.stringify(["Water", "Treats", "fresh greens"]) } });
+    expect(write).toHaveBeenCalledWith("/bots/shared/requests/ask", { answers: { feed: "Pellets", extras: JSON.stringify(["Water", "Treats", "fresh greens"]) }, answerFormat: "json" });
   });
 
   it("moves on from an option question to a free-text question", async () => {
@@ -379,7 +379,7 @@ describe("questions", () => {
     await render();
     await typeInto(container.querySelector<HTMLTextAreaElement>('[aria-label="Gate name?"]')!, "North");
     await act(async () => container.querySelector<HTMLButtonElement>('[data-attention-id="ask"] button[type="submit"]')!.click());
-    expect(write).toHaveBeenCalledWith("/bots/shared/requests/ask", { answers: { name: "North" } });
+    expect(write).toHaveBeenCalledWith("/bots/shared/requests/ask", { answers: { name: "North" }, answerFormat: "json" });
   });
 
   it("addresses approval cards for the status dock", async () => {
@@ -400,7 +400,7 @@ describe("questions", () => {
     await act(async () => field.dispatchEvent(new KeyboardEvent("keydown", { key: "2", bubbles: true })));
     expect(boxes[1].checked).toBe(false);
     await act(async () => container.querySelector<HTMLButtonElement>('.attention-card button[type="submit"]')!.click());
-    expect(write).toHaveBeenCalledWith("/bots/shared/requests/ask", { answers: { items: JSON.stringify(["2 bottles of water\nA warm layer"]) } });
+    expect(write).toHaveBeenCalledWith("/bots/shared/requests/ask", { answers: { items: JSON.stringify(["2 bottles of water\nA warm layer"]) }, answerFormat: "json" });
     await act(async () => container.querySelector<HTMLFormElement>('.attention-card form')!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
     expect(vi.mocked(write).mock.calls.filter(([path]) => path === "/bots/shared/requests/ask")).toHaveLength(1);
     expect(container.querySelector<HTMLButtonElement>('.attention-card button[type="submit"]')?.textContent).toBe("Answers sent");
@@ -421,7 +421,7 @@ describe("questions", () => {
     expect(field.value).toBe("Bring water");
     expect(write).not.toHaveBeenCalled();
     await act(async () => container.querySelector<HTMLButtonElement>('button[type="submit"]')!.click());
-    expect(write).toHaveBeenCalledWith("/bots/shared/requests/ask", { answers: { note: "Bring water" } });
+    expect(write).toHaveBeenCalledWith("/bots/shared/requests/ask", { answers: { note: "Bring water" }, answerFormat: "json" });
   });
 
   it("keeps written answers after a failure and clears the old error when retrying", async () => {
@@ -1582,7 +1582,7 @@ describe("approval scopes, the decline handoff, recommended answers and steering
     expect(second.querySelector(".option-tag")?.closest("label")?.querySelector(".option-label")?.textContent).toBe("Water");
     await act(async () => second.querySelector<HTMLInputElement>("input")!.click());
     await act(async () => card.querySelector<HTMLButtonElement>('button[type="submit"]')!.click());
-    expect(write).toHaveBeenCalledWith("/bots/shared/requests/ask", { answers: { feed: "Hay (Recommended)", extras: JSON.stringify(["Water (Recommended)"]) } });
+    expect(write).toHaveBeenCalledWith("/bots/shared/requests/ask", { answers: { feed: "Hay (Recommended)", extras: JSON.stringify(["Water (Recommended)"]) }, answerFormat: "json" });
   });
 
   it("shows no tag where nothing is recommended", async () => {
