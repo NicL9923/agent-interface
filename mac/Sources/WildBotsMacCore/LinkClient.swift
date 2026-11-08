@@ -222,7 +222,7 @@ public actor LinkClient {
 
   private func endLink(reason: String) {
     credentials.delete()
-    dispatcher.close()
+    dispatcher.closeAdmission()
     socket = nil
     socketDeviceId = nil
     loop = nil
@@ -308,7 +308,7 @@ public actor LinkClient {
         try? journal.acknowledge(id: id)
       case .revoked:
         revokedByServer = true
-        dispatcher.close()
+        dispatcher.closeAdmission()
         socket.close(code: 1000)
         return LinkCloseCode.unauthorized
       case .invoke, .malformedInvoke:

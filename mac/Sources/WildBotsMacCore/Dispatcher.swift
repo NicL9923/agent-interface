@@ -196,15 +196,15 @@ public final class Dispatcher: @unchecked Sendable {
     flags.forEach { $0.cancel() }
   }
 
-  /// Unlinking or revocation: stops everything and admits nothing until `open()`. An invocation
+  /// Unlinking or revocation: stops everything and admits nothing until `openAdmission()`. An invocation
   /// already past authorization when this lands is refused at admission, whatever its snapshot said.
-  public func close() {
+  public func closeAdmission() {
     lock.withLock { admitting = false }
     cancelAll()
   }
 
   /// Linked again: actions may start.
-  public func open() { lock.withLock { admitting = true } }
+  public func openAdmission() { lock.withLock { admitting = true } }
 
   static let stoppedBeforeStart = ActionError(
     .paused, "The action did not start because assistants were paused or this Mac was unlinked.")
