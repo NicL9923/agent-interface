@@ -9,6 +9,7 @@ import { useChatPresence } from "../src/app/use-chat-presence";
 import { defaultPreferences } from "../src/shared/types";
 import type { Bootstrap, Conversation } from "../src/shared/types";
 import { FakeEventSource } from "./fake-event-source";
+import { clearDecline } from "../src/app/decline-handoff";
 import { contentHash } from "../src/app/draft-merge";
 import { advance, mountRoot, stubMatchMedia, typeInto } from "./ui-harness";
 
@@ -54,6 +55,8 @@ let container: HTMLDivElement;
 let root: Root;
 
 beforeEach(() => {
+  // A decline in one test would otherwise still be waiting for the next message in the next.
+  clearDecline("shared");
   vi.useFakeTimers();
   vi.clearAllMocks();
   FakeEventSource.reset();
@@ -967,7 +970,12 @@ describe("conversation state", () => {
     expect(approve.disabled).toBe(false); expect(decline.disabled).toBe(false);
     expect(container.textContent).toContain("Could not send decision");
     vi.mocked(write).mockResolvedValueOnce({}); await act(async () => decline.click());
-    expect(decline.textContent).toBe("Declined"); expect(decline.disabled).toBe(true);
+    // Declined, the card folds to one line and the message box asks what to do instead.
+    expect(container.querySelector(".approval-card")?.textContent).toBe("Declined. Shared stopped that step.");
+    expect(container.querySelector(".approval-card button")).toBeNull();
+    await act(async () => { vi.advanceTimersToNextFrame(); });
+    const message = container.querySelector<HTMLTextAreaElement>("#message")!;
+    expect([message.placeholder, document.activeElement]).toEqual(["Tell Shared what to do instead", message]);
     vi.mocked(write).mockReset().mockResolvedValue({});
   });
 

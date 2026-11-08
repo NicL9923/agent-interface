@@ -1819,11 +1819,11 @@ describe('approval scopes, question shapes and the steering decision on the wire
       {id: 'unknown', method: 'approval', params: {description: 'nothing known', choices: ['later']}},
     ];
     const {approvals} = await runtime.conversation('shared', {history: false});
-    expect(approvals.map(({id, choices, patterns}) => ({id, choices, patterns}))).toEqual([
-      {id: 'scoped', choices: ['once', 'session', 'always', 'deny'], patterns: ['recursive delete']},
-      {id: 'guarded', choices: ['once', 'deny'], patterns: undefined},
-      {id: 'older', choices: undefined, patterns: undefined},
-      {id: 'unknown', choices: undefined, patterns: undefined},
+    expect(approvals.map(({id, choices, patterns, command}) => ({id, choices, patterns, command}))).toEqual([
+      {id: 'scoped', choices: ['once', 'session', 'always', 'deny'], patterns: ['recursive delete'], command: 'rm -rf build'},
+      {id: 'guarded', choices: ['once', 'deny'], patterns: undefined, command: undefined},
+      {id: 'older', choices: undefined, patterns: undefined, command: undefined},
+      {id: 'unknown', choices: undefined, patterns: undefined, command: undefined},
     ]);
   });
   it('answers an approval with its scope, once by default and deny for a decline', async () => {

@@ -105,8 +105,13 @@ export function toggleOption(options: string[], selected: string[], option: stri
   return options.filter(item => next.includes(item));
 }
 /** The one answer a question sends: its choices, then the person's own words. */
+/**
+ * A multi-select answer as Hermes's clarify tool reads one: a JSON array of the picks, with the
+ * person's own words as one more item. Commas inside an option stay inside that option. Empty is "".
+ */
 export function joinAnswer(selected: string[], own: string) {
-  return [...selected, own.trim()].filter(Boolean).join(", ");
+  const picks = [...selected, own.trim()].filter(Boolean);
+  return picks.length ? JSON.stringify(picks) : "";
 }
 
 export type FindMatch = { messageId: string; loaded: boolean };

@@ -261,6 +261,8 @@ export function openRequests(value: Wire, sid: string): {approvals: Conversation
       status: 'pending' as const,
       ...(choices ? {choices} : {}),
       ...(patterns.length ? {patterns} : {}),
+      ...(typeof x.params?.command === 'string' && x.params.command.trim() && x.params.command !== x.params?.description
+        ? {command: x.params.command.slice(0, 2000)} : {}),
     };
   });
   const attention = requests.filter((x: Wire) => x.method !== 'approval').map((x: Wire) => {

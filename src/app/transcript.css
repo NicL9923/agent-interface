@@ -208,3 +208,32 @@
 
 /* Keep Find's single explicit Close control and avoid the browser's blue clear icon. */
 .find-bar input::-webkit-search-cancel-button { appearance: none; }
+
+/* --- Approval scopes, recommended answers and steering (Workstream B) --- */
+.decision-card .approval-command {
+  margin: 0; padding: 10px 12px; max-height: 9.5em; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--surface); font-family: var(--font-mono); font-size: 0.8125rem;
+}
+.always-allow-confirm .approval-command {
+  margin: 8px 0; padding: 8px 10px; max-height: 8em; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere;
+  border-radius: 8px; background: var(--surface); font-family: var(--font-mono); font-size: 0.8125rem;
+}
+.decision-card .actions { flex-wrap: wrap; }
+.approval-more { position: relative; display: inline-flex; }
+.approval-more .icon-button { width: 44px; height: 44px; border-radius: 10px; }
+.approval-menu {
+  position: absolute; z-index: 5; right: 0; top: calc(100% + 6px); display: grid; min-width: 180px; padding: 6px;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--raised); box-shadow: 0 8px 24px rgb(0 0 0 / 0.16);
+}
+.approval-menu button { justify-content: flex-start; min-height: 40px; border: 0; background: transparent; text-align: left; }
+.approval-menu button:hover, .approval-menu button:focus-visible { background: var(--accent-soft); }
+.approval-scope-note { margin: 0; font-size: 0.8125rem; line-height: 1.45; color: var(--muted); }
+.decision-card.decision-declined { padding-block: 12px; border-left-color: var(--line); }
+.decision-card.decision-declined p { margin: 0; color: var(--muted); font-size: 0.9375rem; }
+.attention-card .option-tag {
+  flex: none; padding: 1px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent);
+  font-size: 0.75rem; font-weight: 600; line-height: 1.5;
+}
+.message-steered { margin: 4px 0 0; text-align: right; color: var(--message-meta); font-size: 0.75rem; }
+/* --- End approval scopes, recommended answers and steering --- */
+.attention-card .option-card.checked .option-tag { background: var(--raised); }

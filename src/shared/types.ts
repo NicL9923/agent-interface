@@ -544,6 +544,8 @@ export interface Approval {
   choices?: ApprovalChoice[];
   /** The command patterns "Always allow" saves, such as "recursive delete". */
   patterns?: string[];
+  /** The command as Hermes shows it, already redacted by Hermes, when the description is not the command itself. */
+  command?: string;
 }
 export interface Message {
   /** The add-on admitted this person's message into the task that was already running. Absent when unknown. */

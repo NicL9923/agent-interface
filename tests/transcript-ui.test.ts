@@ -11,6 +11,7 @@ import { useConversation } from "../src/app/use-conversation";
 import { useTurnRetry } from "../src/app/use-turn-retry";
 import { formRequestId, retryRequestId } from "../src/shared/retry-id";
 import { FakeEventSource } from "./fake-event-source";
+import { clearDecline } from "../src/app/decline-handoff";
 import { advance, mountRoot, stubMatchMedia, typeInto, waitForUi } from "./ui-harness";
 
 vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(await (async (original) => ({
@@ -50,6 +51,8 @@ const prompt = (id: string, text: string, extra: Partial<Message> = {}): Message
 const answer = (id: string, text: string, extra: Partial<Message> = {}): Message => ({ id, role: "assistant", text, ...extra });
 
 beforeEach(() => {
+  // A decline in one test would otherwise still be waiting for the next message in the next.
+  clearDecline("shared");
   vi.useFakeTimers();
   vi.clearAllMocks();
   FakeEventSource.reset();
@@ -355,7 +358,7 @@ describe("questions", () => {
     await typeInto(second.querySelector<HTMLTextAreaElement>('[aria-label="Your answer: Anything else?"]')!, "fresh greens");
     expect(submit.disabled).toBe(false);
     await act(async () => submit.click());
-    expect(write).toHaveBeenCalledWith("/bots/shared/requests/ask", { answers: { feed: "Pellets", extras: "Water, Treats, fresh greens" } });
+    expect(write).toHaveBeenCalledWith("/bots/shared/requests/ask", { answers: { feed: "Pellets", extras: JSON.stringify(["Water", "Treats", "fresh greens"]) } });
   });
 
   it("moves on from an option question to a free-text question", async () => {
@@ -397,7 +400,7 @@ describe("questions", () => {
     await act(async () => field.dispatchEvent(new KeyboardEvent("keydown", { key: "2", bubbles: true })));
     expect(boxes[1].checked).toBe(false);
     await act(async () => container.querySelector<HTMLButtonElement>('.attention-card button[type="submit"]')!.click());
-    expect(write).toHaveBeenCalledWith("/bots/shared/requests/ask", { answers: { items: "2 bottles of water\nA warm layer" } });
+    expect(write).toHaveBeenCalledWith("/bots/shared/requests/ask", { answers: { items: JSON.stringify(["2 bottles of water\nA warm layer"]) } });
     await act(async () => container.querySelector<HTMLFormElement>('.attention-card form')!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
     expect(vi.mocked(write).mock.calls.filter(([path]) => path === "/bots/shared/requests/ask")).toHaveLength(1);
     expect(container.querySelector<HTMLButtonElement>('.attention-card button[type="submit"]')?.textContent).toBe("Answers sent");
@@ -466,7 +469,8 @@ describe("approval decisions", () => {
       expect(leaving?.getAttribute("data-attention-id")).toBeNull();
       await advance(500);
       expect(container.querySelector(".approval-card.leaving")).toBeNull();
-      expect([...container.querySelectorAll(".approval-card h2")].map(node => node.textContent)).toEqual(["Turn on the lights?"]);
+      // The declined one folds to a line saying the assistant stopped that step.
+      expect([...container.querySelectorAll(".approval-card")].map(node => node.textContent)).toEqual(["Declined. Shared stopped that step."]);
     } finally { window.removeEventListener("wildbots:avatar-react", heard); }
   });
   for (const decision of ["approved", "denied"] as const) {
@@ -482,11 +486,16 @@ describe("approval decisions", () => {
       expect(button.disabled).toBe(false);
       await act(async () => button.click());
       expect(container.querySelector(".notice.error")).toBeNull();
-      expect(button.disabled).toBe(true);
-      expect(button.textContent).toContain(decision === "approved" ? "Approved" : "Declined");
-      expect(card.querySelector('[role="status"]')?.textContent).toBe(decision === "approved" ? "Approval sent." : "Decline sent.");
-      expect(card.querySelector(".decision-status.sr-only")).toBeNull();
-      await act(async () => button.click());
+      if (decision === "approved") {
+        expect(button.disabled).toBe(true);
+        expect(button.textContent).toContain("Approved");
+        expect(card.querySelector('[role="status"]')?.textContent).toBe("Approval sent.");
+        expect(card.querySelector(".decision-status.sr-only")).toBeNull();
+        await act(async () => button.click());
+      } else {
+        expect(container.querySelector(".approval-card")?.textContent).toBe("Declined. Shared stopped that step.");
+        expect(container.querySelector(".approval-card button")).toBeNull();
+      }
       const calls = vi.mocked(write).mock.calls.filter(([path]) => path === "/bots/shared/approvals/gate");
       expect(calls).toHaveLength(2);
       expect(calls.map(([, body]) => body)).toEqual([{ decision }, { decision }]);
@@ -556,7 +565,7 @@ describe("approval decisions", () => {
     expect(container.textContent).toContain("Try your decision again when the update finishes.");
     expect(container.textContent).not.toContain("no longer available to answer");
     await act(async () => buttonText("Decline")!.click());
-    expect(buttonText("Declined")?.disabled).toBe(true);
+    expect(container.querySelector(".approval-card")?.textContent).toBe("Declined. Shared stopped that step.");
   });
 
   it("retains an earlier unclear choice when a resend meets maintenance", async () => {
@@ -1459,5 +1468,123 @@ describe("email drafts", () => {
     await act(async () => buttonText("Copy")!.click());
     expect(writeText).toHaveBeenCalledWith("To: sam@example.com\nSubject: Saturday\n\nHi Sam,\nSee you then.");
     expect(buttonText("Copied")).toBeDefined();
+  });
+});
+
+describe("approval scopes, the decline handoff, recommended answers and steering", () => {
+  const scoped = { id: "wipe", title: "Action approval", detail: "recursive delete", command: "rm -rf ./build", status: "pending" as const,
+    choices: ["once", "session", "always", "deny"] as ("once" | "session" | "always" | "deny")[], patterns: ["recursive delete"] };
+  const decisions = () => vi.mocked(write).mock.calls.filter(([path]) => path === "/bots/shared/approvals/wipe").map(([, body]) => body);
+  const dialog = () => document.querySelector<HTMLElement>(".always-allow-confirm");
+  beforeEach(() => {
+    for (const [name, open] of [["showModal", true], ["close", false]] as const)
+      Object.defineProperty(HTMLDialogElement.prototype, name, { configurable: true, value: function(this: HTMLDialogElement) { this.open = open; } });
+  });
+
+  it("offers each scope Hermes allows and says what one for this conversation granted", async () => {
+    conversation = { ...conversation, approvals: [scoped] };
+    await render();
+    const card = container.querySelector(".approval-card")!;
+    expect([...card.querySelectorAll(".actions > button")].map(button => button.textContent)).toEqual(["Allow once", "Allow for this conversation", "Decline"]);
+    expect(card.querySelector(".approval-command")?.textContent).toBe("rm -rf ./build");
+    expect(card.textContent).toContain("covers every command Hermes flags as “recursive delete”, not only this one");
+    await act(async () => buttonText("Allow for this conversation")!.click());
+    expect(decisions()).toEqual([{ decision: "approved", scope: "session" }]);
+    expect(card.querySelector('[role="status"]')?.textContent).toBe("Allowed for this conversation.");
+    expect(buttonText("Allow once")?.disabled).toBe(true);
+  });
+
+  it("asks before Always allow, naming the pattern and the command, and Cancel sends nothing", async () => {
+    conversation = { ...conversation, approvals: [scoped] };
+    await render();
+    await act(async () => labelled("More choices").click());
+    await act(async () => buttonText("Always allow…")!.click());
+    expect(dialog()?.textContent).toContain("Always allow this for Shared?");
+    expect(dialog()?.textContent).toContain("any command Hermes flags as “recursive delete” without asking, in every conversation");
+    expect(dialog()?.querySelector(".approval-command")?.textContent).toBe("rm -rf ./build");
+    expect(dialog()?.textContent).toContain("Always-allowed commands");
+    await act(async () => [...dialog()!.querySelectorAll("button")].find(button => button.textContent === "Cancel")!.click());
+    expect(dialog()).toBeNull();
+    expect(decisions()).toEqual([]);
+    await act(async () => labelled("More choices").click());
+    await act(async () => buttonText("Always allow…")!.click());
+    await act(async () => [...dialog()!.querySelectorAll("button")].find(button => button.textContent === "Always allow")!.click());
+    expect(decisions()).toEqual([{ decision: "approved", scope: "always" }]);
+    expect(container.querySelector(".approval-card")?.textContent).toContain("Always allowed for Shared.");
+  });
+
+  it("shows only Allow once and Decline when Hermes limits the request to one operation", async () => {
+    conversation = { ...conversation, approvals: [{ ...scoped, choices: ["once", "deny"] }] };
+    await render();
+    const card = container.querySelector(".approval-card")!;
+    expect([...card.querySelectorAll("button")].map(button => button.textContent)).toEqual(["Allow once", "Decline"]);
+    expect(card.textContent).not.toContain("covers every command");
+  });
+
+  it("keeps the card answerable when the server refuses a choice Hermes no longer offers", async () => {
+    conversation = { ...conversation, approvals: [scoped] };
+    vi.mocked(write).mockRejectedValueOnce(new ApiError("Hermes didn't offer Allow for this conversation for this request.", 409, "approval_choice_unavailable"));
+    await render();
+    await act(async () => buttonText("Allow for this conversation")!.click());
+    expect(container.querySelector(".notice.error")?.textContent).toContain("Hermes didn't offer Allow for this conversation");
+    expect(buttonText("Allow once")?.disabled).toBe(false);
+    expect(buttonText("Decline")?.disabled).toBe(false);
+  });
+
+  it("keeps the declined line and the message box's question until the next message is accepted", async () => {
+    conversation = { ...conversation, activity: { state: "waiting" }, approvals: [scoped] };
+    vi.mocked(write).mockImplementation(async <T>(path: string, body: unknown) =>
+      (path === "/bots/shared/messages" || path === "/bots/shared/steer" ? { requestId: (body as { requestId: string }).requestId, status: "accepted" } : {}) as T);
+    await render();
+    await act(async () => buttonText("Decline")!.click());
+    expect(decisions()).toEqual([{ decision: "denied" }]);
+    await act(async () => { vi.advanceTimersToNextFrame(); });
+    expect(document.activeElement).toBe(textarea());
+    // Hermes stops listing the request; the line stays with the transcript.
+    conversation = { ...conversation, activity: { state: "thinking" }, approvals: [] };
+    await changed();
+    await advance(500);
+    expect(container.querySelector(".approval-card")?.textContent).toBe("Declined. Shared stopped that step.");
+    await typeInto(textarea(), "Just clean the cache folder");
+    await act(async () => labelled("Send guidance").click());
+    await waitForUi(() => expect(container.querySelector(".approval-card")).toBeNull());
+    await typeInto(textarea(), "");
+    expect(textarea().placeholder).not.toBe("Tell Shared what to do instead");
+  });
+
+  it("tags and pre-selects the recommended answer for one choice, sends its raw text, and never pre-selects several", async () => {
+    conversation = { ...conversation, activity: { state: "blocked" }, attention: [{ id: "ask", kind: "clarify", title: "Supplies", detail: "", questions: [
+      { id: "feed", prompt: "Which feed?", options: ["Hay (Recommended)", "Pellets"], recommended: 0 },
+      { id: "extras", prompt: "Anything else?", options: ["Water (Recommended)", "Salt"], multiple: true, recommended: 0 },
+    ] }] };
+    await render();
+    const card = container.querySelector<HTMLElement>('[data-attention-id="ask"]')!;
+    const first = card.querySelector<HTMLElement>('[data-question="0"]')!;
+    expect(first.querySelector("input:checked")?.closest("label")?.querySelector(".option-label")?.textContent).toBe("Hay");
+    expect(first.querySelector(".option-tag")?.closest("label")?.textContent).toContain("Hay");
+    const second = card.querySelector<HTMLElement>('[data-question="1"]')!;
+    expect(second.querySelector("input:checked")).toBeNull();
+    expect(second.querySelector(".option-tag")?.closest("label")?.querySelector(".option-label")?.textContent).toBe("Water");
+    await act(async () => second.querySelector<HTMLInputElement>("input")!.click());
+    await act(async () => card.querySelector<HTMLButtonElement>('button[type="submit"]')!.click());
+    expect(write).toHaveBeenCalledWith("/bots/shared/requests/ask", { answers: { feed: "Hay (Recommended)", extras: JSON.stringify(["Water (Recommended)"]) } });
+  });
+
+  it("shows no tag where nothing is recommended", async () => {
+    conversation = { ...conversation, attention: [{ id: "ask", kind: "clarify", title: "Pick", detail: "", questions: [
+      { id: "pick", prompt: "Which?", options: ["A (Recommended)", "B (Recommended)"] },
+    ] }] };
+    await render();
+    expect(container.querySelector(".option-tag")).toBeNull();
+    expect(container.querySelector('[data-question="0"] input:checked')).toBeNull();
+    expect([...container.querySelectorAll(".option-label")].map(node => node.textContent)).toEqual(["A (Recommended)", "B (Recommended)", "Write my own answer"]);
+  });
+
+  it("says a steered message was added to the current task, and only that one", async () => {
+    conversation = { ...conversation, messages: [prompt("start", "Fix the fence"), prompt("guide", "Use the north gate", { steered: true }), answer("a", "Done.")] };
+    await render();
+    const steered = [...container.querySelectorAll("[data-message-id]")].filter(node => node.querySelector(".message-steered")).map(node => node.getAttribute("data-message-id"));
+    expect(steered).toEqual(["guide"]);
+    expect(container.querySelector(".message-steered")?.textContent).toBe("Added to the current task");
   });
 });
