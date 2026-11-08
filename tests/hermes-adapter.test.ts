@@ -1818,6 +1818,14 @@ describe('approval scopes, question shapes and the steering decision on the wire
       {id: 'older', method: 'approval', params: {description: 'older Hermes'}},
       {id: 'unknown', method: 'approval', params: {description: 'nothing known', choices: ['later']}},
     ];
+    // An add-on that can't remove always-allowed commands never offers Always allow.
+    const older = await runtime.conversation('shared', {history: false});
+    expect(older.approvals.map(({id, choices}) => ({id, choices}))).toEqual([
+      {id: 'scoped', choices: ['once', 'session', 'deny']}, {id: 'guarded', choices: ['once', 'deny']},
+      {id: 'older', choices: undefined}, {id: 'unknown', choices: undefined}]);
+    await runtime.close();
+    capabilities({approval_settings: true});
+    runtime = createHermesRuntime({url: 'http://127.0.0.1:19119', token});
     const {approvals} = await runtime.conversation('shared', {history: false});
     expect(approvals.map(({id, choices, patterns, command}) => ({id, choices, patterns, command}))).toEqual([
       {id: 'scoped', choices: ['once', 'session', 'always', 'deny'], patterns: ['recursive delete'], command: 'rm -rf build'},

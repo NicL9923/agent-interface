@@ -377,7 +377,7 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
       state.tools = [];
     }
     if (active && state && settledStates.includes(state.state)) settleSoon(botId);
-    const {approvals, attention} = openRequests(value, sid);
+    const {approvals, attention} = openRequests(value, sid, {revocable: contract.approvalSettings});
     const toolCalls: ToolCall[] = Array.isArray(value.app_tool_calls) ? value.app_tool_calls.map(unbridged) : state?.tools ?? [];
     if (active && state && generation === structuralGenerationOf(botId)) state.tools = toolCalls;
     const runningTool = toolCalls.find(tool => tool.status === 'running');

@@ -420,7 +420,10 @@ Hermes offered for that request in its order (`once`, `session`, `always`, `deny
 `patterns`, the Hermes pattern keys a session or always grant covers (such as
 `recursive delete`), and `command`, the command as Hermes shows it, already redacted.
 Without `choices` the request comes from a Hermes that offers approve once or decline.
-A request Hermes's smart guardian denied offers only `once` and `deny`.
+A request Hermes's smart guardian denied offers only `once` and `deny`. The server
+leaves `always` out when the add-on cannot list and remove always-allowed commands
+(it reports no `approval_settings`), so no client can save a grant nobody could
+remove in the app, and the server refuses `always` there too.
 
 `POST /api/bots/:id/approvals/:approvalId` takes an optional `scope`: `once` (the
 default when absent), `session` (this conversation) or `always` (this assistant, from

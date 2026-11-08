@@ -247,10 +247,15 @@ export function historyMessages(sid: string, history: Wire[], files: (row: Wire)
 }
 
 /** The approvals and other requests an open session is waiting on. */
-export function openRequests(value: Wire, sid: string): {approvals: Conversation['approvals']; attention: NonNullable<Conversation['attention']>} {
+/**
+ * `revocable` says the add-on can list and remove always-allowed commands. Without it, Always allow
+ * is not offered: the app would save a grant nobody could remove here, so the server refuses it too.
+ */
+export function openRequests(value: Wire, sid: string, {revocable = false}: {revocable?: boolean} = {}): {approvals: Conversation['approvals']; attention: NonNullable<Conversation['attention']>} {
   const requests = Array.isArray(value.open_requests) ? value.open_requests : [];
   const approvals = requests.filter((x: Wire) => x.method === 'approval').map((x: Wire) => {
-    const choices = approvalChoices(x.params?.choices);
+    const offered = approvalChoices(x.params?.choices);
+    const choices = revocable ? offered : offered?.filter(choice => choice !== 'always');
     // Session and always grants are saved by these pattern keys, not by the one command.
     const patterns = Array.isArray(x.params?.pattern_keys)
       ? [...new Set<string>(x.params.pattern_keys.filter((key: unknown) => typeof key === 'string' && key.trim()).map((key: string) => key.slice(0, 200)))] : [];
