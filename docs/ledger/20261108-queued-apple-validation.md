@@ -32,3 +32,20 @@ share-inbox smoke scripts also passed. This is simulator and native-script
 evidence, not physical-device verification or full UI-suite coverage.
 
 Logs live under `/Volumes/DevSSD/scratch/apple-validation-rollout-20261108/`.
+
+After merging main, native validation at
+`135350652b66282f6b9ef6bcab98e0759aa76846` again passed all 20
+PresentationTests. The identical second invocation returned the original passing
+summary and result bundle without building or running tests. Both commands exited
+0. The enclosing shared lock queued for 285.265 seconds and was held for
+157.332 seconds, including device setup, both requests and shutdown. The simulator
+was shut down before release.
+
+The repository Python runner completed 38 passing files and one failing file on
+macOS. Both failures in `tests/release_app_test.py` also reproduced against an
+archive of main at `af601cea7bd88fdd17261e044305596d5af5424f`:
+`test_facts_carry_the_latest_successful_release` and
+`test_facts_tell_the_running_runtime_from_the_one_the_next_start_would_use`.
+Their host runtime probes expect Linux process discovery. The newly merged
+`tests/hermes_mac_test.py` passed separately. These baseline failures were left
+outside this change.
