@@ -1,6 +1,6 @@
 # November 8 main assistant, check-ins and hand-off validation
 
-Code state `cbe3421` on branch `t3/main-assistant-checkins-delegation` over `846ec70`
+Code state `cbe3421` (this record's commit changes no input) on branch `t3/main-assistant-checkins-delegation` over `846ec70`
 (origin/main `a3dfff6` plus PR #264), built from NicolasLaptop (Linux, Node 24.22.2,
 Python 3.14.10) and the Mac mini (macOS 27, Xcode 27, iPhone 18 Pro Max simulator
 `270DC27B`). The Mac checkout was a scratch clone at the same commits, delivered as a git
@@ -49,7 +49,19 @@ change any result (removed).
 
 iOS, on the Mac mini:
 
-- IOS_RESULTS
+- Full `AgentInterfaceTests` through `validate-ios.sh` at `5b60084`: 629 tests, 2 skipped, 0
+  unexpected failures; the 4 expected failures are existing `XCTExpectFailure` cases.
+  `MainAssistantTests` (7) and `MainAssistantFlowTests` (2, light and dark) then passed at
+  `cbe3421`, the last iOS change.
+- Affected UI suites at `cdba4c9`: `ParityFlowTests` and `ShellFlowTests` passed except five
+  tests: `testAssistantCatalogAndUnsavedChangesAreProtected`,
+  `testNotificationPromptAsksIosOnlyAfterEnableAndSettingsSwitchFollows`,
+  `testTodayAndTabletLayout`, `testCommandKOpensTheQuickSwitcherAndGoesWhereChosen` and
+  `testGroupChatNamesSendersSuggestsMentionsAndUpdatesLive`. The same five fail the same way
+  on the base `846ec70`, on the same simulator, so they predate this work.
+- Two fixes came from these runs: the unit tests' Preferences JSON lacked required keys, and
+  the switch test now drags the UISwitch thumb, since a tap on an iOS 27 list row lands on
+  its label.
 
 Visual: the real app server over a scripted runtime in headless Chromium at 1280x860 and
 390x844, light and dark: home with the main assistant, the suggestion card, the picker,
