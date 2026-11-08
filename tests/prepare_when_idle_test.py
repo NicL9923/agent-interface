@@ -100,13 +100,21 @@ class IdlePreparationTests(unittest.TestCase):
         self.assertEqual(result, 1)
         sleep.assert_not_called()
 
-    def test_a_reviewed_helper_change_reaches_every_prepare_attempt(self):
+    def test_prepare_options_reach_every_prepare_attempt(self):
+        # Options the wrapper doesn't define, current or future, go to prepare unchanged.
+        options = ['--node', '/srv/runtime/bin/node', '--qualification', '/srv/q.json', '--accept-helper-change']
         with patch('sys.stdout'):
-            result, run, sleep = self.invoke([self.REFUSED, self.DISCARDED, self.READY], extra=['--accept-helper-change'])
+            result, run, sleep = self.invoke([self.REFUSED, self.DISCARDED, self.READY], extra=options)
         self.assertEqual(result, 0)
         prepares = [call.args[0] for call in run.call_args_list if call.args[0][2] == 'prepare']
         self.assertEqual(len(prepares), 2)
-        self.assertTrue(all(command[-1] == '--accept-helper-change' for command in prepares))
+        self.assertTrue(all(command[3:] == ['commit', '--host', 'host', '--app-base', '/app', *options] for command in prepares), prepares)
+
+    def test_a_wrapper_option_is_never_abbreviated_out_of_a_prepare_option(self):
+        # With abbreviations, --min would set --minutes; here it reaches prepare, which rejects it.
+        with patch('sys.stdout'):
+            result, run, sleep = self.invoke([self.READY], extra=['--min', '5'])
+        self.assertEqual(run.call_args_list[0].args[0][-2:], ['--min', '5'])
 
     def test_integrity_failure_stops_without_discard_or_retry(self):
         failed = subprocess.CompletedProcess([], 1, '', 'Fence: household profile settings unchanged\nDiscard with: release-app.py discard release-test')

@@ -114,24 +114,22 @@ def leaked(report, counted_since, now, window):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    # Every other option goes to release-app.py prepare as given, so a prepare option such as
+    # --node, --qualification or --accept-helper-change can never be missing here (Nov 8, 2026:
+    # --node was, and a runtime release stopped). prepare rejects an unknown one on the first
+    # attempt, before any host step. No abbreviations, so none is taken for one of these.
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
+                                     allow_abbrev=False, epilog="Other options pass through to release-app.py prepare.")
     parser.add_argument("commit")
     parser.add_argument("--host", required=True)
     parser.add_argument("--app-base", required=True)
-    parser.add_argument("--qualification")
-    parser.add_argument("--accept-helper-change", action="store_true",
-                        help="pass through to release-app.py prepare after reviewing a changed upgrade helper")
     parser.add_argument("--minutes", type=float, default=40, help="give up after this long (default 40)")
     parser.add_argument("--interval", type=float, default=120, help="seconds between attempts (default 120)")
     parser.add_argument("--hermes-home", default="~/.hermes", help="Hermes home on the host (default ~/.hermes)")
     parser.add_argument("--household-idle", action="store_true",
                         help="the household confirmed nobody is mid-conversation: restart a leaked gateway count once")
-    args = parser.parse_args()
-    command = [sys.executable, str(TOOL), "prepare", args.commit, "--host", args.host, "--app-base", args.app_base]
-    if args.qualification:
-        command += ["--qualification", args.qualification]
-    if args.accept_helper_change:
-        command.append("--accept-helper-change")
+    args, prepare_options = parser.parse_known_args()
+    command = [sys.executable, str(TOOL), "prepare", args.commit, "--host", args.host, "--app-base", args.app_base, *prepare_options]
     window = QUIET_MINUTES * 60
     deadline = time.monotonic() + args.minutes * 60
     attempt = 0
