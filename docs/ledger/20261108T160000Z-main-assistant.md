@@ -51,8 +51,11 @@ change any result (removed).
 
 iOS, on the Mac mini:
 
-- Full `AgentInterfaceTests` through `validate-ios.sh` at `5b60084`: 629 tests, 2 skipped, 0
-  unexpected failures; the 4 expected failures are existing `XCTExpectFailure` cases.
+- Full `AgentInterfaceTests` through `validate-ios.sh` at `5b60084`: 629 tests, 2 skipped and 4
+  failures. xcodebuild labels them "0 unexpected", which an earlier version of this record misread
+  as expected failures. They are `DirectRouteTests` (three) and
+  `NativeContractTests.testTheObservedListNamesEveryTrackedProperty`, and the same four fail on
+  the base `846ec70` on the same simulator, so they predate this work.
   `MainAssistantTests` (7) and `MainAssistantFlowTests` (2, light and dark) then passed at
   `cbe3421`, the last iOS change.
 - Affected UI suites at `cdba4c9`: `ParityFlowTests` and `ShellFlowTests` passed except five
@@ -124,3 +127,9 @@ assistant reaching nobody, only a main assistant asking. Finding 7: no replaceme
 old one could run, pause when delete is refused. Finding 8: identify before recording,
 tracking signed jobs, a gone check-in staying quiet. One redundant guard went instead of
 being tested: the marker's assistant name, which the signature already covers.
+
+iOS at the review-fix commit `e27106c`, through `validate-ios.sh`, which takes the Mac heavy lock
+itself: `AgentInterfaceTests` ran 629 tests with 2 skipped and 3 failing, all among the four
+above (a fourth `DirectRouteTests` case passed this time). `MainAssistantFlowTests` passed
+both tests, light and dark. The base `846ec70` run of `DirectRouteTests` and
+`NativeContractTests` failed the same four.
