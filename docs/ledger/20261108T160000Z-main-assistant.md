@@ -249,3 +249,9 @@ Mutation checks, the same way: 12 lines broke and went red. They cover the consu
 unit test and the real-Hermes test), the source stamp (both), the routine-output rule, the
 agent-message rule, holding an unknown sender, paused or running routines blocking a sharing
 change, and each of the three bookkeeping fields.
+
+Checks at `49b7c00`: `npm test` 152 files and 2,146 tests passed; typecheck, lint, build, Ruff and
+the e2e smoke suite (2) passed; `npm run test:py` 38 files passed. With `HERMES_SOURCE` at the
+`ed1afb0` clone, `tests/hermes_delegation_test.py` ran 28 tests and `tests/hermes_bot_delivery_test.py`
+18 (one skip, the 6ebd92d rollback case, which needs that older source), all passing. No iOS source
+changed this round.
