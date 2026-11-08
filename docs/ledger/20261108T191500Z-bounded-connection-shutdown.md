@@ -1,7 +1,7 @@
 # November 8 bounded connection shutdown
 
 Base `298c02dfb0e4ca99b77f26be50f21ad43fa48700`. Final source fingerprint
-`sha256:90a0154e2d2ed373870968bd7d3b9d94dde64834d5fb41e56bba2101410541c8`.
+`sha256:7646b89981c3cddd5aa19e51c778eb493ebe2836d0ae8c3b9a12e58b96cd4522`.
 NicolasLaptop, Fedora Linux, Node 24.22.2, Fastify 5.12.8,
 @fastify/websocket 11.3.6, ws 8.22.1, Vitest 5.1.0.
 
@@ -48,3 +48,34 @@ WebSocket routes and separate direct-route listeners. Direct listeners already
 force-close their own connections and have no upgrade handler. No API, auth,
 environment variable or wire-format change is required. No browser, iOS build,
 production deployment, Apple action or live Hermes session ran.
+
+## CI integration corrections
+
+The first PR CI run, 42514661708, found a qualification import-coverage failure
+on both Node versions and an incorrect silent-peer assertion on Node 26. The
+qualification suite passes on the base and failed on the new unbound shutdown
+module. The module is now included in qualification-inputs.json, so the receipt
+binds its source rather than adding another exception.
+
+The silent-peer assertion wrongly required shutdown to remain pending before
+the deadline. A real-timer probe of the unfixed base showed the version difference:
+after 200 milliseconds, Node 24.22.2 still waited with its peer open, while Node
+26.13.0 had already completed close and destroyed the peer. Both used the real
+createApp, a real TCP peer and the same fake-runtime close boundary.
+
+Commit f9c6583 corrects that test separately. Silent peers must finish no later
+than the deadline and may finish sooner. Active responses still assert both
+sides of 25 seconds on both versions. The closed-peer tracking assertion moved
+to the hung-response case, which necessarily reaches the deadline. Removing
+tracking cleanup there still fails with a count of 2 instead of 1 on Node 26.
+
+At the final fingerprint above:
+
+- Both Node 24.22.2 and Node 26.13.0 unit-passed all 6 shutdown tests.
+- Node 24.22.2 unit-passed 14 tests across shutdown, signal handling and Hermes
+  qualification.
+- Node 26.13.0 unit-passed the full 2,114 tests across 153 files.
+- Typecheck and lint passed.
+
+The early-deadline, active-response, stream, upgrade and cleanup checks remain
+strict. No production shutdown behavior changed after the original review.

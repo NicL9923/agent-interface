@@ -77,6 +77,7 @@
   "src/server/routine-routes.ts",
   "src/server/runtime-snapshot.ts",
   "src/server/schemas.ts",
+  "src/server/shutdown.ts",
   "src/server/store-accounts.ts",
   "src/server/store-database.ts",
   "src/server/store-devices.ts",
