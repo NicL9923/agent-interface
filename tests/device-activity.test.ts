@@ -81,23 +81,49 @@ it("keeps a browser in use under its session, folds the ID to lowercase, and end
   expect((await server.inject({ method: "POST", url: "/api/auth/logout", headers: one })).statusCode).toBe(200);
   expect(store.activeDevices("one").has(laptop)).toBe(false);
   // Signing out removes its row at once rather than leaving it for retention.
-  expect(store.db.prepare("SELECT device_id FROM device_activity").all()).toEqual([{ device_id: phone }]);
+  expect(store.db.prepare("SELECT 1 FROM device_activity WHERE device_id=?").get(laptop)).toBeUndefined();
+  expect(store.db.prepare("SELECT 1 FROM device_activity WHERE device_id=?").get(phone)).toBeDefined();
 });
 
-it("lets the person who signs in next on an iPhone take over its device, and ends native activity at sign-out", async () => {
+it("refuses another member's reports for a device until its account signs out there, then hands it over", async () => {
   const { app: server, store } = await app();
   const one = nativeSignIn(store, "one"), two = nativeSignIn(store, "two");
   expect((await server.inject({ ...beat({ deviceId: phone, state: "active" }), headers: one })).statusCode).toBe(200);
   expect(store.db.prepare("SELECT platform FROM device_activity WHERE device_id=?").get(phone)).toEqual({ platform: "ios" });
-  // Switching accounts on the phone: the new account's beat takes the device over.
-  expect((await server.inject({ ...beat({ deviceId: phone, state: "active" }), headers: two })).statusCode).toBe(200);
-  expect(store.activeDevices("one").size).toBe(0);
-  expect([...store.activeDevices("two")]).toEqual([phone]);
-  // One account's inactive report never ends another's activity on the device.
-  expect((await server.inject({ ...beat({ deviceId: phone, state: "inactive" }), headers: one })).statusCode).toBe(200);
-  expect([...store.activeDevices("two")]).toEqual([phone]);
-  expect((await server.inject({ method: "POST", url: "/api/auth/logout", headers: two })).statusCode).toBe(200);
+  // Member two names member one's device while one is still signed in there.
+  const taken = await server.inject({ ...beat({ deviceId: phone, state: "active" }), headers: two });
+  expect([taken.statusCode, taken.json().error]).toEqual([409, "This device is signed in to another household member. Sign out there first."]);
+  expect([...store.activeDevices("one")]).toEqual([phone]);
   expect(store.activeDevices("two").size).toBe(0);
+  // An inactive report from two changes nothing either.
+  expect((await server.inject({ ...beat({ deviceId: phone, state: "inactive" }), headers: two })).statusCode).toBe(200);
+  expect([...store.activeDevices("one")]).toEqual([phone]);
+  // Stopping keeps the device one's while one stays signed in.
+  expect((await server.inject({ ...beat({ deviceId: phone, state: "inactive" }), headers: one })).statusCode).toBe(200);
+  expect(store.activeDevices("one").size).toBe(0);
+  expect((await server.inject({ ...beat({ deviceId: phone, state: "active" }), headers: two })).statusCode).toBe(409);
+  // Signing out there hands it over, as switching accounts on the device does.
+  expect((await server.inject({ method: "POST", url: "/api/auth/logout", headers: one })).statusCode).toBe(200);
+  expect((await server.inject({ ...beat({ deviceId: phone, state: "active" }), headers: two })).statusCode).toBe(200);
+  expect([...store.activeDevices("two")]).toEqual([phone]);
+});
+
+it("refuses a device another member registered for push, and frees one whose session expired", async () => {
+  const { app: server, store } = await app();
+  const one = signIn(store, origin, "one"), two = nativeSignIn(store, "two");
+  // Member one's iPhone, registered for push under one's native session.
+  store.nativeSession("one-phone", "one", Date.now() + 600_000);
+  store.registerNativeDevice("one", "one-phone", phone, "ab".repeat(32), "sandbox");
+  expect((await server.inject({ ...beat({ deviceId: phone, state: "active" }), headers: two })).statusCode).toBe(409);
+  // Member one's browser, labelled on its push subscription.
+  store.subscribe("one", { endpoint: "https://push.example.invalid/one", keys: { p256dh: "key", auth: "auth" } }, laptop);
+  const labelled = await server.inject({ ...beat({ deviceId: laptop, state: "active" }), headers: two });
+  expect([labelled.statusCode, labelled.json().error]).toEqual([409, "This device is signed in to another household member. Sign out there first."]);
+  // A device whose holder's session expired is free to take.
+  expect((await server.inject({ ...beat({ deviceId: tablet, state: "active" }), headers: one })).statusCode).toBe(200);
+  store.db.prepare("UPDATE sessions SET expires=0 WHERE user_id='one'").run();
+  expect((await server.inject({ ...beat({ deviceId: tablet, state: "active" }), headers: two })).statusCode).toBe(200);
+  expect([...store.activeDevices("two")]).toEqual([tablet]);
 });
 
 it("counts a device as in use until five minutes after its last input and 45 seconds after its last beat", () => {
@@ -116,8 +142,15 @@ it("counts a device as in use until five minutes after its last input and 45 sec
     // A session that expired or was removed no longer counts, whatever its beats said.
     store.deviceActivity("one", "web-session", laptop, "web", "active", 0, T);
     expect(store.activeDevices("one", T).has(laptop)).toBe(true);
-    store.deleteSession("web-session");
-    expect(store.activeDevices("one", T).size).toBe(0);
+    // Retention keeps a row its session still holds, however old its beat, and drops it once the session is gone.
+    store.session("web-session-2", "one", "csrf", T + 3600_000);
+    store.deviceActivity("one", "web-session-2", laptop, "web", "active", 0, T);
+    store.deviceActivity("one", "web-session-2", laptop, "web", "inactive", 0, T);
+    store.pruneRetention(T + 3_000_000);
+    expect(store.db.prepare("SELECT count(*) AS n FROM device_activity").get()).toEqual({ n: 1 });
+    store.db.prepare("UPDATE sessions SET expires=? WHERE hash='web-session-2'").run(T + 3_000_001);
+    store.pruneRetention(T + 3_000_002);
+    expect(store.db.prepare("SELECT count(*) AS n FROM device_activity").get()).toEqual({ n: 0 });
   } finally { store.close(); }
 });
 

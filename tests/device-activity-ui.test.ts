@@ -88,3 +88,26 @@ it("keeps one device ID per browser profile and replaces one that storage corrup
     expect(deviceId()).toBe(page);
   } finally { blocked.mockRestore(); }
 });
+
+it("never sends an old active report after the window was left, and stamps idle time when a report goes", async () => {
+  // The server answers slowly: each report waits for the test to let it through.
+  const pending: (() => void)[] = [];
+  vi.mocked(write).mockImplementation(() => new Promise(resolve => { pending.push(() => resolve({ ok: true })); }));
+  const release = async () => { await act(async () => { pending.shift()!(); await Promise.resolve(); }); };
+  await render("one");
+  expect(reports()).toEqual(["active 0"]);
+  // Two beats while the first report is still out: only the latest waits, and is worked out when it goes.
+  await advance(30_000);
+  await act(async () => { vi.advanceTimersByTime(5_000); });
+  await release();
+  expect(reports()).toEqual(["active 0", "active 35000"]);
+  // Hidden while that one is out: what goes next is inactive, never the beats queued before.
+  await advance(15_000);
+  visibility = "hidden";
+  await act(async () => document.dispatchEvent(new Event("visibilitychange")));
+  await advance(60_000);
+  await release();
+  await release();
+  expect(reports()).toEqual(["active 0", "active 35000", "inactive"]);
+  expect(pending).toHaveLength(0);
+});

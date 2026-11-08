@@ -71,17 +71,33 @@ export class DeviceRepository {
   // BEGIN device activity
   /**
    * Records that this person is using this installation now, `idleMs` after their last input, or
-   * that they stopped. One person holds an installation at a time: a beat from another account,
-   * after switching accounts, takes it over. The session that wrote it must stay signed in.
+   * that they stopped. An installation belongs to one account at a time: the account whose signed-in
+   * session last reported it, or that registered it for push. Another account takes it over only
+   * after that session signs out or expires, as switching accounts on the device does; until then
+   * its reports are refused.
    */
   deviceActivity(userId: string, sessionHash: string, deviceId: string, platform: "web" | "ios", state: "active" | "inactive", idleMs = 0, now = Date.now()) {
     if (state === "inactive") {
-      this.db.prepare("DELETE FROM device_activity WHERE device_id=? AND user_id=?").run(deviceId, userId);
+      // The row stays, holding the device for this session, but no longer counts as in use.
+      this.db.prepare("UPDATE device_activity SET beat_at=0 WHERE device_id=? AND user_id=?").run(deviceId, userId);
       return;
     }
-    this.db.prepare(`INSERT INTO device_activity(device_id,user_id,session_hash,platform,beat_at,used_at) VALUES(?,?,?,?,?,?)
-      ON CONFLICT(device_id) DO UPDATE SET user_id=excluded.user_id,session_hash=excluded.session_hash,platform=excluded.platform,beat_at=excluded.beat_at,used_at=excluded.used_at`)
-      .run(deviceId, userId, sessionHash, platform, now, now - idleMs);
+    this.database.transaction(() => {
+      if (this.deviceOwner(deviceId, userId, now))
+        throw httpError(409, "This device is signed in to another household member. Sign out there first.");
+      this.db.prepare(`INSERT INTO device_activity(device_id,user_id,session_hash,platform,beat_at,used_at) VALUES(?,?,?,?,?,?)
+        ON CONFLICT(device_id) DO UPDATE SET user_id=excluded.user_id,session_hash=excluded.session_hash,platform=excluded.platform,beat_at=excluded.beat_at,used_at=excluded.used_at`)
+        .run(deviceId, userId, sessionHash, platform, now, now - idleMs);
+    });
+  }
+  /** Another account that holds this installation now, if any. */
+  private deviceOwner(deviceId: string, userId: string, now: number): string | undefined {
+    const live = `(EXISTS(SELECT 1 FROM sessions s WHERE s.hash=a.session_hash AND s.user_id=a.user_id AND s.expires>?)
+      OR EXISTS(SELECT 1 FROM native_sessions n WHERE n.hash=a.session_hash AND n.user_id=a.user_id AND n.expires>?))`;
+    const row = (this.db.prepare(`SELECT user_id FROM device_activity a WHERE device_id=? AND user_id<>? AND ${live}`).get(deviceId, userId, now, now)
+      ?? this.db.prepare("SELECT user_id FROM native_devices WHERE device_id=? AND user_id<>?").get(deviceId, userId)
+      ?? this.db.prepare("SELECT s.user_id FROM push_subscription_devices d JOIN subscriptions s ON s.endpoint=d.endpoint WHERE d.device_id=? AND s.user_id<>?").get(deviceId, userId)) as { user_id: string } | undefined;
+    return row?.user_id;
   }
   /** The installations this person is using now, whose sign-in is still current. */
   activeDevices(userId: string, now = Date.now()): Set<string> {
@@ -91,7 +107,7 @@ export class DeviceRepository {
       .all(userId, now - deviceBeatTtl, now - deviceIdleMs, now, now) as { device_id: string }[];
     return new Set(rows.map(row => row.device_id));
   }
-  /** Signing out ends that session's activity at once rather than when its beats lapse. */
+  /** Signing out ends that session's activity, and its hold on the device, at once. */
   endSessionActivity(sessionHash: string) {
     this.db.prepare("DELETE FROM device_activity WHERE session_hash=?").run(sessionHash);
   }

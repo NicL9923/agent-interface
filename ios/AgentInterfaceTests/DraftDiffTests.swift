@@ -66,6 +66,26 @@ import XCTest
   }
 }
 
+/// A server that holds each request until the test lets it through, as a slow connection does.
+final class HoldingServer: FakeHost, @unchecked Sendable {
+  let origin = URL(string: "https://hold-\(UUID().uuidString.lowercased()).example.test")!
+  private let lock = NSLock()
+  private var held: [FakeExchange] = []
+  private var bodies: [Data] = []
+  func receive(_ exchange: FakeExchange) {
+    let body = FakeExchange.body(exchange.request) ?? Data()
+    lock.withLock { held.append(exchange); bodies.append(body) }
+  }
+  var count: Int { lock.withLock { bodies.count } }
+  func json(_ index: Int) -> [String: Any] {
+    lock.withLock { (try? JSONSerialization.jsonObject(with: bodies[index])) as? [String: Any] ?? [:] }
+  }
+  func releaseNext() {
+    let exchange = lock.withLock { held.isEmpty ? nil : held.removeFirst() }
+    exchange?.respond(status: 200, data: Data(#"{"ok":true}"#.utf8))
+  }
+}
+
 /// Which device its person is using, against src/shared/device-activity.ts and docs/native-api.md.
 @MainActor final class DeviceActivityTests: XCTestCase {
   private let start = Date(timeIntervalSince1970: 1_800_000_000)
@@ -82,6 +102,39 @@ import XCTest
     XCTAssertNil(decide(false, 0, false))
     // A clock that went back never reports a negative idle time.
     XCTAssertEqual(decide(true, -5, false)?.idleMs, 0)
+  }
+  func testASlowServerNeverGetsAnOldActiveReportAndIdleTimeIsStampedAtSending() async throws {
+    let server = HoldingServer(), store = AppStore()
+    store.widgetSnapshotURL = nil
+    store.api = FakeExchange.client(for: server)
+    let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Contract/bootstrap.json")
+    let envelope = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: fixture)) as? [String: Any])
+    store.bootstrap = try JSONDecoder().decode(Bootstrap.self, from: JSONSerialization.data(withJSONObject: envelope["response"] ?? envelope))
+    let activity = DeviceActivity.shared
+    var clock = start
+    activity.now = { clock }
+    activity.store = store
+    defer { activity.backgrounded(); activity.store = nil; activity.now = Date.init; FakeExchange.remove(host: server.origin.host!) }
+    activity.foregrounded()
+    try await until { server.count == 1 }
+    XCTAssertEqual(server.json(0)["state"] as? String, "active")
+    // Two beats while the first report is held: only the latest waits, worked out when it goes.
+    clock = start.addingTimeInterval(15); activity.update()
+    clock = start.addingTimeInterval(30); activity.update()
+    clock = start.addingTimeInterval(35)
+    server.releaseNext()
+    try await until { server.count == 2 }
+    XCTAssertEqual(server.json(1)["idleMs"] as? Int, 35_000)
+    // Leaving the foreground while that one is held: what goes next is inactive, never an older beat.
+    clock = start.addingTimeInterval(50); activity.update()
+    activity.backgrounded()
+    server.releaseNext()
+    try await until { server.count == 3 }
+    XCTAssertEqual(server.json(2)["state"] as? String, "inactive")
+    server.releaseNext()
+    // Absence: a further report would follow at once, so a short pause shows none went.
+    try await Task.sleep(for: .milliseconds(100))
+    XCTAssertEqual(server.count, 3)
   }
   func testReportsThisInstallInUseAndStopsInTheBackgroundOrAfterSignOut() async throws {
     let server = FakeServer(), store = AppStore()
