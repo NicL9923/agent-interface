@@ -393,6 +393,11 @@ export interface Routine {
   contextFrom?: string[] | null;
   /** A run is in flight now, which Stop run can end. Read only. */
   running?: boolean;
+  /**
+   * Server only: Hermes has claimed a run or still holds a Bot Chat delivery for this routine, each
+   * with a copy of the routine as it was then. Read only.
+   */
+  inFlight?: boolean;
   nextRunAt?: string;
   lastRunAt?: string;
   lastStatus?: string;
@@ -546,10 +551,16 @@ export interface Runtime {
   deleteRoutine(id: string, botId: string): Promise<void>;
   discoverEvents(cursor: string): Promise<RuntimeDiscovery>;
   /**
-   * Who each main assistant may hand work to, replacing every earlier policy. Absent when the
-   * Hermes add-on cannot gate the agent-message tool, so no roster or gate is installed.
+   * Who each assistant may see and reach, replacing every earlier policy. Resolves once Hermes holds
+   * it, with the roster protocol Hermes enforces: 0 when this add-on has no gate, so nothing is
+   * enforced. Absent when the runtime can't send rosters at all.
    */
-  delegationPolicy?(policies: DelegationPolicies): Promise<void>;
+  delegationPolicy?(policies: DelegationPolicies): Promise<number>;
+  /**
+   * Routine results Hermes still holds for delivery from this assistant's profile, each keeping the
+   * destination its run had. Throws when they can't be read. Absent when the add-on can't say.
+   */
+  routineDeliveries?(botId: string): Promise<{ id: string; name: string }[]>;
   close(): Promise<void>;
 }
 export type DownloadedFile = {

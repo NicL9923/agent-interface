@@ -54,7 +54,7 @@ export async function routinesFor<T extends Routine>(runtime: Pick<Runtime, 'gro
   const touches = (routine: Routine) => !!routine.roomIds?.length || mentionsRoom(routine.lastError) || mentionsRoom(routine.lastDeliveryError);
   const errs = (routine: Routine) => routine.lastError !== undefined || routine.lastDeliveryError !== undefined;
   // Every target the delivery names is the server's to check, never anyone's to read.
-  const listed = routines.map(({ delivery: _, nativeOverrides: __, ...routine }) => routine as T);
+  const listed = routines.map(({ delivery: _, nativeOverrides: __, inFlight: ___, ...routine }) => routine as T);
   if (!listed.some(routine => touches(routine) || errs(routine))) return listed;
   const redact = await errorRedactor(runtime, store, roster, userId, listed.some(touches));
   return listed.map(routine => {

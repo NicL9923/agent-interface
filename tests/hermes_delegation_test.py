@@ -227,12 +227,31 @@ class DelegationTest(unittest.TestCase):
 
 
 
+CHECK_IN = {"id": "ci", "name": "Check-ins", "prompt": "[WildBots check-in for member mom on mom-main, abc123] Review Mom's email and calendar."}
+JOBS = {"j": {"id": "j", "name": "Report", "prompt": "Report"}, "ci": CHECK_IN}
+
+
+def find_job(ref):
+    """Hermes's job store as cronjob_manage resolves it: ID, then name. Anything else is unexpected."""
+    if ref in JOBS:
+        return dict(JOBS[ref])
+    if ref == "Check-ins":
+        return dict(CHECK_IN)
+    if ref == "Report":
+        return dict(JOBS["j"])
+    if ref == "Twice":
+        raise delegation.AmbiguousRoutine(ref)
+    if ref == "missing":
+        return None
+    raise OSError(f"jobs.json unreadable for {ref!r}")
+
+
 class DeliveryAndHostTest(unittest.TestCase):
     def setUp(self):
         self.root = tempfile.mkdtemp()
         self.profile = "mom-main"
         self.gate = delegation.Delegation(sqlite3.connect(":memory:"), threading.RLock(), lambda agent: None,
-                                          current_profile=lambda: self.profile, hermes_root=lambda: self.root)
+                                          current_profile=lambda: self.profile, hermes_root=lambda: self.root, jobs=find_job)
         self.gate.replace(POLICY)
         self.ran = []
         registry = types.SimpleNamespace(entries={name: types.SimpleNamespace(handler=self.handler(name)) for name in
@@ -278,6 +297,30 @@ class DeliveryAndHostTest(unittest.TestCase):
             for args in ({"action": "create", "deliver": "bot-chat:dad-diary"}, {"action": "update", "job_id": "j", "deliver": "room:public"},
                          {"action": "run", "job_id": "j"}, {"action": "create", "deliver": "origin"}):
                 self.assertFalse(self.refused("cronjob_manage", args, profile), (profile, args))
+
+    def test_no_assistant_changes_resumes_or_runs_a_check_in_whatever_its_designation(self):
+        # A former main assistant's check-in that cleanup couldn't delete stays as WildBots made it.
+        for profile in ("mom-main", "mom-notes", "ranch", "brand-new"):
+            for args in ({"action": "update", "job_id": "ci", "deliver": "bot-chat:ranch"}, {"action": "update", "job_id": "Check-ins", "prompt": "x"},
+                         {"action": "resume", "job_id": "ci"}, {"action": "run", "job_id": "ci"}, {"action": "Run_Now", "job_id": "ci"},
+                         {"action": "trigger", "job_id": "Check-ins"}):
+                result = self.call("cronjob_manage", dict(args), profile)
+                self.assertIn("WildBots check-in", json.loads(result).get("error", ""), (profile, args))
+            for args in ({"action": "pause", "job_id": "ci"}, {"action": "remove", "job_id": "ci"}):
+                self.assertFalse(self.refused("cronjob_manage", args, profile), (profile, args))
+        # With no rosters at all, as before any WildBots server sent one, the lock still holds.
+        self.gate.replace({}, 1)
+        self.assertIsNone(self.gate.policy_for("mom-notes"))
+        self.assertIn("WildBots check-in", json.loads(self.call("cronjob_manage", {"action": "resume", "job_id": "ci"}, "mom-notes"))["error"])
+
+    def test_a_routine_that_cant_be_told_apart_from_a_check_in_is_left_alone(self):
+        for ref, reason in (("Twice", "More than one routine"), ("broken", "can't be checked")):
+            result = json.loads(self.call("cronjob_manage", {"action": "update", "job_id": ref, "deliver": "local"}, "ranch"))
+            self.assertIn(reason, result["error"], ref)
+        # A reference to nothing goes on, for Hermes to report; another routine is pinned to the job checked.
+        self.assertFalse(self.refused("cronjob_manage", {"action": "run", "job_id": "missing"}, "ranch"))
+        self.call("cronjob_manage", {"action": "update", "job_id": "Report", "deliver": "local"}, "ranch")
+        self.assertEqual(self.ran[-1][1]["job_id"], "j")
 
     def test_a_main_assistant_cannot_drive_hermes_or_other_profiles_from_the_host(self):
         for command in ("hermes -p ranch chat -q hi", "cat ~/.hermes/profiles/dad-diary/memories/MEMORY.md", "HERMES_HOME=/x python run.py"):
@@ -396,6 +439,132 @@ for schedule in ("every 2h", "0 7 * * *"):
     mark_job_run(j, False, error="Job timed out after 600s", status="timeout"); snap(j, schedule + ": timeout")
 print("RESULT " + json.dumps(seen, default=str))
 """
+
+
+CHECK_IN_LOCK = """
+import json, sys, types
+sys.path.insert(0, sys.argv[1])
+from support import load_source
+from cron.jobs import create_job
+delegation = load_source("src/hermes/delegation.py", "delegation_real")
+checkin = create_job(prompt="[WildBots check-in for member mom on mom-main, abc] Review email.", schedule="every 2h", name="Check-ins", deliver="bot-chat")
+other = create_job(prompt="Report", schedule="every 2h", name="Report", deliver="bot-chat")
+create_job(prompt="a", schedule="every 2h", name="Twice", deliver="bot-chat")
+create_job(prompt="b", schedule="every 2h", name="twice", deliver="bot-chat")
+import sqlite3, threading
+gate = delegation.Delegation(sqlite3.connect(":memory:"), threading.RLock(), lambda agent: None, current_profile=lambda: "ranch")
+ran = []
+entry = types.SimpleNamespace(handler=lambda args, task_id=None: ran.append(dict(args)) or "{}")
+gate.gate_registry(types.SimpleNamespace(get_entry=lambda name: entry if name == "cronjob_manage" else None))
+out = {}
+for label, args in (("update by id", {"action": "update", "job_id": checkin["id"], "deliver": "bot-chat:ranch"}),
+                    ("resume by name", {"action": "resume", "job_id": "check-ins"}), ("run", {"action": "run_now", "job_id": checkin["id"]}),
+                    ("pause", {"action": "pause", "job_id": checkin["id"]}), ("other by name", {"action": "update", "job_id": "REPORT", "deliver": "local"}),
+                    ("ambiguous", {"action": "run", "job_id": "TWICE"})):
+    before = len(ran)
+    result = json.loads(entry.handler(dict(args), task_id="t"))
+    out[label] = {"ran": len(ran) > before, "error": result.get("error", ""), "job_id": ran[-1]["job_id"] if len(ran) > before else None}
+out["other_id"] = other["id"]
+print("RESULT " + json.dumps(out))
+"""
+
+
+QUEUED_DELIVERIES = """
+import json, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from support import load_source
+from hermes_constants import get_hermes_home
+from cron import delivery_queue
+from cron.bot_chat_legacy import defer
+delegation = load_source("src/hermes/delegation.py", "delegation_real")
+home = get_hermes_home()
+out = {"empty": delegation.pending_deliveries(home)}
+delivery_queue.enqueue("exec-1", {"id": "job-a", "name": "Weekly report", "deliver": "telegram:-100"}, "Results")
+defer("key-1", {"id": "job-b", "name": "Ranch digest", "deliver": "bot-chat:ranch"}, "Digest", home / "profiles" / "ranch", for_failure=False)
+out["queued"] = delegation.pending_deliveries(home)
+claimed = delivery_queue.claim_next()
+out["sending"] = delegation.pending_deliveries(home)
+delivery_queue._finish(claimed["execution_id"], error=None)
+out["sent"] = delegation.pending_deliveries(home)
+print("RESULT " + json.dumps(out))
+"""
+
+
+def run_real(script, home):
+    import subprocess
+    env = {**os.environ, "HERMES_HOME": str(home), "PYTHONPATH": SOURCE}
+    run = subprocess.run([sys.executable, "-c", script, str(Path(__file__).resolve().parent)], cwd=Path(__file__).resolve().parents[1],
+                         env=env, capture_output=True, text=True, timeout=240, check=False)
+    assert run.returncode == 0, run.stderr[-2000:]
+    return json.loads(next(line for line in run.stdout.splitlines() if line.startswith("RESULT "))[len("RESULT "):])
+
+
+class PendingDeliveriesTest(unittest.TestCase):
+    def setUp(self):
+        self.home = Path(tempfile.mkdtemp())
+        (self.home / "cron" / "bot_chat_pending").mkdir(parents=True)
+
+    def queue(self, rows):
+        connection = sqlite3.connect(self.home / "cron" / "deliveries.db")
+        connection.execute("CREATE TABLE deliveries(execution_id TEXT, job_json TEXT, status TEXT)")
+        connection.executemany("INSERT INTO deliveries VALUES(?,?,?)", rows)
+        connection.commit()
+        connection.close()
+
+    def test_lists_unfinished_queue_rows_and_parked_bot_chat_outputs(self):
+        self.queue([("1", json.dumps({"id": "a", "name": "A"}), "pending"), ("2", json.dumps({"id": "b", "name": "B"}), "delivering"),
+                    ("3", json.dumps({"id": "c", "name": "C"}), "delivered"), ("4", "{}", "failed")])
+        (self.home / "cron" / "bot_chat_pending" / "k1.json").write_text(json.dumps({"status": "queued", "job": {"id": "d", "name": "D"}}))
+        (self.home / "cron" / "bot_chat_pending" / "k2.json").write_text(json.dumps({"status": "transferred", "job": {"id": "e"}}))
+        self.assertEqual([row["id"] for row in delegation.pending_deliveries(self.home)], ["a", "b", "d"])
+
+    def test_a_home_with_neither_has_nothing_pending(self):
+        self.assertEqual(delegation.pending_deliveries(Path(tempfile.mkdtemp())), [])
+
+    def test_an_unreadable_record_is_an_error_not_an_empty_list(self):
+        (self.home / "cron" / "bot_chat_pending" / "bad.json").write_text("{not json")
+        with self.assertRaises(ValueError):
+            delegation.pending_deliveries(self.home)
+        (self.home / "cron" / "bot_chat_pending" / "bad.json").write_text("[]")
+        with self.assertRaises(ValueError):
+            delegation.pending_deliveries(self.home)
+
+    def test_the_rpc_reads_one_profile_and_refuses_a_bad_or_missing_one(self):
+        root = Path(tempfile.mkdtemp())
+        (root / "profiles" / "ranch" / "cron" / "bot_chat_pending").mkdir(parents=True)
+        (root / "profiles" / "ranch" / "cron" / "bot_chat_pending" / "k.json").write_text(json.dumps({"status": "queued", "job": {"id": "r", "name": "Digest"}}))
+        (root / "cron").mkdir()
+        gate = delegation.Delegation(sqlite3.connect(":memory:"), threading.RLock(), lambda agent: None, hermes_root=lambda: root)
+        server = types.SimpleNamespace(_ok=lambda rid, value: {"result": value}, _err=lambda rid, code, message: {"error": message})
+        handle = gate.deliveries_rpc(server)
+        self.assertEqual(handle(1, {"profile": "ranch"}), {"result": {"pending": [{"id": "r", "name": "Digest"}]}})
+        self.assertEqual(handle(1, {"profile": "default"}), {"result": {"pending": []}})
+        for params in ({}, {"profile": "../x"}, {"profile": 3}, None):
+            self.assertEqual(handle(1, params)["error"], "Invalid routine deliveries request: profile", params)
+        self.assertIn("no such profile", handle(1, {"profile": "gone"})["error"])
+        (root / "profiles" / "ranch" / "cron" / "bot_chat_pending" / "k.json").write_text("{")
+        self.assertIn("could not be read", handle(1, {"profile": "ranch"})["error"])
+
+    @unittest.skipUnless(SOURCE, "needs HERMES_SOURCE")
+    def test_real_hermes_queued_and_parked_deliveries_are_seen_until_sent(self):
+        out = run_real(QUEUED_DELIVERIES, self.home)
+        self.assertEqual(out["empty"], [])
+        self.assertEqual(sorted(row["id"] for row in out["queued"]), ["job-a", "job-b"])
+        self.assertEqual(sorted(row["id"] for row in out["sending"]), ["job-a", "job-b"])
+        self.assertEqual([row["id"] for row in out["sent"]], ["job-b"], "A sent queue row is gone; the parked output still waits")
+
+
+class RealCheckInLockTest(unittest.TestCase):
+    @unittest.skipUnless(SOURCE, "needs HERMES_SOURCE")
+    def test_hermes_own_resolver_finds_the_check_in_by_id_or_name(self):
+        out = run_real(CHECK_IN_LOCK, tempfile.mkdtemp())
+        for label in ("update by id", "resume by name", "run"):
+            self.assertFalse(out[label]["ran"], label)
+            self.assertIn("WildBots check-in", out[label]["error"], label)
+        self.assertTrue(out["pause"]["ran"])
+        self.assertEqual(out["other by name"]["job_id"], out["other_id"])
+        self.assertIn("More than one routine", out["ambiguous"]["error"])
 
 
 def unknown_fields(job, known):

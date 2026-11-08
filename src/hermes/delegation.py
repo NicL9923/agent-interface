@@ -16,6 +16,9 @@ from everyone else, so the server sends each profile's roster here and this modu
 - A main assistant's ``cronjob_manage`` creates routines that deliver only to its own chat, and it
   cannot change, resume or run them. Other assistants' routine deliveries are as Hermes has them, a
   known limit taken up separately.
+- No assistant's ``cronjob_manage`` updates, resumes or runs a WildBots check-in, whatever its
+  designation: only the app's reconciler changes those jobs, so a check-in left behind after a
+  member's main assistant changed keeps the delivery and prompt WildBots gave it.
 - A main assistant cannot run the Hermes CLI or touch another profile's files through the
   terminal, code or file tools. Those tools act on the whole host, so this is a guard, not a
   boundary: see docs/HouseholdExperience.md#privacy-limits.
@@ -46,12 +49,60 @@ MAIN_CRON_ACTIONS = {"list", "create", "pause", "remove", "cancel"}
 CRON_ALIASES = {"run_now": "run", "trigger": "run"}
 MAX_TARGETS = 200
 ROSTER_HEADING = re.compile(r"^You are `@[^`]+`\. Your teammates .*:$")
+# A WildBots check-in's prompt starts with this marker (src/server/main-assistant.ts). Any job carrying
+# it, signed or not, is treated as one: refusing a change to a forged one only limits its own assistant.
+CHECK_IN_MARKER = re.compile(r"^\s*\[WildBots check-in\b", re.IGNORECASE)
 HOST_TOOLS = {"terminal", "execute_code", "process_manage"}
 FILE_TOOLS = {"write_file", "patch"}
 
 
 class PolicyError(ValueError):
     pass
+
+
+class AmbiguousRoutine(Exception):
+    pass
+
+
+def read_job(ref):
+    """The routine a reference names for the profile running this tool, as cronjob_manage finds it:
+    an exact ID, else a case-insensitive name. None when nothing matches; AmbiguousRoutine when a
+    name matches several."""
+    from cron.jobs import AmbiguousJobReference, resolve_job_ref
+    try:
+        return resolve_job_ref(ref)
+    except AmbiguousJobReference as error:
+        raise AmbiguousRoutine(str(error)) from error
+
+
+def pending_deliveries(home):
+    """Routine results Hermes still holds for delivery from this profile home: rows in the gateway
+    delivery queue not yet finished (cron/delivery_queue.py), and Bot Chat outputs parked while their
+    target was down (cron/bot_chat_legacy.py). Each outlives its run and keeps the destination the run
+    had. Raises when either can't be read, so a caller can fail closed."""
+    home = Path(home)
+    found = []
+    database = home / "cron" / "deliveries.db"
+    if database.exists():
+        import sqlite3
+        connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
+        try:
+            rows = connection.execute("SELECT job_json FROM deliveries WHERE status IN ('pending','delivering')").fetchall()
+        finally:
+            connection.close()
+        for (job_json,) in rows:
+            job = json.loads(job_json)
+            found.append({"id": str(job.get("id") or ""), "name": str(job.get("name") or "")})
+    parked = home / "cron" / "bot_chat_pending"
+    if parked.exists():
+        for path in sorted(parked.glob("*.json")):
+            record = json.loads(path.read_text(encoding="utf-8-sig"))
+            if not isinstance(record, dict):
+                raise ValueError(f"{path.name} is not a delivery record")
+            if record.get("status") == "queued":
+                job = record.get("job") if isinstance(record.get("job"), dict) else {}
+                found.append({"id": str(job.get("id") or ""), "name": str(job.get("name") or "")})
+    return found
 
 
 def _text(value, limit, field):
@@ -187,8 +238,10 @@ def deliver_tokens(value):
 
 
 class Delegation:
-    def __init__(self, db, lock, profile_for_agent, current_profile=None, hermes_root=None):
+    def __init__(self, db, lock, profile_for_agent, current_profile=None, hermes_root=None, jobs=read_job):
         self.db, self.lock, self.profile_for_agent = db, lock, profile_for_agent
+        # Finds a routine by reference in the profile running the tool; Hermes's own resolver by default.
+        self.read_job = jobs
         # The profile a registry tool runs for, from Hermes's profile-scoped home.
         self.current_profile = current_profile or (lambda: None)
         self.hermes_root = hermes_root
@@ -241,6 +294,22 @@ class Delegation:
             except PolicyError as error:
                 return server._err(rid, -32602, f"Invalid delegation policies: {error}")
             return server._ok(rid, {"ok": True})
+        return handle
+
+    def deliveries_rpc(self, server):
+        """The routine results Hermes still holds for one profile, so the app can wait until they are gone."""
+        def handle(rid, params):
+            profile = (params or {}).get("profile")
+            if not isinstance(profile, str) or not PROFILE_ID.match(profile) or not self.hermes_root:
+                return server._err(rid, -32602, "Invalid routine deliveries request: profile")
+            root = Path(self.hermes_root())
+            home = root if profile == "default" else root / "profiles" / profile
+            if not home.is_dir():
+                return server._err(rid, -32602, "Invalid routine deliveries request: no such profile")
+            try:
+                return server._ok(rid, {"pending": pending_deliveries(home)})
+            except Exception as error:
+                return server._err(rid, -32000, f"Routine deliveries could not be read: {error}")
         return handle
 
     def guidance_for(self, profile):
@@ -337,6 +406,31 @@ class Delegation:
         peers = doc.get("bot_peers") if isinstance(doc, dict) else None
         return {name for name, _ in _roster(root)}, {str(name).lower() for name in peers} if isinstance(peers, dict) else set()
 
+    def check_in_refusal(self, args):
+        """Why a cron call may not touch a WildBots check-in, or None, for any assistant.
+
+        Update, resume and run are refused on a job whose prompt carries the check-in marker; pausing
+        and removing it stay allowed. The job is found as Hermes finds it, and the call is pinned to
+        the ID checked, so a name can't resolve to another job afterwards. A reference that can't be
+        read is refused; one that names nothing goes on, for Hermes to report.
+        """
+        action = str(args.get("action") or "").strip().lower()
+        if CRON_ALIASES.get(action, action) not in ("update", "resume", "run"):
+            return None
+        try:
+            job = self.read_job(str(args.get("job_id") or ""))
+        except AmbiguousRoutine:
+            return "More than one routine has that name. Use its ID."
+        except Exception:
+            return "That routine can't be checked, so it was left as it is."
+        if not isinstance(job, dict):
+            return None
+        if CHECK_IN_MARKER.match(str(job.get("prompt") or "")):
+            return "This is a WildBots check-in. Only WildBots changes, resumes or runs it; the member manages check-ins there."
+        if job.get("id"):
+            args["job_id"] = job["id"]
+        return None
+
     def cron_refusal(self, profile, policy, args):
         """Why a main assistant's cron action may not go ahead, or None.
 
@@ -401,6 +495,10 @@ class Delegation:
             def handler(args, *rest, __original=original, __name=name, **kwargs):
                 profile = self.current_profile()
                 policy = self.policy_for(profile)
+                if __name == "cronjob_manage" and isinstance(args, dict):
+                    reason = self.check_in_refusal(args)
+                    if reason:
+                        return refusal(reason)
                 if policy is not None and isinstance(args, dict):
                     reason = self.cron_refusal(profile, policy, args) if __name == "cronjob_manage" else self.host_refusal(__name, profile, policy, args)
                     if reason:

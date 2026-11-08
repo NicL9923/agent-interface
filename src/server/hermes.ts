@@ -957,7 +957,9 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
             enabled: job.enabled !== false && job.state !== 'paused',
             nextRunAt: job.next_run_at ?? undefined, lastRunAt: job.last_run_at ?? undefined,
             lastStatus: job.last_status ?? undefined, lastError: job.last_error ?? undefined, lastDeliveryError: job.last_delivery_error ?? undefined,
-            ...(job.live_execution ? {running: true} : {}), nativeOverrides: nativeOverrides(job)});
+            ...(job.live_execution ? {running: true} : {}),
+            // A claimed fire, or a Bot Chat delivery Hermes still holds, carries the job as it was then.
+            ...(job.fire_claim || job.last_delivery_queued ? {inFlight: true} : {}), nativeOverrides: nativeOverrides(job)});
         }
       }
       return all;
@@ -989,12 +991,20 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
       // An add-on with no gate gets no roster: its assistants work as before. One that speaks only the
       // first protocol takes main assistants' rosters alone, in that protocol's shape; the rest of the
       // household it leaves as Hermes has it.
-      if (!contract.delegation) return;
+      if (!contract.delegation) return 0;
       const params = contract.delegation >= 2 ? {version: 2, policies}
         : {policies: Object.fromEntries(Object.entries(policies).filter(([, policy]) => policy.main)
           .map(([profile, {member, personal, shared}]) => [profile, {member, personal, shared}]))};
       const result = await rpc('agent-interface.delegation', params);
       if (result?.ok !== true) throw new Error('Hermes did not save the main assistants\' rosters.');
+      return contract.delegation;
+    },
+    async routineDeliveries(botId) {
+      await connect();
+      if (!contract.extension) throw new Error('Reading held routine deliveries requires the verified Hermes add-on.');
+      const result = await rpc('agent-interface.routine_deliveries', {profile: botId});
+      if (!Array.isArray(result?.pending)) throw new Error('Hermes did not list the routine deliveries it holds.');
+      return result.pending.map((row: Wire) => ({id: String(row?.id ?? ''), name: String(row?.name ?? '')}));
     },
     async discoverEvents(cursor): Promise<RuntimeDiscovery> {
       await connect();

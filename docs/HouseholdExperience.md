@@ -125,8 +125,19 @@ WildBots. WildBots's own routine saves (paused or not), resumes, trial runs and
 event triggers refuse a main assistant's routine that posts anywhere else:
 another assistant's chat, including the member's other personal ones, a group
 chat, a messaging platform, or "where it was made" (`origin`). An assistant
-can't be made main while any of its routines posts elsewhere; the refusal names
-them.
+can't be made main while any of its routines posts elsewhere, or while one is
+running or Hermes still holds a delivery from it, wherever it posts: a run in
+progress and a held delivery keep the routine as it was when they began. The
+refusal names them. Hermes holds an assistant to a main assistant's limits
+before WildBots records the choice, so the choice never runs ahead of them; if
+Hermes doesn't take them, nothing changes.
+
+A check-in is WildBots's alone. No assistant's cron tool can change, resume or
+run one, whatever its designation; only pausing or removing it is allowed. An
+assistant also keeps a main assistant's limits in Hermes while any check-in is
+still on it, so a check-in Hermes refused to delete when the member cleared or
+changed their main assistant can't be pointed elsewhere. The member hears that
+the change isn't finished until WildBots removes it.
 
 On each turn the main assistant also reads that roster as guidance and can hand
 specialist work to it with Hermes's agent-message tool. A message to a shared assistant first asks

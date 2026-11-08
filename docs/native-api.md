@@ -534,9 +534,15 @@ keeps the saved one.
 | `PATCH /api/bots/:id` | Sharing the caller's main assistant, or a personal assistant a check-in is still on, answers 409 `main_share_confirmation_required` until the body has `"confirmMainCleared": true`; then check-ins end first, or 502 `check_in_removal_pending` leaves it personal. Any change to who sees an assistant answers 502 `roster_update_failed`, changing nothing, when Hermes did not take the narrowed roster first |
 
 For a main assistant's routine, saving (paused or not), resuming, a trial run or an event trigger answers
-409 `routine_chats` unless its only destination is its own chat. `PUT /api/preferences/main` answers 409
-`main_routine_delivery`, naming them, while any of that assistant's routines posts anywhere else, and when
-its routines can't be read. A routine with `managed: "check-in"` is a member's check-ins: show it without Edit,
+409 `routine_chats` unless its only destination is its own chat. `PUT /api/preferences/main` making an
+assistant main records nothing unless Hermes first takes, and enforces, its main assistant's limits:
+502 `main_activation_failed` when Hermes didn't take them, 409 `main_activation_failed` when its add-on
+can't enforce them. It then answers 409 `main_routine_delivery`, naming them, while any of that assistant's
+routines posts anywhere else, and when its routines or the deliveries Hermes holds can't be read; 409
+`main_routine_busy`, naming them, while one is running or Hermes still holds a delivery from it, wherever it
+posts. Show the message and let the member try again. Clearing or changing it answers 502
+`main_clear_pending` when Hermes still has the previous main assistant's check-in: the change is saved, and
+that assistant keeps a main assistant's limits until the server removes it. Reload preferences after it. A routine with `managed: "check-in"` is a member's check-ins: show it without Edit,
 Pause or Delete, which answer 409 `check_in_managed`. A transcript `message_agent`
 handoff or incoming agent envelope may offer the other assistant's chat when its
 `target` or sender names, by ID or name, an assistant in the caller's bootstrap

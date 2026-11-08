@@ -33,6 +33,9 @@ export type ErrorCode =
   | "roster_update_failed"
   | "routine_chats"
   | "main_routine_delivery"
+  | "main_routine_busy"
+  | "main_activation_failed"
+  | "main_clear_pending"
   // --- End main assistant ---
   // A Hermes transport failure carries its connection diagnosis.
   | NonNullable<RuntimeStatus["code"]>

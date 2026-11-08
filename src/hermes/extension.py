@@ -1475,6 +1475,7 @@ class Bridge:
         methods = {"open": self.open_bot, "submit": self.submit_from_app, "receipt": self.receipt, "discover": self.discover}
         if self.delegation.installed:
             methods["delegation"] = self.delegation.rpc(self.server)
+        methods["routine_deliveries"] = self.delegation.deliveries_rpc(self.server)
         return {"agent-interface." + name: handler for name, handler in methods.items()}
 
     # Bot Chat delivery: routines and bot messages arrive as canonical chat turns.

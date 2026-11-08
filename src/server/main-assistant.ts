@@ -109,8 +109,14 @@ export class MainAssistants {
   /** Assistants whose sharing is changing: no roster lists them, and they reach nobody, until the change settles. */
   private readonly withdrawn = new Set<string>();
   private bots: Bot[] = [];
+  /** Assistants being made main: Hermes holds them to a main assistant's limits before the choice is recorded. */
+  private readonly activating = new Set<string>();
+  /** Assistants a check-in job was still on after the last pass, including ones Hermes refused to delete. */
+  private checkInBots = new Set<string>();
+  /** The roster protocol Hermes enforced at the last send; 0 when it enforces none. */
+  private enforced = 0;
   /** Rosters go to Hermes one at a time, each built from who sees what when it is sent. */
-  private publishing: Promise<void> = Promise.resolve();
+  private publishing: Promise<unknown> = Promise.resolve();
   constructor(private readonly runtime: Runtime, private readonly store: Store, private readonly config: Config, private readonly log: Log = quietLog) {}
 
   start() {
@@ -212,6 +218,9 @@ export class MainAssistants {
       const member = tracked.find(row => same(job, row))?.userId ?? signedCheckInMember(this.store, job);
       if (member) held.set(member, [...held.get(member) ?? [], job]);
     }
+    // Every assistant a check-in cleanup missed in this pass. Each stays a main assistant in Hermes until
+    // its check-ins are confirmed gone; the member's current main one already is.
+    const remaining = new Set<string>();
     const wanted = new Map(members.flatMap(user => { const want = this.wanted(user, bots); return want ? [[user.id, want] as const] : []; }));
     for (const userId of new Set([...held.keys(), ...wanted.keys()])) {
       const want = wanted.get(userId);
@@ -224,7 +233,7 @@ export class MainAssistants {
       let unsafe = false;
       for (const job of have) if (job !== keep) {
         try { await this.remove(job); }
-        catch (error) { failed(userId, error); if (!(error instanceof RemovalError && error.safe)) unsafe = true; }
+        catch (error) { remaining.add(job.botId); failed(userId, error); if (!(error instanceof RemovalError && error.safe)) unsafe = true; }
       }
       if (!want) continue;
       const input = { botId: want.botId, name: CHECK_IN_ROUTINE_NAME, prompt: want.prompt, schedule: checkInSchedule(want.everyHours), enabled: true, recipientIds: [userId] };
@@ -243,6 +252,12 @@ export class MainAssistants {
         }
       } catch (error) { failed(userId, error); }
     }
+    this.checkInBots = remaining;
+  }
+
+  /** Whether a check-in job is on this assistant, as the last pass found or as recorded here. */
+  private holdsCheckIn(botId: string) {
+    return this.checkInBots.has(botId) || this.store.checkIns.current().some(row => row.botId === botId);
   }
 
   /**
@@ -316,7 +331,9 @@ export class MainAssistants {
       const member = members.find(user => user.id === owner);
       // An owner who left the household keeps nothing reachable.
       if (!member) { policies[bot.id] = { member: "", main: false, owned: true, personal: [], shared: [] }; continue; }
-      policies[bot.id] = { member: member.name, main: this.store.preferences(owner).mainBotId === bot.id, owned: true,
+      // An assistant being made main is held to its limits first, and a former one keeps them while a check-in is on it.
+      const main = this.store.preferences(owner).mainBotId === bot.id || this.activating.has(bot.id) || this.holdsCheckIn(bot.id);
+      policies[bot.id] = { member: member.name, main, owned: true,
         personal: others.filter(other => mainEligible(other, owner)).map(target), shared: household };
     }
     return policies;
@@ -327,19 +344,46 @@ export class MainAssistants {
    * the sharing this app records at that moment over the last roster Hermes reported, so a send can never
    * carry sharing older than one that went before it.
    */
-  private publish(force = false): Promise<void> {
+  private publish(force = false): Promise<number> {
     const run = this.publishing.then(async () => {
-      if (!this.runtime.delegationPolicy) return;
+      if (!this.runtime.delegationPolicy) return 0;
       const bots = this.bots.map(bot => ({ ...bot, ...this.store.presentation(bot.id) }));
       const policies = this.policies(bots, this.household());
       const key = JSON.stringify(policies);
       // Sent again now and then, in case the add-on restarted from an older copy.
-      if (!force && key === this.policy.key && Date.now() - this.policy.at < policyRefresh) return;
-      await this.runtime.delegationPolicy(policies);
+      if (!force && key === this.policy.key && Date.now() - this.policy.at < policyRefresh) return this.enforced;
+      this.enforced = await this.runtime.delegationPolicy(policies);
       this.policy = { key, at: Date.now() };
+      return this.enforced;
     });
     this.publishing = run.catch(() => {});
     return run;
+  }
+
+  /**
+   * Makes an assistant main only once Hermes enforces it. Its roster goes to Hermes as a main one first;
+   * once Hermes holds it, `check` reads its routines, and only if both succeed does `commit` record the
+   * choice. Any failure sends the roster back as it was and refuses; if Hermes won't take that either, it
+   * keeps the stricter roster until the next pass. Callers run this in turn with routine changes.
+   */
+  async activate(botId: string, check: () => Promise<void>, commit: () => void) {
+    const refused = () => httpError(502, "Hermes didn't take this assistant's limits as a main assistant, so nothing changed. Try again.", { code: "main_activation_failed", expose: true });
+    if (!this.runtime.delegationPolicy) throw httpError(409, "This Hermes can't hold a main assistant's limits, so none can be chosen.", { code: "main_activation_failed" });
+    const bots = await this.roster().catch(() => undefined);
+    if (!bots?.some(bot => bot.id === botId)) throw refused();
+    this.bots = bots;
+    this.activating.add(botId);
+    try {
+      const enforced = await this.publish(true).catch(() => { throw refused(); });
+      if (enforced < 2) throw httpError(409, "This Hermes add-on can't hold a main assistant's limits, so none can be chosen. Update the add-on first.", { code: "main_activation_failed" });
+      await check();
+      commit();
+    } catch (error) {
+      this.activating.delete(botId);
+      await this.publish(true).catch(() => {});
+      throw error;
+    }
+    this.activating.delete(botId);
   }
 
   private household() { return this.store.users().filter(user => allowedIdentity(this.config, user)); }
@@ -414,30 +458,57 @@ export function installMainAssistantRoutes(app: FastifyInstance, collaborators: 
   /**
    * A main assistant's routines post only in its own chat. An assistant with a routine already posting
    * anywhere else, from before it was made main or outside WildBots, waits until that routine changes.
+   * So does one with a run going or a delivery Hermes still holds, whatever its destination: each keeps
+   * a copy of the routine as it was, which a change to the saved routine doesn't reach.
    */
-  const assertRoutinesOwnChat = async (bot: Bot) => {
+  const assertRoutinesSettled = async (bot: Bot) => {
     if (!(await runtime.capabilities()).routines.supported) return;
+    const unread = () => httpError(409, `WildBots couldn't check ${bot.name}'s routines, so it isn't your main assistant yet. Try again.`, { code: "main_routine_delivery" });
     let routines: Routine[];
     try { routines = (await runtime.routines()).filter(routine => routine.botId === bot.id); }
-    catch { throw httpError(409, `WildBots couldn't check where ${bot.name}'s routines post, so it isn't your main assistant yet. Try again.`, { code: "main_routine_delivery" }); }
+    catch { throw unread(); }
     const elsewhere = routines.filter(routine => !ownChatOnly(bot.id, routineTargets(routine)));
     if (elsewhere.length)
       throw httpError(409, `${bot.name} can't be your main assistant while these routines post outside its own chat: ${elsewhere.map(routine => `"${routine.name}"`).join(", ")}. Change where they deliver first.`,
         { code: "main_routine_delivery" });
+    if (!runtime.routineDeliveries) throw unread();
+    let held: { id: string; name: string }[];
+    try { held = await runtime.routineDeliveries(bot.id); }
+    catch { throw unread(); }
+    const busy = new Set([...routines.filter(routine => routine.running || routine.inFlight).map(routine => routine.name),
+      ...held.map(row => routines.find(routine => routine.id === row.id)?.name ?? (withoutBotTag(row.name).trim() || "A routine"))]);
+    if (busy.size)
+      throw httpError(409, `${[...busy].map(name => `"${name}"`).join(", ")} ${busy.size === 1 ? "is" : "are"} running or waiting to deliver, so ${bot.name} can't be your main assistant yet. Try again when ${busy.size === 1 ? "it finishes" : "they finish"}.`,
+        { code: "main_routine_busy" });
   };
   // Clearing is an explicit null, never a missing field, so no client can clear it by not knowing it.
   apiRoute(app, "PUT /preferences/main", { body: z.object({ botId: id.nullable() }).strict() }, async (req, { botId }) => {
     const userId = signedIn(req).id;
-    if (botId !== null) {
-      const bot = await eligibleBot(userId, botId);
-      if (store.preferences(userId).mainBotId !== botId) await assertRoutinesOwnChat(bot);
+    const before = store.preferences(userId).mainBotId;
+    const commit = () => {
+      const value = store.preferences(userId);
+      // A new main assistant starts without check-ins; the member turns them on for it.
+      const changed = value.mainBotId !== (botId ?? undefined);
+      store.savePreferences(userId, { ...value, mainBotId: botId ?? undefined, ...(changed && value.checkIns ? { checkIns: { ...value.checkIns, enabled: false } } : {}) });
+    };
+    if (botId !== null && botId !== before) {
+      // In turn with routine saves and triggers, so none lands between the check and the choice.
+      await serialDelivery(store, async () => {
+        const bot = await eligibleBot(userId, botId);
+        await mains.activate(bot.id, () => assertRoutinesSettled(bot), commit);
+      });
+    } else {
+      if (botId !== null) await eligibleBot(userId, botId);
+      commit();
     }
-    const value = store.preferences(userId);
-    // A new main assistant starts without check-ins; the member turns them on for it.
-    const changed = value.mainBotId !== (botId ?? undefined);
-    store.savePreferences(userId, { ...value, mainBotId: botId ?? undefined, ...(changed && value.checkIns ? { checkIns: { ...value.checkIns, enabled: false } } : {}) });
-    // The old main's check-ins go now; if Hermes refuses, the periodic pass removes them.
-    if (changed) await mains.reconcile().catch(() => {});
+    if (before && before !== botId) {
+      // The old main's check-ins go now. Until Hermes confirms they are gone, that assistant keeps a main
+      // assistant's limits in Hermes, and the member hears the change isn't finished.
+      await mains.reconcile().catch(() => {});
+      if (await mains.checkInsOn(before))
+        throw httpError(502, "Your previous main assistant still has a check-in in Hermes, so it keeps a main assistant's limits until WildBots removes it. WildBots will keep trying.",
+          { code: "main_clear_pending", expose: true });
+    }
     return preferences(userId);
   });
   apiRoute(app, "PUT /preferences/check-ins", {

@@ -1,8 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/server/app.js";
 import { loadConfig, type Config } from "../src/server/config.js";
-import { checkInMarker, ReconcileError, signedCheckInMember } from "../src/server/main-assistant.js";
-import type { Bot, DelegationPolicies, Routine, RuntimeEvent } from "../src/shared/types.js";
+import { checkInMarker, MainAssistants, ReconcileError, signedCheckInMember } from "../src/server/main-assistant.js";
+import type { Bot, DelegationPolicies, Routine, Runtime, RuntimeEvent } from "../src/shared/types.js";
 import { fakeRuntime, signIn } from "./helpers/server.js";
 import { botFixture, capabilitiesFixture } from "./helpers/runtime-fixtures.js";
 import type { RoutineRunStatus } from "../src/shared/routine-runs.js";
@@ -24,7 +24,10 @@ let jobs: Routine[];
 let calls: string[];
 let bots: Bot[];
 let pushed: DelegationPolicies[];
-let fail: { create?: "refused" | "uncertain"; delete?: boolean; update?: boolean; status?: boolean; pause?: boolean; policy?: boolean; routines?: boolean; stop?: boolean };
+let fail: { create?: "refused" | "uncertain"; delete?: boolean; update?: boolean; status?: boolean; pause?: boolean; policy?: boolean; routines?: boolean; stop?: boolean; held?: boolean };
+let held: Record<string, { id: string; name: string }[]>;
+let enforcing: number;
+let runtime: Runtime;
 let holdRoutines: Promise<void> | undefined;
 let holdPolicy: Promise<void> | undefined;
 let applied: DelegationPolicies[];
@@ -35,6 +38,7 @@ let mom: Record<string, string>, dad: Record<string, string>;
 let results: Record<string, { id: string; status: RoutineRunStatus; startedAt: string; error?: string }[]>;
 
 beforeEach(async () => {
+  held = {}; enforcing = 2;
   jobs = []; calls = []; pushed = []; fail = {}; discovered = []; holdRoutines = undefined; holdPolicy = undefined; applied = []; routinesSupported = true; nextId = 1; results = {};
   bots = [
     botFixture({ id: "mom-main", name: "Sage", description: "Mom's chief of staff", shared: false, ownerId: "mom" }),
@@ -43,7 +47,7 @@ beforeEach(async () => {
     botFixture({ id: "legacy", name: "Legacy", shared: false }),
     botFixture({ id: "dad-diary", name: "Diary", shared: false, ownerId: "dad" }),
   ];
-  const runtime = fakeRuntime({
+  runtime = fakeRuntime({
     status: async () => fail.status ? { connected: false } : { connected: true },
     capabilities: async () => capabilitiesFixture({ routines: { supported: routinesSupported }, botConfiguration: { supported: true }, durableEvents: { supported: true } }),
     listBots: async () => structuredClone(bots),
@@ -87,7 +91,10 @@ beforeEach(async () => {
       calls.push("policy"); if (fail.policy) throw new Error("Hermes refused the roster."); pushed.push(structuredClone(policies));
       if (holdPolicy) { const wait = holdPolicy; holdPolicy = undefined; await wait; }
       applied.push(structuredClone(policies));
+      return enforcing;
     },
+    // The routine results Hermes still holds for delivery, by assistant; `fail.held` makes them unreadable.
+    routineDeliveries: async botId => { if (fail.held) throw new Error("Hermes delivery queue unreadable."); return structuredClone(held[botId] ?? []); },
     saveBot: async (input, id) => { calls.push(`saveBot:${id}`); const bot = { ...bots.find(row => row.id === id)!, ...input }; bots = bots.map(row => row.id === id ? bot : row); return bot; },
     deleteBot: async id => { calls.push(`deleteBot:${id}`); bots = bots.filter(bot => bot.id !== id); jobs = jobs.filter(job => job.botId !== id); },
     close: async () => {},
@@ -680,6 +687,111 @@ describe("a main assistant's routines post only in its own chat", () => {
       const trigger = await created.app.inject({ method: "POST", url: "/api/bots/mom-main/automation/triggers", headers: mom,
         payload: { id: "fence", description: "Fence", events: ["issue.created"], routineId: "outside" } });
       expect(trigger.json().code).toBe("routine_chats");
+    });
+  });
+});
+
+describe("moving into and out of being main", () => {
+  const routine = (id: string, deliver: string, extra: Partial<Routine> = {}): Routine => ({ id, botId: "mom-main", name: `Routine ${id}`, prompt: "Report",
+    schedule: "0 7 * * *", enabled: true, delivery: { deliver }, nativeOverrides: [], ...extra });
+  const lastMain = (botId = "mom-main") => applied.at(-1)?.[botId]?.main;
+  describe("making an assistant main", () => {
+    it("records nothing when Hermes doesn't take its limits, or can't enforce them", async () => {
+      fail.policy = true;
+      expect((await main("mom-main")).json()).toMatchObject({ code: "main_activation_failed" });
+      expect(prefs().mainBotId).toBeUndefined();
+      fail.policy = false; enforcing = 0;
+      expect((await main("mom-main")).json()).toMatchObject({ code: "main_activation_failed", error: expect.stringContaining("Update the add-on") });
+      expect(prefs().mainBotId).toBeUndefined();
+      enforcing = 2;
+      expect((await main("mom-main")).json().mainBotId).toBe("mom-main");
+      expect(lastMain()).toBe(true);
+    });
+    it("checks its routines only once Hermes holds it to a main assistant's limits, and takes the limits back when they fail", async () => {
+      // A routine posting elsewhere appears while the roster is on its way, as one the assistant made just before Hermes enforced it.
+      let release!: () => void;
+      holdPolicy = new Promise(resolve => { release = resolve; });
+      const request = main("mom-main");
+      await vi.waitFor(() => expect(pushed.at(-1)?.["mom-main"]?.main).toBe(true));
+      jobs.push(routine("late", "bot-chat:ranch"));
+      release();
+      expect((await request).json()).toMatchObject({ code: "main_routine_delivery", error: expect.stringContaining('"Routine late"') });
+      expect(prefs().mainBotId).toBeUndefined();
+      expect(lastMain()).toBe(false);
+    });
+    it("waits while one of its routines is running or has a delivery Hermes still holds, wherever it posts", async () => {
+      for (const extra of [{ running: true }, { inFlight: true }] as Partial<Routine>[]) {
+        jobs = [routine("busy", "bot-chat:mom-main", extra)];
+        expect((await main("mom-main")).json(), JSON.stringify(extra)).toMatchObject({ code: "main_routine_busy", error: expect.stringContaining('"Routine busy" is running or waiting to deliver') });
+        expect(prefs().mainBotId).toBeUndefined();
+        expect(lastMain()).toBe(false);
+      }
+      // A delivery from a routine since deleted is still held under the routine's Hermes name.
+      jobs = [];
+      held["mom-main"] = [{ id: "gone", name: "[bot:mom-main] Old digest" }];
+      expect((await main("mom-main")).json().error).toContain('"Old digest"');
+      // Another assistant's held deliveries don't count.
+      held = { ranch: [{ id: "r", name: "Ranch digest" }] };
+      expect((await main("mom-main")).json().mainBotId).toBe("mom-main");
+    });
+    it("isn't made main while Hermes can't say what deliveries it holds, or this Hermes can't read them", async () => {
+      fail.held = true;
+      expect((await main("mom-main")).json()).toMatchObject({ code: "main_routine_delivery" });
+      expect(prefs().mainBotId).toBeUndefined();
+      expect(lastMain()).toBe(false);
+      fail.held = false;
+      delete runtime.routineDeliveries;
+      expect((await main("mom-main")).json()).toMatchObject({ code: "main_routine_delivery" });
+      expect(prefs().mainBotId).toBeUndefined();
+    });
+    it("runs in turn with routine changes, so a trigger sent meanwhile is checked as the main assistant's", async () => {
+      let release!: () => void;
+      holdPolicy = new Promise(resolve => { release = resolve; });
+      const request = main("mom-main");
+      await vi.waitFor(() => expect(pushed.at(-1)?.["mom-main"]?.main).toBe(true));
+      // A routine WildBots can't find can't be shown to post only in its own chat.
+      const trigger = created.app.inject({ method: "POST", url: "/api/bots/mom-main/automation/triggers", headers: mom,
+        payload: { id: "fence", description: "Fence", events: ["issue.created"], routineId: "unknown" } });
+      // Long enough for a trigger that didn't wait its turn to finish first.
+      await new Promise(resolve => setTimeout(resolve, 100));
+      release();
+      expect((await request).json().mainBotId).toBe("mom-main");
+      expect((await trigger).json().code).toBe("routine_chats");
+    });
+  });
+  describe("ending being main", () => {
+    beforeEach(async () => { await main("mom-main"); await checkIns(); fail.delete = true; fail.pause = true; });
+    it("keeps a main assistant's limits in Hermes while a check-in cleanup missed is still there, and says it isn't finished", async () => {
+      const cleared = await main(null);
+      expect(cleared.statusCode).toBe(502);
+      expect(cleared.json()).toMatchObject({ code: "main_clear_pending" });
+      expect(prefs().mainBotId).toBeUndefined();
+      expect(momJobs()).toHaveLength(1);
+      expect(lastMain()).toBe(true);
+      // Once Hermes removes it, the limits end with it.
+      fail.delete = false; fail.pause = false;
+      await created.mains.reconcile();
+      expect(momJobs()).toEqual([]);
+      expect(lastMain()).toBe(false);
+    });
+    it("keeps the limits for a check-in WildBots lost track of, and from a restarted server before its first pass", async () => {
+      await main(null);
+      // A fresh server sends rosters, here for another member's change, before it has looked at any routine.
+      const restarted = new MainAssistants(runtime, created.store, config);
+      await restarted.activate("dad-diary", async () => {}, () => {});
+      expect(lastMain()).toBe(true);
+      // A check-in found only by its signed marker, as after a create whose answer was lost.
+      const [job] = momJobs();
+      created.store.checkIns.removed(job.botId, job.id);
+      await created.mains.reconcile().catch(() => {});
+      expect(created.store.checkIns.current()).toEqual([]);
+      expect(lastMain()).toBe(true);
+    });
+    it("keeps the old main's limits too when the member moves to another assistant", async () => {
+      const moved = await main("mom-notes");
+      expect(moved.json()).toMatchObject({ code: "main_clear_pending" });
+      expect(prefs().mainBotId).toBe("mom-notes");
+      expect([lastMain("mom-main"), lastMain("mom-notes")]).toEqual([true, true]);
     });
   });
 });
