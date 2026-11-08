@@ -167,8 +167,11 @@ export async function installCollaborationRoutes(app: FastifyInstance, runtime: 
     if (!runtime.routineResults) throw httpError(409, 'Routine history is unavailable on this Hermes integration.');
     const page = await assistantRuns(botId);
     const from = since ? Date.parse(since) : -Infinity;
+    // A check-in that found something is its own message in the chat, and one that found nothing says
+    // nothing, so only a check-in that went wrong shows as a run card.
+    const checkIn = (run: RoutineRun) => store.checkIns.isCheckIn(botId, run.routineId) && run.status !== "failed" && !run.deliveryFailed;
     const redact = await redactAgents(store, roster, signedIn(req).id);
-    return { unavailable: page.unavailable, runs: await runErrorsFor(runtime, store, roster, signedIn(req).id, page.runs.filter(run => runTime(run) >= from).map(run => ({
+    return { unavailable: page.unavailable, runs: await runErrorsFor(runtime, store, roster, signedIn(req).id, page.runs.filter(run => runTime(run) >= from && !checkIn(run)).map(run => ({
       ...run, preview: run.preview === undefined ? undefined : redact.text(run.preview), error: run.error === undefined ? undefined : redact.text(run.error) }))) };
   });
   apiRoute(app, "GET /bots/:botId/routines/:routineId/results/:resultId", {}, async req => {

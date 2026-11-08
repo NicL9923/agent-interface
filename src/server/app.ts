@@ -28,7 +28,8 @@ import { installAutomationRoutes } from "./automation.js";
 import { installComputerRoutes } from "./computer.js";
 import { installCollaborationRoutes } from "./collaboration.js";
 import { installRoutineRoutes } from "./routine-routes.js";
-import { installBootstrapRoutes } from "./bootstrap-routes.js";
+import { installBootstrapRoutes, visiblePreferences } from "./bootstrap-routes.js";
+import { installMainAssistantRoutes, MainAssistants } from "./main-assistant.js";
 import { installClientErrorRoutes } from "./client-errors.js";
 import { installEventRoutes } from "./event-routes.js";
 import { installSnapshotInvalidation, runtimeSnapshots } from "./runtime-snapshot.js";
@@ -126,7 +127,9 @@ export async function createApp(
     redact: async (message, userId) => (await redactAgents(store, roster, userId)).message(message) });
   const snapshot = runtimeSnapshots(runtime);
   installBootstrapRoutes(app, { config, runtime, store, upgrades, directory, snapshot });
-  installBotRoutes(app, { runtime, store, roster, directory, requireCapability });
+  const mains = new MainAssistants(runtime, store, config, app.log);
+  installMainAssistantRoutes(app, { runtime, store, mains, requireCapability, preferences: userId => visiblePreferences(store, userId) });
+  installBotRoutes(app, { runtime, store, roster, directory, requireCapability, mains });
   const streams = new Set<() => void>();
   const conversations = installConversationRoutes(app, { config, runtime, store, roster, streams, requireCapability });
   installTalkRoutes(app, { runtime, store, roster, directory, requireCapability, send: conversations.send });
@@ -173,17 +176,19 @@ export async function createApp(
   if (options.background !== false) {
     worker.start();
     health.start();
+    mains.start();
   }
   app.addHook("onClose", async () => {
     await directRoutes?.close();
     groups.close();
     catalogs?.close();
     health.stop();
+    await mains.stop();
     await worker.stop();
     await runtime.close();
     store.close();
   });
-  return { app, store, worker, health, routes, directRoutes };
+  return { app, store, worker, health, routes, directRoutes, mains };
 }
 
 /** The association file Apple's CDN fetches for universal links and Handoff from Safari. */

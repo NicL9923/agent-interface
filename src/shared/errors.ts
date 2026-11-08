@@ -21,6 +21,16 @@ export type ErrorCode =
   | "sharing_changed"
   // A request ID came back with different content: another tab or device already sent under it.
   | "submission_conflict"
+  // --- Main assistant and check-ins ---
+  | "main_not_personal"
+  | "main_required"
+  | "main_share_confirmation_required"
+  | "check_in_hours"
+  | "check_in_managed"
+  | "check_in_marker"
+  | "check_in_unavailable"
+  | "check_in_removal_pending"
+  // --- End main assistant ---
   // A Hermes transport failure carries its connection diagnosis.
   | NonNullable<RuntimeStatus["code"]>
   // The web client sets these for failures that never reached the server.

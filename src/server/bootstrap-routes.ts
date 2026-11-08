@@ -4,6 +4,7 @@ import type { Preferences, Runtime, RuntimeStatus } from "../shared/types.js";
 import { apiRoute } from "./api-route.js";
 import { signedIn } from "./auth.js";
 import { visibleTo } from "./bot-access.js";
+import { mainEligible } from "../shared/main-assistant.js";
 import type { BotDirectory } from "./bot-routes.js";
 import { allowedIdentity, type Config } from "./config.js";
 import { httpError } from "./http-error.js";
@@ -11,6 +12,21 @@ import type { RuntimeSnapshots } from "./runtime-snapshot.js";
 import { id, modelFavoriteList, preferences } from "./schemas.js";
 import type { Store } from "./store.js";
 import type { HermesUpgrades } from "./upgrades.js";
+
+/**
+ * This person's preferences as their clients see them: assistants they cannot see are left out,
+ * and so is a main assistant that is no longer their own personal one.
+ */
+export function visiblePreferences(store: Store, userId: string): Preferences {
+  const value = store.preferences(userId);
+  const seen = (botId: string) => visibleTo(store, botId, userId);
+  const main = value.mainBotId && mainEligible(store.presentation(value.mainBotId), userId) ? value.mainBotId : undefined;
+  return { ...value, favorites: value.favorites.filter(seen), followBots: value.followBots.filter(seen),
+    sections: value.sections.map(section => ({ ...section, botIds: section.botIds.filter(seen) })),
+    ...(value.hiddenRoutineRuns ? { hiddenRoutineRuns: value.hiddenRoutineRuns.filter(entry => seen(entry.botId)) } : {}),
+    defaultBotId: value.defaultBotId && seen(value.defaultBotId) ? value.defaultBotId : undefined,
+    mainBotId: main, ...(value.checkIns ? { checkIns: main ? value.checkIns : { ...value.checkIns, enabled: false } } : {}) };
+}
 
 /** The client's first read, retrying the Hermes connection, this person's preferences and model options. */
 export function installBootstrapRoutes(app: FastifyInstance, collaborators: {
@@ -24,14 +40,7 @@ export function installBootstrapRoutes(app: FastifyInstance, collaborators: {
   const { config, runtime, store, upgrades, directory, snapshot } = collaborators;
   // Someone else's private assistant leaves this person's lists, so their saved
   // preferences stop naming it too.
-  const preferencesFor = (userId: string): Preferences => {
-    const value = store.preferences(userId);
-    const seen = (botId: string) => visibleTo(store, botId, userId);
-    return { ...value, favorites: value.favorites.filter(seen), followBots: value.followBots.filter(seen),
-      sections: value.sections.map(section => ({ ...section, botIds: section.botIds.filter(seen) })),
-      ...(value.hiddenRoutineRuns ? { hiddenRoutineRuns: value.hiddenRoutineRuns.filter(entry => seen(entry.botId)) } : {}),
-      defaultBotId: value.defaultBotId && seen(value.defaultBotId) ? value.defaultBotId : undefined };
-  };
+  const preferencesFor = (userId: string): Preferences => visiblePreferences(store, userId);
   const dated = (status: RuntimeStatus): RuntimeStatus => {
     const revisionDate = upgrades.revisionDate(status.version);
     return revisionDate ? { ...status, revisionDate } : status;
@@ -62,8 +71,13 @@ export function installBootstrapRoutes(app: FastifyInstance, collaborators: {
     value.notifications ??= previous.notifications;
     // Older clients don't know hidden routine runs; their saves keep this person's list.
     value.hiddenRoutineRuns ??= previous.hiddenRoutineRuns;
+    value.mainSuggestionDismissed ??= previous.mainSuggestionDismissed;
+    // The main assistant and its check-ins change only through their own routes, which keep Hermes
+    // matching, so neither an older client nor a stale copy here can change or clear them.
+    value.mainBotId = previous.mainBotId;
+    value.checkIns = previous.checkIns;
     store.savePreferences(signedIn(req).id, value);
-    return value;
+    return preferencesFor(signedIn(req).id);
   });
   apiRoute(app, "PUT /preferences/models", { body: z.object({ modelFavorites: modelFavoriteList }).strict() }, async (req, { modelFavorites }) => {
     const userId = signedIn(req).id;

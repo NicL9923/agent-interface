@@ -969,6 +969,13 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
       discoveryFull = true;
       discoveryGeneration++;
     },
+    async delegationPolicy(policies) {
+      await connect();
+      // An older add-on has no gate, so it gets no roster: its main assistants work as before.
+      if (!contract.delegation) return;
+      const result = await rpc('agent-interface.delegation', {policies});
+      if (result?.ok !== true) throw new Error('Hermes did not save the main assistants\' rosters.');
+    },
     async discoverEvents(cursor): Promise<RuntimeDiscovery> {
       await connect();
       if (!contract.extension) throw new Error('Durable discovery requires the verified Hermes add-on.');

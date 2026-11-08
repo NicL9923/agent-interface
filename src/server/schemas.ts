@@ -50,6 +50,8 @@ export const botInput = z.object({
 export const botSaveRequest = botInput.extend({
   // Making an assistant personal hides it from everyone else, so the person confirms that.
   confirmPrivate: z.boolean().optional(),
+  // Sharing someone's main assistant ends it being their main one and stops its check-ins.
+  confirmMainCleared: z.boolean().optional(),
 });
 const quietTime = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).optional();
 const validTimezone = (value: string) => {
@@ -83,7 +85,14 @@ export const preferences = z.object({
     )
     .optional(),
   hiddenRoutineRuns: z.array(z.object({ botId: id, routineId: id }).strict()).max(500).optional(),
+  // --- Main assistant: server-owned, so PATCH /preferences ignores what a client sends for these two. ---
+  mainBotId: id.optional(),
+  checkIns: z.object({ enabled: z.boolean(), everyHours: z.number(), timezone: z.string() }).strict().optional(),
+  mainSuggestionDismissed: z.boolean().optional(),
 });
+// --- Main assistant ---
+export const timezone = z.string().max(100).refine(validTimezone, "Choose a valid timezone.");
+// --- End main assistant ---
 
 type Keys<T> = T extends unknown ? keyof T : never;
 /** True when each type is assignable to the other and every union member has the same field names. */

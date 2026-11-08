@@ -107,7 +107,27 @@ export interface Preferences {
   notifications?: { timezone: string; quietStart?: string; quietEnd?: string; batchMinutes: number };
   /** Routines whose runs this person keeps out of their assistant's chat. Runs show by default. */
   hiddenRoutineRuns?: { botId: string; routineId: string }[];
+  // --- Main assistant and check-ins (src/shared/main-assistant.ts) ---
+  /**
+   * This person's main assistant: one of their own personal assistants. The server owns it: a
+   * preferences save never changes it, only PUT /preferences/main, so an older client keeps it.
+   */
+  mainBotId?: string;
+  /** Proactive check-ins by the main assistant. Server-owned like mainBotId; PUT /preferences/check-ins. */
+  checkIns?: CheckInSettings;
+  /** This person dismissed the suggestion to choose a main assistant. */
+  mainSuggestionDismissed?: boolean;
+  // --- End main assistant ---
 }
+// --- Main assistant and check-ins ---
+export interface CheckInSettings {
+  enabled: boolean;
+  /** Whole hours between check-ins, 1 to 4. */
+  everyHours: number;
+  /** The IANA timezone the main assistant reads as night, when it stays silent. */
+  timezone: string;
+}
+// --- End main assistant ---
 export const reasoningLevels = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"] as const;
 export const serviceTiers = ["normal", "fast", "ultrafast"] as const;
 export interface InferenceSettings {
@@ -378,6 +398,8 @@ export interface Routine {
   lastStatus?: string;
   lastError?: string;
   lastDeliveryError?: string;
+  /** Kept by WildBots for a feature, not edited as a routine: "check-in" is a member's main-assistant check-ins. */
+  managed?: "check-in";
 }
 export interface Bootstrap {
   user: User;
@@ -427,6 +449,11 @@ export interface RuntimeEvent {
   body?: string;
   occurredAt: string;
 }
+// --- Main assistant delegation ---
+export interface DelegationTarget { id: string; name: string; description?: string }
+/** Per main assistant's profile: the member it serves, assistants it may message freely, and those that need that member's yes first. */
+export type DelegationPolicies = Record<string, { member: string; personal: DelegationTarget[]; shared: DelegationTarget[] }>;
+// --- End main assistant delegation ---
 export interface RuntimeDiscovery {
   cursor: string;
   events: RuntimeEvent[];
@@ -512,6 +539,11 @@ export interface Runtime {
   /** `botId` names the assistant whose job this is: Hermes lets several hold one ID. */
   deleteRoutine(id: string, botId: string): Promise<void>;
   discoverEvents(cursor: string): Promise<RuntimeDiscovery>;
+  /**
+   * Who each main assistant may hand work to, replacing every earlier policy. Absent when the
+   * Hermes add-on cannot gate the agent-message tool, so no roster or gate is installed.
+   */
+  delegationPolicy?(policies: DelegationPolicies): Promise<void>;
   close(): Promise<void>;
 }
 export type DownloadedFile = {

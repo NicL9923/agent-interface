@@ -99,6 +99,9 @@ const additions = `
   CREATE TABLE IF NOT EXISTS routine_recipients_adopted(routine_id TEXT PRIMARY KEY);
   -- Each assistant's live Talk voice, for a Hermes without profile metadata. Hermes keeps it otherwise.
   CREATE TABLE IF NOT EXISTS bot_voices(bot_id TEXT PRIMARY KEY,voice TEXT NOT NULL);
+  -- Each member's managed check-in routine, by assistant and Hermes job ID. removed_at is set once the
+  -- job is gone; the row stays so a run that settles later is still known as a check-in.
+  CREATE TABLE IF NOT EXISTS check_in_jobs(bot_id TEXT NOT NULL,job_id TEXT NOT NULL,user_id TEXT NOT NULL REFERENCES users(id),created_at INTEGER NOT NULL,removed_at INTEGER,PRIMARY KEY(bot_id,job_id));
   CREATE TABLE IF NOT EXISTS draft_revisions(user_id TEXT NOT NULL REFERENCES users(id),bot_id TEXT NOT NULL,revision INTEGER NOT NULL,reason TEXT NOT NULL,sent_revision INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(user_id,bot_id));
 `;
 export const schemaVersion = migrations.length;

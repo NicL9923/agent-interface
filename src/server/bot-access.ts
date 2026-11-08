@@ -167,6 +167,9 @@ export const assistantRoutes: Readonly<Record<string, BotScope>> = {
   "POST /api/connection/retry": "none",
   "PATCH /api/preferences": "none",
   "PUT /api/preferences/models": "none",
+  // The main assistant named in the body; check-ins act on the member's current main assistant.
+  "PUT /api/preferences/main": "body",
+  "PUT /api/preferences/check-ins": "none",
   "GET /api/bots": "list",
   "POST /api/bots": "none",
   "GET /api/models": "query",

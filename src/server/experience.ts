@@ -124,7 +124,8 @@ export async function installExperienceRoutes(app: FastifyInstance, runtime: Run
     });
     for (const key of recaps.keys()) if (key.startsWith(`${userId}\0`) && !bots.some(bot => key === `${userId}\0${bot.id}`)) recaps.delete(key);
     const ids = new Set(bots.map(bot => bot.id));
-    const upcoming = ((await routines) ?? []).filter(row => ids.has(row.botId) && row.enabled && row.nextRunAt).sort((a,b)=>Date.parse(a.nextRunAt!) - Date.parse(b.nextRunAt!)).slice(0,10)
+    // Check-ins run every few hours and usually say nothing, so they are not scheduled work to show.
+    const upcoming = ((await routines) ?? []).filter(row => ids.has(row.botId) && row.enabled && row.nextRunAt && !store.checkIns.isCheckIn(row.botId, row.id)).sort((a,b)=>Date.parse(a.nextRunAt!) - Date.parse(b.nextRunAt!)).slice(0,10)
       // Today never shows where a routine posts, so it never reads the room catalog to hide rooms someone cannot open.
       .map(({ roomIds: _, delivery: __, ...row }) => row);
     const content = { since, frontier: page.frontier, hasMore: page.hasMore, items,

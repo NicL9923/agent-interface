@@ -512,6 +512,16 @@ class Bridge:
         journal.live_profile_for_session = self.live_profile_for
         journal.memory_refresh = sibling_module("experience").MemoryRefresh(journal, server,
             lambda profile: (session for sid, session in server._sessions.copy().items() if sid == self.canonical.get(profile)))
+        # Main assistants' rosters and the gate on their agent messages; see delegation.py.
+        self.delegation = sibling_module("delegation").Delegation(journal.db, journal.lock, self.profile_for_agent)
+
+    def profile_for_agent(self, agent):
+        """The profile a tool-calling agent belongs to, from its own session store, as message_agent finds it."""
+        try:
+            from tools.bot_mode_dm import _agent_home
+            return self.profile_name_for_home(_agent_home(agent)) or "default"
+        except Exception:
+            return None
 
     # Maintenance lease: a held lease fences every native admission except reads.
 
@@ -731,9 +741,10 @@ class Bridge:
         with self.journal.lock:
             return self.journal.db.execute("SELECT 1 FROM receipts WHERE session_id=? AND terminal=0 AND steering=0 AND status IN ('uncertain','accepted') AND input_text=? LIMIT 1", (sid, text)).fetchone() is not None
 
-    def with_inline_guidance(self, original, eligible, agent, *args, **kwargs):
+    def with_inline_guidance(self, original, eligible, agent, *args, guidance_profile=None, **kwargs):
         if not eligible or agent is None:
             return original(*args, **kwargs)
+        roster = self.delegation.guidance_for(guidance_profile) if guidance_profile else None
         # Hermes stages its first-contact note before the turn. It points at /help and offers a
         # profile interview, which suit a terminal, not an app chat with its own first-run flow.
         notes = getattr(agent, "_gateway_turn_context_notes", None)
@@ -741,8 +752,9 @@ class Bridge:
         if kept != notes:
             agent._gateway_turn_context_notes = kept
         prior = getattr(agent, "ephemeral_system_prompt", None)
-        if self.inline_instructions not in (prior or ""):
-            agent.ephemeral_system_prompt = "\n\n".join(part for part in (prior, self.inline_instructions) if part)
+        added = [part for part in (self.inline_instructions, roster) if part and part not in (prior or "")]
+        if added:
+            agent.ephemeral_system_prompt = "\n\n".join(part for part in (prior, *added) if part)
         try:
             return original(*args, **kwargs)
         finally:
@@ -764,14 +776,16 @@ class Bridge:
                 text = kwargs.get("text", args[7] if len(args) > 7 else None)
                 display_kind = kwargs.get("display_kind", args[4] if len(args) > 4 else None)
                 author = kwargs.get("turn_author", args[6] if len(args) > 6 else None)
-                return self.with_inline_guidance(original_invoke, self.app_prompt(sid, text, display_kind, author), turn.agent, sid, session, turn, *args, **kwargs)
+                return self.with_inline_guidance(original_invoke, self.app_prompt(sid, text, display_kind, author), turn.agent, sid, session, turn, *args,
+                                                 guidance_profile=profile, **kwargs)
             server._invoke_agent = invoke
         else:
             original_run = server._run_prompt_submit
             def run(rid, sid, session, *args, **kwargs):
                 text = kwargs.get("text", args[0] if args else None)
                 eligible = not str(rid).startswith("__") and self.app_prompt(sid, text, kwargs.get("display_kind"), kwargs.get("turn_author"))
-                return self.with_inline_guidance(original_run, eligible, session.get("agent"), rid, sid, session, *args, **kwargs)
+                return self.with_inline_guidance(original_run, eligible, session.get("agent"), rid, sid, session, *args,
+                                                 guidance_profile=self.live_profile_for(sid), **kwargs)
             server._run_prompt_submit = run
 
     def record_live_tool(self, sid, session, kind, payload):
@@ -1453,8 +1467,10 @@ class Bridge:
 
     def rpc_methods(self):
         """The agent-interface RPCs that read or admit app work, by registered name."""
-        return {"agent-interface." + name: handler for name, handler in
-                {"open": self.open_bot, "submit": self.submit_from_app, "receipt": self.receipt, "discover": self.discover}.items()}
+        methods = {"open": self.open_bot, "submit": self.submit_from_app, "receipt": self.receipt, "discover": self.discover}
+        if self.delegation.installed:
+            methods["delegation"] = self.delegation.rpc(self.server)
+        return {"agent-interface." + name: handler for name, handler in methods.items()}
 
     # Bot Chat delivery: routines and bot messages arrive as canonical chat turns.
 
@@ -1501,8 +1517,10 @@ def install(path=None):
     from hermes_cli.backend_retirement import retirement
     bridge.install_maintenance(retirement)
     bridge.install_native_seams()
+    # A Hermes without message_agent gets no roster or gate, and says so.
+    delegation = bridge.delegation.install()
     from agent.skill_utils import ESSENTIAL_SKILLS
-    server.register_method("agent-interface.capabilities", lambda rid, _: server._ok(rid, {"revision": actual_revision, "tracked_patch_sha256": patch_hash, "executor_epoch": journal.epoch, "durable_admission": True, "durable_events": True, "canonical_open": True, "explicit_credentials": True, "canonical_submit": True, "incremental_discovery": True, "essential_skills": sorted(ESSENTIAL_SKILLS)}))
+    server.register_method("agent-interface.capabilities", lambda rid, _: server._ok(rid, {"revision": actual_revision, "tracked_patch_sha256": patch_hash, "executor_epoch": journal.epoch, "durable_admission": True, "durable_events": True, "canonical_open": True, "explicit_credentials": True, "canonical_submit": True, "incremental_discovery": True, "delegation": delegation, "essential_skills": sorted(ESSENTIAL_SKILLS)}))
     for name, handler in bridge.rpc_methods().items():
         server.register_method(name, handler)
     bridge.install_delivery()

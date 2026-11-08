@@ -11,6 +11,7 @@ import { assertRoutinesStayPrivate, serialDelivery } from "./routine-delivery.js
 import { avatar, botSaveRequest, id } from "./schemas.js";
 import { TALK_VOICES } from "../shared/voice.js";
 import type { Store } from "./store.js";
+import { endMainBeforeSharing, type MainAssistants } from "./main-assistant.js";
 
 /** Marks a row unread when its latest message is newer than this person's last read of the chat. */
 function withUnread(bot: Bot, readAt: number | undefined): Bot {
@@ -72,8 +73,12 @@ export function installBotRoutes(app: FastifyInstance, collaborators: {
   roster: Roster;
   directory: BotDirectory;
   requireCapability: (key: CapabilityKey) => Promise<void>;
+  /** Absent in tests that never touch a main assistant. */
+  mains?: MainAssistants;
 }) {
-  const { runtime, store, roster, directory, requireCapability } = collaborators;
+  const { runtime, store, roster, directory, requireCapability, mains } = collaborators;
+  // Main assistants hear about every roster change on their next turn, and lose any assistant that went.
+  const rosterChanged = () => { if (mains?.relevant()) void mains.reconcile().catch(() => {}); };
   const nativeAvatar = async () => (await runtime.capabilities()).avatarMetadata.supported;
   apiRoute(app, "GET /bots/:id/inference", {}, async req => {
     if (!runtime.inferenceSettings) throw httpError(409, "Hermes inference controls are unavailable.");
@@ -92,7 +97,7 @@ export function installBotRoutes(app: FastifyInstance, collaborators: {
       (req.query as { roster?: string }).roster === "lean");
   });
   apiRoute(app, "POST /bots", { ...configurable, body: botSaveRequest }, async (req, body) => {
-    const { confirmPrivate: _, ...input } = body;
+    const { confirmPrivate: _, confirmMainCleared: __, ...input } = body;
     const next = { shared: input.shared, ownerId: input.shared ? undefined : signedIn(req).id };
     // Its sharing is recorded before Hermes creates it, so a personal one is never briefly
     // public and a recreated ID never inherits an old record. An existing assistant's is never touched.
@@ -123,6 +128,7 @@ export function installBotRoutes(app: FastifyInstance, collaborators: {
       return bot;
     });
     roster.forget();
+    rosterChanged();
     return directory.decorate(directory.remember(bot), await nativeAvatar());
   });
   apiRoute(app, "GET /bots/:id", {}, async req => {
@@ -133,7 +139,7 @@ export function installBotRoutes(app: FastifyInstance, collaborators: {
     return directory.decorate(directory.remember(value), await nativeAvatar());
   });
   apiRoute(app, "PATCH /bots/:id", { ...configurable, body: botSaveRequest }, async (req, body) => {
-    const { confirmPrivate, ...input } = body;
+    const { confirmPrivate, confirmMainCleared, ...input } = body;
     // Only its owner reaches a private assistant, so a personal one always belongs to the
     // person saving it. Claiming one everyone could see hides it from them, so it needs a yes.
     const id = req.params.id, userId = signedIn(req).id;
@@ -142,6 +148,9 @@ export function installBotRoutes(app: FastifyInstance, collaborators: {
     if (!visible(previous, userId)) throw httpError(404, notFound.error, { code: notFound.code });
     if (!input.shared && !(previous.shared === false && previous.ownerId) && !confirmPrivate)
       throw httpError(409, "Confirm making this assistant personal. It will disappear for the rest of the household.", { code: "private_confirmation_required" });
+    // Only its owner can share a personal assistant, so only their main assistant can end this way.
+    if (input.shared && previous.shared === false && previous.ownerId === userId && mains)
+      await endMainBeforeSharing(store, mains, userId, id, confirmMainCleared);
     // Claim the new sharing before Hermes changes anything, and only if nobody changed it first.
     const next = { shared: input.shared, ownerId: input.shared ? undefined : userId };
     // Routines that post in group chats are checked against the new sharing, and no routine's rooms
@@ -156,6 +165,7 @@ export function installBotRoutes(app: FastifyInstance, collaborators: {
       catch (error) { store.restorePresentation(id, version, previous); throw error; }
     });
     roster.forget();
+    rosterChanged();
     return directory.decorate(directory.remember(bot), await nativeAvatar());
   });
   apiRoute(app, "DELETE /bots/:id", {}, async req => {
@@ -169,6 +179,7 @@ export function installBotRoutes(app: FastifyInstance, collaborators: {
       store.forgetBot(req.params.id);
     });
     roster.forget();
+    rosterChanged();
     return { ok: true };
   });
   apiRoute(app, "PUT /bots/:id/avatar", { body: avatar }, async (req, value) => {

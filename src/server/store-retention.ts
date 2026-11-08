@@ -2,10 +2,12 @@ import type { AccountRepository } from "./store-accounts.js";
 import { presenceTtl } from "./store-notifications.js";
 import type { PersonalRepository } from "./store-personal.js";
 import type { StoreDatabase } from "./store-database.js";
+import type { CheckInRepository } from "./store-check-ins.js";
 
 /** Removals that span every area: a deleted assistant's records, and rows past their retention. */
 export class RetentionRepository {
-  constructor(private readonly database: StoreDatabase, private readonly accounts: AccountRepository, private readonly personal: PersonalRepository) {}
+  constructor(private readonly database: StoreDatabase, private readonly accounts: AccountRepository, private readonly personal: PersonalRepository,
+    private readonly checkIns?: CheckInRepository) {}
   private get db() { return this.database.db; }
   /** Removes what this app keeps about a deleted assistant, so a new one reusing its ID starts clean. */
   // Its news, runs and receipts go too: with no owner left on record, anything kept would
@@ -27,13 +29,16 @@ export class RetentionRepository {
       this.db.prepare("DELETE FROM routine_recipient_sets WHERE bot_id=?").run(botId);
       for (const table of ["bot_presentation", "bot_voices", "bot_visibility_periods", "bot_names", "drafts", "draft_revisions", "read_positions", "chat_presence", "chat_reads", "card_state", "submissions", "approval_attribution", "approval_resolutions", "retry_claims", "routine_trials", "push_action_tokens"])
         this.db.prepare(`DELETE FROM ${table} WHERE bot_id=?`).run(botId);
+      for (const job of this.checkIns?.current().filter(job => job.botId === botId) ?? []) this.checkIns!.removed(botId, job.jobId);
       this.db.prepare("DELETE FROM saved_items WHERE json_extract(value,'$.botId')=?").run(botId);
       for (const user of this.accounts.users()) {
         const value = this.personal.preferences(user.id);
         const kept = (id: string) => id !== botId;
         const next = { ...value, favorites: value.favorites.filter(kept), followBots: value.followBots.filter(kept),
           sections: value.sections.map(section => ({ ...section, botIds: section.botIds.filter(kept) })),
-          defaultBotId: value.defaultBotId === botId ? undefined : value.defaultBotId };
+          defaultBotId: value.defaultBotId === botId ? undefined : value.defaultBotId,
+          // Its check-ins went with its profile, so it stops being anyone's main assistant.
+          ...(value.mainBotId === botId ? { mainBotId: undefined, checkIns: value.checkIns && { ...value.checkIns, enabled: false } } : {}) };
         if (JSON.stringify(next) !== JSON.stringify(value)) this.personal.savePreferences(user.id, next);
       }
     });

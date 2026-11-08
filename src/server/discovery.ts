@@ -1,6 +1,7 @@
 import { apiRoute } from "./api-route.js";
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { assertNotManaged, isManagedCheckIn } from './main-assistant.js';
 import { assertRoutineEditable } from "./experience.js";
 import { signedIn } from './auth.js';
 import type { Routine, Runtime } from '../shared/types.js';
@@ -91,6 +92,8 @@ export async function installDiscoveryRoutes(app: FastifyInstance, runtime: Runt
     const routineId = z.object({id}).parse(req.params).id;
     const row=routineById(await runtime.routines(),routineId,store,signedIn(req).id);
     if(!row)throw httpError(404,'Routine not found');
+    // Check-ins run while they are on; their switch, not pausing, turns them off.
+    assertNotManaged(store, row);
     await bot(signedIn(req).id,row.botId);await assertRoutineEditable(runtime,store,routineId,row.botId);
     if(!runtime.setRoutineEnabled)throw httpError(409,'This integration cannot change routine state independently.');
     // Resuming lets it deliver, so its rooms are checked as Hermes has them now; pausing always goes ahead.
@@ -120,7 +123,7 @@ export async function installDiscoveryRoutes(app: FastifyInstance, runtime: Runt
     const bots = await visible(signedIn(req).id); const allowed = new Set(bots.map(bot => bot.id));
     const all = await runtime.routines();
     store.adoptLegacyRecipients(all);
-    const routines = await routinesFor(runtime, store, roster, signedIn(req).id, all.filter(row => allowed.has(row.botId)).map(row => ({ ...row, recipientIds: store.getRoutineRecipients(row.botId, row.id) })));
+    const routines = await routinesFor(runtime, store, roster, signedIn(req).id, all.filter(row => allowed.has(row.botId)).map(row => ({ ...row, recipientIds: store.getRoutineRecipients(row.botId, row.id), ...(isManagedCheckIn(store, row) ? { managed: 'check-in' as const } : {}) })));
     const unavailableBots: string[] = [];
     const usage: UsageSummary[] = (await mapLimit(bots, 4, async bot => {
       try { return [await experience()({ operation: 'usage', profile: bot.id, days })]; } catch { unavailableBots.push(bot.id); return []; }
