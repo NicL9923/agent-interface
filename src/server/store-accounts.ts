@@ -104,6 +104,14 @@ export class AccountRepository {
     if (session && session.expires <= Date.now()) { this.deleteNativeSession(hash); return undefined; }
     return session;
   }
+  /** Records when this native session's person proved who they are, keeping the later of two times. */
+  confirmNativeSession(hash: string, confirmedAt: number) {
+    this.db.prepare("INSERT INTO native_session_confirmations VALUES(?,?) ON CONFLICT(hash) DO UPDATE SET confirmed_at=max(confirmed_at,excluded.confirmed_at)")
+      .run(hash, confirmedAt);
+  }
+  nativeSessionConfirmedAt(hash: string): number | undefined {
+    return (this.db.prepare("SELECT confirmed_at FROM native_session_confirmations WHERE hash=?").get(hash) as { confirmed_at: number } | undefined)?.confirmed_at;
+  }
   deleteNativeSession(hash: string) {
     this.db.prepare("DELETE FROM native_sessions WHERE hash=?").run(hash);
   }
@@ -121,22 +129,25 @@ export class AccountRepository {
     return this.db.prepare("SELECT state,challenge,nonce FROM native_flows WHERE hash=? AND expires>?")
       .get(hash, Date.now()) as { state: string; challenge: string; nonce: string } | undefined;
   }
-  finishNativeFlow(flowHash: string, codeHash: string, userId: string) {
+  /** Turns a sign-in flow into a one-minute code; `confirmedAt` is when the person proved who they are. */
+  finishNativeFlow(flowHash: string, codeHash: string, userId: string, confirmedAt?: number) {
     return this.database.transaction(() => {
       const flow = this.getNativeFlow(flowHash);
       if (!flow) return false;
       this.db.prepare("DELETE FROM native_flows WHERE hash=?").run(flowHash);
       this.db.prepare("INSERT INTO native_codes VALUES(?,?,?,?,?)")
         .run(codeHash, userId, flow.state, flow.challenge, Date.now() + 60000);
+      if (confirmedAt !== undefined) this.db.prepare("INSERT INTO native_code_confirmations VALUES(?,?)").run(codeHash, confirmedAt);
       return true;
     });
   }
+  /** Spends a code once, with its state and PKCE challenge, returning whom it names and when they proved it. */
   consumeNativeCode(codeHash: string, state: string, challenge: string) {
     return this.database.transaction(() => {
-      const row = this.db.prepare("SELECT user_id AS userId FROM native_codes WHERE hash=? AND state=? AND challenge=? AND expires>?")
-        .get(codeHash, state, challenge, Date.now()) as { userId: string } | undefined;
+      const row = this.db.prepare("SELECT c.user_id AS userId,f.confirmed_at AS confirmedAt FROM native_codes c LEFT JOIN native_code_confirmations f ON f.hash=c.hash WHERE c.hash=? AND c.state=? AND c.challenge=? AND c.expires>?")
+        .get(codeHash, state, challenge, Date.now()) as { userId: string; confirmedAt: number | null } | undefined;
       if (row) this.db.prepare("DELETE FROM native_codes WHERE hash=?").run(codeHash);
-      return row?.userId;
+      return row ? { userId: row.userId, confirmedAt: row.confirmedAt ?? undefined } : undefined;
     });
   }
 }

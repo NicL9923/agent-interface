@@ -26,6 +26,7 @@ import { installDiscoveryRoutes } from "./discovery.js";
 import { installExperienceRoutes } from "./experience.js";
 import { installAutomationRoutes } from "./automation.js";
 import { installComputerRoutes } from "./computer.js";
+import { installTerminalRequestRoutes } from "./terminal-requests.js";
 import { installCollaborationRoutes } from "./collaboration.js";
 import { installRoutineRoutes } from "./routine-routes.js";
 import { installBootstrapRoutes } from "./bootstrap-routes.js";
@@ -115,6 +116,7 @@ export async function createApp(
     canManage: canManageIntegrations,
   });
   await installComputerRoutes(app, config, store, runtime, () => upgrades.maintenance());
+  await installTerminalRequestRoutes(app, config, store, runtime);
   await installExperienceRoutes(app, runtime, store, roster);
   await installAutomationRoutes(app, runtime, store, () => upgrades.maintenance(), canManageIntegrations);
   await installDiscoveryRoutes(app, runtime, store, roster);
@@ -149,16 +151,18 @@ export async function createApp(
       cacheControl: true,
       maxAge: "1h",
       setHeaders: (reply, path) => {
-        if (path.endsWith("index.html") || path.endsWith("native-computer.html") || path.endsWith("sw.js"))
+        if (path.endsWith("index.html") || path.endsWith("native-computer.html") || path.endsWith("native-terminal.html") || path.endsWith("sw.js"))
           reply.header("Cache-Control", "no-cache");
         else if (isHashedAsset(clientRoot, path))
           reply.header("Cache-Control", immutableCacheControl);
       },
     });
-    // The iOS app's shared desktop viewer. It holds nothing private: the app hands it a ticket in the hash.
+    // The iOS app's shared desktop viewer and system terminal. They hold nothing private: the app hands
+    // each a ticket in the hash.
     // These handlers send without returning the reply: a returned reply is thenable, so Fastify
     // would add one more finished-watcher to every static response for nothing.
     app.get("/native/computer", (_req, reply) => { reply.sendFile("native-computer.html"); });
+    app.get("/native/terminal", (_req, reply) => { reply.sendFile("native-terminal.html"); });
     app.setNotFoundHandler((req, reply) => {
       if (isApiRequest(req)) reply.code(404).send({ error: "API endpoint not found" });
       else reply.type("text/html").sendFile("index.html");

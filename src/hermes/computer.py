@@ -630,6 +630,8 @@ class Computer:
             raise ComputerError("Private application authentication is required.")
         if action == "handoff":
             return decline_handoff(params)
+        if action == "terminal_request":
+            return settle_terminal_request(params)
         if action not in ("observe", "take", "release"):
             raise ComputerError("Unknown household computer action.")
         with self.operation():
@@ -1147,22 +1149,141 @@ def register_handoff(computer):
                       handler=lambda args, **kwargs: request_handoff(computer, args, **kwargs))
 
 
-def decline_handoff(params):
-    """Not now on a handoff card. Only this executor's open handoff for that profile's conversation settles."""
+def settle_request(params, method, outcomes, noun):
+    """Settles one open ask of this executor's, which the app answers with a card button.
+
+    Only the open ask of that method in that profile's live conversation settles, and a
+    decision outside outcomes is refused before anything is looked up.
+    """
     from tui_gateway import server_requests
     request_id, sid, epoch, profile = (params.get(key) for key in ("requestId", "sessionId", "epoch", "profile"))
-    if params.get("decision") != "decline" or not all(isinstance(value, str) and 1 <= len(value) <= 200
-                                                      for value in (request_id, sid, epoch, profile)):
-        raise ComputerError("This computer request is invalid.")
+    decision = params.get("decision")
+    if decision not in outcomes or not all(isinstance(value, str) and 1 <= len(value) <= 200
+                                           for value in (request_id, sid, epoch, profile)):
+        raise ComputerError(f"This {noun} request is invalid.")
     with server_requests._lock:
         request = server_requests._open.get(request_id)
     if request is None:
         return {"status": "expired"}
     journal = _journal
-    if (journal is None or request.method != HANDOFF or request.sid != sid or epoch != journal.epoch
+    if (journal is None or request.method != method or request.sid != sid or epoch != journal.epoch
             or journal.live_profile_for_session(sid) != profile or journal.canonical_session(profile) != sid):
-        raise ComputerError("This computer request changed. Refresh the conversation.")
-    return {"status": "ok" if settle_handoff(request_id, "declined") else "expired"}
+        raise ComputerError(f"This {noun} request changed. Refresh the conversation.")
+    return {"status": "ok" if settle_handoff(request_id, outcomes[decision]) else "expired"}
+
+
+def decline_handoff(params):
+    """Not now on a handoff card. Only this executor's open handoff for that profile's conversation settles."""
+    return settle_request(params, HANDOFF, {"decline": "declined"}, "computer")
+
+
+TERMINAL_REQUEST = "agent_interface.terminal_request"
+TERMINAL_TOOL = "computer_request_terminal"
+# A terminal card nobody answers closes after this long. The person may be away from a keyboard.
+TERMINAL_WAIT = 1800
+
+TERMINAL_RESULTS = {
+    "done": dict(success=True, status="done", next=(
+        "The person says they finished in their own system terminal. You cannot see that terminal or its output. "
+        "Check the result yourself before relying on it, for example by reading the state the command should have "
+        "changed, and tell the user what you found.")),
+    "declined": dict(success=False, error_type="declined", error=(
+        "The person chose Not now. You cannot see their terminal, so do not assume whether anything ran there. "
+        "Continue without that step, or tell them what it blocks. Do not ask again unless they ask you to.")),
+    "timed_out": dict(success=False, error_type="timed_out", error=(
+        "Nobody answered within 30 minutes, so the request closed. Whether anything ran in the terminal is unknown. "
+        "Tell the user what is waiting and ask them to reply when they are ready.")),
+}
+
+
+def terminal_command(args):
+    """The optional command to offer: one line of 1 to 500 visible characters, shown to the person as written."""
+    value = args.get("command")
+    # Checked before trimming, so a trailing newline is refused rather than silently dropped.
+    if not isinstance(value, str) or HIDDEN.search(value) or not 1 <= len(value.strip()) <= 500:
+        raise ComputerError("Give command as one line of 1 to 500 visible characters, or leave it out.")
+    return value.strip()
+
+
+def request_terminal(args, **_kwargs):
+    """Asks a person in WildBots to do a step in the system terminal, and waits until they answer."""
+    vault = sibling_module("vault")
+    try:
+        if not isinstance(args, dict) or set(args) - {"reason", "what_to_do", "command"}:
+            raise ComputerError("Pass only reason, what_to_do and command.")
+        reason, todo = handoff_text(args, "reason", 200), handoff_text(args, "what_to_do", 300)
+        command = terminal_command(args) if "command" in args else None
+    except ComputerError as error:
+        return handoff_failure("invalid_arguments", str(error))
+    from gateway.session_context import get_session_env
+    sid = get_session_env("HERMES_UI_SESSION_ID")
+    if not sid or not person_waiting(sid):
+        return handoff_failure("no_person", "Nobody is waiting in this WildBots conversation to open a terminal, as in a "
+                               "scheduled or messaging run. Tell the user what needs a person at the system terminal "
+                               "and ask them to open Computer in WildBots when they can.")
+    from tui_gateway import server_requests
+    started = time.monotonic()
+    with vault.watched_asks() as asks:
+        # No suspend_for_prompt: the terminal is not the household desktop, so bot computer actions continue.
+        result = server_requests.send(TERMINAL_REQUEST, sid, {"reason": reason, "what_to_do": todo, **({"command": command} if command else {})},
+                                      timeout=TERMINAL_WAIT)
+    value = (result or {}).get("value", "")
+    if value in TERMINAL_RESULTS:
+        return json.dumps(TERMINAL_RESULTS[value])
+    if vault.replied_in_chat(asks):
+        return handoff_failure("user_replied_in_chat", "The user sent a chat message instead of answering the terminal card, "
+                               "so the request closed. They may or may not have run anything in the terminal. Their "
+                               "message is the next user message: read it before doing anything else. If they still "
+                               "want help, ask again with what they corrected.")
+    if result is None and time.monotonic() - started >= TERMINAL_WAIT - 1:
+        return json.dumps(TERMINAL_RESULTS["timed_out"])
+    return handoff_failure("cancelled", "The request closed without an answer, for example because the task was "
+                           "stopped. Do not continue the step that needed a person.")
+
+
+TERMINAL_SCHEMA = dict(name=TERMINAL_TOOL, description=(
+    "Ask a person to do a step in the system terminal on the Hermes host. Use it for a step that needs a person at a "
+    "real shell, such as a command that needs sudo or an interactive sign-in (gh auth login, tailscale up), or one the "
+    "person should run themselves. Only household terminal administrators can open the terminal. "
+    "The person sees a card in WildBots with your reason, what you want them to do and the command you suggest, and "
+    "buttons for Open terminal, Done and Not now. Open terminal shows the command beside the shell with a Paste at "
+    "prompt button; nothing is pasted until they press it, and pasting never runs it, so they press Enter themselves. "
+    "The call waits until they answer, up to 30 minutes. "
+    "Results: status done: they say they finished, but you cannot see the terminal or its output, so check the result "
+    "yourself before relying on it. declined: they chose Not now; continue without it or explain what it blocks, and do "
+    "not ask again unless they ask you to. user_replied_in_chat: they sent a message instead; read it next and ask "
+    "again only if they still want this. timed_out: nobody answered within 30 minutes; tell them what is waiting. "
+    "no_person: nobody can see a card now; explain what is blocked. invalid_arguments: fix the arguments and call "
+    "again. cancelled: the task was stopped; do not continue that step. "
+    "Never ask the person to type passwords or codes into chat; they type them in the terminal itself."),
+    parameters=dict(type="object", additionalProperties=False, required=["reason", "what_to_do"], properties=dict(
+        reason=dict(type="string", description="Why you need a person at the terminal, in one short sentence the user "
+                    "sees, such as This install needs sudo. At most 200 characters."),
+        what_to_do=dict(type="string", description="What the person should do, such as Run the command, enter your "
+                        "password when asked, then press Done. At most 300 characters."),
+        command=dict(type="string", description="Optional command to paste at the prompt, one line of at most 500 "
+                     "characters. It is pasted, never run for them."))))
+
+
+def register_terminal_request():
+    """Registers the terminal ask's wire contract and tool. Older Hermes revisions without either seam get no tool."""
+    from tui_gateway.contracts import registry as contracts
+    from tui_gateway.contracts.server_requests import ServerRequestParams, ValueResult
+    if TERMINAL_REQUEST not in contracts.SERVER_REQUESTS:
+        from typing import Optional
+        class TerminalRequestParams(ServerRequestParams):
+            reason: str
+            what_to_do: str
+            command: Optional[str] = None
+        contracts.server_request(TERMINAL_REQUEST, params=TerminalRequestParams, result=ValueResult,
+                                 doc="WildBots: ask a person to do a step in the system terminal.")
+    from tools.registry import registry
+    registry.register(name=TERMINAL_TOOL, toolset="clarify", schema=TERMINAL_SCHEMA, emoji="⌨️", handler=request_terminal)
+
+
+def settle_terminal_request(params):
+    """Done or Not now on a terminal card."""
+    return settle_request(params, TERMINAL_REQUEST, {"done": "done", "decline": "declined"}, "terminal")
 
 
 def install(server):
@@ -1185,6 +1306,10 @@ def install(server):
         register_handoff(computer)
     except ImportError:
         pass  # A revision without the contract seam keeps the computer without the handoff tool.
+    try:
+        register_terminal_request()
+    except ImportError:
+        pass  # Likewise without the terminal ask.
     native_ask = server._ask
     @functools.wraps(native_ask)
     def ask(method, sid, params, timeout=300):

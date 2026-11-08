@@ -328,6 +328,28 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     expect(result.activity.state).toBe('blocked');
   });
 
+  it('shows an assistant\'s terminal request only when this executor owns it and its command is one visible line', async () => {
+    snapshot.executor_epoch='epoch-one';
+    const asks=(id:string,params:Record<string,unknown>,owned=true)=>({id,method:'agent_interface.terminal_request',...(owned?{app_local_secure:true}:{}),params});
+    snapshot.open_requests=[
+      asks('srq-term',{reason:'r'.repeat(250),what_to_do:'Run it, then press Done.',command:'sudo systemctl restart hermes'}),
+      asks('srq-bare',{reason:'No command',what_to_do:'Look around.'}),
+      asks('srq-mirrored',{reason:'Mirrored',what_to_do:'Nothing'},false),
+      asks('srq-malformed',{reason:'No action'}),
+      asks('srq-newline',{reason:'Runs on paste',what_to_do:'Press Done.',command:'ls\nrm -rf ~'}),
+      asks('srq-hidden',{reason:'Disguised',what_to_do:'Press Done.',command:'ls\u202e'}),
+      asks('srq-long',{reason:'Too long',what_to_do:'Press Done.',command:'x'.repeat(501)}),
+      asks('srq-typed',{reason:'Not text',what_to_do:'Press Done.',command:7}),
+    ];
+    const result=await runtime.conversation('shared');
+    expect(result.attention![0]).toEqual({id:'srq-term',kind:'terminal',title:'Use the terminal?',detail:'r'.repeat(200),secure:undefined,
+      questions:undefined,terminal:{epoch:'epoch-one',sessionId:'live-one',reason:'r'.repeat(200),whatToDo:'Run it, then press Done.',command:'sudo systemctl restart hermes'}});
+    expect(result.attention![1].terminal).toEqual({epoch:'epoch-one',sessionId:'live-one',reason:'No command',whatToDo:'Look around.'});
+    // Anything that is not an owned, well-formed ask stays an official-client request with no terminal card.
+    expect(result.attention!.slice(2).map(request=>[request.kind,request.terminal])).toEqual(Array(6).fill(['official',undefined]));
+    expect(result.activity.state).toBe('blocked');
+  });
+
   it('shows an assistant\'s connection request only when this executor owns it and names a requestable connection', async () => {
     snapshot.executor_epoch='epoch-one';
     snapshot.open_requests=[

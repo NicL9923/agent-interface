@@ -20,9 +20,34 @@ Backspace, and the row above the keyboard adds Escape, Tab, a one-shot Control,
 arrows and Paste. Tapping the desktop to pick a field keeps the keyboard up. The
 bottom bar holds the keyboard, a clipboard menu with Copy to and Paste from this
 device, and a **⋯** menu with trackpad mode, Recenter pointer and Reset zoom;
-**?** explains the touch controls. The
-VPS terminal still opens in the system browser with its own household sign-in;
-the native session token is never passed in a URL.
+**?** explains the touch controls.
+
+The **Terminal** button on that screen opens the household's system terminal, a
+real shell on the Hermes host, in a sheet over the desktop. Only terminal
+administrators can open it; anyone else sees the server's reason. It asks you to
+**Confirm it's you** with Google whenever your sign-in is older than 2 hours: the
+same system sign-in browser, then the app posts the code to
+`/api/auth/native/confirm` with this device's token. Signing in counts as a
+confirmation. The shell runs in the server's `/native/terminal` page in a web
+view with no stored data. Tapping the terminal raises the app's own keyboard,
+the same one the desktop uses, so autocorrect and smart quotes never reach the
+shell. Its Control key is one-shot (tap ctrl, then c, for Ctrl+C), the paste key
+and the clipboard button paste with bracketed paste, and Return is the Enter
+key. Closing the screen keeps the shell running; **End shell** asks first and
+then stops it, and an ended shell offers **Start terminal**. Tickets, reconnects
+and the web view's navigation rules follow the desktop's. The native session
+token is never passed in a URL.
+
+When an assistant needs you at the terminal, for a command that needs `sudo` or an
+interactive sign-in, the chat shows a **System terminal** card with the
+assistant's reason, the step and the command. **Copy** copies the command. **Open
+terminal** opens the terminal with the command in a strip above the keyboard bar.
+**Paste at prompt** pastes it once you have checked the shell is at a prompt. It
+never presses Return, and a command with a line break or an invisible character is
+never offered. **Done** and **Not now** answer the
+assistant. A message in the chat also closes the request. Phone fixture:
+`AGENT_INTERFACE_UI_TERMINAL=1` (add `AGENT_INTERFACE_UI_TERMINAL_CONFIRMED=1` to
+skip the confirmation step).
 
 On iPhone, home is the root of one navigation stack: Today and Search push from it, a chat or group chat opened from home pushes over it, and a chat opened from Today or Search goes back there. Group chats are rows in the home list beside the assistants, and **+** offers New assistant or New group chat. Drafts are kept as you move around. iPad keeps its sidebar.
 

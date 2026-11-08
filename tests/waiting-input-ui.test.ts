@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api, write } from "../src/client-api";
 import { SecureRequestCard } from "../src/components/SecureRequestCard";
 import { ComputerHandoffCard } from "../src/components/ComputerHandoffCard";
+import { TerminalRequestCard } from "../src/components/TerminalRequestCard";
 import { AttentionList } from "../src/app/AttentionList";
 import { messageCloses, waitingPlaceholder } from "../src/app/waiting-input";
 import type { AttentionRequest, Conversation } from "../src/shared/types";
@@ -26,6 +27,8 @@ const explicitFor = (id: string): SecureRequest => ({ ...login, explicit: { labe
 const secureRequest = (secure: SecureRequest = login, id = "srq-one"): AttentionRequest => ({ id, kind: "secure", title: "Save a login", detail: "Native request", secure });
 const handoff: AttentionRequest = { id: "srq-hand", kind: "computer", title: "Take over the computer?", detail: "Needs a code",
   computer: { epoch: "epoch", sessionId: "session", reason: "The bank wants a code from your phone.", whatToDo: "Enter the code, then hand back." } };
+const terminalAsk: AttentionRequest = { id: "srq-term", kind: "terminal", title: "Use the terminal?", detail: "Needs sudo",
+  terminal: { epoch: "epoch", sessionId: "session", reason: "The install needs sudo.", whatToDo: "Run the command, enter your password, press Done.", command: "sudo apt install ripgrep" } };
 const conversation = (attention: AttentionRequest[], state: Conversation["activity"]["state"] = "blocked"): Conversation =>
   ({ botId: "kitchen", messages: [], approvals: [], files: [], activity: { state }, attention });
 const status = (control: ComputerStatus["control"], extra: Partial<ComputerStatus> = {}): ComputerStatus =>
@@ -126,5 +129,76 @@ describe("computer handoff card", () => {
     await click("Not now");
     expect(write).toHaveBeenCalledWith("/bots/kitchen/computer-handoffs/srq-hand", { decision: "decline", epoch: "epoch", sessionId: "session" });
     expect(container.querySelector(".secure-receipt")?.textContent).toBe("You chose Not now. Kitchen companion will continue without it.");
+  });
+});
+
+describe("terminal request card", () => {
+  const card = (request = terminalAsk.terminal!) => createElement(TerminalRequestCard, { request, requestId: "srq-term", botId: "kitchen",
+    assistantName: "Kitchen companion", disconnected: false });
+  const terminalStatus = (terminal: ComputerStatus["terminal"]) => status({ kind: "idle" }, { terminal });
+
+  it("shows the assistant's words and command, says the command is only pasted, and is what a reply replaces", async () => {
+    vi.mocked(api).mockResolvedValue(terminalStatus({ available: true, target: "hermes@vps" }));
+    await render(card());
+    for (const text of ["Kitchen companion needs you in the terminal", "The install needs sudo.", "Run the command, enter your password, press Done.",
+      "sudo apt install ripgrep", "Kitchen companion can't see your terminal. Check the command before you run it.", "doesn't run until you press Enter",
+      "Or send a message instead."]) expect(container.textContent).toContain(text);
+    expect(container.querySelector("code")?.textContent).toBe("sudo apt install ripgrep");
+    expect(waitingPlaceholder(conversation([terminalAsk]), "one")).toBe("Or reply here instead…");
+  });
+
+  it("opens the Terminal tab asking for the command to be pasted, and omits the command when there is none", async () => {
+    vi.mocked(api).mockResolvedValue(terminalStatus({ available: true, target: "hermes@vps" }));
+    const opened = vi.fn();
+    window.addEventListener("wildbots:computer", opened);
+    try {
+      await render(card());
+      await click("Open terminal");
+      expect((opened.mock.calls[0][0] as CustomEvent).detail).toEqual({ terminal: { command: "sudo apt install ripgrep" } });
+      await render(createElement("div"));
+      await render(card({ ...terminalAsk.terminal!, command: undefined }));
+      expect(container.textContent).not.toContain("does not run until");
+      await click("Open terminal");
+      expect((opened.mock.calls[1][0] as CustomEvent).detail).toEqual({ terminal: {} });
+    } finally { window.removeEventListener("wildbots:computer", opened); }
+  });
+
+  it("copies the command", async () => {
+    vi.mocked(api).mockResolvedValue(terminalStatus({ available: true, target: "hermes@vps" }));
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    await render(card());
+    await click("Copy");
+    expect(writeText).toHaveBeenCalledWith("sudo apt install ripgrep");
+    expect(button("Copied")).toBeDefined();
+  });
+
+  it("reports the terminal's own reason and disables Open terminal and Done, but leaves Not now", async () => {
+    vi.mocked(api).mockResolvedValue(terminalStatus({ available: false, target: "", reason: "The system terminal is limited to household administrators." }));
+    await render(card());
+    expect(container.textContent).toContain("The system terminal is limited to household administrators.");
+    expect(button("Open terminal").disabled).toBe(true);
+    expect(button("Done").disabled).toBe(true);
+    expect(button("Not now").disabled).toBe(false);
+  });
+
+  it.each([["Done", "done", "Marked done. Kitchen companion will check the result."], ["Not now", "decline", "You chose Not now. Kitchen companion will continue without it."]])(
+    "settles %s with the request's binding and leaves one line", async (label, decision, line) => {
+      vi.mocked(api).mockResolvedValue(terminalStatus({ available: true, target: "hermes@vps" }));
+      vi.mocked(write).mockResolvedValue({ status: "ok" });
+      await render(card());
+      await click(label);
+      expect(write).toHaveBeenCalledWith("/bots/kitchen/terminal-requests/srq-term", { decision, epoch: "epoch", sessionId: "session" });
+      expect(container.querySelector(".secure-receipt")?.textContent).toBe(line);
+    });
+
+  it("explains a request that had already closed and keeps the card", async () => {
+    vi.mocked(api).mockResolvedValue(terminalStatus({ available: true, target: "hermes@vps" }));
+    vi.mocked(write).mockResolvedValue({ status: "expired" });
+    await render(card());
+    await click("Done");
+    expect(container.textContent).toContain("This request had already closed.");
+    expect(container.querySelector(".secure-receipt")).toBeNull();
+    expect(button("Done").disabled).toBe(false);
   });
 });

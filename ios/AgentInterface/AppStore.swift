@@ -155,6 +155,10 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   var computerStatus: ComputerStatus?
   /// The computer screen the transcript asked for: Watch on the live row, or Take over on a handoff.
   var openComputer: ComputerOpening?
+  /// The terminal screen the transcript asked for: Open terminal on an assistant's terminal request.
+  var openTerminal: TerminalOpening?
+  /// A confirm-it's-you sign-in is on screen, so a second one does not start.
+  @ObservationIgnored var confirmingIdentity = false
   /// Builds the client for a server address. Tests substitute a client with a mock transport.
   @ObservationIgnored var makeClient: (URL) -> APIClient = { APIClient(baseURL: $0) }
   @ObservationIgnored var authSession: ASWebAuthenticationSession?

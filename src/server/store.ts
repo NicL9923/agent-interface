@@ -76,6 +76,8 @@ export class Store {
   sessionConfirmedAt(...args: Parameters<AccountRepository["sessionConfirmedAt"]>) { return this.accounts.sessionConfirmedAt(...args); }
   nativeSession(...args: Parameters<AccountRepository["nativeSession"]>) { return this.accounts.nativeSession(...args); }
   getNativeSession(...args: Parameters<AccountRepository["getNativeSession"]>) { return this.accounts.getNativeSession(...args); }
+  confirmNativeSession(...args: Parameters<AccountRepository["confirmNativeSession"]>) { return this.accounts.confirmNativeSession(...args); }
+  nativeSessionConfirmedAt(...args: Parameters<AccountRepository["nativeSessionConfirmedAt"]>) { return this.accounts.nativeSessionConfirmedAt(...args); }
   deleteNativeSession(...args: Parameters<AccountRepository["deleteNativeSession"]>) { return this.accounts.deleteNativeSession(...args); }
   renewNativeSession(...args: Parameters<AccountRepository["renewNativeSession"]>) { return this.accounts.renewNativeSession(...args); }
   pruneNativeAuth(...args: Parameters<AccountRepository["pruneNativeAuth"]>) { return this.accounts.pruneNativeAuth(...args); }
