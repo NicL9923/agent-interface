@@ -3,6 +3,9 @@
 Secret-bearing input goes only to native vault handlers or a verified live
 server request. No payload is written to the application/add-on journal.
 """
+import contextlib
+import collections
+import functools
 import ipaddress
 import json
 import re
@@ -13,6 +16,21 @@ from urllib.parse import urlsplit
 METHODS = frozenset(("vault.save_login", "vault.code", "vault.unlock_prompt", "secret"))
 MANAGERS = frozenset(("onepassword", "bitwarden"))
 TOOL = "vault_save_login"
+# computer.py's household computer handoff ask. Kept here so a chat reply can close it too.
+HANDOFF = "agent_interface.computer_handoff"
+# computer.py's ask for a person at the system terminal.
+TERMINAL_REQUEST = "agent_interface.terminal_request"
+# integrations.py's ask to set up a connection inline.
+CONNECTION_REQUEST = "agent_interface.connection_request"
+# Native asks the app shows and a chat message closes, so the waiting tool returns and the
+# message, already admitted as steering, reaches the assistant. Approvals keep their own decision.
+CHAT_CLOSES = METHODS | {"clarify", HANDOFF, TERMINAL_REQUEST, CONNECTION_REQUEST}
+CHAT_REPLY = ("The user sent a chat message instead of answering this request, so Hermes closed it. Nothing was "
+              "entered, saved or filled. Their message is the next user message: read it before doing anything else. "
+              "If they still want this, ask again with the details they corrected. Never ask for passwords, codes "
+              "or other secrets in chat.")
+CLARIFY_REPLY = ("The user sent a chat message instead of finishing these questions, so Hermes closed them. Answers "
+                 "they had already chosen are included. Their message is the next user message: treat it as their reply.")
 # Control, zero-width and bidirectional characters can disguise what a card shows.
 HIDDEN = re.compile(r"[\x00-\x1f\x7f-\x9f​-‏ -‮⁠-⁯﻿]")
 LABEL = re.compile(r"(?!-)[a-z0-9-]{1,63}(?<!-)")
@@ -21,6 +39,20 @@ _context = threading.local()
 # Native request ID -> what the requesting tool asked for, while that request can be answered.
 _explicit_lock = threading.Lock()
 _explicit = {}
+# Native request IDs the current tool call on this thread opened. See watched_asks.
+_dispatch = threading.local()
+# Requests an answer is settling now, and those a chat reply closes if that answer does not.
+# Lock order: _answer_lock, then the native server_requests lock, then _replies_lock.
+_answer_lock = threading.Lock()
+_answering = set()
+_close_after_answer = set()
+# Native request ID -> True for asks a chat reply closed, until the tool call that opened it reads it.
+_replies_lock = threading.Lock()
+_replies = {}
+# Session ID -> [(member, message text)] for chat messages admitted as steering there that may not have
+# reached the model yet. An ask a tool opens meanwhile is out of date the moment it registers. Each entry
+# lasts while its text is still in the native agent's steer buffer. Under _answer_lock.
+_steered = {}
 
 
 class VaultError(Exception):
@@ -75,6 +107,27 @@ def answer_request(server, journal, data):
     with server_requests._lock:
         if data["requestId"] not in server_requests._open:
             return dict(status="expired")
+    # A chat reply arriving while this answer settles waits for it, so a submitted value is never
+    # discarded. If this answer fails, the reply then closes the request.
+    with _answer_lock:
+        _answering.add(data["requestId"])
+    resolved = False
+    try:
+        resolved = settle_answer(server_requests, journal, data, answer, method)
+        return dict(status="ok" if resolved else "expired")
+    finally:
+        with _answer_lock:
+            _answering.discard(data["requestId"])
+            later = data["requestId"] in _close_after_answer
+            _close_after_answer.discard(data["requestId"])
+        if later and not resolved:
+            with server_requests._lock:
+                request = server_requests._open.get(data["requestId"])
+            if request is not None:
+                close_requests(server_requests, [request])
+
+
+def settle_answer(server_requests, journal, data, answer, method):
     explicit = explicit_request(data["requestId"]) if method == "vault.save_login" else None
     owner = ("epoch", "sessionId", "method")
     if answer.get("cancel") is True:
@@ -101,7 +154,7 @@ def answer_request(server, journal, data):
     with server_requests._lock:
         request = server_requests._open.get(data["requestId"])
         if request is None:
-            return dict(status="expired")
+            return False
         if request.sid != sid or request.method != method or journal.live_profile_for_session(sid) != data["profile"]:
             raise VaultError()
         if explicit and (request.sid != explicit["sid"] or request.params.get("origin") != explicit["origin"]):
@@ -126,8 +179,209 @@ def answer_request(server, journal, data):
         # through a subsequent browser/terminal result into model context.
         from agent.redact import register_vault_redaction_value
         register_vault_redaction_value(answer["password"] if method == "vault.save_login" else value)
-    resolved = server_requests.resolve_response({"jsonrpc": "2.0", "id": data["requestId"], "result": {"value": value}})
-    return dict(status="ok" if resolved else "expired")
+    return server_requests.resolve_response({"jsonrpc": "2.0", "id": data["requestId"], "result": {"value": value}})
+
+
+@contextlib.contextmanager
+def watched_asks():
+    """Collects the native request IDs this thread opens until it exits, for replied_in_chat."""
+    previous = getattr(_dispatch, "requests", None)
+    mine = []
+    _dispatch.requests = mine
+    try:
+        yield mine
+    finally:
+        _dispatch.requests = previous
+        if previous is not None:
+            previous.extend(mine)
+
+
+def replied_in_chat(request_ids):
+    """Whether a chat reply closed any of these requests."""
+    with _replies_lock:
+        return any(request_id in _replies for request_id in request_ids)
+
+
+def close_requests(server_requests, requests, reason="user_replied"):
+    """Withdraw these exact open requests as native ``cancel`` would, marking each as closed by a chat reply.
+
+    Native cancel selects by session and method; a chat reply must leave another member's login,
+    and an answer that is settling, untouched. A request settled meanwhile is skipped: the native
+    lock decides between an answer and this close, so each request has one outcome.
+    """
+    with server_requests._lock:
+        targets = [request for request in requests if server_requests._open.get(request.id) is request]
+        for request in targets:
+            server_requests._open.pop(request.id, None)
+            if request.qids is not None:
+                request.result, request.answered = server_requests.settle_batch(request.locked, ended="cancelled"), True
+            else:
+                request.result, request.answered = None, False
+            if request.writing:
+                request.withdrawn = reason
+            with _replies_lock:
+                _replies[request.id] = True
+                while len(_replies) > 1000:
+                    _replies.pop(next(iter(_replies)))
+        announced = {request.id for request in targets if not request.writing}
+    for request in targets:
+        if request.on_result is not None:
+            request.on_result(None)
+        request.event.set()
+        if request.id in announced:
+            server_requests._emit_cancel(request, reason)
+    return len(targets)
+
+
+def close_for_chat(sid, actor, text=None):
+    """A member's message was admitted as steering for ``sid``: close the asks it answers instead.
+
+    Only that session's app-answerable asks close. A login an assistant asked for by address stays
+    open unless the message comes from the member whose task asked for it, because only they may
+    answer or cancel it; another member's message waits behind it. Returns how many closed now.
+    """
+    from tui_gateway import server_requests
+    chosen = []
+    with _answer_lock:
+        # Recorded before the scan, so an ask that registers after it closes on registration instead.
+        _steered.setdefault(sid, []).append((actor, text.strip() if isinstance(text, str) else None))
+        with server_requests._lock:
+            candidates = [request for request in server_requests._open.values()
+                          if request.sid == sid and request.method in CHAT_CLOSES]
+        for request in candidates:
+            if not closes_for(request, actor):
+                continue
+            if request.id in _answering:
+                _close_after_answer.add(request.id)
+                continue
+            chosen.append(request)
+    return close_requests(server_requests, chosen) if chosen else 0
+
+
+def closes_for(request, actor):
+    """Whether a chat message from ``actor`` closes this ask. A login asked for by address stays with its requester."""
+    explicit = explicit_request(request.id) if request.method == "vault.save_login" else None
+    return not (explicit and explicit["actor"] is not None and explicit["actor"] != actor)
+
+
+def steer_waiting(sid):
+    """The members whose admitted messages have not reached the model in ``sid`` yet: an empty set if none.
+
+    Reads the native agent's own steer buffer, the one record of whether the message was delivered.
+    A member counts while their message's text is still in it, so one drained earlier does not count
+    for a later batch. A Hermes without that buffer gives an empty set: nothing is closed on a guess.
+    """
+    with _answer_lock:
+        if sid not in _steered:
+            return set()
+    try:
+        from tui_gateway import server
+        agent = (server._sessions.get(sid) or {}).get("agent")
+        pending = getattr(agent, "_pending_steer", None) if agent is not None and hasattr(agent, "_pending_steer") else None
+        parts = vars(agent).get("_pending_steer_parts") if pending else None
+    except Exception:
+        pending, parts = None, None
+    with _answer_lock:
+        if not pending:
+            _steered.pop(sid, None)
+            return set()
+        held = buffered_messages(pending, parts)
+        # The buffer drains oldest first, so the newest entries with a text are the ones it still holds.
+        # A message without its text on record can only be timed by the buffer emptying.
+        waiting = []
+        for actor, text in reversed(_steered.get(sid, ())):
+            if text is None:
+                waiting.append((actor, text))
+            elif held[text] > 0:
+                held[text] -= 1
+                waiting.append((actor, text))
+        waiting.reverse()
+        _steered[sid] = waiting
+        return {actor for actor, _ in waiting}
+
+
+def buffered_messages(pending, parts):
+    """How many times each whole message is in the native steer buffer.
+
+    Native ``steer`` stores each message's stripped text as one part and joins them with newlines.
+    App messages are ticketless parts.
+    Without consistent parts, a message counts only where it fills whole lines of the joined text,
+    so "yes" never matches inside "yes, keep checking".
+    """
+    whole = isinstance(parts, list) and all(isinstance(part, tuple) and len(part) == 2 and isinstance(part[1], str) for part in parts)
+    if whole and "\n".join(text for _, text in parts) == pending:
+        # App messages reach the buffer through session.steer without a ticket; a ticketed part is a
+        # gateway transfer, never one of these members' messages, even when its words are the same.
+        return collections.Counter(text for ticket, text in parts if ticket is None)
+    return _LineCounts(pending)
+
+
+class _LineCounts(dict):
+    """Occurrences of a text as whole lines of ``pending``, counted on first lookup."""
+    def __init__(self, pending):
+        super().__init__()
+        self.lines = pending.split("\n")
+
+    def __missing__(self, text):
+        size = text.count("\n") + 1
+        found, index = 0, 0
+        while index + size <= len(self.lines):
+            if "\n".join(self.lines[index:index + size]) == text:
+                found, index = found + 1, index + size
+            else:
+                index += 1
+        self[text] = found
+        return found
+
+
+def close_if_steered(server_requests, request):
+    """Closes an ask that registered after a chat message for its session was admitted but before the model read it."""
+    if request.method not in CHAT_CLOSES:
+        return
+    # Any waiting member's message closes it, except that a login asked for by address waits for its requester's.
+    if any(closes_for(request, actor) for actor in steer_waiting(request.sid)):
+        close_requests(server_requests, [request])
+
+
+def chat_reply_result(result):
+    """Rewrites a tool result whose ask a chat reply closed, so the model reads that message next."""
+    try:
+        value = json.loads(result) if isinstance(result, str) else None
+    except ValueError:
+        value = None
+    if not isinstance(value, dict):
+        return (result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)) + "\n\n" + CHAT_REPLY
+    if value.get("error_type") == "user_replied_in_chat":
+        return result
+    value["user_replied_in_chat"] = True
+    if "responses" in value and "outcome" in value:
+        value["notice"] = CLARIFY_REPLY
+    elif value.get("success") is False:
+        # Native refusals such as "Do not ask again this turn" contradict asking again after a correction.
+        value.update(error_type="user_replied_in_chat", error=CHAT_REPLY)
+    else:
+        value["notice"] = CHAT_REPLY
+    return json.dumps(value, ensure_ascii=False)
+
+
+def bind_dispatch(registry):
+    """Every tool result whose ask a chat reply closed says so, whichever native tool asked."""
+    native = registry.dispatch
+    if getattr(native, "_agent_interface_chat_reply", False):
+        return
+
+    @functools.wraps(native)
+    def dispatch(name, args, **kwargs):
+        with watched_asks() as asks:
+            result = native(name, args, **kwargs)
+        if not asks:
+            return result
+        with _replies_lock:
+            replied = [_replies.pop(request_id, None) for request_id in asks]
+        return chat_reply_result(result) if any(replied) else result
+
+    dispatch._agent_interface_chat_reply = True
+    registry.dispatch = dispatch
 
 
 def operate(server, journal, data):
@@ -253,6 +507,32 @@ def explicit_metadata(request_id):
     return dict(label=value["label"], purpose=value["purpose"], profile=value["profile"], requesterId=value["actor"])
 
 
+def bind_prompt_waits(server, journal):
+    """Keep a person's app login entry open until native answer/cancel/interrupt.
+
+    Native login prompts expire after 180 seconds, even while the person is
+    finding their password. The app shows no deadline. Other chats and prompt
+    kinds retain their native timeouts.
+    """
+    original = server._ask
+    if getattr(original, "_agent_interface_login_wait", False):
+        return
+
+    @functools.wraps(original)
+    def ask(method, sid, params, timeout=300):
+        if method == "vault.save_login":
+            profile = journal.live_profile_for_session(sid)
+            if profile is not None and journal.canonical_session(profile) == sid:
+                with journal.lock:
+                    receipt = journal.db.execute("SELECT 1 FROM receipts WHERE session_id=? AND terminal=0 AND steering=0 LIMIT 1", (sid,)).fetchone()
+                if receipt:
+                    timeout = None
+        return original(method, sid, params, timeout=timeout)
+
+    ask._agent_interface_login_wait = True
+    server._ask = ask
+
+
 def bind_requests(server_requests, journal):
     """Records each explicit-origin request's context under its native request ID as it is sent.
 
@@ -263,6 +543,9 @@ def bind_requests(server_requests, journal):
     if getattr(original, "_agent_interface_explicit", False):
         return
     def register(request):
+        requests = getattr(_dispatch, "requests", None)
+        if requests is not None:
+            requests.append(request.id)
         context = getattr(_context, "value", None)
         if context is not None and request.method == "vault.save_login" and request.params.get("origin") == context["origin"]:
             # The member who started this app task owns its credential request.
@@ -273,7 +556,10 @@ def bind_requests(server_requests, journal):
                 _explicit[request.id] = dict(origin=context["origin"], label=context["label"], purpose=context["purpose"],
                                              profile=context["profile"], actor=row[0] if row else None, sid=request.sid)
             context["requests"].append(request.id)
-        return original(request)
+        result = original(request)
+        # The native caller waits on this request next; closed now, that wait returns at once.
+        close_if_steered(server_requests, request)
+        return result
     register._agent_interface_explicit = True
     server_requests._register = register
 
@@ -301,9 +587,10 @@ def save_explicit_login(args, **_kwargs):
     from agent.vault_backends.unlock import can_prompt_here, get_save_login_prompt_callback
     prompt = get_save_login_prompt_callback()
     if prompt is None or not can_prompt_here():
-        return failure("prompt_unavailable", "This session has no trusted masked prompt, as in a scheduled, messaging "
-                       "or API run. Nothing was saved. Do not ask for the login in chat or with clarify. Ask the user to "
-                       f"add it for {origin} in WildBots assistant settings > Logins, or with `hermes vault add`.")
+        return failure("prompt_unavailable", "Nobody can answer a secure prompt in this session, as in a scheduled, "
+                       "messaging or API run, so nothing was saved. Do not ask for the login in chat or with clarify. "
+                       f"Tell the user to add it for {origin} in WildBots assistant settings > Logins, or with "
+                       "`hermes vault add`, then continue once they say it is saved.")
     from hermes_constants import get_hermes_home, profile_name_for_home
     context = dict(origin=origin, label=label, purpose=purpose,
                    profile=profile_name_for_home(get_hermes_home()) or "default", requests=[])
@@ -323,8 +610,11 @@ def save_explicit_login(args, **_kwargs):
         password = answer.get("password") if isinstance(answer, dict) else None
         if not isinstance(identifier, str) or not isinstance(password, str) or not identifier.strip() \
                 or not password or len(identifier) > 1000 or len(password) > 20000:
+            if replied_in_chat(context["requests"]):
+                return failure("user_replied_in_chat", CHAT_REPLY)
             return failure("not_saved", "The login was not saved: the user cancelled, the request expired or nobody "
-                           "answered. Do not ask again this turn, and never ask for it in chat.")
+                           "answered. Do not ask again unless the user asks you to. They can also add it in WildBots "
+                           "assistant settings > Logins. Never ask for it in chat.")
         identifier = identifier.strip()
         from agent.redact import register_vault_redaction_value
         from agent.vault_store import get_vault_store
@@ -336,7 +626,8 @@ def save_explicit_login(args, **_kwargs):
                                                                    password=password), origin=origin)
         except Exception:
             return failure("save_failed", "Hermes could not save this login in the profile vault, so nothing was "
-                           "saved. Tell the user. Do not ask for the password in chat.")
+                           "saved. Tell the user, and suggest adding it in WildBots assistant settings > Logins. Do not "
+                           "ask for the password in chat.")
     finally:
         if isinstance(answer, dict):
             answer.clear()
@@ -349,14 +640,21 @@ def save_explicit_login(args, **_kwargs):
 
 
 SCHEMA = dict(name=TOOL, description=(
-    "Save a website or device login for an explicit address. Use it when you need credentials you cannot capture "
-    "from an open login page: a private network device, a service you cannot reach, or a login with no browser form. "
-    "The user types the username and password into a masked prompt outside the conversation, and Hermes stores them "
-    "in this profile's encrypted vault. You receive a handle and the username, never the password. Saving does not "
-    "open, check or sign in to the address; browser_vault action=fill later uses the login only on a page whose origin "
-    "matches exactly. On an open login page, use browser_vault action=save_login instead. API keys and tokens are not "
-    "logins. Never ask for, type or repeat a password in chat or clarify, and never pass one to this tool. Stop on "
-    "not_saved or prompt_unavailable."),
+    "Ask the user to save a login for an exact address. You can then sign in later without seeing the password. "
+    "Use it only for a login you cannot capture from an open login page: a private network device, a "
+    "service you cannot reach yet, or a login with no browser form. On an open login page, use browser_vault "
+    "action=save_login instead. API keys and tokens are not logins. "
+    "The user sees a card in WildBots with the address, your label and your purpose, and types the username and "
+    "password into masked fields outside the chat. The call waits until they answer. Hermes stores the login in this "
+    "profile's encrypted vault; you get a handle and the username, never the password. "
+    "Results: status saved with a handle (saving does not open, check or sign in; browser_vault action=fill uses the "
+    "handle only on a page whose origin matches exactly). error_type user_replied_in_chat: the user sent a message "
+    "instead, so nothing was saved; read their message next, and if they still want this, call again with what they "
+    "corrected. not_saved: they cancelled, it expired or nobody answered; do not ask again unless they ask you to. "
+    "prompt_unavailable: nobody can answer here; tell them to add it in WildBots assistant settings > Logins. "
+    "invalid_origin, invalid_label, invalid_purpose or invalid_arguments: fix that argument and call again. "
+    "save_failed: tell the user. Never ask for, type or repeat a password in chat or clarify, and never pass one to "
+    "this tool."),
     parameters=dict(type="object", additionalProperties=False, required=["origin", "label", "purpose"], properties=dict(
         origin=dict(type="string", description="Exact scheme, host and optional port, such as https://device.example.net "
                     "or https://192.0.2.10:8443. No path, query, fragment or credentials."),
@@ -406,5 +704,10 @@ def install(web, journal):
     web.app.add_api_route("/api/agent-interface/credentials", endpoint, methods=["POST"])
     from tui_gateway import server_requests
     bind_requests(server_requests, journal)
+    bind_prompt_waits(server, journal)
     journal.explicit_credential = explicit_metadata
+    # The add-on calls this after durably admitting a member's message as steering.
+    journal.steering_admitted = lambda _profile, sid, actor, text=None: close_for_chat(sid, actor, text)
+    from tools.registry import registry
+    bind_dispatch(registry)
     register_tool()

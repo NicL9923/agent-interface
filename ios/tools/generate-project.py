@@ -28,8 +28,9 @@ def settings(values):
 # One version for the app and every extension: App Store validation rejects extensions whose
 # versions differ from the app's.
 MARKETING_VERSION = "1.0"
-CURRENT_PROJECT_VERSION = "7"
-EXTENSIONS = ["AgentInterfaceShare", "AgentInterfaceWidgets"]
+CURRENT_PROJECT_VERSION = "22"
+LINK_DOMAIN = "agentui.wildflowersranch.com"
+EXTENSIONS = ["AgentInterfaceShare", "AgentInterfaceWidgets", "AgentInterfaceNotifications"]
 targets = []
 products = []
 groups = []
@@ -71,11 +72,13 @@ for name, kind in [(extension, "extension") for extension in EXTENSIONS] + [("Ag
         values = {
             "PRODUCT_NAME": "$(TARGET_NAME)", "PRODUCT_BUNDLE_IDENTIFIER": "dev.agentinterface.ios" + ("" if kind == "app" else "." + name),
             "SDKROOT": "iphoneos", "SUPPORTED_PLATFORMS": "iphoneos iphonesimulator", "IPHONEOS_DEPLOYMENT_TARGET": "17.0",
-            "TARGETED_DEVICE_FAMILY": "1,2", "SWIFT_VERSION": "5.0", "CODE_SIGN_STYLE": "Automatic", "ENABLE_USER_SCRIPT_SANDBOXING": "YES",
+            "TARGETED_DEVICE_FAMILY": "1,2", "SWIFT_VERSION": "6.0", "SWIFT_STRICT_CONCURRENCY": "complete", "CODE_SIGN_STYLE": "Automatic", "ENABLE_USER_SCRIPT_SANDBOXING": "YES",
             "SWIFT_EMIT_LOC_STRINGS": "YES", "MARKETING_VERSION": MARKETING_VERSION, "CURRENT_PROJECT_VERSION": CURRENT_PROJECT_VERSION, "LD_RUNPATH_SEARCH_PATHS": "$(inherited) @executable_path/Frameworks @loader_path/Frameworks", "GENERATE_INFOPLIST_FILE": "NO" if kind in ("app", "extension") else "YES",
         }
         if kind == "app":
-            values.update({"INFOPLIST_FILE": "AgentInterface/Info.plist", "CODE_SIGN_ENTITLEMENTS": "AgentInterface/AgentInterface.entitlements", "APNS_ENVIRONMENT": "development" if configuration == "Debug" else "production", "ASSETCATALOG_COMPILER_APPICON_NAME": "AppIcon", "ENABLE_PREVIEWS": "YES"})
+            values.update({"INFOPLIST_FILE": "AgentInterface/Info.plist", "CODE_SIGN_ENTITLEMENTS": "AgentInterface/AgentInterface.entitlements", "APNS_ENVIRONMENT": "development" if configuration == "Debug" else "production", "ASSETCATALOG_COMPILER_APPICON_NAME": "AppIcon", "ENABLE_PREVIEWS": "YES",
+                # The household server whose chat and Today links open the app. Another household builds with its own.
+                "WILDBOTS_LINK_DOMAIN": LINK_DOMAIN})
         elif kind == "extension":
             values.update({"INFOPLIST_FILE": name + "/Info.plist", "CODE_SIGN_ENTITLEMENTS": name + "/" + name + ".entitlements", "APPLICATION_EXTENSION_API_ONLY": "YES", "SKIP_INSTALL": "YES"})
         elif kind == "unit":

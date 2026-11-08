@@ -1,15 +1,19 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
+import { DatabaseSync } from "node:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { accountMarker } from "../src/server/apns.js";
 import { createApp } from "../src/server/app.js";
 import { publicApiRoutes } from "../src/server/auth.js";
 import { loadConfig } from "../src/server/config.js";
 import { Store } from "../src/server/store.js";
 import type { Avatar, Bot, Capabilities, ConversationOptions, Message, Runtime, Submission } from "../src/shared/types.js";
+import { mascotFamilies } from "../src/shared/types.js";
 import { historyWindow } from "../src/shared/history.js";
 import { MAX_DOWNLOAD_BYTES } from "../src/shared/uploads.js";
+import { localLogin } from "./helpers/server.js";
 const origin = "http://127.0.0.1:3000";
 // This is an isolated app contract double, not evidence of Hermes integration.
 function runtimeDouble() {
@@ -119,23 +123,7 @@ function runtimeDouble() {
     },
   };
 }
-async function login(
-  app: Awaited<ReturnType<typeof createApp>>["app"],
-  member = "one",
-) {
-  const result = await app.inject({
-    method: "POST",
-    url: "/api/auth/local",
-    headers: { origin },
-    payload: { member },
-  });
-  expect(result.statusCode).toBe(200);
-  return {
-    cookie: result.cookies[0].name + "=" + result.cookies[0].value,
-    "x-csrf-token": result.json().csrfToken,
-    origin,
-  };
-}
+const login = (app: Awaited<ReturnType<typeof createApp>>["app"], member = "one") => localLogin(app, origin, member);
 const config = () =>
   loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" });
 describe("default roster detail fallback", () => {
@@ -156,6 +144,7 @@ describe("default roster detail fallback", () => {
       url === "/api/bootstrap" ? response.json<{ bots: Bot[] }>().bots : response.json<Bot[]>();
 
     it(`${url} preserves last-good configuration during outages and leaves lean reads alone`, async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
       const fake = runtimeDouble();
       let bots = [row("shared"), row("second")];
       fake.runtime.listBots = async () => bots;
@@ -168,6 +157,8 @@ describe("default roster detail fallback", () => {
         expect(initial.statusCode).toBe(200);
         for (const bot of botsFrom(initial)) expect(bot).toMatchObject(configuration);
 
+        // Hermes going down after the shared runtime read expires, which the bootstrap snapshot only holds briefly.
+        vi.setSystemTime(Date.now() + 2000);
         bots = [...bots, row("never-detailed")].map(bot => ({
           ...bot, activity: "disconnected", lastMessage: { text: "Current preview" },
         }));
@@ -189,7 +180,7 @@ describe("default roster detail fallback", () => {
         expect(lean.statusCode).toBe(200);
         expect(botsFrom(lean)).toEqual(JSON.parse(JSON.stringify(bots)));
         expect(detail).not.toHaveBeenCalled();
-      } finally { await app.close(); }
+      } finally { vi.useRealTimers(); await app.close(); }
     });
 
     it(`${url} isolates profile failures and drops a bot deleted between reads`, async () => {
@@ -234,7 +225,7 @@ describe("default roster detail fallback", () => {
   }
 });
 describe("authentication and household state", () => {
-  it("saves seasonal avatars through native metadata and round-trips them through household presentation", async () => {
+  it("saves every mascot character through native metadata and round-trips it through household presentation", async () => {
     const fake = runtimeDouble();
     let nativeAvatar: Avatar | undefined;
     const originalList = fake.runtime.listBots;
@@ -243,7 +234,7 @@ describe("authentication and household state", () => {
     const { app } = await createApp(config(), fake.runtime, { background: false });
     try {
       const headers = await login(app);
-      for (const family of ["pumpkin", "santa", "rudolph", "turkey", "bunny"] as const) {
+      for (const family of mascotFamilies) {
         const value: Avatar = { mode: "mascot", family, color: "#FF9800", eyes: "round", accessory: "none", eyeWidth: 1.1 };
         const saved = await app.inject({ method: "PUT", url: "/api/bots/shared/avatar", headers, payload: value });
         expect(saved.statusCode).toBe(200);
@@ -375,6 +366,30 @@ describe("authentication and household state", () => {
       expect(theirs.map(bot => bot.id)).toEqual(["shared"]);
       expect(theirs[0].lastMessage).toEqual(lastMessage);
       expect(bots(await app.inject({ url, headers: one })).find(bot => bot.id === "mine")?.lastMessage).toEqual(lastMessage);
+    }
+    await app.close();
+  });
+  it("marks a chat unread when its latest message is newer than this person's last read", async () => {
+    const fake = runtimeDouble();
+    const at = "2026-10-08T12:00:00.000Z";
+    fake.runtime.listBots = async () => [
+      { id: "shared", name: "Shared", model: "test", shared: true, activity: "idle", lastMessage: { text: "Reply", at } },
+      { id: "quiet", name: "Quiet", model: "test", shared: true, activity: "idle", lastMessage: { text: "Reply", at } },
+    ];
+    const { app, store } = await createApp(config(), fake.runtime, { background: false });
+    const one = await login(app), two = await login(app, "two");
+    const id = async (headers: Record<string, string>) => (await app.inject({ url: "/api/bootstrap", headers })).json().user.id as string;
+    const [first, second] = [await id(one), await id(two)];
+    store.chatPresence(first, "shared", "phone", "left", Date.parse(at) - 1);
+    store.chatPresence(second, "shared", "phone", "left", Date.parse(at) + 1);
+    for (const url of ["/api/bootstrap?roster=lean", "/api/bots"]) {
+      const unread = async (headers: Record<string, string>) => {
+        const value = (await app.inject({ url, headers })).json();
+        return Object.fromEntries((Array.isArray(value) ? value : value.bots).map((bot: { id: string; unread?: boolean }) => [bot.id, !!bot.unread]));
+      };
+      // A chat never opened stays unmarked, so a new member's home starts quiet.
+      expect(await unread(one)).toEqual({ shared: true, quiet: false });
+      expect(await unread(two)).toEqual({ shared: false, quiet: false });
     }
     await app.close();
   });
@@ -532,6 +547,36 @@ describe("safe admission, steering, and approvals", () => {
     expect(store.recipients({id:"event",botId:"shared",runId:"run",kind:"completed",title:"Done",occurredAt:""})).toEqual(["local-one"]);
     await app.close();
   });
+  it("recognizes an interruption rejection by its recorded reason, and legacy rows by their sentence", async () => {
+    const fake=runtimeDouble();
+    fake.runtime.canonicalSubmit=async()=>true;
+    fake.runtime.submit=vi.fn(async input=>{
+      if(!input.reviewedInterruption)throw Object.assign(new Error("Review"),{code:"interruption_pending",statusCode:409});
+      return {requestId:input.requestId,status:"accepted" as const,runId:"run"};
+    });
+    const {app,store}=await createApp(config(),fake.runtime,{background:false});
+    const headers=await login(app);
+    const send=(payload:{requestId:string;text:string;reviewedInterruption?:boolean})=>app.inject({method:"POST",url:"/api/bots/shared/messages",headers,payload});
+    const current={requestId:randomUUID(),text:"Continue"};
+    expect((await send(current)).statusCode).toBe(409);
+    expect(store.submission(current.requestId)).toMatchObject({reason:"interruption_pending",receipt:{status:"rejected"}});
+    expect(store.submission(current.requestId)!.receipt).not.toHaveProperty("reason");
+    expect((await send(current)).statusCode).toBe(409);
+    expect(fake.runtime.submit).toHaveBeenCalledTimes(1);
+    // A row stored before reasons were recorded carries only the sentence.
+    const legacy={requestId:randomUUID(),text:"Older"};
+    store.intent({...legacy,attachments:[],botId:"shared",senderId:"local-one"});
+    store.receipt({requestId:legacy.requestId,status:"rejected",message:"Review the interrupted task before starting another message."});
+    expect((await send(legacy)).json().error).toBe("Review the interrupted task before starting another message.");
+    expect(fake.runtime.submit).toHaveBeenCalledTimes(1);
+    expect((await send({...legacy,reviewedInterruption:true})).json().status).toBe("accepted");
+    // Another rejection is returned as recorded, never mistaken for an interruption.
+    const other={requestId:randomUUID(),text:"Image"};
+    store.intent({...other,attachments:[],botId:"shared",senderId:"local-one"});
+    store.receipt({requestId:other.requestId,status:"rejected",message:"Images cannot be added while Hermes is working."});
+    expect((await send(other)).json()).toEqual({requestId:other.requestId,status:"rejected",message:"Images cannot be added while Hermes is working."});
+    await app.close();
+  });
   it("forwards a request once, rejects reused IDs with changed content, and persists uncertain intent across app restart", async () => {
     const dir = mkdtempSync(join(tmpdir(), "agent-interface-"));
     const path = join(dir, "app.sqlite");
@@ -552,16 +597,9 @@ describe("safe admission, steering, and approvals", () => {
     expect((await submit()).json().status).toBe("uncertain");
     expect((await submit()).json().status).toBe("uncertain");
     expect(fake.calls).toBe(1);
-    expect(
-      (
-        await result.app.inject({
-          method: "POST",
-          url: "/api/bots/shared/messages",
-          headers,
-          payload: { ...payload, text: "Changed" },
-        })
-      ).statusCode,
-    ).toBe(409);
+    // The code tells a client that another tab or device already sent under this ID.
+    const changed = await result.app.inject({ method: "POST", url: "/api/bots/shared/messages", headers, payload: { ...payload, text: "Changed" } });
+    expect([changed.statusCode, changed.json().code]).toEqual([409, "submission_conflict"]);
     await result.app.close();
     result = await createApp(c, fake.runtime, { background: false });
     expect((await submit()).json().status).toBe("uncertain");
@@ -614,7 +652,11 @@ describe("safe admission, steering, and approvals", () => {
       headers: two,
       payload: { decision: "approved" },
     };
-    expect((await app.inject(options)).statusCode).toBe(200);
+    // An iOS notification action sent to one is refused when two is signed in on that phone.
+    const elsewhere = await app.inject({ ...options, payload: { decision: "approved", account: accountMarker("local-one") } });
+    expect([elsewhere.statusCode, elsewhere.json().error]).toEqual([409, "This approval was sent to a different account"]);
+    expect(store.approval("approval")).toBeUndefined();
+    expect((await app.inject({ ...options, payload: { decision: "approved", account: accountMarker("local-two") } })).statusCode).toBe(200);
     expect(store.approval("approval")).toMatchObject({
       userId: "local-two",
       decision: "approved",
@@ -975,4 +1017,69 @@ it("requires production identity and HTTPS on any public listener or origin, eve
     HOUSEHOLD_EMAILS: "family@example.test",
   });
   expect(configured.production).toBe(true);
+});
+
+describe("submission records", () => {
+  // Two requests with one ID can both pass the route's check before either is recorded; the store decides.
+  it("refuses a request ID reused for other content with the code clients follow", () => {
+    const store = new Store(":memory:");
+    try {
+      store.user({ id: "local-one", name: "One", email: "one@example.test" });
+      const input: Submission = { requestId: randomUUID(), botId: "shared", senderId: "local-one", text: "A", attachments: [] };
+      expect(store.intent(input).created).toBe(true);
+      expect(store.intent(input).created).toBe(false);
+      expect(() => store.intent({ ...input, text: "B" })).toThrow(expect.objectContaining({ statusCode: 409, code: "submission_conflict" }));
+    } finally {
+      store.close();
+    }
+  });
+});
+
+describe("form keys", () => {
+  // A form's request ID is derived from this key, so it must be private to its person, the same on
+  // every device, and stable across restarts, or a second device would send the answers again.
+  it("gives each person a private key that stays the same across restarts", () => {
+    const dir = mkdtempSync(join(tmpdir(), "form-key-"));
+    const path = join(dir, "app.db");
+    try {
+      let store = new Store(path);
+      for (const id of ["one", "two"]) store.user({ id, name: id, email: `${id}@example.test` });
+      const one = store.formKey("one"), two = store.formKey("two");
+      expect(one).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      expect(two).not.toBe(one);
+      expect(store.formKey("one")).toBe(one);
+      store.close();
+      store = new Store(path);
+      // Reading an existing key never writes, so it works while another connection holds the write lock.
+      const locker = new DatabaseSync(path);
+      locker.exec("BEGIN IMMEDIATE");
+      try { expect(store.formKey("one")).toBe(one); }
+      finally { locker.exec("ROLLBACK"); locker.close(); }
+      store.close();
+      // A store opened before another connection took the write lock never needs it for a key,
+      // even for the first one it hands out.
+      const fresh = join(dir, "fresh.db");
+      new Store(fresh).close();
+      const opened = new Store(fresh), holder = new DatabaseSync(fresh);
+      holder.exec("BEGIN IMMEDIATE");
+      try { expect(opened.formKey("one")).toMatch(/^[A-Za-z0-9_-]{43}$/); }
+      finally { holder.exec("ROLLBACK"); holder.close(); opened.close(); }
+      // Another installation's secret gives the same person a different key.
+      const elsewhere = new Store(join(dir, "other.db"));
+      expect(elsewhere.formKey("one")).not.toBe(one);
+      elsewhere.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("hands each signed-in person only their own key in bootstrap", async () => {
+    const { app, store } = await createApp(config(), runtimeDouble().runtime, { background: false });
+    try {
+      const keys = await Promise.all(["one", "two"].map(async member =>
+        (await app.inject({ url: "/api/bootstrap", headers: await login(app, member) })).json()));
+      expect(keys.map(boot => boot.formKey)).toEqual(keys.map(boot => store.formKey(boot.user.id)));
+      expect(keys[0].formKey).not.toBe(keys[1].formKey);
+    } finally { await app.close(); }
+  });
 });

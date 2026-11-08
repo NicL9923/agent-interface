@@ -1,0 +1,133 @@
+{
+  "bots": [
+    {
+      "id": "ranch",
+      "lastMessage": {
+        "text": "I found two short routes. Choose what works for everyone before I put the plan together.",
+        "at": "2026-10-25T19:01:00Z"
+      },
+      "name": "Ranch hand",
+      "shared": true,
+      "model": "configured-model",
+      "provider": "openrouter",
+      "activity": "blocked",
+      "description": "Everyday household help",
+      "instructions": "Explicit fixture instructions.",
+      "avatar": {
+        "mode": "geometric",
+        "shape": "blob",
+        "color": "#1084FE",
+        "eyes": "oval",
+        "accessory": "none"
+      }
+    }
+  ],
+  "preferences": {
+    "startPage": "assistant",
+    "defaultBotId": "ranch",
+    "favorites": [],
+    "sections": [],
+    "presentation": "simple"
+  },
+  "conversation": {
+    "botId": "ranch",
+    "sessionId": "ranch-canonical",
+    "messages": [
+      {
+        "id": "question-prompt",
+        "role": "user",
+        "text": "Help us pick a shaded walk and pack for a picnic this Saturday.",
+        "sender": {
+          "id": "preview",
+          "name": "Nicolas"
+        },
+        "createdAt": "2026-10-25T19:00:00Z"
+      },
+      {
+        "id": "question-intro",
+        "role": "assistant",
+        "text": "I found two short routes. Choose what works for everyone before I put the plan together.",
+        "createdAt": "2026-10-25T19:01:00Z"
+      }
+    ],
+    "activity": {
+      "state": "blocked",
+      "detail": "Waiting for your plans"
+    },
+    "approvals": [],
+    "attention": [
+      {
+        "id": "fixture-question",
+        "kind": "clarify",
+        "title": "Let's shape your Saturday",
+        "detail": "I'll use these answers to suggest a route and a simple packing list.",
+        "questions": [
+          {
+            "id": "plan",
+            "prompt": "Which route sounds better?",
+            "options": [
+              "River loop, mostly flat and shaded",
+              "Cedar trail, shorter with a few rocky steps"
+            ]
+          },
+          {
+            "id": "extras",
+            "prompt": "What should I prepare?",
+            "options": [
+              "A picnic packing list",
+              "An offline route map",
+              "A reminder to leave before the heat"
+            ],
+            "multiple": true
+          },
+          {
+            "id": "note",
+            "prompt": "Anything else I should know?"
+          }
+        ]
+      }
+    ],
+    "files": [],
+    "draft": {
+      "text": "",
+      "attachments": []
+    },
+    "readPosition": {}
+  },
+  "screen": "questions",
+  "answerError": "The connection was interrupted. Your answers are kept. Try again.",
+  "afterAnswer": {
+    "botId": "ranch",
+    "sessionId": "ranch-canonical",
+    "messages": [
+      {
+        "id": "question-prompt",
+        "role": "user",
+        "text": "Help us pick a shaded walk and pack for a picnic this Saturday.",
+        "sender": {
+          "id": "preview",
+          "name": "Nicolas"
+        },
+        "createdAt": "2026-10-25T19:00:00Z"
+      },
+      {
+        "id": "question-intro",
+        "role": "assistant",
+        "text": "I found two short routes. Choose what works for everyone before I put the plan together.",
+        "createdAt": "2026-10-25T19:01:00Z"
+      }
+    ],
+    "activity": {
+      "state": "working",
+      "detail": "Putting your Saturday plan together"
+    },
+    "approvals": [],
+    "attention": [],
+    "files": [],
+    "draft": {
+      "text": "",
+      "attachments": []
+    },
+    "readPosition": {}
+  }
+}

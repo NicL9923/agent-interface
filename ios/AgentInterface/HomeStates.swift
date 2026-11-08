@@ -19,41 +19,64 @@ extension AppStore {
   /// The web's `connectionLost`: Hermes or the app cannot be reached, or the device is offline.
   /// An expired sign-in is a different state with its own prompt.
   func connectionLost(offline: Bool) -> Bool { offline || (!connected && !sessionExpired) }
+  /// The household as a whole: Hermes and the app answer and the sign-in holds. Unlike
+  /// `connected`, a chat still showing its saved copy does not count, so home goes live as
+  /// soon as the roster does, even when the last chat opened has not been reopened yet.
+  var householdConnected: Bool { bootstrap?.connection.connected == true && !appUnavailable && !sessionExpired }
+  func householdConnectionLost(offline: Bool) -> Bool { offline || (!householdConnected && !sessionExpired) }
   /// Why a new assistant cannot be created now, or nil when it can.
   var assistantSetupBlock: String? {
-    if !connected { return "Assistant setup is unavailable while Hermes is disconnected." }
-    return supports("botConfiguration") ? nil : reason("botConfiguration")
+    if !householdConnected { return "Assistant setup is unavailable while Hermes is disconnected." }
+    return supports(.botConfiguration) ? nil : reason(.botConfiguration)
+  }
+}
+
+/// Chats this person read on this device, each with the latest message it had then. The server's
+/// `unread` catches up on a later bootstrap; until that chat's latest message changes, it reads as
+/// read here.
+struct UnreadChats: Equatable {
+  private(set) var user: String?
+  /// Bot ID to the `lastMessage.at` it had when read here, empty when it had none.
+  private var seen: [String: String] = [:]
+  mutating func read(_ bot: Bot) { seen[bot.id] = bot.lastMessage?.at ?? "" }
+  /// Forgets chats that left the roster or whose latest message moved on, and all of them when
+  /// another account signs in.
+  mutating func keep(_ bots: [Bot], user: String?) {
+    guard user == self.user else { self = UnreadChats(user: user); return }
+    var latest: [String: String] = [:]
+    for bot in bots { latest[bot.id] = bot.lastMessage?.at ?? "" }
+    seen = seen.filter { latest[$0.key] == $0.value }
+  }
+  func unread(_ bot: Bot, open: String?) -> Bool {
+    bot.unread == true && bot.id != open && seen[bot.id] != (bot.lastMessage?.at ?? "")
   }
 }
 
 /// One shared minute tick for every time label on a screen, instead of a timeline per row.
-@MainActor final class MinuteClock: ObservableObject {
+@MainActor @Observable final class MinuteClock {
   static let shared = MinuteClock()
-  @Published private(set) var now: Date
-  private let date: () -> Date
-  private var timer: Timer?
-  private var foreground: NSObjectProtocol?
+  private(set) var now: Date
+  @ObservationIgnored private let date: () -> Date
+  @ObservationIgnored private var ticking: Task<Void, Never>?
+  /// The app ticks it on returning to the foreground: a sleep stands still in the background, and a
+  /// returning app should not show a stale "Just now".
   init(date: @escaping () -> Date = { Date() }, interval: TimeInterval = 60) {
     self.date = date
     now = date()
-    timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
-      Task { @MainActor in self?.tick() }
-    }
-    // Timers stand still in the background; a returning app should not show a stale "Just now".
-    foreground = NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
-      Task { @MainActor in self?.tick() }
+    ticking = Task { [weak self] in
+      while !Task.isCancelled {
+        try? await Task.sleep(for: .seconds(interval))
+        self?.tick()
+      }
     }
   }
-  deinit {
-    timer?.invalidate()
-    if let foreground { NotificationCenter.default.removeObserver(foreground) }
-  }
+  deinit { ticking?.cancel() }
   func tick() { now = date() }
 }
 
 /// The first screen while a saved sign-in loads, or while the app server is out of reach, as on the web.
 struct LaunchStateView: View {
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @Environment(\.colorScheme) private var scheme
   var body: some View {
     VStack(spacing: 20) {
@@ -80,7 +103,7 @@ struct LaunchStateView: View {
         Task { await store.restore() }
       } label: {
         Text(store.restoring ? "Checking connection…" : "Try again").frame(maxWidth: 260)
-      }.buttonStyle(.borderedProminent).controlSize(.large).disabled(store.restoring).accessibilityIdentifier("retryConnection")
+      }.buttonStyle(.accentProminent).controlSize(.large).disabled(store.restoring).accessibilityIdentifier("retryConnection")
       ChangeServerButton()
     }
   }
@@ -90,19 +113,27 @@ struct LaunchStateView: View {
 enum WelcomeCopy {
   static let heading = "Your assistants,\nin one familiar place."
   static func status(unavailable: Bool) -> String { unavailable ? "Can't reach the app right now. We'll keep trying." : "Connecting to your household…" }
+  static let connectDetail = "Enter the server address your self-hoster gave you. Your assistants and their work stay on that server."
   static let signInHeading = "Your assistants are waiting."
   static let signInDetail = "Sign in to return to your household conversations."
   static let checkingSignIn = "Checking sign-in…"
 }
 
-/// Leaves this server. If the server cannot confirm the sign-out, asks before forgetting it locally.
+/// Confirms before leaving this server, with a second choice if sign-out cannot be confirmed.
 struct ChangeServerButton: View {
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @State private var offline = false
+  @State private var confirm = false
   var body: some View {
-    Button("Change server") {
-      Task { if !(await store.changeConnection()) { offline = true } }
+    Button { confirm = true } label: {
+      Text("Change server").frame(minHeight: 44).contentShape(Rectangle())
     }.disabled(store.signingIn).accessibilityIdentifier("changeServer")
+      .confirmationDialog("Change server? This signs this device out of its current household.", isPresented: $confirm, titleVisibility: .visible) {
+        Button("Change server", role: .destructive) {
+          Task { if !(await store.changeConnection()) { offline = true } }
+        }
+        Button("Stay here", role: .cancel) {}
+      }
       .confirmationDialog(
         "The server didn't confirm sign-out, so it may be unreachable. If you change servers anyway, this device forgets its sign-in, but the session stays valid on the server until it expires.",
         isPresented: $offline, titleVisibility: .visible
@@ -134,7 +165,7 @@ struct HermesConnectionPanel: View {
       if copy.setup { steps }
       Button(action: retry) {
         Text(busy ? "Checking connection…" : copy.setup ? "Check connection" : "Reconnect now").frame(maxWidth: 260)
-      }.buttonStyle(.borderedProminent).controlSize(.large).disabled(busy || offline).accessibilityIdentifier("reconnectNow")
+      }.buttonStyle(.accentProminent).controlSize(.large).disabled(busy || offline).accessibilityIdentifier("reconnectNow")
       details
     }.frame(maxWidth: 520).frame(maxWidth: .infinity).accessibilityElement(children: .contain).accessibilityLabel("Hermes connection")
       .accessibilityIdentifier("connectionPanel")
@@ -183,14 +214,14 @@ struct HermesConnectionPanel: View {
 /// otherwise the web's empty home.
 struct HomeEmptyDetail: View {
   var create: () -> Void
-  @EnvironmentObject private var store: AppStore
-  @ObservedObject private var reachability = NetworkReachability.shared
+  @Environment(AppStore.self) private var store
+  private let reachability = NetworkReachability.shared
   @Environment(\.colorScheme) private var scheme
   @State private var checking = false
   var body: some View {
     ScrollView {
       Group {
-        if store.connectionLost(offline: reachability.offline) {
+        if store.householdConnectionLost(offline: reachability.offline) {
           HermesConnectionPanel(connection: store.bootstrap?.connection, offline: reachability.offline,
             appUnavailable: store.appUnavailable, busy: checking) {
               checking = true
@@ -205,7 +236,7 @@ struct HomeEmptyDetail: View {
       AvatarView(avatar: AvatarConfig(), size: 100, name: "Assistant", forceReducedMotion: true).accessibilityHidden(true)
       Text("A little less to carry.").font(.title2.bold())
       Text("Return to the same assistants, with the context and conversations you share.").foregroundStyle(.secondary).multilineTextAlignment(.center)
-      Button("Create an assistant", action: create).buttonStyle(.borderedProminent).controlSize(.large)
+      Button("Create an assistant", action: create).buttonStyle(.accentProminent).controlSize(.large)
         .disabled(store.assistantSetupBlock != nil).accessibilityIdentifier("createAssistant")
       if let reason = store.assistantSetupBlock { Text(reason).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center) }
     }.frame(maxWidth: 520).frame(maxWidth: .infinity)

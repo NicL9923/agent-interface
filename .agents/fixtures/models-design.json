@@ -1,0 +1,234 @@
+{
+  "screen": "models",
+  "bots": [
+    {
+      "id": "ranch",
+      "lastMessage": {
+        "text": "**Gate check complete.** Replace the north battery, then check the others next month.",
+        "at": "2026-10-26T13:00:00Z"
+      },
+      "name": "Ranch hand",
+      "shared": true,
+      "model": "daily-planner",
+      "provider": "custom:house",
+      "activity": "idle",
+      "description": "Weekly plans, shared reminders, and practical help around the house.",
+      "instructions": "Help our household plan the week. Keep replies concise and explain what needs a decision. Before changing shared plans, ask for confirmation. Use the connected calendar only when someone asks you to schedule a task.",
+      "avatar": {
+        "mode": "geometric",
+        "shape": "blob",
+        "color": "#1084FE",
+        "eyes": "oval",
+        "accessory": "none"
+      },
+      "enabledMcpServers": [
+        "existing-calendar"
+      ]
+    }
+  ],
+  "preferences": {
+    "startPage": "assistant",
+    "defaultBotId": "ranch",
+    "favorites": [],
+    "sections": [],
+    "presentation": "advanced",
+    "modelFavorites": [
+      {
+        "provider": "custom:house",
+        "model": "daily-planner"
+      }
+    ]
+  },
+  "conversation": {
+    "botId": "ranch",
+    "sessionId": "ranch-canonical",
+    "messages": [],
+    "files": [],
+    "activity": {
+      "state": "idle"
+    },
+    "approvals": [],
+    "attention": [],
+    "draft": {
+      "text": "",
+      "attachments": []
+    },
+    "earlier": 0
+  },
+  "createdName": "Garden companion",
+  "saveError": "The settings could not be saved because the connection was interrupted. Your changes are still here.",
+  "loadError": "Assistant settings could not be loaded. Try again.",
+  "unsupportedReason": "This Hermes connection does not support assistant configuration.",
+  "modelWarning": "This model uses a different provider account and may cost more than your current choice. It will change the model for everyone using this shared assistant. Confirm the choice before continuing.",
+  "catalog": {
+    "provider": "custom:house",
+    "model": "daily-planner",
+    "providers": [
+      {
+        "id": "house",
+        "aliases": [
+          "custom:house"
+        ],
+        "name": "Household provider",
+        "authenticated": true,
+        "models": [
+          {
+            "id": "daily-planner",
+            "name": "daily-planner",
+            "available": true
+          },
+          {
+            "id": "house/extended-context-research-and-careful-planning-preview",
+            "name": "house/extended-context-research-and-careful-planning-preview",
+            "available": true
+          },
+          {
+            "id": "quick-reply",
+            "name": "quick-reply",
+            "available": true
+          }
+        ]
+      },
+      {
+        "id": "field",
+        "name": "Field research provider",
+        "authenticated": false,
+        "warning": "This provider needs to be reconnected in Hermes. Your saved choice is kept.",
+        "models": [
+          {
+            "id": "field-planner",
+            "name": "field-planner",
+            "available": false
+          }
+        ]
+      }
+    ]
+  },
+  "inference": {
+    "reasoning": "high",
+    "speed": "normal"
+  },
+  "tools": [
+    {
+      "id": "web",
+      "name": "Web search",
+      "description": "Search public information and include source links when current information matters.",
+      "enabled": true
+    },
+    {
+      "id": "terminal",
+      "name": "Terminal",
+      "description": "Run commands on the assistant server. Review the requested operation before enabling this tool for shared household work.",
+      "enabled": true
+    },
+    {
+      "id": "browser",
+      "name": "Browser",
+      "description": "Open websites and interact with pages on the assistant server.",
+      "enabled": false
+    }
+  ],
+  "skills": [
+    {
+      "id": "weekly-plan",
+      "name": "weekly-plan",
+      "description": "Required by Hermes",
+      "required": true,
+      "enabled": false
+    },
+    {
+      "id": "seasonal-equipment-inspection-checklist",
+      "name": "seasonal-equipment-inspection-checklist",
+      "description": "Hermes profile skill",
+      "enabled": true
+    },
+    {
+      "id": "packing-list",
+      "name": "packing-list",
+      "description": "Hermes profile skill",
+      "enabled": false
+    }
+  ],
+  "catalogError": "Hermes returned an unreadable model catalog.",
+  "favoriteError": "Can't reach the app. Your draft is kept. We'll reconnect automatically.",
+  "inferenceError": "Hermes returned unreadable inference settings.",
+  "capabilityLoadError": "Can't reach the app. Your draft is kept. We'll reconnect automatically.",
+  "capabilitySaveError": "Hermes could not apply all tool selections.",
+  "capabilityUnsupportedReason": "This Hermes connection does not support changing these capabilities.",
+  "skillSaveError": "Hermes refused the skill selection.",
+  "longTools": [
+    {
+      "id": "web",
+      "name": "Web search",
+      "description": "Search public information and include source links when current information matters.",
+      "enabled": true
+    },
+    {
+      "id": "terminal",
+      "name": "Terminal",
+      "description": "Run commands on the assistant server. Review the requested operation before enabling this tool for shared household work.",
+      "enabled": true
+    },
+    {
+      "id": "browser",
+      "name": "Browser",
+      "description": "Open websites and interact with pages on the assistant server.",
+      "enabled": false
+    },
+    {
+      "id": "files",
+      "name": "Files",
+      "description": "Read and organize files attached to the conversation.",
+      "enabled": true
+    },
+    {
+      "id": "calendar",
+      "name": "Calendar and reminders",
+      "description": "Check schedules and propose reminders for household tasks.",
+      "enabled": false
+    },
+    {
+      "id": "notes",
+      "name": "Notes",
+      "description": "Read saved notes and keep related information together.",
+      "enabled": true
+    },
+    {
+      "id": "documents",
+      "name": "Documents",
+      "description": "Prepare a document from the information in the conversation.",
+      "enabled": false
+    },
+    {
+      "id": "research",
+      "name": "Research",
+      "description": "Compare sources and collect the links needed to check an answer.",
+      "enabled": true
+    },
+    {
+      "id": "photos",
+      "name": "Photos",
+      "description": "Read pictures attached to a request and describe relevant details.",
+      "enabled": false
+    },
+    {
+      "id": "messages",
+      "name": "Messages",
+      "description": "Prepare a message for the person you choose.",
+      "enabled": true
+    },
+    {
+      "id": "maps",
+      "name": "Maps and directions",
+      "description": "Find places and prepare directions for a planned trip.",
+      "enabled": false
+    },
+    {
+      "id": "checklists",
+      "name": "Shared household checklists",
+      "description": "Read the checklist, identify unfinished work and propose the next step.",
+      "enabled": true
+    }
+  ],
+  "modelSaveError": "Request failed (503)"
+}

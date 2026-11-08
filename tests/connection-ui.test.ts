@@ -1,14 +1,15 @@
 // @vitest-environment jsdom
 import { act, createElement } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
+import type { Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../src/App';
 import { SignIn } from '../src/components/SignIn';
 import { api, cachedResponse, clearResponseCache, write } from '../src/client-api';
 import { defaultPreferences, type Bootstrap, type Conversation } from '../src/shared/types';
 import { FakeEventSource } from './fake-event-source';
+import { advance, button, mountRoot, stubMatchMedia, typeInto } from './ui-harness';
 
-vi.mock('../src/client-api',async original=>({...await original<typeof import('../src/client-api')>(),api:vi.fn(),cachedResponse:vi.fn(),write:vi.fn().mockResolvedValue({}),clearResponseCache:vi.fn()}));
+vi.mock('../src/client-api', async original => (await import("./helpers/request-mock")).withRequest(await (async original=>({...await original<typeof import('../src/client-api')>(),api:vi.fn(),cachedResponse:vi.fn(),write:vi.fn().mockResolvedValue({}),clearResponseCache:vi.fn()}))(original)));
 // Presence heartbeats would interleave with the writes these tests count; they have their own tests.
 vi.mock('../src/app/use-chat-presence',()=>({useChatPresence:()=>{}}));
 vi.mock('../src/components/Avatar',async original=>({...await original<typeof import('../src/components/Avatar')>(),Avatar:()=>null}));
@@ -17,11 +18,10 @@ let authConfig:{localDevAuth:boolean;googleClientId?:string};
 let pendingBootstrap:Promise<Bootstrap>|undefined;
 let hermesDown:boolean;
 beforeEach(()=>{
-  vi.useFakeTimers();vi.clearAllMocks();vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT',true);
-  FakeEventSource.reset();vi.stubGlobal('EventSource',FakeEventSource);
+  vi.useFakeTimers();vi.clearAllMocks();  FakeEventSource.reset();vi.stubGlobal('EventSource',FakeEventSource);
   vi.mocked(write).mockReset().mockResolvedValue({});
-  vi.stubGlobal('matchMedia',vi.fn(()=>({matches:false,addEventListener:vi.fn(),removeEventListener:vi.fn()})));
-  localStorage.clear();history.replaceState(null,'','/');
+  stubMatchMedia();
+  history.replaceState(null,'','/');
   boot={user:{id:'one',name:'One',email:'one@example.test'},household:[],preferences:{...structuredClone(defaultPreferences),startPage:"assistant"},bots:[{id:'shared',name:'Shared',shared:true,model:'test',activity:'idle'}],capabilities:Object.fromEntries(['chat','steering','approvals','uploads','generatedFiles','botConfiguration','tools','skills','routines','durableEvents','idempotency','imageGeneration','stop','portraitGeneration','avatarMetadata'].map(key=>[key,{supported:true}])) as Bootstrap['capabilities'],connection:{connected:true},csrfToken:'csrf-one'};
   conversation={botId:'shared',messages:[{id:'answer-one',role:'assistant',text:'Existing canonical answer'}],approvals:[],files:[],activity:{state:'idle'}};
   authConfig={localDevAuth:false};pendingBootstrap=undefined;hermesDown=false;
@@ -32,11 +32,10 @@ beforeEach(()=>{
     if(path==='/bots/shared/draft')return {text:boot.user.id==='one'?'My unsent draft':'Second member draft',attachments:[]} as T;
     return null as T;
   });
-  container=document.createElement('div');document.body.append(container);root=createRoot(container);
+  ({container,root}=mountRoot());
 });
-afterEach(async()=>{await act(async()=>root.unmount());container.remove();localStorage.clear();vi.useRealTimers();vi.unstubAllGlobals();Reflect.deleteProperty(window,'google');Reflect.deleteProperty(navigator,'onLine');});
+afterEach(()=>{Reflect.deleteProperty(window,'google');Reflect.deleteProperty(navigator,'onLine');});
 async function renderApp(){await act(async()=>root.render(createElement(App)));}
-async function advance(ms:number){await act(async()=>vi.advanceTimersByTimeAsync(ms));}
 // The server reports a change, as Hermes frames or a write would.
 async function changed(){await act(async()=>FakeEventSource.notifyAll());await advance(1500);}
 // Screens such as preferences load on first use.
@@ -49,6 +48,11 @@ const transcriptSize=()=>{
 };
 const googleScript=()=>document.head.querySelector<HTMLScriptElement>('script[src="https://accounts.google.com/gsi/client"]')!;
 
+// The transcript measures its position on the next frame, as a browser paints after scrolling.
+const scrolled = (transcript: Element) => act(async () => {
+  transcript.dispatchEvent(new Event('scroll'));
+  vi.advanceTimersToNextFrame();
+});
 describe('setup and recovery interface',()=>{
   it('opens at the latest message even when another device saved an earlier position',async()=>{
     conversation.messages.push({id:'later-answer',role:'assistant',text:'Later answer'});
@@ -73,10 +77,11 @@ describe('setup and recovery interface',()=>{
         ?{...conversation,messages:[...turn(0),...turn(1)],earlier:0}:{...conversation,messages:turn(1),earlier:2}) as T;
     });
     const size=transcriptSize();
-    // The prompt being read sits 50px below the top until two earlier messages arrive above it.
+    // Messages stack in order 250px apart. The prompt being read sits 50px below the top until
+    // two earlier messages arrive above it.
     const rects=vi.spyOn(Element.prototype,'getBoundingClientRect').mockImplementation(function(this:Element){
-      const top=this.classList.contains('transcript')?100:(this as HTMLElement).dataset.messageId==='p1'
-        ?(document.querySelector('[data-message-id="p0"]')?650:150):0;
+      const order=[...document.querySelectorAll('[data-message-id]')].indexOf(this);
+      const top=this.classList.contains('transcript')?100:order<0?0:150+250*order;
       return {top,bottom:top+100} as DOMRect;
     });
     try{
@@ -84,7 +89,7 @@ describe('setup and recovery interface',()=>{
       expect(paths.slice(0,2)).toEqual(['/bots/shared/conversation?turns=20','/bots/shared/conversation?start=p1']);
       const transcript=container.querySelector<HTMLElement>('.transcript')!;
       transcript.scrollTop=300;
-      await act(async()=>transcript.dispatchEvent(new Event('scroll')));
+      await scrolled(transcript);
       const earlier=[...container.querySelectorAll('button')].find(button=>button.textContent==='Show earlier messages')!;
       await act(async()=>earlier.click());
       expect(paths).toContain('/bots/shared/conversation?start=p1&turns=20');
@@ -113,7 +118,7 @@ describe('setup and recovery interface',()=>{
       expect(container.querySelector('[data-message-id="p0"]')).not.toBeNull();
       const transcript=container.querySelector<HTMLElement>('.transcript')!;
       transcript.scrollTop=300;
-      await act(async()=>transcript.dispatchEvent(new Event('scroll')));
+      await scrolled(transcript);
       await act(async()=>respond());
       expect(paths).toEqual(['/bots/shared/conversation?turns=20','/bots/shared/conversation?start=p0']);
       expect(container.querySelector('[data-message-id="p0"]')).not.toBeNull();
@@ -134,7 +139,7 @@ describe('setup and recovery interface',()=>{
       await renderApp();await advance(20);
       const transcript=container.querySelector<HTMLElement>('.transcript')!;
       transcript.scrollTop=300;
-      await act(async()=>transcript.dispatchEvent(new Event('scroll')));
+      await scrolled(transcript);
       readingTop=400;
       await act(async()=>resized.forEach(callback=>callback()));
       expect(transcript.scrollTop).toBe(550);
@@ -148,7 +153,7 @@ describe('setup and recovery interface',()=>{
       await renderApp();await advance(20);
       const transcript=container.querySelector<HTMLElement>('.transcript')!;
       transcript.scrollTop=300;
-      await act(async()=>transcript.dispatchEvent(new Event('scroll')));
+      await scrolled(transcript);
       conversation={...conversation,messages:[conversation.messages[0],{id:'live',role:'assistant',text:'Pot roast tonight'}]};
       await changed();
       expect(container.querySelector('.jump-latest')!.textContent).toBe('1 new message');
@@ -161,7 +166,7 @@ describe('setup and recovery interface',()=>{
       await renderApp();await advance(20);
       const transcript=container.querySelector<HTMLElement>('.transcript')!;
       transcript.scrollTop=300;
-      await act(async()=>transcript.dispatchEvent(new Event('scroll')));
+      await scrolled(transcript);
       expect(container.querySelector('.jump-latest')!.textContent).toBe('Jump to latest');
       conversation={...conversation,messages:[...conversation.messages,{id:'fresh',role:'assistant',text:'Fresh reply'}]};
       await changed();
@@ -187,7 +192,7 @@ describe('setup and recovery interface',()=>{
     transcript.getBoundingClientRect=()=>({top:100,bottom:400} as DOMRect);
     container.querySelector<HTMLElement>('[data-message-id="answer-one"]')!.getBoundingClientRect=()=>({top:80,bottom:220} as DOMRect);
     container.querySelector<HTMLElement>('[data-message-id="latest-answer"]')!.getBoundingClientRect=()=>({top:1800,bottom:1900} as DOMRect);
-    await act(async()=>transcript.dispatchEvent(new Event('scroll')));
+    await scrolled(transcript);
     await advance(310);
     expect(write).toHaveBeenCalledWith('/bots/shared/read-position',{scrollTop:300,messageId:'answer-one'},'PUT');
   });
@@ -196,7 +201,7 @@ describe('setup and recovery interface',()=>{
     await act(async()=>root.render(createElement(SignIn,{onSuccess:vi.fn()})));
     expect(container.textContent).toContain('npm run setup');
     expect(container.textContent).toContain('Start on the computer running this app');
-    const button=Array.from(container.querySelectorAll('button')).find(node=>node.textContent==='Check setup again')!;
+    const button=Array.from(container.querySelectorAll('button')).find(node=>node.textContent==='Check now')!;
     expect(button).toBeDefined();expect(googleScript()).toBeNull();
     authConfig={localDevAuth:true};await act(async()=>button.click());
     expect(container.textContent).toContain('Enter local workspace');
@@ -229,7 +234,7 @@ describe('setup and recovery interface',()=>{
     expect(container.querySelector('textarea')?.value).toBe('My unsent draft');
     expect(container.querySelector('.transcript')?.textContent).toContain('Existing canonical answer');
     expect(container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')?.disabled).toBe(true);
-    expect(container.textContent).toContain('Hermes is temporarily unavailable');
+    expect(container.textContent).toContain('Reconnecting to Hermes');
     expect(JSON.parse(localStorage.getItem('agent-interface:draft:one:shared')!).text).toBe('My unsent draft');
   });
 
@@ -240,6 +245,85 @@ describe('setup and recovery interface',()=>{
     expect(vi.mocked(api).mock.calls.filter(([path])=>path==='/bootstrap?roster=lean')).toHaveLength(initial+1);
     await act(async()=>{finish(boot);});
     expect(container.querySelector('textarea')?.value).toBe('My unsent draft');
+  });
+
+  describe('bootstrap reads when returning to the app',()=>{
+    const reads=()=>vi.mocked(api).mock.calls.filter(([path])=>path==='/bootstrap?roster=lean').length;
+    const returnTo=async()=>{await act(async()=>{window.dispatchEvent(new Event('focus'));document.dispatchEvent(new Event('visibilitychange'));});};
+
+    it('skips a focus or visibility read right after a successful one, and reads once that is stale',async()=>{
+      await renderApp();const initial=reads();
+      await returnTo();await advance(4_000);await returnTo();
+      expect(reads()).toBe(initial);
+      await advance(1_000);await returnTo();
+      expect(reads()).toBe(initial+1);
+      // The read just made is fresh in turn.
+      await returnTo();
+      expect(reads()).toBe(initial+1);
+    });
+
+    it('reads at once when the connection comes back, however recent the last read',async()=>{
+      await renderApp();const initial=reads();
+      Object.defineProperty(navigator,'onLine',{configurable:true,value:false});
+      await act(async()=>window.dispatchEvent(new Event('offline')));
+      expect(Array.from(container.querySelectorAll('button')).some(node=>node.textContent==='Reconnect now')).toBe(false);
+      await returnTo();
+      expect(reads()).toBe(initial);
+      Object.defineProperty(navigator,'onLine',{configurable:true,value:true});
+      await act(async()=>window.dispatchEvent(new Event('online')));
+      expect(reads()).toBe(initial+1);
+    });
+
+    it('does not hold back the next look after a read that failed or found Hermes down',async()=>{
+      const original=vi.mocked(api).getMockImplementation()!;
+      let failing=true;
+      vi.mocked(api).mockImplementation(async <T>(path:string,init?:RequestInit)=>{
+        if(path==='/bootstrap?roster=lean'&&failing)throw new Error('network');
+        return await original(path,init) as T;
+      });
+      await renderApp();const initial=reads();
+      await returnTo();
+      expect(reads()).toBe(initial+1);
+      failing=false;hermesDown=true;boot={...boot,bots:[],connection:{connected:false,code:'unreachable'}};
+      await returnTo();
+      expect(reads()).toBe(initial+2);
+      await returnTo();
+      expect(reads()).toBe(initial+3);
+    });
+
+    it('reads on the next focus after a read that failed, even right after an earlier success',async()=>{
+      const original=vi.mocked(api).getMockImplementation()!;
+      let failing=false;
+      vi.mocked(api).mockImplementation(async <T>(path:string,init?:RequestInit)=>{
+        if(path==='/bootstrap?roster=lean'&&failing)throw new Error('network');
+        return await original(path,init) as T;
+      });
+      await renderApp();const initial=reads();
+      // Coming back online always reads; this one fails, so what the app shows is no longer trusted.
+      failing=true;
+      await act(async()=>window.dispatchEvent(new Event('online')));
+      expect(reads()).toBe(initial+1);
+      failing=false;
+      await advance(1_000);await returnTo();
+      expect(reads()).toBe(initial+2);
+    });
+
+    it('reads on the next focus after a read that found Hermes down, even right after an earlier success',async()=>{
+      await renderApp();const initial=reads();
+      const healthy=boot;
+      boot={...boot,bots:[],connection:{connected:false,code:'unreachable'}};
+      await act(async()=>window.dispatchEvent(new Event('online')));
+      expect(reads()).toBe(initial+1);
+      boot=healthy;
+      await advance(1_000);await returnTo();
+      expect(reads()).toBe(initial+2);
+    });
+
+    it('still reads for a roster change the server announces, however recent the last read',async()=>{
+      await renderApp();await advance(0);const initial=reads();
+      await act(async()=>{for(const stream of FakeEventSource.streams)if(stream.url==='/api/events')stream.emit('roster','roster');});
+      expect(reads()).toBe(initial+1);
+    });
   });
 
   it('falls back to an existing bot when a saved default and deep link no longer exist',async()=>{
@@ -260,6 +344,8 @@ describe('setup and recovery interface',()=>{
     const requestId=(admission[1] as {requestId:string}).requestId;
     expect(requestId).toBeDefined();
     expect(clearResponseCache).not.toHaveBeenCalled();
+    // A focus right after a bootstrap is skipped, so the second member's account is seen on a later one.
+    await advance(5_000);
     boot={...boot,user:{id:'two',name:'Two',email:'two@example.test'},csrfToken:'csrf-two'};
     await act(async()=>window.dispatchEvent(new Event('focus')));
     expect(clearResponseCache).toHaveBeenCalledTimes(1);
@@ -284,6 +370,8 @@ describe('setup and recovery interface',()=>{
     await renderApp();
     const button=Array.from(container.querySelectorAll('button')).find(node=>node.textContent==='Retry this saved message')!;
     await act(async()=>button.click());
+    // A focus right after a bootstrap is skipped, so the second member's account is seen on a later one.
+    await advance(5_000);
     boot={...boot,user:{id:'two',name:'Two',email:'two@example.test'},csrfToken:'csrf-two'};
     await act(async()=>window.dispatchEvent(new Event('focus')));
     await act(async()=>container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')!.click());
@@ -314,9 +402,7 @@ describe('setup and recovery interface',()=>{
     }
     await renderApp();await advance(400);
     if(mode==='admission'){
-      const textarea=container.querySelector('textarea')!;
-      const setValue=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value')!.set!;
-      await act(async()=>{setValue.call(textarea,'Edited immediately before sending');textarea.dispatchEvent(new Event('input',{bubbles:true}));});
+      await typeInto(container.querySelector('textarea')!,'Edited immediately before sending');
       await act(async()=>container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')!.click());
       requestId=(vi.mocked(write).mock.calls.find(([path])=>path==='/bots/shared/messages')![1] as {requestId:string}).requestId;
     }
@@ -334,7 +420,7 @@ describe('setup and recovery interface',()=>{
     await renderApp();await advance(400);expect(write).not.toHaveBeenCalled();
     const original=vi.mocked(api).getMockImplementation()!;
     vi.mocked(api).mockImplementation(async <T>(path:string,init?:RequestInit)=>path==='/bots/shared/draft'?{text:'New draft from my phone',attachments:[]} as T:await original(path,init) as T);
-    await act(async()=>root.unmount());root=createRoot(container);await renderApp();await advance(400);
+    await act(async()=>root.unmount());await renderApp();await advance(400);
     expect(container.querySelector('textarea')?.value).toBe('New draft from my phone');
     expect(JSON.parse(localStorage.getItem('agent-interface:draft:one:shared')!).text).toBe('New draft from my phone');
     expect(write).not.toHaveBeenCalled();
@@ -344,14 +430,12 @@ describe('setup and recovery interface',()=>{
     await renderApp();
     Object.defineProperty(navigator,'onLine',{configurable:true,value:false});
     await act(async()=>window.dispatchEvent(new Event('offline')));
-    const textarea=container.querySelector('textarea')!;
-    const setValue=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value')!.set!;
-    await act(async()=>{setValue.call(textarea,'Written while offline');textarea.dispatchEvent(new Event('input',{bubbles:true}));});
+    await typeInto(container.querySelector('textarea')!,'Written while offline');
     await advance(400);
     const key='agent-interface:draft:one:shared';
     expect(JSON.parse(localStorage.getItem(key)!)).toMatchObject({text:'Written while offline',dirty:true});
     expect(write).not.toHaveBeenCalled();
-    await act(async()=>root.unmount());root=createRoot(container);await renderApp();
+    await act(async()=>root.unmount());await renderApp();
     expect(container.querySelector('textarea')?.value).toBe('Written while offline');
     // The server answers a save with the draft it now holds.
     vi.mocked(write).mockImplementation(async <T>(_path:string,value:unknown)=>({...value as object,revision:1,reason:'edit',sentRevision:0}) as T);
@@ -384,12 +468,12 @@ it('lets the next sign-in send after signing out while a send was unanswered',as
   const previous=vi.mocked(api).getMockImplementation()!;
   vi.mocked(api).mockImplementation(async <T>(path:string,init?:RequestInit)=>path.startsWith('/submissions/')?{status:'rejected'} as T:await previous(path,init) as T);
   vi.mocked(write).mockImplementation(async <T>(path:string)=>path==='/bots/shared/messages'?await new Promise<T>(()=>{}):{} as T);
-  const button=(label:string)=>[...container.querySelectorAll('button')].find(node=>node.textContent?.trim()===label)!;
   await renderApp();await advance(400);
   await act(async()=>container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')!.click());
   await act(async()=>container.querySelector<HTMLButtonElement>('[aria-label="Settings"]')!.click());
   await loaded();
   await act(async()=>button('Sign out').click());
+  await act(async()=>container.querySelector<HTMLButtonElement>('.settings-confirmation .danger')!.click());
   expect(container.querySelector('.sign-in')).not.toBeNull();
   await act(async()=>button('Enter local workspace').click());
   await advance(2500);
@@ -415,7 +499,7 @@ describe('pushed conversation updates',()=>{
   const reads=()=>vi.mocked(api).mock.calls.filter(([path])=>String(path).startsWith('/bots/shared/conversation?')).length;
   const opened=async()=>{
     await renderApp();await advance(20);
-    expect(FakeEventSource.created).toEqual(['/api/events','/api/bots/shared/events?inflight=1']);
+    expect(FakeEventSource.created).toEqual(['/api/events','/api/bots/shared/events?inflight=2&drafts=1']);
     const stream=[...FakeEventSource.streams].find(stream=>stream.url.includes('/bots/'))!;
     // A change between the first read and the subscription would be lost, so connecting reloads.
     const before=reads();

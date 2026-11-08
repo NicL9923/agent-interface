@@ -1,0 +1,42 @@
+{
+  "scope": "Web Work task board, details, move actions and refusal feedback only. Native and task editors remain pending.",
+  "reviewer": "Anthropic Claude Opus 5.5, high effort",
+  "implementers": [
+    "OpenAI GPT-6.1 Terra",
+    "OpenAI GPT-6.1 Sol"
+  ],
+  "webAccepted": true,
+  "allClientGateAccepted": false,
+  "nextScreenAllowed": false,
+  "scores": {
+    "refused-card": 9.5,
+    "other18CapturedWebStates": 9.0,
+    "iphone": null,
+    "ipad": null
+  },
+  "closingWebSource": "sha256:ec6b1f4de53106eea650be4b05cfba1e4019082fa0ee50ed048ca34e83d6eaef (226 source files)",
+  "fixtureSHA256": "e8fee514b68e3f33b42b1b5fe166e6629d2fbb87679f87810aa778f0c072e744",
+  "checks": {
+    "focusedUiTests": 31,
+    "testEvidence": "Original orchestration exec session11964, exit0, 31passed; no standalone log was retained.",
+    "productionBuild": "R6 passed",
+    "captureChecks": "19 frames, no overflow or browser errors; keyboard focus and automatic result landing checked before test scrolling"
+  },
+  "counts": {
+    "sharedBeforeAllClientsAndEditorScopes": 67,
+    "webAfter": 19,
+    "annotatedWebComparisons": 7
+  },
+  "artifactRoot": "/Volumes/DevSSD/scratch/wildbots-design-review",
+  "evidence": "work-w2a-web-after-r6-evidence.json",
+  "annotations": "work-w2a-web-r6-annotated-evidence.json",
+  "review": "reviews/82-work-w2a-web-recheck.md",
+  "annotationCorrection": "Review82 A1 marker moved from y fraction0.30 to0.345 and root inspected; no screenshot or caption changed.",
+  "outputNamingDisclosure": "R6 wrote the previously nonexistent captures-r5 directory. R5 failed before admission and produced no captures. All19 timestamps bind to R6.",
+  "limits": [
+    "Fixture behavior, not live production Hermes verification.",
+    "200% root font size, no browser zoom claim.",
+    "No native visual acceptance, VoiceOver, physical device or hardware-keyboard claim."
+  ],
+  "allClientClosingRecord": "work-task-acceptance.json"
+}

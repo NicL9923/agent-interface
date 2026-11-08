@@ -17,6 +17,7 @@ import pwd
 import signal
 import socket
 import subprocess
+import sys
 import time
 from urllib.parse import urlsplit
 
@@ -71,14 +72,43 @@ def claim_idle(computer, held, error):
     return True
 
 
+def keep_desktop_alive(runtime):
+    """The supervisor owns this screen; a dead supervisor stops renewing its activity."""
+    if not runtime.status().running:
+        raise RuntimeError("The household desktop exited; its supervisor will restart it.")
+    runtime.touch_activity()
+
+
+def sibling_module(name):
+    """Load src/hermes/NAME.py once per process, under its one canonical module name.
+
+    A second load under another name would be a separate instance with its own state.
+    Keep every copy of this function identical; tests/hermes_private_fs_test.py checks.
+    """
+    canonical, path = "agent_interface_" + name, Path(__file__).resolve().with_name(name + ".py")
+    if canonical not in sys.modules:
+        spec = importlib.util.spec_from_file_location(canonical, path)
+        sys.modules[canonical] = module = importlib.util.module_from_spec(spec)
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            del sys.modules[canonical]
+            raise
+    module = sys.modules[canonical]
+    if Path(module.__file__).resolve() != path:
+        raise ImportError(canonical + " is already loaded from " + module.__file__)
+    return module
+
+
 def main():
-    spec = importlib.util.spec_from_file_location("agent_interface_computer", Path(__file__).resolve().with_name("computer.py"))
-    module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+    module = sibling_module("computer")
     setting = module.configured()
     if setting is None:
         raise SystemExit("The household computer is not configured.")
     home, endpoint = setting
     from tools.bot_desktop import runtime, lease, browser
+    if not callable(getattr(runtime, "touch_activity", None)):
+        raise RuntimeError("Native desktop activity updates require qualification.")
     source = Path(runtime.__file__).resolve().parents[2]
     loaded = loaded_code(source)
     hermes_home = os.environ["HERMES_HOME"]
@@ -127,8 +157,7 @@ def main():
             if child.poll() is not None:
                 raise RuntimeError("The household browser exited; its supervisor will restart it.")
             with module.resource_scope(home):
-                if not runtime.status().running:
-                    raise RuntimeError("The household desktop exited; its supervisor will restart it.")
+                keep_desktop_alive(runtime)
             if time.monotonic() >= next_check:
                 next_check = time.monotonic() + CODE_CHECK_SECONDS
                 try:

@@ -1,23 +1,15 @@
 // @vitest-environment jsdom
 import { act, createElement, lazy } from "react";
-import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { Loading } from "../src/app/panels";
+import { mountRoot } from "./ui-harness";
+import { quietConsoleErrors } from "./act-guard";
 
 let container: HTMLDivElement;
 let root: Root;
 beforeEach(() => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
-});
-afterEach(async () => {
-  await act(async () => root.unmount());
-  container.remove();
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
+  ({ container, root } = mountRoot());
 });
 
 describe("lazy screens", () => {
@@ -33,7 +25,7 @@ describe("lazy screens", () => {
   });
 
   it("offer a reload instead of blanking the app when a screen cannot load", async () => {
-    vi.spyOn(console, "error").mockImplementation(() => {});
+    quietConsoleErrors();
     const Screen = lazy(() => Promise.reject(new Error("Failed to fetch dynamically imported module")));
     await act(async () => root.render(createElement("div", null, createElement("p", { id: "app" }, "App"), createElement(Loading, null, createElement(Screen)))));
     expect(container.querySelector("#app")?.textContent).toBe("App");

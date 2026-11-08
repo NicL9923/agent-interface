@@ -36,8 +36,17 @@ native route and require an update.
 The browser flow expires after five minutes; its one-time handoff code expires
 after one minute. The handoff is bound to state, the PKCE challenge, and an
 HttpOnly flow cookie. The database stores hashes of flow, code, and session
-credentials. Session lifetime is seven days. Exchange credentials are never
+credentials. A session lasts seven days. While it is in use, the app renews it with
+`POST /api/auth/native/renew`, an empty JSON body and its bearer token; the response
+is `{ "expiresAt": "ISO8601" }`. Renewal extends the same token to seven days from
+now, so push and Live Activity registrations stay attached and a lost response
+cannot sign the app out. It never extends a session past 90 days after its Google
+sign-in; at that limit it returns the unchanged expiry. A gone session returns 401
+with `session_expired`. Exchange credentials are never
 accepted in query parameters; session credentials never appear in callback URLs.
+Signing in counts as confirming it's you for the system terminal: the new session
+starts confirmed at the Google credential's issue time, or now for a local member.
+A Google credential without an issue time leaves the session unconfirmed.
 The hosted page and API auth responses use `Cache-Control: no-store`. The server
 disables request logging. Reverse proxies should avoid retaining the sign-in
 query or request bodies.
@@ -72,6 +81,9 @@ those messages with their files. `GET /api/bots/:id/events` is a server-sent
 event stream for the same readers: each `change` message means the
 conversation may have changed, so refetch it, and refetch after any reconnect.
 It sends a `ping` event every 25 seconds and ends when the session does.
+Conversation reads carry a `Server-Timing` header that splits the time between the
+Hermes read, the add-on's phases and this server. It is diagnostic only and never part
+of the body or its ETag.
 
 Clients may opt in with `/api/bots/:id/events?inflight=1`. Token, reasoning,
 status and tool-start frames then send `event: inflight` at most four times a
@@ -87,12 +99,38 @@ Structural events still send `data: change`, meaning refetch. Clients fetch on
 stream open and reconnect; the server sends no initial notice. Streams without the parameter retain their
 one-change-per-second streaming cadence.
 
+`?inflight=2` opts in to the same stream with growth sent as deltas, so a long
+reply is not resent whole every 250 ms. `?inflight=1` is unchanged, and the iOS
+app and cached web bundles keep using it. A `?inflight=2` stream sends the first
+`event: inflight` whole and then, while the same reply only grows, `event:
+inflight-delta` with JSON `{botId, messageId, baseTextLength, baseReasoningLength,
+appendText?, appendReasoning?, activity, toolCalls?}`. The lengths count UTF-16
+code units of the `message.text` and `message.reasoning` the stream last sent, an
+absent `reasoning` counting as zero. Append the suffixes to the live reply you
+hold, replace `activity`, and replace `toolCalls` only when the event carries it.
+An event that sends nothing new is omitted. The server sends the update as a whole
+`inflight` event instead of a delta when the message `id` changed, when text or
+reasoning changed any way except by growing at the end, when any other message
+field changed, after any `data: change` notice, and on a new stream. Later growth
+of that reply may be sent as deltas on the whole event's text and reasoning. Deltas are
+computed on the redacted reply, so redaction applies exactly as for `?inflight=1`.
+If a delta's `messageId` or base lengths do not match the reply you hold, or you
+hold none, discard it, refetch the conversation and reconnect the stream, which
+restarts from a whole event. A server that predates `?inflight=2` treats it as no
+opt-in and sends only change notices, which clients already handle.
+
 `GET /api/bootstrap?roster=lean` and `GET /api/bots?roster=lean` opt in to
 roster fields only: `id`,
 `name`, `description`, `model`, `provider`, `shared`, `ownerId`, `avatar`,
-`sessionId`, `activity` and `lastMessage`. Optional configuration fields
-`instructions`, `enabledTools`, `enabledSkills` and `enabledMcpServers` load
-from `GET /api/bots/:id`. Fetch detail before initializing a settings form or
+`sessionId`, `activity`, `lastMessage` and `unread`. `unread` is true when the
+latest message is newer than this person's last read of a chat they have opened
+before; chat presence reports record reads. Show the open chat as read, and treat a
+chat as read through its latest message after leaving it until the next roster.
+Optional configuration fields
+`instructions`, `enabledTools`, `enabledSkills`, `enabledMcpServers` and
+`availableMcpServers` load from `GET /api/bots/:id`. `availableMcpServers` lists
+every MCP server configured for the profile, enabled or not, so settings can offer
+them as switches. Fetch detail before initializing a settings form or
 resending configuration during a model change. Model fallback from profile
 configuration is also available in detail. Without `roster=lean`, both list
 routes retain full configuration for native build 5 and cached web bundles.
@@ -106,7 +144,48 @@ notifies each viewer only when their visible roster changes. Private activity
 does not notify other household members. Clients fetch on open; there is no
 initial roster notice. The stream pings every 25 seconds and ends on sign-out. Refresh on
 reconnect and foreground as well. A 45-second bootstrap poll covers missed
-notices and changes made outside this app.
+notices and changes made outside this app. The server shares one read of the
+assistant list, capabilities and connection status among bootstraps for 1.5
+seconds, so many devices answering one notice cost one Hermes round trip. It drops
+that read when this app writes an assistant, a routine, an integration, a Hermes
+upgrade or a connection retry, and never keeps a disconnected one, so a change
+made outside this app can take up to 1.5 seconds longer to show.
+
+The household stream, with or without `?group=`, also sends `event: groups` with
+`data: groups` when that person's visible group catalog changes: a room added,
+removed, renamed or with changed members, or a room's newest message. Refetch
+`GET /api/groups`; the notice carries no room IDs or previews. Visibility follows
+`GET /api/groups`, so a room with someone else's private assistant never notifies.
+One server check serves every open stream: it reads the Hermes catalog at most once
+every 30 seconds, only while a household stream is open, and compares each person's
+catalog with the last one, so an unchanged catalog sends nothing. A group write
+through this app (create, send, stop, settings, approval) or an assistant change
+checks within about a second instead. Every connection also gets one `groups` notice
+once its catalog is known: at once when the server already has a starting point, or
+when its first check lands. Fetch on that notice rather than on connect, which would
+read twice. Notices sent while disconnected are lost, and the connect notice covers
+them. Fetch on foreground as well. A fallback
+poll of about 5 minutes covers a missed notice; older servers send no `groups`
+events, so keep a 30-second poll for them.
+
+`GET /api/events?group=ROOM_ID` also watches one group chat. The server checks the
+room like `GET /api/groups/:id`, answering 404 for a room the person cannot see,
+before the stream opens. While any stream watches a room, the server reads that
+room from the Hermes coordinator about every 2 seconds, one reader per room, and
+stops when the last watching stream closes. Reads slow down to every 30 seconds
+while Hermes fails. Each change to the room's latest event or its driver status
+sends `event: group` with `data: {"roomId":"ROOM_ID","latestSeq":N}`; fetch
+`GET /api/groups/:id/log?since=CURSOR&state=1` from your own cursor. `latestSeq`
+can repeat when only the driver status changed, such as a new pending approval,
+and is 0 when Hermes does not report one. There is no notice on open, so fetch
+then. A room that gains someone else's private assistant ends the stream. Watch
+one room per stream; roster events still arrive on the same stream. Each person
+may hold 8 room-watching streams at once across tabs and devices, and the server
+watches at most 24 rooms for the household. A watch beyond either limit answers
+429 with an `error` message before the stream opens; close the stream when the
+room leaves the screen, and rely on the fallback poll until a retry succeeds.
+Keep a slow fallback poll, such as every 30 seconds, for older servers and
+missed notices; they ignore `group` and send no `group` events.
 
 A personal assistant with a recorded owner is private to that owner. For anyone
 else it does not exist: lists such as `/api/bots`, bootstrap, Today, search, saved
@@ -137,7 +216,38 @@ when an assistant with that name already exists. If someone else
 changed its sharing while the save was under way, it returns 409 with
 `code: "sharing_changed"` and changes nothing. A private assistant's routines
 accept only its owner as a recipient; others return 400 with
-`code: "private_recipients"`. Only its owner can
+`code: "private_recipients"`. Routines also take `roomIds`, the group chats they post their
+results in, where `GET /api/groups` reports `routineDelivery: true`. A routine lists only the
+rooms the reader can open, and leaves `roomIds` out when the server could not read the room
+catalog; send `roomIds` only when it was present, since saving replaces the rooms you can see
+and keeps the ones you cannot. A new room must be one you can open (400), and a private
+assistant's routine may post only in rooms nobody else can open, in practice rooms with one of its
+owner's personal assistants (400 with `code: "private_recipients"`). An error that names a room you cannot
+open is replaced whole with "Couldn't post in a group chat you can't open.", since Hermes repeats the
+room's profile elsewhere in it, and one that names an assistant you cannot see is hidden as private.
+A save merges your rooms with the routine's rooms as Hermes has them when the save runs. Anything that
+lets a routine deliver checks every room its delivery names, read exactly as Hermes reads it
+(`src/server/delivery-targets.ts`): `deliver` and `failure_deliver`, `room:<id>` with any spacing and
+case Hermes trims, `room:<id>@<profile>` as the same room, and `origin` delivery into the room a job
+came from. That includes rooms you cannot see and targets written outside the app. The places it applies: a save that leaves it enabled,
+`PATCH /api/routines/:id/state` with `enabled: true`, `POST /api/routines/:id/run`, and creating,
+changing or turning on an event trigger for it. If a room would expose the routine, these answer 409
+with `code: "routine_rooms"`. If the rooms, the routine or a trigger's routine cannot be read, they answer
+`code: "routine_rooms_unknown"`, including a trigger beyond the 100 the automation overview lists and a
+Hermes that offers no room catalog. Hermes lets two assistants hold jobs with one ID: a save checks the
+named assistant's routine and a trigger its own assistant's, and `PATCH /api/routines/:id/state`,
+`POST /api/routines/:id/run` and `DELETE /api/routines/:id` act on the one you can see and tell Hermes its
+assistant, a running trial blocks changes only to its own assistant's routine, a deletion answers 404 and deletes
+nothing if that assistant's copy is gone by the time it runs, routine recipients are kept per assistant, answering 409 with `code: "routine_ambiguous"`
+when you can see two. Pausing,
+saving a paused routine and turning a trigger off always go ahead. `PATCH /api/bots/:id` refuses a sharing change that
+would let a routine post where people who cannot see its assistant read it, such as making an
+assistant personal while its routine posts in a room others can open, or sharing the last personal
+member of a room a personal routine posts in. `POST /api/bots` refuses the same way when a room
+still lists an earlier assistant with the new one's ID and the new one would open that room. Deleting
+an assistant is never refused: a room that lists a deleted assistant opens for nobody. These answer 409 with `code: "routine_rooms"` and names
+the routines and rooms you can see; remove those rooms from the routines first. When the routines or
+rooms cannot be read, it answers 409 with `code: "routine_rooms_unknown"` and changes nothing. Only its owner can
 reach a private assistant to share it again; sharing clears the recorded owner.
 `DELETE /api/bots/:id` also removes its owner, visibility and each person's
 drafts, read positions, reply choices, saved items and preference references,
@@ -154,6 +264,153 @@ discarding a valid credential. A failed/offline logout needs a visible retry
 because clearing only local storage cannot revoke the server session. When the
 server stays unreachable, the app lets the person clear the local session anyway
 after warning that the server-side session remains valid until it expires.
+
+## Direct routes
+
+A server can offer the app shorter paths to itself, such as its household LAN or
+tailnet address, beside the primary origin. The app prefers one it can reach and
+falls back to the primary origin. The primary origin stays the server's identity:
+the Keychain, caches, links, sign-in and every web page use it.
+
+`GET /api/native/routes` returns `{ "routes": [ROUTE] }`, LAN routes before tailnet
+routes, or an empty list when the server offers none. A server from before direct
+routes answers 404; treat that as an empty list. Each route is
+`{ "kind": "lan" | "tailnet", "url": "https://ADDRESS:PORT", "certificateSha256": PIN }`.
+Each `ADDRESS` is an IPv4 literal. Skip a route with another kind or scheme, a host
+name, a path, no port or a malformed pin, rather than failing the list.
+
+`PIN` is the base64url SHA-256 of the route listener's certificate, in DER form. The
+certificate is self-signed and names no host. On a route's address, accept exactly
+that certificate and no other, whatever a certificate authority says, and cancel the
+handshake otherwise, so the session token is never sent to an impostor. Every other
+address keeps the system's own HTTPS evaluation. Learn routes and pins only over the
+primary origin or another pinned route.
+
+A route listener serves only the signed-in native API: a registered `/api/` route
+with `Authorization: Bearer TOKEN` and neither a cookie nor an Origin header. Of the
+`/api/auth/` routes it serves only `POST /api/auth/native/renew` and
+`POST /api/auth/logout`. Anything else, including sign-in, unknown paths and
+WebSockets, returns 403 with
+`code: "direct_route_refused"` before it is handled; send it to the primary origin
+instead. An unknown or expired bearer returns the usual 401 `session_expired`.
+
+The app probes each route with `GET /api/native/routes` and a three-second timeout,
+uses the best one that answers 200 (LAN, then tailnet, then the primary origin), and
+checks again when the app returns to the foreground, when the device's network
+changes, and every two minutes while it polls. When a request on a route fails at
+the network, the app stops using that route for a minute and sends the request
+again on the primary origin if it cannot have reached the server: the connection
+never opened, or the handshake failed, or the request is a GET. A write that timed
+out or lost its connection is not repeated; the app's usual retry rules apply.
+
+## Reusing a request ID
+
+`POST /api/bots/:id/messages` and `/steer` admit one message per `requestId`. The same
+ID with the same content answers that message's receipt again. The same ID with
+different text, files or sender answers 409 with `code: "submission_conflict"`, even
+when both arrive at once. The web's form cards rely on this: they derive one ID per
+person, message, card and attempt, so a second tab or device that sends different
+answers learns that the first one already went and follows its receipt.
+
+## Retrying a failed turn
+
+`POST /api/bots/:id/messages` accepts `retryOf`, the ID of a user message in this
+assistant's current conversation, to send that message again after the assistant's
+turn failed. Send the failed turn's retry ID as `requestId` (below), the original
+`text`, its files as `attachments`, and no `draftBaseRevision`; a retry with
+`draftBaseRevision` answers 400. The server answers 400 when `retryOf` names a
+message that is not a person's message in the current conversation, such as an
+assistant reply, a scheduled delivery, another assistant's message or an ID from
+another chat, and 400 on `POST /api/bots/:id/steer`. While the assistant is working
+or waiting on someone it answers 409; offer Retry only after a failed turn. A retry
+never reads, merges or clears the sender's draft. Receipts, uncertain receipts and
+attribution work as for any other message.
+
+### One retry per failed turn
+
+The server admits one retry per failed turn: the assistant, `retryOf`, and the
+conversation's `activity.runId` when the retry arrives, or empty without one. A
+retry's `requestId` must be exactly that turn's retry ID (below), derived from the
+run the server reads; any other ID answers 400 and records nothing, so reload the
+conversation and derive it again. An ordinary message or steer whose `requestId` is
+a version 8 UUID also answers 400: those IDs are kept for retries, so send ordinary
+messages with random version 4 IDs. The first retry claims the turn. A retry with
+the claimed `requestId` takes the usual idempotent path; from another person, or
+with different text, it answers the same receipt instead of 409, even when both
+arrive at once. Reviewing an `uncertain` retry with `reviewedUncertain: true`, from
+anyone who can see the assistant, sends the recorded request again: its original
+text, files and sender, which Hermes's idempotency check covers. Anyone who can see
+the assistant can read a retry's receipt with `GET /api/submissions/:id`. Once the
+retried message runs and fails again, Hermes records it as a new message in a new
+run, so retrying it is a new turn.
+
+While the conversation's activity is `failed`, `GET /api/bots/:id/conversation`
+carries `retry`, that turn's claim as a receipt with `retryOf`, once anyone retried
+it. Hide Retry when its `retryOf` is the latest person's message and its status is
+`accepted`, `rejected` or `interrupted`. A refused retry stays refused under its ID,
+so while `retry` is `rejected` or `interrupted`, show "Hermes didn't take the retry."
+followed by its `message`, if any, and offer "Put my message in the message box". That
+adds the retried message's text after the draft's own, separated by a blank line, and
+its files after the draft's, up to the attachment limit. It never replaces the draft,
+and is not offered while a message is sending. The person sends it from the composer
+as a new message. While it is `uncertain`,
+show "Checking whether the retry arrived…" and check its `requestId` with
+`GET /api/submissions/:id`: at once, then after 2, 4, 8 and 16 seconds, then every
+30, until a receipt settles it or the conversation moves past that message or run.
+Retry in that state sends the same request with `reviewedUncertain: true`, only
+when the `idempotency` capability is supported; without it, keep Retry disabled and
+say the retry is unconfirmed and will not be sent again. Never make a new request
+ID for the same failed turn.
+
+### Retry request ID
+
+Every client derives the same `requestId` for a failed turn, so a lost response, a
+second tab, a reload or another device can never run it twice:
+
+1. Join `wildbots-retry`, the assistant ID, `retryOf` and the failed
+   `activity.runId` (empty without one) with a NUL character (U+0000) between
+   them, and encode the result as UTF-8.
+2. Take the first 16 bytes of its SHA-256 digest.
+3. Set byte 6 to `(byte6 & 0x0F) | 0x80` (version 8) and byte 8 to
+   `(byte8 & 0x3F) | 0x80` (the RFC 9562 variant).
+4. Format the bytes as a lowercase UUID, `8-4-4-4-12` hex digits.
+
+`src/shared/retry-id.ts` implements it; `tests/retry-id.test.ts` checks these
+vectors:
+
+| Assistant | `retryOf` | Run | `requestId` |
+| --- | --- | --- | --- |
+| `ranch` | `msg-42` | `run-7` | `97260a13-beba-8fb5-9218-204b5e8a2010` |
+| `ranch` | `msg-42` | empty | `3bba2658-e84c-8ad5-a391-77d34308f4b8` |
+| `café` | `👋` | `run` | `f0431e86-8678-8bc4-92de-7d27336108fb` |
+
+### Form request ID
+
+A form card's answers are sent as an ordinary message under an ID every device of the
+same person derives alike, so the server admits them once:
+
+1. Join `wildbots-form`, the person's `formKey` from `GET /api/bootstrap`, the
+   assistant ID, the message ID, the card's `id` and the attempt number in decimal,
+   with NUL between them, and encode the result as UTF-8.
+2. Take the first 16 bytes of its SHA-256 digest.
+3. Set byte 6 to `(byte6 & 0x0F) | 0x40` (version 4) and byte 8 to
+   `(byte8 & 0x3F) | 0x80`.
+4. Format the bytes as a lowercase UUID.
+
+`formKey` is private to the signed-in person and stable across their devices and
+the server's restarts; never log or share it. A server without it is older than form
+cards. Attempt 0 comes first. Move to the next attempt only after a receipt says
+`rejected`. On opening a form with nothing saved, look up attempts in order with
+`GET /api/submissions/:id`, skipping `rejected`, until one says where the form stands:
+`accepted` means sent, `interrupted` means Hermes restarted while holding it and the
+person decides whether to send again, and anything else means not sent yet.
+`src/shared/retry-id.ts` implements it; `tests/retry-id.test.ts` checks these vectors:
+
+| `formKey` | Assistant | Message | Card | Attempt | `requestId` |
+| --- | --- | --- | --- | --- | --- |
+| `k3y_A-b` | `ranch` | `msg-42` | `trip` | 0 | `1ab28536-230d-4777-84cf-8dcda31bb28c` |
+| `k3y_A-b` | `ranch` | `msg-42` | `trip` | 3 | `76bbd8a5-8259-4c9e-8b2b-3b3fa7bec9d2` |
+| `café` | `👋` | `m` | `c` | 1 | `f2ec6d4c-7663-410f-88ba-49c4a6921df8` |
 
 ## Drafts
 
@@ -175,6 +432,15 @@ If the draft has changed since, the server returns 409 with `code: "draft_confli
 and the current draft as `draft`, and saves nothing. Without `baseRevision`, as from
 older app builds, the edit always applies. Content the server already has is not a
 conflict and does not advance the revision, so a retried save is harmless.
+
+Streams opened as `GET /api/bots/:id/events?drafts=1` also hear about the person's
+own draft: each new revision, from an edit or the clear after a send, sends `event:
+draft` on that person's streams for the assistant. Its data is the new revision
+number, never the draft. Without `drafts=1` none are sent, so a client that treats
+every data line as a change, as the iOS app does, is unaffected. A client holding
+an older revision reads the draft again, so an edit from another device appears at
+once without polling. Other household members' streams never see it. The web app
+keeps a 30-second draft read only as a fallback for a stream that fails unnoticed.
 
 A message submission may carry `draftBaseRevision`, the revision of the draft the
 message was written on. When Hermes accepts the message, the server clears the
@@ -227,23 +493,75 @@ Web and native clients share these authenticated operations. See
 
 | Method and route | Body or response |
 | --- | --- |
-| `GET /api/today` | Canonical activity, pending decisions, paged recorded events, recent files, `generatedAt`, `frontier` and `hasMore` |
+| `GET /api/today` | Canonical activity, pending decisions, paged recorded events, recent files, `generatedAt`, `frontier` and `hasMore`. The ETag leaves out `generatedAt`, so an unchanged recap answers 304 and the client keeps the body it has; show your own check time |
 | `PUT /api/today/seen` | `{ "seenAt": "LOADED_GENERATED_AT", "frontier": "LOADED_FRONTIER" }`; advances only the returned page |
 | `GET /api/bots/:id/memory` | Native profile scope, document revisions, entries and character limits |
 | `PATCH /api/bots/:id/memory/:target` | `{ "revision": "SHA256", "entries": [{ "id": "EXISTING_ID", "text": "FACT" }] }`; target is `memory` or `user` |
 | `DELETE /api/bots/:id/memory/:target` | `{ "revision": "SHA256", "entryId": "EXISTING_ID" }` |
 | `POST /api/bots/:id/voice/transcribe` | Multipart `audio` field, maximum 8 MiB; returns a reviewable transcript |
 | `POST /api/bots/:id/voice/speak` | `{ "messageId": "COMPLETED_ASSISTANT_MESSAGE_ID" }`; returns a private, single-use audio URL |
+| `PUT /api/bots/:id/voice` | `{ "voice": "marin" }`, one of `alloy`, `ash`, `ballad`, `coral`, `echo`, `sage`, `shimmer`, `verse`, `marin`, `cedar`; returns `{ "voice" }`. A bot's `voice` is absent until chosen, which means `marin` |
+| `POST /api/bots/:id/talk/session` | No body. Needs the `liveVoice` capability. Returns `{ "clientSecret", "expiresAt", "model", "voice" }` with `Cache-Control: no-store`; 429 for a second start within five seconds or past 20 an hour; 409 with the reason when live voice is unavailable or the launch profile is signed out of ChatGPT; 503 when the voice plugin was disabled since the last status check or Hermes refuses it |
+| `POST /api/bots/:id/talk/ask` | `{ "requestId": "UUID", "request": "SPOKEN_TEXT" }`; sends it as the caller's message and waits up to 20 seconds. Returns `{ "state": "done" | "working" | "needsApproval" | "needsAnswer" | "interrupted" | "refused", "text"? }`. Repeat the same request ID while the state is `working`, `needsApproval` or `needsAnswer`; it never sends twice |
 | `GET` or `PUT /api/bots/:id/messages/:messageId/cards/:cardId/state` | `{ "checkedIds": ["ITEM_ID"], "notes": { "ITEM_ID": "PERSONAL_NOTE" } }`, private to the caller |
 | `GET /api/routines/templates` | Routine recipes |
 | `POST /api/routines/preview` | `{ "botId": "ID", "schedule": "CRON_OR_NATIVE_SCHEDULE" }`; actual timezone and upcoming runs |
 | `POST /api/routines/:id/run` | `{ "requestId": "UUID" }`; durable native trial receipt |
 | `GET /api/routines/:id/runs/:requestId` | Exact trial result; rechecking does not execute another trial |
+| `GET /api/groups/:id/log?since=CURSOR&state=1` | The group's events after `since`. `state=1` adds the room and its driver status as `state`, so an open group polls with one request and one Hermes read. Servers before this option answer 400; then read `GET /api/groups/:id` separately. A `message.user` event sent through this app carries `sender: { "id": "USER_ID", "name": "NAME" }`; label others "Household member" |
+| `GET /api/groups/:id` | A routine's post is a `message.user` event whose `actor.id` starts with `cron:` (`cron-notice:` for a failed run's notice) and whose `actor.display_name` is the routine's name, which may start with an `[bot:ID] ` tag to drop; show it as the routine's post. The room, its driver status and, from Hermes versions with room settings, `context: { "purpose", "notes", "routing": "everyone" or "lead", "lead_member_id" }`. `driver_status.member_activity` lists each assistant's live turn (`member_id`, `status` of queued, running or stopping, 0-based `round_index`, `started_at`, current `tool`), and `max_rounds` bounds a discussion. Older Hermes versions omit them; then say only that the room is working |
+| `POST /api/groups/:id/context` | `{ "requestId": "UUID", "purpose": "TEXT", "notes": "TEXT", "leadMemberId": "MEMBER_ID" or null }`. Anyone who can open the room may save; null means every assistant answers a message that names no one. Purpose is at most 500 characters and trimmed notes at most 4,096 UTF-8 bytes. Answers 409 when Hermes cannot save room settings. `GET /api/groups` reports `settings: true` where it can |
+| `GET /api/search?q=TEXT&botId=ID` | `{ "hits": [...], "unavailableBots": [...] }`. `botId` is optional and searches only that assistant, answering 404 with `code: "assistant_not_found"` for one the person cannot see. A hit whose `sessionId` is the assistant's current session and that has a `messageId` can open the live chat with `GET /api/bots/:id/conversation?start=MESSAGE_ID` |
 
 Preserve memory drafts after a 409 revision conflict. Persist a trial's request ID
 before dispatch and reuse it after an uncertain admission. Do not replay a trial
 automatically. iOS read aloud plays `POST /api/bots/:id/voice/speak` audio from Hermes, as
 the web does, and refuses replies over 12,000 characters; transcription uses Hermes.
+Live Talk is web-only for now. iOS decodes the `liveVoice` capability and ignores
+a bot's `voice`.
+
+## Work and learning
+
+`GET /api/bots/:id/automation` returns the shared `AutomationOverview` contract
+in `src/shared/automation.ts`. Goals, tasks, triggers and skills each report
+`supported` and an optional explanation. Clients must honor those capabilities
+and the server's `canManageTriggers` and `canManageLearningPolicy` flags.
+
+All routes below are relative to `/api/bots/:id/automation`.
+
+| Method and route | Contract |
+| --- | --- |
+| `PUT /goal` | `{title,maxTurns}` replaces the entire goal with a new paused goal, resetting progress, subgoals, completion contracts and verification gates; require explicit confirmation for an existing goal |
+| `POST /goal/resume` | `{requestId,reviewedInterruption?}` resumes through durable chat admission and returns the overview |
+| `POST /goal/pause` or `/goal/clear` | `{}`; both work during an active turn and return the overview |
+| `POST /tasks` | `TaskInput`, including a UUID `requestId`; returns a blocked `AutomationTask` |
+| `GET` or `PATCH /tasks/:taskId` | Reads a task, or edits `{title?,body?,priority?,assignee?}`; explicit `assignee: null` clears assignment, omission preserves it |
+| `POST /tasks/:taskId/actions` | `{action,reason?,reviewer?}`; action is `start`, `block`, `unblock` or `request_review` |
+| `PUT /tasks/:taskId/dependencies/:dependencyId` | `{remove}`; dependencies must share the selected owner profile |
+| `POST /triggers` | `TriggerInput`; returns a disabled subscription and its signing secret once |
+| `PUT`, `PATCH` or `DELETE /triggers/:triggerId` | All require the loaded `revision`; PUT edits routing, PATCH edits `enabled` |
+| `GET /skills/content?name=...` | Installed `SkillContent` |
+| `GET /skills/pending/:pendingId` | `SkillDiff` with the revision of the reviewed diff |
+| `POST /skills/pending/:pendingId` | `{revision,decision}`; decision is `approve` or `reject` |
+| `PUT /skills/policy` | `{approvalRequired}`; requires an integration administrator |
+
+Persist a resume UUID before sending. An `uncertain` resume requires a status
+refresh, never automatic resubmission. A rejected request remains rejected on
+retry. A new, explicitly reviewed attempt uses a fresh UUID. Send
+`reviewedInterruption: true` only after the person reviews interrupted work.
+Persist one task UUID per creation intent as well.
+Show the task overview's truncation notice when `tasks.truncated` is true. The
+overview contains at most `tasks.limit` newest visible tasks owned by the selected
+profile; older tasks remain available in Hermes.
+
+Skill approval must use `SkillDiff.revision` from the loaded detail, rather than
+the pending-list revision. Refuse approval of a truncated diff. Keep trigger
+secrets only in the creation view until the person dismisses them.
+
+Memory responses expose `refresh.state` as `next_turn`, `pending` or `applied`.
+Saved app edits reach the canonical Bot Chat at its next safe execution boundary
+without replacing its
+history or starting a message. A running turn keeps its existing prompt.
 
 ## Native notifications
 
@@ -282,6 +600,97 @@ removed when their native session expires or APNs reports an invalid token.
 Notification taps receive the existing relative `url` field such as `/?bot=ID`
 and the event `tag`. Resolve links against the configured application origin;
 reject external URLs. Oversized links are omitted instead of truncated.
+
+### Notification payload and actions
+
+Each iOS alert carries `aps.thread-id` set to the assistant ID, so iOS groups
+notifications per assistant. Alerts without an assistant, such as digests and
+host alerts, have none. The request sets `apns-collapse-id` to the `tag` when it is
+1 to 64 printable ASCII characters, or to the tag's base64url SHA-256 otherwise.
+Tags name one notification, so the collapse ID only replaces a repeated delivery
+of the same one. Clearing still matches the payload's `tag`.
+
+Approval requests set `aps.interruption-level` to `time-sensitive`, so they break
+through Focus. The app is signed with the Time Sensitive Notifications entitlement
+from build 15; iOS ignores the level for earlier builds.
+
+Every alert sets `aps.filter-criteria` for the app's Focus filter: the assistant ID,
+`approval:` and the assistant ID for an approval request, or `household` for digests
+and host alerts. A Focus filter that chose some assistants lets their notifications,
+household news and, unless the person turned it off, every assistant's approval
+requests through; iOS delivers the rest quietly. The criteria are dropped before the
+alert itself would exceed APNs' limit.
+
+Every alert about an assistant names its account with `account`, the first 16 hex
+characters of SHA-256 of `wildbots-account:` and the user ID, and the assistant
+with `botId`, and sets `aps.mutable-content` to 1. The app's notification service
+extension then shows the assistant as the sender, with its avatar, like a person
+in Messages. People can then allow WildBots through a Focus. The extension reads
+only the avatar pictures the app keeps in the App Group per account and never
+holds a sign-in token. It waits for iOS to record the message donation before
+showing the notification. A portrait avatar shows the assistant's initials. A
+notification for an account not signed in on the device stays as sent, and
+signing out deletes that account's pictures and donated messages. Digests and
+host alerts have no assistant and stay as sent. `botId`, `account` and
+`mutable-content` are dropped before the alert itself would exceed APNs' limit.
+
+| Notification | `aps.category` | Extra fields |
+| --- | --- | --- |
+| Approval request from an add-on that reports its ID | `APPROVAL` | `botId`, `approvalId`, `account` |
+| Finished reply in a one-to-one chat | `REPLY` | `botId`, `account` |
+| Routine results, failures and other assistant alerts | none | `botId`, `account` |
+| Digests and host alerts | none | none |
+
+`APPROVAL` offers Review and Decline, and both need the phone unlocked. The
+payload leaves out what the approval would run, because it can contain
+credentials, so approving from the notification would be blind: Review opens the
+chat, where the approval card shows it. Decline runs without opening the app. It
+calls `POST /api/bots/:id/approvals/:approvalId` with
+`{ "decision": "denied", "account": ACCOUNT }`, the request the approval card
+makes plus the account. The server answers 409 when the account is
+not the signed-in person's, or when the approval is no longer pending. The app
+sends a decision once and never retries it. When it does not go through, the app
+posts a local notification saying so, and tapping it opens the chat. `REPLY`
+offers a Reply text field. It opens the app and adds the text to that assistant's
+draft for review. While a send to that assistant is unsettled, the text waits, as
+Share inbox items do. It is never sent for the person.
+
+Grouping and actions are optional: when they would push the payload past 4000
+bytes, the actions go first, then the grouping. IDs over 200 bytes get neither.
+Older app builds ignore the new fields.
+
+### Badge
+
+Each alert sets `aps.badge` to the person's badge count when the server can read
+Hermes's roster; without one, the badge is left as it was. The count is the number
+of assistants they can see that show the unread mark, plus those waiting on an
+approval, a question or a secure request, each counted once. The notification being
+delivered counts too: an approval as a decision, other news as unread in a chat
+they have opened before. An approval the person was notified about keeps counting,
+even while the roster shows the assistant idle, until someone decides it in the
+app, its own run finishes, fails or is interrupted, or the open requests of the
+Hermes session that raised it no longer hold it. Another run or session on the same
+assistant, such as a routine, does not settle it. The server compares open requests whenever it reads the conversation
+and, a few assistants at a time, about once a minute in the background, and
+credits nobody with a decision made outside the app. Approvals count for a day at
+most. `src/shared/unread.ts` holds the rule, which iOS mirrors in `UnreadChats`. The read-elsewhere clear push carries the new count as `badge`
+beside `aps`, since a background push's `aps` may hold only `content-available`,
+and the server follows it with a silent alert push, `{ "aps": { "badge": N } }` at
+priority 5, which iOS applies even while the app is closed.
+
+### Web Push
+
+Web Push payloads carry `title`, `body`, `url`, `tag`, `kind`, `botId`, an
+approval's `approvalId`, and `badge` as above. The service worker sets the app badge
+from `badge`, or clears it at 0. A lone approval also carries `declineToken`, a
+single-use token valid for an hour that denies that approval for that person.
+Where the browser supports notification actions, the service worker offers Review,
+which opens the chat as a tap does, and Decline, which calls
+`POST /api/push/actions` with `{ "token": "TOKEN" }` and no session or CSRF token.
+The request still needs the app's Origin. The server answers 401 for a used,
+expired or unknown token, or an assistant the person can no longer see, and 409
+when the approval is no longer pending. A failed Decline shows a notification that
+opens the chat. APNs payloads never carry the token.
 
 ### Chat presence
 
@@ -322,6 +731,170 @@ the matching signed app entitlement, a real APNs signing key, notification
 permission, and a current device registration. The repository does not provision
 those external credentials or publish a signed app.
 
+## Shared computer
+
+The iOS app shows the shared desktop in a `WKWebView` without a web session:
+
+1. `POST /api/computer/desktop` with the bearer token and `{}`, or
+   `{ "viewerId": "ID" }` to keep the same attachment identity on reconnect,
+   returns `{ "path": "/api/computer/desktop/ws?ticket=TICKET", "expiresAt": "...", "viewerId": "ID" }`.
+   The ticket works once, within 30 seconds.
+2. Load `ORIGIN/native/computer#path=ENCODED_PATH&control=0`. The page connects to
+   the ticketed WebSocket, full screen and scaled to fit, watch-only. Its socket
+   carries no bearer token or cookie: a ticket issued to a native session is
+   accepted on its own from the app's Origin, and the stream ends when that native
+   session ends.
+3. `POST /api/computer/control` with the bearer token and
+   `{ "action": "take" | "release", "viewerId": "ID" }` returns the computer status.
+   After a successful take, set `control=1` in the hash; set it back to 0 after
+   handing back or on any failure. Changing only `control` switches input without
+   reconnecting. A new `path` reconnects with that ticket.
+4. The page reports to the `computer` script message handler, when present, with
+   `{ "type": "connected" }`, `{ "type": "disconnected", "reason": "closed" | "lost" }`
+   or `{ "type": "failed", "reason": "invalid_ticket" | "viewer_unavailable" | "rejected" }`.
+   On disconnect, request a fresh ticket with the same `viewerId` and set the new
+   path. The page also sets `data-state` on its root element and announces the
+   state in a status line.
+
+The page accepts only a desktop ticket path. It is served with the app's content
+security policy and needs no Hermes credential.
+
+### Confirming it's you
+
+The system terminal needs a confirmation from the last 2 hours, as on the web. A
+signed-in app confirms with the sign-in flow above:
+
+1. Open the `ASWebAuthenticationSession` at
+   `/native/sign-in?state=STATE&code_challenge=CHALLENGE&code_challenge_method=S256&purpose=confirm`
+   with a fresh state and PKCE verifier. `purpose=confirm` only changes the page's
+   heading to "Confirm it's you" and asks for the same household account. Any
+   other `purpose` is a 400.
+2. Take the code from the same `agentinterface://auth/callback?code=CODE&state=STATE`
+   callback, checking the state.
+3. `POST /api/auth/native/confirm` with the bearer token, no Origin header, and
+   `{ "code": "CODE", "state": "STATE", "codeVerifier": "VERIFIER" }`, validated
+   as for exchange. It spends the code and answers `{ "confirmedAt": "ISO8601" }`.
+   The session keeps the later of this and any earlier confirmation.
+
+Failures leave the session signed in. None of them uses `session_expired`:
+
+- 401 `{ "error": "That confirmation expired. Try again.", "code": "confirmation_expired" }`
+  for an unknown, used or expired code, or a wrong state or verifier.
+- 403 `{ "error": "Use the same Google account you signed in with." }` when the
+  code belongs to another household member. The code is spent.
+- 401 `{ "error": "That confirmation is too old. Try again.", "code": "confirmation_expired" }`
+  when the Google credential behind the code is more than 10 minutes old or has
+  no issue time.
+- 403 `{ "error": "Confirm your identity in the iOS app." }` for a browser session.
+
+### System terminal
+
+`GET /api/computer` reports `terminal: { "available", "target", "reason"?, "confirmationRequired"? }`.
+Only terminal administrators get `available: true`; everyone else gets the reason.
+`confirmationRequired: true` means the session has no confirmation from the last
+2 hours; confirm it first.
+
+1. `POST /api/computer/terminal` with the bearer token and `{}` returns
+   `{ "path": "/api/computer/terminal/ws?ticket=TICKET", "expiresAt": "...", "sessionId": "ID", "target": "..." }`.
+   The ticket works once, within 30 seconds, and only for the terminal socket. Without
+   a recent confirmation the answer is 401
+   `{ "error": "Confirm it's you to open the terminal.", "code": "reauthentication_required" }`;
+   confirm and try again. A non-administrator gets 403, a turned-off or unavailable
+   terminal 403 or 409 with the reason, and maintenance 409.
+2. Load `ORIGIN/native/terminal#path=ENCODED_PATH`. The page connects to the ticketed
+   WebSocket with no bearer token or cookie, as the desktop page does: a terminal
+   ticket issued to a native session is accepted on its own from the app's Origin.
+   The connection ends when that native session ends. A new `path` reconnects with
+   that ticket.
+3. `POST /api/computer/terminal/end` with the bearer token and `{ "sessionId": "ID" }`
+   ends the member's own shell and answers `{ "ok": true }`.
+
+The page reports to the `terminal` script message handler with:
+
+- `{ "type": "connected" }` once the shell is attached.
+- `{ "type": "disconnected", "reason": "closed" | "lost" }` when the connection ends
+  without the shell ending. Request a fresh ticket and set the new path.
+- `{ "type": "failed", "reason": "invalid_ticket" | "viewer_unavailable" }` for a path
+  that is not a terminal ticket or an emulator that could not load.
+- `{ "type": "ended" }` when the shell exited. Offer to start a new one.
+- `{ "type": "error", "message": "..." }` with the server's words, such as the
+  maintenance pause. The connection stays open.
+- `{ "type": "focus" }` when the person taps the terminal. Show the app's keyboard.
+
+The page never raises the web keyboard, so iOS smart quotes and autocorrect never
+reach the shell. The app types with its own keyboard through two functions, each
+returning whether it sent anything; both send nothing unless the shell is connected:
+
+- `terminalInput({ "text": "..." })` types text, with line breaks as Return.
+  `terminalInput({ "key": NAME })` presses one of `enter`, `tab`, `backspace`,
+  `escape`, `delete`, `left`, `up`, `right`, `down`, `home`, `end`, `pageUp` or
+  `pageDown`, using application cursor keys when the running program asks for them.
+  Add `"control": true` to text of one letter, `@`, `[`, `\`, `]`, `^`, `_` or a space
+  to send its control character, so `{ "text": "c", "control": true }` is Control-C.
+  Control with a key, or with longer text, sends them unchanged.
+- `terminalPaste(text)` pastes up to 8,192 characters through the terminal, bracketed
+  when the shell asked for it, so a pasted command waits for Return.
+
+The page fits the shell to the web view and sends the size on connect and on every
+size change. A finger drag scrolls as a mouse wheel does. The page sets `data-state`
+on its root element and announces the state in a status line.
+
+### Handoff requests
+
+An assistant's request to take over the computer arrives in a conversation's
+`attention` with `kind: "computer"` and
+`computer: { "epoch", "sessionId", "reason", "whatToDo" }`. `reason` and
+`whatToDo` are the assistant's own words, at most 200 and 300 characters. Take
+over uses the steps above; Hermes answers the request when the person who took
+control hands back, so the client sends nothing extra. For **Not now**, call
+`POST /api/bots/:id/computer-handoffs/:requestId` with
+`{ "decision": "decline", "epoch": "...", "sessionId": "..." }`. It answers
+`{ "status": "ok" }`, or `{ "status": "expired" }` when the request already
+closed, and 409 when the binding no longer matches the assistant's conversation.
+
+### Terminal requests
+
+An assistant's request for a person at the system terminal arrives in `attention`
+with `kind: "terminal"` and
+`terminal: { "epoch", "sessionId", "reason", "whatToDo", "command"? }`. The three
+texts are the assistant's own words, at most 200, 300 and 500 characters.
+`command` is one line with no control or hidden characters; the server drops the
+whole card to an official-client request when it is not. Open the terminal with
+the terminal routes and offer `command` for the person to paste at the prompt
+with `terminalPaste`; never paste it on its own or run it. To answer, call `POST /api/bots/:id/terminal-requests/:requestId`
+with `{ "decision": "done" | "decline", "epoch": "...", "sessionId": "..." }`. It
+answers `{ "status": "ok" }`, or `{ "status": "expired" }` when the request already
+closed. `done` answers 403 unless the person is a terminal administrator, 409
+when the binding no longer matches the conversation, and `decline` is open to
+anyone who can see the chat. Hermes tells the assistant that `done` is the
+person's word, because it cannot see the terminal.
+
+### Connection requests
+
+An assistant's request to set up one of its connections arrives in `attention`
+with `kind: "connection"` and
+`connection: { "epoch", "sessionId", "connectionId", "reason" }`. `connectionId`
+is an ID from `GET /api/integrations?profile=:id`, such as `google_workspace`,
+`github` or `key:brave`. `reason` is the assistant's own words, at most 200
+characters. Show that one connection's integration controls in the card. To
+answer, call `POST /api/bots/:id/connection-requests/:requestId` with
+`{ "decision": "connected" | "decline", "epoch": "...", "sessionId": "...", "connection": "<connectionId>" }`.
+`connected` answers 409 with a message to show until the catalog lists the
+connection as `connected` or `configured`. An OAuth MCP server whose sign-in
+never finished reads as `not_connected`, from Hermes's own token store.
+Send it once the connection becomes ready while the card is open, or after an
+in-card setup finishes. A flow names its connection in `connectionId`; a sign-in
+restored for another connection must not settle the card. If the
+connection already read as set up when the card opened, wait for the person to
+press **Continue**. It answers `{ "status": "ok" }`, or `{ "status": "expired" }`
+when the request already closed.
+
+A message sent with `POST /api/bots/:id/messages` while the assistant waits on a
+question, a secure request, a handoff or a connection request closes those requests after the message
+is admitted, so the assistant reads it next. A login the assistant asked for by
+address stays open unless the sender is the member whose task asked for it. An
+answer that reaches Hermes after its request closed answers `{ "status": "expired" }`.
+
 ## Live Activity
 
 The app shows one aggregate Live Activity per device: the person's assistants that are
@@ -332,9 +905,11 @@ the same rule as notifications. A private assistant appears only for its owner.
 
 | Method and route | Body or response |
 | --- | --- |
-| `GET /api/native/live-activity?deviceId=UUID` | `{ "available": true, "state": ACTIVITY_STATE }`; `available` is false when APNs is not configured. The optional installation UUID restores this native session's starting grace and observed rows. |
-| `PUT /api/native/live-activity` | `{ "deviceId": "UUID", "token": "HEX_ACTIVITY_PUSH_TOKEN", "botIds": ["kitchen"] }`; returns `{ "ok": true }`, and the next push within about five seconds replays the current state |
-| `DELETE /api/native/live-activity` | `{ "deviceId": "UUID", "token": "HEX_ACTIVITY_PUSH_TOKEN" }`; removes only that activity token, so late cleanup cannot remove a replacement |
+| `GET /api/native/live-activity?deviceId=UUID` | `{ "available": true, "state": ACTIVITY_STATE }`; `available` is false when APNs is not configured. The optional installation UUID restores this native session's starting grace and observed rows. `&local=1` says the app is about to start its own activity after a send, which holds pushed starts off this device for two minutes. |
+| `PUT /api/native/live-activity` | `{ "deviceId": "UUID", "token": "HEX_ACTIVITY_PUSH_TOKEN", "botIds": ["kitchen"] }`; returns `{ "ok": true }`, and the next push within about five seconds replays the current state. An app launched in the background for a pushed activity adds `"scope": SCOPE`; the server answers 400 when it names another account. |
+| `DELETE /api/native/live-activity` | `{ "deviceId": "UUID", "token": "HEX_ACTIVITY_PUSH_TOKEN" }`; removes only that activity token, so late cleanup cannot remove a replacement. The app sends it when the activity is dismissed or ends. When that activity was still registered, the assistants running at the worker's next pass are not started again by push, even after a Hermes outage. |
+| `PUT /api/native/live-activity/start` | `{ "deviceId": "UUID", "token": "HEX_PUSH_TO_START_TOKEN", "scope": SCOPE }`; returns `{ "ok": true }`. Answers 400 when the scope names another account. |
+| `DELETE /api/native/live-activity/start` | `{ "deviceId": "UUID" }`; stops pushed starts on this device |
 
 `ACTIVITY_STATE` is both the response body field and the APNs `content-state`:
 
@@ -346,7 +921,7 @@ the same rule as notifications. A private assistant appears only for its owner.
   "updatedAt": 1760000000,
   "rows": [
     { "botId": "kitchen", "name": "Kitchen", "phase": "waiting", "status": "Needs approval",
-      "detail": "Order groceries", "since": 1759999900, "color": "#1084FE" }
+      "detail": "Order groceries", "since": 1759999900, "color": "#1084FE", "approvalId": "request-7" }
   ]
 }
 ```
@@ -356,12 +931,26 @@ the same rule as notifications. A private assistant appears only for its owner.
 - `status` is a short label of at most 24 characters. `detail` is optional, at most 80
   characters, and comes from the current activity detail. `color` is the avatar color when
   the assistant has a geometric or character avatar.
+- `approvalId` is set on a `waiting` row to its first pending approval, when the ID is at
+  most 200 bytes. It never carries what the approval would run.
 - `updatedAt` and `since` are Unix epoch seconds. They are numbers, not ISO strings, because
   ActivityKit decodes `Date` from the 2001 reference epoch.
 - At most four rows, ordered: attention (`waiting`, `blocked`), then `failed` and
   `interrupted`, then `starting`, `thinking` and `working`, then `done`. The first row
   drives the tint, the minimal Dynamic Island symbol and the tap target.
 - `activeCount` counts non-terminal rows, including any beyond the first four.
+
+The first row gets one button while the activity is current: **Decline** for a `waiting`
+row with an `approvalId`, or **Stop** for a `thinking` or `working` row. Both need the
+phone unlocked and run in the app, never in the widget extension. The app acts only
+when the activity's scope is the signed-in account. Decline sends the notification
+action's request, `POST /api/bots/:id/approvals/:approvalId` with
+`{ "decision": "denied", "account": ACCOUNT }`; Stop sends `POST /api/bots/:id/stop` with
+`{ "account": ACCOUNT }`. The server answers 409 when the account is not the signed-in
+person's, so a sign-in that changed since the app's check cannot act with another
+person's token. Stop without a body, as the chat and the web send it, is unchanged.
+When either does not go through, a local notification says so and opens the chat.
+Approving stays in the chat, where the approval card shows what it would run.
 
 Registration requires native bearer authentication and binds the activity token to the
 person, installation UUID and native session, like device registration. The app keeps a
@@ -392,6 +981,29 @@ The background worker pushes with `apns-push-type: liveactivity` and topic
 - A 410 or `BadDeviceToken`, `DeviceTokenNotForTopic` or `Unregistered` response removes
   the registration. Sign-out removes it with the native session.
 
+### Starting by push
+
+On iOS 18 and later the app registers the device's push-to-start token with its
+`SCOPE`: the base64url of the server address the app uses, `|`, and the user ID,
+the same value it stores in the activity's attributes. The server checks the
+scope names the signed-in person. A token belongs to the device, so registering
+it for another account, as after an offline sign-out, takes it over. Sign-out
+removes it with the native session.
+
+When a device has no registered activity and the person's aggregate gains a
+running assistant, the worker sends `event: "start"` at priority 10 with
+`attributes-type: "AssistantsActivityAttributes"`, `attributes: { "scope": SCOPE }`,
+the current state, a `stale-date` and `input-push-token: 1`. iOS requires an
+`alert` to start an activity; it carries the title and the first row's status,
+never approval details, and no sound. iOS then wakes the app with the new
+activity's update token, which the app registers as above, and updates follow.
+This covers work that starts away from the phone, such as a routine or a message
+sent from the web. The server remembers which runs an activity on that device already
+showed: dismissing an activity keeps those runs off the Lock Screen, and a new run,
+even of the same assistant, starts it again. The record drops each run once it
+finishes.
+Rejected tokens are forgotten and failures back off as for updates.
+
 The app starts the activity in the foreground after sending a message, or on foreground
 when the state has active rows. It shows a `starting` seed row for the assistant it sent
 to, registers the push token as soon as iOS provides it, and re-registers on every
@@ -404,9 +1016,37 @@ The widget extension never receives a sign-in token. The app writes a snapshot o
 signed-in person's visible assistants into the shared App Group whenever the household
 refreshes, removes it on sign-out or account change, and reloads widget timelines when it
 changes. Widgets show the snapshot time and say "Open WildBots to refresh" once it is
-older than 30 minutes. Message previews are privacy-sensitive, so a locked device that
+older than 30 minutes.
+
+While the app is closed, the background worker compares each person's visible roster
+every 30 seconds: names, states, latest messages, avatar colors and pins. When it
+changed, it sends each of their devices a background push,
+`{ "aps": { "content-available": 1 }, "refresh": ["widgets"] }` with
+`apns-push-type: background` and priority 5, at most once per device every 15 minutes.
+A change inside that window goes out when it ends. The push carries no names or
+previews. The app reads `GET /api/bootstrap?roster=lean` with its own sign-in and
+rewrites the snapshot, as it does in the foreground; an outage or a sign-in that changed
+during the read leaves the snapshot alone. iOS also runs the app's background refresh
+task, `dev.agentinterface.ios.widgets`, when it chooses. Both are best effort: iOS
+budgets background pushes and skips them for an app the person force-quit. A device
+first seen after the server starts is not woken until its person's roster next changes. Message previews are privacy-sensitive, so a locked device that
 hides widget data redacts them. A tap opens `agentinterface://open?bot=ID`, which the app
 handles exactly like a notification link to `/?bot=ID`.
+
+## Universal links and Handoff
+
+When APNs is configured, the server answers
+`GET /.well-known/apple-app-site-association` without a session. It names
+`APNS_TEAM_ID.APNS_TOPIC`, which is the app's bundle ID, for `applinks` and
+`activitycontinuation`. Only `/?bot=ID` and `/?view=today` open the app; sign-in and
+every other page stay on the web. Without APNs the route answers 404.
+
+The app lists `applinks:` and `activitycontinuation:` for the household's domain,
+set by `LINK_DOMAIN` in `ios/tools/generate-project.py`. A link for another server
+shows a notice instead of opening. An open chat advertises Handoff with its web link,
+`https://SERVER/?bot=ID`, so a Mac without the app opens the web client there. A device
+with the app opens it only when that link is its own server's, since another household's
+server may use the same assistant ID.
 
 ## App updates
 

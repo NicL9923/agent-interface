@@ -1,15 +1,19 @@
+import { capabilitiesFixture } from "./helpers/runtime-fixtures.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { createServer, Socket, type AddressInfo } from "node:net";
 import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import webpush from "web-push";
 import { createApp } from "../src/server/app.js";
-import { loadConfig } from "../src/server/config.js";
+import { loadConfig, type Config } from "../src/server/config.js";
+import { attemptConnect, defaultMetadataProbe, metadataTargets, metadataVerdict, probeMetadata, type MetadataAttempt, type MetadataProbe } from "../src/server/health.js";
 import { FailureTracker } from "../src/server/logging.js";
 import type { HermesUpgrades } from "../src/server/upgrades.js";
 import type { Runtime, RuntimeStatus } from "../src/shared/types.js";
+import { fakeRuntime, localLogin } from "./helpers/server.js";
 
 const minute = 60_000, hour = 60 * minute;
 const origin = "http://127.0.0.1:3000";
@@ -27,29 +31,27 @@ const temporary = () => {
 };
 function runtime(overrides: Partial<Runtime> = {}) {
   let status: RuntimeStatus = { connected: true };
-  const value = {
+  const value = fakeRuntime({
     status: async () => status,
-    capabilities: async () => ({ durableEvents: { supported: false }, idempotency: { supported: false }, generatedFiles: { supported: true } }),
+    capabilities: async () => capabilitiesFixture({ durableEvents: { supported: false }, idempotency: { supported: false }, generatedFiles: { supported: true } }),
     listBots: async () => [{ id: "shared", name: "Shared", model: "test", shared: true, activity: "idle" }],
     download: async () => ({ body: new Blob(["hello"]).stream(), name: "note.txt", mime: "text/plain" }),
     close: async () => {},
     ...overrides,
-  } as unknown as Runtime;
+  });
   return { value, set status(next: RuntimeStatus) { status = next; } };
 }
-async function setup(env: Record<string, string> = {}, options: { runtime?: Runtime; maintenance?: boolean; lines?: string[] } = {}) {
+async function setup(env: Record<string, string> = {}, options: { runtime?: Runtime; maintenance?: boolean; lines?: string[]; metadataProbe?: MetadataProbe } = {}) {
   const config = loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:", ...env });
   const upgrades = { maintenance: () => options.maintenance ?? false } as unknown as HermesUpgrades;
   const result = await createApp(config, options.runtime ?? runtime().value, {
     background: false, upgrades, logStream: options.lines ? { write: line => { options.lines!.push(line); } } : undefined,
+    metadataProbe: options.metadataProbe,
   });
   apps.push(result.app);
   return result;
 }
-async function login(app: Awaited<ReturnType<typeof createApp>>["app"]) {
-  const result = await app.inject({ method: "POST", url: "/api/auth/local", headers: { origin }, payload: { member: "one" } });
-  return { cookie: `session=${result.cookies[0].value}`, "x-csrf-token": result.json().csrfToken, origin };
-}
+const login = (app: Awaited<ReturnType<typeof createApp>>["app"]) => localLogin(app, origin);
 
 describe("health", () => {
   it("keeps the liveness response unchanged", async () => {
@@ -69,6 +71,7 @@ describe("health", () => {
       worker: { status: "ok", detail: "Starting" },
       push: { status: "unconfigured", detail: expect.any(String) },
       backup: { status: "unconfigured", detail: "APP_BACKUP_DIR is not set" },
+      metadataFloor: { status: "unconfigured", detail: "Checked only in production" },
     } });
     for (const headers of [{ "x-forwarded-for": "203.0.113.9" }, { forwarded: "for=203.0.113.9" }, { "x-real-ip": "203.0.113.9" }])
       expect((await app.inject({ url: "/api/health/ready", headers })).body).toBe('{"ok":true}');
@@ -114,7 +117,7 @@ describe("health", () => {
     const { app: maintained } = await setup({}, { runtime: draining.value, maintenance: true });
     response = await maintained.inject("/api/health/ready");
     expect(response.statusCode).toBe(200);
-    expect(response.json().checks.hermes).toEqual({ status: "ok", detail: "A Hermes update is in progress" });
+    expect(response.json().checks.hermes).toEqual({ status: "unconfigured", detail: "A Hermes update is in progress" });
   });
 
   it("warns about push failures without failing readiness", async () => {
@@ -159,6 +162,71 @@ describe("health", () => {
     expect((await backup()).status).toBe("ok");
   });
 
+  it("is ready only while every metadata attempt is explicitly refused", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const v4 = (outcome: string, ms = 2): MetadataAttempt => ({ target: "169.254.169.254", family: 4, outcome, ms });
+    const v6 = (outcome: string, ms = 1): MetadataAttempt => ({ target: "fe80::a9fe:a9fe%ens3", family: 6, outcome, ms });
+    let attempts: MetadataAttempt[] = [v4("connected")];
+    const probe = vi.fn<MetadataProbe>(async () => attempts);
+    const { app, worker } = await setup({}, { metadataProbe: probe });
+    const ready = async () => {
+      vi.setSystemTime(Date.now() + minute);
+      worker.loop.success();
+      const response = await app.inject("/api/health/ready");
+      return [response.statusCode, response.json().checks.metadataFloor] as const;
+    };
+    let response = await app.inject("/api/health/ready");
+    expect(response.statusCode).toBe(503);
+    expect(response.json().checks.metadataFloor).toEqual({
+      status: "fail", detail: "Connected: 169.254.169.254 port 80 connected in 2 ms. Install the host's metadata egress floor; see docs/Hosting.md",
+    });
+    // Requests between readiness ticks reuse the last probe.
+    attempts = [v4("ECONNREFUSED"), v6("ECONNREFUSED")];
+    expect((await app.inject("/api/health/ready")).statusCode).toBe(503);
+    expect(probe).toHaveBeenCalledTimes(1);
+    expect(await ready()).toEqual([200, { status: "ok", detail: "Blocked: 169.254.169.254 ECONNREFUSED; fe80::a9fe:a9fe%ens3 ECONNREFUSED" }]);
+    // A link-local interface with no route sends nothing; IPv4 without a route proves nothing.
+    attempts = [v4("ECONNREFUSED"), v6("ENETUNREACH")];
+    expect((await ready())[0]).toBe(200);
+    // Silence, a slow ICMP error, a full file table or a missing route are not proof of the floor.
+    for (const unproven of [[v4("timeout", 1500)], [v4("EHOSTUNREACH", 3000)], [v4("EMFILE", 0)], [v4("ENETUNREACH")], [v4("ECONNREFUSED"), v6("timeout", 1500)]]) {
+      attempts = unproven;
+      const [status, check] = await ready();
+      expect(status).toBe(503);
+      expect(check.status).toBe("fail");
+      expect(check.detail).toMatch(/^Could not confirm the floor refuses metadata: /);
+    }
+    attempts = [v4("ECONNREFUSED"), v6("connected")];
+    expect((await ready())[1].detail).toMatch(/^Connected: fe80::a9fe:a9fe%ens3 port 80 connected/);
+  });
+
+  it("probes metadata with bounded TCP connects on IPv4 and each link-local interface", async () => {
+    const server = createServer(socket => socket.destroy());
+    await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address() as AddressInfo;
+    try {
+      expect((await attemptConnect("127.0.0.1", port)).outcome).toBe("connected");
+    } finally {
+      await new Promise(resolve => server.close(resolve));
+    }
+    const refused = await attemptConnect("127.0.0.1", port);
+    expect(refused.outcome).toBe("ECONNREFUSED");
+    expect(metadataVerdict(refused)).toBe("refused");
+    // A socket that never connects stands in for a SYN nobody answers.
+    const silent = await attemptConnect("127.0.0.1", port, { timeoutMs: 50, open: () => new Socket() });
+    expect(silent.outcome).toBe("timeout");
+    expect(silent.ms).toBeLessThan(1000);
+    expect(metadataVerdict(silent)).toBe("inconclusive");
+    const exhausted = await attemptConnect("127.0.0.1", port, { open: () => { throw Object.assign(new Error("too many open files"), { code: "EMFILE" }); } });
+    expect([exhausted.outcome, metadataVerdict(exhausted)]).toEqual(["EMFILE", "inconclusive"]);
+    const address = (name: string, family: "IPv4" | "IPv6", internal = false) => ({ address: name, family, internal, netmask: "", mac: "", cidr: null, scopeid: 2 }) as never;
+    expect(metadataTargets({ lo: [address("::1", "IPv6", true)], ens3: [address("10.0.0.5", "IPv4"), address("fe80::f816:3eff:fe00:1", "IPv6")], wg0: [address("10.8.0.1", "IPv4")] }))
+      .toEqual([{ target: "169.254.169.254", family: 4 }, { target: "fe80::a9fe:a9fe%ens3", family: 6 }]);
+    // Only production runs on the host that has the floor; tests and development never probe a real address.
+    expect(defaultMetadataProbe({ production: true } as Config)).toBe(probeMetadata);
+    expect(defaultMetadataProbe({ production: false } as Config)).toBeUndefined();
+  });
+
   it("alerts administrators once after ten minutes and again on recovery", async () => {
     const hermes = runtime();
     hermes.status = { connected: false, detail: "Hermes is unreachable." };
@@ -178,6 +246,11 @@ describe("health", () => {
       title: "WildBots needs attention", url: "/", kind: "failed",
       body: expect.stringMatching(/^The Hermes connection needs attention\. Disconnected for 10 min: Hermes is unreachable\./),
     });
+    // A maintenance window cannot close an existing incident.
+    const maintenance = vi.spyOn(health['deps'], 'maintenance').mockReturnValue(true);
+    await at(12 * minute);
+    expect(alerts()).toHaveLength(1);
+    maintenance.mockReturnValue(false);
     hermes.status = { connected: true };
     await at(12 * minute);
     await at(13 * minute);
@@ -275,5 +348,26 @@ describe("ETags", () => {
     expect(file.statusCode).toBe(200);
     expect(file.headers.etag).toBeUndefined();
     expect((await app.inject("/api/bootstrap")).headers.etag).toBeUndefined();
+  });
+
+  it("reports where a conversation read spent its time without changing its body or ETag", async () => {
+    let reads = 0;
+    const conversation: Runtime["conversation"] = async (botId, options) => {
+      reads++;
+      Object.assign(options!.timing!, reads === 1 ? { shared: false, hermes: 42.25, addon: { wait: 0, activate: 30.5, total: 40 } } : { shared: true });
+      return { botId, messages: [{ id: "m1", role: "assistant", text: "Hello" }], activity: { state: "idle" }, approvals: [], attention: [], files: [] };
+    };
+    const { app } = await setup({}, { runtime: runtime({ conversation }).value });
+    const headers = await login(app);
+    const first = await app.inject({ url: "/api/bots/shared/conversation?turns=20", headers });
+    expect(first.statusCode).toBe(200);
+    expect(first.headers["server-timing"]).toMatch(/^cache;desc=miss, hermes;dur=42\.3, addon-wait;dur=0, addon-activate;dur=30\.5, addon-total;dur=40, transit;dur=2\.3, runtime;dur=[\d.]+, node;dur=[\d.]+, total;dur=[\d.]+$/);
+    expect(first.body).not.toMatch(/timing|dur=|hermes/i);
+    const second = await app.inject({ url: "/api/bots/shared/conversation?turns=20", headers });
+    expect(second.headers["server-timing"]).toMatch(/^cache;desc=shared, runtime;dur=/);
+    expect([second.body, second.headers.etag]).toEqual([first.body, first.headers.etag]);
+    const unchanged = await app.inject({ url: "/api/bots/shared/conversation?turns=20", headers: { ...headers, "if-none-match": first.headers.etag as string } });
+    expect(unchanged.statusCode).toBe(304);
+    expect(unchanged.headers["server-timing"]).toMatch(/^cache;desc=shared, /);
   });
 });

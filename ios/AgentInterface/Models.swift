@@ -30,41 +30,50 @@ enum ActivityState: String, Codable, CaseIterable {
   var active: Bool { [.thinking, .working, .waiting, .blocked].contains(self) }
 }
 struct AvatarConfig: Codable, Equatable {
-  var mode = "geometric"
-  var shape: String? = "blob"
-  var family: String? = nil
+  var mode = AvatarMode.geometric
+  var shape: AvatarShape? = .blob
+  var family: AvatarFamily? = nil
   var color: String? = "#1084FE"
-  var eyes: String? = "oval"
-  var accessory: String? = "none"
+  var eyes: AvatarEyes? = .oval
+  var accessory: AvatarAccessory? = .plain
   var eyeWidth: Double? = 1
   var eyeHeight: Double? = 1
   var eyeSpacing: Double? = 1
   var src: String? = nil
   var origin: String? = nil
-  static let shapes = [
-    "blob", "pebble", "squircle", "capsule", "triangle", "hex", "cloud", "drop", "circle",
-    "diamond", "sparkle", "clover", "heart", "cookie", "pentagon", "burst", "alien", "ghost",
-    "flower", "sun",
+  static let shapes = AvatarShape.all
+  static let everydayFamilies: [(id: AvatarFamily, label: String)] = [
+    (.bear, "Bear"), (.fox, "Fox"), (.sprout, "Sprout"), (.panda, "Panda"),
+    (.raccoon, "Raccoon"), (.owl, "Owl"), (.cactus, "Cactus"), (.dinosaur, "Dinosaur"),
   ]
-  static let everydayFamilies: [(id: String, label: String)] = [
-    ("bear", "Bear"), ("fox", "Fox"), ("sprout", "Sprout"),
+  /// Listed under their own "Seasonal" heading, in calendar order from spring, like the web editor.
+  static let seasonalFamilies: [(id: AvatarFamily, label: String)] = [
+    (.leprechaun, "Leprechaun"), (.bunny, "Easter Bunny"), (.eagle, "Bald Eagle"),
+    (.pumpkin, "Pumpkin"), (.bat, "Bat"), (.ghost, "Ghost"), (.turkey, "Turkey"),
+    (.santa, "Santa"), (.rudolph, "Rudolph"), (.snowman, "Snowman"),
   ]
-  /// Listed under their own "Seasonal" heading, like the web editor.
-  static let seasonalFamilies: [(id: String, label: String)] = [
-    ("pumpkin", "Pumpkin"), ("santa", "Santa"), ("rudolph", "Rudolph"),
-    ("turkey", "Turkey"), ("bunny", "Easter Bunny"),
+  static var families: [(id: AvatarFamily, label: String)] { everydayFamilies + seasonalFamilies }
+  static let seasonalColors: [AvatarFamily: String] = [
+    .leprechaun: "#F2B08B", .bunny: "#F5E9D8", .eagle: "#F7F3EA", .pumpkin: "#FF9800",
+    .bat: "#5E4B8B", .ghost: "#F2EEF8", .turkey: "#97683D", .santa: "#F2B08B",
+    .rudolph: "#97683D", .snowman: "#F4F8FB",
   ]
-  static var families: [(id: String, label: String)] { everydayFamilies + seasonalFamilies }
-  static let seasonalColors = [
-    "pumpkin": "#FF9800", "santa": "#F2B08B", "rudolph": "#97683D",
-    "turkey": "#97683D", "bunny": "#F5E9D8",
-  ]
-  var geometry: String {
-    if mode == "geometric" { return shape ?? "blob" }
-    if let family, Self.seasonalColors[family] != nil { return family }
-    return "mascot"
+  /// Bear, fox and sprout are drawn by AvatarArtwork itself; every later mascot is a character.
+  static let characterFamilies: [AvatarFamily] = families.map(\.id).filter {
+    ![.bear, .fox, .sprout].contains($0)
   }
-  func selectingFamily(_ family: String) -> AvatarConfig {
+  /// The character a mascot avatar draws, if its family is one.
+  var character: AvatarFamily? {
+    guard mode == .mascot, let family, Self.characterFamilies.contains(family) else { return nil }
+    return family
+  }
+  /// The outline this avatar morphs to. An unknown shape draws as the blob, an unknown or
+  /// plain mascot as the shared mascot head.
+  var body: AvatarBody {
+    if mode == .geometric { return .shape(shape ?? .blob) }
+    return character.map(AvatarBody.character) ?? .mascot
+  }
+  func selectingFamily(_ family: AvatarFamily) -> AvatarConfig {
     var next = self
     next.family = family
     if let color = Self.seasonalColors[family] { next.color = color }
@@ -102,12 +111,30 @@ struct Preferences: Codable, Equatable {
   var defaultBotId: String?
   var sections: [BotSection] = []
   var followBots: [String] = []
+  /// Routines whose runs this person keeps out of their assistant's chat. Older servers omit it.
+  var hiddenRoutineRuns: [HiddenRoutineRun]?
 }
-struct Capability: Codable {
+struct Capability: Codable, Equatable {
   var supported: Bool
   var reason: String?
 }
-struct RuntimeStatus: Codable {
+/// The capability names the server reports, mirroring `CapabilityKey` in src/shared/types.ts.
+/// Bootstrap keeps its capabilities keyed by raw name, so a name a newer server adds still
+/// decodes and survives an offline-cache round trip; code asks by case, so a typo cannot compile.
+/// ContractFixtureTests checks `allCases` against the server's own bootstrap fixture.
+enum CapabilityKey: String, CaseIterable {
+  case chat, steering, approvals, uploads, generatedFiles, botConfiguration, tools, skills
+  case routines, durableEvents, idempotency, imageGeneration, stop, portraitGeneration
+  case avatarMetadata
+  /// Live Talk is web-only for now; the app decodes it so the contract stays exact.
+  case liveVoice
+}
+/// The bot settings tabs that load a catalog from the server; each is named for its capability.
+enum CatalogKind: String, CaseIterable {
+  case tools, skills
+  var capability: CapabilityKey { self == .tools ? .tools : .skills }
+}
+struct RuntimeStatus: Codable, Equatable {
   var connected: Bool
   var code: String?
   var version: String?
@@ -115,15 +142,21 @@ struct RuntimeStatus: Codable {
   var address: String?
   var retryAt: String?
   var lastConnectedAt: String?
+  /// When the running Hermes revision was committed (ISO 8601). Older servers omit it.
+  var revisionDate: String?
 }
-struct Bot: Codable, Identifiable {
+struct Bot: Codable, Identifiable, Equatable {
   var id: String
   var name: String
   var description: String?
   var instructions: String?
   var model: String
+  /// A readable name for the model that the server fills. Older servers omit it, so show `model` then.
+  var modelName: String? = nil
   var provider: String?
   var enabledMcpServers: [String]?
+  /// Every MCP server configured for the profile, enabled or not. Only the detail read sends it; older servers omit it.
+  var availableMcpServers: [String]? = nil
   var shared: Bool
   var ownerId: String?
   var avatar: AvatarConfig?
@@ -132,6 +165,9 @@ struct Bot: Codable, Identifiable {
   var sessionId: String?
   var activity: ActivityState
   var lastMessage: LastMessage?
+  /// Whether this person has read the chat before and `lastMessage` is newer than that read.
+  /// Older servers omit it. `AppStore.unread(_:)` applies the chats read on this device since.
+  var unread: Bool? = nil
 }
 /// The newest message in an assistant's canonical conversation, for list and widget previews.
 struct LastMessage: Codable, Equatable {
@@ -311,6 +347,8 @@ struct Question: Codable, Identifiable, Equatable {
   var id: String
   var prompt: String
   var options: [String]?
+  /// The shared `multiple` field (src/shared/types.ts): several options may be chosen. Absent means one.
+  var multiple: Bool? = nil
 }
 struct Attention: Codable, Identifiable, Equatable {
   var id: String
@@ -319,6 +357,9 @@ struct Attention: Codable, Identifiable, Equatable {
   var detail: String
   var questions: [Question]?
   var secure: SecureRequest? = nil
+  var computer: ComputerHandoff? = nil
+  var connection: ConnectionRequest? = nil
+  var terminal: TerminalRequest? = nil
 }
 /// What this device reports about the chat on screen: reading it, or gone after reading it.
 struct ChatPresenceReport: Codable, Equatable {
@@ -469,14 +510,43 @@ struct CoordinationGroup: Identifiable, Equatable {
   var id: String
   var messages: [Message]
 }
+enum ConversationTurnRow: Identifiable {
+  case message(Int, Message)
+  case activity(CoordinationGroup)
+  case reasoning
+  var id: String {
+    switch self {
+    case .message(_, let message): return "message-" + message.id
+    case .activity(let group): return "activity-" + group.id
+    case .reasoning: return "reasoning"
+    }
+  }
+}
 struct ConversationTurn: Identifiable, Equatable {
   var id: String
   var messages: [Message]
+  var replyStart: String? = nil
   var visibleMessages: [Message] { messages.filter(\.isConversationVisible) }
   var reasoning: [String] { messages.filter { !$0.isInternalActivity && $0.role == "assistant" }.compactMap {
     let text = $0.reasoning?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     return text.isEmpty ? nil : text
   } }
+  /// One identity scope preserves disclosure state when activity moves above the final reply.
+  func rows(advanced: Bool) -> [ConversationTurnRow] {
+    var rows: [ConversationTurnRow] = []
+    var needsReasoning = advanced && !reasoning.isEmpty
+    let groups = activityGroups.map(ConversationTurnRow.activity)
+    for (index, message) in visibleMessages.enumerated() {
+      if needsReasoning && message.role != "user" {
+        rows.append(.reasoning); needsReasoning = false
+      }
+      if message.id == replyStart { rows += groups }
+      rows.append(.message(index, message))
+    }
+    if needsReasoning { rows.append(.reasoning) }
+    if replyStart == nil { rows += groups }
+    return rows
+  }
   var activityGroups: [CoordinationGroup] {
     var groups: [CoordinationGroup] = []
     for message in messages where message.isInternalActivity || message.isToolActivity || message.toolCall != nil {
@@ -528,6 +598,9 @@ struct Conversation: Codable, Equatable {
   var draft: SavedDraft?
   var readPosition: ReadPosition?
   var toolCalls: [ToolCall]?
+  /// After a failed turn: anyone's retry of it, as the server claimed it, with its current receipt.
+  /// Older servers omit it.
+  var retry: RetryClaim?
   var activityMessages: [Message] {
     let canonical = messages.filter { $0.isInternalActivity || $0.isToolActivity || $0.toolCall != nil }
     let known = Set(canonical.compactMap { $0.toolCall?.id })
@@ -537,8 +610,19 @@ struct Conversation: Codable, Equatable {
   }
   var presentationTurns: [ConversationTurn] {
     var turns: [ConversationTurn] = []
+    var sawActivity = false
     for message in messages {
-      if turns.isEmpty || message.role == "user" { turns.append(ConversationTurn(id: message.id, messages: [])) }
+      if turns.isEmpty || message.role == "user" {
+        turns.append(ConversationTurn(id: message.id, messages: []))
+        sawActivity = false
+      }
+      if message.isConversationVisible && message.role != "user" && sawActivity && turns[turns.count - 1].replyStart == nil {
+        turns[turns.count - 1].replyStart = message.id
+      }
+      if message.isInternalActivity || message.isToolActivity || message.toolCall != nil {
+        sawActivity = true
+        turns[turns.count - 1].replyStart = nil
+      }
       turns[turns.count - 1].messages.append(message)
     }
     for call in toolCalls ?? [] {
@@ -561,6 +645,10 @@ struct Conversation: Codable, Equatable {
         turns[turns.count - 1].messages.append(Message(id: "live-" + call.id, role: "tool", text: "", toolCall: call))
       }
     }
+    // Appended live calls must not become a new history position for the reply.
+    for index in turns.indices where turns[index].activityGroups.contains(where: { $0.messages.contains(where: { $0.toolCall?.status == "running" }) }) {
+      turns[index].replyStart = nil
+    }
     return turns
   }
   var visibleMessages: [Message] {
@@ -571,7 +659,8 @@ struct UpgradeRevision: Codable {
   var revision: String
   var version: String?
   var notesUrl: String?
-  var displayVersion: String { version ?? String(revision.prefix(12)) }
+  /// When this revision was committed (ISO 8601). Older servers omit it.
+  var committedAt: String?
 }
 struct UpgradeCheck: Codable, Identifiable {
   var id: String
@@ -660,6 +749,8 @@ extension UpgradeStatus {
   func actionLabel(submitting: Bool, uncertain: Bool) -> String {
     if submitting { return installsNext ? "Starting the install…" : "Starting the check…" }
     if uncertain { return "Checking update status…" }
+    if phase == "recovering" { return "Restoring…" }
+    if phase == "verifying" { return "Checking Hermes…" }
     if inProgress { return isInstall ? "Installing…" : "Testing…" }
     return installsNext ? "Install update" : stopped && !isInstall ? "Check again" : "Check for an update"
   }
@@ -677,8 +768,31 @@ struct ComputerStatus: Decodable, Equatable {
     var mine: Bool?
   }
   var available: Bool
+  /// Absent from older servers; false means the desktop is installed but not running.
+  var running: Bool? = nil
   var reason: String?
   var control: Control
+  /// Absent from older servers. The system terminal, for terminal administrators.
+  var terminal: Terminal? = nil
+  struct Terminal: Decodable, Equatable {
+    var available: Bool
+    /// Blank when this person may not use the shell.
+    var target: String = ""
+    var reason: String? = nil
+    /// The server wants a sign-in confirmed in the last 2 hours before it opens a shell.
+    var confirmationRequired: Bool? = nil
+    init(from decoder: Decoder) throws {
+      let values = try decoder.container(keyedBy: CodingKeys.self)
+      available = try values.decode(Bool.self, forKey: .available)
+      target = try values.decodeIfPresent(String.self, forKey: .target) ?? ""
+      reason = try values.decodeIfPresent(String.self, forKey: .reason)
+      confirmationRequired = try values.decodeIfPresent(Bool.self, forKey: .confirmationRequired)
+    }
+    init(available: Bool, target: String = "", reason: String? = nil, confirmationRequired: Bool? = nil) {
+      self.available = available; self.target = target; self.reason = reason; self.confirmationRequired = confirmationRequired
+    }
+    private enum CodingKeys: String, CodingKey { case available, target, reason, confirmationRequired }
+  }
   /// What the Settings row says under "Computer", worded like the web panel.
   var detail: String {
     guard available else { return reason?.isEmpty == false ? reason! : "Desktop unavailable" }
@@ -700,14 +814,18 @@ struct UpgradeInstallRequest: Encodable {
   var candidateRevision: String
   var requestId: String
 }
-struct Bootstrap: Codable {
+/// Equatable so an unchanged poll leaves the published value, and every view reading it, alone.
+struct Bootstrap: Codable, Equatable {
   var user: Member
   var household: [Member]
   var preferences: Preferences
   var bots: [Bot]
   var capabilities: [String: Capability]
+  subscript(capability key: CapabilityKey) -> Capability? { capabilities[key.rawValue] }
   var connection: RuntimeStatus
   var csrfToken: String?
+  /// This person's private key for deriving form request IDs. A server from before form cards omits it.
+  var formKey: String?
   /// Present when the host publishes the latest distributed iOS build.
   var nativeApp: NativeAppInfo?
 }
@@ -736,22 +854,73 @@ struct Routine: Codable, Identifiable {
   var schedule: String
   var enabled: Bool
   var recipientIds: [String]?
+  /// Group chats this routine also posts its results in. Nil when the server could not say, and then never sent.
+  var roomIds: [String]?
+  var skills: [String]?
+  var model: String?
+  var provider: String?
+  var enabledToolsets: [String]?
+  var script: String?
+  var noAgent: Bool?
+  var contextFrom: [String]?
   var nextRunAt: String?
   var lastRunAt: String?
   var lastStatus: String?
   var lastError: String?
   var lastDeliveryError: String?
+  /// A run is in flight now, which Stop run can end. Read only.
+  var running: Bool?
+  enum CodingKeys: String, CodingKey {
+    case id, botId, name, prompt, schedule, enabled, recipientIds, roomIds, skills, model, provider
+    case enabledToolsets, script, noAgent, contextFrom, nextRunAt, lastRunAt, lastStatus, lastError, lastDeliveryError, running
+  }
+  // Explicit null releases an override; synthesized encodeIfPresent would omit it
+  // and native PUT would retain the old value. Unknown native fields stay server-side.
+  func encode(to encoder: Encoder) throws {
+    var c = encoder.container(keyedBy: CodingKeys.self)
+    try c.encode(id, forKey: .id)
+    try c.encode(botId, forKey: .botId)
+    try c.encode(name, forKey: .name)
+    try c.encode(prompt, forKey: .prompt)
+    try c.encode(schedule, forKey: .schedule)
+    try c.encode(enabled, forKey: .enabled)
+    try c.encodeIfPresent(recipientIds, forKey: .recipientIds)
+    try c.encodeIfPresent(roomIds, forKey: .roomIds)
+    try c.encodeIfPresent(skills, forKey: .skills)
+    try c.encode(model, forKey: .model)
+    try c.encode(provider, forKey: .provider)
+    try c.encode(enabledToolsets, forKey: .enabledToolsets)
+    try c.encode(script, forKey: .script)
+    try c.encodeIfPresent(noAgent, forKey: .noAgent)
+    try c.encode(contextFrom, forKey: .contextFrom)
+    try c.encodeIfPresent(nextRunAt, forKey: .nextRunAt)
+    try c.encodeIfPresent(lastRunAt, forKey: .lastRunAt)
+    try c.encodeIfPresent(lastStatus, forKey: .lastStatus)
+    try c.encodeIfPresent(lastError, forKey: .lastError)
+    try c.encodeIfPresent(lastDeliveryError, forKey: .lastDeliveryError)
+  }
   static func empty(botId: String) -> Routine {
     Routine(
-      id: "", botId: botId, name: "", prompt: "", schedule: "", enabled: true, recipientIds: [])
+      id: "", botId: botId, name: "", prompt: "", schedule: "", enabled: true, recipientIds: [], roomIds: [], contextFrom: ["self"])
   }
 }
-struct Receipt: Codable {
+struct Receipt: Codable, Equatable {
   var requestId: String
   var status: String
   var runId: String?
   var messageId: String?
   var message: String?
+  /// The text the server recorded under this request ID, sent only to its sender by `GET /submissions/:id`.
+  var text: String? = nil
+}
+/// A failed turn's retry as the server records it: the receipt of the request that claimed the turn.
+struct RetryClaim: Codable, Equatable {
+  var requestId: String
+  var status: String
+  var runId: String?
+  var messageId: String?
+  var message: String?
+  var retryOf: String
 }
 struct PendingSubmission: Codable, Equatable {
   var requestId: String
@@ -881,11 +1050,7 @@ struct SentEcho: Equatable {
     return draft.text == pending.text && draft.attachments == pending.attachments
   }
   private static func trimmed(_ text: String) -> String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
-  private static func timestamp(_ date: Date) -> String {
-    let formatter = ISO8601DateFormatter()
-    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    return formatter.string(from: date)
-  }
+  private static func timestamp(_ date: Date) -> String { ServerDate.string(date) }
 }
 struct AuthConfig: Codable {
   var googleClientId: String?
@@ -897,7 +1062,26 @@ struct TokenExchange: Codable {
   var expiresAt: String?
   var user: Member
 }
+/// `POST /api/auth/native/renew`: the same token, valid until this new expiry.
+struct TokenRenewal: Codable {
+  var expiresAt: String
+}
+/// When to ask the server to extend this device's sign-in. The server renews the same token in
+/// place, because push registrations hang off it, and stops at 90 days after the Google sign-in.
+enum SignInRenewal {
+  /// Renewal starts once fewer than two days of the seven-day sign-in remain.
+  static let window: TimeInterval = 2 * 24 * 3600
+  /// A failed or capped renewal is asked again at most this often.
+  static let retry: TimeInterval = 3600
+  static func due(expiresAt: Date?, lastAttempt: Date?, now: Date) -> Bool {
+    guard let expiresAt, expiresAt > now, expiresAt.timeIntervalSince(now) < window else { return false }
+    // A clock set back past the last attempt counts as time passed, so renewal cannot stall.
+    return lastAttempt.map { now.timeIntervalSince($0) >= retry || now < $0 } ?? true
+  }
+}
 struct EmptyResponse: Codable { var ok: Bool? }
+/// `POST /routines/:id/stop`: whether a run was in flight to stop.
+struct StopRunResponse: Decodable { var stopped: Bool }
 struct PushConfig: Codable {
   var available: Bool
   var environment: String?
@@ -907,11 +1091,29 @@ struct PushDevice: Encodable {
   var token: String
 }
 enum ServerDate {
-  static func parse(_ value: String) -> Date? {
+  /// ISO8601DateFormatter is thread-safe, so one of each serves every parse instead of one per call.
+  nonisolated(unsafe) private static let fractional: ISO8601DateFormatter = {
     let formatter = ISO8601DateFormatter()
     formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    return formatter.date(from: value) ?? ISO8601DateFormatter().date(from: value)
-  }
+    return formatter
+  }()
+  nonisolated(unsafe) private static let whole = ISO8601DateFormatter()
+  static func parse(_ value: String) -> Date? { fractional.date(from: value) ?? whole.date(from: value) }
+  static func string(_ date: Date) -> String { fractional.string(from: date) }
+}
+
+/// UserDefaults keys for this device rather than a household scope. `AppStore.StorageKind` holds
+/// the scoped ones. Changing a value here forgets what installed apps saved under the old name.
+enum DeviceDefaults {
+  static let host = "connection.host"
+  static let pushDeviceId = "push.deviceId"
+  /// The account last signed in here, kept until sign-out, so a background launch can tell whose a
+  /// pushed Live Activity is before the account loads.
+  static let signedInScope = "connection.signedInScope"
+  /// When the sign-in to `server` expires.
+  static func expiry(_ server: URL) -> String { "connection.expiry.\(server.absoluteString)" }
+  /// The LAN and tailnet routes `server` advertised last. Not secret: addresses and certificate pins.
+  static func directRoutes(_ server: URL) -> String { "connection.directRoutes.\(server.absoluteString)" }
 }
 
 enum ConnectionAddress {
@@ -952,7 +1154,7 @@ extension Preferences {
     var groups: [AssistantGroup] = []
     for section in sections {
       let rows = unpinned.filter { section.botIds.contains($0.id) && seen.insert($0.id).inserted }
-      if !rows.isEmpty { groups.append(AssistantGroup(id: "section:" + section.id, title: section.name, bots: rows)) }
+      if !rows.isEmpty { groups.append(AssistantGroup(id: "section:" + section.id, title: section.displayName, bots: rows)) }
     }
     let remaining = unpinned.filter { !seen.contains($0.id) }
     if !remaining.isEmpty {

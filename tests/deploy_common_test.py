@@ -1,7 +1,6 @@
 """Shared deploy and recovery host steps, against fake systemctl, native and app processes."""
 import ast
 import http.server
-import importlib.util
 import json
 import os
 from pathlib import Path
@@ -11,6 +10,8 @@ import tempfile
 import threading
 import unittest
 from unittest import mock
+
+from support import load_source
 
 ROOT = Path(__file__).resolve().parents[1]
 TOOLS = ROOT / ".agents/tools"
@@ -105,6 +106,27 @@ class DeploymentTests(unittest.TestCase):
         self.assertEqual(sorted(path.name for path in self.host.ops.iterdir()), ["commands.log", "phase.json"])
         self.assertEqual(sorted(path.name for path in self.host.base.iterdir()), ["current", "releases", "shared"])
 
+    def test_voice_plugin_link_follows_current_and_never_replaces_another_path(self):
+        link = self.host.home / "plugins/wildbots-voice"
+        self.assertTrue(self.d.voice_plugin_ready())
+        self.d.link_voice_plugin()
+        self.assertEqual(os.readlink(link), str(self.host.base / "current/src/hermes/wildbots_voice"))
+        # Activating the next release moves the plugin with current; the link itself stays.
+        for release in ("old", "new"):
+            (self.host.base / "releases" / release / "src/hermes/wildbots_voice").mkdir(parents=True)
+        self.d.switch(self.host.base / "releases/new")
+        self.assertEqual(link.resolve(), (self.host.base / "releases/new/src/hermes/wildbots_voice").resolve())
+        self.d.link_voice_plugin()
+        self.assertEqual(sorted(path.name for path in link.parent.iterdir()), ["wildbots-voice"])
+        # A folder or a link someone else put there is never replaced.
+        for occupy in (lambda: link.mkdir(), lambda: link.symlink_to(self.host.base / "releases/old/src/hermes/wildbots_voice")):
+            link.unlink() if link.is_symlink() else link.rmdir()
+            occupy()
+            with self.subTest(occupied=link.is_symlink()):
+                self.assertFalse(self.d.voice_plugin_ready())
+                with self.assertRaisesRegex(deploy_common.Fence, "voice plugin path"):
+                    self.d.link_voice_plugin()
+
     def test_wait_retries_transient_reads_but_never_swallows_a_guard(self):
         answers = iter([OSError("not yet"), ValueError("partial json"), False, True])
         def predicate():
@@ -180,7 +202,7 @@ class FenceTests(unittest.TestCase):
             try:
                 deploy_common.fence(False, "drain request names this operation")
             except AssertionError:
-                raise RuntimeError("rollback failed")
+                raise RuntimeError("rollback failed")  # noqa: B904 - implicit chaining is the case under test
         except RuntimeError as error:
             self.assertEqual(deploy_common.tripped(error), " Stopped at fence: drain request names this operation.")
 
@@ -190,7 +212,7 @@ class FenceTests(unittest.TestCase):
             config.write_text("{}")
             config.chmod(0o644)
             done = subprocess.run([sys.executable, "-O", str(TOOLS / "deploy-guarded-app-release.py"), "--config", str(config)],
-                                  capture_output=True, text=True, timeout=30)
+                                  capture_output=True, text=True, timeout=30, check=False)
         self.assertNotEqual(done.returncode, 0)
         self.assertIn("Fence: config file is private and owned by this user", done.stderr)
 
@@ -222,24 +244,24 @@ class ToolWiringTests(unittest.TestCase):
                             self.assertTrue(callable(getattr(deploy_common.Deployment, value.attr, None)), value.attr)
 
     def test_idle_wait_recognizes_the_guarded_preflights_busy_fence(self):
-        spec = importlib.util.spec_from_file_location("prepare_when_idle", TOOLS / "prepare-when-idle.py")
-        idle = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(idle)
+        idle = load_source(".agents/tools/prepare-when-idle.py", "prepare_when_idle")
         source = (TOOLS / "deploy-guarded-app-release.py").read_text()
         busy = [node.args[1].value for node in ast.walk(ast.parse(source)) if isinstance(node, ast.Call)
                 and getattr(node.func, "id", None) == "fence" and ast.unparse(node.args[0]) == "gate['active'] is False and gate['busy'] == []"]
         self.assertEqual(len(busy), 1)
         # Only the fence's own line, as a traceback without source would print it.
         self.assertTrue(idle.BUSY.search("deploy_common.Fence: " + busy[0]))
+        gateway = sorted((node for node in ast.walk(ast.parse(source)) if isinstance(node, ast.Call)
+            and getattr(node.func, "id", None) == "fence" and "record['active_agents'] == 0" in ast.unparse(node.args[0])),
+            key=lambda node: node.lineno)
+        self.assertEqual(len(gateway), 2)
+        self.assertTrue(idle.BUSY.search("deploy_common.Fence: " + gateway[0].args[1].value))
+        self.assertFalse(idle.BUSY.search("deploy_common.Fence: " + gateway[1].args[1].value))
         self.assertFalse(idle.BUSY.search("deploy_common.Fence: release serves the configured web build"))
 
     def test_staged_recovery_ships_the_shared_module_its_helper_pins(self):
-        spec = importlib.util.spec_from_file_location("stage_recovery", TOOLS / "stage-recovery-tools.py")
-        stage = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(stage)
-        spec = importlib.util.spec_from_file_location("recover_app", TOOLS / "recover-app-after-native-update.py")
-        recover = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(recover)
+        stage = load_source(".agents/tools/stage-recovery-tools.py", "stage_recovery")
+        recover = load_source(".agents/tools/recover-app-after-native-update.py", "recover_app")
         self.assertEqual(stage.FILES, ("recover-app-after-native-update.py", recover.SHARED_FUNCTIONS))
         self.assertTrue((TOOLS / recover.SHARED_FUNCTIONS).is_file())
 

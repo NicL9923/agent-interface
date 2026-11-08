@@ -1,28 +1,48 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
-import { flushSync } from "react-dom";
-import type { ActivityState, Avatar as AvatarConfig } from "../shared/types";
+import type { ActivityState, Avatar as AvatarConfig, AvatarShape } from "../shared/types";
 import {
   animatesAt,
   approach,
   avatarPose,
+  bodyEdge,
   expressionFor,
   faceInk,
   frozenStates,
-  motionSeed,
+  motionClock,
   orbitArcs,
   perspective,
   pitchEyes,
   popIn,
   project,
   propMotion,
+  IDLE_FRAME_MS,
+  idleQuietAt,
+  ringOffset,
   smoothstep,
+  soloPlan,
   tickMarks,
   tint,
   type AvatarProp,
   type Expression,
+  type MotionPlan,
 } from "./avatar-motion";
+import { startFrames } from "./avatar-frames";
+import { avatarConductor } from "./avatar-conductor";
+import { useAvatarAttention, useAvatarReactions, withGaze } from "./avatar-attention";
 import "./avatar.css";
-import { isSeasonal, seasonalAnchors, seasonalHeads, SeasonalBack, SeasonalFace, SeasonalFront } from "./seasonal-avatars";
+import {
+  characterAnchors,
+  CharacterBack,
+  CharacterFace,
+  CharacterFront,
+  characterHatAnchors,
+  characterHeads,
+  cheekless,
+  headColor,
+  EyeSurround,
+  eyeSurroundColor,
+  isCharacter,
+} from "./character-avatars";
 
 export const avatarStates: ActivityState[] = [
   "idle",
@@ -42,7 +62,7 @@ export const stateLabels: Record<ActivityState, string> = {
   waiting: "Waiting",
   blocked: "Needs your help",
   done: "Done",
-  disconnected: "Connection lost",
+  disconnected: "Reconnecting",
   failed: "Failed",
   interrupted: "Interrupted",
 };
@@ -65,14 +85,17 @@ export const defaultAvatar: Extract<AvatarConfig, { mode: "geometric" }> = {
   accessory: "none",
 };
 
+const blobHead = "M50 3 C77 1 99 24 98 51 C100 77 79 99 51 98 C23 99 2 80 2 51 C2 25 21 3 50 3Z";
 const mascotHead =
   "M50 14 C77 14 95 32 95 56 C95 81 76 95 50 95 C24 95 5 81 5 56 C5 32 23 14 50 14Z";
 /**
  * One closed outline per shape in a 0-100 box. AvatarView.swift repeats these strings and
  * reads only absolute M L H V Q C Z; the circle's arc is its one cubic rewrite.
  */
-export function silhouette(shape: string) {
+export function silhouette(shape: AvatarShape | "mascot"): string {
   switch (shape) {
+    case "blob":
+      return blobHead;
     case "mascot":
       return mascotHead;
     case "drop":
@@ -114,14 +137,16 @@ export function silhouette(shape: string) {
     case "circle":
       return "M50 3 A47 47 0 1 1 49.99 3Z";
     default:
-      return "M50 3 C77 1 99 24 98 51 C100 77 79 99 51 98 C23 99 2 80 2 51 C2 25 21 3 50 3Z";
+      // A shape missing above is a compile error; one from newer data still draws as a blob.
+      shape satisfies never;
+      return blobHead;
   }
 }
 /**
  * Where each silhouette's face sits. Eyes follow the visual center of mass, so
  * a triangle or drop looks out from its wide base instead of its point.
  */
-export const faces: Record<string, { cy: number; scale: number; top: number; hat: number }> = {
+export const faces: Record<AvatarShape | "mascot", { cy: number; scale: number; top: number; hat: number }> = {
   blob: { cy: 50, scale: 1, top: 3, hat: 1 },
   pebble: { cy: 50, scale: 1, top: 2, hat: 1 },
   squircle: { cy: 50, scale: 1, top: 5, hat: 1 },
@@ -215,23 +240,43 @@ const morphTargets = (state: ActivityState) => ({
   bang: state === "blocked" ? 1 : 0,
 });
 
+/** The directions a cheer's sparks fly, in degrees. */
+const sparks = [0, 45, 90, 135, 180, 225, 270, 315];
+
+/**
+ * Who the conductor sees. A bot's ID wins over its name, because two bots can share a name and
+ * must still move independently; an avatar with neither counts as its own bot.
+ */
+export function motionOwner(botId: string | undefined, name: string | undefined, instance: string) {
+  return botId !== undefined ? `bot:${botId}` : name !== undefined ? `name:${name}` : `avatar-${instance}`;
+}
+
 export function Avatar({
   avatar = defaultAvatar,
   state = "idle",
   size = 48,
-  name = "Assistant",
+  name,
+  botId,
   reducedMotion = false,
   showState = false,
+  offline = false,
   prop,
+  aware = false,
 }: {
   avatar?: AvatarConfig;
   state?: ActivityState;
   size?: number;
+  /** The bot's name, for its label. Without a `botId`, avatars with the same name share gestures. */
   name?: string;
+  /** The bot's stable ID. Two bots can share a name; their avatars must still move independently. */
+  botId?: string;
   reducedMotion?: boolean;
   showState?: boolean;
+  offline?: boolean;
   /** A tool to hold while working, such as a magnifying glass during a search. */
   prop?: AvatarProp;
+  /** Featured avatars glance at a nearby mouse pointer, and at siblings that finish, while idle. */
+  aware?: boolean;
 }) {
   const wrapper = useRef<HTMLSpanElement>(null);
   const [visible, setVisible] = useState(true);
@@ -244,14 +289,20 @@ export function Avatar({
     return () => observer.disconnect();
   }, []);
   const reduce = useReducedMotion(reducedMotion);
-  const seed = motionSeed(name);
   const id = useId().replace(/:/g, "");
+  const label = name ?? "Assistant";
+  const statusLabel = state === "disconnected" && offline ? "Offline" : stateLabels[state];
+  // The conductor keeps different bots from gesturing alike; an unnamed avatar is its own bot.
+  const owner = motionOwner(botId, name, id);
   const [, setFrame] = useState(0);
   // Mutable animation clock. Only commit-phase effects and frame callbacks write
   // it, so an interrupted or replayed render never disturbs the running motion.
   const motion = useRef({
     state,
     since: performance.now(),
+    /** Whether `since` marks a state change rather than the mount. */
+    entered: false,
+    plan: soloPlan as MotionPlan,
     elapsed: 0,
     level: 0,
     sweep: 0,
@@ -264,6 +315,8 @@ export function Avatar({
   const expression = useRef<Expression>(expressionFor(state, 0));
   const morph = useRef(morphTargets(state));
   const still = reduce || !visible || avatar.mode === "portrait" || frozenStates.includes(state);
+  const gaze = useAvatarAttention(wrapper, botId, aware && !still && (state === "idle" || state === "done"));
+  const burst = useAvatarReactions(wrapper, botId, !reduce);
   useLayoutEffect(() => {
     if (motion.current.prop === prop) return;
     motion.current = { ...motion.current, prop, propSince: performance.now() };
@@ -276,6 +329,7 @@ export function Avatar({
       ...clock,
       state,
       since: performance.now(),
+      entered: true,
       elapsed: 0,
       carry: clock.level,
       carrySweep: clock.sweep,
@@ -289,41 +343,42 @@ export function Avatar({
       setFrame((f) => f + 1);
       return;
     }
-    let frame = 0;
-    let wake: ReturnType<typeof setTimeout> | undefined;
     let last = performance.now();
-    const tick = (now: number) => {
-      const dt = Math.min((now - last) / 1000, 0.05);
-      last = now;
-      const clock = motion.current;
-      const t = (now - clock.since) / 1000;
-      const trail = trailsAt(avatarPose(state, t, false, clock.prop, seed), t, clock.carry, clock.carrySweep);
-      motion.current = { ...clock, elapsed: t, now, ...trail };
-      expression.current = approach(expression.current, expressionFor(state, t), dt);
-      const targets = morphTargets(state);
-      const k = 1 - Math.exp(-dt / 0.13);
-      morph.current = {
-        bang: morph.current.bang + (targets.bang - morph.current.bang) * k,
-      };
-      const settling = Math.abs(targets.bang - morph.current.bang) > 0.002 || t < 0.7;
-      // Committed inside this frame's callback; scheduled React work would land in a second frame, and each costs a restyle.
-      flushSync(() => setFrame((f) => f + 1));
-      if (!animatesAt(state, t) && !settling) return;
-      // Small avatars repaint at about 30 fps to spare battery. They sleep between frames, because
-      // asking for every display refresh makes the page restyle on each one even when nothing paints.
-      if (size >= 56) frame = requestAnimationFrame(tick);
-      else wake = setTimeout(() => { frame = requestAnimationFrame(tick); }, 24);
-    };
-    frame = requestAnimationFrame(tick);
-    return () => { cancelAnimationFrame(frame); clearTimeout(wake); };
-  }, [state, still, size, seed]);
+    return startFrames({
+      advance: (now) => {
+        const dt = Math.min((now - last) / 1000, 0.05);
+        last = now;
+        const clock = motion.current;
+        const cue = avatarConductor.cue(owner, state, clock.since / 1000, clock.entered, !!clock.prop, now / 1000);
+        const { plan } = cue;
+        const t = Math.max(0, now / 1000 - cue.since);
+        const trail = trailsAt(avatarPose(state, t, false, clock.prop, plan), t, clock.carry, clock.carrySweep);
+        motion.current = { ...clock, elapsed: t, now, plan, ...trail };
+        expression.current = approach(expression.current, expressionFor(state, t, plan), dt);
+        const targets = morphTargets(state);
+        const k = 1 - Math.exp(-dt / 0.13);
+        morph.current = {
+          bang: morph.current.bang + (targets.bang - morph.current.bang) * k,
+        };
+        const settling = Math.abs(targets.bang - morph.current.bang) > 0.002 || t < 0.7;
+        if (!animatesAt(state, t, plan) && !settling) return null;
+        // Small avatars repaint at about 30 fps to spare battery. They sleep between frames, because
+        // asking for every display refresh makes the page restyle on each one even when nothing paints.
+        // An idle avatar that is only breathing sleeps longer, until just before its next blink or glance.
+        return state === "idle" && !settling && idleQuietAt(t, plan, (IDLE_FRAME_MS + 20) / 1000) ? IDLE_FRAME_MS
+          : size >= 56 ? 0 : 24;
+      },
+      commit: () => setFrame((f) => f + 1),
+    });
+  }, [state, still, size, owner]);
 
   // A state that has not committed yet renders from its first frame.
   const clock = motion.current;
   const fresh = clock.state !== state;
   const t = still || fresh ? 0 : clock.elapsed;
+  const plan = still || fresh ? soloPlan : clock.plan;
   const held = state === "working" && avatar.mode !== "portrait" ? prop : undefined;
-  const pose = avatarPose(state, t, still, held, seed);
+  const pose = withGaze(avatarPose(state, t, still, held, plan), gaze);
   const { level: trailLevel, sweep } = still
     ? { level: 0, sweep: 0 }
     : fresh
@@ -334,14 +389,18 @@ export function Avatar({
   const symbolic = bang;
 
   const mascot = avatar.mode === "mascot" ? avatar : null;
-  const seasonal = mascot && isSeasonal(mascot.family) ? mascot.family : null;
+  const character = mascot && isCharacter(mascot.family) ? mascot.family : null;
   const color = avatar.mode === "portrait" ? "#1084FE" : avatar.color;
   const eyes = avatar.mode === "portrait" ? "oval" : avatar.eyes;
   const accessory = avatar.mode === "portrait" ? "none" : avatar.accessory;
   const geometry = avatar.mode === "geometric" ? avatar.shape : "mascot";
-  const anchor = seasonal ? seasonalAnchors[seasonal] : faces[geometry] || faces.blob;
-  const bodyPath = useShapeTransition(seasonal ? seasonalHeads[seasonal] : silhouette(geometry), reduce);
-  const ink = faceInk(color, !!mascot);
+  const anchor = (character && characterAnchors[character]) || faces[geometry] || faces.blob;
+  const bodyPath = useShapeTransition((character && characterHeads[character]) || silhouette(geometry), reduce);
+  const ink = faceInk(character ? eyeSurroundColor(character, color) : color, !!mascot);
+  const headFill = character ? headColor(character, color) : color;
+  // Glasses sit mostly on the head, so they contrast with it rather than with an eye patch.
+  const frameInk = headFill === color ? ink : faceInk(headFill, !!mascot);
+  const edge = bodyEdge(headFill);
   const eyeScale = anchor.scale;
   const eyeWidth = avatar.mode === "portrait" ? 1 : avatar.eyeWidth ?? 1;
   const eyeHeight = avatar.mode === "portrait" ? 1 : avatar.eyeHeight ?? 1;
@@ -401,6 +460,7 @@ export function Avatar({
     const size = perspective(p.scale) * pose.eyeScale * dotShrink;
     return (
       <g key={direction} transform={`translate(${50 + p.x} ${eyeY})`}>
+        {character && <EyeSurround family={character} side={side} color={color} scaleX={p.scale * eyeScale} scale={eyeScale} />}
         <g
           opacity={1 - face.happy}
           transform={`scale(${p.scale * eyeWidth * eyeScale * size * (1 + (1 - Math.min(face.open, 1)) * 0.4)} ${open * size})`}
@@ -423,7 +483,7 @@ export function Avatar({
             rx={12.5 * eyeScale * p.scale}
             ry={12.5 * eyeScale}
             fill="none"
-            stroke={ink}
+            stroke={frameInk}
             strokeWidth="2.5"
           />
         )}
@@ -434,14 +494,14 @@ export function Avatar({
     <path
       d={`M${50 + center.x - 4 * center.scale} ${eyeY - 2} Q${50 + center.x} ${eyeY - 5} ${50 + center.x + 4 * center.scale} ${eyeY - 2}`}
       fill="none"
-      stroke={ink}
+      stroke={frameInk}
       strokeWidth="2.5"
       strokeLinecap="round"
     />
   );
   const mascotFace = mascot && center.visible && (
     <g transform={`translate(${50 + center.x} 0) scale(${center.scale} 1) translate(-50 0)`}>
-      {seasonal ? <SeasonalFace family={seasonal} color={color} ink={ink} mouth={face.mouth} happy={face.happy} /> : <>
+      {character ? <CharacterFace family={character} color={color} ink={ink} mouth={face.mouth} happy={face.happy} /> : <>
       {mascot.family === "bear" && <ellipse cx="50" cy="71" rx="18" ry="13" fill="#fff3db" />}
       {mascot.family === "fox" && (
         <path
@@ -481,7 +541,7 @@ export function Avatar({
       </>}
     </g>
   );
-  const cheeks = mascot && seasonal !== "pumpkin" && [-1, 1].map((direction) => {
+  const cheeks = mascot && !(character && cheekless.has(character)) && [-1, 1].map((direction) => {
     const p = project(direction * 27, pose.yaw);
     return p.visible ? (
       <ellipse key={direction} cx={50 + p.x} cy={anchor.cy + 12} rx={6 * p.scale} ry="3.8"
@@ -519,10 +579,7 @@ export function Avatar({
       <path d="M47 9.5 Q37 6 29 7 M54 6.5 Q63 2.5 72 2.5" fill="none" stroke="#a9d9b3" strokeWidth="1.2" strokeLinecap="round" />
     </g>
   );
-  // A smaller extra hat leaves the seasonal character's ears, cap and antlers visible.
-  const hatAnchor = seasonal === "santa" ? { top: -3, hat: 0.45 }
-    : seasonal === "rudolph" ? { top: 24, hat: 0.45 }
-      : seasonal === "bunny" ? { top: 31, hat: 0.4 } : anchor;
+  const hatAnchor = (character && characterHatAnchors[character]) || anchor;
   const hat = accessory === "hat" && (
     <g transform={`translate(50 ${hatAnchor.top + 15 * hatAnchor.hat}) scale(${hatAnchor.hat})`}>
       <path d="M-20 -2 Q-21 -20 -10 -21 Q0 -16 10 -21 Q21 -20 20 -2Z" fill="#3a2f28" />
@@ -534,7 +591,7 @@ export function Avatar({
   const propAge = still ? 1 : clock.prop !== prop ? 0 : (clock.now - clock.propSince) / 1000;
   const heldProp = held && (
     <g className="avatar-prop" data-prop={held} opacity={smoothstep(propAge / 0.2)}>
-      <PropArt prop={held} t={t} grow={popIn(propAge / 0.4)} />
+      <PropArt prop={held} t={motionClock(t, plan)} grow={popIn(propAge / 0.4)} />
     </g>
   );
   // Emphasis marks are lost at list sizes, so only larger avatars draw them.
@@ -550,6 +607,8 @@ export function Avatar({
     `translate(50 94) scale(${pose.scaleX * (1 - 0.3 * bang)} ${pose.scaleY}) translate(-50 -94)`,
     `translate(50 50) scale(${bodyScale}) translate(-50 -50)`,
   ].join(" ");
+  // A portrait's ring turns at this bot's own offset and pace.
+  const ring = avatar.mode === "portrait" ? ringOffset(owner) : null;
   const badge = avatar.mode === "portrait"
     ? state !== "idle" && state !== "thinking" && state !== "working"
     : ["disconnected", "failed", "interrupted", "done"].includes(state);
@@ -557,12 +616,17 @@ export function Avatar({
     <span
       ref={wrapper}
       className={`avatar-wrap avatar-${avatar.mode}`}
-      style={{ width: size, height: size, ["--avatar-size" as string]: `${size}px` }}
+      style={{
+        width: size,
+        height: size,
+        ["--avatar-size" as string]: `${size}px`,
+        ...(ring && { ["--avatar-ring-phase" as string]: ring.phase.toFixed(3), ["--avatar-ring-pace" as string]: ring.pace.toFixed(3) }),
+      }}
       data-state={state}
       data-family={mascot?.family}
       data-reduced-motion={reduce}
       role="img"
-      aria-label={`${name}: ${stateLabels[state]}`}
+      aria-label={`${label}: ${statusLabel}`}
     >
       {avatar.mode === "portrait" ? (
         <>
@@ -591,8 +655,8 @@ export function Avatar({
             {trailLayer("back")}
             {ears}
             {sprout}
-            {seasonal && <SeasonalBack family={seasonal} color={color} yaw={pose.yaw} />}
-            <path d={bodyPath} fill={color} className="avatar-body" />
+            {character && <CharacterBack family={character} color={color} yaw={pose.yaw} />}
+            <path d={bodyPath} fill={headFill} className="avatar-body" />
             <g clipPath={`url(#face-${id})`}>
               {roll.visible && (
                 <g transform={pose.pitch ? `translate(0 ${anchor.cy + roll.y}) scale(1 ${roll.scale}) translate(0 ${-anchor.cy})` : undefined}>
@@ -603,7 +667,8 @@ export function Avatar({
                 </g>
               )}
             </g>
-            {seasonal && <SeasonalFront family={seasonal} yaw={pose.yaw} />}
+            {edge && <path d={bodyPath} fill="none" stroke={edge} strokeWidth="2.2" />}
+            {character && <CharacterFront family={character} yaw={pose.yaw} />}
             {hat}
             {ticks}
             {trailLayer("front")}
@@ -626,7 +691,12 @@ export function Avatar({
         </span>
       )}
       {showState && (
-        <span className="avatar-caption">{stateLabels[state]}</span>
+        <span className="avatar-caption">{statusLabel}</span>
+      )}
+      {burst > 0 && (
+        <span className="avatar-burst" key={burst} aria-hidden="true">
+          {sparks.map(turn => <i key={turn} style={{ ["--spark-turn" as string]: `${turn}deg` }} />)}
+        </span>
       )}
     </span>
   );

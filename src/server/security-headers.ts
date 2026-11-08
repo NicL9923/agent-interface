@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { isApiRequest, routePattern } from "./route-path.js";
+import { httpError } from "./http-error.js";
 
 /** The policy for app pages and static files. The preview fixture serves the same one. */
 export function contentSecurityPolicy(origin: string) {
@@ -11,8 +12,8 @@ export function contentSecurityPolicy(origin: string) {
     "style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style",
     "img-src 'self' data: blob: https://*.googleusercontent.com",
     "media-src 'self' blob:",
-    // Older Safari does not match WebSockets with 'self'.
-    `connect-src 'self' ${url.protocol === "https:" ? "wss:" : "ws:"}//${url.host} https://accounts.google.com/gsi/`,
+    // Older Safari does not match WebSockets with 'self'. Live Talk sends its WebRTC offer to OpenAI.
+    `connect-src 'self' ${url.protocol === "https:" ? "wss:" : "ws:"}//${url.host} https://accounts.google.com/gsi/ https://api.openai.com`,
     "frame-src 'self' https://accounts.google.com/gsi/",
     "worker-src 'self'",
     "manifest-src 'self'",
@@ -63,7 +64,7 @@ export function installSecurityHeaders(app: FastifyInstance, origin: string) {
   });
   app.addContentTypeParser(["application/csp-report", "application/reports+json"], { parseAs: "string" }, (_req, body, done) => {
     try { done(null, JSON.parse(body as string)); }
-    catch { done(Object.assign(new Error("Invalid violation report"), { statusCode: 400 }), undefined); }
+    catch { done(httpError(400, "Invalid violation report"), undefined); }
   });
   const seen = new Set<string>();
   let windowStart = 0, reports = 0;

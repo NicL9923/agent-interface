@@ -9,7 +9,8 @@
                    ledger entry, then open their docs PR from a temporary worktree of
                    origin/main. Activation runs this; rerun it if a post-release check
                    failed and the cause is fixed, or to retry an unopened docs PR.
-  verify NAME      Read-only public and service checks for an activated release.
+  verify NAME      Read-only public and service checks for an activated release,
+                   including the host's metadata egress floor.
   discard NAME     Remove a prepared release that was never activated.
   recover NAME     After an outside Hermes update disabled the add-on, install the fresh
                    qualification of staged release NAME for the unchanged live release.
@@ -24,6 +25,7 @@ import argparse
 import contextlib
 import datetime
 import fcntl
+import importlib.util
 import json
 import re
 import shlex
@@ -34,6 +36,7 @@ import uuid
 from pathlib import Path
 
 from deploy_common import OPTIMIZED_REFUSAL, fence
+import host_access
 
 ROOT = Path(__file__).resolve().parents[2]
 MANIFESTS = ROOT / ".private/releases"
@@ -42,6 +45,16 @@ APP_UNITS = ("agent-interface.service", "hermes-dashboard.service", "hermes-gate
 RUNNING_PHASES = ("checking", "qualifying", "installing", "verifying", "recovering")
 # A release in these states may be mid-cutover or live; only review may change it.
 UNDISCARDABLE = ("activating", "needs-review", "activated", "recorded", "recovering", "recovered")
+# The host's metadata egress floor. Host programs check it as the SSH user, which is the
+# service user, with the tool's own verdicts, so a release never ships onto a host without it.
+_floor_spec = importlib.util.spec_from_file_location("metadata_egress_floor", Path(__file__).with_name("metadata-egress-floor.py"))
+FLOOR = importlib.util.module_from_spec(_floor_spec)
+_floor_spec.loader.exec_module(FLOOR)
+METADATA_PROBE = {"v4": FLOOR.METADATA_V4, "v6": FLOOR.METADATA_V6, "port": 80, "timeoutSeconds": 3,
+                  "interfaces": "/proc/net/if_inet6", "unit": FLOOR.UNIT,
+                  # The install's read-only sudo rule allows exactly this command.
+                  "liveRulesCommand": ["sudo", "-n", "/usr/sbin/nft", "-j", "list", "table", "inet", FLOOR.TABLE]}
+FLOOR_INSTALL = "sudo python3 .agents/tools/metadata-egress-floor.py install --user $USER (see docs/Hosting.md)"
 
 
 # Pure release rules. Tests cover these without a host.
@@ -68,12 +81,14 @@ def helper_hooks(value, release):
 
 
 def derive_config(prior, *, release, current, operation, web_build, worker, profile_hashes,
-                  helper_sha, hermes_revision, repair_sha, qualification=None):
+                  helper_sha, hermes_revision, repair_sha, qualification=None, managed_python=None, node=None):
     """The next guarded deploy configuration.
 
     Settings are carried from the last successful release. Live state supplies the
-    worker configuration (pointed at the new release) and the installed Hermes
-    revision and repair, which a Hermes update changes without an app release.
+    worker configuration (pointed at the new release), the installed Hermes revision and
+    repair, and the native launcher's interpreter, all of which a Hermes update changes
+    without an app release. A stale interpreter makes Hermes relaunch the guarded tool's
+    calls into the new one without their input (Nov 2, 2026: 3.14.7 to 3.14.9).
     """
     config = {key: value for key, value in prior.items() if key != "newQualificationReceipt"}
     config.update(
@@ -87,15 +102,55 @@ def derive_config(prior, *, release, current, operation, web_build, worker, prof
         hermesRevision=hermes_revision,
         repairSha256=repair_sha,
     )
+    if managed_python:
+        config["managedPython"] = str(managed_python)
+    if node:
+        # The runtime the service now runs, which the guarded deploy also uses for its backup and checks.
+        config["node"] = str(node)
     if qualification:
         config["newQualificationReceipt"] = str(qualification)
     return config
 
 
-def preparation_problems(facts, built, *, local_web_build, qualification, accept_helper_change):
+def satisfies_engines(version, engines):
+    """Whether a Node version such as v24.22.2 meets package.json engines written as caret ranges
+    joined by ||, such as ^24.22.2 || ^26.13.0. Anything else in the range counts as unmet."""
+    found = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)", version or "")
+    if not found:
+        return False
+    have = tuple(int(part) for part in found.groups())
+    for clause in (engines or "").split("||"):
+        need = re.fullmatch(r"\s*\^(\d+)\.(\d+)\.(\d+)\s*", clause)
+        if need and have[0] == int(need.group(1)) and have >= tuple(int(part) for part in need.groups()):
+            return True
+    return False
+
+
+def runtime_problems(runtime, node):
+    """Why the app service is not running `node`, a real path on the host: its live process, the
+    `node` that process's PATH finds, the command its next start would use and the `node` that
+    start's PATH finds must all be that binary."""
+    runtime = runtime or {}
+    names = {"running": "its running process", "livePath": "the node on its running process's PATH",
+             "execStart": "its ExecStart", "path": "the node on its PATH"}
+    wrong = [f"{text} is {runtime.get(key) or 'unknown'}" for key, text in names.items() if runtime.get(key) != node]
+    # systemd applies environment files after Environment=, so one that sets PATH decides the next
+    # start's PATH. The release checks only the drop-in's Environment=PATH.
+    wrong += [f"its EnvironmentFile {path} sets PATH or cannot be read" for path in runtime.get("pathFiles") or []]
+    if not wrong:
+        return []
+    return [f"The app service does not run {node}: {'; '.join(wrong)}. Switch it to the release's Node, "
+            "reload systemd and restart the service first (see docs/Hosting.md)."]
+
+
+def preparation_problems(facts, built, *, local_web_build, qualification, accept_helper_change, node=None, engines=None):
     """Reasons a prepared release must not proceed to the guarded preflight."""
     problems = []
     prior = facts["prior"]
+    if engines is not None and not satisfies_engines(built.get("nodeVersion"), engines):
+        problems.append(f"The host built with Node {built.get('nodeVersion') or 'of unknown version'}, outside package.json's "
+                        f"engines ({engines}). Install a supported app runtime and pass --node (see docs/Hosting.md).")
+    problems += runtime_problems(facts.get("serviceRuntime"), built.get("nodeRealpath"))
     if facts["maintenance"] or facts["leasePresent"] or facts["drainPresent"]:
         problems.append("Maintenance is active. Resolve the recorded operation before releasing.")
     if facts["upgradePhase"] in RUNNING_PHASES:
@@ -107,10 +162,30 @@ def preparation_problems(facts, built, *, local_web_build, qualification, accept
             "The app integration inputs no longer match the qualification receipt"
             + (" supplied." if qualification else ". Qualify this release and pass --qualification.")
             + f" ({built['receipt']['error']})")
+    problems += metadata_floor_problems(facts["metadataFloor"])
+    if not facts.get("managedPython"):
+        problems.append("The native launcher did not report an interpreter inside the Hermes tool store.")
     if built["helperSha256"] != prior["fixedHelperSha256"] and not accept_helper_change:
         problems.append("The upgrade helper changed since the last release. Review it, then pass "
                         "--accept-helper-change.")
     return problems
+
+
+def metadata_floor_problems(floor):
+    """Why the host's live metadata egress floor is not enforcing, empty when it is."""
+    problems = []
+    if (floor["enabled"], floor["active"]) != ("enabled", "active"):
+        problems.append(f"its boot unit is {floor['enabled'] or 'missing'} and {floor['active'] or 'unknown'}, not enabled and active")
+    if not FLOOR.requires_floor(floor["userManager"]):
+        problems.append(f"user@{floor['uid']}.service does not require the boot unit")
+    if floor["listing"] is None:
+        problems.append("the live table could not be read through the floor's sudo rule")
+    else:
+        problems += FLOOR.live_rule_problems(floor["listing"], floor["uid"], floor["user"])
+    problems += FLOOR.probe_problems(floor["probe"])
+    if not problems:
+        return []
+    return [f"Metadata egress floor: {problem}" for problem in problems] + [f"Install or repair it: {FLOOR_INSTALL}"]
 
 
 def maintenance_clear(live):
@@ -136,7 +211,7 @@ def ledger_entry(manifest, receipt_name, day):
                      if manifest["qualification"] == "new"
                      else "The app integration inputs were unchanged, so the existing qualification receipt "
                           "validated against the release and was reused.")
-    return f"""## {day:%B} {day.day} app release {manifest['commit'][:7]}
+    return f"""# {day:%B} {day.day} app release {manifest['commit'][:7]}
 
 {pull} at `{manifest['commit']}`. The release is live at `{manifest['origin']}`,
 web build `{manifest['webBuild']}`, from the archive with SHA256
@@ -146,28 +221,55 @@ web build `{manifest['webBuild']}`, from the archive with SHA256
 Activation drained idle native work, switched the release and verified original
 Google HTTP and fresh WebSockets, the configured Discord connections and the
 gateway guard before clearing maintenance. The
-[production receipt](evidence/{receipt_name}) records the result. Hermes remains
+[production receipt](../evidence/{receipt_name}) records the result. Hermes remains
 at `{manifest['hermesRevision'][:12]}`. Afterwards the public service worker reported the new
 build, API requests required sign-in, the app and Hermes services were active and
 maintenance was clear. A signed-in household session was not exercised.
 """
 
 
-LEDGER_HEADING = "# Validation ledger\n"
+LEDGER_DIR = "docs/ledger"
+# The frozen archive of earlier entries; new ones are files in LEDGER_DIR.
+LEDGER_ARCHIVE = "docs/ValidationLedger.md"
 
 
-def insert_ledger_entry(ledger, entry, receipt_name):
-    """Add a release entry under the ledger heading, once per release.
+def ledger_file(release_name):
+    """Entry path under LEDGER_DIR, named by the release's UTC stamp so listings sort chronologically.
 
-    Keyed by the release's receipt, not its heading: two releases of one commit on one
-    day share a heading but each has its own receipt and entry.
+    Derived from the release name, which two releases never share, so entries cannot collide.
     """
-    text = ledger.read_text()
-    fence(text.startswith(LEDGER_HEADING), "validation ledger starts with its heading")
-    if f"(evidence/{receipt_name})" in text:
+    match = re.fullmatch(r"release-([0-9a-f]+)-(\d{8}T\d{6}Z)", release_name)
+    fence(match, "release name carries its commit and UTC stamp")
+    return f"{LEDGER_DIR}/{match[2]}-app-release-{match[1]}.md"
+
+
+def insert_ledger_entry(root, manifest):
+    """Write the release's entry file under root, once per release.
+
+    Keyed by the release's receipt link as well as its file, so an entry another branch already
+    recorded by hand, in the archive or under another name, is not repeated.
+    """
+    path = root / ledger_file(manifest["name"])
+    if path.exists():
         return False
-    ledger.write_text(LEDGER_HEADING + "\n" + entry + text[len(LEDGER_HEADING):])
+    link = f"evidence/{manifest['receiptName']})"
+    recorded = [root / LEDGER_ARCHIVE, *sorted((root / LEDGER_DIR).glob("*.md"))]
+    if any(link in entry.read_text() for entry in recorded if entry.is_file()):
+        return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(relocated_entry(manifest["ledgerEntry"]))
     return True
+
+
+def relocated_entry(text):
+    """An entry saved by an earlier version for the archive, moved to its own file.
+
+    Those manifests hold a `##` heading and receipt links relative to docs/; a retry writes them under
+    docs/ledger/, so the heading becomes the file's title and the links climb one directory.
+    """
+    if text.startswith("## "):
+        text = text[1:]
+    return text.replace("](evidence/", "](../evidence/")
 
 
 def docs_branch(manifest):
@@ -192,7 +294,7 @@ def docs_pull_request(manifest):
 
 # Host and repository steps.
 
-REMOTE_PRELUDE = OPTIMIZED_REFUSAL + """
+REMOTE_PRELUDE = OPTIMIZED_REFUSAL + FLOOR.PROBE_FUNCTIONS + """
 import hashlib, json, os, runpy, shutil, subprocess, sys
 from pathlib import Path
 os.umask(0o077)
@@ -200,9 +302,91 @@ sha = lambda path: hashlib.sha256(Path(path).read_bytes()).hexdigest()
 def finish(value):
     print(json.dumps(value))
     raise SystemExit(0)
+# The interpreter the native launcher runs now, asked as the upgrade helper asks it, or None.
+# A Hermes update can move it (Nov 2, 2026: 3.14.7 to 3.14.9). A stale path makes Hermes
+# relaunch a guarded call into the new one without its input.
+def managed_interpreter(launcher, source, hermes_home):
+    if not launcher:
+        return None
+    try:
+        command = json.loads(subprocess.check_output([launcher, "--print-runtime-command", "--module",
+            "hermes_cli.venv_sync", "--", "--project-root", str(source), "--check", "--json"], text=True, timeout=60))
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    found = command[0] if isinstance(command, list) and command and isinstance(command[0], str) else None
+    if not found or not Path(found).is_absolute() or not Path(found).resolve().is_relative_to(Path(hermes_home).resolve() / "tools"):
+        return None
+    return found
+
+# The metadata egress floor as the SSH user, which is the service user, sees it live.
+# release-app.py judges the result with the floor tool's own verdicts.
+def metadata_floor(probe):
+    import pwd
+    def run(argv):
+        try:
+            done = subprocess.run(argv, capture_output=True, text=True, timeout=30, check=False)
+            return done.returncode, done.stdout
+        except (OSError, subprocess.SubprocessError) as error:
+            return None, str(error)
+    uid = os.getuid()
+    code, listing = run(probe["liveRulesCommand"])
+    return {"uid": uid, "user": pwd.getpwuid(uid).pw_name,
+            "enabled": run(["systemctl", "is-enabled", probe["unit"]])[1].strip(),
+            "active": run(["systemctl", "is-active", probe["unit"]])[1].strip(),
+            "userManager": run(["systemctl", "show", "user@" + str(uid) + ".service", "-p", "Requires", "-p", "After"])[1],
+            "listing": listing if code == 0 else None,
+            "probe": floor_probe(probe["v4"], probe["v6"], probe["port"], probe["timeoutSeconds"], probe["interfaces"])}
 """
 
+# The app service as systemd has it loaded, drop-ins included: its running process, the command it
+# starts and its environment. A release must build, qualify and deploy with the Node it runs.
+SERVICE_COMMAND = ["systemctl", "--user", "show", "agent-interface.service", "-p", "MainPID", "-p", "ExecStart",
+                   "-p", "Environment", "-p", "EnvironmentFiles"]
+
 REMOTE_FACTS = """
+import glob, re, shlex
+def service_runtime(command):
+    # Real paths, so a symlink or a second path to one binary compares as that binary. `running` and
+    # `livePath` are the live process, which a reload without a restart or a retargeted symlink
+    # leaves as it was; `execStart` and `path` are what the next start would use.
+    shown = {}
+    for line in subprocess.run(command, capture_output=True, text=True, check=False).stdout.splitlines():
+        if "=" in line:
+            key, value = line.split("=", 1)
+            shown.setdefault(key, []).append(value)
+    one = lambda key: (shown.get(key) or [""])[0]
+    real = lambda path: os.path.realpath(path) if path and os.path.exists(path) else None
+    node_on = lambda path: real(shutil.which("node", path=path)) if path else None
+    # systemd prints an ExecStart path with spaces as is, and quotes an Environment entry with spaces.
+    start = re.search(r"path=(.+?) ; argv\\[\\]=", one("ExecStart"))
+    path = next((value[5:] for value in shlex.split(one("Environment")) if value.startswith("PATH=")), "")
+    pid = one("MainPID").strip()
+    live = ""
+    if pid.isdigit() and pid != "0":
+        try:
+            variables = Path("/proc/" + pid + "/environ").read_bytes().decode(errors="replace").split("\\0")
+            live = next((value[5:] for value in variables if value.startswith("PATH=")), "")
+        except OSError:
+            pass
+    def sets_path(file, ignored):
+        try:
+            return any(re.match(r"\\s*(export\\s+)?PATH\\s*=", line) for line in Path(file).read_text().splitlines())
+        except OSError:
+            return not ignored
+    path_files = []
+    for entry in shown.get("EnvironmentFiles", []):
+        listed = re.fullmatch(r"(.+) \\(ignore_errors=(yes|no)\\)", entry)
+        file, ignored = (listed.group(1), listed.group(2) == "yes") if listed else (entry, False)
+        # systemd expands a wildcard and reads each match; no match fails a required entry.
+        matches = sorted(glob.glob(file)) if glob.has_magic(file) else [file]
+        if not matches and not ignored:
+            path_files.append(file)
+        path_files += [match for match in matches if sets_path(match, ignored)]
+    return {"running": real("/proc/" + pid + "/exe") if pid.isdigit() and pid != "0" else None,
+            "livePath": node_on(live), "execStart": real(start.group(1)) if start else None,
+            "path": node_on(path), "pathFiles": path_files}
+
+
 base = Path(PAYLOAD["appBase"]); operations = base / "operations"
 best = None
 for path in operations.glob("*/deploy-config.json"):
@@ -218,16 +402,20 @@ if best is None:
 prior = best[2]
 status = json.loads((Path(prior["upgradeStateDir"]) / "status.json").read_text())
 source = prior["source"]
+worker = json.loads((base / "shared/hermes-worker.json").read_text())
 finish({
+    "managedPython": managed_interpreter(worker.get("managedLauncher"), source, prior["hermesHome"]),
     "hermesRevision": subprocess.check_output(["git", "-C", source, "rev-parse", "HEAD"], text=True).strip(),
     "repairSha256": hashlib.sha256(subprocess.check_output(["git", "-c", "core.abbrev=10", "-C", source, "diff", "HEAD", "--binary"])).hexdigest(),
     "workerSha256": sha(base / "shared/hermes-worker.json"),
     "priorPath": str(best[1]), "prior": prior, "current": str((base / "current").resolve()),
-    "worker": json.loads((base / "shared/hermes-worker.json").read_text()),
+    "worker": worker,
     "profileHashes": {path: sha(path) for path in prior["profileHashes"]},
     "upgradePhase": status.get("phase"), "maintenance": status.get("maintenance") is not False,
     "leasePresent": Path(prior["maintenanceFile"]).exists(),
     "drainPresent": (Path(prior["hermesHome"]) / ".drain_request.json").exists(),
+    "metadataFloor": metadata_floor(PAYLOAD["metadataProbe"]),
+    "serviceRuntime": service_runtime(PAYLOAD["serviceCommand"]),
 })
 """
 
@@ -239,6 +427,9 @@ assert sha(archive) == PAYLOAD["archiveSha256"], "The uploaded archive does not 
 release.mkdir()
 subprocess.run(["tar", "xzf", str(archive), "-C", str(release)], check=True)
 environment = dict(os.environ, PATH=str(Path(PAYLOAD["node"]).parent) + os.pathsep + os.environ["PATH"])
+# npm and the build call `node` by name, so it must be the selected binary and no other.
+selected = os.path.realpath(PAYLOAD["node"])
+assert os.path.realpath(shutil.which("node", path=environment["PATH"]) or "") == selected, "node on the build PATH is not " + PAYLOAD["node"]
 with (operation / "build.log").open("w") as log:
     for command in (["npm", "ci", "--cache", str(base / "npm-cache"), "--no-audit", "--no-fund"], ["npm", "run", "build"]):
         if subprocess.run(command, cwd=release, env=environment, stdout=log, stderr=subprocess.STDOUT).returncode:
@@ -250,13 +441,40 @@ try:
     receipt_result = {"valid": valid, "error": None if valid else "revision or repair differs"}
 except Exception as error:
     receipt_result = {"valid": False, "error": f"{type(error).__name__}: {error}"}
-finish({"buildLog": (operation / "build.log").read_text()[-4000:],
+finish({"buildLog": (operation / "build.log").read_text()[-4000:], "nodeVersion": subprocess.check_output([selected, "--version"], text=True).strip(),
+        "nodeRealpath": selected,
         "helperSha256": sha(release / "scripts/hermes-upgrade-linux.py"), "receipt": receipt_result})
 """
 
 REMOTE_LIVE = """
 base = Path(PAYLOAD["appBase"])
 finish({"current": str((base / "current").resolve()), "workerSha256": sha(base / "shared/hermes-worker.json")})
+"""
+
+# Releases kept beyond the live one and the rollback target its deploy configuration names.
+# Older ones are removed only after a week untouched, so a stage another session is still
+# preparing or qualifying is never removed under it.
+RELEASES_KEPT = 10
+RELEASE_MIN_AGE_DAYS = 7
+REMOTE_PRUNE = """
+import re
+base = Path(PAYLOAD["appBase"]); releases = base / "releases"
+current = (base / "current").resolve()
+keep = {current}
+# The live release's deploy configuration names its rollback target.
+config = base / "operations" / current.name / "deploy-config.json"
+if config.exists():
+    keep |= {(releases / name).resolve() for name in re.findall(r"releases/(release-[A-Za-z0-9._-]+)", config.read_text())}
+dirs = sorted((p for p in releases.iterdir() if p.is_dir() and not p.is_symlink()), key=lambda p: p.stat().st_mtime, reverse=True)
+keep |= {p.resolve() for p in dirs[:PAYLOAD["keep"]]}
+import time
+def touched(path):
+    operation = base / "operations" / path.name
+    return max(path.stat().st_mtime, operation.stat().st_mtime if operation.exists() else 0)
+cutoff = time.time() - PAYLOAD["minAgeDays"] * 86400
+removed = [p.name for p in dirs if p.resolve() not in keep and touched(p) < cutoff]
+for name in removed: shutil.rmtree(releases / name)
+finish({"removed": removed, "kept": len(dirs) - len(removed)})
 """
 
 REMOTE_WRITE_CONFIG = """
@@ -277,6 +495,7 @@ finish({"current": str((base / "current").resolve()), "release": str(Path(PAYLOA
         "phase": status.get("phase"), "maintenance": status.get("maintenance"),
         "leasePresent": Path(PAYLOAD["maintenanceFile"]).exists(),
         "drainPresent": (Path(PAYLOAD["hermesHome"]) / ".drain_request.json").exists(),
+        "metadataFloor": metadata_floor(PAYLOAD["metadataProbe"]),
         "result": json.loads(result.read_text()) if result.is_file() else None})
 """
 
@@ -307,8 +526,14 @@ else:
                  *(units / (unit + ".service.d") / name for unit in ("hermes-gateway", "hermes-dashboard")
                    for name in ("90-agent-interface.conf", "computer.conf")),
                  *(source / ("agent_interface_" + name + ".py") for name in ("gateway", "dashboard", "computer_host"))]
+    worker = json.loads((base / "shared/hermes-worker.json").read_text())
+    managed = managed_interpreter(worker.get("managedLauncher"), source, home)
+    assert managed, "The native launcher did not report an interpreter inside the Hermes tool store."
     config = dict(prior,
-        release=str(release), expectedRelease=str(release), operationId=operation,
+        # The runtime the stage was qualified with, which the service runs, not the one the live
+        # release was first deployed with. A stage from before releases recorded it keeps the live one.
+        node=PAYLOAD.get("node") or prior["node"],
+        release=str(release), expectedRelease=str(release), operationId=operation, managedPython=managed,
         hermesRevision=subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip(),
         repairSha256=hashlib.sha256(subprocess.check_output(["git", "-c", "core.abbrev=10", "-C", str(source), "diff", "HEAD", "--binary"])).hexdigest(),
         newQualificationReceipt=PAYLOAD["receipt"],
@@ -379,10 +604,16 @@ def remote_source(program, payload):
     return REMOTE_PRELUDE + f"PAYLOAD = json.loads({json.dumps(json.dumps(payload))})\n" + program
 
 
+def host_facts(host, app_base):
+    """The live host facts every release tool starts from. One caller shape, so a key REMOTE_FACTS
+    reads can never be missing from one tool's payload (Nov 4, 2026: qualification sent no
+    metadataProbe and stopped with a KeyError on the host)."""
+    return remote(host, REMOTE_FACTS, {"appBase": str(app_base), "metadataProbe": METADATA_PROBE, "serviceCommand": SERVICE_COMMAND})
+
+
 def remote(host, program, payload, timeout=900):
     """Run a Python program on the host with a JSON payload; return its final JSON line."""
-    done = subprocess.run(["ssh", "-o", "BatchMode=yes", host, "python3", "-"], input=remote_source(program, payload),
-                          capture_output=True, text=True, timeout=timeout)
+    done = host_access.ssh(host, ["python3", "-"], input=remote_source(program, payload), timeout=timeout, check=False, capture=True)
     if done.returncode:
         raise SystemExit(f"Host step failed:\n{(done.stderr or done.stdout).strip()[-3000:]}")
     return json.loads(done.stdout.strip().splitlines()[-1])
@@ -390,8 +621,7 @@ def remote(host, program, payload, timeout=900):
 
 def guarded(host, manifest, check):
     command = f"cd {shlex.quote(manifest['release'])} && python3 {GUARDED_TOOL} --config {shlex.quote(manifest['configPath'])}"
-    done = subprocess.run(["ssh", "-o", "BatchMode=yes", host, command + (" --check" if check else "")],
-                          capture_output=True, text=True, timeout=1800)
+    done = host_access.ssh(host, command + (" --check" if check else ""), timeout=1800, check=False, capture=True)
     output = done.stdout.strip()
     print(output)
     if done.returncode:
@@ -422,7 +652,7 @@ def manifest_lock(name):
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            raise SystemExit(f"Another release-app.py command is using {name}. Try again after it finishes.")
+            raise SystemExit(f"Another release-app.py command is using {name}. Try again after it finishes.") from None
         yield
 
 
@@ -439,7 +669,7 @@ def build_locally(commit, work):
         archive = json.loads(subprocess.check_output(
             [sys.executable, ".agents/tools/archive-release.py", str(work / "release.tar.gz")], cwd=checkout, text=True))
         log = subprocess.run("npm ci --no-audit --no-fund && npm run build", shell=True, cwd=checkout,
-                             capture_output=True, text=True)
+                             capture_output=True, text=True, check=False)
         if log.returncode:
             raise SystemExit("The local build failed:\n" + (log.stdout + log.stderr)[-3000:])
         return archive["sha256"], built_web_version(log.stdout)
@@ -448,15 +678,19 @@ def build_locally(commit, work):
 
 
 def prepare(args):
+    if args.node and (not Path(args.node).is_absolute() or Path(args.node).name != "node"):
+        raise SystemExit("--node must be an absolute host path to a binary named node, which npm finds by that name.")
     git("fetch", "--quiet", "origin", "main")
     commit = git("rev-parse", "--verify", args.commit + "^{commit}")
-    if subprocess.run(["git", "merge-base", "--is-ancestor", commit, "origin/main"], cwd=ROOT).returncode:
+    if subprocess.run(["git", "merge-base", "--is-ancestor", commit, "origin/main"], cwd=ROOT, check=False).returncode:
         raise SystemExit("Release only commits that are merged to origin/main.")
     name = release_name(commit, datetime.datetime.now(datetime.timezone.utc))
     base = Path(args.app_base)
-    facts = remote(args.host, REMOTE_FACTS, {"appBase": str(base)})
+    facts = host_facts(args.host, base)
     prior = facts["prior"]
     print(f"Carrying settings from {facts['priorPath']}; live release {Path(facts['current']).name}.")
+    node = args.node or prior["node"]
+    engines = json.loads(git("show", f"{commit}:package.json")).get("engines", {}).get("node")
     operation_dir = base / "operations" / name
     release = base / "releases" / name
     manifest = {
@@ -464,6 +698,7 @@ def prepare(args):
         "release": str(release), "operationDir": str(operation_dir), "origin": prior["appOrigin"],
         "hermesRevision": facts["hermesRevision"], "qualification": "new" if args.qualification else "reused",
         "pullRequest": merged_pull_request(git("log", "-1", "--format=%s", commit)),
+        "node": node,
     }
     with tempfile.TemporaryDirectory() as temporary:
         work = Path(temporary)
@@ -471,19 +706,21 @@ def prepare(args):
         manifest["archiveSha256"] = archive_sha
         # Recorded before the host changes, so discard can always clean up.
         save_manifest(manifest)
-        subprocess.run(["ssh", "-o", "BatchMode=yes", args.host,
-                        f"umask 077 && mkdir {shlex.quote(str(operation_dir))}"], check=True)
-        subprocess.run(["scp", "-q", "-o", "BatchMode=yes", str(work / "release.tar.gz"),
-                        f"{args.host}:{operation_dir}/release.tar.gz"], check=True)
+        host_access.ssh(args.host, f"umask 077 && mkdir {shlex.quote(str(operation_dir))}", timeout=60)
+        host_access.scp(str(work / "release.tar.gz"), f"{args.host}:{operation_dir}/release.tar.gz", timeout=900)
     built = remote(args.host, REMOTE_BUILD, {
         "appBase": str(base), "release": str(release), "operationDir": str(operation_dir),
-        "archiveSha256": archive_sha, "node": prior["node"], "qualification": args.qualification,
+        "archiveSha256": archive_sha, "node": node, "qualification": args.qualification,
         "qualificationReceipt": prior["qualificationReceipt"], "hermesRevision": facts["hermesRevision"],
         "repairSha256": facts["repairSha256"]})
     built["webBuild"] = built_web_version(built["buildLog"])
-    manifest.update(webBuild=built["webBuild"], helperChanged=built["helperSha256"] != prior["fixedHelperSha256"])
+    # Qualification, the deploy and recovery run the binary the host built with, not the path that
+    # named it: a symlink retargeted after preparation would otherwise swap the runtime under them.
+    node = built["nodeRealpath"]
+    manifest.update(node=node, webBuild=built["webBuild"], nodeVersion=built["nodeVersion"], nodeRealpath=node,
+                    helperChanged=built["helperSha256"] != prior["fixedHelperSha256"])
     save_manifest(manifest)
-    problems = preparation_problems(facts, built, local_web_build=local_web_build,
+    problems = preparation_problems(facts, built, local_web_build=local_web_build, engines=engines,
                                     qualification=args.qualification, accept_helper_change=args.accept_helper_change)
     if problems:
         raise SystemExit("Not ready to release:\n- " + "\n- ".join(problems)
@@ -492,7 +729,7 @@ def prepare(args):
                            web_build=built["webBuild"], worker=facts["worker"],
                            profile_hashes=facts["profileHashes"], helper_sha=built["helperSha256"],
                            hermes_revision=facts["hermesRevision"], repair_sha=facts["repairSha256"],
-                           qualification=args.qualification)
+                           qualification=args.qualification, managed_python=facts["managedPython"], node=node)
     config_path = operation_dir / "deploy-config.json"
     remote(args.host, REMOTE_WRITE_CONFIG, {"path": str(config_path), "config": config})
     manifest.update(configPath=str(config_path), operationId=config["operationId"],
@@ -527,13 +764,17 @@ def verify_release(manifest):
         "appBase": manifest["appBase"], "release": manifest["release"], "units": APP_UNITS,
         "operationId": manifest["operationId"],
         "upgradeStateDir": manifest["upgradeStateDir"], "maintenanceFile": manifest["maintenanceFile"],
-        "hermesHome": manifest["hermesHome"]})
+        "hermesHome": manifest["hermesHome"], "metadataProbe": METADATA_PROBE})
+    floor = metadata_floor_problems(live["metadataFloor"])
+    for problem in floor:
+        print(problem, file=sys.stderr)
     checks = {
         "publicServiceWorkerBuild": public_build,
         "apiRequiresSignIn": signed_out,
         "releaseIsCurrent": live["current"] == live["release"],
         "servicesActive": all(state == "active" for state in live["units"].values()),
         "maintenanceCleared": maintenance_clear(live),
+        "metadataEgressFloor": not floor,
     }
     return checks, live["result"]
 
@@ -547,6 +788,13 @@ def activate(args):
     if live["current"] != manifest["expectedRelease"] or live["workerSha256"] != manifest["workerSha256"]:
         raise SystemExit("The live release or worker configuration changed since preparation. "
                          f"Discard {args.name} and prepare again.")
+    # The service may have been switched back since preparation; the deploy would then check and back
+    # up with one Node while the service starts on another. A stage prepared before releases recorded
+    # their runtime has nothing to compare.
+    if "nodeRealpath" in manifest:
+        stale = runtime_problems(host_facts(manifest["host"], manifest["appBase"]).get("serviceRuntime"), manifest["nodeRealpath"])
+        if stale:
+            raise SystemExit("Not activating:\n- " + "\n- ".join(stale))
     # Recorded before cutover, so an interrupted run can never look merely prepared.
     manifest["status"] = "activating"
     save_manifest(manifest)
@@ -565,13 +813,30 @@ def activate(args):
         raise SystemExit(held_for_review())
     manifest.update(status="activated", guardedResult=result)
     save_manifest(manifest)
+    prune_releases(manifest)
     record_release(manifest, docs_pr=not args.no_docs_pr)
 
 
+def prune_releases(manifest):
+    """Remove old release builds so the host keeps room for Hermes update checks; never fails a release."""
+    try:
+        pruned = remote(manifest["host"], REMOTE_PRUNE, {"appBase": manifest["appBase"], "keep": RELEASES_KEPT, "minAgeDays": RELEASE_MIN_AGE_DAYS})
+        print(f"Removed {len(pruned['removed'])} old releases; kept {pruned['kept']}.")
+    except (SystemExit, subprocess.SubprocessError, ValueError, KeyError, TypeError) as error:
+        print(f"Warning: old releases were not pruned: {error}", file=sys.stderr)
+
+
 def write_records(root, manifest):
-    """Write the release's receipt and ledger entry into a checkout; rerunning changes nothing."""
-    (root / "docs/evidence" / manifest["receiptName"]).write_text(manifest["productionReceipt"])
-    insert_ledger_entry(root / "docs/ValidationLedger.md", manifest["ledgerEntry"], manifest["receiptName"])
+    """Write the release's receipt and ledger entry into a checkout; rerunning changes nothing.
+
+    Returns the paths that hold this release's records. The entry file is absent when the release was
+    already recorded elsewhere, by hand or in the archive, so only the receipt is listed then.
+    """
+    receipt = "docs/evidence/" + manifest["receiptName"]
+    (root / receipt).write_text(manifest["productionReceipt"])
+    insert_ledger_entry(root, manifest)
+    entry = ledger_file(manifest["name"])
+    return [entry, receipt] if (root / entry).exists() else [receipt]
 
 
 def record_release(manifest, docs_pr=True):
@@ -625,8 +890,7 @@ def open_docs_pull_request(manifest):
                 checkout = Path(temporary) / "records"
                 git("worktree", "add", "--quiet", "--detach", str(checkout), "origin/main")
                 try:
-                    write_records(checkout, manifest)
-                    git("add", "docs/ValidationLedger.md", "docs/evidence/" + manifest["receiptName"], cwd=checkout)
+                    git("add", *write_records(checkout, manifest), cwd=checkout)
                     if not git("status", "--porcelain", cwd=checkout):
                         print("origin/main already records this release; no docs PR is needed.")
                         return
@@ -644,7 +908,7 @@ def open_docs_pull_request(manifest):
               f"Retry with: release-app.py record {manifest['name']}\n"
               f"Or by hand:\n"
               f"  git fetch origin main && git switch -c {branch} origin/main\n"
-              f"  git add docs/ValidationLedger.md docs/evidence/{manifest['receiptName']}\n"
+              f"  git add {ledger_file(manifest['name'])} docs/evidence/{manifest['receiptName']}\n"
               f"  git commit -m {shlex.quote(title)} && git push -u origin {branch}\n"
               f"  gh pr create --base main --head {branch} --title {shlex.quote(title)}")
 
@@ -697,9 +961,13 @@ def run_recovery(args):
     if result.get("qualificationComplete") is not True:
         raise SystemExit(f"Qualify first: qualify-app-release.py {args.name}")
     host = args.host or manifest["host"]
+    if "nodeRealpath" in manifest:
+        stale = runtime_problems(host_facts(host, manifest["appBase"]).get("serviceRuntime"), manifest["nodeRealpath"])
+        if stale:
+            raise SystemExit("Not recovering:\n- " + "\n- ".join(stale))
     operation = str(uuid.uuid4())
     payload = {"appBase": manifest["appBase"], "receipt": result["receipt"], "operationId": operation,
-               "check": True, "heartbeatWaitSeconds": 150}
+               "check": True, "heartbeatWaitSeconds": 150, "node": manifest.get("node")}
     # A failed check changes nothing, so the release stays recoverable.
     print(json.dumps(remote(host, REMOTE_RECOVER, payload, timeout=1800), indent=2))
     if args.check:
@@ -720,16 +988,37 @@ def run_recovery(args):
     print(json.dumps(outcome, indent=2))
 
 
+def add_prepare_arguments(parser):
+    """prepare's arguments, which prepare-when-idle.py takes too, so the two can't drift apart
+    (Nov 8, 2026: the wrapper listed them by hand, lacked --node, and a release stopped)."""
+    return [
+        parser.add_argument("commit"),
+        parser.add_argument("--host", required=True, help="SSH alias of the app host"),
+        parser.add_argument("--app-base", required=True, help="absolute application directory on the host"),
+        parser.add_argument("--qualification", help="fresh qualification receipt on the host, when integration inputs changed"),
+        parser.add_argument("--accept-helper-change", action="store_true",
+                            help="confirm a reviewed change to scripts/hermes-upgrade-linux.py"),
+        parser.add_argument("--node", help="absolute host path to the app runtime's node; defaults to the last release's. "
+                                           "The app service must already run it"),
+    ]
+
+
+def prepare_argv(actions, args):
+    """The prepare arguments that parse back to `args`: each option as --name=value, so no value is
+    read as an option, and the commit last after --, so it is never read as one either."""
+    argv = []
+    for action in actions:
+        value = getattr(args, action.dest)
+        if action.option_strings and value not in (None, False):
+            argv.append(action.option_strings[0] if action.nargs == 0 else f"{action.option_strings[0]}={value}")
+    return argv + ["--", *(getattr(args, action.dest) for action in actions if not action.option_strings)]
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = parser.add_subparsers(dest="command", required=True)
     step = commands.add_parser("prepare", help="build and preflight a merged commit")
-    step.add_argument("commit")
-    step.add_argument("--host", required=True, help="SSH alias of the app host")
-    step.add_argument("--app-base", required=True, help="absolute application directory on the host")
-    step.add_argument("--qualification", help="fresh qualification receipt on the host, when integration inputs changed")
-    step.add_argument("--accept-helper-change", action="store_true",
-                      help="confirm a reviewed change to scripts/hermes-upgrade-linux.py")
+    add_prepare_arguments(step)
     step.set_defaults(run=prepare)
     for name, run, text in (("activate", activate, "activate a prepared release"),
                             ("record", record, "verify an activated release and write its records"),

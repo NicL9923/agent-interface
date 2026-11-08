@@ -1,28 +1,53 @@
 import { useEffect, useState } from "react";
 export type InstallEvent = Event & { prompt: () => Promise<void> };
-export function useMobile() {
-  const [mobile, setMobile] = useState(() => matchMedia("(max-width: 620px)").matches);
+/** Whether a media query matches now, following changes such as a resize or a mouse plugged in. */
+export function useMediaQuery(media: string) {
+  const [matches, setMatches] = useState(() => matchMedia(media).matches);
   useEffect(() => {
-    const query = matchMedia("(max-width: 620px)");
-    const update = () => setMobile(query.matches);
+    const query = matchMedia(media);
+    const update = () => setMatches(query.matches);
+    update();
     query.addEventListener("change", update);
     return () => query.removeEventListener("change", update);
-  }, []);
-  return mobile;
+  }, [media]);
+  return matches;
 }
+export const useMobile = () => useMediaQuery("(max-width: 620px)");
+/**
+ * Whether a mouse or trackpad is attached, the closest a page can come to knowing a keyboard is.
+ * Touch-only phones and tablets have neither, so keyboard hints stay off there.
+ */
+export const useFinePointer = () => useMediaQuery("(any-pointer: fine)");
 /** How often a long-open tab or installed app asks for a newer build. Browsers only check on navigation. */
 export const UPDATE_CHECK_MS = 30 * 60_000;
 export interface AppUpdate {
   applying: boolean;
   apply(): void;
 }
+/**
+ * Once the page is idle, asks the active worker to cache the lazy screens for offline use. The
+ * message keeps the worker alive while it downloads, and every page load finishes what an earlier
+ * run missed. Returns a cancel function.
+ */
+function warmOfflineWhenIdle(container: ServiceWorkerContainer) {
+  const run = async () => {
+    try { (await container.ready).active?.postMessage({ type: "WARM" }); } catch { /* Best effort. */ }
+  };
+  if (typeof requestIdleCallback === "function") {
+    const id = requestIdleCallback(() => void run(), { timeout: 5000 });
+    return () => cancelIdleCallback(id);
+  }
+  const id = setTimeout(() => void run(), 2000);
+  return () => clearTimeout(id);
+}
+
 export function useAppInstall() {
   const [update, setUpdate] = useState<AppUpdate | null>(null);
   const [installEvent, setInstallEvent] = useState<InstallEvent | null>(null);
   const [notice, setNotice] = useState("");
   useEffect(() => {
     if (!import.meta.env.PROD || !("serviceWorker" in navigator)) return;
-    let cancelled = false, registration: ServiceWorkerRegistration | undefined, checkedAt = Date.now();
+    let cancelled = false, cancelWarm = () => {}, registration: ServiceWorkerRegistration | undefined, checkedAt = Date.now();
     // A page loaded without a worker gets its first one by claim, which is not an update.
     let controlled = !!navigator.serviceWorker.controller;
     const reload = () => location.reload();
@@ -57,6 +82,7 @@ export function useAppInstall() {
       .then((value) => {
         if (cancelled) return;
         registration = value;
+        cancelWarm = warmOfflineWhenIdle(navigator.serviceWorker);
         if (value.waiting) waiting();
         value.addEventListener("updatefound", () => {
           const worker = value.installing;
@@ -70,6 +96,7 @@ export function useAppInstall() {
       );
     return () => {
       cancelled = true;
+      cancelWarm();
       clearInterval(timer);
       navigator.serviceWorker.removeEventListener("controllerchange", switched);
       document.removeEventListener("visibilitychange", visible);

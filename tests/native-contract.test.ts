@@ -1,5 +1,7 @@
+import { experienceRequester, automationRequester } from "./helpers/runtime-fixtures.js";
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
@@ -7,7 +9,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createApp } from "../src/server/app.js";
 import { loadConfig } from "../src/server/config.js";
 import type { HermesUpgrades } from "../src/server/upgrades.js";
-import type { GroupCatalog, GroupPage, GroupRoom, GroupState, RoutineOutput, RoutineResult } from "../src/shared/collaboration.js";
+import type { GroupCatalog, GroupContext, GroupPage, GroupRoom, GroupState, RoutineOutput, RoutineResult } from "../src/shared/collaboration.js";
 import type { HistoryPage, SearchHit, UsageSummary } from "../src/shared/discovery.js";
 import type { ProfileMemory, RoutinePreview, RoutineRunReceipt } from "../src/shared/experience.js";
 import type { IntegrationCatalog, IntegrationConnection, IntegrationFlow } from "../src/shared/integrations.js";
@@ -15,16 +17,17 @@ import type { Bot, Capabilities, Conversation, FileRef, Message, ModelCatalog, P
 import type { UpgradeStatus } from "../src/shared/upgrades.js";
 import type { ProfileVault } from "../src/shared/vault.js";
 import type { VoiceTranscript } from "../src/shared/voice.js";
+import type { AutomationOverview as ProfileAutomationOverview, AutomationTask, EventSubscription, SkillContent, SkillDiff } from "../src/shared/automation.js";
 
 // The iOS app decodes these responses. Every optional field the app reads is populated, so a
 // renamed or retyped field changes a committed fixture and the Swift decoding test sees it.
 const directory = fileURLToPath(new URL("../ios/AgentInterfaceTests/Contract/", import.meta.url));
-const instruction = "If the API change is intended, run `UPDATE_CONTRACT=1 npx vitest run tests/native-contract.test.ts`, commit the fixtures, and update the Swift types and ios/AgentInterfaceTests/ContractFixtureTests.swift.";
+const instruction = "If the API change is intended, run `UPDATE_CONTRACT=1 npx vitest run tests/native-contract.test.ts`, commit the fixtures, update the Swift types and ios/AgentInterfaceTests/ContractFixtureTests.swift, then run the iOS contract tests on the Mac mini: `bash .agents/tools/validate-ios.sh SIMULATOR_UUID test -only-testing:AgentInterfaceTests/ContractFixtureTests`.";
 const now = "2026-10-01T12:00:00.000Z";
 const origin = "http://127.0.0.1:3000";
 const at = (time: string) => `2026-10-01T${time}:00.000Z`;
 // Request IDs this test chooses stay readable; any other UUID is server-generated and normalized.
-const ids = { submission: "3f1c2a4e-8b7d-4c6e-9a5f-1d2e3c4b5a69", run: "7d9e0f1a-2b3c-4d5e-8f60-718293a4b5c6", group: "c0ffee00-1234-4abc-8def-0123456789ab", groupMessage: "5e6f7a8b-9c0d-4e1f-a2b3-c4d5e6f7a8b9", groupStop: "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d", operation: "9a8b7c6d-5e4f-4a3b-9c2d-1e0f9a8b7c6d", control: "0f1e2d3c-4b5a-4968-8776-5a4b3c2d1e0f", device: "6c5b4a39-2817-4f6e-9d5c-4b3a29180f7e" };
+const ids = { submission: "3f1c2a4e-8b7d-4c6e-9a5f-1d2e3c4b5a69", run: "7d9e0f1a-2b3c-4d5e-8f60-718293a4b5c6", group: "c0ffee00-1234-4abc-8def-0123456789ab", groupMessage: "5e6f7a8b-9c0d-4e1f-a2b3-c4d5e6f7a8b9", groupStop: "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d", groupContext: "b2c3d4e5-f6a7-4b8c-9d0e-1f2a3b4c5d6e", operation: "9a8b7c6d-5e4f-4a3b-9c2d-1e0f9a8b7c6d", control: "0f1e2d3c-4b5a-4968-8776-5a4b3c2d1e0f", device: "6c5b4a39-2817-4f6e-9d5c-4b3a29180f7e" };
 const ourIds = new Set(Object.values(ids));
 
 const generated = { id: "plan.signature", name: "dinner-plan.pdf", mime: "application/pdf", size: 18432, url: "/api/files/plan.signature" } satisfies FileRef;
@@ -42,6 +45,7 @@ const bots = [
 const supported = { supported: true };
 const capabilities = { chat: supported, steering: supported, approvals: supported, uploads: supported, generatedFiles: supported, botConfiguration: supported, tools: supported,
   skills: supported, routines: supported, durableEvents: supported, idempotency: supported, stop: supported, portraitGeneration: supported, avatarMetadata: supported,
+  liveVoice: { supported: false, reason: "The WildBots voice plugin is not linked into Hermes." },
   imageGeneration: { supported: false, reason: "The connected Hermes profile has no image provider." } } satisfies Capabilities;
 const status = { connected: true, code: "ready", version: "0.9.4", detail: "Connected to Hermes on the household VPS.", address: "wss://hermes.example.test/agent-ui",
   retryAt: at("12:05"), lastConnectedAt: at("11:58") } satisfies RuntimeStatus;
@@ -75,7 +79,7 @@ const models = { provider: "anthropic", model: "claude-sonnet", providers: [{ id
 const tools = [{ id: "terminal", name: "Terminal", description: "Run shell commands.", enabled: true }, { id: "web", name: "Web", description: "Search the web.", enabled: true }] satisfies Tool[];
 const skills = [{ id: "meal-planning", name: "Meal planning", description: "Plan balanced meals.", enabled: true, required: true }] satisfies Skill[];
 const routines = [
-  { id: "routine-morning", botId: "household", name: "Morning brief", prompt: "Prepare a morning brief.", schedule: "0 7 * * *", enabled: true, recipientIds: ["local-one"],
+  { id: "routine-morning", botId: "household", name: "Morning brief", prompt: "Prepare a morning brief.", schedule: "0 7 * * *", enabled: true, recipientIds: ["local-one"], roomIds: ["room-dinner"],
     nextRunAt: "2026-10-02T07:00:00.000Z", lastRunAt: at("07:00"), lastStatus: "ok", lastError: "The weather source timed out.", lastDeliveryError: "One device was offline." },
   { id: "routine-garden", botId: "garden", name: "Watering reminder", prompt: "Remind me to water.", schedule: "0 18 * * *", enabled: false },
 ] satisfies Routine[];
@@ -88,6 +92,20 @@ const memory = { botId: "household", profile: "household", scope: "profile", own
 const preview = { botId: "household", schedule: "0 7 * * *", timezone: "America/Chicago", nextRuns: ["2026-10-02T12:00:00.000Z", "2026-10-03T12:00:00.000Z"], kind: "cron" } satisfies RoutinePreview;
 const runReceipt = { requestId: ids.run, routineId: "routine-morning", botId: "household", status: "completed", message: "The trial finished.", startedAt: at("11:30"), finishedAt: at("11:31"),
   executionId: "execution-1", ownerStatus: "succeeded" } satisfies RoutineRunReceipt;
+const automationTask = { id: "task-fence", title: "Check the north gate", body: "Inspect the latch before opening the pasture.", status: "blocked", priority: 5,
+  assignee: "garden", owner: "household", dependencies: ["task-supplies"], blockedReason: "Waiting for supplies." } satisfies AutomationTask;
+const eventSubscription = { id: "gate-event", description: "Gate alert", events: ["gate.open", "gate.closed"], routineId: "routine-morning", enabled: false,
+  url: "https://hermes.example.test/webhook/gate-event", secretSet: true, revision: "b".repeat(64) } satisfies EventSubscription;
+const profileAutomation = { botId: "household", owner: "Hermes", goals: { supported: true,
+  goal: { title: "Maintain the pasture", status: "paused", turnsUsed: 4, maxTurns: 20, pausedReason: "Waiting for your approval." },
+  resume: { requestId: ids.run, status: "accepted", runId: "run-goal" } },
+  tasks: { supported: true, items: [automationTask] }, triggers: { supported: true, items: [eventSubscription], platformEnabled: false },
+  skills: { supported: true, installed: [{ name: "ranch/fences", description: "Fence inspection", locked: true }, { name: "ranch/gates", description: "Gate checks", locked: false }],
+    pending: [{ id: "deadbeef", summary: "Add gate check", origin: "agent", revision: "c".repeat(64) }], approvalRequired: true, lockSupported: true },
+} satisfies ProfileAutomationOverview;
+const skillContent = { name: "ranch/fences", content: "# Fence inspection\n\nCheck the north gate.", truncated: false } satisfies SkillContent;
+// The detail revision hashes the displayed diff, so it deliberately differs from the list revision.
+const skillDiff = { id: "deadbeef", diff: "--- SKILL.md\n+++ SKILL.md\n+Check the north gate.\n", revision: "d".repeat(64), truncated: false } satisfies SkillDiff;
 const hits = [{ botId: "household", botName: "Household", sessionId: "session-household", title: "Dinner planning", snippet: "Five easy dinners", updatedAt: at("11:05") }] satisfies SearchHit[];
 const history = { botId: "household", sessionId: "session-household", offset: 0, hasMore: true,
   // Hermes reports the app sender; the server turns it into a household sender.
@@ -97,9 +115,12 @@ const room = { room_id: "room-dinner", name: "Dinner team", latest_seq: 2, membe
   { member_id: "household", profile: "household", handle: "household", display_name: "Household", target: { kind: "local", profile: "household" } },
   { member_id: "garden", profile: "garden", handle: "garden", display_name: "Garden", target: { kind: "local", profile: "garden" } },
 ] } satisfies GroupRoom;
-const groups = { supported: true, canSend: true, reason: "Hosted group chats run on the household VPS.", rooms: [room] } satisfies GroupCatalog;
+const groups = { supported: true, canSend: true, reason: "Hosted group chats run on the household VPS.", rooms: [room], settings: true, routineDelivery: true } satisfies GroupCatalog;
+const groupContext = { purpose: "Plan the week's dinners.", notes: "No mushrooms.\nBudget is $120.", routing: "lead", lead_member_id: "garden" } satisfies GroupContext;
 const approval = { request_id: "approval-request-1", description: "Order groceries", command: "grocer order --items 12" };
-const groupState = { room, driver_status: { running: true, working: true, blocked: true, pending_actions: [{ kind: "approval", task_id: "task-1", member_id: "household", execution_generation: 1, ...approval, approval }] } } satisfies GroupState;
+const groupState = { room, driver_status: { running: true, working: true, blocked: true, pending_actions: [{ kind: "approval", task_id: "task-1", member_id: "household", execution_generation: 1, ...approval, approval }],
+  member_activity: [{ member_id: "garden", status: "running", thread_id: "thread-1", round_index: 1, started_at: 1790852410.25, tool: "web_search", progress_at: 1790852415.5 },
+    { member_id: "household", status: "queued", thread_id: "thread-1", round_index: 1 }], max_rounds: 3 }, context: groupContext } satisfies GroupState;
 const groupPage = { cursor: 1, latest_seq: 2, has_more: false, events: [{ event_id: "group-event-1", seq: 1, kind: "message", created_at: 1790852400.5, actor: { kind: "human", id: "local-one" },
   payload: { text: "Plan dinners together", thread_id: "thread-1", member_id: "household" } }] } satisfies GroupPage;
 const vault = { botId: "household", profile: "household", scope: "profile", owner: "Hermes", notice: "Hermes stores these logins for this profile.",
@@ -164,19 +185,27 @@ const runtime = {
   discoverEvents: async cursor => ({ cursor, events: [] }),
   modelOptions: async () => models,
   transcribeVoice: async () => transcript,
-  experienceRequest: async input => {
-    if (input.profile === "archive") throw offline();
-    switch (input.operation) {
-      case "search": return input.profile === "household" ? hits : [];
-      case "history": return history;
-      case "usage": return input.profile === "household" ? usage : { ...usage, botId: input.profile, sessions: 0, inputTokens: 0, outputTokens: 0, actualCost: null, estimatedCost: null, partial: true };
-      case "routine_results": return routineResults;
-      case "routine_output": return routineOutput;
-      case "memory": case "save_memory": case "delete_memory": return memory;
-      case "preview": return preview;
-      case "run": case "run_receipt": return { ...runReceipt, requestId: input.requestId };
-    }
-  },
+  experienceRequest: experienceRequester({
+    search: input => { if (input.profile === "archive") throw offline(); return input.profile === "household" ? hits : []; },
+    history: () => history,
+    usage: input => { if (input.profile === "archive") throw offline(); return input.profile === "household" ? usage : { ...usage, botId: input.profile, sessions: 0, inputTokens: 0, outputTokens: 0, actualCost: null, estimatedCost: null, partial: true }; },
+    routine_results: () => routineResults, routine_output: () => routineOutput,
+    memory: () => memory, save_memory: () => memory, delete_memory: () => memory,
+    preview: () => preview, run: input => ({ ...runReceipt, requestId: input.requestId }),
+    run_receipt: input => ({ ...runReceipt, requestId: input.requestId }),
+  }),
+  automationRequest: automationRequester({
+    overview: () => structuredClone(profileAutomation), goal_set: () => structuredClone(profileAutomation),
+    goal_pause: () => structuredClone(profileAutomation), goal_clear: () => structuredClone(profileAutomation),
+    goal_resume: input => ({ ...structuredClone(profileAutomation), goals: { ...structuredClone(profileAutomation.goals), resume: { requestId: input.requestId, status: "accepted", runId: "run-goal" } } }),
+    task_create: () => structuredClone(automationTask), task_get: () => structuredClone(automationTask),
+    task_update: () => structuredClone(automationTask), task_action: () => structuredClone(automationTask), task_dependency: () => structuredClone(automationTask),
+    trigger_create: () => ({ subscription: structuredClone(eventSubscription), secret: "one-time-contract-fixture" }),
+    trigger_update: () => ({ subscription: structuredClone(eventSubscription) }), trigger_toggle: () => ({ subscription: structuredClone(eventSubscription) }),
+    trigger_delete: () => ({ ok: true }), skill_content: () => skillContent, skill_diff: () => skillDiff,
+    skill_decide: () => ({ ok: true }), skill_policy: () => ({ ok: true }),
+    skill_lock: input => ({ ok: true, name: input.name, locked: input.locked }),
+  }),
   groupRequest: async input => {
     switch (input.operation) {
       case "list": return groups;
@@ -186,6 +215,8 @@ const runtime = {
       case "send": return { accepted: true };
       case "stop": return { cancelled: 1 };
       case "approve": return { approved: true };
+      case "context": return { context: { ...groupContext, purpose: input.purpose, notes: input.notes, routing: input.routing, lead_member_id: input.leadMemberId },
+        event: { event_id: input.requestId, seq: 3, kind: "room.context_set", created_at: 1790852420, actor: { kind: "system", id: "room-control" }, payload: {} } };
     }
   },
   vaultRequest: async input => {
@@ -205,9 +236,12 @@ const runtime = {
       default: return flow;
     }
   },
+  // The shared desktop as Hermes reports it; the server adds this person's terminal access.
+  computerRequest: async () => ({ available: true, running: true, browserReady: true, label: "Household computer",
+    control: { kind: "bot", name: "garden" }, terminal: { available: false, target: "" } }),
   close: async () => {},
 } satisfies Runtime;
-const upgrades: Pick<HermesUpgrades, "status" | "maintenance"> = { status: async () => upgrade, maintenance: () => false };
+const upgrades: Pick<HermesUpgrades, "status" | "maintenance" | "revisionDate"> = { status: async () => upgrade, maintenance: () => false, revisionDate: () => undefined };
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** Replaces values that differ per run. The frozen clock already fixes server timestamps. */
@@ -215,7 +249,7 @@ function normalize(value: unknown, seen = new Map<string, string>()): unknown {
   if (Array.isArray(value)) return value.map(item => normalize(item, seen));
   if (value && typeof value === "object")
     return Object.fromEntries(Object.entries(value).map(([key, item]) =>
-      [key, ["token", "csrfToken"].includes(key) && typeof item === "string" ? `normalized-${key}` : normalize(item, seen)]));
+      [key, ["token", "csrfToken", "formKey"].includes(key) && typeof item === "string" ? `normalized-${key}` : normalize(item, seen)]));
   if (typeof value === "string" && uuid.test(value) && !ourIds.has(value)) {
     if (!seen.has(value)) seen.set(value, `00000000-0000-4000-8000-${String(seen.size + 1).padStart(12, "0")}`);
     return seen.get(value);
@@ -235,7 +269,11 @@ it("keeps the server responses the iOS app decodes in sync with the committed co
   const config = loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" });
   config.apns = { teamId: "TEAM123456", keyId: "KEY1234567", topic: "dev.agentinterface.ios", privateKeyFile: "unused-by-contract-test", environment: "sandbox" };
   config.nativeApp = { latestBuild: 12, updateUrl: "https://testflight.apple.com/join/CONTRACT" };
-  const { app, store } = await createApp(config, runtime, { background: false, sendApns: async () => {}, upgrades: upgrades as HermesUpgrades });
+  const tlsDirectory = mkdtempSync(join(tmpdir(), "contract-direct-"));
+  config.directRoutes = { kinds: ["lan", "tailnet"], port: 0, stateDirectory: tlsDirectory };
+  const { app, store, directRoutes } = await createApp(config, runtime, { background: false, sendApns: async () => {}, upgrades: upgrades as HermesUpgrades,
+    directAddresses: () => [{ kind: "tailnet", address: "127.0.0.2" }, { kind: "lan", address: "127.0.0.1" }] });
+  await directRoutes!.start(3_600_000);
   const fixtures = new Map<string, { request: string; response: unknown }>();
   try {
     const signIn = async (member: "one" | "two") => {
@@ -285,6 +323,7 @@ it("keeps the server responses the iOS app decodes in sync with the committed co
     await record("bot-read-position", "PUT", "/api/bots/household/read-position", { messageId: "message-assistant", scrollTop: 240.5 });
     await record("bot-presence", "PUT", "/api/bots/household/presence", { client: "8F0C2F6E-1D7A-4D35-9B53-3C1E6E2F9A10", state: "active" });
     await record("conversation", "GET", "/api/bots/household/conversation");
+    await record("bot-files", "GET", "/api/bots/household/files?before=message-assistant");
     const card = "/api/bots/household/messages/message-assistant/cards/groceries/state";
     await record("card-state-save", "PUT", card, { checkedIds: ["milk"], notes: {} });
     await record("card-state", "GET", card);
@@ -292,7 +331,7 @@ it("keeps the server responses the iOS app decodes in sync with the committed co
     await record("voice-transcript", "POST", "/api/bots/household/voice/transcribe", audio.payload, audio.headers);
 
     await record("routine-save", "PUT", "/api/routines/routine-morning", { botId: "household", name: "Morning brief", prompt: "Prepare a morning brief.", schedule: "0 7 * * *", enabled: true,
-      recipientIds: ["local-one", "local-two"] });
+      recipientIds: ["local-one", "local-two"], roomIds: ["room-dinner"] });
     await record("routines", "GET", "/api/routines");
     await record("routine-templates", "GET", "/api/routines/templates");
     await record("routine-preview", "POST", "/api/routines/preview", { botId: "household", schedule: "0 7 * * *" });
@@ -307,6 +346,16 @@ it("keeps the server responses the iOS app decodes in sync with the committed co
     await record("memory", "GET", "/api/bots/household/memory");
     await record("memory-save", "PATCH", "/api/bots/household/memory/memory", { revision: "a".repeat(64), entries: [{ id: "b".repeat(64), text: "The household prefers vegetarian dinners." }] });
 
+    await record("bot-automation", "GET", "/api/bots/household/automation");
+    await record("bot-goal-resume", "POST", "/api/bots/household/automation/goal/resume", { requestId: ids.run });
+    await record("bot-task", "POST", "/api/bots/household/automation/tasks", { requestId: ids.submission, title: automationTask.title,
+      body: automationTask.body, priority: automationTask.priority, assignee: "garden", dependencies: automationTask.dependencies });
+    await record("bot-trigger-create", "POST", "/api/bots/household/automation/triggers", { id: eventSubscription.id,
+      description: eventSubscription.description, events: eventSubscription.events, routineId: eventSubscription.routineId });
+    await record("bot-skill-diff", "GET", "/api/bots/household/automation/skills/pending/deadbeef");
+    await record("bot-skill-content", "GET", "/api/bots/household/automation/skills/content?name=ranch%2Ffences");
+    await record("bot-skill-lock", "PUT", "/api/bots/household/automation/skills/lock", { name: "ranch/fences", locked: false });
+
     await record("search", "GET", "/api/search?q=dinner");
     await record("history", "GET", "/api/bots/household/history/session-household?offset=0");
     await record("saved-session", "POST", "/api/saved", { botId: "household", kind: "session", sessionId: "session-household", messageId: "message-assistant", offset: 0, title: "Five dinners" });
@@ -318,8 +367,10 @@ it("keeps the server responses the iOS app decodes in sync with the committed co
     await record("group-create", "POST", "/api/groups", { requestId: ids.group, name: "Dinner team", botIds: ["household", "garden"] });
     await record("group-state", "GET", "/api/groups/room-dinner");
     await record("group-log", "GET", "/api/groups/room-dinner/log?since=0");
+    await record("group-log-state", "GET", "/api/groups/room-dinner/log?since=0&state=1");
     await record("group-message", "POST", "/api/groups/room-dinner/messages", { requestId: ids.groupMessage, threadId: "thread-1", text: "Plan dinners together" });
     await record("group-stop", "POST", "/api/groups/room-dinner/stop", { requestId: ids.groupStop });
+    await record("group-context", "POST", "/api/groups/room-dinner/context", { requestId: ids.groupContext, purpose: "Plan the week's dinners.", notes: "No mushrooms.", leadMemberId: "garden" });
     await record("group-approve", "POST", "/api/groups/room-dinner/approve", { taskId: "task-1", memberId: "household", generation: 1, choice: "once", requestId: "approval-request-1" });
 
     await record("vault", "GET", "/api/bots/household/vault");
@@ -337,6 +388,16 @@ it("keeps the server responses the iOS app decodes in sync with the committed co
 
     await record("upgrade", "GET", "/api/hermes/upgrade");
     await record("push-config", "GET", "/api/native/push/config");
+    // Listeners take any free port and make a new key each run, so both are normalized.
+    await record("native-routes", "GET", "/api/native/routes");
+    for (const route of (fixtures.get("native-routes")!.response as { routes: { url: string; certificateSha256: string }[] }).routes) {
+      route.url = route.url.replace(/:\d+$/, route.url.includes("127.0.0.1") ? ":3443" : ":3444");
+      route.certificateSha256 = "q1Ue7mHzv1bS0n9yKXGJmWjv2sQxRZbL0dYc3Hc8V2E";
+    }
+    await record("computer", "GET", "/api/computer");
+    // The terminal names this host's account and machine, which differ wherever the test runs.
+    const computer = fixtures.get("computer")!.response as { terminal: { target: string } };
+    if (computer.terminal.target) computer.terminal.target = "normalized-target";
     // The aggregate shows a run this person sent to and an assistant they follow, waiting first.
     store.participate("run-dinner", "local-one");
     store.savePreferences("local-one", { ...preferences, followBots: ["garden"] });
@@ -344,6 +405,7 @@ it("keeps the server responses the iOS app decodes in sync with the committed co
     await record("live-activity", "GET", "/api/native/live-activity");
   } finally {
     await app.close();
+    rmSync(tlsDirectory, { recursive: true, force: true });
   }
 
   const files = new Map([...fixtures].map(([name, fixture]) => [`${name}.json`, JSON.stringify(normalize(fixture), null, 2) + "\n"]));

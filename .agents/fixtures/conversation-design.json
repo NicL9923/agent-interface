@@ -1,0 +1,95 @@
+{
+  "bots": [
+    {
+      "id": "ranch",
+      "lastMessage": {
+        "text": "Take these along:\n\n- Water for everyone and a little extra\n- Hats, sunscreen and a light layer\n- A picnic, a small trash bag and a basic first-aid kit\n\nThe north gate battery needs replacing. This checker prints gates below 20 percent:\n\n```bash\n#!/usr/bin/env bash\nset -euo pipefail\nfor gate in north east barn; do\n  level=$(ha state \"sensor.${gate}_gate_battery\")\n  if (( level < 20 )); then echo \"$gate: ${level}%\"; fi\ndone\n```\n\n**Before you leave:** replace the north gate battery and check that every gate is latched.",
+        "at": "2026-10-25T19:05:00Z"
+      },
+      "name": "Ranch hand",
+      "shared": true,
+      "model": "configured-model",
+      "provider": "openrouter",
+      "activity": "idle",
+      "description": "Everyday household help",
+      "instructions": "Explicit fixture instructions.",
+      "avatar": {
+        "mode": "geometric",
+        "shape": "blob",
+        "color": "#1084FE",
+        "eyes": "oval",
+        "accessory": "none"
+      }
+    }
+  ],
+  "preferences": {
+    "startPage": "assistant",
+    "defaultBotId": "ranch",
+    "favorites": [],
+    "sections": [],
+    "presentation": "simple"
+  },
+  "conversation": {
+    "botId": "ranch",
+    "sessionId": "ranch-canonical",
+    "messages": [
+      {
+        "id": "design-ask",
+        "role": "user",
+        "sender": {
+          "id": "preview",
+          "name": "Nicolas"
+        },
+        "text": "Help us plan a quiet Saturday outdoors. We have about three hours, and we'd like some shade.",
+        "createdAt": "2026-10-25T19:00:00Z"
+      },
+      {
+        "id": "design-plan",
+        "role": "assistant",
+        "text": "### Keep the morning simple\n\nPick one short trail, then leave time for a picnic. A two-mile loop is plenty if you're stopping to look around.\n\n- Start before the warmest part of the day.\n- Choose a shaded route with an easy way back.\n- Check the weather and current trail notices before leaving.\n\n| Plan | Time |\n| --- | --- |\n| A short walk | 60\u201390 minutes |\n| Picnic and a break | 45 minutes |\n\nKeep the afternoon open so a slow start doesn't turn into a rushed day.",
+        "createdAt": "2026-10-25T19:01:00Z"
+      },
+      {
+        "id": "design-followup",
+        "role": "user",
+        "sender": {
+          "id": "preview",
+          "name": "Nicolas"
+        },
+        "text": "Give me a packing list and a short script to check the gate batteries before we leave.",
+        "createdAt": "2026-10-25T19:03:00Z"
+      },
+      {
+        "id": "design-tool",
+        "role": "tool",
+        "text": "",
+        "createdAt": "2026-10-25T19:04:00Z",
+        "toolCall": {
+          "id": "design-call",
+          "name": "home_assistant.states",
+          "status": "completed",
+          "startedAt": "2026-10-25T19:03:00Z",
+          "completedAt": "2026-10-25T19:04:00Z",
+          "result": "north: 14%, east: 62%, barn: 48%"
+        }
+      },
+      {
+        "id": "design-reply",
+        "role": "assistant",
+        "text": "Take these along:\n\n- Water for everyone and a little extra\n- Hats, sunscreen and a light layer\n- A picnic, a small trash bag and a basic first-aid kit\n\nThe north gate battery needs replacing. This checker prints gates below 20 percent:\n\n```bash\n#!/usr/bin/env bash\nset -euo pipefail\nfor gate in north east barn; do\n  level=$(ha state \"sensor.${gate}_gate_battery\")\n  if (( level < 20 )); then echo \"$gate: ${level}%\"; fi\ndone\n```\n\n**Before you leave:** replace the north gate battery and check that every gate is latched.",
+        "createdAt": "2026-10-25T19:05:00Z"
+      }
+    ],
+    "activity": {
+      "state": "idle"
+    },
+    "approvals": [],
+    "attention": [],
+    "files": [],
+    "draft": {
+      "text": "",
+      "attachments": []
+    },
+    "readPosition": {}
+  }
+}

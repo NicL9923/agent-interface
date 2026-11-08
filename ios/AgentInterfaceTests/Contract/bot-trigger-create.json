@@ -1,0 +1,19 @@
+{
+  "request": "POST /api/bots/household/automation/triggers",
+  "response": {
+    "subscription": {
+      "id": "gate-event",
+      "description": "Gate alert",
+      "events": [
+        "gate.open",
+        "gate.closed"
+      ],
+      "routineId": "routine-morning",
+      "enabled": false,
+      "url": "https://hermes.example.test/webhook/gate-event",
+      "secretSet": true,
+      "revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "secret": "one-time-contract-fixture"
+  }
+}

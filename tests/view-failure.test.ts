@@ -1,13 +1,15 @@
 // @vitest-environment jsdom
 import { act, createElement } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Root } from "react-dom/client";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
 import { api } from "../src/client-api";
 import { defaultPreferences } from "../src/shared/types";
 import type { Bootstrap } from "../src/shared/types";
+import { mountRoot, stubMatchMedia } from "./ui-harness";
+import { quietConsoleErrors } from "./act-guard";
 
-vi.mock("../src/client-api", async original => ({ ...await original<typeof import("../src/client-api")>(), api: vi.fn(), write: vi.fn().mockResolvedValue({}), clearResponseCache: vi.fn() }));
+vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(await (async original => ({ ...await original<typeof import("../src/client-api")>(), api: vi.fn(), write: vi.fn().mockResolvedValue({}), clearResponseCache: vi.fn() }))(original)));
 // SVG geometry is a browser concern, not part of this regression.
 vi.mock("../src/components/Avatar", async original => ({
   ...await original<typeof import("../src/components/Avatar")>(),
@@ -15,8 +17,8 @@ vi.mock("../src/components/Avatar", async original => ({
 }));
 // Find cannot load, as when its file was retired by a release; Groups is healthy.
 vi.mock("../src/components/DiscoveryPanel", () => ({ get DiscoveryPanel() { throw new TypeError("Failed to fetch dynamically imported module: /assets/DiscoveryPanel-OLD12345.js"); } }));
-vi.mock("../src/components/GroupChats", () => ({ GroupChats: () => createElement("p", { id: "groups-screen" }, "Group chats") }));
-vi.mock("../src/components/ComposerModelPicker", () => ({ get ComposerModelPicker() { throw new TypeError("Failed to fetch dynamically imported module: /assets/ComposerModelPicker-OLD12345.js"); } }));
+vi.mock("../src/components/GroupChats", () => ({ GroupRoomView: () => createElement("p", { id: "groups-screen" }, "Group chats") }));
+vi.mock("../src/components/ChatModelPicker", () => ({ get ChatModelPicker() { throw new TypeError("Failed to fetch dynamically imported module: /assets/ChatModelPicker-OLD12345.js"); } }));
 
 const bootstrap: Bootstrap = {
   user: { id: "one", name: "One", email: "one@example.test" },
@@ -34,33 +36,24 @@ const bootstrap: Bootstrap = {
 let container: HTMLDivElement;
 let root: Root;
 beforeEach(() => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })));
-  vi.spyOn(console, "error").mockImplementation(() => {});
-  localStorage.clear();
+  stubMatchMedia();
+  quietConsoleErrors();
   history.replaceState(null, "", "/");
-  vi.mocked(api).mockImplementation(async <T>(path: string) => (path === "/bootstrap?roster=lean" ? bootstrap : null) as T);
-  container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
-});
-afterEach(async () => {
-  await act(async () => root.unmount());
-  container.remove();
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
+  vi.mocked(api).mockImplementation(async <T>(path: string) => (path === "/bootstrap?roster=lean" ? bootstrap
+    : path === "/groups" ? { supported: true, canSend: true, rooms: [{ room_id: "room", name: "Supper planning", members: [] }] } : null) as T);
+  ({ container, root } = mountRoot());
 });
 const loaded = () => act(async () => { await vi.dynamicImportSettled(); });
 
 describe("screens that fail to load", () => {
-  it("keeps the composer usable if the advanced model picker cannot load", async () => {
+  it("keeps the chat and composer usable if the advanced model picker cannot load", async () => {
     vi.mocked(api).mockImplementation(async <T>(path: string) => (path === "/bootstrap?roster=lean"
       ? { ...bootstrap, preferences: { ...bootstrap.preferences, presentation: "advanced" } } : null) as T);
     await act(async () => root.render(createElement(App)));
     await loaded();
     const unavailable = container.querySelector<HTMLButtonElement>('[aria-label="Model controls unavailable. Reload to try again."]');
     expect(unavailable?.disabled).toBe(true);
-    expect(unavailable?.closest(".composer-tools")).not.toBeNull();
+    expect(unavailable?.closest(".chat-model-slot")).not.toBeNull();
     const input = container.querySelector<HTMLTextAreaElement>(".composer textarea");
     expect(input).not.toBeNull();
     expect(input?.disabled).toBe(false);
@@ -71,7 +64,7 @@ describe("screens that fail to load", () => {
     await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Search & saved"]')!.click());
     await loaded();
     expect(container.querySelector("[role=alert]")?.textContent).toContain("could not load");
-    const groups = [...container.querySelectorAll<HTMLButtonElement>(".home-links button")].find(button => button.textContent?.includes("Group chats"))!;
+    const groups = [...container.querySelectorAll<HTMLButtonElement>(".room-row")].find(button => button.textContent?.includes("Supper planning"))!;
     await act(async () => groups.click());
     await loaded();
     expect(container.querySelector("#groups-screen")?.textContent).toBe("Group chats");

@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
 import { act, createElement } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Root } from "react-dom/client";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AvatarEditor } from "../src/components/AvatarEditor";
+import { mountRoot } from "./ui-harness";
 import type { Avatar } from "../src/shared/types";
-import { seasonalChoices } from "../src/components/seasonal-avatars";
+import { seasonalChoices } from "../src/components/character-avatars";
+import { everydayFamilies } from "../src/shared/types";
 
 // jsdom has no SVG geometry, so the rig itself is covered by avatar-motion tests.
 vi.mock("../src/components/Avatar", async (original) => ({
@@ -15,11 +17,13 @@ vi.mock("../src/components/Avatar", async (original) => ({
 let container: HTMLDivElement;
 let root: Root;
 let current: Avatar;
-const render = () => act(async () => root.render(createElement(AvatarEditor, {
+const editor = () => createElement(AvatarEditor, {
   avatar: current,
-  onChange: (next: Avatar) => { current = next; void render(); },
+  // Runs inside the act scope of the click that changed the avatar, so it must not open another.
+  onChange: (next: Avatar) => { current = next; root.render(editor()); },
   portraitControls: createElement("p", null, "Portrait controls"),
-})));
+});
+const render = () => act(async () => root.render(editor()));
 const choose = async (label: string) => {
   const input = Array.from(container.querySelectorAll("label"))
     .find((element) => element.textContent?.trim() === label)?.querySelector("input");
@@ -28,16 +32,9 @@ const choose = async (label: string) => {
 };
 
 beforeEach(async () => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   current = { mode: "geometric", shape: "hex", color: "#FF309B", eyes: "visor", accessory: "hat", eyeWidth: 1.2 };
-  container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
+  ({ container, root } = mountRoot());
   await render();
-});
-afterEach(() => {
-  act(() => root.unmount());
-  container.remove();
 });
 
 describe("avatar editor", () => {
@@ -49,6 +46,12 @@ describe("avatar editor", () => {
     expect(current).toMatchObject({ mode: "geometric", shape: "hex" });
     await choose("Mascot");
     expect(current).toMatchObject({ mode: "mascot", family, color });
+  });
+
+  it.each(everydayFamilies)("offers the %s character in your own color", async (family) => {
+    await choose("Mascot");
+    await choose(family[0].toUpperCase() + family.slice(1));
+    expect(current).toMatchObject({ mode: "mascot", family, color: "#FF309B", eyes: "visor", accessory: "hat" });
   });
 
   it("keeps color, eyes and accessory when switching to a mascot", async () => {
@@ -96,4 +99,12 @@ describe("avatar editor", () => {
     expect(working.getAttribute("aria-pressed")).toBe("true");
     expect(current).toBe(before);
   });
+  it("names each eye tuning slider even though the label contains an output", () => {
+    for (const range of container.querySelectorAll<HTMLInputElement>('input[type="range"]')) {
+      expect(range.labels?.length).toBe(1);
+      expect(range.labels![0].control).toBe(range);
+      expect(range.labels![0].textContent).toMatch(/Eye (width|height|spacing)/);
+    }
+  });
+
 });

@@ -66,6 +66,7 @@ def tree_digest(root, listing=None):
 
 
 def private_directory(path):
+    # Not private_fs.owner_private: prepare freezes this file alone into the candidate stage.
     info = path.lstat()
     if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) & 0o077:
         raise RuntimeError("Candidate stage must be a private directory owned by this user")
@@ -233,6 +234,16 @@ def fingerprint(python):
     return json.loads(subprocess.check_output([str(python), "-c", code], stderr=subprocess.PIPE, timeout=180))
 
 
+def installs_into_environment(declaration):
+    """Whether native PM makes this plugin a workspace member of the shared environment.
+
+    Hermes 6661080238 (Oct 30, 2026) renamed ``is_member`` to ``installs_packages``: a pyproject
+    that installs nothing no longer joins the workspace. Older qualified revisions keep the old name.
+    """
+    value = getattr(declaration, "installs_packages", None)
+    return bool(declaration.is_member if value is None else value)
+
+
 def selection(source, home):
     python, selected = activate_readonly(source, home)
     from pm.environments import runtime_facts_path
@@ -242,7 +253,7 @@ def selection(source, home):
     if set(members) != {path for path in enabled if (path / "pyproject.toml").is_file() or (path / "hermes-plugin.json").is_file()}:
         # A selected plugin rejected by this native version must not vanish silently.
         from pm.plugin_declarations import read_python_declaration
-        if any(read_python_declaration(path).is_member and path not in members for path in enabled):
+        if any(installs_into_environment(read_python_declaration(path)) and path not in members for path in enabled):
             raise RuntimeError("An enabled native plugin was excluded from the dependency union")
     facts = json.loads(runtime_facts_path(source).read_text())
     extras = facts.get("packages", {}).get("venv", {}).get("extras")
@@ -297,7 +308,7 @@ def prepare(source, stage, launcher, installed_source, installed_home):
     log = stage / "pm-build.log"
     with log.open("w") as output:
         log.chmod(0o600)
-        result = subprocess.run([str(python), "-I", "-c", code], env=clean_environment(home, home / "tools"), stdout=subprocess.PIPE, stderr=output, text=True, timeout=1800)
+        result = subprocess.run([str(python), "-I", "-c", code], env=clean_environment(home, home / "tools"), stdout=subprocess.PIPE, stderr=output, text=True, timeout=1800, check=False)
     if result.returncode:
         raise RuntimeError("Candidate native PM dependency build failed; inspect its private build log")
     built = json.loads(result.stdout)
@@ -393,4 +404,4 @@ if __name__ == "__main__":
     except (RuntimeError, subprocess.SubprocessError, OSError, ValueError) as error:
         # The caller's log needs the stack: "Permission denied: '/'" alone cannot be traced.
         traceback.print_exc()
-        raise SystemExit("Managed qualification failed: " + str(error))
+        raise SystemExit("Managed qualification failed: " + str(error)) from error

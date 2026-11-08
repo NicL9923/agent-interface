@@ -1,6 +1,8 @@
+import Combine
 import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
+import AVFAudio
 
 /// The message box below a conversation, the web's Composer. Files can be picked, photographed,
 /// pasted or dropped onto it; with a hardware keyboard, Return sends and Shift-Return starts a line.
@@ -9,25 +11,31 @@ struct ComposerView: View {
   @Binding var focused: Bool
   /// Called when Send is pressed, so the transcript can follow the new message.
   var onSent: () -> Void
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @Environment(\.colorScheme) private var scheme
   @Environment(\.scenePhase) private var scenePhase
-  @StateObject private var voice = VoiceController()
+  @Environment(\.verticalSizeClass) private var verticalSizeClass
+  @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+  @ScaledMetric(relativeTo: .headline) private var sendGlyphSize = 18.0
+  @State private var voice = VoiceController()
+  @Environment(SpeechController.self) private var speech: SpeechController?
   @State private var importFiles = false
   @State private var importPhotos = false
   @State private var takePhoto = false
   @State private var photos: [PhotosPickerItem] = []
   @State private var discardConfirm = false
-  @State private var modelOpen = false
   @State private var stopping = false
   @State private var dropTargeted = false
+  @State private var recall = PromptRecall()
+  /// A short line after a long paste became an attachment.
+  @State private var pasteNotice: String?
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
-      ComposerNotices(botId: bot.id, discardConfirm: $discardConfirm)
-      card
-    }.padding(12).frame(maxWidth: 850).frame(maxWidth: .infinity).background(Palette.surface(scheme))
-      .overlay(alignment: .top) { Rectangle().fill(Palette.line).frame(height: 1) }
+      StatusDock(botId: bot.id, discardConfirm: $discardConfirm)
+      card.fixedSize(horizontal: false, vertical: true)
+    }.padding(.horizontal, 12).padding(.top, 6).padding(.bottom, 8)
+      .frame(maxWidth: 752).frame(maxWidth: .infinity).background(Palette.surface(scheme))
       .onDrop(of: [.item], isTargeted: $dropTargeted) { providers in
         drop(providers)
         return true
@@ -35,28 +43,67 @@ struct ComposerView: View {
       .overlay { if dropTargeted { ComposerDropOverlay(botName: bot.name, unavailable: store.attachUnavailable(bot.id)) } }
       .modifier(ComposerPickers(
         bot: bot, importFiles: $importFiles, importPhotos: $importPhotos, takePhoto: $takePhoto, photos: $photos,
-        discardConfirm: $discardConfirm, modelOpen: $modelOpen))
+        discardConfirm: $discardConfirm))
       .onAppear { configureVoice() }
-      // A recording belongs to one account's assistant; a new identity or server starts afresh.
-      .onChange(of: "\(store.scope ?? "")|\(bot.id)") { _, _ in voice.reset(); configureVoice() }
-      .onChange(of: voiceDisabled) { _, disabled in if disabled && voice.state != .idle { voice.cancel() } }
-      .onChange(of: scenePhase) { _, phase in
-        if phase != .active && [.requesting, .recording].contains(voice.state) { voice.cancel() }
+      #if DEBUG
+      .onChange(of: store.draftReady, initial: true) { _, ready in
+        guard ready else { return }
+        if ["composer-focused", "composer-ax-focused"].contains(DebugFixtures.captureSurvival ?? "") { focused = true }
+        if ["composer-multiline", "composer-ax-focused"].contains(DebugFixtures.captureSurvival ?? "") {
+          store.editComposer { $0.text = "Check the north gate.\nReview the battery history.\nCompare the other sensors.\nKeep the existing reminders.\nTell me what needs attention." }
+        }
       }
-      .onDisappear { voice.cancel() }
+      #endif
+      .onChange(of: store.listenRequest, initial: true) { startRequestedRecording() }
+      .onChange(of: voiceDisabled) { startRequestedRecording() }
+      .stopShortcut(bot: bot, canStop: stopVisible && !stopDisabled, stop: stop)
+      // A recording belongs to one account's assistant; a new identity or server starts afresh.
+      .onChange(of: store.voiceRecordingURL(botId: bot.id)) { _, _ in voice.cancel(); configureVoice() }
+      .onChange(of: voiceDisabled) { _, disabled in
+        if disabled && voice.state != .idle {
+          if voice.recordingURL == store.voiceRecordingURL(botId: bot.id) { voice.preserveRecording(); voice.cancel() }
+          else { voice.reset() }
+        }
+      }
+      .onChange(of: scenePhase) { _, phase in
+        // The microphone permission dialog is temporarily inactive too. Let its request finish.
+        if phase == .background || phase == .inactive && voice.state == .recording { voice.preserveRecording() }
+      }
+      .onDisappear {
+        if voice.recordingURL == store.voiceRecordingURL(botId: bot.id) { voice.preserveRecording(); voice.cancel() }
+        else { voice.reset() }
+      }
+      // Audio session notifications can arrive on any thread; the voice controller lives on the main actor.
+      .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification).receive(on: DispatchQueue.main)) { event in
+        if event.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt == AVAudioSession.InterruptionType.began.rawValue {
+          voice.preserveRecording()
+        }
+      }
+  }
+  private var inputLineHeight: CGFloat {
+    let _ = dynamicTypeSize
+    return max(44, UIFont.preferredFont(forTextStyle: .body).lineHeight + 22)
   }
   private var card: some View {
-    VStack(alignment: .leading, spacing: 10) {
-      if !store.attachNotice.isEmpty {
-        AttachNoticeView(problems: store.attachNotice) { store.attachNotice = [] }
+    VStack(alignment: .leading, spacing: 6) {
+      if !store.uploads.notice.isEmpty {
+        AttachNoticeView(problems: store.uploads.notice) { store.uploads.notice = [] }
       }
       AttachmentTrayView(botId: bot.id)
-      input
-      tools
-      VoicePanel(voice: voice, disabled: voiceDisabled)
+      ComposerRowLayout(singleLine: inputLineHeight,
+        forceStack: dynamicTypeSize.isAccessibilitySize || store.composerDraft.text.contains("\n")) {
+        HStack(spacing: 4) { attachMenu }
+        input
+        HStack(spacing: 4) {
+          VoiceButtons(voice: voice, bot: bot, disabled: voiceDisabled, beforeRecording: { speech?.cancel() })
+          if focused { hideKeyboardButton }
+          sendButton
+        }
+      }
+      VoicePanel(voice: voice, disabled: voiceDisabled, bot: bot)
       footnotes
-    }.padding(12).background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 20))
-      .overlay(RoundedRectangle(cornerRadius: 20).stroke(Palette.line, lineWidth: 1))
+    }.padding(4).background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+      .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).stroke(Palette.line, lineWidth: 1))
   }
   private var input: some View {
     // While a message is on its way the transcript shows it, so the box reads empty and is
@@ -67,27 +114,27 @@ struct ComposerView: View {
         set: { text in store.editComposer { $0.text = text } }),
       label: "Message \(bot.name)", editable: store.draftReady, readOnly: store.sendingDraft, focused: $focused,
       onReturn: { if store.canSend { send() } },
-      onPasteImages: { images in Task { await store.attach(images: images, named: "Pasted image") } }
+      onPasteImages: { images in Task { await store.uploads.attach(images: images, named: "Pasted image") } },
+      onArrow: recallArrow, onPasteLongText: attachLongPaste, maximumLines: verticalSizeClass == .compact || dynamicTypeSize.isAccessibilitySize ? 3 : 6
     )
     .overlay(alignment: .topLeading) {
       if store.composerDraft.text.isEmpty {
-        Text(placeholder).foregroundStyle(.tertiary).allowsHitTesting(false).accessibilityHidden(true)
+        Text(placeholder).lineLimit(1).foregroundStyle(Palette.muted).allowsHitTesting(false).accessibilityHidden(true)
       }
     }
-    .padding(12).background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 16))
+    .padding(.vertical, 11).padding(.horizontal, 6).frame(minHeight: 44)
     .opacity(store.draftReady ? 1 : 0.6)
   }
   private var placeholder: String {
-    store.sendingDraft ? "Sending…" : store.active ? "Guide \(bot.name) while they work…" : "Message \(bot.name)…"
+    store.sendingDraft ? "Sending…"
+      : WaitingInput.placeholder(store.conversation, userId: store.bootstrap?.user.id) ?? (store.active ? "Guide…" : "Message…")
   }
-  private var tools: some View {
-    HStack(alignment: .center, spacing: 8) {
-      attachMenu
-      if store.bootstrap?.preferences.presentation == "advanced" { modelButton }
-      VoiceButtons(voice: voice, bot: bot, reply: store.active ? nil : latestReply, disabled: voiceDisabled)
-      Spacer(minLength: 0)
-      sendButton
-    }
+  /// Always there while typing, so the keyboard can be put away without finding a spot to drag.
+  private var hideKeyboardButton: some View {
+    Button { focused = false } label: {
+      Image(systemName: "keyboard.chevron.compact.down").font(.system(size: 20)).frame(width: 44, height: 44)
+    }.foregroundStyle(Palette.muted).accessibilityLabel("Hide keyboard").accessibilityIdentifier("hideKeyboard")
+      .transition(.opacity)
   }
   private var attachMenu: some View {
     let unavailable = store.attachUnavailable(bot.id)
@@ -98,17 +145,10 @@ struct ComposerView: View {
       }
       Button("Choose Files", systemImage: "folder") { importFiles = true }
     } label: {
-      Image(systemName: "paperclip").font(.body).frame(width: 44, height: 44)
+      Image(systemName: "paperclip").font(.system(size: 20)).frame(width: 44, height: 44)
     }.accessibilityLabel("Attach images, PDFs, or text").accessibilityIdentifier("composerAttach")
       .accessibilityHint(unavailable ?? "You can also paste or drop them here.")
       .disabled(unavailable != nil)
-  }
-  /// Icon only, like the web at phone width; the label still names the model.
-  private var modelButton: some View {
-    Button { modelOpen = true } label: {
-      RobotGlyph().frame(width: 20, height: 20).frame(width: 44, height: 44)
-    }.accessibilityLabel("Model: \(bot.model)").accessibilityIdentifier("composerModel")
-      .disabled(!store.supports("botConfiguration") || !store.connected || store.sending)
   }
   private var sendButton: some View {
     let enabled = stopVisible ? !stopDisabled : store.canSend
@@ -117,7 +157,7 @@ struct ComposerView: View {
     } label: {
       Group {
         if store.sending || store.pending != nil || (stopVisible && stopping) { ProgressView().tint(Palette.muted) }
-        else { Image(systemName: stopVisible ? "stop.fill" : "arrow.up").font(.headline) }
+        else { Image(systemName: stopVisible ? "stop.fill" : "arrow.up").font(.system(size: min(sendGlyphSize, 24), weight: .semibold)) }
       }.frame(width: 44, height: 44)
         .foregroundStyle(enabled ? Palette.raised(scheme) : Palette.muted)
         .background(enabled ? Palette.accent : Palette.line, in: Circle())
@@ -127,17 +167,20 @@ struct ComposerView: View {
       .accessibilityIdentifier("sendMessage")
   }
   @ViewBuilder private var footnotes: some View {
-    if store.uploading && !store.attachmentUploads.contains(where: { $0.botId == bot.id }) {
+    if let pasteNotice {
+      Label(pasteNotice, systemImage: "doc.text").font(.caption).foregroundStyle(Palette.muted).accessibilityIdentifier("pasteNotice")
+    }
+    if store.uploads.uploading && !store.uploads.items.contains(where: { $0.botId == bot.id }) {
       ProgressView("Uploading…").font(.caption)
     } else if store.draft.text.utf16.count > AppStore.maxMessageLength {
       Text("Messages can contain up to 50,000 characters.").font(.caption).foregroundStyle(.red)
     }
     // A loading draft already shows as a dimmed message box, and a send as its spinning button.
     if let reason = store.attachUnavailable(bot.id), reason != "Your draft is still loading.", reason != AppStore.attachWhileSending {
-      Text(reason).font(.caption).foregroundStyle(.secondary)
+      Text(reason).font(.caption).foregroundStyle(Palette.muted)
     }
-    if !store.supports("chat") {
-      Text(store.reason("chat")).font(.caption).foregroundStyle(.secondary)
+    if !store.supports(.chat) {
+      Text(store.reason(.chat)).font(.caption).foregroundStyle(Palette.muted)
     }
   }
   // An in-flight send keeps its spinning send button even if the draft is cleared meanwhile.
@@ -145,19 +188,51 @@ struct ComposerView: View {
     store.active && !store.sending && store.draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
       && store.draft.attachments.isEmpty
   }
-  private var stopDisabled: Bool { stopping || !store.connected || !store.supports("stop") }
+  private var stopDisabled: Bool { stopping || !store.connected || !store.supports(.stop) }
   /// The web turns voice off while the draft loads, a message is on its way, or the connection is down.
   private var voiceDisabled: Bool {
     !store.draftReady || store.pending != nil || store.sending || !store.connected
   }
-  /// The newest reply in the conversation, the one the web's Listen to reply reads.
-  private var latestReply: Message? {
-    store.conversation?.messages.last {
-      $0.role == "assistant" && !$0.isInternalActivity
-        && (!$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !($0.files ?? []).isEmpty)
-    }.flatMap { $0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
+  /// The Talk to assistant control opened this chat to record. A kept recording waits for review
+  /// instead, and a request that cannot start soon lapses.
+  private func startRequestedRecording() {
+    guard let request = store.listenRequest, request.botId == bot.id else { return }
+    guard request.fresh(), request.scope == store.scope, voice.recording == nil, voice.state == .idle else { store.listenRequest = nil; return }
+    guard !voiceDisabled else { return }
+    store.listenRequest = nil
+    speech?.cancel()
+    Task { await voice.startRecording() }
+  }
+  /// Steps through earlier messages from an empty composer. Never while a message is on its way:
+  /// until it settles, the draft is told apart from its send only by its text.
+  private func recallArrow(_ up: Bool) -> Bool {
+    guard store.draftReady, !store.sending, !store.sendingDraft, store.selectedBotId == bot.id else { recall.reset(); return false }
+    let userId = store.bootstrap?.user.id
+    let text = store.composerDraft.text
+    // The conversation is read only when recall starts, so streamed replies never render the composer.
+    guard let next = recall.arrow(up: up, text: text, messages: { PromptRecall.ownMessages(store.conversation?.messages ?? [], userId: userId) })
+    else { return false }
+    if next != text { store.editComposer { $0.text = next } }
+    return true
+  }
+  /// A paste of 32 KiB or more goes through the upload queue as a text file, like any other file.
+  private func attachLongPaste(_ text: String) {
+    let botId = bot.id
+    Task {
+      guard store.selectedBotId == botId else { return }
+      do {
+        let url = try LargePaste.file(text)
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        await store.uploads.attach(urls: [url])
+        guard store.uploads.notice.isEmpty else { return }
+        pasteNotice = LargePaste.notice
+        AccessibilityNotification.Announcement(LargePaste.notice).post()
+      } catch { store.report(error) }
+    }
   }
   private func send() {
+    recall.reset()
+    pasteNotice = nil
     // The message shows in the transcript at once, so the transcript follows it now. The box keeps
     // focus, as on the web, so the next message can start as soon as this one settles.
     onSent()
@@ -171,12 +246,13 @@ struct ComposerView: View {
       do {
         try await store.perform("/bots/\(APIClient.component(bot.id))/stop", [String: String]())
         await store.refreshConversation()
-      } catch { store.report(error) }
+      } catch { store.buzz(.failed); store.report(error) }
     }
   }
   private func configureVoice() {
     voice.api = store.api
     voice.botId = bot.id
+    voice.restoreRecording(from: store.voiceRecordingURL(botId: bot.id))
     let botId = bot.id
     let target = store
     voice.onTranscript = { [weak target] text in _ = target?.appendTranscript(text, botId: botId) }
@@ -191,8 +267,8 @@ struct ComposerView: View {
       if !dropped.text.isEmpty, store.draftReady {
         store.editComposer { $0.text += ($0.text.isEmpty ? "" : "\n") + dropped.text.joined(separator: "\n") }
       }
-      if !dropped.images.isEmpty { await store.attach(images: dropped.images, named: "Pasted image") }
-      if !dropped.files.isEmpty { await store.attach(urls: dropped.files) }
+      if !dropped.images.isEmpty { await store.uploads.attach(images: dropped.images, named: "Pasted image") }
+      if !dropped.files.isEmpty { await store.uploads.attach(urls: dropped.files) }
     }
   }
 }
@@ -205,11 +281,9 @@ private struct ComposerPickers: ViewModifier {
   @Binding var takePhoto: Bool
   @Binding var photos: [PhotosPickerItem]
   @Binding var discardConfirm: Bool
-  @Binding var modelOpen: Bool
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   func body(content: Content) -> some View {
     content
-      .sheet(isPresented: $modelOpen) { ComposerModelSheet(botId: bot.id).appStore(store) }
       .photosPicker(isPresented: $importPhotos, selection: $photos, maxSelectionCount: UploadRules.maxAttachments, matching: .images)
       .onChange(of: photos) { _, selection in pick(selection) }
       .fullScreenCover(isPresented: $takePhoto) {
@@ -217,7 +291,7 @@ private struct ComposerPickers: ViewModifier {
       }
       .fileImporter(isPresented: $importFiles, allowedContentTypes: UploadRules.pickerTypes, allowsMultipleSelection: true) { result in
         switch result {
-        case .success(let urls): Task { await store.attach(urls: urls) }
+        case .success(let urls): Task { await store.uploads.attach(urls: urls) }
         case .failure(let error): store.report(error)
         }
       }
@@ -247,43 +321,7 @@ private struct ComposerPickers: ViewModifier {
     let botId = bot.id
     Task {
       guard scope == store.scope, store.selectedBotId == botId else { return }
-      await store.attach(images: images, named: "Photo")
-    }
-  }
-}
-
-/// The unconfirmed send, rejection and interruption notices above the message box.
-private struct ComposerNotices: View {
-  var botId: String
-  @Binding var discardConfirm: Bool
-  @EnvironmentObject private var store: AppStore
-  @Environment(\.colorScheme) private var scheme
-  var body: some View {
-    if store.activity == .interrupted {
-      Toggle("I reviewed the interrupted task and its last actions before continuing.", isOn: $store.interruptionReviewed)
-        .toggleStyle(CheckboxStyle()).font(.footnote)
-    }
-    // A normal send only spins the send button. This appears once the request ended without a receipt.
-    if store.pending != nil, !store.sending {
-      VStack(alignment: .leading, spacing: 8) {
-        Text("Checking whether your last message arrived…").font(.footnote)
-        Button("Retry this saved message") { Task { await store.send(reviewedUncertain: true) } }
-          .font(.footnote).disabled(store.sending || !store.supports("idempotency") || !store.connected)
-        // A send that never resolves would otherwise block this assistant on this device.
-        Button("Discard and keep my text in the draft", role: .destructive) {
-          discardConfirm = true
-        }.font(.caption).accessibilityIdentifier("discardUnconfirmedSend")
-      }.padding(10).frame(maxWidth: .infinity, alignment: .leading)
-        .background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 10))
-        .accessibilityElement(children: .contain)
-    }
-    if let receipt = store.receipt, receipt.status == "rejected" {
-      Text(receipt.message?.isEmpty == false ? receipt.message! : "Hermes did not accept this message. Your draft is saved.")
-        .font(.footnote).foregroundStyle(Palette.attention)
-    }
-    if store.receipt?.status == "interrupted" {
-      Text("This submission was interrupted. Review its last actions before trying again.")
-        .font(.footnote).foregroundStyle(Palette.attention)
+      await store.uploads.attach(images: images, named: "Photo")
     }
   }
 }
@@ -331,7 +369,8 @@ struct DroppedItems {
   var text: [String] = []
   func cleanUp() { for url in files { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) } }
 
-  static func load(_ providers: [NSItemProvider]) async -> DroppedItems {
+  /// On the main actor, where the drop delivered its providers; only their loaded values leave the callbacks.
+  @MainActor static func load(_ providers: [NSItemProvider]) async -> DroppedItems {
     var result = DroppedItems()
     for provider in providers {
       // A text selection has no file name; it goes into the message, as in a browser.
@@ -352,18 +391,18 @@ struct DroppedItems {
     }
     return result
   }
-  private static func loadText(_ provider: NSItemProvider) async -> String? {
+  @MainActor private static func loadText(_ provider: NSItemProvider) async -> String? {
     await withCheckedContinuation { continuation in
       _ = provider.loadObject(ofClass: String.self) { value, _ in continuation.resume(returning: value) }
     }
   }
-  private static func loadData(_ provider: NSItemProvider, _ type: UTType) async -> Data? {
+  @MainActor private static func loadData(_ provider: NSItemProvider, _ type: UTType) async -> Data? {
     await withCheckedContinuation { continuation in
       _ = provider.loadDataRepresentation(forTypeIdentifier: type.identifier) { data, _ in continuation.resume(returning: data) }
     }
   }
   /// The provided file lasts only for the callback, so it is copied, under the name it was dragged with.
-  private static func loadFile(_ provider: NSItemProvider, _ type: UTType) async -> URL? {
+  @MainActor private static func loadFile(_ provider: NSItemProvider, _ type: UTType) async -> URL? {
     let suggested = provider.suggestedName
     return await withCheckedContinuation { continuation in
       _ = provider.loadFileRepresentation(forTypeIdentifier: type.identifier) { url, _ in
@@ -407,5 +446,45 @@ struct CameraPicker: UIViewControllerRepresentable {
       parent.isPresented = false
     }
     func imagePickerControllerDidCancel(_ picker: UIImagePickerController) { parent.isPresented = false }
+  }
+}
+
+/// Keeps the same text-view identity while arranging its fixed controls beside or below it.
+private struct ComposerRowLayout: Layout {
+  var singleLine: CGFloat
+  var forceStack: Bool
+  private struct Sizes {
+    var width: CGFloat
+    var lead: CGSize
+    var input: CGSize
+    var trail: CGSize
+    var stacked: Bool
+    var height: CGFloat { stacked ? input.height + max(lead.height, trail.height) + 4 : max(input.height, lead.height, trail.height) }
+  }
+  private func sizes(_ proposal: ProposedViewSize, _ subviews: Subviews) -> Sizes {
+    let width = max(0, proposal.width ?? 320)
+    let lead = subviews[0].sizeThatFits(.unspecified)
+    let trail = subviews[2].sizeThatFits(.unspecified)
+    let slot = max(0, width - lead.width - trail.width - 8)
+    let inline = subviews[1].sizeThatFits(ProposedViewSize(width: slot, height: nil))
+    let stacked = forceStack || slot < 120 || inline.height > singleLine + 1
+    let input = stacked ? subviews[1].sizeThatFits(ProposedViewSize(width: width, height: nil)) : inline
+    return Sizes(width: width, lead: lead, input: input, trail: trail, stacked: stacked)
+  }
+  func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+    let value = sizes(proposal, subviews)
+    return CGSize(width: value.width, height: value.height)
+  }
+  func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+    let value = sizes(ProposedViewSize(width: bounds.width, height: nil), subviews)
+    let controlsY = bounds.maxY - max(value.lead.height, value.trail.height) / 2
+    subviews[0].place(at: CGPoint(x: bounds.minX, y: controlsY), anchor: .leading, proposal: ProposedViewSize(value.lead))
+    subviews[2].place(at: CGPoint(x: bounds.maxX, y: controlsY), anchor: .trailing, proposal: ProposedViewSize(value.trail))
+    if value.stacked {
+      subviews[1].place(at: bounds.origin, proposal: ProposedViewSize(width: bounds.width, height: value.input.height))
+    } else {
+      subviews[1].place(at: CGPoint(x: bounds.minX + value.lead.width + 4, y: bounds.midY), anchor: .leading,
+        proposal: ProposedViewSize(width: max(0, bounds.width - value.lead.width - value.trail.width - 8), height: value.input.height))
+    }
   }
 }

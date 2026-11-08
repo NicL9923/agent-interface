@@ -1,7 +1,13 @@
-import type { Inflight } from "./shared/types";
+import { routeParts, routeUrl, type ApiBody, type ApiParams, type ApiQuery, type ApiResponse, type ApiRoute } from "./shared/api";
+import type { ErrorCode } from "./shared/errors";
+import type { Inflight, InflightDelta } from "./shared/types";
 let csrf = "";
 export function setCsrf(value: string) {
   csrf = value;
+}
+/** Whether a bootstrap signed this page in. Cleared on sign-out and on a lost session. */
+export function hasSession() {
+  return csrf !== "";
 }
 // GET bodies by exact path. A 304, or a 200 with identical text, returns the same object so React can skip the update.
 type Cached = { etag: string | null; text: string; data: unknown };
@@ -11,6 +17,10 @@ let cachedChars = 0, generation = 0;
 /** The last body read for a GET path, to show while it is fetched again. */
 export function cachedResponse<T>(path: string) {
   return responses.get(path)?.data as T | undefined;
+}
+/** Changes whenever cached responses stop belonging to the signed-in account. */
+export function responseScope() {
+  return generation;
 }
 export function clearResponseCache() {
   responses.clear();
@@ -35,7 +45,8 @@ export class ApiError extends Error {
   constructor(
     message: string,
     public status: number,
-    public code?: string,
+    /** An unknown server code still arrives as its string and matches no comparison. */
+    public code?: ErrorCode,
     public confirmRequired?: boolean,
     /** The error response body, such as the current draft with a draft conflict. */
     public data?: Record<string, unknown>,
@@ -100,8 +111,9 @@ export async function api<T>(path: string, init: RequestInit = {}, retried = fal
     return data as T;
   } catch (error) {
     if (error instanceof ApiError || init.signal?.aborted) throw error;
+    // Only a write has a draft and a sent message to reassure about; a slow read just needs another try.
     throw new ApiError(controller.signal.aborted
-      ? "The app took too long to respond. Your draft is kept; sent messages will be checked before retrying."
+      ? get ? "The app took too long to respond. Try again in a moment." : "The app took too long to respond. Your draft is kept; sent messages will be checked before retrying."
       : "Can't reach the app. Your draft is kept. We'll reconnect automatically.",
     controller.signal.aborted ? 504 : 503, "CONNECTION_UNAVAILABLE");
   } finally {
@@ -111,6 +123,24 @@ export async function api<T>(path: string, init: RequestInit = {}, retried = fal
 }
 export function write<T>(path: string, value: unknown, method = "POST", init?: RequestInit) {
   return api<T>(path, { ...init, method, body: JSON.stringify(value) });
+}
+type Fields<K extends ApiRoute> =
+  & (keyof ApiParams<K> extends never ? { params?: undefined } : { params: ApiParams<K> })
+  & (ApiBody<K> extends undefined ? { body?: undefined } : { body: ApiBody<K> })
+  & (ApiQuery<K> extends undefined ? { query?: undefined } : {} extends ApiQuery<K> ? { query?: ApiQuery<K> } : { query: ApiQuery<K> });
+export type RequestOptions<K extends ApiRoute> = Fields<K> & { signal?: AbortSignal };
+/**
+ * Calls a route from the shared map, typed by its method and path: `request("GET /bots/:id/draft",
+ * { params: { id } })` answers a SavedDraft or null. It reads and caches like api().
+ */
+export function request<K extends ApiRoute>(route: K, ...[options]: {} extends RequestOptions<K> ? [RequestOptions<K>?] : [RequestOptions<K>]) {
+  const { params, body, query, signal } = (options ?? {}) as { params?: ApiParams<K>; body?: unknown; query?: ApiQuery<K>; signal?: AbortSignal };
+  const { method } = routeParts(route);
+  return api<ApiResponse<K>>(routeUrl(route, params ?? ({} as ApiParams<K>), query), {
+    ...(method === "GET" ? {} : { method }),
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    signal,
+  });
 }
 /**
  * Runs refresh every intervalMs while the page is visible. A hidden page pauses it,
@@ -140,9 +170,11 @@ const STREAM_SILENCE = 60_000;
 /**
  * Calls onChange for each change notice on a server event stream, and each time it
  * connects, since notices sent before the subscription are lost. EventSource retries a drop
- * itself but never a refusal, so `open` replaces a closed or silent stream.
+ * itself but never a refusal, so `open` replaces a closed or silent stream. `named` handles other
+ * named events by their data, such as group chat notices.
  */
-export function changeStream(path: string, onChange: () => void, onInflight?: (value: Inflight) => void) {
+export function changeStream(path: string, onChange: () => void, onInflight?: (value: Inflight) => void, named: Record<string, (data: string) => void> = {},
+  onInflightDelta?: (value: InflightDelta) => boolean) {
   let source: EventSource | undefined, heard = 0;
   const close = () => {
     source?.close();
@@ -162,7 +194,20 @@ export function changeStream(path: string, onChange: () => void, onInflight?: (v
       heard = Date.now();
       try { onInflight(JSON.parse((event as MessageEvent).data) as Inflight); } catch { onChange(); }
     });
+    // A growth notice the caller cannot apply means this stream and the caller disagree about the
+    // live reply. Reload, and reconnect so the server starts again from a whole `inflight` event.
+    if (onInflightDelta) current.addEventListener("inflight-delta", event => {
+      heard = Date.now();
+      let applied = false;
+      try { applied = onInflightDelta(JSON.parse((event as MessageEvent).data) as InflightDelta); } catch { /* Reloads below. */ }
+      if (applied) return;
+      onChange();
+      close();
+      open();
+    });
     current.addEventListener("roster", () => { heard = Date.now(); onChange(); });
+    for (const [name, handle] of Object.entries(named))
+      current.addEventListener(name, event => { heard = Date.now(); handle((event as MessageEvent).data); });
     current.addEventListener("ping", () => { heard = Date.now(); });
     current.onmessage = () => {
       heard = Date.now();

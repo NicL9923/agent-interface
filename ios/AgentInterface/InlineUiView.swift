@@ -87,7 +87,7 @@ private struct InlineWebView: UIViewRepresentable {
       guard message.frameInfo.isMainFrame, let value = message.body as? Double, value.isFinite else { return }
       parent.height = CGFloat(min(1600, max(80, value)))
     }
-    func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+    func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction, decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void) {
       // Only the initial local document and its sandboxed srcdoc may load.
       let url = action.request.url?.absoluteString ?? ""
       decisionHandler(action.navigationType == .other && ["about:blank", "about:srcdoc"].contains(url) ? .allow : .cancel)

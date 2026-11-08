@@ -38,6 +38,7 @@ export interface ProfileMemory {
   owner: 'Hermes';
   documents: MemoryDocument[];
   notice: string;
+  refresh?: { revision: string; state: 'next_turn' | 'pending' | 'applied'; busy: boolean; message: string };
 }
 export interface RoutinePreview {
   botId: string;
@@ -57,16 +58,38 @@ export interface RoutineRunReceipt {
   executionId?: string;
   ownerStatus?: string;
 }
-export type ExperienceRequest =
+type ExperienceRequestUnion =
   | { operation: 'search'; profile: string; query: string }
-  | { operation: 'history'; profile: string; sessionId: string; offset: number }
+  | { operation: 'history'; profile: string; sessionId: string; offset: number; messageId?: string }
   | { operation: 'usage'; profile: string; days: number }
   | { operation: 'routine_results'; profile: string; routineId: string }
   | { operation: 'routine_output'; profile: string; routineId: string; resultId: string }
   | { operation: 'memory'; profile: string }
   | { operation: 'save_memory'; profile: string; target: 'memory' | 'user'; revision: string; entries: { id?: string; text: string }[] }
   | { operation: 'delete_memory'; profile: string; target: 'memory' | 'user'; revision: string; entryId: string }
+  | { operation: 'model_names'; profile: string; models: { provider: string; model: string }[] }
   | { operation: 'preview'; profile: string; schedule: string }
   | { operation: 'run'; profile: string; routineId: string; requestId: string; senderId: string }
   | { operation: 'run_receipt'; profile: string; routineId: string; requestId: string; senderId: string };
-export type ExperienceResponse = ProfileMemory | RoutinePreview | RoutineRunReceipt | RoutineResult[] | RoutineOutput | SearchHit[] | HistoryPage | UsageSummary;
+/** The result belongs to the requested operation. Missing receipts are HTTP 404 errors. */
+export interface ExperienceResults {
+  search: SearchHit[];
+  history: HistoryPage;
+  usage: UsageSummary;
+  routine_results: RoutineResult[];
+  routine_output: RoutineOutput;
+  memory: ProfileMemory;
+  save_memory: ProfileMemory;
+  delete_memory: ProfileMemory;
+  preview: RoutinePreview;
+  /** Hermes's cache-only display names, null where it has none. */
+  model_names: { names: { provider: string; model: string; name: string | null }[] };
+  run: RoutineRunReceipt;
+  run_receipt: RoutineRunReceipt;
+}
+export type ExperienceOperation = ExperienceRequestUnion['operation'];
+export type ExperienceRequests = { [O in ExperienceOperation]: Extract<ExperienceRequestUnion, { operation: O }> };
+export type ExperienceRequest<K extends ExperienceOperation = ExperienceOperation> = { [O in K]: ExperienceRequests[O] }[K];
+export type ExperienceResponse<K extends ExperienceOperation = ExperienceOperation> = ExperienceResults[K];
+export type ExperienceRequester = <R extends ExperienceRequest>(input: R) => Promise<ExperienceResult<R['operation']>>;
+export type ExperienceResult<O extends ExperienceOperation> = ExperienceResults[O];

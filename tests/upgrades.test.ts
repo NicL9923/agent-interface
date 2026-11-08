@@ -1,3 +1,4 @@
+import { capabilitiesFixture } from "./helpers/runtime-fixtures.js";
 import { afterEach, expect, it, vi } from "vitest";
 import { spawnSync } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -7,8 +8,9 @@ import { join, resolve } from "node:path";
 import { createApp } from "../src/server/app.js";
 import { hash } from "../src/server/auth.js";
 import { loadConfig } from "../src/server/config.js";
-import { HermesUpgrades, launchWorker } from "../src/server/upgrades.js";
+import { HermesUpgrades, launchWorker, transientRunner } from "../src/server/upgrades.js";
 import type { ActivityState, Runtime } from "../src/shared/types.js";
+import { fakeRuntime, localLogin } from "./helpers/server.js";
 
 const origin = "http://127.0.0.1:3000", revision = "d23cc6b06455b8551fb6f61d3cad040a0e82f5b6";
 const temporary: string[] = [], apps: Awaited<ReturnType<typeof createApp>>["app"][] = [];
@@ -21,8 +23,8 @@ async function setup(enabled = true) {
     HERMES_UPGRADE_STATE_DIR: directory, HERMES_UPGRADE_PYTHON: "/usr/bin/python3",
   } : {}) });
   let activity: ActivityState = "idle", connected = true;
-  const runtime = { status: async () => ({ connected }), listBots: async () => [{ id: "shared", name: "Shared", model: "test", shared: true, activity }],
-    close: async () => {}, capabilities: async () => ({ chat: { supported: true } }), submit: vi.fn() } as unknown as Runtime;
+  const runtime = fakeRuntime({ status: async () => ({ connected }), listBots: async () => [{ id: "shared", name: "Shared", model: "test", shared: true, activity }],
+    close: async () => {}, capabilities: async () => capabilitiesFixture({ chat: { supported: true } }), submit: vi.fn() });
   const launch = vi.fn(), upgrades = new HermesUpgrades(config, runtime, launch);
   const result = await createApp(config, runtime, { background: false, upgrades }); apps.push(result.app);
   const stateFile = join(directory, "status.json");
@@ -33,13 +35,11 @@ async function setup(enabled = true) {
   return { ...result, config, directory, workerConfig, upgrades, launch, runtime, state, save, ready,
     activity: (value: ActivityState) => { activity = value; }, connected: (value: boolean) => { connected = value; } };
 }
-async function login(app: Awaited<ReturnType<typeof createApp>>["app"], member = "one") {
-  const result = await app.inject({ method: "POST", url: "/api/auth/local", headers: { origin }, payload: { member } });
-  return { origin, cookie: `session=${result.cookies[0].value}`, "x-csrf-token": result.json().csrfToken };
-}
+const login = (app: Awaited<ReturnType<typeof createApp>>["app"], member = "one") => localLogin(app, origin, member);
 
 it("keeps upgrades opt-in, restricts administrators, and rejects client commands or refs", async () => {
   const disabled = await setup(false), disabledHeaders = await login(disabled.app);
+  expect(await disabled.upgrades["workerHeld"]()).toBe(false);
   expect((await disabled.app.inject({ url: "/api/hermes/upgrade", headers: disabledHeaders })).json()).toMatchObject({ available: false, canCheck: false, canInstall: false });
   expect((await disabled.app.inject({ method: "POST", url: "/api/hermes/upgrade/check", headers: disabledHeaders, payload: {} })).statusCode).toBe(409);
   const installation = await setup(), member = await login(installation.app, "two"), admin = await login(installation.app);
@@ -60,6 +60,21 @@ it("retains browser CSRF protections and accepts administrator native sessions w
   expect((await installation.app.inject({ method: "POST", url: "/api/hermes/upgrade/check", headers: { ...native, origin }, payload: {} })).statusCode).toBe(403);
   expect((await installation.app.inject({ method: "POST", url: "/api/hermes/upgrade/check", headers: native, payload: {} })).json()).toMatchObject({ phase: "checking", canInstall: false });
   expect(installation.launch).toHaveBeenCalledTimes(1);
+});
+
+it("dates the running Hermes revision in bootstrap, and a bad date never invalidates the record", async () => {
+  const installation = await setup(), headers = await login(installation.app);
+  installation.runtime.status = async () => ({ connected: true, version: revision });
+  installation.runtime.capabilities = async () => ({ chat: { supported: true }, avatarMetadata: { supported: false } }) as Awaited<ReturnType<Runtime["capabilities"]>>;
+  const committedAt = "2026-10-15T22:07:17+00:00";
+  installation.save({ phase: "idle", current: { revision, committedAt }, checks: [], message: "Idle" });
+  expect((await installation.app.inject({ url: "/api/bootstrap", headers })).json().connection).toEqual({ connected: true, version: revision, revisionDate: committedAt });
+  expect((await installation.app.inject({ url: "/api/hermes/upgrade", headers })).json().current).toEqual({ revision, committedAt });
+  installation.save({ phase: "idle", current: { revision, committedAt: "yesterday-ish" }, checks: [], message: "Idle" });
+  const status = (await installation.app.inject({ url: "/api/hermes/upgrade", headers })).json();
+  expect(status).toMatchObject({ phase: "idle", current: { revision } });
+  expect(status.current.committedAt).toBeUndefined();
+  expect((await installation.app.inject({ url: "/api/bootstrap", headers })).json().connection.revisionDate).toBeUndefined();
 });
 
 it("labels a check as a check", async () => {
@@ -222,13 +237,40 @@ worker.Worker(sys.argv[2],sys.argv[3],sys.argv[4],sys.argv[5]).recovery(sys.argv
   expect(installation.upgrades.maintenance()).toBe(false);
 });
 
+it("starts the worker as its own systemd user unit when the app runs under systemd", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "agent-interface-launch-"));
+  try {
+    expect(transientRunner({}, "/bin/sh")).toBe(false);
+    expect(transientRunner({ INVOCATION_ID: "x", XDG_RUNTIME_DIR: "/run/user/1" }, "/bin/sh")).toBe("/bin/sh");
+    expect(transientRunner({ INVOCATION_ID: "x", XDG_RUNTIME_DIR: "/run/user/1" }, join(directory, "missing"))).toBe(false);
+    const runner = join(directory, "systemd-run"), seen = join(directory, "argv");
+    writeFileSync(runner, `#!/bin/sh\nprintf '%s\\n' "$@" > ${seen}\n`, { mode: 0o700 });
+    const child = launchWorker({ python: "/py", workerConfig: "/config.json", stateDirectory: directory }, { action: "check", operationId: "op" }, "/worker.py", runner);
+    await new Promise(done => child.on("exit", done));
+    const argv = readFileSync(seen, "utf8").trim().split("\n");
+    const log = readdirSync(directory).find(name => name.startsWith("worker-launch-"))!;
+    expect(argv.slice(0, 5)).toEqual(["--user", "--collect", "--quiet", "--service-type=exec", "--expand-environment=no"]);
+    expect(argv).toContain("--property=ExitType=cgroup");
+    expect(argv).toContain("--property=UMask=0077");
+    expect(argv).toContain(`--property=StandardOutput=append:${join(directory, log)}`);
+    expect(argv).toContain("--setenv=LANG=C.UTF-8");
+    expect(argv.slice(argv.indexOf("--") + 1)).toEqual(["/py", "/worker.py", "--config", "/config.json", "--state-dir", directory, "--action", "check", "--operation-id", "op"]);
+    // A refused unit is a worker that never started.
+    const refusing = join(directory, "refusing-systemd-run");
+    writeFileSync(refusing, "#!/bin/sh\nexit 1\n", { mode: 0o700 });
+    const refused = launchWorker({ python: "/py", workerConfig: "/config.json", stateDirectory: directory }, { action: "check", operationId: "op" }, "/worker.py", refusing);
+    const error = await new Promise<Error>(done => refused.on("error", done));
+    expect(error.message).toBe("systemd-run exited with 1");
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
 it("keeps each worker launch's startup output privately instead of discarding it", async () => {
   const directory = mkdtempSync(join(tmpdir(), "agent-interface-launch-"));
   try {
     const python = join(directory, "python");
     writeFileSync(python, "#!/bin/sh\necho \"Traceback: worker could not start $7\" >&2\nexit 3\n", { mode: 0o700 });
     const launch = async (action: string) => {
-      const child = launchWorker({ python, workerConfig: "/config.json", stateDirectory: directory }, { action, operationId: "op" }, "/worker.py");
+      const child = launchWorker({ python, workerConfig: "/config.json", stateDirectory: directory }, { action, operationId: "op" }, "/worker.py", false);
       return new Promise(done => child.on("exit", done));
     };
     expect(await launch("check")).toBe(3);
@@ -241,4 +283,44 @@ it("keeps each worker launch's startup output privately instead of discarding it
     for (let index = 0; index < 12; index++) await launch("check");
     expect(readdirSync(directory).filter(name => name.startsWith("worker-launch-"))).toHaveLength(10);
   } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+it("offers safe recovery after an admitted install worker failed before starting a host hook", async () => {
+  const installation = await setup();
+  const stageRoot = join(installation.directory, "stages"), stage = join(stageRoot, "qualified");
+  mkdirSync(stage, { recursive: true });
+  writeFileSync(installation.workerConfig, JSON.stringify({ stageRoot, hooks: { recover: ["recover"], restart_service: ["restart"] } }));
+  installation.save({ phase: "failed", maintenance: true, operationId: randomUUID(), error: "worker_start_failed", message: "Worker failed", checks: [], qualification: { stage } });
+  expect(await installation.upgrades.status(administrator)).toMatchObject({ canRetry: true, canCancel: true });
+  expect(installation.upgrades.maintenance()).toBe(true);
+  // A failure after a hook may have changed Hermes still requires recovery evidence.
+  installation.save({ ...installation.state(), checks: [{ id: "install", label: "Install", status: "running" }] });
+  expect(await installation.upgrades.status(administrator)).toMatchObject({ canRetry: false, canCancel: false });
+});
+
+it("keeps the installation gate closed if pending requests cannot be read", async () => {
+  const installation = await setup();
+  rmSync(join(installation.directory, "requests"), { recursive: true });
+  expect(installation.upgrades.maintenance()).toBe(true);
+});
+
+it("offers restore and restart only for receipts that attest the appropriate revision", async () => {
+  const installation = await setup();
+  const operationId = randomUUID(), stage = join(installation.directory, "stages", "decision-table");
+  mkdirSync(stage, { recursive: true });
+  const current = "a".repeat(40), receiptPath = join(installation.directory, "receipt.json"), digest = "b".repeat(64);
+  const qualification = { stage, currentRevision: current, currentPatchSha256: null, candidateRevision: revision, candidatePatchSha256: null, integrationDigest: digest };
+  const receipt = (rev: string) => ({ schemaVersion: 1, revision: rev, trackedPatchSha256: null, qualifiedAt: "2026-10-01", checks: { realIntegration: true, hostRegressions: true }, integrationDigest: digest });
+  const baseline = receipt(current), candidate = receipt(revision), invalidCandidate = { ...candidate, checks: { ...candidate.checks, hostRegressions: false } };
+  writeFileSync(installation.workerConfig, JSON.stringify({ stageRoot: join(installation.directory, "stages"), qualificationReceipt: receiptPath, hooks: { recover: ["/bin/true"], restart_service: ["/bin/true"] } }));
+  writeFileSync(join(stage, "platform.json"), JSON.stringify({ operationId, phase: "installed" }));
+  const state = { phase: "failed", operationId, requestId: randomUUID(), maintenance: true, qualification, checks: [], message: "Interrupted" };
+  for (const [previous, deployed, restore, restart] of [
+    [baseline, candidate, true, true], [null, baseline, true, true], [baseline, invalidCandidate, true, false],
+    [null, candidate, false, true], [null, invalidCandidate, false, false], [baseline, receipt("c".repeat(40)), true, false],
+  ] as const) {
+    writeFileSync(join(stage, "recovery.json"), JSON.stringify({ operationId, hostHookStarted: true, previousReceipt: previous && Buffer.from(JSON.stringify(previous)).toString("base64") }));
+    writeFileSync(receiptPath, JSON.stringify(deployed));
+    expect(installation.upgrades["recoveryEligibility"](state as Parameters<typeof installation.upgrades["recoveryEligibility"]>[0])).toMatchObject({ restore, restart });
+  }
 });

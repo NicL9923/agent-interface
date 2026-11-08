@@ -7,22 +7,28 @@ drafts and notification subscriptions.
 
 Household installation: [agentui.wildflowersranch.com](https://agentui.wildflowersranch.com).
 
-The web home lists every assistant with its latest message. Pin assistants to show
-them as large live avatars at the top: use the pin in a conversation's header, or
-long-press (right-click on a computer) an assistant on home. Phones open on home and
-push into a conversation; Back returns. The account button opens Settings, which also
-holds Hermes updates, Computer and Integrations.
+The web home lists every assistant with its latest message. A dot marks a chat you
+have opened before that has a newer message than your last read, on any of your
+devices. Pin assistants to show them as large live avatars at the top. In a conversation, the assistant's avatar and
+name in the header open its details: Pin, Artifacts, Settings, "Notify me about all
+activity" and its home section. Long-press (right-click on a computer) an assistant
+on home to pin it or move it to a section. Phones open on home and push into a
+conversation; Back returns. The account button opens Settings, which also holds Hermes
+updates, Computer, Integrations, the assistants you follow and your home sections.
+Each assistant can be in one section. New assistants start with their name and look,
+then role and model. On the web, a new assistant's chat opens once it is created.
 
 The self-hoster connects this server to Hermes once. Web users sign in to that
 installation. iOS users enter its HTTPS address, then sign in to the same
-household. The mobile app connects to this server, not directly to Hermes.
+household. The app keeps the sign-in alive while it is used, up to 90 days after
+signing in with Google. The mobile app connects to this server, not directly to Hermes.
 
 Web assistant settings load model options from the connected Hermes profile.
 The selected provider starts expanded. Search the catalog, refresh it after
 changing connected providers, and star models to keep personal favorites. Shared assistants keep one shared model. Existing selections remain
 saved when a provider is unavailable, and Hermes model warnings still require
-confirmation. In Advanced presentation, the model button in the web and iOS composers switches
-the assistant's model from the same catalog without opening settings. Both pickers control reasoning effort and Normal/Fast/Ultrafast speed for the current
+confirmation. In Advanced presentation, the model chip under the assistant's name in the web and iOS chat headers, with the provider's mark and the model's display name, switches
+the assistant's model from the same catalog without opening settings. Simple presentation never shows the model. Display names come from Hermes's cached models.dev catalog through the add-on, and the server formats the identifier itself (`claude-opus-5-5` becomes Claude Opus 5.5) when the add-on is older or does not know the model. Both pickers control reasoning effort and Normal/Fast/Ultrafast speed for the current
 conversation. The native picker includes search, provider groups, refresh and model favorites. Hermes validates support for the selected model.
 
 An assistant is either shared with the household or personal. A personal assistant
@@ -48,9 +54,15 @@ Reading a chat on one device stops its pending notifications to the others and
 removes its delivered ones from your iPhone and iPad. A browser tab counts while
 it is focused and has had input in the last five minutes.
 
+The browser tab title, favicon and installed app, and the iPhone and iPad app icon,
+show how many assistants have unread messages or a decision waiting for you. A web
+approval notification offers **Review** and **Decline** where the browser supports
+notification buttons, as the iOS notification does. Decline works without opening
+the app and can only decline that one request.
+
 ## Run locally
 
-Use Node 24.21 or 26.10 and npm. `.node-version` selects the tested Node 24 LTS
+Use Node 24.22 or 26.13 and npm. `.node-version` selects the tested Node 24 LTS
 release. The lockfile pins application dependencies. See the
 [dependency record](docs/Dependencies.md) for versions and verification.
 
@@ -88,6 +100,65 @@ Shared controls live in `src/components/ui`, with shadcn configuration in
 `components.json` and Base UI handling context menus and popovers. Keep the
 existing WildBots colors, typography and spacing when adding controls.
 
+Base UI is not part of the first load. Import its components only from modules the
+entry reaches through `import()`, such as the assistant menu in `src/app/BotMenuPopup.tsx`.
+Until that menu has loaded, `src/app/BotMenu.tsx` stands in for it and catches the first
+right click, menu key or long press, so none is lost. `npm run build` fails when Base UI
+returns to the entry's static imports.
+
+### Motion and ambience
+
+`src/motion.css` holds the web client's motion layer and loads after `src/styles.css`. Every
+animation in it runs only when the system allows motion, and the existing reduced-motion rules
+still win.
+
+- On a phone, opening a chat from home and going Back use the View Transitions API. The avatar
+  flies between its home row and the chat header while the screens slide. Browsers without the
+  API change screens at once.
+- A chat with a drawn avatar takes a light tint from the avatar's color in its header, your own
+  messages and the composer's focus ring. Photo avatars keep the app's green.
+- The chat header lifts with a border and shadow once messages scroll under it. This uses
+  scroll-driven animations where the browser supports them.
+- While a turn runs, the live row shows its tools as a strip that fills in as each finishes. While
+  an assistant uses the computer, a small watch-only view of the desktop docks in the transcript's
+  corner. It opens the full computer view and can be dismissed for the turn.
+- On a computer, pinned avatars glance at a nearby mouse pointer. When a pinned assistant finishes,
+  it hops and the other pinned ones look over. Approving a request or answering a question makes
+  the assistant cheer, and settled approval cards fold away.
+- Dark mode adds a faint glow, rail grain and lit edges on raised panels.
+- Home shows the season with a slight accent shift and a few faint drifting shapes. The calendar
+  decides first. Between holidays, a pinned seasonal character brings its own season.
+
+These are web-only. The avatar conductor and pose math that iOS mirrors are unchanged.
+
+### Crash reports
+
+A render failure anywhere outside a lazy screen shows a "Something went wrong" page with
+Reload instead of a blank screen. Chat and group drafts are written to the device on
+every edit, so a reload keeps them. While someone is signed in, the web client sends
+that crash, uncaught errors and unhandled rejections to `POST /api/client-errors`: each
+distinct report once, at most five per page load, and never chunk-load failures the
+screens already handle. The server logs each one as a `Client error` warning with the
+person's id and stores nothing. It accepts 20 reports per person every 10 minutes.
+
+### Offline cache
+
+`scripts/build-worker.mjs` turns `scripts/service-worker.js` into `sw.js`, and
+`scripts/precache-plan.mjs` sorts the built files into three groups. The install step
+fetches only the pages and the static import graph of both HTML entries, which is enough
+to open offline without racing the first visit. Install fails, and the browser retries it
+later while the old worker keeps serving, if any of those files is an error or comes back
+as `text/html` in place of code. Lazy screens and libraries are fetched in the background,
+three at a time, when the page posts `{ type: "WARM" }` to the active worker after it goes
+idle. The worker runs that under `waitUntil` so the browser keeps it alive, never delays
+activation for it, and skips files already cached, so any later page load finishes what a
+stopped run missed. The terminal and remote desktop chunks wait for first use. A file that
+was never warmed is kept after its first use, unless it is an error or `text/html`.
+Installing a release copies every hashed `assets/name-HASH.ext` file already held by an
+earlier release's cache instead of downloading it again. The pages, icons, manifest and
+unhashed files are always fetched fresh. The worker's hashed-name rule must match
+`src/server/static-cache.ts`; a test compares them.
+
 Tailwind 4 uses the app's CSS tokens through `src/ui.css`. Utilities have a `tw:`
 prefix so they cannot collide with existing semantic class names. Preflight is
 omitted to preserve native control styling. Keep custom layout, avatar and
@@ -124,12 +195,23 @@ Hermes runs separately from this application. Guided setup saves `HERMES_URL` an
 HTTP is restricted to loopback. Provider credentials remain in Hermes. Open
 **Integrations** to inspect the selected profile's accounts, check their health,
 and connect or reconnect supported services. Connection changes require an
-integration administrator. See the [integration guide](docs/Integrations.md) for
-supported services, one-time hosting configuration and device limitations.
+integration administrator. An assistant that needs a service it lacks can ask in
+the chat: its card holds that connection's setup and continues once it is set up.
+See the [integration guide](docs/Integrations.md) for supported services, one-time
+hosting configuration and device limitations.
 
 The [shared computer](docs/SharedComputer.md) provides one persistent desktop and
 browser for all assistants, with human takeover for every household member and a
-real VPS terminal for terminal administrators.
+real VPS terminal for terminal administrators. The iOS app shows the desktop on its
+own Computer screen with Take over and Hand back; the terminal still opens in Safari.
+On a phone, web and iOS add touch controls with a help sheet: two-finger scroll and
+right-click, pinch to zoom the view, trackpad mode and clipboard copy and paste.
+An assistant can ask for a person in the conversation; the card's Take over opens the
+computer with control in one step, and handing back tells the assistant to continue.
+While a browser tool runs, the live row offers Watch.
+An assistant can also offer the system terminal in chat; its card's Open terminal offers the
+suggested command for you to paste at the prompt, never runs it, and Done tells the assistant to
+check the result.
 
 The [capability matrix](docs/HermesCapabilityMatrix.md) records the tested upstream
 revision, native integration probes, and the small revision-bound extension for
@@ -166,15 +248,22 @@ online or into view. Manual reconnect checks immediately. The transport bounds
 stalled requests and backs off repeated failures. It never automatically replays
 messages or configuration changes; uncertain admissions are reconciled through
 Hermes's durable receipts.
+Known native admission refusals return the message to its draft. Crashes and
+unrecognized native errors keep the saved request ID for receipt checks.
 
 ## Household experience
 
 The app opens **Today** unless you choose an assistant start page or follow a notification. Today shows pending decisions, scheduled work, recent results and files
 across your assistants. **Mark caught up** shares your recap position between
 web and iOS. Voice messages are transcribed into a draft for review before you
-send. **Listen to reply** reads the latest reply with Hermes speech on web and iOS.
+send. The speaker button in any reply's action row reads that reply with Hermes speech on web and iOS, one reply at a time. On the web, **Talk** holds a live spoken conversation with an assistant: a voice model listens and answers out loud while the assistant does the work, and each assistant has its own voice. See [Live Talk](docs/HouseholdExperience.md#live-talk). Each message shows its time under its bubble beside its actions, and a reply made of several parts shows the time once, under the last. A name appears above a message only for another household member or a scheduled prompt. Copy is available on your own messages too.
 
-**Search & saved** searches native answers, attachment names, and routine previews across your visible assistants. Open original history, page through older messages, and save a conversation, reply, or routine output. Saved items belong to your account and hold references rather than copied transcripts.
+Hermes questions on web and iOS show each suggested answer as a card to tap, with
+**Write my own answer** last. A question that allows several answers shows checkboxes.
+On a computer, number keys pick an option. Choosing an answer moves on to the next
+question, and Send answers waits until every question has one.
+
+**Search & saved** searches native answers, attachment names, and routine previews across your visible assistants as you type. A match in an assistant's current conversation opens that chat at the message. Results mark the matching words. Open original history, page through older messages, and save a conversation, reply, or routine output. Saved items belong to your account and hold references rather than copied transcripts.
 
 Its **Automations** tab lists next runs, recent execution or delivery failures, result recipients, and pause/resume controls. Usage shows Hermes's recorded main-session tokens, reported cost, and estimates separately. Missing cost reporting stays unknown. Simple conversations show tool receipts with the native outcome and any reported result link.
 
@@ -184,9 +273,20 @@ An empty conversation on web and iOS offers a role discussion using the assistan
 
 The native iPhone app includes a share extension for webpages, photos, PDFs, and text. Choose an assistant, save the share, and open the app to review and add it to a draft. The extension shares no sign-in token. Existing draft content is kept, and nothing sends automatically. HEIC and other unsupported image formats convert to a bounded PNG. Device installation requires the app and extension to be signed with the shared App Group.
 
-Assistant settings > **Memory** lets you inspect, correct and forget native
+The iPhone and iPad app also works with Siri, Shortcuts and Spotlight: ask WildBots to open an assistant or Today, or to put a question in an assistant's draft for you to review and send. Assistant names show in Spotlight search, and the Assistants widget can be edited to show only the assistants you choose. None of these hold your sign-in token, and they clear when you sign out. An iPad with a keyboard opens pinned assistants with Cmd+1 to 9 and any destination with Cmd+K.
+
+Assistant settings has five sections: **Profile** (name, description, sharing,
+avatar, live Talk voice), **Behavior** (instructions, model, tools and skills), **Access**
+(connections, logins and, in Advanced presentation, MCP servers), **Automation**
+(routines, goals, tasks and triggers) and **Memory & learning**. On a phone it
+opens on that list. One **Save changes** saves everything in Profile, Behavior and
+Access; it stays visible on other sections while those changes are unsaved.
+Memory keeps its own Save, and list actions such as adding a routine or a login
+save at once.
+
+**Memory & learning** lets you inspect, correct and forget native
 Hermes profile memory. Existing conversations keep their memory snapshot until
-a new Hermes session starts. In **Details**, enable interactive replies to add
+a new Hermes session starts. In **Behavior**, enable interactive replies to add
 checklists, itineraries and reviewed calendar proposals to assistant answers.
 Your checks and itinerary notes are saved for your account.
 
@@ -198,18 +298,71 @@ conversation. Hermes receives the format instructions automatically in WildBots
 conversations. See [inline views](docs/HouseholdExperience.md#inline-views) for
 the reply format and supported behavior.
 
+Assistants can also hand you an email draft to open in your mail app or Gmail, or
+a short form to fill in. **Send answers** posts your answers as your own message
+without touching your draft. When an assistant connected to T3 Code starts a
+thread, the chat shows a card with **Open in T3 Code**. These work on web and
+iOS. See [email drafts and forms](docs/HouseholdExperience.md#email-drafts-and-forms)
+and [T3 Code threads](docs/HouseholdExperience.md#t3-code-threads).
+
 **Routines** includes morning brief, meal plan and VPS health recipes, schedule
 previews in the actual Hermes timezone, and **Try once** with durable run
 receipts. See the [household experience guide](docs/HouseholdExperience.md) for
 controls, supported reply cards, voice requirements and recovery behavior.
 
+In Advanced presentation, routine **Advanced** options include skills,
+model/provider pins, toolsets, profile scripts, script-only runs and context from
+other routines; Simple presentation keeps saved overrides without showing them.
+**Automation** also manages standing goals, native tasks and event triggers.
+Behavior's skill rows read and lock installed skills, and **Memory & learning**
+reviews proposed skill changes. New work
+requires an explicit start. Memory edits apply to the canonical conversation at
+the next safe turn boundary, with pending/applied status and preserved history.
+
+Each routine run also appears in its assistant's conversation, in time order with the
+messages, as a collapsed card: a status dot, the routine's name, when it ran and a line of
+its output. Failed, running and undelivered runs say so in words beside the dot. Open a
+card to read the output with its files, save it, or open all results. A run whose output
+Hermes delivered into the chat shows once, as that message. Cards follow the loaded
+history, so paging back brings in earlier runs, and they update while the chat is open.
+**Hide this routine in chat** on a card, with Undo, or **Show runs in chat** in the
+routine's settings, keeps a routine such as a certificate check out of your chat. It
+is your own setting and doesn't change the routine for anyone else. Run status needs the
+current Hermes add-on; with an older one, runs show as "Status unknown".
+
 Use **View results** beside a routine to read its saved runs, including trials.
-Routine notifications open this history directly. Results stay within the selected
+Routine notifications name the routine and quote the start of its answer, or the
+error for a failed run, and open this history directly. Results stay within the selected
 Hermes profile; a run with only a saved preview says so.
 
-**Group chats** lets 2–6 local assistants discuss a task in one room. Create a
-named group, address assistants with `@handle`, reply in a thread, approve a
-pending action or stop the discussion. Hermes owns the persistent coordinator.
+**Group chats** lets 2–6 local assistants discuss a task in one room. Rooms are rows
+in the home list beside the assistants, with overlapping member faces, the last
+message and who said it, and its time. Rooms follow the assistants, newest message first, because assistant rows keep
+the roster's order and do not jump. Home reads Hermes's room catalog when the household event stream
+says this person's rooms changed, when it reconnects or the page wakes, and every 5 minutes as a fallback.
+While any household stream is open, the server checks the catalog once for everyone at most every
+30 seconds, and right away after a group or assistant change made in the app, and tells only the people
+whose visible rooms changed. It adds each room's newest message to the catalog and re-reads a room's log
+only when the room has a newer message, so home never polls room logs. Home has no group unread dot, since
+the app keeps no read position for rooms. Choose a room to open it like a conversation
+(`?view=group&room=ID`; the old `?view=groups` link opens home). Make a group from the **+** button's
+New group chat, which opens it. Create a
+named group, address assistants with `@handle` (typing `@` suggests members),
+reply in a thread, approve a pending action or stop the discussion. Messages show
+which household member sent them, and new messages arrive live. While assistants work, the room
+names each one, as "Planner is working..."; Advanced presentation adds the tool it is in and its
+round, such as "Round 2 of 3". **Group settings** in the room sets its purpose, shared notes
+that every assistant reads from the next message on, and an optional lead assistant who picks who
+answers a message that names no one; the room then shows each hand-off. Anyone who can open the
+room can change them. A routine can also post its results in group chats you choose in its
+editor. Its posts show under the routine's name, marked Routine, and assistants answer one only when
+it @mentions them. A personal assistant's routine can post only in groups with one of your personal
+assistants. While a routine posts in a group, a sharing change, or a new assistant reusing a deleted
+one's name, that would let someone who can't see the routine's assistant read the group is refused
+until that group is removed from the routine. A group that lists a deleted assistant closes for everyone. These need a Hermes with room
+activity and settings, such as `3a1e9ef`; with an older one the room says only that assistants
+are discussing, and settings and routine posts stay hidden.
+Hermes owns the persistent coordinator.
 If that coordinator is unavailable, rooms remain readable and sending is disabled.
 After an uncertain send or creation, retry the saved request to check its status
 without creating a duplicate. Conversation activity keeps bot messages, scheduled-job handoffs, subagents,
@@ -219,11 +372,47 @@ answers stay in the conversation with a Scheduled label. Decisions and requests
 for input stay visible. Unknown messages from other clients remain in chat;
 only recognized automation sources move into activity.
 
-Assistant settings > **Logins** manages the selected Hermes profile's encrypted
+Assistant settings > **Access** manages the selected Hermes profile's encrypted
 login vault. Native login, code, vault-unlock and secret requests appear inline
-with masked fields, outside chat and drafts. Ownership and source controls follow
+with masked fields, outside chat and drafts. Each card shows when it is sending and
+when Hermes took the answer, then folds to one line. Sending a message instead
+closes the request so the assistant reads it and can ask again. Ownership and source controls follow
 Hermes. See [passwords and logins](docs/PasswordsAndLogins.md) for storage scope,
 external password managers and uncertain-request recovery.
+
+## Chatting
+
+Each finished reply offers **Copy reply**, **Share reply** where the device can share,
+**Save reply** and **Quote in reply**. On a computer they appear when you point at or
+tab to the reply; on touch screens and in the iOS long-press menu they are always
+there. Select part of a web reply to quote just that part. Code blocks are colored by
+language, and tables can be copied as Markdown or CSV.
+
+When a reply fails, **Retry** under it sends your message again without touching
+your draft. A failed turn can be retried once, by anyone, from any device: a second
+tap, tab or phone gets the first retry's result instead of starting another turn.
+
+After you send, your message moves near the top and the reply grows below it.
+Scrolling up stops the view from following; it follows again once you return to
+the end. Each finished turn folds its tool calls and delegated work into one row,
+such as "Worked for 2m 14s · 3 tool calls". Expand it for the details. While the
+assistant works, one live line shows its current tool and, in Advanced, its latest
+reasoning. Decisions and requests for input stay outside the fold.
+
+**Find in chat** (Cmd/Ctrl+F on web, Find on iOS) matches loaded messages at once and
+adds older matches from the conversation's history; choosing one opens the chat at
+that message. A status area above the message box gathers send problems, the
+interrupted-task review, waiting decisions with **Review**, and connection trouble,
+most urgent first.
+
+On a computer, Cmd/Ctrl+K opens a command palette for assistants, group chats, Today,
+Search, Settings and appearance. Cmd/Ctrl+1 to 9 open pinned assistants in the
+installed app (browsers keep those keys for tabs), Cmd/Ctrl+. stops the current
+reply after asking, and `?` lists every shortcut. An iPad with a keyboard has Cmd+K
+"Go to…" and Cmd+1 to 9. In an empty message box, Up recalls your earlier messages
+in that chat. Pasting 32 KB of text or more attaches it as `Pasted text.txt`. Pinning
+or moving an assistant on home shows Undo for five seconds. Web text follows the
+browser's text size setting.
 
 ## Hermes updates and activity
 
@@ -253,7 +442,7 @@ describes recovery.
 Conversations show an animated avatar inline after the latest message while
 Hermes thinks or uses tools. Thinking keeps the character visible with a gentle
 tilt and upward gaze. Completed work leaves the final reply without a separate
-Done status. Web tool calls and delegated work appear in counted accordions.
+Done status. Tool calls and delegated work appear in counted accordions inside each turn's fold.
 Advanced view adds tool inputs, outputs, errors and timestamps, plus reasoning
 Hermes exposes. Approval buttons show submission feedback immediately. Stop
 replaces Send while a response is active and the draft has no text or attachments;
@@ -265,13 +454,18 @@ a magnifying glass for search and browsing, a laptop for terminal and code, a bo
 for reading, or a notepad for writing. Disconnecting marks activity unknown;
 the last tool event is not evidence that execution is still running.
 
-Avatar settings include Pumpkin, Santa, Rudolph, Turkey and Easter Bunny
-in both web and native iOS. The web picker groups these under Seasonal. Each keeps its character during
-working/thinking animation and supports the existing eye and accessory controls.
-Choosing a seasonal character applies its default color and preserves your other
-customization. All five use original artwork.
+Mascot avatars offer eight everyday characters: Bear, Fox, Sprout, Panda, Raccoon,
+Owl, Cactus and Dinosaur. They take whichever color you choose; a panda keeps its
+white face and wears the color on its ears and eye patches. Ten seasonal characters
+follow under their own heading in calendar order: Leprechaun, Easter Bunny, Bald
+Eagle, Pumpkin, Bat, Ghost, Turkey, Santa, Rudolph and Snowman. Both web and native
+iOS offer every character. Each keeps its character during working/thinking
+animation and supports the existing eye and accessory controls. Choosing a seasonal
+character applies its default color and preserves your other customization. Very
+light heads get a soft edge so they stay visible on the light theme. All use
+original artwork.
 
-Open Artifacts in the conversation header to browse that assistant's generated
+Open Artifacts from the assistant's details (tap its name in the conversation header) to browse its generated
 outputs and shared attachments. Search filenames, filter by type, and preview
 images, text, or supported media. PDFs and other files can be opened or downloaded.
 External file sources open only when you choose their link.
@@ -280,13 +474,18 @@ External file sources open only when you choose their link.
 
 ```sh
 npm test
+npm run lint
 npm run test:py
 npm run lint:py
 npm run build
+npm run test:e2e
 python3 .agents/tools/source-state.py
 ```
 
-`npm test` runs the application tests with Vitest. `npm run test:py` runs every
+`npm test` runs the application tests with Vitest. It refuses to start on a Node
+outside the `engines` range in `package.json`, and `.npmrc` makes `npm ci` refuse too:
+older Node 24 releases hang the event-stream tests. `npm run lint` runs oxlint over the
+TypeScript and JavaScript, with warnings failing the run. `npm run test:py` runs every
 Python test file it discovers in `tests/*_test.py`, `scripts/*-test.py` and
 `scripts/spike/*_test.py`, one subprocess each, and fails if a test-looking file
 sits outside those paths. Pass file paths to run a subset, for example
@@ -297,13 +496,23 @@ without `tmux`, shows SKIP locally and fails when `CI=true`.
 `npm run lint:py` runs ruff for undefined names and likely bugs. Install the
 version pinned in `.github/requirements-ci.txt`. CI runs both in its Python job.
 
-The [validation ledger](docs/ValidationLedger.md) distinguishes application tests,
+`npm run test:e2e` runs a short Playwright smoke suite in real Chromium. Run `npm run build`
+first, and `npx playwright install chromium` once per Playwright version. `e2e/server.ts`
+starts the real app server and built client on loopback ports 4173 and 4174, in memory,
+with local sign-in and a scripted assistant, so it never contacts Hermes, Google or the
+network. It covers sign-in, sending a message and receiving the reply over the live event
+stream, the service worker opening the app offline and recovering, and no page errors,
+console errors or CSP violation reports. It does not cover real Hermes behavior, push
+delivery, Google sign-in, the iOS app, or other browsers. CI runs it in the `browser` job
+and uploads the report and traces when it fails.
+
+The [validation ledger](docs/ledger/README.md) distinguishes application tests,
 real Hermes execution using a deterministic local provider, visual checks, and
 acceptance that needs a physical phone or configured external service. Tests with
 a runtime double do not prove Hermes integration. Simulated push checks do not
 prove delivery to an installed phone app while it is closed.
 
-Pull requests run the application tests, production build and Python syntax checks
+Pull requests run the application tests, lint, production build and Python syntax checks
 on both supported Node versions. Native builds and simulator tests run on the
 Mac mini using Xcode 27.0. The isolated Hermes probes remain a separate
 explicit run using the capability matrix's reproduction instructions.
@@ -329,6 +538,28 @@ Connect to the app server's HTTPS origin. HTTP is limited to loopback developmen
 including an iOS simulator on the server's Mac. A physical phone needs an HTTPS
 address it can reach. Household sign-in opens the system authentication browser;
 the resulting app token stays in Keychain, scoped to that server.
+
+### LAN and tailnet routes
+
+Set `DIRECT_ROUTES=lan`, `tailnet` or `lan,tailnet` to let the iOS app reach this
+server over the household network or a Tailscale (or Headscale) tailnet when it
+can, instead of the public origin. The server opens an HTTPS listener on
+`DIRECT_PORT` (default 3443) on each matching private address, and adds and drops
+them as addresses change. It finds LAN addresses on ordinary adapters, never
+container bridges or other VPNs, and tailnet addresses on Tailscale's adapter. A
+cloud server should list only `tailnet`, since its provider's private network is no
+household's LAN. Allow `DIRECT_PORT` through the host firewall on those interfaces
+only, and through the tailnet's access rules for the phones that should use it. Linux
+accepts a packet for any of its addresses on any interface, so the firewall, not the
+listener's address, decides who can connect.
+
+Each listener uses a self-signed certificate kept in `DIRECT_TLS_DIR`, by default
+`direct-tls` beside the database. The app learns each route and the certificate's
+fingerprint over the HTTPS origin, then pins it. The listener serves only the signed-in
+native API; sign-in and the web app stay on the origin. Deleting the directory makes
+a new certificate at the next start, and the app picks it up the next time it
+reaches the origin. See [direct routes](docs/native-api.md#direct-routes) for the
+contract.
 
 Native notifications require the `APNS_*` settings in `.env.example` and a signed
 app whose bundle ID and APNs environment match the server. The

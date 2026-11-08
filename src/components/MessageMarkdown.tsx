@@ -1,5 +1,5 @@
-import { Children, createContext, isValidElement, memo, useContext, useMemo, useState } from "react";
-import type { ReactNode } from "react";
+import { Children, createContext, isValidElement, memo, useContext, useEffect, useMemo, useRef, useState } from "react";
+import type { ComponentProps, ReactNode } from "react";
 import Markdown from "react-markdown";
 import type { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -7,7 +7,13 @@ import { parseReplyDocument, replyCardsFromText } from "../shared/reply-cards";
 import { ReplyCards } from "./ReplyCards";
 import { parseInlineDocument } from "../shared/inline-ui";
 import { InlineUi } from "./InlineUi";
+import { tableRows, tableToCsv, tableToMarkdown } from "./table-export";
 import "./message-markdown.css";
+
+type Highlighter = typeof import("./code-highlight");
+let highlighter: Highlighter | undefined;
+let highlighterLoad: Promise<Highlighter> | undefined;
+const loadHighlighter = () => highlighterLoad ??= import("./code-highlight").then(module => highlighter = module);
 
 interface ReplyContextValue { text: string; inlineUi?: boolean; actionableIds: Set<string>; botId?: string; messageId?: string; userId?: string; unavailable?: boolean }
 const ReplyContext = createContext<ReplyContextValue | null>(null);
@@ -26,13 +32,24 @@ function MessagePre({ children, node }: { children?: ReactNode; node?: { positio
   const document = language === "agent-ui" && context?.botId && context.messageId ? parseReplyDocument(code) : null;
   return document && context && document.cards.every(card => context.actionableIds.has(card.id))
     ? <ReplyCards document={document} botId={context.botId} messageId={context.messageId} userId={context.userId} unavailable={context.unavailable} />
-    : <CodeBlock key={code} code={code} language={language} />;
+    : <CodeBlock key={code} code={code} language={language} finished={!!closed} />;
 }
 
-function CodeBlock({ code, language }: { code: string; language?: string }) {
+/**
+ * A fenced block. It renders plain at once and gains colors when the highlighter chunk is ready; color
+ * alone never changes the layout. A fence still streaming in stays plain until its closing line arrives.
+ */
+function CodeBlock({ code, language, finished }: { code: string; language?: string; finished: boolean }) {
   const [copyState, setCopyState] = useState<
     "idle" | "copying" | "copied" | "failed"
   >("idle");
+  const highlightable = finished && !!language;
+  const [html, setHtml] = useState(() => highlightable && highlighter ? highlighter.highlight(code, language!) : null);
+  // The block is keyed by its code, so a result can only ever belong to this code.
+  useEffect(() => {
+    if (!highlightable || html !== null) return;
+    loadHighlighter().then(module => setHtml(module.highlight(code, language!)), () => { /* Plain code still reads fine. */ });
+  }, [highlightable, html, code, language]);
 
   async function copy() {
     setCopyState("copying");
@@ -61,7 +78,7 @@ function CodeBlock({ code, language }: { code: string; language?: string }) {
         role="region"
         aria-label={language ? `${language} code block` : "Code block"}
       >
-        <code>{code}</code>
+        {html ? <code className="hljs" dangerouslySetInnerHTML={{ __html: html }} /> : <code>{code}</code>}
       </pre>
       <span className="markdown-copy-status" role="status">
         {copyState === "copied"
@@ -74,18 +91,33 @@ function CodeBlock({ code, language }: { code: string; language?: string }) {
   );
 }
 
+/**
+ * Whether a reply's link can open from this app. An assistant often links a file by its path on
+ * the Hermes computer, such as /home/…/notes.md, which here would only open this app again.
+ */
+export function openableHref(href: string | undefined): href is string {
+  if (!href) return false;
+  // Web addresses, including protocol-relative ones, and in-page anchors.
+  if (/^(?:https?:|mailto:|tel:|\/\/|#)/i.test(href)) return true;
+  // This app's own destinations, such as /?view=today, and its signed files.
+  return href === "/" || /^\/?[?#]/.test(href) || href.startsWith("/api/files/");
+}
+const localFile = "On the assistant's computer. Ask it to share the file to open it here.";
+
 const components: Components = {
   a({ children, href, title }) {
-    return href ? (
+    return openableHref(href) ? (
       <a href={href} title={title} target="_blank" rel="noopener noreferrer">
         {children}
       </a>
+    ) : href ? (
+      <span className="markdown-local-file" title={localFile}>{children}</span>
     ) : (
       <span>{children}</span>
     );
   },
   img({ src, alt, title }) {
-    return typeof src === "string" && src ? (
+    return typeof src === "string" && openableHref(src) ? (
       <a href={src} title={title} target="_blank" rel="noopener noreferrer">
         {alt ? `Open image: ${alt}` : "Open image"}
       </a>
@@ -96,32 +128,97 @@ const components: Components = {
   pre: MessagePre,
   table({ children, ...props }) {
     const { node: _node, ...tableProps } = props;
-    return (
-      <div
-        className="markdown-table-scroll"
-        tabIndex={0}
-        role="region"
-        aria-label="Table"
-      >
-        <table {...tableProps}>{children}</table>
-      </div>
-    );
+    return <MarkdownTable {...tableProps}>{children}</MarkdownTable>;
   },
+};
+
+/** A reply's table, with copies a spreadsheet or another chat can take. */
+function MarkdownTable({ children, ...props }: ComponentProps<"table">) {
+  const table = useRef<HTMLTableElement>(null);
+  const [status, setStatus] = useState("");
+  async function copy(format: "Markdown" | "CSV") {
+    const rows = table.current ? tableRows(table.current) : [];
+    try {
+      await navigator.clipboard.writeText(format === "CSV" ? tableToCsv(rows) : tableToMarkdown(rows));
+      setStatus(`Table copied as ${format}.`);
+    } catch {
+      setStatus("Couldn't copy. Select the table and copy it manually.");
+    }
+  }
+  return (
+    <div className="markdown-table">
+      <div className="markdown-table-scroll" tabIndex={0} role="region" aria-label="Table">
+        <table ref={table} {...props}>{children}</table>
+      </div>
+      <div className="markdown-table-actions">
+        <button type="button" onClick={() => void copy("Markdown")}>Copy as Markdown</button>
+        <button type="button" onClick={() => void copy("CSV")}>Copy as CSV</button>
+        <span className="markdown-copy-status" role="status">{status}</span>
+      </div>
+    </div>
+  );
+}
+
+type MessageMarkdownProps = {
+  text: string; botId?: string; messageId?: string; userId?: string; unavailable?: boolean; inlineUi?: boolean;
 };
 
 // Memoized because the composer re-renders the app on every keystroke, and
 // re-parsing every reply in a long transcript made typing lag.
-export const MessageMarkdown = memo(function MessageMarkdown({ text, botId, messageId, userId, unavailable, inlineUi = false }: {
-  text: string; botId?: string; messageId?: string; userId?: string; unavailable?: boolean; inlineUi?: boolean;
-}) {
+export const MessageMarkdown = memo(function MessageMarkdown(props: MessageMarkdownProps) {
+  return <div className="message-markdown"><MarkdownBlocks {...props} /></div>;
+});
+
+/** One parsed piece of a reply, without its container, so several can share one. */
+const MarkdownBlocks = memo(function MarkdownBlocks({ text, botId, messageId, userId, unavailable, inlineUi = false }: MessageMarkdownProps) {
   const context = useMemo(() => ({ text, inlineUi, actionableIds: new Set(replyCardsFromText(text).map(card => card.id)), botId, messageId, userId, unavailable }), [text, inlineUi, botId, messageId, userId, unavailable]);
   return (
     <ReplyContext.Provider value={context}>
-    <div className="message-markdown">
       <Markdown skipHtml remarkPlugins={[remarkGfm]} components={components}>
         {text}
       </Markdown>
-    </div>
     </ReplyContext.Provider>
   );
+});
+
+const fence = /^ {0,3}(`{3,}|~{3,})/;
+const listItem = /^ {0,3}([-*+]|\d{1,9}[.)])(\s|$)/;
+/**
+ * Splits a reply that is still arriving into blocks that are finished and the one still growing,
+ * so each update parses only the last. Splits fall on blank lines outside code fences that are
+ * followed by a line at the margin, which starts a new block, unless that line is a list item,
+ * which may continue a loose list above it. Returns null when a rule
+ * spans the whole reply: reply cards and inline pages are judged together, reference links and
+ * footnotes resolve anywhere, and HTML comments or raw blocks may contain blank lines.
+ */
+export function streamingBlocks(text: string): string[] | null {
+  if (/^ {0,3}(`{3,}|~{3,})\s*(agent-ui|wildbots-html)\b/m.test(text) || /^ {0,3}\[[^\]]+\]:/m.test(text)
+    || text.includes("[^") || text.includes("<!--") || /^ {0,3}<(pre|script|style|textarea)\b/im.test(text)) return null;
+  const lines = text.split("\n"), blocks: string[] = [];
+  let start = 0, open: string | undefined;
+  for (let index = 0; index < lines.length; index++) {
+    const marker = fence.exec(lines[index])?.[1];
+    if (marker) {
+      if (!open) open = marker;
+      else if (marker[0] === open[0] && marker.length >= open.length && !lines[index].trim().slice(marker.length).trim()) open = undefined;
+      continue;
+    }
+    const next = lines[index + 1];
+    if (open || lines[index].trim() || index === start || !next?.trim() || /^\s/.test(next) || listItem.test(next)) continue;
+    blocks.push(lines.slice(start, index).join("\n"));
+    start = index + 1;
+  }
+  blocks.push(lines.slice(start).join("\n"));
+  return blocks;
+}
+
+/**
+ * A reply that is still arriving. Finished blocks keep their parsed output while the last one
+ * grows, so a long reply no longer re-parses from the top several times a second. The saved
+ * reply replaces this and is parsed whole.
+ */
+export const StreamingMarkdown = memo(function StreamingMarkdown(props: MessageMarkdownProps) {
+  const blocks = useMemo(() => streamingBlocks(props.text), [props.text]);
+  if (!blocks) return <MessageMarkdown {...props} />;
+  return <div className="message-markdown">{blocks.map((block, index) => <MarkdownBlocks key={index} {...props} text={block} />)}</div>;
 });

@@ -9,13 +9,13 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tests"))
+from support import load_source
+
 ROOT = Path(__file__).resolve().parents[2] / "src/hermes"
 
 def load(name, path=None):
-    spec = importlib.util.spec_from_file_location("contract_" + name, path or ROOT / (name + ".py"))
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return load_source(path or ROOT / (name + ".py"), "contract_" + name)
 
 class DashboardContract(unittest.TestCase):
     def exercise(self, failure=None, native_switch=True):
@@ -23,7 +23,7 @@ class DashboardContract(unittest.TestCase):
         def step(name):
             events.append(name)
             if name == failure:
-                if name in ("extension", "experience", "integrations", "vault"): raise RuntimeError("Hook installation failed")
+                if name in ("extension", "experience", "automation", "integrations", "vault", "voice"): raise RuntimeError("Hook installation failed")
                 raise SystemExit("Integration unavailable")
         extension = types.SimpleNamespace(source_state=lambda: step("qualify"), install=lambda: step("extension"))
         def validate(secret):
@@ -37,8 +37,10 @@ class DashboardContract(unittest.TestCase):
             self.assertIs(projector, server._history_to_messages)
             step("experience")
         experience = types.SimpleNamespace(install=install_experience)
+        automation = types.SimpleNamespace(install=lambda web, journal: step("automation"))
         vault = types.SimpleNamespace(install=lambda web, journal: step("vault"))
         integrations = types.SimpleNamespace(install=lambda web: step("integrations"))
+        voice = types.SimpleNamespace(install=lambda web: step("voice"))
         computer = types.SimpleNamespace(install_tools=lambda: step("computer"))
         cli = types.ModuleType("hermes_cli.main")
         cli.main = lambda: events.append(("cli", list(sys.argv)))
@@ -56,10 +58,12 @@ class DashboardContract(unittest.TestCase):
             dashboard = load("dashboard", link)
             def sibling_spec(name, path):
                 self.assertEqual(Path(path).parent, ROOT)
-                module = extension if name.endswith("extension") else experience if name.endswith("experience") else vault if name.endswith("vault") else integrations if name.endswith("integrations") else computer if name.endswith("computer") else service
-                return importlib.util.spec_from_loader(name, types.SimpleNamespace(create_module=lambda spec: types.ModuleType(name), exec_module=lambda target: target.__dict__.update(vars(module))))
+                module = extension if name.endswith("extension") else experience if name.endswith("experience") else automation if name.endswith("automation") else vault if name.endswith("vault") else integrations if name.endswith("integrations") else voice if name.endswith("voice") else computer if name.endswith("computer") else service
+                spec = importlib.util.spec_from_loader(name, types.SimpleNamespace(create_module=lambda spec: types.ModuleType(name), exec_module=lambda target: target.__dict__.update(vars(module))), origin=str(path))
+                spec.has_location = True  # Like a real file spec, so the loader can confirm which file it loaded.
+                return spec
             with patch.object(sys, "argv", argv), patch.dict(os.environ, {"HERMES_AGENT_INTERFACE_TOKEN": "private", "HERMES_SERVE_HEADLESS": ""}), patch.dict(sys.modules, {"hermes_cli": package, "hermes_cli.main": cli, "hermes_cli.web_server": web, "hermes_cli.web_server_files": files, "hermes_cli.web_routers": routers, "hermes_cli.web_routers.actions": actions, "tui_gateway": gateway, "tui_gateway.server": server}), patch.object(dashboard.importlib.util, "spec_from_file_location", sibling_spec):
-                if failure in ("extension", "experience", "integrations", "vault"):
+                if failure in ("extension", "experience", "automation", "integrations", "vault", "voice"):
                     with self.assertRaises(RuntimeError): dashboard.main()
                 else: dashboard.main()
         self.native_updater = files, actions
@@ -72,7 +76,7 @@ class DashboardContract(unittest.TestCase):
 
     def test_original_cli_receives_unchanged_dashboard_arguments_after_install(self):
         events, argv, web = self.exercise()
-        self.assertEqual(events, [("secret", "private"), "qualify", "computer", "extension", "experience", "vault", "integrations", ("service", web, "private"), ("cli", argv)])
+        self.assertEqual(events, [("secret", "private"), "qualify", "computer", "extension", "experience", "automation", "vault", "integrations", "voice", ("service", web, "private"), ("cli", argv)])
         self.assert_native_updater_off()
 
     def test_native_updater_stays_off_while_the_add_on_is_disabled(self):
@@ -102,7 +106,7 @@ class DashboardContract(unittest.TestCase):
                 self.assertFalse(any(isinstance(event, tuple) and event[0] == "service" for event in events))
 
     def test_partial_install_failure_never_continues_native_cli(self):
-        for failure in ("extension", "experience", "vault", "integrations"):
+        for failure in ("extension", "experience", "automation", "vault", "integrations", "voice"):
             events, _, _ = self.exercise(failure)
             self.assertEqual(events[-1], failure)
             self.assertFalse(any(isinstance(event, tuple) and event[0] == "cli" for event in events))

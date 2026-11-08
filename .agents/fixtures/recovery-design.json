@@ -1,0 +1,156 @@
+{
+  "bots": [
+    {
+      "id": "ranch",
+      "lastMessage": {
+        "text": "Is the north gate closed?",
+        "at": "2026-10-26T13:00:00Z"
+      },
+      "name": "Ranch hand",
+      "shared": true,
+      "model": "configured-model",
+      "provider": "openrouter",
+      "activity": "failed",
+      "description": "Everyday household help",
+      "instructions": "Explicit fixture instructions.",
+      "avatar": {
+        "mode": "geometric",
+        "shape": "blob",
+        "color": "#1084FE",
+        "eyes": "oval",
+        "accessory": "none"
+      }
+    }
+  ],
+  "preferences": {
+    "startPage": "assistant",
+    "defaultBotId": "ranch",
+    "favorites": [],
+    "sections": [],
+    "presentation": "simple"
+  },
+  "screen": "recovery",
+  "conversation": {
+    "botId": "ranch",
+    "sessionId": "ranch-canonical",
+    "messages": [
+      {
+        "id": "retry-prompt",
+        "role": "user",
+        "text": "Is the north gate closed?",
+        "sender": {
+          "id": "preview",
+          "name": "Nicolas"
+        },
+        "createdAt": "2026-10-26T13:00:00Z"
+      },
+      {
+        "id": "retry-tool",
+        "role": "tool",
+        "text": "The gate service did not answer.",
+        "createdAt": "2026-10-26T13:00:12Z",
+        "toolCall": {
+          "id": "retry-call",
+          "name": "gate_status",
+          "status": "failed",
+          "error": "The gate service did not answer."
+        }
+      }
+    ],
+    "activity": {
+      "state": "failed",
+      "detail": "The gate service did not answer.",
+      "runId": "recovery-run"
+    },
+    "approvals": [],
+    "attention": [],
+    "files": [],
+    "draft": {
+      "text": "",
+      "attachments": []
+    },
+    "earlier": 0
+  },
+  "refusalReason": "The gate service is offline.",
+  "answer": "The north gate is closed, and its battery reads 80%.",
+  "afterRetry": {
+    "botId": "ranch",
+    "sessionId": "ranch-canonical",
+    "messages": [
+      {
+        "id": "retry-prompt",
+        "role": "user",
+        "text": "Is the north gate closed?",
+        "sender": {
+          "id": "preview",
+          "name": "Nicolas"
+        },
+        "createdAt": "2026-10-26T13:00:00Z"
+      },
+      {
+        "id": "retry-tool",
+        "role": "tool",
+        "text": "The gate service did not answer.",
+        "createdAt": "2026-10-26T13:00:12Z",
+        "toolCall": {
+          "id": "retry-call",
+          "name": "gate_status",
+          "status": "failed",
+          "error": "The gate service did not answer."
+        }
+      },
+      {
+        "id": "retry-answer",
+        "role": "assistant",
+        "text": "The north gate is closed, and its battery reads 80%.",
+        "createdAt": "2026-10-26T13:01:00Z"
+      }
+    ],
+    "activity": {
+      "state": "idle"
+    },
+    "approvals": [],
+    "attention": [],
+    "files": [],
+    "draft": {
+      "text": "",
+      "attachments": []
+    },
+    "earlier": 0
+  },
+  "interrupted": {
+    "botId": "ranch",
+    "sessionId": "ranch-canonical",
+    "messages": [
+      {
+        "id": "interrupted-prompt",
+        "role": "user",
+        "text": "Check the north and east gates.",
+        "sender": {
+          "id": "preview",
+          "name": "Nicolas"
+        },
+        "createdAt": "2026-10-26T13:00:00Z"
+      },
+      {
+        "id": "interrupted-last-action",
+        "role": "assistant",
+        "text": "The north gate is closed. I still need to check the east gate.",
+        "createdAt": "2026-10-26T13:00:12Z"
+      }
+    ],
+    "activity": {
+      "state": "interrupted",
+      "detail": "The connection ended after checking the north gate. The east gate has not been checked.",
+      "runId": "interrupted-run"
+    },
+    "approvals": [],
+    "attention": [],
+    "files": [],
+    "draft": {
+      "text": "",
+      "attachments": []
+    },
+    "earlier": 0
+  }
+}

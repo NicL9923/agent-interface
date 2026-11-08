@@ -3,9 +3,7 @@
 Native modules are stubbed at their seams. scripts/spike/vault_probe.py runs the same flow
 against real Hermes.
 """
-import importlib.util
 import json
-from pathlib import Path
 import sqlite3
 import sys
 import threading
@@ -14,8 +12,9 @@ import unittest
 from unittest.mock import patch
 from urllib.parse import urlsplit
 
-spec = importlib.util.spec_from_file_location('vault_explicit_addon', Path(__file__).resolve().parents[1] / 'src/hermes/vault.py')
-vault = importlib.util.module_from_spec(spec); spec.loader.exec_module(vault)
+from support import load_source
+
+vault = load_source('src/hermes/vault.py', 'vault_explicit_addon')
 CANARY = 'Canary-Explicit-Login-5f0c2b!'
 ORIGIN = 'https://comet-pro-kvm.mesh.wildflowersranch.com'
 

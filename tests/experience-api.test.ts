@@ -1,43 +1,49 @@
+import { approvalFixture, botFixture, experienceRequester, memoryFixture, routineFixture, runReceiptFixture } from './helpers/runtime-fixtures.js';
+import type { Conversation } from '../src/shared/types.js';
 import Fastify from 'fastify';
 import cookie from '@fastify/cookie';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { afterEach, expect, it, vi } from 'vitest';
-import { z } from 'zod';
-import { installAuth, hash } from '../src/server/auth.js';
+import { installAuth } from '../src/server/auth.js';
 import { Store } from '../src/server/store.js';
 import { loadConfig } from '../src/server/config.js';
 import { installExperienceRoutes } from '../src/server/experience.js';
-import type { Runtime } from '../src/shared/types.js';
+import { installEtags } from '../src/server/etag.js';
+import { fakeRuntime, signIn } from "./helpers/server.js";
+import { errorHandler } from "../src/server/http-error.js";
 const origin = 'https://experience.example.invalid';
 const apps: ReturnType<typeof Fastify>[] = [];
 afterEach(async () => { for (const app of apps.splice(0)) await app.close(); });
-async function setup() {
+async function setup(etags = false) {
   const app = Fastify({ logger: false }); apps.push(app);
+  if (etags) installEtags(app);
   const store = new Store(':memory:');
   const config = loadConfig({ NODE_ENV: 'production', APP_ORIGIN: origin, APP_DATABASE: ':memory:', GOOGLE_CLIENT_ID: 'fixture', HOUSEHOLD_EMAILS: 'first@example.invalid,second@example.invalid' });
   await app.register(cookie); await installAuth(app, store, config);
-  app.setErrorHandler((error, _req, reply) => reply.code(error instanceof z.ZodError ? 400 : (error as { statusCode?: number }).statusCode ?? 502).send({ error: (error as Error).message }));
-  const conversation = vi.fn(async (id: string) => {
+  app.setErrorHandler(errorHandler({ production: true }));
+  const conversation = vi.fn(async (id: string): Promise<Conversation> => {
     if (id === 'offline') throw new Error('private transport failure');
-    return { botId: id, messages: [{ id: 'reply', role: 'assistant', text: '```agent-ui\n{"version":1,"cards":[{"id":"list","type":"checklist","title":"Groceries","items":[{"id":"milk","text":"Milk"}]}]}\n```', createdAt: new Date().toISOString(), files: [{ id: 'file', name: 'plan.pdf', mime: 'application/pdf' }] }], activity: { state: 'blocked' }, approvals: [{ id: 'pending', status: 'pending' }, { id: 'resolved', status: 'approved' }], attention: [{ id: 'clarify', kind: 'clarify', title: 'Which day?', detail: 'Confirm Saturday' }], files: [] };
+    return { botId: id, messages: [{ id: 'reply', role: 'assistant', text: '```agent-ui\n{"version":1,"cards":[{"id":"list","type":"checklist","title":"Groceries","items":[{"id":"milk","text":"Milk"}]}]}\n```', createdAt: new Date().toISOString(), files: [{ id: 'file', name: 'plan.pdf', mime: 'application/pdf' }] }], activity: { state: 'blocked' }, approvals: [approvalFixture({ id: 'pending' }), approvalFixture({ id: 'resolved', status: 'approved' })], attention: [{ id: 'clarify', kind: 'clarify', title: 'Which day?', detail: 'Confirm Saturday' }], files: [] };
   });
-  const experienceRequest = vi.fn(async (value: unknown) => value);
-  const routines = vi.fn(async () => [{ id: 'routine', botId: 'ranch' }]);
-  const runtime = { conversation, experienceRequest, routines, listBots: vi.fn(async () => [{ id: 'ranch', name: 'Ranch' }, { id: 'offline', name: 'Offline' }]) } as unknown as Runtime;
+  const receipt = vi.fn((input: { profile: string; routineId: string; requestId: string }) => runReceiptFixture({ botId: input.profile, routineId: input.routineId, requestId: input.requestId }));
+  const experience = experienceRequester({
+    memory: input => memoryFixture({ botId: input.profile, profile: input.profile }),
+    save_memory: input => memoryFixture({ botId: input.profile, profile: input.profile }),
+    delete_memory: input => memoryFixture({ botId: input.profile, profile: input.profile }),
+    preview: input => ({ botId: input.profile, schedule: input.schedule, timezone: 'UTC', nextRuns: ['2026-10-24T07:00:00Z'], kind: 'cron' }),
+    run: receipt, run_receipt: receipt,
+  });
+  const routines = vi.fn(async () => [routineFixture({ botId: 'ranch' })]);
+  const runtime = fakeRuntime({ conversation, experienceRequest: experience, routines, listBots: vi.fn(async () => [botFixture({ id: 'ranch', name: 'Ranch' }), botFixture({ id: 'offline', name: 'Offline' })]) });
+  const experienceRequest = vi.spyOn(runtime, 'experienceRequest');
   await installExperienceRoutes(app, runtime, store);
-  const login = (id: string) => {
-    store.user({ id, name: id, email: `${id}@example.invalid` });
-    const token = randomBytes(32).toString('hex'), csrf = randomBytes(32).toString('hex');
-    store.session(hash(token), id, csrf, Date.now() + 600000);
-    return { origin, cookie: `session=${token}`, 'x-csrf-token': csrf };
-  };
   app.addHook('onClose', async () => store.close());
-  return { app, store, runtime, experienceRequest, conversation, routines, first: login('first'), second: login('second') };
+  return { app, store, runtime, experienceRequest, receipt, conversation, routines, first: signIn(store, origin, 'first'), second: signIn(store, origin, 'second') };
 }
 it('authenticates profile memory reads, protects edits and validates native profile identity', async () => {
   const s = await setup();
   expect((await s.app.inject('/api/bots/ranch/memory')).statusCode).toBe(401);
-  expect((await s.app.inject({ url: '/api/bots/ranch/memory', headers: s.first })).json()).toEqual({ operation: 'memory', profile: 'ranch' });
+  expect((await s.app.inject({ url: '/api/bots/ranch/memory', headers: s.first })).json()).toEqual(memoryFixture());
   const payload = { revision: 'a'.repeat(64), entries: [{ text: 'Quick dinners' }] };
   expect((await s.app.inject({ method: 'PUT', url: '/api/bots/ranch/memory/memory', headers: { origin, cookie: s.first.cookie }, payload })).statusCode).toBe(403);
   expect((await s.app.inject({ method: 'PUT', url: '/api/bots/missing/memory/memory', headers: s.first, payload })).statusCode).toBe(404);
@@ -50,16 +56,101 @@ it('authenticates profile memory reads, protects edits and validates native prof
 it('builds Today from canonical activity and attention without hiding unavailable assistants', async () => {
   const s = await setup();
   const since = new Date(Date.now() - 3600000).toISOString();
-  s.store.recordEvents([{ id: 'event', botId: 'ranch', kind: 'completed', title: 'Finished', occurredAt: new Date().toISOString() }, { id: 'gone', botId: 'deleted', kind: 'completed', title: 'Deleted profile', occurredAt: new Date().toISOString() }], '1');
+  s.store.recordEvents([{ id: 'event', botId: 'ranch', kind: 'completed', title: 'Finished', body: '## Fence\n\n| Post | State |\n|---|---|\n| North | Set |', occurredAt: new Date().toISOString() }, { id: 'gone', botId: 'deleted', kind: 'completed', title: 'Deleted profile', occurredAt: new Date().toISOString() }], '1');
   const response = await s.app.inject({ url: `/api/today?since=${encodeURIComponent(since)}`, headers: s.first });
   expect(response.statusCode).toBe(200); const today = response.json();
   expect(today.since).toBe(since); expect(today.events.map((x: { id: string }) => x.id)).toEqual(['event']);
+  // Web and iOS show a result as one plain line.
+  expect(today.events[0].body).toBe('Fence Post · State · North · Set');
   expect(today.items[0].approvals.map((x: { id: string }) => x.id)).toEqual(['pending']); expect(today.items[0].attention[0].id).toBe('clarify');
   expect(today.items[0].files[0].name).toBe('plan.pdf'); expect(today.unavailableBots).toEqual(['offline']); expect(today.items[1].activity.state).toBe('disconnected'); expect(JSON.stringify(today)).not.toContain('private transport');
   await s.app.inject({ method: 'PUT', url: '/api/today/seen', headers: s.first, payload: { seenAt: since, frontier: today.frontier } });
   expect((await s.app.inject({ url: '/api/today', headers: s.first })).json().since).toBe(since);
   expect((await s.app.inject({ url: '/api/today', headers: s.second })).json().since).not.toBe(since);
   expect((await s.app.inject({ method: 'PUT', url: '/api/today/seen', headers: s.first, payload: { seenAt: new Date(Date.now() + 86400000).toISOString(), frontier: today.frontier } })).statusCode).toBe(400);
+});
+it('builds a recap from a recent window and its earlier file context, reading everything only when the window has no reply', async () => {
+  const s = await setup();
+  const at = new Date().toISOString();
+  const file = { id: 'early', name: 'early.pdf', mime: 'application/pdf' };
+  let windowed: Conversation = { botId: 'ranch', messages: [{ id: 'reply', role: 'assistant', text: 'Fence is up.', createdAt: at }], activity: { state: 'idle' }, approvals: [], files: [],
+    window: { earlier: 40, context: [{ id: 'old', role: 'assistant', text: 'Here it is.', createdAt: at, files: [file] }] } };
+  const full: Conversation = { ...windowed, window: undefined, messages: [{ id: 'first', role: 'assistant', text: 'Hello.', createdAt: at }, { id: 'later', role: 'user', text: 'Thanks', createdAt: at }] };
+  s.conversation.mockImplementation(async (id: string, options?: { history?: false; window?: { turns?: number } }) =>
+    (id === 'offline' ? Promise.reject(new Error('offline')) : options?.window ? windowed : full) as never);
+  const ranch = async (headers: typeof s.first) => (await s.app.inject({ url: '/api/today', headers })).json().items.find((item: { botId: string }) => item.botId === 'ranch');
+  expect(await ranch(s.first)).toMatchObject({ files: [{ name: 'early.pdf' }], latestMessage: { id: 'reply' } });
+  expect(s.conversation.mock.calls.filter(call => (call as unknown[])[1] === undefined)).toHaveLength(0);
+  // Activity alone fills the window, so the whole history is read for the latest reply.
+  windowed = { ...windowed, messages: [{ id: 'mine', role: 'user', text: 'Status?', createdAt: at }] };
+  expect((await ranch(s.second)).latestMessage.id).toBe('first');
+});
+it('reads a settled assistant\'s history again only after its roster preview changes', async () => {
+  const s = await setup();
+  let preview = { text: 'Fence is up.', at: new Date(Date.now() - 60000).toISOString() };
+  let state = 'done';
+  s.runtime.listBots = vi.fn(async () => [{ id: 'ranch', name: 'Ranch', model: 'test', shared: true, activity: 'idle' as const, lastMessage: preview }]);
+  const read = s.conversation.getMockImplementation()!;
+  s.conversation.mockImplementation(async (id: string) => ({ ...await read(id), activity: { state } }) as never);
+  const histories = () => s.conversation.mock.calls.filter(call => ((call as unknown[])[1] as { history?: false } | undefined)?.history !== false).length;
+  const today = async () => (await s.app.inject({ url: '/api/today', headers: s.first })).json();
+  expect((await today()).items[0].files[0].name).toBe('plan.pdf');
+  expect(histories()).toBe(1);
+  const again = await today();
+  expect(histories()).toBe(1);
+  expect(again.items[0]).toMatchObject({ activity: { state: 'done' }, files: [{ name: 'plan.pdf' }], latestMessage: { id: 'reply' } });
+  // Another person's recap is their own, since redaction depends on who is asking.
+  await s.app.inject({ url: '/api/today', headers: s.second });
+  expect(histories()).toBe(2);
+  preview = { text: 'Gate is fixed.', at: new Date().toISOString() };
+  await today();
+  expect(histories()).toBe(3);
+  // A running assistant's history keeps changing, so it is read every time.
+  state = 'working';
+  await today(); await today();
+  expect(histories()).toBe(5);
+});
+it('never reuses a recap redacted under privacy that changed while it was read', async () => {
+  const s = await setup();
+  const lastMessage = { text: 'Done', at: new Date(Date.now() - 60000).toISOString() };
+  // One assistant is already private, so the redactor waits for roster names after deciding
+  // what to hide. Another becomes private during that wait.
+  s.store.savePresentation('secret', { shared: false, ownerId: 'someone-else' });
+  let lists = 0;
+  s.runtime.listBots = vi.fn(async () => {
+    if (++lists === 2) s.store.savePresentation('ledger', { shared: false, ownerId: 'someone-else' });
+    return [{ id: 'ranch', name: 'Ranch', model: 'test', shared: true, activity: 'idle' as const, lastMessage }];
+  });
+  const read = s.conversation.getMockImplementation()!;
+  s.conversation.mockImplementation(async (id: string) => ({ ...await read(id), activity: { state: 'done' } }) as never);
+  const histories = () => s.conversation.mock.calls.filter(call => ((call as unknown[])[1] as { history?: false } | undefined)?.history !== false).length;
+  await s.app.inject({ url: '/api/today', headers: s.first });
+  expect(lists).toBeGreaterThanOrEqual(2);
+  await s.app.inject({ url: '/api/today', headers: s.first });
+  expect(histories()).toBe(2);
+  await s.app.inject({ url: '/api/today', headers: s.first });
+  expect(histories()).toBe(2);
+});
+it('revalidates an unchanged Today as 304 although each read has a new check time', async () => {
+  const s = await setup(true);
+  const createdAt = new Date(Date.now() - 60_000).toISOString();
+  s.conversation.mockImplementation(async (id: string) => ({ botId: id, messages: [{ id: 'reply', role: 'assistant', text: 'Gate fixed', createdAt }], activity: { state: 'idle' }, approvals: [], attention: [], files: [] }));
+  const fresh = (await s.app.inject({ url: '/api/today', headers: s.first })).json();
+  // Before a first catch-up the rolling day starts on a whole minute, so it holds still between polls.
+  expect(Date.parse(fresh.since) % 60_000).toBe(0);
+  await s.app.inject({ method: 'PUT', url: '/api/today/seen', headers: s.first, payload: { seenAt: new Date(Date.now() - 3_600_000).toISOString(), frontier: fresh.frontier } });
+  const first = await s.app.inject({ url: '/api/today', headers: s.first });
+  const etag = first.headers.etag as string;
+  await new Promise(resolve => setTimeout(resolve, 5));
+  const second = await s.app.inject({ url: '/api/today', headers: s.first });
+  expect(second.json().generatedAt).not.toBe(first.json().generatedAt);
+  expect(second.headers.etag).toBe(etag);
+  const unchanged = await s.app.inject({ url: '/api/today', headers: { ...s.first, 'if-none-match': etag } });
+  expect(unchanged.statusCode).toBe(304); expect(unchanged.body).toBe('');
+  s.store.recordEvents([{ id: 'late', botId: 'ranch', kind: 'completed', title: 'Finished', occurredAt: new Date().toISOString() }], '1');
+  const changed = await s.app.inject({ url: '/api/today', headers: { ...s.first, 'if-none-match': etag } });
+  expect(changed.statusCode).toBe(200); expect(changed.headers.etag).not.toBe(etag);
+  expect(changed.json().events.map((event: { id: string }) => event.id)).toEqual(['late']);
 });
 it('keeps reply choices private and rejects nonexistent or forged card items', async () => {
   const s = await setup(), url = '/api/bots/ranch/messages/reply/cards/list/state';
@@ -79,20 +170,28 @@ it('keeps trial receipt scope after a one-shot routine disappears and refuses cr
   expect((await s.app.inject({ method: 'POST', url: '/api/routines/routine/run', headers: s.first, payload: { requestId } })).statusCode).toBe(200);
   expect((await s.app.inject({ method: 'POST', url: '/api/routines/routine/run', headers: s.second, payload: { requestId } })).statusCode).toBe(409);
   expect((await s.app.inject({ url: `/api/routines/routine/runs/${requestId}`, headers: s.second })).statusCode).toBe(404);
-  expect((await s.app.inject({ method: 'POST', url: '/api/routines/preview', headers: s.first, payload: { botId: 'ranch', schedule: '0 7 * * *' } })).json()).toEqual({ operation: 'preview', profile: 'ranch', schedule: '0 7 * * *' });
+  expect((await s.app.inject({ method: 'POST', url: '/api/routines/preview', headers: s.first, payload: { botId: 'ranch', schedule: '0 7 * * *' } })).json()).toMatchObject({ botId: 'ranch', schedule: '0 7 * * *', timezone: 'UTC', kind: 'cron' });
 });
 it('fences routine edits during a trial and stops rereading terminal trial history', async () => {
   const { assertRoutineEditable } = await import('../src/server/experience.js');
   const s = await setup(), requestId = randomUUID();
   s.store.rememberRoutineTrial(requestId, 'first', 'routine', 'ranch');
-  s.experienceRequest.mockResolvedValueOnce({ status: 'accepted' });
-  await expect(assertRoutineEditable(s.runtime, s.store, 'routine')).rejects.toMatchObject({ statusCode: 409 });
-  s.experienceRequest.mockResolvedValueOnce({ status: 'completed' });
-  await assertRoutineEditable(s.runtime, s.store, 'routine');
+  s.receipt.mockReturnValueOnce(runReceiptFixture({ status: 'accepted', requestId }));
+  await expect(assertRoutineEditable(s.runtime, s.store, 'routine', 'ranch')).rejects.toMatchObject({ statusCode: 409 });
+  s.receipt.mockReturnValueOnce(runReceiptFixture({ status: 'completed', requestId }));
+  await assertRoutineEditable(s.runtime, s.store, 'routine', 'ranch');
   expect(s.store.routineTrials('routine')).toEqual([]);
   const count = s.experienceRequest.mock.calls.length;
-  await assertRoutineEditable(s.runtime, s.store, 'routine');
+  await assertRoutineEditable(s.runtime, s.store, 'routine', 'ranch');
   expect(s.experienceRequest.mock.calls.length).toBe(count);
+});
+it("fences only the assistant whose routine runs a trial, when another assistant has a job with the same ID", async () => {
+  const { assertRoutineEditable } = await import('../src/server/experience.js');
+  const s = await setup(), requestId = randomUUID();
+  s.store.rememberRoutineTrial(requestId, 'first', 'routine', 'private');
+  s.receipt.mockReturnValue(runReceiptFixture({ status: 'accepted', requestId }));
+  await assertRoutineEditable(s.runtime, s.store, 'routine', 'ranch');
+  await expect(assertRoutineEditable(s.runtime, s.store, 'routine', 'private')).rejects.toMatchObject({ statusCode: 409 });
 });
 it('shows late native completions and their attributed artifacts after a catch-up marker', async () => {
   const s = await setup();

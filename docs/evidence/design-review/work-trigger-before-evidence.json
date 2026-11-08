@@ -1,0 +1,900 @@
+{
+  "gate": "Work W3 event triggers",
+  "stage": "before",
+  "baselineComplete": true,
+  "accepted": false,
+  "nextScreenAllowed": false,
+  "reviewer": {
+    "provider": "Anthropic",
+    "model": "Claude Opus5.5",
+    "effort": "high"
+  },
+  "review": "work-trigger-baseline-review.md",
+  "baseCommit": "707140f30e3843fcc772db47791b4a3fa50fc398",
+  "fixtureSHA256": "5ed79b279e92aec72374303ef45c340560ca753524187cff9e78637f17e97e9d",
+  "counts": {
+    "web": 28,
+    "iphone": 28,
+    "ipad": 14
+  },
+  "selectedCount": 70,
+  "uniqueImageHashes": 70,
+  "rawRecordCount": 72,
+  "beforeMeans": {
+    "web": 5.3,
+    "iphone": 5.6,
+    "ipad": 5.8
+  },
+  "scoreBasis": "Actual70 BEFORE images individually scored in baseline review; no AFTER projection or acceptance",
+  "sourceCarry": "Only W3 debug fixture and newUITest changed since707140f; no product view/model/CSS changes before baseline. P1cfc83f0f,D1/P244af243f,P3/D2fa65c9a7 retain originalsourcebindings; carry verified106/107/108.",
+  "frames": [
+    {
+      "name": "trigger-secret-desktop",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-w3-before-web-w0-captures/work-triggers-before-r1/web-work-trigger-secret-desktop.png",
+      "sha256": "49c27d8459a41a00cbffe5db4c104ea638eaf54530bc85e07e61d5e8829f6d96",
+      "dimensions": [
+        1440,
+        1000
+      ],
+      "client": "web",
+      "window": "web-w0",
+      "source": "sha256:765e5e2580c39b397dffeac90c415033189d3cc92658f06fe064b2334316870f (227 source files)"
+    },
+    {
+      "name": "trigger-create-uncertain",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-w3-before-web-w0-captures/work-triggers-before-r1/web-work-trigger-create-uncertain.png",
+      "sha256": "142fcffb73199962feef0a351946afec16c80b5adf128b806c534fef2027b0ed",
+      "dimensions": [
+        390,
+        844
+      ],
+      "client": "web",
+      "window": "web-w0",
+      "source": "sha256:765e5e2580c39b397dffeac90c415033189d3cc92658f06fe064b2334316870f (227 source files)"
+    },
+    {
+      "name": "trigger-create-uncertain-refreshed",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-w3-before-web-w0-captures/work-triggers-before-r1/web-work-trigger-create-uncertain-refreshed.png",
+      "sha256": "8a6362dbb484e4dcc27a6815e6b095b7b07101df5313c2c379bb75ef52293072",
+      "dimensions": [
+        390,
+        844
+      ],
+      "client": "web",
+      "window": "web-w0",
+      "source": "sha256:765e5e2580c39b397dffeac90c415033189d3cc92658f06fe064b2334316870f (227 source files)"
+    },
+    {
+      "name": "trigger-edit-stale-refused",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-w3-before-web-w0-captures/work-triggers-before-r1/web-work-trigger-edit-stale-refused.png",
+      "sha256": "78d473b619361f4207d5dac92102c2cdeeb9db3e597c05a735248d2d7dcb7dd8",
+      "dimensions": [
+        390,
+        844
+      ],
+      "client": "web",
+      "window": "web-w0",
+      "source": "sha256:765e5e2580c39b397dffeac90c415033189d3cc92658f06fe064b2334316870f (227 source files)"
+    },
+    {
+      "name": "trigger-edit-stale-alert",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-w3-before-web-w0-captures/work-triggers-before-r1/web-work-trigger-edit-stale-alert.png",
+      "sha256": "3a6db5da44271ee796ddd43d646514460737ca6cb3466c9b88d381d69a9d6785",
+      "dimensions": [
+        390,
+        844
+      ],
+      "client": "web",
+      "window": "web-w0",
+      "source": "sha256:765e5e2580c39b397dffeac90c415033189d3cc92658f06fe064b2334316870f (227 source files)"
+    },
+    {
+      "name": "trigger-toggled",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-w3-before-web-w0-captures/work-triggers-before-r1/web-work-trigger-toggled.png",
+      "sha256": "2b86cac48744caa5564af9e67a3e6bc39350ec5c17e319c04740d6cd838ac423",
+      "dimensions": [
+        390,
+        844
+      ],
+      "client": "web",
+      "window": "web-w0",
+      "source": "sha256:765e5e2580c39b397dffeac90c415033189d3cc92658f06fe064b2334316870f (227 source files)"
+    },
+    {
+      "name": "trigger-delete-confirm",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-w3-before-web-w0-captures/work-triggers-before-r1/web-work-trigger-delete-confirm.png",
+      "sha256": "40e7f71d1b370e3df552ccda3192a0a049875804bc1f0940fe517c76e7bfb62f",
+      "dimensions": [
+        390,
+        844
+      ],
+      "client": "web",
+      "window": "web-w0",
+      "source": "sha256:765e5e2580c39b397dffeac90c415033189d3cc92658f06fe064b2334316870f (227 source files)"
+    },
+    {
+      "name": "trigger-list-desktop",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-w3-before-web-w0-captures/work-triggers-before-r1/web-work-trigger-list-desktop.png",
+      "sha256": "1e43f00624086faf138e4ac82a2c7040795674b1ff65249fc60865cc0d8f1114",
+      "dimensions": [
+        1440,
+        1000
+      ],
+      "client": "web",
+      "window": "web-w0",
+      "source": "sha256:765e5e2580c39b397dffeac90c415033189d3cc92658f06fe064b2334316870f (227 source files)"
+    },
+    {
+      "name": "trigger-list-dark",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-w3-before-web-w0-captures/work-triggers-before-r1/web-work-trigger-list-dark.png",
+      "sha256": "04537f2f767f620b18c2ca7b49be081710073d58e5e7dc173d6539f7d629bfca",
+      "dimensions": [
+        1440,
+        1000
+      ],
+      "client": "web",
+      "window": "web-w0",
+      "source": "sha256:765e5e2580c39b397dffeac90c415033189d3cc92658f06fe064b2334316870f (227 source files)"
+    },
+    {
+      "name": "trigger-list-phone",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-w3-before-web-w0-captures/work-triggers-before-r1/web-work-trigger-list-phone.png",
+      "sha256": "0b859cc49ab4da55ba6e4e1ec16dd5ed0e6b8e36c731ff0ed7e4d5b0a95b17e6",
+      "dimensions": [
+        390,
+        844
+      ],
+      "client": "web",
+      "window": "web-w0",
+      "source": "sha256:765e5e2580c39b397dffeac90c415033189d3cc92658f06fe064b2334316870f (227 source files)"
+    },
+    {
+      "name": "trigger-list-narrow",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-w3-before-web-w0-captures/work-triggers-before-r1/web-work-trigger-list-narrow.png",
+      "sha256": "beeec54bcb420fcd3cb8a98bf1f1a7019f4e6e8064df40fc72e3ea9602b54f18",
+      "dimensions": [
+        320,
+        844
+      ],
+      "client": "web",
+      "window": "web-w0",
+      "source": "sha256:765e5e2580c39b397dffeac90c415033189d3cc92658f06fe064b2334316870f (227 source files)"
+    },
+    {
+      "name": "trigger-list-large",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-w3-before-web-w0-captures/work-triggers-before-r1/web-work-trigger-list-large.png",
+      "sha256": "90419f9e3b202dd44149003fa4890cfebbe97069aa6a384b4fad17cdf1699449",
+      "dimensions": [
+        390,
+        844
+      ],
+      "client": "web",
+      "window": "web-w0",
+      "source": "sha256:765e5e2580c39b397dffeac90c415033189d3cc92658f06fe064b2334316870f (227 source files)"
+    },
+    {
+      "name": "trigger-readonly",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-w3-before-web-w0-captures/work-triggers-before-r1/web-work-trigger-readonly.png",
+      "sha256": "9f7ad7c829f562cbf949c4ca8d3c37a87676d93d8384210a381d32b74f26da79",
+      "dimensions": [
+        390,
+        844
+      ],
+      "client": "web",
+      "window": "web-w0",
+      "source": "sha256:765e5e2580c39b397dffeac90c415033189d3cc92658f06fe064b2334316870f (227 source files)"
+    },
+    {
+      "name": "trigger-platform-off",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-w3-before-web-w0-captures/work-triggers-before-r1/web-work-trigger-platform-off.png",
+      "sha256": "e7250df5da649a216ed63964127491fadfd75e29a032b674a9180528f09101b8",
+      "dimensions": [
+        390,
+        844
+      ],
+      "client": "web",
+      "window": "web-w0",
+      "source": "sha256:765e5e2580c39b397dffeac90c415033189d3cc92658f06fe064b2334316870f (227 source files)"
+    },
+    {
+      "name": "trigger-unsupported",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-w3-before-web-w0-captures/work-triggers-before-r1/web-work-trigger-unsupported.png",
+      "sha256": "cb06ab8f33a1410165c8e19062716701d6a0f832064dc9a1d1e57dc9c71c959e",
+      "dimensions": [
+        390,
+        844
+      ],
+      "client": "web",
+      "window": "web-w0",
+      "source": "sha256:765e5e2580c39b397dffeac90c415033189d3cc92658f06fe064b2334316870f (227 source files)"
+    },
+    {
+      "name": "trigger-first-use",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-w3-before-web-w0-captures/work-triggers-before-r1/web-work-trigger-first-use.png",
+      "sha256": "cbe9e2fa0845576317ee40937db5da349a1e829fb27be9b3bf0a8811c77dbab6",
+      "dimensions": [
+        390,
+        844
+      ],
+      "client": "web",
+      "window": "web-w0",
+      "source": "sha256:765e5e2580c39b397dffeac90c415033189d3cc92658f06fe064b2334316870f (227 source files)"
+    },
+    {
+      "name": "trigger-routines-error",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-w3-before-web-w0-captures/work-triggers-before-r1/web-work-trigger-routines-error.png",
+      "sha256": "19b0bacd408e085be216ec2063093c12c1f660f8f059c9b8db1fcf2e37d10109",
+      "dimensions": [
+        390,
+        844
+      ],
+      "client": "web",
+      "window": "web-w0",
+      "source": "sha256:765e5e2580c39b397dffeac90c415033189d3cc92658f06fe064b2334316870f (227 source files)"
+    },
+    {
+      "name": "trigger-routines-loading",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-w3-before-web-w0-captures/work-triggers-before-r1/web-work-trigger-routines-loading.png",
+      "sha256": "f82b215f80ed3a91e112825fe89564a97d6516275f6f3d89b7a481cc211330bf",
+      "dimensions": [
+        390,
+        844
+      ],
+      "client": "web",
+      "window": "web-w0",
+      "source": "sha256:765e5e2580c39b397dffeac90c415033189d3cc92658f06fe064b2334316870f (227 source files)"
+    },
+    {
+      "name": "trigger-create-desktop",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-w3-before-web-w0-captures/work-triggers-before-r1/web-work-trigger-create-desktop.png",
+      "sha256": "a89e10b276f64a36a3bd705bce47aa7da6bd95c48bfece230df858dcd1f2c909",
+      "dimensions": [
+        1440,
+        1000
+      ],
+      "client": "web",
+      "window": "web-w0",
+      "source": "sha256:765e5e2580c39b397dffeac90c415033189d3cc92658f06fe064b2334316870f (227 source files)"
+    },
+    {
+      "name": "trigger-create-phone",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-w3-before-web-w0-captures/work-triggers-before-r1/web-work-trigger-create-phone.png",
+      "sha256": "f438b695c93cc45a32a158c53e720e625365dece61521cdd9155334857370169",
+      "dimensions": [
+        390,
+        844
+      ],
+      "client": "web",
+      "window": "web-w0",
+      "source": "sha256:765e5e2580c39b397dffeac90c415033189d3cc92658f06fe064b2334316870f (227 source files)"
+    },
+    {
+      "name": "trigger-create-narrow",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-w3-before-web-w0-captures/work-triggers-before-r1/web-work-trigger-create-narrow.png",
+      "sha256": "d69c1c31b6ae830dd4d1e05f46195f1b07b3a2fa8f54bca399c79096e96ac1c0",
+      "dimensions": [
+        320,
+        844
+      ],
+      "client": "web",
+      "window": "web-w0",
+      "source": "sha256:765e5e2580c39b397dffeac90c415033189d3cc92658f06fe064b2334316870f (227 source files)"
+    },
+    {
+      "name": "trigger-create-large",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-w3-before-web-w0-captures/work-triggers-before-r1/web-work-trigger-create-large.png",
+      "sha256": "1a55cbdabec22466979702d4578f30ae3347da084aa7b78344b10f56299a884a",
+      "dimensions": [
+        390,
+        844
+      ],
+      "client": "web",
+      "window": "web-w0",
+      "source": "sha256:765e5e2580c39b397dffeac90c415033189d3cc92658f06fe064b2334316870f (227 source files)"
+    },
+    {
+      "name": "trigger-edit-phone",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-w3-before-web-w0-captures/work-triggers-before-r1/web-work-trigger-edit-phone.png",
+      "sha256": "b9d5a425c504af5af884a7c0285c75d7051886cb661b0f34abcb776d5a1e6e11",
+      "dimensions": [
+        390,
+        844
+      ],
+      "client": "web",
+      "window": "web-w0",
+      "source": "sha256:765e5e2580c39b397dffeac90c415033189d3cc92658f06fe064b2334316870f (227 source files)"
+    },
+    {
+      "name": "trigger-secret-phone",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-w3-before-web-w0-captures/work-triggers-before-r1/web-work-trigger-secret-phone.png",
+      "sha256": "28e81bf79d752f46947b31a9ba568ca394b7dea11e42dc227a8b04db57798fe8",
+      "dimensions": [
+        390,
+        844
+      ],
+      "client": "web",
+      "window": "web-w0",
+      "source": "sha256:765e5e2580c39b397dffeac90c415033189d3cc92658f06fe064b2334316870f (227 source files)"
+    },
+    {
+      "name": "trigger-secret-dark",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-w3-before-web-w0-captures/work-triggers-before-r1/web-work-trigger-secret-dark.png",
+      "sha256": "d4ad8b6880a3b09f38576a97156334d880d14a72b1e92e2c2ea8e9de2e817844",
+      "dimensions": [
+        390,
+        844
+      ],
+      "client": "web",
+      "window": "web-w0",
+      "source": "sha256:765e5e2580c39b397dffeac90c415033189d3cc92658f06fe064b2334316870f (227 source files)"
+    },
+    {
+      "name": "trigger-secret-large",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-w3-before-web-w0-captures/work-triggers-before-r1/web-work-trigger-secret-large.png",
+      "sha256": "78cdd34af7d4ff6a67fd7c5cea9a1625cc982f4cdeb5507823b1ebda22bd6b7f",
+      "dimensions": [
+        390,
+        844
+      ],
+      "client": "web",
+      "window": "web-w0",
+      "source": "sha256:765e5e2580c39b397dffeac90c415033189d3cc92658f06fe064b2334316870f (227 source files)"
+    },
+    {
+      "name": "trigger-secret-narrow",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-w3-before-web-w0-captures/work-triggers-before-r1/web-work-trigger-secret-narrow.png",
+      "sha256": "879bebc20cafd9ad4fa8ad82f3ce18f8a81d25b0f67dc9219a14ce44e1cfbdc3",
+      "dimensions": [
+        320,
+        844
+      ],
+      "client": "web",
+      "window": "web-w0",
+      "source": "sha256:765e5e2580c39b397dffeac90c415033189d3cc92658f06fe064b2334316870f (227 source files)"
+    },
+    {
+      "name": "trigger-created",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-w3-before-web-w0-captures/work-triggers-before-r1/web-work-trigger-created.png",
+      "sha256": "198e2ab2e6ebcafd2a2a1c911a84acb8d60e610e2c45613b5b0312301fbd6c58",
+      "dimensions": [
+        390,
+        844
+      ],
+      "client": "web",
+      "window": "web-w0",
+      "source": "sha256:765e5e2580c39b397dffeac90c415033189d3cc92658f06fe064b2334316870f (227 source files)"
+    },
+    {
+      "name": "trigger-create-empty",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w3-before-phone-p1-trigger-create-captures/before/ios/trigger-create-empty.png",
+      "sha256": "b45962117c0975215f90f33f6f88112c57335f6b0d5de396f4feb30166d099c8",
+      "dimensions": [
+        1206,
+        2622
+      ],
+      "client": "iphone",
+      "window": "phone-p1",
+      "source": "sha256:cfc83f0fe400d324d4660adf8ee10d3bb157f4f282187de015e9385c81822282 (243 source files)"
+    },
+    {
+      "name": "trigger-create-filled",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w3-before-phone-p1-trigger-create-captures/before/ios/trigger-create-filled.png",
+      "sha256": "33a6f3c189acbb3f9463bcf749845fefee03a5f1a6a727f805cd537eb2751823",
+      "dimensions": [
+        1206,
+        2622
+      ],
+      "client": "iphone",
+      "window": "phone-p1",
+      "source": "sha256:cfc83f0fe400d324d4660adf8ee10d3bb157f4f282187de015e9385c81822282 (243 source files)"
+    },
+    {
+      "name": "trigger-secret-landing",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w3-before-phone-p1-trigger-create-captures/before/ios/trigger-secret-landing.png",
+      "sha256": "5a0975c2993992db9c9ae9158ed90163e0835246cab384baed186e12a44c157a",
+      "dimensions": [
+        1206,
+        2622
+      ],
+      "client": "iphone",
+      "window": "phone-p1",
+      "source": "sha256:cfc83f0fe400d324d4660adf8ee10d3bb157f4f282187de015e9385c81822282 (243 source files)"
+    },
+    {
+      "name": "trigger-secret-hidden",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w3-before-phone-p1-trigger-create-captures/before/ios/trigger-secret-hidden.png",
+      "sha256": "42ecea0c58ef170b452575fd1bbf5745864ad8d296cdba84cff0bdcffd194abf",
+      "dimensions": [
+        1206,
+        2622
+      ],
+      "client": "iphone",
+      "window": "phone-p1",
+      "source": "sha256:cfc83f0fe400d324d4660adf8ee10d3bb157f4f282187de015e9385c81822282 (243 source files)"
+    },
+    {
+      "name": "trigger-secret-revealed",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w3-before-phone-p1-trigger-create-captures/before/ios/trigger-secret-revealed.png",
+      "sha256": "30b9ea2d415ba1bc8ccdf2740d2e79d5c2d85cd293e86e9da1122c9e9412ebde",
+      "dimensions": [
+        1206,
+        2622
+      ],
+      "client": "iphone",
+      "window": "phone-p1",
+      "source": "sha256:cfc83f0fe400d324d4660adf8ee10d3bb157f4f282187de015e9385c81822282 (243 source files)"
+    },
+    {
+      "name": "trigger-created",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w3-before-phone-p1-trigger-create-captures/before/ios/trigger-created.png",
+      "sha256": "0289812dbe311cf1425def4a5531e833c9fc09dadf720e06ca80e3787e138ac6",
+      "dimensions": [
+        1206,
+        2622
+      ],
+      "client": "iphone",
+      "window": "phone-p1",
+      "source": "sha256:cfc83f0fe400d324d4660adf8ee10d3bb157f4f282187de015e9385c81822282 (243 source files)"
+    },
+    {
+      "name": "trigger-create-uncertain",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w3-before-phone-p1-trigger-create-uncertain-captures/before/ios/trigger-create-uncertain.png",
+      "sha256": "3ece8d1b132d70054588bbe0cb069850ca6bc58418f9a284f14e5402c254b232",
+      "dimensions": [
+        1206,
+        2622
+      ],
+      "client": "iphone",
+      "window": "phone-p1",
+      "source": "sha256:cfc83f0fe400d324d4660adf8ee10d3bb157f4f282187de015e9385c81822282 (243 source files)"
+    },
+    {
+      "name": "trigger-create-uncertain-refreshed",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w3-before-phone-p1-trigger-create-uncertain-captures/before/ios/trigger-create-uncertain-refreshed.png",
+      "sha256": "32bd89b76661d86500c9809afd157437753a8995d17060125b78e45e87adc3e4",
+      "dimensions": [
+        1206,
+        2622
+      ],
+      "client": "iphone",
+      "window": "phone-p1",
+      "source": "sha256:cfc83f0fe400d324d4660adf8ee10d3bb157f4f282187de015e9385c81822282 (243 source files)"
+    },
+    {
+      "name": "trigger-edit",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w3-before-phone-p1-trigger-edit-stale-captures/before/ios/trigger-edit.png",
+      "sha256": "aed10c744ab0c4d2cb1eae4b973666ed0f34597590d4d5adb28c03fd8402c3f7",
+      "dimensions": [
+        1206,
+        2622
+      ],
+      "client": "iphone",
+      "window": "phone-p1",
+      "source": "sha256:cfc83f0fe400d324d4660adf8ee10d3bb157f4f282187de015e9385c81822282 (243 source files)"
+    },
+    {
+      "name": "trigger-edit-stale",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w3-before-phone-p1-trigger-edit-stale-captures/before/ios/trigger-edit-stale.png",
+      "sha256": "48881d93eb259c7ae5a4aed46a3f1dbeb799c35cd053b3c95601ecda58a53c16",
+      "dimensions": [
+        1206,
+        2622
+      ],
+      "client": "iphone",
+      "window": "phone-p1",
+      "source": "sha256:cfc83f0fe400d324d4660adf8ee10d3bb157f4f282187de015e9385c81822282 (243 source files)"
+    },
+    {
+      "name": "trigger-toggled",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w3-before-phone-p1-trigger-toggle-delete-captures/before/ios/trigger-toggled.png",
+      "sha256": "2198dc22ab518187755af7e702f557d3520677c7632a507081888a2799e37894",
+      "dimensions": [
+        1206,
+        2622
+      ],
+      "client": "iphone",
+      "window": "phone-p1",
+      "source": "sha256:cfc83f0fe400d324d4660adf8ee10d3bb157f4f282187de015e9385c81822282 (243 source files)"
+    },
+    {
+      "name": "trigger-delete-confirm",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w3-before-phone-p1-trigger-toggle-delete-captures/before/ios/trigger-delete-confirm.png",
+      "sha256": "eda67ef3c4ce30da5724053656c30554dd715d710116e9ae199d8cdd920dae3d",
+      "dimensions": [
+        1206,
+        2622
+      ],
+      "client": "iphone",
+      "window": "phone-p1",
+      "source": "sha256:cfc83f0fe400d324d4660adf8ee10d3bb157f4f282187de015e9385c81822282 (243 source files)"
+    },
+    {
+      "name": "trigger-list-expanded",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w3-before-phone-p1-trigger-list-captures/before/ios/trigger-list-expanded.png",
+      "sha256": "c453908654fd9b751a5d1804a5b2553b672abe8354a4b6a327daf7b792a3c87e",
+      "dimensions": [
+        1206,
+        2622
+      ],
+      "client": "iphone",
+      "window": "phone-p1",
+      "source": "sha256:cfc83f0fe400d324d4660adf8ee10d3bb157f4f282187de015e9385c81822282 (243 source files)"
+    },
+    {
+      "name": "trigger-delete-confirm",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w3-before-pad-d1-trigger-toggle-delete-captures/before/ipad/trigger-delete-confirm.png",
+      "sha256": "80e7583f4906a0038911d12650b96478f7ad6abfbdf28ffd89354988b1d3e463",
+      "dimensions": [
+        1668,
+        2420
+      ],
+      "client": "ipad",
+      "window": "pad-d1",
+      "source": "sha256:44af243fa70035849047ccc6b7301b2d1fcef6dae4a66ebf78969d95c6c3aff2 (243 source files)"
+    },
+    {
+      "name": "trigger-create-filled",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w3-before-pad-d1-trigger-create-captures/before/ipad/trigger-create-filled.png",
+      "sha256": "7984afa535ae86c4c0edafb9cdb938d34d75452e36bc6d94a87a3ccf72b8d862",
+      "dimensions": [
+        1668,
+        2420
+      ],
+      "client": "ipad",
+      "window": "pad-d1",
+      "source": "sha256:44af243fa70035849047ccc6b7301b2d1fcef6dae4a66ebf78969d95c6c3aff2 (243 source files)"
+    },
+    {
+      "name": "trigger-secret-landing",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w3-before-pad-d1-trigger-create-captures/before/ipad/trigger-secret-landing.png",
+      "sha256": "ee8ec5d93495d7856f5d700ab24924b7bb876e2f0e6919a83ca9369a5fa57370",
+      "dimensions": [
+        1668,
+        2420
+      ],
+      "client": "ipad",
+      "window": "pad-d1",
+      "source": "sha256:44af243fa70035849047ccc6b7301b2d1fcef6dae4a66ebf78969d95c6c3aff2 (243 source files)"
+    },
+    {
+      "name": "trigger-secret-revealed",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w3-before-pad-d1-trigger-create-captures/before/ipad/trigger-secret-revealed.png",
+      "sha256": "d016ae17f288dc795826f104a2433114dad1582a6322e54ae8cbc68a8b46b65e",
+      "dimensions": [
+        1668,
+        2420
+      ],
+      "client": "ipad",
+      "window": "pad-d1",
+      "source": "sha256:44af243fa70035849047ccc6b7301b2d1fcef6dae4a66ebf78969d95c6c3aff2 (243 source files)"
+    },
+    {
+      "name": "trigger-created",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w3-before-pad-d1-trigger-create-captures/before/ipad/trigger-created.png",
+      "sha256": "60eebb7b61cf1c6602659be0720a0936aabd943792b3298874f00e1bf15a38f2",
+      "dimensions": [
+        1668,
+        2420
+      ],
+      "client": "ipad",
+      "window": "pad-d1",
+      "source": "sha256:44af243fa70035849047ccc6b7301b2d1fcef6dae4a66ebf78969d95c6c3aff2 (243 source files)"
+    },
+    {
+      "name": "trigger-edit-stale",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w3-before-pad-d1-trigger-edit-stale-captures/before/ipad/trigger-edit-stale.png",
+      "sha256": "2eaa1992cbe24b44cba079b83e9458614d7ffce6d0dd11a39ee959496fa70189",
+      "dimensions": [
+        1668,
+        2420
+      ],
+      "client": "ipad",
+      "window": "pad-d1",
+      "source": "sha256:44af243fa70035849047ccc6b7301b2d1fcef6dae4a66ebf78969d95c6c3aff2 (243 source files)"
+    },
+    {
+      "name": "trigger-list",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w3-before-pad-d1-trigger-list-captures/before/ipad/trigger-list.png",
+      "sha256": "e83a179f43c9a1af38e8570cf742841c6dff2e4c71df68476f148218388ddd30",
+      "dimensions": [
+        1668,
+        2420
+      ],
+      "client": "ipad",
+      "window": "pad-d1",
+      "source": "sha256:44af243fa70035849047ccc6b7301b2d1fcef6dae4a66ebf78969d95c6c3aff2 (243 source files)"
+    },
+    {
+      "name": "trigger-list-expanded",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w3-before-pad-d1-trigger-list-captures/before/ipad/trigger-list-expanded.png",
+      "sha256": "552f7803476d49e13d1d3a3493d53b759d505404f4875624fa74065f0c9774b4",
+      "dimensions": [
+        1668,
+        2420
+      ],
+      "client": "ipad",
+      "window": "pad-d1",
+      "source": "sha256:44af243fa70035849047ccc6b7301b2d1fcef6dae4a66ebf78969d95c6c3aff2 (243 source files)"
+    },
+    {
+      "name": "trigger-list",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w3-before-phone-p2-trigger-list-captures/before/ios/trigger-list.png",
+      "sha256": "f613ff9adf4df66bd8da5baf30b207724b89726b6fa5c2f0a073b59519ea3544",
+      "dimensions": [
+        1206,
+        2622
+      ],
+      "client": "iphone",
+      "window": "phone-p2",
+      "source": "sha256:44af243fa70035849047ccc6b7301b2d1fcef6dae4a66ebf78969d95c6c3aff2 (243 source files)"
+    },
+    {
+      "name": "trigger-list-dark",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w3-before-phone-p2-trigger-list-dark-captures/before/ios/trigger-list-dark.png",
+      "sha256": "1d140322bdfd2424b44ae56fdbd19305ec58e5e9e00532505fcd70b10d99c142",
+      "dimensions": [
+        1206,
+        2622
+      ],
+      "client": "iphone",
+      "window": "phone-p2",
+      "source": "sha256:44af243fa70035849047ccc6b7301b2d1fcef6dae4a66ebf78969d95c6c3aff2 (243 source files)"
+    },
+    {
+      "name": "trigger-list-dark-expanded",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w3-before-phone-p2-trigger-list-dark-captures/before/ios/trigger-list-dark-expanded.png",
+      "sha256": "f839a48a33afbbaf5dd6bf96feb1f7323071596eface6d5f60a28189c7a86624",
+      "dimensions": [
+        1206,
+        2622
+      ],
+      "client": "iphone",
+      "window": "phone-p2",
+      "source": "sha256:44af243fa70035849047ccc6b7301b2d1fcef6dae4a66ebf78969d95c6c3aff2 (243 source files)"
+    },
+    {
+      "name": "trigger-list-large-text",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w3-before-phone-p2-trigger-list-large-text-captures/before/ios/trigger-list-large-text.png",
+      "sha256": "65db186753b8eb11a720eee65960633ea0d3bda47f334b3e09cae2bd2f3c0371",
+      "dimensions": [
+        1206,
+        2622
+      ],
+      "client": "iphone",
+      "window": "phone-p2",
+      "source": "sha256:44af243fa70035849047ccc6b7301b2d1fcef6dae4a66ebf78969d95c6c3aff2 (243 source files)"
+    },
+    {
+      "name": "trigger-list-large-text-actions",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w3-before-phone-p2-trigger-list-large-text-captures/before/ios/trigger-list-large-text-actions.png",
+      "sha256": "b371450522ccc932237bd901eb354a2159dc4c4bb58f240712d67c9753ed777a",
+      "dimensions": [
+        1206,
+        2622
+      ],
+      "client": "iphone",
+      "window": "phone-p2",
+      "source": "sha256:44af243fa70035849047ccc6b7301b2d1fcef6dae4a66ebf78969d95c6c3aff2 (243 source files)"
+    },
+    {
+      "name": "trigger-create-dark",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w3-before-phone-p2-trigger-create-dark-captures/before/ios/trigger-create-dark.png",
+      "sha256": "2e5d0cdecf9cf59f6785ef7bea78429984f71b7491c6e20802f7623d14e4fdc2",
+      "dimensions": [
+        1206,
+        2622
+      ],
+      "client": "iphone",
+      "window": "phone-p2",
+      "source": "sha256:44af243fa70035849047ccc6b7301b2d1fcef6dae4a66ebf78969d95c6c3aff2 (243 source files)"
+    },
+    {
+      "name": "trigger-secret-dark",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w3-before-phone-p2-trigger-create-dark-captures/before/ios/trigger-secret-dark.png",
+      "sha256": "8023763a70d8eeaaaf54a435bb154cddd4bf4b1c793261d7078892c42d1d2a77",
+      "dimensions": [
+        1206,
+        2622
+      ],
+      "client": "iphone",
+      "window": "phone-p2",
+      "source": "sha256:44af243fa70035849047ccc6b7301b2d1fcef6dae4a66ebf78969d95c6c3aff2 (243 source files)"
+    },
+    {
+      "name": "trigger-create-large-text-top",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w3-before-phone-p2-trigger-create-large-text-captures/before/ios/trigger-create-large-text-top.png",
+      "sha256": "a857906c21a30d2c6534231aa40d7f08890598c4a8ec400869d1956174706088",
+      "dimensions": [
+        1206,
+        2622
+      ],
+      "client": "iphone",
+      "window": "phone-p2",
+      "source": "sha256:44af243fa70035849047ccc6b7301b2d1fcef6dae4a66ebf78969d95c6c3aff2 (243 source files)"
+    },
+    {
+      "name": "trigger-create-large-text-bottom",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w3-before-phone-p2-trigger-create-large-text-captures/before/ios/trigger-create-large-text-bottom.png",
+      "sha256": "c0ac8e1eeb1a56f4bcf7b4cf8ab05a9ccbe18f8d27472332b118d7faa094d53e",
+      "dimensions": [
+        1206,
+        2622
+      ],
+      "client": "iphone",
+      "window": "phone-p2",
+      "source": "sha256:44af243fa70035849047ccc6b7301b2d1fcef6dae4a66ebf78969d95c6c3aff2 (243 source files)"
+    },
+    {
+      "name": "trigger-secret-large-text",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w3-before-phone-p2-trigger-create-large-text-captures/before/ios/trigger-secret-large-text.png",
+      "sha256": "50d00bec7e3076227994fa0cf593eb1b9ef4331eb0699650eca80298f6cabbe8",
+      "dimensions": [
+        1206,
+        2622
+      ],
+      "client": "iphone",
+      "window": "phone-p2",
+      "source": "sha256:44af243fa70035849047ccc6b7301b2d1fcef6dae4a66ebf78969d95c6c3aff2 (243 source files)"
+    },
+    {
+      "name": "trigger-readonly",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w3-before-phone-p3-trigger-readonly-captures/before/ios/trigger-readonly.png",
+      "sha256": "208441a8cd0baff3f1e3e31724c3288ec9a6ea44e2896a34be95560e96698a41",
+      "dimensions": [
+        1206,
+        2622
+      ],
+      "client": "iphone",
+      "window": "phone-p3",
+      "source": "sha256:fa65c9a728f9404d602f776a9abc7ef3c83daddb0e37f10e61b67756743d9e3a (243 source files)"
+    },
+    {
+      "name": "trigger-platform-off",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w3-before-phone-p3-trigger-platform-off-captures/before/ios/trigger-platform-off.png",
+      "sha256": "9dca8bfa898ece31e398af31dd434daba3e7d22a8cc5270bd997809116b178a6",
+      "dimensions": [
+        1206,
+        2622
+      ],
+      "client": "iphone",
+      "window": "phone-p3",
+      "source": "sha256:fa65c9a728f9404d602f776a9abc7ef3c83daddb0e37f10e61b67756743d9e3a (243 source files)"
+    },
+    {
+      "name": "trigger-routines-error",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w3-before-phone-p3-trigger-routines-error-captures/before/ios/trigger-routines-error.png",
+      "sha256": "38a27305b213d664bbfb0012a453199d24dccf32f43dedbbed84202b6ef67db3",
+      "dimensions": [
+        1206,
+        2622
+      ],
+      "client": "iphone",
+      "window": "phone-p3",
+      "source": "sha256:fa65c9a728f9404d602f776a9abc7ef3c83daddb0e37f10e61b67756743d9e3a (243 source files)"
+    },
+    {
+      "name": "trigger-first-use",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w3-before-phone-p3-trigger-first-use-captures/before/ios/trigger-first-use.png",
+      "sha256": "34db2706fba1bfde0f5b66086412c2692b45f48cffd3d534dee0d5b5ee118205",
+      "dimensions": [
+        1206,
+        2622
+      ],
+      "client": "iphone",
+      "window": "phone-p3",
+      "source": "sha256:fa65c9a728f9404d602f776a9abc7ef3c83daddb0e37f10e61b67756743d9e3a (243 source files)"
+    },
+    {
+      "name": "trigger-unsupported",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w3-before-phone-p3-trigger-unsupported-captures/before/ios/trigger-unsupported.png",
+      "sha256": "c4d7e62b64cf5b3fbb304453af87cd339b1c0200423a7337fd4c4aae435232ed",
+      "dimensions": [
+        1206,
+        2622
+      ],
+      "client": "iphone",
+      "window": "phone-p3",
+      "source": "sha256:fa65c9a728f9404d602f776a9abc7ef3c83daddb0e37f10e61b67756743d9e3a (243 source files)"
+    },
+    {
+      "name": "trigger-list-dark-expanded",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w3-before-pad-d2-trigger-list-dark-captures/before/ipad/trigger-list-dark-expanded.png",
+      "sha256": "bfb9de6d65a250fddd1637cf3fa8dbce5f1808e5447896994542a7e5d37efb2a",
+      "dimensions": [
+        1668,
+        2420
+      ],
+      "client": "ipad",
+      "window": "pad-d2",
+      "source": "sha256:fa65c9a728f9404d602f776a9abc7ef3c83daddb0e37f10e61b67756743d9e3a (243 source files)"
+    },
+    {
+      "name": "trigger-list-large-text",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w3-before-pad-d2-trigger-list-large-text-captures/before/ipad/trigger-list-large-text.png",
+      "sha256": "484b3abba7efc81c72a18b20df9bffe5e1c76310cfdbd8b3eaff42af60b00a32",
+      "dimensions": [
+        1668,
+        2420
+      ],
+      "client": "ipad",
+      "window": "pad-d2",
+      "source": "sha256:fa65c9a728f9404d602f776a9abc7ef3c83daddb0e37f10e61b67756743d9e3a (243 source files)"
+    },
+    {
+      "name": "trigger-list-large-text-actions",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w3-before-pad-d2-trigger-list-large-text-captures/before/ipad/trigger-list-large-text-actions.png",
+      "sha256": "9ad7b6224a7ea572f057b8c1498c26f2ba7cf1a60abcba3cf580a39296553970",
+      "dimensions": [
+        1668,
+        2420
+      ],
+      "client": "ipad",
+      "window": "pad-d2",
+      "source": "sha256:fa65c9a728f9404d602f776a9abc7ef3c83daddb0e37f10e61b67756743d9e3a (243 source files)"
+    },
+    {
+      "name": "trigger-readonly",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w3-before-pad-d2-trigger-readonly-captures/before/ipad/trigger-readonly.png",
+      "sha256": "d6226868017499db2a7a09dc855e0fe25f80b4f7c540ad6cbb027c2cddf449bf",
+      "dimensions": [
+        1668,
+        2420
+      ],
+      "client": "ipad",
+      "window": "pad-d2",
+      "source": "sha256:fa65c9a728f9404d602f776a9abc7ef3c83daddb0e37f10e61b67756743d9e3a (243 source files)"
+    },
+    {
+      "name": "trigger-create-large-text-top",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w3-before-pad-d2-trigger-create-large-text-captures/before/ipad/trigger-create-large-text-top.png",
+      "sha256": "73861c5318a3bfd0949a6e5479950bd1613e84792fab5fa391eebdf4f43a9d14",
+      "dimensions": [
+        1668,
+        2420
+      ],
+      "client": "ipad",
+      "window": "pad-d2",
+      "source": "sha256:fa65c9a728f9404d602f776a9abc7ef3c83daddb0e37f10e61b67756743d9e3a (243 source files)"
+    },
+    {
+      "name": "trigger-secret-large-text",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w3-before-pad-d2-trigger-create-large-text-captures/before/ipad/trigger-secret-large-text.png",
+      "sha256": "7b887b213699ce416612f0f1604113eb736ec5bb2262c808825d4d0ff1d532aa",
+      "dimensions": [
+        1668,
+        2420
+      ],
+      "client": "ipad",
+      "window": "pad-d2",
+      "source": "sha256:fa65c9a728f9404d602f776a9abc7ef3c83daddb0e37f10e61b67756743d9e3a (243 source files)"
+    }
+  ],
+  "exclusions": [
+    {
+      "window": "phone-p1",
+      "client": "iphone",
+      "name": "trigger-list",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w3-before-phone-p1-trigger-list-captures/before/ios/trigger-list.png",
+      "reason": "P1 closed list misses rows"
+    },
+    {
+      "window": "phone-p2",
+      "client": "iphone",
+      "name": "trigger-list-expanded",
+      "path": "/Volumes/DevSSD/scratch/wildbots-design-review/work-native-w3-before-phone-p2-trigger-list-captures/before/ios/trigger-list-expanded.png",
+      "reason": "Duplicate expanded normal list; originalP1 binding retained"
+    }
+  ],
+  "afterPlan": {
+    "web": 32,
+    "iphone": 31,
+    "ipad": 16,
+    "total": 79,
+    "countCorrection": "Review110 named web states sum32, not heading31; no named state dropped"
+  },
+  "limits": [
+    "Synthetic fixtures and saved simulators only",
+    "Native AX3; web200percentroot-font scaling,notbrowserzoom",
+    "Physicaldevices,VoiceOver,hardwarekeyboards,AX5,iOS17andcompactiPad remainunverified"
+  ]
+}

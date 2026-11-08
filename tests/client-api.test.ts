@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { api, clearResponseCache, setCsrf, uploadFile } from '../src/client-api.js';
+import { api, clearResponseCache, request, setCsrf, uploadFile } from '../src/client-api.js';
 
 beforeEach(()=>{vi.useFakeTimers();setCsrf('current-session-csrf');clearResponseCache();});
 afterEach(()=>{vi.useRealTimers();vi.unstubAllGlobals();setCsrf('');});
@@ -25,6 +25,12 @@ describe('client request recovery',()=>{
     await vi.advanceTimersByTimeAsync(1);await failure;
     expect(transport.signal?.aborted).toBe(true);
     expect(transport.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([{method:undefined,draft:false,deadline:20_000},{method:'POST',draft:true,deadline:60_000}])('mentions the draft only when a $method request was a write',async({method,draft,deadline})=>{
+    stalledBody();
+    const failure=expect(api('/today',method?{method,body:'{}'}:{})).rejects.toSatisfy((error:Error)=>error.message.includes('draft')===draft);
+    await vi.advanceTimersByTimeAsync(deadline);await failure;
   });
 
   it('reads once more when an assistant turned private mid-read, and only once',async()=>{
@@ -166,3 +172,52 @@ describe('attachment uploads',()=>{
     await expect(pending).rejects.toMatchObject({name:'AbortError'});
   });
 });
+
+describe('typed route requests',()=>{
+  const ok=(body:unknown)=>({ok:true,status:200,headers:new Headers(),text:async()=>JSON.stringify(body)});
+  it('fills and encodes path parameters, drops unset query values, and sends JSON writes with the CSRF token',async()=>{
+    const fetch=vi.fn().mockResolvedValue(ok({ok:true}));
+    vi.stubGlobal('fetch',fetch);
+    await request('GET /bots/:id/conversation',{params:{id:'a b/c'},query:{turns:20,start:undefined}});
+    expect(fetch.mock.calls[0][0]).toBe('/api/bots/a%20b%2Fc/conversation?turns=20');
+    expect(fetch.mock.calls[0][1].method).toBeUndefined();
+    await request('POST /bots/:id/approvals/:approvalId',{params:{id:'bot',approvalId:'ap/1'},body:{decision:'approved'}});
+    const [path,init]=fetch.mock.calls[1];
+    expect(path).toBe('/api/bots/bot/approvals/ap%2F1');
+    expect(init).toMatchObject({method:'POST',body:JSON.stringify({decision:'approved'})});
+    expect(new Headers(init.headers).get('X-CSRF-Token')).toBe('current-session-csrf');
+    await request('GET /bots');
+    expect(fetch.mock.calls[2][0]).toBe('/api/bots');
+  });
+  it('sends a route without a body as a bare POST with the CSRF token',async()=>{
+    const fetch=vi.fn().mockResolvedValue(ok({ok:true}));
+    vi.stubGlobal('fetch',fetch);
+    await request('POST /bots/:id/stop',{params:{id:'bot'}});
+    const [path,init]=fetch.mock.calls[0];
+    expect(path).toBe('/api/bots/bot/stop');
+    expect(init.method).toBe('POST');expect(init.body).toBeUndefined();
+    const headers=new Headers(init.headers);
+    expect(headers.get('Content-Type')).toBeNull();expect(headers.get('X-CSRF-Token')).toBe('current-session-csrf');
+  });
+  it('shares the GET cache with api() for the same path',async()=>{
+    const fetch=vi.fn().mockResolvedValue(ok({text:'saved',attachments:[],revision:1,reason:'edit',sentRevision:0}));
+    vi.stubGlobal('fetch',fetch);
+    const first=await request('GET /bots/:id/draft',{params:{id:'bot'}});
+    expect(first?.revision).toBe(1);
+    expect(await api('/bots/bot/draft')).toBe(first);
+  });
+});
+
+// Compiled with the suite. Invalid calls must stay compile errors as routes evolve.
+function checkFeatureRouteTypes() {
+  const memory: Promise<import('../src/shared/experience').ProfileMemory> = request('GET /bots/:id/memory', { params: { id: 'ranch' } });
+  const task: Promise<import('../src/shared/automation').AutomationTask> = request('POST /bots/:id/automation/tasks', { params: { id: 'ranch' }, body: { requestId: 'request', title: 'Fix fence' } });
+  void memory; void task;
+  // @ts-expect-error Search requires its query, even when an options object is supplied.
+  void request('GET /search', {});
+  // @ts-expect-error Each operation has its own body, not an arbitrary suffix and payload.
+  void request('PUT /bots/:id/automation/goal', { params: { id: 'ranch' }, body: { enabled: true } });
+  // @ts-expect-error A routine saved item needs its native output locator.
+  void request('POST /saved', { body: { kind: 'routine', botId: 'ranch', title: 'Output' } });
+}
+void checkFeatureRouteTypes;

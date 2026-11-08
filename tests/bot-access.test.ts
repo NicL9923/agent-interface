@@ -10,6 +10,8 @@ import { loadConfig } from "../src/server/config.js";
 import { Store } from "../src/server/store.js";
 import { HermesUpgrades } from "../src/server/upgrades.js";
 import { defaultPreferences, type Runtime } from "../src/shared/types.js";
+import { IncompleteCreationError } from "../src/shared/errors.js";
+import { localLogin } from "./helpers/server.js";
 const origin = "http://127.0.0.1:3000";
 const apps: { close(): unknown }[] = [], directories: string[] = [];
 afterEach(async () => {
@@ -74,11 +76,7 @@ async function setup() {
   const runtime = runtimeDouble(calls);
   const created = await createApp(config, runtime, { background: false, upgrades: new HermesUpgrades(config, runtime, () => {}) });
   apps.push(created.app);
-  const login = async (member: "one" | "two") => {
-    const result = await created.app.inject({ method: "POST", url: "/api/auth/local", headers: { origin }, payload: { member } });
-    return { cookie: `session=${result.cookies[0].value}`, "x-csrf-token": result.json().csrfToken as string, origin };
-  };
-  const owner = await login("one"), other = await login("two");
+  const owner = await localLogin(created.app, origin, "one"), other = await localLogin(created.app, origin, "two");
   created.store.savePresentation(secret, { shared: false, ownerId: "local-one" });
   created.store.savePresentation("family", { shared: true });
   created.store.savePresentation("legacy", { shared: false });
@@ -95,7 +93,8 @@ function seedMemberHistory(store: Store) {
 }
 const values: Record<string, string> = { approvalId: "approval", messageId: "m1", cardId: "card", target: "memory", itemId: "item", source: "onepassword", requestId: randomUUID(), sessionId: "session", routineId: "r-family", resultId: "result", roomId: "ledger-room", flowId: "f".repeat(24), audioId: "audio" };
 const ids: Record<string, (botId: string) => string> = { "/api/routines/:id": () => "r-secret", "/api/files/:id": fileId, "/api/submissions/:id": () => randomUUID(), "/api/integrations/:id": () => "workspace" };
-const queries: Record<string, (botId: string) => string> = { "/api/search": () => "q=ledger", "/api/models": botId => `botId=${botId}`, "/api/integrations": botId => `profile=${botId}`, "/api/integrations/flows/:flowId": botId => `profile=${botId}` };
+const queries: Record<string, (botId: string) => string> = { // Search names the private assistant to be refused, and otherwise searches every visible one.
+  "/api/search": botId => botId === secret ? `q=ledger&botId=${botId}` : "q=ledger", "/api/models": botId => `botId=${botId}`, "/api/integrations": botId => `profile=${botId}`, "/api/integrations/flows/:flowId": botId => `profile=${botId}` };
 const request = (method: string, url: string, botId: string) => {
   const path = url.replace(/:(\w+)/g, (_, name: string) => name === "botId" || name === "id" && url.startsWith("/api/bots/") ? botId
     : name === "id" ? Object.entries(ids).find(([prefix]) => url.startsWith(prefix))?.[1](botId) ?? "x" : values[name]!);
@@ -332,7 +331,17 @@ describe("private assistants under concurrency and side channels", () => {
     const theirs = (await s.app.inject({ url: `/api/submissions/${requestId}`, headers: s.member })).json();
     expect(theirs).toMatchObject({ status: "uncertain" });
     expect(JSON.stringify(theirs)).not.toContain("run-x");
-    expect((await s.app.inject({ url: `/api/submissions/${requestId}`, headers: s.owner })).json()).toMatchObject({ runId: "run-x" });
+    expect((await s.app.inject({ url: `/api/submissions/${requestId}`, headers: s.owner })).json()).toMatchObject({ runId: "run-x", text: "Hi" });
+    expect(theirs).not.toHaveProperty("text");
+    // Anyone who sees the assistant can follow a retry's receipt, but only its sender learns its text.
+    const retry = randomUUID();
+    s.store.intent({ requestId: retry, botId: "family", senderId: "local-one", text: "Try again", attachments: [], retryOf: "m1" });
+    s.store.receipt({ requestId: retry, status: "accepted", runId: "run-r" });
+    s.runtime.lookupSubmission = async () => null;
+    const followed = (await s.app.inject({ url: `/api/submissions/${retry}`, headers: s.member })).json();
+    expect(followed).toMatchObject({ status: "accepted", runId: "run-r" });
+    expect(followed).not.toHaveProperty("text");
+    expect((await s.app.inject({ url: `/api/submissions/${retry}`, headers: s.owner })).json()).toMatchObject({ text: "Try again" });
     // Kim ran a trial while the assistant was shared; it became private and the routine was deleted.
     const trial = randomUUID();
     s.store.rememberRoutineTrial(trial, "local-two", "r-gone", "family");
@@ -386,6 +395,15 @@ describe("private assistant notification history", () => {
     expect(store.db.prepare("SELECT count(*) AS n FROM participants WHERE run_id='run'").get()).toEqual({ n: 0 });
   });
 
+  it("advances the privacy version when a private assistant's record is forgotten, so open streams rebuild what they hide", () => {
+    const store = seeded();
+    makePrivate(store, secret);
+    const version = store.privacyVersion;
+    store.forgetBot(secret);
+    expect(store.privateBots().some(bot => bot.botId === secret)).toBe(false);
+    expect(store.privacyVersion).toBeGreaterThan(version);
+  });
+
   it("sends each event only to whoever could see the assistant when it happened, by its own time", () => {
     const store = new Store(":memory:"); apps.push(store);
     for (const id of ["alice", "bob", "carol"]) {
@@ -422,6 +440,21 @@ describe("private assistant notification history", () => {
     store.recordEvents([event("hidden-1"), event("hidden-2")], "2");
     expect(store.eventPage("local-two", 0, store.latestEventFrontier(), ["family"]).frontier).toBe(before);
     expect(Number(store.eventPage("local-one", 0, store.latestEventFrontier(), ["family", secret]).frontier)).toBeGreaterThan(Number(before));
+  });
+
+  it("passes over visible events before the recap start, moving the frontier past them but not past hidden ones", () => {
+    const store = seeded();
+    store.savePresentation("family", { shared: true });
+    store.recordEvents([event("old", "family"), event("recent", "family")], "1");
+    const since = Date.now() - 60_000;
+    store.db.prepare("UPDATE notification_events SET created_at=? WHERE id='old'").run(since - 1);
+    const visible = store.latestEventFrontier();
+    store.recordEvents([event("hidden")], "2");
+    const page = store.eventPage("local-two", 0, store.latestEventFrontier(), ["family", secret], new Date(since).toISOString());
+    expect(page.events.map(row => row.id)).toEqual(["recent"]);
+    expect(page).toMatchObject({ frontier: String(visible), hasMore: false });
+    // Without a recap start the same page includes the older event.
+    expect(store.eventPage("local-two", 0, store.latestEventFrontier(), ["family"]).events.map(row => row.id)).toEqual(["old", "recent"]);
   });
 });
 
@@ -515,7 +548,7 @@ describe("private assistant redaction across tools, restarts and failed creation
 
   it("keeps a profile Hermes created but could not remove private to its creator", async () => {
     const s = await setup();
-    s.runtime.saveBot = async () => { throw Object.assign(new Error("Hermes created the bot but configuration failed and automatic cleanup was refused. Review bot night-ledger."), { createdBotId: "night-ledger" }); };
+    s.runtime.saveBot = async () => { throw new IncompleteCreationError("Hermes created the bot but configuration failed and automatic cleanup was refused. Review bot night-ledger.", "night-ledger"); };
     const failed = await s.app.inject({ method: "POST", url: "/api/bots", headers: s.owner, payload: { name: "Night Ledger", instructions: "", model: "test", shared: false } });
     expect([failed.statusCode, failed.json().code]).toEqual([502, "created_incomplete"]);
     expect(failed.json().error).toContain("Night Ledger");

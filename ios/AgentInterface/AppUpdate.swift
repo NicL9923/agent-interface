@@ -32,7 +32,7 @@ struct AppUpdateBanner: View {
       Image(systemName: "arrow.down.app.fill").foregroundStyle(Palette.accent).accessibilityHidden(true)
       Text("A new version of WildBots is available").font(.footnote.weight(.medium))
         .frame(maxWidth: .infinity, alignment: .leading)
-      Button("Update") { openURL(url) }.buttonStyle(.borderedProminent).controlSize(.small).tint(Palette.accent)
+      Button("Update") { openURL(url) }.buttonStyle(.accentProminent).controlSize(.small).tint(Palette.accent)
         .accessibilityIdentifier("appUpdateButton")
     }.padding(.horizontal, 16).padding(.vertical, 8).background(Palette.accentSoft)
       .accessibilityElement(children: .contain).accessibilityIdentifier("appUpdateBanner")
@@ -50,7 +50,7 @@ struct AppVersionRows: View {
       HStack {
         Label("Update available", systemImage: "arrow.down.app.fill").foregroundStyle(Palette.accent)
         Spacer()
-        Button("Update") { openURL(url) }.buttonStyle(.borderedProminent).controlSize(.small)
+        Button("Update") { openURL(url) }.buttonStyle(.accentProminent).controlSize(.small)
           .accessibilityIdentifier("preferencesUpdateButton")
       }
     case .upToDate: Label("Up to date", systemImage: "checkmark.circle").foregroundStyle(.secondary)

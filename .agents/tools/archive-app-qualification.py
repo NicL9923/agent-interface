@@ -10,6 +10,8 @@ import subprocess
 import sys
 import tempfile
 
+import host_access
+
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("name", help="Staged release name used for qualification")
 parser.add_argument("destination", type=Path)
@@ -42,6 +44,6 @@ parent.mkdir(parents=True, exist_ok=True)
 # Always fetch into a fresh directory. Optional receipts from an earlier run
 # must never survive a later fetch and become mixed qualification evidence.
 raw = Path(tempfile.mkdtemp(prefix="fetch-", dir=parent))
-subprocess.run(["scp", "-q", "-r", manifest["host"] + ":" + shlex.quote(found["evidence"]) + "/.", str(raw)], check=True)
+host_access.scp(manifest["host"] + ":" + shlex.quote(found["evidence"]) + "/.", str(raw), recursive=True, timeout=600)
 subprocess.run([sys.executable, str(Path(__file__).with_name("archive-spike-evidence.py")), str(raw), str(args.destination),
                 "--isolated-host-home", str(receipt.parent)], check=True)

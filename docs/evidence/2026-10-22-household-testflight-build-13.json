@@ -1,0 +1,16 @@
+{
+    "appId": "6823644380",
+    "buildId": "8dc21965-b379-4983-9b40-cd08012925fa",
+    "build": 13,
+    "version": "1.0",
+    "groupId": "6fcdf5f2-a590-4d31-987f-ec40fc5b1874",
+    "testerCount": 2,
+    "expirationDate": "2027-01-20T14:20:10-08:00",
+    "confirmedAt": "2026-10-22T22:30:21.215Z",
+    "announcement": {
+        "IOS_APP_LATEST_BUILD": "13",
+        "IOS_APP_UPDATE_URL": "https://testflight.apple.com/v1/app/6823644380"
+    },
+    "commit": "e6e772d4ca320e5eb62f581f3e3183867bcd7057",
+    "sha256": "e80e81cbb564e2fdbfdad742945373591f7ccd538a6fcddaff37b79c51d582e7"
+}

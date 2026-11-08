@@ -2,20 +2,25 @@ import SwiftUI
 
 struct PreferencesView: View {
   var close: (() -> Void)? = nil
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @Environment(\.dismiss) private var dismiss
   @Environment(\.colorScheme) private var scheme
   @State private var preferences = Preferences()
-  @State private var sectionName = ""
-  @StateObject private var reachability = NetworkReachability()
+  @State private var reachability = NetworkReachability()
   private var saving: Bool { store.preferencesSaving }
   private var saveFailed: Bool { store.preferencesSaveFailed }
   @State private var discardConfirm = false
   @State private var loaded = false
   @State private var signOutConfirm = false
   @State private var changeServerConfirm = false
+  @State private var quietError: String?
+  #if DEBUG
+    @State private var captureComputerOpen = false
+    @State private var captureUpgradeOpen = false
+  #endif
   var body: some View {
     NavigationStack {
+      ScrollViewReader { captureScroll in
       Form {
         Group {
         Section {
@@ -32,21 +37,22 @@ struct PreferencesView: View {
             HermesUpgradeView()
           } label: {
             settingsRow("Hermes and updates", icon: "arrow.triangle.2.circlepath",
-              detail: store.connected ? "Connected" + (store.bootstrap?.connection.version.map { " · \($0)" } ?? "") : reachability.offline ? "Offline" : "Reconnecting",
+              detail: store.connected ? "Connected" + (store.bootstrap?.connection.hermesLabel.map { " · \($0)" } ?? "") : reachability.offline ? "Offline" : "Reconnecting",
               status: store.connected ? Palette.accent : Palette.attention)
           }.accessibilityIdentifier("Hermes updates")
-          if let url = try? store.api?.url("/?computer=1") {
-            Link(destination: url) {
-              settingsRow("Computer", icon: "desktopcomputer", detail: store.computerStatus?.detail ?? "Shared desktop and terminal")
-            }.disabled(store.computerStatus?.available == false).accessibilityIdentifier("sharedComputer")
-          }
+          // The desktop opens in the app; its screen has the terminal button. The terminal runs without
+          // the desktop, so the row stays open while either works.
+          NavigationLink { ComputerView() } label: {
+            settingsRow("Computer", icon: "desktopcomputer", detail: store.computerStatus?.detail ?? "Shared desktop and terminal")
+          }.disabled(store.computerStatus.map { !$0.available && $0.terminal?.available != true } ?? false)
+            .accessibilityIdentifier("sharedComputer")
           NavigationLink { IntegrationsView() } label: {
             settingsRow("Integrations", icon: "powerplug", detail: "Accounts your assistants can use")
           }.accessibilityIdentifier("Integrations")
         }.task { await watchComputer() }
         if let error = store.error {
           Section {
-            ErrorBanner(message: error, dismiss: { store.error = nil })
+            ErrorBanner(message: error, dismiss: { store.dismissError() })
           }
         }
         if saveFailed { Section { Button("Retry saving settings") { enqueueSave() } } }
@@ -69,49 +75,45 @@ struct PreferencesView: View {
           defaultPicker
         }.disabled(store.sessionExpired)
         Section {
-          DeviceNotificationSettings()
-          Picker("Batching", selection: Binding(get: { preferences.notifications?.batchMinutes ?? 0 }, set: { value in
-            var settings = notificationPreferences; settings.batchMinutes = value; preferences.notifications = settings
-          })) {
-            Text("As updates arrive").tag(0); Text("Every 5 minutes").tag(5); Text("Every 15 minutes").tag(15); Text("Hourly").tag(60)
+          DeviceNotificationSettings().id("captureNotifications")
+        } header: { Text("Notifications") }
+          .disabled(store.sessionExpired)
+        Section {
+          VStack(alignment: .leading, spacing: 4) {
+            Picker("Batching", selection: Binding(get: { preferences.notifications?.batchMinutes ?? 0 }, set: { value in
+              var settings = notificationPreferences; settings.batchMinutes = value; preferences.notifications = settings
+            })) {
+              Text("As updates arrive").tag(0); Text("Every 5 minutes").tag(5); Text("Every 15 minutes").tag(15); Text("Hourly").tag(60)
+            }
+            Text("Decisions and failures skip batching.").font(.caption).foregroundStyle(Palette.muted)
+              .fixedSize(horizontal: false, vertical: true)
           }
+          if !bots.isEmpty { followRow }
           Toggle("Quiet hours", isOn: Binding(get: { preferences.notifications?.quietStart != nil }, set: { enabled in
+            quietError = nil
             var settings = notificationPreferences; settings.quietStart = enabled ? "22:00" : nil
             settings.quietEnd = enabled ? "07:00" : nil; preferences.notifications = settings
           }))
           if preferences.notifications?.quietStart != nil {
             DatePicker("From", selection: quietTime(start: true), displayedComponents: .hourAndMinute).environment(\.timeZone, TimeZone(identifier: notificationPreferences.timezone) ?? .current)
             DatePicker("Until", selection: quietTime(start: false), displayedComponents: .hourAndMinute).environment(\.timeZone, TimeZone(identifier: notificationPreferences.timezone) ?? .current)
+            if let quietError { Text(quietError).font(.footnote).foregroundStyle(Palette.danger).accessibilityIdentifier("quietHoursError") }
           }
-        } header: { Text("Notifications") } footer: {
-          if preferences.notifications?.quietStart != nil {
-            Text("\(notificationPreferences.timezone). Other notifications wait until quiet hours end; security alerts arrive right away. Decisions and failures skip batching outside quiet hours.")
-          }
-        }.disabled(store.sessionExpired)
-        if !(store.bootstrap?.bots.isEmpty ?? true) {
-          Section {
-            ForEach(store.bootstrap?.bots ?? []) { bot in
-              Toggle(isOn: membership(bot.id, \Preferences.followBots)) {
-                HStack(spacing: 10) {
-                  AvatarView(avatar: bot.avatar ?? AvatarConfig(), size: 28, name: bot.name, forceReducedMotion: true)
-                  Text(bot.name)
-                }
-              }
+        } header: { Text("Notifications on all your devices") } footer: {
+          VStack(alignment: .leading, spacing: 6) {
+            Text("These apply wherever you get notifications.")
+            if preferences.notifications?.quietStart != nil {
+              Text("Times are in \(notificationPreferences.timezone). During quiet hours, alerts wait until the end, except security alerts.")
             }
-          } header: { Text("Follow all activity") } footer: {
-            Text("Shared-task notifications already go to participants. Follow an assistant to receive all their activity.")
+          }.fixedSize(horizontal: false, vertical: true)
+        }.disabled(store.sessionExpired)
+        if !bots.isEmpty {
+          Section {
+            HomeSectionRows(preferences: $preferences, bots: bots)
+          } header: { Text("Home sections") } footer: {
+            Text("Group assistants on home. Each assistant can be in one section.")
           }.disabled(store.sessionExpired)
         }
-        ForEach(Array(preferences.sections.enumerated()), id: \.element.id) { index, section in sectionEditor(section, first: index == 0) }
-        Section {
-          HStack {
-            TextField("New section, like Around the house", text: $sectionName).accessibilityLabel("New section name")
-            Button("Add") {
-              preferences.sections.append(BotSection(id: UUID().uuidString, name: sectionName.trimmingCharacters(in: .whitespacesAndNewlines), botIds: []))
-              sectionName = ""
-            }.buttonStyle(.borderless).disabled(sectionName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || preferences.sections.count >= 30)
-          }
-        } header: { if preferences.sections.isEmpty { Text("Home sections") } }.disabled(store.sessionExpired)
         Section {
           if store.sessionExpired { Button("Sign in again") { Task { await store.signIn() } } }
           Button("Sign out", role: .destructive) { signOutConfirm = true }
@@ -124,12 +126,25 @@ struct PreferencesView: View {
           VStack(spacing: 6) {
             Text("w.").font(.largeTitle.bold()).foregroundStyle(Palette.accent)
             Text("WildBots").font(.headline)
-            if let version = store.bootstrap?.connection.version { Text("Hermes \(version)").font(.caption).foregroundStyle(.secondary) }
+            if let label = store.bootstrap?.connection.hermesLabel { Text(label).font(.caption).foregroundStyle(.secondary) }
+            if let detail = store.bootstrap?.connection.hermesDetail {
+              Text(detail).font(.caption2.monospaced()).foregroundStyle(.tertiary).textSelection(.enabled)
+            }
           }.frame(maxWidth: .infinity).padding(.vertical, 12)
         }.listRowBackground(Color.clear)
         }.listRowBackground(Palette.raised(scheme))
       }.listSectionSpacing(18).contentMargins(.top, 12, for: .scrollContent)
         .householdListBackground().navigationTitle("Settings").navigationBarTitleDisplayMode(.inline)
+        #if DEBUG
+        .navigationDestination(isPresented: $captureComputerOpen) { ComputerView() }
+        .navigationDestination(isPresented: $captureUpgradeOpen) { HermesUpgradeView() }
+        .onAppear {
+          captureComputerOpen = DebugFixtures.captureComputerPage; captureUpgradeOpen = DebugFixtures.captureUpgradePage
+          if DebugFixtures.captureNotificationsPage {
+            Task { try? await Task.sleep(for: .milliseconds(500)); captureScroll.scrollTo("captureNotifications", anchor: .top) }
+          }
+        }
+        #endif
         .toolbar {
           ToolbarItem(placement: .cancellationAction) { Button("Close") { if saveFailed { discardConfirm = true } else { closeSheet() } } }
           ToolbarItem(placement: .status) {
@@ -155,6 +170,7 @@ struct PreferencesView: View {
         .confirmationDialog("Change the app server? Sign-out will revoke this device's session and notifications first.", isPresented: $changeServerConfirm, titleVisibility: .visible) {
           Button("Change server") { Task { await store.changeConnection(); if store.api == nil { closeSheet() } } }
         }
+      }
     }
   }
   /// The web panel polls the shared computer every few seconds while open; Settings checks while it is shown.
@@ -206,23 +222,22 @@ struct PreferencesView: View {
       let value = String(format: "%02d:%02d", calendar.component(.hour, from: date), calendar.component(.minute, from: date))
       var settings = notificationPreferences
       if start { settings.quietStart = value } else { settings.quietEnd = value }
+      guard settings.quietStart != settings.quietEnd else { quietError = "Start and end times can't match."; return }
+      quietError = nil
       preferences.notifications = settings
     })
   }
-  private func membership(_ id: String, _ keyPath: WritableKeyPath<Preferences, [String]>)
-    -> Binding<Bool>
-  {
-    Binding(
-      get: { preferences[keyPath: keyPath].contains(id) },
-      set: {
-        if $0 {
-          if !preferences[keyPath: keyPath].contains(id) {
-            preferences[keyPath: keyPath].append(id)
-          }
-        } else {
-          preferences[keyPath: keyPath].removeAll { $0 == id }
-        }
-      })
+  private var bots: [Bot] { store.bootstrap?.bots ?? [] }
+  /// One summary row instead of a switch per assistant; the list it opens is a single multi-select.
+  private var followRow: some View {
+    NavigationLink {
+      FollowedAssistantsView(preferences: $preferences, bots: bots)
+    } label: {
+      VStack(alignment: .leading, spacing: 4) {
+        Text(HomeSummary.following(bots.filter { preferences.isFollowing($0.id) }.count))
+        Text("Choose whose activity you want to follow").font(.caption).foregroundStyle(.secondary)
+      }
+    }.accessibilityIdentifier("followedAssistants")
   }
   private var defaultPicker: some View {
     let selection = Binding<String>(
@@ -233,38 +248,6 @@ struct PreferencesView: View {
       ForEach(store.bootstrap?.bots ?? []) { bot in Text(bot.name).tag(bot.id) }
     }
   }
-  private func sectionEditor(_ section: BotSection, first: Bool) -> some View {
-    Section {
-      HStack {
-        Text(section.name.isEmpty ? "Untitled section" : section.name).fontWeight(.medium)
-        Spacer(minLength: 8)
-        Button { preferences.sections.removeAll { $0.id == section.id } } label: { Image(systemName: "xmark") }
-          .buttonStyle(.borderless).accessibilityLabel("Remove section \(section.name)")
-      }
-      ForEach(store.bootstrap?.bots ?? []) { bot in
-        Toggle(isOn: sectionMembership(section.id, bot.id)) {
-          HStack(spacing: 10) {
-            AvatarView(avatar: bot.avatar ?? AvatarConfig(), size: 28, name: bot.name, forceReducedMotion: true)
-            Text(bot.name)
-          }
-        }
-      }
-    } header: { if first { Text("Home sections") } }.disabled(store.sessionExpired)
-  }
-  private func sectionMembership(_ sectionId: String, _ botId: String) -> Binding<Bool> {
-    Binding(
-      get: { preferences.sections.first { $0.id == sectionId }?.botIds.contains(botId) == true },
-      set: { selected in
-        guard let index = preferences.sections.firstIndex(where: { $0.id == sectionId }) else {
-          return
-        }
-        if selected {
-          preferences.sections[index].botIds.append(botId)
-        } else {
-          preferences.sections[index].botIds.removeAll { $0 == botId }
-        }
-      })
-  }
 }
 
 #if DEBUG
@@ -272,18 +255,19 @@ struct PreferencesView: View {
     @State private var avatar = AvatarConfig()
     @State private var reduced = false
     @State private var matrixWidth: CGFloat = 353
+    @ScaledMetric(relativeTo: .caption2) private var specimenLabel: CGFloat = 9
     /// The web specimen's state matrix across every activity state.
     private let matrix: [(String, AvatarConfig)] = [
       ("Blob", AvatarConfig()),
-      ("Triangle", AvatarConfig(shape: "triangle", color: "#FF309B", eyes: "visor")),
-      ("Drop", AvatarConfig(shape: "drop", color: "#97683D", accessory: "hat")),
-      ("Hex", AvatarConfig(shape: "hex", color: "#9159FE", accessory: "glasses")),
-      ("Bear", AvatarConfig(mode: "mascot", shape: nil, family: "bear", color: "#FF9800", eyes: "round")),
-      ("Fox", AvatarConfig(mode: "mascot", shape: nil, family: "fox", color: "#FF6700")),
-      ("Sprout", AvatarConfig(mode: "mascot", shape: nil, family: "sprout", color: "#00BCA6", accessory: "hat")),
-      ("Portrait", AvatarConfig(mode: "portrait", shape: nil, origin: "uploaded")),
-    ] + AvatarConfig.families.filter { AvatarConfig.seasonalColors[$0.id] != nil }.map {
-      ($0.label, AvatarConfig(mode: "mascot", shape: nil, eyes: "round").selectingFamily($0.id))
+      ("Triangle", AvatarConfig(shape: .triangle, color: "#FF309B", eyes: .visor)),
+      ("Drop", AvatarConfig(shape: .drop, color: "#97683D", accessory: .hat)),
+      ("Hex", AvatarConfig(shape: .hex, color: "#9159FE", accessory: .glasses)),
+      ("Bear", AvatarConfig(mode: .mascot, shape: nil, family: .bear, color: "#FF9800", eyes: .round)),
+      ("Fox", AvatarConfig(mode: .mascot, shape: nil, family: .fox, color: "#FF6700")),
+      ("Sprout", AvatarConfig(mode: .mascot, shape: nil, family: .sprout, color: "#00BCA6", accessory: .hat)),
+      ("Portrait", AvatarConfig(mode: .portrait, shape: nil, origin: "uploaded")),
+    ] + AvatarConfig.families.filter { AvatarConfig.characterFamilies.contains($0.id) }.map {
+      ($0.label, AvatarConfig(mode: .mascot, shape: nil, eyes: .round).selectingFamily($0.id))
     }
     var body: some View {
       ScrollView {
@@ -311,7 +295,7 @@ struct PreferencesView: View {
               GridRow {
                 ForEach(ActivityState.allCases, id: \.self) { state in
                   Text(state.label.replacingOccurrences(of: " ", with: "\n"))
-                    .font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(3)
+                    .font(.system(size: specimenLabel)).foregroundStyle(.secondary).lineLimit(3)
                     .minimumScaleFactor(0.5).multilineTextAlignment(.center).frame(width: cell)
                 }
               }
@@ -330,7 +314,7 @@ struct PreferencesView: View {
           ForEach(AvatarConfig.shapes, id: \.self) { shape in
             HStack {
               AvatarView(avatar: AvatarConfig(shape: shape), size: 64)
-              Text(shape.capitalized)
+              Text(shape.rawValue.capitalized)
               Spacer()
             }
           }

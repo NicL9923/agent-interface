@@ -1,0 +1,16 @@
+{
+  "request": "POST /api/bots/household/automation/tasks",
+  "response": {
+    "id": "task-fence",
+    "title": "Check the north gate",
+    "body": "Inspect the latch before opening the pasture.",
+    "status": "blocked",
+    "priority": 5,
+    "assignee": "garden",
+    "owner": "household",
+    "dependencies": [
+      "task-supplies"
+    ],
+    "blockedReason": "Waiting for supplies."
+  }
+}

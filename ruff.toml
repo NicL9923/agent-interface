@@ -5,10 +5,10 @@ target-version = "py314"
 [lint]
 # F: pyflakes (undefined names, unused imports and variables).
 # E9: syntax and I/O errors. B: bugbear, for bug-prone patterns.
-select = ["F", "E9", "B"]
+# PLW1510: subprocess.run must say whether a failure raises (check=True or False).
+select = ["F", "E9", "B", "PLW1510"]
 # Style-leaning bugbear rules, not bugs. Enable them in a dedicated cleanup.
 ignore = [
-  "B904", # raise ... from err inside except (13 sites)
   "B905", # zip() without strict= (4 sites)
   "B007", # unused loop control variable (3 sites)
   "B017", # assertRaises(Exception) (2 sites)
@@ -25,6 +25,10 @@ ignore = [
 "scripts/spike/routine_probe.py" = ["F841"]
 "scripts/spike/vault_probe.py" = ["B023", "F841"]
 "src/hermes/experience.py" = ["F401", "F811"]
-"src/hermes/extension.py" = ["F401", "F841"]
-"src/hermes/integrations.py" = ["F401", "F841"]
+"src/hermes/integrations.py" = ["F401"]
 "tests/hermes_computer_test.py" = ["F401"]
+# The host pins this file's SHA256 as deployFunctionsSha256; edit it only with a
+# reviewed recovery configuration change.
+".agents/tools/deploy_common.py" = ["PLW1510"]
+# Server-owned; clear these in a server change.
+"src/server/terminal-host.py" = ["B904", "PLW1510"]

@@ -1,28 +1,35 @@
 import XCTest
 @testable import AgentInterface
 
-private final class ExperienceProtocol: URLProtocol, @unchecked Sendable {
-  nonisolated(unsafe) static var observed: URLRequest?
-  override class func canInit(with request: URLRequest) -> Bool { true }
-  override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
-  override func startLoading() {
-    Self.observed = request
-    let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
-    client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-    client?.urlProtocol(self, didLoad: Data((request.url?.path == "/api/today/seen" ? #"{"ok":true}"# : #"{"text":"Check the pasture gate","provider":"fixture"}"#).utf8))
-    client?.urlProtocolDidFinishLoading(self)
+/// What the Hermes app server answers the voice and Today acknowledgement calls with.
+private func experienceServer() -> FakeServer {
+  FakeServer { request in
+    .init(body: request.url?.path == "/api/today/seen" ? #"{"ok":true}"# : #"{"text":"Check the pasture gate","provider":"fixture"}"#)
   }
-  override func stopLoading() {}
 }
 final class ExperienceTests: XCTestCase {
-  func testTodayHeadlinesRemoveMarkdownAndKeepApprovalSecretsInChat() {
+  func testTodayHeadlinesKeepTheServersPlainWordsAndApprovalSecretsInChat() {
     let approval = TodayEvent(id: "a", botId: "b", kind: "approval", title: "Approval requested", body: "Run secret-token=123", occurredAt: "2026-10-01")
     XCTAssertEqual(EventCopy.headline(approval), "Needs your approval to continue.")
     var custom = approval; custom.title = "A custom approval with secret-token=123"
     XCTAssertEqual(EventCopy.headline(custom), "Needs your approval to continue.")
-    let result = TodayEvent(id: "r", botId: "b", kind: "completed", title: "Hermes completed", body: "# Done\n\n**Check** the [gate](https://example.test).\n```sh\nsecret command\n```", occurredAt: "2026-10-01")
-    XCTAssertEqual(EventCopy.headline(result), "Done Check the gate.")
+    // The server reads Markdown into words, so literal marks such as __init__ stay as written.
+    let result = TodayEvent(id: "r", botId: "b", kind: "completed", title: "Hermes completed", body: "Done\n Call __init__ with **kwargs.", occurredAt: "2026-10-01")
+    XCTAssertEqual(EventCopy.headline(result), "Done Call __init__ with **kwargs.")
     XCTAssertEqual(EventCopy.excerpt(String(repeating: "word ", count: 100)).suffix(1), "…")
+  }
+  func testSearchSnippetsMarkMatchesInOrderAndKeepStrayMarkers() {
+    XCTAssertEqual(SearchSnippet.parts("the >>>grocery<<< store"), [.init(text: "the ", match: false), .init(text: "grocery", match: true), .init(text: " store", match: false)])
+    XCTAssertEqual(SearchSnippet.parts("Use <<< before >>>query<<< and >>>tail"), [.init(text: "Use <<< before ", match: false), .init(text: "query", match: true), .init(text: " and >>>tail", match: false)])
+    XCTAssertEqual(SearchSnippet.parts("Use <device> here"), [.init(text: "Use <device> here", match: false)])
+    XCTAssertTrue(SearchSnippet.parts(String(repeating: "a", count: 300) + ">>>hidden tail<<<").last!.text.hasSuffix("…"))
+    XCTAssertLessThanOrEqual(SearchSnippet.parts(String(repeating: "word ", count: 100), limit: 40).map(\.text).joined().count, 41)
+  }
+  func testRoutineHeadlinesDropTheOwnerTagAndSayWhenARunFailed() {
+    var routine = TodayEvent(id: "r", botId: "patch", kind: "completed", title: "[bot:patch] Daily AI news", body: "Three model launches.", occurredAt: "2026-10-01", routineId: "job")
+    XCTAssertEqual(EventCopy.headline(routine), "Daily AI news: Three model launches.")
+    routine.kind = "failed"; routine.body = "Provider rate limit"
+    XCTAssertEqual(EventCopy.headline(routine), "Daily AI news couldn't finish: Provider rate limit")
   }
   func testInlineViewsRequireValidCompleteExplicitFences() {
     let json = #"{"version":1,"title":"Supply planner","html":"<button>Compare</button>"}"#
@@ -74,21 +81,14 @@ final class ExperienceTests: XCTestCase {
     XCTAssertNotNil(parts[1].cards?.first?.start.flatMap(ServerDate.parse))
   }
   @MainActor func testNativeVoiceSendsBoundedAuthenticatedAudioToSelectedBot() async throws {
-    let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [ExperienceProtocol.self]
-    let api = APIClient(baseURL: URL(string: "https://experience.example.test")!, session: URLSession(configuration: config))
-    api.token = "fixture-token"
+    let server = experienceServer(), api = server.api(token: "fixture-token")
     let result = try await api.transcribe(botId: "ranch/bot", audio: Data([1, 2, 3]))
     XCTAssertEqual(result.text, "Check the pasture gate")
-    let request = try XCTUnwrap(ExperienceProtocol.observed)
-    XCTAssertEqual(request.url?.absoluteString, "https://experience.example.test/api/bots/ranch%2Fbot/voice/transcribe")
+    let request = try XCTUnwrap(server.lastRequest)
+    XCTAssertEqual(request.url?.absoluteString, server.origin.absoluteString + "/api/bots/ranch%2Fbot/voice/transcribe")
     XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer fixture-token")
     XCTAssertTrue(request.value(forHTTPHeaderField: "Content-Type")?.hasPrefix("multipart/form-data; boundary=") == true)
-    var data = request.httpBody ?? Data()
-    if let stream = request.httpBodyStream {
-      stream.open(); defer { stream.close() }
-      var buffer = [UInt8](repeating: 0, count: 4096)
-      while stream.hasBytesAvailable { let count = stream.read(&buffer, maxLength: buffer.count); if count <= 0 { break }; data.append(buffer, count: count) }
-    }
+    let data = try XCTUnwrap(server.lastBody)
     XCTAssertTrue(String(decoding: data, as: UTF8.self).contains("name=\"audio\"; filename=\"voice.m4a\""))
     XCTAssertTrue(String(decoding: data, as: UTF8.self).contains("Content-Type: audio/mp4"))
     do { _ = try await api.transcribe(botId: "ranch", audio: Data(repeating: 0, count: 8 * 1024 * 1024 + 1)); XCTFail("Oversized audio must be refused before network upload") } catch { XCTAssertEqual((error as? APIError)?.status, 400) }
@@ -100,6 +100,19 @@ final class ExperienceTests: XCTestCase {
     let decoded = try JSONDecoder().decode(RoutineRunReceipt.self, from: JSONEncoder().encode(receipt))
     XCTAssertEqual(decoded.requestId, receipt.requestId); XCTAssertEqual(decoded.status, "uncertain")
   }
+  func testMemoryDraftSizeMatchesHermesUnicodeScalarsAndKnownSeparatorOverhead() {
+    let document = MemoryDocument(target: "memory", label: "Assistant notes", revision: "rev", enabled: true,
+      entries: [MemoryEntry(id: "1", text: "🧑‍🌾"), MemoryEntry(id: "2", text: "élève")], charLimit: 2200, charCount: 11)
+    let edited = [MemoryEntry(id: "1", text: " 🧑‍🌾 "), MemoryEntry(id: "2", text: "🍏")].map(MemoryDraft.init)
+    XCTAssertEqual(document.draftSize(edited), 7)
+    XCTAssertEqual(document.draftSize([]), 0)
+    var unknown = document
+    unknown.entries = [MemoryEntry(id: "1", text: "First")]; unknown.charCount = 5
+    XCTAssertNil(unknown.draftSize(edited), "A single saved entry cannot reveal the delimiter width")
+    unknown = document; unknown.charCount = 1
+    XCTAssertNil(unknown.draftSize(edited), "Inconsistent server counts cannot produce an exact draft counter")
+  }
+
   func testSavingOneMemoryDocumentPreservesUnsavedRevisionForCAS() {
     let document = MemoryDocument(target: "memory", label: "Memory", revision: "original-memory", enabled: true, entries: [], charLimit: 2200, charCount: 0)
     var original = ProfileMemory(botId: "ranch", profile: "default", scope: "profile", owner: "Hermes", documents: [document, MemoryDocument(target: "user", label: "About you", revision: "original-user", enabled: true, entries: [], charLimit: 1400, charCount: 0)], notice: "")
@@ -120,20 +133,30 @@ final class ExperienceTests: XCTestCase {
     let snapshot = try JSONDecoder().decode(TodayOverview.self, from: Data(#"{"generatedAt":"2026-10-01T13:30:00Z","since":"2026-10-01T12:00:00Z","items":[],"events":[{"id":"late","botId":"ranch","kind":"completed","title":"Late imported completion","occurredAt":"2026-09-28T12:00:00Z"}],"unavailableBots":[],"frontier":"42","hasMore":true}"#.utf8))
     XCTAssertTrue(snapshot.hasMore)
     XCTAssertEqual(snapshot.events.first?.occurredAt, "2026-09-28T12:00:00Z")
-    let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [ExperienceProtocol.self]
-    let api = APIClient(baseURL: URL(string: "https://experience.example.test")!, session: URLSession(configuration: config)); api.token = "fixture-token"
+    let server = experienceServer(), api = server.api(token: "fixture-token")
     try await api.markTodaySeen(snapshot)
-    let request = try XCTUnwrap(ExperienceProtocol.observed)
+    let request = try XCTUnwrap(server.lastRequest)
     XCTAssertEqual(request.url?.path, "/api/today/seen"); XCTAssertEqual(request.httpMethod, "PUT")
     XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer fixture-token")
-    var data = request.httpBody ?? Data()
-    if let stream = request.httpBodyStream {
-      stream.open(); defer { stream.close() }
-      var buffer = [UInt8](repeating: 0, count: 4096)
-      while stream.hasBytesAvailable { let count = stream.read(&buffer, maxLength: buffer.count); if count <= 0 { break }; data.append(buffer, count: count) }
-    }
-    let body = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: String])
+    let body = try XCTUnwrap(try JSONSerialization.jsonObject(with: XCTUnwrap(server.lastBody)) as? [String: String])
     XCTAssertEqual(body, ["seenAt": snapshot.generatedAt, "frontier": "42"])
   }
 
+}
+
+extension ExperienceTests {
+  @MainActor func testInterruptedRecordingSurvivesRelaunchWithoutTranscribing() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root); VoiceController.fixtureRecording = false }
+    let url = root.appendingPathComponent("recording.m4a")
+    VoiceController.fixtureRecording = true
+    let voice = VoiceController(); voice.restoreRecording(from: url)
+    await voice.startRecording(); XCTAssertEqual(voice.state, .recording)
+    voice.preserveRecording()
+    XCTAssertEqual(voice.state, .idle); XCTAssertNotNil(voice.recording)
+    let reopened = VoiceController(); reopened.restoreRecording(from: url)
+    XCTAssertEqual(reopened.recording, voice.recording)
+    XCTAssertEqual(reopened.state, .idle)
+    reopened.discardRecording(); XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+  }
 }

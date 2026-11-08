@@ -1,27 +1,18 @@
 // @vitest-environment jsdom
 import { act, createElement } from "react";
-import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MessageMarkdown } from "../src/components/MessageMarkdown";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MessageMarkdown, StreamingMarkdown, streamingBlocks } from "../src/components/MessageMarkdown";
+import { mountRoot, stubMatchMedia } from "./ui-harness";
 
 let container: HTMLDivElement;
 let root: Root;
 const writeText = vi.fn<(value: string) => Promise<void>>();
 
 beforeEach(() => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("navigator", { clipboard: { writeText } });
   writeText.mockReset().mockResolvedValue(undefined);
-  container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
-});
-
-afterEach(async () => {
-  await act(async () => root.unmount());
-  container.remove();
-  vi.unstubAllGlobals();
+  ({ container, root } = mountRoot());
 });
 
 async function render(text: string, inlineUi = false) {
@@ -35,8 +26,21 @@ async function copy() {
 }
 
 describe("assistant Markdown", () => {
+  it("opens web links but shows a file path on the Hermes computer as plain text", async () => {
+    await render("Saved to [notes.md](/home/nicolas/.hermes/profiles/testbot/notes.md). See [docs](https://example.test) or [the file](/api/files/abc).");
+    const links = [...container.querySelectorAll("a")].map(link => link.getAttribute("href"));
+    expect(links).toEqual(["https://example.test", "/api/files/abc"]);
+    expect(container.querySelector(".markdown-local-file")?.textContent).toBe("notes.md");
+  });
+
+  it("keeps links to this app's own destinations and protocol-relative web addresses", async () => {
+    await render("[Today](/?view=today), [Chat](/?bot=ranch), [docs](//example.test/docs) and [notes](~/notes.md).");
+    expect([...container.querySelectorAll("a")].map(link => link.getAttribute("href"))).toEqual(["/?view=today", "/?bot=ranch", "//example.test/docs"]);
+    expect(container.querySelector(".markdown-local-file")?.textContent).toBe("notes");
+  });
+
   it("renders only closed explicit UI fences when the caller enables assistant UI", async () => {
-    vi.stubGlobal("matchMedia", () => ({ addEventListener() {}, removeEventListener() {} }));
+    stubMatchMedia();
     const payload = JSON.stringify({ version: 1, title: "Supply planner", html: "<button>Compare</button>" });
     const fence = "```wildbots-html\n" + payload + "\n```";
     await render(fence);
@@ -77,7 +81,7 @@ describe("assistant Markdown", () => {
     expect(container.querySelector("em")?.textContent).toBe("patience");
     expect(container.querySelectorAll("ol li")).toHaveLength(2);
     expect(container.querySelector("code")?.textContent).toBe("config");
-    expect(container.querySelector("button")).toBeNull();
+    expect([...container.querySelectorAll("button")].map(button => button.textContent)).toEqual(["Copy as Markdown", "Copy as CSV"]);
     const link = container.querySelector("a")!;
     expect(link.getAttribute("href")).toBe("https://example.test/docs");
     expect(link.getAttribute("rel")).toBe("noopener noreferrer");
@@ -168,5 +172,82 @@ describe("assistant Markdown", () => {
     await act(async () => finish());
     expect(button.disabled).toBe(false);
     expect(container.querySelector('[role="status"]')?.textContent).toBe("Code copied.");
+  });
+});
+
+describe("code highlighting and tables", () => {
+  const settle = () => act(async () => { await vi.dynamicImportSettled(); });
+  it("colors a finished fence once its grammar loads, keeping the code text and Copy code", async () => {
+    await render("```ts\nconst gate: number = 1; // north\n```");
+    await settle();
+    const code = container.querySelector("pre code")!;
+    expect(code.textContent).toBe("const gate: number = 1; // north\n");
+    expect(code.querySelector(".hljs-keyword")?.textContent).toBe("const");
+    expect(code.querySelector(".hljs-comment")?.textContent).toBe("// north");
+    await copy();
+    expect(writeText).toHaveBeenCalledWith("const gate: number = 1; // north\n");
+    expect(container.querySelector('[role="status"]')?.textContent).toBe("Code copied.");
+  });
+
+  it("escapes markup in highlighted code", async () => {
+    await render("```html\n<img src=x onerror=alert(1)>\n```");
+    await settle();
+    expect(container.querySelector("pre code img")).toBeNull();
+    expect(container.querySelector("pre code")?.textContent).toBe("<img src=x onerror=alert(1)>\n");
+  });
+
+  it("leaves a fence still streaming in, and unknown languages, plain", async () => {
+    await act(async () => root.render(createElement(StreamingMarkdown, { text: "Here:\n\n```python\nprint('hay')" })));
+    await settle();
+    expect(container.querySelector("pre code")?.textContent).toBe("print('hay')\n");
+    expect(container.querySelector("pre code [class^=hljs-]")).toBeNull();
+    await render("```brainfuck\n+++.\n```");
+    await settle();
+    expect(container.querySelector("pre code")?.innerHTML).toBe("+++.\n");
+  });
+
+  it("copies a table as Markdown or CSV and says so", async () => {
+    await render("| Gate | Battery |\n| --- | --- |\n| Barn, west | 48% |");
+    const button = (text: string) => [...container.querySelectorAll("button")].find(item => item.textContent === text)!;
+    await act(async () => button("Copy as CSV").click());
+    expect(writeText).toHaveBeenLastCalledWith('Gate,Battery\r\n"Barn, west",48%');
+    expect(container.querySelector(".markdown-table [role=status]")?.textContent).toBe("Table copied as CSV.");
+    await act(async () => button("Copy as Markdown").click());
+    expect(writeText).toHaveBeenLastCalledWith("| Gate | Battery |\n| --- | --- |\n| Barn, west | 48% |");
+    writeText.mockRejectedValueOnce(new Error("denied"));
+    await act(async () => button("Copy as CSV").click());
+    expect(container.querySelector(".markdown-table [role=status]")?.textContent).toContain("copy it manually");
+  });
+});
+
+describe("streaming Markdown", () => {
+  const renderAs = async (component: typeof MessageMarkdown, text: string) => {
+    await act(async () => root.render(createElement(component, { text })));
+    // Newlines between blocks are insignificant in the transcript's normal white-space.
+    return container.innerHTML.replace(/>\n</g, "><");
+  };
+
+  it("splits only at blank lines that start a new block outside code fences", () => {
+    expect(streamingBlocks("# Plan\n\nFirst part.\n\n```sh\necho one\n\necho two\n```\n\nDone")).toEqual(
+      ["# Plan", "First part.", "```sh\necho one\n\necho two\n```", "Done"]);
+    // An indented line continues the list item above it, so it stays with it.
+    expect(streamingBlocks("1. Feed\n\n   the horses\n\nNext")).toEqual(["1. Feed\n\n   the horses", "Next"]);
+    expect(streamingBlocks("Still typing\n\n")).toEqual(["Still typing\n\n"]);
+    expect(streamingBlocks("Open fence\n\n```\ncode\n\nmore")).toEqual(["Open fence", "```\ncode\n\nmore"]);
+  });
+
+  it("parses the whole reply when a rule spans it", () => {
+    for (const text of ["Cards\n\n```agent-ui\n{}\n```", "See [docs][1].\n\n[1]: https://example.test",
+      "Note[^1]\n\n[^1]: Footnote", "<!--\n\nhidden\n-->"]) expect(streamingBlocks(text)).toBeNull();
+  });
+
+  it("renders a growing reply the same as the saved reply", async () => {
+    for (const text of [
+      "## Supper\n\nBeans, **cornbread** and greens.\n\n> Soak the beans tonight.\n\n```txt\nsoak\n\nsimmer\n```\n\n| Day | Meal |\n| --- | --- |\n| Sat | Chili |",
+      // Loose lists continue across blank lines, so their numbering and spacing hold.
+      "Steps:\n\n1. Soak\n\n1. Rinse\n\n1. Simmer\n\nEnjoy.",
+      "- Beans\n\n- Cornbread\n\n* Greens",
+      "- [ ] Feed the horses\n\n- [x] Check the gate\n\nThat is all.",
+    ]) expect(await renderAs(StreamingMarkdown, text)).toBe(await renderAs(MessageMarkdown, text));
   });
 });

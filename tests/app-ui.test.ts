@@ -1,23 +1,24 @@
 // @vitest-environment jsdom
 import { act, createElement } from "react";
-import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
+import { preloadBotMenu } from "../src/app/BotMenu";
 import { api, ApiError, clearResponseCache, uploadFile, write } from "../src/client-api";
 import { useChatPresence } from "../src/app/use-chat-presence";
 import { defaultPreferences } from "../src/shared/types";
 import type { Bootstrap, Conversation } from "../src/shared/types";
 import { FakeEventSource } from "./fake-event-source";
 import { contentHash } from "../src/app/draft-merge";
+import { advance, mountRoot, stubMatchMedia, typeInto } from "./ui-harness";
 
-vi.mock("../src/client-api", async (original) => ({
+vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(await (async (original) => ({
   ...await original<typeof import("../src/client-api")>(),
   api: vi.fn(),
   write: vi.fn().mockResolvedValue({}),
   uploadFile: vi.fn(),
   clearResponseCache: vi.fn(),
-}));
+}))(original)));
 const renders = vi.hoisted(() => ({ avatar: 0, markdown: 0 }));
 // SVG geometry and animation are browser concerns, not part of these state regressions.
 // Presence heartbeats would interleave with the writes these tests count; they have their own tests.
@@ -29,9 +30,10 @@ vi.mock("../src/components/Avatar", async (original) => ({
   })),
 }));
 // Unmemoized on purpose, so the count shows whether the transcript re-renders.
-vi.mock("../src/components/MessageMarkdown", () => ({
-  MessageMarkdown: (props: { text: string }) => (renders.markdown++, createElement("div", { className: "message-markdown" }, props.text)),
-}));
+vi.mock("../src/components/MessageMarkdown", () => {
+  const markdown = (props: { text: string }) => (renders.markdown++, createElement("div", { className: "message-markdown" }, props.text));
+  return { MessageMarkdown: markdown, StreamingMarkdown: markdown };
+});
 
 const bootstrap: Bootstrap = {
   user: { id: "one", name: "One", email: "one@example.test" },
@@ -54,15 +56,9 @@ let root: Root;
 beforeEach(() => {
   vi.useFakeTimers();
   vi.clearAllMocks();
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   FakeEventSource.reset();
   vi.stubGlobal("EventSource", FakeEventSource);
-  vi.stubGlobal("matchMedia", vi.fn(() => ({
-    matches: false,
-    addEventListener: vi.fn(),
-    removeEventListener: vi.fn(),
-  })));
-  localStorage.clear();
+  stubMatchMedia();
   history.replaceState(null, "", "/");
   conversation = {
     botId: "shared", messages: [], approvals: [], files: [],
@@ -75,26 +71,13 @@ beforeEach(() => {
       : null;
     return result as T;
   });
-  container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
-});
-
-afterEach(async () => {
-  await act(async () => root.unmount());
-  container.remove();
-  localStorage.clear();
-  vi.useRealTimers();
-  vi.unstubAllGlobals();
+  ({ container, root } = mountRoot());
 });
 
 async function render() {
   await act(async () => root.render(createElement(App)));
 }
 
-async function advance(milliseconds: number) {
-  await act(async () => vi.advanceTimersByTimeAsync(milliseconds));
-}
 /** The server reports a change, as Hermes frames or a write would. */
 async function changed() {
   await act(async () => FakeEventSource.notifyAll());
@@ -110,6 +93,34 @@ const reviewCheckbox = () => container.querySelector<HTMLInputElement>(".interru
 const sendButton = () => container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')!;
 
 describe("conversation state", () => {
+  it("sends a custom answer to a question with suggestions and keeps it after a failure", async () => {
+    conversation.attention = [{ id: "ask", kind: "clarify", title: "Pick a plan", detail: "Choose or write a plan.", questions: [
+      { id: "plan", prompt: "Which plan?", options: ["First", "Write my own answer"] },
+      { id: "note", prompt: "Any details?" },
+    ] }];
+    await render();
+    const options = () => [...container.querySelectorAll<HTMLInputElement>('.approval-card [data-question="0"] input[type="radio"]')];
+    const submit = container.querySelector<HTMLButtonElement>('.approval-card button[type="submit"]')!;
+    expect(container.querySelector(".approval-card")?.getAttribute("data-attention-id")).toBe("ask");
+    expect(options().map(option => option.closest("label")?.querySelector(".option-label")?.textContent)).toEqual(["First", "Write my own answer", "Write my own answer"]);
+    expect(submit.disabled).toBe(true);
+    await act(async () => options()[2].click());
+    const custom = container.querySelector<HTMLInputElement>('[aria-label="Your answer: Which plan?"]')!;
+    await typeInto(custom, "   ");
+    await typeInto(container.querySelector<HTMLInputElement>('[aria-label="Any details?"]')!, "Keep the draft");
+    expect(submit.disabled).toBe(true);
+    await typeInto(custom, "A different plan");
+    vi.mocked(write).mockRejectedValueOnce(new Error("Try again"));
+    await act(async () => submit.click());
+    expect(write).toHaveBeenCalledWith("/bots/shared/requests/ask", { answers: { plan: "A different plan", note: "Keep the draft" } });
+    expect(custom.value).toBe("A different plan");
+    // An option that happens to read "Write my own answer" is still an option, not the field.
+    await act(async () => options()[1].click());
+    expect(container.querySelector('[aria-label="Your answer: Which plan?"]')).toBeNull();
+    await act(async () => submit.click());
+    expect(write).toHaveBeenLastCalledWith("/bots/shared/requests/ask", { answers: { plan: "Write my own answer", note: "Keep the draft" } });
+  });
+
   it("reopens a refused household stream at the fallback interval", async () => {
     await render();
     const stream=[...FakeEventSource.streams].find(stream=>stream.url==="/api/events")!;
@@ -129,16 +140,58 @@ describe("conversation state", () => {
     await render();
     const reads = vi.mocked(api).mock.calls.length;
     await act(async () => {
-      for (const stream of FakeEventSource.streams) if (stream.url.includes("inflight=1")) stream.emit("inflight", JSON.stringify({botId:"shared",message:{id:"sid-inflight",role:"assistant",text:"Growing reply"},activity:{state:"thinking",runId:"run"},toolCalls:[]}));
+      for (const stream of FakeEventSource.streams) if (stream.url.includes("inflight=2")) stream.emit("inflight", JSON.stringify({botId:"shared",message:{id:"sid-inflight",role:"assistant",text:"Growing reply"},activity:{state:"thinking",runId:"run"},toolCalls:[]}));
     });
     expect(container.textContent).toContain("Growing reply");
     expect(vi.mocked(api).mock.calls).toHaveLength(reads);
+  });
+  describe("inflight growth notices", () => {
+    const run = { state: "thinking" as const, runId: "run" };
+    const open = () => [...FakeEventSource.streams].find(stream => stream.url.includes("inflight=2"))!;
+    const reads = () => vi.mocked(api).mock.calls.filter(([path]) => String(path).startsWith("/bots/shared/conversation?")).length;
+    const whole = (text: string) => JSON.stringify({ botId: "shared", message: { id: "sid-inflight", role: "assistant", text }, activity: run, toolCalls: [] });
+    const growth = (changes: object) => JSON.stringify({ botId: "shared", messageId: "sid-inflight", baseTextLength: 7, baseReasoningLength: 0, activity: run, ...changes });
+    it("opts in to growth notices and applies one that continues the reply it holds", async () => {
+      conversation = { ...conversation, activity: run, messages: [{ id: "u", role: "user", text: "Hello" }] };
+      await render();
+      expect(FakeEventSource.created).toContain("/api/bots/shared/events?inflight=2&drafts=1");
+      await act(async () => open().emit("inflight", whole("Growing")));
+      const before = vi.mocked(api).mock.calls.length;
+      await act(async () => open().emit("inflight-delta", growth({ appendText: " reply" })));
+      expect(container.textContent).toContain("Growing reply");
+      await act(async () => open().emit("inflight-delta", growth({ baseTextLength: 13, appendText: " grows" })));
+      expect(container.textContent).toContain("Growing reply grows");
+      expect(vi.mocked(api).mock.calls).toHaveLength(before);
+    });
+    it.each([
+      ["another message", { messageId: "other-inflight", appendText: "!" }],
+      ["a base it does not hold", { baseTextLength: 3, appendText: "!" }],
+    ])("reloads and reconnects instead of applying growth of %s", async (_name, change) => {
+      conversation = { ...conversation, activity: run, messages: [{ id: "u", role: "user", text: "Hello" }] };
+      await render();
+      await act(async () => open().emit("inflight", whole("Growing")));
+      const before = reads(), streams = FakeEventSource.created.length;
+      await act(async () => open().emit("inflight-delta", growth(change)));
+      await advance(0);
+      expect(container.textContent).not.toContain("Growing!");
+      expect(reads()).toBeGreaterThan(before);
+      // A new stream starts the server again from a whole event.
+      expect(FakeEventSource.created.length).toBe(streams + 1);
+    });
+    it("reloads when there is no reply held to grow", async () => {
+      conversation = { ...conversation, activity: run, messages: [{ id: "u", role: "user", text: "Hello" }] };
+      await render();
+      const before = reads();
+      await act(async () => open().emit("inflight-delta", growth({ appendText: " reply" })));
+      await advance(0);
+      expect(reads()).toBeGreaterThan(before);
+    });
   });
   it.each(["done", "new-run"])("does not reapply an old live tail over a %s fetch", async mode => {
     conversation = { ...conversation, activity: { state: "thinking", runId: "run" }, messages: [] };
     await render();
     await act(async () => {
-      for (const stream of FakeEventSource.streams) if (stream.url.includes("inflight=1")) stream.emit("inflight", JSON.stringify({ botId: "shared", message: { id: "sid-inflight", role: "assistant", text: "Old tail" }, activity: { state: "thinking", runId: "run" }, toolCalls: [] }));
+      for (const stream of FakeEventSource.streams) if (stream.url.includes("inflight=2")) stream.emit("inflight", JSON.stringify({ botId: "shared", message: { id: "sid-inflight", role: "assistant", text: "Old tail" }, activity: { state: "thinking", runId: "run" }, toolCalls: [] }));
     });
     expect(container.textContent).toContain("Old tail");
     conversation = { ...conversation, activity: { state: mode === "done" ? "done" : "thinking", runId: mode === "done" ? "run" : "next-run" }, messages: [{ id: "saved", role: "assistant", text: "Persisted reply" }] };
@@ -151,10 +204,7 @@ describe("conversation state", () => {
     conversation = { ...conversation, attention: [{ id: "login-request", kind: "secure", title: "Save login", detail: "Native request", secure }] };
     await render();
     const password = container.querySelector<HTMLInputElement>('.secure-request input[type="password"]')!;
-    await act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(password, "synthetic-pending-secret");
-      password.dispatchEvent(new Event("input", { bubbles: true }));
-    });
+    await typeInto(password, "synthetic-pending-secret");
     conversation = { ...conversation, attention: [{ ...conversation.attention![0], secure: { ...secure } }] };
     await advance(8000);
     expect(container.querySelector<HTMLInputElement>('.secure-request input[type="password"]')!.value).toBe("synthetic-pending-secret");
@@ -183,6 +233,8 @@ describe("conversation state", () => {
     await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Settings"]')!.click());
     await loaded();
     await act(async () => Array.from(container.querySelectorAll("button")).find(button => button.textContent?.trim() === "Sign out")!.click());
+    expect(order).toEqual([]);
+    await act(async () => document.querySelector<HTMLButtonElement>('[role="alertdialog"] button.danger')!.click());
     expect(write).toHaveBeenCalledWith("/push/subscriptions", { endpoint }, "DELETE");
     expect(order).toEqual(["/push/subscriptions", "unsubscribe", "/auth/logout"]);
     expect(clearResponseCache).toHaveBeenCalledTimes(1);
@@ -236,19 +288,18 @@ describe("conversation state", () => {
     await render();
     expect(container.querySelector('.transcript .conversation-activity [data-avatar-size="52"]')?.getAttribute("data-avatar-state")).toBe("working");
     expect(container.querySelector('.conversation-activity [data-avatar-size="52"]')?.getAttribute("data-avatar-prop")).toBe("computer");
-    // Only the inline work indicator animates; the header and home stay still.
+    // The inline work indicator, the header avatar and pinned assistants animate; the home list stays still.
     expect(container.querySelector(".conversation-activity [data-avatar-state]")?.hasAttribute("data-avatar-still")).toBe(false);
-    expect([...container.querySelectorAll(".chat-header [data-avatar-state], .bot-rail [data-avatar-state]")].every(item => item.hasAttribute("data-avatar-still"))).toBe(true);
+    expect(container.querySelector(".chat-header [data-avatar-state]")?.hasAttribute("data-avatar-still")).toBe(false);
+    expect([...container.querySelectorAll(".home-pinned [data-avatar-state]")].every(item => !item.hasAttribute("data-avatar-still"))).toBe(true);
+    expect([...container.querySelectorAll(".home-list [data-avatar-state]")].every(item => item.hasAttribute("data-avatar-still"))).toBe(true);
     expect(container.querySelector(".activity-copy")?.textContent).toContain("Shared is running terminal...");
     // The sweeping highlight is a visual copy of the text, so assistive technology must hear the line once.
     const highlight = container.querySelector(".activity-shimmer .shimmer-band");
     expect(highlight?.getAttribute("aria-hidden")).toBe("true");
     expect(highlight?.textContent).toBe("Shared is running terminal...");
     const textarea = container.querySelector("textarea")!;
-    await act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, "");
-      textarea.dispatchEvent(new Event("input", { bubbles: true }));
-    });
+    await typeInto(textarea, "");
     const stop = container.querySelector<HTMLButtonElement>('[aria-label="Stop response"]')!;
     await act(async () => stop.click());
     expect(write).toHaveBeenCalledWith("/bots/shared/stop", {});
@@ -262,19 +313,26 @@ describe("conversation state", () => {
     expect(container.querySelector(".activity-copy")?.textContent).not.toContain("Shared is running terminal...");
   });
 
-  it("hides empty tool-call replies and the assistant's own name, keeping one timestamp per reply", async () => {
+  it("hides empty tool-call replies and the assistant's own name, keeping one timestamp under the last part of a reply", async () => {
     conversation = { ...conversation, activity: { state: "done" }, messages: [
       { id: "question", role: "user", text: "Check the NAS", sender: { id: "one", name: "One" }, createdAt: "2026-10-07T12:00:00Z" },
       { id: "call-row", role: "assistant", text: "", createdAt: "2026-10-07T12:00:05Z", toolCall: { id: "ssh", name: "terminal", status: "completed" } },
       { id: "first", role: "assistant", text: "Tailscale is installed.", createdAt: "2026-10-07T12:00:09Z" },
       { id: "second", role: "assistant", text: "It is connected." },
+      { id: "other", role: "user", text: "Thanks from the kitchen", sender: { id: "two", name: "Two" }, createdAt: "2026-10-07T12:01:00Z" },
     ] };
     await render();
     const replies = [...container.querySelectorAll(".message-assistant")];
     expect(replies.map(reply => reply.getAttribute("data-message-id"))).toEqual(["first", "second"]);
-    expect(replies.map(reply => reply.querySelectorAll(".message-attribution time").length)).toEqual([1, 0]);
-    expect(replies.some(reply => reply.querySelector(".message-attribution")?.textContent?.includes("Shared"))).toBe(false);
-    expect(container.querySelector(".message-user .message-attribution")?.textContent).toContain("One");
+    // The time sits under the last part, taken from the earlier part when the last has none.
+    expect(replies.map(reply => reply.querySelectorAll(".message-meta time").length)).toEqual([0, 1]);
+    expect(replies.every(reply => !reply.querySelector(".message-attribution"))).toBe(true);
+    const [mine, theirs] = [...container.querySelectorAll(".message-user")];
+    // The person's own message needs no name, and another member's does. Both have their time under the bubble.
+    expect(mine.querySelector(".message-attribution")).toBeNull();
+    expect(theirs.querySelector(".message-attribution")?.textContent).toBe("Two");
+    expect(mine.querySelector(".message-bubble + .message-meta-own time")).not.toBeNull();
+    expect([...mine.querySelectorAll(".message-meta button")].map(button => button.getAttribute("aria-label"))).toEqual(["Copy message"]);
     expect(container.querySelector(".tool-count")?.textContent).toBe("1");
   });
 
@@ -291,7 +349,6 @@ describe("conversation state", () => {
     Object.defineProperty(image(), "naturalHeight", { value: 600 });
     await act(async () => image().dispatchEvent(new Event("load")));
     await act(async () => root.unmount());
-    root = createRoot(container);
     await render();
     expect([image().getAttribute("width"), image().getAttribute("height")]).toEqual(["800", "600"]);
   });
@@ -302,10 +359,7 @@ describe("conversation state", () => {
     const settled = renders.markdown;
     expect(settled).toBeGreaterThan(0);
     const textarea = container.querySelector("textarea")!;
-    for (const text of ["H", "He", "Hey"]) await act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, text);
-      textarea.dispatchEvent(new Event("input", { bubbles: true }));
-    });
+    for (const text of ["H", "He", "Hey"]) await typeInto(textarea, text);
     expect(textarea.value).toBe("Hey");
     expect(renders.markdown).toBe(settled);
   });
@@ -341,7 +395,7 @@ describe("conversation state", () => {
       expect(sent()).toHaveLength(1);
       expect(sent()[0].textContent).toContain("My saved server draft");
       expect(sent()[0].classList.contains("message-sending")).toBe(true);
-      expect(sent()[0].querySelector(".message-delivery")?.textContent).toBe("Sending…");
+      expect(sent()[0].querySelector(".message-meta .message-delivery")?.textContent).toBe("Sending…");
       expect(container.querySelector("textarea")!.value).toBe("");
       expect(sendButton().getAttribute("aria-busy")).toBe("true");
       const requestId = (vi.mocked(write).mock.calls.find(([path]) => path === "/bots/shared/messages")![1] as { requestId: string }).requestId;
@@ -365,10 +419,7 @@ describe("conversation state", () => {
   };
   const type = async (text: string) => {
     const textarea = container.querySelector("textarea")!;
-    await act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, text);
-      textarea.dispatchEvent(new Event("input", { bubbles: true }));
-    });
+    await typeInto(textarea, text);
   };
 
   it("keeps the same words typed again right after Hermes accepts them", async () => {
@@ -397,7 +448,9 @@ describe("conversation state", () => {
       await act(async () => sendButton().click());
       expect(container.querySelector("textarea")!.readOnly).toBe(true);
       serveClearedDraft();
-      await advance(1600);
+      // The chat's stream announces the cleared draft's revision.
+      await act(async () => { for (const stream of FakeEventSource.streams) if (stream.url.startsWith("/api/bots/shared/events")) stream.emit("draft", "1"); });
+      await advance(0);
       expect(container.querySelector("textarea")!.readOnly).toBe(false);
       await type("My saved server draft");
       expect(container.querySelector("textarea")!.value).toBe("My saved server draft");
@@ -453,10 +506,7 @@ describe("conversation state", () => {
       await render();
       await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Send guidance"]')!.click());
       const textarea = container.querySelector("textarea")!;
-      await act(async () => {
-        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, "");
-        textarea.dispatchEvent(new Event("input", { bubbles: true }));
-      });
+      await typeInto(textarea, "");
       expect(container.querySelector('[aria-label="Stop response"]')).toBeNull();
       expect(container.querySelector('[aria-label="Send guidance"]')?.getAttribute("aria-busy")).toBe("true");
       const requestId = (vi.mocked(write).mock.calls.find(([path]) => path === "/bots/shared/messages")![1] as { requestId: string }).requestId;
@@ -583,6 +633,24 @@ describe("conversation state", () => {
     });
   });
 
+  it("stops marking a chat unread once it has been on screen", async () => {
+    const other = { ...bootstrap.bots[0], id: "other", name: "Other", unread: true, lastMessage: { text: "Pot roast tonight.", at: new Date(Date.now() - 1000).toISOString() } };
+    const home = { ...bootstrap, bots: [...bootstrap.bots, other] };
+    const original = vi.mocked(api).getMockImplementation()!;
+    vi.mocked(api).mockImplementation(async <T>(path: string) => path === "/bootstrap?roster=lean" ? home as T : original(path) as Promise<T>);
+    await render();
+    const marked = () => [...container.querySelectorAll(".bot-row.unread strong")].map(item => item.textContent);
+    expect(marked()).toEqual(["Other"]);
+    const rows = () => [...container.querySelectorAll<HTMLButtonElement>(".home-list .bot-row")];
+    await act(async () => rows().find(row => row.textContent?.includes("Other"))!.click());
+    await loaded();
+    expect(marked()).toEqual([]);
+    // Back in another chat, the server has not caught up yet, but the read is remembered here.
+    await act(async () => rows().find(row => !row.textContent?.includes("Other"))!.click());
+    await loaded();
+    expect(marked()).toEqual([]);
+  });
+
   it("pins assistants to the top of home and shows everyone else's latest message", async () => {
     const other = { ...bootstrap.bots[0], id: "other", name: "Other", lastMessage: { text: "Pot roast tonight.", at: new Date().toISOString() } };
     const home = { ...bootstrap, bots: [...bootstrap.bots, other], preferences: { ...bootstrap.preferences, favorites: ["shared"] } };
@@ -593,6 +661,7 @@ describe("conversation state", () => {
       await render();
       const pinned = () => [...container.querySelectorAll(".home-pinned .pinned-name")].map(item => item.textContent);
       expect(pinned()).toEqual(["Shared"]);
+      await act(async () => { await preloadBotMenu(); });
       const row = container.querySelector<HTMLButtonElement>(".home-list .bot-row")!;
       expect(row.textContent).toContain("Pot roast tonight.");
       expect(row.querySelector("time")?.getAttribute("dateTime")).toBe(other.lastMessage.at);
@@ -601,14 +670,21 @@ describe("conversation state", () => {
       expect(write).toHaveBeenCalledWith("/preferences", expect.objectContaining({ favorites: ["shared", "other"] }), "PATCH");
       expect(pinned()).toEqual(["Shared", "Other"]);
       expect(document.body.querySelector(".bot-menu")).toBeNull();
-      const toggle = container.querySelector<HTMLButtonElement>('.chat-header [aria-label="Unpin assistant"]')!;
+      // Pinning also lives in the assistant's details, opened from the header.
+      Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: function(this: HTMLDialogElement) { this.open = true; } });
+      await act(async () => container.querySelector<HTMLButtonElement>(".chat-header .chat-identity")!.click());
+      await loaded();
+      const toggle = container.querySelector<HTMLButtonElement>('.bot-details [aria-pressed="true"]')!;
+      expect(toggle.textContent).toBe("Unpin");
       await act(async () => toggle.click());
       expect(pinned()).toEqual(["Other"]);
+      expect(container.querySelector('.bot-details [aria-pressed="false"]')?.textContent).toBe("Pin");
     } finally { vi.mocked(write).mockReset().mockResolvedValue({}); }
   });
 
   it("opens the pin menu on a held touch but not while the list scrolls", async () => {
     await render();
+    await act(async () => { await preloadBotMenu(); });
     const row = container.querySelector<HTMLButtonElement>(".bot-row")!;
     const touch = (type: string, x: number, y: number) => {
       const event = new Event(type, { bubbles: true, cancelable: true });
@@ -650,7 +726,7 @@ describe("conversation state", () => {
   });
 
   it("opens phones on home, pushes into a chat and returns with Back", async () => {
-    vi.stubGlobal("matchMedia", vi.fn((query: string) => ({ matches: query === "(max-width: 620px)", addEventListener: vi.fn(), removeEventListener: vi.fn() })));
+    stubMatchMedia(query => query === "(max-width: 620px)");
     conversation = { ...conversation, activity: { state: "idle" } };
     await render();
     const rail = () => container.querySelector(".bot-rail")!;
@@ -671,7 +747,7 @@ describe("conversation state", () => {
   });
 
   it.each([false, true])("leaves an assistant that becomes someone else's personal one, on a phone: %s", async (phone) => {
-    vi.stubGlobal("matchMedia", vi.fn((query: string) => ({ matches: phone && query === "(max-width: 620px)", addEventListener: vi.fn(), removeEventListener: vi.fn() })));
+    stubMatchMedia(query => phone && query === "(max-width: 620px)");
     const books = { ...bootstrap.bots[0], id: "books", name: "Ranch books" };
     let hidden = false, reads = 0;
     const original = vi.mocked(api).getMockImplementation()!;
@@ -725,18 +801,18 @@ describe("conversation state", () => {
     expect(accordions).toHaveLength(1);
     expect(accordions[0].querySelector(".tool-count")?.textContent).toBe("2");
     expect([...accordions[0].querySelectorAll(".reasoning-part")].map(part => part.textContent)).toEqual(["Plan the SSH steps.", "Check the status."]);
-    expect(accordions[0].previousElementSibling?.getAttribute("data-message-id")).toBe("question");
-    expect(accordions[0].nextElementSibling?.getAttribute("data-message-id")).toBe("answer");
+    // Reasoning and tools share the turn's one fold between the prompt and the reply.
+    const fold = accordions[0].closest(".turn-work")!;
+    expect(fold.previousElementSibling?.getAttribute("data-message-id")).toBe("question");
+    expect(accordions[0].nextElementSibling?.classList.contains("tool-calls")).toBe(true);
+    expect(fold.nextElementSibling?.getAttribute("data-message-id")).toBe("answer");
   });
 
   it("switches Stop back to Send while drafting guidance", async () => {
     conversation = { ...conversation, activity: { state: "working" } };
     await render();
     const textarea = container.querySelector("textarea")!;
-    const type = (text: string) => act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, text);
-      textarea.dispatchEvent(new Event("input", { bubbles: true }));
-    });
+    const type = (text: string) => typeInto(textarea, text);
     expect(container.querySelector('[aria-label="Send guidance"]')).not.toBeNull();
     await type(""); expect(container.querySelector('[aria-label="Stop response"]')).not.toBeNull();
     await type("Try the other file"); expect(container.querySelector('[aria-label="Send guidance"]')).not.toBeNull();
@@ -755,7 +831,7 @@ describe("conversation state", () => {
     await render();
     const bubbles = [...container.querySelectorAll(".message[data-message-id]")];
     expect(bubbles.map(row => row.getAttribute("data-message-id"))).toEqual(["reminder", "human"]);
-    expect(bubbles[0].querySelector(".message-attribution")?.textContent).toContain("Scheduled");
+    expect(bubbles[0].querySelector(".message-attribution")?.textContent).toBe("Scheduled");
     expect(bubbles[1].textContent).toContain("Hello from Desktop");
     const groups = [...container.querySelectorAll(".tool-calls")];
     expect(groups.map(group => group.querySelector("summary")?.textContent)).toEqual(["Scheduled jobs1", "Bot messages2", "Subagents1Running"]);
@@ -763,6 +839,63 @@ describe("conversation state", () => {
     expect(container.querySelector(".approval-card")?.textContent).toContain("Open the gate?");
     await act(async () => { groups[0].setAttribute("open", ""); });
     expect(groups[0].textContent).toContain("Hay and water.");
+  });
+
+  it.each(["completed", "running"] as const)("orders saved tool activity before the final reply after calls are %s", async status => {
+    const call = { id: "reused", name: "terminal", status, result: "Result" };
+    conversation = { ...conversation, activity: { state: status === "running" ? "working" : "done" }, messages: [
+      { id: "question", role: "user", text: "Check both" },
+      { id: "commentary", role: "assistant", text: "Checking both reports." },
+      { id: "first-tool", role: "tool", text: "First result", toolCall: call },
+      { id: "second-tool", role: "tool", text: "Second result", toolCall: call },
+      { id: "answer", role: "assistant", text: "Both reports are ready." },
+      { id: "answer-part-two", role: "assistant", text: "The figures match." },
+    ], toolCalls: [call] };
+    await render();
+    const order = [...container.querySelectorAll('.conversation-turn > .message, .conversation-turn > .turn-work')]
+      .map(row => row.getAttribute("data-message-id") ?? "tools");
+    expect(order).toEqual(status === "running"
+      ? ["question", "commentary", "answer", "answer-part-two", "tools"]
+      : ["question", "commentary", "tools", "answer", "answer-part-two"]);
+  });
+
+  it("keeps tool-call commentary above activity and puts an attachment-only final reply below it", async () => {
+    const call = { id: "lookup", name: "terminal", status: "completed" as const, result: "Report ready" };
+    conversation = { ...conversation, activity: { state: "done" }, messages: [
+      { id: "question", role: "user", text: "Make a report" },
+      { id: "commentary", role: "assistant", text: "Preparing the report.", toolCall: call },
+      { id: "answer", role: "assistant", text: "", files: [{ id: "report", name: "report.txt", mime: "text/plain" }] },
+    ] };
+    await render();
+    const order = [...container.querySelectorAll('.conversation-turn > .message, .conversation-turn > .turn-work')]
+      .map(row => row.getAttribute("data-message-id") ?? "tools");
+    expect(order).toEqual(["question", "commentary", "tools", "answer"]);
+    expect(container.querySelector('[data-message-id="answer"] a')?.textContent).toContain("report.txt");
+  });
+
+  it("keeps expanded tool details and scroll position when completion moves them above the reply", async () => {
+    const running = { id: "lookup", name: "terminal", status: "running" as const, result: "Partial result" };
+    conversation = { ...conversation, activity: { state: "working" }, messages: [
+      { id: "question", role: "user", text: "Check it" },
+      { id: "tool-row", role: "tool", text: "", toolCall: running },
+      { id: "answer", role: "assistant", text: "Checking." },
+    ] };
+    await render();
+    const fold = container.querySelector<HTMLDetailsElement>(".turn-work")!;
+    const group = container.querySelector<HTMLDetailsElement>(".tool-calls")!;
+    const receipt = group.querySelector<HTMLDetailsElement>(".action-receipt")!;
+    const output = receipt.querySelector("pre")!;
+    fold.open = group.open = receipt.open = true; output.scrollTop = 120;
+    conversation = { ...conversation, activity: { state: "done" }, messages: conversation.messages.map(message =>
+      message.toolCall ? { ...message, toolCall: { ...running, status: "completed" as const } } : message) };
+    await changed();
+    expect(container.querySelector(".turn-work")).toBe(fold);
+    expect(container.querySelector(".tool-calls")).toBe(group);
+    expect(fold.open).toBe(true); expect(group.open).toBe(true); expect(receipt.open).toBe(true);
+    expect(output.scrollTop).toBe(120);
+    expect(output.getAttribute("role")).toBe("region");
+    expect(output.getAttribute("aria-label")).toBe("Result from terminal");
+    expect(group.compareDocumentPosition(container.querySelector('[data-message-id="answer"]')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("counts history and live tools once and groups delegated work separately", async () => {
@@ -830,7 +963,7 @@ describe("conversation state", () => {
     expect(approve.textContent).toBe("Approving…"); expect(approve.querySelector(".spin")).not.toBeNull();
     expect(approve.disabled).toBe(true); expect(decline.disabled).toBe(true);
     await act(async () => decline.click()); expect(write).toHaveBeenCalledOnce();
-    await act(async () => reject(new Error("Could not send decision")));
+    await act(async () => reject(new ApiError("Could not send decision", 400)));
     expect(approve.disabled).toBe(false); expect(decline.disabled).toBe(false);
     expect(container.textContent).toContain("Could not send decision");
     vi.mocked(write).mockResolvedValueOnce({}); await act(async () => decline.click());
@@ -851,7 +984,7 @@ describe("conversation state", () => {
       { id: "answer", role: "assistant", text: "The file is in your Documents folder." },
     ] };
     await changed();
-    expect(container.querySelector(".transcript")?.lastElementChild?.textContent).toContain("The file is in your Documents folder.");
+    expect(container.querySelector(".transcript-content")?.lastElementChild?.textContent).toContain("The file is in your Documents folder.");
     expect(container.querySelector(".conversation-activity")).toBeNull();
     expect(container.querySelector(".chat-header [data-avatar-state]")?.getAttribute("data-avatar-state")).toBe("idle");
   });

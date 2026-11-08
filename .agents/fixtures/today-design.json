@@ -1,0 +1,188 @@
+{
+  "bots": [
+    {
+      "id": "ranch",
+      "name": "Ranch hand",
+      "shared": true,
+      "model": "configured-model",
+      "provider": "openrouter",
+      "activity": "working",
+      "avatar": {
+        "mode": "geometric",
+        "shape": "blob",
+        "color": "#1084FE",
+        "eyes": "oval",
+        "accessory": "none"
+      }
+    },
+    {
+      "id": "ledger",
+      "name": "Ledger",
+      "shared": true,
+      "model": "configured-model",
+      "activity": "blocked",
+      "avatar": {
+        "mode": "geometric",
+        "shape": "triangle",
+        "color": "#FF2998",
+        "eyes": "oval",
+        "accessory": "none"
+      }
+    },
+    {
+      "id": "guide",
+      "name": "Trail guide",
+      "shared": true,
+      "model": "configured-model",
+      "activity": "failed",
+      "avatar": {
+        "mode": "mascot",
+        "family": "bear",
+        "color": "#A97842",
+        "eyes": "oval",
+        "accessory": "none"
+      }
+    },
+    {
+      "id": "garden",
+      "name": "Garden planner",
+      "shared": true,
+      "model": "configured-model",
+      "activity": "thinking",
+      "avatar": {
+        "mode": "mascot",
+        "family": "sprout",
+        "color": "#00BCA6",
+        "eyes": "oval",
+        "accessory": "none"
+      }
+    },
+    {
+      "id": "scout",
+      "name": "Trail scout",
+      "shared": true,
+      "model": "configured-model",
+      "activity": "idle",
+      "avatar": {
+        "mode": "mascot",
+        "family": "fox",
+        "color": "#FF9800",
+        "eyes": "oval",
+        "accessory": "none"
+      }
+    }
+  ],
+  "overview": {
+    "generatedAt": "2026-10-25T22:00:00Z",
+    "since": "2026-10-24T22:00:00Z",
+    "frontier": "1",
+    "hasMore": false,
+    "items": [
+      {
+        "botId": "ranch",
+        "botName": "Ranch hand",
+        "activity": {
+          "state": "working",
+          "detail": "Creating a shared reminder in Google Calendar"
+        },
+        "approvals": [
+          {
+            "id": "approve-reminder",
+            "title": "Add a shared reminder for both of you?",
+            "detail": "Check gate batteries on November 1.",
+            "status": "pending"
+          }
+        ],
+        "attention": [],
+        "files": []
+      },
+      {
+        "botId": "ledger",
+        "botName": "Ledger",
+        "activity": {
+          "state": "blocked"
+        },
+        "approvals": [],
+        "attention": [
+          {
+            "id": "ask",
+            "kind": "clarify",
+            "title": "Which category is the TX FEED CO charge?",
+            "detail": "No matching receipt.",
+            "questions": [
+              {
+                "id": "category",
+                "prompt": "Category",
+                "options": [
+                  "Livestock feed",
+                  "Garden supplies"
+                ]
+              }
+            ]
+          }
+        ],
+        "files": []
+      },
+      {
+        "botId": "guide",
+        "botName": "Trail guide",
+        "activity": {
+          "state": "failed",
+          "detail": "The trail conditions service did not respond."
+        },
+        "approvals": [],
+        "attention": [],
+        "files": []
+      },
+      {
+        "botId": "garden",
+        "botName": "Garden planner",
+        "activity": {
+          "state": "thinking"
+        },
+        "approvals": [],
+        "attention": [],
+        "files": []
+      },
+      {
+        "botId": "scout",
+        "botName": "Trail scout",
+        "activity": {
+          "state": "idle"
+        },
+        "approvals": [],
+        "attention": [],
+        "files": [
+          {
+            "id": "trail-plan",
+            "name": "Weekend trail plan.pdf",
+            "mime": "application/pdf"
+          }
+        ]
+      }
+    ],
+    "events": [
+      {
+        "id": "trail-ready",
+        "botId": "scout",
+        "kind": "completed",
+        "title": "Your weekend trail options are ready",
+        "body": "Three short hikes with shade and picnic spots.",
+        "occurredAt": "2026-10-25T21:50:00Z"
+      }
+    ],
+    "upcoming": [
+      {
+        "id": "morning",
+        "botId": "ranch",
+        "name": "Morning check",
+        "prompt": "Check the gates and forecast.",
+        "schedule": "0 7 * * *",
+        "enabled": true,
+        "recipientIds": [],
+        "nextRunAt": "2026-10-26T12:00:00Z"
+      }
+    ],
+    "unavailableBots": []
+  }
+}

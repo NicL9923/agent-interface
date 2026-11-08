@@ -1,0 +1,278 @@
+{
+  "bots": [
+    {
+      "id": "ranch",
+      "lastMessage": {
+        "text": "**Gate check complete.** Replace the north battery, then check the others next month.",
+        "at": "2026-10-26T13:00:00Z"
+      },
+      "name": "Ranch hand",
+      "shared": true,
+      "model": "daily-planner",
+      "provider": "custom:house",
+      "activity": "idle",
+      "description": "Weekly plans, shared reminders, and practical help around the house.",
+      "instructions": "Help our household plan the week. Keep replies concise and explain what needs a decision. Before changing shared plans, ask for confirmation. Use the connected calendar only when someone asks you to schedule a task.",
+      "avatar": {
+        "mode": "geometric",
+        "shape": "blob",
+        "color": "#1084FE",
+        "eyes": "oval",
+        "accessory": "none"
+      },
+      "enabledMcpServers": [
+        "existing-calendar"
+      ]
+    }
+  ],
+  "preferences": {
+    "startPage": "assistant",
+    "defaultBotId": "ranch",
+    "favorites": [],
+    "sections": [],
+    "presentation": "advanced",
+    "modelFavorites": [
+      {
+        "provider": "custom:house",
+        "model": "daily-planner"
+      }
+    ]
+  },
+  "conversation": {
+    "botId": "ranch",
+    "sessionId": "ranch-canonical",
+    "messages": [],
+    "files": [],
+    "activity": {
+      "state": "idle"
+    },
+    "approvals": [],
+    "attention": [],
+    "draft": {
+      "text": "",
+      "attachments": []
+    },
+    "earlier": 0
+  },
+  "screen": "memory",
+  "memory": {
+    "botId": "ranch",
+    "profile": "ranch",
+    "scope": "profile",
+    "owner": "Hermes",
+    "documents": [
+      {
+        "target": "memory",
+        "label": "Assistant notes",
+        "revision": "78da1839062516cd75e97aee6d428d0e21cc4043f8ded8bd2aea5e134e8ebbee",
+        "enabled": true,
+        "entries": [
+          {
+            "id": "bc9b906b71224eac9b8a38832083365aa3a25da9221e99f0419cacdf428fab77",
+            "text": "Trash and recycling go out Sunday night. Pickup is Monday morning."
+          },
+          {
+            "id": "e3615472f927ec3de9790cd5b0615ecaa618bf5f0baa9cc9d69d9767ad6bfb16",
+            "text": "Send weekly plans as a short checklist, with decisions first."
+          },
+          {
+            "id": "d771385ca45a29b47fb2cc365229c2b080b6746ffb0e8421d10dea07323fe04b",
+            "text": "Garden watering: the drip timer runs at 6 a.m. Monday, Wednesday and Friday. Skip a cycle after more than half an inch of rain, and check the east bed by hand during heat advisories because its emitter clogs."
+          }
+        ],
+        "charLimit": 2200,
+        "charCount": 341
+      },
+      {
+        "target": "user",
+        "label": "About you",
+        "revision": "4eb8a713e6e45bde0dac6abc6f1f6610cb03e208b0452e24bccef6d0c7c45ae9",
+        "enabled": true,
+        "entries": [
+          {
+            "id": "ed55ebeb493a1a3aba2ceda518c6d8348c9e20d1f519a017377e09814a446cec",
+            "text": "School pickup is 3:15 p.m. on weekdays."
+          },
+          {
+            "id": "e287d85e5220d6472d9ab8550b287a6d0d60265024c3144f82938d3deb3c4cb0",
+            "text": "Feed store standing order: https://feed.example.test/orders/household-weekly-standing-order"
+          }
+        ],
+        "charLimit": 1375,
+        "charCount": 133
+      }
+    ],
+    "notice": "These memories belong to this shared Hermes profile. Saved edits refresh at the next safe turn boundary without changing chat history.",
+    "refresh": {
+      "revision": "",
+      "state": "applied",
+      "busy": false,
+      "message": "Saved in Hermes. No app memory refresh is pending."
+    }
+  },
+  "memoryFixture": {
+    "delimiter": "\n§\n",
+    "limitSource": "Synthetic values from repository fixtures. The client uses the API-provided limits; no claim about installed Hermes defaults.",
+    "externalEntry": "Fence repair is booked for Thursday.",
+    "newEntry": "Check the north gate battery on the first Saturday of each month.",
+    "editEntry": "Send weekly plans as a short checklist, with decisions and time-sensitive chores first.",
+    "limitEditSuffix": " Add one more weekly chore.",
+    "refreshRevision": "f5242ddb1e5444f98ecf46c14f65e1fd"
+  },
+  "memoryMessages": {
+    "loadError": "Hermes could not read this memory document. Check the native memory store.",
+    "saveError": "Request failed (503)",
+    "conflict": "Hermes memory changed since you opened it. Reload and review the new entries before saving.",
+    "paused": "Hermes is being upgraded. Memory edits are paused.",
+    "disabled": "This memory surface is disabled in the Hermes profile.",
+    "tooLong": "This document exceeds Hermes's 2,200 character limit. Shorten or remove an entry.",
+    "nextTurn": "Saved in Hermes. Applies to the next turn. Existing chat history is preserved.",
+    "pendingBusy": "Saved in Hermes. Refresh pending. The active turn keeps its current memory; Hermes will retry at the next safe turn boundary.",
+    "applied": "Saved in Hermes. Applied to the current chat memory. Existing chat history is preserved."
+  },
+  "memoryStates": {
+    "empty": {
+      "botId": "ranch",
+      "profile": "ranch",
+      "scope": "profile",
+      "owner": "Hermes",
+      "documents": [
+        {
+          "target": "memory",
+          "label": "Assistant notes",
+          "revision": "1f71ece5689b6feb1e1d034fa76af1ccd65f6e8455b6434b468317bdb31ef4a2",
+          "enabled": true,
+          "entries": [],
+          "charLimit": 2200,
+          "charCount": 0
+        },
+        {
+          "target": "user",
+          "label": "About you",
+          "revision": "85a760d84113d834689e72c788bd8a3b4103fbc55710b55e76e6de586e6b2aac",
+          "enabled": true,
+          "entries": [],
+          "charLimit": 1375,
+          "charCount": 0
+        }
+      ],
+      "notice": "These memories belong to this shared Hermes profile. Saved edits refresh at the next safe turn boundary without changing chat history.",
+      "refresh": {
+        "revision": "",
+        "state": "applied",
+        "busy": false,
+        "message": "Saved in Hermes. No app memory refresh is pending."
+      }
+    },
+    "disabled": {
+      "botId": "ranch",
+      "profile": "ranch",
+      "scope": "profile",
+      "owner": "Hermes",
+      "documents": [
+        {
+          "target": "memory",
+          "label": "Assistant notes",
+          "revision": "78da1839062516cd75e97aee6d428d0e21cc4043f8ded8bd2aea5e134e8ebbee",
+          "enabled": true,
+          "entries": [
+            {
+              "id": "bc9b906b71224eac9b8a38832083365aa3a25da9221e99f0419cacdf428fab77",
+              "text": "Trash and recycling go out Sunday night. Pickup is Monday morning."
+            },
+            {
+              "id": "e3615472f927ec3de9790cd5b0615ecaa618bf5f0baa9cc9d69d9767ad6bfb16",
+              "text": "Send weekly plans as a short checklist, with decisions first."
+            },
+            {
+              "id": "d771385ca45a29b47fb2cc365229c2b080b6746ffb0e8421d10dea07323fe04b",
+              "text": "Garden watering: the drip timer runs at 6 a.m. Monday, Wednesday and Friday. Skip a cycle after more than half an inch of rain, and check the east bed by hand during heat advisories because its emitter clogs."
+            }
+          ],
+          "charLimit": 2200,
+          "charCount": 341
+        },
+        {
+          "target": "user",
+          "label": "About you",
+          "revision": "4eb8a713e6e45bde0dac6abc6f1f6610cb03e208b0452e24bccef6d0c7c45ae9",
+          "enabled": false,
+          "entries": [
+            {
+              "id": "ed55ebeb493a1a3aba2ceda518c6d8348c9e20d1f519a017377e09814a446cec",
+              "text": "School pickup is 3:15 p.m. on weekdays."
+            },
+            {
+              "id": "e287d85e5220d6472d9ab8550b287a6d0d60265024c3144f82938d3deb3c4cb0",
+              "text": "Feed store standing order: https://feed.example.test/orders/household-weekly-standing-order"
+            }
+          ],
+          "charLimit": 1375,
+          "charCount": 133
+        }
+      ],
+      "notice": "These memories belong to this shared Hermes profile. Saved edits refresh at the next safe turn boundary without changing chat history.",
+      "refresh": {
+        "revision": "",
+        "state": "applied",
+        "busy": false,
+        "message": "Saved in Hermes. No app memory refresh is pending."
+      }
+    },
+    "too-long": {
+      "botId": "ranch",
+      "profile": "ranch",
+      "scope": "profile",
+      "owner": "Hermes",
+      "documents": [
+        {
+          "target": "memory",
+          "label": "Assistant notes",
+          "revision": "7da6b9372afc1505f3cdcebeceecc5149d88947556a0bfc4388cc6845e713e4a",
+          "enabled": true,
+          "entries": [
+            {
+              "id": "150c398f36659d88d2ea2df9ff2932c43c88d38b19709d78e17145ad4cd699ec",
+              "text": "Review the weekly household checklist. Review the weekly household checklist. Review the weekly household checklist. Review the weekly household checklist. Review the weekly household checklist. Review the weekly household checklist. Review the weekly household checklist. Review the weekly household checklist. Review the weekly household checklist. Review the weekly household checklist. Review the weekly household checklist. Review the weekly household checklist. Review the weekly household checklist. Review the weekly household checklist. Review the weekly household checklist. Review the weekly household checklist. Review the weekly household checklist. Review the weekly household checklist. Review the weekly household checklist. Review the weekly household checklist. Review the weekly household checklist. Review the weekly household checklist. Review the weekly household checklist. Review the weekly household checklist. Review the weekly household checklist. Review the weekly household checklist. Review the weekly household checklist. Review the weekly household checklist. Review the weekly household checklist. Review the weekly household checklist. Review the weekly household checklist. Review the weekly household checklist. Review the weekly household checklist. Review the weekly household checklist. Review the weekly household checklist. Review the weekly household checklist. Review the weekly household checklist. Review the weekly household checklist. Review the weekly household checklist. Review the weekly household checklist. Review the weekly household checklist. Review the weekly household checklist. Review the weekly household checklist. Review the weekly household checklist. Review the weekly household checklist. Review the weekly household checklist. Review the weekly household checklist. Review the weekly household checklist. Review the weekly household check"
+            },
+            {
+              "id": "e3615472f927ec3de9790cd5b0615ecaa618bf5f0baa9cc9d69d9767ad6bfb16",
+              "text": "Send weekly plans as a short checklist, with decisions first."
+            },
+            {
+              "id": "d771385ca45a29b47fb2cc365229c2b080b6746ffb0e8421d10dea07323fe04b",
+              "text": "Garden watering: the drip timer runs at 6 a.m. Monday, Wednesday and Friday. Skip a cycle after more than half an inch of rain, and check the east bed by hand during heat advisories because its emitter clogs."
+            }
+          ],
+          "charLimit": 2200,
+          "charCount": 2180
+        },
+        {
+          "target": "user",
+          "label": "About you",
+          "revision": "4eb8a713e6e45bde0dac6abc6f1f6610cb03e208b0452e24bccef6d0c7c45ae9",
+          "enabled": true,
+          "entries": [
+            {
+              "id": "ed55ebeb493a1a3aba2ceda518c6d8348c9e20d1f519a017377e09814a446cec",
+              "text": "School pickup is 3:15 p.m. on weekdays."
+            },
+            {
+              "id": "e287d85e5220d6472d9ab8550b287a6d0d60265024c3144f82938d3deb3c4cb0",
+              "text": "Feed store standing order: https://feed.example.test/orders/household-weekly-standing-order"
+            }
+          ],
+          "charLimit": 1375,
+          "charCount": 133
+        }
+      ],
+      "notice": "These memories belong to this shared Hermes profile. Saved edits refresh at the next safe turn boundary without changing chat history.",
+      "refresh": {
+        "revision": "",
+        "state": "applied",
+        "busy": false,
+        "message": "Saved in Hermes. No app memory refresh is pending."
+      }
+    }
+  }
+}

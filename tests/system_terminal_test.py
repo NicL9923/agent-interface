@@ -25,7 +25,7 @@ class SystemTerminalTests(unittest.TestCase):
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             deadline = time.monotonic() + 5
             while subprocess.run(["tmux", "-N", "-S", socket, "show-options", "-s"],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0:
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False).returncode != 0:
                 if time.monotonic() >= deadline: self.fail("The independent tmux supervisor did not start")
                 time.sleep(.05)
             clients = []
@@ -94,14 +94,14 @@ class SystemTerminalTests(unittest.TestCase):
                 subprocess.run(command + ["--end"], check=True, timeout=5)
                 second.wait(timeout=5)
                 self.assertNotEqual(subprocess.run(["tmux", "-S", socket, "has-session", "-t", "=" + session],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode, 0)
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False).returncode, 0)
             finally:
                 for proc in clients:
                     if proc.poll() is None:
                         proc.kill(); proc.wait()
                     for stream in (proc.stdin, proc.stdout, proc.stderr):
                         if stream and not stream.closed: stream.close()
-                subprocess.run(["tmux", "-S", socket, "kill-server"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.run(["tmux", "-S", socket, "kill-server"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
                 server.wait(timeout=5)
 
 

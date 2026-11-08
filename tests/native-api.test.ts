@@ -1,3 +1,4 @@
+import { capabilitiesFixture } from "./helpers/runtime-fixtures.js";
 import { createHash, randomBytes, randomUUID, generateKeyPairSync, verify } from "node:crypto";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -6,22 +7,25 @@ import { afterEach, expect, it } from "vitest";
 import { createApp } from "../src/server/app.js";
 import { hash } from "../src/server/auth.js";
 import { loadConfig, type Config } from "../src/server/config.js";
-import { createApnsSender, apnsClearPayload, apnsPayload } from "../src/server/apns.js";
+import { accountMarker, ApnsError, apnsCollapseId, createApnsSender, apnsClearPayload, apnsPayload } from "../src/server/apns.js";
 import { BackgroundWorker } from "../src/server/notifications.js";
 import { Store } from "../src/server/store.js";
-import { defaultPreferences, type Runtime, type RuntimeEvent } from "../src/shared/types.js";
+import { defaultPreferences, type RuntimeEvent } from "../src/shared/types.js";
+import { fakeRuntime, localLogin } from "./helpers/server.js";
+import Fastify from "fastify";
+import { errorHandler } from "../src/server/http-error.js";
 
 const origin = "http://127.0.0.1:3000";
-const runtime = { status: async () => ({ connected: false }), listBots: async () => [{ id: "bot", name: "Bot", shared: true, model: "test", activity: "idle" }], capabilities: async () => ({ avatarMetadata: { supported: false }, generatedFiles: { supported: true }, idempotency: { supported: false }, durableEvents: { supported: false } }), download: async () => ({ body: new Blob(["file body"]).stream(), name: "answer.txt", mime: "text/plain" }), close: async () => {} } as unknown as Runtime;
+const runtime = fakeRuntime({ status: async () => ({ connected: false }), listBots: async () => [{ id: "bot", name: "Bot", shared: true, model: "test", activity: "idle" }], capabilities: async () => capabilitiesFixture({ avatarMetadata: { supported: false }, generatedFiles: { supported: true }, idempotency: { supported: false }, durableEvents: { supported: false } }), download: async () => ({ body: new Blob(["file body"]).stream(), name: "answer.txt", mime: "text/plain" }), close: async () => {} });
 const apps: Awaited<ReturnType<typeof createApp>>[] = [];
 afterEach(async () => { for (const { app } of apps.splice(0)) await app.close(); });
 async function setup(config = loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }), verifyGoogle?: NonNullable<Parameters<typeof createApp>[2]>["verifyGoogle"]) {
   const result = await createApp(config, runtime, { background: false, verifyGoogle, sendApns: config.apns ? async () => {} : undefined });
   apps.push(result); return result;
 }
-async function flow(app: Awaited<ReturnType<typeof createApp>>["app"]) {
+async function flow(app: Awaited<ReturnType<typeof createApp>>["app"], purpose?: "confirm") {
   const state = randomBytes(32).toString("base64url"), codeVerifier = randomBytes(32).toString("base64url");
-  const query = new URLSearchParams({ state, code_challenge: createHash("sha256").update(codeVerifier).digest("base64url"), code_challenge_method: "S256" });
+  const query = new URLSearchParams({ state, code_challenge: createHash("sha256").update(codeVerifier).digest("base64url"), code_challenge_method: "S256", ...(purpose ? { purpose } : {}) });
   const response = await app.inject(`/native/sign-in?${query}`);
   expect(response.statusCode).toBe(200);
   return { state, codeVerifier, cookie: `native_flow=${response.cookies[0].value}`, cookieValue: response.cookies[0].value, response };
@@ -103,6 +107,94 @@ it("verifies the Google flow nonce and rechecks the household on each native req
   expect(store.getNativeSession(hash(result.json().token))).toBeUndefined();
 });
 
+/** A completed native sign-in page: the code the app receives, with its state and verifier. */
+async function nativeCode(app: Awaited<ReturnType<typeof createApp>>["app"], body: Record<string, string>, purpose?: "confirm") {
+  const started = await flow(app, purpose);
+  const completed = await app.inject({ method: "POST", url: "/api/auth/native/complete", headers: { origin, cookie: started.cookie }, payload: body });
+  expect(completed.statusCode).toBe(200);
+  return { code: new URL(completed.json().callback).searchParams.get("code")!, state: started.state, codeVerifier: started.codeVerifier };
+}
+
+it("records signing in to the app as confirming it's you, from Google's issue time", async () => {
+  const config = loadConfig({ GOOGLE_CLIENT_ID: "google", HOUSEHOLD_EMAILS: "one@example.test", APP_DATABASE: ":memory:" });
+  let identity: { iat?: number } = {};
+  const { app, store } = await setup(config, async () => ({ sub: "google-one", email: "one@example.test", email_verified: true, nonce: store.getNativeFlow(hash(flowCookie))!.nonce, ...identity }));
+  let flowCookie = "";
+  const signIn = async () => {
+    const started = await flow(app);
+    flowCookie = started.cookieValue;
+    const completed = await app.inject({ method: "POST", url: "/api/auth/native/complete", headers: { origin, cookie: started.cookie }, payload: { credential: "verified-test-token" } });
+    const payload = { code: new URL(completed.json().callback).searchParams.get("code"), state: started.state, codeVerifier: started.codeVerifier };
+    return hash((await app.inject({ method: "POST", url: "/api/auth/native/exchange", payload })).json().token);
+  };
+  identity = { iat: Math.floor(Date.now() / 1000) - 120 };
+  expect(store.nativeSessionConfirmedAt(await signIn())).toBe(identity.iat! * 1000);
+  // A credential from the future counts from now; one without an issue time proves nothing.
+  identity = { iat: Math.floor(Date.now() / 1000) + 3600 };
+  expect(store.nativeSessionConfirmedAt(await signIn())).toBeLessThanOrEqual(Date.now());
+  identity = {};
+  expect(store.nativeSessionConfirmedAt(await signIn())).toBeUndefined();
+});
+
+it("confirms a signed-in app's person with a fresh PKCE-bound code for the same account, never signing it out", async () => {
+  const { app, store } = await setup();
+  const { token } = await connectNative(app, "one");
+  const headers = { authorization: `Bearer ${token}` };
+  // Signing in with a local member counts as confirming now.
+  expect(Date.now() - store.nativeSessionConfirmedAt(hash(token))!).toBeLessThan(5000);
+  store.db.prepare("DELETE FROM native_session_confirmations").run();
+  const confirm = (payload: unknown, extra: Record<string, string> = headers) =>
+    app.inject({ method: "POST", url: "/api/auth/native/confirm", headers: extra, payload: payload as object });
+  // The confirmation page says what it is for; any other purpose is refused.
+  const page = (await flow(app, "confirm")).response.body;
+  expect(page).toContain("<h1>Confirm it's you</h1><p>Choose the same household account to open the terminal.</p>");
+  const query = (purpose: string) => `/native/sign-in?state=${"s".repeat(32)}&code_challenge=${"c".repeat(43)}&code_challenge_method=S256&purpose=${purpose}`;
+  expect((await app.inject(query("sign-in"))).statusCode).toBe(400);
+
+  const good = await nativeCode(app, { member: "one" }, "confirm");
+  // Only the app's own bearer, without a browser Origin, reaches it; a browser session is refused.
+  expect((await confirm(good, {})).json()).toEqual({ error: "Sign in required", code: "session_expired" });
+  expect((await confirm(good, { ...headers, origin })).statusCode).toBe(403);
+  const browser = await localLogin(app, origin);
+  expect((await confirm(good, browser)).json()).toEqual({ error: "Confirm your identity in the iOS app." });
+  // Malformed bodies fail validation before anything is spent.
+  for (const bad of [{ ...good, code: "short" }, { ...good, extra: true }, { code: good.code, state: good.state }])
+    expect((await confirm(bad)).statusCode).toBe(400);
+  // A wrong verifier leaves the code unspent, and the refusal never says session_expired, so the app stays signed in.
+  const wrong = await confirm({ ...good, codeVerifier: randomBytes(32).toString("base64url") });
+  expect([wrong.statusCode, wrong.json()]).toEqual([401, { error: "That confirmation expired. Try again.", code: "confirmation_expired" }]);
+  expect(store.nativeSessionConfirmedAt(hash(token))).toBeUndefined();
+  const confirmed = await confirm(good);
+  expect(confirmed.statusCode).toBe(200);
+  const at = Date.parse(confirmed.json().confirmedAt);
+  expect(store.nativeSessionConfirmedAt(hash(token))).toBe(at);
+  expect(Math.abs(Date.now() - at)).toBeLessThan(5000);
+  // Each code works once, for confirming or for signing in.
+  expect((await confirm(good)).json().code).toBe("confirmation_expired");
+  expect((await app.inject({ method: "POST", url: "/api/auth/native/exchange", payload: good })).statusCode).toBe(401);
+  expect((await app.inject({ url: "/api/bootstrap", headers })).statusCode).toBe(200);
+
+  // Another household member's code never confirms this person.
+  const theirs = await nativeCode(app, { member: "two" }, "confirm");
+  expect((await confirm(theirs)).json()).toEqual({ error: "Use the same Google account you signed in with." });
+  // An expired code, and a code whose proof is missing or more than ten minutes old, are refused.
+  const expired = await nativeCode(app, { member: "one" }, "confirm");
+  store.db.prepare("UPDATE native_codes SET expires=0").run();
+  expect((await confirm(expired)).json().code).toBe("confirmation_expired");
+  const old = await nativeCode(app, { member: "one" }, "confirm");
+  store.db.prepare("UPDATE native_code_confirmations SET confirmed_at=?").run(Date.now() - 10 * 60000 - 1000);
+  expect((await confirm(old)).json()).toEqual({ error: "That confirmation is too old. Try again.", code: "confirmation_expired" });
+  const unproven = await nativeCode(app, { member: "one" }, "confirm");
+  store.db.prepare("DELETE FROM native_code_confirmations").run();
+  expect((await confirm(unproven)).json().error).toBe("That confirmation is too old. Try again.");
+  // Just inside ten minutes counts, and never moves a later confirmation back.
+  const recent = await nativeCode(app, { member: "one" }, "confirm");
+  store.db.prepare("UPDATE native_code_confirmations SET confirmed_at=?").run(Date.now() - 10 * 60000 + 30000);
+  expect((await confirm(recent)).statusCode).toBe(200);
+  expect(store.nativeSessionConfirmedAt(hash(token))).toBe(at);
+  expect((await app.inject({ url: "/api/bootstrap", headers })).statusCode).toBe(200);
+});
+
 it("keeps device ownership explicit, controls APNs environment on the host, and unregisters on native logout", async () => {
   const config = loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }); config.apns = apnsConfig();
   const { app, store } = await setup(config);
@@ -141,6 +233,10 @@ it("registers one Live Activity token per device and owner, seeds just-sent assi
     .toMatchObject({ title: "Bot is starting", activeCount: 1, rows: [{ botId: "bot", phase: "starting", status: "Starting" }] });
   expect(store.liveActivities("sandbox")).toMatchObject([{ userId: "local-one", armed: ["bot", "missing"] }]);
   expect((await register(two.token)).statusCode).toBe(409);
+  // A background registration names the activity's account, which must be the signed-in one.
+  const scope = (userId: string) => Buffer.from(`https://wildbots.example|${userId}`).toString("base64url");
+  expect((await register(one.token, { scope: scope("local-two") })).statusCode).toBe(400);
+  expect((await register(one.token, { botIds: ["bot"], scope: scope("local-one") })).statusCode).toBe(200);
   const read = await app.inject({ url: "/api/native/live-activity", headers: headers(one.token) });
   expect(read.json()).toMatchObject({ available: true, state: { activeCount: 0, rows: [] } });
   const deviceRead = `/api/native/live-activity?deviceId=${deviceId}`;
@@ -164,6 +260,32 @@ it("registers one Live Activity token per device and owner, seeds just-sent assi
   expect(store.liveActivities("sandbox")).toMatchObject([{ token: replacement }]);
   expect((await app.inject({ method: "DELETE", url: "/api/native/live-activity", headers: headers(two.token), payload: { deviceId, token: replacement.toUpperCase() } })).statusCode).toBe(200);
   expect(store.liveActivities("sandbox")).toHaveLength(0);
+});
+
+it("registers a push-to-start token only for the signed-in account and lets the app claim its own start", async () => {
+  const config = loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }); config.apns = apnsConfig();
+  const { app, store } = await setup(config);
+  const one = await connectNative(app), two = await connectNative(app, "two");
+  const deviceId = randomUUID(), token = "ab".repeat(32);
+  const headers = (bearer: string) => ({ authorization: `Bearer ${bearer}` });
+  const scope = (userId: string) => Buffer.from(`https://wildbots.example|${userId}`).toString("base64url");
+  const register = (bearer: string, payload: object) => app.inject({ method: "PUT", url: "/api/native/live-activity/start", headers: headers(bearer), payload });
+  // A scope naming another account would label this person's activity as someone else's.
+  expect((await register(one.token, { deviceId, token, scope: scope("local-two") })).statusCode).toBe(400);
+  expect((await register(one.token, { deviceId, token, scope: "not base64url!" })).statusCode).toBe(400);
+  expect((await register(one.token, { deviceId, token, scope: scope("local-one") })).statusCode).toBe(200);
+  expect(store.liveActivityStarts("sandbox")).toMatchObject([{ userId: "local-one", deviceId, token, scope: scope("local-one"), started: [], localAt: 0 }]);
+  // The app's own start after a send holds pushed starts off this device.
+  await app.inject({ url: `/api/native/live-activity?deviceId=${deviceId}&local=1`, headers: headers(one.token) });
+  expect(store.liveActivityStarts("sandbox")[0].localAt).toBeGreaterThan(0);
+  // The same device signed in as someone else, after an offline sign-out, takes the token over.
+  const other = randomUUID();
+  expect((await register(two.token, { deviceId: other, token: token.toUpperCase(), scope: scope("local-two") })).statusCode).toBe(200);
+  expect(store.liveActivityStarts("sandbox")).toMatchObject([{ userId: "local-two", deviceId: other, token }]);
+  expect((await app.inject({ method: "DELETE", url: "/api/native/live-activity/start", headers: headers(one.token), payload: { deviceId: other } })).statusCode).toBe(200);
+  expect(store.liveActivityStarts("sandbox")).toHaveLength(1);
+  await app.inject({ method: "POST", url: "/api/auth/logout", headers: headers(two.token) });
+  expect(store.liveActivityStarts("sandbox")).toHaveLength(0);
 });
 
 it("reports absent APNs settings explicitly and rejects incomplete signing configuration", async () => {
@@ -196,6 +318,41 @@ it("authorizes native reads and downloads, rejects malformed bearer fallback, an
   expect((await app.inject({ url: "/api/bots", headers: { cookie } })).statusCode).toBe(200);
 });
 
+it("renews a native session in place, keeping its push registrations, until 90 days after sign-in", async () => {
+  const config = loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }); config.apns = apnsConfig();
+  const { app, store } = await setup(config);
+  const { token } = await connectNative(app);
+  const headers = { authorization: `Bearer ${token}` };
+  const renew = (extra: Record<string, string> = {}) => app.inject({ method: "POST", url: "/api/auth/native/renew", headers: { ...headers, ...extra }, payload: {} });
+  store.registerNativeDevice("local-one", hash(token), randomUUID(), "ab".repeat(32), "sandbox");
+  const day = 86400000;
+  // Six days in, one day remains; renewal restores a full week from now.
+  store.db.prepare("UPDATE native_sessions SET expires=? WHERE hash=?").run(Date.now() + day, hash(token));
+  store.db.prepare("UPDATE native_session_starts SET signed_in_at=? WHERE hash=?").run(Date.now() - 6 * day, hash(token));
+  const renewed = await renew();
+  expect(renewed.statusCode).toBe(200);
+  expect(Math.abs(Date.parse(renewed.json().expiresAt) - (Date.now() + 7 * day))).toBeLessThan(5000);
+  expect((await app.inject({ url: "/api/bots", headers })).statusCode).toBe(200);
+  expect(store.nativeDevices("local-one", "sandbox")).toHaveLength(1);
+  // Near the 90-day limit, renewal stops at the limit instead of granting another week.
+  const start = Date.now() - 88 * day;
+  store.db.prepare("UPDATE native_session_starts SET signed_in_at=? WHERE hash=?").run(start, hash(token));
+  store.db.prepare("UPDATE native_sessions SET expires=? WHERE hash=?").run(Date.now() + day, hash(token));
+  expect(Date.parse((await renew()).json().expiresAt)).toBe(start + 90 * day);
+  // A session from the previous release has no recorded start. Its start is inferred once and
+  // kept, so renewing it every six days still ends 90 days after it began.
+  const legacy = "legacy-session", began = Date.now();
+  store.db.prepare("INSERT INTO native_sessions VALUES(?,?,?)").run(legacy, "local-one", began + 7 * day);
+  let last: number | undefined;
+  for (let at = began + 6 * day; at < began + 120 * day; at += 6 * day)
+    last = store.renewNativeSession(legacy, 7 * day, 90 * day, at) ?? last;
+  expect(last).toBe(began + 90 * day);
+  // A browser-origin request never renews a native token, and a gone session cannot be renewed.
+  expect((await renew({ origin })).statusCode).toBe(403);
+  store.deleteNativeSession(hash(token));
+  expect((await renew()).statusCode).toBe(401);
+});
+
 it("signs cached ES256 APNs provider requests and bounds multibyte payloads", async () => {
   const dir = mkdtempSync(join(tmpdir(), "apns-test-"));
   const { privateKey, publicKey } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
@@ -215,9 +372,24 @@ it("signs cached ES256 APNs provider requests and bounds multibyte payloads", as
     expect(JSON.parse(Buffer.from(jwt[0], "base64url").toString()).alg).toBe("ES256");
     expect(verify("sha256", Buffer.from(jwt.slice(0, 2).join(".")), { key: publicKey, dsaEncoding: "ieee-p1363" }, Buffer.from(jwt[2], "base64url"))).toBe(true);
     expect(JSON.parse(seen[0].body)).toMatchObject({ aps: { alert: { title: "Done" } }, url: "/?bot=bot" });
+    await sender.refresh(device);
+    expect(seen[2].headers).toMatchObject({ "apns-topic": "test.agentinterface", "apns-push-type": "background", "apns-priority": "5" });
+    // Only a nudge: the app reads names and states itself, with its own sign-in.
+    expect(JSON.parse(seen[2].body)).toEqual({ aps: { "content-available": 1 }, refresh: ["widgets"] });
+    seen.splice(2);
     await sender.clear(device, ["event"]);
     expect(seen[2].headers).toMatchObject({ "apns-topic": "test.agentinterface", "apns-push-type": "background", "apns-priority": "5" });
     expect(JSON.parse(seen[2].body)).toEqual({ aps: { "content-available": 1 }, clear: { tags: ["event"] } });
+    // A known badge rides beside the background clear, and as a silent alert push for a closed app.
+    await sender.clear(device, ["event"], 3);
+    expect(JSON.parse(seen[3].body)).toEqual({ aps: { "content-available": 1 }, clear: { tags: ["event"] }, badge: 3 });
+    expect(seen[4].headers).toMatchObject({ "apns-push-type": "alert", "apns-priority": "5" });
+    expect(JSON.parse(seen[4].body)).toEqual({ aps: { badge: 3 } });
+    await sender(device, JSON.stringify({ title: "Done", body: "Hello", url: "/?bot=bot", tag: "event", badge: 0 }));
+    expect(JSON.parse(seen[5].body).aps).toMatchObject({ alert: { title: "Done" }, badge: 0 });
+    await sender(device, JSON.stringify({ title: "Done", body: "Hello", url: "/?bot=bot", tag: "event", badge: -1 }));
+    expect(JSON.parse(seen[6].body).aps).not.toHaveProperty("badge");
+    seen.splice(2);
     const many = apnsClearPayload(Array.from({ length: 100 }, (_, index) => `${index}`.padEnd(150, "x")));
     expect(Buffer.byteLength(many)).toBeLessThanOrEqual(4000);
     expect(JSON.parse(many).clear.tags[0]).toBe("0".padEnd(150, "x"));
@@ -231,6 +403,28 @@ it("signs cached ES256 APNs provider requests and bounds multibyte payloads", as
   } finally { sender.close(); rmSync(dir, { recursive: true }); }
 });
 
+it("reports Apple's refusal with its status and reason, which a route never forwards", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "apns-test-"));
+  const { privateKey } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+  const config = { ...apnsConfig(), privateKeyFile: join(dir, "key.p8") };
+  writeFileSync(config.privateKeyFile, privateKey.export({ type: "pkcs8", format: "pem" }), { mode: 0o600 });
+  const sender = createApnsSender(config, async () => ({ statusCode: 400, reason: "BadDeviceToken" }))!;
+  const device = { deviceId: randomUUID(), token: "ab".repeat(32), environment: "sandbox" as const };
+  const app = Fastify();
+  try {
+    const refusal = await sender(device, JSON.stringify({ title: "Done", body: "Hello", url: "/?bot=bot", tag: "event" })).catch((error: unknown) => error);
+    expect(refusal).toBeInstanceOf(ApnsError);
+    expect(refusal).toMatchObject({ apnsStatus: 400, reason: "BadDeviceToken" });
+    await expect(sender.clear(device, ["event"])).rejects.toMatchObject({ apnsStatus: 400, reason: "BadDeviceToken" });
+    // Apple's 400 is not this app's: a route that let it escape answers as an unexplained failure.
+    app.setErrorHandler(errorHandler({ production: true }));
+    app.get("/escaped", async () => { throw refusal; });
+    const response = await app.inject({ url: "/escaped" });
+    expect(response.statusCode).toBe(502);
+    expect(response.json()).toEqual({ error: "The Hermes operation could not be completed" });
+  } finally { await app.close(); sender.close(); rmSync(dir, { recursive: true }); }
+});
+
 it("shares durable participant/routine notifications across web/APNs without retry duplicates and removes invalid devices", async () => {
   const store = new Store(":memory:");
   const config = loadConfig({ HOUSEHOLD_EMAILS: "one@example.test,two@example.test" }); config.apns = apnsConfig();
@@ -240,7 +434,7 @@ it("shares durable participant/routine notifications across web/APNs without ret
     store.registerNativeDevice(userId, userId, userId, userId.repeat(32), "sandbox");
   }
   store.participate("run", "one");
-  store.routineRecipients("routine", ["two"]);
+  store.routineRecipients("bot", "routine", ["two"]);
   const event: RuntimeEvent = { id: "complete", botId: "bot", runId: "run", kind: "completed", title: "Done", occurredAt: "now" };
   store.recordEvents([event, { ...event, id: "routine", routineId: "routine" }], "cursor");
   store.subscribe("one", { endpoint: "https://push.test/one", keys: { p256dh: "key", auth: "auth" } });
@@ -248,7 +442,7 @@ it("shares durable participant/routine notifications across web/APNs without ret
   const worker = new BackgroundWorker(store, runtime, config, async device => { web.push(device.endpoint); }, async device => {
     native.push(device.deviceId);
     if (device.deviceId === "one" && native.filter(value => value === "one").length === 1) throw new Error("Temporary outage");
-    if (device.deviceId === "two") throw Object.assign(new Error("Invalid device"), { statusCode: 410 });
+    if (device.deviceId === "two") throw new ApnsError("Invalid device", 410);
   });
   try {
     await worker.tick(); expect(web).toHaveLength(1); expect(native).toEqual(["one", "two"]);
@@ -258,6 +452,92 @@ it("shares durable participant/routine notifications across web/APNs without ret
     store.recordEvents([{ ...event, id: "revoked" }], "cursor2"); config.householdEmails = [];
     await worker.tick(); expect(native).toHaveLength(3);
   } finally { await worker.stop(); store.close(); }
+});
+
+it("groups iOS notifications per assistant and adds actions only where they make sense", () => {
+  const base = { title: "Kitchen", body: "Done", url: "/?bot=kitchen", tag: "event-1", botId: "kitchen", account: "0123456789abcdef" };
+  const reply = JSON.parse(apnsPayload(JSON.stringify({ ...base, kind: "completed" })));
+  expect(reply).toEqual({ aps: { alert: { title: "Kitchen", body: "Done" }, sound: "default", "filter-criteria": "kitchen", "thread-id": "kitchen", "mutable-content": 1, category: "REPLY" },
+    url: "/?bot=kitchen", tag: "event-1", botId: "kitchen", account: "0123456789abcdef" });
+  const approval = JSON.parse(apnsPayload(JSON.stringify({ ...base, kind: "approval", approvalId: "request-7" })));
+  // A Focus filter can let every assistant's approvals through while it quiets the rest of their news.
+  expect(approval.aps).toMatchObject({ "thread-id": "kitchen", category: "APPROVAL", "interruption-level": "time-sensitive", "filter-criteria": "approval:kitchen" });
+  expect(approval).toMatchObject({ botId: "kitchen", approvalId: "request-7", account: "0123456789abcdef" });
+  // An add-on without approval IDs still sends a time-sensitive approval, which only opens the chat.
+  const unnamed = JSON.parse(apnsPayload(JSON.stringify({ ...base, kind: "approval" })));
+  expect([unnamed.aps.category, unnamed.aps["interruption-level"], unnamed.approvalId]).toEqual([undefined, "time-sensitive", undefined]);
+  for (const kind of ["failed", "interrupted", "security", undefined]) {
+    const value = JSON.parse(apnsPayload(JSON.stringify({ ...base, kind })));
+    expect([value.aps.category, value.aps["interruption-level"], value.aps["thread-id"]]).toEqual([undefined, undefined, "kitchen"]);
+    // Every assistant's notification names it and the account, so the extension can show it as the sender.
+    expect([value.aps["mutable-content"], value.botId, value.account]).toEqual([1, "kitchen", "0123456789abcdef"]);
+  }
+  // Routine results open their results sheet, not a chat to reply in; digests and host alerts have no assistant.
+  expect(JSON.parse(apnsPayload(JSON.stringify({ ...base, kind: "completed", url: "/?bot=kitchen&routine=daily" }))).aps.category).toBeUndefined();
+  const digest = JSON.parse(apnsPayload(JSON.stringify({ title: "2 assistant updates", body: "A · B", url: "/?view=today", tag: "batch", account: "0123456789abcdef" })));
+  expect(digest.aps).toEqual({ alert: { title: "2 assistant updates", body: "A · B" }, sound: "default", "filter-criteria": "household" });
+  // Without the account marker an action could be taken by whoever is signed in, so there is none,
+  // and the extension cannot tell whose avatar to show.
+  const anonymous = JSON.parse(apnsPayload(JSON.stringify({ ...base, account: undefined, kind: "completed" })));
+  expect([anonymous.aps.category, anonymous.aps["mutable-content"], anonymous.botId]).toEqual([undefined, undefined, undefined]);
+  // An oversized ID is never truncated into a different assistant or approval; that notification just has no actions.
+  const longId = JSON.parse(apnsPayload(JSON.stringify({ ...base, kind: "approval", approvalId: "a".repeat(300) })));
+  expect([longId.aps.category, longId.approvalId]).toEqual([undefined, undefined]);
+  // Full-size alerts keep their text and link; the extras go first, never the alert itself.
+  const huge = { title: "\u0000".repeat(1000), body: "\n\\\"".repeat(1000), url: "/?bot=" + "a".repeat(2300), tag: "\t".repeat(1000), kind: "approval", botId: "b".repeat(200), approvalId: "c".repeat(200), account: "0123456789abcdef" };
+  const fitted = apnsPayload(JSON.stringify(huge));
+  expect(Buffer.byteLength(fitted)).toBeLessThanOrEqual(4000);
+  expect(JSON.parse(fitted)).toMatchObject({ url: huge.url, aps: { "interruption-level": "time-sensitive" } });
+  expect(JSON.parse(fitted).aps.category).toBeUndefined();
+  const roomy = JSON.parse(apnsPayload(JSON.stringify({ ...huge, url: "/?bot=" + "b".repeat(200) })));
+  expect([roomy.aps.category, roomy.approvalId]).toEqual(["APPROVAL", "c".repeat(200)]);
+});
+
+it("derives an APNs collapse ID from the tag within Apple's 64 bytes", async () => {
+  expect(apnsCollapseId("6f1c2b1e-9d4a-4c3e-8f1a-2b3c4d5e6f70")).toBe("6f1c2b1e-9d4a-4c3e-8f1a-2b3c4d5e6f70");
+  expect(apnsCollapseId("x".repeat(64))).toBe("x".repeat(64));
+  for (const tag of ["x".repeat(65), "😀".repeat(20), "with space", "line\nbreak"]) {
+    const id = apnsCollapseId(tag);
+    expect(Buffer.byteLength(id)).toBeLessThanOrEqual(64);
+    expect(id).toMatch(/^[\x21-\x7e]+$/);
+    expect(apnsCollapseId(tag)).toBe(id);
+  }
+  expect(apnsCollapseId("x".repeat(65))).not.toBe(apnsCollapseId("x".repeat(66)));
+  const dir = mkdtempSync(join(tmpdir(), "apns-collapse-"));
+  const { privateKey } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+  const config = { ...apnsConfig(), privateKeyFile: join(dir, "key.p8") };
+  writeFileSync(config.privateKeyFile, privateKey.export({ type: "pkcs8", format: "pem" }), { mode: 0o600 });
+  const seen: Record<string, string>[] = [];
+  const sender = createApnsSender(config, async (_origin, headers) => { seen.push(headers); return { statusCode: 200 }; })!;
+  try {
+    const device = { deviceId: randomUUID(), token: "ab".repeat(32), environment: "sandbox" as const };
+    await sender(device, JSON.stringify({ title: "Done", body: "Hello", url: "/?bot=bot", tag: "event" }));
+    await sender(device, JSON.stringify({ title: "Done", body: "Hello", url: "/?bot=bot", tag: "t".repeat(200) }));
+    await sender.clear(device, ["event"]);
+    expect(seen.map(headers => headers["apns-collapse-id"])).toEqual(["event", apnsCollapseId("t".repeat(200)), undefined]);
+  } finally { sender.close(); rmSync(dir, { recursive: true }); }
+});
+
+it("names the recipient account and the approval on iOS only, keeping Web Push as before", async () => {
+  const store = new Store(":memory:");
+  const config = loadConfig({ HOUSEHOLD_EMAILS: "one@example.test" }); config.apns = apnsConfig();
+  store.user({ id: "one", name: "one", email: "one@example.test" });
+  store.nativeSession("one", "one", Date.now() + 100000);
+  store.registerNativeDevice("one", "one", "one", "ab".repeat(32), "sandbox");
+  store.subscribe("one", { endpoint: "https://push.test/one", keys: { p256dh: "key", auth: "auth" } });
+  store.savePreferences("one", { ...defaultPreferences, followBots: ["kitchen"] });
+  store.recordEvents([{ id: "ask", botId: "kitchen", runId: "run", kind: "approval", approvalId: "request-7", title: "Approval requested", occurredAt: "now" },
+    { id: "done", botId: "kitchen", runId: "run", kind: "completed", title: "Done", occurredAt: "now" }], "cursor");
+  const web: Record<string, unknown>[] = [], native: Record<string, unknown>[] = [];
+  const worker = new BackgroundWorker(store, runtime, config, async (_subscription, payload) => { web.push(JSON.parse(payload)); },
+    async (_device, payload) => { native.push(JSON.parse(apnsPayload(payload))); });
+  await worker.tick();
+  expect(web.map(row => [row.tag, row.approvalId, row.account])).toEqual([["ask", "request-7", undefined], ["done", undefined, undefined]]);
+  expect(native.map(row => [row.tag, (row.aps as { category?: string }).category, row.approvalId, row.account])).toEqual([
+    ["ask", "APPROVAL", "request-7", accountMarker("one")], ["done", "REPLY", undefined, accountMarker("one")]]);
+  expect(accountMarker("one")).toMatch(/^[0-9a-f]{16}$/);
+  expect(accountMarker("one")).not.toBe(accountMarker("two"));
+  store.close();
 });
 
 it("sends a private assistant's news only to its owner on web and APNs, even after quiet hours", async () => {
@@ -272,7 +552,7 @@ it("sends a private assistant's news only to its owner on web and APNs, even aft
   }
   // Two joined the run, receives the routine and follows the assistant; none of that reaches past its privacy.
   store.participate("run", "two");
-  store.routineRecipients("routine", ["two"]);
+  store.routineRecipients("mine", "routine", ["two"]);
   store.savePresentation("mine", { shared: false, ownerId: "one" });
   const event: RuntimeEvent = { id: "run-done", botId: "mine", runId: "run", kind: "completed", title: "Done", occurredAt: "now" };
   store.recordEvents([event, { ...event, id: "routine-done", routineId: "routine" }], "cursor");
@@ -316,4 +596,45 @@ it("stops a delivery mid-way when its assistant turns private, before any other 
   expect(sent).toEqual(["https://push.test/phone"]);
   expect(store.outbox()).toHaveLength(0);
   store.close();
+});
+
+it("publishes the iOS app's universal links only when the host signs for that app", async () => {
+  const unsigned = await setup();
+  expect((await unsigned.app.inject("/.well-known/apple-app-site-association")).statusCode).toBe(404);
+  const config = loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }); config.apns = apnsConfig();
+  const signed = await setup(config);
+  // Apple's CDN fetches it without a session.
+  const response = await signed.app.inject("/.well-known/apple-app-site-association");
+  expect(response.statusCode).toBe(200);
+  expect(response.headers["content-type"]).toMatch(/^application\/json/);
+  const value = response.json();
+  expect(value.applinks.details).toEqual([{ appIDs: ["TEAM123456.test.agentinterface"], components: [
+    expect.objectContaining({ "/": "/", "?": { bot: "?*" } }), expect.objectContaining({ "/": "/", "?": { view: "today" } }),
+  ] }]);
+  expect(value.activitycontinuation).toEqual({ apps: ["TEAM123456.test.agentinterface"] });
+});
+
+it("lets a Live Activity's Stop act only for the account it names", async () => {
+  const stopped: string[] = [];
+  const result = await createApp(loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }), fakeRuntime({
+    listBots: async () => [{ id: "bot", name: "Bot", shared: true, model: "test", activity: "working" }],
+    capabilities: async () => capabilitiesFixture({ avatarMetadata: { supported: false }, stop: { supported: true } }), stop: async (botId: string) => { stopped.push(botId); },
+    close: async () => {},
+  }), { background: false });
+  apps.push(result);
+  const { app } = result, { token } = await connectNative(app);
+  const stop = (payload?: object) => app.inject({ method: "POST", url: "/api/bots/bot/stop", headers: { authorization: `Bearer ${token}` }, ...(payload ? { payload } : {}) });
+  // Another person signed in on the phone since the activity started: nothing stops.
+  const refused = await stop({ account: accountMarker("local-two") });
+  expect(refused.statusCode).toBe(409);
+  expect(refused.json().error).toBe("This activity belongs to a different account");
+  expect(stopped).toEqual([]);
+  const allowed = await stop({ account: accountMarker("local-one") });
+  expect(allowed.statusCode, allowed.body).toBe(200);
+  expect(allowed.json()).toEqual({ ok: true });
+  // The chat's own Stop sends nothing or an empty body, as before.
+  expect((await stop()).statusCode).toBe(200);
+  expect((await stop({})).statusCode).toBe(200);
+  expect((await stop({ account: "x".repeat(65) })).statusCode).toBe(400);
+  expect(stopped).toEqual(["bot", "bot", "bot"]);
 });

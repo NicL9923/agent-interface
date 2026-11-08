@@ -18,7 +18,16 @@ struct ReplyCard: Decodable, Identifiable {
   var start: String?
   var end: String?
   var location: String?
+  /// An event's details, or a form's introduction.
   var description: String?
+  // An email draft.
+  var to: [String]?
+  var cc: [String]?
+  var subject: String?
+  var body: String?
+  // A form.
+  var submitLabel: String?
+  var fields: [FormField]?
 }
 struct ReplyCardDocument: Decodable { var version: Int; var cards: [ReplyCard] }
 struct ReplyCardState: Codable, Equatable { var checkedIds: [String] = []; var notes: [String: String] = [:] }
@@ -34,13 +43,37 @@ enum ReplyCards {
       if let prose = part.markdown { return prose }
       if let inline = part.inline { return inline.title }
       return (part.cards ?? []).map { card in
-        ([card.title] + (card.items ?? []).map { $0.text ?? $0.title ?? "" }).joined(separator: ". ")
+        ([card.title] + (card.items ?? []).map { $0.text ?? $0.title ?? "" } + [card.subject].compactMap { $0 }
+          + (card.fields ?? []).map(\.label)).joined(separator: ". ")
       }.joined(separator: "\n")
     }.joined(separator: "\n")
   }
   /// Splits a reply into prose, cards and, when `inlineUi` allows it, inline UI. Without it a
   /// wildbots-html fence stays a code block, as the web shows it outside assistant replies.
-  static func parse(_ text: String, inlineUi: Bool = true) -> [ReplyContentPart] {
+  /// Messages render on every update, so results are reused like MarkdownCache's blocks. A reply
+  /// still streaming changes with every patch, so it is not `cached`.
+  static func parse(_ text: String, inlineUi: Bool = true, cached: Bool = true) -> [ReplyContentPart] {
+    guard cached else { return parseFresh(text, inlineUi: inlineUi) }
+    let key = ((inlineUi ? "1" : "0") + text) as NSString
+    if let cached = parsed.object(forKey: key) { return cached.parts }
+    let parts = parseFresh(text, inlineUi: inlineUi)
+    // A large reply still renders, but cannot evict every ordinary answer from the cache.
+    if text.utf16.count <= 100_000 { parsed.setObject(Parsed(parts), forKey: key, cost: text.utf16.count * 2) }
+    return parts
+  }
+  private final class Parsed: NSObject {
+    let parts: [ReplyContentPart]
+    init(_ parts: [ReplyContentPart]) { self.parts = parts }
+  }
+  /// NSCache is thread-safe, and its entries are immutable.
+  nonisolated(unsafe) private static let parsed: NSCache<NSString, Parsed> = {
+    let cache = NSCache<NSString, Parsed>()
+    cache.countLimit = 128
+    cache.totalCostLimit = 4 * 1024 * 1024
+    return cache
+  }()
+  static func clearCache() { parsed.removeAllObjects() }
+  static func parseFresh(_ text: String, inlineUi: Bool = true) -> [ReplyContentPart] {
     guard text.utf16.count <= 200_000 else { return [.init(id: 0, markdown: text)] }
     var parts: [ReplyContentPart] = []
     var cursor = text.startIndex
@@ -57,7 +90,7 @@ enum ReplyCards {
         let data = String(text[payload]).data(using: .utf8), strictJSON(data),
         let doc = try? JSONDecoder().decode(ReplyCardDocument.self, from: data), valid(doc) else { continue }
       if cursor < whole.lowerBound { parts.append(.init(id: parts.count, markdown: String(text[cursor..<whole.lowerBound]))) }
-      parts.append(.init(id: parts.count, cards: doc.cards)); cursor = whole.upperBound
+      parts.append(.init(id: parts.count, cards: doc.cards.map(ReplyActionRules.normalized))); cursor = whole.upperBound
     }
     if cursor < text.endIndex || parts.isEmpty { parts.append(.init(id: parts.count, markdown: String(text[cursor...]))) }
     let cards = parts.flatMap { $0.cards ?? [] }
@@ -67,7 +100,8 @@ enum ReplyCards {
   struct Fence { var whole: Range<String.Index>; var payload: Range<String.Index>; var language: String }
   // Scan all code fences so an example nested inside a longer fence stays code.
   static func fencedBlocks(_ text: String) -> [Fence] {
-    let opening = try! NSRegularExpression(pattern: "^ {0,3}(`{3,}|~{3,})(.*)$")
+    // Most replies have no fence at all, and every opening needs three of a kind.
+    guard text.contains("```") || text.contains("~~~") else { return [] }
     var result: [Fence] = []
     var active: (start: String.Index, payload: String.Index, language: String, closing: NSRegularExpression)?
     var cursor = text.startIndex
@@ -83,30 +117,62 @@ enum ReplyCards {
         }
       } else if let match = opening.firstMatch(in: line, range: range), let delimiterRange = Range(match.range(at: 1), in: line), let languageRange = Range(match.range(at: 2), in: line) {
         let delimiter = String(line[delimiterRange])
-        let pattern = "^ {0,3}" + String(delimiter.first!) + "{" + String(delimiter.count) + ",}[ \t]*$"
-        active = (cursor, next, String(line[languageRange]).trimmingCharacters(in: .whitespaces), try! NSRegularExpression(pattern: pattern))
+        active = (cursor, next, String(line[languageRange]).trimmingCharacters(in: .whitespaces), closing(delimiter))
       }
       cursor = next
     }
     return result
   }
+  private static let opening = try! NSRegularExpression(pattern: "^ {0,3}(`{3,}|~{3,})(.*)$")
+  /// Closing patterns by opening fence, compiled once each. NSRegularExpression is thread-safe.
+  nonisolated(unsafe) private static let closings = NSCache<NSString, NSRegularExpression>()
+  private static func closing(_ delimiter: String) -> NSRegularExpression {
+    if let cached = closings.object(forKey: delimiter as NSString) { return cached }
+    let pattern = "^ {0,3}" + String(delimiter.first!) + "{" + String(delimiter.count) + ",}[ \t]*$"
+    let compiled = try! NSRegularExpression(pattern: pattern)
+    closings.setObject(compiled, forKey: delimiter as NSString)
+    return compiled
+  }
+  /// Whether a JSON value is a number and not a switch, which JSONSerialization also hands back as NSNumber.
+  private static func isNumber(_ value: Any) -> Bool {
+    guard let number = value as? NSNumber else { return false }
+    return CFGetTypeID(number) != CFBooleanGetTypeID()
+  }
   static func strictJSON(_ data: Data) -> Bool {
     guard data.count <= 100_000, let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any], Set(object.keys) == ["version", "cards"], let cards = object["cards"] as? [[String: Any]] else { return false }
+    // An explicit null is not an absent field: the web rejects it, while Swift's decoding would read
+    // it as absent. A JSON number may start only a number field.
+    func clean(_ value: [String: Any]) -> Bool { !value.values.contains { $0 is NSNull } }
     return cards.allSatisfy { card in
+      guard clean(card) else { return false }
       let type = card["type"] as? String ?? ""
-      let allowed: Set<String> = type == "event" ? ["id", "type", "title", "start", "end", "location", "description"] : ["id", "type", "title", "items"]
+      let allowed: Set<String> = switch type {
+      case "event": ["id", "type", "title", "start", "end", "location", "description"]
+      case "email": ["id", "type", "title", "to", "cc", "subject", "body"]
+      case "form": ["id", "type", "title", "description", "submitLabel", "fields"]
+      default: ["id", "type", "title", "items"]
+      }
       guard Set(card.keys).isSubset(of: allowed) else { return false }
-      if type == "event" { return true }
-      guard let items = card["items"] as? [[String: Any]] else { return false }
-      let itemKeys: Set<String> = type == "checklist" ? ["id", "text"] : ["id", "title", "time", "detail", "url"]
-      return items.allSatisfy { Set($0.keys).isSubset(of: itemKeys) }
+      switch type {
+      case "event", "email": return true
+      case "form":
+        guard let fields = card["fields"] as? [[String: Any]] else { return false }
+        return fields.allSatisfy { field in
+          Set(field.keys).isSubset(of: ["id", "label", "kind", "required", "help", "placeholder", "options", "value"]) && clean(field)
+            && (field["value"].map { !isNumber($0) || field["kind"] as? String == "number" } ?? true)
+        }
+      default:
+        guard let items = card["items"] as? [[String: Any]] else { return false }
+        let itemKeys: Set<String> = type == "checklist" ? ["id", "text"] : ["id", "title", "time", "detail", "url"]
+        return items.allSatisfy { Set($0.keys).isSubset(of: itemKeys) && clean($0) }
+      }
     }
   }
   static func validId(_ id: String) -> Bool { !id.isEmpty && id.count <= 80 && id.range(of: "^[a-zA-Z0-9_-]+$", options: .regularExpression) != nil }
   static func valid(_ doc: ReplyCardDocument) -> Bool {
     guard doc.version == 1, !doc.cards.isEmpty, doc.cards.count <= 8, Set(doc.cards.map(\.id)).count == doc.cards.count else { return false }
     return doc.cards.allSatisfy { card in
-      guard validId(card.id), !card.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, card.title.count <= 200 else { return false }
+      guard validId(card.id), ReplyActionRules.title(card.title, 200) else { return false }
       switch card.type {
       case "checklist", "itinerary":
         guard let items = card.items, !items.isEmpty, items.count <= 60, Set(items.map(\.id)).count == items.count else { return false }
@@ -121,6 +187,8 @@ enum ReplyCards {
         guard let raw = card.start, absoluteDate(raw), let start = ServerDate.parse(raw) else { return false }
         if let end = card.end { guard absoluteDate(end), let date = ServerDate.parse(end), date > start else { return false } }
         return true
+      case "email": return ReplyActionRules.validEmail(card)
+      case "form": return ReplyActionRules.validForm(card)
       default: return false
       }
     }
@@ -138,8 +206,9 @@ struct ReplyContentView: View {
   var message: Message
   var body: some View {
     if message.isReply {
-      ForEach(ReplyCards.parse(message.text, inlineUi: message.role == "assistant")) { part in
-        if let markdown = part.markdown { MarkdownView(text: markdown) }
+      let streaming = message.id.hasSuffix("-inflight")
+      ForEach(ReplyCards.parse(message.text, inlineUi: message.role == "assistant", cached: !streaming)) { part in
+        if let markdown = part.markdown { MarkdownView(text: markdown, streaming: streaming) }
         if let inline = part.inline { InlineUiView(document: inline) }
         if let cards = part.cards { ForEach(cards) { card in InteractiveReplyCard(card: card, messageId: message.id) } }
       }
@@ -152,7 +221,7 @@ struct ReplyContentView: View {
 struct InteractiveReplyCard: View {
   var card: ReplyCard
   var messageId: String
-  @Environment(\.unobservedStore) private var store
+  @Environment(AppStore.self) private var store: AppStore?
   @Environment(\.transcriptConnected) private var connected
   @Environment(\.colorScheme) private var scheme
   @State private var saved = ReplyCardState()
@@ -163,7 +232,9 @@ struct InteractiveReplyCard: View {
   @State private var eventOpen = false
   enum Status { case loading, ready, saving, failed }
   private var busy: Bool { status == .loading || status == .saving || !connected }
-  private var typeLabel: String { card.type == "event" ? "Calendar proposal" : card.type == "itinerary" ? "Itinerary" : "Checklist" }
+  private var typeLabel: String {
+    switch card.type { case "event": "Calendar proposal"; case "itinerary": "Itinerary"; case "email": "Email draft"; case "form": "Questions"; default: "Checklist" }
+  }
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
       HStack {
@@ -180,6 +251,10 @@ struct InteractiveReplyCard: View {
         if let description = card.description { Text(description).font(.footnote) }
         Button("Review calendar event", systemImage: "calendar.badge.plus") { eventOpen = true }.buttonStyle(.bordered)
         Text("Review and choose Save in Apple's event editor to add it to your calendar.").font(.caption).foregroundStyle(.secondary)
+      } else if card.type == "email" {
+        EmailDraftCardView(card: card)
+      } else if card.type == "form" {
+        FormReplyCardView(card: card, messageId: messageId)
       } else {
         ForEach(card.items ?? []) { item in
           if card.type == "checklist" {
@@ -226,17 +301,24 @@ struct InteractiveReplyCard: View {
   }
   private var path: String { "/bots/\(APIClient.component(store?.selectedBotId ?? ""))/messages/\(APIClient.component(messageId))/cards/\(APIClient.component(card.id))/state" }
   private func load() async {
-    guard card.type != "event", let api = store?.api else { return }
-    let scope = store?.scope; status = .loading; error = nil
-    do { let value: ReplyCardState = try await api.get(path); guard store?.scope == scope, store?.api === api else { return }; saved = value; draft = value; status = .ready }
-    catch { if store?.scope == scope { self.error = error.localizedDescription; status = .failed } }
+    // Only checklists and itineraries save per-person state on the server.
+    guard card.type == "checklist" || card.type == "itinerary", let store, store.api != nil else { return }
+    status = .loading; error = nil
+    switch await store.attempt({ (context) -> ReplyCardState in try await context.api.get(path) }) {
+    case .success(let value)?: saved = value; draft = value; status = .ready
+    case .failure(let failure)?: error = failure.localizedDescription; status = .failed
+    case nil: break
+    }
   }
   private func save(_ value: ReplyCardState) {
-    guard let api = store?.api, !busy else { return }
-    let scope = store?.scope; let route = path; draft = value; status = .saving; error = nil
+    guard let store, store.api != nil, !busy else { return }
+    let route = path; draft = value; status = .saving; error = nil
     Task {
-      do { let result: ReplyCardState = try await api.write(route, value, method: "PUT"); guard store?.scope == scope, store?.api === api else { return }; saved = result; draft = result; status = .ready; editing = nil }
-      catch { if store?.scope == scope { self.error = error.localizedDescription; status = .failed } }
+      switch await store.attempt({ (context) -> ReplyCardState in try await context.api.write(route, value, method: "PUT") }) {
+      case .success(let result)?: saved = result; draft = result; status = .ready; editing = nil
+      case .failure(let failure)?: error = failure.localizedDescription; status = .failed
+      case nil: break
+      }
     }
   }
 }

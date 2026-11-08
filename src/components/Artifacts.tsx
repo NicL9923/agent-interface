@@ -3,7 +3,8 @@ import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { NativeSelect } from "./ui/native-select";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { api } from "../client-api";
+import { request as apiRequest } from "../client-api";
+import { useResource } from "../app/use-resource";
 import type { EarlierFiles } from "../shared/history";
 import type { Bot, Conversation, FileRef } from "../shared/types";
 import { Icon } from "./Icon";
@@ -17,6 +18,7 @@ const kinds: { value: FileKind | "all"; label: string }[] = [
   { value: "audio", label: "Audio" }, { value: "video", label: "Video" },
   { value: "other", label: "Other files" },
 ];
+const typeNames: Record<FileKind, string> = { image: "Image", text: "Text", document: "PDF", audio: "Audio", video: "Video", other: "File" };
 const rasterTypes = new Set(["image/png", "image/jpeg", "image/webp", "image/gif", "image/avif", "image/bmp"]);
 const textTypes = new Set(["text/plain", "text/markdown", "text/csv", "application/json"]);
 const audioTypes = new Set(["audio/mpeg", "audio/mp4", "audio/ogg", "audio/wav", "audio/x-wav", "audio/webm", "audio/flac"]);
@@ -90,7 +92,7 @@ export function ArtifactsButton({ bot, conversation, unavailable = false }: {
     const id = ++request.current;
     const settle = (value: typeof earlier) => { if (request.current === id) setEarlier({ session, before, ...value }); };
     settle({ loading: true });
-    api<EarlierFiles>(`/bots/${encodeURIComponent(bot.id)}/files${before ? `?before=${encodeURIComponent(before)}` : ""}`)
+    apiRequest("GET /bots/:id/files", { params: { id: bot.id }, query: { before } })
       .then(value => settle({ messages: value.messages }), () => settle({ failed: true }));
   }, [open, bot.id, session, before, !!current?.earlierFiles, fetched]);
   const show = () => {
@@ -101,18 +103,20 @@ export function ArtifactsButton({ bot, conversation, unavailable = false }: {
   return <>
     <Button className="icon-button artifacts-button" aria-label={`Artifacts (${count})`}
       title="Browse artifacts" aria-haspopup="dialog" onClick={show}>
-      <Icon name="file" />
+      <span className="artifacts-button-icon">
+        <Icon name="file" />
+        {!!count && <span className="artifacts-count" aria-hidden="true">{count}</span>}
+      </span>
       <span className="artifacts-button-label">Artifacts</span>
-      {!!count && <span className="artifacts-count" aria-hidden="true">{count}</span>}
     </Button>
-    {open && <ArtifactsView bot={bot} artifacts={artifacts} loading={!current && !unavailable}
+    {open && <ArtifactsView bot={bot} artifacts={artifacts} reloading={!current}
       earlier={!fetched ? undefined : earlier.loading ? "loading" : earlier.failed ? "failed" : undefined}
       unavailable={unavailable} onClose={() => setOpen(false)} />}
   </>;
 }
 
-function ArtifactsView({ bot, artifacts, loading, earlier, unavailable, onClose }: {
-  bot: Bot; artifacts: Artifact[]; loading: boolean; earlier?: "loading" | "failed"; unavailable: boolean; onClose: () => void;
+function ArtifactsView({ bot, artifacts, reloading, earlier, unavailable, onClose }: {
+  bot: Bot; artifacts: Artifact[]; reloading: boolean; earlier?: "loading" | "failed"; unavailable: boolean; onClose: () => void;
 }) {
   const titleId = useId();
   const searchId = useId();
@@ -142,7 +146,7 @@ function ArtifactsView({ bot, artifacts, loading, earlier, unavailable, onClose 
     {earlier && <p className="artifacts-notice" role="status">{earlier === "loading"
       ? "Loading files from earlier in the conversation…"
       : "Files from earlier in the conversation could not be loaded. Close and reopen this list to try again."}</p>}
-    {loading ? <div className="artifacts-empty" role="status">Loading your conversation’s files…</div>
+    {reloading ? <div className="artifacts-empty" role="status">Artifacts are unavailable while this conversation reloads.</div>
       : !artifacts.length ? <div className="artifacts-empty"><Icon name="file" size={36} />
         <h3>No artifacts yet</h3><p>Generated outputs and files shared in this conversation will appear here.</p></div>
       : !filtered.length ? <div className="artifacts-empty" role="status"><h3>No matching files</h3>
@@ -167,7 +171,7 @@ function ArtifactDetail({ artifact }: { artifact: Artifact }) {
   const url = managedFileUrl(file);
   const external = url ? undefined : sourceUrl(file);
   return <section className="artifact-detail" aria-label={`Preview of ${file.name}`}>
-    <header><h3>{file.name}</h3><p>{source} · {file.mime}{fileSize(file.size) && ` · ${fileSize(file.size)}`}</p></header>
+    <header><h3>{file.name}</h3><p>{source} · {typeNames[fileKind(file)]}{fileSize(file.size) && ` · ${fileSize(file.size)}`}</p></header>
     <div className="artifact-preview">
       {!url ? <p>{external ? "This file is hosted outside the app. Open its source to view it."
         : "This file has no supported download address."}</p>
@@ -205,51 +209,54 @@ function FilePreview({ file, url }: { file: FileRef; url: string }) {
 }
 
 const textPreviewLimit = 256 * 1024;
+type TextContent = { text: string; truncated: boolean };
+/** Reads the start of a file as text, up to the preview limit, and gives up after 20 seconds. */
+async function readTextPreview(url: string, signal: AbortSignal): Promise<TextContent> {
+  const controller = new AbortController();
+  const stop = () => controller.abort();
+  let late = false;
+  const timer = setTimeout(() => { late = true; controller.abort(); }, 20_000);
+  signal.addEventListener("abort", stop);
+  try {
+    const response = await fetch(url, { credentials: "same-origin", cache: "no-store", redirect: "error", signal: controller.signal });
+    if (!response.ok) throw new Error(response.status === 401 ? "Sign in again to open this file." : "This file could not be loaded. Try again when the connection is restored.");
+    const chunks: Uint8Array[] = [];
+    let length = 0;
+    let truncated = false;
+    if (response.body) {
+      const reader = response.body.getReader();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const remaining = textPreviewLimit - length;
+        chunks.push(value.slice(0, remaining));
+        length += Math.min(value.length, remaining);
+        if (value.length > remaining || length === textPreviewLimit) { truncated = true; await reader.cancel(); break; }
+      }
+    } else {
+      const value = new TextEncoder().encode(await response.text());
+      chunks.push(value.slice(0, textPreviewLimit)); length = Math.min(value.length, textPreviewLimit);
+      truncated = value.length > textPreviewLimit;
+    }
+    const bytes = new Uint8Array(length);
+    let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
+    return { text: new TextDecoder().decode(bytes), truncated };
+  } catch (error) {
+    throw late ? new Error("The preview took too long to load. Try again.") : error;
+  } finally {
+    clearTimeout(timer);
+    signal.removeEventListener("abort", stop);
+  }
+}
 function TextPreview({ file, url }: { file: FileRef; url: string }) {
-  const [attempt, setAttempt] = useState(0);
-  const [preview, setPreview] = useState<{ text?: string; truncated?: boolean; error?: string }>({});
-  useEffect(() => {
-    const controller = new AbortController();
-    let live = true;
-    setPreview({});
-    const timer = setTimeout(() => controller.abort(), 20_000);
-    const load = async () => {
-      try {
-        const response = await fetch(url, { credentials: "same-origin", cache: "no-store", redirect: "error", signal: controller.signal });
-        if (!response.ok) throw new Error(response.status === 401 ? "Sign in again to open this file." : "This file could not be loaded. Try again when the connection is restored.");
-        const chunks: Uint8Array[] = [];
-        let length = 0;
-        let truncated = false;
-        if (response.body) {
-          const reader = response.body.getReader();
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            const remaining = textPreviewLimit - length;
-            chunks.push(value.slice(0, remaining));
-            length += Math.min(value.length, remaining);
-            if (value.length > remaining || length === textPreviewLimit) { truncated = true; await reader.cancel(); break; }
-          }
-        } else {
-          const value = new TextEncoder().encode(await response.text());
-          chunks.push(value.slice(0, textPreviewLimit)); length = Math.min(value.length, textPreviewLimit);
-          truncated = value.length > textPreviewLimit;
-        }
-        const bytes = new Uint8Array(length);
-        let offset = 0;
-        for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
-        if (live) setPreview({ text: new TextDecoder().decode(bytes), truncated });
-      } catch (error) {
-        if (live) setPreview({ error: controller.signal.aborted ? "The preview took too long to load. Try again."
-          : error instanceof Error ? error.message : "The preview could not be loaded." });
-      } finally { clearTimeout(timer); }
-    };
-    void load();
-    return () => { live = false; controller.abort(); clearTimeout(timer); };
-  }, [url, attempt]);
+  const preview = useResource<TextContent>(url, {
+    load: readTextPreview,
+    errorMessage: cause => cause instanceof Error ? cause.message : "The preview could not be loaded.",
+  });
   return preview.error ? <div className="artifact-preview-error" role="alert"><p>{preview.error}</p>
-    <Button onClick={() => setAttempt(value => value + 1)}>Retry preview</Button></div>
-    : preview.text === undefined ? <p role="status">Loading preview…</p>
-      : <div className="artifact-text-preview"><pre aria-label={`Contents of ${file.name}`}>{preview.text || "This file is empty."}</pre>
-        {preview.truncated && <p className="artifact-preview-status">Showing the first 256 KB. Download the file to read the rest.</p>}</div>;
+    <Button onClick={() => void preview.reload()}>Retry preview</Button></div>
+    : !preview.data ? <p role="status">Loading preview…</p>
+      : <div className="artifact-text-preview"><pre aria-label={`Contents of ${file.name}`}>{preview.data.text || "This file is empty."}</pre>
+        {preview.data.truncated && <p className="artifact-preview-status">Showing the first 256 KB. Download the file to read the rest.</p>}</div>;
 }

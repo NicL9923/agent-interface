@@ -1,0 +1,153 @@
+import { createHmac, randomBytes } from "node:crypto";
+import type { User } from "../shared/types.js";
+import { httpError } from "./http-error.js";
+import type { StoreDatabase } from "./store-database.js";
+
+/** Household members, web and native sessions, and the native sign-in handshake. */
+export class AccountRepository {
+  constructor(private readonly database: StoreDatabase) {}
+  private get db() { return this.database.db; }
+  user(user: User) {
+    this.db
+      .prepare(
+        "INSERT INTO users(id,email,name,picture) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET email=excluded.email,name=excluded.name,picture=excluded.picture",
+      )
+      .run(user.id, user.email, user.name, user.picture ?? null);
+    return user;
+  }
+  /**
+   * A key only this person's clients receive, for deriving their form request IDs. It is an HMAC of
+   * the person's ID under one random secret kept for this installation, so nobody else can work out
+   * those IDs and claim one first, and every device of the same person derives the same ones.
+   */
+  formKey(userId: string): string {
+    return createHmac("sha256", this.formSecret()).update(`wildbots-form-key\u0000${userId}`).digest("base64url");
+  }
+  private secret?: string;
+  /**
+   * Creates the installation's form-key secret if it is missing. The store calls this once when it
+   * opens, beside its other startup writes, so bootstrap only ever reads the secret and never needs
+   * the write lock. Two processes opening at once keep whichever row landed first.
+   */
+  ensureFormSecret() {
+    // Read first: even an ignored INSERT takes the write lock, which only a new installation needs.
+    if (this.db.prepare("SELECT 1 FROM metadata WHERE key='form_key_secret'").get()) return;
+    this.db.prepare("INSERT OR IGNORE INTO metadata VALUES('form_key_secret',?)").run(randomBytes(32).toString("base64url"));
+  }
+  /** The secret, read once per process. A store that opened without creating it is a programming error. */
+  private formSecret(): string {
+    this.secret ??= (this.db.prepare("SELECT value FROM metadata WHERE key='form_key_secret'").get() as { value: string } | undefined)?.value;
+    if (this.secret === undefined) throw new Error("The form-key secret is missing; the store creates it when it opens.");
+    return this.secret;
+  }
+  users(): User[] {
+    return this.db
+      .prepare("SELECT * FROM users ORDER BY name")
+      .all() as unknown as User[];
+  }
+  getUser(id: string): User | undefined {
+    return this.db
+      .prepare("SELECT * FROM users WHERE id=?")
+      .get(id) as unknown as User | undefined;
+  }
+  session(hash: string, userId: string, csrf: string, expires: number) {
+    this.db
+      .prepare("INSERT INTO sessions VALUES(?,?,?,?)")
+      .run(hash, userId, csrf, expires);
+  }
+  getSession(hash: string) {
+    return this.db
+      .prepare(
+        "SELECT user_id AS userId,csrf,expires FROM sessions WHERE hash=? AND expires>?",
+      )
+      .get(hash, Date.now()) as unknown as
+      { userId: string; csrf: string; expires: number } | undefined;
+  }
+  deleteSession(hash: string) {
+    this.db.prepare("DELETE FROM sessions WHERE hash=?").run(hash);
+  }
+  confirmSession(hash: string, confirmedAt: number) {
+    this.db.prepare("INSERT INTO session_confirmations VALUES(?,?) ON CONFLICT(session_hash) DO UPDATE SET confirmed_at=max(confirmed_at,excluded.confirmed_at)")
+      .run(hash, confirmedAt);
+  }
+  sessionConfirmedAt(hash: string): number | undefined {
+    return (this.db.prepare("SELECT confirmed_at FROM session_confirmations WHERE session_hash=?").get(hash) as { confirmed_at: number } | undefined)?.confirmed_at;
+  }
+  nativeSession(hash: string, userId: string, expires: number, signedInAt = Date.now()) {
+    this.database.transaction(() => {
+      this.db.prepare("INSERT INTO native_sessions VALUES(?,?,?)").run(hash, userId, expires);
+      this.db.prepare("INSERT INTO native_session_starts VALUES(?,?)").run(hash, signedInAt);
+    });
+  }
+  /**
+   * Extends a live native session in place to `lifetime` from now, never past `limit` after its
+   * Google sign-in. The token keeps its hash, so its push registrations stay attached.
+   * Returns the expiry it now has, or undefined when the session is gone.
+   */
+  renewNativeSession(hash: string, lifetime: number, limit: number, now = Date.now()) {
+    return this.database.transaction(() => {
+      const session = this.db.prepare("SELECT s.expires,t.signed_in_at AS signedInAt FROM native_sessions s LEFT JOIN native_session_starts t ON t.hash=s.hash WHERE s.hash=?")
+        .get(hash) as { expires: number; signedInAt: number | null } | undefined;
+      if (!session || session.expires <= now) return undefined;
+      // A session from before renewal began one lifetime before its first expiry. Recording that
+      // start keeps later renewals from inferring a newer one from the expiry they extended.
+      const signedInAt = session.signedInAt ?? session.expires - lifetime;
+      if (session.signedInAt === null) this.db.prepare("INSERT INTO native_session_starts VALUES(?,?)").run(hash, signedInAt);
+      const expires = Math.max(session.expires, Math.min(now + lifetime, signedInAt + limit));
+      if (expires !== session.expires) this.db.prepare("UPDATE native_sessions SET expires=? WHERE hash=?").run(expires, hash);
+      return expires;
+    });
+  }
+  getNativeSession(hash: string) {
+    const session = this.db.prepare("SELECT user_id AS userId,expires FROM native_sessions WHERE hash=?").get(hash) as
+      { userId: string; expires: number } | undefined;
+    if (session && session.expires <= Date.now()) { this.deleteNativeSession(hash); return undefined; }
+    return session;
+  }
+  /** Records when this native session's person proved who they are, keeping the later of two times. */
+  confirmNativeSession(hash: string, confirmedAt: number) {
+    this.db.prepare("INSERT INTO native_session_confirmations VALUES(?,?) ON CONFLICT(hash) DO UPDATE SET confirmed_at=max(confirmed_at,excluded.confirmed_at)")
+      .run(hash, confirmedAt);
+  }
+  nativeSessionConfirmedAt(hash: string): number | undefined {
+    return (this.db.prepare("SELECT confirmed_at FROM native_session_confirmations WHERE hash=?").get(hash) as { confirmed_at: number } | undefined)?.confirmed_at;
+  }
+  deleteNativeSession(hash: string) {
+    this.db.prepare("DELETE FROM native_sessions WHERE hash=?").run(hash);
+  }
+  pruneNativeAuth() {
+    for (const table of ["native_flows", "native_codes", "native_sessions"])
+      this.db.prepare(`DELETE FROM ${table} WHERE expires<=?`).run(Date.now());
+  }
+  nativeFlow(hash: string, state: string, challenge: string, nonce: string, expires: number) {
+    this.pruneNativeAuth();
+    const count = this.db.prepare("SELECT count(*) AS count FROM native_flows").get() as { count: number };
+    if (count.count >= 1000) throw httpError(429, "Too many sign-in attempts. Try again shortly.");
+    this.db.prepare("INSERT INTO native_flows VALUES(?,?,?,?,?)").run(hash, state, challenge, nonce, expires);
+  }
+  getNativeFlow(hash: string) {
+    return this.db.prepare("SELECT state,challenge,nonce FROM native_flows WHERE hash=? AND expires>?")
+      .get(hash, Date.now()) as { state: string; challenge: string; nonce: string } | undefined;
+  }
+  /** Turns a sign-in flow into a one-minute code; `confirmedAt` is when the person proved who they are. */
+  finishNativeFlow(flowHash: string, codeHash: string, userId: string, confirmedAt?: number) {
+    return this.database.transaction(() => {
+      const flow = this.getNativeFlow(flowHash);
+      if (!flow) return false;
+      this.db.prepare("DELETE FROM native_flows WHERE hash=?").run(flowHash);
+      this.db.prepare("INSERT INTO native_codes VALUES(?,?,?,?,?)")
+        .run(codeHash, userId, flow.state, flow.challenge, Date.now() + 60000);
+      if (confirmedAt !== undefined) this.db.prepare("INSERT INTO native_code_confirmations VALUES(?,?)").run(codeHash, confirmedAt);
+      return true;
+    });
+  }
+  /** Spends a code once, with its state and PKCE challenge, returning whom it names and when they proved it. */
+  consumeNativeCode(codeHash: string, state: string, challenge: string) {
+    return this.database.transaction(() => {
+      const row = this.db.prepare("SELECT c.user_id AS userId,f.confirmed_at AS confirmedAt FROM native_codes c LEFT JOIN native_code_confirmations f ON f.hash=c.hash WHERE c.hash=? AND c.state=? AND c.challenge=? AND c.expires>?")
+        .get(codeHash, state, challenge, Date.now()) as { userId: string; confirmedAt: number | null } | undefined;
+      if (row) this.db.prepare("DELETE FROM native_codes WHERE hash=?").run(codeHash);
+      return row ? { userId: row.userId, confirmedAt: row.confirmedAt ?? undefined } : undefined;
+    });
+  }
+}

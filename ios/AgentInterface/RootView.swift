@@ -1,96 +1,274 @@
 import Network
 import SwiftUI
 
-enum HomeDestination { case conversation, today, groups, find }
+enum HomeDestination { case conversation, today, room, find }
+/// A screen pushed over home on iPhone. Home is the stack's root; everything else is one push away.
+enum HomeRoute: Hashable { case chat, today, room, search }
+
+/// Keeps the system prominent control while pairing its label with the app's accent color.
+struct AccentProminentButtonStyle: PrimitiveButtonStyle {
+  func makeBody(configuration: Configuration) -> some View { AccentProminentButton(configuration: configuration) }
+}
+private struct AccentProminentButton: View {
+  let configuration: PrimitiveButtonStyleConfiguration
+  @Environment(\.isEnabled) private var enabled
+  var body: some View {
+    Button(role: configuration.role, action: configuration.trigger) {
+      if enabled { configuration.label.foregroundStyle(Palette.onAccent) } else { configuration.label }
+    }.buttonStyle(.borderedProminent)
+  }
+}
+extension PrimitiveButtonStyle where Self == AccentProminentButtonStyle {
+  static var accentProminent: AccentProminentButtonStyle { AccentProminentButtonStyle() }
+}
 
 struct RootView: View {
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @Environment(\.colorScheme) private var scheme
+  private let reachability = NetworkReachability.shared
   @State private var settingsBot: Bot?
   @State private var creatingBot = false
+  @State private var creatingGroup = false
+  /// The group chat open beside or over home. Kept whole, so a room that leaves the catalog still shows its own notice.
+  @State private var openedRoom: GroupRoom?
+  /// The room just made, opened once its sheet is gone.
+  @State private var createdRoom: GroupRoom?
   @State private var preferencesOpen = false
+  #if DEBUG
+    @State private var captureConnectionOpen = false
+    @State private var captureAppleOpen = false
+    @State private var captureSurvivalOpen = false
+  #endif
   @State private var destination: HomeDestination = .conversation
   @State private var sharedCapture: SharedCapture?
   @Environment(\.scenePhase) private var scenePhase
+  @State private var path: [HomeRoute] = []
   @State private var initialScope: String?
   @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
   @State private var compactColumn: NavigationSplitViewColumn = .sidebar
+  @State private var quickSwitcherOpen = false
+  #if DEBUG
+    @State private var captureRoomWhenListed = false
+  #endif
+  @State private var quickSettingsRequested = false
   var body: some View {
     Group {
       if store.bootstrap == nil {
         if store.connectingToHousehold { LaunchStateView() } else { ConnectionView() }
       } else {
-        // Above the split view, not a safe-area inset: an inset would sit over its navigation bars.
-        VStack(spacing: 0) {
-          if case .available(let url) = store.appUpdate { AppUpdateBanner(url: url) }
-          NavigationSplitView(
-            columnVisibility: $columnVisibility, preferredCompactColumn: $compactColumn
-          ) {
-            BotListView(
-              destination: destination, openPreferences: { preferencesOpen = true }, edit: { settingsBot = $0 }, create: { creatingBot = true },
-              openBot: { destination = .conversation; compactColumn = .detail },
-              openToday: { destination = .today; compactColumn = .detail },
-              openGroups: { destination = .groups; compactColumn = .detail },
-              openDiscovery: { destination = .find; compactColumn = .detail })
-          } detail: {
-            if destination == .find {
-              DiscoveryView()
-            } else if destination == .groups {
-              GroupChatsView()
-            } else if destination == .today {
-              TodayView(openBot: { destination = .conversation; compactColumn = .detail })
-            } else if let bot = store.bot {
-              ConversationView(bot: bot, edit: { settingsBot = bot }).id(bot.id)
-            } else if store.bootstrap?.bots.isEmpty == true {
-              HomeEmptyDetail(create: { creatingBot = true })
-            } else {
-              ContentUnavailableView(
-                "Choose an assistant", systemImage: "bubble.left.and.bubble.right",
-                description: Text("Your assistants keep their conversations here."))
-            }
-          }
-        }
+        household
       }
     }
     .background(Palette.surface(scheme))
-    .sheet(item: $sharedCapture) { capture in ShareCaptureView(capture:capture).appStore(store).coveringChat(store) }
+    .background { AppBadgeSync() }
+    .sheet(isPresented: $quickSwitcherOpen, onDismiss: {
+      if quickSettingsRequested { quickSettingsRequested = false; preferencesOpen = true }
+    }) {
+      QuickSwitcher(choose: go).appStore(store).coveringChat(store)
+    }
+    .homeSignals(haptic: store.haptic, command: store.keyboardCommand, run: run)
+    .modifier(sheets)
+    #if DEBUG
+    .sheet(isPresented: $captureConnectionOpen) { ConnectionView().appStore(store) }
+    .sheet(isPresented: $captureSurvivalOpen) { DebugSurvivalView(mode: DebugFixtures.captureSurvival ?? "").appStore(store) }
+    .sheet(isPresented: $captureAppleOpen) { NavigationStack { AppleDeviceConnectionsView(botId: store.bot?.id ?? store.bootstrap?.bots.first?.id ?? "").appStore(store) } }
+    #endif
     .onAppear { checkShares() }
+    #if DEBUG
+    .onChange(of: store.bootstrap?.user.id, initial: true) { _, id in
+      if id != nil, DebugFixtures.captureSettingsTab != nil, let bot = store.bootstrap?.bots.first {
+        settingsBot = bot
+      }
+      if id != nil { capturePageIfAsked() }
+    }
+    #endif
     .onChange(of:store.sessionExpired) { _,_ in checkShares() }
     .onChange(of:scenePhase) { _, phase in if phase == .active { checkShares() } }
-    .onChange(of:store.scope) { _, scope in
-      checkShares()
-      if let scope, scope != initialScope {
-        initialScope=scope
-        let today=(store.bootstrap?.preferences.startPage == "today" || store.bootstrap?.preferences.startPage != "assistant" && store.bootstrap?.preferences.defaultBotId == nil) && store.routineResult == nil
-        destination = today ? .today : .conversation
-        compactColumn = .sidebar
+    .onChange(of:store.scope) { _, scope in scopeChanged(scope) }
+    // Initial too: a notification or Siri can ask before this view first appears.
+    .onChange(of: store.todayRequest, initial: true) { _, request in if request != nil { store.todayRequest = nil; destination = .today; path = [.today]; compactColumn = .detail } }
+    .onChange(of: store.leftBotId, initial: true) { _, id in if let id { left(id) } }
+    .onChange(of: store.conversationRequest, initial: true) { _, request in
+      if request != nil {
+        destination = .conversation; openChat(); compactColumn = .detail
+        #if DEBUG
+        capturePageIfAsked()
+        #endif
       }
     }
-    .sheet(item: $settingsBot) { bot in BotSettingsView(bot: bot, close: { settingsBot = nil }).appStore(store).coveringChat(store) }
-    .sheet(isPresented: $creatingBot) { BotSettingsView(bot: nil, close: { creatingBot = false }).appStore(store).coveringChat(store) }
-    .sheet(isPresented: $preferencesOpen) { PreferencesView(close: { preferencesOpen = false }).appStore(store).coveringChat(store) }
-    .sheet(item: $store.openedFile) { FilePreview(file: $0).ignoresSafeArea().coveringChat(store) }
-    .sheet(item: $store.routineResult) { target in NavigationStack { RoutineResultsView(botId: target.botId, routineId: target.routineId, resultId:target.resultId) }.appStore(store).coveringChat(store) }
-    .onReceive(store.$todayRequest) { request in if request != nil { destination = .today;compactColumn = .detail } }
-    .onReceive(store.$leftBotId) { id in
-      guard let id else { return }
-      if settingsBot?.id == id { settingsBot = nil }
-      if store.routineResult?.botId == id { store.routineResult = nil }
-      // Only a person looking at its conversation is taken home; Today and the other views stay.
-      if destination == .conversation { compactColumn = .sidebar }
+    .onChange(of: store.homeRequest, initial: true) { _, request in
+      if request != nil { store.homeRequest = nil; destination = .conversation; path = []; compactColumn = .sidebar }
     }
-    .onReceive(store.$conversationRequest) { request in
-      if request != nil { destination = .conversation; compactColumn = .detail }
+    .onChange(of: store.bootstrap?.user.id) { old, new in if let old, old != new { accountChanged() } }
+    #if DEBUG
+    .onChange(of: store.groupCatalog?.rooms.first?.id) { _, _ in
+      if captureRoomWhenListed, let room = store.groupCatalog?.rooms.first { captureRoomWhenListed = false; open(room) }
     }
-    .onChange(of: store.bootstrap?.user.id) { old, new in
-      if let old, old != new {
-        destination = .conversation
-        preferencesOpen = false
-        settingsBot = nil
-        creatingBot = false
-        store.openedFile = nil
-        store.routineResult = nil
+    #endif
+  }
+  /// Above the split view, not a safe-area inset: an inset would sit over its navigation bars.
+  private var household: some View {
+    VStack(spacing: 0) {
+      if case .available(let url) = store.appUpdate { AppUpdateBanner(url: url) }
+      // Only while the roster itself is the saved copy; a saved chat says so in the chat.
+      if let date = store.offlineSavedAt, !store.householdConnected {
+        Text("Saved on this device \(date.formatted(date: .abbreviated, time: .shortened)). \(reachability.offline ? "Offline." : "Reconnecting…")")
+          .font(.caption).foregroundStyle(.secondary).padding(8)
       }
+      if UIDevice.current.userInterfaceIdiom == .phone { compactNavigation } else { splitNavigation }
+    }
+  }
+  private var splitNavigation: some View {
+    NavigationSplitView(columnVisibility: $columnVisibility, preferredCompactColumn: $compactColumn) {
+      BotListView(
+        destination: destination, openedRoomId: openedRoom?.id, openPreferences: { preferencesOpen = true }, edit: { settingsBot = $0 }, create: { creatingBot = true },
+        openBot: { destination = .conversation; compactColumn = .detail },
+        openToday: { destination = .today; compactColumn = .detail },
+        openRoom: { open($0) }, newGroup: { creatingGroup = true }, creatingGroup: creatingGroup,
+        openDiscovery: { destination = .find; compactColumn = .detail })
+    } detail: { detail }
+  }
+  @ViewBuilder private var detail: some View {
+    if destination == .find {
+      DiscoveryView()
+    } else if destination == .room, let room = openedRoom {
+      GroupConversationView(room: room, canSend: store.groupCatalog?.canSend ?? false).id(room.id)
+    } else if destination == .today {
+      TodayView(openBot: { destination = .conversation; compactColumn = .detail })
+    } else if let bot = store.bot {
+      ConversationView(bot: bot, edit: { settingsBot = bot }).id(bot.id)
+    } else if store.bootstrap?.bots.isEmpty == true {
+      HomeEmptyDetail(create: { creatingBot = true })
+    } else {
+      ContentUnavailableView(
+        "Choose an assistant", systemImage: "bubble.left.and.bubble.right",
+        description: Text("Your assistants keep their conversations here."))
+    }
+  }
+  private var sheets: RootSheets {
+    RootSheets(store: store, sharedCapture: $sharedCapture, settingsBot: $settingsBot, creatingBot: $creatingBot, creatingGroup: $creatingGroup, preferencesOpen: $preferencesOpen,
+      groupCreated: { room in createdRoom = room; store.groupRoomCreated(room) },
+      groupDismissed: { if let room = createdRoom { createdRoom = nil; open(room) } })
+  }
+  private func scopeChanged(_ scope: String?) {
+    checkShares()
+    guard let scope, scope != initialScope else { return }
+    initialScope = scope
+    let preferences = store.bootstrap?.preferences
+    let today = (preferences?.startPage == "today" || preferences?.startPage != "assistant" && preferences?.defaultBotId == nil) && store.routineResult == nil
+    destination = today ? .today : .conversation
+    path = today ? [.today] : []
+    compactColumn = .sidebar
+    #if DEBUG
+    capturePageIfAsked()
+    #endif
+  }
+  #if DEBUG
+  private func capturePageIfAsked() {
+    if DebugFixtures.captureSurvival?.hasPrefix("composer") == true {
+      destination = .conversation; path = [.chat]; compactColumn = .detail
+      if store.selectedBotId != "ranch" { Task { await store.select("ranch") } }
+      return
+    }
+    if let mode = DebugFixtures.captureSurvival, mode != "empty" { captureSurvivalOpen = true; return }
+    if DebugFixtures.captureApplePage { captureAppleOpen = true; return }
+    if DebugFixtures.captureConnectionPage { captureConnectionOpen = true; return }
+    if DebugFixtures.capturePreferencesPage || DebugFixtures.captureComputerPage || DebugFixtures.captureUpgradePage || DebugFixtures.captureNotificationsPage { preferencesOpen = true; return }
+    if DebugFixtures.captureGroupPage {
+      if let room = store.groupCatalog?.rooms.first { open(room) } else { captureRoomWhenListed = true }
+      return
+    }
+    guard DebugFixtures.captureDiscoveryTab != nil else { return }
+    destination = .find; path = [.search]; compactColumn = .detail
+  }
+  #endif
+  private func left(_ id: String) {
+    if settingsBot?.id == id { settingsBot = nil }
+    if store.routineResult?.botId == id { store.routineResult = nil }
+    // Only a person looking at its conversation is taken home; Today and the other views stay.
+    if UIDevice.current.userInterfaceIdiom == .phone { path.removeAll { $0 == .chat } }
+    if destination == .conversation { compactColumn = .sidebar }
+    // Handled: losing the same assistant again later is a new change.
+    store.leftBotId = nil
+  }
+  /// Opens a group chat the way an assistant's chat opens: over home on iPhone, in the detail column on iPad.
+  private func open(_ room: GroupRoom) {
+    openedRoom = room
+    destination = .room
+    if UIDevice.current.userInterfaceIdiom == .phone { path = [.room] } else { compactColumn = .detail }
+  }
+  private func accountChanged() {
+    openedRoom = nil
+    destination = .conversation
+    path = []
+    preferencesOpen = false
+    settingsBot = nil
+    creatingBot = false
+    store.openedFile = nil
+    store.routineResult = nil
+  }
+  /// iPhone: one stack rooted at home. Home's links replace whatever was pushed, so a double tap
+  /// cannot stack the same screen twice.
+  private var compactNavigation: some View {
+    NavigationStack(path: $path) {
+      BotListView(destination: destination, openedRoomId: openedRoom?.id, openPreferences: { preferencesOpen = true },
+        edit: { settingsBot = $0 }, create: { creatingBot = true },
+        openBot: { destination = .conversation; path = [.chat] },
+        openToday: { path = [.today] },
+        openRoom: { open($0) }, newGroup: { creatingGroup = true }, creatingGroup: creatingGroup,
+        openDiscovery: { path = [.search] })
+        .navigationDestination(for: HomeRoute.self) { route in pushed(route) }
+    }
+  }
+  @ViewBuilder private func pushed(_ route: HomeRoute) -> some View {
+    switch route {
+    case .today: TodayView(openBot: { destination = .conversation; openChat() })
+    case .room: if let room = openedRoom { GroupConversationView(room: room, canSend: store.groupCatalog?.canSend ?? false).id(room.id) }
+    case .search: DiscoveryView()
+    case .chat: if let bot = store.bot { ConversationView(bot: bot, edit: { settingsBot = bot }).id(bot.id) }
+    }
+  }
+  /// A chat opens over the screen that asked for it, so Back returns to Today or the search
+  /// results. Only one chat is ever in the stack; opening another replaces it.
+  private func openChat() {
+    var next = path.filter { $0 != .chat }
+    next.append(.chat)
+    if next != path { path = next }
+  }
+  /// Hardware keyboard shortcuts that belong to home. An open chat takes Find and Stop itself.
+  private func run(_ command: KeyboardCommand) {
+    switch command.kind {
+    case .pinned(let index):
+      guard store.pinnedForShortcuts.indices.contains(index) else { return }
+      let id = store.pinnedForShortcuts[index].id
+      Task { await store.select(id) }
+    case .find:
+      guard store.viewingBotId == nil else { return }
+      store.searchFocusPending = true
+      destination = .find; path = [.search]; compactColumn = .detail
+    case .stop: break
+    case .settings:
+      if store.bootstrap != nil {
+        if quickSwitcherOpen { quickSettingsRequested = true; quickSwitcherOpen = false }
+        else { preferencesOpen = true }
+      }
+    case .quickSwitch: if store.bootstrap != nil { quickSwitcherOpen = true }
+    }
+  }
+  /// Where the quick switcher sends the person, the same way home's links and rows do.
+  private func go(_ target: QuickSwitchTarget) {
+    quickSwitcherOpen = false
+    let phone = UIDevice.current.userInterfaceIdiom == .phone
+    switch target {
+    case .bot(let id):
+      destination = .conversation
+      if phone { path = [.chat] } else { compactColumn = .detail }
+      Task { await store.select(id) }
+    case .settings: quickSettingsRequested = true
+    case .today: destination = .today; path = [.today]; compactColumn = .detail
+    case .room(let id):
+      if let room = store.groupCatalog?.rooms.first(where: { $0.id == id }) { open(room) }
+    case .search: store.searchFocusPending = true; destination = .find; path = [.search]; compactColumn = .detail
     }
   }
   private func checkShares() {
@@ -99,84 +277,120 @@ struct RootView: View {
     if sharedCapture == nil { sharedCapture=ShareInbox.pending(scope:scope).first }
   }
 }
+/// Home's sheets, in their own modifier so the root body stays quick to type-check.
+private struct RootSheets: ViewModifier {
+  let store: AppStore
+  @Binding var sharedCapture: SharedCapture?
+  @Binding var settingsBot: Bot?
+  @Binding var creatingBot: Bool
+  @Binding var creatingGroup: Bool
+  @Binding var preferencesOpen: Bool
+  var groupCreated: (GroupRoom) -> Void
+  var groupDismissed: () -> Void
+  func body(content: Content) -> some View {
+    @Bindable var store = store
+    content
+      .sheet(item: $sharedCapture) { capture in ShareCaptureView(capture: capture).appStore(store).coveringChat(store) }
+      .sheet(item: $settingsBot) { bot in BotSettingsView(bot: bot, close: { settingsBot = nil }).appStore(store).coveringChat(store) }
+      .sheet(isPresented: $creatingBot) { BotSettingsView(bot: nil, close: { creatingBot = false }).appStore(store).coveringChat(store) }
+      .sheet(isPresented: $creatingGroup, onDismiss: groupDismissed) { NavigationStack { GroupCreateView(onCreated: groupCreated) }.appStore(store).coveringChat(store) }
+      .sheet(isPresented: $preferencesOpen) { PreferencesView(close: { preferencesOpen = false }).appStore(store).coveringChat(store) }
+      .sheet(item: $store.openedFile) { FilePreview(file: $0).ignoresSafeArea().coveringChat(store) }
+      .sheet(item: $store.routineResult) { target in
+        NavigationStack { RoutineResultsView(botId: target.botId, routineId: target.routineId, resultId: target.resultId) }.appStore(store).coveringChat(store)
+      }
+  }
+}
+/// The first screen and the sign-in screen. It keeps the launch screen's centered composition, so
+/// moving from one to the other does not jump: the household of avatars, one heading, one primary
+/// action, and everything else quiet below it.
 struct ConnectionView: View {
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @Environment(\.colorScheme) private var scheme
+  @FocusState private var addressFocused: Bool
   var body: some View {
-    NavigationStack {
+    GeometryReader { proxy in
       ScrollView {
-        VStack(alignment: .leading, spacing: 24) {
-          AvatarTrio().padding(.top, 28)
-          VStack(alignment: .leading, spacing: 8) {
-            Text(store.api == nil ? WelcomeCopy.heading.replacingOccurrences(of: "\n", with: " ") : WelcomeCopy.signInHeading)
-              .font(.largeTitle.bold())
-            Text(
-              store.api == nil
-                ? "Connect to the WildBots app server your self-hoster set up. Your assistants and their work stay on that server."
-                : WelcomeCopy.signInDetail
-            ).foregroundStyle(.secondary)
+        VStack(spacing: 0) {
+          Spacer(minLength: 24)
+          hero
+          Spacer(minLength: 32).frame(maxHeight: 48)
+          VStack(spacing: 14) {
+            if store.api == nil { connectForm } else { signInActions }
+            if let error = store.error { ErrorBanner(message: error, dismiss: { store.dismissError() }) }
           }
-          if store.api == nil {
-            VStack(alignment: .leading, spacing: 10) {
-              Text("App server address").font(.headline)
-              TextField("https://assistants.example.com", text: $store.host).textContentType(.URL)
-                .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
-                .padding(14).background(
-                  Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 12)
-                ).accessibilityIdentifier("serverAddress")
-              Button {
-                Task { await store.connect() }
-              } label: {
-                HStack {
-                  if store.loading { ProgressView() }
-                  Text(store.loading ? "Checking server…" : "Connect to server").frame(
-                    maxWidth: .infinity)
-                }
-              }.buttonStyle(.borderedProminent).controlSize(.large).disabled(
-                store.loading || store.host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-              ).accessibilityIdentifier("connectServer")
-            }
-          } else {
-            Label(store.host, systemImage: "server.rack").font(.footnote).textSelection(.enabled)
-            if store.authConfig == nil && store.error == nil {
-              Text(WelcomeCopy.checkingSignIn).font(.footnote).foregroundStyle(.secondary).accessibilityIdentifier("checkingSignIn")
-            }
-            Button {
-              Task { await store.signIn() }
-            } label: {
-              HStack {
-                if store.signingIn { ProgressView() }
-                Text(store.signingIn ? "Signing in…" : "Sign in to your household").frame(
-                  maxWidth: .infinity)
-              }
-            }.buttonStyle(.borderedProminent).controlSize(.large).disabled(store.signingIn)
-              .accessibilityIdentifier("householdSignIn")
-            Button {
-              Task { await store.restore() }
-            } label: {
-              HStack {
-                if store.restoring { ProgressView() }
-                Text(store.restoring ? "Checking server…" : "Retry connection").frame(
-                  maxWidth: .infinity)
-              }
-            }.buttonStyle(.bordered).controlSize(.large).disabled(store.restoring || store.signingIn)
-              .accessibilityIdentifier("retryConnection")
-            if store.authConfig?.localDevAuth == true {
-              Text(
-                "This development server also offers local test accounts in the sign-in browser."
-              ).font(.footnote).foregroundStyle(.secondary)
-            }
-            ChangeServerButton()
-          }
-          if let error = store.error { ErrorBanner(message: error, dismiss: { store.error = nil }) }
-          Text(
-            "Provider credentials and the Hermes gateway token are configured by the self-hoster on the server."
-          ).font(.footnote).foregroundStyle(.secondary)
-        }.padding(24).frame(maxWidth: 560)
-      }.frame(maxWidth: .infinity).background(Palette.surface(scheme)).navigationTitle(
-        "WildBots"
-      ).navigationBarTitleDisplayMode(.inline)
+          Spacer(minLength: 32)
+          Text("Your self-hoster keeps provider keys and the Hermes connection on the server, not on this device.")
+            .font(.footnote).foregroundStyle(Palette.muted).multilineTextAlignment(.center)
+        }.padding(.horizontal, 28).padding(.vertical, 16).frame(maxWidth: 440)
+          .frame(maxWidth: .infinity, minHeight: proxy.size.height)
+      }.scrollDismissesKeyboard(.interactively)
+    }.background(Palette.surface(scheme)).accessibilityIdentifier("connectionView")
+  }
+  private var hero: some View {
+    VStack(spacing: 18) {
+      Text("WildBots").font(.caption.weight(.semibold)).tracking(1.4).textCase(.uppercase).foregroundStyle(Palette.muted)
+      AvatarTrio()
+      Text(store.api == nil ? WelcomeCopy.heading : WelcomeCopy.signInHeading)
+        .font(.largeTitle.bold()).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+        .accessibilityAddTraits(.isHeader)
+      Text(store.api == nil ? WelcomeCopy.connectDetail : WelcomeCopy.signInDetail)
+        .foregroundStyle(.secondary).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
     }
+  }
+  private var connectForm: some View {
+    VStack(spacing: 14) {
+      TextField("App server address", text: Bindable(store).host, prompt: Text("assistants.example.com"))
+        .textContentType(.URL).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+        .submitLabel(.go).focused($addressFocused).onSubmit(connect)
+        .padding(.horizontal, 16).frame(minHeight: 52)
+        .background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(addressFocused ? Palette.accent : Palette.line, lineWidth: 1))
+        .accessibilityLabel("App server address").accessibilityIdentifier("serverAddress")
+      primaryButton(store.loading ? "Checking server…" : "Continue", busy: store.loading, action: connect)
+        .disabled(store.loading || hostEmpty).accessibilityIdentifier("connectServer")
+    }
+  }
+  @ViewBuilder private var signInActions: some View {
+    primaryButton(store.signingIn ? "Signing in…" : "Sign in to your household", busy: store.signingIn) {
+      Task { await store.signIn() }
+    }.disabled(store.signingIn).accessibilityIdentifier("householdSignIn")
+    if store.authConfig == nil && store.error == nil {
+      Text(WelcomeCopy.checkingSignIn).font(.footnote).foregroundStyle(.secondary).accessibilityIdentifier("checkingSignIn")
+    }
+    if store.authConfig?.localDevAuth == true {
+      Text("This development server also offers local test accounts in the sign-in browser.")
+        .fixedSize(horizontal: false, vertical: true)
+        .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
+    }
+    // The server, and the two ways to recover from a wrong or sleeping one, in one quiet line.
+    VStack(spacing: 6) {
+      Label(store.host, systemImage: "server.rack").font(.footnote).foregroundStyle(.secondary)
+        .lineLimit(1).truncationMode(.middle).textSelection(.enabled)
+      HStack(spacing: 18) {
+        Button { Task { await store.restore() } } label: {
+          HStack(spacing: 6) {
+            if store.restoring { ProgressView().controlSize(.mini) }
+            Text(store.restoring ? "Checking…" : "Retry connection")
+              .frame(minHeight: 44).contentShape(Rectangle())
+          }
+        }.disabled(store.restoring || store.signingIn).accessibilityIdentifier("retryConnection")
+        ChangeServerButton()
+      }.font(.footnote.weight(.medium)).tint(Palette.accent)
+    }.padding(.top, 6)
+  }
+  private func primaryButton(_ title: String, busy: Bool, action: @escaping () -> Void) -> some View {
+    Button(action: action) {
+      HStack(spacing: 8) {
+        if busy { ProgressView().tint(.white) }
+        Text(title).fontWeight(.semibold)
+      }.frame(maxWidth: .infinity, minHeight: 30)
+    }.buttonStyle(.accentProminent).controlSize(.large).buttonBorderShape(.capsule).tint(Palette.accent)
+  }
+  private var hostEmpty: Bool { store.host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+  private func connect() {
+    guard !hostEmpty, !store.loading else { return }
+    Task { await store.connect() }
   }
 }
 struct ErrorBanner: View {
@@ -188,10 +402,11 @@ struct ErrorBanner: View {
       Text(message).font(.footnote).frame(maxWidth: .infinity, alignment: .leading).textSelection(
         .enabled)
       if let dismiss {
-        Button(action: dismiss) { Image(systemName: "xmark") }.accessibilityLabel("Dismiss error")
+        Button(action: dismiss) { Image(systemName: "xmark").frame(width: 44, height: 44).contentShape(Rectangle()) }
+          .accessibilityLabel("Dismiss error")
       }
-    }.foregroundStyle(.red).padding(12).background(
-      Color.red.opacity(0.07), in: RoundedRectangle(cornerRadius: 10)
+    }.foregroundStyle(Palette.danger).padding(12).background(
+      Palette.danger.opacity(0.07), in: RoundedRectangle(cornerRadius: 10)
     ).accessibilityElement(children: .contain)
   }
 }
@@ -201,32 +416,48 @@ struct AvatarTrio: View {
   var body: some View {
     HStack(alignment: .bottom, spacing: 6) {
       AvatarView(
-        avatar: AvatarConfig(shape: "blob", color: "#1084FE", eyes: "oval"), size: 64, name: "Welcome 1"
+        avatar: AvatarConfig(shape: .blob, color: "#1084FE", eyes: .oval), size: 64, name: "Welcome 1"
       ).rotationEffect(.degrees(-6))
       AvatarView(
-        avatar: AvatarConfig(mode: "mascot", shape: nil, family: "bear", color: "#FF9800", eyes: "round"),
+        avatar: AvatarConfig(mode: .mascot, shape: nil, family: .bear, color: "#FF9800", eyes: .round),
         size: 84, name: "Welcome 2")
       AvatarView(
-        avatar: AvatarConfig(shape: "triangle", color: "#FF309B", eyes: "oval"), size: 64, name: "Welcome 3"
+        avatar: AvatarConfig(shape: .triangle, color: "#FF309B", eyes: .oval), size: 64, name: "Welcome 3"
       ).rotationEffect(.degrees(5))
     }.accessibilityHidden(true)
   }
 }
 struct BotListView: View {
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @Environment(\.colorScheme) private var scheme
   @Environment(\.horizontalSizeClass) private var sizeClass
+  @Environment(\.dynamicTypeSize) private var typeSize
+  @ScaledMetric(relativeTo: .subheadline) private var pinColumn: CGFloat = 100
   var destination: HomeDestination
+  /// The group chat open now, which its row shows as selected beside home.
+  var openedRoomId: String? = nil
   var openPreferences: () -> Void
   var edit: (Bot) -> Void
   var create: () -> Void
   var openBot: () -> Void
   var openToday: () -> Void
-  var openGroups: () -> Void
+  var openRoom: (GroupRoom) -> Void
+  var newGroup: () -> Void
+  /// True while the new-group sheet is up, so a request it leaves saved shows here once it closes.
+  var creatingGroup = false
   var openDiscovery: () -> Void
-  @ObservedObject private var reachability = NetworkReachability.shared
+  private let reachability = NetworkReachability.shared
   @State private var checkingConnection = false
-  private var lost: Bool { store.connectionLost(offline: reachability.offline) }
+  /// The assistant a new home section is being named for.
+  @State private var sectionFor: Bot?
+  /// A saved group creation whose outcome is unknown, offered as "Finish creating group".
+  @State private var pendingGroup: GroupCreate?
+  /// Undo for the last pin or section move made from a row here.
+  @State private var undo = UndoQueue()
+  /// Everyone on home despite the Focus, until the Focus changes.
+  @State private var ignoringFocus = false
+  private var pinnedMinimum: CGFloat { sizeClass == .compact ? pinColumn : pinColumn * 0.76 }
+  private var lost: Bool { store.householdConnectionLost(offline: reachability.offline) }
   private var selectionVisible: Bool { sizeClass != .compact }
   private var homeBackground: Color { sizeClass == .compact ? Palette.surface(scheme) : Palette.rail(scheme) }
   var body: some View {
@@ -248,11 +479,15 @@ struct BotListView: View {
           }
         }
         if let bootstrap = store.bootstrap {
-          let pinned = bootstrap.preferences.pinnedAssistants(bootstrap.bots)
+          let focused = store.focus.shown(bootstrap.bots)
+          let filtering = focused.count < bootstrap.bots.count
+          let bots = filtering && !ignoringFocus ? focused : bootstrap.bots
+          if filtering { focusBanner(showing: focused.count, of: bootstrap.bots.count) }
+          let pinned = bootstrap.preferences.pinnedAssistants(bots)
           if !pinned.isEmpty {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: sizeClass == .compact ? 100 : 76), spacing: 8)], alignment: .center, spacing: 12) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: pinnedMinimum), spacing: 8, alignment: .top)], alignment: .center, spacing: 12) {
               ForEach(pinned) { bot in pinnedTile(bot) }
-            }.frame(maxWidth: CGFloat(min(pinned.count, sizeClass == .compact ? 3 : 2)) * (sizeClass == .compact ? 112 : 86))
+            }.frame(maxWidth: CGFloat(min(pinned.count, sizeClass == .compact ? 3 : 2)) * (pinnedMinimum + 12))
               .frame(maxWidth: .infinity)
               .accessibilityElement(children: .contain).accessibilityLabel("Pinned assistants")
           }
@@ -260,42 +495,88 @@ struct BotListView: View {
             HStack(spacing: 10) { householdLinks }
             VStack(alignment: .leading, spacing: 8) { householdLinks }
           }
-          ForEach(bootstrap.preferences.assistantGroups(bootstrap.bots)) { group in
+          let assistantGroups = bootstrap.preferences.assistantGroups(bots)
+          let rooms = GroupRows.ordered(store.groupCatalog?.rooms ?? [])
+          let hasChats = !rooms.isEmpty || pendingGroup != nil
+          ForEach(assistantGroups) { group in
+            // Group chats join the assistants outside any section, so that list is named for both.
+            let joined = group.id == "remaining" && hasChats
             VStack(alignment: .leading, spacing: 4) {
-              if !group.title.isEmpty {
-                Text(group.title).font(.caption2.weight(.semibold)).tracking(1.1).textCase(.uppercase)
-                  .foregroundStyle(Palette.muted).padding(.horizontal, 10).padding(.bottom, 8).accessibilityAddTraits(.isHeader)
+              if !group.title.isEmpty { sectionTitle(joined ? "More chats" : group.title) }
+              LazyVStack(spacing: 2) {
+                if joined { pendingRow }
+                ForEach(group.bots) { bot in row(bot) }
+                if joined { ForEach(rooms) { room in roomRow(room) } }
               }
-              LazyVStack(spacing: 2) { ForEach(group.bots) { bot in row(bot) } }
+            }
+          }
+          if hasChats && assistantGroups.last?.id != "remaining" {
+            VStack(alignment: .leading, spacing: 4) {
+              if !assistantGroups.isEmpty { sectionTitle("More chats") }
+              LazyVStack(spacing: 2) { pendingRow; ForEach(rooms) { room in roomRow(room) } }
             }
           }
           if bootstrap.bots.isEmpty { emptyHome }
         }
       }.padding(16)
-    }.background(homeBackground)
+    }.background(homeBackground).accessibilityIdentifier("assistantHome")
       .navigationTitle("Your assistants").navigationBarTitleDisplayMode(.inline).homeTitleHidden()
       .toolbarBackground(homeBackground, for: .navigationBar)
+      .bareToolbarItem(.topBarLeading) { accountButton }
       .toolbar {
-        ToolbarItem(placement: .topBarLeading) {
-          Button(action: openPreferences) {
-            AccountAvatar(member: store.bootstrap?.user, size: 40)
-              .overlay(alignment: .bottomTrailing) {
-                Circle().fill(HomeConnectionStatus.of(lost: lost, offline: reachability.offline).color)
-                  .frame(width: 10, height: 10).overlay(Circle().stroke(homeBackground, lineWidth: 2))
-              }
-          }.accessibilityLabel("Settings").accessibilityIdentifier("openSettings")
-        }
         if lost {
           ToolbarItem(placement: .topBarLeading) { syncPill }
         }
         ToolbarItemGroup(placement: .topBarTrailing) {
           Button(action: openDiscovery) { Image(systemName: "magnifyingglass") }
             .accessibilityLabel("Search & saved").accessibilityIdentifier("openDiscovery")
-          Button(action: createOrExplain) { Image(systemName: "plus") }.accessibilityLabel("New assistant")
-            .opacity(store.assistantSetupBlock == nil ? 1 : 0.4).accessibilityHint(store.assistantSetupBlock ?? "")
-            .accessibilityIdentifier("newAssistant")
+          if canMakeGroup {
+            Menu {
+              Button { createOrExplain() } label: { Label("New assistant", systemImage: "plus") }.accessibilityIdentifier("newAssistant")
+              Button { newGroup() } label: { Label("New group chat", systemImage: "bubble.left.and.bubble.right") }
+                .disabled(groupHint != nil).accessibilityIdentifier("newGroup")
+              if let groupHint { Text(groupHint) }
+            } label: { Image(systemName: "plus") }.accessibilityLabel("New").accessibilityIdentifier("newMenu")
+          } else {
+            Button(action: createOrExplain) { Image(systemName: "plus") }.accessibilityLabel("New assistant")
+              .opacity(store.assistantSetupBlock == nil ? 1 : 0.4).accessibilityHint(store.assistantSetupBlock ?? "")
+              .accessibilityIdentifier("newAssistant")
+          }
         }
-      }.refreshable { await store.refreshBootstrap() }
+      }.refreshable { await store.refreshBootstrap(); await store.refreshGroups() }
+      // Rooms come with the catalog, read on appearing, on returning to the foreground and on each `groups`
+      // notice from the household stream; a slow poll covers a notice lost to a stream that failed unnoticed.
+      // Split-view reparenting can cancel a view task during a phone push, so the first read does not depend on one.
+      .onAppear { pendingGroup = GroupCreation.pending(scope: store.scope); Task { await store.refreshGroups() }; store.prefetchLikelyChats() }
+      // A reply that makes a chat unread is the likeliest next tap, so it is read ahead too.
+      .onChange(of: store.likelyChatIds) { _, _ in store.prefetchLikelyChats() }
+      .onChange(of: store.scope) { _, scope in pendingGroup = GroupCreation.pending(scope: scope); Task { await store.refreshGroups() } }
+      .onChange(of: creatingGroup) { _, _ in pendingGroup = GroupCreation.pending(scope: store.scope) }
+      .pollWhileActive(id: "\(store.scope ?? "")|\(store.groupsPollInterval)", every: store.groupsPollInterval) { await store.refreshGroups() }
+      .newSectionAlert(for: $sectionFor)
+      .undoToast($undo) { change in Task { await store.undo(change) } }
+      .onChange(of: store.focus) { _, _ in ignoringFocus = false }
+  }
+  /// Says home is narrowed by the Focus, and lets everyone back for now.
+  private func focusBanner(showing count: Int, of total: Int) -> some View {
+    HStack(spacing: 10) {
+      Image(systemName: "moon.fill").foregroundStyle(Palette.accent).accessibilityHidden(true)
+      Text(ignoringFocus ? "Showing everyone during this Focus" : "This Focus shows \(count) of \(total) assistants")
+        .font(.footnote).frame(maxWidth: .infinity, alignment: .leading)
+      Button(ignoringFocus ? "Focus only" : "Show all") { ignoringFocus.toggle() }
+        .font(.footnote.weight(.semibold)).accessibilityIdentifier("focusShowAll")
+    }.padding(12).background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 12))
+      .accessibilityElement(children: .contain).accessibilityIdentifier("focusBanner")
+  }
+  /// The person's own avatar is the button, with the connection dot on it; no capsule around it.
+  private var accountButton: some View {
+    Button(action: openPreferences) {
+      AccountAvatar(member: store.bootstrap?.user, size: 40)
+        .overlay(alignment: .bottomTrailing) {
+          Circle().fill(HomeConnectionStatus.of(lost: lost, offline: reachability.offline).color)
+            .frame(width: 10, height: 10).overlay(Circle().stroke(homeBackground, lineWidth: 2))
+        }.contentShape(Circle())
+    }.buttonStyle(.plain).accessibilityLabel("Settings").accessibilityIdentifier("openSettings")
   }
   /// Home while there are no assistants: the setup panel if Hermes is out of reach, else the web's empty list.
   @ViewBuilder private var emptyHome: some View {
@@ -307,8 +588,9 @@ struct BotListView: View {
         }
     } else {
       VStack(spacing: 12) {
-        Text("No assistants are available from Hermes yet.").foregroundStyle(.secondary)
-        Button("Create an assistant", action: createOrExplain).buttonStyle(.borderedProminent)
+        Text("No assistants yet").font(.title3.bold())
+        Text("Create one to help your household plan, remember and get things done.").foregroundStyle(.secondary).multilineTextAlignment(.center)
+        Button("Create an assistant", action: createOrExplain).buttonStyle(.accentProminent)
           .opacity(store.assistantSetupBlock == nil ? 1 : 0.4).accessibilityHint(store.assistantSetupBlock ?? "")
           .accessibilityIdentifier("createAssistant")
         if let reason = store.assistantSetupBlock { Text(reason).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center) }
@@ -325,34 +607,48 @@ struct BotListView: View {
       HStack(spacing: 7) {
         SyncSpinner(spinning: !reachability.offline)
         Text(reachability.offline ? "Offline" : "Reconnecting").font(.subheadline).foregroundStyle(Palette.muted)
-      }
+      }.fixedSize()
     }.buttonStyle(.plain).accessibilityIdentifier("homeSync")
       .accessibilityHint("Loaded conversations and drafts are kept. Tap to reconnect now.")
   }
   @ViewBuilder private var householdLinks: some View {
     Button(action: openToday) { Label("Today", systemImage: "calendar") }.buttonStyle(HomeLinkStyle(selected: destination == .today)).accessibilityIdentifier("openToday")
-    Button(action: openGroups) { Label("Group chats", systemImage: "bubble.left.and.bubble.right") }.buttonStyle(HomeLinkStyle(selected: destination == .groups)).accessibilityIdentifier("openGroups")
+  }
+  private func sectionTitle(_ title: String) -> some View {
+    Text(title).font(.caption.weight(.semibold)).tracking(1.1).textCase(.uppercase)
+      .foregroundStyle(Palette.muted).padding(.horizontal, 10).padding(.bottom, 8).accessibilityAddTraits(.isHeader)
+  }
+  private var canMakeGroup: Bool { GroupRows.canCreate(store.groupCatalog, bots: store.bootstrap?.bots ?? [], pending: pendingGroup != nil) }
+  private var groupHint: String? { pendingGroup != nil ? nil : GroupRows.creationHint(store.groupCatalog, connected: store.connected) }
+  @ViewBuilder private var pendingRow: some View {
+    if let pendingGroup { PendingGroupRow(request: pendingGroup, action: newGroup) }
+  }
+  private func roomRow(_ room: GroupRoom) -> some View {
+    GroupRoomRow(room: room, selected: selectionVisible && destination == .room && store.groupCatalog != nil && openedRoomId == room.id, ring: homeBackground) { openRoom(room) }
   }
   private func state(_ bot: Bot) -> ActivityState {
-    lost ? .disconnected : bot.id == store.selectedBotId ? store.activity : bot.activity
+    // The open conversation is read only while on screen; otherwise the roster's state is the current one.
+    lost ? .disconnected : bot.id == store.followedBotId ? store.activity : bot.activity
   }
   private func open(_ bot: Bot) { openBot(); Task { await store.select(bot.id) } }
   private func pinnedTile(_ bot: Bot) -> some View {
     let activity = state(bot)
+    let unread = store.unread(bot)
     return Button { open(bot) } label: {
       VStack(spacing: 8) {
-        AvatarView(avatar: bot.avatar ?? AvatarConfig(), state: activity == .done ? .idle : activity,
-          size: sizeClass == .compact ? 92 : 60, name: bot.name, forceReducedMotion: true)
-          .overlay(alignment: .bottomTrailing) {
-            Image(systemName: "pin.fill").font(.system(size: 11)).padding(5)
-              .background(Palette.raised(scheme), in: Circle()).foregroundStyle(Palette.accent)
-          }
-        Text(bot.name).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
-          .lineLimit(2).multilineTextAlignment(.center)
+        AvatarView(avatar: bot.avatar ?? AvatarConfig(), state: activity == .done || activity == .blocked ? .idle : activity,
+          size: sizeClass == .compact ? 92 : 60, name: bot.name, botId: bot.id)
+          .accessibilityHidden(true)
+        HStack(alignment: .firstTextBaseline, spacing: 5) {
+          if unread { UnreadDot() }
+          let label = Text(bot.name).font(.subheadline.weight(unread ? .bold : .semibold)).foregroundStyle(.primary)
+            .multilineTextAlignment(.center)
+          if typeSize.isAccessibilitySize { label } else { label.lineLimit(2, reservesSpace: true) }
+        }
         if activity != .idle && activity != .done { ActivityLabel(state: activity) }
       }.frame(maxWidth: .infinity).padding(.vertical, 10).padding(.horizontal, 4)
         .contentShape(RoundedRectangle(cornerRadius: 16))
-    }.buttonStyle(.plain)
+    }.buttonStyle(.plain).accessibilityValue(unread ? "Unread" : "")
       .background(selectionVisible && destination == .conversation && bot.id == store.selectedBotId ? Palette.accentSoft : Color.clear, in: RoundedRectangle(cornerRadius: 16))
       .accessibilityAddTraits(destination == .conversation && bot.id == store.selectedBotId ? .isSelected : [])
       .accessibilityIdentifier("bot.\(bot.id)")
@@ -360,34 +656,65 @@ struct BotListView: View {
   }
   private func row(_ bot: Bot) -> some View {
     let activity = state(bot)
+    let unread = store.unread(bot)
     return Button { open(bot) } label: {
       HStack(spacing: 12) {
-        AvatarView(avatar: bot.avatar ?? AvatarConfig(), state: activity == .done ? .idle : activity,
-          size: 52, name: bot.name, forceReducedMotion: true)
+        AvatarView(avatar: bot.avatar ?? AvatarConfig(), state: activity == .done || activity == .blocked ? .idle : activity,
+          size: 52, name: bot.name, forceReducedMotion: true).accessibilityHidden(true)
         VStack(alignment: .leading, spacing: 5) {
-          HStack(alignment: .firstTextBaseline) {
-            Text(bot.name).font(.subheadline.weight(.semibold)).foregroundStyle(.primary).lineLimit(1)
-            Spacer(minLength: 8)
+          if typeSize.isAccessibilitySize {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+              if unread { UnreadDot() }
+              Text(bot.name).font(.body.weight(unread ? .bold : .semibold)).foregroundStyle(.primary)
+            }
             if let at = bot.lastMessage?.at, let date = ServerDate.parse(at) { AssistantListDate(date: date) }
+          } else {
+            HStack(alignment: .firstTextBaseline) {
+              HStack(spacing: 6) {
+                if unread { UnreadDot() }
+                Text(bot.name).font(.body.weight(unread ? .bold : .semibold)).foregroundStyle(.primary).lineLimit(2)
+              }
+              Spacer(minLength: 8)
+              if let at = bot.lastMessage?.at, let date = ServerDate.parse(at) { AssistantListDate(date: date) }
+            }
           }
           if activity != .idle && activity != .done { ActivityLabel(state: activity) }
           else {
             Text(bot.lastMessage?.text.isEmpty == false ? bot.lastMessage!.text : bot.shared ? "Shared assistant" : "Personal assistant")
-              .font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+              .font(unread ? .subheadline.weight(.medium) : .subheadline)
+              .foregroundStyle(unread ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary)).lineLimit(typeSize.isAccessibilitySize ? 3 : 2)
           }
-        }
+        }.frame(maxWidth: .infinity, alignment: .leading)
       }.padding(.horizontal, 10).padding(.vertical, 12).contentShape(Rectangle())
-    }.buttonStyle(.plain)
+    }.buttonStyle(.plain).accessibilityValue(unread ? "Unread" : "")
       .background(selectionVisible && destination == .conversation && bot.id == store.selectedBotId ? Palette.accentSoft : Color.clear, in: RoundedRectangle(cornerRadius: 16))
       .accessibilityAddTraits(destination == .conversation && bot.id == store.selectedBotId ? .isSelected : [])
       .accessibilityIdentifier("bot.\(bot.id)")
       .contextMenu { botMenu(bot) }
+      .swipeAction(isPinned(bot) ? "Unpin" : "Pin", symbol: isPinned(bot) ? "pin.slash" : "pin", enabled: canPin) { togglePin(bot) }
   }
+  private func isPinned(_ bot: Bot) -> Bool { store.homePreferences?.favorites.contains(bot.id) == true }
+  private func togglePin(_ bot: Bot) {
+    let pinned = !isPinned(bot)
+    Task { await store.togglePin(bot.id) }
+    undo.show(.pin(bot, pinned: pinned))
+  }
+  private var canPin: Bool { store.householdConnected }
   @ViewBuilder private func botMenu(_ bot: Bot) -> some View {
-    Button(store.bootstrap?.preferences.favorites.contains(bot.id) == true ? "Unpin" : "Pin to top", systemImage: "pin") {
-      Task { await store.togglePin(bot.id) }
-    }.disabled(!store.connected || store.sessionExpired)
+    Button(isPinned(bot) ? "Unpin" : "Pin to top", systemImage: "pin") { togglePin(bot) }.disabled(!canPin)
+    Menu("Move to section", systemImage: "rectangle.stack") {
+      HomeSectionPicker(botId: bot.id, newSection: { sectionFor = bot }) { from, to in
+        undo.show(.move(bot, from: from, to: store.homeSectionName(to)))
+      }
+    }.disabled(!canPin)
     Button("Assistant settings", systemImage: "gearshape") { edit(bot) }
+  }
+}
+/// A chat with a reply this person has not read yet. VoiceOver hears "Unread" from its row instead.
+private struct UnreadDot: View {
+  @ScaledMetric(relativeTo: .body) private var diameter: CGFloat = 8
+  var body: some View {
+    Circle().fill(Palette.accent).frame(width: min(diameter, 12), height: min(diameter, 12)).accessibilityHidden(true)
   }
 }
 private struct HomeLinkStyle: ButtonStyle {
@@ -411,11 +738,11 @@ private struct SyncSpinner: View {
       .onAppear { turn = true }.accessibilityHidden(true)
   }
 }
-@MainActor final class NetworkReachability: ObservableObject {
+@MainActor @Observable final class NetworkReachability {
   /// One monitor for every screen that shows the connection.
   static let shared = NetworkReachability()
-  @Published private(set) var offline = false
-  private let monitor = NWPathMonitor()
+  private(set) var offline = false
+  @ObservationIgnored private let monitor = NWPathMonitor()
   init() {
     monitor.pathUpdateHandler = { [weak self] path in Task { @MainActor in self?.offline = path.status != .satisfied } }
     monitor.start(queue: DispatchQueue(label: "dev.agentinterface.reachability"))
@@ -451,6 +778,17 @@ extension View {
   @ViewBuilder func homeTitleHidden() -> some View {
     if #available(iOS 26, *) { toolbar(removing: .title) } else { self }
   }
+  /// A toolbar item that draws its own shape, without the Liquid Glass capsule iOS 26 puts around
+  /// bar buttons. The check sits here, not in a toolbar builder, because a toolbar builder's
+  /// availability branch is only safe from iOS 17.5.
+  @ViewBuilder func bareToolbarItem<Content: View>(_ placement: ToolbarItemPlacement, @ViewBuilder _ content: () -> Content) -> some View {
+    let item = content()
+    if #available(iOS 26, *) {
+      toolbar { ToolbarItem(placement: placement) { item }.sharedBackgroundVisibility(.hidden) }
+    } else {
+      toolbar { ToolbarItem(placement: placement) { item } }
+    }
+  }
   /// The web's two-line view header: title over a one-line subtitle, with the title kept for navigation and accessibility.
   func viewHeader(_ title: String, _ subtitle: String) -> some View {
     navigationTitle(title).navigationBarTitleDisplayMode(.inline).toolbar {
@@ -477,9 +815,9 @@ struct AccountAvatar: View {
     }.frame(width: size, height: size).clipShape(Circle()).accessibilityHidden(true)
   }
 }
-private struct AssistantListDate: View {
+struct AssistantListDate: View {
   var date: Date
-  @ObservedObject private var clock = MinuteClock.shared
+  private let clock = MinuteClock.shared
   var body: some View {
     Text(When.listDate(date, now: clock.now)).font(.caption).foregroundStyle(.secondary).fixedSize()
   }

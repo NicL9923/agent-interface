@@ -29,7 +29,12 @@ from hermes_constants import get_hermes_home, reset_hermes_home_override, set_he
 from tools.bot_desktop import runtime, lease
 from tools.registry import registry
 from hermes_cli.dashboard_auth.ws_tickets import consume_ticket, TicketInvalid
-from tools import browser_tool_session as browser_session
+try:
+    from tools import browser_session
+    modern_browser = True
+except ImportError:
+    from tools import browser_tool_session as browser_session
+    modern_browser = False
 from tools import browser_use_cli
 from tui_gateway import server
 import hermes_cli
@@ -140,10 +145,10 @@ assert lease.get().holder == lease.HUMAN
 assert lease.get(profile_key=str(resource)).viewer_id == first["viewerId"]
 assert rpc({**one, "action": "status"})["control"]["mine"] is True
 assert rpc({**two, "action": "status"})["control"]["mine"] is False
-for tool in ("browser_snapshot", "browser_cdp", "computer_use"):
+for tool in ("browser_exec", "browser_cdp", "computer_use"):
     result = json.loads(registry.dispatch(tool, {}))
     assert result.get("success") is False and "human" in result["error"].lower(), result
-assert browser_session._shares_bot_desktop_browser({"features": {"cdp_override": True}})
+assert getattr(browser_session, "shares_bot_desktop_browser" if modern_browser else "_shares_bot_desktop_browser")({"features": {"cdp_override": True}})
 checks["native_human_lease_fences_browser_cdp_and_computer_capture"] = True
 
 for action in ("take", "release"):
@@ -155,7 +160,14 @@ rpc({**one, "action": "release", "viewerId": first["viewerId"]})
 assert lease.get().holder == lease.AGENT
 checks["native_owner_cannot_be_stolen_or_released_by_another_member"] = True
 
-assert browser_session._run_browser_command("fixture", "close", []) == {"success": True, "data": {}}
+if modern_browser:
+    from unittest.mock import patch
+    from tools.browser_session_lifecycle import release_session_backend
+    with patch("tools.browser_launcher.stop_browser") as stop_browser:
+        release_session_backend("fixture", {"features": {"cdp_override": True}})
+        stop_browser.assert_not_called()
+else:
+    assert browser_session._run_browser_command("fixture", "close", []) == {"success": True, "data": {}}
 refused = json.loads(registry.dispatch("browser_cdp", {"method": "Browser.close"}))
 assert refused.get("success") is False and "persistent" in refused["error"]
 checks["native_task_cleanup_cannot_close_supervised_browser"] = True
@@ -176,7 +188,7 @@ assert status["available"] and not status["browserReady"] and "recovery" in stat
 refused = server.handle_request({"jsonrpc": "2.0", "id": 83, "method": "agent-interface.computer",
     "params": {"service_key": os.environ["HERMES_AGENT_INTERFACE_TOKEN"], **one, "action": "take", "viewerId": first["viewerId"]}})
 assert "error" in refused and "recovery" in refused["error"]["message"], refused
-for tool in ("browser_snapshot", "browser_cdp", "computer_use"):
+for tool in ("browser_exec", "browser_cdp", "computer_use"):
     result = json.loads(registry.dispatch(tool, {}))
     assert result.get("success") is False and "recovery" in result["error"], result
 from tools.browser_supervisor_dialogs import DialogSupervisionMixin

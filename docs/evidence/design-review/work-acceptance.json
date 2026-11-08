@@ -1,0 +1,61 @@
+{
+  "scope": "Work frame and standing goal only. Task board, task editors, triggers and Learning are pending.",
+  "scores": {
+    "web": 9,
+    "iphone": 9,
+    "ipad": 9
+  },
+  "reviewer": "Anthropic Claude Opus5.5, high effort",
+  "implementers": [
+    "OpenAI GPT6.1Terra",
+    "OpenAI GPT6.1Sol"
+  ],
+  "closingSources": {
+    "web": "sha256:0ec286bc6d453f9f05d98c177b00d4453dffd5718c13b3bae1555615dd118c27 (226 source files)",
+    "native": "sha256:b3bb3d95ea1d98b8f911affe12b8ac8399102bca4a330ce24e62bb32ad866d33 (243 source files)"
+  },
+  "fixtureSHA256": "6d0f1062b23df98b445204bfbdb068a7af1062eb223522d17e56a0fdb230b706",
+  "checks": {
+    "webFocusedTests": 26,
+    "typecheck": "Passed; reused unchanged TS inputs.",
+    "productionBuild": "Passed in Clear R4.",
+    "nativePresenterCycles": {
+      "iphone": 3,
+      "ipad": 3
+    },
+    "nativeOtherFlows": "Interrupted/rejected passed at76954fa9 and task smoke at d6abef4d, reuse approved."
+  },
+  "counts": {
+    "before": {
+      "web": 21,
+      "iphone": 20,
+      "ipad": 20
+    },
+    "after": {
+      "web": 29,
+      "iphone": 23,
+      "ipad": 22
+    },
+    "unscoredAfterLearningFrames": 2,
+    "annotatedComparisons": 19
+  },
+  "artifactRoot": "/Volumes/DevSSD/scratch/wildbots-design-review",
+  "evidence": {
+    "web": "work-web-after-evidence.json",
+    "iphone": "work-native-after-iphone-final-evidence.json",
+    "ipad": "work-native-after-ipad-final-evidence.json",
+    "beforeSources": "work-before-source-reconstruction.json",
+    "webReuseProof": "work-web-review62-reuse-source-proof.json",
+    "nativeReuseProof": "work-goal-fix-r6-source-proof.json"
+  },
+  "annotations": {
+    "web": "work-web-annotated-evidence.json",
+    "iphone": "work-phone-annotated-evidence.json",
+    "ipad": "work-ipad-annotated-evidence.json"
+  },
+  "limits": [
+    "Fixtures and iOS27 simulators; no live provider or production actions.",
+    "Native AX3 and web200%root font, no browser zoom claim.",
+    "No physical device, VoiceOver, hardware keyboard, iOS17, AX4/AX5 or compact iPad validation."
+  ]
+}

@@ -7,7 +7,7 @@ import type { Message, SubmissionReceipt } from "../src/shared/types";
 const sender = { id: "one", name: "One" };
 const request: Pending = { requestId: "req", botId: "bot", text: "Hello there", attachments: [], reviewedInterruption: false };
 const conversation = (messages: Message[] = [{ id: "a", role: "assistant", text: "Hi" }], state: SavedConversation["activity"]["state"] = "idle"): SavedConversation =>
-  ({ botId: "bot", messages, approvals: [], files: [], activity: { state } });
+  ({ botId: "bot", messages, approvals: [], files: [], activity: { state }, draft: null, readPosition: null });
 const step = (echo: SentEcho | null, input: Partial<Parameters<typeof nextEcho>[1]>) =>
   nextEcho(echo, { pending: null, receipt: null, sending: false, conversation: conversation(), sender, now: 1000, ...input });
 const accepted: SubmissionReceipt = { requestId: "req", status: "accepted", messageId: "row-9" };

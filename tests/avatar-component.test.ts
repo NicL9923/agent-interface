@@ -1,12 +1,19 @@
 // @vitest-environment jsdom
 import { act, createElement } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
-import { Avatar, faces, silhouette } from "../src/components/Avatar";
-import { avatarShapes, type ActivityState, type Avatar as AvatarConfig } from "../src/shared/types";
-import { seasonalAvatar, seasonalChoices } from "../src/components/seasonal-avatars";
+import type { Root } from "react-dom/client";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { mountRoot, stubMatchMedia } from "./ui-harness";
+import { Avatar, motionOwner, silhouette } from "../src/components/Avatar";
+import { avatarShapes, mascotFamilies, type ActivityState, type Avatar as AvatarConfig } from "../src/shared/types";
+import { characterHeads, isCharacter, isSeasonal, seasonalAvatar } from "../src/components/character-avatars";
+
+/** Every character drawn by the character module, in its everyday or seasonal colors. */
+const characters = mascotFamilies.filter(isCharacter).map((family) => ({
+  family,
+  avatar: isSeasonal(family)
+    ? seasonalAvatar(family)
+    : { mode: "mascot", family, color: "#97683D", eyes: "round", accessory: "none" } as AvatarConfig,
+}));
 
 let container: HTMLDivElement;
 let root: Root;
@@ -30,7 +37,6 @@ const advance = async (seconds: number) => {
 const svg = () => container.querySelector("svg")!.innerHTML;
 
 beforeEach(() => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   now = 0;
   frames = new Map();
   reduceMotion = false;
@@ -40,11 +46,7 @@ beforeEach(() => {
     return nextFrame;
   });
   vi.stubGlobal("cancelAnimationFrame", (handle: number) => frames.delete(handle));
-  vi.stubGlobal("matchMedia", () => ({
-    matches: reduceMotion,
-    addEventListener: () => {},
-    removeEventListener: () => {},
-  }));
+  stubMatchMedia(() => reduceMotion);
   vi.stubGlobal("IntersectionObserver", class {
     constructor(callback: (entries: { isIntersecting: boolean }[]) => void) {
       reportVisibility = (visible) => callback([{ isIntersecting: visible }]);
@@ -57,22 +59,15 @@ beforeEach(() => {
     getTotalLength: () => 100,
     getPointAtLength: (length: number) => ({ x: length, y: 0 }),
   });
-  container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
-});
-afterEach(() => {
-  act(() => root.unmount());
-  container.remove();
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
+  ({ container, root } = mountRoot());
 });
 
 describe("avatar animation loop", () => {
-  it.each(seasonalChoices)("animates the $label character while working", async ({ family }) => {
-    await render("working", seasonalAvatar(family));
+  it("animates a character while working", async () => {
+    const { family, avatar } = characters[0];
+    await render("working", avatar);
     expect(container.querySelector('[role="img"]')?.getAttribute("data-family")).toBe(family);
-    expect(container.querySelector("[data-seasonal-feature]")).not.toBeNull();
+    expect(container.querySelector("[data-character-feature]")).not.toBeNull();
     const before = svg();
     await advance(1);
     expect(svg()).not.toBe(before);
@@ -101,13 +96,26 @@ describe("avatar animation loop", () => {
       act(() => root.unmount());
       await act(async () => { vi.advanceTimersByTime(100); });
       expect(frames.size).toBe(0);
-      root = createRoot(container);
       await render("working");
       await advance(0.5);
       expect(frames.size).toBe(1);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("draws several working avatars from one frame callback", async () => {
+    await act(async () => root.render(createElement("div", null,
+      createElement(Avatar, { state: "working", size: 64, name: "Ranch hand" }),
+      createElement(Avatar, { state: "working", size: 64, name: "Foreman" }),
+      createElement(Avatar, { state: "working", size: 64, name: "Wrangler" }))));
+    // Past the silhouette transitions, which have their own frames.
+    await advance(0.5);
+    const poses = [...container.querySelectorAll("svg")].map(node => node.innerHTML);
+    expect(frames.size).toBe(1);
+    await advance(0.5);
+    expect(frames.size).toBe(1);
+    expect([...container.querySelectorAll("svg")].map(node => node.innerHTML)).not.toEqual(poses);
   });
 
   it("sizes a portrait up front and loads it lazily, since list avatars are tiny copies of a large file", async () => {
@@ -117,13 +125,13 @@ describe("avatar animation loop", () => {
     expect([image.getAttribute("loading"), image.getAttribute("decoding")]).toEqual(["lazy", "async"]);
   });
 
-  it.each(seasonalChoices)("keeps the $label character visible and still under reduced motion", async ({ family }) => {
+  it.each(characters)("keeps the $family character visible and still under reduced motion", async ({ avatar }) => {
     reduceMotion = true;
-    await render("thinking", seasonalAvatar(family));
+    await render("thinking", avatar);
     const before = svg();
     await advance(1);
     expect(svg()).toBe(before);
-    expect(container.querySelector("[data-seasonal-feature]")).not.toBeNull();
+    expect(container.querySelector("[data-character-feature]")).not.toBeNull();
     expect(frames.size).toBe(0);
     expect(container.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe("Ranch hand: Thinking");
   });
@@ -137,7 +145,6 @@ describe("avatar animation loop", () => {
     expect(frames.size).toBeGreaterThan(0);
     act(() => root.unmount());
     expect(frames.size).toBe(0);
-    root = createRoot(container);
   });
 
   it.each<ActivityState>(["disconnected", "interrupted"])("holds a %s avatar completely still", async (state) => {
@@ -182,26 +189,52 @@ describe("avatar animation loop", () => {
   });
 });
 
+it("keeps two bots that share a name apart in the motion conductor", () => {
+  expect(motionOwner("ranch", "Helper", "a")).not.toBe(motionOwner("kitchen", "Helper", "b"));
+  expect(motionOwner("ranch", "Helper", "a")).toBe(motionOwner("ranch", "Renamed", "b"));
+  expect(motionOwner(undefined, "Welcome 1", "a")).toBe(motionOwner(undefined, "Welcome 1", "b"));
+  expect(motionOwner(undefined, undefined, "a")).not.toBe(motionOwner(undefined, undefined, "b"));
+});
+
 describe("avatar silhouettes", () => {
-  // jsdom rewrites import.meta.url, so read from the project root.
-  const native = (file: string) => readFileSync(resolve("ios/AgentInterface", file), "utf8");
-  const swift = native("AvatarView.swift");
-
-  it("lists the same shapes natively", () => {
-    const list = native("Models.swift").match(/static let shapes = \[([^\]]*)\]/)![1];
-    expect([...list.matchAll(/"(\w+)"/g)].map((m) => m[1])).toEqual([...avatarShapes]);
-  });
-
-  it.each(avatarShapes)("draws %s as one closed outline with a matching native face", (shape) => {
+  // The native copies of these outlines, faces and characters are checked in tests/avatar-art-parity.test.ts.
+  it.each(avatarShapes)("draws %s as one closed outline", (shape) => {
     const d = silhouette(shape);
     if (shape !== "blob") expect(d).not.toBe(silhouette("blob"));
-    const nativePath = shape === "blob"
-      ? swift.match(/default: "([^"]+)"/)![1]
-      : swift.match(new RegExp(`case "${shape}":\\s*"([^"]+)"`))![1];
     // Morphing samples one continuous outline; native parses only absolute M L H V Q C Z.
-    expect(nativePath).toMatch(/^M[\d. -]+(?:[LHVQC][\d. -]+)+Z$/);
-    if (shape !== "circle") expect(nativePath).toBe(d);
-    const anchor = swift.match(new RegExp(`"${shape}": Anchor\\(cy: ([\\d.]+), scale: ([\\d.]+), top: ([\\d.]+), hat: ([\\d.]+)\\)`))!;
-    expect(anchor.slice(1).map(Number)).toEqual(Object.values(faces[shape]));
+    if (shape !== "circle") expect(d).toMatch(/^M[\d. -]+(?:[LHVQC][\d. -]+)+Z$/);
+  });
+});
+
+describe("mascot characters", () => {
+  it.each(Object.entries(characterHeads))("outlines %s as one closed native-parseable path", (_family, d) => {
+    expect(d).toMatch(/^M[\d. -]+(?:[LHVQC][\d. -]+)+Z$/);
+  });
+
+  it("edges very light heads so they hold their shape on the cream surface", async () => {
+    const edges = () => [...container.querySelectorAll("svg path[fill='none'][stroke-width='2.2']")];
+    await render("idle", seasonalAvatar("ghost"));
+    expect(edges()).toHaveLength(1);
+    await render("idle", { mode: "mascot", family: "panda", color: "#292929", eyes: "round", accessory: "none" });
+    expect(edges()).toHaveLength(1);
+    await render("idle", seasonalAvatar("pumpkin"));
+    expect(edges()).toHaveLength(0);
+  });
+
+  it("draws a black panda's glasses dark against its white face while its eyes stay light on the patches", async () => {
+    await render("idle", { mode: "mascot", family: "panda", color: "#292929", eyes: "round", accessory: "glasses" });
+    expect(container.querySelector("g[fill='#fff3db']")).not.toBeNull();
+    const frames = [...container.querySelectorAll("ellipse[fill='none'][stroke-width='2.5'], path[fill='none'][stroke-width='2.5']")];
+    expect(frames).toHaveLength(3);
+    expect(frames.every((frame) => frame.getAttribute("stroke") === "#2b201b")).toBe(true);
+  });
+
+  it("gives each eye surround ink that contrasts with it", async () => {
+    await render("idle", { mode: "mascot", family: "raccoon", color: "#8C8F99", eyes: "round", accessory: "none" });
+    expect(container.querySelector("[data-character-feature='mask']")).not.toBeNull();
+    expect(container.querySelector("g[fill='#fff3db']")).not.toBeNull();
+    await render("idle", { mode: "mascot", family: "owl", color: "#292929", eyes: "round", accessory: "none" });
+    expect(container.querySelectorAll("[data-character-feature='facial-disc']")).toHaveLength(2);
+    expect(container.querySelector("g[fill='#2b201b']")).not.toBeNull();
   });
 });

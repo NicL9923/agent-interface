@@ -1,0 +1,125 @@
+{
+  "baseCommit": "dc8729232d6a7ba9aae0e731b03e50b555a4f969",
+  "applicationInputs": "sha256:4022bd8707179a7745085e56aa010272d504a7d0f45ef2f941868953ecfd968c",
+  "applicationInputPrefixes": [
+    "src",
+    "tests",
+    "vite.config.ts",
+    "vitest.config.ts"
+  ],
+  "application": {
+    "node": "26.10.0",
+    "npm": "11.19.1",
+    "typecheck": "passed",
+    "vitest": {
+      "files": 89,
+      "passed": 1074,
+      "failed": 0
+    },
+    "build": "passed",
+    "serviceWorkerBuild": "0bc7002f3d77e665"
+  },
+  "python": {
+    "version": "3.14.7",
+    "suitesPassed": 32,
+    "suitesSkipped": 0,
+    "suitesFailed": 0,
+    "ruff": "passed",
+    "individualTestsSkipped": 2
+  },
+  "nativeInputs": "sha256:361df32d7659c727a1e5c56b2a74d014678908c826ddfe23d800a15cba894354",
+  "nativeInputPrefixes": [
+    "ios/",
+    ".agents/tools/validate-ios.sh",
+    ".agents/tools/patch-xctestrun.py"
+  ],
+  "native": {
+    "xcode": "27.1",
+    "xcodeBuild": "27A9275",
+    "simulator": "iPhone 17",
+    "runtime": "iOS 27.0",
+    "unitTestsSelected": 402,
+    "automationUiTestsSelected": 7,
+    "summary": {
+      "devicesAndConfigurations": [
+        {
+          "device": {
+            "architecture": "arm64",
+            "deviceId": "0915E0B2-A1A0-43FC-9A9A-35DF02CAF0F0",
+            "deviceName": "iPhone 17",
+            "modelName": "iPhone 17",
+            "osBuildNumber": "24A434",
+            "osVersion": "27.0",
+            "platform": "iOS Simulator"
+          },
+          "expectedFailures": 0,
+          "failedTests": 0,
+          "passedTests": 407,
+          "skippedTests": 2,
+          "testPlanConfiguration": {
+            "configurationId": "1",
+            "configurationName": "Test Scheme Action"
+          }
+        }
+      ],
+      "environmentDescription": "AgentInterface \u00b7 Built with macOS 27.0.1",
+      "expectedFailures": 0,
+      "failedTests": 0,
+      "finishTime": 1792770959.376,
+      "passedTests": 407,
+      "result": "Passed",
+      "runtimeWarnings": [
+        {
+          "issueType": "Runtime Warning",
+          "message": "    AVAudioSession_iOS.mm:978   This method can lead to UI unresponsiveness if called on the main thread. Consider using the asynchronous activate/deactivate API instead for calls from the main thread."
+        }
+      ],
+      "skippedTests": 2,
+      "startTime": 1792770677.362,
+      "statistics": [],
+      "testFailures": [],
+      "title": "Test - AgentInterface",
+      "topInsights": [
+        {
+          "category": "Longest Test Runs",
+          "impact": "49% of duration",
+          "text": "9 longest test runs with outlier durations exceeding 0.83s (three standard deviations)"
+        }
+      ],
+      "totalTestCount": 409
+    }
+  },
+  "browser": {
+    "fixtureOnly": true,
+    "results": [
+      {
+        "viewport": {
+          "width": 1280,
+          "height": 900
+        },
+        "goalResumePause": true,
+        "taskCreateStart": true,
+        "skillDiffReview": true,
+        "noOverflow": true,
+        "fixtureOnly": true
+      },
+      {
+        "viewport": {
+          "width": 390,
+          "height": 900
+        },
+        "goalResumePause": true,
+        "taskCreateStart": true,
+        "skillDiffReview": true,
+        "noOverflow": true,
+        "fixtureOnly": true
+      }
+    ]
+  },
+  "limitations": [
+    "No real Hermes qualification run",
+    "No production deployment",
+    "No TestFlight publication",
+    "No physical-device or APNs acceptance"
+  ]
+}

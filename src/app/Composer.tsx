@@ -1,49 +1,82 @@
-import { isConversationReply } from "../shared/message-origin";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { shouldStackComposer } from "./composer-layout";
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { ActivityState, Bootstrap, Bot, SubmissionReceipt } from "../shared/types";
+import type { ActivityState, Bootstrap, Bot, Message, SubmissionReceipt } from "../shared/types";
 import type { VoiceState } from "../shared/voice";
-import { Avatar } from "../components/Avatar";
 import { Icon } from "../components/Icon";
 import { VoiceControls } from "../components/VoiceControls";
-import { ComposerModelPicker, Loading } from "./panels";
-import { Button } from "../components/ui/button";
-import { write } from "../client-api";
+import { TalkPanel } from "../components/TalkPanel";
+import { useTalk } from "./use-talk";
+import { request } from "../client-api";
 import { MAX_ATTACHMENTS, namePastedFile, pastedFiles, prepareUpload, UPLOAD_ACCEPT } from "../shared/uploads";
 import { AttachmentTray, DropOverlay } from "./AttachmentTray";
-import type { Draft, LocalUpload, Pending, SavedConversation } from "./storage";
+import type { Draft, LocalUpload, Pending } from "./storage";
 import { sendingDraft } from "./sent-echo";
+import { StatusDock, type DockItem } from "./StatusDock";
+import { ownPrompts, recallStep, type Recall } from "./prompt-recall";
+import { largePasteFile } from "./large-paste";
+import { formatBytes } from "../shared/uploads";
 
-function ModelPickerPlaceholder({ model, failed = false }: { model: string; failed?: boolean }) {
-  const description = failed ? "Model controls unavailable. Reload to try again." : "Loading model controls";
-  return <div className="composer-model" role={failed ? "status" : undefined}>
-    <Button className="composer-tool" disabled aria-label={description} title={description}>
-      <Icon name="robot" size={18} /><span className="tool-label composer-model-name">{model}</span>
-    </Button>
-  </div>;
+/** Stops the open assistant's current response. The composer's Stop button and Cmd+. share it. */
+export function useStopResponse(botId: string, report: (message: string) => void) {
+  const [stopping, setStopping] = useState(false);
+  // A late answer belongs to the assistant it stopped, so it is dropped once another one is open.
+  const shown = useRef<string | null>(botId);
+  useEffect(() => { shown.current = botId; return () => { shown.current = null; }; }, [botId]);
+  useEffect(() => setStopping(false), [botId]);
+  const stop = useCallback(() => {
+    const target = botId;
+    setStopping(true);
+    void request("POST /bots/:id/stop", { params: { id: target } })
+      .catch(error => { if (shown.current === target) report(error.message); })
+      .finally(() => { if (shown.current === target) setStopping(false); });
+  }, [botId, report]);
+  return { stopping, stop };
 }
+
+/**
+ * This person's earlier messages for recall, newest first. The same array comes back while the
+ * messages are unchanged, so a streaming reply does not hand the composer a new list four times a second.
+ */
+export function useOwnPrompts(messages: readonly Message[] | undefined, userId: string | undefined) {
+  const kept = useRef<string[]>([]);
+  const next = ownPrompts(messages, userId ?? "");
+  if (next.length !== kept.current.length || next.some((text, index) => text !== kept.current[index])) kept.current = next;
+  return kept.current;
+}
+
 // Fits on mount too, so a restored multi-line draft is sized when returning from another view.
-function useComposerInput(text: string, botId: string) {
+function useComposerInput(text: string, botId: string, voiceState: VoiceState) {
   const composerInput = useRef<HTMLTextAreaElement>(null);
   const fitComposer = useCallback(() => {
     // Grow the composer with its draft up to the CSS max-height, then scroll.
     const input = composerInput.current;
     if (!input) return;
-    input.style.height = "auto";
-    input.style.height = `${input.scrollHeight}px`;
+    const form = input.closest<HTMLFormElement>("form");
+    if (form) {
+      const lead = form.querySelector<HTMLElement>(".composer-tools");
+      const voice = form.querySelector<HTMLElement>(".voice-actions");
+      const send = form.querySelector<HTMLElement>(".send-button");
+      const measure = form.querySelector<HTMLElement>(".composer-measure");
+      const style = getComputedStyle(input);
+      if (measure) { measure.style.font = style.font; measure.style.letterSpacing = style.letterSpacing; measure.textContent = input.value.slice(0, 201); }
+      const available = form.clientWidth - 8 - (lead?.offsetWidth ?? 0) - (voice?.offsetWidth ?? 0) - (send?.offsetWidth ?? 44) - 12;
+      form.dataset.layout = shouldStackComposer(input.value, available, measure?.getBoundingClientRect().width ?? 0) ? "stacked" : "inline";
+    }
+    input.style.height = input.value ? "auto" : "";
+    if (input.value) input.style.height = `${input.scrollHeight}px`;
   }, []);
-  useLayoutEffect(fitComposer, [text, botId, fitComposer]);
+  useLayoutEffect(fitComposer, [text, botId, voiceState, fitComposer]);
   const ref = useCallback((input: HTMLTextAreaElement | null) => {
     composerInput.current = input;
     if (!input || typeof ResizeObserver === "undefined") return;
-    // Rotation or a narrower window rewraps the same draft.
-    let width = input.clientWidth;
-    const observer = new ResizeObserver(() => {
-      if (input.clientWidth === width) return;
-      width = input.clientWidth;
-      fitComposer();
-    });
-    observer.observe(input);
+    // Observe the fixed controls and form, not the textarea width that stacking itself changes.
+    const observer = new ResizeObserver(fitComposer);
+    const form = input.closest("form");
+    if (form) {
+      observer.observe(form);
+      for (const controls of form.querySelectorAll(".composer-tools, .voice-actions")) observer.observe(controls);
+    }
     return () => {
       observer.disconnect();
       composerInput.current = null;
@@ -102,13 +135,17 @@ function useFileDrop(footer: React.RefObject<HTMLElement | null>, onDrop: (files
   }, [footer]);
   return { panel, over };
 }
-export function Composer({ boot, selected, botId, conversation, state, active, connectionLost, draft, setDraft, draftReady, uploads, previews, uploading, upload, retryUpload, cancelUpload, pending, receipt, sending, send, retry, reviewed, setReviewed, refresh, report }: {
+// Memoized with stable callbacks from App, so a streaming reply, which changes the conversation about four times a second, does not re-render it.
+export const Composer = memo(function Composer({ boot, selected, botId, prompts, state, active, connectionLost, draft, setDraft, draftReady, uploads, previews, uploading, upload, retryUpload, cancelUpload, pending, receipt, sending, send, retry, discard, reviewed, setReviewed, dock = [], stopping, onStop, waiting }: {
   boot: Bootstrap;
   selected: Bot;
   botId: string;
-  conversation: SavedConversation | null;
+  /** This person's earlier messages in the chat, newest first, for Up and Down recall. */
+  prompts: readonly string[];
   state: ActivityState;
   active: boolean;
+  /** The placeholder while the assistant waits on a request this person could answer by message. */
+  waiting?: string;
   connectionLost: boolean;
   draft: Draft;
   setDraft(update: (current: Draft) => Draft): void;
@@ -124,23 +161,27 @@ export function Composer({ boot, selected, botId, conversation, state, active, c
   sending: boolean;
   send(): Promise<void>;
   retry(): void;
+  /** Gives up on an unconfirmed send and puts its text back in the draft. */
+  discard(): void;
   reviewed: boolean;
   setReviewed(value: boolean): void;
-  refresh(): void;
-  report(message: string): void;
+  /** Notices from the rest of the app for the dock above the composer: connection, decisions, update. */
+  dock?: DockItem[];
+  stopping: boolean;
+  onStop(): void;
 }) {
   const [voiceState, setVoiceState] = useState<VoiceState>("idle");
-  const mounted = useRef(true);
-  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  const [stopping, setStopping] = useState(false);
+  const talk = useTalk(botId, selected.name);
+  const talking = talk.status !== "idle";
+  // An older server reports no liveVoice; its absence hides Talk entirely.
+  const liveVoice = boot.capabilities.liveVoice as Bootstrap["capabilities"]["liveVoice"] | undefined;
   // An in-flight send keeps its spinning Send button even if the draft is cleared meanwhile.
   const stopVisible = active && !sending && !draft.text.trim() && !draft.attachments.length;
   // The transcript shows a message on its way, so the composer reads empty until Hermes answers.
   // The draft itself keeps the message until then, and is read-only so it stays the sent copy.
   const handedOff = sendingDraft(draft, pending, sending);
   const shown = draft.botId === botId && !handedOff ? draft : { text: "", attachments: [] };
-  const input = useComposerInput(shown.text, botId);
-  const advanced = boot.preferences.presentation === "advanced";
+  const input = useComposerInput(shown.text, botId, voiceState);
   const fileInput = useRef<HTMLInputElement>(null);
   const slots = MAX_ATTACHMENTS - draft.attachments.length - uploads.length;
   const attachUnavailable = !boot.capabilities.uploads.supported
@@ -167,44 +208,64 @@ export function Composer({ boot, selected, botId, conversation, state, active, c
   };
   const footer = useRef<HTMLElement>(null);
   const drop = useFileDrop(footer, addFiles);
+  // Up and Down in an empty composer browse this person's earlier messages here, newest first.
+  const [recall, setRecall] = useState<Recall>(null);
+  const caret = useRef<"start" | "end" | null>(null);
+  // An edit from elsewhere, such as another device or a send, ends browsing.
+  useEffect(() => { if (recall && shown.text !== prompts[recall.index]) setRecall(null); }, [recall, shown.text, prompts]);
+  useLayoutEffect(() => {
+    const field = document.getElementById("message") as HTMLTextAreaElement | null;
+    if (!caret.current || !field) return;
+    const at = caret.current === "start" ? 0 : field.value.length;
+    field.setSelectionRange(at, at);
+    caret.current = null;
+  }, [shown.text]);
+  const recallTo = (text: string, next: Recall, at: "start" | "end") => {
+    caret.current = at;
+    setRecall(next);
+    setDraft(previous => ({ ...previous, dirty: true, text }));
+  };
+  const [pasteStatus, setPasteStatus] = useState("");
+  useEffect(() => {
+    if (!pasteStatus) return;
+    const timer = setTimeout(() => setPasteStatus(""), 8000);
+    return () => clearTimeout(timer);
+  }, [pasteStatus]);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
+  useEffect(() => { if (!pending || sending) setConfirmDiscard(false); }, [pending, sending]);
+  const notices: DockItem[] = [...dock];
+  // A normal send only spins the send button. This appears once the request ended without a receipt.
+  if (pending && !sending) notices.push({ id: "send-uncertain", kind: "send", node: <div className="notice" role="status">
+    {confirmDiscard
+      ? <span>The message may still arrive. Its text goes back into the draft, so sending it again could deliver it twice.</span>
+      : <span>Checking whether your last message arrived…</span>}
+    <span className="notice-actions">
+      {confirmDiscard ? <>
+        <button type="button" className="danger" onClick={() => { setConfirmDiscard(false); discard(); }}>Discard and keep my text in the draft</button>
+        <button type="button" onClick={() => setConfirmDiscard(false)}>Cancel</button>
+      </> : <>
+        <button type="button" disabled={sending || !boot.capabilities.idempotency.supported} title={boot.capabilities.idempotency.reason} onClick={retry}>
+          Retry this saved message
+        </button>
+        <button type="button" onClick={() => setConfirmDiscard(true)}>Discard</button>
+      </>}
+    </span>
+  </div> });
+  if (receipt?.status === "rejected") notices.push({ id: "send-rejected", kind: "send", node: <div className="notice attention" role="alert">
+    {receipt.message || "Hermes did not accept this message. Your draft is saved."}
+  </div> });
+  if (receipt?.status === "interrupted") notices.push({ id: "send-interrupted", kind: "send", node: <div className="notice attention">
+    This submission was interrupted. Review its last actions before trying again.
+  </div> });
+  if (state === "interrupted") notices.push({ id: "interrupted", kind: "interrupted", node: <label className="interruption-review">
+    <input type="checkbox" checked={reviewed} onChange={(event) => setReviewed(event.target.checked)} />{" "}
+    I've reviewed the task's last actions.
+  </label> });
   return (
     <footer className="composer-area" ref={footer}>
       {drop.over && drop.panel && createPortal(<DropOverlay botName={selected.name} unavailable={attachUnavailable} />, drop.panel)}
-      {state === "interrupted" && (
-        <label className="interruption-review">
-          <input
-            type="checkbox"
-            checked={reviewed}
-            onChange={(event) => setReviewed(event.target.checked)}
-          />{" "}
-          I reviewed the interrupted task and its last actions before
-          continuing.
-        </label>
-      )}
-      {/* A normal send only spins the send button. This appears once the request ended without a receipt. */}
-      {pending && !sending && (
-        <div className="notice" role="status">
-          Checking whether your last message arrived…
-          <button
-            disabled={sending || !boot.capabilities.idempotency.supported}
-            title={boot.capabilities.idempotency.reason}
-            onClick={retry}
-          >
-            Retry this saved message
-          </button>
-        </div>
-      )}
-      {receipt?.status === "rejected" && (
-        <div className="notice attention" role="alert">
-          {receipt.message || "Hermes did not accept this message. Your draft is saved."}
-        </div>
-      )}
-      {receipt?.status === "interrupted" && (
-        <div className="notice attention">
-          This submission was interrupted. Review its last actions before
-          trying again.
-        </div>
-      )}
+      <StatusDock items={notices} />
+      <TalkPanel talk={talk} name={selected.name} />
       <form
         className="composer"
         onSubmit={(event) => {
@@ -212,69 +273,18 @@ export function Composer({ boot, selected, botId, conversation, state, active, c
           void send();
         }}
       >
+        <div className="composer-extras">
         {!!attachNotice.length && <div className="attachment-notice" role="alert">
           <Icon name="alert" size={15} />
           <div>{attachNotice.map(problem => <p key={problem}>{problem}</p>)}</div>
           <button type="button" className="icon-button" aria-label="Dismiss" onClick={() => setAttachNotice([])}><Icon name="close" size={14} /></button>
         </div>}
+        <p id="composer-paste-status" className="composer-status" role="status">{pasteStatus}</p>
         <AttachmentTray attachments={shown.attachments} uploads={uploads} previews={previews}
           canOpen={boot.capabilities.generatedFiles.supported}
           onRemove={id => setDraft(previous => ({ ...previous, dirty: true, attachments: previous.attachments.filter(file => file.id !== id) }))}
           onCancel={cancelUpload} onRetry={retryUpload} />
-        <label className="sr-only" htmlFor="message">
-          Message {selected.name}
-        </label>
-        <textarea
-          ref={input.ref}
-          id="message"
-          value={shown.text}
-          placeholder={
-            handedOff ? "Sending…"
-              : active
-              ? `Guide ${selected.name} while they work…`
-              : `Message ${selected.name}…`
-          }
-          // Read-only rather than disabled, so focus stays here for the next message.
-          readOnly={handedOff}
-          onChange={(event) =>
-            setDraft((previous) => ({
-              ...previous,
-              dirty: true,
-              text: event.target.value,
-            }))
-          }
-          onPaste={(event) => {
-            const files = event.clipboardData ? pastedFiles(event.clipboardData) : [];
-            if (!files.length) return;
-            event.preventDefault();
-            const at = new Date();
-            addFiles(files.map((file, index) => namePastedFile(file, at, index)));
-          }}
-          onKeyDown={(event) => {
-            if (
-              event.key === "Enter" &&
-              !event.shiftKey &&
-              !event.nativeEvent.isComposing
-            ) {
-              event.preventDefault();
-              if (
-                !(
-                  pending ||
-                  sending ||
-                  uploading ||
-                  connectionLost ||
-                  !boot.capabilities.chat.supported ||
-                  (state === "interrupted" && !reviewed) ||
-                  (active && !boot.capabilities.steering.supported)
-                ) &&
-                (draft.text.trim() || draft.attachments.length)
-              )
-                void send();
-            }
-          }}
-          rows={2}
-          disabled={!draftReady || draft.botId !== botId}
-        />
+        </div>
         <div className="composer-tools">
           {/* A real button opens a hidden picker. An invisible file input overlay
               won iOS touch adjustment for taps meant for the model button beside it. */}
@@ -300,26 +310,105 @@ export function Composer({ boot, selected, botId, conversation, state, active, c
               event.target.value = "";
             }}
           />
-          {advanced && <Loading loadingFallback={<ModelPickerPlaceholder model={selected.model} />}
-            errorFallback={<ModelPickerPlaceholder model={selected.model} failed />}><ComposerModelPicker bot={selected} bootstrap={boot}
-            disabled={connectionLost || sending} onSaved={refresh} /></Loading>}
-          <div className="composer-voice">
-            {voiceState !== "idle" && <span className={`voice-avatar voice-${voiceState}`}><Avatar avatar={selected.avatar} state="idle" size={24} name={selected.name} reducedMotion /></span>}
-            <VoiceControls key={`${boot.user.id}:${botId}`} botId={botId}
-              reply={!active ? conversation?.messages.findLast(isConversationReply) : undefined}
-              disabled={!draftReady || draft.botId !== botId || pending !== null || sending || connectionLost}
+        </div>
+        <span className="composer-measure-box" aria-hidden="true"><span className="composer-measure" /></span>
+        <label className="sr-only" htmlFor="message">
+          Message {selected.name}
+        </label>
+        <textarea
+          ref={input.ref}
+          id="message"
+          value={shown.text}
+          placeholder={
+            handedOff ? "Sending…"
+              : waiting ?? (active
+              ? "Guide…"
+              : "Message…")
+          }
+          aria-describedby={pasteStatus ? "composer-paste-status" : undefined}
+          // Read-only rather than disabled, so focus stays here for the next message.
+          readOnly={handedOff}
+          onChange={(event) => {
+            setRecall(null);
+            setPasteStatus("");
+            setDraft((previous) => ({
+              ...previous,
+              dirty: true,
+              text: event.target.value,
+            }));
+          }}
+          onPaste={(event) => {
+            const files = event.clipboardData ? pastedFiles(event.clipboardData) : [];
+            if (files.length) {
+              event.preventDefault();
+              const at = new Date();
+              addFiles(files.map((file, index) => namePastedFile(file, at, index)));
+              return;
+            }
+            // A very long paste travels as a text file; when files cannot attach now, it inserts as before.
+            const pasted = largePasteFile(event.clipboardData?.getData("text/plain") ?? "");
+            if (!pasted || attachUnavailable) return;
+            event.preventDefault();
+            addFiles([pasted]);
+            setPasteStatus(`Your paste was long, so it is attached as ${pasted.name} (${formatBytes(pasted.size)}).`);
+          }}
+          onKeyDown={(event) => {
+            if ((event.key === "ArrowUp" || event.key === "ArrowDown") && !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey
+              && !event.nativeEvent.isComposing && !submitting && !handedOff) {
+              const field = event.currentTarget;
+              const collapsed = field.selectionStart === field.selectionEnd;
+              const move = recallStep(recall, event.key, prompts, field.value,
+                collapsed && field.selectionStart === 0, collapsed && field.selectionEnd === field.value.length);
+              if (move) {
+                event.preventDefault();
+                recallTo(move.text, move.recall, event.key === "ArrowUp" ? "start" : "end");
+                return;
+              }
+            }
+            if (event.key === "Escape" && recall) {
+              event.preventDefault();
+              recallTo(recall.draft, null, "end");
+              return;
+            }
+            if (
+              event.key === "Enter" &&
+              !event.shiftKey &&
+              !event.nativeEvent.isComposing
+            ) {
+              event.preventDefault();
+              if (
+                !(
+                  pending ||
+                  sending ||
+                  uploading ||
+                  connectionLost ||
+                  !boot.capabilities.chat.supported ||
+                  (state === "interrupted" && !reviewed) ||
+                  (active && !boot.capabilities.steering.supported)
+                ) &&
+                (draft.text.trim() || draft.attachments.length)
+              )
+                void send();
+            }
+          }}
+          rows={1}
+          disabled={!draftReady || draft.botId !== botId}
+        />
+
+            <VoiceControls avatar={selected.avatar} name={selected.name} key={`${boot.user.id}:${botId}`} botId={botId}
+              disabled={!draftReady || draft.botId !== botId || pending !== null || sending || connectionLost || talking}
+              extra={liveVoice && <button type="button" className="talk-start" aria-label={`Talk live with ${selected.name}`}
+                aria-pressed={talking} disabled={connectionLost && !talking || voiceState !== "idle"}
+                title={talking ? "End the live conversation" : liveVoice.supported ? `Talk with ${selected.name} out loud. It hears you and answers as you go.` : liveVoice.reason}
+                onClick={() => talking ? talk.end() : liveVoice.supported ? talk.start() : talk.explain(liveVoice.reason ?? "Live talk is unavailable on this Hermes.")}>
+                <Icon name="talk" size={18} /><span className="tool-label">Talk</span>
+              </button>}
               onStateChange={setVoiceState} onTranscript={(text) => setDraft(previous => ({ ...previous, dirty: true,
                 text: previous.text.trim() ? `${previous.text}\n${text}` : text }))} />
-          </div>
           {stopVisible ? <button type="button" className="send-button" aria-label="Stop response"
             disabled={stopping || connectionLost || !boot.capabilities.stop.supported}
             title={boot.capabilities.stop.reason || "Stop response"}
-            onClick={() => {
-              setStopping(true);
-              void write(`/bots/${encodeURIComponent(botId)}/stop`, {})
-                .catch(error => { if (mounted.current) report(error.message); })
-                .finally(() => { if (mounted.current) setStopping(false); });
-            }}>
+            onClick={onStop}>
             <Icon name={stopping ? "spinner" : "stop"} className={stopping ? "spin" : undefined} size={19} />
           </button> : <button
             className="send-button"
@@ -339,8 +428,7 @@ export function Composer({ boot, selected, botId, conversation, state, active, c
           >
             <Icon name={submitting ? "spinner" : "send"} className={submitting ? "spin" : undefined} size={19} />
           </button>}
-        </div>
       </form>
     </footer>
   );
-}
+});

@@ -56,6 +56,8 @@ struct AssistantActivityState: Codable, Hashable {
     /// wire format stays a number and views convert it.
     var since: Double?
     var color: String?
+    /// A waiting row's pending approval, which the Lock Screen can decline.
+    var approvalId: String?
     var id: String { botId }
     var sinceDate: Date? { since.map(Date.init(timeIntervalSince1970:)) }
     /// Out-of-date running rows must not claim to still be working.
@@ -73,8 +75,19 @@ struct AssistantActivityState: Codable, Hashable {
   var updatedAt: Double
   var rows: [Row]
 
-  /// The first row drives the tint, the minimal symbol and the tap target.
+  /// The first row drives the tint, the minimal symbol, the tap target and the one action.
   var hero: Row? { rows.first }
+  /// What the Lock Screen and Dynamic Island offer for the first row: Decline a pending approval, or
+  /// Stop running work. Nothing while out of date, since the row may no longer be true. Approving
+  /// stays in the chat, where the approval card shows what it would run.
+  func action(stale: Bool) -> ActivityAction.Kind? {
+    guard !stale, let hero else { return nil }
+    switch hero.phase {
+    case .waiting: return hero.approvalId.map { .decline(approvalId: $0) }
+    case .thinking, .working: return .stop
+    default: return nil
+    }
+  }
   var updatedDate: Date { Date(timeIntervalSince1970: updatedAt) }
   static func empty(at now: Date) -> Self {
     Self(title: "", activeCount: 0, attentionCount: 0, updatedAt: now.timeIntervalSince1970, rows: [])
@@ -126,15 +139,17 @@ struct AssistantActivityState: Codable, Hashable {
 /// links notifications carry, so one path handles both.
 enum DeepLink {
   static let today = URL(string: "agentinterface://open?view=today")!
-  static func bot(_ id: String) -> URL {
+  static let home = URL(string: "agentinterface://open?view=home")!
+  /// `listen` also starts a voice message once the chat is open.
+  static func bot(_ id: String, listen: Bool = false) -> URL {
     var components = URLComponents()
     components.scheme = "agentinterface"
     components.host = "open"
-    components.queryItems = [URLQueryItem(name: "bot", value: id)]
+    components.queryItems = [URLQueryItem(name: "bot", value: id)] + (listen ? [URLQueryItem(name: "listen", value: "1")] : [])
     return components.url ?? today
   }
-  /// `agentinterface://open?bot=ID` becomes `/?bot=ID`. Anything else, including the sign-in
-  /// callback `agentinterface://auth/callback`, is not a navigation link.
+  /// `agentinterface://open?bot=ID` becomes `/?bot=ID`, keeping `listen=1`. Anything else, including
+  /// the sign-in callback `agentinterface://auth/callback`, is not a navigation link.
   static func relativePath(for url: URL) -> String? {
     guard url.scheme?.lowercased() == "agentinterface", url.host?.lowercased() == "open",
       url.path.isEmpty || url.path == "/",
@@ -143,9 +158,10 @@ enum DeepLink {
     var components = URLComponents()
     components.path = "/"
     if let bot = items.first(where: { $0.name == "bot" })?.value, !bot.isEmpty {
-      components.queryItems = [URLQueryItem(name: "bot", value: bot)]
-    } else if items.first(where: { $0.name == "view" })?.value == "today" {
-      components.queryItems = [URLQueryItem(name: "view", value: "today")]
+      let listen = items.contains { $0.name == "listen" && $0.value == "1" }
+      components.queryItems = [URLQueryItem(name: "bot", value: bot)] + (listen ? [URLQueryItem(name: "listen", value: "1")] : [])
+    } else if let view = items.first(where: { $0.name == "view" })?.value, ["today", "home"].contains(view) {
+      components.queryItems = [URLQueryItem(name: "view", value: view)]
     } else {
       return nil
     }

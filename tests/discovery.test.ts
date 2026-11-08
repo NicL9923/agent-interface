@@ -1,9 +1,11 @@
+import { capabilitiesFixture } from "./helpers/runtime-fixtures.js";
 import { afterEach, expect, it } from 'vitest';
 import { Store } from '../src/server/store.js';
-import { defaultPreferences, type ToolCall, type Runtime } from '../src/shared/types.js';
-import { receipt } from '../src/shared/discovery.js';
+import { defaultPreferences, type ToolCall } from '../src/shared/types.js';
+import { receipt, routineResultLabel, snippetParts } from '../src/shared/discovery.js';
 import { inQuietHours, BackgroundWorker } from '../src/server/notifications.js';
 import { loadConfig } from '../src/server/config.js';
+import { fakeRuntime } from "./helpers/server.js";
 const stores:Store[]=[];afterEach(()=>stores.splice(0).forEach(store=>store.close()));
 function setup() { const store=new Store(':memory:');stores.push(store);store.user({id:'one',name:'One',email:'one@example.test'});store.user({id:'two',name:'Two',email:'two@example.test'});return store; }
 it('stores account-specific pointers and deduplicates original references without copying answers',()=>{
@@ -25,18 +27,18 @@ it('keeps a fixed digest across retries and acknowledges each device independent
   for(const id of ['first','second'])store.recordEvents([{id,runId:'run',botId:'ranch',kind:'completed',title:id,occurredAt:new Date().toISOString()}],id);
   for(const endpoint of ['https://push.test/ok','https://push.test/retry'])store.subscribe('one',{endpoint,keys:{p256dh:'key',auth:'key'}});
   const payloads:{endpoint:string;payload:string}[]=[];
-  const runtime={capabilities:async()=>({idempotency:{supported:false},durableEvents:{supported:false}})} as unknown as Runtime;
+  const runtime=fakeRuntime({capabilities:async()=>capabilitiesFixture({idempotency:{supported:false},durableEvents:{supported:false}})});
   const worker=new BackgroundWorker(store,runtime,loadConfig({HOUSEHOLD_EMAILS:'one@example.test'}),async(subscription,payload)=>{payloads.push({endpoint:subscription.endpoint,payload});if(subscription.endpoint.endsWith('/retry')&&payloads.filter(item=>item.endpoint.endsWith('/retry')).length===1)throw new Error('offline');});
   await worker.tick();expect(payloads).toEqual([]);
   store.db.prepare("UPDATE outbox SET payload=json_set(payload,'$.queuedAt',?)").run(Date.now()-600000);
   await worker.tick();expect(payloads).toHaveLength(2);const tag=JSON.parse(payloads[0].payload).tag;
   store.recordEvents([{id:'new',runId:'run',botId:'ranch',kind:'completed',title:'new',occurredAt:new Date().toISOString()}],'3');store.db.prepare('UPDATE outbox SET next_attempt=0').run();
-  await worker.tick();expect(payloads).toHaveLength(3);expect(JSON.parse(payloads[2].payload).tag).toBe(tag);expect(JSON.parse(payloads[2].payload).title).toBe('2 assistant updates');expect(store.outbox()).toHaveLength(1);
+  await worker.tick();expect(payloads).toHaveLength(3);expect(JSON.parse(payloads[2].payload).tag).toBe(tag);expect(JSON.parse(payloads[2].payload).title).toBe('2 updates from 2 assistants');expect(store.outbox()).toHaveLength(1);
 });
 it('defers approval notifications through quiet hours without marking them delivered',async()=>{
   const store=setup();const now=new Date();const time=new Intl.DateTimeFormat('en-GB',{timeZone:'UTC',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(now);
   store.savePreferences('one',{...defaultPreferences,notifications:{timezone:'UTC',quietStart:time,quietEnd:time==='23:59'?'23:58':'23:59',batchMinutes:0}});store.participate('run','one');store.recordEvents([{id:'decision',runId:'run',botId:'ranch',kind:'approval',title:'Decision',occurredAt:now.toISOString()}],'1');store.subscribe('one',{endpoint:'https://push.test/one',keys:{p256dh:'key',auth:'key'}});
-  let sends=0;const runtime={capabilities:async()=>({idempotency:{supported:false},durableEvents:{supported:false}})} as unknown as Runtime;
+  let sends=0;const runtime=fakeRuntime({capabilities:async()=>capabilitiesFixture({idempotency:{supported:false},durableEvents:{supported:false}})});
   const worker=new BackgroundWorker(store,runtime,loadConfig({HOUSEHOLD_EMAILS:'one@example.test'}),async()=>{sends++;});await worker.tick();expect(sends).toBe(0);expect(store.outbox()).toHaveLength(1);
   store.savePreferences('one',defaultPreferences);await worker.tick();expect(sends).toBe(1);expect(store.outbox()).toHaveLength(0);
 });
@@ -45,9 +47,30 @@ it('does not mistake completed transport or shell exit zero for a confirmed exte
   expect(receipt(call).label).toBe('Tool finished');expect(receipt({...call,result:'{"success":true,"html_url":"https://example.test/result"}'}).links).toEqual(['https://example.test/result']);
   expect(receipt({...call,result:'{"success":false,"error":"No permission"}'}).label).toBe('Tool failed');expect(receipt({...call,result:'{"success":true,"url":"javascript:alert(1)"}'}).links).toEqual([]);
 });
+it('keeps the end of long tool output available inside a scrollable receipt',()=>{
+  const result = 'Synthetic tool detail\n'.repeat(300) + 'Final outcome after 4,000 characters';
+  expect(receipt({id:'long-tool',name:'terminal',status:'completed',result}).text).toBe(result);
+});
 it('does not lose an accessible update when another member’s bot is revoked from its digest',async()=>{
   const store=setup();store.savePreferences('one',{...defaultPreferences,notifications:{timezone:'UTC',batchMinutes:5}});store.participate('run','one');
   store.recordEvents([{id:'public',botId:'public',runId:'run',kind:'completed',title:'Public update',occurredAt:new Date().toISOString()},{id:'private',botId:'private',runId:'run',kind:'completed',title:'Private secret title',occurredAt:new Date().toISOString()}],'1');store.db.prepare("UPDATE outbox SET payload=json_set(payload,'$.queuedAt',?)").run(Date.now()-600000);store.deliveryGroups();store.savePresentation('private',{ownerId:'two',shared:false});
-  store.subscribe('one',{endpoint:'https://push.test/one',keys:{p256dh:'key',auth:'key'}});const payloads:string[]=[];const runtime={capabilities:async()=>({idempotency:{supported:false},durableEvents:{supported:false}})} as unknown as Runtime;
+  store.subscribe('one',{endpoint:'https://push.test/one',keys:{p256dh:'key',auth:'key'}});const payloads:string[]=[];const runtime=fakeRuntime({capabilities:async()=>capabilitiesFixture({idempotency:{supported:false},durableEvents:{supported:false}})});
   const worker=new BackgroundWorker(store,runtime,loadConfig({HOUSEHOLD_EMAILS:'one@example.test'}),async(_,payload)=>{payloads.push(payload);});await worker.tick();expect(payloads).toHaveLength(1);expect(payloads[0]).toContain('Public update');expect(payloads[0]).not.toContain('Private secret title');expect(store.outbox()).toHaveLength(0);
+});
+
+
+it('labels familiar routine results and keeps unfamiliar Hermes outcomes visible',()=>{
+  expect(routineResultLabel('delivery_failed')).toBe('Delivery failed');
+  expect(routineResultLabel('ok')).toBe('Succeeded');expect(routineResultLabel('error')).toBe('Failed');
+  expect(routineResultLabel('waiting_for_device')).toBe('waiting_for_device');
+  expect(routineResultLabel('__proto__')).toBe('__proto__');
+});
+it('marks search matches in the plain snippet the server sends',()=>{
+  expect(snippetParts('the >>>grocery<<< store')).toEqual([{text:'the ',match:false},{text:'grocery',match:true},{text:' store',match:false}]);
+  expect(snippetParts('>>>Grocery<<< Demo, then x > y').map(part=>part.text).join('')).toBe('Grocery Demo, then x > y');
+  // Markers count only as an opening then a closing pair; a stray one stays as written.
+  expect(snippetParts('Use <<< before >>>query<<< and >>>tail')).toEqual([{text:'Use <<< before ',match:false},{text:'query',match:true},{text:' and >>>tail',match:false}]);
+  expect(snippetParts('a'.repeat(300)+'>>>hidden tail<<<').at(-1)!.text.endsWith('…')).toBe(true);
+  const long=snippetParts('word '.repeat(100),40);expect(long.map(part=>part.text).join('').length).toBeLessThanOrEqual(41);
+  const started=performance.now();snippetParts('>>>'.repeat(50_000)+'\\'.repeat(50_000));expect(performance.now()-started).toBeLessThan(200);
 });

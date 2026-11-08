@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 // Operator tooling uses Node's built-in modules and has no TypeScript build step.
 // @ts-expect-error Plain JavaScript operator module.
-import { all, appleApi, distribute, requireReadyBuild, runPrivate } from '../.agents/tools/apple-api.mjs';
+import { all, appleApi, AppleNotReady, distribute, requireReadyBuild, runPrivate, untilReady } from '../.agents/tools/apple-api.mjs';
 
 const ready = () => ({ id: 'build-42', attributes: { version: '42', processingState: 'VALID', expired: false }, marketingVersion: '1.0', relationships: { app: { data: { id: 'wildbots' } }, preReleaseVersion: { data: { id: 'v1' } } } });
 const household = ['one@example.test', 'two@example.test'];
@@ -19,13 +19,17 @@ describe('iOS publishing fences', () => {
       const reply = (status: number) => ({ ok: status === 200, status, text: async () => JSON.stringify(status === 200 ? { data: [] } : { errors: [{ code: 'UNEXPECTED_ERROR' }] }) });
       const transport = vi.fn().mockResolvedValueOnce(reply(500)).mockRejectedValueOnce(new Error('connection reset')).mockResolvedValueOnce(reply(200));
       const api = appleApi({ keyId: 'test', issuerId: 'test', keyFile }, transport);
-      await expect(api('GET', '/apps')).resolves.toEqual({ data: [] });
+      // Each of the two retries waits 2 s, which a virtual clock skips.
+      vi.useFakeTimers({ toFake: ['setTimeout'] });
+      const read = expect(api('GET', '/apps')).resolves.toEqual({ data: [] });
+      await vi.advanceTimersByTimeAsync(4000);
+      await read;
       expect(transport).toHaveBeenCalledTimes(3);
       transport.mockReset().mockResolvedValue(reply(500));
       await expect(api('POST', '/profiles', { data: {} })).rejects.toThrow('HTTP 500');
       expect(transport).toHaveBeenCalledTimes(1);
-    } finally { rmSync(directory, { recursive: true }); }
-  }, 10000);
+    } finally { vi.useRealTimers(); rmSync(directory, { recursive: true }); }
+  });
   it('does not echo signing credentials when a subprocess fails', () => {
     try {
       runPrivate(process.execPath, ['-e', 'console.error(process.argv[1]); process.exit(1)', 'private-signing-password']);
@@ -75,7 +79,32 @@ describe('iOS publishing fences', () => {
 
   it('does not create a group when the selected build is still processing', async () => {
     const api = vi.fn(async (_method: string, route: string) => route.startsWith('/apps?') ? { data: [{ id: 'wildbots', attributes: { bundleId: 'dev.agentinterface.ios' } }] } : { data: [] });
-    await expect(distribute(api, 42, '1.0', household)).rejects.toThrow('not finished processing');
+    await expect(distribute(api, 42, '1.0', household)).rejects.toThrow(AppleNotReady);
+    await expect(distribute(api, 42, '1.0', household)).rejects.toThrow('has not listed build 42');
     expect(api.mock.calls.every(([method]) => method === 'GET')).toBe(true);
+  });
+
+  it('stops at once when the build number belongs to another marketing version', async () => {
+    const api = vi.fn(async (_method: string, route: string) => route.startsWith('/apps?')
+      ? { data: [{ id: 'wildbots', attributes: { bundleId: 'dev.agentinterface.ios' } }] }
+      : { data: [ready()], included: [{ id: 'v1', type: 'preReleaseVersions', attributes: { version: '1.1' } }] });
+    const refusal = await distribute(api, 42, '1.0', household).catch((error: Error) => error);
+    expect(refusal).not.toBeInstanceOf(AppleNotReady);
+    expect(refusal.message).toContain('belongs to marketing version 1.1, not 1.0');
+  });
+
+  it('waits only while Apple is processing, and gives up at the deadline', async () => {
+    let clock = 0;
+    const sleep = vi.fn(async (ms: number) => { clock += ms; });
+    const options = { sleep, now: () => clock, minutes: 3 };
+    let calls = 0;
+    const flaky = async () => { calls += 1; if (calls < 3) throw new AppleNotReady('Apple is still processing build 42.'); return 'distributed'; };
+    await expect(untilReady(flaky, options)).resolves.toBe('distributed');
+    expect(sleep).toHaveBeenCalledTimes(2);
+    await expect(untilReady(async () => { throw new AppleNotReady('Apple is still processing build 42.'); }, options)).rejects.toThrow('Run distribute again later');
+    await expect(untilReady(async () => { throw new Error('exactly the two testers'); }, options)).rejects.toThrow('exactly the two');
+    const once = vi.fn(async () => { throw new AppleNotReady('not yet'); });
+    await expect(untilReady(once, { ...options, wait: false })).rejects.toThrow('Run distribute again later');
+    expect(once).toHaveBeenCalledTimes(1);
   });
 });

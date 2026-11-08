@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { RefObject } from "react";
 import type { SubmissionReceipt } from "../shared/types";
-import { api, ApiError, write } from "../client-api";
+import { ApiError, request as apiRequest } from "../client-api";
 import { clearSavedDraft, draftKey, localRead, localRemove, localSave, sentCopy, submissionKey } from "./storage";
 import type { Draft, Pending } from "./storage";
 import { contentHash } from "./draft-merge";
@@ -20,7 +20,13 @@ export function useSubmission({ botId, userId, identityEpoch, draft, setDraft, d
 }) {
   const [pending, setPending] = useState<Pending | null>(null);
   const [receipt, setReceipt] = useState<SubmissionReceipt | null>(null);
-  const [sending, setSending] = useState(false);
+  const [inFlight, setInFlight] = useState<Record<string, string>>({});
+  const sending = !!inFlight[botId];
+  const start = (request: Pending) => setInFlight(current => ({ ...current, [request.botId]: request.requestId }));
+  const finish = (request: Pending) => setInFlight(current => {
+    if (current[request.botId] !== request.requestId) return current;
+    const next = { ...current }; delete next[request.botId]; return next;
+  });
   const activeBotRef = useRef(botId);
   activeBotRef.current = botId;
   const clearSent = (user: string, request: Pending) =>
@@ -49,12 +55,12 @@ export function useSubmission({ botId, userId, identityEpoch, draft, setDraft, d
     setDraft(current => current.botId === request.botId && current.userId === user ? restoreSent(current, request) : current);
   };
   useEffect(() => {
-    if (!botId || !userId) return;
     setReceipt(null);
+    if (!botId || !userId) { setPending(null); return; }
     setPending(localRead<Pending>(submissionKey(userId, botId)));
   }, [botId, userId]);
   useEffect(() => {
-    if (!pending || !userId || sending) return;
+    if (!pending || pending.botId !== botId || !userId || sending) return;
     let live = true;
     let loading = false;
     const epoch = identityEpoch.current;
@@ -63,9 +69,7 @@ export function useSubmission({ botId, userId, identityEpoch, draft, setDraft, d
       if (loading || navigator.onLine === false || document.visibilityState === "hidden") return;
       loading = true;
       try {
-        const result = await api<SubmissionReceipt>(
-          `/submissions/${pending.requestId}`,
-        );
+        const result = await apiRequest("GET /submissions/:id", { params: { id: pending.requestId } });
         if (!live || epoch !== identityEpoch.current) return;
         setReceipt(result);
         if (result.status === "accepted") {
@@ -91,8 +95,9 @@ export function useSubmission({ botId, userId, identityEpoch, draft, setDraft, d
       live = false;
       clearInterval(timer);
     };
-  }, [pending, userId, sending]);
-  const send = async () => {
+  }, [pending, userId, botId, sending]);
+  /** `onStart` hears the request once it is on its way, such as to anchor the view to it. */
+  const send = async (onStart?: (request: Pending) => void) => {
     if (
       !userId ||
       connectionLost ||
@@ -117,12 +122,10 @@ export function useSubmission({ botId, userId, identityEpoch, draft, setDraft, d
     localSave(submissionKey(userId, botId), request);
     markSent(userId, request, true);
     setPending(request);
-    setSending(true);
+    start(request);
+    onStart?.(request);
     try {
-      const result = await write<SubmissionReceipt>(
-        `/bots/${encodeURIComponent(botId)}/messages`,
-        request,
-      );
+      const result = await apiRequest("POST /bots/:id/messages", { params: { id: botId }, body: request });
       if (epoch !== identityEpoch.current) return;
       if (activeBotRef.current === request.botId) setReceipt(result);
       if (result.status === "accepted") {
@@ -145,30 +148,37 @@ export function useSubmission({ botId, userId, identityEpoch, draft, setDraft, d
         if (activeBotRef.current === request.botId) setPending(null);
         localRemove(submissionKey(userId, request.botId));
       }
-      setError((e as Error).message);
+      if (activeBotRef.current === request.botId) setError((e as Error).message);
     } finally {
-      if (epoch === identityEpoch.current) setSending(false);
+      if (epoch === identityEpoch.current) finish(request);
     }
   };
   const retry = () => {
-    if (!pending) return;
+    if (!pending || sending) return;
+    const request = pending;
     const epoch = identityEpoch.current;
     const requestBot = pending.botId;
     const current = () => epoch === identityEpoch.current &&
       activeBotRef.current === requestBot;
-    setSending(true);
-    void write<SubmissionReceipt>(
-      `/bots/${encodeURIComponent(pending.botId)}/messages`,
-      { ...pending, reviewedUncertain: true },
-    )
+    start(request);
+    void apiRequest("POST /bots/:id/messages", { params: { id: pending.botId }, body: { ...pending, reviewedUncertain: true } })
       .then((result) => { if (current()) setReceipt(result); })
       .catch((e) => { if (current()) setError(e.message); })
       .finally(() => {
-        if (epoch === identityEpoch.current) setSending(false);
+        if (epoch === identityEpoch.current) finish(request);
       });
   };
-  const reset = () => {
-    setSending(false); setPending(null); setReceipt(null);
+  // Gives up on checking an unconfirmed send, as the native client can: its text and files go back
+  // into the draft, no longer marked as sent. The message may still arrive.
+  const discard = () => {
+    if (!pending || sending || !userId) return;
+    refused(userId, pending);
+    setPending(null);
+    setReceipt(null);
+    localRemove(submissionKey(userId, pending.botId));
   };
-  return { pending, receipt, sending, send, retry, reset };
+  const reset = () => {
+    setInFlight({}); setPending(null); setReceipt(null);
+  };
+  return { pending, receipt, sending, send, retry, discard, reset };
 }

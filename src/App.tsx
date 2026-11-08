@@ -1,27 +1,49 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { ActivityState, Bot } from "./shared/types";
-import { write } from "./client-api";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { ActivityState, Bot, Preferences } from "./shared/types";
+import { MAX_ATTACHMENTS } from "./shared/uploads";
+import { api, write } from "./client-api";
+import type { GroupCatalog, GroupRoom } from "./shared/collaboration";
 import { AvatarTrio, SignIn } from "./components/SignIn";
 import { useDeviceNotifications } from "./components/use-device-notifications";
 import { TodayPanel } from "./components/TodayPanel";
 import "./components/discovery.css";
-import { hasDestination, initialPanel, initialView, startsOnToday, useUrlSync } from "./app/view";
+import { hasDestination, initialPanel, initialRoom, initialView, startsOnToday, useUrlSync } from "./app/view";
 import type { Panel, View } from "./app/view";
-import { useSession } from "./app/use-session";
+import { GROUP_FALLBACK_POLL_MS, GROUP_UNNOTIFIED_POLL_MS, GROUPS_EVENT, useSession } from "./app/use-session";
 import { useDraft, useDraftPersistence } from "./app/use-draft";
 import { useConversation } from "./app/use-conversation";
 import { useChatPresence } from "./app/use-chat-presence";
 import { useSubmission } from "./app/use-submission";
-import { useSentEchoes, withEchoes } from "./app/sent-echo";
+import { sendingDraft, useSentEchoes, withEchoes } from "./app/sent-echo";
+import { moveSectionEdit, togglePinEdit, type UndoableEdit } from "./app/home-undo";
+import { withRunsShown } from "./shared/routine-runs";
 import { useAppInstall, useMobile } from "./app/use-browser";
+import { latestMessageAt, useReadThrough } from "./app/unread";
+import { useStableCallback } from "./app/use-stable-callback";
+import { useResource } from "./app/use-resource";
+import { orderRooms, pendingGroup } from "./app/home-rooms";
 import { UpdateNotice } from "./app/UpdateNotice";
-import { Sidebar } from "./app/Sidebar";
+import { Sidebar, type HomeGroups } from "./app/Sidebar";
 import { ChatHeader } from "./app/ChatHeader";
 import { Conversation } from "./app/Conversation";
-import { Composer } from "./app/Composer";
-import { BotSettings, ComputerPanel, DiscoveryPanel, GroupChats, HermesUpgradePanel, IntegrationsPanel, Loading, PreferencesDialog, RoutineResults, useOnceActive } from "./app/panels";
+import { Composer, useOwnPrompts, useStopResponse } from "./app/Composer";
+import { CommandPalette, paletteBots } from "./app/CommandPalette";
+import { ShortcutsDialog } from "./app/ShortcutsDialog";
+import { StopConfirm } from "./app/StopConfirm";
+import { Toast, useToast } from "./app/Toast";
+import { useShortcuts } from "./app/shortcuts";
+import { headerAvatar, morphNavigate, railAvatar } from "./app/navigation-morph";
+import { tintProps } from "./app/bot-tint";
+import { waitingPlaceholder } from "./app/waiting-input";
+import { badgeCount, useAppBadge } from "./app/badge";
+import { ConnectionPanel } from "./components/ConnectionPanel";
+import { DecisionsNotice, reviewFirstDecision, type DockItem } from "./app/StatusDock";
+import { BotDetails, BotSettings, ComputerPanel, DiscoveryPanel, GroupCreate, GroupRoomView, HermesUpgradePanel, IntegrationsPanel, Loading, PreferencesDialog, RoutineResults, useOnceActive } from "./app/panels";
 export function App() {
   const [view, setView] = useState<View>(initialView);
+  // The group chat open in the main pane when the view is "group".
+  const [roomId, setRoomId] = useState(initialRoom);
+  const [creatingGroup, setCreatingGroup] = useState(false);
   const [panel, setPanel] = useState<Panel | null>(initialPanel);
   const closePanels = (...kinds: Panel["kind"][]) =>
     setPanel(current => current && kinds.includes(current.kind) ? null : current);
@@ -32,15 +54,16 @@ export function App() {
   // An assistant this person just deleted leaves quietly; any other one explains itself.
   const deleted = useRef("");
   const gone = (id: string) => {
-    setPanel(current => current?.kind === "routine" && current.botId === id || current?.kind === "settings" && current.bot !== "new" && current.bot.id === id ? null : current);
+    setPanel(current => (current?.kind === "routine" || current?.kind === "details") && current.botId === id || current?.kind === "settings" && current.bot !== "new" && current.bot.id === id ? null : current);
     if (deleted.current === id) return;
     setError("That assistant is no longer available to you.");
     setRailOpen(mobile);
   };
   const session = useSession({
     onIdentityChange: () => {
-      reset(); clearUploads();
-      closePanels("settings", "preferences", "upgrade", "integrations", "computer"); setError("");
+      reset(); clearUploads(); toast.dismiss();
+      closePanels("settings", "details", "preferences", "upgrade", "integrations", "computer"); setError("");
+      setRoomId(""); setCreatingGroup(false); setView(current => current === "group" ? "conversation" : current);
     },
     onFirstBootstrap: next => { if (startsOnToday(next.preferences)) setView("today"); },
     onError: setError,
@@ -48,21 +71,68 @@ export function App() {
   });
   const { boot, botId, setBotId, identityEpoch, offline, appUnavailable } = session;
   const userId = boot?.user.id;
-  useUrlSync(view, panel, botId, userId);
+  const toast = useToast(session.auth ? undefined : userId);
+  useUrlSync(view, panel, botId, userId, roomId);
+  // Home lists the household's group chats beside its assistants. The catalog carries each room's
+  // newest message, so one read serves every row; no room's log is read from here. The household
+  // stream's notices drive reads; the slow poll only covers one it missed.
+  // A read that finds nothing new returns the copy already held, so home does not redraw for it.
+  const groupsHeld = useRef<{ json: string; value: { userId: string; catalog: GroupCatalog } }>(undefined);
+  const groupLoad = useResource<{ userId: string; catalog: GroupCatalog }>(userId ? "/groups" : null, {
+    // A server that never sends `groups` notices gets the 30-second poll home always had.
+    deps: [userId], pollMs: session.groupsNotified ? GROUP_FALLBACK_POLL_MS : GROUP_UNNOTIFIED_POLL_MS, wake: true,
+    load: async (path, signal) => {
+      const catalog = await api<GroupCatalog>(path, { signal });
+      const json = JSON.stringify([userId, catalog]);
+      if (groupsHeld.current?.json === json) return groupsHeld.current.value;
+      groupsHeld.current = { json, value: { userId: userId!, catalog } };
+      return groupsHeld.current.value;
+    },
+  });
+  // Another account's rooms never show while this one's load.
+  const catalog = userId && groupLoad.data?.userId === userId ? groupLoad.data.catalog : null;
+  const rooms = useMemo(() => orderRooms(catalog?.rooms ?? []), [catalog]);
+  const reloadGroups = useStableCallback(() => void groupLoad.reload());
+  useEffect(() => {
+    if (!userId) return;
+    window.addEventListener(GROUPS_EVENT, reloadGroups);
+    window.addEventListener("agent-interface:reconnect", reloadGroups);
+    return () => {
+      window.removeEventListener(GROUPS_EVENT, reloadGroups);
+      window.removeEventListener("agent-interface:reconnect", reloadGroups);
+    };
+  }, [userId, reloadGroups]);
+  const pendingCreate = useMemo(() => userId && !creatingGroup ? pendingGroup(userId) : null, [userId, creatingGroup]);
   const notifications = useDeviceNotifications(userId, boot?.vapidPublicKey);
   const { draft, setDraft, draftReady, uploads, previews, uploading, upload, retryUpload, cancelUpload, clearUploads } = useDraft({ botId, userId, identityEpoch, setError });
-  const { conversation, setConversation, disconnected: conversationDisconnected, reply, reviewed, setReviewed, scroll, content, history, persistPosition } = useConversation(botId, userId, id => {
+  const { conversation, setConversation, disconnected: conversationDisconnected, reply, reviewed, setReviewed, scroll, endSpace, content, history, persistPosition } = useConversation(botId, userId, id => {
     gone(id);
     setBotId("");
     void session.refresh();
   });
   // The chat counts as on screen only when nothing covers it: no panel, and on a phone, not the home list.
-  useChatPresence(view === "conversation" && !panel && !(mobile && railOpen) && boot?.bots.some(bot => bot.id === botId) ? botId : undefined, userId);
+  const shownBotId = view === "conversation" && !panel && !(mobile && railOpen) && boot?.bots.some(bot => bot.id === botId) ? botId : undefined;
+  useChatPresence(shownBotId, userId);
+  const readThrough = useReadThrough(userId, shownBotId, shownBotId
+    ? latestMessageAt(boot?.bots.find(bot => bot.id === shownBotId), conversation?.botId === shownBotId ? conversation.messages : undefined) : undefined);
   const connectionLost = session.disconnected || conversationDisconnected || offline;
-  const { pending, receipt, sending, send, retry, reset } = useSubmission({
+  const { pending, receipt, sending, send, retry, discard, reset } = useSubmission({
     botId, userId, identityEpoch, draft, setDraft, draftReady, reviewed, connectionLost, setError,
   });
   useDraftPersistence({ draft, setDraft, draftReady, botId, userId, identityEpoch, offline, appUnavailable, pending });
+  // The anchored send follows the ID Hermes gave its message, once the receipt names one.
+  const { sentAs } = history;
+  useEffect(() => { if (receipt?.messageId) sentAs(receipt.requestId, receipt.messageId); }, [receipt, sentAs]);
+  // A handoff card's Take over, a terminal card's Open terminal and the live row's Watch open the computer from the transcript.
+  useEffect(() => {
+    const opened = (event: Event) => {
+      const detail = (event as CustomEvent<{ take?: boolean; terminal?: { command?: string } }>).detail;
+      setPanel({ kind: "computer", ...(detail?.take ? { take: Date.now() } : {}),
+        ...(detail?.terminal ? { tab: "terminal" as const, terminal: { at: Date.now(), ...(detail.terminal.command ? { command: detail.terminal.command } : {}) } } : {}) });
+    };
+    window.addEventListener("wildbots:computer", opened);
+    return () => window.removeEventListener("wildbots:computer", opened);
+  }, []);
   // A sent message shows in the transcript at once; Send keeps spinning until Hermes answers.
   const echoes = useSentEchoes({ pending, receipt, sending, conversation, sender: boot?.user });
   const transcript = useMemo(() => withEchoes(conversation, echoes), [conversation, echoes]);
@@ -85,13 +155,30 @@ export function App() {
       ? document.querySelector<HTMLElement>(".bot-rail [aria-current='page']") ?? document.querySelector<HTMLElement>(".bot-rail .home-account")
       : document.querySelector<HTMLElement>("[aria-label='Back to assistants']"))?.focus();
   }, [railOpen, mobile]);
-  const selectBot = (id: string) => {
-    persistPosition();
+  const selectBot = useStableCallback((id: string) => {
+    persistPosition(true);
     setView("conversation");
     setBotId(id);
     setRailOpen(false);
     setError("");
-  };
+  });
+  // On a phone, choosing an assistant on home pushes its chat in, carrying the avatar to the header.
+  const selectFromHome = useStableCallback((id: string) => {
+    if (!mobile || !railOpen) return selectBot(id);
+    morphNavigate(() => selectBot(id), railAvatar(id), headerAvatar, "forward");
+  });
+  // Back reverses it, returning the avatar to its place on home.
+  const backToHome = useStableCallback(() => {
+    if (!mobile || railOpen || view !== "conversation" || !botId) return setRailOpen(true);
+    morphNavigate(() => setRailOpen(true), headerAvatar, railAvatar(botId), "back");
+  });
+  const selectRoom = useStableCallback((id: string) => {
+    persistPosition(true);
+    setView("group");
+    setRoomId(id);
+    setRailOpen(false);
+    setError("");
+  });
   const signOut = async () => {
     try {
       await notifications.disable();
@@ -100,13 +187,114 @@ export function App() {
       setConversation(null);
       setDraft({ text: "", attachments: [] });
       // The signed-out account's in-flight work can never clear these once the identity changes.
-      reset(); clearUploads();
+      reset(); clearUploads(); toast.dismiss();
       setRailOpen(mobile);
-      closePanels("settings", "preferences", "upgrade", "integrations");
+      closePanels("settings", "details", "preferences", "upgrade", "integrations");
     } catch (e) {
       setNotice((e as Error).message);
     }
   };
+  // Home is memoized, so its handlers keep one identity across renders.
+  const scrolled = useCallback(() => persistPosition(), [persistPosition]);
+  const showView = useStableCallback((next: View) => { setView(next); setRailOpen(false); });
+  const openPanel = useStableCallback((next: Panel) => setPanel(next));
+  const newBot = useStableCallback(() => setPanel({ kind: "settings", bot: "new" }));
+  const newGroup = useStableCallback(() => setCreatingGroup(true));
+  const groupCreated = useStableCallback((room: GroupRoom) => {
+    setCreatingGroup(false);
+    // The new room shows at once; the next read of the catalog replaces this copy.
+    groupLoad.setData(current => current && { ...current, catalog: { ...current.catalog, rooms: [...current.catalog.rooms.filter(item => item.room_id !== room.room_id), room] } });
+    selectRoom(room.room_id);
+    reloadGroups();
+  });
+  const openPreferences = useStableCallback(() => setPanel({ kind: "preferences" }));
+  // Home menu changes can be taken back for a few seconds, by the toast's Undo or Cmd+Z. The
+  // toast belongs to whoever made the change; useToast drops it for anyone else.
+  const undoable = (change: UndoableEdit) => {
+    void session.editPreferences(change.apply);
+    toast.show(change.message, () => void session.editPreferences(change.undo));
+  };
+  const togglePin = useStableCallback((bot: Bot) => { if (boot) undoable(togglePinEdit(boot.preferences, bot.id, bot.name)); });
+  const botSettings = useStableCallback((bot: Bot) => setPanel({ kind: "settings", bot }));
+  const moveToSection = useStableCallback((bot: Bot, sectionId: string | null) => {
+    if (boot) undoable(moveSectionEdit(boot.preferences, bot.id, bot.name, sectionId));
+  });
+  const newSection = useStableCallback((bot: Bot) => setPanel({ kind: "details", botId: bot.id, newSection: true }));
+  const openRoutineRun = useStableCallback((routineId: string, resultId: string) => setPanel({ kind: "routine", botId, routineId, resultId }));
+  // Hiding a routine's runs from the chat can be taken back from the toast, or in its routine settings.
+  const hideRoutineRuns = useStableCallback((routineId: string, name: string) => undoable({
+    apply: value => withRunsShown(value, botId, routineId, false), undo: value => withRunsShown(value, botId, routineId, true),
+    message: `Hid ${name} runs from this chat`,
+  }));
+  // Home is memoized, so its group props keep one identity until something they show changes.
+  const homeGroups = useMemo<HomeGroups>(() => {
+    // Making a group needs Hermes to host them and two assistants to put in one.
+    const choosable = boot?.bots.filter(bot => !["all", "everyone"].includes(bot.id.toLowerCase())).length ?? 0;
+    return {
+      rooms, roomId, pending: pendingCreate, onSelect: selectRoom, onCreate: newGroup,
+      canCreate: !!pendingCreate || catalog?.supported === true && choosable >= 2,
+      hint: pendingCreate ? undefined : !catalog?.canSend ? catalog?.reason ?? "The Hermes group coordinator must be running to make a group chat."
+        : boot && !boot.connection.connected ? "Reconnect to Hermes to make a group chat." : undefined,
+    };
+  }, [rooms, roomId, pendingCreate, selectRoom, newGroup, catalog, boot]);
+  const [overlay, setOverlay] = useState<"palette" | "shortcuts" | "stop" | null>(null);
+  const closeOverlay = useCallback(() => setOverlay(null), []);
+  // Search from the palette opens Search & saved with the words already searched.
+  const [findQuery, setFindQuery] = useState<{ text: string; id: number }>();
+  const searchMessages = useStableCallback((text: string) => { setFindQuery(previous => ({ text, id: (previous?.id ?? 0) + 1 })); showView("find"); });
+  const setTheme = useStableCallback((theme: Preferences["theme"]) => void session.editPreferences(preferences => ({ ...preferences, theme })));
+  const showShortcuts = useStableCallback(() => setOverlay("shortcuts"));
+  // Find in chat belongs to the transcript, which listens for this once the chat is on screen.
+  const findInChat = useStableCallback((id: string) => {
+    closePanels("details");
+    if (id !== botId || view !== "conversation") selectBot(id);
+    requestAnimationFrame(() => window.dispatchEvent(new CustomEvent("wildbots:find", { detail: { botId: id } })));
+  });
+  // A search hit in the live conversation opens the chat at that message, which the transcript loads.
+  const openMessage = useStableCallback((id: string, messageId: string) => {
+    history.openAt(id, messageId);
+    selectBot(id);
+  });
+  const { stopping, stop } = useStopResponse(botId, setError);
+  // The composer is memoized, so these keep one identity while a reply streams.
+  const sendMessage = useStableCallback(() => send(request => history.anchorSend(request.requestId)));
+  const refreshSession = useStableCallback(() => void session.refresh());
+  const reconnect = useStableCallback(() => void session.reconnect());
+  const uploadFiles = useStableCallback(upload);
+  const retryUploadFile = useStableCallback(retryUpload);
+  const cancelUploadFile = useStableCallback(cancelUpload);
+  const retrySend = useStableCallback(retry);
+  const discardSend = useStableCallback(discard);
+  const ownConversation = conversation?.botId === botId ? conversation : null;
+  const prompts = useOwnPrompts(ownConversation?.messages, userId);
+  const decisions = (ownConversation?.attention?.length ?? 0) + (ownConversation?.approvals.filter(approval => approval.status === "pending").length ?? 0);
+  const checkingConnection = session.checkingConnection;
+  // Notices from the rest of the app, rebuilt only when one of them changes.
+  const dock = useMemo(() => {
+    const items: DockItem[] = [];
+    if (!boot) return items;
+    if (connectionLost) items.push({ id: "connection", kind: "connection", node: <ConnectionPanel compact connection={boot.connection} offline={offline}
+      appUnavailable={appUnavailable} busy={checkingConnection} retry={reconnect} /> });
+    if (decisions) items.push({ id: "decisions", kind: "decisions", node: <DecisionsNotice disconnected={connectionLost} count={decisions} onReview={() => reviewFirstDecision()} /> });
+    if (mobile && update) items.push({ id: "update", kind: "update", node: <UpdateNotice update={update} /> });
+    return items;
+  }, [boot, connectionLost, offline, appUnavailable, checkingConnection, reconnect, decisions, mobile, update]);
+  const liveBot = boot?.bots.find(bot => bot.id === botId);
+  const liveState = conversation?.botId === botId ? conversation.activity.state : liveBot?.activity;
+  const canStop = !!liveBot && view === "conversation" && !connectionLost && !!boot?.capabilities.stop.supported
+    && ["thinking", "working", "waiting", "blocked"].includes(liveState ?? "idle");
+  useShortcuts({
+    palette: () => { if (!boot) return false; setOverlay(current => current === "palette" ? null : "palette"); },
+    pinned: ({ digit }) => {
+      const bot = boot && paletteBots(boot).filter(item => boot.preferences.favorites.includes(item.id))[digit! - 1];
+      if (!bot) return false;
+      setOverlay(null); setPanel(null); selectBot(bot.id);
+    },
+    stop: () => { if (!canStop) return false; setOverlay("stop"); },
+    help: () => { if (!boot) return false; setOverlay("shortcuts"); },
+    undo: () => toast.undo(),
+  });
+  useAppBadge(boot ? badgeCount(boot.bots, shownBotId, readThrough) : 0);
   if (session.auth) return <SignIn onSuccess={session.signedIn} />;
   if (!boot)
     return (
@@ -129,47 +317,50 @@ export function App() {
   const active = ["thinking", "working", "waiting", "blocked"].includes(state);
   const showActivity = state !== "idle" && state !== "done";
   const avatarState = state === "done" ? "idle" : state;
-  const open = (next: Panel) => setPanel(next);
-  const togglePin = (bot: Bot) => void session.savePreferences({
-    ...boot.preferences,
-    favorites: boot.preferences.favorites.includes(bot.id)
-      ? boot.preferences.favorites.filter(id => id !== bot.id)
-      : [...boot.preferences.favorites, bot.id],
-  });
+  const open = openPanel;
+  const detailsBot = panel?.kind === "details" ? boot.bots.find(bot => bot.id === panel.botId) : undefined;
+
   return (
     <div className="app-shell">
-      <Sidebar boot={boot} botId={botId} view={view} state={state} connectionLost={connectionLost} offline={offline}
-        mobile={mobile} open={railOpen} update={update} onSelectBot={selectBot}
-        onView={next => { setView(next); setRailOpen(false); }}
-        onNewBot={() => open({ kind: "settings", bot: "new" })}
-        onSettings={() => open({ kind: "preferences" })}
-        onPin={togglePin}
-        onBotSettings={bot => open({ kind: "settings", bot })} />
-      <main className="conversation-panel" inert={mobile && railOpen}>
-        <ChatHeader boot={boot} view={view} selected={selected} avatarState={avatarState} conversation={conversation}
-          connectionLost={connectionLost} railOpen={railOpen}
-          onOpenRail={() => setRailOpen(true)}
-          onSettings={bot => setPanel({ kind: "settings", bot })} onPin={togglePin} />
-        {/* On a computer the rail is always beside this, so its notice is enough. */}
-        {mobile && <UpdateNotice update={update} />}
-        {view === "find" ? <Loading key="find"><DiscoveryPanel key={boot.user.id} bootstrap={boot} onRoutine={(id,routineId,resultId)=>setPanel({kind:"routine",botId:id,routineId,resultId})} /></Loading> : view === "groups" ? <Loading key="groups"><GroupChats key={boot.user.id} bootstrap={boot} /></Loading> : view === "today" ? <TodayPanel key={boot.user.id} bootstrap={boot} onOpen={(id, routineId) => { selectBot(id); if (routineId) setPanel({ kind: "routine", botId: id, routineId }); }} /> : <>
-          <Conversation boot={boot} selected={selected} botId={botId} conversation={transcript} echo={outgoing} state={state}
+      <Sidebar boot={boot} botId={botId} shownBotId={shownBotId} readThrough={readThrough} groups={homeGroups} view={view} state={state}
+        connectionLost={connectionLost} offline={offline} mobile={mobile} open={railOpen} update={update}
+        onSelectBot={selectFromHome} onView={showView} onNewBot={newBot} onSettings={openPreferences} onPin={togglePin}
+        onBotSettings={botSettings} onMoveToSection={moveToSection} onNewSection={newSection} />
+      <main className="conversation-panel" inert={mobile && railOpen} {...(view === "conversation" ? tintProps(selected) : {})}>
+        <ChatHeader offline={offline} view={view} boot={boot} selected={selected} room={rooms.find(room => room.room_id === roomId)} modelLocked={connectionLost || sending} onModelSaved={refreshSession} avatarState={avatarState} railOpen={railOpen}
+          onOpenRail={backToHome}
+          onDetails={bot => open({ kind: "details", botId: bot.id })} />
+        {/* On a computer the rail is always beside this, so its notice is enough. In a chat it joins the composer's dock. */}
+        {mobile && !(view === "conversation" && selected) && <UpdateNotice update={update} />}
+        {view === "find" ? <Loading key="find"><DiscoveryPanel key={boot.user.id} bootstrap={boot} search={findQuery} onOpenMessage={openMessage} onRoutine={(id,routineId,resultId)=>setPanel({kind:"routine",botId:id,routineId,resultId})} /></Loading> : view === "group" ? <Loading key="group"><GroupRoomView key={`${boot.user.id}:${roomId}`} bootstrap={boot} roomId={roomId} canSend={catalog?.canSend ?? false} reason={catalog?.reason} onChanged={reloadGroups} /></Loading> : view === "today" ? <TodayPanel key={boot.user.id} bootstrap={boot} onOpen={(id, routineId) => { selectBot(id); if (routineId) setPanel({ kind: "routine", botId: id, routineId }); }} /> : <>
+          <Conversation boot={boot} selected={selected} botId={botId} conversation={transcript} canonical={conversation} echo={outgoing} state={state}
             showActivity={showActivity} avatarState={avatarState} connectionLost={connectionLost}
             offline={offline} appUnavailable={appUnavailable} checkingConnection={session.checkingConnection}
             reconnect={session.reconnect} error={error} setError={setError}
-            notifications={notifications} scroll={scroll} content={content} history={history} reply={reply} onScroll={persistPosition}
-            onDraft={text => setDraft(previous => ({ ...previous, dirty: true, text: previous.text ? `${previous.text}\n\n${text}` : text }))}
+            notifications={notifications} scroll={scroll} endSpace={endSpace} content={content} history={history} reply={reply} onScroll={scrolled}
+            onRoutineResults={openRoutineRun} onHideRoutineRuns={hideRoutineRuns} computerOpen={panel?.kind === "computer"} reviewed={reviewed}
+            onDraft={(text, files = []) => {
+              // Drafts are known by their text, so one on its way must not change.
+              if (sendingDraft(draft, pending, sending)) return false;
+              // Files join those already there, as many as a message can carry.
+              const missing = files.filter(file => !draft.attachments.some(kept => kept.id === file.id));
+              const added = missing.slice(0, Math.max(0, MAX_ATTACHMENTS - draft.attachments.length - uploads.length));
+              setDraft(previous => ({ ...previous, dirty: true, text: previous.text.trim() ? `${previous.text.trimEnd()}\n\n${text}` : text,
+                attachments: [...previous.attachments, ...added.filter(file => !previous.attachments.some(kept => kept.id === file.id))] }));
+              return missing.length - added.length;
+            }}
             onCreate={() => setPanel({ kind: "settings", bot: "new" })} />
-          {selected && <Composer key={`${boot.user.id}:${botId}`} boot={boot} selected={selected} botId={botId} conversation={conversation} state={state}
+          {selected && <Composer key={`${boot.user.id}:${botId}`} boot={boot} selected={selected} botId={botId} prompts={prompts}
+            state={state}
             active={active} connectionLost={connectionLost} draft={draft} setDraft={setDraft}
-            draftReady={draftReady} uploads={uploads} previews={previews} uploading={uploading} upload={upload}
-            retryUpload={retryUpload} cancelUpload={cancelUpload} pending={pending} receipt={receipt}
-            sending={sending} retry={retry}
-            send={() => { history.jumpToLatest(); return send(); }} reviewed={reviewed} setReviewed={setReviewed}
-            report={setError}
-            refresh={() => void session.refresh()} />}
+            draftReady={draftReady} uploads={uploads} previews={previews} uploading={uploading} upload={uploadFiles}
+            retryUpload={retryUploadFile} cancelUpload={cancelUploadFile} pending={pending} receipt={receipt}
+            sending={sending} retry={retrySend} discard={discardSend} waiting={waitingPlaceholder(ownConversation, boot.user.id)}
+            send={sendMessage} reviewed={reviewed} setReviewed={setReviewed}
+            stopping={stopping} onStop={stop} dock={dock} />}
         </>}
       </main>
+      {creatingGroup && <Loading><GroupCreate bootstrap={boot} canSend={catalog?.canSend ?? false} onClose={() => setCreatingGroup(false)} onCreated={groupCreated} /></Loading>}
       {panel?.kind === "settings" && (
         <Loading>
           <BotSettings
@@ -178,24 +369,44 @@ export function App() {
             onClose={() => closePanels("settings")}
             onDeleted={id => { deleted.current = id; }}
             onOpenRoutine={(botId, routineId) => { selectBot(botId); setPanel({ kind: "routine", botId, routineId }); }}
+            editPreferences={session.editPreferences}
             onSaved={() => void session.refresh()}
+            onCreated={id => void session.refresh().then(next => { if (next?.bots.some(bot => bot.id === id)) selectBot(id); })}
           />
         </Loading>
       )}
-      {panel?.kind === "routine" && <Loading><RoutineResults key={`${boot.user.id}:${panel.botId}:${panel.routineId}`} botId={panel.botId} routineId={panel.routineId} userId={boot.user.id} resultId={panel.resultId} onClose={() => closePanels("routine")} /></Loading>}
+      {panel?.kind === "details" && detailsBot && (
+        <Loading>
+          <BotDetails key={`${boot.user.id}:${detailsBot.id}`} boot={boot} bot={detailsBot}
+            avatarState={detailsBot.id === botId ? avatarState : connectionLost ? "disconnected" : detailsBot.activity}
+            conversation={conversation} connectionLost={connectionLost} startNewSection={panel.newSection}
+            editPreferences={session.editPreferences} onFind={findInChat}
+            onSettings={bot => open({ kind: "settings", bot })} onClose={() => closePanels("details")} />
+        </Loading>
+      )}
+      {panel?.kind === "routine" && <Loading><RoutineResults key={`${boot.user.id}:${panel.botId}:${panel.routineId}`} botId={panel.botId} routineId={panel.routineId} resultId={panel.resultId} onClose={() => closePanels("routine")} /></Loading>}
       {panel?.kind === "integrations" && <Loading><IntegrationsPanel key={`integrations:${boot.user.id}`} bots={boot.bots} accountScope={boot.user.id} onClose={() => closePanels("integrations")} /></Loading>}
-      {computerLoaded && <Loading><ComputerPanel key={`computer:${boot.user.id}`} open={panel?.kind === "computer"} onClose={() => closePanels("computer")} /></Loading>}
+      {computerLoaded && <Loading><ComputerPanel key={`computer:${boot.user.id}`} initialTab={panel?.kind === "computer" ? panel.tab : undefined} open={panel?.kind === "computer"}
+        take={panel?.kind === "computer" ? panel.take : undefined} terminal={panel?.kind === "computer" ? panel.terminal : undefined} onClose={() => closePanels("computer")} /></Loading>}
       {upgradeLoaded && <Loading><HermesUpgradePanel key={`upgrades:${boot.user.id}`} open={panel?.kind === "upgrade"} onClose={() => closePanels("upgrade")}
-        bots={boot.bots} currentVersion={boot.connection.version} /></Loading>}
+        bots={boot.bots} currentVersion={boot.connection.version} currentRevisionDate={boot.connection.revisionDate} /></Loading>}
       {panel?.kind === "preferences" && (
         <Loading>
-          <PreferencesDialog boot={boot} connectionLost={connectionLost} offline={offline} savePreferences={session.savePreferences}
+          <PreferencesDialog destination={panel.destination} boot={boot} connectionLost={connectionLost} offline={offline} editPreferences={session.editPreferences}
             notifications={notifications} installEvent={installEvent} notice={notice}
             onClose={() => closePanels("preferences")} onSignOut={signOut}
             onComputer={() => open({ kind: "computer" })} onIntegrations={() => open({ kind: "integrations" })}
-            onUpgrade={() => open({ kind: "upgrade" })} />
+            onUpgrade={() => open({ kind: "upgrade" })} onShortcuts={showShortcuts} />
         </Loading>
       )}
+      {overlay === "palette" && <CommandPalette boot={boot} botId={botId} rooms={rooms} onSelectRoom={id => { setPanel(null); selectRoom(id); }} onNewGroup={homeGroups.canCreate ? () => { setPanel(null); newGroup(); } : undefined} shownBotId={shownBotId} readThrough={readThrough}
+        connectionLost={connectionLost} onClose={closeOverlay} onSelectBot={id => { setPanel(null); selectBot(id); }}
+        onView={next => { setPanel(null); showView(next); }} onSearch={text => { setPanel(null); searchMessages(text); }}
+        onSettings={destination => setPanel({ kind: "preferences", destination })} onNewBot={newBot} onTheme={setTheme} onShortcuts={showShortcuts}
+        onFind={selected && view === "conversation" ? () => findInChat(selected.id) : undefined} />}
+      {overlay === "shortcuts" && <ShortcutsDialog onClose={closeOverlay} />}
+      {overlay === "stop" && liveBot && <StopConfirm name={liveBot.name} onStop={stop} onClose={closeOverlay} />}
+      <Toast toast={toast.toast} onDismiss={toast.dismiss} onUndo={toast.undo} />
     </div>
   );
 }

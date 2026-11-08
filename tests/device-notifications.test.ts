@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
 import { act, createElement } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { Root } from "react-dom/client";
+import { beforeEach, expect, it, vi } from "vitest";
 import { write } from "../src/client-api";
 import { useDeviceNotifications } from "../src/components/use-device-notifications";
 import { NotificationSettings, NotificationOnboarding } from "../src/components/DeviceNotifications";
+import { mountRoot, stubMatchMedia } from "./ui-harness";
 
-vi.mock("../src/client-api", () => ({ write: vi.fn() }));
+vi.mock("../src/client-api", async () => (await import("./helpers/request-mock")).withRequest(await (() => ({ write: vi.fn() }))()));
 let container: HTMLDivElement, root: Root;
 let notifications: ReturnType<typeof useDeviceNotifications>;
 let subscription: PushSubscription | null;
@@ -27,10 +28,9 @@ const toggle = () => container.querySelector<HTMLInputElement>('[role="switch"]'
 const fakeSubscription = () => ({ endpoint, toJSON: () => ({ endpoint, keys: { auth: "key", p256dh: "key" } }), unsubscribe } as unknown as PushSubscription);
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("isSecureContext", true);
   vi.stubGlobal("PushManager", function() {});
-  vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: false })));
+  stubMatchMedia();
   permission = "default"; subscription = null; registered = false;
   requestPermission = vi.fn(async () => { permission = "granted"; return permission; });
   vi.stubGlobal("Notification", { get permission() { return permission; }, requestPermission });
@@ -44,20 +44,18 @@ beforeEach(() => {
     registered = method !== "DELETE";
     return { ok: true } as T;
   });
-  localStorage.clear();
-  container = document.createElement("div"); document.body.append(container); root = createRoot(container);
+  ({ container, root } = mountRoot());
 });
-afterEach(async () => { await act(async () => root.unmount()); container.remove(); localStorage.clear(); vi.unstubAllGlobals(); });
 
-it("asks a new device once without requesting browser permission, including across remounts and account changes", async () => {
+it("remembers an answered invitation for its account without requesting permission for another account", async () => {
   await render();
   expect(container.textContent).toContain("Enable notifications on this device?");
-  expect(container.textContent).toContain("Settings > Notifications");
+  expect(container.textContent).toContain("Get alerts for finished work");
   expect(requestPermission).not.toHaveBeenCalled();
   await act(async () => container.querySelector<HTMLButtonElement>(".notification-onboarding button:last-child")!.click());
   await render("two");
-  expect(container.querySelector(".notification-onboarding")).toBeNull();
-  await act(async () => { root.unmount(); root = createRoot(container); root.render(createElement(Harness)); });
+  expect(container.querySelector(".notification-onboarding")).not.toBeNull();
+  await act(async () => { root.unmount(); root.render(createElement(Harness)); });
   expect(container.querySelector(".notification-onboarding")).toBeNull();
 });
 
@@ -79,7 +77,7 @@ it("does not claim enabled when permission is granted but no browser subscriptio
   await render();
   expect(toggle().checked).toBe(false);
   expect(write).not.toHaveBeenCalled();
-  expect(container.querySelector(".notification-onboarding")).toBeNull();
+  expect(container.querySelector(".notification-onboarding")).not.toBeNull();
 });
 
 it("requests permission directly from the enable gesture and registers before checking the switch", async () => {
@@ -100,6 +98,8 @@ it("respects denied permission and explains how to unblock it without asking aga
   await render();
   expect(toggle().checked).toBe(false); expect(toggle().disabled).toBe(true);
   expect(container.textContent).toContain("browser or device settings");
+  expect(container.querySelector(".notification-toggle")?.textContent).toBe("Blocked");
+  expect(container.querySelector(".notification-attention")).not.toBeNull();
   expect(container.querySelector(".notification-onboarding")).toBeNull();
   expect(requestPermission).not.toHaveBeenCalled();
 });
@@ -189,4 +189,43 @@ it("refreshes the new account after a pending permission operation settles witho
   expect(notifications.checking).toBe(false);
   expect(toggle().disabled).toBe(false); expect(toggle().checked).toBe(false);
   expect(subscribe).not.toHaveBeenCalled(); expect(write).not.toHaveBeenCalled();
+});
+
+it("keeps an unanswered invitation through a reload and records an Enable answer", async () => {
+  await render();
+  await act(async () => root.unmount());
+  await render();
+  expect(container.querySelector(".notification-onboarding")).not.toBeNull();
+  requestPermission.mockImplementationOnce(async () => "default");
+  await act(async () => container.querySelector<HTMLButtonElement>(".notification-onboarding .primary")!.click());
+  await act(async () => root.unmount());
+  await render();
+  expect(container.querySelector(".notification-onboarding")).toBeNull();
+});
+
+it("offers another account its own invitation when browser permission was already granted", async () => {
+  permission = "granted"; subscription = fakeSubscription(); registered = true;
+  await render("one");
+  expect(container.querySelector(".notification-onboarding")).toBeNull();
+  registered = false;
+  await render("two");
+  expect(container.querySelector(".notification-onboarding")).not.toBeNull();
+  expect(requestPermission).not.toHaveBeenCalled();
+  expect(write).not.toHaveBeenCalledWith("/push/subscriptions", expect.anything());
+});
+
+it("leaves checking after Enable supersedes a refresh and then fails", async () => {
+  await render();
+  let finishRead!: (subscription: PushSubscription | null) => void;
+  vi.mocked(worker.pushManager.getSubscription).mockImplementationOnce(() => new Promise(resolve => { finishRead = resolve; }));
+  let refresh!: Promise<void>;
+  await act(async () => { refresh = notifications.refresh(); });
+  expect(notifications.checking).toBe(true);
+  subscribe.mockRejectedValueOnce(new Error("Push service unavailable"));
+  await act(async () => { await notifications.enable(); });
+  expect(notifications.checking).toBe(false);
+  expect(notifications.busy).toBe(false);
+  expect(notifications.error).toBe("Push service unavailable");
+  await act(async () => { finishRead(null); await refresh; });
+  expect(notifications.checking).toBe(false);
 });

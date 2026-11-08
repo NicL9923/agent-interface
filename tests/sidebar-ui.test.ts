@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
 import { act, createElement } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { Root } from "react-dom/client";
+import { beforeEach, expect, it, vi } from "vitest";
 import { Sidebar } from "../src/app/Sidebar";
+import { preloadBotMenu } from "../src/app/BotMenu";
 import { defaultPreferences, type Bootstrap } from "../src/shared/types";
 import type { ComponentProps } from "react";
+import { mountRoot } from "./ui-harness";
 
 vi.mock("../src/components/Avatar", async original => ({
   ...await original<typeof import("../src/components/Avatar")>(),
@@ -15,10 +17,7 @@ let root: Root;
 let container: HTMLDivElement;
 let props: ComponentProps<typeof Sidebar>;
 beforeEach(() => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
+  ({ container, root } = mountRoot());
   props = {
     boot: {
       user: { id: "one", name: "One" },
@@ -28,18 +27,19 @@ beforeEach(() => {
         { id: "garden", name: "Garden planner", activity: "thinking" },
       ],
     } as Bootstrap,
-    botId: "ranch", view: "conversation", state: "working",
+    botId: "ranch", readThrough: {}, view: "conversation", state: "working",
     connectionLost: false, offline: false, mobile: false, open: true, update: null,
     onSelectBot: vi.fn(), onView: vi.fn(), onNewBot: vi.fn(),
     onSettings: vi.fn(), onPin: vi.fn(), onBotSettings: vi.fn(),
+    onMoveToSection: vi.fn(), onNewSection: vi.fn(),
   };
 });
-afterEach(async () => {
-  await act(async () => root.unmount());
-  container.remove();
-  vi.unstubAllGlobals();
-});
-const render = () => act(async () => root.render(createElement(Sidebar, props)));
+// Rows hold a lightweight stand-in until the menu code has loaded, which happens right after first paint.
+// These tests are about the real menu; bot-menu-ui.test.ts covers gestures that beat it.
+const render = async () => {
+  await act(async () => root.render(createElement(Sidebar, props)));
+  await act(async () => { await preloadBotMenu(); });
+};
 const statuses = () => [...container.querySelectorAll(".pinned-activity")].map(node => node.textContent);
 
 it("updates pinned activity from the selected conversation and other bots' live summaries", async () => {
@@ -71,11 +71,38 @@ it("replaces stale working indicators during connection loss and restores them o
   await render();
   props = { ...props, connectionLost: true, offline: true };
   await render();
-  expect(statuses()).toEqual(["Connection lost", "Connection lost"]);
+  expect(statuses()).toEqual(["Offline", "Offline"]);
+  props = { ...props, offline: false };
+  await render();
+  expect(statuses()).toEqual(["Reconnecting", "Reconnecting"]);
   expect(container.querySelector(".pinned-activity.state-working")).toBeNull();
   props = { ...props, connectionLost: false, offline: false };
   await render();
   expect(statuses()).toEqual(["Working", "Thinking"]);
+});
+
+it("marks unread chats until they are on screen or read through their latest message", async () => {
+  const at = "2026-10-23T15:00:00.000Z";
+  props = { ...props, boot: { ...props.boot, preferences: { ...props.boot.preferences, favorites: ["garden"] }, bots: [
+    { id: "ranch", name: "Ranch hand", activity: "idle", model: "test", shared: true, unread: true, lastMessage: { text: "Gate is fixed.", at } },
+    { id: "garden", name: "Garden planner", activity: "idle", model: "test", shared: true, unread: true, lastMessage: { text: "Frost tonight.", at } },
+    { id: "kitchen", name: "Kitchen", activity: "idle", model: "test", shared: true, lastMessage: { text: "Soup.", at } },
+  ] } };
+  await render();
+  const marked = () => [...container.querySelectorAll(".unread")].map(node => node.querySelector(".pinned-name, strong")!.textContent);
+  expect(marked()).toEqual(["UnreadGarden planner", "Ranch hand"]);
+  expect(container.querySelector(".bot-row.unread")!.textContent).toContain("Unread");
+  props = { ...props, shownBotId: "ranch" };
+  await render();
+  expect(marked()).toEqual(["UnreadGarden planner"]);
+  // Leaving after reading keeps it read until the server's next roster knows.
+  props = { ...props, shownBotId: undefined, readThrough: { ranch: at } };
+  await render();
+  expect(marked()).toEqual(["UnreadGarden planner"]);
+  props = { ...props, boot: { ...props.boot, bots: props.boot.bots.map(bot => bot.id === "ranch"
+    ? { ...bot, lastMessage: { text: "Cattle are out.", at: "2026-10-23T15:05:00.000Z" } } : bot) } };
+  await render();
+  expect(marked()).toEqual(["UnreadGarden planner", "Ranch hand"]);
 });
 
 const menuItems = () => [...document.body.querySelectorAll<HTMLElement>('[role="menuitem"]')];
@@ -91,7 +118,8 @@ it("opens the assistant menu by keyboard, navigates its actions, and restores ro
   await key(row, "F10", true);
   await settleFocus();
   expect(document.body.querySelector('[role="menu"]')?.getAttribute("aria-label")).toBe("Ranch hand");
-  const [unpin, settings] = menuItems();
+  const [unpin, move, settings] = menuItems();
+  expect(move.textContent).toBe("Move to section");
   await key(document.activeElement!, "ArrowDown");
   expect(document.activeElement).toBe(unpin);
   await key(unpin, "End");
@@ -112,7 +140,7 @@ it("opens a right-click menu for its own assistant and invokes its settings", as
   const row = container.querySelectorAll<HTMLButtonElement>(".pinned-bot")[1];
   await act(async () => row.dispatchEvent(new MouseEvent("contextmenu", { clientX: 100, clientY: 180, button: 2, bubbles: true, cancelable: true })));
   await settleFocus();
-  await act(async () => menuItems()[1].click());
+  await act(async () => menuItems()[2].click());
   expect(props.onBotSettings).toHaveBeenCalledExactlyOnceWith(props.boot.bots[1]);
   expect(props.onSelectBot).not.toHaveBeenCalled();
   expect(document.body.querySelector('[role="menu"]')).toBeNull();
@@ -138,4 +166,77 @@ it("opens on a held touch, cancels a scrolling touch, and suppresses selection a
   await touch("touchend", 30, 40);
   await act(async () => row.click());
   expect(props.onSelectBot).not.toHaveBeenCalled();
+});
+
+it("moves an assistant to one home section from its menu, or starts a new section for it", async () => {
+  props.boot.preferences = { ...props.boot.preferences, sections: [{ id: "house", name: "Around the house", botIds: ["garden"] }] };
+  await render();
+  const openSubmenu = async () => {
+    const row = container.querySelectorAll<HTMLButtonElement>(".pinned-bot")[1];
+    await act(async () => row.dispatchEvent(new MouseEvent("contextmenu", { clientX: 100, clientY: 180, button: 2, bubbles: true, cancelable: true })));
+    await settleFocus();
+    await act(async () => menuItems().find(item => item.textContent === "Move to section")!.click());
+    await settleFocus();
+  };
+  await openSubmenu();
+  const choices = [...document.body.querySelectorAll<HTMLElement>('[role="menuitemradio"]')];
+  expect(choices.map(item => [item.textContent, item.getAttribute("aria-checked")])).toEqual([["None", "false"], ["✓Around the house", "true"]]);
+  await act(async () => choices[0].click());
+  expect(props.onMoveToSection).toHaveBeenCalledExactlyOnceWith(props.boot.bots[1], null);
+  await settleFocus();
+  expect(document.body.querySelector('[role="menu"]')).toBeNull();
+  await openSubmenu();
+  await act(async () => menuItems().find(item => item.textContent === "New section…")!.click());
+  expect(props.onNewSection).toHaveBeenCalledExactlyOnceWith(props.boot.bots[1]);
+  expect(props.onSelectBot).not.toHaveBeenCalled();
+});
+
+it("cheers a pinned assistant that finishes its work and has the other pinned ones glance at it", async () => {
+  const events: string[] = [];
+  const reacted = (event: Event) => events.push(`react:${(event as CustomEvent).detail.botId}:${(event as CustomEvent).detail.kind}`);
+  const glanced = (event: Event) => events.push(`glance:${(event as CustomEvent).detail.botId}`);
+  window.addEventListener("wildbots:avatar-react", reacted);
+  window.addEventListener("wildbots:avatar-glance", glanced);
+  try {
+    await render();
+    expect(events).toEqual([]);
+    // The selected chat finishes; the other moves on to waiting, which is not a finish.
+    props = { ...props, state: "idle", boot: { ...props.boot, bots: props.boot.bots.map(bot => ({ ...bot, activity: bot.id === "garden" ? "waiting" : bot.activity })) } };
+    await render();
+    expect(events).toEqual(["react:ranch:cheer", "glance:ranch"]);
+    await render();
+    expect(events).toHaveLength(2);
+  } finally {
+    window.removeEventListener("wildbots:avatar-react", reacted);
+    window.removeEventListener("wildbots:avatar-glance", glanced);
+  }
+});
+
+it("marks home with the season and draws its drifting shapes, hidden from assistive technology", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  try {
+    vi.setSystemTime(new Date(2026, 9, 20, 12));
+    await render();
+    const rail = container.querySelector(".bot-rail")!;
+    expect(rail.getAttribute("data-season")).toBe("spooky");
+    expect(rail.querySelector(".season-ambience")?.getAttribute("aria-hidden")).toBe("true");
+    expect(rail.querySelectorAll(".season-mote")).toHaveLength(9);
+    await act(async () => root.unmount());
+    vi.setSystemTime(new Date(2026, 7, 15, 12));
+    await render();
+    expect(container.querySelector(".bot-rail")?.hasAttribute("data-season")).toBe(false);
+    expect(container.querySelector(".season-ambience")).toBeNull();
+    // Outside every calendar season, a pinned seasonal character brings its own.
+    await act(async () => root.unmount());
+    props = { ...props, boot: { ...props.boot, bots: props.boot.bots.map(bot => bot.id === "garden"
+      ? { ...bot, avatar: { mode: "mascot", family: "snowman", color: "#F4F8FB", eyes: "round", accessory: "none" } } : bot) } };
+    await render();
+    expect(container.querySelector(".bot-rail")?.getAttribute("data-season")).toBe("winter");
+  } finally { vi.useRealTimers(); }
+});
+
+it("gives the avatar morph and glances a place on home", async () => {
+  await render();
+  expect([...container.querySelectorAll(".pinned-avatar")].map(node => [node.getAttribute("data-morph"), node.getAttribute("data-glance-target")]))
+    .toEqual([["ranch", "ranch"], ["garden", "garden"]]);
 });

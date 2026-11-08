@@ -1,7 +1,7 @@
 import UIKit
 import XCTest
 
-final class TabletPresentationTests: XCTestCase {
+@MainActor final class TabletPresentationTests: XCTestCase {
   private func fixture() -> XCUIApplication {
     let app = XCUIApplication()
     app.launchEnvironment["AGENT_INTERFACE_UI_FIXTURE"] = "1"
@@ -29,8 +29,8 @@ final class TabletPresentationTests: XCTestCase {
     XCTAssertTrue(app.textViews["messageComposer"].exists)
     screenshot(app, "Fixture iPad landscape split view")
     app.buttons["bot.kitchen"].tap()
-    XCTAssertTrue(app.buttons["Configure Kitchen companion"].waitForExistence(timeout: 5))
-    app.buttons["Configure Kitchen companion"].tap()
+    XCTAssertTrue(app.chatHeader("Kitchen companion").waitForExistence(timeout: 5))
+    app.openAssistantSettings("Kitchen companion")
     XCTAssertTrue(app.textFields["Name"].waitForExistence(timeout: 5))
     screenshot(app, "Fixture iPad native assistant settings")
     app.buttons["Close"].tap()

@@ -15,14 +15,21 @@ const runtime = createHermesRuntime({
   qualificationFile: config.hermesQualificationFile,
 });
 // pino writes JSON lines to stdout; systemd keeps them in journald.
-const { app } = await createApp({ ...config, logLevel: config.logLevel ?? "info" }, runtime);
+const { app, directRoutes } = await createApp({ ...config, logLevel: config.logLevel ?? "info" }, runtime);
 await app.listen({ host: config.host, port: config.port });
+await directRoutes?.start();
 app.log.info({ origin: config.origin, schemaVersion, node: process.version }, "WildBots started");
+let stopping: Promise<void> | undefined;
 for (const signal of ["SIGINT", "SIGTERM"] as const)
   process.on(signal, () => {
+    if (stopping) return;
     app.log.info({ signal }, "WildBots stopping");
-    void app.close().then(
-      () => { app.log.info("WildBots stopped"); process.exit(0); },
-      error => { app.log.error({ error: safeError(error) }, "WildBots did not stop cleanly"); process.exit(1); },
+    const deadline = setTimeout(() => {
+      app.log.error("WildBots shutdown deadline reached");
+      process.exit(1);
+    }, 30000);
+    stopping = app.close().then(
+      () => { clearTimeout(deadline); app.log.info("WildBots stopped"); process.exit(0); },
+      error => { clearTimeout(deadline); app.log.error({ error: safeError(error) }, "WildBots did not stop cleanly"); process.exit(1); },
     );
   });

@@ -4,10 +4,12 @@ The real gateway contract lives in scripts/spike/extension_probe.py. These
 tests pin the journal reads every conversation poll makes.
 """
 import copy
+import concurrent.futures
 import contextlib
-import importlib.util
+import contextvars
 import json
 import re
+import stat
 import sys
 import tempfile
 import threading
@@ -17,27 +19,27 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+from support import load_source
+
 ROOT = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location("extension_journal_test", ROOT / "src/hermes/extension.py")
-extension = importlib.util.module_from_spec(spec); spec.loader.exec_module(extension)
+extension = load_source("src/hermes/extension.py", "extension_journal_test")
 
 
 def image_text(text, images):
     return (text or "") + "".join("\n[image: " + path + "]" for path in images)
 
 
-class FakeHermes:
-    """Just enough of tui_gateway for install() and agent-interface.open."""
-    def __init__(self, messages, bridge=False, environment=None, invocation=False, journal_path=None):
+class FakeGateway:
+    """Just enough of tui_gateway.server for one Bridge's open, submit, receipt and discover RPCs."""
+    def __init__(self, messages, journal_path=None, environment=None):
         self.messages = messages
         self.journal_path = journal_path
         self.environment = environment or {}
-        self.methods = {}
-        server = types.ModuleType("tui_gateway.server")
+        self.native_calls = []
+        self.server = server = types.ModuleType("tui_gateway.server")
         server._sessions = {}
         server._ok = lambda rid, value: {"jsonrpc": "2.0", "id": rid, "result": value}
         server._err = lambda rid, code, message: {"jsonrpc": "2.0", "id": rid, "error": {"code": code, "message": message}}
-        self.native_calls = []
         def handle(request):
             self.native_calls.append((request["method"], dict(request.get("params") or {})))
             if request["method"] == "profiles.list":
@@ -46,15 +48,58 @@ class FakeHermes:
             omitted = (request.get("params") or {}).get("omit_messages") is True
             return server._ok(request["id"], {"session_id": "sid", "messages": [] if omitted else copy.deepcopy(self.messages)})
         server.handle_request = handle
-        server.dispatch = lambda request, *args, **kwargs: handle(request)
-        server.register_method = self.methods.__setitem__
+        server._attach_session_transport = lambda session, transport: None
+        server._build_persist_message_with_image_refs = image_text
+        requests = types.SimpleNamespace(_lock=threading.Lock(), _open={})
+        gateway = types.ModuleType("tui_gateway")
+        gateway.server, gateway.server_requests = server, requests
+        # Native redaction registries, which history projection reads in memory.
+        self.redact = types.SimpleNamespace(_VAULT_REDACTION_LOCK=threading.Lock(), _VAULT_REDACTION_VALUES={},
+                                            _registry_lock=threading.Lock(), _PLUGIN_PREFIX_PATTERNS={})
+        bound = contextvars.ContextVar("transport", default=None)
+        self.transport = types.SimpleNamespace(bind_transport=bound.set, current_transport=bound.get)
+        self.modules = {"tui_gateway": gateway, "tui_gateway.server": server, "tui_gateway.server_requests": requests,
+                        "tui_gateway.transport": self.transport, "agent": types.ModuleType("agent"), "agent.redact": self.redact}
+
+    def __enter__(self):
+        self.patches = [patch.dict(sys.modules, self.modules), patch.dict("os.environ", self.environment)]
+        for item in self.patches:
+            item.start()
+        self.directory = tempfile.TemporaryDirectory()
+        self.journal = self.start(self.journal_path or Path(self.directory.name) / "agent-interface.db")
+        return self
+
+    def start(self, path):
+        journal = extension.Journal(path)
+        self.bridge = extension.Bridge(self.server, journal, get_hermes_home=lambda: "/home/default",
+                                       profile_name_for_home=lambda home: "default")
+        self.methods = self.bridge.rpc_methods()
+        return journal
+
+    def __exit__(self, *exc):
+        self.journal.db.close()
+        self.directory.cleanup()
+        for item in reversed(self.patches):
+            item.stop()
+
+    def open(self, **params):
+        return self.methods["agent-interface.open"]("poll", {"profile": "default", **params})["result"]
+
+
+class FakeHermes(FakeGateway):
+    """The whole native surface install() wraps, for its seams, registration and Bot Chat delivery."""
+    def __init__(self, messages, bridge=False, environment=None, invocation=False, journal_path=None):
+        super().__init__(messages, journal_path, {"HERMES_AGENT_INTERFACE_COMPUTER_HOME": "", **(environment or {})})
+        server = self.server
+        self.registered = {}
+        server.dispatch = lambda request, *args, **kwargs: server.handle_request(request)
+        server.register_method = self.registered.__setitem__
         server._history_to_messages = lambda history, **kwargs: history
         server.project_compaction_message_for_display = lambda row: row
         server.write_json = lambda frame: True
         server._run_post_turn_followups = lambda *args: None
         server._record_turn_marker = lambda *args, **kwargs: None
         server._maybe_schedule_auto_continue = lambda *args: None
-        server._attach_session_transport = lambda session, transport: None
         server._session_cwd = lambda session: "/"
         self.invoked = []
         if invocation:
@@ -63,19 +108,13 @@ class FakeHermes:
                 self.invoked.append((turn.agent.ephemeral_system_prompt, text))
                 raise RuntimeError("Synthetic provider failure")
             server._invoke_agent = invoke
-        server._build_persist_message_with_image_refs = image_text
-        requests = types.SimpleNamespace(_lock=threading.Lock(), _open={})
-        gateway = types.ModuleType("tui_gateway")
-        gateway.server, gateway.server_requests = server, requests
-        retirement = types.SimpleNamespace(acquire=lambda: True, release=lambda: None, active_count=lambda: 1)
-        self.modules = {
-            "tui_gateway": gateway, "tui_gateway.server": server, "tui_gateway.server_requests": requests,
-            "tui_gateway.transport": types.SimpleNamespace(Transport=object),
+        self.retirement = types.SimpleNamespace(acquire=lambda: True, release=lambda: None, active_count=lambda: 1)
+        self.modules.update({
             "hermes_constants": types.SimpleNamespace(get_hermes_home=lambda: "/home/default", profile_name_for_home=lambda home: "default"),
             "hermes_cli": types.ModuleType("hermes_cli"),
-            "hermes_cli.backend_retirement": types.SimpleNamespace(retirement=retirement),
+            "hermes_cli.backend_retirement": types.SimpleNamespace(retirement=self.retirement),
             "agent": types.ModuleType("agent"), "agent.skill_utils": types.SimpleNamespace(ESSENTIAL_SKILLS=set()),
-        }
+        })
         # Bot Chat delivery: Hermes 6ebd92d's dashboard consumer, or eb75627's authority-only producers.
         self.mailbox = types.ModuleType("tools.bot_live_delivery")
         native = lambda *args, **kwargs: None
@@ -92,23 +131,106 @@ class FakeHermes:
         self.modules.update({"tools": types.ModuleType("tools"), "tools.bot_live_delivery": self.mailbox,
                              "tools.bot_failure_reasons": types.SimpleNamespace(classify_agent_error=lambda error: "unknown")})
 
-    def __enter__(self):
-        self.patches = [patch.dict(sys.modules, self.modules), patch.object(extension, "source_state", lambda: (extension.REVISION, None)),
-                        patch.dict("os.environ", {"HERMES_AGENT_INTERFACE_COMPUTER_HOME": "", **self.environment})]
-        for item in self.patches:
-            item.start()
-        self.directory = tempfile.TemporaryDirectory()
-        self.journal = extension.install(self.journal_path or Path(self.directory.name) / "agent-interface.db")
-        return self
+    def start(self, path):
+        with patch.object(extension, "source_state", lambda: (extension.REVISION, None)):
+            journal = extension.install(path)
+        self.methods = self.registered
+        self.bridge = self.methods["agent-interface.open"].__self__
+        return journal
+
+
+class ProfilesGateway(FakeGateway):
+    """Two assistants with their own canonical sessions; a test can hold either one's native activation."""
+    def __init__(self):
+        super().__init__([])
+        self.held, self.entered, self.inside, self.peak = {}, {}, {}, {}
+        server, counting = self.server, threading.Lock()
+        def handle(request):
+            params = request.get("params") or {}
+            profile = params.get("profile", "default")
+            if request["method"] == "profiles.list":
+                return server._ok(request["id"], {"profiles": [{"name": name, "canonical_session": {"resolved_id": "stored-" + name}} for name in ("slow", "fast")]})
+            if request["method"] not in ("session.activate", "session.resume"):
+                self.native_calls.append((request["method"], params))
+                return server._ok(request["id"], {"status": "accepted"})
+            with counting:
+                self.inside[profile] = self.inside.get(profile, 0) + 1
+                self.peak[profile] = max(self.peak.get(profile, 0), self.inside[profile])
+            try:
+                self.entered.setdefault(profile, threading.Event()).set()
+                if profile in self.held:
+                    self.held[profile].wait(5)
+            finally:
+                with counting:
+                    self.inside[profile] -= 1
+            server._sessions.setdefault("sid-" + profile, {"session_key": "stored-" + profile})
+            return server._ok(request["id"], {"session_id": "sid-" + profile, "messages": []})
+        server.handle_request = handle
+
+    def opening(self, profile, results):
+        thread = threading.Thread(target=lambda: results.append(self.open(profile=profile)), daemon=True)
+        thread.start()
+        return thread
+
+
+class PooledHermes(FakeHermes):
+    """FakeHermes behind native dispatch as rpc_dispatch does it: long handlers on an
+    8-worker pool, reserved before queueing and released once answered; the rest inline."""
+    def __init__(self):
+        super().__init__([])
+        server, self.native_pool = self.server, concurrent.futures.ThreadPoolExecutor(max_workers=8)
+        self.held, self.entered, self.active, counting = threading.Event(), threading.Event(), [0], threading.Lock()
+        def acquire():
+            with counting:
+                self.active[0] += 1
+            return True
+        def release():
+            with counting:
+                self.active[0] -= 1
+        self.retirement.acquire, self.retirement.release = acquire, release
+        server._LONG_HANDLERS = frozenset({"profiles.list"})
+        def handle(request):
+            method, params = request["method"], request.get("params") or {}
+            if method in self.registered:
+                return self.registered[method](request.get("id"), params)
+            if method == "profiles.list":
+                return server._ok(request["id"], {"profiles": [{"name": name, "canonical_session": {"resolved_id": "stored-" + name}} for name in ("slow", "fast")]})
+            profile = params.get("profile", "default")
+            if method in ("session.activate", "session.resume") and profile == "slow":
+                self.entered.set()
+                self.held.wait(10)
+            server._sessions.setdefault("sid-" + profile, {"session_key": "stored-" + profile})
+            return server._ok(request["id"], {"session_id": "sid-" + profile, "messages": []})
+        server.handle_request = handle
+        def dispatch(request, transport=None):
+            if request["method"] not in server._LONG_HANDLERS:
+                return server.handle_request(request)
+            if not self.retirement.acquire():
+                return server._err(request["id"], 5035, "backend is retiring")
+            self.native_pool.submit(lambda: transport.write(server.handle_request(request))).add_done_callback(lambda _: self.retirement.release())
+            return None
+        server.dispatch = dispatch
 
     def __exit__(self, *exc):
-        self.journal.db.close()
-        self.directory.cleanup()
-        for item in reversed(self.patches):
-            item.stop()
+        self.held.set()
+        self.native_pool.shutdown(wait=True)
+        return super().__exit__(*exc)
 
-    def open(self, **params):
-        return self.methods["agent-interface.open"]("poll", {"profile": "default", **params})["result"]
+
+class Replies:
+    """A connection transport that records what each request ID was answered."""
+    def __init__(self):
+        self.answers, self.changed = {}, threading.Condition()
+
+    def write(self, response):
+        with self.changed:
+            self.answers[response["id"]] = response
+            self.changed.notify_all()
+        return True
+
+    def wait(self, *ids, timeout=3):
+        with self.changed:
+            return self.changed.wait_for(lambda: all(rid in self.answers for rid in ids), timeout)
 
 
 def turns(count, files=()):
@@ -119,6 +241,20 @@ def turns(count, files=()):
         rows.append({"row_id": len(rows) + 1, "role": "assistant", "text": f"reply {turn}",
                      **({"app_artifacts": [{"path": f"/out/{turn}.png"}]} if turn in files else {})})
     return rows
+
+
+class EventBodyTests(unittest.TestCase):
+    def test_keeps_line_breaks_so_the_app_can_read_markdown_structure(self):
+        body = extension.event_body("## Fence\r\n\n\n\n|  Post | State |\n|---|---|\n| North   | Set |  \n")
+        self.assertEqual(body, "## Fence\n\n| Post | State |\n|---|---|\n| North | Set |")
+
+    def test_stays_bounded_and_empty_text_has_no_body(self):
+        self.assertEqual(len(extension.event_body("word " * 400)), 500)
+        self.assertIsNone(extension.event_body(" \n\t\n"))
+
+    def test_keeps_indentation_that_places_lines_inside_a_list(self):
+        self.assertEqual(extension.event_body("- ```js\n  code   here\n  ```\n\nSummary."), "- ```js\n  code here\n  ```\n\nSummary.")
+        self.assertIsNone(extension.event_body(None))
 
 
 class HistoryWindowTests(unittest.TestCase):
@@ -158,8 +294,94 @@ class HistoryWindowTests(unittest.TestCase):
 
 
 class OpenTests(unittest.TestCase):
+    def test_native_refusals_settle_but_unknown_errors_never_allow_replay(self):
+        params = {"profile": "default", "request_id": "refused", "sender_id": "member", "text": "Hello"}
+        for code, status in [(-32602, "rejected"), (-32601, "rejected"), (4010, "rejected"), (4001, "rejected"), (4090, "rejected"), (-32603, "uncertain"), (5000, "uncertain")]:
+            with self.subTest(code=code), FakeGateway([]) as hermes:
+                hermes.open()
+                hermes.native_calls.clear()
+                hermes.server.handle_request = Mock(return_value=hermes.server._err("native", code, "Native refused input"))
+                submit = hermes.methods["agent-interface.submit"]
+                original = submit("send", params)["result"]
+                self.assertEqual(original["status"], status)
+                if status == "rejected":
+                    self.assertNotIn("Native refused input", original["message"])
+                    self.assertIn("Your draft is saved", original["message"])
+                self.assertEqual(hermes.journal.receipt("refused")["status"], status)
+                self.assertEqual(submit("retry", params)["result"], original)
+                self.assertEqual(hermes.server.handle_request.call_count, 1)
+                terminal = hermes.journal.db.execute("SELECT terminal FROM receipts WHERE request_id='refused'").fetchone()[0]
+                self.assertEqual(terminal, int(status == "rejected"))
+
+    def test_refusal_unstages_images_and_does_not_block_the_next_send(self):
+        with FakeGateway([]) as hermes:
+            hermes.open()
+            session = hermes.server._sessions["sid"]
+            session.update(history_lock=threading.Lock(), attached_images=["prior.png"])
+            def refuse(request):
+                if request["method"] == "image.attach":
+                    session["attached_images"].append("new.png")
+                    return hermes.server._ok(request["id"], {})
+                return hermes.server._err(request["id"], 4090, "No slot available")
+            hermes.server.handle_request = Mock(side_effect=refuse)
+            params = {"profile": "default", "request_id": "image", "sender_id": "member", "text": "Hello"}
+            submit = hermes.methods["agent-interface.submit"]
+            result = submit("send", {**params, "attachments": [{"path": "/new.png", "mime": "image/png"}]})["result"]
+            self.assertEqual(result["status"], "rejected")
+            self.assertEqual(session["attached_images"], ["prior.png"])
+            hermes.server.handle_request = Mock(return_value=hermes.server._ok("native", {"status": "accepted"}))
+            self.assertEqual(submit("next", {**params, "request_id": "next"})["result"]["status"], "accepted")
+            self.assertEqual(hermes.server.handle_request.call_count, 1)
+
+    def test_image_refusal_still_settles_if_native_closed_the_session(self):
+        with FakeGateway([]) as hermes:
+            hermes.open()
+            session = hermes.server._sessions["sid"]
+            session.update(history_lock=threading.Lock(), attached_images=[])
+            def closed(request):
+                if request["method"] == "image.attach":
+                    session["attached_images"].append("new.png")
+                    return hermes.server._ok(request["id"], {})
+                hermes.server._sessions.pop("sid")
+                return hermes.server._err(request["id"], 4001, "Session not found")
+            hermes.server.handle_request = Mock(side_effect=closed)
+            result = hermes.methods["agent-interface.submit"]("send", {"profile": "default", "request_id": "closed", "sender_id": "member", "text": "Hello", "attachments": [{"path": "/new.png", "mime": "image/png"}]})["result"]
+            self.assertEqual(result["status"], "rejected")
+            self.assertEqual(hermes.journal.receipt("closed")["status"], "rejected")
+
+    def test_admitted_steering_closes_the_asks_it_answers_after_every_lock_is_released(self):
+        with FakeGateway([]) as hermes:
+            hermes.open()
+            calls = []
+            def admitted(profile, sid, actor, text):
+                free = []
+                probe = threading.Thread(target=lambda: free.extend(lock.acquire(blocking=False) and (lock.release() or True)
+                                                                    for lock in (hermes.bridge.submission_lock, hermes.journal.lock)))
+                probe.start(); probe.join()
+                calls.append((profile, sid, actor, text, free))
+            hermes.journal.steering_admitted = admitted
+            submit = hermes.methods["agent-interface.submit"]
+            hermes.server.handle_request = Mock(return_value=hermes.server._ok("native", {"status": "accepted"}))
+            params = {"profile": "default", "request_id": "first", "sender_id": "member", "text": "Start"}
+            submit("send", params)
+            self.assertEqual(calls, [])
+            hermes.server._sessions["sid"]["running"] = True
+            hermes.server.handle_request = Mock(return_value=hermes.server._ok("native", {"status": "queued"}))
+            steer = {**params, "request_id": "steer", "text": "Use the other address"}
+            self.assertEqual(submit("send", steer)["result"]["status"], "accepted")
+            self.assertEqual(calls, [("default", "sid", "member", "Use the other address", [True, True])])
+            # A replay, a native refusal and a hook failure close nothing more and still answer.
+            submit("again", steer)
+            hermes.server.handle_request = Mock(return_value=hermes.server._ok("native", {"status": "rejected"}))
+            submit("send", {**params, "request_id": "refused", "text": "Late"})
+            hermes.journal.steering_admitted = Mock(side_effect=RuntimeError("hook"))
+            hermes.server.handle_request = Mock(return_value=hermes.server._ok("native", {"status": "queued"}))
+            with self.assertLogs(level="ERROR"):
+                self.assertEqual(submit("send", {**params, "request_id": "third", "text": "Again"})["result"]["status"], "accepted")
+            self.assertEqual(len(calls), 1)
+
     def test_submit_resolves_canonical_and_preserves_interruption_guard(self):
-        with FakeHermes([]) as hermes:
+        with FakeGateway([]) as hermes:
             hermes.open()
             hermes.native_calls.clear()
             submit=hermes.methods["agent-interface.submit"]
@@ -189,14 +411,14 @@ class OpenTests(unittest.TestCase):
         params = {"profile": "default", "request_id": "one", "sender_id": "member", "text": "Hello"}
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "journal.db"
-            with FakeHermes([], journal_path=path) as hermes:
+            with FakeGateway([], journal_path=path) as hermes:
                 original = hermes.methods["agent-interface.submit"]("send", params)["result"]
                 self.assertEqual((original["status"], original["userRowId"]), ("accepted", None))
                 with hermes.journal.db:
                     hermes.journal.db.execute("UPDATE receipts SET row_id=42 WHERE request_id='one'")
                 epoch = hermes.journal.epoch
             for _ in range(2):
-                with FakeHermes([], journal_path=path) as hermes:
+                with FakeGateway([], journal_path=path) as hermes:
                     self.assertNotEqual(hermes.journal.epoch, epoch)
                     submit = hermes.methods["agent-interface.submit"]
                     self.assertEqual(submit("retry", params)["result"], original)
@@ -211,12 +433,13 @@ class OpenTests(unittest.TestCase):
             "running-image": ("rejected", "Images cannot be added while Hermes is working. Keep this draft and send it after the task settles."),
             "image-preparation": ("rejected", "Image preparation failed before admission: Synthetic image failure"),
             "native": ("uncertain", "Synthetic native failure"),
+            "native-refusal": ("rejected", "Hermes was starting or reconnecting and did not accept this message. Your draft is saved. Try sending it again."),
         }
         for mode, (status, message) in failures.items():
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
                 path = Path(directory) / "journal.db"
                 params = {"profile": "default", "request_id": "failed", "sender_id": "member", "text": "Hello"}
-                with FakeHermes([], journal_path=path) as hermes:
+                with FakeGateway([], journal_path=path) as hermes:
                     hermes.open()
                     server = hermes.modules["tui_gateway.server"]
                     session = server._sessions["sid"]
@@ -238,15 +461,18 @@ class OpenTests(unittest.TestCase):
                         native.side_effect = fail_image
                     elif mode == "native":
                         native.side_effect = RuntimeError("Synthetic native failure")
+                    elif mode == "native-refusal":
+                        session["running"] = True
+                        native.return_value = server._err("native", 4010, "Agent does not support steer")
                     original = submit("send", params)["result"]
                     self.assertEqual((original["status"], original["message"]), (status, message))
-                    self.assertEqual(native.call_count, int(mode in ("image-preparation", "native")))
+                    self.assertEqual(native.call_count, int(mode in ("image-preparation", "native", "native-refusal")))
                     if mode == "image-preparation":
                         self.assertEqual(session["attached_images"], ["prior.png"])
                     native.reset_mock()
                     self.assertEqual(submit("retry", params)["result"], original)
                     native.assert_not_called()
-                with FakeHermes([], journal_path=path) as hermes:
+                with FakeGateway([], journal_path=path) as hermes:
                     self.assertEqual(hermes.methods["agent-interface.submit"]("retry", params)["result"], original)
                     self.assertEqual(hermes.native_calls, [])
 
@@ -257,14 +483,14 @@ class OpenTests(unittest.TestCase):
         for old_schema in (False, True):
             with self.subTest(old_schema=old_schema), tempfile.TemporaryDirectory() as directory:
                 path = Path(directory) / "journal.db"
-                with FakeHermes([], journal_path=path) as hermes:
+                with FakeGateway([], journal_path=path) as hermes:
                     hermes.methods["agent-interface.submit"]("send", params)
                     with hermes.journal.db:
                         if old_schema:
                             hermes.journal.db.execute("ALTER TABLE receipts DROP COLUMN admission_response")
                         else:
                             hermes.journal.db.execute("UPDATE receipts SET admission_response=NULL,status='uncertain' WHERE request_id='old'")
-                with FakeHermes([], journal_path=path) as hermes:
+                with FakeGateway([], journal_path=path) as hermes:
                     submit = hermes.methods["agent-interface.submit"]
                     recovered = submit("retry", params)["result"]
                     self.assertEqual((recovered["status"], recovered["userRowId"]), ("uncertain", None))
@@ -276,12 +502,12 @@ class OpenTests(unittest.TestCase):
                         hermes.journal.db.execute("UPDATE receipts SET status='accepted',row_id=99,terminal=1 WHERE request_id='old'")
                     self.assertEqual(submit("retry", params)["result"], recovered)
                     self.assertEqual(hermes.native_calls, [])
-                with FakeHermes([], journal_path=path) as hermes:
+                with FakeGateway([], journal_path=path) as hermes:
                     self.assertEqual(hermes.methods["agent-interface.submit"]("retry", params)["result"], recovered)
                     self.assertEqual(hermes.native_calls, [])
 
     def test_submit_rejects_changed_input_before_refresh_or_interruption_guard(self):
-        with FakeHermes([]) as hermes:
+        with FakeGateway([]) as hermes:
             params = {"profile": "default", "request_id": "one", "sender_id": "member", "text": "Hello"}
             submit = hermes.methods["agent-interface.submit"]
             submit("send", params)
@@ -297,7 +523,7 @@ class OpenTests(unittest.TestCase):
 
     def test_submit_requires_review_after_stopped_terminal_or_inflight(self):
         for mode in ("terminal", "inflight", "cold"):
-            with self.subTest(mode=mode), FakeHermes([]) as hermes:
+            with self.subTest(mode=mode), FakeGateway([]) as hermes:
                 hermes.open()
                 session = hermes.modules["tui_gateway.server"]._sessions["sid"]
                 if mode == "inflight":
@@ -318,14 +544,12 @@ class OpenTests(unittest.TestCase):
                 self.assertEqual(submit("send", params)["result"]["status"], "accepted")
 
     def test_history_cache_prunes_noncanonical_sessions_and_caps_entries(self):
-        with FakeHermes(turns(1)) as hermes:
+        with FakeGateway(turns(1)) as hermes:
             hermes.open()
             session = hermes.modules["tui_gateway.server"]._sessions["sid"]
             session.update(history=hermes.messages, history_lock=threading.Lock(), profile_home=hermes.directory.name)
             hermes.open()
-            method = hermes.methods["agent-interface.open"]
-            cells = dict(zip(method.__code__.co_freevars, (cell.cell_contents for cell in method.__closure__)))
-            cache, canonical = cells["decorated"], cells["canonical"]
+            cache, canonical = hermes.bridge.decorated, hermes.bridge.canonical
             cache["obsolete"] = cache["sid"]
             hermes.open()
             self.assertNotIn("obsolete", cache)
@@ -340,7 +564,7 @@ class OpenTests(unittest.TestCase):
             self.assertLessEqual(len(cache), 32)
 
     def test_decorated_cache_skips_projection_and_binding_and_invalidates(self):
-        with FakeHermes(turns(25, files={3})) as hermes:
+        with FakeGateway(turns(25, files={3})) as hermes:
             expected = hermes.open(window={"turns": 20})
             session = hermes.modules["tui_gateway.server"]._sessions["sid"]
             session.update(history=hermes.messages, history_lock=threading.Lock(),profile_home=hermes.directory.name)
@@ -376,8 +600,121 @@ class OpenTests(unittest.TestCase):
             hermes.open()
             self.assertNotIn("omit_messages", hermes.native_calls[-1][1])
 
+    def test_one_assistants_slow_open_never_holds_up_anothers(self):
+        with ProfilesGateway() as hermes:
+            hermes.held["slow"] = threading.Event()
+            slow, fast = [], []
+            waiting = hermes.opening("slow", slow)
+            self.assertTrue(hermes.entered["slow"].wait(5))
+            # A global open lock would queue this behind the held activation.
+            hermes.opening("fast", fast).join(2)
+            self.assertEqual([result["session_id"] for result in fast], ["sid-fast"])
+            self.assertEqual(slow, [])
+            hermes.held["slow"].set()
+            waiting.join(5)
+            self.assertEqual(slow[0]["session_id"], "sid-slow")
+
+    def test_one_assistants_opens_still_run_one_at_a_time(self):
+        with ProfilesGateway() as hermes:
+            hermes.held["slow"] = threading.Event()
+            results = []
+            first = hermes.opening("slow", results)
+            self.assertTrue(hermes.entered["slow"].wait(5))
+            second = hermes.opening("slow", results)
+            time.sleep(0.2)
+            self.assertEqual((hermes.inside["slow"], results), (1, []))
+            hermes.held["slow"].set()
+            first.join(5); second.join(5)
+            self.assertEqual(hermes.peak["slow"], 1)
+            # The second open reports the time it spent behind the first.
+            self.assertGreaterEqual(max(result["app_timing"]["wait"] for result in results), 150)
+            self.assertEqual(hermes.bridge.canonical, {"slow": "sid-slow"})
+
+    def test_a_send_never_waits_behind_its_assistants_history_read(self):
+        with ProfilesGateway() as hermes:
+            hermes.open(profile="slow")
+            hermes.held["slow"] = threading.Event()
+            hermes.entered["slow"].clear()
+            reading = hermes.opening("slow", [])
+            self.assertTrue(hermes.entered["slow"].wait(5))
+            sent = []
+            params = {"profile": "slow", "request_id": "send", "sender_id": "member", "text": "Hello"}
+            sending = threading.Thread(target=lambda: sent.append(hermes.methods["agent-interface.submit"]("send", params)), daemon=True)
+            sending.start(); sending.join(2)
+            self.assertEqual([response["result"]["status"] for response in sent], ["accepted"])
+            hermes.held["slow"].set()
+            reading.join(5)
+
+    def test_open_reports_its_phases_in_milliseconds(self):
+        with FakeGateway(turns(2)) as hermes:
+            timing = hermes.open(window={"turns": 20})["app_timing"]
+            self.assertEqual(set(timing), {"wait", "activate", "decorate", "window", "total"})
+            self.assertTrue(all(isinstance(value, float) and value >= 0 for value in timing.values()))
+            self.assertGreaterEqual(timing["total"], timing["activate"])
+
+    def test_decorated_history_outlives_a_short_idle_until_its_bound(self):
+        with FakeGateway(turns(3)) as hermes:
+            hermes.open()
+            session = hermes.modules["tui_gateway.server"]._sessions["sid"]
+            session.update(history=hermes.messages, history_lock=threading.Lock(), profile_home=hermes.directory.name)
+            hermes.open()
+            stored = time.monotonic()
+            # Coming back to an idle chat minutes later reuses its exact decorated history.
+            with patch.object(extension.time, "monotonic", return_value=stored + 300):
+                self.assertEqual(len(hermes.open()["messages"]), 6)
+            self.assertTrue(hermes.native_calls[-1][1].get("omit_messages"))
+            with patch.object(extension.time, "monotonic", return_value=stored + extension.DECORATED_TTL + 1):
+                hermes.open()
+            self.assertNotIn("omit_messages", hermes.native_calls[-1][1])
+
+    def test_decorated_history_follows_native_redaction_registries(self):
+        with FakeGateway(turns(3)) as hermes:
+            hermes.open()
+            session = hermes.modules["tui_gateway.server"]._sessions["sid"]
+            session.update(history=hermes.messages, history_lock=threading.Lock(), profile_home=hermes.directory.name)
+            hermes.open()
+            hermes.open()
+            self.assertTrue(hermes.native_calls[-1][1].get("omit_messages"))
+            # A vault fill or plugin pattern scrubs native commentary without touching history.
+            for registry, value in ((hermes.redact._VAULT_REDACTION_VALUES, {"secret": None}), (hermes.redact._PLUGIN_PREFIX_PATTERNS, ["tok_"])):
+                registry["/home/default"] = value
+                hermes.open()
+                self.assertNotIn("omit_messages", hermes.native_calls[-1][1])
+                hermes.open()
+                self.assertTrue(hermes.native_calls[-1][1].get("omit_messages"))
+            # A Hermes that keeps them elsewhere gets only the short lifetime.
+            with patch.dict(sys.modules, {"agent.redact": None}):
+                hermes.open()
+                stored = time.monotonic()
+                with patch.object(extension.time, "monotonic", return_value=stored + extension.UNTRACKED_REDACTION_TTL - 1):
+                    hermes.open()
+                self.assertTrue(hermes.native_calls[-1][1].get("omit_messages"))
+                with patch.object(extension.time, "monotonic", return_value=stored + extension.UNTRACKED_REDACTION_TTL + 1):
+                    hermes.open()
+                self.assertNotIn("omit_messages", hermes.native_calls[-1][1])
+
+    def test_eviction_keeps_the_most_recently_read_histories(self):
+        clock = Mock(return_value=100)
+        with FakeGateway(turns(1)) as hermes, patch.object(extension.time, "monotonic", clock), patch.object(extension, "DECORATED_LIMIT", 2):
+            hermes.open()
+            sessions = hermes.modules["tui_gateway.server"]._sessions
+            sessions["sid"].update(history=hermes.messages, history_lock=threading.Lock(), profile_home=hermes.directory.name)
+            hermes.open()
+            clock.return_value = 300
+            hermes.open()
+            cache = hermes.bridge.decorated
+            # A hit refreshes its read time; its lifetime still counts from the fill.
+            self.assertEqual(cache["sid"][3:], (100, 300))
+            for sid, filled, read in (("read-recently", 50, 350), ("filled-recently", 200, 200)):
+                hermes.bridge.canonical[sid], sessions[sid] = sid, dict(sessions["sid"])
+                cache[sid] = (*cache["sid"][:3], filled, read)
+            clock.return_value = 400
+            sessions["sid"]["history"] = hermes.messages = turns(2)
+            hermes.open()
+            self.assertEqual(sorted(cache), ["read-recently", "sid"])
+
     def test_light_open_skips_native_history_and_a_window_cuts_it(self):
-        with FakeHermes(turns(25, files={3})) as hermes:
+        with FakeGateway(turns(25, files={3})) as hermes:
             first = hermes.open(omit_messages=True)
             self.assertEqual(len(first["messages"]), 50)
             light = hermes.open(omit_messages=True, window={"turns": 20})
@@ -397,6 +734,7 @@ class InlineGuidanceTests(unittest.TestCase):
 
     def test_current_native_invocation_uses_post_model_switch_agent_and_restores_on_error(self):
         with FakeHermes([], invocation=True) as hermes:
+            hermes.journal.memory_refresh.before_turn = Mock()
             server = hermes.modules["tui_gateway.server"]
             hermes.open()
             self.pending_app_turn(hermes)
@@ -420,6 +758,55 @@ class InlineGuidanceTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 server._invoke_agent("sid", session, turn, None, None, None, [], None, None, None, "Other client text")
             self.assertEqual(hermes.invoked[-1][0], "Current model")
+            self.assertEqual(hermes.journal.memory_refresh.before_turn.call_count, 4)
+            hermes.journal.memory_refresh.before_turn.assert_called_with("default", session, agent)
+
+    def test_app_turns_drop_the_native_first_contact_note_and_others_keep_it(self):
+        intro = "[System note: This is the user's very first message ever. Introduce yourself and mention /help.]"
+        offer = "[System note: This is the user's very first message ever. OFFER to build a profile:\n  1. Ask.]"
+        with FakeHermes([], invocation=True) as hermes:
+            hermes.journal.memory_refresh.before_turn = Mock()
+            server = hermes.modules["tui_gateway.server"]
+            hermes.open()
+            self.pending_app_turn(hermes)
+            session = server._sessions["sid"]
+            for note in (intro, offer):
+                agent = types.SimpleNamespace(ephemeral_system_prompt="", _gateway_turn_context_notes=f"Daybreak note.\n\n{note}")
+                with self.assertRaises(RuntimeError):
+                    server._invoke_agent("sid", session, types.SimpleNamespace(agent=agent), None, None, None, [], None, None, None, "Original user text")
+                self.assertEqual(agent._gateway_turn_context_notes, "Daybreak note.")
+            # Another client's turn in the same session keeps Hermes's own note.
+            agent = types.SimpleNamespace(ephemeral_system_prompt="", _gateway_turn_context_notes=intro)
+            with self.assertRaises(RuntimeError):
+                server._invoke_agent("sid", session, types.SimpleNamespace(agent=agent), None, None, None, [], None, None, None, "Other client text")
+            self.assertEqual(agent._gateway_turn_context_notes, intro)
+
+    def test_memory_refresh_runs_at_goal_and_steering_invocation_boundaries(self):
+        with FakeHermes([], invocation=True) as hermes:
+            server = hermes.modules["tui_gateway.server"]
+            hermes.open()
+            session = server._sessions["sid"]
+            session['agent'] = agent = types.SimpleNamespace(ephemeral_system_prompt='Original system')
+            refresh = hermes.journal.memory_refresh.before_turn = Mock()
+            for kind in ('goal_continue', 'steering'):
+                with self.assertRaisesRegex(RuntimeError, 'Synthetic provider failure'):
+                    server._invoke_agent('sid', session, types.SimpleNamespace(agent=agent), None, None, None, [], kind, None, None, 'Followup')
+                refresh.assert_called_with('default', session, agent)
+            self.assertEqual(refresh.call_count, 2)
+            self.assertEqual([text for _, text in hermes.invoked], ['Followup', 'Followup'])
+
+    def test_memory_refresh_hook_ignores_other_native_sessions_in_the_same_profile(self):
+        with FakeHermes([], invocation=True) as hermes:
+            server = hermes.modules['tui_gateway.server']
+            hermes.open()
+            agent = types.SimpleNamespace(ephemeral_system_prompt='Native frozen system')
+            native = dict(session_key='native-stored', agent=agent)
+            server._sessions['native-chat'] = native
+            refresh = hermes.journal.memory_refresh.before_turn = Mock()
+            with self.assertRaisesRegex(RuntimeError, 'Synthetic provider failure'):
+                server._invoke_agent('native-chat', native, types.SimpleNamespace(agent=agent), None, None, None, [], None, None, None, 'Native chat text')
+            refresh.assert_not_called()
+            self.assertEqual(hermes.invoked[-1], ('Native frozen system', 'Native chat text'))
 
     def test_guidance_is_ephemeral_and_only_for_app_sessions(self):
         with FakeHermes([]) as hermes:
@@ -505,7 +892,7 @@ class CanonicalOpenTests(unittest.TestCase):
             {"role": "tool", "row_id": 31, "tool_call_id": "read", "name": "read_file", "args": {}, "app_tool_result": {"pages": 3}},
             {"role": "system", "text": "Compacted", "timestamp": 301},
         ]
-        with FakeHermes(messages) as hermes:
+        with FakeGateway(messages) as hermes:
             db = hermes.journal.db
             with db:
                 receipt(db, "first", 10, 1, text="Summarize\n@file:\"/srv/report.pdf\"", attachments=[report], actor="kimberly")
@@ -537,7 +924,7 @@ class CanonicalOpenTests(unittest.TestCase):
 
     def statements(self, turns):
         messages, write = history(turns)
-        with FakeHermes(messages) as hermes:
+        with FakeGateway(messages) as hermes:
             with hermes.journal.db:
                 write(hermes.journal.db)
             seen = []
@@ -583,7 +970,7 @@ class CanonicalOpenTests(unittest.TestCase):
                     self.writer.join(0.5)
                     self.writer = None
                 return self.db.execute(sql, *args)
-        with FakeHermes(messages) as hermes:
+        with FakeGateway(messages) as hermes:
             journal, db = hermes.journal, hermes.journal.db
             with db:
                 receipt(db, "first", 10, 1, text="Summarize")
@@ -602,6 +989,80 @@ class CanonicalOpenTests(unittest.TestCase):
             after = hermes.open()["messages"]
         self.assertNotEqual(before, after)
         self.assertIn(during, (before, after))
+
+
+class MaintenanceLeaseTests(unittest.TestCase):
+    def hermes(self, directory):
+        self.lease = Path(directory) / "state" / "maintenance.json"
+        return FakeHermes([], environment={"HERMES_AGENT_INTERFACE_MAINTENANCE_FILE": str(self.lease), "HERMES_AGENT_INTERFACE_TOKEN": "key"})
+
+    def lease_call(self, hermes, action, operation="operation-1", key="key"):
+        return hermes.methods["agent-interface.maintenance"]("lease", {"service_key": key, "action": action, "operation_id": operation})
+
+    def test_a_held_lease_fences_native_admission_but_not_reads_until_released(self):
+        with tempfile.TemporaryDirectory() as directory, self.hermes(directory) as hermes:
+            server = hermes.server
+            self.assertEqual(self.lease_call(hermes, "acquire", key="wrong")["error"]["code"], 403)
+            self.assertEqual(self.lease_call(hermes, "acquire")["result"], {"active": True, "operationId": "operation-1", "busy": []})
+            self.assertEqual(stat.S_IMODE(self.lease.stat().st_mode), 0o600)
+            self.assertEqual(server.handle_request({"id": 1, "method": "prompt.submit", "params": {}})["error"]["code"], 409)
+            self.assertEqual(server.dispatch({"id": 2, "method": "session.steer", "params": {}})["error"]["code"], 409)
+            self.assertIn("result", server.handle_request({"id": 3, "method": "profiles.list", "params": {}}))
+            self.assertFalse(hermes.retirement.acquire())
+            self.assertEqual(self.lease_call(hermes, "acquire", "operation-2")["error"]["code"], 409)
+            self.assertEqual(self.lease_call(hermes, "release")["result"]["active"], False)
+            self.assertFalse(self.lease.exists())
+            self.assertIn("result", server.handle_request({"id": 4, "method": "prompt.submit", "params": {}}))
+            self.assertTrue(hermes.retirement.acquire())
+
+    def test_busy_work_refuses_a_lease_and_an_unsafe_lease_file_closes_admission(self):
+        with tempfile.TemporaryDirectory() as directory, self.hermes(directory) as hermes:
+            hermes.server._sessions["sid"] = {"session_key": "stored", "running": True}
+            refused = self.lease_call(hermes, "acquire")
+            self.assertEqual((refused["error"]["code"], self.lease.exists()), (409, False))
+            self.lease.parent.mkdir()
+            self.lease.write_text('{"operationId": "installer"}')
+            self.lease.chmod(0o640)
+            with self.assertRaisesRegex(RuntimeError, "not private"):
+                hermes.server.handle_request({"id": 1, "method": "prompt.submit", "params": {}})
+            # A dangling link is not a missing lease: admission stays closed until repaired.
+            self.lease.unlink()
+            self.lease.symlink_to(Path(directory) / "missing.json")
+            with self.assertRaisesRegex(RuntimeError, "not private"):
+                hermes.server.handle_request({"id": 2, "method": "prompt.submit", "params": {}})
+
+class ReadQueueTests(unittest.TestCase):
+    def test_one_slow_assistants_reads_never_take_hermes_native_workers(self):
+        with PooledHermes() as hermes:
+            replies, server = Replies(), hermes.server
+            opens = [server.dispatch({"id": f"slow-{index}", "method": "agent-interface.open", "params": {"profile": "slow"}}, replies) for index in range(8)]
+            self.assertEqual(opens, [None] * 8)
+            self.assertTrue(hermes.entered.wait(3))
+            # As many reads as Hermes has workers, all behind one held activation. Native long
+            # handlers and another assistant's read still answer.
+            self.assertIsNone(server.dispatch({"id": "roster", "method": "profiles.list", "params": {}}, replies))
+            server.dispatch({"id": "fast", "method": "agent-interface.open", "params": {"profile": "fast"}}, replies)
+            server.dispatch({"id": "discover", "method": "agent-interface.discover", "params": {"cursor": "0"}}, replies)
+            self.assertTrue(replies.wait("roster", "fast"), replies.answers)
+            self.assertEqual(replies.answers["fast"]["result"]["session_id"], "sid-fast")
+            self.assertFalse(any(rid.startswith("slow") for rid in replies.answers))
+            # Each queued read holds a native admission reservation until it is answered.
+            self.assertGreaterEqual(hermes.active[0], 8)
+            hermes.held.set()
+            self.assertTrue(replies.wait(*(f"slow-{index}" for index in range(8))))
+            self.assertTrue(all(replies.answers[f"slow-{index}"]["result"]["session_id"] == "sid-slow" for index in range(8)))
+            deadline = time.monotonic() + 3
+            while hermes.active[0] and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertEqual(hermes.active[0], 0)
+
+    def test_direct_calls_and_writes_keep_native_dispatch(self):
+        with PooledHermes() as hermes:
+            server = hermes.server
+            # In-process callers and requests without a connection transport answer synchronously.
+            self.assertEqual(server.handle_request({"id": 1, "method": "agent-interface.open", "params": {"profile": "fast"}})["result"]["session_id"], "sid-fast")
+            self.assertEqual(server.dispatch({"id": 2, "method": "agent-interface.open", "params": {"profile": "fast"}})["result"]["session_id"], "sid-fast")
+            self.assertIn("result", server.dispatch({"id": 3, "method": "agent-interface.receipt", "params": {"request_id": "none"}}, Replies()))
 
 
 class BotDeliveryInstallTests(unittest.TestCase):
@@ -673,6 +1134,125 @@ class DiscoveryTests(unittest.TestCase):
                 self.assertEqual(ledger.call_count, 4)
                 discover("tick", {"full": True})
                 self.assertEqual(ledger.call_count, 5)
+
+    def test_routine_events_carry_what_each_run_said_read_once_per_run(self):
+        jobs = [{"id": "job", "name": "[bot:default] Daily AI news"}]
+        ledger = Mock(return_value=[{"id": "execution", "status": "completed", "claimed_at": "2026-10-31T07:00:00-05:00"}])
+        with FakeHermes([]) as hermes:
+            executions = types.ModuleType("cron.executions")
+            executions.list_executions, executions.EXECUTIONS_FILE = ledger, Path(hermes.directory.name) / "executions.db"
+            cron = types.ModuleType("cron")
+            cron.executions = executions
+            modules = {"hermes_cli.web_routers.cron": types.SimpleNamespace(_owner_home_scope=lambda _: contextlib.nullcontext(), _list_cron_jobs_sync=lambda _: jobs),
+                       "cron": cron, "cron.executions": executions}
+            body = Mock(return_value="Three model launches.")
+            with patch.dict(sys.modules, modules), patch.object(extension, "routine_run_body", body):
+                discover = hermes.methods["agent-interface.discover"]
+                events = discover("tick", {"cursor": "0", "full": True})["result"]["events"]
+                discover("tick", {"cursor": "0", "full": True})
+        self.assertEqual([(event["title"], event["body"], event["routineId"]) for event in events], [("[bot:default] Daily AI news", "Three model launches.", "job")])
+        body.assert_called_once_with("/home/default", "job", ledger.return_value[0], ledger.return_value)
+
+    def test_routine_run_body_quotes_the_runs_own_answer_or_error(self):
+        with tempfile.TemporaryDirectory() as home:
+            output = Path(home) / "cron" / "output" / "job"
+            output.mkdir(parents=True)
+            document = lambda answer: f"# Cron Job: Daily AI news\n\n**Job ID:** job\n\n## Prompt\n\nSummarize today's AI news.\n\n## Response\n\n{answer}\n"
+            (output / "2026-10-30_07-00-04.md").write_text(document("Yesterday's news."))
+            (output / "2026-10-31_07-00-09.md").write_text(document("**Three** model launches\nand a new benchmark."))
+            (output / "2026-10-31_09-00-02.md").write_text(document("A later run."))
+            run = {"status": "completed", "claimed_at": "2026-10-31T07:00:00.700-05:00", "finished_at": "2026-10-31T07:00:10-05:00"}
+            body = lambda execution, job="job": extension.routine_run_body(home, job, execution)
+            # Lines survive for the app to read as Markdown.
+            self.assertEqual(body(run), "**Three** model launches\nand a new benchmark.")
+            # A run whose document was pruned or never written must not borrow a later run's, even within the grace.
+            pruned = {"status": "completed", "claimed_at": "2026-10-31T06:59:00-05:00", "finished_at": "2026-10-31T06:59:30-05:00"}
+            self.assertIsNone(extension.routine_run_body(home, "job", pruned, [pruned, run]))
+            self.assertIsNone(body({**run, "claimed_at": "2026-10-31T08:00:00-05:00", "finished_at": "2026-10-31T08:00:05-05:00"}))
+            # Nor across the hour daylight saving repeats, when the next claim's wall clock reads earlier.
+            (output / "2026-11-01_01-06-00.md").write_text(document("The next run's answer."))
+            before = {"status": "completed", "claimed_at": "2026-11-01T01:04:00-05:00", "finished_at": "2026-11-01T01:04:30-05:00"}
+            self.assertIsNone(extension.routine_run_body(home, "job", before, [before, {"claimed_at": "2026-11-01T01:02:00-06:00"}]))
+            # Hermes's reader checks length frames over the whole document, so a long prompt still yields its answer.
+            prompt = "context " * 40000
+            (output / "2026-10-31_09-00-02.md").write_text(f"# Cron Job: Daily AI news\n\n## Prompt\n\n{prompt}\n\n## Response\n\nLong prompt, short answer.\n")
+            self.assertEqual(body({"status": "completed", "claimed_at": "2026-10-31T09:00:00-05:00"}), "Long prompt, short answer.")
+            self.assertEqual(body({"status": "failed", "error": "Provider\n rate limit"}), "Provider\n rate limit")
+            self.assertIsNone(body({"status": "unknown"}))
+            self.assertIsNone(body(run, job="../job"))
+            self.assertIsNone(body({"status": "completed"}))
+            (output / "2026-10-31_07-00-09.md").unlink()
+            (output / "2026-10-31_07-00-09.md").symlink_to(output / "2026-10-30_07-00-04.md")
+            self.assertIsNone(body(run))
+            # Nor may the job's folder link to another profile's output.
+            elsewhere = Path(home) / "private-profile"
+            elsewhere.mkdir()
+            (elsewhere / "2026-10-31_07-00-09.md").write_text(document("Private notes."))
+            (output.parent / "linked").symlink_to(elsewhere)
+            self.assertIsNone(body(run, job="linked"))
+
+    def test_approval_events_name_their_native_request_for_notification_actions(self):
+        with FakeHermes([]) as hermes:
+            server = hermes.modules["tui_gateway.server"]
+            server._sessions["sid"] = {"session_key": "stored"}
+            with hermes.journal.db:
+                hermes.journal.db.execute("INSERT INTO receipts(request_id,digest,profile,session_id,stored_session,actor,epoch,run_id,input_text,attachments,steering,status,terminal,created) VALUES('run','d','default','sid','stored','nicolas','e','run','Ask','[]',0,'accepted',0,1)")
+            server.write_json({"jsonrpc": "2.0", "id": "request:7", "method": "approval", "params": {"session_id": "sid", "command": "rm -rf build"}})
+            # A journal row from before approval identities, and one whose key belongs to another run, get none.
+            hermes.journal.event("default", "sid", "approval", "Approval requested", "run")
+            hermes.journal.event("default", "sid", "approval", "Approval requested", "run", event_key="other:approval:9")
+            hermes.journal.event("default", "sid", "completed", "Done", "run", event_key="run:completed:")
+            executions = types.ModuleType("cron.executions")
+            executions.list_executions, executions.EXECUTIONS_FILE = Mock(return_value=[]), Path(hermes.directory.name) / "executions.db"
+            cron = types.ModuleType("cron")
+            cron.executions = executions
+            modules = {"hermes_cli.web_routers.cron": types.SimpleNamespace(_owner_home_scope=lambda _: contextlib.nullcontext(), _list_cron_jobs_sync=lambda _: []),
+                       "cron": cron, "cron.executions": executions}
+            with patch.dict(sys.modules, modules):
+                events = hermes.methods["agent-interface.discover"]("tick", {"cursor": "0"})["result"]["events"]
+        self.assertEqual([(event["kind"], event.get("approvalId")) for event in events],
+                         [("approval", "request:7"), ("approval", None), ("approval", None), ("completed", None)])
+
+
+class SubmissionRecoveryGateTests(unittest.TestCase):
+    def test_gate_reads_restart_marker_inflight_and_prior_owner_across_runtime_sid(self):
+        with tempfile.TemporaryDirectory() as directory:
+            journal = extension.Journal(Path(directory) / 'gates.db')
+            try:
+                session = dict(session_key='stored', running=False)
+                self.assertFalse(journal.submission_state('ranch', 'sid', session)['interrupted'])
+                session['inflight_turn'] = dict(interrupted=True)
+                self.assertTrue(journal.submission_state('ranch', 'sid', session)['interrupted'])
+                session.pop('inflight_turn')
+                with journal.db:
+                    journal.db.execute("INSERT INTO interruptions VALUES('ranch','stored','crashed',1)")
+                self.assertTrue(journal.submission_state('ranch', 'sid', session)['interrupted'])
+                self.assertFalse(journal.submission_state('other', 'sid', session)['interrupted'])
+                with journal.db:
+                    journal.db.execute("DELETE FROM interruptions")
+                    journal.db.execute("INSERT INTO receipts(request_id,digest,profile,session_id,stored_session,actor,epoch,status,terminal,created) VALUES('past','d','ranch','old-sid','stored','person','e','interrupted',1,1)")
+                journal.event('ranch', 'old-sid', 'interrupted', 'Stopped', 'past')
+                self.assertTrue(journal.submission_state('ranch', 'new-sid', session)['interrupted'])
+            finally:
+                journal.db.close()
+
+    def test_unsettled_receipt_and_resume_require_idle_use_the_same_submit_gate(self):
+        with FakeHermes([]) as hermes:
+            hermes.open()
+            session = hermes.modules['tui_gateway.server']._sessions['sid']
+            with hermes.journal.db:
+                hermes.journal.db.execute("INSERT INTO receipts(request_id,digest,profile,session_id,stored_session,actor,epoch,status,terminal,created) VALUES('previous','d','default','sid','stored','person','e','accepted',0,1)")
+            self.assertEqual(hermes.journal.submission_state('default', 'sid', session)['current'], ('previous',))
+            submit = hermes.methods['agent-interface.submit']
+            params = dict(profile='default', request_id='continuation', sender_id='person', text='Continue', require_idle=True)
+            refused = submit('resume', params)['result']
+            self.assertEqual(refused['status'], 'rejected')
+            with hermes.journal.db:
+                hermes.journal.db.execute("UPDATE receipts SET terminal=1")
+            session['running'] = True
+            busy = submit('resume', dict(params, request_id='busy'))
+            self.assertEqual(busy['error']['code'], 4091)
+            self.assertIsNone(hermes.journal.receipt('busy'))
 
 
 if __name__ == "__main__":

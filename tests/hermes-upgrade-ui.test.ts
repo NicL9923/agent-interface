@@ -1,14 +1,15 @@
 // @vitest-environment jsdom
 import { act, createElement } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Root } from "react-dom/client";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { HermesUpgradePanel } from "../src/components/HermesUpgradePanel";
 import { api, ApiError, write } from "../src/client-api";
 import type { UpgradeStatus } from "../src/shared/upgrades";
+import { button, mountRoot } from "./ui-harness";
 
-vi.mock("../src/client-api", async original => ({
+vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(await (async original => ({
   ...await original<typeof import("../src/client-api")>(), api: vi.fn(), write: vi.fn(),
-}));
+}))(original)));
 let container: HTMLDivElement;
 let root: Root;
 let status: UpgradeStatus;
@@ -17,21 +18,12 @@ const onClose = vi.fn();
 beforeEach(() => {
   vi.useFakeTimers();
   vi.clearAllMocks();
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: function(this: HTMLDialogElement) { this.open = true; } });
   Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: function(this: HTMLDialogElement) { this.open = false; } });
   status = { available: true, phase: "idle", current: { revision: "original", version: "1.0" },
     message: "Check for an update.", checks: [], canCheck: true, canInstall: false, canRetry: false, canCancel: false, canRestartService: false, busyBots: [] };
   vi.mocked(api).mockImplementation(async () => status as never);
-  container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
-});
-afterEach(async () => {
-  await act(async () => root.unmount());
-  container.remove();
-  vi.useRealTimers();
-  vi.unstubAllGlobals();
+  ({ container, root } = mountRoot());
 });
 async function render(open = true) {
   await act(async () => root.render(createElement(HermesUpgradePanel, { open, onClose, bots: [
@@ -43,6 +35,19 @@ const qualified = (): UpgradeStatus => ({ ...status, phase: "ready", candidate: 
   message: "The update passed qualification.", canInstall: true, checks: [{ id: "contract", label: "Connection contract", status: "passed" }] });
 
 describe("Hermes updates", () => {
+  it("names revisions by commit date, keeping the short hash as a quiet notes link", async () => {
+    const hash = "0123456789abcdef0123456789abcdef01234567";
+    status = { ...qualified(), current: { revision: hash, committedAt: "2026-10-20T15:00:00Z" },
+      candidate: { revision: "fedcba9876543210fedcba9876543210fedcba98", notesUrl: "https://example.test/notes" } };
+    await render();
+    const [current, candidate] = [...container.querySelectorAll(".upgrade-versions dd")];
+    expect(current.textContent).toBe(`${new Date("2026-10-20T15:00:00Z").toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}0123456`);
+    expect(current.querySelector(".upgrade-revision")?.textContent).toBe("0123456");
+    // Without a date, the short hash is all there is, and it still links to the notes.
+    expect(candidate.textContent).toBe("fedcba9");
+    expect(candidate.querySelector("a")?.getAttribute("href")).toBe("https://example.test/notes");
+  });
+
   it("checks without installing, then installs only the qualified candidate after a second click", async () => {
     vi.mocked(write).mockImplementation(async path => {
       status = path.endsWith("/check") ? qualified() : { ...status, phase: "installing", canCheck: false, canInstall: false };
@@ -137,7 +142,6 @@ describe("Hermes updates", () => {
     status = { ...status, phase: "failed", operationId: "failed-operation", canCheck: false, canRestartService: true, canRetry: true };
     vi.mocked(write).mockRejectedValue(new ApiError("Lost connection", 503));
     await render();
-    const button = (text: string) => Array.from(container.querySelectorAll("button")).find(b => b.textContent === text)!;
     await act(async () => button("Restart Hermes").click());
     expect(write).not.toHaveBeenCalled();
     expect(container.textContent).toContain("briefly disconnect everyone");
@@ -157,7 +161,6 @@ describe("Hermes updates", () => {
     vi.mocked(write).mockResolvedValue({ ...status, phase: "recovering", canCancel: false });
     await render(false);
     await render();
-    const button = (text: string) => Array.from(container.querySelectorAll("button")).find(b => b.textContent === text)!;
     await act(async () => button("Cancel update").click());
     expect(write).not.toHaveBeenCalled();
     await act(async () => button("Yes, cancel update").click());
@@ -195,4 +198,71 @@ describe("Hermes updates", () => {
     expect(container.textContent).toContain("Checking the restarted service.");
     expect(container.textContent).not.toContain("before we could confirm the request");
   });
+  it("leads failed-install recovery with Restart and restores keyboard focus after cancellation", async () => {
+    status = { ...status, phase: "failed", operation: "install", operationId: "failed", canCheck: false, canRestartService: true, canRetry: true, canCancel: true };
+    await render();
+    expect(container.querySelector(".primary")?.textContent).toBe("Restart Hermes");
+    expect(container.querySelector(".upgrade-action")).toBeNull();
+    button("Restart Hermes").focus();
+    await act(async () => button("Restart Hermes").click());
+    expect(document.activeElement).toBe(container.querySelector(".upgrade-confirmation"));
+    await act(async () => button("Not now").click());
+    expect(document.activeElement).toBe(button("Restart Hermes"));
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it("dismisses a stale confirmation rather than recovering another device's newer operation", async () => {
+    status = { ...status, phase: "failed", operation: "install", operationId: "old-operation", canRestartService: true };
+    await render();
+    await act(async () => button("Restart Hermes").click());
+    status = { ...status, operationId: "new-operation" };
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+    expect(container.querySelector(".upgrade-confirmation")).toBeNull();
+    expect(container.textContent).toContain("The update changed on another device.");
+    expect(document.activeElement?.id).toBe("hermes-upgrade-title");
+    expect(write).not.toHaveBeenCalled();
+    await act(async () => button("Restart Hermes").click());
+    vi.mocked(write).mockResolvedValue({ ...status, phase: "recovering", canRestartService: false });
+    await act(async () => button("Yes, restart Hermes").click());
+    expect(write).toHaveBeenCalledExactlyOnceWith("/hermes/upgrade/control", { action: "restart_service", operationId: "new-operation", requestId: expect.any(String) });
+    expect(document.activeElement?.id).toBe("hermes-upgrade-title");
+  });
+
+  it.each([["recovering", "Restoring…"], ["verifying", "Checking Hermes…"]] as const)("names the %s phase without claiming another install", async (phase, label) => {
+    status = { ...status, phase, operation: "install", canCheck: false };
+    await render();
+    expect(action().textContent).toBe(label);
+    expect(action().disabled).toBe(true);
+  });
+
+  it.each(["phase", "permission"] as const)("retires a prompt when the same operation changes its %s, without bringing it back later", async change => {
+    status = { ...status, phase: "failed", operation: "install", operationId: "same-operation", canRestartService: true, canCancel: true };
+    await render();
+    await act(async () => button("Restart Hermes").click());
+    status = { ...status, ...(change === "phase" ? { phase: "recovering" } : { canRestartService: false }) };
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+    expect(container.querySelector(".upgrade-confirmation")).toBeNull();
+    expect(document.activeElement?.id).toBe("hermes-upgrade-title");
+    expect(container.textContent).toContain("The update changed on another device.");
+    expect(write).not.toHaveBeenCalled();
+    status = { ...status, phase: "failed", canRestartService: true };
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+    expect(container.querySelector(".upgrade-confirmation")).toBeNull();
+    expect(button("Restart Hermes").disabled).toBe(false);
+    await render(false); await render();
+    expect(container.textContent).not.toContain("The update changed on another device.");
+  });
+
+  it("clears a changed-operation notice when the status moves to another phase", async () => {
+    status = { ...status, phase: "failed", operation: "install", operationId: "old", canRestartService: true };
+    await render();
+    await act(async () => button("Restart Hermes").click());
+    status = { ...status, operationId: "new" };
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+    expect(container.textContent).toContain("The update changed on another device.");
+    status = { ...status, phase: "succeeded", canRestartService: false };
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+    expect(container.textContent).not.toContain("The update changed on another device.");
+  });
+
 });

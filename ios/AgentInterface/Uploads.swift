@@ -1,3 +1,4 @@
+import ImageIO
 import Foundation
 import UniformTypeIdentifiers
 
@@ -59,3 +60,30 @@ enum UploadRules {
 }
 
 enum UploadStatus: Equatable { case queued, uploading, processing, failed }
+
+/// Portrait input can be a full-size photo; only a bounded thumbnail leaves the device.
+enum PortraitUpload {
+  static let maxInputBytes = 15 * 1024 * 1024
+  static func prepare(_ data: Data) throws -> Data {
+    guard data.count <= maxInputBytes else {
+      throw APIError(message: "Choose a portrait no larger than 15 MB.", status: 400)
+    }
+    guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+      let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+        kCGImageSourceCreateThumbnailFromImageAlways: true,
+        kCGImageSourceCreateThumbnailWithTransform: true,
+        kCGImageSourceThumbnailMaxPixelSize: 512,
+      ] as CFDictionary) else {
+      throw APIError(message: "This portrait couldn't be read. Choose another image.", status: 400)
+    }
+    let result = NSMutableData()
+    guard let destination = CGImageDestinationCreateWithData(result, UTType.png.identifier as CFString, 1, nil) else {
+      throw APIError(message: "This portrait couldn't be processed. Try again.", status: 400)
+    }
+    CGImageDestinationAddImage(destination, image, nil)
+    guard CGImageDestinationFinalize(destination), result.length <= 2_000_000 else {
+      throw APIError(message: "This portrait couldn't be compressed. Choose another image.", status: 400)
+    }
+    return result as Data
+  }
+}

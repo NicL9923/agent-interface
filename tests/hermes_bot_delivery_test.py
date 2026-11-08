@@ -13,9 +13,10 @@ import types
 import unittest
 from pathlib import Path
 
+from support import load_source
+
 ROOT = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location("bot_delivery_test", ROOT / "src/hermes/bot_delivery.py")
-delivery = importlib.util.module_from_spec(spec); spec.loader.exec_module(delivery)
+delivery = load_source("src/hermes/bot_delivery.py", "bot_delivery_test")
 
 KEY = "a" * 64
 OTHER = "b" * 64
@@ -118,6 +119,45 @@ class BotDeliveryTests(unittest.TestCase):
             yield allowed
         return delivery.Consumer(server, self.box, lambda: [("penny", self.home)], lambda profile: "sid", admission,
                                  open_db=store, classify=lambda error: "provider", native_records=native_records)
+
+    def test_hermes_without_mailbox_helpers_still_delivers_once_through_the_addon(self):
+        # Hermes 74915d7 (v0.23) deleted the helpers its authority FIFO stopped using.
+        self.box = mailbox()
+        for name in ("has_mailbox", "_scan_read", "_next_sequence", "complete_delivery"):
+            delattr(self.box, name)
+        store = Store()
+        self.assertTrue(delivery.install_producer(self.box, store))
+        owner = self.box.find_canonical_live_owner(self.home)
+        self.box.deliver_to_live_owner(self.home, owner, "first", delivery_id=KEY)
+        self.box.deliver_to_live_owner(self.home, owner, "second", delivery_id=OTHER)
+        self.assertEqual([self.record(key)["sequence"] for key in (KEY, OTHER)], [1, 2])
+        # A malformed ticket beside them never wedges the scan.
+        (self.home / "runtime/bot_live_delivery" / ("c" * 64 + ".json")).write_text("{not json")
+        server = Server({"session_key": "stored", "agent": object()})
+        consumer = self.consumer(server, store)
+        self.assertTrue(consumer.deliver_once("penny", self.home))
+        self.assertEqual(server.turns[0][2], "first")
+        self.assertEqual(self.record()["status"], "settled")
+        # The counter outlives the tickets, so a later admission never reuses a sequence.
+        self.assertEqual((self.home / "runtime/bot_live_delivery/.sequence").read_text(), "2")
+
+    def test_bot_chat_receipts_are_skipped_before_the_native_ticket_check(self):
+        # Hermes's Bot Chat receipts share the directory; its ticket check warned about each one.
+        self.box = mailbox()
+        store = Store()
+        self.assertTrue(delivery.install_producer(self.box, store))
+        owner = self.box.find_canonical_live_owner(self.home)
+        self.box.deliver_to_live_owner(self.home, owner, "first", delivery_id=KEY)
+        receipt = self.home / "runtime/bot_live_delivery" / ("c" * 64 + ".json")
+        receipt.write_text(json.dumps({"delivery_id": "c" * 64, "admission_id": "d" * 32, "principal_id": "p",
+                                       "profile_home": str(self.home), "session_id": "s", "status": "settled"}))
+        checked, native = [], self.box._scan_read
+        self.box._scan_read = lambda path: checked.append(path.name) or native(path)
+        server = Server({"session_key": "stored", "agent": object()})
+        self.assertTrue(self.consumer(server, store).deliver_once("penny", self.home))
+        self.assertEqual(server.turns[0][2], "first")
+        self.assertIn(KEY + ".json", checked)
+        self.assertNotIn(receipt.name, checked)
 
     def test_native_owner_mailbox_hermes_keeps_native_delivery(self):
         box = mailbox(authority=False)

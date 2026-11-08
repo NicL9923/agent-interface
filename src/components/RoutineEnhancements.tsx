@@ -1,8 +1,10 @@
-import { useEffect, useRef, useState } from "react";
-import { api, ApiError, pollWhileVisible, write } from "../client-api";
+import { useEffect, useId, useRef, useState } from "react";
+import { ApiError, pollWhileVisible, request } from "../client-api";
 import type { RoutinePreview, RoutineRunReceipt } from "../shared/experience";
 import type { Routine } from "../shared/types";
+import { routineTrialKey } from "../app/storage";
 import "./experience.css";
+import { FormMessage } from "./ui/form-message";
 function runTime(instant: string, timezone: string) {
   try { return new Date(instant).toLocaleString(undefined, { timeZone: timezone }); }
   catch { return `${new Date(instant).toLocaleString(undefined, { timeZone: "UTC" })} UTC`; }
@@ -17,7 +19,7 @@ export function RoutineSchedulePreview({ botId, schedule, onReady }: { botId: st
   async function load() {
     const input = { botId, schedule }; setBusy(true); setError(""); setRequested(schedule);
     try {
-      const result = await write<RoutinePreview>("/routines/preview", input);
+      const result = await request("POST /routines/preview", { body: input });
       if (current.current.botId !== input.botId || current.current.schedule !== input.schedule) return;
       setPreview(result); onReady?.(input.schedule);
     } catch (e) { if (current.current.schedule === input.schedule) setError((e as Error).message); }
@@ -28,25 +30,27 @@ export function RoutineSchedulePreview({ botId, schedule, onReady }: { botId: st
     {visible && <div className="routine-preview"><strong>{preview.kind === "once" ? "Scheduled run" : "Next runs"}</strong><p>Hermes timezone: {preview.timezone}</p>
       <ol>{preview.nextRuns.map(instant => <li key={instant}>{runTime(instant, preview.timezone)}</li>)}</ol>
       <small>The assistant's Hermes profile controls this timezone.</small></div>}
-    {error && requested === schedule && <p className="form-error" role="alert">{error}</p>}
+    {error && requested === schedule && <FormMessage tone="error">{error}</FormMessage>}
   </div>;
 }
 
 export function RoutineEnhancements({ routine, userId, disabled, onOpenResults }: { routine: Routine; userId: string; disabled?: boolean; onOpenResults?: () => void }) {
-  const key = `agent-interface:routine-trial:${userId}:${routine.id}`;
+  const key = routineTrialKey(userId, routine.id);
+  const trialHintId = useId();
+  const retryHintId = useId();
   const [requestId, setRequestId] = useState(() => { try { return localStorage.getItem(key) || ""; } catch { return ""; } });
   const [receipt, setReceipt] = useState<RoutineRunReceipt | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [missing, setMissing] = useState(false);
   const checking = useRef(false);
-  const path = `/routines/${encodeURIComponent(routine.id)}`;
+
   const canStart = !requestId || receipt?.status === "completed" || receipt?.status === "failed";
   async function check(id: string) {
     if (checking.current) return;
     checking.current = true;
     setBusy(true); setError("");
-    try { setReceipt(await api<RoutineRunReceipt>(`${path}/runs/${encodeURIComponent(id)}`)); setMissing(false); }
+    try { setReceipt(await request("GET /routines/:id/runs/:requestId", { params: { id: routine.id, requestId: id } })); setMissing(false); }
     catch (e) { setError((e as Error).message); setMissing(e instanceof ApiError && e.status === 404); }
     finally { checking.current = false; setBusy(false); }
   }
@@ -62,20 +66,24 @@ export function RoutineEnhancements({ routine, userId, disabled, onOpenResults }
     try { localStorage.setItem(key, id); }
     catch { setError("This browser cannot save a run receipt. Allow local storage before trying a routine."); return; }
     setRequestId(id); setReceipt(null); setBusy(true); setError(""); setMissing(false);
-    try { setReceipt(await write<RoutineRunReceipt>(`${path}/run`, { requestId: id })); }
+    try { setReceipt(await request("POST /routines/:id/run", { params: { id: routine.id }, body: { requestId: id } })); }
     catch (e) { setError(`${(e as Error).message} Check this run's status before starting another.`); }
     finally { setBusy(false); }
   }
-  return <div className="routine-enhancements"><RoutineSchedulePreview botId={routine.botId} schedule={routine.schedule} />
-    {onOpenResults ? <button type="button" onClick={onOpenResults}>View results</button> : <a href={`/?bot=${encodeURIComponent(routine.botId)}&routine=${encodeURIComponent(routine.id)}`}>View results</a>}
-    <small className="muted">Runs now. Hermes may move the next run or finish a one-time routine. Paused recurring routines stay paused.</small>
-    <div className="actions">{canStart ? <button type="button" disabled={busy || disabled} onClick={() => void start()}>{busy ? "Starting..." : "Try once"}</button>
-      : <button type="button" disabled={busy || disabled} onClick={() => void check(requestId)}>{busy ? "Checking..." : "Check run status"}</button>}
-      {missing && <button type="button" disabled={busy || disabled} onClick={() => void start(requestId)}>Retry the same request</button>}</div>
+  return <div className="routine-enhancements">
+    <div className="routine-enhancement-actions">
+      {canStart ? <button type="button" aria-describedby={trialHintId} disabled={busy || disabled} onClick={() => void start()}>{busy ? "Starting..." : "Try once"}</button>
+        : <button type="button" aria-describedby={trialHintId} disabled={busy || disabled} onClick={() => void check(requestId)}>{busy ? "Checking..." : "Check run status"}</button>}
+      {missing && <button type="button" aria-describedby={retryHintId} disabled={busy || disabled} onClick={() => void start(requestId)}>Retry the same request</button>}
+      <RoutineSchedulePreview botId={routine.botId} schedule={routine.schedule} />
+      {onOpenResults ? <button type="button" onClick={onOpenResults}>View results</button> : <a href={`/?bot=${encodeURIComponent(routine.botId)}&routine=${encodeURIComponent(routine.id)}`}>View results</a>}
+    </div>
+    <p id={trialHintId} className="routine-trial-note">{canStart ? "Try once runs this routine now. Hermes may move the next run or finish a one-time routine. Paused recurring routines stay paused." : "Check the saved run's status before starting another. Checking does not run it again."}</p>
+    {missing && <p id={retryHintId} className="routine-trial-note">Retry sends the saved request again and may run this routine. It uses the same request ID.</p>}
     {receipt && <p className="routine-run-status" role="status">{receipt.status === "accepted" ? "Trial run started. Hermes will finish it even if you close this screen."
       : receipt.status === "completed" ? "Trial run completed."
       : receipt.status === "failed" ? "Trial run failed."
       : "The run's outcome is unknown. Review its result before starting another."}{receipt.message && ` ${receipt.message}`}</p>}
-    {error && <p className="form-error" role="alert">{error}</p>}
+    {error && <FormMessage tone="error">{error}</FormMessage>}
   </div>;
 }

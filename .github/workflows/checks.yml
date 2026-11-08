@@ -23,7 +23,7 @@ jobs:
         include:
           # The primary version comes from .node-version so it cannot drift.
           - node-version-file: .node-version
-          - node-version: 26.10.0
+          - node-version: 26.13.0
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -34,8 +34,44 @@ jobs:
           node-version-file: ${{ matrix.node-version-file }}
           cache: npm
       - run: npm ci
+      - run: npm run lint
       - run: npm test
       - run: npm run build
+  browser:
+    # A real Chromium against the built client and the real server, over a scripted assistant runtime.
+    name: Browser smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Read the Playwright version
+        id: playwright
+        run: echo "version=$(npx playwright --version | cut -d' ' -f2)" >> "$GITHUB_OUTPUT"
+      - name: Cache Playwright browsers
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
+      # Browsers come from the cache when present; the system libraries are installed either way.
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
+      - name: Upload the report and traces
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7
   python:
     # Runs once, on the Python the Hermes host runs (scripts/spike/requirements.lock.txt).
     name: Python 3.14.7
@@ -65,27 +101,3 @@ jobs:
           sudo apt-get install -y tmux
       - name: Run Python tests
         run: python scripts/run-python-tests.py
-  native:
-    name: iOS unit tests
-    runs-on: macos-26
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Show the image's default Xcode
-        run: xcodebuild -version
-      - name: Run native unit tests
-        # Ad hoc simulator signing, as in .agents/tools/validate-ios.sh. UI tests run locally.
-        run: |
-          simulator=$(xcrun simctl list devices available --json | python3 -c '
-          import json, sys
-          devices = json.load(sys.stdin)["devices"]
-          version = lambda runtime: [int(part) for part in runtime.rsplit("iOS-", 1)[1].split("-")]
-          runtimes = sorted((runtime for runtime in devices if ".iOS-" in runtime), key=version, reverse=True)
-          print(next(device["udid"] for runtime in runtimes for device in devices[runtime] if device["name"].startswith("iPhone")))
-          ')
-          xcodebuild -project ios/AgentInterface.xcodeproj -scheme AgentInterface \
-            -destination "platform=iOS Simulator,id=$simulator" -derivedDataPath build/ios \
-            CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= \
-            -parallel-testing-enabled NO -only-testing:AgentInterfaceTests test

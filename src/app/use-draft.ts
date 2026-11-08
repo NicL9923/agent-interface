@@ -1,13 +1,18 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RefObject } from "react";
 import type { FileRef, SavedDraft } from "../shared/types";
-import { api, ApiError, uploadFile, write } from "../client-api";
+import { routeUrl, type ApiResponse } from "../shared/api";
+import { ApiError, pollWhileVisible, request, uploadFile, write } from "../client-api";
 import { contentHash, mergeDraft, nextSeq, savedDraft } from "./draft-merge";
 import { draftKey, isSentCopy, localRead, localSave, sameDraft } from "./storage";
 import type { Draft, LocalUpload, Pending } from "./storage";
 type Epoch = RefObject<number>;
+/** Dispatched on window by the open chat's event stream when the person's draft gets a new revision. */
+export const DRAFT_EVENT = "agent-interface:draft";
+export type DraftNotice = { botId: string; revision: number };
+// Only a stream that fails unnoticed leaves this poll to catch another device's edit.
+export const DRAFT_POLL_MS = 30_000;
 type SetDraft = (update: (current: Draft) => Draft) => void;
-const draftPath = (botId: string) => `/bots/${encodeURIComponent(botId)}/draft`;
 // Keepalive requests in flight share a 64 KiB budget, and the browser rejects one over it. A
 // save that does not fit is sent as an ordinary request instead.
 const KEEPALIVE_BYTES = 60_000;
@@ -46,8 +51,9 @@ async function saveDraft(options: {
   if (budgeted) keepaliveBytes += bytes;
   try {
     server = savedDraft(await (budgeted
-      ? write<SavedDraft>(draftPath(botId), body, "PUT", { keepalive: true })
-      : write<SavedDraft>(draftPath(botId), body, "PUT")));
+      // request() has no keepalive option, so this one save writes to the same route by hand.
+      ? write<ApiResponse<"PUT /bots/:id/draft">>(routeUrl("PUT /bots/:id/draft", { id: botId }), body, "PUT", { keepalive: true })
+      : request("PUT /bots/:id/draft", { params: { id: botId }, body })));
   } catch (e) {
     if (!(e instanceof ApiError && e.code === "draft_conflict")) {
       // A failed or timed-out save leaves the copy unsaved: check the rule again after a backoff.
@@ -104,16 +110,18 @@ export function useDraft({ botId, userId, identityEpoch, setError }: {
     // the page is shown: it may have been edited or sent from another device since.
     let draftLoaded = false;
     let loadingDraft = false;
+    // A notice or poll during a read may announce a newer revision than that read returns.
+    let loadAgain = false;
     // Restoring the cached copy is not an edit: it keeps its own sequence, so a copy that was sent
     // is still the sent copy after a reload or a switch back.
     setDraftState({ ...(cached || { text: "", attachments: [] }), botId, userId });
     if (cached) setDraftReady(true);
     // Personal drafts remain available even when the separate executor is down.
     const loadDraft = async () => {
-      if (loadingDraft) return;
+      if (loadingDraft) { loadAgain = true; return; }
       loadingDraft = true;
       try {
-        const saved = savedDraft(await api<SavedDraft | null>(draftPath(botId)));
+        const saved = savedDraft(await request("GET /bots/:id/draft", { params: { id: botId } }));
         if (!live) return;
         draftLoaded = true;
         setDraft(current => mergeDraft(current, saved, { settled: !inFlight.has(draftKey(userId, botId)) }).draft);
@@ -125,22 +133,32 @@ export function useDraft({ botId, userId, identityEpoch, setError }: {
         if (live && !draftLoaded && !cached?.dirty) setError(`Your saved draft could not be loaded. Retrying. ${(e as Error).message}`);
       } finally {
         loadingDraft = false;
+        if (loadAgain && live) { loadAgain = false; void loadDraft(); }
       }
     };
     void loadDraft();
     const wake = () => {
       if (navigator.onLine !== false && document.visibilityState !== "hidden") void loadDraft();
     };
-    const timer = setInterval(wake, 1500);
+    // The chat's event stream announces each new revision; a copy that already has it skips the read.
+    const announced = (event: Event) => {
+      const { botId: changed, revision } = (event as CustomEvent<DraftNotice>).detail;
+      const shown = latestDraft.current;
+      if (changed !== botId || shown.botId !== botId || shown.userId !== userId) return;
+      if (!Number.isSafeInteger(revision) || draftLoaded && revision <= (shown.baseRevision ?? 0)) return;
+      wake();
+    };
+    // Change notices drive updates. This slow poll covers a stream that fails unnoticed.
+    const stopPolling = pollWhileVisible(wake, DRAFT_POLL_MS);
+    window.addEventListener(DRAFT_EVENT, announced);
     window.addEventListener("online", wake);
     window.addEventListener("agent-interface:reconnect", wake);
-    document.addEventListener("visibilitychange", wake);
     return () => {
       live = false;
-      clearInterval(timer);
+      stopPolling();
+      window.removeEventListener(DRAFT_EVENT, announced);
       window.removeEventListener("online", wake);
       window.removeEventListener("agent-interface:reconnect", wake);
-      document.removeEventListener("visibilitychange", wake);
     };
   }, [botId, userId]);
   const latestDraft = useRef(draft);
@@ -174,7 +192,7 @@ export function useDraft({ botId, userId, identityEpoch, setError }: {
     const key = draftKey(uploadUser, uploadBot);
     let saved = localRead<Draft>(key);
     if (!saved) {
-      const loaded = savedDraft(await api<SavedDraft | null>(draftPath(uploadBot)));
+      const loaded = savedDraft(await request("GET /bots/:id/draft", { params: { id: uploadBot } }));
       // They may have come back while the saved draft loaded.
       await settle();
       if (!live()) return false;
@@ -191,7 +209,8 @@ export function useDraft({ botId, userId, identityEpoch, setError }: {
     if (controller.signal.aborted || epoch !== identityEpoch.current) return;
     patch(item.id, { status: "uploading", progress: 0, error: undefined });
     try {
-      const result = await uploadFile<FileRef>(`/bots/${encodeURIComponent(item.botId)}/uploads`, item.file, {
+      // Multipart, so the mapped route is posted through uploadFile.
+      const result = await uploadFile<ApiResponse<"POST /bots/:id/uploads">>(routeUrl("POST /bots/:id/uploads", { id: item.botId }), item.file, {
         signal: controller.signal,
         onProgress: sent => patch(item.id, sent >= 1 ? { progress: 1, status: "processing" } : { progress: sent }),
       });
@@ -261,7 +280,9 @@ export function useDraft({ botId, userId, identityEpoch, setError }: {
   }, [draft, previews]);
   // A failed file still blocks sending, so a message never goes out quietly missing it.
   const uploading = uploads.some(item => item.botId === botId);
-  return { draft, setDraft, draftReady, uploads: uploads.filter(item => item.botId === botId), previews, uploading, upload, retryUpload, cancelUpload, clearUploads };
+  // One array per change, so the composer is not handed a new list every render.
+  const shownUploads = useMemo(() => uploads.filter(item => item.botId === botId), [uploads, botId]);
+  return { draft, setDraft, draftReady, uploads: shownUploads, previews, uploading, upload, retryUpload, cancelUpload, clearUploads };
 }
 export function useDraftPersistence({ draft, setDraft, draftReady, botId, userId, identityEpoch, offline, appUnavailable, pending }: {
   draft: Draft;

@@ -1,8 +1,16 @@
-import type { ExperienceRequest, ExperienceResponse } from "./experience.js";
-import type { IntegrationRequest, IntegrationCatalog, IntegrationConnection, IntegrationFlow } from "./integrations.js";
-import type { ComputerRequest, ComputerStatus, ComputerAttachment } from "./computer.js";
+import type { AutomationRequester } from './automation.js';
+import type { ExperienceRequester } from "./experience.js";
+import type { IntegrationRequest, IntegrationCatalog, IntegrationConnection, IntegrationFlow, ConnectionRequestSettle, ConnectionRequestResult, ConnectionRequest } from "./integrations.js";
+import type { ComputerRequest, ComputerStatus, ComputerAttachment, ComputerHandoff, TerminalRequest } from "./computer.js";
 import type { SecureRequest, VaultRequest, VaultResponse } from "./vault.js";
 import type { GroupRequest, GroupResponse, RoutineOutput, RoutineResult } from './collaboration.js';
+import type { TalkSession, TalkVoice } from "./voice.js";
+/** What the app chooses in a Realtime session. The Hermes add-on fixes the model's other settings. */
+export interface RealtimeSessionInput {
+  voice: TalkVoice;
+  instructions: string;
+  tools: { type: "function"; name: string; description: string; parameters: Record<string, unknown> }[];
+}
 export type ActivityState =
   | "idle"
   | "thinking"
@@ -37,8 +45,28 @@ export const avatarShapes = [
   "sun",
 ] as const;
 export type AvatarShape = (typeof avatarShapes)[number];
-export type Eyes = "round" | "oval" | "visor" | "spark";
-export type Accessory = "none" | "hat" | "glasses";
+/** Mascot characters in picker order. ios/AgentInterface/Models.swift mirrors both lists. */
+export const everydayFamilies = ["bear", "fox", "sprout", "panda", "raccoon", "owl", "cactus", "dinosaur"] as const;
+/** Listed under their own "Seasonal" heading, in calendar order from spring. */
+export const seasonalFamilies = [
+  "leprechaun",
+  "bunny",
+  "eagle",
+  "pumpkin",
+  "bat",
+  "ghost",
+  "turkey",
+  "santa",
+  "rudolph",
+  "snowman",
+] as const;
+export const mascotFamilies = [...everydayFamilies, ...seasonalFamilies] as const;
+export type MascotFamily = (typeof mascotFamilies)[number];
+export type SeasonalFamily = (typeof seasonalFamilies)[number];
+export const avatarEyes = ["round", "oval", "visor", "spark"] as const;
+export type Eyes = (typeof avatarEyes)[number];
+export const avatarAccessories = ["none", "hat", "glasses"] as const;
+export type Accessory = (typeof avatarAccessories)[number];
 export type Avatar =
   | {
       mode: "geometric";
@@ -52,7 +80,7 @@ export type Avatar =
     }
   | {
       mode: "mascot";
-      family: "sprout" | "fox" | "bear" | "pumpkin" | "santa" | "rudolph" | "turkey" | "bunny";
+      family: MascotFamily;
       color: string;
       eyes: Eyes;
       accessory: Accessory;
@@ -77,6 +105,8 @@ export interface Preferences {
   followBots: string[];
   startPage?: "today" | "assistant";
   notifications?: { timezone: string; quietStart?: string; quietEnd?: string; batchMinutes: number };
+  /** Routines whose runs this person keeps out of their assistant's chat. Runs show by default. */
+  hiddenRoutineRuns?: { botId: string; routineId: string }[];
 }
 export const reasoningLevels = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"] as const;
 export const serviceTiers = ["normal", "fast", "ultrafast"] as const;
@@ -120,7 +150,9 @@ export type CapabilityKey =
   | "imageGeneration"
   | "stop"
   | "portraitGeneration"
-  | "avatarMetadata";
+  | "avatarMetadata"
+  /** Live Talk: Hermes can mint OpenAI Realtime sessions on its ChatGPT sign-in. */
+  | "liveVoice";
 export type Capabilities = Record<CapabilityKey, Capability>;
 export interface Bot {
   id: string;
@@ -128,17 +160,28 @@ export interface Bot {
   description?: string;
   instructions?: string;
   model: string;
+  /** A readable name for the model, filled by the server. Clients show it as given. */
+  modelName?: string;
   provider?: string;
   enabledMcpServers?: string[];
+  /** Every MCP server configured for this profile, enabled or not. Detail only. */
+  availableMcpServers?: string[];
   shared: boolean;
   ownerId?: string;
   avatar?: Avatar;
+  /** The Realtime voice it speaks with in live Talk. Unset means the default, marin. */
+  voice?: TalkVoice;
   enabledTools?: string[];
   enabledSkills?: string[];
   sessionId?: string;
   activity: ActivityState;
   /** Latest canonical message preview from Hermes's roster, for the home list. */
   lastMessage?: { text: string; at?: string };
+  /**
+   * The latest message arrived after this person last read a chat they have opened before.
+   * A chat they have never opened is not marked, so a new member's home starts quiet.
+   */
+  unread?: boolean;
 }
 /** The Hermes profile ID a new assistant gets from its name. */
 export const botIdFor = (name: string) => name.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-|-$/g, "");
@@ -219,16 +262,25 @@ export interface Activity {
 }
 export interface AttentionRequest {
   id: string;
-  kind: "clarify" | "official" | "secure";
+  kind: "clarify" | "official" | "secure" | "computer" | "terminal" | "connection";
   title: string;
   detail: string;
-  questions?: { id: string; prompt: string; options?: string[] }[];
+  /** `multiple` lets a person choose several options, sent as one comma-separated answer. Absent means one. */
+  questions?: { id: string; prompt: string; options?: string[]; multiple?: boolean }[];
   secure?: SecureRequest;
+  computer?: ComputerHandoff;
+  terminal?: TerminalRequest;
+  connection?: ConnectionRequest;
 }
 export interface Conversation {
   attention?: AttentionRequest[];
   botId: string;
   sessionId?: string;
+  /**
+   * The live Hermes session whose open requests `approvals` and `attention` list, which
+   * discovered events name as `sessionId`. Server-side only; clients never receive it.
+   */
+  requestSessionId?: string;
   messages: Message[];
   activity: Activity;
   approvals: Approval[];
@@ -248,11 +300,37 @@ export interface Inflight {
   activity: Activity;
   toolCalls: ToolCall[];
 }
+/**
+ * What `event: inflight-delta` carries on a stream opened with `?inflight=2`: growth of the reply
+ * the stream last sent whole. The base lengths say how much of each field the sender had already
+ * sent, so a receiver holding anything else must reload. `toolCalls` is present only when it changed.
+ */
+export interface InflightDelta {
+  botId: string;
+  messageId: string;
+  baseTextLength: number;
+  baseReasoningLength: number;
+  appendText?: string;
+  appendReasoning?: string;
+  activity: Activity;
+  toolCalls?: ToolCall[];
+}
 export interface ConversationOptions {
   /** The app's history window, cut by the runtime when it can. */
   window?: { start?: string; turns?: number };
   /** false reads current state, approvals and requests without history, as write checks need. */
   history?: false;
+  /** Filled by the runtime with how it served this read, for Server-Timing. Never part of the result. */
+  timing?: ReadTiming;
+}
+/** Where one conversation read spent its time, in milliseconds. */
+export interface ReadTiming {
+  /** The add-on open's round trip, when this read made one. */
+  hermes?: number;
+  /** The add-on's own phases, when it reports them. */
+  addon?: Record<string, number>;
+  /** Whether the read joined another reader's read instead of asking Hermes. */
+  shared?: boolean;
 }
 export interface Tool {
   id: string;
@@ -275,6 +353,27 @@ export interface Routine {
   schedule: string;
   enabled: boolean;
   recipientIds?: string[];
+  /**
+   * Group chats this routine also posts its results in, as a message from the routine. Only rooms the
+   * viewer can open are listed; saving keeps the ones they cannot see. Undefined leaves them unchanged.
+   */
+  roomIds?: string[];
+  /**
+   * Server only, never sent to clients: the delivery fields as Hermes stores them, which the server reads
+   * (src/server/delivery-targets.ts) to check every group chat the routine posts in.
+   */
+  delivery?: { deliver?: unknown; failure_deliver?: unknown; origin?: unknown };
+  skills?: string[];
+  model?: string | null;
+  provider?: string | null;
+  /** null inherits profile tools; [] is a native zero-tool allowlist. */
+  enabledToolsets?: string[] | null;
+  script?: string | null;
+  noAgent?: boolean;
+  /** Native job IDs in this profile, plus "self" for continuity. */
+  contextFrom?: string[] | null;
+  /** A run is in flight now, which Stop run can end. Read only. */
+  running?: boolean;
   nextRunAt?: string;
   lastRunAt?: string;
   lastStatus?: string;
@@ -289,6 +388,8 @@ export interface Bootstrap {
   capabilities: Capabilities;
   connection: RuntimeStatus;
   csrfToken: string | null;
+  /** This person's private key for deriving form request IDs; see formRequestId. Absent from an older server. */
+  formKey?: string;
   vapidPublicKey?: string;
   /** The newest distributed iOS build, when the host advertises one. */
   nativeApp?: { latestBuild: number; updateUrl: string };
@@ -302,6 +403,8 @@ export interface Submission {
   senderId: string;
   /** The draft revision this message was written on. Older clients omit it. */
   draftBaseRevision?: number;
+  /** The user message this one retries. A retry never reads, merges or clears the sender's draft. */
+  retryOf?: string;
 }
 export interface SubmissionReceipt {
   requestId: string;
@@ -309,6 +412,12 @@ export interface SubmissionReceipt {
   runId?: string;
   messageId?: string;
   message?: string;
+  /**
+   * The text the server recorded under this request ID, from `GET /submissions/:id` and only to the
+   * person who sent it. A form card compares it with its own answers, since another tab or device
+   * may have sent different answers under the same derived ID.
+   */
+  text?: string;
 }
 export interface RuntimeEvent {
   id: string;
@@ -316,7 +425,11 @@ export interface RuntimeEvent {
   botId: string;
   runId?: string;
   routineId?: string;
+  /** The live Hermes session the event happened in, as `Conversation.requestSessionId` names it. */
+  sessionId?: string;
   kind: "completed" | "approval" | "failed" | "interrupted" | "activity";
+  /** The pending approval an approval event asked about, from add-ons that report it. */
+  approvalId?: string;
   title: string;
   body?: string;
   occurredAt: string;
@@ -329,6 +442,8 @@ export interface RuntimeStatus {
   connected: boolean;
   code?: "not_configured" | "invalid_config" | "connecting" | "unreachable" | "unauthorized" | "addon_missing" | "incompatible" | "ready" | "reconnecting" | "closed";
   version?: string;
+  /** ISO 8601 commit time of `version`, when the Hermes updater has recorded it. */
+  revisionDate?: string;
   detail?: string;
   address?: string;
   retryAt?: string;
@@ -336,18 +451,23 @@ export interface RuntimeStatus {
 }
 export interface Runtime {
   setRoutineEnabled?(botId: string, routineId: string, enabled: boolean): Promise<void>;
+  /** Stops the routine's run in flight, leaving its schedule alone. Whether a run was stopped. */
+  stopRoutineRun?(botId: string, routineId: string): Promise<boolean>;
   routineResults?(botId: string, routineId: string): Promise<RoutineResult[]>;
   routineOutput?(botId: string, routineId: string, resultId: string): Promise<RoutineOutput>;
   groupRequest?(input: GroupRequest): Promise<GroupResponse>;
   transcribeVoice?(botId: string, input: { mime: string; data: Buffer }): Promise<{ text: string; provider?: string }>;
   synthesizeVoice?(botId: string, text: string): Promise<{ data: Buffer; mime: string; provider?: string }>;
-  experienceRequest?(input: ExperienceRequest): Promise<ExperienceResponse>;
+  automationRequest?: AutomationRequester;
+  experienceRequest?: ExperienceRequester;
   vaultRequest?(input: VaultRequest): Promise<VaultResponse>;
   computerRequest?(input: ComputerRequest): Promise<ComputerStatus | ComputerAttachment>;
   connectComputerDisplay?(attachment: ComputerAttachment): import("ws").WebSocket;
   inferenceSettings?(botId: string, update?: Partial<InferenceSettings>): Promise<InferenceSettings>;
   modelOptions?(profile?: string): Promise<ModelCatalog>;
   integrationRequest?(input: IntegrationRequest): Promise<IntegrationCatalog | IntegrationConnection | IntegrationFlow | {ok: true}>;
+  /** Continue or Not now on an assistant's connection request. Hermes checks it belongs to that profile's conversation. */
+  connectionRequest?(input: ConnectionRequestSettle): Promise<ConnectionRequestResult>;
   status(): Promise<RuntimeStatus>;
   reconnect?(): Promise<RuntimeStatus>;
   capabilities(): Promise<Capabilities>;
@@ -360,6 +480,10 @@ export interface Runtime {
   stop(botId: string): Promise<void>;
   generatePortrait(botId: string, prompt: string): Promise<FileRef>;
   setAvatar?(botId: string, avatar: Avatar): Promise<void>;
+  /** Saves the Talk voice with the profile, beside its avatar. */
+  setVoice?(botId: string, voice: TalkVoice): Promise<void>;
+  /** A Realtime client secret on Hermes's ChatGPT sign-in, for a session the add-on completes. */
+  realtimeSession?(input: RealtimeSessionInput): Promise<TalkSession>;
   conversation(botId: string, options?: ConversationOptions): Promise<Conversation>;
   /** An inflight notice patches live state; an omitted kind means refetch. Unsubscribe with the returned function. */
   watch?(botId: string, changed: (kind?: "inflight") => void): () => void;
@@ -392,7 +516,8 @@ export interface Runtime {
   setSkills(botId: string, ids: string[]): Promise<void>;
   routines(): Promise<Routine[]>;
   saveRoutine(input: Omit<Routine, "id">, id?: string): Promise<Routine>;
-  deleteRoutine(id: string): Promise<void>;
+  /** `botId` names the assistant whose job this is: Hermes lets several hold one ID. */
+  deleteRoutine(id: string, botId: string): Promise<void>;
   discoverEvents(cursor: string): Promise<RuntimeDiscovery>;
   close(): Promise<void>;
 }

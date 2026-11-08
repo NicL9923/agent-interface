@@ -9,18 +9,36 @@ from pathlib import Path
 import tempfile
 import threading
 import time
+import socket
 import subprocess
 import sys
 import types
 import unittest
 from unittest.mock import Mock, patch
 
-spec = importlib.util.spec_from_file_location("computer", Path(__file__).resolve().parents[1] / "src/hermes/computer.py")
-computer = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(computer)
-spec = importlib.util.spec_from_file_location("computer_host", Path(__file__).resolve().parents[1] / "src/hermes/computer_host.py")
-computer_host = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(computer_host)
+from support import load_source
+
+computer = load_source("src/hermes/computer.py", "computer")
+computer_host = load_source("src/hermes/computer_host.py", "computer_host")
+# Set HERMES_SOURCE to a Hermes checkout, run with an interpreter holding its dependencies, to check
+# the shared browser's metadata floor against that revision's real URL policy and CDP parameter scan.
+SOURCE = os.environ.get("HERMES_SOURCE")
+
+
+def native_url_policy():
+    """Hermes's real modules, imported once and then removed from sys.modules so other tests keep their stand-ins."""
+    before = set(sys.modules)
+    sys.path.insert(0, SOURCE)
+    try:
+        from tools import browser_cdp_tool, browser_url_policy, url_safety
+    finally:
+        sys.path.remove(SOURCE)
+        for name in set(sys.modules) - before:
+            del sys.modules[name]
+    return dict(browser_cdp_tool=browser_cdp_tool, browser_url_policy=browser_url_policy, url_safety=url_safety)
+
+
+NATIVE = native_url_policy() if SOURCE else {}
 
 
 class TestLease:
@@ -450,6 +468,7 @@ class LocalBrowserTests(ComputerFixture):
 
 
 class InstallToolsTests(ComputerFixture):
+    modern = False
     def setUp(self):
         super().setUp()
         noop = lambda *a, **k: None
@@ -462,8 +481,10 @@ class InstallToolsTests(ComputerFixture):
             TerminalPolicyUnavailable=ValueError)
         self.terminal = types.SimpleNamespace(_ensure_terminal_env_bridged=noop)
         self.registry = types.SimpleNamespace(dispatch=self.native_dispatch)
-        self.cdp = types.SimpleNamespace(_get_cdp_override_raw=noop)
-        self.cloud = types.SimpleNamespace(_is_local_backend=self.native_local)
+        self.cdp_name = "get_cdp_override_raw" if self.modern else "_get_cdp_override_raw"
+        self.local_name = "is_local_backend" if self.modern else "_is_local_backend"
+        self.cdp = types.SimpleNamespace(**{self.cdp_name: noop, "get_dialog_policy_config": noop})
+        self.cloud = types.SimpleNamespace(**{self.local_name: self.native_local})
         runtime = types.SimpleNamespace(start=noop, desktop_env=noop, stop_if_idle=noop)
         lease = TestLease()
         lease.human_holds = noop; lease.viewer_may_send_input = noop
@@ -472,15 +493,25 @@ class InstallToolsTests(ComputerFixture):
             "browser_tool_cloud": self.cloud,
             "browser_tool_session": types.SimpleNamespace(_run_browser_command=noop, _shares_bot_desktop_browser=noop),
             "browser_tool_lifecycle": types.SimpleNamespace(_cleanup_single_browser_session=noop),
-            "browser_use_cli": types.SimpleNamespace(_route_backend=noop, _set_cdp_env=noop, _run_cli_killing_process_group=noop),
+            "browser_use_cli": types.SimpleNamespace(_route_backend=noop, _set_cdp_env=noop, _run_cli_killing_process_group=noop,
+                _OWN_TAB_PREAMBLE="native", _BOT_DESKTOP_BROWSER_SENTINEL="_HERMES_BU_BOT_DESKTOP_BROWSER"),
             "browser_extension_router": types.SimpleNamespace(routed_browser_handler=noop),
             "browser_cdp_tool": types.SimpleNamespace(),
             "terminal_scope": self.terminal_scope, "terminal_tool": self.terminal,
             "url_safety": types.SimpleNamespace(is_always_blocked_url=Mock(return_value=False)),
             "browser_tool_eval_policy": types.SimpleNamespace(_JS_URL_LITERAL_RE=computer.re.compile(r"https?://[^\s'\"]+")),
         }
+        if self.modern:
+            modules = {key: value for key, value in modules.items() if not key.startswith("browser_tool") and key != "browser_extension_router"}
+            modules.update(browser_session=types.SimpleNamespace(shares_bot_desktop_browser=noop),
+                browser_session_cdp=self.cdp, browser_session_cloud=self.cloud,
+                browser_url_policy=types.SimpleNamespace(url_literals=lambda value: computer.re.findall(r"https?://[^\s'\"]+", value),
+                    literal_targets_metadata=Mock(return_value=False)),
+                browser_cdp_tool=types.SimpleNamespace(_fetched_param_urls=Mock(return_value=[]), _TEXT_INPUT_METHOD_PREFIX="Input.",
+                    _CDP_NON_FETCHING_METHODS=frozenset({"Network.setBlockedURLs"})))
         self.native_modules = modules
         fake_modules = {"tools": types.SimpleNamespace(**modules),
+            **({"tools.browser_session": modules["browser_session"]} if self.modern else {}),
             "tools.registry": types.SimpleNamespace(registry=self.registry),
             "tools.bot_desktop": types.SimpleNamespace(runtime=runtime, lease=lease, placement=types.SimpleNamespace()),
             "tools.browser_supervisor_dialogs": types.SimpleNamespace(
@@ -494,33 +525,42 @@ class InstallToolsTests(ComputerFixture):
     def test_matching_override_calls_profile_policy_other_overrides_preserve_native_result(self):
         installed = computer.install_tools()
         with patch.object(installed, "profile_local_browser", return_value=False) as policy:
-            self.assertIs(self.cloud._is_local_backend(), False)
+            self.assertIs(getattr(self.cloud, self.local_name)(), False)
             policy.assert_called_once_with()
             self.native_local.assert_not_called()
             policy.reset_mock()
             for override in (None, "", "http://127.0.0.1:1", "http://external.example:9222"):
-                with patch.object(self.cdp, "_get_cdp_override_raw", return_value=override):
-                    self.assertEqual(self.cloud._is_local_backend(), "native decision")
+                with patch.object(self.cdp, self.cdp_name, return_value=override):
+                    self.assertEqual(getattr(self.cloud, self.local_name)(), "native decision")
             policy.assert_not_called()
             self.assertEqual(self.native_local.call_count, 4)
 
     def test_missing_profile_policy_seams_refuse_install_before_mutating_native(self):
-        for module, name in ((self.config, "read_raw_config"), (self.constants, "get_hermes_home_override"),
-                             (self.terminal_scope, "get_terminal_scope"), (self.terminal_scope, "terminal_env"),
-                             (self.terminal_scope, "TerminalPolicyUnavailable"), (self.terminal, "_ensure_terminal_env_bridged")):
+        seams = [(self.config, "read_raw_config"), (self.constants, "get_hermes_home_override"),
+                 (self.terminal_scope, "get_terminal_scope"), (self.terminal_scope, "terminal_env"),
+                 (self.terminal_scope, "TerminalPolicyUnavailable"), (self.terminal, "_ensure_terminal_env_bridged")]
+        if self.modern:
+            seams += [(self.native_modules["browser_url_policy"], "url_literals"), (self.cdp, "get_dialog_policy_config"),
+                      (self.native_modules["browser_session"], "shares_bot_desktop_browser"),
+                      (self.native_modules["browser_url_policy"], "literal_targets_metadata"),
+                      (self.native_modules["browser_cdp_tool"], "_fetched_param_urls"),
+                      (self.native_modules["browser_cdp_tool"], "_TEXT_INPUT_METHOD_PREFIX"),
+                      (self.native_modules["browser_cdp_tool"], "_CDP_NON_FETCHING_METHODS")]
+        for module, name in seams:
             with self.subTest(name=name), patch.object(module, name, None):
                 with self.assertRaisesRegex(computer.ComputerError, "require qualification"):
                     computer.install_tools()
-                self.assertIs(self.cloud._is_local_backend, self.native_local)
+                self.assertIs(getattr(self.cloud, self.local_name), self.native_local)
                 self.assertFalse(hasattr(self.registry, "_agent_interface_computer"))
 
     def test_metadata_dispatch_uses_native_matcher_and_keeps_private_literals_allowed(self):
         installed = computer.install_tools()
         matcher = self.native_modules["url_safety"].is_always_blocked_url
         matcher.side_effect = lambda url: "metadata.google.internal" in url
-        cases = (("browser_console", {"expression": 'fetch("http://metadata.google.internal")'}),
-                 ("browser_cdp", {"method": "Page.navigate", "params": {"url": "http://metadata.google.internal"}}),
-                 ("browser_cdp", {"method": "Runtime.evaluate", "params": {"expression": 'fetch("http://metadata.google.internal")'}}))
+        cases = (("browser_console", {"expression": 'fetch("http://metadata.google.internal")'}),)
+        if not self.modern:
+            cases += (("browser_cdp", {"method": "Page.navigate", "params": {"url": "http://metadata.google.internal"}}),
+                      ("browser_cdp", {"method": "Runtime.evaluate", "params": {"expression": 'fetch("http://metadata.google.internal")'}}))
         with patch.object(installed, "bot_operation", return_value=contextlib.nullcontext()):
             for name, args in cases:
                 result = json.loads(self.registry.dispatch(name, args))
@@ -529,6 +569,356 @@ class InstallToolsTests(ComputerFixture):
             self.native_dispatch.assert_not_called()
             self.assertEqual(self.registry.dispatch("browser_console", {"expression": 'fetch("https://100.100.0.5")'}), "native dispatch")
         self.assertIn(unittest.mock.call("https://100.100.0.5"), matcher.call_args_list)
+
+    def test_override_session_shares_human_control_fence(self):
+        computer.install_tools()
+        session = self.native_modules["browser_session" if self.modern else "browser_tool_session"]
+        shared = getattr(session, "shares_bot_desktop_browser" if self.modern else "_shares_bot_desktop_browser")
+        self.assertTrue(shared({"features": {"cdp_override": True}}))
+
+    def test_missing_harness_preamble_refuses_before_mutating_native(self):
+        del self.native_modules["browser_use_cli"]._OWN_TAB_PREAMBLE
+        with self.assertRaisesRegex(computer.ComputerError, "require qualification"):
+            computer.install_tools()
+        self.assertIs(getattr(self.cloud, self.local_name), self.native_local)
+        self.assertFalse(hasattr(self.registry, "_agent_interface_computer"))
+
+    def test_reload_preserves_pending_recovery_record(self):
+        installed = computer.install_tools()
+        pending = {"endpoint": "pending recovery"}
+        installed._write("computer-recovery.json", pending)
+        installed._run_harness_cli = Mock(return_value="reloaded")
+        result = self.native_modules["browser_use_cli"]._run_cli_killing_process_group(
+            ["python", "-m", "browser_harness", "--reload"], "", {}, 10)
+        self.assertEqual(result, "reloaded")
+        self.assertEqual(installed._read("computer-recovery.json", None), pending)
+        installed._run_harness_cli.assert_called_once_with(["python", "-m", "browser_harness", "--reload"], "", {}, 10)
+
+
+class ModernInstallToolsTests(InstallToolsTests):
+    modern = True
+
+    def dispatch_cdp(self, installed, method, params):
+        with patch.object(installed, "bot_operation", return_value=contextlib.nullcontext()):
+            return self.registry.dispatch("browser_cdp", {"method": method, "params": params})
+
+    def test_cdp_metadata_floor_judges_every_url_native_cdp_would_fetch(self):
+        installed = computer.install_tools()
+        scan = self.native_modules["browser_cdp_tool"]._fetched_param_urls
+        matcher = self.native_modules["browser_url_policy"].literal_targets_metadata
+        matcher.side_effect = lambda url: url.lstrip("/").startswith("169.254.169.254")
+        params = {"url": "https://downloads.example/file", "options": {"includeCredentials": False}}
+        scan.side_effect = lambda method, value: ["https://downloads.example/file", "//169.254.169.254/latest"]
+        result = json.loads(self.dispatch_cdp(installed, "Network.loadNetworkResource", params))
+        self.assertEqual((result["success"], result["error"]), (False, "Blocked: URL targets a cloud metadata endpoint"))
+        scan.assert_called_once_with("Network.loadNetworkResource", params)
+        self.native_dispatch.assert_not_called()
+        # Native leaves text input and block lists unscanned; private addresses stay native policy's call.
+        for urls in ([], ["http://100.100.0.5/"]):
+            scan.side_effect = lambda method, value, _urls=urls: _urls
+            self.assertEqual(self.dispatch_cdp(installed, "Network.setBlockedURLs", {"urls": ["*169.254.169.254*"]}), "native dispatch")
+        self.assertEqual(self.native_dispatch.call_count, 2)
+
+    # Special-scheme forms WHATWG parsing reads as an authority, which native's literal scan misses.
+    # Backslashes are as the CDP text holds them: "\\" in a JavaScript string, "\t" an escape.
+    SCHEME_COLON_FORMS = ("http:/169.254.169.254/latest/meta-data/", "HTTP:169.254.169.254/", "http:\\\\169.254.169.254\\\\latest",
+                          "http:\\/\\/169.254.169.254/", "ht\\ttp:/169.254.169.254/", "https:/user@169.254.169.254/", "ws:/169.254.169.254/")
+
+    def test_scheme_colon_hosts_read_each_authority_as_whatwg_does(self):
+        hosts = computer.scheme_colon_hosts
+        self.assertEqual(hosts('location.href = "http:/169.254.169.254/latest/meta-data/"'), ["169.254.169.254"])
+        self.assertEqual(hosts('fetch("http:\\\\169.254.169.254\\\\x")'), ["169.254.169.254"])
+        self.assertEqual(hosts('fetch("ht\\ttp:/169.254.169.254/")'), ["169.254.169.254"])
+        self.assertEqual(hosts('fetch("http:\\/\\/169.254.169.254/")'), ["169.254.169.254"])
+        # Userinfo runs to the last "@" before the path, and a bracketed host stays whole. CSS would
+        # end the first one at ")", so that reading comes back too.
+        self.assertEqual(hosts('fetch("http:/x)@169.254.169.254/")'), ["169.254.169.254", "x"])
+        self.assertEqual(hosts("@import url(http:/169.254.169.254);@media print{}"), ["media", "169.254.169.254"])
+        self.assertEqual(hosts('location.href="http:/x[abc]@[64:ff9b::a9fe:a9fe]/"'), ["[64:ff9b::a9fe:a9fe]"])
+        self.assertEqual(hosts('fetch("https:/user:pw@[fd00:ec2::254]:80/")'), ["[fd00:ec2::254]:80"])
+        # An "@" after a quote or space may still be userinfo, so both readings come back.
+        self.assertEqual(hosts('fetch("http:/a b@169.254.169.254/")'), ["a", "169.254.169.254"])
+        # Not URLs. Every scheme occurrence is read, one inside another URL's query included.
+        self.assertEqual(hosts('const o = {https: true}; "see http: headers"; case "http:"'), [])
+        self.assertEqual(hosts('fetch("https://example.test/?next=http:/169.254.169.254/")'), ["example.test", "169.254.169.254"])
+
+    def test_cdp_metadata_floor_reads_scheme_colon_forms_in_every_fetching_method(self):
+        installed = computer.install_tools()
+        matcher = self.native_modules["browser_url_policy"].literal_targets_metadata
+        matcher.side_effect = lambda url: url.startswith("//") and url[2:].split("/")[0].rsplit("@", 1)[-1] == "169.254.169.254"
+        for form in self.SCHEME_COLON_FORMS:
+            for method, params in (("Runtime.evaluate", {"expression": f'location.href = "{form}"'}),
+                                   ("Runtime.callFunctionOn", {"functionDeclaration": f'function () {{ return fetch("{form}") }}'}),
+                                   ("Page.addScriptToEvaluateOnNewDocument", {"source": f'new Image().src = "{form}"'}),
+                                   ("Page.navigate", {"url": form}), ("Target.createTarget", {"url": form}),
+                                   ("Network.loadNetworkResource", {"url": form, "options": {}})):
+                with self.subTest(method=method, form=form):
+                    result = json.loads(self.dispatch_cdp(installed, method, params))
+                    self.assertEqual((result["success"], result["error"]), (False, "Blocked: URL targets a cloud metadata endpoint"))
+        self.native_dispatch.assert_not_called()
+        for method, params in (("Input.insertText", {"text": "http:/169.254.169.254/"}), ("Network.setBlockedURLs", {"urls": ["http:/169.254.169.254/*"]}),
+                               ("Runtime.evaluate", {"expression": 'fetch("http:/100.100.0.5/")'})):
+            self.assertEqual(self.dispatch_cdp(installed, method, params), "native dispatch")
+
+    def dispatch_on_fetching_paths(self, installed, text):
+        """The dispatch result for text in each CDP path that runs page script."""
+        return {method: self.dispatch_cdp(installed, method, params) for method, params in (
+            ("Runtime.evaluate", {"expression": text}),
+            ("Runtime.callFunctionOn", {"functionDeclaration": f"function () {{ {text} }}"}),
+            ("Page.addScriptToEvaluateOnNewDocument", {"source": text}))}
+
+    # Ordinary script syntax that only looks like a scheme. Its "host" is one WHATWG rejects, or no host.
+    SCHEME_LOOKALIKES = ("const x={https:[]};", "JSON.stringify({http:[],https:[]})", "const o = {http:1};", "const v = a?https:b;",
+                         'switch (protocol) { case "http:": break; }', "const r = {http:[1,2], wss:[]};", "label: { https:{} }")
+
+    def test_object_json_and_label_syntax_that_looks_like_a_scheme_passes(self):
+        installed = computer.install_tools()
+        matcher = self.native_modules["browser_url_policy"].literal_targets_metadata
+        matcher.side_effect = lambda url: url.startswith("//") and url[2:].split("/")[0].rsplit("@", 1)[-1] in ("169.254.169.254", "[fd00:ec2::254]")
+        for text in self.SCHEME_LOOKALIKES:
+            with self.subTest(text=text):
+                self.assertEqual(set(self.dispatch_on_fetching_paths(installed, text).values()), {"native dispatch"})
+
+    def stand_in_metadata_matcher(self):
+        """Native's matcher, reduced to the literal metadata hosts the tests use."""
+        matcher = self.native_modules["browser_url_policy"].literal_targets_metadata
+        matcher.side_effect = lambda url: url.startswith("//") and url[2:].split("/")[0] in ("169.254.169.254", "[fd00:ec2::254]", "metadata.google.internal")
+
+    def assert_blocked_on_fetching_paths(self, installed, forms):
+        for form in forms:
+            for method, result in self.dispatch_on_fetching_paths(installed, f'location.href = "{form}"').items():
+                with self.subTest(method=method, form=form):
+                    self.assertEqual(json.loads(result), {"success": False, "error": "Blocked: URL targets a cloud metadata endpoint"})
+        self.native_dispatch.assert_not_called()
+
+    def test_brackets_in_userinfo_never_truncate_the_host(self):
+        installed = computer.install_tools()
+        self.stand_in_metadata_matcher()
+        self.assert_blocked_on_fetching_paths(installed, (
+            "http:/x[abc]@[64:ff9b::a9fe:a9fe]/", "http:/x[abc]@[::169.254.169.254]/", "http:/x[abc]@[2002:a9fe:a9fe::]/",
+            "http:/x]@[fd00:ec2::254]/", "http:/[a]b@169.254.169.254/", "https:/a b@169.254.169.254/"))
+
+    # WHATWG domain to ASCII is UTS 46: these all name a metadata host.
+    UTS46_FORMS = ("http:/%E1%B4%B9etadata.google.internal/", "http:/%F0%9F%AF%B169.254.169.254/",
+                   "http:/\U0001d7cf\U0001d7d4\U0001d7d7.254.169.254/", "http:/\uff11\uff16\uff19\uff0e\uff12\uff15\uff14.169.254/",
+                   "http:/169\u3002254\u3002169\u3002254/", "http:/\u1d39etadata.google.internal/")
+
+    @unittest.skipUnless(importlib.util.find_spec("idna"), "UTS 46 mapping needs the idna package Hermes ships")
+    def test_non_ascii_hosts_are_mapped_as_whatwg_maps_them(self):
+        installed = computer.install_tools()
+        self.stand_in_metadata_matcher()
+        self.assert_blocked_on_fetching_paths(installed, self.UTS46_FORMS)
+        # WHATWG keeps the small capital M (U+1D0D) as its own letter, so that host isn't metadata.google.internal.
+        for form in ("http:/b\u00fccher.example/", "http:/\u1d0detadata.google.internal/"):
+            with self.subTest(form=form):
+                self.assertEqual(self.dispatch_cdp(installed, "Runtime.evaluate", {"expression": f'fetch("{form}")'}), "native dispatch")
+
+    def test_without_idna_every_non_ascii_host_is_blocked_and_ascii_still_judged(self):
+        installed = computer.install_tools()
+        self.stand_in_metadata_matcher()
+        with patch.dict(sys.modules, {"idna": None}):
+            self.assert_blocked_on_fetching_paths(installed, self.UTS46_FORMS + ("http:/b\u00fccher.example/",))
+            for text in self.SCHEME_LOOKALIKES + ('fetch("http:/example.test/")',):
+                with self.subTest(text=text):
+                    self.assertEqual(set(self.dispatch_on_fetching_paths(installed, text).values()), {"native dispatch"})
+
+    def test_markup_and_css_end_a_url_at_their_own_punctuation(self):
+        installed = computer.install_tools()
+        self.stand_in_metadata_matcher()
+        self.assertEqual(computer.scheme_colon_hosts("@import url(http:/169.254.169.254);"), ["169.254.169.254);", "169.254.169.254"])
+        documents = ("<style>@import url(http:/169.254.169.254);</style>", "<div style=background:url(http:/169.254.169.254)>",
+                     "<style>@import 'http:/169.254.169.254';</style>", "<img src=http:/169.254.169.254>",
+                     "<img srcset=http:/169.254.169.254,x.png>", '<img srcset="x.png 1x, http:/[fd00:ec2::254] 2x">',
+                     "<style>a{background:url(http:/x@169.254.169.254)}</style>",
+                     # An "@" after the URL's end in CSS or markup is not userinfo.
+                     "<style>@import url(http:/169.254.169.254);@media print{body{color:red}}</style>",
+                     "<style>a{background:url(http:/169.254.169.254)}@font-face{font-family:x}</style>",
+                     "<img src=http:/169.254.169.254 alt=me@example.test>",
+                     "<img srcset=http:/169.254.169.254,x.png@2x>")
+        for document in documents:
+            for method, params in (("Page.setDocumentContent", {"frameId": "main", "html": document}),
+                                   ("Runtime.evaluate", {"expression": f"document.body.innerHTML = '{document}'"}),
+                                   ("Page.addScriptToEvaluateOnNewDocument", {"source": f"document.write(`{document}`)"})):
+                with self.subTest(method=method, document=document):
+                    self.assertEqual(json.loads(self.dispatch_cdp(installed, method, params)),
+                                     {"success": False, "error": "Blocked: URL targets a cloud metadata endpoint"})
+        self.native_dispatch.assert_not_called()
+        for text in self.SCHEME_LOOKALIKES:
+            with self.subTest(text=text):
+                self.assertEqual(set(self.dispatch_on_fetching_paths(installed, text).values()), {"native dispatch"})
+
+    # Several URLs in one text: an earlier URL never hides a later one.
+    MULTI_URL_TEXTS = (
+        "<style>@import url(https://example.test);@import/**/url(http:/169.254.169.254);@media print{}</style>",
+        "<style>a{background:url(https://example.test/a.png),url(http:/169.254.169.254)}</style>",
+        "<img srcset=https://example.test/a.png,http:/169.254.169.254>",
+        "<a href=https://example.test/?u=http:/169.254.169.254/>x</a>",
+        "const urls = ['https://example.test', 'http:/x', 'http:/169.254.169.254/'];",
+        "const urls = [\"https:example.test\",\"http:169.254.169.254\"];",
+        "const urls = 'https://example.test,http:/169.254.169.254'.split(',');",
+        "const urls = [`https://example.test/${path},http:/169.254.169.254`];")
+
+    def test_every_url_in_a_text_is_judged_on_its_own(self):
+        installed = computer.install_tools()
+        self.stand_in_metadata_matcher()
+        for text in self.MULTI_URL_TEXTS:
+            for method, params in (("Page.setDocumentContent", {"frameId": "main", "html": text}),
+                                   ("Runtime.evaluate", {"expression": text}),
+                                   ("Runtime.callFunctionOn", {"functionDeclaration": f"function () {{ {text} }}"}),
+                                   ("Page.addScriptToEvaluateOnNewDocument", {"source": text})):
+                with self.subTest(method=method, text=text):
+                    self.assertEqual(json.loads(self.dispatch_cdp(installed, method, params)),
+                                     {"success": False, "error": "Blocked: URL targets a cloud metadata endpoint"})
+        self.native_dispatch.assert_not_called()
+        for text in self.SCHEME_LOOKALIKES + ("const urls = ['https://example.test', 'http:/x', 'http:/[2001:db8::1]/'];",):
+            with self.subTest(text=text):
+                self.assertEqual(set(self.dispatch_on_fetching_paths(installed, text).values()), {"native dispatch"})
+
+    def test_a_megabyte_of_scheme_occurrences_scans_in_near_linear_time(self):
+        installed = computer.install_tools()
+        self.stand_in_metadata_matcher()
+        # The review's input: 58,252 schemes in one string, each authority running to its end.
+        text = "'" + ",".join(["http:example.test"] * 58252) + "'.split(',')"
+        self.assertGreater(len(text), 1_000_000)
+        began = time.perf_counter()
+        self.assertEqual(self.dispatch_cdp(installed, "Runtime.evaluate", {"expression": text}), "native dispatch")
+        # About 0.1 s on the Mac mini. The quadratic scan took over 10 s; 2 s leaves room for a slow runner.
+        self.assertLess(time.perf_counter() - began, 2.0)
+        poisoned = text.replace("'.split", ",http:/169.254.169.254'.split")
+        self.assertEqual(json.loads(self.dispatch_cdp(installed, "Runtime.evaluate", {"expression": poisoned})),
+                         {"success": False, "error": "Blocked: URL targets a cloud metadata endpoint"})
+
+    # Padding that WHATWG reads away: long leading zeros, percent-encoding and userinfo.
+    PADDED_FORMS = ("http:/0x" + "0" * 3000 + "a9fea9fe/", "http:/" + "%30" * 600 + "251.0376.0251.0376/",
+                    "http:/" + "a" * 5000 + "@169.254.169.254/", "http:/" + "0" * 2000 + "251.0376.0251.0376:80/")
+
+    def test_padding_cannot_hide_a_metadata_host(self):
+        installed = computer.install_tools()
+        self.stand_in_metadata_matcher()
+        self.assert_blocked_on_fetching_paths(installed, self.PADDED_FORMS)
+        # A long host holding a character no address spelling has can't name one, and an over-long
+        # bracket is rejected by WHATWG.
+        for form in ("http:/" + "a-" * 1000 + "example.test/", "http:/[" + "0" * 100 + "::1]/", "'http:" + "a," * 2000 + "b'"):
+            with self.subTest(form=form[:40]):
+                self.assertEqual(self.dispatch_cdp(installed, "Runtime.evaluate", {"expression": f'fetch("{form}")'}), "native dispatch")
+
+    def test_bracketed_mapped_and_unparseable_scheme_colon_hosts_fail_closed(self):
+        installed = computer.install_tools()
+        # A stand-in that knows only the two literal metadata hosts, as native would read them.
+        matcher = self.native_modules["browser_url_policy"].literal_targets_metadata
+        matcher.side_effect = lambda url: url.startswith("//") and url[2:].split("/")[0].rsplit("@", 1)[-1] in ("169.254.169.254", "[fd00:ec2::254]")
+        blocked = ("http:/x)@[fd00:ec2::254]/", "http:/x)@[::ffff:169.254.169.254]/", "http:/[::ffff:169.254.169.254]/",
+                   "http:/[::ffff:0:a9fe:a9fe]/", "http:/[64:ff9b::a9fe:a9fe]/", "http:/[::169.254.169.254]/", "http:/[2002:a9fe:a9fe::]/",
+                   "http:/169.254.169.254:80/", "http:/user:pw@169.254.169.254/", "http:/%31%36%39.254.169.254/",
+                   "http:/\uff11\uff16\uff19\uff0e254.169.254/")
+        for form in blocked:
+            for method, params in (("Runtime.evaluate", {"expression": f'location.href = "{form}"'}),
+                                   ("Runtime.callFunctionOn", {"functionDeclaration": f'function () {{ return fetch("{form}") }}'}),
+                                   ("Page.addScriptToEvaluateOnNewDocument", {"source": f'new Image().src = "{form}"'})):
+                with self.subTest(method=method, form=form):
+                    result = json.loads(self.dispatch_cdp(installed, method, params))
+                    self.assertEqual((result["success"], result["error"]), (False, "Blocked: URL targets a cloud metadata endpoint"))
+        self.native_dispatch.assert_not_called()
+        # WHATWG rejects an unclosed, empty or invalid bracketed host, an empty host and a bad port,
+        # so none of these can fetch anything.
+        for form in ("http:/[2001:db8::1]/", "http:/x)@[2001:db8::1]/", "http:/[::1]/", "http:/x)@example.test/",
+                     "http:/x)@[fd00:ec2::254", "http:/[fd00:ec2::254", "http:/[zz]/", "http:/[]/", "http:/@/", "http:/169.254.169.254:8x/"):
+            with self.subTest(form=form):
+                self.assertEqual(self.dispatch_cdp(installed, "Runtime.evaluate", {"expression": f'fetch("{form}")'}), "native dispatch")
+
+    def test_cdp_with_malformed_arguments_goes_to_native_validation(self):
+        installed = computer.install_tools()
+        for method, params in (("Page.navigate", ["http://169.254.169.254/"]), (None, {"url": "http://169.254.169.254/"})):
+            self.assertEqual(self.dispatch_cdp(installed, method, params), "native dispatch")
+        self.native_modules["browser_cdp_tool"]._fetched_param_urls.assert_not_called()
+
+    @unittest.skipUnless(SOURCE, "Set HERMES_SOURCE to a Hermes checkout to use its real URL policy")
+    def test_native_url_policy_blocks_every_metadata_form_the_cdp_tool_blocks(self):
+        # The native CDP scan imports the policy module lazily, by name.
+        imports = patch.dict(sys.modules, {"tools." + name: value for name, value in NATIVE.items()})
+        # The resolver reads numeric spellings such as http://2852039166/ as addresses; names never reach DNS here.
+        no_dns = patch.object(NATIVE["url_safety"], "_getaddrinfo", side_effect=lambda host, port=None:
+                              socket.getaddrinfo(host, port, socket.AF_UNSPEC, socket.SOCK_STREAM, 0, socket.AI_NUMERICHOST))
+        with imports, no_dns, patch.dict(sys.modules["tools"].__dict__, NATIVE):
+            installed = computer.install_tools()
+            blocked = (
+                ("Runtime.evaluate", {"expression": 'fetch("//169.254.169.254/latest/meta-data/")'}),
+                ("Runtime.evaluate", {"expression": 'fetch("\\\\169.254.169.254\\latest")'}),
+                ("Runtime.evaluate", {"expression": 'fetch("http://x)@169.254.169.254/")'}),
+                ("Page.navigate", {"url": "http://user@169.254.169.254/"}),
+                ("Page.navigate", {"url": "http://user:secret@metadata.google.internal/"}),
+                ("Target.createTarget", {"url": "http://2852039166/"}),
+                ("Network.loadNetworkResource", {"url": "http://[fd00:ec2::254]/", "options": {}}),
+                ("Runtime.callFunctionOn", {"functionDeclaration": 'function () { return fetch("//0xa9fea9fe/") }'}),
+                ("Page.addScriptToEvaluateOnNewDocument", {"source": 'new Image().src = "//metadata.google.internal/"'}),
+                # Forms native's own scan misses, which a browser still reads as a special-scheme authority.
+                ("Runtime.evaluate", {"expression": 'location.href = "http:/169.254.169.254/latest/meta-data/"'}),
+                ("Runtime.evaluate", {"expression": 'fetch("HTTP:169.254.169.254/")'}),
+                ("Runtime.evaluate", {"expression": 'fetch("http:\\\\169.254.169.254\\\\latest")'}),
+                ("Runtime.evaluate", {"expression": 'fetch("ht\\ttp:/169.254.169.254/")'}),
+                ("Runtime.callFunctionOn", {"functionDeclaration": 'function () { return fetch("http:/metadata.google.internal/") }'}),
+                ("Page.addScriptToEvaluateOnNewDocument", {"source": 'fetch("https:/[fd00:ec2::254]/")'}),
+                ("Page.navigate", {"url": "http:/user@169.254.169.254/"}),
+                ("Target.createTarget", {"url": "http:/0xa9fea9fe/"}),
+                ("Network.loadNetworkResource", {"url": "http:\\169.254.169.254/", "options": {}}),
+                # Hosts after userinfo kept whole, IPv4 inside IPv6, and authorities native can't parse.
+                ("Runtime.evaluate", {"expression": 'location.href = "http:/x)@[fd00:ec2::254]/"'}),
+                # CSS and markup end a URL at their own punctuation.
+                ("Page.setDocumentContent", {"frameId": "main", "html": "<style>@import url(http:/169.254.169.254);</style>"}),
+                ("Page.setDocumentContent", {"frameId": "main", "html": "<img src=http:/169.254.169.254>"}),
+                ("Page.setDocumentContent", {"frameId": "main", "html": "<img srcset=http:/169.254.169.254,x.png>"}),
+                ("Page.setDocumentContent", {"frameId": "main", "html": "<style>@import url(http:/169.254.169.254);@media print{body{color:red}}</style>"}),
+                ("Page.setDocumentContent", {"frameId": "main", "html": "<style>a{background:url(http:/169.254.169.254)}@font-face{font-family:x}</style>"}),
+                ("Runtime.evaluate", {"expression": "document.body.style.background = 'url(http:/169.254.169.254)'"}),
+                # Padding WHATWG reads away, judged by native when short and blocked when over-long.
+                *(("Runtime.evaluate", {"expression": f'fetch("{form}")'}) for form in self.PADDED_FORMS),
+                ("Runtime.evaluate", {"expression": 'fetch("http:/0x' + "0" * 60 + 'a9.0xfe.0xa9.0xfe/")'}),
+                ("Runtime.evaluate", {"expression": 'fetch("http:/' + "%30" * 60 + '251.0376.0251.0376/")'}),
+                # Several URLs in one text: an earlier one never hides a later one.
+                *(("Page.setDocumentContent", {"frameId": "main", "html": text}) for text in self.MULTI_URL_TEXTS),
+                *(("Runtime.evaluate", {"expression": text}) for text in self.MULTI_URL_TEXTS),
+                # Brackets in userinfo, and non-ASCII hosts WHATWG maps through UTS 46.
+                *(("Runtime.evaluate", {"expression": f'location.href = "{form}"'}) for form in (
+                    "http:/x[abc]@[64:ff9b::a9fe:a9fe]/", "http:/x[abc]@[::169.254.169.254]/", "http:/x[abc]@[2002:a9fe:a9fe::]/")),
+                *(("Runtime.callFunctionOn", {"functionDeclaration": f'function () {{ return fetch("{form}") }}'}) for form in self.UTS46_FORMS),
+                ("Runtime.callFunctionOn", {"functionDeclaration": 'function () { return fetch("http:/x)@[::ffff:169.254.169.254]/") }'}),
+                ("Page.addScriptToEvaluateOnNewDocument", {"source": 'fetch("http:/[64:ff9b::a9fe:a9fe]/")'}),
+                ("Runtime.evaluate", {"expression": 'fetch("http:/\uff11\uff16\uff19\uff0e\uff12\uff15\uff14\uff0e169.254/")'}),
+            )
+            for method, params in blocked:
+                with self.subTest(method=method, params=params):
+                    result = json.loads(self.dispatch_cdp(installed, method, params))
+                    self.assertEqual((result["success"], result["error"]), (False, "Blocked: URL targets a cloud metadata endpoint"))
+            self.native_dispatch.assert_not_called()
+            allowed = (
+                ("Runtime.evaluate", {"expression": 'fetch("http://100.100.0.5/status") // see //TODO'}),
+                ("Page.navigate", {"url": "https://93.184.215.14/?next=//169.254.169.254/"}),
+                ("Network.setBlockedURLs", {"urls": ["http://169.254.169.254/*"]}),
+                ("Input.insertText", {"text": "//169.254.169.254/"}),
+                ("Input.insertText", {"text": "http:/169.254.169.254/"}),
+                ("Runtime.evaluate", {"expression": 'const o = {https: true}; fetch("http:/100.100.0.5/")'}),
+                ("Runtime.evaluate", {"expression": 'fetch("http:/x)@[2001:db8::1]/")'}),
+                # Hosts WHATWG rejects fetch nothing, and object syntax that looks like a scheme isn't a URL.
+                ("Runtime.evaluate", {"expression": 'fetch("http:/x)@[fd00:ec2::254")'}),
+                ("Runtime.evaluate", {"expression": 'fetch("http:/b\u00fccher.example/")'}),
+                *(("Runtime.evaluate", {"expression": text}) for text in self.SCHEME_LOOKALIKES),
+                ("Runtime.callFunctionOn", {"functionDeclaration": "function () { return JSON.stringify({http:[],https:[]}) }"}),
+                ("Page.addScriptToEvaluateOnNewDocument", {"source": "const x={https:[]};"}),
+            )
+            for method, params in allowed:
+                with self.subTest(method=method, params=params):
+                    self.assertEqual(self.dispatch_cdp(installed, method, params), "native dispatch")
+
+
+class DesktopActivityTests(unittest.TestCase):
+    def test_running_supervisor_renews_activity_and_missing_desktop_does_not(self):
+        runtime = types.SimpleNamespace(status=Mock(return_value=types.SimpleNamespace(running=True)), touch_activity=Mock())
+        computer_host.keep_desktop_alive(runtime)
+        runtime.touch_activity.assert_called_once_with()
+        runtime.status.return_value.running = False
+        with self.assertRaisesRegex(RuntimeError, "desktop exited"):
+            computer_host.keep_desktop_alive(runtime)
+        runtime.touch_activity.assert_called_once_with()
 
 
 class SupervisorRestartTests(ComputerFixture):

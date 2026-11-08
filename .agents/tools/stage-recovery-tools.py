@@ -10,6 +10,7 @@ import shlex
 import subprocess
 
 from deploy_common import OPTIMIZED_REFUSAL, fence
+import host_access
 
 ROOT = Path(__file__).resolve().parents[2]
 FILES = ("recover-app-after-native-update.py", "deploy_common.py")
@@ -56,8 +57,7 @@ def main():
         data = subprocess.check_output(["git", "show", commit + ":.agents/tools/" + name], cwd=ROOT)
         files[name] = {"data": base64.b64encode(data).decode(), "sha256": hashlib.sha256(data).hexdigest()}
     payload = {"commit": commit, "appBase": args.app_base, "files": files}
-    result = subprocess.run(["ssh", "-o", "BatchMode=yes", args.host, "python3 -c " + shlex.quote(REMOTE)],
-                            input=json.dumps(payload), text=True, capture_output=True, check=True)
+    result = host_access.ssh(args.host, "python3 -c " + shlex.quote(REMOTE), input=json.dumps(payload), timeout=120, capture=True)
     receipt = json.loads(result.stdout)
     fence(receipt["sourceCommit"] == commit and receipt["files"] == {name: item["sha256"] for name, item in files.items()}, "host staged exactly these files and hashes")
     print(json.dumps(receipt))

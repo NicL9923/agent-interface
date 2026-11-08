@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Bootstrap, Preferences } from "../shared/types";
-import { api, ApiError, changeStream, clearResponseCache, setCsrf, write } from "../client-api";
+import { ApiError, changeStream, clearResponseCache, request as apiRequest, setCsrf } from "../client-api";
+import { preferenceQueue } from "./preference-queue";
 type SessionEvents = {
   onIdentityChange(): void;
   onFirstBootstrap(next: Bootstrap): void;
@@ -8,12 +9,27 @@ type SessionEvents = {
   /** The open assistant left this person's roster, as when another member made it personal. */
   onBotGone(botId: string): void;
 };
+/**
+ * Dispatched on window when this person's group catalog may have changed: the household stream's
+ * `groups` notice, a roster notice, or the stream (re)connecting, since notices sent while it was
+ * down are lost.
+ */
+export const GROUPS_EVENT = "agent-interface:groups";
+/** Group chat reads that only cover a notice the stream missed. */
+export const GROUP_FALLBACK_POLL_MS = 5 * 60_000;
+/** Until the server has sent a `groups` notice, it may be one that never does, so poll as before. */
+export const GROUP_UNNOTIFIED_POLL_MS = 30_000;
+const groupsChanged = () => window.dispatchEvent(new Event(GROUPS_EVENT));
+/** A bootstrap this recent already answers a focus or visibility change, such as alt-tabbing back. */
+const FRESH_MS = 5_000;
 export function useSession(events: SessionEvents) {
   const handlers = useRef(events);
   handlers.current = events;
   const initialDestination = useRef(false);
   const [boot, setBoot] = useState<Bootstrap | null>(null);
   const [auth, setAuth] = useState(false);
+  /** The account whose household stream has sent a `groups` notice: that server pushes catalog changes. */
+  const [groupsNotifiedFor, setGroupsNotifiedFor] = useState<string | null>(null);
   const [botId, setBotId] = useState(
     () => new URLSearchParams(location.search).get("bot") || "",
   );
@@ -24,9 +40,11 @@ export function useSession(events: SessionEvents) {
   const bootstrapRequest = useRef<Promise<Bootstrap | null> | null>(null);
   const lastBootstrap = useRef<Bootstrap | null>(null);
   const identityEpoch = useRef(0);
+  const lastSuccess = useRef(0);
   // Responses cached for one account must never answer for the next.
   const nextIdentity = () => {
     identityEpoch.current++;
+    lastSuccess.current = 0;
     clearResponseCache();
   };
   const bootRef = useRef(boot);
@@ -38,10 +56,13 @@ export function useSession(events: SessionEvents) {
   const refresh = useCallback((): Promise<Bootstrap | null> => {
     if (bootstrapRequest.current) return bootstrapRequest.current;
     const epoch = identityEpoch.current;
+    const marked = preferences.current?.mark() ?? -1;
     const request = (async () => {
       try {
-        const next = await api<Bootstrap>("/bootstrap?roster=lean");
+        const next = await apiRequest("GET /bootstrap", { query: { roster: "lean" } });
         if (epoch !== identityEpoch.current) return null;
+        // A bootstrap that found Hermes down, like a failed one, is no reason to hold back the next look.
+        lastSuccess.current = next.connection.connected ? Date.now() : 0;
         if (bootRef.current && bootRef.current.user.id !== next.user.id) {
           nextIdentity();
           handlers.current.onIdentityChange();
@@ -51,12 +72,16 @@ export function useSession(events: SessionEvents) {
           handlers.current.onFirstBootstrap(next);
         }
         setCsrf(next.csrfToken ?? "");
+        // A save that overlapped this read may be newer than its preferences; keep the saved copy.
+        const stalePreferences = !preferences.current?.fresh(marked);
         // An unchanged poll returns the cached object; keeping the derived state lets React skip the app render.
+        // A read whose preferences were held back is not remembered, so the next one reconciles them.
         const unchanged = lastBootstrap.current === next;
-        lastBootstrap.current = next;
+        lastBootstrap.current = stalePreferences ? null : next;
         setBoot((previous) => unchanged && previous ? previous : { ...next,
           bots: !next.connection.connected && !next.bots.length && previous?.user.id === next.user.id
             ? previous.bots : next.bots,
+          preferences: stalePreferences && previous?.user.id === next.user.id ? previous.preferences : next.preferences,
         });
         setAuth(false);
         setAppUnavailable(false);
@@ -76,6 +101,7 @@ export function useSession(events: SessionEvents) {
           handlers.current.onIdentityChange();
           setAuth(true); setBoot(null); setCsrf("");
         } else {
+          lastSuccess.current = 0;
           setDisconnected(true); setAppUnavailable(true);
         }
         return null;
@@ -91,10 +117,11 @@ export function useSession(events: SessionEvents) {
     if (checkingConnection) return;
     setCheckingConnection(true);
     try {
-      await write("/connection/retry", {});
+      await apiRequest("POST /connection/retry");
       await refresh();
       window.dispatchEvent(new Event("agent-interface:reconnect"));
     } catch {
+      lastSuccess.current = 0;
       setDisconnected(true); setAppUnavailable(true);
     } finally {
       setCheckingConnection(false);
@@ -105,26 +132,33 @@ export function useSession(events: SessionEvents) {
     const id = setInterval(() => {
       if (!authRef.current && document.visibilityState !== "hidden" && navigator.onLine !== false) void refresh();
     }, 45_000);
-    const wake = () => {
+    // Coming back online always reads; focus and visibility changes skip a read the last few seconds already made.
+    const wake = (skipIfFresh: boolean) => () => {
       setOffline(navigator.onLine === false);
-      if (navigator.onLine !== false && document.visibilityState !== "hidden") void refresh();
+      if (navigator.onLine === false || document.visibilityState === "hidden") return;
+      if (skipIfFresh && Date.now() - lastSuccess.current < FRESH_MS) return;
+      void refresh();
     };
+    const online = wake(false), returned = wake(true);
     const lost = () => { setOffline(true); };
-    window.addEventListener("online", wake);
+    window.addEventListener("online", online);
     window.addEventListener("offline", lost);
-    window.addEventListener("focus", wake);
-    document.addEventListener("visibilitychange", wake);
+    window.addEventListener("focus", returned);
+    document.addEventListener("visibilitychange", returned);
     return () => {
       clearInterval(id);
-      window.removeEventListener("online", wake);
+      window.removeEventListener("online", online);
       window.removeEventListener("offline", lost);
-      window.removeEventListener("focus", wake);
-      document.removeEventListener("visibilitychange", wake);
+      window.removeEventListener("focus", returned);
+      document.removeEventListener("visibilitychange", returned);
     };
   }, [refresh]);
   useEffect(() => {
     if (!boot?.user.id || auth) return;
-    const stream = changeStream("/events", () => void refresh());
+    const userId = boot.user.id;
+    // The server sends `groups` once on every connect and on each catalog change, so connecting or a
+    // roster notice does not read the group catalog itself.
+    const stream = changeStream("/events", () => { void refresh(); }, undefined, { groups: () => { setGroupsNotifiedFor(userId); groupsChanged(); } });
     const wake = () => {
       if (document.visibilityState !== "hidden" && navigator.onLine !== false) stream.open();
       else stream.close();
@@ -144,18 +178,18 @@ export function useSession(events: SessionEvents) {
       document.removeEventListener("visibilitychange", wake);
     };
   }, [boot?.user.id, auth, refresh]);
-  const savePreferences = async (value: Preferences) => {
-    const epoch = identityEpoch.current;
-    try {
-      const saved = await write<Preferences>("/preferences", value, "PATCH");
-      if (epoch !== identityEpoch.current) return;
-      setBoot((previous) =>
-        previous ? { ...previous, preferences: saved } : previous,
-      );
-    } catch (e) {
-      if (epoch === identityEpoch.current) handlers.current.onError((e as Error).message);
-    }
-  };
+  const preferences = useRef<ReturnType<typeof preferenceQueue> | null>(null);
+  preferences.current ??= preferenceQueue({
+    // Model stars have their own endpoint; leaving them out keeps the server's current list.
+    send: ({ modelFavorites: _, ...value }) => apiRequest("PATCH /preferences", { body: value }),
+    apply: saved => setBoot(previous => previous ? { ...previous, preferences: saved } : previous),
+    failed: error => handlers.current.onError(error.message),
+    account: () => identityEpoch.current,
+  });
+  const savePreferences = (value: Preferences) => preferences.current!.save(value);
+  /** Applies an edit to the newest preferences, including a save still on its way. */
+  const editPreferences = (edit: (value: Preferences) => Preferences) =>
+    preferences.current!.edit(edit, bootRef.current?.preferences);
   const signedIn = () => {
     nextIdentity();
     bootstrapRequest.current = null;
@@ -170,6 +204,9 @@ export function useSession(events: SessionEvents) {
   };
   return {
     boot, auth, botId, setBotId, disconnected, appUnavailable, offline, checkingConnection,
-    identityEpoch, refresh, reconnect, savePreferences, signedIn, signedOut,
+    identityEpoch, refresh, reconnect, savePreferences, editPreferences, signedIn, signedOut,
+    /** This server sends `groups` notices, so a slow fallback poll is enough. */
+    // Per account, so another account starts unproven in the same render that switches to it.
+    groupsNotified: !!boot?.user.id && groupsNotifiedFor === boot.user.id,
   };
 }

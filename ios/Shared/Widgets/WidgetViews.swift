@@ -112,9 +112,35 @@ struct ActivityRowView: View {
   }
 }
 
+/// The Live Activity's one button, for its first row: Decline or Stop. It needs the phone unlocked.
+struct ActivityActionButton: View {
+  var state: AssistantActivityState
+  var stale: Bool
+  var scope: String
+  var body: some View {
+    if let hero = state.hero, let kind = state.action(stale: stale) {
+      Group {
+        switch kind {
+        case .stop:
+          Button(intent: StopAssistantActivityIntent(botId: hero.botId, name: hero.name, scope: scope)) {
+            Label("Stop", systemImage: "stop.fill")
+          }.accessibilityLabel("Stop \(hero.name)")
+        case .decline(let approvalId):
+          Button(intent: DeclineApprovalActivityIntent(botId: hero.botId, name: hero.name, approvalId: approvalId, scope: scope)) {
+            Label("Decline", systemImage: "xmark")
+          }.accessibilityLabel("Decline \(hero.name)'s request")
+        }
+      }.font(.caption.weight(.semibold)).labelStyle(.titleAndIcon).buttonStyle(.bordered).buttonBorderShape(.capsule)
+        .controlSize(.small).tint(WidgetPalette.color(hero.phase))
+    }
+  }
+}
+
 struct ActivityLockScreenView: View {
   var state: AssistantActivityState
   var stale: Bool
+  /// The account the activity belongs to, for its button.
+  var scope = ""
   @Environment(\.widgetRenderingMode) private var mode
   @Environment(\.isLuminanceReduced) private var reduced
   var body: some View {
@@ -128,6 +154,7 @@ struct ActivityLockScreenView: View {
         (Text(header.text) + Text(header.attention ?? "").foregroundStyle(tone.color(.waiting)))
           .font(.subheadline.weight(.semibold)).lineLimit(1)
         Spacer(minLength: 0)
+        ActivityActionButton(state: state, stale: stale, scope: scope)
       }
       ForEach(state.rows.prefix(4)) { ActivityRowView(row: $0, stale: stale, tone: tone) }
     }.padding(.horizontal, 16).padding(.vertical, 13)
@@ -192,12 +219,16 @@ struct IslandExpandedTrailing: View {
 struct IslandExpandedBottom: View {
   var state: AssistantActivityState
   var stale: Bool
+  var scope = ""
   var body: some View {
     VStack(alignment: .leading, spacing: 6) {
       if stale { Text("Assistant status out of date").font(.caption.weight(.semibold)).foregroundStyle(.secondary) }
-      ForEach(state.rows.prefix(3)) {
+      // With a button there is room for two rows beside it.
+      let action = state.action(stale: stale) != nil
+      ForEach(state.rows.prefix(action ? 2 : 3)) {
         ActivityRowView(row: $0, stale: stale, tone: WidgetTone(mode: .fullColor, reduced: false), font: .caption)
       }
+      if action { ActivityActionButton(state: state, stale: stale, scope: scope).frame(maxWidth: .infinity, alignment: .trailing) }
     }
   }
 }
@@ -210,6 +241,7 @@ struct AssistantsWidgetView: View {
   var family: WidgetFamily
   @Environment(\.widgetRenderingMode) private var mode
   @Environment(\.isLuminanceReduced) private var reduced
+  @ScaledMetric(relativeTo: .caption2) private var pinSize: CGFloat = 8
   private var tone: WidgetTone { WidgetTone(mode: mode, reduced: reduced) }
   private var stale: Bool { snapshot?.isStale(at: date) ?? false }
   var body: some View {
@@ -231,7 +263,13 @@ struct AssistantsWidgetView: View {
   }
   private func footer(_ snapshot: WidgetSnapshot) -> some View {
     Group {
-      if stale { Text("Open WildBots to refresh") } else { Text("As of \(snapshot.generatedAt, style: .time)") }
+      if stale {
+        if family == .systemSmall {
+          Label { Text(snapshot.generatedAt, style: .relative) + Text(" ago") } icon: { Image(systemName: "clock.arrow.circlepath") }
+        } else {
+          (Text(snapshot.generatedAt, style: .relative) + Text(" ago · Open to refresh"))
+        }
+      } else { Text("As of \(snapshot.generatedAt, style: .time)") }
     }.font(.caption2).foregroundStyle(.secondary).lineLimit(1)
   }
   /// Like the Live Activity, an old snapshot does not claim work is still running.
@@ -267,7 +305,7 @@ struct AssistantsWidgetView: View {
         VStack(alignment: .leading, spacing: 1) {
           HStack(spacing: 6) {
             Text(assistant.name).font(.subheadline.weight(.semibold)).lineLimit(1)
-            if assistant.pinned { Image(systemName: "star.fill").font(.system(size: 8)).foregroundStyle(.secondary).accessibilityLabel("Pinned") }
+            if assistant.pinned { Image(systemName: "star.fill").font(.system(size: pinSize)).foregroundStyle(.secondary).accessibilityLabel("Pinned") }
             Spacer(minLength: 4)
             if assistant.status != nil { status(assistant) }
           }
@@ -335,10 +373,10 @@ struct AssistantsWidgetView: View {
           Text(message).font(.headline).lineLimit(2).fixedSize(horizontal: false, vertical: true)
           if family != .accessoryRectangular && family != .systemSmall {
             Spacer(minLength: 0)
-            Text("Your assistants appear here after you open the app.").font(.caption).foregroundStyle(.secondary)
+            Text(snapshot == nil ? "Your assistants appear here after you open the app." : "Create one in WildBots.").font(.caption).foregroundStyle(.secondary)
           }
         }.frame(maxWidth: .infinity, alignment: .leading)
       }
-    }.widgetURL(DeepLink.today)
+    }.widgetURL(DeepLink.home)
   }
 }

@@ -1,7 +1,7 @@
 import XCTest
 @testable import AgentInterface
 
-final class HomeParityTests: XCTestCase {
+@MainActor final class HomeParityTests: XCTestCase {
   private func hit(_ session: String, _ title: String) throws -> SearchHit {
     let json = #"{"botId":"ranch","botName":"Ranch","sessionId":"\#(session)","title":"\#(title)","snippet":""}"#
     return try JSONDecoder().decode(SearchHit.self, from: Data(json.utf8))
@@ -12,10 +12,23 @@ final class HomeParityTests: XCTestCase {
     XCTAssertEqual(DiscoveryView.conversationTitle(hits, "b").count, 120)
     XCTAssertEqual(DiscoveryView.conversationTitle(hits, "missing"), "Saved conversation")
   }
+  func testRoutineResultLabelsPreserveUnfamiliarStatuses() {
+    XCTAssertEqual(DiscoveryView.routineResultLabel("delivery_failed"), "Delivery failed")
+    XCTAssertEqual(DiscoveryView.routineResultLabel("success"), "Succeeded")
+    XCTAssertEqual(DiscoveryView.routineResultLabel("waiting_for_device"), "waiting_for_device")
+  }
+  func testSearchHitDecodesOptionalUpdateTime() throws {
+    let data = Data(#"{"botId":"ranch","botName":"Ranch","sessionId":"history","title":"Gate","snippet":"Plan","updatedAt":"2026-10-28T12:00:00Z"}"#.utf8)
+    XCTAssertEqual(try JSONDecoder().decode(SearchHit.self, from: data).updatedAt, "2026-10-28T12:00:00Z")
+  }
   func testSavedReplyTitleStripsMarkdownSymbolsLikeTheWeb() {
     XCTAssertEqual(DiscoveryView.replyTitle("## **Gate**"), "Gate")
-    XCTAssertEqual(DiscoveryView.replyTitle("a_b"), "a b")
+    XCTAssertEqual(DiscoveryView.replyTitle("a_b"), "a_b")
+    XCTAssertEqual(DiscoveryView.replyTitle("`binary_sensor.north_gate`"), "binary_sensor.north_gate")
     XCTAssertEqual(DiscoveryView.replyTitle(" ** "), "Saved reply")
+    XCTAssertEqual(DiscoveryView.replyTitle("\n - **Check** `binary_sensor.north_gate`.\n- Another item"), "Check binary_sensor.north_gate.")
+    XCTAssertEqual(DiscoveryView.replyTitle("1. `freezer_door` is ready\nNext steps"), "freezer_door is ready")
+    XCTAssertLessThanOrEqual(DiscoveryView.replyTitle(String(repeating: "A useful gate maintenance plan ", count: 8)).count, 80)
   }
 
   // MARK: Launch and connection states
@@ -73,6 +86,53 @@ final class HomeParityTests: XCTestCase {
     XCTAssertEqual(HomeCopy.emptyTitle, "Welcome home")
     XCTAssertEqual(HomeCopy.emptySubtitle, "Your assistants will appear here when Hermes is connected.")
   }
+  // MARK: Home sections and following, from the assistant card
+  private func sections(_ pairs: (String, [String])...) -> Preferences {
+    var preferences = Preferences()
+    preferences.sections = pairs.map { BotSection(id: $0.0, name: $0.0.capitalized, botIds: $0.1) }
+    return preferences
+  }
+  func testMovingAnAssistantKeepsItInOneSection() {
+    // A saved list can already hold a bot twice, as the old per-section toggles allowed.
+    let start = sections(("house", ["ranch", "kitchen"]), ("garden", ["ranch"]))
+    let moved = start.moving(bot: "ranch", toSection: "garden")
+    XCTAssertEqual(moved.sections.map(\.botIds), [["kitchen"], ["ranch"]])
+    XCTAssertEqual(moved.section(of: "ranch")?.id, "garden")
+    XCTAssertEqual(moved.moving(bot: "ranch", toSection: "garden"), moved, "Moving to the current section changes nothing")
+    let out = moved.moving(bot: "ranch", toSection: nil)
+    XCTAssertNil(out.section(of: "ranch")?.id)
+    XCTAssertEqual(out.sections.map(\.botIds), [["kitchen"], []], "Leaving a section keeps the section and the others in it")
+    XCTAssertEqual(start.moving(bot: "ranch", toSection: "missing").sections.flatMap(\.botIds), ["kitchen"], "A section deleted elsewhere just takes it out")
+  }
+  func testANewSectionIsNamedOnceAndReusesAMatchingName() throws {
+    let start = sections(("house", ["kitchen"]))
+    let created = try XCTUnwrap(start.moving(bot: "ranch", toNewSection: "  Around the yard  ", id: "yard"))
+    XCTAssertEqual(created.sections.last, BotSection(id: "yard", name: "Around the yard", botIds: ["ranch"]))
+    let reused = try XCTUnwrap(start.moving(bot: "ranch", toNewSection: "HOUSE", id: "duplicate"))
+    XCTAssertEqual(reused.sections.map(\.id), ["house"])
+    XCTAssertEqual(reused.section(of: "ranch")?.id, "house")
+    XCTAssertNil(start.moving(bot: "ranch", toNewSection: " \n "))
+    XCTAssertEqual(start.moving(bot: "ranch", toNewSection: String(repeating: "x", count: 140), id: "long")?.sections.last?.name.count, 100)
+    var full = Preferences()
+    full.sections = (0..<Preferences.sectionLimit).map { BotSection(id: "\($0)", name: "Section \($0)", botIds: []) }
+    XCTAssertNil(full.moving(bot: "ranch", toNewSection: "One more"), "The server accepts at most 30 sections")
+    XCTAssertEqual(full.moving(bot: "ranch", toNewSection: "section 3")?.section(of: "ranch")?.id, "3", "An existing name still works when full")
+  }
+  func testFollowingAddsAnAssistantOnce() {
+    var preferences = Preferences()
+    preferences.followBots = ["kitchen"]
+    let on = preferences.settingFollow("ranch", true).settingFollow("ranch", true)
+    XCTAssertEqual(on.followBots, ["kitchen", "ranch"])
+    XCTAssertEqual(on.settingFollow("ranch", false).followBots, ["kitchen"])
+  }
+  @MainActor func testCardChangesShowBeforeTheSaveReturns() throws {
+    let value = try store()
+    value.homeFollow("ranch", true)
+    XCTAssertTrue(value.homeMove("ranch", toNewSection: "Around the yard"))
+    XCTAssertTrue(value.homeFollows("ranch"))
+    XCTAssertEqual(value.homePreferences?.sections.first?.name, "Around the yard")
+    XCTAssertNotNil(value.homeSectionId(of: "ranch"))
+  }
   @MainActor func testBlockedAssistantSetupAlwaysSaysWhy() throws {
     XCTAssertNil(try store().assistantSetupBlock)
     XCTAssertEqual(try store(connected: false).assistantSetupBlock, "Assistant setup is unavailable while Hermes is disconnected.")
@@ -115,51 +175,22 @@ final class HomeParityTests: XCTestCase {
   }
 
   @MainActor func testGroupCreationKeepsItsRequestUntilHermesAnswersAndSendsAssistantsInPickOrder() async throws {
-    GroupStub.reset()
+    let server = FakeServer()
     let scope = "home-parity-\(UUID().uuidString)"
     defer { GroupCreation.clear(scope: scope) }
-    let config = URLSessionConfiguration.ephemeral
-    config.protocolClasses = [GroupStub.self]; config.urlCache = nil
-    let api = APIClient(baseURL: URL(string: "https://groups.example.test")!, session: URLSession(configuration: config))
-    api.token = "synthetic"
+    let api = server.api(token: "synthetic")
     let request = GroupCreate(requestId: "request-1", name: "Gate planning", botIds: ["zed", "alpha", "mid"])
-    GroupStub.status = 503
+    server.reply = .init(status: 503, body: #"{"error":"Synthetic outage"}"#)
     do { _ = try await GroupCreation.submit(request, api: api, scope: scope); XCTFail("The outage must surface") } catch {
       XCTAssertTrue(GroupCreation.failure(error).hasSuffix("Retry the saved request to check this room's creation."))
     }
     XCTAssertEqual(GroupCreation.pending(scope: scope)?.requestId, "request-1", "A request that may have arrived is kept for the retry")
-    GroupStub.status = 200
+    server.reply = .init(body: #"{"room":{"room_id":"room-1","name":"Gate planning","members":[]}}"#)
     let room = try await GroupCreation.submit(GroupCreation.pending(scope: scope)!, api: api, scope: scope)
     XCTAssertEqual(room.name, "Gate planning")
     XCTAssertNil(GroupCreation.pending(scope: scope), "Hermes answered, so the saved request is done")
-    let bodies = GroupStub.bodies.compactMap { try? JSONDecoder().decode(GroupCreate.self, from: $0) }
+    let bodies = server.bodies.compactMap { try? JSONDecoder().decode(GroupCreate.self, from: $0) }
     XCTAssertEqual(bodies.map(\.requestId), ["request-1", "request-1"], "The retry reuses the request ID so Hermes cannot make a second room")
     XCTAssertEqual(bodies.last?.botIds, ["zed", "alpha", "mid"])
   }
-}
-
-private final class GroupStub: URLProtocol, @unchecked Sendable {
-  nonisolated(unsafe) static var status = 200
-  nonisolated(unsafe) static var bodies: [Data] = []
-  static func reset() { status = 200; bodies = [] }
-  override class func canInit(with request: URLRequest) -> Bool { true }
-  override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
-  override func startLoading() {
-    var body = request.httpBody
-    if body == nil, let stream = request.httpBodyStream {
-      stream.open(); defer { stream.close() }
-      var data = Data(), buffer = [UInt8](repeating: 0, count: 4096)
-      while stream.hasBytesAvailable { let count = stream.read(&buffer, maxLength: buffer.count); if count <= 0 { break }; data.append(buffer, count: count) }
-      body = data
-    }
-    Self.bodies.append(body ?? Data())
-    let payload = Self.status == 200
-      ? #"{"room":{"room_id":"room-1","name":"Gate planning","members":[]}}"#
-      : #"{"error":"Synthetic outage"}"#
-    let response = HTTPURLResponse(url: request.url!, statusCode: Self.status, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!
-    client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-    client?.urlProtocol(self, didLoad: Data(payload.utf8))
-    client?.urlProtocolDidFinishLoading(self)
-  }
-  override func stopLoading() {}
 }

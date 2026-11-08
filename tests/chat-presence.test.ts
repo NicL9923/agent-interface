@@ -1,10 +1,12 @@
+import { capabilitiesFixture } from "./helpers/runtime-fixtures.js";
 import { expect, it } from "vitest";
 import { loadConfig, type Config } from "../src/server/config.js";
 import { BackgroundWorker } from "../src/server/notifications.js";
 import { presenceTtl, Store } from "../src/server/store.js";
-import type { Runtime, RuntimeEvent } from "../src/shared/types.js";
+import type { RuntimeEvent } from "../src/shared/types.js";
+import { fakeRuntime } from "./helpers/server.js";
 
-const runtime = { capabilities: async () => ({ idempotency: { supported: false }, durableEvents: { supported: false } }) } as unknown as Runtime;
+const runtime = fakeRuntime({ capabilities: async () => capabilitiesFixture({ idempotency: { supported: false }, durableEvents: { supported: false } }) });
 const apns = (): NonNullable<Config["apns"]> => ({ teamId: "TEAM123456", keyId: "KEY1234567", topic: "test.agentinterface", privateKeyFile: "unused", environment: "sandbox" });
 const reply = (id: string, extra: Partial<RuntimeEvent> = {}): RuntimeEvent =>
   ({ id, botId: "shared", runId: "run", kind: "completed", title: "Done", occurredAt: new Date().toISOString(), ...extra });
@@ -38,7 +40,7 @@ it("sends nothing anywhere while the person is reading that chat on any device",
     expect([web, native]).toEqual([[], []]);
     expect(store.outbox()).toHaveLength(0);
     // Another chat and a routine result still notify while this one is open.
-    store.routineRecipients("routine", ["one"]);
+    store.routineRecipients("shared", "routine", ["one"]);
     store.recordEvents([reply("other-chat", { botId: "elsewhere" }), reply("routine", { routineId: "routine" })], "cursor");
     await worker.tick();
     expect(web).toHaveLength(2);
@@ -123,4 +125,16 @@ it("forgets presence and reads with a deleted assistant", () => {
   store.forgetBot("shared");
   expect(store.db.prepare("SELECT count(*) AS n FROM chat_presence UNION ALL SELECT count(*) FROM chat_reads").all()).toEqual([{ n: 0 }, { n: 0 }]);
   store.close();
+});
+
+it("records a queued notification suppressed by reading separately from delivery", async () => {
+  const { store, worker, web, native } = household();
+  try {
+    store.recordEvents([reply("queued-before-reading")], "cursor");
+    store.chatPresence("one", "shared", "desk-tab", "active");
+    await worker.tick();
+    expect([web, native]).toEqual([[], []]);
+    expect(store.db.prepare("SELECT state FROM outbox WHERE event_id=?").get("queued-before-reading"))
+      .toEqual({ state: "suppressed" });
+  } finally { await worker.stop(); store.close(); }
 });

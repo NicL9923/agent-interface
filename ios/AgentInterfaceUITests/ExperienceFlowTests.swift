@@ -1,6 +1,6 @@
 import XCTest
 
-final class ExperienceFlowTests: XCTestCase {
+@MainActor final class ExperienceFlowTests: XCTestCase {
   func testInlineHtmlRunsLocalControlsAndResets() {
     let app = XCUIApplication()
     app.launchEnvironment["AGENT_INTERFACE_UI_FIXTURE"] = "1"
@@ -9,7 +9,8 @@ final class ExperienceFlowTests: XCTestCase {
     app.launchEnvironment["AGENT_INTERFACE_UI_SCOPE"] = UUID().uuidString.lowercased()
     app.launch()
     let compare = app.webViews.buttons["Compare supply"]
-    XCTAssertTrue(compare.waitForExistence(timeout: 15), app.debugDescription)
+    // A web view's first load on CI's simulator can take well over 15 seconds.
+    XCTAssertTrue(compare.waitForExistence(timeout: 40), app.debugDescription)
     compare.tap()
     XCTAssertTrue(app.webViews.staticTexts["40 days"].waitForExistence(timeout: 5))
     capture(app, name: "Native inline UI expanded")
@@ -25,7 +26,7 @@ final class ExperienceFlowTests: XCTestCase {
     app.launch(); return app
   }
   private func tab(_ name: String, app: XCUIApplication) {
-    app.buttons["settingsMore"].tap(); app.buttons[name].tap()
+    app.selectSettingsTab(name)
   }
   private func capture(_ app: XCUIApplication, name: String) {
     let attachment = XCTAttachment(screenshot: app.screenshot()); attachment.name = name; attachment.lifetime = .keepAlways; add(attachment)
@@ -39,35 +40,53 @@ final class ExperienceFlowTests: XCTestCase {
     let checked = NSPredicate(format: "value == %@", "Checked")
     expectation(for: checked, evaluatedWith: milk); waitForExpectations(timeout: 5)
     capture(app, name: "Native interactive checklist")
-    app.buttons["Configure Ranch hand"].tap(); tab("Memory", app: app)
+    app.openAssistantSettings("Ranch hand"); tab("Memory", app: app)
     XCTAssertTrue(app.staticTexts["What Hermes remembers"].waitForExistence(timeout: 5))
-    XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Profile: default.")).firstMatch.exists)
-    app.buttons["Forget…"].tap(); app.buttons["Forget entry"].tap()
+    XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Shared profile: default")).firstMatch.exists)
+    app.buttons["memoryForget.memory.1"].tap(); app.buttons["Forget entry"].tapWhenReady()
     XCTAssertTrue(app.staticTexts["Saved in Hermes."].waitForExistence(timeout: 5))
-    XCTAssertTrue(app.staticTexts["Nothing saved here yet."].exists)
-    XCTAssertFalse(app.buttons["Save memories"].isEnabled)
-    app.buttons["Add memory"].tap()
-    let fact = app.descendants(matching: .any).matching(identifier: "memoryEntry.1").firstMatch; fact.tap(); fact.typeText("Prefers the south pasture")
-    app.buttons["Discard edits"].tap()
-    XCTAssertTrue(app.staticTexts["Nothing saved here yet."].waitForExistence(timeout: 5))
-    app.buttons["Add memory"].tap()
-    fact.tap(); fact.typeText("Prefers the south pasture")
-    app.buttons["Save memories"].tap()
+    XCTAssertTrue(app.staticTexts["Nothing saved here yet. Add a fact you want this profile to remember."].exists)
+    XCTAssertFalse(app.buttons["memorySave.memory"].isEnabled)
+    app.buttons["memoryAdd.memory"].tap()
+    let fact = app.descendants(matching: .any).matching(identifier: "memoryEntry.memory.1").firstMatch; fact.typeWhenFocused("Prefers the south pasture")
+    app.buttons["memoryDiscard.memory"].tapWhenReady()
+    XCTAssertTrue(app.staticTexts["Nothing saved here yet. Add a fact you want this profile to remember."].waitForExistence(timeout: 5))
+    app.buttons["memoryAdd.memory"].tap()
+    fact.typeWhenFocused("Prefers the south pasture")
+    app.buttons["memorySave.memory"].tapWhenReady()
     XCTAssertTrue(app.staticTexts["Saved in Hermes."].waitForExistence(timeout: 5))
-    XCTAssertTrue(fact.exists); XCTAssertFalse(app.buttons["Discard edits"].exists)
-    XCTAssertFalse(app.staticTexts["Nothing saved here yet."].exists)
+    XCTAssertTrue(fact.exists); XCTAssertFalse(app.buttons["memoryDiscard.memory"].exists)
+    XCTAssertFalse(app.staticTexts["Nothing saved here yet. Add a fact you want this profile to remember."].exists)
     capture(app, name: "Native profile memory")
     tab("Routines", app: app)
     XCTAssertTrue(app.buttons["routineTemplate.morning"].waitForExistence(timeout: 5)); app.buttons["routineTemplate.morning"].tap()
-    app.collectionViews["routineEditorForm"].buttons["Preview schedule"].tap()
+    app.collectionViews["routineEditorForm"].buttons["Preview schedule"].tapWhenReady()
     XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "America/Chicago")).firstMatch.waitForExistence(timeout: 5))
     app.collectionViews["routineEditorForm"].swipeUp()
     capture(app, name: "Native routine timezone preview")
   }
+  func testLeavingUnsavedMemoryAsksBeforeGoingBack() {
+    let app = launch()
+    XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 10))
+    app.openAssistantSettings("Ranch hand"); tab("Memory", app: app)
+    app.buttons["memoryAdd.memory"].tapWhenReady()
+    let fact = app.descendants(matching: .any).matching(identifier: "memoryEntry.memory.2").firstMatch
+    fact.typeWhenFocused("Prefers the south pasture")
+    let back = app.buttons["memoryBack"]
+    XCTAssertTrue(back.waitForExistence(timeout: 5), "Unsaved memory guards the back button")
+    back.tapWhenReady()
+    XCTAssertTrue(app.staticTexts["Leave memory without saving?"].waitForExistence(timeout: 5))
+    app.buttons["confirmationKeep"].tapWhenReady()
+    XCTAssertTrue(fact.wait(until: "value == %@", "Prefers the south pasture"), "Keep editing stays on Memory with the edit")
+    back.tapWhenReady()
+    app.buttons["confirmationAccept"].tapWhenReady()
+    XCTAssertTrue(app.buttons["settingsPage.learning"].waitForExistence(timeout: 5), "Discarding goes back to Memory & learning")
+    XCTAssertFalse(back.exists)
+  }
   func testTodayOpensCanonicalAssistantAndVoiceTranscribesIntoTheDraft() {
     let app = launch()
-    XCTAssertTrue(app.buttons["Configure Ranch hand"].waitForExistence(timeout: 10))
-    if !app.buttons["openToday"].isHittable {
+    XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 10))
+    if !app.buttons["openToday"].canTap {
       let back = app.navigationBars.buttons.matching(identifier: "Your assistants").firstMatch
       if back.exists { back.tap() } else { app.navigationBars.buttons.firstMatch.tap() }
     }
@@ -86,15 +105,16 @@ final class ExperienceFlowTests: XCTestCase {
     // As on the web, stopping transcribes at once and the text joins the draft, with no review step.
     XCTAssertTrue(app.staticTexts["Added to your draft. Review it before sending."].waitForExistence(timeout: 5))
     let composer = app.textViews["messageComposer"]
+    composer.wait(until: "value == %@", "Fixture transcript: check the north gate.")
     XCTAssertEqual(composer.value as? String, "Fixture transcript: check the north gate.")
     XCTAssertTrue(app.buttons["Record voice"].exists)
   }
   func testUncertainRoutineTrialChecksReceiptBeforeFreshRun() {
     let app = launch()
-    XCTAssertTrue(app.buttons["Configure Ranch hand"].waitForExistence(timeout: 10))
-    app.buttons["Configure Ranch hand"].tap(); tab("Routines", app: app)
+    XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 10))
+    app.openAssistantSettings("Ranch hand"); tab("Routines", app: app)
     let message = { (text: String) in app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", text)).firstMatch }
-    for _ in 0..<5 { if app.buttons["Try once"].isHittable { break }; app.collectionViews.firstMatch.swipeUp() }
+    for _ in 0..<5 { if app.buttons["Try once"].canTap { break }; app.collectionViews.firstMatch.swipeUp() }
     app.buttons["Try once"].tap()
     XCTAssertTrue(app.buttons["Check run status"].waitForExistence(timeout: 5))
     XCTAssertFalse(app.buttons["Try once"].exists)
@@ -107,37 +127,41 @@ final class ExperienceFlowTests: XCTestCase {
 
   func testListenToReplyPlaysServerAudioWithAnExplicitStop() {
     let app = launch()
-    XCTAssertTrue(app.buttons["Listen to reply"].waitForExistence(timeout: 10))
-    app.buttons["Listen to reply"].tap()
+    // Each reply carries its own speaker button, so the one nearest the composer is the latest reply's.
+    let listen = app.buttons.matching(identifier: "listenToReply")
+    XCTAssertTrue(listen.firstMatch.waitForExistence(timeout: 10))
+    capture(app, name: "Native reply action row")
+    listen.element(boundBy: listen.count - 1).tapWhenReady()
     XCTAssertTrue(app.buttons["Stop speaking"].waitForExistence(timeout: 3))
-    app.buttons["Stop speaking"].tap()
-    XCTAssertTrue(app.buttons["Listen to reply"].waitForExistence(timeout: 3))
+    capture(app, name: "Native reply speaking")
+    app.buttons["Stop speaking"].tapWhenReady()
+    XCTAssertTrue(app.buttons["Listen to reply"].firstMatch.waitForExistence(timeout: 3))
   }
   func testRoutineResultsAndGroupCreationMessaging() {
     var app = launch()
-    XCTAssertTrue(app.buttons["Configure Ranch hand"].waitForExistence(timeout: 10))
-    app.buttons["Configure Ranch hand"].tap(); tab("Routines", app: app)
-    app.buttons["View results"].firstMatch.tap()
+    XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 10))
+    app.openAssistantSettings("Ranch hand"); tab("Routines", app: app)
+    app.buttons["View results"].firstMatch.tapWhenReady()
     XCTAssertTrue(app.staticTexts["Fixture saved routine output: the pasture gate is closed."].waitForExistence(timeout: 5))
     capture(app, name: "Native routine saved output")
     app.terminate(); app = launch()
-    XCTAssertTrue(app.buttons["Configure Ranch hand"].waitForExistence(timeout: 10))
-    if !app.buttons["openGroups"].isHittable { app.navigationBars.buttons.firstMatch.tap() }
-    app.buttons["openGroups"].tap()
-    let newGroup = app.buttons["New group"]
+    XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 10))
+    if !app.buttons["newMenu"].canTap { app.navigationBars.buttons.firstMatch.tap() }
+    app.buttons["newMenu"].tapWhenReady()
+    let newGroup = app.buttons["newGroup"]
     XCTAssertTrue(newGroup.waitForExistence(timeout: 5))
     expectation(for: NSPredicate(format: "enabled == true"), evaluatedWith: newGroup); waitForExpectations(timeout: 5)
     newGroup.tap()
     XCTAssertTrue(app.textFields["Group name"].waitForExistence(timeout: 5), app.debugDescription)
-    app.textFields["Group name"].tap(); app.textFields["Group name"].typeText("Gate planning")
+    app.textFields["Group name"].typeWhenFocused("Gate planning")
     app.switches["Ranch hand"].switches.firstMatch.tap(); app.switches["Kitchen companion"].switches.firstMatch.tap()
-    XCTAssertEqual(app.switches["Ranch hand"].value as? String, "1")
-    XCTAssertEqual(app.switches["Kitchen companion"].value as? String, "1")
-    XCTAssertTrue(app.buttons["Create group"].isEnabled)
+    XCTAssertTrue(app.switches["Ranch hand"].wait(until: "value == %@", "1"), "Ranch hand joins the group")
+    XCTAssertTrue(app.switches["Kitchen companion"].wait(until: "value == %@", "1"), "Kitchen companion joins the group")
+    XCTAssertTrue(app.buttons["Create group"].wait(until: "enabled == true"))
     app.buttons["Create group"].tap()
     // The new room opens by itself, as on the web.
     let composer = app.descendants(matching: .any).matching(identifier: "groupComposer").firstMatch
-    XCTAssertTrue(composer.waitForExistence(timeout: 5), app.debugDescription); composer.tap(); composer.typeText("Check the gate together")
+    XCTAssertTrue(composer.waitForExistence(timeout: 5), app.debugDescription); composer.typeWhenFocused("Check the gate together")
     app.buttons["Send to group"].tap()
     XCTAssertTrue(app.staticTexts["Check the gate together"].waitForExistence(timeout: 5))
     capture(app, name: "Native group discussion")
@@ -145,8 +169,8 @@ final class ExperienceFlowTests: XCTestCase {
 
   func testTodayAcknowledgesEachReturnedPageWithoutDroppingLateImports() {
     let app = launch()
-    XCTAssertTrue(app.buttons["Configure Ranch hand"].waitForExistence(timeout: 10))
-    if !app.buttons["openToday"].isHittable {
+    XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 10))
+    if !app.buttons["openToday"].canTap {
       let back = app.navigationBars.buttons.matching(identifier: "Your assistants").firstMatch
       if back.exists { back.tap() } else { app.navigationBars.buttons.firstMatch.tap() }
     }
@@ -154,10 +178,10 @@ final class ExperienceFlowTests: XCTestCase {
     XCTAssertTrue(app.staticTexts["Fixture routine completed"].waitForExistence(timeout: 5))
     let marker = app.buttons["markTodaySeen"]
     XCTAssertEqual(marker.label, "Mark this page caught up")
-    XCTAssertTrue(app.staticTexts["More recorded results are waiting. Mark this page caught up to load the next page."].exists)
+    XCTAssertTrue(app.staticTexts["More results are waiting. Mark this page caught up to see them."].exists)
     app.collectionViews["todayOverview"].swipeUp(); marker.tap()
     XCTAssertTrue(app.staticTexts["Fixture late imported completion"].waitForExistence(timeout: 5))
-    XCTAssertEqual(marker.label, "Mark caught up")
+    XCTAssertTrue(marker.wait(until: "label == %@", "Mark caught up"), marker.label)
     capture(app, name: "Native Today preserves late imported event")
     marker.tap()
     let cleared = NSPredicate(format: "exists == false")

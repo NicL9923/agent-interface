@@ -15,67 +15,70 @@
 .computer-panel::backdrop { background: #101a1480; backdrop-filter: blur(3px); }
 .computer-panel > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 24px 26px 18px; flex-shrink: 0; }
 .computer-panel > header > div { min-width: 0; }
-.computer-panel h2 { font-size: 23px; margin: 3px 0 7px; }
+.computer-panel h2 { font-size: 1.4375rem; margin: 3px 0 7px; }
 .computer-panel .eyebrow { margin: 0; }
-.computer-subtitle { font-size: 13px; color: var(--muted); margin: 0; }
+.computer-subtitle { font-size: 0.8125rem; color: var(--muted); margin: 0; }
 .computer-panel .icon-button { min-height: 44px; min-width: 44px; }
 .computer-tabs { display: flex; align-items: center; border-bottom: 1px solid var(--line); padding: 0 20px; gap: 4px; flex-shrink: 0; }
-.computer-tabs button { display: flex; align-items: center; gap: 8px; border: 0; border-radius: 0; border-bottom: 2px solid transparent; min-height: 48px; padding: 12px 14px; font-size: 13px; }
+.computer-tabs button { display: flex; align-items: center; gap: 8px; border: 0; border-radius: 0; border-bottom: 2px solid transparent; min-height: 48px; padding: 12px 14px; font-size: 0.8125rem; }
 .computer-tabs [aria-selected="true"] { border-bottom-color: var(--accent); color: var(--accent); }
-.computer-host { margin-left: auto; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; text-align: right; padding-left: 14px; }
+.computer-host { margin-left: auto; color: var(--muted); font-size: 0.75rem; overflow-wrap: anywhere; text-align: right; padding-left: 14px; }
 .computer-panel > [role="tabpanel"] { min-height: 0; flex: 1; display: flex; flex-direction: column; }
 .computer-panel > [role="tabpanel"][hidden] { display: none; }
 .computer-view { display: flex; flex-direction: column; min-height: 0; flex: 1; }
 .computer-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 15px 24px; flex-shrink: 0; }
-.computer-toolbar > button, .computer-control-actions > button { flex-shrink: 0; font-size: 13px; min-height: 44px; }
+.computer-toolbar > button, .computer-control-actions > button { flex-shrink: 0; font-size: 0.8125rem; min-height: 44px; }
 .computer-control-actions { display: flex; flex-shrink: 0; gap: 6px; }
-.computer-ownership { display: grid; grid-template-columns: 8px minmax(0, 1fr); align-items: center; gap: 5px 9px; min-width: 0; font-size: 13px; }
+.computer-ownership { display: grid; grid-template-columns: 8px minmax(0, 1fr); align-items: center; gap: 5px 9px; min-width: 0; font-size: 0.8125rem; }
 .computer-ownership strong { font-weight: 600; overflow-wrap: anywhere; }
-.computer-ownership > span:last-child { grid-column: 2; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+.computer-ownership > span:not(.computer-state-dot) { grid-column: 2; color: var(--muted); font-size: 0.75rem; overflow-wrap: anywhere; }
 .computer-state-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
 .computer-state-dot.ready { background: var(--accent); }
-.computer-notice { margin: 0; padding: 10px 24px; font-size: 12px; line-height: 1.5; color: var(--attention); background: var(--rail); overflow-wrap: anywhere; flex-shrink: 0; }
+.computer-notice { margin: 0; padding: 10px 24px; font-size: 0.75rem; line-height: 1.5; color: var(--attention); background: var(--rail); overflow-wrap: anywhere; flex-shrink: 0; }
 .computer-screen-wrap { position: relative; display: flex; flex: 1; min-height: 100px; margin: 0 18px; background: #151c18; border-radius: 12px; overflow: hidden; }
 .computer-screen { flex: 1; min-width: 0; min-height: 0; }
-.computer-connection-overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 15px; background: #151c18; color: #a6b4a7; font-size: 14px; text-align: center; padding: 24px; }
+.computer-connection-overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 15px; background: #151c18; color: #a6b4a7; font-size: 0.875rem; text-align: center; padding: 24px; }
 .computer-connection-overlay strong { font-weight: 500; }
 .computer-connection-overlay button { color: #f1efdf; border-color: #3a483d; }
 .computer-connection-overlay button:hover { background: #2a4435; }
-.computer-footnote { margin: 12px 24px 16px; color: var(--muted); font-size: 11px; flex-shrink: 0; }
+.computer-footnote { margin: 12px 24px 16px; color: var(--muted); font-size: 0.75rem; flex-shrink: 0; }
 .computer-unavailable { margin: auto; padding: 36px 24px; max-width: 480px; text-align: center; overflow-wrap: anywhere; }
 .computer-empty-icon { display: inline-grid; place-items: center; width: 70px; height: 70px; border-radius: 20px; background: var(--accent-soft); color: var(--accent); margin-bottom: 8px; }
-.computer-unavailable h3 { font-size: 20px; font-weight: 600; margin: 18px 0 10px; }
-.computer-unavailable p { color: var(--muted); font-size: 13px; line-height: 1.7; }
+.computer-unavailable h3 { font-size: 1.25rem; font-weight: 600; margin: 18px 0 10px; }
+.computer-unavailable p { color: var(--muted); font-size: 0.8125rem; line-height: 1.7; }
 .terminal-wrap { padding: 12px 10px 8px 14px; color-scheme: dark; }
 .computer-terminal { width: 100%; height: 100%; min-height: 0; }
 .computer-terminal .xterm { height: 100%; }
 .terminal-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 12px 20px 16px; flex-shrink: 0; }
-.terminal-tools button { min-height: 40px; font-size: 12px; padding: 8px 12px; }
-.terminal-tools > span { margin-left: auto; font-size: 11px; color: var(--muted); }
+.terminal-tools button { min-height: 40px; font-size: 0.75rem; padding: 8px 12px; }
 .terminal-paste { margin: 0 20px 16px; flex-shrink: 0; }
-.terminal-paste > label { font-size: 12px; margin-bottom: 6px; }
+.terminal-offer { margin: 12px 20px 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; display: grid; gap: 6px; flex-shrink: 0; }
+.terminal-offer code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.8125rem; overflow-wrap: anywhere; }
+.terminal-offer small { font-size: 0.75rem; color: var(--muted); }
+.terminal-offer .actions { display: flex; justify-content: flex-end; gap: 8px; }
+.terminal-offer button { min-height: 44px; font-size: 0.75rem; }
+.terminal-paste > label { font-size: 0.75rem; margin-bottom: 6px; }
 .terminal-paste .actions { margin-top: 8px; justify-content: space-between; gap: 12px; }
-.terminal-paste small { font-size: 11px; color: var(--muted); }
-.terminal-paste button { min-height: 44px; font-size: 12px; flex-shrink: 0; }
-.computer-end-confirmation { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; padding: 10px 24px; background: var(--rail); flex-shrink: 0; }
+.terminal-paste small { font-size: 0.75rem; color: var(--muted); }
+.terminal-paste button { min-height: 44px; font-size: 0.75rem; flex-shrink: 0; }
+.computer-end-confirmation { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 0.75rem; padding: 10px 24px; background: var(--rail); flex-shrink: 0; }
 .computer-end-confirmation > span { flex: 1; min-width: 180px; }
-.computer-end-confirmation button { min-height: 44px; font-size: 12px; }
+.computer-end-confirmation button { min-height: 44px; font-size: 0.75rem; }
 @media (max-width: 620px) {
   .computer-panel { width: 100%; height: 100dvh; margin: 0; inset: 0; border: 0; border-radius: 0; overflow-y: auto; }
   .computer-panel > header { padding: max(16px, env(safe-area-inset-top)) 16px 14px; gap: 8px; }
-  .computer-panel h2 { font-size: 21px; }
-  .computer-subtitle { font-size: 12px; line-height: 1.5; }
+  .computer-panel h2 { font-size: 1.3125rem; }
+  .computer-subtitle { font-size: 0.75rem; line-height: 1.5; }
   .computer-tabs { padding: 0 10px; }
-  .computer-host { font-size: 10px; max-width: 38%; }
+  .computer-host { font-size: 0.6875rem; max-width: 38%; }
   .computer-toolbar { padding: 12px 14px; gap: 8px; }
-  .computer-ownership { font-size: 12px; }
-  .computer-toolbar > button, .computer-control-actions > button { font-size: 12px; padding-inline: 10px; }
+  .computer-ownership { font-size: 0.75rem; }
+  .computer-toolbar > button, .computer-control-actions > button { font-size: 0.75rem; padding-inline: 10px; }
   .computer-screen-wrap { margin: 0 8px; border-radius: 8px; }
   .computer-notice { padding: 10px 14px; }
   .computer-footnote { margin: 12px 14px max(14px, env(safe-area-inset-bottom)); line-height: 1.5; }
   .terminal-tools { padding: 10px 12px max(12px, env(safe-area-inset-bottom)); gap: 6px; }
   .terminal-tools button { min-height: 44px; }
-  .terminal-tools > span { margin: 2px 0 0; flex-basis: 100%; line-height: 1.5; }
   .terminal-paste { margin: 0 12px max(12px, env(safe-area-inset-bottom)); }
   .terminal-paste textarea { max-height: 100px; }
   .computer-end-confirmation { padding: 12px 14px; }
@@ -87,3 +90,48 @@
 .computer-google { max-width: 100%; min-height: 0; }
 .computer-confirm-error { display: flex; flex-direction: column; align-items: center; gap: 10px; }
 .computer-confirm-error p { color: var(--attention); }
+
+/* Match the emulator theme in the remainder below its last whole text row. */
+.computer-terminal .xterm-viewport { background-color: #151c18; }
+.desktop-stage.is-controlling { outline: 2px solid var(--accent); outline-offset: 2px; }
+.terminal-tools [aria-expanded="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+@media (max-width: 620px) {
+  .desktop-stage { flex: 0 0 auto; min-height: 0; aspect-ratio: var(--desktop-aspect, 1.6); max-height: 60dvh; }
+  .computer-end-confirmation > span { flex-basis: 100%; min-width: 0; }
+  .computer-end-confirmation button { flex: 1; }
+  .terminal-paste .actions { flex-wrap: wrap; justify-content: flex-end; }
+  .terminal-paste .actions small { flex-basis: 100%; }
+}
+.computer-notice.is-info { color: var(--muted); }
+.terminal-tools [aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.desktop-touch-tools button { display: inline-flex; align-items: center; gap: 6px; }
+.desktop-touch-tools { padding-top: 0; }
+
+/* How to use the desktop by touch: a sheet over the computer panel. */
+.computer-help {
+  width: min(520px, calc(100vw - 32px));
+  max-height: min(760px, calc(100dvh - 32px));
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  background: var(--raised);
+  color: var(--ink);
+  overflow: hidden;
+  box-shadow: 0 24px 90px #14201940;
+}
+.computer-help[open] { display: flex; flex-direction: column; }
+.computer-help::backdrop { background: #101a1480; }
+.computer-help > header { display: grid; grid-template-columns: 44px 1fr 44px; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--line); flex-shrink: 0; }
+.computer-help > header h2 { grid-column: 2; margin: 0; font-size: 1.0625rem; font-weight: 600; text-align: center; }
+.computer-help .icon-button { min-height: 44px; min-width: 44px; border-radius: 50%; }
+.computer-help-body { overflow-y: auto; padding: 6px 18px max(18px, env(safe-area-inset-bottom)); }
+.computer-help h3 { margin: 18px 4px 8px; font-size: 0.8125rem; font-weight: 500; color: var(--muted); }
+.computer-help ul { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: 16px; background: var(--rail); }
+.computer-help li { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 14px; align-items: start; padding: 14px 16px; }
+.computer-help li + li { border-top: 1px solid var(--line); }
+.computer-help li .icon { color: var(--muted); margin-top: 1px; }
+.computer-help strong { display: block; font-weight: 500; font-size: 0.9375rem; }
+.computer-help li p { margin: 4px 0 0; color: var(--muted); font-size: 0.8125rem; line-height: 1.5; }
+@media (max-width: 620px) {
+  .computer-help { width: 100%; max-width: none; max-height: calc(100dvh - max(24px, env(safe-area-inset-top))); margin: auto 0 0; border-radius: 22px 22px 0 0; border-bottom: 0; }
+}

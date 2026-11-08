@@ -2,8 +2,8 @@ import XCTest
 import UIKit
 
 /// Exercises parity behavior against the Debug-only transport, never a household server.
-final class ParityFlowTests: XCTestCase {
-  override func setUp() {
+@MainActor final class ParityFlowTests: XCTestCase {
+  override func setUp() async throws {
     continueAfterFailure = false
     if UIDevice.current.userInterfaceIdiom == .pad { XCUIDevice.shared.orientation = .landscapeLeft }
   }
@@ -17,7 +17,8 @@ final class ParityFlowTests: XCTestCase {
     return app
   }
   private func home(_ app: XCUIApplication) {
-    if app.buttons["openSettings"].isHittable { return }
+    // iPhone goes back to home, the root of its stack; iPad brings back its sidebar.
+    if app.buttons["openSettings"].canTap { return }
     if app.buttons["Show Sidebar"].exists { app.buttons["Show Sidebar"].tap() }
     else { app.navigationBars.buttons.firstMatch.tap() }
     XCTAssertTrue(app.buttons["openSettings"].waitForExistence(timeout: 5))
@@ -33,17 +34,51 @@ final class ParityFlowTests: XCTestCase {
   private func scroll(_ app: XCUIApplication, to element: XCUIElement, up: Bool = true) {
     let surface = app.collectionViews.firstMatch
     for _ in 0..<8 {
-      if element.exists && element.isHittable { return }
+      if element.exists && element.canTap { return }
       if surface.exists { if up { surface.swipeUp() } else { surface.swipeDown() } }
       else { if up { app.swipeUp() } else { app.swipeDown() } }
     }
-    XCTAssertTrue(element.isHittable, app.debugDescription)
+    XCTAssertTrue(element.canTap, app.debugDescription)
   }
   private func closeSettings(_ app: XCUIApplication) {
     let close = app.buttons["Close"]
     expectation(for: NSPredicate(format: "enabled == true"), evaluatedWith: close)
     waitForExpectations(timeout: 10)
     close.tap()
+  }
+  func testAnUnreadReplyIsMarkedUntilItsChatIsOpened() {
+    let app = launch(home: true)
+    let row = app.buttons["bot.personal"]
+    XCTAssertTrue(row.waitForExistence(timeout: 15))
+    XCTAssertTrue(row.wait(until: "value == %@", "Unread"), "VoiceOver hears the unread reply")
+    XCTAssertNotEqual(app.buttons["bot.ranch"].value as? String, "Unread")
+    row.tapWhenReady()
+    XCTAssertTrue(app.textViews["messageComposer"].waitForExistence(timeout: 10))
+    home(app)
+    // The fixture keeps saying unread; the chat read here stays read until a newer reply.
+    XCTAssertTrue(row.wait(until: "value != %@", "Unread"))
+  }
+  func testSwipingARowPinsItAndCommandShortcutsOpenAndFind() throws {
+    let app = launch(home: true)
+    XCTAssertTrue(app.buttons["openSettings"].waitForExistence(timeout: 15))
+    let preview = app.staticTexts["The north gate battery needs replacing."]
+    XCTAssertTrue(app.buttons["bot.ranch"].waitForExistence(timeout: 5)); XCTAssertTrue(preview.exists)
+    // A pinned assistant leaves the list for the tiles above it, which show no preview.
+    app.buttons["bot.ranch"].swipeLeft()
+    expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: preview)
+    waitForExpectations(timeout: 5)
+    // The first pin opens with Cmd+1, and Cmd+F in that chat finds, keyboard ready.
+    app.shortcut("1", shows: app.textViews["messageComposer"])
+    // Cmd+F reaches the chat only once it is on screen; before that, home would take it for Search.
+    XCTAssertTrue(app.chatHeader("Ranch hand").waitUntilHittable())
+    XCTAssertTrue(app.textViews["messageComposer"].waitUntilHittable())
+    let find = app.textFields["findConversation"]
+    // Known app issue: Cmd+F sometimes never reaches the chat after Cmd+1 (#178). Recorded, not
+    // failed, until that is fixed; remove this wrapper with the fix.
+    XCTExpectFailure("Cmd+F sometimes never reaches the open chat (#178)", options: .nonStrict()) {
+      app.shortcut("f", shows: find)
+      XCTAssertTrue(find.waitForKeyboardFocus())
+    }
   }
   func testHomePinsSettingsAutosaveAndAdvancedComposer() throws {
     let app = launch(home: true)
@@ -67,48 +102,84 @@ final class ParityFlowTests: XCTestCase {
     waitForExpectations(timeout: 5)
     let appearance = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Appearance")).firstMatch
     scroll(app, to: appearance); appearance.tap()
-    app.buttons["Dark"].tap()
+    app.buttons["Dark"].tapWhenReady()
     closeSettings(app)
     app.buttons["openSettings"].tap()
-    XCTAssertEqual(app.switches["advancedDetails"].value as? String, "1")
+    XCTAssertTrue(app.switches["advancedDetails"].wait(until: "value == %@", "1"), "Advanced details stays on")
     try capture("settings-dark")
     closeSettings(app)
     try capture("home-dark")
     app.buttons["bot.ranch"].tap()
-    XCTAssertTrue(app.buttons["composerModel"].waitForExistence(timeout: 10))
-    XCTAssertTrue(app.buttons["Unpin assistant"].exists)
+    XCTAssertTrue(app.buttons["chatModel"].waitForExistence(timeout: 10))
+    app.openBotProfile("Ranch hand")
+    XCTAssertEqual(app.buttons["profilePin"].label, "Unpin")
+    app.buttons["profilePin"].tap()
+    expectation(for: NSPredicate(format: "label == %@", "Pin"), evaluatedWith: app.buttons["profilePin"])
+    waitForExpectations(timeout: 5)
+    app.buttons["closeBotProfile"].tap()
     try capture("conversation-dark")
-    app.buttons["composerModel"].tap()
+    app.buttons["chatModel"].tap()
     XCTAssertTrue(app.textFields["modelSearch"].waitForExistence(timeout: 10))
     try capture("model-dark")
-    let speed = app.buttons["inferenceSpeed"]
-    scroll(app, to: speed); speed.tap(); app.buttons["Fast"].tap()
+    // Three speeds fit as a segmented control: one tap, no menu.
+    let speed = app.segmentedControls["inferenceSpeed"]
+    scroll(app, to: speed); speed.buttons["Fast"].tapWhenReady()
+    XCTAssertTrue(speed.buttons["Fast"].wait(until: "selected == true"), "Fast is selected")
     let favorite = app.buttons["Add Fixture fast model to favorites"]
     scroll(app, to: favorite); favorite.tap()
     XCTAssertTrue(app.buttons["Remove Fixture fast model from favorites"].waitForExistence(timeout: 5))
     let search = app.textFields["modelSearch"]
-    search.tap(); search.typeText("Fixture fast")
+    search.typeWhenFocused("Fixture fast")
     let choice = app.buttons["Fixture fast model"].firstMatch
-    XCTAssertTrue(choice.waitForExistence(timeout: 5)); choice.tap()
-    XCTAssertTrue(app.buttons["composerModel"].waitForExistence(timeout: 10))
-    XCTAssertEqual(app.buttons["composerModel"].label, "Model: fixture-fast")
+    XCTAssertTrue(choice.waitForExistence(timeout: 5)); choice.tapWhenReady()
+    XCTAssertTrue(app.buttons["chatModel"].waitForExistence(timeout: 10))
+    XCTAssertTrue(app.buttons["chatModel"].wait(until: "label == %@", "Model: fixture-fast"), app.buttons["chatModel"].label)
     let composer = app.textViews["messageComposer"]
-    composer.tap(); composer.typeText("Check the fence")
+    composer.typeWhenFocused("Check the fence")
     XCTAssertTrue(app.buttons["sendMessage"].isEnabled)
-    XCTAssertGreaterThan(composer.frame.width, 240, "Advanced tools must not squeeze the input")
+    XCTAssertFalse(app.buttons["composerModel"].exists, "The model lives in the chat header, so Advanced adds nothing to the composer")
     try capture("composer-typing")
+  }
+  func testAssistantCardFollowsAndMovesIntoANewHomeSection() throws {
+    let app = launch()
+    app.openBotProfile("Ranch hand")
+    try capture("assistant-card")
+    let follow = app.switches["followBot"]
+    XCTAssertEqual(follow.value as? String, "0")
+    // The row's middle is its label, which a toggle ignores; tap the switch itself.
+    follow.coordinate(withNormalizedOffset: CGVector(dx: 0.94, dy: 0.5)).tap()
+    expectation(for: NSPredicate(format: "value == %@", "1"), evaluatedWith: follow)
+    waitForExpectations(timeout: 5)
+    let section = app.buttons["homeSection"]
+    XCTAssertTrue(section.waitForExistence(timeout: 5), app.debugDescription)
+    section.tap()
+    let new = app.buttons["New section…"]
+    XCTAssertTrue(new.waitForExistence(timeout: 5), app.debugDescription)
+    new.tap()
+    let name = app.alerts.textFields.firstMatch
+    XCTAssertTrue(name.waitForExistence(timeout: 5))
+    name.typeWhenFocused("Around the house")
+    app.alerts.buttons["Add"].tapWhenReady()
+    expectation(for: NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", "Around the house", "Around the house"), evaluatedWith: section)
+    waitForExpectations(timeout: 5)
+    app.buttons["closeBotProfile"].tap()
+    home(app)
+    // Home lists the assistant under its new section, once.
+    XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label ==[c] %@", "Around the house")).firstMatch.waitForExistence(timeout: 5))
+    XCTAssertEqual(app.buttons.matching(identifier: "bot.ranch").count, 1)
+    try capture("home-section")
   }
   func testAssistantCatalogAndUnsavedChangesAreProtected() throws {
     let app = launch()
-    XCTAssertTrue(app.buttons["Configure Ranch hand"].waitForExistence(timeout: 10))
-    app.buttons["Configure Ranch hand"].tap()
+    XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 10))
+    app.openAssistantSettings("Ranch hand")
     let name = app.textFields["Name"]
-    name.tap(); name.typeText(" edited")
+    name.typeWhenFocused(" edited")
     app.buttons["Close"].tap()
     XCTAssertTrue(app.buttons["Discard changes"].waitForExistence(timeout: 5))
     app.buttons["Discard changes"].tap()
-    XCTAssertTrue(app.buttons["Configure Ranch hand"].waitForExistence(timeout: 5))
-    app.buttons["Configure Ranch hand"].tap()
+    XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 5))
+    app.openAssistantSettings("Ranch hand")
     XCTAssertTrue(app.textFields["Name"].waitForExistence(timeout: 5))
     XCTAssertEqual(app.textFields["Name"].value as? String, "Ranch hand")
     XCTAssertFalse(app.textFields["modelSearch"].exists, "The catalog opens from the collapsed model row")
@@ -117,7 +188,7 @@ final class ParityFlowTests: XCTestCase {
     app.buttons["assistantModel"].tap()
     let search = app.textFields["modelSearch"]
     XCTAssertTrue(search.waitForExistence(timeout: 5))
-    search.tap(); search.typeText("Fixture fast")
+    search.typeWhenFocused("Fixture fast")
     XCTAssertTrue(app.buttons["Fixture fast model"].waitForExistence(timeout: 5))
     try capture("assistant-model-catalog")
   }
@@ -148,7 +219,7 @@ final class ParityFlowTests: XCTestCase {
     app.launchEnvironment["AGENT_INTERFACE_UI_PREFERENCES_FAILURE"] = "1"
     app.launch()
     XCTAssertTrue(app.buttons["openSettings"].waitForExistence(timeout: 10)); app.buttons["openSettings"].tap()
-    app.switches["advancedDetails"].tap()
+    app.switches["advancedDetails"].tapWhenReady()
     let retry = app.buttons["Retry saving settings"]
     XCTAssertTrue(retry.waitForExistence(timeout: 5))
     let dismissError = app.collectionViews.buttons["Dismiss error"].firstMatch
@@ -158,7 +229,7 @@ final class ParityFlowTests: XCTestCase {
     expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: retry); waitForExpectations(timeout: 5)
     closeSettings(app)
     app.buttons["openSettings"].tap()
-    XCTAssertEqual(app.switches["advancedDetails"].value as? String, "1")
+    XCTAssertTrue(app.switches["advancedDetails"].wait(until: "value == %@", "1"), "The retried save kept Advanced details on")
     try capture("settings-save-recovered")
   }
   func testMixedReplyShowsTextOnceAndToolOnlyInsideActivity() {
@@ -174,10 +245,46 @@ final class ParityFlowTests: XCTestCase {
     XCTAssertFalse(app.staticTexts["Fixture tool result"].exists)
     XCTAssertTrue(app.buttons["Fixture output.txt"].exists)
     XCTAssertFalse(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "fixture_file_tool")).firstMatch.exists)
-    app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Tool calls")).firstMatch.tap()
-    app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "fixture_search")).firstMatch.tap()
+    app.buttons["turnWork"].tapWhenReady()
+    app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Tool calls")).firstMatch.tapWhenReady()
+    app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "fixture_search")).firstMatch.tapWhenReady()
     XCTAssertTrue(app.staticTexts["Fixture tool result"].waitForExistence(timeout: 5))
     XCTAssertEqual(app.staticTexts.matching(identifier: "Fixture single visible reply").count, 1)
+  }
+  func testLongToolOutputsScrollInsideCompactReceipts() throws {
+    for presentation in ["simple", "advanced"] {
+      let app = XCUIApplication()
+      app.launchEnvironment["AGENT_INTERFACE_UI_FIXTURE"] = "1"
+      app.launchEnvironment["AGENT_INTERFACE_UI_RESET"] = "1"
+      app.launchEnvironment["AGENT_INTERFACE_UI_SCOPE"] = UUID().uuidString.lowercased()
+      app.launchEnvironment["AGENT_INTERFACE_UI_LONG_TOOL"] = presentation
+      app.launch()
+      app.buttons["turnWork"].tapWhenReady()
+      let tools = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Tool calls")).firstMatch
+      XCTAssertTrue(tools.waitForExistence(timeout: 10)); tools.tap()
+      XCTAssertLessThan(tools.frame.minY, app.staticTexts["Fixture final answer follows the tool results."].frame.minY)
+      app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "fixture_short")).firstMatch.tapWhenReady()
+      let short = app.staticTexts["Short fixture tool result"]
+      XCTAssertTrue(short.waitForExistence(timeout: 5))
+      let long = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "fixture_long")).firstMatch
+      XCTAssertLessThan(long.frame.minY - short.frame.maxY, 100, "Short output must not reserve a full-height empty box")
+      long.tap()
+      let beforeScroll = XCTAttachment(screenshot: app.screenshot())
+      beforeScroll.name = "Before scrolling \(presentation) tool output"; beforeScroll.lifetime = .keepAlways; add(beforeScroll)
+      let outputs = app.scrollViews.matching(NSPredicate(format: "label BEGINSWITH %@", "Result"))
+      XCTAssertTrue(outputs.firstMatch.waitForExistence(timeout: 5), app.debugDescription)
+      let output = try XCTUnwrap(outputs.allElementsBoundByIndex.last)
+      XCTAssertLessThanOrEqual(output.frame.height, 281)
+      let text = output.staticTexts.firstMatch
+      XCTAssertTrue(text.label.hasSuffix("END OF FIXTURE OUTPUT"), "Long output must remain complete beyond 4,000 characters")
+      let before = text.frame.minY, outer = output.frame
+      output.swipeUp()
+      XCTAssertLessThan(text.frame.minY, before, "The output itself must scroll")
+      XCTAssertEqual(output.frame.minY, outer.minY, accuracy: 2, "Scrolling output must keep the receipt in place")
+      let capture = XCTAttachment(screenshot: app.screenshot())
+      capture.name = "Bounded \(presentation) tool output"; capture.lifetime = .keepAlways; add(capture)
+      app.terminate()
+    }
   }
   /// Like the web, a chat opens at its latest message, pages in earlier turns near the top, and
   /// the jump control returns to the end.
@@ -218,6 +325,7 @@ final class ParityFlowTests: XCTestCase {
     app.buttons["bot.ranch"].tap()
     XCTAssertTrue(app.textViews["messageComposer"].waitForExistence(timeout: 10))
     try capture("conversation-light")
+    app.openBotProfile("Ranch hand")
     app.buttons["conversationFiles"].tap()
     XCTAssertTrue(app.staticTexts["No artifacts yet"].waitForExistence(timeout: 5))
     try capture("artifacts-empty")
@@ -250,7 +358,7 @@ final class ParityFlowTests: XCTestCase {
     XCTAssertTrue(app.staticTexts["Connect your household to Hermes"].waitForExistence(timeout: 10), app.debugDescription)
     XCTAssertTrue(app.staticTexts["Pick up with your assistants"].exists)
     XCTAssertTrue(app.buttons["Check connection"].exists)
-    app.buttons["New assistant"].tap()
+    app.tapNewAssistant()
     XCTAssertTrue(app.staticTexts["Assistant setup is unavailable while Hermes is disconnected."].waitForExistence(timeout: 5))
   }
   func testNotificationPromptAsksIosOnlyAfterEnableAndSettingsSwitchFollows() {
@@ -274,7 +382,7 @@ final class ParityFlowTests: XCTestCase {
     let app = launch(["PUSH"])
     XCTAssertTrue(app.buttons["notNowNotifications"].waitForExistence(timeout: 10))
     app.buttons["notNowNotifications"].tap()
-    XCTAssertFalse(app.staticTexts["Enable notifications on this device?"].exists)
+    XCTAssertTrue(app.staticTexts["Enable notifications on this device?"].waitForDisappearance())
     app.buttons["openSettings"].tap()
     let toggle = app.switches["deviceNotifications"]
     // Settings is a lazy form; on a landscape iPad the Notifications section starts below the fold.

@@ -4,7 +4,6 @@ The actual Hermes store/scheduler qualification lives in experience_probe.py.
 """
 import contextlib
 import copy
-import importlib.util
 import json
 import sqlite3
 import sys
@@ -14,11 +13,297 @@ import tempfile
 import types
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
+
+from support import load_source
 
 ROOT = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location('experience_test', ROOT / 'src/hermes/experience.py')
-experience = importlib.util.module_from_spec(spec); spec.loader.exec_module(experience)
+experience = load_source('src/hermes/experience.py', 'experience_test')
+
+
+class MemoryRefreshTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.path = Path(self.directory.name) / 'refresh.db'
+        self.disk = {'memory': ['Old note'], 'user': ['About me']}
+        self.locks = {target: threading.RLock() for target in self.disk}
+        self.persisted = {'system_prompt': 'Old note|About me'}
+        self.server = types.SimpleNamespace(_invoke_agent=lambda: None)
+        self.session = dict(session_key='canonical', running=False, history=[{'role': 'user', 'content': 'earlier', '_row_id': 7}],
+                            task_id='root', pending_approval=object(), goal=object())
+        owner = self
+        class Store:
+            def __init__(self): self.load_from_disk()
+            def load_from_disk(self): self.loaded = copy.deepcopy(owner.disk)
+            def _path_for(self, target): return target
+            def _file_lock(self, path): return owner.locks[path]
+            def _read_raw_checked(self, path): return '\n§\n'.join(owner.disk[path]), True
+            def target_enabled(self, target): return True
+            def _mutate(self, target, fn, **kwargs):
+                with owner.locks[target]:
+                    result = fn(list(owner.disk[target]), 5000)
+                    if isinstance(result, dict): return result
+                    owner.disk[target] = result[0]
+                    return {'success': True}
+        self.Store = Store
+        def persist(session):
+            agent = session['agent']
+            agent._cached_system_prompt = agent._build_system_prompt(None)
+            self.persisted['system_prompt'] = agent._cached_system_prompt
+        self.server._persist_live_session_system_prompt = persist
+        self.modules = {
+            'tools.memory_tool': types.SimpleNamespace(load_on_disk_store=Store),
+            'tools.memory_tool_store': types.SimpleNamespace(ENTRY_DELIMITER='\n§\n', _scan_memory_content=lambda text: False),
+        }
+        self.patch = patch.dict(sys.modules, self.modules); self.patch.start()
+        self.open_journal()
+        self.make_agent()
+
+    def open_journal(self):
+        self.journal = types.SimpleNamespace(lock=threading.RLock(), db=sqlite3.connect(self.path, check_same_thread=False))
+        self.refresh = experience.MemoryRefresh(self.journal, self.server, lambda profile: [self.session] if profile == 'default' else [])
+
+    def make_agent(self):
+        store = self.Store()
+        agent = types.SimpleNamespace(_memory_store=store, _cached_system_prompt=self.persisted['system_prompt'],
+            _cached_system_prompt_static='old static', session_id='canonical',
+            _session_db=types.SimpleNamespace(get_session=lambda sid: dict(self.persisted), update_system_prompt=lambda *args: None))
+        def invalidate():
+            agent._cached_system_prompt = None; agent._cached_system_prompt_static = None
+            store.load_from_disk()
+        def build(_):
+            agent._cached_system_prompt_static = 'new static'
+            return '|'.join(text for entries in store.loaded.values() for text in entries)
+        agent._invalidate_system_prompt = invalidate; agent._build_system_prompt = build
+        self.session['agent'] = self.agent = agent
+
+    def tearDown(self):
+        self.patch.stop(); self.journal.db.close(); self.directory.cleanup()
+
+    def save(self, text):
+        document = experience.profile_memory('default')['documents'][0]
+        return experience.mutate_memory(dict(operation='save_memory', profile='default', target='memory',
+            revision=document['revision'], entries=[dict(text=text)]), self.refresh)
+
+    def test_edit_during_run_waits_then_rebuilds_and_persists_without_changing_session(self):
+        self.refresh.before_turn('default', self.session, self.agent)
+        self.session['running'] = True
+        before = dict(self.session)
+        result = self.save('New note')
+        self.assertEqual(result['refresh']['state'], 'pending')
+        self.assertTrue(result['refresh']['busy'])
+        self.assertEqual(self.agent._memory_store.loaded['memory'], ['Old note'])
+        self.assertEqual(self.persisted['system_prompt'], 'Old note|About me')
+        self.session['running'] = False
+        self.assertEqual(self.refresh.status('default')['state'], 'next_turn')
+        self.refresh.before_turn('default', self.session, self.agent)
+        self.assertEqual(self.persisted['system_prompt'], 'New note|About me')
+        self.assertEqual(self.agent._cached_system_prompt_static, 'new static')
+        self.assertEqual(self.refresh.status('default')['state'], 'applied')
+        self.assertEqual(self.session, {**before, 'running': False})
+        # A subsequent native restore with nonempty canonical history sees the
+        # persisted rebuild, rather than resurrecting the old memory snapshot.
+        self.assertIn('New note', self.agent._session_db.get_session('canonical')['system_prompt'])
+
+    def test_restart_recovers_unapplied_revision_and_saved_prompt(self):
+        revision = self.save('Saved before restart')['refresh']['revision']
+        self.journal.db.close(); self.open_journal(); self.make_agent()
+        self.assertEqual(self.refresh.status('default')['revision'], revision)
+        self.assertEqual(self.refresh.status('default')['state'], 'next_turn')
+        self.assertEqual(self.agent._cached_system_prompt, 'Old note|About me')
+        self.refresh.before_turn('default', self.session, self.agent)
+        self.assertIn('Saved before restart', self.persisted['system_prompt'])
+        self.journal.db.close(); self.open_journal(); self.make_agent()
+        self.assertEqual(self.refresh.status('default')['state'], 'applied')
+
+    def test_native_persist_swallows_failure_or_missing_methods_never_acknowledge(self):
+        self.save('Pending note')
+        for persist in (lambda session: None, None):
+            self.server._persist_live_session_system_prompt = persist
+            with self.assertLogs(experience.__name__, level='WARNING'):
+                self.refresh.before_turn('default', self.session, self.agent)
+            self.assertEqual(self.refresh.status('default')['state'], 'pending')
+            self.assertEqual(self.agent._cached_system_prompt, 'Old note|About me')
+            self.assertEqual(self.agent._memory_store.loaded['memory'], ['Old note'])
+            self.assertIsNone(getattr(self.agent, '_app_memory_revision', None))
+
+    def test_disk_change_during_build_is_pending_and_next_boundary_retries_latest(self):
+        self.save('First edit')
+        persist = self.server._persist_live_session_system_prompt
+        def racing(session):
+            persist(session)
+            # An uncooperative external writer can ignore Hermes's locks.
+            self.disk['memory'] = ['External edit']
+        self.server._persist_live_session_system_prompt = racing
+        with self.assertLogs(experience.__name__, level='WARNING'):
+            self.refresh.before_turn('default', self.session, self.agent)
+        self.assertEqual(self.refresh.status('default')['state'], 'pending')
+        self.server._persist_live_session_system_prompt = persist
+        self.refresh.before_turn('default', self.session, self.agent)
+        self.assertEqual(self.persisted['system_prompt'], 'External edit|About me')
+        self.assertEqual(self.refresh.status('default')['state'], 'applied')
+
+    def test_cas_failure_does_not_write_refresh_receipt_and_other_profile_is_separate(self):
+        with self.assertRaises(experience.ExperienceError):
+            experience.mutate_memory(dict(operation='save_memory', profile='default', target='memory', revision='stale', entries=[]), self.refresh)
+        self.assertEqual(self.journal.db.execute('SELECT count(*) FROM memory_refresh_edits').fetchone()[0], 0)
+        self.save('Profile note')
+        self.refresh.before_turn('default', self.session, self.agent)
+        self.assertEqual(self.refresh.status('other')['state'], 'applied')
+        self.assertEqual(self.refresh.status('other')['revision'], '')
+        self.assertEqual(self.journal.db.execute('SELECT profile FROM memory_refresh_sessions').fetchall(), [('default',)])
+
+    def test_native_writer_is_serialized_with_app_reload_then_keeps_frozen_prompt(self):
+        self.save('First edit')
+        entered, attempted, written = threading.Event(), threading.Event(), threading.Event()
+        persist = self.server._persist_live_session_system_prompt
+        def writer():
+            entered.wait(2); attempted.set()
+            with self.locks['memory']:
+                self.disk['memory'] = ['Later native edit']
+                written.set()
+        worker = threading.Thread(target=writer); worker.start()
+        def building(session):
+            entered.set()
+            self.assertTrue(attempted.wait(2))
+            self.assertFalse(written.is_set(), 'Native write crossed the prompt reload lock')
+            persist(session)
+        self.server._persist_live_session_system_prompt = building
+        self.refresh.before_turn('default', self.session, self.agent)
+        worker.join(2); self.assertFalse(worker.is_alive())
+        self.assertEqual(self.persisted['system_prompt'], 'First edit|About me')
+        self.assertEqual(self.refresh.status('default')['state'], 'applied')
+        self.server._persist_live_session_system_prompt = persist
+        self.agent._invalidate_system_prompt = Mock(wraps=self.agent._invalidate_system_prompt)
+        self.refresh.before_turn('default', self.session, self.agent)
+        self.agent._invalidate_system_prompt.assert_not_called()
+        self.assertEqual(self.persisted['system_prompt'], 'First edit|About me')
+
+    def test_status_and_native_tool_writes_never_create_app_refresh_requests(self):
+        self.agent._invalidate_system_prompt = Mock(wraps=self.agent._invalidate_system_prompt)
+        self.refresh.before_turn('default', self.session, self.agent)
+        self.disk['memory'].append('A native tool wrote this')
+        self.refresh.status('default')
+        self.refresh.before_turn('default', self.session, self.agent)
+        self.agent._invalidate_system_prompt.assert_not_called()
+        self.assertEqual(self.journal.db.execute('SELECT count(*) FROM memory_refresh_edits').fetchone()[0], 0)
+        self.assertEqual(self.persisted['system_prompt'], 'Old note|About me')
+
+    def test_busy_app_edit_followed_by_native_tool_write_loads_latest_disk_once(self):
+        self.session['running'] = True
+        revision = self.save('An app edit')['refresh']['revision']
+        self.disk['memory'].append('Subsequent native tool edit')
+        self.assertEqual(self.refresh.status('default')['revision'], revision)
+        self.session['running'] = False
+        self.refresh.before_turn('default', self.session, self.agent)
+        self.assertEqual(self.persisted['system_prompt'], 'An app edit|Subsequent native tool edit|About me')
+        self.assertEqual(self.refresh.status('default')['state'], 'applied')
+
+    def test_other_native_session_is_untouched_even_with_pending_app_edit(self):
+        self.save('App edit for Bot Chat')
+        native = {**self.session, 'session_key': 'unrelated-native-session'}
+        self.agent._invalidate_system_prompt = Mock(wraps=self.agent._invalidate_system_prompt)
+        self.refresh.before_turn('default', native, self.agent)
+        self.agent._invalidate_system_prompt.assert_not_called()
+        self.assertEqual(self.journal.db.execute('SELECT count(*) FROM memory_refresh_sessions').fetchone()[0], 0)
+        self.assertEqual(self.persisted['system_prompt'], 'Old note|About me')
+
+    def test_restored_acknowledged_agent_uses_persisted_prompt_without_rebuilding(self):
+        revision = self.save('Persisted app edit')['refresh']['revision']
+        self.refresh.before_turn('default', self.session, self.agent)
+        prompt = self.persisted['system_prompt']
+        self.disk['memory'].append('Native write after acknowledgement')
+        self.journal.db.close(); self.open_journal(); self.make_agent()
+        self.agent._cached_system_prompt = None
+        self.agent._invalidate_system_prompt = Mock(wraps=self.agent._invalidate_system_prompt)
+        self.agent._build_system_prompt = Mock(wraps=self.agent._build_system_prompt)
+        self.refresh.before_turn('default', self.session, self.agent)
+        self.agent._invalidate_system_prompt.assert_not_called()
+        self.agent._build_system_prompt.assert_not_called()
+        self.assertEqual(self.persisted['system_prompt'], prompt)
+        self.assertEqual(self.refresh.status('default')['revision'], revision)
+        self.assertEqual(self.refresh.status('default')['state'], 'applied')
+
+    def test_acknowledged_stale_cache_defers_to_verified_native_restore(self):
+        self.save('Persisted app edit')
+        self.refresh.before_turn('default', self.session, self.agent)
+        self.agent._cached_system_prompt = 'Old note|About me'
+        self.agent._build_system_prompt = Mock(wraps=self.agent._build_system_prompt)
+        self.refresh.before_turn('default', self.session, self.agent)
+        self.assertIsNone(self.agent._cached_system_prompt)
+        self.assertIsNone(self.agent._cached_system_prompt_static)
+        self.agent._build_system_prompt.assert_not_called()
+
+    def test_native_model_prompt_rewrite_rebuilds_and_acknowledges_once(self):
+        revision = self.save('Persisted app edit')['refresh']['revision']
+        self.refresh.before_turn('default', self.session, self.agent)
+        original_ack = self.refresh.acknowledgement('default', 'canonical')
+        native_build = self.agent._build_system_prompt
+        self.agent.model = 'switched-model'
+        self.agent._build_system_prompt = Mock(side_effect=lambda message: self.agent.model + '|' + native_build(message))
+        # The native model-switch path persists its new runtime identity before
+        # the next invocation, replacing the digest in the existing receipt.
+        self.server._persist_live_session_system_prompt(self.session)
+        rewritten = self.persisted['system_prompt']
+        self.assertNotEqual(experience.digest(rewritten), original_ack[2])
+        self.agent._build_system_prompt.reset_mock()
+        self.agent._invalidate_system_prompt = Mock(wraps=self.agent._invalidate_system_prompt)
+        session_before = dict(self.session)
+        self.refresh.before_turn('default', self.session, self.agent)
+        self.agent._invalidate_system_prompt.assert_called_once_with()
+        self.agent._build_system_prompt.assert_called_once_with(None)
+        self.assertEqual(self.refresh.acknowledgement('default', 'canonical'), (revision, None, experience.digest(rewritten)))
+        self.assertEqual(self.refresh.status('default')['state'], 'applied')
+        self.assertEqual(self.session, session_before)
+        self.assertEqual(self.agent.model, 'switched-model')
+        self.assertEqual(self.journal.db.execute('SELECT count(*) FROM memory_refresh_edits').fetchone()[0], 1)
+        # A later native tool write still keeps the newly acknowledged prefix.
+        self.disk['memory'].append('Native-only edit after model switch')
+        self.refresh.before_turn('default', self.session, self.agent)
+        self.agent._build_system_prompt.assert_called_once_with(None)
+        self.assertEqual(self.persisted['system_prompt'], rewritten)
+
+    def test_missing_acknowledged_prompt_remains_pending_until_persistence_recovers(self):
+        self.save('Persisted app edit')
+        self.refresh.before_turn('default', self.session, self.agent)
+        self.persisted['system_prompt'] = None
+        persist = self.server._persist_live_session_system_prompt
+        self.server._persist_live_session_system_prompt = lambda session: None
+        with self.assertLogs(experience.__name__, level='WARNING'):
+            self.refresh.before_turn('default', self.session, self.agent)
+        self.assertEqual(self.refresh.status('default')['state'], 'pending')
+        self.server._persist_live_session_system_prompt = persist
+        self.refresh.before_turn('default', self.session, self.agent)
+        self.assertEqual(self.persisted['system_prompt'], 'Persisted app edit|About me')
+        self.assertEqual(self.refresh.status('default')['state'], 'applied')
+
+    def test_crash_after_native_cas_before_saved_marker_keeps_recoverable_intent(self):
+        native_mutate = self.Store._mutate
+        def crash_after_write(store, *args, **kwargs):
+            native_mutate(store, *args, **kwargs)
+            raise SystemExit('Simulated process crash after native CAS')
+        with patch.object(self.Store, '_mutate', crash_after_write):
+            # Read the revision before installing the crashing native seam.
+            revision = experience.digest('default', 'memory', ['Old note'])
+            with self.assertRaises(SystemExit):
+                experience.mutate_memory(dict(operation='save_memory', profile='default', target='memory', revision=revision, entries=[dict(text='Crash durable app edit')]), self.refresh)
+        self.assertEqual(self.journal.db.execute('SELECT state FROM memory_refresh_edits').fetchall(), [('prepared',)])
+        self.disk['memory'].append('Later native write')
+        self.journal.db.close(); self.open_journal(); self.make_agent()
+        self.refresh.before_turn('default', self.session, self.agent)
+        self.assertEqual(self.persisted['system_prompt'], 'Crash durable app edit|Later native write|About me')
+        self.assertEqual(self.refresh.status('default')['state'], 'applied')
+
+    def test_native_compression_tip_gets_its_own_durable_acknowledgement(self):
+        self.save('Current memory')
+        self.refresh.before_turn('default', self.session, self.agent)
+        # Hermes may compress/rotate its own tip after a turn. Memory refresh
+        # follows that native identity without creating a new conversation.
+        self.session['session_key'] = self.agent.session_id = 'native-compressed-tip'
+        self.refresh.before_turn('default', self.session, self.agent)
+        self.assertEqual(self.refresh.status('default')['state'], 'applied')
+        self.assertEqual(self.session['task_id'], 'root')
+        self.assertEqual(self.session['history'][0]['_row_id'], 7)
 
 
 class TrialTests(unittest.TestCase):
@@ -92,6 +377,20 @@ class TrialTests(unittest.TestCase):
         self.assertEqual(self.runs.lookup(self.data)['status'],'completed')
         self.assertFalse(self.job['enabled'])
         self.runs.start(self.data); self.assertEqual(self.fires,1)
+    def test_a_stopped_trial_ends_its_wait_and_releases_native_admission(self):
+        self.runs.start(self.data); self.assertTrue(self.started.wait(2))
+        self.assertEqual(self.reservations,1)
+        # Stop run cancels the live execution; the trial must not wait for a completion that never comes.
+        self.execution.update(status='cancelled', finished_at='2026-10-02T00:00:00+00:00')
+        self.wait_done()
+        receipt=self.runs.lookup(self.data)
+        self.assertEqual((receipt['status'],receipt['message']),('failed','This trial was stopped before it finished.'))
+    def test_restarted_receipt_reconciles_a_stopped_trial_as_finished(self):
+        receipt=dict(requestId='request',routineId='routine',botId='default',status='accepted',executionId='execution',startedAt=experience.timestamp())
+        self.journal.db.execute('INSERT INTO experience_runs VALUES(?,?,?,?,?)',('request','default','routine','one',json.dumps(receipt))); self.journal.db.commit()
+        self.execution=dict(id='execution',status='cancelled')
+        reconciled=experience.RoutineRuns(self.journal).reconcile(self.data)
+        self.assertEqual((reconciled['status'],reconciled['message']),('failed','This trial was stopped before it finished.'))
     def test_native_resume_before_claim_is_preserved_and_trial_does_not_execute(self):
         before=copy.deepcopy(self.job)
         self.job.update(enabled=True,state='scheduled',paused_at=None)
@@ -242,13 +541,144 @@ class RoutineLedgerOutputTests(RoutineOutputTests):
         self.assertEqual(experience.routine_results({**self.data, 'operation': 'routine_results'}), [])
 
 
+class RoutineRunStatusTests(unittest.TestCase):
+    """Each run's normalized status, from the execution ledger when Hermes has one."""
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.home = Path(self.temp.name).resolve()
+        self.directory = self.home / 'cron/output/routine'
+        self.directory.mkdir(parents=True)
+        (self.home / 'state.db').write_text('written store')
+        self.sessions, self.docs, self.attempts, self.ledger, self.live = [], [], [], [], None
+        self.job = None
+        self.db = types.SimpleNamespace(list_cron_job_runs=lambda *a, **kw: self.sessions, close=lambda: None)
+        executions = types.SimpleNamespace(list_executions=lambda **kw: self.ledger, live_inflight_execution=lambda job_id: self.live)
+        self.modules = {
+            'hermes_cli.web_routers.cron': types.SimpleNamespace(
+                _owner_home_scope=lambda profile: contextlib.nullcontext(),
+                _open_session_db_for_profile=lambda profile, **kw: self.db,
+                _call_cron_for_profile=lambda *a: self.job,
+                _list_cron_output_runs=lambda *a: (self.docs, self.attempts),
+                _reconcile_cron_runs=lambda sessions, docs, attempts, job_id, limit: sessions + docs,
+                _cron_output_runs_dir=lambda *a: self.directory),
+            'hermes_cli.web_routers.sessions': types.SimpleNamespace(_project_for_display=lambda rows, **kw: rows),
+            'hermes_cli.web_server_sessions': types.SimpleNamespace(_session_db_path_for_profile=lambda profile: self.home / 'state.db'),
+            'hermes_constants': types.SimpleNamespace(get_hermes_home=lambda: self.home),
+            'cron': types.SimpleNamespace(executions=executions), 'cron.executions': executions,
+        }
+        self.patch = patch.dict(sys.modules, self.modules); self.patch.start()
+        self.data = dict(operation='routine_results', profile='private', routineId='routine')
+    def tearDown(self):
+        self.patch.stop(); self.temp.cleanup()
+    def results(self):
+        return {row['id']: row for row in experience.routine_results(self.data)}
+
+    def test_unified_session_takes_its_executions_status_and_delivery(self):
+        self.sessions += [dict(id='local-1', source='cron', title='Brief', started_at=1000.0, ended_at=1060.0, cron_execution_id='e1'),
+            dict(id='local-2', source='cron', title='Brief', started_at=500.0, ended_at=560.0, cron_execution_id='e2')]
+        self.ledger += [dict(id='e1', status='completed', claimed_at='1970-01-01T00:16:39+00:00', finished_at='1970-01-01T00:17:41+00:00', delivery_outcome='failed'),
+            dict(id='e2', status='failed', claimed_at='1970-01-01T00:08:19+00:00', finished_at='1970-01-01T00:09:20+00:00', error='Model refused')]
+        rows = self.results()
+        self.assertEqual((rows['local-1']['status'], rows['local-1']['deliveryFailed'], rows['local-1']['error']), ('succeeded', True, None))
+        self.assertEqual(rows['local-1']['finishedAt'], '1970-01-01T00:17:41+00:00')
+        self.assertEqual((rows['local-2']['status'], rows['local-2']['error']), ('failed', 'Model refused'))
+        # The row keeps every field older apps read.
+        self.assertLessEqual({'id', 'title', 'startedAt', 'preview', 'previewOnly'}, set(rows['local-2']))
+
+    def test_a_stopped_or_missed_run_reads_as_neither_success_nor_failure(self):
+        self.sessions += [dict(id='local-3', source='cron', title='Brief', started_at=700.0, ended_at=710.0, cron_execution_id='e3'),
+            dict(id='local-4', source='cron', title='Brief', started_at=800.0, ended_at=800.0, cron_execution_id='e4')]
+        self.ledger += [dict(id='e3', status='cancelled', claimed_at='1970-01-01T00:11:40+00:00', finished_at='1970-01-01T00:11:50+00:00', error='cancelled on request (Stop)'),
+            dict(id='e4', status='missed', claimed_at='1970-01-01T00:13:20+00:00', finished_at='1970-01-01T00:13:20+00:00')]
+        rows = self.results()
+        self.assertEqual((rows['local-3']['status'], rows['local-4']['status']), ('stopped', 'missed'))
+
+    def test_open_session_is_running_only_while_active(self):
+        now = time.time()
+        self.sessions += [dict(id='cron_routine_live', source='cron', started_at=now - 30, last_active=now - 5, ended_at=None),
+            dict(id='cron_routine_stale', source='cron', started_at=now - 4000, last_active=now - 3600, ended_at=None)]
+        rows = self.results()
+        self.assertEqual((rows['cron_routine_live']['status'], rows['cron_routine_live']['finishedAt']), ('running', None))
+        self.assertEqual(rows['cron_routine_stale']['status'], 'unknown')
+
+    def test_script_document_pairs_with_the_attempt_that_wrote_it(self):
+        self.docs.append(dict(id='cron_output:routine:2026-10-02_07-00-05', source='cron_output', title='FAILED · Certificate expired', started_at=2005.0))
+        (self.directory / '2026-10-02_07-00-05.md').write_text('Certificate expired')
+        self.attempts += [dict(id='e3', status='failed', claimed_at=2000.0, finished_at=2006.0, error='Certificate expired'),
+            dict(id='e2', status='completed', claimed_at=1000.0, finished_at=1004.0, error='')]
+        row = self.results()['cron_output:routine:2026-10-02_07-00-05']
+        self.assertEqual((row['status'], row['error']), ('failed', 'Certificate expired'))
+        self.assertEqual((row['startedAt'], row['finishedAt']), ('1970-01-01T00:33:20+00:00', '1970-01-01T00:33:26+00:00'))
+
+    def test_metadata_row_indexes_terminal_attempts(self):
+        self.docs.append(dict(id='cron_output:routine:exec:1', source='cron_output', title='COMPLETED · Script-only run', started_at=1004.0))
+        self.attempts += [dict(id='e3', status='failed', claimed_at=2000.0, finished_at=2006.0, error='x'),
+            dict(id='e2', status='completed', claimed_at=1000.0, finished_at=1004.0, error='')]
+        self.assertEqual(self.results()['cron_output:routine:exec:1']['status'], 'succeeded')
+
+    def test_metadata_rows_read_stopped_and_missed_attempts_after_newer_runs(self):
+        # Hermes's own reconciliation writes exec:N rows for a stopped script run and a missed occurrence.
+        self.docs += [dict(id='cron_output:routine:exec:0', source='cron_output', title='Stopped run', started_at=1000.0),
+            dict(id='cron_output:routine:exec:1', source='cron_output', title='Missed run', started_at=1500.0)]
+        self.attempts += [dict(id='e1', status='cancelled', claimed_at=1000.0, finished_at=1002.0, error='cancelled on request (Stop)'),
+            dict(id='e2', status='missed', claimed_at=1500.0, finished_at=1500.0, error=''),
+            dict(id='e3', status='completed', claimed_at=2000.0, finished_at=2006.0, error='')]
+        rows = self.results()
+        self.assertEqual((rows['cron_output:routine:exec:0']['status'], rows['cron_output:routine:exec:1']['status']), ('stopped', 'missed'))
+
+    def test_an_overlapping_stopped_run_never_takes_a_finished_runs_document(self):
+        # Hermes pairs each output document once: A's document stays A's though B started later.
+        self.docs.append(dict(id='cron_output:routine:2026-10-02_07-00-19', source='cron_output', title='COMPLETED · A', started_at=1019.0))
+        (self.directory / '2026-10-02_07-00-19.md').write_text('A finished')
+        self.attempts += [dict(id='a', status='completed', claimed_at=1000.0, finished_at=1020.0, error=''),
+            dict(id='b', status='cancelled', claimed_at=1005.0, finished_at=1025.0, error='cancelled on request (Stop)')]
+        self.assertEqual(self.results()['cron_output:routine:2026-10-02_07-00-19']['status'], 'succeeded')
+
+    def test_metadata_row_index_counts_unknown_attempts_as_hermes_does(self):
+        # Hermes numbers exec:N by position in the whole attempts list, so exec:1 is e2, not e3.
+        self.docs.append(dict(id='cron_output:routine:exec:1', source='cron_output', title='COMPLETED · Script-only run', started_at=1004.0))
+        self.attempts += [dict(id='e1', status='unknown', claimed_at=500.0, finished_at=None, error=''),
+            dict(id='e2', status='completed', claimed_at=1000.0, finished_at=1004.0, error=''),
+            dict(id='e3', status='failed', claimed_at=2000.0, finished_at=2006.0, error='x')]
+        row = self.results()['cron_output:routine:exec:1']
+        self.assertEqual((row['status'], row['error'], row['finishedAt']), ('succeeded', None, '1970-01-01T00:16:44+00:00'))
+
+    def test_older_hermes_without_a_ledger_reads_unknown_except_the_newest_known_run(self):
+        del self.modules['cron'], self.modules['cron.executions']
+        self.patch.stop(); self.patch = patch.dict(sys.modules, self.modules); self.patch.start()
+        sys.modules.pop('cron', None); sys.modules.pop('cron.executions', None)
+        self.modules['hermes_cli.web_routers.cron']._list_cron_output_runs = lambda *a: self.docs
+        self.modules['hermes_cli.web_routers.cron']._reconcile_cron_runs = lambda sessions, docs, limit: sessions + docs
+        self.sessions += [dict(id='cron_routine_2', source='cron', started_at=3000.0, ended_at=3050.0),
+            dict(id='cron_routine_1', source='cron', started_at=1000.0, ended_at=1050.0)]
+        self.job = dict(last_run_at=3049.0, last_status='delivery_failed')
+        rows = self.results()
+        self.assertEqual((rows['cron_routine_2']['status'], rows['cron_routine_2']['deliveryFailed']), ('succeeded', True))
+        self.assertEqual(rows['cron_routine_1']['status'], 'unknown')
+        self.job = dict(last_run_at=9000.0, last_status='ok')
+        self.assertEqual(self.results()['cron_routine_2']['status'], 'unknown')
+
+    def test_live_script_attempt_is_a_running_row_with_a_preview(self):
+        self.live = dict(id='e9', status='running', claimed_at='1970-01-01T01:00:00+00:00')
+        self.ledger.append(self.live)
+        rows = self.results()
+        running = rows['cron_output:routine:running']
+        self.assertEqual((running['status'], running['startedAt'], running['finishedAt']), ('running', '1970-01-01T01:00:00+00:00', None))
+        output = experience.routine_results({**self.data, 'operation': 'routine_output', 'resultId': 'cron_output:routine:running'})
+        self.assertEqual((output['previewOnly'], output['messages'][0]['text']), (True, 'This run is still in progress.'))
+        # An agent run's own open session already stands for the live attempt.
+        self.sessions.append(dict(id='local-9', source='cron', started_at=3600.0, last_active=time.time(), ended_at=None, cron_execution_id='e9'))
+        self.assertNotIn('cron_output:routine:running', self.results())
+
+
 
 class HistoryAttributionTests(unittest.TestCase):
     def setUp(self):
         self.journal = types.SimpleNamespace(lock=threading.RLock(), db=sqlite3.connect(':memory:', check_same_thread=False))
         self.journal.db.execute('CREATE TABLE receipts(request_id TEXT,actor TEXT,run_id TEXT,attachments TEXT,input_text TEXT,stored_session TEXT,profile TEXT,row_id INTEGER,created REAL)')
         self.journal.db.execute("INSERT INTO receipts VALUES('run','one',NULL,'[]','Original ask','session','spike',1,1)")
-        self.db = types.SimpleNamespace(_read_all=lambda sql, values: [{'id':1},{'id':300}],close=lambda:None)
+        # Every clone lookup finds rows 1 and 300 as copies of the first occurrence it asks about.
+        self.db = types.SimpleNamespace(_read_all=lambda sql, values: [{'id':1,'message_uid':values[0]},{'id':300,'message_uid':values[0]}],close=lambda:None)
         self.temp = tempfile.TemporaryDirectory()
         self.store = Path(self.temp.name) / 'state.db'
         self.store.write_text('written store')
@@ -301,6 +731,27 @@ class HistoryDiscoveryTests(unittest.TestCase):
         result=self.history(False)
         self.assertEqual(result['messages'][0]['app_artifacts'],[{'path':'/fixture/old.pdf'}])
         self.assertEqual(result['app_prior_prompt']['app_sender_id'], 'one')
+    def test_page_reads_receipts_and_tool_records_once_and_attributes_each_turn(self):
+        self.journal.db.execute('CREATE TABLE tools(id INTEGER PRIMARY KEY,profile TEXT,stored_session TEXT,tool_id TEXT,run_id TEXT,result TEXT,artifacts TEXT)')
+        self.journal.db.execute("INSERT INTO receipts VALUES('second','two','run-two','[]','Second ask','session','spike',12,2)")
+        self.journal.db.execute("INSERT INTO tools VALUES(NULL,'spike','session','call','run','{\"n\":1}','[{\"path\":\"/fixture/one.pdf\"}]')")
+        self.journal.db.execute("INSERT INTO tools VALUES(NULL,'spike','session','call','run-two','{\"n\":2}','[{\"path\":\"/fixture/two.pdf\"}]')")
+        page = [{'id':1,'role':'user','content':'First'},{'id':11,'role':'tool','content':'Done','tool_call_id':'call','app_tool_result':{'n':1}},
+                {'id':12,'role':'user','content':'Second'},{'id':13,'role':'tool','content':'Done','tool_call_id':'call','app_tool_result':{'n':2}}]
+        self.db.get_messages = lambda sid, **kw: [dict(row) for row in page]
+        self.db._resume_lineage_ids = lambda sid: ['session']
+        sessions = types.SimpleNamespace(_timeline_session_id=lambda db,sid,p:sid,_history_profile_home=lambda p:'/fixture')
+        statements = []
+        self.journal.db.set_trace_callback(statements.append)
+        with patch.dict(sys.modules, {'hermes_cli.web_routers':types.SimpleNamespace(sessions=sessions,analytics=None)}):
+            result = experience.discovery({'operation':'history','profile':'spike','sessionId':'session','offset':0},self.journal,
+                                          lambda rows, **kw: [dict(row,row_id=row['_row_id'],text=row.get('content','')) for row in rows])
+        self.journal.db.set_trace_callback(None)
+        messages = result['messages']
+        self.assertEqual([message.get('app_sender_id') for message in messages], ['one', None, 'two', None])
+        self.assertEqual([message.get('app_artifacts') for message in messages], [None, [{'path':'/fixture/one.pdf'}], None, [{'path':'/fixture/two.pdf'}]])
+        self.assertEqual(sum('FROM receipts' in statement for statement in statements), 1)
+        self.assertEqual(sum('FROM tools' in statement for statement in statements), 1)
     def test_unwritten_profile_store_reads_as_empty_history(self):
         # A new bot's store stays empty until its first session; Hermes no longer creates it on read.
         self.store.write_text('')
@@ -315,5 +766,96 @@ class HistoryDiscoveryTests(unittest.TestCase):
             with self.assertRaises(experience.ExperienceError) as invalid:
                 experience.discovery({'operation':'usage','profile':'new','days':5},self.journal,None)
             self.assertEqual(invalid.exception.status,400)
+
+
+
+class HistoryPointerTests(unittest.TestCase):
+    def test_finds_visible_uid_after_hidden_rows_and_compression(self):
+        rows = [dict(id=i, message_uid=f"uid-{i}", role="assistant", content="text") for i in range(1, 206)]
+        connection = sqlite3.connect(":memory:")
+        self.addCleanup(connection.close)
+        connection.row_factory = sqlite3.Row
+        connection.execute("CREATE TABLE messages(id TEXT, session_id TEXT, message_uid TEXT)")
+        connection.execute("INSERT INTO messages VALUES ('old-row', 'old', 'uid-205')")
+        reads = []
+        def messages(sid, **kw):
+            self.assertNotIn("limit", kw)
+            reads.append(sid)
+            return rows
+        db = types.SimpleNamespace(
+            _resume_lineage_ids=lambda sid: ["old", "tip"],
+            _read_one=lambda sql, params: connection.execute(sql, params).fetchone(),
+            get_messages=messages)
+        def project(page, **kw):
+            return [dict(row, row_id=row["id"], display_kind="hidden" if row["id"] == 204 else "conversation") for row in page]
+        pointer = experience.history_pointer(db, "tip", ["old-row"], projector=project, profile_home="/fixture")
+        self.assertEqual(pointer, {"messageId": "uid-205", "offset": 200})
+        self.assertEqual(reads, ["tip"], "A locator must merge native compression lineage only once")
+        self.assertIsNone(experience.history_pointer(db, "tip", ["204"], projector=project, profile_home="/fixture"))
+        self.assertIsNone(experience.history_pointer(db, "tip", ["missing"], projector=project, profile_home="/fixture"))
+
+
+    def test_search_pointers_are_cheap_and_optional(self):
+        hits = [dict(sessionId="retired"), dict(sessionId="live")]
+        def resolve(db, sid, profile):
+            if sid == "retired":
+                raise RuntimeError("retired native session")
+            return sid
+        sessions = types.SimpleNamespace(_timeline_session_id=resolve)
+        db = types.SimpleNamespace(_resume_lineage_ids=lambda sid: ["old", sid],
+            search_messages=lambda **kw: [dict(id=205, session_id="old")],
+            get_messages=lambda *args, **kw: self.fail("Search must not scan history pages"))
+        experience.enrich_search_pointers(db, hits, [], sessions, "profile", "synthetic")
+        self.assertNotIn("messageId", hits[0]); self.assertEqual(hits[1]["messageId"], "205")
+        db.search_messages = lambda **kw: (_ for _ in ()).throw(ValueError("unsupported native FTS query"))
+        untouched = [dict(sessionId="live", title="Still useful")]
+        experience.enrich_search_pointers(db, untouched, [], sessions, "profile", 'foo"')
+        self.assertEqual(untouched, [dict(sessionId="live", title="Still useful")])
+
+    def test_attachment_tool_pointer_is_only_assigned_when_unambiguous(self):
+        hits = [dict(sessionId="live")]
+        db = types.SimpleNamespace(_resume_lineage_ids=lambda sid: [sid], search_messages=lambda **kw: [],
+            _read_all=lambda *args: [dict(identity="stable")])
+        sessions = types.SimpleNamespace(_timeline_session_id=lambda db, sid, profile: sid)
+        files = [("live", "artifact.pdf", None, "tool")]
+        experience.enrich_search_pointers(db, hits, files, sessions, "profile", "artifact.pdf")
+        self.assertEqual(hits[0]["messageId"], "stable")
+        db._read_all = lambda *args: [dict(identity="first-run"), dict(identity="second-run")]
+        hits = [dict(sessionId="live")]
+        experience.enrich_search_pointers(db, hits, files, sessions, "profile", "artifact.pdf")
+        self.assertNotIn("messageId", hits[0])
+
+
+class ModelNamesTests(unittest.TestCase):
+    def names(self, models, info):
+        calls = []
+        def get_model_info(provider, model, allow_network=None):
+            calls.append((provider, model, allow_network))
+            result = info(provider, model)
+            return None if result is None else types.SimpleNamespace(name=result)
+        module = types.SimpleNamespace(get_model_info=get_model_info)
+        with patch.dict(sys.modules, {'agent': types.SimpleNamespace(models_dev=module), 'agent.models_dev': module}):
+            return experience.model_names(dict(operation='model_names', profile='default', models=models)), calls
+
+    def test_reads_only_the_cache_and_asks_once_per_pair(self):
+        pairs = [dict(provider='anthropic', model='claude-opus-5-5')] * 2 + [dict(provider='openai', model='gpt-6.1-terra')]
+        result, calls = self.names(pairs, lambda provider, model: 'Claude Opus 5.5' if provider == 'anthropic' else None)
+        self.assertEqual(result['names'], [dict(provider='anthropic', model='claude-opus-5-5', name='Claude Opus 5.5')] * 2
+            + [dict(provider='openai', model='gpt-6.1-terra', name=None)])
+        self.assertEqual(calls, [('anthropic', 'claude-opus-5-5', False), ('openai', 'gpt-6.1-terra', False)])
+
+    def test_a_name_that_only_echoes_the_slug_or_fails_is_left_for_the_app_to_format(self):
+        def info(provider, model):
+            if model == 'broken': raise RuntimeError('cache unreadable')
+            return {'echo': 'echo', 'blank': '   '}.get(model)
+        result, _ = self.names([dict(provider='p', model=model) for model in ('echo', 'blank', 'broken')], info)
+        self.assertEqual([row['name'] for row in result['names']], [None, None, None])
+
+    def test_rejects_malformed_or_oversized_requests(self):
+        for models in ('x', [dict(provider='p')], [dict(provider='p', model='')], [dict(provider='p', model=3)],
+                       [dict(provider='p', model='m')] * (experience.MAX_MODEL_NAMES + 1)):
+            with self.subTest(models=str(models)[:40]), self.assertRaises(experience.ExperienceError):
+                experience.model_names(dict(models=models))
+
 
 if __name__ == '__main__': unittest.main()

@@ -6,29 +6,55 @@ import { z } from "zod";
 import type { Runtime, User } from "../shared/types.js";
 import type { UpgradeControlAction, UpgradeControlRequest, UpgradeInstallRequest, UpgradeStatus } from "../shared/upgrades.js";
 import type { Config } from "./config.js";
+import { httpError } from "./http-error.js";
 
 type WorkerSettings = { python: string; workerConfig: string; stateDirectory: string };
 // The worker keeps its own log once it runs. Output from a start that fails before then lands in
 // a new private launch log per attempt, so a retry never erases the failure it follows.
 const LAUNCH_LOGS_KEPT = 10;
+/**
+ * The app's user service runs with a private /tmp, which a user manager provides through a user
+ * namespace. Inside it AppArmor refuses Chrome's own sandbox namespace, so a worker started as
+ * the app's child can never pass the browser probe. Under systemd the worker runs as its own
+ * transient user unit instead, outside the app's namespace and cgroup.
+ */
+export function transientRunner(env: NodeJS.ProcessEnv = process.env, runner = "/usr/bin/systemd-run"): string | false {
+  return env.INVOCATION_ID && env.XDG_RUNTIME_DIR && existsSync(runner) ? runner : false;
+}
 export function launchWorker(settings: WorkerSettings, args: { action: string; operationId: string },
-  script = resolve("scripts/hermes-upgrade-worker.py")) {
+  script = resolve("scripts/hermes-upgrade-worker.py"), runner: string | false = transientRunner()) {
   const directory = settings.stateDirectory;
   const logs = readdirSync(directory).filter(name => /^worker-launch-.+\.log$/.test(name))
     .map(name => ({ name, at: lstatSync(join(directory, name)).mtimeMs })).sort((a, b) => b.at - a.at);
   for (const { name } of logs.slice(LAUNCH_LOGS_KEPT - 1)) rmSync(join(directory, name), { force: true });
   // Exclusive creation never follows or reuses an existing path.
-  const log = openSync(join(directory, `worker-launch-${new Date().toISOString().replace(/[:.]/g, "")}-${randomUUID()}.log`), "wx", 0o600);
+  const logPath = join(directory, `worker-launch-${new Date().toISOString().replace(/[:.]/g, "")}-${randomUUID()}.log`);
+  const log = openSync(logPath, "wx", 0o600);
+  const argv = [script, "--config", settings.workerConfig, "--state-dir", settings.stateDirectory,
+    "--action", args.action, "--operation-id", args.operationId];
+  const env = { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", LANG: "C.UTF-8" };
   try {
-    return spawn(settings.python, [script, "--config", settings.workerConfig, "--state-dir", settings.stateDirectory,
-      "--action", args.action, "--operation-id", args.operationId],
-    { detached: true, stdio: ["ignore", log, log], env: { PATH: process.env.PATH, HOME: process.env.HOME, LANG: "C.UTF-8" } });
+    if (!runner) return spawn(settings.python, argv, { detached: true, stdio: ["ignore", log, log], env });
+    // exec: systemd-run fails if Python itself cannot start. ExitType=cgroup: hooks the worker
+    // left behind keep running to their end instead of being killed when it exits, as they
+    // did as orphans before. Paths reach Python as written, with no `$` expansion.
+    const child = spawn(runner, ["--user", "--collect", "--quiet", "--service-type=exec", "--expand-environment=no",
+      `--unit=agent-interface-upgrade-${randomUUID()}`, `--working-directory=${process.cwd()}`,
+      "--property=ExitType=cgroup", "--property=UMask=0077",
+      `--property=StandardOutput=append:${logPath}`, `--property=StandardError=append:${logPath}`,
+      ...Object.entries(env).map(([key, value]) => `--setenv=${key}=${value}`), "--", settings.python, ...argv],
+    { stdio: ["ignore", log, log], env: { ...env, XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR ?? "" } });
+    // systemd-run returns once the unit starts; a refusal means the worker never ran.
+    child.on("exit", code => { if (code) child.emit("error", new Error(`systemd-run exited with ${code}`)); });
+    return child;
   } finally {
     closeSync(log);
   }
 }
 const phases = ["idle", "checking", "qualifying", "ready", "installing", "verifying", "succeeded", "blocked", "failed", "rolled_back", "recovering", "cancelled"] as const;
-const revision = z.object({ revision: z.string().regex(/^[a-f0-9]{40}$/), version: z.string().optional(), notesUrl: z.string().url().optional() });
+// A bad date only loses its label; it must never invalidate the record and close the maintenance gate.
+const committedAt = z.string().refine(value => !Number.isNaN(Date.parse(value))).optional().catch(undefined);
+const revision = z.object({ revision: z.string().regex(/^[a-f0-9]{40}$/), version: z.string().optional(), notesUrl: z.string().url().optional(), committedAt });
 const stateSchema = z.object({
   phase: z.enum(phases), message: z.string(), current: revision.optional(), candidate: revision.optional(),
   checks: z.array(z.object({ id: z.string(), label: z.string(), status: z.enum(["pending", "running", "passed", "failed"]), detail: z.string().optional() })),
@@ -38,7 +64,6 @@ const stateSchema = z.object({
 type WorkerState = z.infer<typeof stateSchema>;
 interface InstallReceipt { candidateRevision: string; operationId: string; status: "pending" | "complete"; result?: WorkerState }
 const active = new Set(["checking", "qualifying", "installing", "verifying", "recovering"]);
-const issue = (message: string, statusCode = 409) => Object.assign(new Error(message), { statusCode });
 const writePrivate = (file: string, value: unknown) => {
   const temporary = `${file}.${randomUUID()}.tmp`;
   const descriptor = openSync(temporary, "wx", 0o600);
@@ -93,6 +118,12 @@ export class HermesUpgrades {
       } catch { /* Damaged admissions keep the maintenance gate closed. */ }
     }
   }
+  /** When a recorded Hermes revision was committed, for showing a date instead of a hash. */
+  revisionDate(revision?: string) {
+    if (!revision || !this.stateFile) return undefined;
+    const state = this.read();
+    return [state.current, state.candidate].find(item => item?.revision === revision)?.committedAt;
+  }
   private save(state: WorkerState) { if (this.stateFile) writePrivate(this.stateFile, { ...state, updatedAt: new Date().toISOString() }); }
   private read(): WorkerState {
     if (!this.stateFile) return { phase: "blocked", checks: [], message: "Hermes upgrades have not been enabled by this installation's administrator." };
@@ -123,7 +154,7 @@ export class HermesUpgrades {
       if (journal?.releaseStarted) return { ...none, reason: "Admission release may have started. The installer must review Hermes before any restart or rollback." };
       if (journal && !journal.hostHookStarted) return { restore: true, restart: false };
       // An admitted worker which has not started a hook can be cancelled safely.
-      if (!journal && !existsSync(platformPath) && state.phase === "installing" && !state.checks.some(check => ["quiescence", "backup", "install"].includes(check.id))) return { restore: true, restart: false };
+      if (!journal && !existsSync(platformPath) && (state.phase === "installing" || state.phase === "failed" && state.error === "worker_start_failed") && !state.checks.some(check => ["quiescence", "backup", "install"].includes(check.id))) return { restore: true, restart: false };
       if (!existsSync(platformPath)) return none;
       const platform = JSON.parse(readFileSync(platformPath, "utf8"));
       if (Array.isArray(finish) && finish.includes("--config")) {
@@ -210,8 +241,8 @@ export class HermesUpgrades {
     return result;
   }
   private authorized(user: User) {
-    if (!this.config.hermesUpgrade) throw issue("Hermes upgrades are not enabled on this installation");
-    if (!this.administrator(user)) throw issue("Only the installation's designated administrator can manage Hermes upgrades", 403);
+    if (!this.config.hermesUpgrade) throw httpError(409, "Hermes upgrades are not enabled on this installation");
+    if (!this.administrator(user)) throw httpError(403, "Only the installation's designated administrator can manage Hermes upgrades");
   }
   control(user: User, input: UpgradeControlRequest) { return this.exclusive(async () => {
     this.authorized(user);
@@ -219,7 +250,7 @@ export class HermesUpgrades {
     const receiptFile = join(this.controlsDirectory!, `request-${input.requestId}.json`);
     if (existsSync(receiptFile)) {
       const receipt = JSON.parse(readFileSync(receiptFile, "utf8"));
-      if (receipt.action !== input.action || receipt.operationId !== input.operationId) throw issue("This recovery request ID already belongs to another action");
+      if (receipt.action !== input.action || receipt.operationId !== input.operationId) throw httpError(409, "This recovery request ID already belongs to another action");
       const intent = this.controlIntent(input.operationId);
       const lostLaunch = !intent || intent.requestId === input.requestId && intent.status === "pending" && (!intent.startedAt || Date.now() - Date.parse(intent.startedAt) >= 15000);
       if (receipt.status === "pending" && lostLaunch && this.read().operationId === input.operationId && !await this.workerHeld()) {
@@ -229,9 +260,9 @@ export class HermesUpgrades {
       return this.status(user);
     }
     const status = await this.status(user);
-    if (status.operationId !== input.operationId) throw issue("This update changed. Refresh before choosing a recovery action");
+    if (status.operationId !== input.operationId) throw httpError(409, "This update changed. Refresh before choosing a recovery action");
     const allowed = input.action === "cancel" ? status.canCancel : input.action === "retry" ? status.canRetry : status.canRestartService;
-    if (!allowed) throw issue("This recovery action is unavailable while another operation runs or the update requires installer review");
+    if (!allowed) throw httpError(409, "This recovery action is unavailable while another operation runs or the update requires installer review");
     const intent = { ...input, status: "pending", startedAt: new Date().toISOString() };
     writePrivate(receiptFile, intent);
     writePrivate(join(this.controlsDirectory!, `${input.operationId}.json`), intent);
@@ -241,7 +272,7 @@ export class HermesUpgrades {
   }); }
   check(user: User) { return this.exclusive(async () => {
     this.authorized(user);
-    if (!(await this.status(user)).canCheck) throw issue("An upgrade is already running or requires installer review");
+    if (!(await this.status(user)).canCheck) throw httpError(409, "An upgrade is already running or requires installer review");
     const operationId = randomUUID();
     this.save({ phase: "checking", checks: [], operationId, message: "Looking for a Hermes update." });
     this.launch({ action: "check", operationId });
@@ -253,7 +284,7 @@ export class HermesUpgrades {
     const requestFile = join(this.requestsDirectory!, `${input.requestId}.json`);
     if (existsSync(requestFile)) {
       const receipt = JSON.parse(readFileSync(requestFile, "utf8")) as InstallReceipt;
-      if (receipt.candidateRevision !== input.candidateRevision) throw issue("This upgrade request ID was already used for a different revision");
+      if (receipt.candidateRevision !== input.candidateRevision) throw httpError(409, "This upgrade request ID was already used for a different revision");
       const current = await this.status(user);
       if (current.operationId === receipt.operationId || !receipt.result) return current;
       const result = receipt.result;
@@ -263,7 +294,7 @@ export class HermesUpgrades {
     }
     const status = await this.status(user);
     if (!status.canInstall || status.candidate?.revision !== input.candidateRevision)
-      throw issue(status.busyBots.length ? "Wait for active Hermes work to finish before upgrading" : "Check and qualify this exact Hermes update before installing it");
+      throw httpError(409, status.busyBots.length ? "Wait for active Hermes work to finish before upgrading" : "Check and qualify this exact Hermes update before installing it");
     const operationId = randomUUID();
     // The pending receipt is also the durable maintenance gate. Persist it before launching.
     const predecessor = this.read();

@@ -3,13 +3,14 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import WebSocket, { type RawData } from "ws";
 import type { Runtime, User } from "../shared/types.js";
-import type { ComputerAttachment, ComputerStatus } from "../shared/computer.js";
+import type { ComputerAttachment, ComputerHandoffResult, ComputerStatus } from "../shared/computer.js";
 import { hash, signedIn } from "./auth.js";
 import { allowedIdentity, type Config } from "./config.js";
 import type { Store } from "./store.js";
 import { SystemTerminal } from "./terminal.js";
 import { safeError } from "./logging.js";
 import { visibleTo } from "./bot-access.js";
+import { httpError } from "./http-error.js";
 
 type Session = { kind: "web" | "native"; hash: string; userId: string };
 type Attachment = { session: Session; expires: number; type: "desktop" | "terminal"; native?: ComputerAttachment };
@@ -17,7 +18,6 @@ declare module "fastify" { interface FastifyRequest { computerAttachment?: Attac
 const viewer = z.string().regex(/^[A-Za-z0-9_-]{16,200}$/);
 const ticketQuery = z.object({ticket: z.string().regex(/^[A-Za-z0-9_-]{43}$/)}).strict();
 const empty = z.object({}).strict();
-const unavailable = (message: string, statusCode = 409) => Object.assign(new Error(message), {statusCode});
 const maxBuffered = 4 * 1024 * 1024;
 const frameSize = (data: RawData) => Array.isArray(data) ? data.reduce((size, item) => size + item.length, 0) : data.byteLength;
 const confirmationWindow = 2 * 3600000;
@@ -36,7 +36,7 @@ export async function installComputerRoutes(app: FastifyInstance, config: Config
   function source(req: FastifyRequest): Session {
     const userId = signedIn(req).id;
     if (req.nativeSessionHash) return {kind: "native", hash: req.nativeSessionHash, userId};
-    if (!req.cookies.session) throw unavailable("Sign in required", 401);
+    if (!req.cookies.session) throw httpError(401, "Sign in required");
     return {kind: "web", hash: hash(req.cookies.session), userId};
   }
   function valid(session: Session) {
@@ -48,32 +48,36 @@ export async function installComputerRoutes(app: FastifyInstance, config: Config
   const actor = (req: FastifyRequest) => ({actorId: signedIn(req).id, actorName: signedIn(req).name});
   const admins = () => config.computerTerminalAdmins ?? [];
   const terminalAdmin = (user: User) => admins().includes(user.email.toLowerCase());
-  // The desktop is for every household member; the shell is for terminal administrators in a browser.
+  // The desktop is for every household member; the shell is for terminal administrators, in a
+  // browser or in the iOS app.
   function shellDenial(req: FastifyRequest) {
-    if (req.nativeSessionHash) return "Open the computer in a browser to use the system terminal.";
     if (!admins().length) return "The system terminal is turned off for this household.";
     if (!terminalAdmin(signedIn(req))) return "The system terminal is limited to household administrators.";
   }
+  // When the person behind this session last proved who they are: the web's confirmation for a
+  // browser, the iOS app's own for a native session.
+  const confirmedAt = (session: Session) =>
+    session.kind === "web" ? store.sessionConfirmedAt(session.hash) : store.nativeSessionConfirmedAt(session.hash);
   function confirmed(req: FastifyRequest) {
-    const at = req.cookies.session ? store.sessionConfirmedAt(hash(req.cookies.session)) : undefined;
+    const at = confirmedAt(source(req));
     return at !== undefined && Date.now() - at <= confirmationWindow;
   }
   function requireShell(req: FastifyRequest, fresh: boolean) {
     const denied = shellDenial(req);
-    if (denied) throw unavailable(denied, 403);
-    if (!terminals.available) throw unavailable(terminals.reason!);
+    if (denied) throw httpError(403, denied);
+    if (!terminals.available) throw httpError(409, terminals.reason!);
     // Open shells continue past the window; only new attachments need a recent sign-in.
     if (fresh && !confirmed(req))
-      throw Object.assign(unavailable("Confirm it's you to open the terminal.", 401), {code: "reauthentication_required"});
+      throw httpError(401, "Confirm it's you to open the terminal.", {code: "reauthentication_required"});
   }
-  function audit(req: FastifyRequest, action: string, session: Session) {
-    const user = signedIn(req);
+  // The iOS terminal page has no signed-in request of its own, so the user comes from the ticket's session.
+  function audit(req: FastifyRequest, action: string, session: Session, user = signedIn(req)) {
     req.log.info({audit: "terminal", action, userId: user.id, email: user.email, session: session.hash.slice(0, 16),
       forwardedFor: req.headers["x-forwarded-for"], userAgent: req.headers["user-agent"]}, `System terminal ${action}`);
   }
   function alertAdmins(user: User, session: Session) {
     // One alert per confirmed sign-in, however often that session reconnects.
-    const eventId = `terminal-open:${session.hash.slice(0, 16)}:${store.sessionConfirmedAt(session.hash) ?? 0}`;
+    const eventId = `terminal-open:${session.hash.slice(0, 16)}:${confirmedAt(session) ?? 0}`;
     for (const admin of store.users())
       if (terminalAdmin(admin) && allowedIdentity(config, admin))
         store.queueNotification(eventId, admin.id, {title: "System terminal opened", body: `${user.name} opened the system terminal.`,
@@ -99,15 +103,15 @@ export async function installComputerRoutes(app: FastifyInstance, config: Config
   }
   function issue(req: FastifyRequest, type: Attachment["type"], native?: ComputerAttachment) {
     for (const [key, value] of tickets) if (value.expires <= Date.now()) tickets.delete(key);
-    if (tickets.size >= 1000) throw unavailable("Too many computer attachment requests. Try again shortly.", 429);
+    if (tickets.size >= 1000) throw httpError(429, "Too many computer attachment requests. Try again shortly.");
     const token = randomBytes(32).toString("base64url"), expires = Date.now() + 30_000;
     tickets.set(hash(token), {session: source(req), type, native, expires});
     return {path: `/api/computer/${type}/ws?ticket=${token}`, expiresAt: new Date(expires).toISOString(),
       ...(native ? {viewerId: native.viewerId} : {sessionId: terminals.sessionId(signedIn(req).id), target: terminals.target})};
   }
-  function fence() { if (maintenance()) throw unavailable("Hermes is being maintained. Try computer input after maintenance finishes."); }
+  function fence() { if (maintenance()) throw httpError(409, "Hermes is being maintained. Try computer input after maintenance finishes."); }
   function requireDesktop() {
-    if (!runtime.computerRequest || !runtime.connectComputerDisplay) throw unavailable("The Hermes desktop integration is unavailable.");
+    if (!runtime.computerRequest || !runtime.connectComputerDisplay) throw httpError(409, "The Hermes desktop integration is unavailable.");
   }
   app.get("/api/computer", async req => status(req));
   app.post("/api/computer/desktop", async req => {
@@ -115,7 +119,7 @@ export async function installComputerRoutes(app: FastifyInstance, config: Config
     requireDesktop();
     const native = await runtime.computerRequest!({action: "observe", ...actor(req), ...input}) as ComputerAttachment;
     if (native.path !== "/api/display/ws" || !viewer.safeParse(native.viewerId).success)
-      throw unavailable("Hermes returned an invalid desktop attachment", 502);
+      throw httpError(502, "Hermes returned an invalid desktop attachment");
     const owned = viewers.get(signedIn(req).id) ?? new Set<string>();
     owned.add(native.viewerId); viewers.set(signedIn(req).id, owned);
     return issue(req, "desktop", native);
@@ -123,10 +127,23 @@ export async function installComputerRoutes(app: FastifyInstance, config: Config
   app.post("/api/computer/control", async req => {
     const input = z.object({action: z.enum(["take", "release"]), viewerId: viewer}).strict().parse(req.body);
     requireDesktop();
-    if (!viewers.get(signedIn(req).id)?.has(input.viewerId)) throw unavailable("Open the desktop before changing its control.", 403);
+    if (!viewers.get(signedIn(req).id)?.has(input.viewerId)) throw httpError(403, "Open the desktop before changing its control.");
     if (input.action === "take") fence();
     await runtime.computerRequest!({...input, ...actor(req)});
     return status(req);
+  });
+  // Not now on an assistant's request to take over. Take over itself is the ordinary control route.
+  const handoffParams = z.object({id: z.string().regex(/^[A-Za-z0-9_-]{1,200}$/), requestId: z.string().regex(/^[A-Za-z0-9_-]{1,200}$/)}).strict();
+  const handoffBody = z.object({decision: z.literal("decline"), epoch: z.string().regex(/^[A-Za-z0-9_-]{1,200}$/),
+    sessionId: z.string().regex(/^[A-Za-z0-9_-]{1,200}$/)}).strict();
+  app.post("/api/bots/:id/computer-handoffs/:requestId", async (req): Promise<ComputerHandoffResult> => {
+    const params = handoffParams.parse(req.params), body = handoffBody.parse(req.body);
+    if (!visibleTo(store, params.id, signedIn(req).id)) throw httpError(404, "Assistant not found");
+    requireDesktop();
+    const result = await runtime.computerRequest!({action: "handoff", decision: body.decision, profile: params.id, requestId: params.requestId,
+      epoch: body.epoch, sessionId: body.sessionId, ...actor(req)}) as unknown as Partial<ComputerHandoffResult>;
+    if (result?.status !== "ok" && result?.status !== "expired") throw httpError(502, "Hermes returned an invalid answer for this computer request");
+    return {status: result.status};
   });
   app.post("/api/computer/terminal", async req => {
     empty.parse(req.body); fence(); requireShell(req, true);
@@ -136,7 +153,7 @@ export async function installComputerRoutes(app: FastifyInstance, config: Config
   });
   app.post("/api/computer/terminal/end", async req => {
     const input = z.object({sessionId: z.string()}).strict().parse(req.body); fence(); requireShell(req, false);
-    if (input.sessionId !== terminals.sessionId(signedIn(req).id)) throw unavailable("This terminal belongs to another household member.", 403);
+    if (input.sessionId !== terminals.sessionId(signedIn(req).id)) throw httpError(403, "This terminal belongs to another household member.");
     await terminals.end(signedIn(req).id);
     audit(req, "end", source(req));
     return {ok: true};
@@ -145,12 +162,17 @@ export async function installComputerRoutes(app: FastifyInstance, config: Config
   function guard(type: Attachment["type"]) {
     return async (req: FastifyRequest) => {
       if (!req.nativeSessionHash && req.headers.origin !== config.origin)
-        throw unavailable("The computer connection must come from this application.", 403);
+        throw httpError(403, "The computer connection must come from this application.");
       const query = ticketQuery.parse(req.query), key = hash(query.ticket), ticket = tickets.get(key);
-      const current = source(req);
+      // The iOS app's desktop and terminal pages cannot put the app's bearer token on a WebSocket. A
+      // ticket of this type issued to that native session moments ago stands in for it, still once
+      // and from this Origin.
+      const nativePage = ticket?.session.kind === "native" && !req.nativeSessionHash;
+      if (!nativePage && !req.user) throw httpError(401, "Sign in required");
+      const current = nativePage ? ticket.session : source(req);
       if (!ticket || ticket.expires <= Date.now() || ticket.type !== type || ticket.session.kind !== current.kind
         || ticket.session.hash !== current.hash || !valid(ticket.session))
-        throw unavailable("This computer attachment expired. Reconnect to get a fresh connection.", 401);
+        throw httpError(401, "This computer attachment expired. Reconnect to get a fresh connection.");
       tickets.delete(key);
       req.computerAttachment = ticket;
     };
@@ -214,9 +236,11 @@ export async function installComputerRoutes(app: FastifyInstance, config: Config
   });
   app.get("/api/computer/terminal/ws", {websocket: true, preValidation: guard("terminal")}, (socket, req) => {
     const ticket = req.computerAttachment!, check = monitor(socket, ticket.session);
+    // The guard just checked that this session's user exists. A native page's request has no user.
+    const user = store.getUser(ticket.session.userId)!;
     const child = terminals.attach(ticket.session.userId);
-    audit(req, "attach", ticket.session);
-    alertAdmins(signedIn(req), ticket.session);
+    audit(req, "attach", ticket.session, user);
+    alertAdmins(user, ticket.session);
     let buffer = "", inputPaused = false;
     const send = (data: Record<string, unknown>) => {
       if (!check() || socket.readyState !== WebSocket.OPEN) return;
@@ -255,7 +279,7 @@ export async function installComputerRoutes(app: FastifyInstance, config: Config
     child.stdin.on("error", () => socket.close(1011, "Terminal disconnected"));
     child.on("error", () => {send({type: "error", message: "The terminal could not be opened."}); socket.close(1011);});
     child.on("exit", () => {send({type: "exit"}); socket.close(1000, "Terminal ended");});
-    socket.on("close", () => { child.stdin.end(); audit(req, "detach", ticket.session); });
+    socket.on("close", () => { child.stdin.end(); audit(req, "detach", ticket.session, user); });
     socket.on("error", () => child.stdin.end());
   });
   // Removed members and non-administrators keep no shell across restarts. Without a known

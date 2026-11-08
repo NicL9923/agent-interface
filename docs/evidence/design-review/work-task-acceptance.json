@@ -1,0 +1,77 @@
+{
+  "scope": "Work W2a task board, task details, move actions and refusal feedback. Task create/edit is the next separate gate.",
+  "reviewer": "Anthropic Claude Opus 5.5, high effort",
+  "implementers": [
+    "OpenAI GPT-6.1 Terra",
+    "OpenAI GPT-6.1 Sol"
+  ],
+  "allClientGateAccepted": true,
+  "nextScreenAllowed": "Work W2b task create and edit only",
+  "fullAppAccepted": false,
+  "pullRequestReady": false,
+  "scores": {
+    "webRefusal": 9.5,
+    "other18WebFrames": 9,
+    "iphone23Frames": 9,
+    "ipad23Frames": 9
+  },
+  "closingSources": {
+    "web": "sha256:ec6b1f4de53106eea650be4b05cfba1e4019082fa0ee50ed048ca34e83d6eaef (226 source files)",
+    "native": "sha256:f55bda239c0781a7e3a6bfde45de164f51cacf8b8484e025c3040f43a7444afd (243 source files)"
+  },
+  "fixtureSHA256": "e8fee514b68e3f33b42b1b5fe166e6629d2fbb87679f87810aa778f0c072e744",
+  "counts": {
+    "sharedBeforeIncludingEditorGate": 67,
+    "boardAndActionsBefore": 42,
+    "webAfter": 19,
+    "iphoneAfter": 23,
+    "ipadAfter": 23,
+    "totalAfter": 65,
+    "annotatedComparisons": 14
+  },
+  "checks": {
+    "webFocusedUiTests": 31,
+    "webTestEvidence": "Original orchestration exec session11964 exit0; no standalone log retained.",
+    "hermesAdapterTests": 25,
+    "nativeFunctionalTests": 35,
+    "nativeFunctionalScope": "32 Automation tests and 3 standing-goal UI regressions on their reviewed source; unaffected logic reused after test-only framing edits.",
+    "productionBuild": "Web R6 passed.",
+    "nativeCaptureRuns": "Every selected closing run passed 1/1 with 0 skips; the binder requires exact source, names, timestamps and verified release.",
+    "nativeFinalSupplement": "iPad R6 task-detail passed 1/1. Four bound outputs, only Start note replaces the matrix. Execution including cleanup 107.260350875 seconds, queue 0.000006709 seconds."
+  },
+  "artifactRoot": "/Volumes/DevSSD/scratch/wildbots-design-review",
+  "evidence": {
+    "web": "work-w2a-web-after-r6-evidence.json",
+    "iphone": "work-w2a-native-phone-accepted-evidence.json",
+    "ipad": "work-w2a-native-pad-accepted-evidence.json",
+    "annotations": "work-w2a-annotated-comparisons-index.json",
+    "sharedBefore": [
+      "work-w2-web-before-evidence.json",
+      "work-w2-native-phone-before-evidence.json",
+      "work-w2-native-pad-before-evidence.json"
+    ]
+  },
+  "reviews": {
+    "web": "reviews/82-work-w2a-web-recheck.md",
+    "iphoneClosing": "reviews/87-work-phone-form-recheck.md",
+    "ipadNormal": "reviews/91-work-ipad-normal-review.md",
+    "allClientClosing": "reviews/92-work-ipad-start-note-recheck.md"
+  },
+  "disclosures": [
+    "Phone detail-top and dependencies records show the same content apart from the backdrop. File uniqueness does not imply distinct layouts.",
+    "Native source changes after the product render are test-only and covered by explicit snapshot-restoration and no-gesture carry proofs.",
+    "Historical incomplete BEFORE iPad batches retain unknown original launcher exit/unlock/deadline; individually bound passed frames remain eligible.",
+    "Web R6 used a previously nonexistent captures-r5 directory; all final image times bind to R6.",
+    "The W1 fixture differs only in unused task-refusal text, aligned with the adapter copy. Standing-goal pixels and behavior remain accepted."
+  ],
+  "followups": [
+    "W3 Event triggers header and message contrast of 3.37 and 4.00 remains for its own pass.",
+    "Platform navigation material shows faint scrolled content underneath.",
+    "Opening the optional note on iPad may require user scrolling. The final capture frames its field; no product auto-scroll change."
+  ],
+  "limits": [
+    "Synthetic fixtures and iOS 27 simulators; production Hermes 41dfcf2c unavailable.",
+    "Native AX3 and web 200% root font; no browser zoom claim.",
+    "No physical device, VoiceOver, hardware keyboard, iOS 17, AX5 or compact/split iPad validation."
+  ]
+}

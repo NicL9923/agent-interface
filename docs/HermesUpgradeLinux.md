@@ -31,8 +31,10 @@ changing them requires a fresh check.
 Keep both configuration files owned by the app/service user with mode `0600`.
 Keep the state and staging directories at `0700`. Staging must be outside the
 live Hermes home, including its recovery archives. Paths below are placeholders.
-Copy the actual managed interpreter paths from the host's native launcher and PM
-selection. Do not substitute the retired in-tree venv or a system Python.
+At setup, copy the actual managed interpreter paths from the host's native launcher
+and PM selection. Do not substitute the retired in-tree venv or a system Python.
+Hermes updates move the store interpreter between tool versions. The helpers then
+refresh these paths themselves, as [interpreter paths](#interpreter-paths) describes.
 
 The platform configuration can live at
 `/home/installer/.config/agent-interface/hermes-linux.json`:
@@ -101,6 +103,35 @@ passes the key to the native maintenance request through stdin. Neither the
 browser nor a public admin command receives it. A missing maintenance extension,
 wrong service configuration, or unavailable native work record stops the upgrade.
 
+## Interpreter paths
+
+A Hermes update can move the native store interpreter. The Oct 30, 2026 update
+moved it from Python 3.14.7 to 3.14.9 while the host configuration still named
+3.14.7. So `managedPython` is not authoritative for an operation's checks.
+
+Each operation asks the native launcher for its interpreter when maintenance
+starts. The helper requires it inside `HERMES_HOME/tools` and records it in the
+operation's platform record. Later hooks at the original revision compare the
+launcher's answer with that record, so a change during the operation still stops
+it. Native PM sync runs in the recorded interpreter. A record from an older helper
+has none; sync then uses `managedPython`, and the tool store still bounds the check.
+
+After `finish` releases maintenance, the platform helper asks the launcher again.
+It points every string value that names a Python 3 interpreter inside the tool store
+at the launcher's answer, whichever version it named before. That covers
+`managedPython`, `regressionPython` and regression argv entries, so positions left
+on different old versions all follow. Other tool-store binaries, such as Chromium,
+stay as they are. It checks the result as it checks any configuration, then
+atomically rewrites the file with mode `0600`. After a rollback the launcher reports the
+restored interpreter, and the file follows it. The worker does the same for
+`qualificationPython` and its hook argv after a released install, a restored
+install or a recovery. Both refreshes replace only tool-store paths, so a system
+bootstrap interpreter stays as configured. They are best-effort and write to the
+update's private log. A failed refresh never fails an update that already succeeded.
+
+The rewritten files change the host fingerprint. The next check binds it afresh, and
+a release prepared before the refresh must be prepared again.
+
 ## Persistent gateway gate
 
 Before enabling upgrades, the installer must add a source-side
@@ -159,6 +190,14 @@ List indirectly referenced private regression scripts and the Google verificatio
 script in worker `qualificationFiles`. Their exact bytes must remain unchanged
 between qualification and install. The worker also binds its configuration,
 platform helper, and directly referenced hook files.
+
+The app starts the worker as its own transient systemd user unit when it runs
+under systemd, through `systemd-run --user`. The app's service has a private
+`/tmp`, which a user manager builds from a user namespace. On hosts that restrict
+unprivileged user namespaces through AppArmor, a sandboxed Chrome started inside
+that namespace aborts, so a worker started as the app's child would always fail
+the local-network probe. Started outside the app's namespace and cgroup, the worker
+also keeps running if the app restarts. Without systemd the app spawns it directly.
 
 On a host that requires a specific sandboxed browser for the local-network probe,
 qualify the app release with `--computer-probe-browser /absolute/direct/ELF`.
@@ -243,7 +282,11 @@ acknowledgement from the current systemd process, its exact code SHA and home,
 and zero native chat, cron, API, or deferred work. Active or unknown work blocks
 shutdown. Exit code `75` means the hook proved that its gate and drain were
 released and that source, settings, and service processes stayed unchanged.
-Other failures keep maintenance closed for installer review. A failed cold backup
+A failed baseline also exits `75`: those checks run before the gate is taken and
+change no Hermes source, setting or service. Renew that session with `.agents/tools/renew-google-verification-session.py`. On Nov 6, 2026 an expired Google verification session failed
+the baseline, the hook reported it as an interrupted install, and the app refused
+chat sends until the record was reviewed by hand. The hook writes the refusal's
+cause to the private log. Other failures keep maintenance closed for installer review. A failed cold backup
 names its cause before restarting the services, and a restarted gateway gets
 `gatewayStartSeconds` to report, so a slow start cannot hide the original failure.
 Verification allows a just-started gateway its whole `verificationSeconds`.
@@ -254,7 +297,12 @@ Before stopping either service, the helper checks that it can read every file bo
 archives will include, so an unreadable file such as a root-owned operation copy fails
 without downtime. It then imports the qualified candidate's
 reachable Git objects from staging into the installed object store and proves
-they can be read without upstream access. This bounded private pack transfer
+they can be read without upstream access. The regressions check already made
+the same transfer while the household worked normally, so after the drain the
+backup copies only what changed since. A candidate far ahead of the installed
+revision can lack over 100,000 objects, which took about five minutes to pack and
+index on the Hermes host. A timeout names the command that ran out of time, never
+its arguments. This bounded private pack transfer
 changes no installed branches, tags, Git configuration, index, or working files.
 It avoids fetching missing objects during checkout while Hermes is offline.
 The install hook checks out the already-qualified SHA, applies the identical
@@ -350,7 +398,10 @@ output such as the dashboard's `web_dist`, and directories an older revision lef
 Hermes's package manager snapshots both into its editable workspace, and setuptools records
 those directories as namespace packages, so without them a qualified runtime never matches the
 installed one. Caches, `.hermes`, `venv` and the names the snapshot itself skips are not
-copied. An ignored Python file or link requires installer review. On Oct 13, 2026 this was
+copied. An ignored Python file or link requires installer review, except inside a Hermes product
+build: `ui-tui/dist` or `hermes_cli/web_dist`, untracked and holding a `hermes-build.json` receipt
+for that product with its source and output hashes. The TUI copies its tracked helper scripts there. Hermes rebuilds such output when its receipt no longer
+matches the tracked sources, so its code never runs unqualified. On Oct 13, 2026 this was
 proven by rebuilding the installed revision this way: its fingerprint equalled the live one.
 
 Disk space is checked twice before it can matter. A check refuses to stage without

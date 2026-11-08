@@ -25,6 +25,10 @@ the UI marks activity unknown and preserves the loaded conversation and draft.
 
 The revision-bound [add-on](../src/hermes/extension.py) adds durable admission, attribution, and event discovery through `agent-interface.capabilities/open/submit/receipt/discover`. Its private SQLite journal lives at `HERMES_HOME/runtime/agent-interface.db`. It writes no Hermes database rows. The adapter enables mutations only after the add-on reports a qualified revision. A native gateway without that contract stays unavailable with an explanation.
 
+The add-on runs `agent-interface.open` and `agent-interface.discover` on Hermes's RPC pool instead of the socket's read loop, with one lock per assistant, so one assistant's history read never waits on another's. It reuses decorated history for up to ten minutes while the session's history, journal, database files and redaction state are unchanged, or 30 seconds when it cannot read the redaction state. Each open reports its phase timings, which the app server sends as a `Server-Timing` header on conversation reads.
+
+After the add-on admits an app message as steering, it closes that session's open clarify, secure-input, computer handoff, terminal and connection requests, except a login asked for by address that belongs to another member, so the blocked tool returns and native steering drains. It withdraws each exact request under the native `server_requests` lock with the same settlement as native `cancel`, and wraps tool dispatch so a result whose request was closed this way says the user replied in chat. When the household computer is configured, it also registers the `agent_interface.computer_handoff` server request contract and the `computer_request_handoff` tool, and likewise the `agent_interface.terminal_request` contract and the `computer_request_terminal` tool; a revision without the contract seam keeps the computer without those tools. It always registers the `agent_interface.connection_request` contract and the `request_connection` tool the same way, when the seam exists. These use private native seams, so a new Hermes revision needs qualification before release, as for the rest of the add-on. `tests/hermes_chat_reply_test.py` runs against a Hermes checkout's real `tui_gateway/server_requests.py` when `HERMES_SOURCE` names it.
+
 The dashboard wrapper sets the native switch for externally managed installs, so
 the native dashboard hides its update control and its check and install routes
 refuse with a message directing administrators to the app. The service probe requires that switch on each
@@ -67,6 +71,19 @@ After executor death, the journal marks unfinished receipts interrupted and proj
 | Routines and chosen recipients | Native cron store and official scheduler provider, native `bot-chat:<profile>` delivery through the live-owner mailbox | Passed native CRUD, atomic paused creation, pause/resume state transitions, actual provider execution, canonical bot delivery, durable completion discovery and outbox delivery only to the explicitly selected recipient. Routine participants are not inferred from the conversation. Hermes' unified gateway runtime retired the dashboard's mailbox consumer and sends deliveries only to its gateway authority, which refuses a Bot Chat the dashboard holds. On such a Hermes, `bot_delivery.py` keeps deliveries for add-on chats in the native mailbox and runs them in the dashboard, once each. The suite fires routines through the guarded native gateway, as production does. |
 | Durable notifications | Add-on monotonic event journal plus profile-owned native cron execution ledgers | Passed cursor replay without duplicate events, approval/completion discovery and executor interruption discovery. Routine execution uses its own durable execution identity. Physical closed-phone Web Push is a separate acceptance gap. |
 | Avatar editing and portraits | Native profile metadata and assets, `image.generate` | Passed geometric/mascot metadata and preservation during bot edits. Uploaded portraits use native profile assets. Native image capability probe and a real generation request refused the absent image backend. Live generation and generated-portrait acceptance require a configured backend. |
+| Skill locks | Native skill lock record (`tools.skill_usage.set_locked`, keyed by skill directory, the record `PUT /api/skills/lock` writes), the dashboard's `_locked_index`, and the `skill_manage` lock preflight | A disposable home run against the 3a1e9ef source locked a skill through the add-on by its frontmatter name, listed it as locked, and saw native `skill_manage` and replayed approvals (single edit, delete and batch) refuse with `_locked` before any write; unlocking restored edits. An approval refused by a lock records a definite refusal. Locking needs an integration administrator, as the skill write policy does. Not run against a live profile. |
+| MCP sign-in rejected | `mcp.servers.status` `needs_auth` through the in-process dispatcher | A disposable home call returned `needs_auth` for every configured server, and a server parked as native parks a rejected OAuth credential read `needs_auth: true` and showed as Expired. No live MCP OAuth service was configured. |
+| Shared browser metadata floor | `browser_cdp_tool._fetched_param_urls`, `browser_url_policy.literal_targets_metadata` | The add-on wrapper applies native's CDP metadata scan to every `browser_cdp` call. With `HERMES_SOURCE` set to the 3a1e9ef source, `tests/hermes_computer_test.py` blocks `//169.254.169.254/`, `\\169.254.169.254`, userinfo forms, `http://2852039166/`, `http://[fd00:ec2::254]/` and `//0xa9fea9fe/` across `Runtime.evaluate`, `Page.navigate`, `Target.createTarget`, `Network.loadNetworkResource`, `Runtime.callFunctionOn` and `Page.addScriptToEvaluateOnNewDocument`; the earlier wrapper let six of those cases through. The wrapper also reads zero- and one-slash, backslash and escaped special-scheme forms such as `http:/169.254.169.254/`, which native's scan misses: of nine such real-module cases, native alone and the earlier wrapper let six through. |
+
+### Group chat activity, settings and routine posts
+
+Hermes `3a1e9ef50a570b1544795ddad197ad2dcde430ab` adds three room features the app uses where the gateway advertises them. None has a real-Hermes probe yet: the contracts below were read from that source, and application, contract-fixture and native unit tests exercise the app against them.
+
+| Requirement | Official implementation | Recorded result |
+| --- | --- | --- |
+| Who is working in a room | `groups.state` `driver_status.member_activity` (member, status, thread, 0-based round, `started_at`, current `tool`) and `max_rounds` (`tui_gateway/contracts/groups_bot_relay.py`) | Application tests only. Older gateways omit both; the app then keeps the room-wide working line. The server's room watcher ignores each turn's `progress_at`, so a step inside one tool never wakes every viewer |
+| Room purpose, shared notes and lead | `groups.context` with `event_id`, `purpose`, `notes`, `routing` (`everyone` or `lead`) and `lead_member_id`; `groups.state` returns `context` (`gateway/hosted_room_context.py`). Lead hand-offs are `room.assignment` events | Application tests only. Offered when `groups.capabilities.methods` lists `groups.context`; it is a room-log write, so it needs no running coordinator. The app always sends `routing`, since Hermes keeps the current routing only when it is omitted. Hermes limits purpose to 500 characters and trimmed notes to 4,096 UTF-8 bytes, which the server checks first |
+| Routine results in a group chat | `deliver: room:<id>` beside `bot-chat:<profile>` in the comma-separated target list, plus `failure_deliver` and `origin` delivery (`cron/scheduler_delivery_room.py`, `cron/scheduler_delivery.py`), mirrored in `src/server/delivery-targets.ts` | Application tests only. The app edits only its own `room:<id>` targets and keeps any other target, including `room:<id>@<profile>`. A post starts a round only for the members it @mentions. Hermes writes it as `message.user` with a `cron:<job>` actor and the routine name as `display_name`, which the app shows as the routine's post. The app offers it with `groups.context`, which arrived in the same upstream change. Delivery errors name `room:<id>`; the app shows only rooms the reader can open |
 
 The native baseline is in [hermes-native-probe.json](evidence/hermes-native-probe.json). Lifecycle and recovery results are in [hermes-extension-probe.json](evidence/hermes-extension-probe.json). Scheduler results are in [hermes-routine-probe.json](evidence/hermes-routine-probe.json). The authenticated Fastify-to-Hermes application proof is in [app-probe.json](evidence/app-probe.json). These contain synthetic content and sanitized paths, not credentials.
 
@@ -131,6 +148,46 @@ previews, and durable manual trials through the official scheduler. The new
 conflicts, paused trial execution and same-request deduplication in a disposable
 home. Voice delegates to native audio routes. See
 [Household experience](HouseholdExperience.md) for client behavior and limits.
+
+Live Talk uses `hermes_cli.plugin_provider_requests.credentialed_provider_request`
+from the WildBots voice plugin (`requires_auth: [openai-codex]`) to mint OpenAI
+Realtime client secrets, with Hermes attaching the ChatGPT credential. The
+session shape, the frame check through the plugins link and the browser's WebRTC
+call were verified by hand against production Hermes and OpenAI. The application
+tests use a fake `credentialed_provider_request` and never contact OpenAI, and no
+isolated probe covers this seam yet. A host rehearsal showed Hermes mints for the
+linked plugin even when it is not enabled, so the add-on gates on the plugin's
+enabled state through `hermes_cli.plugins._get_enabled_plugins` and
+`_get_disabled_plugins`, the readers Hermes's own loader uses; those private names
+are checked against Hermes 0.15.2 source only, and their absence fails closed. An
+older Hermes without the module reports live voice as unavailable. See
+[Hosting](Hosting.md#live-voice-plugin).
+
+The November 4 follow-up for Hermes 3a1e9ef adopts three native features and
+degrades on an older revision. Without native skill locks, the overview omits
+`lockSupported` and both clients hide the lock control. Without `needs_auth`
+in `mcp.servers.status`, connection cards keep the earlier token rule. A
+`tools.browser_session` revision without `literal_targets_metadata` and
+`_fetched_param_urls` fails the shared computer's seam check, so the shared
+computer stays off rather than run a weaker metadata check. The automation
+probe now locks a skill, checks that an approved assistant edit to it is
+refused, and unlocks it again.
+
+The November 6 follow-up qualifies Hermes main `74915d7af8d3115c3eb821893f3c01ab783146a5`, which
+contains v0.23.0. Upstream commits `e9f8551` and `1fcc57e` deleted the Bot Chat mailbox helpers
+`has_mailbox`, `_scan_read`, `_next_sequence` and `complete_delivery` once the authority FIFO stopped
+reading the mailbox. The add-on's own deliveries still use that directory, so `bot_delivery.ensure_helpers`
+supplies the four over the native `_root`, `_locked`, `_read`, `_write` and `_delivery_id` that remain,
+and keeps Hermes's own where they exist. Without it the guarded gateway refused to start. The full spike,
+native and real-application probes passed against that revision in disposable homes.
+
+The same follow-up adopts the native cron cancel route (`POST /api/cron/jobs/{id}/cancel`) and the job
+list's `live_execution`. A routine with a run in flight shows Stop run on web and iOS; the schedule is
+unchanged. Stop works during a trial too: the trial then ends, reads as failed with "This trial was stopped
+before it finished.", and releases its maintenance reservation. In run history, an attempt Hermes records
+as `cancelled` reads as Stopped and one recorded as `missed` as Didn't run wherever Hermes names the
+attempt exactly: session execution IDs, ledger rows and native `exec:N` output rows. Output documents
+matched by time still pair only with finished runs, so a stopped run never takes another run's document. Both routes exist at `ed1afb0` too.
 
 New full spike runs save receipts in their disposable `evidence` directory,
 printed at completion. Archive a successful run with

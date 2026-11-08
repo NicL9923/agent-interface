@@ -173,7 +173,7 @@ extension APIClient {
 
 struct VaultView: View {
   var botId: String?
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @Environment(\.scenePhase) private var scenePhase
   @State private var selectedBot = ""
   @State private var catalog: ProfileVault?
@@ -338,7 +338,7 @@ private struct AddVaultLoginView: View {
   let identity: String
   var onSaved: () -> Void
   var onUncertain: () -> Void
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @Environment(\.dismiss) private var dismiss
   @Environment(\.scenePhase) private var scenePhase
   @State private var label = ""
@@ -398,29 +398,50 @@ private struct AddVaultLoginView: View {
 
 /// Only request bindings and outcome flags live here. Never credential values.
 @MainActor enum SecureRequestOutcomes { static var uncertain: Set<String> = [] }
-@MainActor final class SecureRequestInput: ObservableObject {
-  @Published var identifier = ""
-  @Published var value = ""
-  @Published var busy = false
-  @Published var message: String?
-  @Published var blocked = false
-  private var generation = UUID()
+@MainActor @Observable final class SecureRequestInput {
+  var identifier = ""
+  var value = ""
+  var busy = false
+  var message: String?
+  var blocked = false
+  /// What the card shows while an answer is on its way: the visible identifier, never the secret.
+  var sendingIdentifier: String?
+  var sendingCancel = false
+  /// The confirmation after Hermes took the answer.
+  var accepted: String?
+  @ObservationIgnored private var generation = UUID()
   func clear() { identifier = ""; value = "" }
-  func teardown() { clear(); generation = UUID(); busy = false }
-  func bind(_ key: String) { clear(); generation = UUID(); busy = false; blocked = SecureRequestOutcomes.uncertain.contains(key); message = blocked ? "Could not confirm the result from Hermes. Refresh this request before taking another action." : nil }
-  func submit(api: APIClient, botId: String, requestId: String, request: SecureRequest, key: String, cancel: Bool, current: @escaping () -> Bool, refresh: @escaping () async -> Void) {
-    guard !busy, !blocked, request.supported else { clear(); return }
+  func sceneChanged(to phase: ScenePhase) { if phase == .background { clear() } }
+  func teardown() { clear(); generation = UUID(); busy = false; sendingIdentifier = nil }
+  func bind(_ key: String) {
+    clear(); generation = UUID(); busy = false; sendingIdentifier = nil; sendingCancel = false; accepted = nil
+    blocked = SecureRequestOutcomes.uncertain.contains(key)
+    message = blocked ? "Could not confirm the result from Hermes. Refresh this request before taking another action." : nil
+  }
+  func submit(api: APIClient, botId: String, requestId: String, request: SecureRequest, key: String, cancel: Bool, assistant: String = "The assistant",
+    current: @escaping () -> Bool, refresh: @escaping () async -> Void) {
+    guard !busy, !blocked, accepted == nil, request.supported else { clear(); return }
     let answer = SecureRequestAnswer(request: request, identifier: identifier, value: value, cancel: cancel)
+    sendingIdentifier = cancel ? "" : identifier.trimmingCharacters(in: .whitespacesAndNewlines); sendingCancel = cancel
     clear(); busy = true; message = nil
     let nonce = generation
     SecureRequestOutcomes.uncertain.insert(key)
     Task {
+      defer { if nonce == generation { sendingIdentifier = nil } }
       do {
         let result = try await api.answerSecureRequest(botId: botId, requestId: requestId, answer: answer)
         SecureRequestOutcomes.uncertain.remove(key)
         guard nonce == generation, current() else { return }
         busy = false; blocked = true
-        message = result.status == "expired" ? "This request expired. Refresh to see the current request." : "Response sent directly to Hermes."
+        if result.status == "expired" {
+          message = "This request had already closed, so Hermes didn't use what you entered. It may have timed out, been stopped, or closed when someone sent a message."
+        } else {
+          let text = cancel ? "Request cancelled. \(assistant) will continue without it."
+            : request.method == "vault.save_login" ? "Login saved. \(assistant) is continuing." : "Sent securely. \(assistant) is continuing."
+          accepted = text
+          SettledRequests.shared.remember(botId: botId, requestId: requestId, text: text)
+          AccessibilityNotification.Announcement(text).post()
+        }
         await refresh()
       } catch {
         let uncertain = VaultSafety.uncertain(error)
@@ -429,6 +450,7 @@ private struct AddVaultLoginView: View {
         busy = false
         blocked = uncertain || [404, 409].contains((error as? APIError)?.status ?? 0)
         message = error is CancellationError ? "Could not confirm the result from Hermes. Refresh this request before taking another action." : VaultSafety.error(error).localizedDescription
+        if [404, 409].contains((error as? APIError)?.status ?? 0) { await refresh() }
       }
     }
   }
@@ -436,9 +458,9 @@ private struct AddVaultLoginView: View {
 struct SecureAttentionView: View {
   var request: Attention
   var botId: String
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @Environment(\.scenePhase) private var scenePhase
-  @StateObject private var input = SecureRequestInput()
+  @State private var input = SecureRequestInput()
   private var key: String { [store.scope ?? "", botId, request.id, request.secure?.binding ?? ""].joined(separator: "|") }
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
@@ -446,6 +468,7 @@ struct SecureAttentionView: View {
         ExplicitLoginDetails(origin: secure.origin ?? "", request: explicit, assistantName: assistantName)
         Text("Waiting for \(explicit.requestedBy?.name ?? "the household member who started this task"). Only they can save or cancel this login.")
           .font(.footnote).accessibilityIdentifier("secure.waiting")
+        Text("Messages you send reach \(assistantName ?? "the assistant") after they answer.").font(.caption).foregroundStyle(.secondary)
       } else if let secure = request.secure {
         if secure.method == "vault.save_login" {
           if let explicit = secure.explicit {
@@ -454,7 +477,7 @@ struct SecureAttentionView: View {
             Text("Save login for \(secure.site ?? "this site")").font(.subheadline.bold())
             Text(secure.origin ?? "").font(.footnote).textSelection(.enabled)
           }
-          TextField("Username or email", text: $input.identifier).textFieldStyle(.roundedBorder).textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityIdentifier("secure.identifier").disabled(input.busy || input.blocked)
+          TextField("Username or email", text: input.sendingIdentifier.map { .constant($0) } ?? $input.identifier).textFieldStyle(.roundedBorder).textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityIdentifier("secure.identifier").disabled(input.busy || input.blocked)
         } else if secure.method == "vault.unlock_prompt" {
           Text("Unlock \(secure.displayName ?? "password source") in Hermes").font(.subheadline.bold())
         } else if secure.method == "vault.code" {
@@ -464,23 +487,29 @@ struct SecureAttentionView: View {
           Text(secure.envVar ?? "").font(.subheadline.bold())
           Text(secure.prompt ?? "").font(.footnote)
         }
-        SecureField(fieldLabel(secure), text: $input.value).textFieldStyle(.roundedBorder).textInputAutocapitalization(.never).autocorrectionDisabled().privacySensitive().accessibilityIdentifier("secure.value").disabled(input.busy || input.blocked)
+        SecureField(input.sendingIdentifier != nil && !input.sendingCancel ? "••••••••••" : fieldLabel(secure), text: $input.value).textFieldStyle(.roundedBorder).textInputAutocapitalization(.never).autocorrectionDisabled().privacySensitive().accessibilityIdentifier("secure.value").disabled(input.busy || input.blocked)
         Text("Sent directly to Hermes, outside chat and the model's context. Login identifiers remain visible metadata. Access follows the assistant's Hermes profile.").font(.caption).foregroundStyle(.secondary)
-        if let message = input.message { Text(message).font(.footnote).accessibilityIdentifier("secure.status") }
-        if input.blocked { Button("Refresh request") { Task { await store.refreshConversation() } }.disabled(input.busy) }
+        if let accepted = input.accepted {
+          Label(accepted, systemImage: "checkmark").font(.subheadline.weight(.semibold)).foregroundStyle(Palette.accent).accessibilityIdentifier("secure.accepted")
+        } else if let message = input.message { Text(message).font(.footnote).accessibilityIdentifier("secure.status") }
+        if input.blocked { if input.accepted == nil { Button("Refresh request") { Task { await store.refreshConversation() } }.disabled(input.busy) } }
         else {
           HStack {
-            Button("Send securely") { submit(cancel: false) }.buttonStyle(.borderedProminent).disabled(input.busy || input.value.isEmpty || (secure.method == "vault.save_login" && input.identifier.isEmpty))
+            Button { submit(cancel: false) } label: {
+              if input.sendingIdentifier != nil && !input.sendingCancel { HStack(spacing: 6) { ProgressView(); Text("Sending securely…") } } else { Text("Send securely") }
+            }.buttonStyle(.accentProminent).disabled(input.busy || input.value.isEmpty || (secure.method == "vault.save_login" && input.identifier.isEmpty))
               .accessibilityIdentifier("secure.submit")
-            Button("Cancel request", role: .destructive) { submit(cancel: true) }.disabled(input.busy).accessibilityIdentifier("secure.cancel")
+            Button(input.sendingCancel && input.busy ? "Cancelling…" : "Cancel request", role: .destructive) { submit(cancel: true) }.disabled(input.busy).accessibilityIdentifier("secure.cancel")
           }
+          Text("Need to change something? Send a message instead. That cancels this request so \(assistantName ?? "the assistant") can read it and ask again.")
+            .font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("secure.replyHint")
         }
       }
-    }.disabled(!store.connected || scenePhase != .active)
+    }.disabled(!store.connected || scenePhase == .background)
       .onAppear { input.bind(key) }
       .onChange(of: key) { _, new in input.bind(new) }
       .onChange(of: request.secure) { _, _ in input.bind(key) }
-      .onChange(of: scenePhase) { _, phase in if phase != .active { input.clear() } }
+      .onChange(of: scenePhase) { _, phase in input.sceneChanged(to: phase) }
       .onDisappear { input.teardown() }
   }
   private var assistantName: String? { store.bootstrap?.bots.first { $0.id == botId }?.name }
@@ -496,7 +525,7 @@ struct SecureAttentionView: View {
     guard let api = store.api, let secure = request.secure, store.connected,
       secure.explicit?.answerable(by: store.bootstrap?.user.id) != false else { input.clear(); return }
     let binding = key, token = api.token
-    input.submit(api: api, botId: botId, requestId: request.id, request: secure, key: binding, cancel: cancel,
+    input.submit(api: api, botId: botId, requestId: request.id, request: secure, key: binding, cancel: cancel, assistant: assistantName ?? "The assistant",
       current: { store.api === api && api.token == token && key == binding && !store.sessionExpired },
       refresh: { await store.refreshConversation() })
   }
@@ -527,5 +556,76 @@ struct ExplicitLoginDetails: View {
       Text("Profiles organize access but are not a household security boundary. Household members with Hermes access, and tools running on the Hermes server, can reach saved logins.")
         .font(.caption).foregroundStyle(.secondary)
     }.accessibilityElement(children: .contain).accessibilityIdentifier("secure.explicit")
+  }
+}
+
+/// Requests this device just settled. A settled card folds to one line, and that line stays a
+/// moment after Hermes stops listing the request, so the outcome never vanishes with the card.
+/// Holds only the confirmation text, never entered values.
+@MainActor @Observable final class SettledRequests {
+  static let shared = SettledRequests()
+  struct Item: Identifiable, Equatable {
+    var id: String { botId + "|" + requestId }
+    var botId: String
+    var requestId: String
+    var text: String
+    /// The card has shown its confirmation and now shows only this line.
+    var collapsed = false
+    /// Still shown after Hermes stops listing the request.
+    var lingering = true
+  }
+  private(set) var items: [Item] = []
+  func remember(botId: String, requestId: String, text: String) {
+    let item = Item(botId: botId, requestId: requestId, text: text)
+    items.removeAll { $0.id == item.id }
+    items.append(item)
+    Task {
+      // Timer: the confirmation reads in the card, then folds to its line.
+      try? await Task.sleep(for: .seconds(1.2))
+      update(item.id) { $0.collapsed = true }
+      // Timer: how long the line outlasts a request Hermes no longer lists.
+      try? await Task.sleep(for: .seconds(1.3))
+      update(item.id) { $0.lingering = false }
+      try? await Task.sleep(for: .seconds(60))
+      items.removeAll { $0.id == item.id }
+    }
+  }
+  func item(botId: String, requestId: String) -> Item? { items.first { $0.botId == botId && $0.requestId == requestId } }
+  func lingering(botId: String, listed: Set<String>) -> [Item] {
+    items.filter { $0.botId == botId && $0.lingering && !listed.contains($0.requestId) }
+  }
+  private func update(_ id: String, _ change: (inout Item) -> Void) {
+    guard let index = items.firstIndex(where: { $0.id == id }) else { return }
+    change(&items[index])
+  }
+}
+
+/// The one line a settled request leaves.
+struct SettledReceiptRow: View {
+  var text: String
+  var body: some View {
+    Label(text, systemImage: "checkmark").font(.subheadline).padding(.horizontal, 14).padding(.vertical, 10)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .background(Palette.accentSoft, in: RoundedRectangle(cornerRadius: 10))
+      .accessibilityIdentifier("settledReceipt")
+  }
+}
+
+/// Whether a message this person sends closes a request so the assistant reads it, as the web
+/// composer says. A login asked for by address stays with the member whose task asked.
+enum WaitingInput {
+  static func closes(_ request: Attention, userId: String?) -> Bool {
+    guard request.kind != "official" else { return false }
+    guard let requester = request.secure?.explicit?.requestedBy else { return true }
+    return requester.id == userId
+  }
+  static func placeholder(_ conversation: Conversation?, userId: String?) -> String? {
+    guard let conversation, conversation.activity.state == .blocked else { return nil }
+    let requests = conversation.attention ?? []
+    if requests.contains(where: { closes($0, userId: userId) }) { return "Or reply here instead…" }
+    if let owner = requests.compactMap({ $0.secure?.explicit?.requestedBy }).first {
+      return "Your message waits for \(owner.name ?? "the person who asked")…"
+    }
+    return nil
   }
 }

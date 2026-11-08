@@ -1,13 +1,22 @@
 import { Dialog } from "./ui/dialog";
 import { Button } from "./ui/button";
 import { Textarea } from "./ui/textarea";
+import type { CSSProperties } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type RFB from "@novnc/novnc";
 import type { Terminal } from "@xterm/xterm";
 import { api, ApiError, write } from "../client-api";
 import { isChunkFailure, useRaise } from "../app/chunk-failure";
-import type { ComputerStatus, ComputerStreamTicket } from "../shared/computer";
-import { loadGoogleIdentity, renderGoogleButton } from "./google-identity";
+import { terminalCommandPattern, type ComputerStatus, type ComputerStreamTicket } from "../shared/computer";
+import { desktopKeys, keysymsFor, limitPaste, pasteLimit } from "../lib/desktop-keys";
+import { attachDesktopTouch, type DesktopTouch } from "../lib/desktop-touch";
+import { computerSocketUrl } from "../lib/socket-url";
+import { chunkInput, terminalOptions } from "../lib/terminal-input";
+import { useMediaQuery } from "../app/use-browser";
+import { ComputerHelp } from "./ComputerHelp";
+import { useGoogleButton } from "./google-identity";
+import { useAction } from "../app/use-action";
+import { useResource } from "../app/use-resource";
 import { Icon } from "./Icon";
 import type { AuthConfig } from "./SignIn";
 import "@xterm/xterm/css/xterm.css";
@@ -17,14 +26,7 @@ type Connection = "connecting" | "connected" | "reconnecting" | "ended" | "faile
 type Tab = "desktop" | "terminal";
 const RETRY_DELAY = 2500;
 
-function socketUrl(path: string) {
-  const url = new URL(path, location.href);
-  if (url.origin !== location.origin || !url.pathname.startsWith("/api/computer/")) {
-    throw new Error("The computer returned an invalid connection address.");
-  }
-  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  return url.href;
-}
+const socketUrl = computerSocketUrl;
 function failure(cause: unknown, fallback: string) {
   // The general request helper discusses chat drafts. Computer errors need their own context.
   return cause instanceof ApiError && cause.code === "CONNECTION_UNAVAILABLE"
@@ -34,18 +36,103 @@ const reauthenticate = (cause: unknown) => cause instanceof ApiError && cause.co
 function retryable(cause: unknown) {
   return !(cause instanceof ApiError && [401, 403].includes(cause.status));
 }
+/** What a connection attempt can do while it runs; everything stops when it is replaced or unmounted. */
+type Attachment = {
+  signal: AbortSignal;
+  connected: () => void;
+  /** Shows the message, runs the teardown and tries again after a pause. */
+  retry: (message: string) => void;
+  /** Registers teardown for this attempt. */
+  onCleanup: (teardown: () => void) => void;
+};
+/**
+ * The connection state of a desktop or terminal attachment, and the ladder for a failed attempt: a retired
+ * chunk is raised, a request to confirm identity is handed to the caller, a refusal ends the attempt, and
+ * anything else retries. `connect` runs again for each attempt and reports a lost stream through `retry`.
+ */
+function useReconnecting(connect: (attachment: Attachment) => Promise<void>, { fallback, onReauthenticate, onRetry, canRetry }: {
+  /** Shown when a failed attempt has no better message. */
+  fallback: string;
+  /** Without it, a request to confirm identity fails the attempt like any other refusal. */
+  onReauthenticate?: () => void;
+  /** Runs before each retry is scheduled. */
+  onRetry?: () => void;
+  /** False once the caller ended the session on purpose. */
+  canRetry?: () => boolean;
+}) {
+  const [connection, setConnection] = useState<Connection>("connecting");
+  const [error, setError] = useState("");
+  const [attempt, setAttempt] = useState(0);
+  const raise = useRaise();
+  const cancelConnection = useRef<() => void>(() => {});
+  const latest = useRef({ connect, onReauthenticate, onRetry, canRetry, raise });
+  latest.current = { connect, onReauthenticate, onRetry, canRetry, raise };
+  useEffect(() => {
+    const controller = new AbortController();
+    const teardowns: Array<() => void> = [];
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    cancelConnection.current = () => { controller.abort(); clearTimeout(timer); };
+    const attachment: Attachment = {
+      signal: controller.signal,
+      connected: () => {
+        if (controller.signal.aborted) return;
+        setConnection("connected"); setError("");
+      },
+      retry: message => {
+        if (controller.signal.aborted || latest.current.canRetry?.() === false) return;
+        latest.current.onRetry?.();
+        setError(message); setConnection("reconnecting");
+        clearTimeout(timer);
+        timer = setTimeout(() => {
+          if (!controller.signal.aborted && latest.current.canRetry?.() !== false) setAttempt(value => value + 1);
+        }, RETRY_DELAY);
+      },
+      onCleanup: teardown => { teardowns.push(teardown); },
+    };
+    setConnection("connecting");
+    latest.current.connect(attachment).catch(cause => {
+      if (controller.signal.aborted) return;
+      if (reauthenticate(cause) && latest.current.onReauthenticate) { latest.current.onReauthenticate(); return; }
+      // A retired chunk never comes back for this page, so surface it rather than reconnect forever.
+      if (isChunkFailure(cause)) { latest.current.raise(cause); return; }
+      const message = failure(cause, fallback);
+      if (retryable(cause)) attachment.retry(message);
+      else { setConnection("failed"); setError(message); }
+    });
+    return () => {
+      controller.abort(); clearTimeout(timer);
+      for (const teardown of teardowns) teardown();
+    };
+  }, [attempt, fallback]);
+  const reconnect = useCallback(() => setAttempt(value => value + 1), []);
+  const stop = useCallback(() => cancelConnection.current(), []);
+  return { connection, setConnection, error, setError, reconnect, stop };
+}
+const TRACKPAD_KEY = "computer.trackpad";
+/** Trackpad mode is a per-device habit; storage can be missing or refuse, as in a private window. */
+function storedTrackpad() {
+  try { return localStorage.getItem(TRACKPAD_KEY) === "1"; } catch { return false; }
+}
+function storeTrackpad(on: boolean) {
+  try { if (on) localStorage.setItem(TRACKPAD_KEY, "1"); else localStorage.removeItem(TRACKPAD_KEY); } catch { /* Only this session remembers it. */ }
+}
 function ownerLabel(status: ComputerStatus | null, controlling: boolean) {
   if (controlling) return "You have control";
   if (status?.control.kind === "human") return status.control.mine
-    ? "Watching. Take over to control the desktop."
+    ? "Watching your desktop session"
     : `${status.control.name || "A household member"} has control`;
   if (status?.control.kind === "bot") return `${status.control.name || "An assistant"} is using the computer`;
-  return "Watching. Assistants can use this computer.";
+  return "Watching the shared desktop";
 }
 
-export function ComputerPanel({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const [tab, setTab] = useState<Tab>("desktop");
-  const [terminalOpened, setTerminalOpened] = useState(false);
+export function ComputerPanel({ open, onClose, initialTab = "desktop", take, terminal: opening }: {
+  open: boolean; onClose: () => void; initialTab?: Tab; take?: number;
+  /** An assistant's terminal card opened the shell. Each opening has its own `at`; its command waits for the person to paste it, and is never run. */
+  terminal?: { at: number; command?: string };
+}) {
+  const [tab, setTab] = useState<Tab>(initialTab);
+  const [desktopOpened, setDesktopOpened] = useState(initialTab === "desktop");
+  const [terminalOpened, setTerminalOpened] = useState(initialTab === "terminal");
   // Chosen once, so an open shell is not replaced when its confirmation ages past two hours.
   const [terminalStep, setTerminalStep] = useState<"confirm" | "shell" | null>(null);
   const [status, setStatus] = useState<ComputerStatus | null>(null);
@@ -85,6 +172,18 @@ export function ComputerPanel({ open, onClose }: { open: boolean; onClose: () =>
     };
   }, [open]);
 
+  // Take over from an assistant's request in the transcript always lands on the desktop.
+  useEffect(() => {
+    if (!take) return;
+    setTab("desktop"); setDesktopOpened(true);
+  }, [take]);
+
+  // Open terminal on an assistant's card always lands on the Terminal tab, even when the panel was already open.
+  useEffect(() => {
+    if (!opening) return;
+    setTab("terminal"); setTerminalOpened(true);
+  }, [opening]);
+
   const terminal = status?.terminal;
   useEffect(() => {
     if (terminalOpened && terminalStep === null && terminal?.available)
@@ -95,9 +194,10 @@ export function ComputerPanel({ open, onClose }: { open: boolean; onClose: () =>
   const changeTab = (next: Tab) => {
     setTab(next);
     if (next === "terminal") setTerminalOpened(true);
+    else setDesktopOpened(true);
   };
 
-  return <Dialog open={open}
+  return <Dialog open={open} initialFocus='[role="tab"][aria-selected="true"]'
     fallbackFocus={() => document.querySelector<HTMLElement>(".bot-rail:not([inert]) [aria-label='Settings']")
       ?? document.querySelector<HTMLElement>("[aria-label='Back to assistants']")} className="computer-panel" aria-labelledby="computer-title"
     onCancel={event => { event.preventDefault(); onClose(); }}>
@@ -105,7 +205,7 @@ export function ComputerPanel({ open, onClose }: { open: boolean; onClose: () =>
       <div>
         <p className="eyebrow">Shared workspace</p>
         <h2 id="computer-title">Computer</h2>
-        <p className="computer-subtitle">One desktop for your assistants. Your own persistent shell.</p>
+        <p className="computer-subtitle">Shared desktop. Your persistent shell.</p>
       </div>
       <Button className="icon-button" aria-label="Close computer" onClick={onClose}><Icon name="close" /></Button>
     </header>
@@ -123,7 +223,7 @@ export function ComputerPanel({ open, onClose }: { open: boolean; onClose: () =>
     </div>
     {statusError && <p role="status" className="computer-notice">{statusError}</p>}
     <section id="computer-desktop" role="tabpanel" aria-labelledby="computer-tab-desktop" hidden={tab !== "desktop"}>
-      {open && status?.available ? <DesktopView status={status} onStatus={setStatus} viewerId={viewerId} />
+      {open && desktopOpened && status?.available ? <DesktopView status={status} onStatus={setStatus} viewerId={viewerId} take={take} />
         : <Unavailable icon="computer" title={!status ? "Connecting to the computer" : "Desktop unavailable"}
           detail={status?.reason || (!status ? "Checking the shared desktop on the Hermes host." : "The shared desktop needs to be started on the Hermes host.")} />}
     </section>
@@ -131,7 +231,7 @@ export function ComputerPanel({ open, onClose }: { open: boolean; onClose: () =>
       {open && terminalOpened && terminal?.available && terminalStep === "confirm"
         ? <ConfirmIdentity onConfirmed={() => setTerminalStep("shell")} />
         : open && terminalOpened && terminal?.available && terminalStep === "shell"
-          ? <TerminalView target={terminal.target} active={tab === "terminal"} onReauthenticate={confirmTerminal} />
+          ? <TerminalView target={terminal.target} active={tab === "terminal"} onReauthenticate={confirmTerminal} opening={opening} />
           : <Unavailable icon="terminal" title={!status || terminal?.available ? "Checking the terminal" : "Terminal unavailable"}
             detail={terminal?.reason || (terminal?.available ? "Checking your access to the system terminal."
               : "The system terminal is not available on this Hermes host yet.")} />}
@@ -147,62 +247,24 @@ function Unavailable({ icon, title, detail }: { icon: "computer" | "terminal"; t
 }
 
 function ConfirmIdentity({ onConfirmed }: { onConfirmed: () => void }) {
-  const [config, setConfig] = useState<AuthConfig | null>(null);
-  const [member, setMember] = useState<string | null>(null);
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [googleLoading, setGoogleLoading] = useState(false);
   const [attempt, setAttempt] = useState(0);
+  const auth = useResource<AuthConfig>("/auth/config", { deps: [attempt], errorMessage: cause => failure(cause, "Can't check sign-in options. Try again.") });
+  const config = auth.data;
+  // Local test accounts confirm as the signed-in member; the server checks it is the same one.
+  const local = useResource<{ user: { id: string } }>(config?.localDevAuth ? "/bootstrap" : null);
+  const member = local.data ? /^local-(one|two)$/.exec(local.data.user.id)?.[1] ?? null : null;
   const button = useRef<HTMLDivElement>(null);
   const confirmed = useRef(onConfirmed);
   confirmed.current = onConfirmed;
-  const live = useRef(true);
-  useEffect(() => {
-    live.current = true;
-    return () => { live.current = false; };
-  }, []);
-
-  const confirm = useCallback(async (body: { credential: string } | { member: string }) => {
-    setBusy(true); setError("");
-    try {
-      await write("/auth/confirm", body);
-      if (live.current) confirmed.current();
-    } catch (cause) {
-      if (live.current) setError(failure(cause, "Couldn't confirm it's you. Check your connection and try again."));
-    } finally { if (live.current) setBusy(false); }
-  }, []);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    api<AuthConfig>("/auth/config", { signal: controller.signal }).then(setConfig, cause => {
-      if (!controller.signal.aborted) setError(failure(cause, "Can't check sign-in options. Try again."));
-    });
-    return () => controller.abort();
-  }, [attempt]);
-
-  // Local test accounts confirm as the signed-in member; the server checks it is the same one.
-  useEffect(() => {
-    if (!config?.localDevAuth) return;
-    const controller = new AbortController();
-    api<{ user: { id: string } }>("/bootstrap", { signal: controller.signal })
-      .then(boot => setMember(/^local-(one|two)$/.exec(boot.user.id)?.[1] ?? null), () => {});
-    return () => controller.abort();
-  }, [config?.localDevAuth]);
-
-  useEffect(() => {
-    const clientId = config?.googleClientId;
-    if (!clientId) return;
-    let current = true;
-    setGoogleLoading(true);
-    loadGoogleIdentity().then(client => {
-      if (!current || !button.current) return;
-      renderGoogleButton(client, button.current, clientId, credential => { if (current) void confirm({ credential }); });
-      setGoogleLoading(false);
-    }, (cause: Error) => {
-      if (current) { setGoogleLoading(false); setError(cause.message); }
-    });
-    return () => { current = false; };
-  }, [config?.googleClientId, attempt, confirm]);
+  const confirming = useAction();
+  const { busy } = confirming;
+  const confirm = (body: { credential: string } | { member: string }) => confirming.run(async ({ current }) => {
+    await write("/auth/confirm", body);
+    if (current()) confirmed.current();
+  }, { onError: cause => failure(cause, "Couldn't confirm it's you. Check your connection and try again.") });
+  const google = useGoogleButton(button, config?.googleClientId, attempt, credential => void confirm({ credential }));
+  const googleLoading = google.loading;
+  const error = auth.error || confirming.error || google.error;
 
   return <div className="computer-unavailable computer-confirm">
     <span className="computer-empty-icon"><Icon name="terminal" size={34} /></span>
@@ -215,85 +277,91 @@ function ConfirmIdentity({ onConfirmed }: { onConfirmed: () => void }) {
     {member && <Button className="primary" disabled={busy} onClick={() => void confirm({ member })}>Confirm local member {member}</Button>}
     {error && <div className="computer-confirm-error">
       <p role="alert">{error}</p>
-      <Button onClick={() => { setError(""); setAttempt(value => value + 1); }}>Try again</Button>
+      <Button onClick={() => { confirming.setError(""); setAttempt(value => value + 1); }}>Try again</Button>
     </div>}
   </div>;
 }
 
-function DesktopView({ status, onStatus, viewerId }: {
+function DesktopView({ status, onStatus, viewerId, take }: {
   status: ComputerStatus; onStatus: (status: ComputerStatus) => void;
   viewerId: React.RefObject<string | undefined>;
+  /** A take over request from the transcript, carried out once, as soon as the desktop connects. */
+  take?: number;
 }) {
   const screen = useRef<HTMLDivElement>(null);
   const rfb = useRef<RFB | null>(null);
-  const [connection, setConnection] = useState<Connection>("connecting");
-  const [error, setError] = useState("");
-  const [attempt, setAttempt] = useState(0);
-  const raise = useRaise();
   const [controlling, setControlling] = useState(false);
+  const [aspect, setAspect] = useState(1.6);
   const [submitting, setSubmitting] = useState(false);
   const [textOpen, setTextOpen] = useState(false);
   const [typedText, setTypedText] = useState("");
+  const [note, setNote] = useState("");
+  const [trackpad, setTrackpad] = useState(storedTrackpad);
+  const [zoomed, setZoomed] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const touchScreen = useMediaQuery("(any-pointer: coarse)");
+  const touch = useRef<DesktopTouch | null>(null);
+  const trackpadOn = useRef(trackpad);
+  trackpadOn.current = trackpad;
+  /** The desktop's clipboard as it last told this viewer. It only tells a viewer with control. */
+  const copied = useRef("");
   const attachmentEpoch = useRef(0);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    let timer: ReturnType<typeof setTimeout> | undefined;
+  const { connection, error, setError, reconnect } = useReconnecting(async ({ signal, connected, retry, onCleanup }) => {
     let client: RFB | null = null;
-    const detached = () => {
-      attachmentEpoch.current++;
-      setControlling(false);
-      if (client) client.viewOnly = true;
-    };
-    const retry = (message: string) => {
-      if (controller.signal.aborted) return;
-      detached();
-      setError(message);
-      setConnection("reconnecting");
-      clearTimeout(timer);
-      timer = setTimeout(() => setAttempt(value => value + 1), RETRY_DELAY);
-    };
-    const connect = async () => {
-      setControlling(false);
-      setConnection("connecting");
-      try {
-        const [{ default: RemoteFrameBuffer }, ticket] = await Promise.all([
-          import("@novnc/novnc"),
-          api<ComputerStreamTicket>("/computer/desktop", {
-            method: "POST", body: JSON.stringify({ viewerId: viewerId.current }), signal: controller.signal,
-          }),
-        ]);
-        if (controller.signal.aborted || !screen.current) return;
-        if (!ticket.viewerId) throw new Error("The desktop did not provide an attachment identity.");
-        viewerId.current = ticket.viewerId;
-        client = new RemoteFrameBuffer(screen.current, socketUrl(ticket.path));
-        rfb.current = client;
-        client.viewOnly = true;
-        client.scaleViewport = true;
-        client.resizeSession = false;
-        client.addEventListener("connect", () => {
-          if (controller.signal.aborted) return;
-          setConnection("connected"); setError("");
-        });
-        client.addEventListener("disconnect", () => retry("Desktop disconnected. Reconnecting in watch mode."));
-        client.addEventListener("securityfailure", () => retry("The desktop connection was rejected. Reconnecting in watch mode."));
-      } catch (cause) {
-        if (controller.signal.aborted) return;
-        // A retired chunk never comes back for this page, so surface it rather than reconnect forever.
-        if (isChunkFailure(cause)) { raise(cause); return; }
-        const message = failure(cause, "Can't connect to the desktop. We'll keep trying.");
-        if (retryable(cause)) retry(message);
-        else { setConnection("failed"); setError(message); }
-      }
-    };
-    void connect();
-    return () => {
-      controller.abort(); clearTimeout(timer);
+    onCleanup(() => {
       attachmentEpoch.current++;
       rfb.current = null;
       client?.disconnect();
+    });
+    setControlling(false);
+    const [{ default: RemoteFrameBuffer }, ticket] = await Promise.all([
+      import("@novnc/novnc"),
+      api<ComputerStreamTicket>("/computer/desktop", {
+        method: "POST", body: JSON.stringify({ viewerId: viewerId.current }), signal,
+      }),
+    ]);
+    if (signal.aborted || !screen.current) return;
+    if (!ticket.viewerId) throw new Error("The desktop did not provide an attachment identity.");
+    viewerId.current = ticket.viewerId;
+    client = new RemoteFrameBuffer(screen.current, socketUrl(ticket.path));
+    rfb.current = client;
+    client.viewOnly = true;
+    client.scaleViewport = true;
+    client.resizeSession = false;
+    const layer = attachDesktopTouch(client, screen.current, { onZoom: setZoomed });
+    layer?.setTrackpad(trackpadOn.current);
+    touch.current = layer;
+    onCleanup(() => {
+      layer?.detach();
+      if (touch.current === layer) touch.current = null;
+      setZoomed(false);
+    });
+    copied.current = "";
+    client.addEventListener("clipboard", event => {
+      const text = (event as CustomEvent<{ text?: unknown }>).detail?.text;
+      if (typeof text === "string") copied.current = text;
+    });
+    // noVNC's canvas keeps the remote framebuffer dimensions even when its CSS
+    // viewport scales. Observe resolution changes without polling the desktop.
+    const measure = () => {
+      const canvas = screen.current?.querySelector("canvas");
+      if (canvas && canvas.width > 0 && canvas.height > 0) setAspect(canvas.width / canvas.height);
     };
-  }, [attempt, viewerId]);
+    const observer = new MutationObserver(measure);
+    observer.observe(screen.current, { subtree: true, childList: true, attributes: true, attributeFilter: ["width", "height"] });
+    onCleanup(() => observer.disconnect());
+    client.addEventListener("connect", () => { measure(); connected(); });
+    client.addEventListener("disconnect", () => retry("Desktop disconnected. Reconnecting in watch mode."));
+    client.addEventListener("securityfailure", () => retry("The desktop connection was rejected. Reconnecting in watch mode."));
+  }, {
+    fallback: "Can't connect to the desktop. We'll keep trying.",
+    // Local input stops at once, before the next attempt has a chance to start.
+    onRetry: () => {
+      attachmentEpoch.current++;
+      setControlling(false);
+      if (rfb.current) rfb.current.viewOnly = true;
+    },
+  });
 
   // Losing ownership must immediately remove local input, even before the server fences it.
   useEffect(() => {
@@ -303,11 +371,44 @@ function DesktopView({ status, onStatus, viewerId }: {
     }
   }, [status.control.kind, status.control.mine]);
   useEffect(() => {
-    if (!controlling) { setTextOpen(false); setTypedText(""); }
+    if (!controlling) { setTextOpen(false); setTypedText(""); setNote(""); }
   }, [controlling]);
+  useEffect(() => {
+    touch.current?.setTrackpad(trackpad);
+    storeTrackpad(trackpad);
+  }, [trackpad]);
 
   const key = (keysym: number) => {
     if (controlling && connection === "connected") rfb.current?.sendKey(keysym);
+  };
+
+  /** Sets the desktop's clipboard and types the text, so it lands in the selected field either way. */
+  const paste = (text: string) => {
+    if (!controlling || connection !== "connected" || !rfb.current) return;
+    const limited = limitPaste(text);
+    rfb.current.clipboardPasteFrom(limited.text);
+    for (const keysym of keysymsFor(limited.text)) key(keysym);
+    setNote(limited.cut ? `Pasted the first ${pasteLimit} characters.` : "Pasted into the desktop.");
+  };
+  const copyToDevice = async () => {
+    const text = copied.current;
+    if (!text) { setNote("Nothing is copied on the desktop yet. Copy there first, then try again."); return; }
+    try {
+      await navigator.clipboard.writeText(text);
+      setNote("Copied the desktop's clipboard to this device.");
+    } catch { setNote("This browser didn't allow copying. Try again, or select the text on the desktop and type it here."); }
+  };
+  const pasteFromDevice = async () => {
+    let text: string;
+    try { text = await navigator.clipboard.readText(); }
+    catch {
+      // Some browsers only paste into a field. Type text's box takes a normal paste.
+      setTextOpen(true);
+      setNote("This browser didn't share its clipboard. Paste into the box below, then Send text.");
+      return;
+    }
+    if (text) paste(text);
+    else setNote("This device's clipboard is empty.");
   };
 
   const control = async (requestedAction?: "take" | "release") => {
@@ -331,56 +432,71 @@ function DesktopView({ status, onStatus, viewerId }: {
     } finally { setSubmitting(false); }
   };
 
+  // Each request takes over at most once. A failure leaves the person watching with the reason, like the button.
+  const taken = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    if (!take || taken.current === take || connection !== "connected" || submitting) return;
+    taken.current = take;
+    if (!controlling && !(status.control.kind === "human" && !status.control.mine)) void control("take");
+  });
+
+  const heldElsewhere = status.control.kind === "human";
+  const hint = controlling ? "Assistants are paused while you use the desktop."
+    : heldElsewhere && !status.control.mine ? "Take over is available after they hand back."
+    : heldElsewhere ? "Take over to use it here." : "Take over to use the mouse and keyboard.";
   return <div className="computer-view">
     <div className="computer-toolbar">
       <div className="computer-ownership" role="status"><span className={`computer-state-dot ${connection === "connected" ? "ready" : ""}`} />
-        <strong>{ownerLabel(status, controlling)}</strong><span>{controlling ? "Assistants are paused while you use the desktop." : "Take over to use the mouse and keyboard."}</span></div>
+        <strong>{ownerLabel(status, controlling)}</strong><span>{hint}</span></div>
       <div className="computer-control-actions">
+        {touchScreen && <Button className="icon-button" aria-label="How to use the desktop" aria-haspopup="dialog" onClick={() => setHelpOpen(true)}><Icon name="help" /></Button>}
         {!controlling && status.control.kind === "human" && status.control.mine && <Button disabled={connection !== "connected" || submitting} onClick={() => void control("release")}>Hand back</Button>}
         <Button className={controlling ? "" : "primary"} disabled={connection !== "connected" || submitting || status.control.kind === "human" && !status.control.mine}
           onClick={() => void control()}>{submitting ? "Updating control…" : controlling ? "Hand back" : "Take over"}</Button>
       </div>
     </div>
     {(error || status.reason) && <p className="computer-notice" role="status">{error || status.reason}</p>}
-    <div className="computer-screen-wrap">
+    {note && !error && <p className="computer-notice is-info" role="status">{note}</p>}
+    <div className={`computer-screen-wrap desktop-stage${controlling ? " is-controlling" : ""}`} style={{ "--desktop-aspect": aspect } as CSSProperties}>
       <div className="computer-screen" ref={screen} aria-label={controlling ? "Shared desktop. You have control." : "Shared desktop. Watching."} />
       {connection !== "connected" && <div className="computer-connection-overlay" role="status">
         <Icon name="computer" size={30} /><strong>{connection === "failed" ? "Desktop connection unavailable" : connection === "reconnecting" ? "Reconnecting desktop" : "Opening desktop"}</strong>
-        {connection === "failed" && <Button onClick={() => setAttempt(value => value + 1)}>Reconnect</Button>}
+        {connection === "failed" && <Button onClick={reconnect}>Reconnect</Button>}
       </div>}
     </div>
     <div className="terminal-tools">
       <Button disabled={!controlling} aria-expanded={textOpen} aria-controls="desktop-text" onClick={() => setTextOpen(value => !value)}>Type text</Button>
-      <Button disabled={!controlling} onClick={() => key(0xff0d)}>Enter</Button>
-      <Button disabled={!controlling} onClick={() => key(0xff09)}>Tab</Button>
-      <Button disabled={!controlling} onClick={() => key(0xff08)}>Backspace</Button>
+      <Button disabled={!controlling} onClick={() => key(desktopKeys.enter)}>Enter</Button>
+      <Button disabled={!controlling} onClick={() => key(desktopKeys.tab)}>Tab</Button>
+      <Button disabled={!controlling} onClick={() => key(desktopKeys.backspace)}>Backspace</Button>
+      <Button disabled={!controlling} onClick={() => void copyToDevice()}>Copy to device</Button>
+      <Button disabled={!controlling} onClick={() => void pasteFromDevice()}>Paste from device</Button>
     </div>
+    {touchScreen && <div className="terminal-tools desktop-touch-tools" role="group" aria-label="Touch">
+      <Button aria-pressed={trackpad} onClick={() => setTrackpad(value => !value)}><Icon name="trackpad" size={18} />Trackpad</Button>
+      {trackpad && <Button onClick={() => touch.current?.recenter()}>Recenter pointer</Button>}
+      {zoomed && <Button onClick={() => touch.current?.resetZoom()}>Reset zoom</Button>}
+    </div>}
     {textOpen && <form id="desktop-text" className="terminal-paste" onSubmit={event => {
       event.preventDefault();
       if (!controlling || connection !== "connected") return;
-      for (const character of typedText) {
-        const point = character.codePointAt(0)!;
-        key(point === 10 || point === 13 ? 0xff0d : point === 9 ? 0xff09 : point <= 255 ? point : 0x01000000 | point);
-      }
+      for (const keysym of keysymsFor(typedText)) key(keysym);
       setTypedText(""); setTextOpen(false); rfb.current?.focus();
     }}><label htmlFor="desktop-text-input">Type into the selected desktop field</label>
       <Textarea id="desktop-text-input" autoFocus autoCapitalize="none" autoComplete="off" autoCorrect="off" spellCheck={false} maxLength={8192} rows={2} value={typedText} onChange={event => setTypedText(event.target.value)} />
-      <div className="actions"><small>Click a field on the desktop first. Text is cleared after sending.</small><Button type="submit" disabled={!controlling || !typedText}>Send text</Button></div>
+      <div className="actions"><small>Select a field on the desktop first. Text is cleared after sending.</small><Button type="submit" disabled={!controlling || !typedText}>Send text</Button></div>
     </form>}
     <p className="computer-footnote">The desktop and browser logins stay on the server when you close this panel.</p>
+    {touchScreen && <ComputerHelp open={helpOpen} onClose={() => setHelpOpen(false)} />}
   </div>;
 }
 
-function TerminalView({ target, active, onReauthenticate }: { target: string; active: boolean; onReauthenticate: () => void }) {
+function TerminalView({ target, active, onReauthenticate, opening }: { target: string; active: boolean; onReauthenticate: () => void; opening?: { at: number; command?: string } }) {
   const surface = useRef<HTMLDivElement>(null);
   const terminal = useRef<Terminal | null>(null);
   const socket = useRef<WebSocket | null>(null);
   const fit = useRef<(() => void) | null>(null);
   const sessionId = useRef<string | undefined>(undefined);
-  const [connection, setConnection] = useState<Connection>("connecting");
-  const [error, setError] = useState("");
-  const [attempt, setAttempt] = useState(0);
-  const raise = useRaise();
   const [pasteOpen, setPasteOpen] = useState(false);
   const [pasteText, setPasteText] = useState("");
   const [confirmEnd, setConfirmEnd] = useState(false);
@@ -392,100 +508,67 @@ function TerminalView({ target, active, onReauthenticate }: { target: string; ac
     if (socket.current?.readyState === WebSocket.OPEN) socket.current.send(JSON.stringify(message));
   }, []);
 
-  useEffect(() => {
-    const controller = new AbortController();
-    let timer: ReturnType<typeof setTimeout> | undefined;
+  const { connection, setConnection, error, setError, reconnect, stop } = useReconnecting(async ({ signal, connected, retry, onCleanup }) => {
     let client: WebSocket | undefined;
     let emulator: Terminal | undefined;
     let observer: ResizeObserver | undefined;
     let resize: (() => void) | undefined;
-    stopped.current = false;
-    const retry = (message: string) => {
-      if (controller.signal.aborted || stopped.current) return;
-      setError(message); setConnection("reconnecting");
-      clearTimeout(timer);
-      timer = setTimeout(() => setAttempt(value => value + 1), RETRY_DELAY);
-    };
-    const connect = async () => {
-      setConnection("connecting");
-      try {
-        const [{ Terminal: Emulator }, { FitAddon }, ticket] = await Promise.all([
-          import("@xterm/xterm"), import("@xterm/addon-fit"),
-          api<ComputerStreamTicket>("/computer/terminal", { method: "POST", body: "{}", signal: controller.signal }),
-        ]);
-        if (controller.signal.aborted || !surface.current) return;
-        if (!ticket.sessionId) throw new Error("The terminal did not provide a shell session.");
-        sessionId.current = ticket.sessionId;
-        emulator = new Emulator({ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 14,
-          cursorBlink: true, screenReaderMode: true, scrollback: 3000, theme: { background: "#151c18", foreground: "#f1efdf", cursor: "#8bd2b2", selectionBackground: "#3a5947" } });
-        terminal.current = emulator;
-        const fitting = new FitAddon();
-        emulator.loadAddon(fitting);
-        emulator.open(surface.current);
-        resize = () => {
-          if (!surface.current?.clientWidth || !surface.current.clientHeight) return;
-          fitting.fit();
-          send({ type: "resize", columns: emulator!.cols, rows: emulator!.rows });
-        };
-        fit.current = resize;
-        resize();
-        emulator.onData(data => {
-          // xterm emits an entire paste at once. Keep each wire message bounded
-          // without splitting Unicode code points or queueing disconnected input.
-          let chunk = "", bytes = 0;
-          const encoder = new TextEncoder();
-          for (const character of data) {
-            const size = encoder.encode(character).length;
-            if (bytes + size > 16384) { send({type: "input", data: chunk}); chunk = ""; bytes = 0; }
-            chunk += character; bytes += size;
-          }
-          if (chunk) send({type: "input", data: chunk});
-        });
-        client = new WebSocket(socketUrl(ticket.path));
-        socket.current = client;
-        client.addEventListener("open", () => {
-          if (controller.signal.aborted || stopped.current) return;
-          setConnection("connected"); setError(""); resize?.();
-        });
-        client.addEventListener("message", event => {
-          if (controller.signal.aborted || stopped.current) return;
-          try {
-            const message = JSON.parse(String(event.data));
-            if (message.type === "output" && typeof message.data === "string") emulator?.write(message.data);
-            else if (message.type === "error") setError(typeof message.message === "string" ? message.message : "The shell reported an error.");
-            else if (message.type === "exit") {
-              stopped.current = true;
-              setConnection("ended"); setError("");
-              client?.close();
-            }
-          } catch { setError("The terminal returned an unreadable response."); }
-        });
-        client.addEventListener("close", () => retry("Terminal disconnected. Reconnecting to your shell."));
-        client.addEventListener("error", () => retry("Can't reach the terminal. Reconnecting to your shell."));
-        if (typeof ResizeObserver !== "undefined") {
-          observer = new ResizeObserver(resize);
-          observer.observe(surface.current);
-        }
-        window.addEventListener("resize", resize);
-      } catch (cause) {
-        if (controller.signal.aborted) return;
-        if (reauthenticate(cause)) { onReauthenticate(); return; }
-        if (isChunkFailure(cause)) { raise(cause); return; }
-        const message = failure(cause, "Can't connect to the terminal. We'll keep trying.");
-        if (retryable(cause)) retry(message);
-        else { setConnection("failed"); setError(message); }
-      }
-    };
-    void connect();
-    return () => {
-      controller.abort(); clearTimeout(timer);
+    onCleanup(() => {
       observer?.disconnect();
       if (resize) window.removeEventListener("resize", resize);
       socket.current = null; terminal.current = null; fit.current = null;
       client?.close(); emulator?.dispose();
       // The server-side tmux session intentionally continues after this attachment closes.
+    });
+    stopped.current = false;
+    const [{ Terminal: Emulator }, { FitAddon }, ticket] = await Promise.all([
+      import("@xterm/xterm"), import("@xterm/addon-fit"),
+      api<ComputerStreamTicket>("/computer/terminal", { method: "POST", body: "{}", signal }),
+    ]);
+    if (signal.aborted || !surface.current) return;
+    if (!ticket.sessionId) throw new Error("The terminal did not provide a shell session.");
+    sessionId.current = ticket.sessionId;
+    emulator = new Emulator(terminalOptions);
+    terminal.current = emulator;
+    const fitting = new FitAddon();
+    emulator.loadAddon(fitting);
+    emulator.open(surface.current);
+    resize = () => {
+      if (!surface.current?.clientWidth || !surface.current.clientHeight) return;
+      fitting.fit();
+      send({ type: "resize", columns: emulator!.cols, rows: emulator!.rows });
     };
-  }, [attempt, send, onReauthenticate]);
+    fit.current = resize;
+    resize();
+    // xterm emits an entire paste at once. Keep each wire message bounded without queueing disconnected input.
+    emulator.onData(data => { for (const chunk of chunkInput(data)) send({type: "input", data: chunk}); });
+    client = new WebSocket(socketUrl(ticket.path));
+    socket.current = client;
+    client.addEventListener("open", () => {
+      if (signal.aborted || stopped.current) return;
+      connected(); resize?.();
+    });
+    client.addEventListener("message", event => {
+      if (signal.aborted || stopped.current) return;
+      try {
+        const message = JSON.parse(String(event.data));
+        if (message.type === "output" && typeof message.data === "string") emulator?.write(message.data);
+        else if (message.type === "error") setError(typeof message.message === "string" ? message.message : "The shell reported an error.");
+        else if (message.type === "exit") {
+          stopped.current = true;
+          setConnection("ended"); setError("");
+          client?.close();
+        }
+      } catch { setError("The terminal returned an unreadable response."); }
+    });
+    client.addEventListener("close", () => retry("Terminal disconnected. Reconnecting to your shell."));
+    client.addEventListener("error", () => retry("Can't reach the terminal. Reconnecting to your shell."));
+    if (typeof ResizeObserver !== "undefined") {
+      observer = new ResizeObserver(resize);
+      observer.observe(surface.current);
+    }
+    window.addEventListener("resize", resize);
+  }, { fallback: "Can't connect to the terminal. We'll keep trying.", onReauthenticate, canRetry: () => !stopped.current });
 
   useEffect(() => {
     if (active) fit.current?.();
@@ -494,20 +577,40 @@ function TerminalView({ target, active, onReauthenticate }: { target: string; ac
   const end = async () => {
     if (!sessionId.current || ending) return;
     setEnding(true);
+    stopped.current = true;
+    stop();
+    socket.current?.close();
     try {
       await write("/computer/terminal/end", { sessionId: sessionId.current });
       stopped.current = true;
       socket.current?.close();
       setConnection("ended"); setConfirmEnd(false); setError("");
-    } catch (cause) { setError(failure(cause, "Couldn't confirm whether your shell ended. Check the connection before trying again.")); }
+    } catch (cause) {
+      stopped.current = false;
+      reconnect();
+      setError(failure(cause, "Couldn't confirm whether your shell ended. Check the connection before trying again."));
+    }
     finally { setEnding(false); }
   };
   const connected = connection === "connected";
+  // An assistant's suggested command waits beside the shell until the person pastes it. The persistent
+  // shell may still be running a program waiting for one key, so text arriving on its own could answer
+  // it. Pasting never runs the command: a command with a line break is never offered, and xterm uses
+  // bracketed paste when the shell asked for it. Each card opening offers it once.
+  const [offered, setOffered] = useState<{ at: number; command: string } | null>(null);
+  useEffect(() => {
+    setOffered(opening?.command && terminalCommandPattern.test(opening.command) ? { at: opening.at, command: opening.command } : null);
+  }, [opening]);
+  const pasteOffered = () => {
+    if (!connected || !offered) return;
+    terminal.current?.paste(offered.command);
+    setOffered(null); terminal.current?.focus();
+  };
 
   return <div className="computer-view">
     <div className="computer-toolbar">
       <div className="computer-ownership" role="status"><span className={`computer-state-dot ${connected ? "ready" : ""}`} />
-        <strong>{connection === "ended" ? "Shell ended" : connected ? "Your system terminal" : "Connecting to your terminal"}</strong><span>{target}</span></div>
+        <strong>{connection === "ended" ? "Shell ended" : connected ? "Your system terminal" : "Connecting to your terminal"}</strong><span>{target}</span>{connection !== "ended" && <span className="terminal-persistence">Closing this panel keeps your shell running.</span>}</div>
       <Button disabled={!sessionId.current || connection === "ended" || ending} onClick={() => setConfirmEnd(true)}>End shell</Button>
     </div>
     {confirmEnd && <div className="computer-end-confirmation" role="alert">
@@ -520,14 +623,21 @@ function TerminalView({ target, active, onReauthenticate }: { target: string; ac
       <div ref={surface} className="computer-terminal" aria-label="System terminal" />
       {connection !== "connected" && <div className="computer-connection-overlay" role="status">
         <Icon name="terminal" size={30} /><strong>{connection === "ended" ? "Your shell has ended" : connection === "failed" ? "Terminal connection unavailable" : connection === "reconnecting" ? "Reconnecting terminal" : "Opening your shell"}</strong>
-        {(connection === "ended" || connection === "failed") && <Button onClick={() => { setConfirmEnd(false); setAttempt(value => value + 1); }}>{connection === "ended" ? "Start terminal" : "Reconnect"}</Button>}
+        {(connection === "ended" || connection === "failed") && <Button onClick={() => { setConfirmEnd(false); reconnect(); }}>{connection === "ended" ? "Start terminal" : "Reconnect"}</Button>}
       </div>}
     </div>
+    {offered && <div className="terminal-offer" role="group" aria-label="Assistant's command">
+      <code>{offered.command}</code>
+      <small>Check the terminal is at a prompt first. Pasting doesn't run it; you press Enter.</small>
+      <div className="actions">
+        <Button onClick={() => setOffered(null)}>Dismiss</Button>
+        <Button className="primary" disabled={!connected} onClick={pasteOffered}>Paste at prompt</Button>
+      </div>
+    </div>}
     <div className="terminal-tools">
       <Button disabled={!connected} onClick={() => terminal.current?.focus()}>Keyboard</Button>
       <Button disabled={!connected} aria-label="Send Ctrl+C" onClick={() => send({ type: "input", data: "\u0003" })}>Ctrl+C</Button>
       <Button disabled={!connected} aria-expanded={pasteOpen} aria-controls="terminal-paste" onClick={() => setPasteOpen(value => !value)}>Paste text</Button>
-      <span>Closing this panel keeps your shell running.</span>
     </div>
     {pasteOpen && <form id="terminal-paste" className="terminal-paste" onSubmit={event => {
       event.preventDefault();

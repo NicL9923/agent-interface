@@ -1,10 +1,8 @@
-import { randomBytes } from "node:crypto";
 import { afterEach, expect, it } from "vitest";
 import webpush from "web-push";
 import { createApp } from "../src/server/app.js";
-import { hash } from "../src/server/auth.js";
 import { loadConfig } from "../src/server/config.js";
-import type { Runtime } from "../src/shared/types.js";
+import { fakeRuntime, signIn } from "./helpers/server.js";
 
 const origin = "https://app.example.invalid";
 const endpoint = "https://push.example.invalid/device";
@@ -15,15 +13,9 @@ async function setup() {
   const config = loadConfig({ NODE_ENV: "production", APP_ORIGIN: origin, APP_DATABASE: ":memory:",
     GOOGLE_CLIENT_ID: "fixture-client", HOUSEHOLD_EMAILS: "one@example.invalid,two@example.invalid",
     VAPID_PUBLIC_KEY: keys.publicKey, VAPID_PRIVATE_KEY: keys.privateKey, VAPID_SUBJECT: "mailto:one@example.invalid" });
-  const runtime = { close: async () => {} } as unknown as Runtime;
+  const runtime = fakeRuntime({ close: async () => {} });
   const result = await createApp(config, runtime, { background: false }); apps.push(result.app);
-  const login = (id: string) => {
-    result.store.user({ id, name: id, email: `${id}@example.invalid` });
-    const token = randomBytes(32).toString("hex"), csrf = randomBytes(32).toString("hex");
-    result.store.session(hash(token), id, csrf, Date.now() + 60000);
-    return { origin, cookie: `session=${token}`, "x-csrf-token": csrf };
-  };
-  return { ...result, one: login("one"), two: login("two") };
+  return { ...result, one: signIn(result.store, origin, "one"), two: signIn(result.store, origin, "two") };
 }
 
 it("checks a subscription only for its signed-in owner without exposing another member's registration", async () => {

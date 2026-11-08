@@ -1,27 +1,285 @@
 # Validation ledger
 
-## October 20 app release 2141b24
+> This file is the frozen archive of entries through October 21, 2026. New entries
+> go in [`docs/ledger/`](ledger/README.md), one file each, so release PRs never
+> conflict here. Do not add entries to this file.
 
-PR #160 merged at `2141b2408e90119b2fd50af7ea0c8f2a727bdad3`. The release is live at `https://agentui.wildflowersranch.com`,
-web build `41d3898d79da77b7`, from the archive with SHA256
-`4a37e9656ae5236ff90aeac0c1ac26fd61a20c39cbc9f137ef30ae8d15e2fde4`. The host build reproduced the local web build.
+## October 21 app release f257cc0
 
-The app integration inputs were unchanged, so the existing qualification receipt validated against the release and was reused. The guarded release tool's no-change preflight passed.
+PR #167's native improvements and PR #168's qualification records are deployed at `f257cc090418e0c0f7cd67d8fd0426cddeff6979`. The release is live at `https://agentui.wildflowersranch.com`,
+web build `154d3a216cfac9be`, from the archive with SHA256
+`91249e63582e7a6b1ee9d478679b60d6bd5d3c164dc03800b4fcaf6944725ed1`. The host build reproduced the local web build.
+
+The retained October 21 qualification receipt was verified and activated with the release; qualification was not rerun for this cutover. The guarded release tool's no-change preflight passed.
 Activation drained idle native work, switched the release and verified original
 Google HTTP and fresh WebSockets, the configured Discord connections and the
 gateway guard before clearing maintenance. The
-[production receipt](evidence/production-release-2141b240-20261020T013159Z.json) records the result. Hermes remains
+[production receipt](evidence/production-release-f257cc09-20261021T190417Z.json) records the result. Hermes remains
 at `acc3cada0da8`. Afterwards the public service worker reported the new
 build, API requests required sign-in, the app and Hermes services were active and
-maintenance was clear. A signed-in household session was not exercised.
+maintenance was clear. Interactive household use was not exercised.
+Nicolas explicitly authorized "Stop active work and deploy" after the earlier
+idle wait ended. The supported gateway stop/start completed and reported zero
+active agents. Normal guarded preparation and activation then completed without
+bypassing admission. The independent computer and terminal services remained
+active. The newer Headnet migration and legacy wg0 retirement were preserved.
 
-iOS 1.0 (8) was signed, uploaded once, and confirmed installable in the internal
-Household TestFlight group for both configured testers. The archive came from
-reviewed head `1bb099a`; its entire `ios/` tree matches merged commit `2141b24`.
-The [distribution receipt](evidence/2026-10-20-household-testflight-build-8.json)
-records the IPA hash, exact Apple build and expiry. Only the server's
-`IOS_APP_LATEST_BUILD` changed from 7 to 8 before guarded activation; its update
-URL stayed the same. No physical-device installation was exercised.
+Apple confirmed WildBots 1.0 build 10 as installable for both internal Household
+testers before changing the app announcement. The [distribution receipt](evidence/2026-10-21-household-testflight-build-10.json)
+binds the signed IPA and reviewed commit. The exact prior app environment was
+privately backed up; only the announced build changed from 9 to 10, with the
+existing TestFlight URL retained. The [native availability check](evidence/2026-10-21-native-availability-build-10.json)
+verified authenticated bootstrap, native connectivity, build 10 and the exact
+served worker bytes, then removed its temporary operator session. A subsequent
+read-only release verification confirmed current release, active services,
+sign-in enforcement and cleared maintenance. Physical-phone installation/audio,
+VoiceOver navigation and device frame timing remain unverified.
+
+## October 21 daily-use qualification, awaiting idle admission
+
+PR #167 merged as `14c93da8df3a8a89ebd39e9b0751b8e91467e132` after all four
+CI jobs completed. Fresh isolated qualification passed the native/application
+probes, including the new numeric search-pointer/history locator assertions,
+and all 18 private OAuth/Google regressions. The [sanitized receipts](evidence/qualification-daily-use-20261021/manifest.json)
+record unchanged Hermes `acc3cada0da86` and repair
+`30fe7232fa6121eca920ea753feb01ec3a6166406ed25310c9608e4e1473f3a1`.
+The retained private qualification receipt binds integration digest
+`b64ed1e0f73cc06632af7a51289098cb5b2c528b043a24205c99cadf1a54f7eb`.
+The disposable runtime was removed; the actual qualification receipt remains in
+operation `release-14c93da8-20261021T031808Z` for the final guarded preparation.
+
+WildBots 1.0 build 10 was signed and uploaded once from reviewed commit
+`63cd9cc2d517e90dc94f7b8fd9114e38960bca2d`. All three bundles and the exported
+IPA passed release verification. Apple returned transient upload errors before
+the uploader completed; the exact [build is valid](evidence/2026-10-21-household-build-10-upload.json).
+The later merge and draft-retry test fix did not alter shipping iOS source.
+Household assignment was not performed, and automatic all-build access remains
+disabled. The production announcement remains build 9.
+
+Twenty-eight check-only preflights over the bounded 40-minute wait refused active
+Hermes work. Each refused stage was discarded. Production remains
+`release-2cdd913c-20261020T124144Z`; no task-owned service restart, admission bypass
+or release switch occurred. The five app/Hermes user services remained active.
+Stopping that work requires Nicolas's explicit direction; otherwise resume normal
+guarded preparation with the retained qualification receipt when work is idle.
+
+The reusable native-release check verifies authenticated bootstrap, Hermes
+connectivity, an expected TestFlight build/link and exact service-worker bytes.
+It refuses missing databases and writes an owner-private receipt after deleting
+its temporary session. Independent Claude Opus 5.5 review identified an untied
+release label, possible stray database creation and an incomplete command header.
+The worker-byte comparison, existence guard and full invocation now address them.
+Final independent review confirmed these fixes and found no additional issues.
+Node syntax validation and an actual run against the unchanged build-9 deployment
+confirmed [bootstrap, connectivity and temporary-session cleanup](evidence/2026-10-21-native-baseline-check.json). It does not claim
+build-10 distribution or activation. Physical-phone audio, VoiceOver navigation,
+frame timing and interactive household use remain unverified.
+
+## October 20 native daily-use improvements
+
+PR #167's first CI run exposed an existing draft-retry test's fixed 1.2-second
+completion wait on a slower host. The test now waits for the settled draft with
+a ten-second deadline and keeps its backoff and final-content assertions. Three
+local iterations passed; independent Claude Opus 5.5 review confirmed the timing
+diagnosis and found no product bug. Final source including merged main tooling:
+`48976bbc6dcd4ffae78f9ddd232daef02dd3ca68bc48ee557b604cff8eca62cd`.
+The signed build 10 archive predates this test-only change; shipping iOS source
+is identical.
+
+Base `8926fb6`; reviewed implementation source fingerprint
+`85a08d99dac7ac828e9727c9a9c9eac359bc7ea2c14f3e7da4377fbf89410706`.
+This records implementation and local validation. Deployment and exact TestFlight
+distribution are recorded separately after their receipts exist.
+
+The change preserves interrupted voice clips, adds native reply actions, restores
+bounded read-only offline snapshots, locates search matches and finds loaded chat
+text, retains iPhone tab roots and memoizes Markdown parses. Snapshot files exclude
+credentials, authority, approvals, tool output, reasoning, drafts and in-flight
+text. A cached conversation stays read-only until its own network refresh.
+
+The shared validation ledger reused successful checks while rerunning checks whose
+inputs changed: 851 web tests across 73 files before the final fallback regression;
+eight focused discovery API/UI tests after it; the TypeScript/production build;
+22 Python suites with one platform suite skipped; all 27 experience tests through
+the script runner after fixing its main-guard placement; and Ruff. Native unit
+validation covered 293 tests with two skips. Focused follow-ups exercised roster
+add/remove clip retention, offline restoration/revalidation, background snapshot
+writes, uncached offline selection and missing search targets.
+
+Agent-driven simulator flows covered retained drafts and search across tabs and
+Pro Max rotation, reply actions, Find, interrupted recording/transcription, search
+scrolling, long-history anchors and existing home/settings flows. The iPad sidebar,
+settings and avatar flow was also exercised. Browser interactions at widths 390
+and 1280 verified the history pointer request, visible highlighted target and
+scrolling. Screenshots use synthetic fixtures; they do not prove real Hermes or
+APNs behavior. No physical-phone microphone, VoiceOver navigation or device frame
+timing claim is made.
+
+The reproducible optimized macOS Markdown benchmark parsed 50,000 blocks across
+100 repetitions in 0.460 seconds without the cache and 0.00358 seconds with it,
+including its first miss. This measures parse reuse, not scrolling frame rate.
+
+Independent Claude Opus 5.5 review found and prompted fixes for roster invalidation,
+rotation state loss, repeated main-thread snapshot writes, optional search failures,
+redundant history scans, stale reply action state and capture dates, misleading
+offline copy, a SQLite row contract mismatch and skipped pointer regressions.
+Final independent review confirmed the prior fixes and found one remaining purge
+gap: suspend could recreate an expiring session snapshot. The suggested save guard
+and a focused expiry regression now cover it. The unused root size-class binding
+was also removed. Fresh isolated native qualification is required before activation
+because the integration changed.
+## October 20 tsrs command-line adoption
+
+Validated on Nicolass-Mini, macOS arm64, Node 26.10.0, npm 11.19.1 and Python
+3.14.7. The source fingerprint is
+`sha256:3aaf4b2ea3da33eb1c8ba7300663dc90b358807ac53fa360cd9f24af29d18efd`
+across 891 files. The source-state tool excludes this ledger.
+
+TypeScript 7.0.2 and tsrs `0.18.0-ts7.1.0-dev.20260929` both exited 0 with no
+diagnostics on that same source and `tsconfig.json`, using `--noEmit --pretty false`.
+`/usr/bin/time -l` measured one invocation each, with no incremental compiler cache:
+
+| Compiler | Elapsed execution | macOS peak RSS |
+| --- | --- | --- |
+| TypeScript 7.0.2 | 1.03 s | 781,041,664 bytes |
+| tsrs | 0.29 s | 238,206,976 bytes |
+
+These are single-run observations with OS caches uncontrolled. Queue waits of
+93.14 s and 60.62 s respectively are excluded. tsrs reports upstream TypeScript
+`7.1.0-dev.20260930.4`; this comparison found no diagnostic differences.
+A temporary included `src/tsrs-negative-control.ts` assigned a number to a string.
+`npm run typecheck -- --pretty false` exited 2 with TS2322 naming that file.
+The probe was removed before the successful build and tests.
+
+- `npm ci --no-audit --no-fund` passed. All five optional tsrs native packages
+  remain pinned with integrity hashes, including both Linux libc variants.
+- `npm test` passed all 849 tests in 73 files.
+- `npm run build` passed the tsrs check, Vite build and service-worker build.
+  Web build `b688581988af98c7` matches the recorded base release.
+- `npm run test:py` passed 22 files, with no failures. One system-terminal file
+  skipped without tmux; two individual tests skipped because optional native
+  Hermes source fixtures were not configured.
+- `npm run lint:py` passed with the repository's pinned ruff 0.17.0.
+
+Raw logs and time reports are under
+`/Volumes/DevSSD/scratch/tsrs-rollout-20261020/agent-interface/`; the shared
+`validation.jsonl` records each command against its source fingerprint.
+Validation used the rollout's shared slot and released it between commands.
+Linux execution, native iOS builds and deployment were not performed for this
+tooling change. TypeScript, tsx and the JavaScript emission tools remain installed.
+
+## October 20 app release 2cdd913
+
+PR #162 merged at `2cdd913c7cb790a95343218952b3e4969e55b205`. The release is live at `https://agentui.wildflowersranch.com`,
+web build `b688581988af98c7`, from the archive with SHA256
+`09d3cb87ae9c3f5e183ed8572e290cb6f17c23ef48acd22cfc0ff25e6ea91677`. The host build reproduced the local web build.
+
+A fresh qualification receipt was activated with the release. The guarded release tool's no-change preflight passed.
+Activation drained idle native work, switched the release and verified original
+Google HTTP and fresh WebSockets, the configured Discord connections and the
+gateway guard before clearing maintenance. The
+[production receipt](evidence/production-release-2cdd913c-20261020T124144Z.json) records the result. Hermes remains
+at `acc3cada0da8`. Afterwards the public service worker reported the new
+build, API requests required sign-in, the app and Hermes services were active and
+maintenance was clear.
+
+Nicolas explicitly authorized interrupting the active work after the earlier idle
+wait expired. The supported gateway stop/start completed successfully and the new
+gateway reported zero active work before normal guarded preparation and activation.
+No admission check was bypassed. The shared computer and terminal services stayed
+active; all five user services, Caddy and WireGuard were active after deployment.
+
+The existing Household TestFlight distribution receipt was confirmed before
+changing the server announcement from build 8 to build 9. The exact prior private
+environment was backed up. A temporary operator session verified the live
+authenticated bootstrap, native connection and build 9 update link, then was
+deleted. Interactive household use and physical-phone installation/AutoFill were
+not exercised. The earlier qualification receipt was verified and activated;
+qualification was not rerun for this cutover.
+
+## October 20 qualification and Household build 9
+
+PR #162 merged at `2cdd913c7cb790a95343218952b3e4969e55b205` after all four CI jobs completed. WildBots 1.0 build 9 was archived from its reviewed parent `5bd28a925477f3f0963cc047dd36ecf722eb4e31`. All three signed bundles and the exported IPA passed the release checks. Apple confirmed the exact build as installable in the internal Household group with two testers. The [distribution receipt](evidence/2026-10-20-household-testflight.json) binds the commit and IPA hash. Installation and password-manager AutoFill on a physical phone remain unverified.
+
+Fresh isolated qualification passed the native/application probes and all 18 private OAuth/Google regressions against unchanged Hermes `acc3cada0da86`. The [sanitized native receipts](evidence/qualification-secure-input-20261020/manifest.json) retain the actual probe evidence. The native qualification receipt binds integration digest `bfeafff2fab529b75a93f374307bd8d3d9c2b3b0a3c8b4093fed5c5faaab840b` and repair `30fe7232fa6121eca920ea753feb01ec3a6166406ed25310c9608e4e1473f3a1`.
+
+The qualification's silent SSH connection lost its idle NAT mapping after the remote work completed. A new connection verified the actual receipt with the release's verifier and confirmed completed cleanup before reusing it for normal guarded preparation. Only the stalled local SSH process was terminated. No qualification receipt was recreated. Release SSH calls now send 30-second keepalives and fail after four missed responses. The idle helper also recognizes the gateway's preflight busy refusal, discards that unchanged stage and retries; integrity failures still stop immediately.
+
+Four focused deployment Python suites and Ruff passed. Independent Claude Opus 5.5 review found no blockers and requested a source-linked test for the gateway refusal; the AST wiring test now checks both the real preflight message and refusal to match its post-drain variant. Helper/test fingerprint: `fd858a76ea3a1894e1c06ab0e188fb8b7609fe813ac45f77ba20cdbbab2ed2e8`. Independent round-two review confirmed the helper fixes, regression coverage and release records with no remaining findings. At that checkpoint, guarded web activation was waiting for idle admission; the release entry above records the subsequent cutover.
+
+## October 19 secure input and tool receipts
+
+Base `2141b24`; final source fingerprint
+`ff6166021e149b009da45740f5ae9eda353732419d4d751a0f370407772320ed`.
+The vault implementation and regression-test fingerprint is
+`0ab887973ce11375e33848b0db05e5b8cc5f7cd48b8c4b5f226ee0116639134e`.
+Read-only production inspection found repeated Patch login requests ending after
+180 seconds, matching the installed Hermes login callback's timeout. WildBots
+does not show that deadline. App-owned canonical login prompts now wait for an
+answer, cancellation or native interruption only while an unsettled, non-steering
+app receipt proves a person started the turn. Unattended routine/bot turns, other
+chats and other prompt kinds retain their native deadlines.
+
+iOS preserves secure entry and leaves fields enabled during temporary inactivity,
+while clearing entry on submission, backgrounding and dismissal. Real password-manager
+AutoFill on a physical phone remains unverified. A 404 or
+409 answer now refreshes the conversation, as an expired response already did.
+Native tool arguments, results, errors and activity text use a measured scroll
+container capped at 280 points; short text keeps its natural height. Simple
+receipts on both clients retain the full exposed output instead of silently
+cutting it at 4,000 characters. Web keeps its existing height caps and adds
+keyboard focus and scroll containment.
+
+Both turn renderers place grouped activity before the reply that follows the
+last saved activity row. Earlier commentary stays above the group, split replies
+stay together, and attachment-only replies work. Live updates preserve that
+history position; running calls stay after the current commentary. Claude Opus
+5.5 pressure-tested this design. A subsequent independent full-diff review found
+that unattended turns could wait indefinitely, moving groups could lose disclosure
+state, and output regions needed clearer accessibility semantics. The fixes scope
+the wait to an open app receipt, keep each activity group in one keyed sibling
+collection on both clients, and name web/native output regions. Fields now stay
+enabled during temporary inactivity. Backgrounding still clears both fields, as
+the existing security behavior requires. Round two confirmed those fixes and
+found an iOS reasoning/tool ordering regression. Reasoning now has its own stable
+row before tools, with a model-level parity regression matching the web fixture.
+Claude Opus 5.5 round three found no remaining actionable issues. All 16
+native presentation tests passed after the reasoning-row fix.
+
+- The initial full web suite passed all 848 tests. After review fixes, 71 focused
+  web tests passed, including receipt identity/expansion/scroll preservation during
+  completion, and the production build passed with web build `b688581988af98c7`.
+- Xcode 27.1 on iOS 27.0 simulator `DB70DBE8-5F8D-40DA-8DFA-B724FE2CD03A`
+  reran 284 native unit tests after round-one fixes, with two skips and no failures. The native secure
+  login/code/unlock/secret background flow passed. The final UI check passed in
+  simple and advanced presentation: short output stays compact, long output is
+  complete and capped at 280 points, swiping scrolls its content while its
+  container stays in place, and the final reply follows the tool group.
+- Browser checks at 390 and 1280 CSS pixels confirmed bounded output, complete
+  result text, keyboard scrolling to the end and the corrected message order.
+  Native before/after screenshots were inspected together; web phone and desktop
+  screenshots were inspected separately. Local native evidence is retained at
+  `/Volumes/DevSSD/scratch/browser-vault-expiry/ios-tool-output-final.png`.
+  A baseline/current web comparison also confirms the message ordering change.
+- Initial layout/UI-selector checks failed. The final native container uses
+  measured height, and the test locates it by its accessible label because the
+  disclosure group's identifier overrides descendant identifiers. The first
+  failed run stalled collecting diagnostics and was stopped; subsequent runs
+  used `-collect-test-diagnostics never` and completed normally.
+- Four Python suites passed: vault settlement, explicit-origin logins, shared
+  computer and extension journal. Ruff and `git diff --check` passed.
+- An offline disposable harness used the exact native `_ask` helper and request
+  registry from installed revision `acc3cada`, with a zero-second deadline to
+  reproduce expiry without waiting three minutes. The scoped fix kept the prompt
+  open; submission, cancellation, interruption and duplicate-answer refusal passed.
+  The harness replaced redaction registration and canonical-owner lookup with
+  fixtures. It did not exercise the browser or authenticated HTTP transport.
+- Production was inspected only. Full release qualification and deployment have
+  not run, and the user's exact submission timing remains unverified.
+- Claude Opus 5.5's diagnostic pass ruled out separate request registries,
+  transport retries and owner mismatches as explanations for this expiry text.
+  It identified stale cards after failed refreshes as another possible contributor;
+  the available evidence does not distinguish that from the hidden timeout.
 
 ## October 19 sent-message echo and avatar motion
 

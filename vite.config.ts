@@ -6,5 +6,7 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: { alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) } },
   server: { host: "127.0.0.1", proxy: { "/api": {target: "http://127.0.0.1:3000", ws: true}, "/inline-ui": "http://127.0.0.1:3000" } },
-  build: { outDir: "dist/client", manifest: true },
+  // The iOS app's shared desktop viewer and system terminal are their own small pages, served at
+  // /native/computer and /native/terminal.
+  build: { outDir: "dist/client", manifest: true, rollupOptions: { input: { index: "index.html", nativeComputer: "native-computer.html", nativeTerminal: "native-terminal.html" } } },
 });

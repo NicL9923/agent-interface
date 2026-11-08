@@ -1,6 +1,6 @@
 .inline-ui { margin: 16px 0; min-width: 0; }
 .inline-ui > iframe { display: block; width: 100%; border: 0; background: transparent; }
-.inline-ui-controls { display: flex; gap: 12px; align-items: center; justify-content: space-between; color: var(--muted); font-size: 12px; margin-top: 8px; }
+.inline-ui-controls { display: flex; gap: 12px; align-items: center; justify-content: space-between; color: var(--muted); font-size: 0.75rem; margin-top: 8px; }
 .inline-ui-controls button { flex-shrink: 0; }
-.inline-ui > details { color: var(--muted); font-size: 12px; margin-top: 8px; }
+.inline-ui > details { color: var(--muted); font-size: 0.75rem; margin-top: 8px; }
 .inline-ui > details > pre { max-height: 360px; overflow: auto; white-space: pre-wrap; color: var(--ink); background: var(--rail); padding: 12px; border-radius: 8px; }

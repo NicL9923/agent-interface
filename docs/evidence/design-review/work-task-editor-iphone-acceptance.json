@@ -1,0 +1,53 @@
+{
+  "gate": "Work W2b task editors, iPhone only",
+  "accepted": true,
+  "fullW2bAccepted": true,
+  "nextScreenAllowed": true,
+  "source": "sha256:8b416af9bff992bd2af8f9a9f8aff25c7028157dc45cf609625e20b4dccd5cb7 (243 source files)",
+  "fixtureSHA256": "e8fee514b68e3f33b42b1b5fe166e6629d2fbb87679f87810aa778f0c072e744",
+  "review": "100-work-task-editor-iphone-render-review",
+  "reviewer": {
+    "provider": "Anthropic",
+    "model": "Claude Opus 5.5",
+    "effort": "high"
+  },
+  "evidence": "/Volumes/DevSSD/scratch/wildbots-design-review/work-w2b-native-phone-final-selection.json",
+  "frameCount": 13,
+  "scores": {
+    "task-create-large-text-keyboard": 9,
+    "task-create-large-text-top": 9,
+    "task-create-large-text-middle": 9,
+    "task-create-large-text-bottom": 9,
+    "task-create-empty": 9,
+    "task-create-filled": 9,
+    "task-create-saved": 9,
+    "task-create-dark": 9,
+    "task-edit": 9,
+    "task-edit-saved": 9,
+    "task-create-uncertain": 9,
+    "task-create-refreshed": 9,
+    "task-create-closed": 9
+  },
+  "annotations": "/Volumes/DevSSD/scratch/wildbots-design-review/work-w2b-native-annotations/phone-manifest.json",
+  "sourceCarry": "/Volumes/DevSSD/scratch/wildbots-design-review/work-w2b-phone-to-pad-r2-carry-proof.json",
+  "checks": {
+    "nativeFunctional": "Original R1:33 unit and5UI passed. R4:two affected task UI tests passed after keyboard product change. Original run/source bindings retained.",
+    "capture": "R6 AX1tour and R7 fourtours each1passed0skipped; strict target44x44 and keyboard dismissal preserve draft."
+  },
+  "disclosures": [
+    "R7 actual release relay was delayed by parent interruption. Persisted supervisor and scoped release prove the earlier event; no live foreground drain is claimed.",
+    "Only UITest final-position check changed after these captures. App bytes remain unchanged; original source bindings retained."
+  ],
+  "followups": [
+    "Native disabled controls have mixed visual dimming by platform default.",
+    "Dark keyboard accessory glass overlaps the stepper corner slightly.",
+    "AX3 captures do not show every intervening task row or the complete help text.",
+    "Invalid frame dimension warning occurs with keyboard toolbar in several runs, without an observed visual effect. Retain for whole-app native polish diagnosis."
+  ],
+  "limits": [
+    "Simulator iOS27/iPhone17 only",
+    "AX3, not AX5",
+    "No VoiceOver, physical device, hardware keyboard or iOS17 verification"
+  ],
+  "closingEvidence": "work-task-editor-acceptance.json"
+}

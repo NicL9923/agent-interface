@@ -6,6 +6,7 @@ import { resolve, extname } from 'node:path';
 import { WebSocketServer } from 'ws';
 import { createHash, randomUUID } from 'node:crypto';
 import { tsImport } from 'tsx/esm/api';
+import { automationPreview } from './automation-preview.mjs';
 const { routinePresets } = await tsImport('../../src/shared/routine-presets.ts', import.meta.url);
 const { replyCardsFromText, validReplyCardState } = await tsImport('../../src/shared/reply-cards.ts', import.meta.url);
 const { apiPolicy, contentSecurityPolicy, cspViolations, permissionsPolicy } = await tsImport('../../src/server/security-headers.ts', import.meta.url);
@@ -14,6 +15,43 @@ const { inlineUiShell, inlineUiShellPolicy } = await tsImport('../../src/server/
 const port = Number(process.env.PREVIEW_PORT || 3000);
 const host = process.env.PREVIEW_HOST || '127.0.0.1';
 const root = resolve(process.env.PREVIEW_CLIENT_DIR || 'dist/client');
+// PREVIEW_TALK=1 stands in for the microphone, WebRTC and OpenAI, so live Talk runs offline: the
+// person asks one question, the voice calls ask_assistant, and the fixture answer is spoken back.
+const talkFixture = `(() => {
+  const silent = () => { const context = new AudioContext(); return context.createMediaStreamDestination().stream; };
+  navigator.mediaDevices.getUserMedia = async () => silent();
+  const realFetch = window.fetch.bind(window);
+  window.fetch = (url, init) => String(url).startsWith('https://api.openai.com/') ? Promise.resolve(new Response('v=0 preview answer', { status: 201 })) : realFetch(url, init);
+  window.RTCPeerConnection = class {
+    constructor() { this.connectionState = 'new'; }
+    addTrack() {} close() { this.connectionState = 'closed'; }
+    async createOffer() { return { type: 'offer', sdp: 'v=0 preview offer' }; }
+    async setLocalDescription() {}
+    async setRemoteDescription() { setTimeout(() => this.channel.open(), 300); }
+    createDataChannel() {
+      let output = '';
+      const channel = this.channel = { readyState: 'connecting', onopen: null, onmessage: null, onclose: null,
+        emit: (event, delay) => setTimeout(() => channel.readyState === 'open' && channel.onmessage?.({ data: JSON.stringify(event) }), delay),
+        open() { channel.readyState = 'open'; channel.onopen?.();
+          channel.emit({ type: 'input_audio_buffer.speech_started' }, 600);
+          channel.emit({ type: 'conversation.item.input_audio_transcription.completed', transcript: 'Is the north gate shut tonight?' }, 2200);
+          channel.emit({ type: 'response.created' }, 2400);
+          channel.emit({ type: 'response.output_audio_transcript.done', transcript: 'Let me check with Ranch hand.' }, 2600);
+          channel.emit({ type: 'response.function_call_arguments.done', name: 'ask_assistant', call_id: 'preview-call', arguments: JSON.stringify({ request: 'Is the north gate shut tonight?' }) }, 2800);
+          channel.emit({ type: 'response.done' }, 2900); },
+        close() { channel.readyState = 'closed'; },
+        send(raw) { const event = JSON.parse(raw);
+          if (event.item?.output) output = event.item.output;
+          if (event.type !== 'response.create') return;
+          const words = output ? output.replace(/^[^:]*answered: /, '') : 'Howdy.';
+          channel.emit({ type: 'response.created' }, 50);
+          words.split(' ').forEach((word, index) => channel.emit({ type: 'response.output_audio_transcript.delta', delta: (index ? ' ' : '') + word }, 200 + index * 120));
+          channel.emit({ type: 'response.output_audio_transcript.done', transcript: words }, 300 + words.split(' ').length * 120);
+          channel.emit({ type: 'response.done' }, 400 + words.split(' ').length * 120); } };
+      return channel;
+    }
+  };
+})();`;
 // LAN previews need request IDs even when HTTPS-only randomUUID is unavailable.
 // Microphone and push remain subject to the browser's real secure-context rules.
 // Served as a file, not inline, so the app's own Content-Security-Policy applies unchanged.
@@ -23,7 +61,8 @@ const fixtureScript = `if (!crypto.randomUUID) crypto.randomUUID = () => {
   const hex = Array.from(bytes, value => value.toString(16).padStart(2, '0')).join('');
   return [hex.slice(0,8), hex.slice(8,12), hex.slice(12,16), hex.slice(16,20), hex.slice(20)].join('-');
 };
-${process.env.PREVIEW_NOTIFICATION_PROMPT === '1' ? 'if(window.Notification)Object.defineProperty(Notification,"permission",{get:()=>"default",configurable:true});' : ''}`;
+${process.env.PREVIEW_NOTIFICATION_PROMPT === '1' ? 'if(window.Notification)Object.defineProperty(Notification,"permission",{get:()=>"default",configurable:true});' : ''}
+${process.env.PREVIEW_TALK === '1' ? talkFixture : ''}`;
 const fixtureHtml = async () => (await readFile(resolve(root, 'index.html'), 'utf8'))
   .replace('<head>', '<head><script src="/preview-fixture.js"></script>');
 const documentHeaders = request => ({ 'Content-Security-Policy': contentSecurityPolicy(`http://${request.headers.host || `${host}:${port}`}`),
@@ -33,13 +72,13 @@ const previewPushKey = process.env.PREVIEW_PUSH_CONFIGURED === '1' ? Buffer.conc
 // PREVIEW_THEME=light|dark|system and PREVIEW_PRESENTATION=simple|advanced pick the initial preferences.
 const portrait = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 80"><rect width="80" height="80" fill="#d9c7a3"/><circle cx="40" cy="31" r="15" fill="#6b4f3a"/><path d="M12 80c4-20 16-29 28-29s24 9 28 29Z" fill="#3f6b57"/></svg>');
 const bots = [
-  { id: 'ranch', lastMessage: { text: 'Here is what I will set up: reminders for all three gates on Nov 1.', at: new Date(Date.now() - 2 * 60_000).toISOString() }, name: 'Ranch hand', shared: true, model: 'configured-model', provider: 'openrouter', activity: 'working', description: 'Everyday household help', instructions: 'Explicit fixture instructions.', avatar: { mode: 'geometric', shape: 'blob', color: '#1084FE', eyes: 'oval', accessory: 'none' } },
-  { id: 'kitchen', lastMessage: { text: 'Pot roast tonight. I added carrots and onions to the shared list.', at: new Date(Date.now() - 90 * 60_000).toISOString() }, name: 'Kitchen companion', shared: true, model: 'configured-model', provider: 'openrouter', activity: 'idle', avatar: { mode: 'mascot', family: 'bear', color: '#FF9800', eyes: 'round', accessory: 'none' } },
+  { id: 'ranch', lastMessage: { text: 'Here is what I will set up: reminders for all three gates on Nov 1.', at: new Date(Date.now() - 2 * 60_000).toISOString() }, name: 'Ranch hand', shared: true, model: 'claude-opus-5-5', modelName: 'Claude Opus 5.5', provider: 'anthropic', activity: 'working', description: 'Everyday household help', instructions: 'Explicit fixture instructions.', avatar: { mode: 'geometric', shape: 'blob', color: '#1084FE', eyes: 'oval', accessory: 'none' } },
+  { id: 'kitchen', unread: true, lastMessage: { text: 'Pot roast tonight. I added carrots and onions to the shared list.', at: new Date(Date.now() - 90 * 60_000).toISOString() }, name: 'Kitchen companion', shared: true, model: 'gpt-6.1-terra', modelName: 'GPT-6.1-Terra', provider: 'openai', activity: 'idle', avatar: { mode: 'mascot', family: 'bear', color: '#FF9800', eyes: 'round', accessory: 'none' } },
   { id: 'garden', lastMessage: { text: 'Frost is likely Thursday night. Cover the peppers.', at: new Date(Date.now() - 300 * 60_000).toISOString() }, name: 'Garden planner', shared: false, model: 'configured-model', provider: 'openrouter', activity: 'thinking', avatar: { mode: 'mascot', family: 'sprout', color: '#00BCA6', eyes: 'oval', accessory: 'hat' } },
   { id: 'homework', lastMessage: { text: 'Ready to check the fractions worksheet when you are.', at: new Date(Date.now() - 1500 * 60_000).toISOString() }, name: 'Homework helper', shared: false, model: 'configured-model', provider: 'openrouter', activity: 'waiting', avatar: { mode: 'geometric', shape: 'hex', color: '#9159FE', eyes: 'oval', accessory: 'glasses' } },
   { id: 'ledger', lastMessage: { text: 'September is reconciled except for one charge I cannot match.', at: new Date(Date.now() - 3000 * 60_000).toISOString() }, name: 'Ledger', shared: true, model: 'configured-model', provider: 'openrouter', activity: 'blocked', avatar: { mode: 'geometric', shape: 'triangle', color: '#FF309B', eyes: 'visor', accessory: 'none' } },
   { id: 'fox', lastMessage: { text: 'Trail options are ready.', at: new Date(Date.now() - 10 * 60_000).toISOString() }, name: 'Trail scout with a long name for wrapping', shared: false, model: 'configured-model', provider: 'openrouter', activity: 'done', avatar: { mode: 'mascot', family: 'fox', color: '#FF6700', eyes: 'oval', accessory: 'none' } },
-  { id: 'guide', lastMessage: { text: 'I could not reach the trail conditions service.', at: new Date(Date.now() - 12 * 60_000).toISOString() }, name: 'Trail guide', shared: true, model: 'configured-model', provider: 'openrouter', activity: 'failed', avatar: { mode: 'portrait', src: portrait, origin: 'uploaded' } },
+  { id: 'guide', unread: true, lastMessage: { text: 'I could not reach the trail conditions service.', at: new Date(Date.now() - 12 * 60_000).toISOString() }, name: 'Trail guide', shared: true, model: 'configured-model', provider: 'openrouter', activity: 'failed', avatar: { mode: 'portrait', src: portrait, origin: 'uploaded' } },
 ];
 const savedItems = [];
 const preferences = { theme: process.env.PREVIEW_THEME || 'system', presentation: process.env.PREVIEW_PRESENTATION || 'simple', favorites: ['ranch', 'garden'], sections: [{ id: 'house', name: 'Around the house', botIds: ['ranch', 'kitchen', 'garden'] }], followBots: [], modelFavorites: [] };
@@ -123,10 +162,60 @@ const fixtureCards = { version: 1, cards: [
 ranchMessages.push({ id: 'fixture-cards', role: 'assistant', createdAt: at(23), text: 'These are explicit preview fixtures for groceries, trip notes and a calendar proposal. No purchases, bookings or calendar events were created.\n\n```agent-ui\n' + JSON.stringify(fixtureCards) + '\n```' });
 ranchMessages.push({ id: 'fixture-agent-message', role: 'user', text: 'Message from 🤖 Ledger (@ledger): The gate battery purchase is accounted for. You can go ahead with the replacement.', createdAt: at(24) });
 ranchMessages.push({ id: 'fixture-agent-handoff', role: 'tool', text: 'Planner will review the weekend schedule.', toolCall: { id: 'handoff', name: 'message_agent', arguments: JSON.stringify({ target: 'planner', message: 'Check the weekend plans against the weather.' }), status: 'completed', result: 'Planner will review the weekend schedule.' }, createdAt: at(25) });
-const previewRoom = { room_id: 'fixture-group', name: 'Weekend at the ranch', members: ['ranch', 'planner'].map(id => ({ member_id: id, profile: id, handle: id, display_name: bots.find(bot => bot.id === id)?.name || id })) };
-const groupRooms = [previewRoom];
-const groupEvents = [{ event_id: 'group-user', seq: 1, kind: 'message.user', actor: { kind: 'user', id: 'desktop' }, payload: { text: 'Can we fit a short nature walk around the gate repair? Explicit preview fixture.', thread_id: 'a624af77-b3de-46f9-a583-626018476e41' }, created_at: Date.now() / 1000 }, { event_id: 'group-reply', seq: 2, kind: 'message.member', actor: { kind: 'member', id: 'ranch' }, payload: { member_id: 'ranch', text: 'Replace the battery before breakfast, then take the shady trail. Bring water and check the weather before leaving.', thread_id: 'a624af77-b3de-46f9-a583-626018476e41' }, created_at: Date.now() / 1000 }];
+if (process.env.PREVIEW_LONG_TOOL === '1') {
+  const output = Array.from({ length: 120 }, (_, i) => `Fixture output line ${i + 1}: synthetic tool details stay readable and scroll inside this receipt.`).join('\n') + '\nEND OF FIXTURE OUTPUT';
+  ranchMessages.splice(0, ranchMessages.length,
+    { id: 'fixture-intro', role: 'assistant', text: 'Fixture tools have finished.' },
+    { id: 'fixture-short-tool', role: 'tool', text: 'Short fixture tool result', toolCall: { id: 'fixture-short', name: 'fixture_short', status: 'completed', result: 'Short fixture tool result' } },
+    { id: 'fixture-long-tool', role: 'tool', text: output, toolCall: { id: 'fixture-long', name: 'fixture_long', status: 'completed', arguments: '{"fixture":true}', result: output } },
+    { id: 'fixture-raw-tool', role: 'tool', toolName: 'fixture_activity', text: output },
+    { id: 'fixture-final', role: 'assistant', text: 'Fixture final answer follows the tool results.' });
+  Object.assign(conversations.ranch, { activity: { state: 'done' }, toolCalls: [], approvals: [] });
+}
+// Transcript catch-up fixtures: a failed turn to retry, a question with one answer and one with several,
+// a finished turn with timed tool work, and a reply with code in several languages and a table.
+{
+  const t = (minutes, seconds = 0) => new Date(Date.UTC(2026, 9, 1, 15, minutes, seconds)).toISOString();
+  conversations.guide = { sessionId: 'fixture-guide', approvals: [], activity: { state: 'failed', runId: 'run_guide_1', detail: 'The trail conditions service did not respond.' }, messages: [
+    { id: 'guide-ask', role: 'user', sender: { id: 'preview', name: 'Nicolas' }, text: 'Are the Lost Maples trails open this Saturday?', createdAt: t(10) },
+    { id: 'guide-fetch', role: 'tool', text: '', createdAt: t(10, 30), toolCall: { id: 'guide-call', name: 'web.fetch', status: 'failed', error: 'Fixture: the trail conditions service did not respond.', startedAt: t(10, 5), completedAt: t(10, 30) } },
+  ] };
+  conversations.ledger.attention[0].questions.push({ id: 'split', prompt: 'Who should share it?', options: ['Nicolas', 'Jordan', 'The ranch account'], multiple: true });
+  const code = [
+    'Here is a small checker. It reads each sensor, logs the low ones and exits non-zero when any need a battery.',
+    '```bash\n#!/usr/bin/env bash\nset -euo pipefail\nfor gate in north east barn; do\n  level=$(ha state "sensor.${gate}_gate_battery")\n  if (( level < 20 )); then echo "$gate: ${level}%"; fi\ndone\n```',
+    '```ts\ntype Gate = { name: string; battery: number };\nexport const low = (gates: Gate[]) => gates.filter(gate => gate.battery < 20); // fixture\n```',
+    '```python\ndef low(gates: dict[str, int]) -> list[str]:\n    """Gates under 20 percent."""\n    return [name for name, level in gates.items() if level < 20]\n```',
+    '```swift\nstruct Gate { let name: String; let battery: Int }\nlet low = gates.filter { $0.battery < 20 }\n```',
+    '```json\n{ "north": 14, "east": 62, "barn": 48, "notify": true }\n```',
+    '```diff\n- threshold: 15\n+ threshold: 20\n```',
+    '| Gate | Battery | Action |\n| --- | --- | --- |\n| North | 14% | Replace now |\n| East | 62% | Check Nov 1 |\n| Barn, west | 48% | Check Nov 1 |',
+    'Explicit preview fixture. Nothing was run.',
+  ].join('\n\n');
+  conversations.fox = { sessionId: 'fixture-fox', approvals: [], activity: { state: 'done' }, messages: [
+    { id: 'fox-ask', role: 'user', sender: { id: 'preview', name: 'Nicolas' }, text: 'Write me a script that checks the gate batteries and flags the low ones.', createdAt: t(30) },
+    { id: 'fox-search', role: 'tool', text: '', createdAt: t(30, 40), toolCall: { id: 'fox-call-1', name: 'home_assistant.states', status: 'completed', result: '{"north":14,"east":62,"barn":48}', startedAt: t(30, 8), completedAt: t(30, 40) } },
+    { id: 'fox-run', role: 'tool', text: '', createdAt: t(31, 50), toolCall: { id: 'fox-call-2', name: 'terminal', status: 'completed', arguments: '{"command":"bash check-gates.sh"}', result: 'north: 14%', startedAt: t(31), completedAt: t(31, 50) } },
+    { id: 'fox-helper', role: 'user', text: 'Subagent Task Completed: Review thresholds\nTwenty percent leaves two weeks of margin.', createdAt: t(32), origin: { kind: 'subagent', visibility: 'activity', title: 'Review thresholds completed' } },
+    { id: 'fox-reply', role: 'assistant', text: code, createdAt: t(32, 14), reasoning: 'Read the three battery sensors.\nCompare each against a 20 percent threshold.' },
+  ] };
+  conversations.kitchen.sessionId = 'fixture-kitchen';
+}
+const previewRoom = { room_id: 'fixture-group', name: 'Weekend at the ranch', members: ['ranch', 'garden'].map(id => ({ member_id: id, profile: id, handle: id, display_name: bots.find(bot => bot.id === id)?.name || id })) };
+const supperRoom = { room_id: 'fixture-supper', name: 'Supper planning', members: ['kitchen', 'trail', 'ranch'].map(id => ({ member_id: id, profile: id, handle: id, display_name: bots.find(bot => bot.id === id)?.name || id })) };
+const groupRooms = [previewRoom, supperRoom];
+/** Room purpose, notes and lead by room ID, as Group settings saves them. */
+const groupContexts = new Map();
+const groupEvents = [{ event_id: 'group-user', seq: 1, kind: 'message.user', actor: { kind: 'user', id: 'preview' }, sender: { id: 'preview', name: 'Nicolas' }, payload: { text: 'Can we fit a short nature walk around the gate repair? Explicit preview fixture.', thread_id: 'a624af77-b3de-46f9-a583-626018476e41' }, created_at: Date.now() / 1000 }, { event_id: 'group-reply', seq: 2, kind: 'message.member', actor: { kind: 'member', id: 'ranch' }, payload: { member_id: 'ranch', text: 'Replace the battery before breakfast, then take the shady trail. Bring water and check the weather before leaving.', thread_id: 'a624af77-b3de-46f9-a583-626018476e41' }, created_at: Date.now() / 1000 }];
 const groupRequests = new Set();
+// The catalog previews each room's newest message, as the app server does. Supper planning keeps a fixed one so home shows an older row.
+function roomWithLatest(room) {
+  if (room === supperRoom) return { ...room, latest: { text: 'The smoker is free Sunday, so brisket is on.', at: new Date(Date.now() - 3 * 3600_000).toISOString(), author: 'Kitchen companion' } };
+  const event = [...groupEvents].reverse().find(item => item.kind === 'message.user' || item.kind === 'message.member');
+  if (room !== previewRoom || !event) return room;
+  const author = event.kind === 'message.user' ? 'You' : room.members.find(member => member.member_id === event.payload.member_id)?.display_name || 'Assistant';
+  return { ...room, latest: { text: event.payload.text, at: new Date(event.created_at * 1000).toISOString(), author } };
+}
 const conversationFor = (id) => ({ botId: id, messages: [], approvals: [], files: [], activity: { state: bots.find(item => item.id === id)?.activity || 'idle' }, ...conversations[id] });
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const vaults = new Map();
@@ -153,6 +242,46 @@ if (process.env.PREVIEW_SECURE_REQUEST) {
     detail: 'Explicit preview fixture. Use made-up credentials; no website login or native vault change occurs.',
     secure: { epoch: 'fixture-epoch', sessionId: 'fixture-session', method, ...metadata } }];
 }
+// PREVIEW_SECURE_FLOW=login|handoff runs the whole wait: a message to Kitchen companion starts a turn
+// that asks for a login or a computer takeover, the answer takes a moment, and Hermes stops listing the
+// request shortly before the app hears about it. A message sent while it waits closes the request.
+const secureFlow = process.env.PREVIEW_SECURE_FLOW;
+const flowRequest = () => secureFlow === 'handoff'
+  ? { id: `fixture-handoff-${Date.now()}`, kind: 'computer', title: 'Take over the computer?', detail: 'The supply site wants a code from your phone.',
+    computer: { epoch: 'fixture-epoch', sessionId: 'fixture-session', reason: 'The supply site wants a code from your phone.', whatToDo: 'Enter the code from your phone, then press Hand back.' } }
+  : { id: `fixture-login-${Date.now()}`, kind: 'secure', title: 'Hermes asks to save a login', detail: 'Check the address and reason first. The password goes directly to the encrypted Hermes vault, never into this chat or to the assistant.',
+    secure: { epoch: 'fixture-epoch', sessionId: 'fixture-session', method: 'vault.save_login', origin: 'https://supply.example.invalid', site: 'supply.example.invalid',
+      explicit: { label: 'Ranch supply', purpose: 'Sign in to check this week\'s feed order.', profile: 'kitchen', requestedBy: { id: 'preview', name: 'Nicolas' } } } };
+const flowReply = (conversation, text, delay = 2500) => setTimeout(() => {
+  conversation.messages.push({ id: `flow-reply-${Date.now()}`, role: 'assistant', text, createdAt: new Date().toISOString() });
+  conversation.activity = { state: 'done' }; conversation.toolCalls = []; changed('kitchen');
+}, delay);
+function secureFlowMessage(body) {
+  const conversation = conversations.kitchen, now = new Date().toISOString();
+  conversation.messages.push({ id: body.requestId, role: 'user', sender: { id: 'preview', name: 'Nicolas' }, text: body.text, createdAt: now });
+  if (conversation.attention?.length) {
+    // A reply while it waits closes the request; the assistant reads the message next.
+    conversation.attention = [];
+    conversation.activity = { state: 'working', detail: 'Reading your message', updatedAt: now };
+    flowReply(conversation, 'Thanks, I closed that request. I will use the address you gave me instead.');
+  } else {
+    conversation.activity = { state: 'working', detail: secureFlow === 'handoff' ? 'Opening the supply site' : 'Preparing the supply sign-in', updatedAt: now };
+    conversation.toolCalls = [{ id: 'flow-tool', name: secureFlow === 'handoff' ? 'browser_navigate' : 'vault_save_login', status: 'running', startedAt: now }];
+    setTimeout(() => {
+      conversation.attention = [flowRequest()];
+      conversation.activity = { state: 'blocked', updatedAt: new Date().toISOString() }; changed('kitchen');
+    }, 1200);
+  }
+  changed('kitchen');
+}
+function secureFlowSettled(conversation, outcome) {
+  // Hermes stops listing it at once; the app learns of it from the next change notice.
+  conversation.attention = [];
+  conversation.activity = { state: 'working', detail: 'Continuing', updatedAt: new Date().toISOString() };
+  conversation.toolCalls = [{ id: 'flow-tool-2', name: 'browser_navigate', status: 'running', startedAt: new Date().toISOString() }];
+  setTimeout(() => changed('kitchen'), 1500);
+  flowReply(conversation, outcome === 'declined' ? 'No problem. I left the order as it is.' : 'Signed in. This week\'s feed order is two bags of layer pellets and one of scratch grain.', 4000);
+}
 const memories = new Map();
 const memoryFor = botId => {
   if (!memories.has(botId)) memories.set(botId, { botId, profile: botId, scope: 'profile', owner: 'Hermes',
@@ -164,7 +293,19 @@ const memoryFor = botId => {
   return memories.get(botId);
 };
 const cardStates = new Map(), todaySeen = new Map(), routineReceipts = new Map(), fixtureAudio = new Map();
-const routines = [{ id: 'r1', botId: 'ranch', name: 'Morning check', prompt: 'Summarize overnight sensor alerts and the weather.', schedule: '0 6 * * *', enabled: true, recipientIds: ['preview'] }];
+const routines = [{ id: 'r1', botId: 'ranch', name: 'Morning check', prompt: 'Summarize overnight sensor alerts and the weather.', schedule: '0 6 * * *', enabled: true, recipientIds: ['preview'] },
+  { id: 'r2', botId: 'ranch', name: 'Certificate check', prompt: '', script: 'check_certs.py', noAgent: true, schedule: 'every 6h', enabled: true, recipientIds: [] },
+  { id: 'r3', botId: 'ranch', name: 'Feed inventory', prompt: 'Count feed on hand and draft an order if any bin is under a week.', schedule: '0 16 * * 1', enabled: true, recipientIds: ['preview'] }];
+// Routine runs shown among the Ranch hand's turns: succeeded before the first message, failed between
+// turns, and one still running at the end. Synthetic; no routine runs.
+const routineRunFixtures = [
+  { run: { id: 'run-morning', routineId: 'r1', routineName: 'Morning check', startedAt: '2026-10-01T15:58:00.000Z', finishedAt: '2026-10-01T15:59:10.000Z', status: 'succeeded', preview: 'Overnight: two north gate alerts, low of 41°F, no rain expected.', previewOnly: false },
+    output: '## Overnight check\n\n- **Gates:** the north gate reported open twice after midnight. Both closed within 4 seconds.\n- **Weather:** low of 41°F, clear through Friday.\n- **Water:** trough levels normal.\n\nExplicit fixture output. No routine was executed.' },
+  { run: { id: 'run-cert', routineId: 'r2', routineName: 'Certificate check', startedAt: '2026-10-01T16:10:00.000Z', finishedAt: '2026-10-01T16:10:04.000Z', status: 'failed', error: 'cameras.ranch.example expires in 3 days.', preview: 'FAILED · cameras.ranch.example expires in 3 days.', previewOnly: true },
+    output: '- cameras.ranch.example: expires Oct 4, 2026 (3 days)\n- home.ranch.example: expires Dec 19, 2026\n- gate.ranch.example: expires Jan 8, 2027', previewOnly: true },
+  { run: { id: 'run-feed', routineId: 'r3', routineName: 'Feed inventory', startedAt: '2026-10-01T16:23:00.000Z', status: 'running', preview: 'This run is still in progress.', previewOnly: true },
+    output: 'This run is still in progress.', previewOnly: true },
+];
 const fixtureEvents = [{ id: 'fixture-completed', botId: 'fox', kind: 'completed', title: 'Trail options are ready', body: 'Explicit fixture. Open the conversation to review the proposal.', occurredAt: new Date(Date.now() - 10 * 60000).toISOString() }];
 // Tiny WAV tone, never provider-generated speech. Used only to verify audio controls.
 const fixtureWav = (() => {
@@ -178,13 +319,13 @@ const fixtureWav = (() => {
 const schedulePreview = (botId, schedule) => {
   const match = /^(\d{1,2}) (\d{1,2}) \* \* (\*|[0-6])$/.exec(schedule);
   if (!match || Number(match[1]) > 59 || Number(match[2]) > 23) return null;
-  const runs = [], candidate = new Date(); candidate.setUTCHours(Number(match[2]) + 5, Number(match[1]), 0, 0);
-  // Stable preview uses UTC-05 fixture time. Native schedule parsing is tested separately.
+  const runs = [], candidate = new Date(); candidate.setUTCHours(Number(match[2]), Number(match[1]), 0, 0);
+  // Use an explicit UTC fixture so seasonal timezone changes cannot suggest schedule drift.
   for (let day = 0; day < 25 && runs.length < 3; day++, candidate.setUTCDate(candidate.getUTCDate() + 1)) {
-    const localDay = new Date(candidate.getTime() - 5 * 3600000).getUTCDay();
+    const localDay = candidate.getUTCDay();
     if (candidate > new Date() && (match[3] === '*' || localDay === Number(match[3]))) runs.push(candidate.toISOString());
   }
-  return { botId, schedule, timezone: 'America/Chicago', nextRuns: runs, kind: 'cron' };
+  return { botId, schedule, timezone: 'UTC', nextRuns: runs, kind: 'cron' };
 };
 const connections = [
   ['workspace', 'Google Workspace', 'productivity', 'connected', 'nic@example.invalid', 'Gmail, Drive, Calendar and Sheets access checked.'],
@@ -196,12 +337,12 @@ const connections = [
   ['cloudflare', 'Cloudflare', 'development', 'unavailable', undefined, 'Cloudflare did not respond. Check again when the service is available.'],
   ['vps', 'VPS', 'development', 'connected', 'Hermes host', 'The configured server is reachable.'],
   ['homeassistant', 'Home Assistant', 'home', 'not_connected', undefined, 'Connect your Home Assistant server to use home tools.'],
-  ['apple', 'Apple Calendar & Reminders', 'devices', 'unsupported', undefined, 'Open Integrations in the iPhone app to choose and share data from this device.'],
+  ['apple', 'Apple Calendar & Reminders', 'devices', 'unsupported', undefined, 'Open Integrations in the iPhone app to choose calendars and reminders, review a snapshot, then add it to an assistant\'s draft.'],
   ['openrouter', 'Model provider', 'providers', 'configured', undefined, 'Provider credentials are present. Model execution has not been checked.'],
   ['search', 'Web search', 'providers', 'not_connected', undefined, 'Configure a search provider for current information.'],
   ['images', 'Image generation', 'providers', 'configured', undefined, 'An image provider is configured. Generation has not been checked.'],
-].map(([id, name, category, status, account, detail]) => ({ id, name, category, status, account, detail, owner: category === 'devices' ? 'This iPhone' : 'Hermes', profile: 'ranch', botIds: ['ranch'], setup: id === 'homeassistant' ? [{ key: 'url', label: 'Server address', kind: 'url', required: true }, { key: 'token', label: 'Access token', kind: 'secret', required: true }] : [], permissions: id === 'workspace' ? [{ id: 'drive', name: 'Drive files', granted: true }, { id: 'gmail', name: 'Gmail', granted: true }] : [], capabilities: [], checkedAt: ['connected', 'expired', 'unavailable', 'missing_permission'].includes(status) ? '2026-10-01T17:00:00Z' : undefined, actions: { connect: !['files', 'apple', 'vps'].includes(id), check: !['files', 'apple'].includes(id), disconnect: status === 'connected' } }));
-let upgrade = { available: true, phase: 'failed', current: { revision: 'oldrevision', version: '2026.9' }, candidate: { revision: 'newrevision', version: '2026.10' }, message: 'The update could not restart Hermes. Your conversations are saved. Restart Hermes to check and restore the connection.', operationId: 'fixture-operation', checks: [{ id: 'restart', label: 'Restart and verify Hermes', status: 'failed', detail: 'Explicit preview fixture. No real Hermes upgrade was attempted.' }], canCheck: false, canInstall: false, canRetry: true, canCancel: true, canRestartService: true, busyBots: [], checkedAt: '2026-10-01T17:00:00Z' };
+].map(([id, name, category, status, account, detail]) => ({ id, name, category, status, account, detail, owner: category === 'devices' ? 'Your iPhone' : 'Hermes', profile: 'ranch', botIds: ['ranch'], setup: id === 'homeassistant' ? [{ key: 'url', label: 'Server address', kind: 'url', required: true }, { key: 'token', label: 'Access token', kind: 'secret', required: true }] : [], permissions: id === 'workspace' ? [{ id: 'drive', name: 'Drive files', granted: true }, { id: 'gmail', name: 'Gmail', granted: true }] : [], capabilities: [], checkedAt: ['connected', 'expired', 'unavailable', 'missing_permission'].includes(status) ? '2026-10-01T17:00:00Z' : undefined, actions: { connect: !['files', 'apple', 'vps'].includes(id), check: !['files', 'apple'].includes(id), disconnect: status === 'connected' } }));
+let upgrade = { available: true, phase: 'failed', operation: 'install', current: { revision: '5c1d0e7a9b3f4c2d8e6a1b0c9d8e7f6a5b4c3d2e', committedAt: '2026-09-18T16:20:00Z' }, candidate: { revision: '9f8e7d6c5b4a39281706f5e4d3c2b1a098765432', committedAt: '2026-10-20T15:05:00Z', notesUrl: 'https://example.invalid/hermes/notes' }, message: 'The update could not restart Hermes. Your conversations are saved. Restart Hermes to check and restore the connection.', operationId: 'fixture-operation', checks: [{ id: 'restart', label: 'Restart and verify Hermes', status: 'failed', detail: 'Explicit preview fixture. No real Hermes upgrade was attempted.' }], canCheck: false, canInstall: false, canRetry: true, canCancel: true, canRestartService: true, busyBots: [], checkedAt: '2026-10-01T17:00:00Z' };
 const flows = new Map();
 const pushRegistrations = new Set();
 // Computer fixture streams are simulations. They never open a shell or contact a desktop.
@@ -220,10 +361,12 @@ const json = (response, data, status = 200) => { response.writeHead(status, { 'C
 const server = createServer(async (request, response) => {
   response.setHeader('Cache-Control', 'no-store');
   const url = new URL(request.url, `http://127.0.0.1:${port}`);
-  let body = {}, raw = Buffer.alloc(0); if (request.method !== 'GET') { const chunks = []; for await (const chunk of request) chunks.push(chunk); raw = Buffer.concat(chunks); try { body = JSON.parse(raw); } catch {} }
+  // A browser that closes mid-request must not take the fixture down.
+  let body = {}, raw = Buffer.alloc(0); if (request.method !== 'GET') { const chunks = []; try { for await (const chunk of request) chunks.push(chunk); } catch { return; } raw = Buffer.concat(chunks); try { body = JSON.parse(raw); } catch {} }
   if (url.pathname === '/preview-fixture.js') { response.writeHead(200, { ...documentHeaders(request), 'Content-Type': 'text/javascript' }); return response.end(fixtureScript); }
   if (url.pathname.startsWith('/api/')) {
     const path = url.pathname.slice(4);
+    if (path.includes('/automation') && automationPreview(path, request.method, body, url.searchParams, value => json(response, value))) return;
     if (path === '/csp-report') {
       for (const violation of cspViolations(body)) process.stderr.write(`CSP violation: ${JSON.stringify(violation)}\n`);
       response.writeHead(204); return response.end();
@@ -233,14 +376,70 @@ const server = createServer(async (request, response) => {
     if (path === '/auth/confirm') { terminalConfirmed = true; return json(response, { confirmedAt: new Date().toISOString() }); }
     if (path === '/auth/local') { signedIn = true; return json(response, { ok: true }); }
     if (path === '/bootstrap' && !signedIn) return json(response, { error: 'Sign in to continue.' }, 401);
-    if (path === '/search') return json(response,{hits:[{botId:'ranch',botName:'Ranch',sessionId:'fixture-history',title:'Gate battery plan',snippet:'Replace the north gate battery and check the others next month.'}],unavailableBots:[]});
+    // Find in chat: botId scopes search to one assistant's canonical session. Every saved message can match.
+    if (path === '/search' && url.searchParams.get('botId')) {
+      const botId = url.searchParams.get('botId'), q = (url.searchParams.get('q') || '').toLowerCase(), conversation = conversationFor(botId), bot = bots.find(item => item.id === botId);
+      const hits = conversation.sessionId ? conversation.messages.flatMap((message, offset) => ['user', 'assistant'].includes(message.role) && message.text.toLowerCase().includes(q)
+        ? [{ botId, botName: bot?.name, sessionId: conversation.sessionId, title: bot?.name, snippet: message.text.slice(0, 120), messageId: message.id, offset }] : []) : [];
+      return json(response, { hits, unavailableBots: [] });
+    }
+    if (secureFlow && request.method === 'POST' && path === '/bots/kitchen/messages' && !body.retryOf) {
+      secureFlowMessage(body);
+      return json(response, { requestId: body.requestId, status: 'accepted', messageId: body.requestId });
+    }
+    const handoffMatch = /^\/bots\/([^/]+)\/computer-handoffs\/([^/]+)$/.exec(path);
+    if (handoffMatch) {
+      const conversation = conversations[decodeURIComponent(handoffMatch[1])], pending = conversation?.attention?.find(item => item.id === handoffMatch[2]);
+      if (!pending) return json(response, { status: 'expired' });
+      secureFlowSettled(conversation, 'declined');
+      return setTimeout(() => json(response, { status: 'ok' }), 700);
+    }
+    // Retry of a failed turn: the fixture runs again briefly, then answers. Nothing is fetched.
+    const retryMatch = request.method === 'POST' && body.retryOf ? /^\/bots\/([^/]+)\/messages$/.exec(path) : null;
+    if (retryMatch) {
+      const botId = decodeURIComponent(retryMatch[1]), conversation = conversations[botId];
+      if (body.draftBaseRevision !== undefined || !conversation?.messages.some(message => message.id === body.retryOf && message.role === 'user')) return json(response, { error: 'Fixture: that message cannot be retried.' }, 400);
+      const runId = `run_retry_${Date.now()}`;
+      const original = conversation.messages.find(message => message.id === body.retryOf);
+      conversation.messages.push({ ...original, id: `retry-${runId}`, createdAt: new Date().toISOString() });
+      conversation.activity = { state: 'thinking', runId }; changed(botId);
+      setTimeout(() => {
+        conversation.messages.push({ id: `retry-reply-${runId}`, role: 'assistant', text: 'Fixture retry: the trails are open Saturday. Bring water and check the weather first.', createdAt: new Date().toISOString() });
+        conversation.activity = { state: 'done', runId }; changed(botId);
+      }, 2500);
+      return json(response, { requestId: body.requestId, status: 'accepted', runId });
+    }
+    if (path === '/search') return json(response,{hits:[{botId:'ranch',botName:'Ranch',sessionId:'fixture-history',title:'Gate battery plan',snippet:'Replace the north gate battery and check the others next month.',messageId:'m2',offset:0}],unavailableBots:[]});
     if (/\/history\//.test(path)) return json(response,{botId:'ranch',sessionId:'fixture-history',messages:ranchMessages,offset:0,hasMore:false});
-    if (path === '/saved') { if(request.method==='POST'){const item={...body,id:randomUUID(),createdAt:new Date().toISOString()};savedItems.push(item);return json(response,item);}return json(response,savedItems); }
+    if (path === '/saved') {
+      if(request.method==='POST'){
+        const keys=['kind','botId','sessionId','routineId','resultId','messageId'];
+        const existing=savedItems.find(item=>keys.every(key=>(item[key]??null)===(body[key]??null)));
+        if(existing)return json(response,existing);
+        const item={...body,id:randomUUID(),createdAt:new Date().toISOString()};savedItems.push(item);return json(response,item);
+      }
+      return json(response,savedItems);
+    }
     if(path.startsWith('/saved/')) { const index=savedItems.findIndex(item=>item.id===path.split('/').at(-1));if(index>=0)savedItems.splice(index,1);return json(response,{ok:true}); }
     if(path.endsWith('/starters')) return json(response,[{id:'meals',title:'Plan dinners',prompt:'Help me plan five easy dinners. Ask about our preferences and budget first.'},{id:'document',title:'Explain a document',prompt:'Help me understand the document I attach. Summarize the key points.'},{id:'server',title:'Check a server',prompt:'Review my server health. Confirm the server and connection first; inspect only.'}]);
     if(path==='/automations') return json(response,{routines:routines.map(row=>({...row,nextRunAt:new Date(Date.now()+3600000).toISOString(),lastStatus:'delivery_failed',lastDeliveryError:'Fixture: recipient destination unavailable'})),usage:bots.map(bot=>({botId:bot.id,days:30,sessions:4,inputTokens:1200,outputTokens:400,actualCost:null,estimatedCost:0.02,partial:true})),unavailableBots:[]});
-    if (/^\/bots\/[^/]+$/.test(path) && request.method === 'GET') return json(response, { ...bots.find(bot => bot.id === path.split('/')[2]), instructions: 'Be clear and useful.', enabledMcpServers: [] });
-    if (path === '/bootstrap') return json(response, { user: { id: 'preview', name: 'Nicolas', email: 'preview@localhost.invalid' }, household: [{ id: 'preview', name: 'Nicolas' }, { id: 'two', name: 'Jordan' }], bots, preferences, vapidPublicKey: previewPushKey, connection: { connected: process.env.PREVIEW_DISCONNECTED !== '1', version: 'Preview fixture' }, csrfToken: 'fixture-only', capabilities: Object.fromEntries(['chat', 'steering', 'approvals', 'uploads', 'generatedFiles', 'botConfiguration', 'tools', 'skills', 'routines', 'stop', 'avatarMetadata', 'durableEvents', 'idempotency', 'imageGeneration', 'portraitGeneration'].map(key => [key, { supported: true }])) });
+    // Creating adds a fixture assistant; PREVIEW_AVATAR_FAILURE=1 fails its first avatar save so Retry can be checked.
+    if (path === '/bots' && request.method === 'POST') {
+      const id = String(body.name || 'assistant').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'assistant';
+      if (bots.some(bot => bot.id === id)) return json(response, { error: 'An assistant with this name already exists. Choose another name.' }, 409);
+      const bot = { id, name: body.name, description: body.description, instructions: body.instructions, model: body.model, provider: body.provider, shared: body.shared, ownerId: body.shared ? undefined : 'preview', activity: 'idle', enabledMcpServers: [] };
+      bots.push(bot); conversations[id] = { messages: [] };
+      return json(response, bot);
+    }
+    const avatarMatch = /^\/bots\/([^/]+)\/avatar$/.exec(path);
+    if (avatarMatch && request.method === 'PUT') {
+      const bot = bots.find(item => item.id === decodeURIComponent(avatarMatch[1]));
+      if (!bot) return json(response, { error: 'Unknown fixture assistant.' }, 404);
+      if (process.env.PREVIEW_AVATAR_FAILURE === '1' && !bot.avatarFailed) { bot.avatarFailed = true; return json(response, { error: 'Fixture: Hermes is restarting.' }, 503); }
+      bot.avatar = body; return json(response, bot.avatar);
+    }
+    if (/^\/bots\/[^/]+$/.test(path) && request.method === 'GET') return json(response, { ...bots.find(bot => bot.id === path.split('/')[2]), instructions: 'Be clear and useful.', enabledMcpServers: ['calendar'], availableMcpServers: ['calendar', 'recipes'] });
+    if (path === '/bootstrap') return json(response, { user: { id: 'preview', name: 'Nicolas', email: 'preview@localhost.invalid' }, household: [{ id: 'preview', name: 'Nicolas' }, { id: 'two', name: 'Jordan' }], bots, preferences, vapidPublicKey: previewPushKey, connection: { connected: process.env.PREVIEW_DISCONNECTED !== '1', version: '5c1d0e7a9b3f4c2d8e6a1b0c9d8e7f6a5b4c3d2e', revisionDate: '2026-09-18T16:20:00Z' }, csrfToken: 'fixture-only', capabilities: Object.fromEntries(['chat', 'steering', 'approvals', 'uploads', 'generatedFiles', 'botConfiguration', 'tools', 'skills', 'routines', 'stop', 'avatarMetadata', 'durableEvents', 'idempotency', 'imageGeneration', 'portraitGeneration', 'liveVoice'].map(key => [key, { supported: true }])) });
     const fixtureUser = request.headers['x-preview-user'] || 'preview';
     const experiencePath = path === '/today' || path === '/today/seen' || /\/memory(?:\/|$)|\/vault(?:\/|$)|\/secure-requests\/|\/voice\/|\/cards\/|^\/routines\//.test(path);
     if (experiencePath && !signedIn) return json(response, { error: 'Sign in to use the preview fixture.' }, 401);
@@ -294,6 +493,7 @@ const server = createServer(async (request, response) => {
       const botId = decodeURIComponent(secureMatch[1]), conversation = conversations[botId], pending = conversation?.attention?.find(item => item.id === secureMatch[2]);
       if (!pending || body.epoch !== pending.secure.epoch || body.sessionId !== pending.secure.sessionId || body.method !== pending.secure.method) return json(response, { error: 'The fixture request expired.' }, 409);
       if (process.env.PREVIEW_SECURE_FAILURE === '1') return json(response, { error: 'Fixture result uncertain.' }, 502);
+      if (secureFlow) { secureFlowSettled(conversation, body.cancel ? 'declined' : 'saved'); return setTimeout(() => json(response, { status: 'ok' }), 900); }
       if (!body.cancel && pending.secure.method === 'vault.save_login') vaultFor(botId).items.push({ id: 'fixture-' + randomUUID(), kind: 'login', label: pending.secure.site, origin: pending.secure.origin, identifier: body.identifier, identifierType: 'username', createdAt: new Date().toISOString(), hasOtp: false, backend: 'local', canRemove: true });
       conversation.attention = []; conversation.activity = { state: 'idle' }; changed(botId);
       return json(response, { status: 'ok' });
@@ -341,19 +541,33 @@ const server = createServer(async (request, response) => {
       if (request.method === 'POST' && !routineReceipts.has(key)) routineReceipts.set(key, { requestId, routineId: routine.id, botId: routine.botId, status: 'completed', startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(), message: 'Explicit fixture. No routine or external action was executed.' });
       return json(response, routineReceipts.get(key) || { error: 'Fixture run receipt not found.' }, routineReceipts.has(key) ? 200 : 404);
     }
+    const runsMatch = /^\/bots\/([^/]+)\/routine-runs$/.exec(path);
+    if (runsMatch) return json(response, { runs: routineRunFixtures.filter(({ run }) => routines.some(row => row.id === run.routineId && row.botId === runsMatch[1])).map(({ run }) => run), unavailable: [] });
+    const fixtureRun = /^\/bots\/[^/]+\/routines\/[^/]+\/results\/([^/]+)$/.exec(path) && routineRunFixtures.find(({ run }) => run.id === path.split('/').at(-1));
+    if (fixtureRun) return json(response, { previewOnly: !!fixtureRun.previewOnly, messages: [{ id: `${fixtureRun.run.id}-output`, role: 'assistant', text: fixtureRun.output }] });
     const resultsMatch = /^\/bots\/([^/]+)\/routines\/([^/]+)\/results(?:\/([^/]+))?$/.exec(path);
     if (resultsMatch) return json(response, resultsMatch[3] ? { previewOnly: false, messages: [{ id: 'fixture-run-output', role: 'assistant', text: '## Morning gate check\n\nThe north gate battery needs replacing. The east gate is at **62%** and the barn gate is at **48%**.\n\nExplicit fixture output. No routine was executed.' }] } : [{ id: 'fixture-run', title: 'Morning gate check', startedAt: new Date().toISOString(), previewOnly: false }]);
     if (path === '/groups') {
       if (request.method === 'POST') { let room = groupRooms.find(room => room.room_id === body.requestId); if (!room) { room = { room_id: body.requestId, name: body.name, members: body.botIds.map(id => ({ member_id: id, profile: id, handle: id, display_name: bots.find(bot => bot.id === id)?.name || id })) }; groupRooms.push(room); } return json(response, { room }); }
-      return json(response, { supported: true, canSend: process.env.PREVIEW_GROUP_DRIVER_OFF !== '1', rooms: groupRooms, ...(process.env.PREVIEW_GROUP_DRIVER_OFF === '1' ? { reason: 'Fixture group coordinator is unavailable. History is still readable.' } : {}) });
+      return json(response, { supported: true, canSend: process.env.PREVIEW_GROUP_DRIVER_OFF !== '1', settings: true, routineDelivery: true, rooms: groupRooms.map(roomWithLatest), ...(process.env.PREVIEW_GROUP_DRIVER_OFF === '1' ? { reason: 'Fixture group coordinator is unavailable. History is still readable.' } : {}) });
     }
-    const groupMatch = /^\/groups\/([^/]+)(?:\/(log|messages|stop|approve))?$/.exec(path);
+    const groupMatch = /^\/groups\/([^/]+)(?:\/(log|messages|stop|approve|context))?$/.exec(path);
     if (groupMatch) {
       const room = groupRooms.find(room => room.room_id === groupMatch[1]); if (!room) return json(response, { error: 'Fixture room not found.' }, 404);
-      if (groupMatch[2] === 'messages') { if (!groupRequests.has(body.requestId)) { groupRequests.add(body.requestId); groupEvents.push({ event_id: body.requestId, seq: groupEvents.length + 1, kind: 'message.user', actor: { kind: 'user', id: 'desktop' }, payload: { text: body.text, thread_id: body.threadId }, created_at: Date.now() / 1000 }); } return json(response, { accepted: true }); }
+      if (groupMatch[2] === 'context') {
+        const context = { purpose: body.purpose, notes: body.notes, routing: body.leadMemberId ? 'lead' : 'everyone', lead_member_id: body.leadMemberId || '' };
+        groupContexts.set(room.room_id, context);
+        return json(response, { context, event: { event_id: body.requestId, seq: groupEvents.length + 1, kind: 'room.context_set', actor: { kind: 'system', id: 'room-control' }, payload: context, created_at: Date.now() / 1000 } });
+      }
+      if (groupMatch[2] === 'messages') { if (!groupRequests.has(body.requestId)) { groupRequests.add(body.requestId); groupEvents.push({ event_id: body.requestId, seq: groupEvents.length + 1, kind: 'message.user', actor: { kind: 'user', id: 'preview' }, sender: { id: 'preview', name: 'Nicolas' }, payload: { text: body.text, thread_id: body.threadId }, created_at: Date.now() / 1000 }); } return json(response, { accepted: true }); }
       if (groupMatch[2] === 'log') return json(response, { events: groupEvents.filter(event => event.seq > Number(url.searchParams.get('since') || 0)), cursor: groupEvents.length, latest_seq: groupEvents.length, has_more: false });
       if (groupMatch[2]) return json(response, { cancelled: 0, approved: true });
-      return json(response, { room, driver_status: { running: true, working: false, blocked: false, pending_actions: [] } });
+      // PREVIEW_GROUP_WORKING=1 shows two members at work, one in a tool, for the activity lines.
+      const working = process.env.PREVIEW_GROUP_WORKING === '1';
+      const member_activity = working ? [{ member_id: room.members[0].member_id, status: 'running', round_index: 1, tool: 'web_search', started_at: Date.now() / 1000 - 40 },
+        ...room.members.slice(1, 2).map(member => ({ member_id: member.member_id, status: 'queued', round_index: 1 }))] : [];
+      return json(response, { room, context: groupContexts.get(room.room_id) ?? { purpose: '', notes: '', routing: 'everyone', lead_member_id: '' },
+        driver_status: { running: true, working, blocked: false, pending_actions: [], member_activity, max_rounds: 3 } });
     }
     const botMatch = /^\/bots\/([^/]+)$/.exec(path);
     if (botMatch && request.method === 'PATCH') {
@@ -365,7 +579,12 @@ const server = createServer(async (request, response) => {
     }
     if (path === '/models') return json(response, modelCatalog);
     if (path === '/computer') return json(response, computerStatus());
-    if (path === '/computer/control') { computerControl = body.action === 'take' ? { kind: 'human', mine: true, name: 'Nicolas' } : { kind: 'idle' }; return json(response, computerStatus()); }
+    if (path === '/computer/control') {
+      computerControl = body.action === 'take' ? { kind: 'human', mine: true, name: 'Nicolas' } : { kind: 'idle' };
+      // Handing the computer back answers an open handoff, as the add-on's lease watcher does.
+      if (body.action === 'release' && conversations.kitchen.attention?.some(item => item.kind === 'computer')) secureFlowSettled(conversations.kitchen, 'handed_back');
+      return json(response, computerStatus());
+    }
     if (path === '/computer/terminal/end') { for (const client of computerSockets.clients) if (client.computerKind === 'terminal') { client.send(JSON.stringify({ type: 'exit' })); client.close(); } return json(response, { ok: true }); }
     if (path === '/computer/desktop' || path === '/computer/terminal') {
       const kind = path.split('/').at(-1), ticket = `fixture-${++computerTicket}`;
@@ -431,7 +650,7 @@ const server = createServer(async (request, response) => {
     return json(response, {});
   }
   if (url.pathname === '/inline-ui') { response.writeHead(200, { 'Content-Type': 'text/html', 'Content-Security-Policy': inlineUiShellPolicy, 'X-Frame-Options': 'SAMEORIGIN' }); return response.end(inlineUiShell); }
-  try { const file = resolve(root, '.' + url.pathname); if (!file.startsWith(root + '/') && file !== root) throw Error(); const content = url.pathname === '/' ? await fixtureHtml() : await readFile(file); response.writeHead(200, { ...documentHeaders(request), 'Content-Type': ({ '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.html': 'text/html' })[extname(file)] || 'text/html' }); response.end(content); }
+  try { const file = resolve(root, '.' + url.pathname); if (!file.startsWith(root + '/') && file !== root) throw Error(); const content = url.pathname === '/' ? await fixtureHtml() : await readFile(file); response.writeHead(200, { ...documentHeaders(request), 'Content-Type': ({ '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.html': 'text/html', '.webmanifest': 'application/manifest+json', '.m4a': 'audio/mp4' })[extname(file)] || 'text/html' }); response.end(content); }
   catch { try { const fallback = await fixtureHtml(); response.writeHead(200, { ...documentHeaders(request), 'Content-Type': 'text/html' }); response.end(fallback); } catch { response.writeHead(404); response.end('Run npm run build first.'); } }
 }).listen(port, host, () => process.stdout.write(`Fixture-only preview: http://${host}:${port}\n`));
 
@@ -459,6 +678,21 @@ server.on('upgrade', (request, socket, head) => {
     });
   });
 });
+
+// PREVIEW_LOG_INPUT=1 prints the desktop input the viewer sends, and answers a released mouse button
+// with a desktop clipboard change, as if the click copied something, for touch and clipboard checks.
+function logFixtureInput(client, type, message) {
+  if (type === 4) console.error(`fixture key ${message[1] ? 'down' : 'up'} 0x${message.readUInt32BE(4).toString(16)}`);
+  else if (type === 6) console.error(`fixture clipboard ${JSON.stringify(message.subarray(8).toString('latin1'))}`);
+  else if (type === 5) {
+    console.error(`fixture pointer ${message.readUInt16BE(2)} ${message.readUInt16BE(4)} mask ${message[1]}`);
+    if (message[1] === 0) {
+      const text = Buffer.from('Copied on the fixture desktop');
+      const header = Buffer.alloc(8); header[0] = 3; header.writeUInt32BE(text.length, 4);
+      client.send(Buffer.concat([header, text]));
+    }
+  }
+}
 
 // Minimal RFB server with one static desktop frame for visual and takeover checks.
 function fixtureDesktop(client) {
@@ -505,6 +739,7 @@ function fixtureDesktop(client) {
         if (!length) return;
         if (pending.length < length) return;
         const fullRefresh = type === 3 && pending[1] === 0;
+        if (process.env.PREVIEW_LOG_INPUT === '1') logFixtureInput(client, type, pending.subarray(0, length));
         pending = pending.subarray(length);
         if (type === 3 && (!frameSent || fullRefresh)) {
           frameSent = true;

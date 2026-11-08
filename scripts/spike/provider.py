@@ -15,13 +15,14 @@ class Provider(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
-        self.wfile.write(json.dumps({"data": [{"id": "spike-model", "object": "model"}]}).encode())
+        self.wfile.write(json.dumps({"data": [{"id": model, "object": "model"} for model in ("spike-model", "spike-routine-model")]}).encode())
 
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        model = body.get("model") or "spike-model"
         if os.environ.get("HERMES_SPIKE_PROVIDER_LOG"):
             with open(os.environ["HERMES_SPIKE_PROVIDER_LOG"], "a") as log:
-                log.write(json.dumps({"at": time.time(), "messages": body.get("messages", [])}) + "\n")
+                log.write(json.dumps({"at": time.time(), "model": body.get("model"), "tools": body.get("tools", []), "messages": body.get("messages", [])}) + "\n")
         messages = body.get("messages", [])
         user = next((str(x.get("content", "")) for x in reversed(messages) if x["role"] == "user"), "")
         tools = body.get("tools", [])
@@ -69,11 +70,11 @@ class Provider(BaseHTTPRequestHandler):
             if "tool_calls" in delta:
                 delta["tool_calls"][0]["index"] = 0
             for piece in [delta, {}]:
-                self.wfile.write(("data: " + json.dumps({"id": "spike", "object": "chat.completion.chunk", "created": 1, "model": "spike-model", "choices": [{"index": 0, "delta": piece, "finish_reason": None if piece else ("tool_calls" if "tool_calls" in message else "stop")} ]}) + "\n\n").encode())
+                self.wfile.write(("data: " + json.dumps({"id": "spike", "object": "chat.completion.chunk", "created": 1, "model": model, "choices": [{"index": 0, "delta": piece, "finish_reason": None if piece else ("tool_calls" if "tool_calls" in message else "stop")} ]}) + "\n\n").encode())
                 self.wfile.flush()
             self.wfile.write(b"data: [DONE]\n\n")
         else:
-            self.wfile.write(json.dumps({"id": "spike", "object": "chat.completion", "created": 1, "model": "spike-model", "choices": [{"index": 0, "message": message, "finish_reason": "tool_calls" if "tool_calls" in message else "stop"}], "usage": {"prompt_tokens": 10, "completion_tokens": 10, "total_tokens": 20}}).encode())
+            self.wfile.write(json.dumps({"id": "spike", "object": "chat.completion", "created": 1, "model": model, "choices": [{"index": 0, "message": message, "finish_reason": "tool_calls" if "tool_calls" in message else "stop"}], "usage": {"prompt_tokens": 10, "completion_tokens": 10, "total_tokens": 20}}).encode())
 
 
 if __name__ == "__main__":

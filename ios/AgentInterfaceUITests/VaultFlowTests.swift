@@ -1,6 +1,6 @@
 import XCTest
 
-final class VaultFlowTests: XCTestCase {
+@MainActor final class VaultFlowTests: XCTestCase {
   private func launch(uncertain: Bool = false, cancelledAdd: Bool = false, unlockFails: Bool = false) -> XCUIApplication {
     let app = XCUIApplication()
     app.launchEnvironment["AGENT_INTERFACE_UI_FIXTURE"] = "1"
@@ -17,20 +17,20 @@ final class VaultFlowTests: XCTestCase {
   }
   private func field(_ id: String, app: XCUIApplication, value: String, secure: Bool = false) {
     let field = secure ? app.secureTextFields[id] : app.textFields[id]
-    XCTAssertTrue(field.waitForExistence(timeout: 5)); field.tap(); field.typeText(value)
+    XCTAssertTrue(field.waitForExistence(timeout: 5)); field.typeWhenFocused(value)
   }
   private func reveal(_ button: XCUIElement, app: XCUIApplication, container: XCUIElement? = nil) {
-    for _ in 0..<5 { if button.isHittable { return }; (container ?? app.scrollViews.firstMatch).swipeUp() }
+    for _ in 0..<5 { if button.canTap { return }; (container ?? app.scrollViews.firstMatch).swipeUp() }
   }
   func testProfileLoginAddRemoveAndAvailableExternalSourceUnlock() {
     let app = launch()
-    XCTAssertTrue(app.buttons["Configure Ranch hand"].waitForExistence(timeout: 10)); app.buttons["Configure Ranch hand"].tap()
-    app.buttons["settingsMore"].tap(); app.buttons["Logins"].tap()
+    XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 10)); app.openAssistantSettings("Ranch hand")
+    app.selectSettingsTab("Logins")
     XCTAssertTrue(app.staticTexts["Hermes profile: default"].waitForExistence(timeout: 5))
     XCTAssertTrue(app.staticTexts["Fixture school portal"].exists)
     XCTAssertFalse(app.buttons["Unlock 1Password"].exists)
     capture(app, name: "Native Hermes profile logins")
-    app.buttons["vault.add"].tap()
+    app.buttons["vault.add"].tapWhenReady()
     field("vault.loginLabel", app: app, value: "Fixture library")
     field("vault.loginOrigin", app: app, value: "https://library.example.test")
     field("vault.loginIdentifier", app: app, value: "fixture-reader")
@@ -38,7 +38,7 @@ final class VaultFlowTests: XCTestCase {
     let save = app.buttons["vault.saveLogin"]; reveal(save, app: app, container: app.collectionViews["vaultAddForm"]); save.tap()
     XCTAssertTrue(app.staticTexts["Fixture library"].waitForExistence(timeout: 5))
     let remove = app.buttons["vault.remove.added-login"]; reveal(remove, app: app, container: app.collectionViews["vaultForm"]); remove.tap()
-    app.buttons.matching(identifier: "Remove login").allElementsBoundByIndex.last?.tap()
+    let confirm = app.sheets.buttons["Remove login"]; XCTAssertTrue(confirm.waitForExistence(timeout: 5)); confirm.tap()
     let absent = NSPredicate(format: "exists == false"); expectation(for: absent, evaluatedWith: app.staticTexts["Fixture library"]); waitForExpectations(timeout: 5)
     let unlock = app.buttons["Unlock Bitwarden fixture"]; reveal(unlock, app: app, container: app.collectionViews["vaultForm"]); unlock.tap()
     field("vault.unlockPassword", app: app, value: "fixture-master", secure: true); app.buttons["vault.unlock"].tap()
@@ -47,8 +47,8 @@ final class VaultFlowTests: XCTestCase {
   }
   func testFailedUnlockKeepsTheSheetOpenWithItsErrorAndLocksVaultActionsUntilReload() {
     let app = launch(unlockFails: true)
-    XCTAssertTrue(app.buttons["Configure Ranch hand"].waitForExistence(timeout: 10)); app.buttons["Configure Ranch hand"].tap()
-    app.buttons["settingsMore"].tap(); app.buttons["Logins"].tap()
+    XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 10)); app.openAssistantSettings("Ranch hand")
+    app.selectSettingsTab("Logins")
     XCTAssertTrue(app.staticTexts["Hermes profile: default"].waitForExistence(timeout: 5))
     let unlock = app.buttons["Unlock Bitwarden fixture"]; reveal(unlock, app: app, container: app.collectionViews["vaultForm"]); unlock.tap()
     field("vault.unlockPassword", app: app, value: "fixture-master", secure: true); app.buttons["vault.unlock"].tap()
@@ -73,8 +73,8 @@ final class VaultFlowTests: XCTestCase {
   }
   func testAddLoginExplainsABadAddressBeforeSaving() {
     let app = launch()
-    XCTAssertTrue(app.buttons["Configure Ranch hand"].waitForExistence(timeout: 10)); app.buttons["Configure Ranch hand"].tap()
-    app.buttons["settingsMore"].tap(); app.buttons["Logins"].tap()
+    XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 10)); app.openAssistantSettings("Ranch hand")
+    app.selectSettingsTab("Logins")
     XCTAssertTrue(app.buttons["vault.add"].waitForExistence(timeout: 5)); app.buttons["vault.add"].tap()
     field("vault.loginOrigin", app: app, value: "library.example.test")
     XCTAssertTrue(app.staticTexts["vault.originError"].waitForExistence(timeout: 5))
@@ -84,8 +84,8 @@ final class VaultFlowTests: XCTestCase {
   }
   func testCancelledAddRequiresReviewOfPotentiallySavedLogin() {
     let app = launch(cancelledAdd: true)
-    XCTAssertTrue(app.buttons["Configure Ranch hand"].waitForExistence(timeout: 10)); app.buttons["Configure Ranch hand"].tap()
-    app.buttons["settingsMore"].tap(); app.buttons["Logins"].tap()
+    XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 10)); app.openAssistantSettings("Ranch hand")
+    app.selectSettingsTab("Logins")
     XCTAssertTrue(app.buttons["vault.add"].waitForExistence(timeout: 5)); app.buttons["vault.add"].tap()
     field("vault.loginLabel", app: app, value: "Fixture library")
     field("vault.loginOrigin", app: app, value: "https://library.example.test")
@@ -108,7 +108,10 @@ final class VaultFlowTests: XCTestCase {
     field("secure.identifier", app: app, value: "fixture-parent")
     field("secure.value", app: app, value: "fixture-password", secure: true)
     capture(app, name: "Native secure login request")
+    XCTAssertTrue(app.staticTexts["secure.replyHint"].exists, "The card says a message replaces the request")
     app.buttons["secure.submit"].tap()
+    // The outcome stays as one line after Hermes moves on to the next request.
+    XCTAssertTrue(app.descendants(matching: .any)["settledReceipt"].waitForExistence(timeout: 5), app.debugDescription)
     XCTAssertTrue(app.secureTextFields["secure.value"].waitForExistence(timeout: 5))
     XCTAssertTrue(app.staticTexts["Enter the fixture verification code."].waitForExistence(timeout: 5))
     XCTAssertFalse(app.textFields["secure.identifier"].exists)
@@ -136,7 +139,108 @@ final class VaultFlowTests: XCTestCase {
     XCTAssertFalse(app.secureTextFields["secure.value"].isEnabled); XCTAssertFalse(app.textFields["secure.identifier"].isEnabled)
     XCTAssertFalse(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "fixture-password")).firstMatch.exists)
     app.buttons["Refresh request"].tap()
-    XCTAssertTrue(app.buttons["Refresh request"].exists); XCTAssertFalse(app.buttons["secure.submit"].exists)
+    XCTAssertTrue(app.buttons["Refresh request"].waitForExistence(timeout: 5)); XCTAssertFalse(app.buttons["secure.submit"].exists)
     capture(app, name: "Native uncertain secure request cannot replay")
+  }
+
+  private func launchHandoff(_ extra: [String: String] = [:]) -> XCUIApplication {
+    let app = XCUIApplication()
+    app.launchEnvironment["AGENT_INTERFACE_UI_FIXTURE"] = "1"
+    app.launchEnvironment["AGENT_INTERFACE_UI_RESET"] = "1"
+    app.launchEnvironment["AGENT_INTERFACE_UI_SCOPE"] = UUID().uuidString.lowercased()
+    for (key, value) in extra { app.launchEnvironment[key] = value }
+    app.launch(); return app
+  }
+  func testHandoffTakesOverInOneStepAndHandingBackAnswersIt() {
+    let app = launchHandoff(["AGENT_INTERFACE_UI_HANDOFF": "1"])
+    let take = app.buttons["handoff.take"]
+    XCTAssertTrue(take.waitForExistence(timeout: 15), app.debugDescription)
+    let card = app.descendants(matching: .any)["handoff"]
+    XCTAssertTrue(card.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "The fixture bank wants a code from your phone.")).firstMatch.exists)
+    XCTAssertTrue(card.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Enter the code, then press Hand back.")).firstMatch.exists)
+    capture(app, name: "Native computer handoff request")
+    take.tapWhenReady()
+    let control = app.buttons["computerControl"]
+    XCTAssertTrue(control.wait(until: "label == %@", "Hand back", timeout: 20), "Take over takes control once the desktop connects: \(app.debugDescription)")
+    capture(app, name: "Native handoff took control")
+    control.tapWhenReady()
+    XCTAssertTrue(control.wait(until: "label == %@", "Take over"), control.label)
+    app.buttons["Done"].tapWhenReady()
+    XCTAssertTrue(app.staticTexts["Thanks, I'll check the page again."].waitForExistence(timeout: 10), app.debugDescription)
+    XCTAssertFalse(app.buttons["handoff.take"].exists)
+  }
+  func testHandoffNotNowLeavesOneLine() {
+    let app = launchHandoff(["AGENT_INTERFACE_UI_HANDOFF": "1"])
+    let decline = app.buttons["handoff.decline"]
+    XCTAssertTrue(decline.waitForExistence(timeout: 15), app.debugDescription)
+    XCTAssertGreaterThanOrEqual(decline.frame.height.rounded(), 44)
+    XCTAssertGreaterThanOrEqual(app.buttons["handoff.take"].frame.height.rounded(), 44)
+    decline.tapWhenReady()
+    let receipt = app.descendants(matching: .any)["settledReceipt"]
+    XCTAssertTrue(receipt.waitForExistence(timeout: 5), app.debugDescription)
+    XCTAssertTrue(receipt.label.contains("You chose Not now."), receipt.label)
+    XCTAssertFalse(app.buttons["handoff.take"].exists)
+    capture(app, name: "Native handoff declined")
+  }
+  func testWatchOpensTheComputerWhileABrowserToolRuns() {
+    let app = launchHandoff(["AGENT_INTERFACE_UI_LIVE_COMPUTER": "1"])
+    let watch = app.buttons["liveWatch"]
+    XCTAssertTrue(watch.waitForExistence(timeout: 15), app.debugDescription)
+    XCTAssertGreaterThanOrEqual(watch.frame.height.rounded(), 44)
+    watch.tapWhenReady()
+    XCTAssertTrue(app.descendants(matching: .any)["computerStatus"].waitForExistence(timeout: 10), app.debugDescription)
+    XCTAssertTrue(app.buttons["computerControl"].wait(until: "label == %@", "Take over", timeout: 15), "Watch does not take control")
+  }
+  func testTerminalRequestOffersTheCommandToPasteNeverRunsIt() {
+    let app = launchHandoff(["AGENT_INTERFACE_UI_TERMINAL": "1", "AGENT_INTERFACE_UI_TERMINAL_CONFIRMED": "1"])
+    let open = app.buttons["terminal.open"]
+    XCTAssertTrue(open.waitForExistence(timeout: 15), app.debugDescription)
+    let card = app.descendants(matching: .any)["terminalRequest"]
+    for text in ["Tailscale needs a person to sign in.", "Run the command, then open the link it prints.", "sudo tailscale up"] {
+      XCTAssertTrue(card.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", text)).firstMatch.exists, text)
+    }
+    XCTAssertTrue(app.buttons["terminal.copy"].exists)
+    for button in ["terminal.open", "terminal.done", "terminal.decline"] { XCTAssertGreaterThanOrEqual(app.buttons[button].frame.height.rounded(), 44, button) }
+    capture(app, name: "Native terminal request")
+    open.tapWhenReady()
+    XCTAssertTrue(app.descendants(matching: .any)["terminalStatus"].wait(until: "label CONTAINS %@", "Your system terminal", timeout: 20), app.debugDescription)
+    // The shell may be waiting on one key, so the command waits for the person to paste it.
+    XCTAssertTrue(app.descendants(matching: .any)["terminalOffer"].waitForExistence(timeout: 10), app.debugDescription)
+    XCTAssertFalse(app.staticTexts["Typed: [paste:sudo tailscale up]"].exists, "Nothing is pasted on its own")
+    let paste = app.buttons["terminalOfferPaste"]
+    XCTAssertTrue(paste.wait(until: "enabled == true", timeout: 10), "Paste waits for the shell to connect")
+    paste.tap()
+    XCTAssertTrue(app.staticTexts["Typed: [paste:sudo tailscale up]"].waitForExistence(timeout: 10), "The command is pasted with no Return: \(app.debugDescription)")
+    XCTAssertTrue(app.descendants(matching: .any)["terminalInfo"].exists)
+    XCTAssertFalse(app.buttons["terminalOfferPaste"].exists, "The offer goes away once pasted")
+    capture(app, name: "Native terminal request pasted")
+    app.buttons["terminalClose"].tapWhenReady()
+    app.buttons["terminal.done"].tapWhenReady()
+    let receipt = app.descendants(matching: .any)["settledReceipt"]
+    XCTAssertTrue(receipt.waitForExistence(timeout: 10), app.debugDescription)
+    XCTAssertTrue(receipt.label.contains("You said you finished in the terminal."), receipt.label)
+    XCTAssertFalse(app.buttons["terminal.open"].exists)
+  }
+  func testTerminalRequestNotNowLeavesOneLine() {
+    let app = launchHandoff(["AGENT_INTERFACE_UI_TERMINAL": "1"])
+    let decline = app.buttons["terminal.decline"]
+    XCTAssertTrue(decline.waitForExistence(timeout: 15), app.debugDescription)
+    decline.tapWhenReady()
+    let receipt = app.descendants(matching: .any)["settledReceipt"]
+    XCTAssertTrue(receipt.waitForExistence(timeout: 5), app.debugDescription)
+    XCTAssertTrue(receipt.label.contains("You chose Not now."), receipt.label)
+    XCTAssertFalse(app.buttons["terminal.open"].exists)
+  }
+  func testTerminalRequestAsksForConfirmationBeforeAShellOpens() {
+    let app = launchHandoff(["AGENT_INTERFACE_UI_TERMINAL": "1"])
+    app.buttons["terminal.open"].tapWhenReady(timeout: 15)
+    let confirm = app.buttons["terminalConfirm"]
+    XCTAssertTrue(confirm.waitForExistence(timeout: 15), app.debugDescription)
+    confirm.tapWhenReady()
+    XCTAssertTrue(app.descendants(matching: .any)["terminalStatus"].wait(until: "label CONTAINS %@", "Your system terminal", timeout: 20), app.debugDescription)
+    let paste = app.buttons["terminalOfferPaste"]
+    XCTAssertTrue(paste.wait(until: "enabled == true", timeout: 10), "Paste waits for the shell to connect")
+    paste.tap()
+    XCTAssertTrue(app.staticTexts["Typed: [paste:sudo tailscale up]"].waitForExistence(timeout: 10), "After confirming, the command is still offered: \(app.debugDescription)")
   }
 }

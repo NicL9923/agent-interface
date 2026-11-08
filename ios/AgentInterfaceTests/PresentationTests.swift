@@ -37,6 +37,44 @@ final class PresentationTests: XCTestCase {
     XCTAssertEqual(turn.activityGroups[0].messages.count, 1)
     XCTAssertEqual(turn.activityGroups[0].messages[0].toolCall?.result, "Fresh result")
     XCTAssertEqual(turn.activityGroups[0].messages[0].toolCall?.status, "completed")
+    XCTAssertEqual(turn.replyStart, "answer1")
+  }
+  func testToolActivityPrecedesSplitFinalReplyAndLiveDuplicatesDoNotMoveIt() {
+    for status in ["completed", "running"] {
+      let call = ToolCall(id: "reused", name: "terminal", status: status, result: "Result")
+      let conversation = Conversation(botId: "b", messages: [
+        Message(id: "prompt", role: "user", text: "Check both"),
+        Message(id: "commentary", role: "assistant", text: "Checking both reports."),
+        Message(id: "first-tool", role: "tool", text: "First result", toolCall: call),
+        Message(id: "second-tool", role: "tool", text: "Second result", toolCall: call),
+        Message(id: "answer", role: "assistant", text: "Both reports are ready."),
+        Message(id: "answer-part-two", role: "assistant", text: "The figures match."),
+      ], activity: Activity(state: .idle), approvals: [], files: [], toolCalls: [call])
+      let turn = conversation.presentationTurns[0]
+      XCTAssertEqual(turn.replyStart, status == "completed" ? "answer" : nil)
+      XCTAssertEqual(turn.activityGroups[0].messages.count, 3)
+    }
+  }
+  func testReasoningPrecedesToolsAndFinalReplyAsOnTheWeb() {
+    var conversation = Conversation(botId: "b", messages: [
+      Message(id: "question", role: "user", text: "Join the NAS"),
+      Message(id: "plan", role: "assistant", text: "", reasoning: "Plan the SSH steps."),
+      Message(id: "call", role: "assistant", text: "", reasoning: "Check the status.", toolCall: ToolCall(id: "ssh", name: "terminal", status: "completed")),
+      Message(id: "answer", role: "assistant", text: "Tailscale is up."),
+    ], activity: Activity(state: .idle), approvals: [], files: [])
+    XCTAssertEqual(conversation.presentationTurns[0].rows(advanced: true).map(\.id),
+      ["message-question", "reasoning", "activity-Tool calls", "message-answer"])
+    XCTAssertEqual(conversation.presentationTurns[0].rows(advanced: false).map(\.id),
+      ["message-question", "activity-Tool calls", "message-answer"])
+    conversation.messages.removeLast()
+    XCTAssertEqual(conversation.presentationTurns[0].rows(advanced: true).map(\.id),
+      ["message-question", "reasoning", "activity-Tool calls"])
+  }
+  func testToolCallCommentaryStaysBeforeAnAttachmentOnlyFinalReply() throws {
+    let json = #"{"botId":"b","messages":[{"id":"commentary","role":"assistant","text":"Preparing the report.","toolCall":{"id":"call","name":"terminal","status":"completed","result":"Ready"}},{"id":"answer","role":"assistant","text":"","files":[{"id":"report","name":"report.txt","mime":"text/plain"}]}],"activity":{"state":"idle"},"approvals":[],"files":[]}"#
+    let conversation = try JSONDecoder().decode(Conversation.self, from: Data(json.utf8))
+    XCTAssertEqual(conversation.presentationTurns[0].replyStart, "answer")
+    XCTAssertEqual(conversation.presentationTurns[0].visibleMessages.map(\.id), ["commentary", "answer"])
   }
   func testCurrentToolCallsMergeWithCanonicalResultsByTheirActualID() throws {
     let json = """
@@ -67,31 +105,83 @@ final class PresentationTests: XCTestCase {
     XCTAssertNil(ServerDate.parse("not a date"))
   }
   func testEveryAvatarSilhouetteSupportsFiniteConsistentMorphing() {
-    for shape in AvatarConfig.shapes + ["mascot"] + AvatarConfig.seasonalColors.keys.sorted() {
-      let points = AvatarGeometry.points(shape)
-      XCTAssertEqual(points.values.count, 144, shape)
-      XCTAssertTrue(points.values.allSatisfy(\.isFinite), shape)
+    for body in AvatarGeometry.keys {
+      let points = AvatarGeometry.points(body)
+      XCTAssertEqual(points.values.count, 144, "\(body)")
+      XCTAssertTrue(points.values.allSatisfy(\.isFinite), "\(body)")
       XCTAssertGreaterThan(points.magnitudeSquared, 0)
-      XCTAssertNotNil(AvatarGeometry.faces[shape], shape)
-      if shape != "blob" { XCTAssertNotEqual(AvatarGeometry.svg(shape), AvatarGeometry.svg("blob"), shape) }
+      if body != .shape(.blob), case .shape = body {
+        XCTAssertNotEqual(AvatarGeometry.svg(body), AvatarGeometry.svg(.shape(.blob)), "\(body)")
+      }
     }
+    for shape in AvatarConfig.shapes { XCTAssertNotNil(AvatarGeometry.faces[shape], shape.rawValue) }
+  }
+  func testCharactersWithoutTheirOwnHeadShareTheMascotHeadAndAnchor() {
+    for family in AvatarConfig.characterFamilies {
+      let own = CharacterAvatarArt.heads[family]
+      XCTAssertEqual(AvatarGeometry.svg(.character(family)), own ?? AvatarGeometry.mascotHead, family.rawValue)
+      let avatar = AvatarConfig(mode: .mascot, shape: nil, family: family)
+      let anchor = AvatarGeometry.anchor(for: avatar)
+      let expected = AvatarGeometry.characterFaces[family] ?? AvatarGeometry.mascotFace
+      XCTAssertEqual([anchor.cy, anchor.scale, anchor.top, anchor.hat], [expected.cy, expected.scale, expected.top, expected.hat], family.rawValue)
+    }
+    XCTAssertEqual(
+      Set(AvatarConfig.characterFamilies.filter { CharacterAvatarArt.heads[$0] == nil }),
+      [.panda, .raccoon, .owl, .dinosaur, .eagle, .bat])
+  }
+  func testCharacterGhostKeepsItsOwnSilhouetteNextToTheGeometricGhost() {
+    let character = AvatarConfig(mode: .mascot, shape: nil, family: .ghost)
+    let shape = AvatarConfig(shape: .ghost)
+    XCTAssertNotEqual(character.body, shape.body)
+    XCTAssertNotEqual(AvatarGeometry.svg(character.body), AvatarGeometry.svg(shape.body))
+    XCTAssertEqual(AvatarGeometry.anchor(for: shape).cy, 45)
+    XCTAssertEqual(AvatarGeometry.anchor(for: character).cy, 47)
+  }
+  func testCharacterInkHeadColorAndCheeksFollowTheirMarkings() {
+    XCTAssertEqual(CharacterAvatarArt.headColor(.panda, "#292929"), "#FBF7EF")
+    XCTAssertEqual(CharacterAvatarArt.headColor(.owl, "#97683D"), "#97683D")
+    // Dark eyes would vanish on the raccoon mask, and light ones on the owl's cream disc.
+    XCTAssertEqual(AvatarMotion.faceInk(CharacterAvatarArt.eyeSurroundColor(.raccoon, "#8C8F99"), mascot: true), "#fff3db")
+    XCTAssertEqual(AvatarMotion.faceInk(CharacterAvatarArt.eyeSurroundColor(.owl, "#292929"), mascot: true), "#2b201b")
+    XCTAssertEqual(CharacterAvatarArt.cheekless, [.pumpkin, .owl])
+    XCTAssertNotNil(AvatarMotion.bodyEdge("#F2EEF8"))
+    XCTAssertNil(AvatarMotion.bodyEdge("#FF9800"))
   }
   func testSeasonalAvatarsDecodeAndKeepCustomizationWhenSelected() throws {
     for (family, color) in AvatarConfig.seasonalColors {
-      let data = Data("{\"mode\":\"mascot\",\"family\":\"\(family)\",\"color\":\"#111111\",\"eyes\":\"spark\",\"accessory\":\"glasses\",\"eyeSpacing\":1.3}".utf8)
+      let data = Data("{\"mode\":\"mascot\",\"family\":\"\(family.rawValue)\",\"color\":\"#111111\",\"eyes\":\"spark\",\"accessory\":\"glasses\",\"eyeSpacing\":1.3}".utf8)
       let saved = try JSONDecoder().decode(AvatarConfig.self, from: data)
-      XCTAssertEqual(saved.geometry, family)
+      XCTAssertEqual(saved.body, .character(family))
       XCTAssertEqual(try JSONDecoder().decode(AvatarConfig.self, from: JSONEncoder().encode(saved)), saved)
       let selected = saved.selectingFamily(family)
       XCTAssertEqual(selected.color, color)
-      XCTAssertEqual(selected.eyes, "spark")
-      XCTAssertEqual(selected.accessory, "glasses")
+      XCTAssertEqual(selected.eyes, .spark)
+      XCTAssertEqual(selected.accessory, .glasses)
       XCTAssertEqual(selected.eyeSpacing, 1.3)
       XCTAssertTrue(AvatarConfig.families.contains { $0.id == family })
-      XCTAssertNotEqual(AvatarGeometry.svg(family), AvatarGeometry.mascotHead)
+      XCTAssertEqual(
+        AvatarGeometry.svg(.character(family)) != AvatarGeometry.mascotHead,
+        CharacterAvatarArt.heads[family] != nil, family.rawValue)
     }
-    let original = AvatarConfig(mode: "mascot", color: "#111111")
-    XCTAssertEqual(original.selectingFamily("fox").color, "#111111")
+    let original = AvatarConfig(mode: .mascot, color: "#111111")
+    XCTAssertEqual(original.selectingFamily(.fox).color, "#111111")
+  }
+  func testAnAvatarValueThisAppDoesNotKnowSurvivesASaveUnchanged() throws {
+    let json = ##"{"mode":"hologram","shape":"tesseract","family":"yeti","color":"#111111","eyes":"laser","accessory":"monocle"}"##
+    let saved = try JSONDecoder().decode(AvatarConfig.self, from: Data(json.utf8))
+    XCTAssertEqual(saved.mode.rawValue, "hologram")
+    XCTAssertEqual(saved.shape?.rawValue, "tesseract")
+    let object = try XCTUnwrap(
+      JSONSerialization.jsonObject(with: JSONEncoder().encode(saved)) as? [String: Any])
+    XCTAssertEqual(object["mode"] as? String, "hologram")
+    XCTAssertEqual(object["shape"] as? String, "tesseract")
+    XCTAssertEqual(object["family"] as? String, "yeti")
+    XCTAssertEqual(object["eyes"] as? String, "laser")
+    XCTAssertEqual(object["accessory"] as? String, "monocle")
+    // It still draws, as the shared mascot, instead of failing.
+    XCTAssertEqual(saved.body, .mascot)
+    XCTAssertEqual(AvatarConfig(shape: AvatarShape(rawValue: "tesseract")).body, .shape(AvatarShape(rawValue: "tesseract")))
+    XCTAssertEqual(AvatarGeometry.svg(AvatarShape(rawValue: "tesseract")), AvatarGeometry.svg(.blob))
   }
   @MainActor func testPushRoutesOnlyRelativeConversationURL() {
     let origin = URL(string: "https://household.example")!
@@ -188,24 +278,58 @@ final class AvatarMotionTests: XCTestCase {
       XCTAssertTrue(paused(state, settling: true), "\(state) never ticks")
     }
   }
+  func testIdleDrawsSlowlyOnlyWhileJustItsSlowLoopsMove() {
+    XCTAssertEqual(M.frameInterval(size: 92, lowPower: false, quiet: true), M.idleFrame)
+    XCTAssertEqual(M.frameInterval(size: 92, lowPower: false, quiet: false), 1.0 / 60)
+    XCTAssertEqual(M.frameInterval(size: 92, lowPower: true, quiet: false), 1.0 / 30, "Low Power Mode caps at 30")
+    XCTAssertEqual(M.frameInterval(size: 92, lowPower: true, quiet: true), M.idleFrame)
+    XCTAssertEqual(M.frameInterval(size: 40, lowPower: false, quiet: false), 1.0 / 30)
+    // Over every quiet wait, the pose moves less than a frame at full rate could show.
+    let plan = M.Plan(gesture: M.Gesture(kind: .hop, side: 1, start: 7), boop: 0.1, phase: 0.37, tempo: 1.08)
+    var quietSteps = 0, busySteps = 0
+    for step in 0..<2000 {
+      let t = Double(step) * 0.01
+      guard M.idleQuietAt(t, plan, ahead: M.idleFrame + 0.02) else { busySteps += 1; continue }
+      quietSteps += 1
+      let start = M.pose(.idle, t, reduce: false, plan: plan)
+      for u in stride(from: t, through: t + M.idleFrame, by: 0.004) {
+        let pose = M.pose(.idle, u, reduce: false, plan: plan)
+        XCTAssertEqual(pose.blink, 1, "t=\(u)")
+        XCTAssertEqual(pose.gazeX, start.gazeX, accuracy: 0.005, "t=\(u)")
+        XCTAssertEqual(pose.gazeY, start.gazeY, accuracy: 0.005, "t=\(u)")
+        XCTAssertEqual(pose.roll, start.roll, accuracy: 0.2, "t=\(u)")
+        XCTAssertEqual(pose.lift, start.lift, accuracy: 0.2, "t=\(u)")
+        XCTAssertEqual(pose.scaleY, start.scaleY, accuracy: 0.003, "t=\(u)")
+      }
+    }
+    XCTAssertGreaterThan(quietSteps, busySteps, "Most of the time an idle avatar draws slowly")
+    XCTAssertGreaterThan(busySteps, 200, "Blinks, glances, the hop and the arrival draw at full rate")
+  }
+  /// A plan granting one gesture, as the conductor would.
+  private func plan(_ kind: M.GestureKind, _ start: Double) -> M.Plan {
+    M.Plan(gesture: M.Gesture(kind: kind, side: 1, start: start))
+  }
   func testWorkingKeepsTheFaceForwardUntilASpinTurnsItAway() {
-    let scanEnd = M.workCycle - M.workSpin
-    for t in samples(0, scanEnd) {
-      let pose = M.pose(.working, t, reduce: false)
+    let spinning = plan(.spin, M.workScan)
+    for t in samples(0, M.workScan) {
+      let pose = M.pose(.working, t, reduce: false, plan: spinning)
       XCTAssertTrue(M.project(0, yaw: pose.yaw).visible, "t=\(t)")
       XCTAssertEqual(pose.trails, 0)
     }
-    let spin = samples(scanEnd, M.workCycle).map { M.pose(.working, $0, reduce: false) }
+    let spin = samples(M.workScan, M.workCycle).map {
+      M.pose(.working, $0, reduce: false, plan: spinning)
+    }
     XCTAssertTrue(spin.contains { !M.project(0, yaw: $0.yaw).visible })
     XCTAssertGreaterThan(spin.map(\.trails).max() ?? 0, 0.9)
   }
   func testCompletionSettlesIntoACalmHappyFace() {
-    let celebrating = samples(0, M.celebration).map { M.pose(.done, $0, reduce: false) }
+    let twirl = plan(.twirl, 0)
+    let celebrating = samples(0, M.celebration).map { M.pose(.done, $0, reduce: false, plan: twirl) }
     XCTAssertEqual(celebrating.map(\.trails).max(), 1)
-    let after = M.pose(.done, M.celebration + 2, reduce: false)
+    let after = M.pose(.done, M.celebration + 2, reduce: false, plan: twirl)
     XCTAssertEqual(after.trails, 0)
     XCTAssertTrue(M.project(0, yaw: after.yaw).visible)
-    XCTAssertEqual(M.expression(for: .done, at: M.celebration + 2).happy, 1)
+    XCTAssertEqual(M.expression(for: .done, at: M.celebration + 2, plan: twirl).happy, 1)
     let start = M.expression(for: .working, at: 0)
     XCTAssertEqual(
       M.expression(from: start, toward: .done, after: M.celebration + 2).happy, 1, accuracy: 0.001)
@@ -237,10 +361,11 @@ final class AvatarMotionTests: XCTestCase {
   func testSmoothingIsContinuousAcrossStateChanges() {
     let now = Date()
     let working = M.Snapshot.entering(.working, at: now)
+    let cue = M.Cue(since: now.timeIntervalSinceReferenceDate, plan: plan(.spin, M.workScan))
     // Leave mid-spin: the trails carry over and fade instead of vanishing.
     let midSpin = now.addingTimeInterval(M.workCycle - M.workSpin / 2)
-    let before = M.frame(working, at: midSpin, still: false)
-    let waiting = M.next(working, to: .waiting, at: midSpin, still: false)
+    let before = M.frame(working, at: midSpin, still: false, cue: cue)
+    let waiting = M.next(working, to: .waiting, at: midSpin, still: false, cue: cue)
     let after = M.frame(waiting, at: midSpin, still: false)
     XCTAssertGreaterThan(before.trailLevel, 0.9)
     XCTAssertEqual(after.trailLevel, before.trailLevel, accuracy: 0.0001)

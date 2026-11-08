@@ -86,15 +86,15 @@ extension Data {
 }
 
 @MainActor final class APIClient {
-  private static let log = Logger(subsystem: "dev.agentinterface.ios", category: "api")
+  nonisolated private static let log = Logger(subsystem: "dev.agentinterface.ios", category: "api")
   /// Paths kept for conditional GETs. Polling uses a handful; the bound covers browsing.
   static let conditionalCacheLimit = 64
   private struct Validated { var etag: String; var data: Data }
   /// One server per client: changing servers creates a new client and a new cache.
   let baseURL: URL
   var token: String? {
-    // A cached body belongs to the identity that fetched it.
-    didSet { if token != oldValue { clearConditionalCache() } }
+    // A cached body belongs to the identity that fetched it. A route is chosen per sign-in.
+    didSet { if token != oldValue { clearConditionalCache(); activeRoute = nil; routeGeneration += 1 } }
   }
   var csrf: String?
   var localCookieAuth = false
@@ -103,6 +103,26 @@ extension Data {
   private var validatedOrder: [String] = []
   /// Bumped on every clear, so a response that was in flight for an earlier identity is not cached.
   private var validatedGeneration = 0
+  // Direct routes (DirectRoutes.swift). `baseURL` stays this server's identity; only API requests
+  // travel over `activeRoute` when one is set, each with its route's pin in its own delegate.
+  var directRoutes: [DirectRoute] = [] {
+    didSet {
+      if directRoutes != oldValue { storeRoutes() }
+      if let activeRoute, !directRoutes.contains(activeRoute) { self.activeRoute = nil }
+    }
+  }
+  /// The route API requests use now; nil is the primary origin.
+  var activeRoute: DirectRoute?
+  var routeCooldowns: [DirectRoute: Date] = [:]
+  var routesCheckedAt: Date?
+  var routeCheck: Task<Void, Never>?
+  var routeRecheckQueued = false
+  /// Bumped by a network change or another sign-in, so a route check that began before it is ignored.
+  var routeGeneration = 0
+  var pathWatch: NetworkPathWatch?
+  /// Tests replace the clock; they also supply their own session, which turns off path watching.
+  var now: () -> Date = Date.init
+  var watchesNetwork: Bool { !injectedSession }
   init(baseURL: URL, session: URLSession? = nil) {
     self.baseURL = baseURL
     if let session {
@@ -116,12 +136,13 @@ extension Data {
       config.timeoutIntervalForResource = 60
       config.httpCookieStorage = HTTPCookieStorage()
       self.session = URLSession(
-        configuration: config, delegate: SameOriginRedirectDelegate(origin: baseURL),
+        configuration: config, delegate: APISessionDelegate(origin: baseURL),
         delegateQueue: nil)
     }
     token = SecureToken.read(host: baseURL.absoluteString)
+    directRoutes = Self.storedRoutes(for: baseURL)
   }
-  static func component(_ value: String) -> String {
+  nonisolated static func component(_ value: String) -> String {
     value.addingPercentEncoding(
       withAllowedCharacters: .alphanumerics.union(CharacterSet(charactersIn: "-_")))!
   }
@@ -153,12 +174,14 @@ extension Data {
     path: String, method: String = "GET", body: Data? = nil, contentType: String? = nil,
     authenticated: Bool = true
   ) async throws -> Data {
-    try await data(
+    try await exchange(
       path: path, method: method, body: body, contentType: contentType,
-      authenticated: authenticated, conditional: method == "GET")
+      authenticated: authenticated, conditional: method == "GET").data
   }
-  private func request(path: String, method: String, contentType: String?, authenticated: Bool) throws -> URLRequest {
-    var request = URLRequest(url: try url(path))
+  private func request(path: String, method: String, contentType: String?, authenticated: Bool, route: DirectRoute? = nil) throws -> URLRequest {
+    var request = URLRequest(url: try transportURL(path, on: route))
+    // A direct route refuses cookies; it takes only the bearer.
+    if route != nil { request.httpShouldHandleCookies = false }
     request.httpMethod = method
     request.timeoutInterval = method == "GET" ? 20 : 60
     // Without a local HTTP cache, a 304 reaches the app instead of being replaced by a cached body.
@@ -181,6 +204,10 @@ extension Data {
         "Can't reach the app server. Your draft is kept; sent messages will be checked before retrying.",
       status: 503, code: "CONNECTION_UNAVAILABLE")
   }
+  /// A direct route's listener refused the request before handling it; see docs/native-api.md.
+  static func refusedByRoute(_ status: Int, _ data: Data) -> Bool {
+    status == 403 && failure(status, data).code == "direct_route_refused"
+  }
   private static func failure(_ status: Int, _ data: Data) -> APIError {
     let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
     return APIError(
@@ -189,28 +216,49 @@ extension Data {
       code: object?["code"] as? String,
       confirmRequired: object?["confirmRequired"] as? Bool ?? false, body: data)
   }
-  private func data(
+  /// The body with its ETag: a 304 answers with the validated body and its tag.
+  private func exchange(
     path: String, method: String, body: Data?, contentType: String?, authenticated: Bool,
     conditional: Bool
-  ) async throws -> Data {
-    var request = try self.request(path: path, method: method, contentType: contentType, authenticated: authenticated)
+  ) async throws -> (data: Data, etag: String?) {
+    // Signed-out requests, such as sign-in, stay on the primary origin; a direct route refuses them.
+    let route = authenticated && token != nil ? activeRoute : nil
+    // A request sent again on the primary origin goes only under the identity that first sent it.
+    let sentToken = token
+    let pinning = route.map { DirectTaskDelegate(pin: $0.certificateSha256) }
+    var request = try self.request(path: path, method: method, contentType: contentType, authenticated: authenticated, route: route)
     request.httpBody = body
     let sent = conditional ? validated[path] : nil
     let generation = validatedGeneration
     if let sent { request.setValue(sent.etag, forHTTPHeaderField: "If-None-Match") }
     let (data, response): (Data, URLResponse)
-    do { (data, response) = try await session.data(for: request) } catch { throw Self.unreachable(error) }
+    do { (data, response) = try await session.data(for: request, delegate: pinning) } catch {
+      if let route, token == sentToken, directRouteFailed(route, error: error, unsent: pinning?.refused == true, method: method) {
+        return try await exchange(
+          path: path, method: method, body: body, contentType: contentType,
+          authenticated: authenticated, conditional: conditional)
+      }
+      throw Self.unreachable(error)
+    }
     guard let response = response as? HTTPURLResponse else {
       throw APIError(message: "The server returned an invalid response.", status: 502)
+    }
+    // The server stopped serving this route to the app before handling the request.
+    if let route, Self.refusedByRoute(response.statusCode, data) {
+      _ = directRouteFailed(route, unsent: true, method: method)
+      guard token == sentToken else { throw Self.failure(response.statusCode, data) }
+      return try await exchange(
+        path: path, method: method, body: body, contentType: contentType,
+        authenticated: authenticated, conditional: conditional)
     }
     if response.statusCode == 304, conditional {
       // Reuse the body only if it is still the one this request validated. A sign-out or
       // identity change while the request was in flight clears it; then ask again in full.
       if let sent, let current = validated[path], current.etag == sent.etag {
         remember(path, etag: current.etag, data: current.data)
-        return current.data
+        return (current.data, current.etag)
       }
-      return try await self.data(
+      return try await exchange(
         path: path, method: method, body: body, contentType: contentType,
         authenticated: authenticated, conditional: false)
     }
@@ -218,18 +266,16 @@ extension Data {
       let failure = Self.failure(response.statusCode, data)
       // An assistant turned private while this read ran; the server dropped it, so read once more.
       if method == "GET", conditional, response.statusCode == 503, failure.code == "assistants_changed" {
-        return try await self.data(
+        return try await exchange(
           path: path, method: method, body: body, contentType: contentType,
           authenticated: authenticated, conditional: false)
       }
       throw failure
     }
-    if method == "GET", generation == validatedGeneration {
-      // Only JSON is kept; file downloads can be large and are never polled.
-      let json = response.mimeType == "application/json"
-      remember(path, etag: json ? response.value(forHTTPHeaderField: "ETag") : nil, data: data)
-    }
-    return data
+    // Only JSON is kept; file downloads can be large and are never polled.
+    let etag = method == "GET" && response.mimeType == "application/json" ? response.value(forHTTPHeaderField: "ETag") : nil
+    if method == "GET", generation == validatedGeneration { remember(path, etag: etag, data: data) }
+    return (data, etag)
   }
   /// Event streams stay open for hours, so they get their own session without the resource
   /// timeout. Tests that supply a session stream through it.
@@ -243,38 +289,67 @@ extension Data {
     config.timeoutIntervalForRequest = 70
     config.timeoutIntervalForResource = 24 * 60 * 60
     config.httpCookieStorage = session.configuration.httpCookieStorage
-    return URLSession(configuration: config, delegate: SameOriginRedirectDelegate(origin: baseURL), delegateQueue: nil)
+    return URLSession(configuration: config, delegate: APISessionDelegate(origin: baseURL), delegateQueue: nil)
   }()
   /// The lines of a server event stream. Anything but an open stream throws.
   func events(_ path: String) async throws -> AsyncLineSequence<URLSession.AsyncBytes> {
-    var request = URLRequest(url: try url(path))
+    let route = token != nil ? activeRoute : nil
+    let sentToken = token
+    let pinning = route.map { DirectTaskDelegate(pin: $0.certificateSha256) }
+    var request = URLRequest(url: try transportURL(path, on: route))
+    if route != nil { request.httpShouldHandleCookies = false }
     request.cachePolicy = .reloadIgnoringLocalCacheData
     request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
     if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
-    let (bytes, response) = try await streamSession.bytes(for: request)
+    let (bytes, response): (URLSession.AsyncBytes, URLResponse)
+    do { (bytes, response) = try await streamSession.bytes(for: request, delegate: pinning) } catch {
+      if let route, token == sentToken, directRouteFailed(route, error: error, unsent: pinning?.refused == true, method: "GET") {
+        return try await events(path)
+      }
+      throw error
+    }
     let http = response as? HTTPURLResponse
+    // The stream body is not read here. Event routes answer 401 or 404 themselves, so a 403 on a
+    // route is the listener refusing it.
+    if let route, http?.statusCode == 403 {
+      bytes.task.cancel()
+      _ = directRouteFailed(route, unsent: true, method: "GET")
+      // Reopened only for the account that asked; another sign-in opens its own stream.
+      guard token == sentToken else { throw APIError(message: "The change stream is unavailable.", status: 403) }
+      return try await events(path)
+    }
     guard http?.statusCode == 200, http?.mimeType == "text/event-stream" else {
       bytes.task.cancel()
       throw APIError(message: "The change stream is unavailable.", status: http?.statusCode ?? 0)
     }
     return bytes.lines
   }
-  func get<T: Decodable>(_ path: String) async throws -> T {
-    try Self.decode(await data(path: "/api" + path), from: "/api" + path)
+  func get<T: Decodable & SendableMetatype>(_ path: String) async throws -> T {
+    let body = try await data(path: "/api" + path)
+    return try await Self.decoded(body, from: "/api" + path)
   }
-  func publicGet<T: Decodable>(_ path: String) async throws -> T {
-    try Self.decode(await data(path: "/api" + path, authenticated: false), from: "/api" + path)
+  /// A poll read that skips decoding when the response is the body the caller last applied, named
+  /// by its ETag, whether it came back as a 304 or in full. The value is nil then; otherwise it
+  /// comes with the ETag to pass next time. A server without ETags always decodes.
+  func changed<T: Decodable & SendableMetatype>(_ path: String, since applied: String?) async throws -> (value: T?, etag: String?) {
+    let response = try await exchange(
+      path: "/api" + path, method: "GET", body: nil, contentType: nil, authenticated: true, conditional: true)
+    if let applied, response.etag == applied { return (nil, applied) }
+    return (try await Self.decoded(response.data, from: "/api" + path), response.etag)
   }
-  func publicWrite<T: Decodable, V: Encodable>(_ path: String, _ value: V) async throws -> T {
-    try Self.decode(
+  func publicGet<T: Decodable & SendableMetatype>(_ path: String) async throws -> T {
+    try await Self.decoded(await data(path: "/api" + path, authenticated: false), from: "/api" + path)
+  }
+  func publicWrite<T: Decodable & SendableMetatype, V: Encodable>(_ path: String, _ value: V) async throws -> T {
+    try await Self.decoded(
       await data(
         path: "/api" + path, method: "POST", body: JSONEncoder().encode(value),
         contentType: "application/json", authenticated: false), from: "/api" + path)
   }
-  func write<T: Decodable, V: Encodable>(_ path: String, _ value: V, method: String = "POST")
+  func write<T: Decodable & SendableMetatype, V: Encodable>(_ path: String, _ value: V, method: String = "POST")
     async throws -> T
   {
-    try Self.decode(
+    try await Self.decoded(
       await data(
         path: "/api" + path, method: method, body: JSONEncoder().encode(value),
         contentType: "application/json"), from: "/api" + path)
@@ -282,9 +357,17 @@ extension Data {
   func delete(_ path: String) async throws {
     _ = try await data(path: "/api" + path, method: "DELETE")
   }
+  /// `decode` away from the main actor. A long conversation, or a streamed reply patch four times
+  /// a second, is large enough to cost frames there.
+  static func decoded<T: Decodable & SendableMetatype>(_ data: Data, from path: String) async throws -> T {
+    try await offMain { try decode(data, from: path) }
+  }
+  @concurrent nonisolated private static func offMain<R>(_ work: sending () throws -> sending R) async throws -> sending R {
+    try work()
+  }
   /// Decodes a server response. The person sees a friendly message; the log and `detail`
   /// keep the coding path that failed, so a contract break is diagnosable.
-  static func decode<T: Decodable>(_ data: Data, from path: String) throws -> T {
+  nonisolated static func decode<T: Decodable>(_ data: Data, from path: String) throws -> T {
     do { return try JSONDecoder().decode(T.self, from: data) } catch {
       let detail = decodingDetail(error)
       let route = path.split(separator: "?", maxSplits: 1).first.map(String.init) ?? path
@@ -298,7 +381,7 @@ extension Data {
     }
   }
   /// The failing JSON location and reason, without any response values.
-  static func decodingDetail(_ error: Error) -> String {
+  nonisolated static func decodingDetail(_ error: Error) -> String {
     func path(_ keys: [CodingKey]) -> String {
       let joined = keys.map { $0.intValue.map { "[\($0)]" } ?? ".\($0.stringValue)" }.joined()
       let trimmed = joined.hasPrefix(".") ? String(joined.dropFirst()) : joined
@@ -318,7 +401,7 @@ extension Data {
   /// Uploads one attachment. `progress` hears the share of the request body sent, from 0 to 1.
   func upload(
     botId: String, name: String, mime: String, data: Data,
-    progress: (@MainActor (Double) -> Void)? = nil
+    progress: (@MainActor @Sendable (Double) -> Void)? = nil
   ) async throws -> FileRef {
     guard UploadRules.mimeTypes.contains(mime) else {
       throw APIError(message: "Use \(UploadRules.kinds).", status: 415)
@@ -336,25 +419,50 @@ extension Data {
     body.append(data)
     body.append(Data("\r\n--\(boundary)--\r\n".utf8))
     let path = "/api/bots/\(Self.component(botId))/uploads"
-    let request = try self.request(
-      path: path, method: "POST", contentType: "multipart/form-data; boundary=\(boundary)", authenticated: true)
+    let route = token != nil ? activeRoute : nil
+    let sentToken = token
+    let pinning = route.map { DirectTaskDelegate(pin: $0.certificateSha256, report: progress) }
+    // A direct route's delegate also reports progress; only one delegate fits a task.
+    let taskDelegate: (any URLSessionTaskDelegate)?
+    if let pinning { taskDelegate = pinning } else { taskDelegate = progress.map { UploadProgressDelegate(report: $0) } }
+    var request = try self.request(
+      path: path, method: "POST", contentType: "multipart/form-data; boundary=\(boundary)", authenticated: true, route: route)
+    #if DEBUG
+      // URLProtocol may not receive an upload task's body. Preserve the exact multipart bytes
+      // only for the invalid-host fixture transport; Release uses the ordinary upload request.
+      if request.url?.host?.hasSuffix(".native-fixture.invalid") == true {
+        let mutable = (request as NSURLRequest).mutableCopy() as! NSMutableURLRequest
+        URLProtocol.setProperty(body, forKey: "fixtureUploadBody", in: mutable)
+        request = mutable as URLRequest
+      }
+    #endif
     let (result, response): (Data, URLResponse)
     do {
       (result, response) = try await session.upload(
-        for: request, from: body, delegate: progress.map { UploadProgressDelegate(report: $0) })
-    } catch { throw Self.unreachable(error) }
+        for: request, from: body, delegate: taskDelegate)
+    } catch {
+      if let route, token == sentToken, directRouteFailed(route, error: error, unsent: pinning?.refused == true, method: "POST") {
+        return try await upload(botId: botId, name: name, mime: mime, data: data, progress: progress)
+      }
+      throw Self.unreachable(error)
+    }
     guard let response = response as? HTTPURLResponse else {
       throw APIError(message: "The server returned an invalid response.", status: 502)
     }
+    if let route, Self.refusedByRoute(response.statusCode, result) {
+      _ = directRouteFailed(route, unsent: true, method: "POST")
+      guard token == sentToken else { throw Self.failure(response.statusCode, result) }
+      return try await upload(botId: botId, name: name, mime: mime, data: data, progress: progress)
+    }
     guard (200..<300).contains(response.statusCode) else { throw Self.failure(response.statusCode, result) }
-    return try Self.decode(result, from: path)
+    return try await Self.decoded(result, from: path)
   }
 }
 
-/// Reports an upload's progress on the main actor.
-private final class UploadProgressDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
-  let report: @MainActor (Double) -> Void
-  init(report: @escaping @MainActor (Double) -> Void) { self.report = report }
+/// Reports an upload's progress on the main actor. Checked Sendable: its only state is immutable.
+private final class UploadProgressDelegate: NSObject, URLSessionTaskDelegate, Sendable {
+  let report: @MainActor @Sendable (Double) -> Void
+  init(report: @escaping @MainActor @Sendable (Double) -> Void) { self.report = report }
   func urlSession(
     _ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64,
     totalBytesSent: Int64, totalBytesExpectedToSend: Int64
@@ -362,25 +470,5 @@ private final class UploadProgressDelegate: NSObject, URLSessionTaskDelegate, @u
     guard totalBytesExpectedToSend > 0 else { return }
     let fraction = Double(totalBytesSent) / Double(totalBytesExpectedToSend)
     Task { @MainActor in self.report(fraction) }
-  }
-}
-
-private final class SameOriginRedirectDelegate: NSObject, URLSessionTaskDelegate,
-  @unchecked Sendable
-{
-  let origin: URL
-  init(origin: URL) { self.origin = origin }
-  func urlSession(
-    _ session: URLSession, task: URLSessionTask,
-    willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
-    completionHandler: @escaping (URLRequest?) -> Void
-  ) {
-    guard let url = request.url, url.scheme == origin.scheme, url.host == origin.host,
-      url.port == origin.port
-    else {
-      completionHandler(nil)
-      return
-    }
-    completionHandler(request)
   }
 }

@@ -4,7 +4,7 @@ import SwiftUI
 
 struct AuthenticatedImage: View {
   let path: String
-  @Environment(\.unobservedStore) private var store
+  @Environment(AppStore.self) private var store: AppStore?
   @State private var image: UIImage?
   @State private var failed = false
   var body: some View {
@@ -33,12 +33,56 @@ struct AuthenticatedImage: View {
           failed = true
           return
         }
-        let data = try await api.data(path: path)
+        let path = path
+        let loaded = try await Self.loads.image(key) { try await api.data(path: path) }
         guard !Task.isCancelled else { return }
-        image = Self.downsampled(data)
-        failed = image == nil
-        if let image, let cgImage = image.cgImage { Self.cache.setObject(image, forKey: key, cost: cgImage.bytesPerRow * cgImage.height) }
+        image = loaded
+        failed = loaded == nil
       } catch is CancellationError {} catch { failed = true }
+    }
+  }
+  /// One download and decode per image at a time: the same picture in a reply and the file
+  /// list, or a row scrolled back in, waits for the load already running.
+  private static let loads = ImageLoads()
+  @MainActor final class ImageLoads {
+    private struct Load { var task: Task<UIImage?, Error>; var waiters = 1; var abandoned = 0 }
+    /// Keyed by the cache key's text: a String crosses into the cancellation handler, an NSString does not.
+    private var running: [String: Load] = [:]
+    func image(_ cacheKey: NSString, fetch: @escaping @MainActor () async throws -> Data) async throws -> UIImage? {
+      let key = cacheKey as String
+      // A load every view abandoned is ending; a new view starts its own.
+      if let load = running[key], !load.task.isCancelled {
+        running[key]?.waiters += 1
+        return try await wait(key, load.task)
+      }
+      let task = Task {
+        let data = try await fetch()
+        try Task.checkCancellation()
+        // Decoding a camera photo takes tens of milliseconds, so it stays off the main actor.
+        let image = await Task.detached(priority: .userInitiated) { AuthenticatedImage.downsampled(data) }.value
+        if let image, let cgImage = image.cgImage {
+          AuthenticatedImage.cache.setObject(image, forKey: key as NSString, cost: cgImage.bytesPerRow * cgImage.height)
+        }
+        return image
+      }
+      running[key] = Load(task: task)
+      return try await wait(key, task)
+    }
+    private func wait(_ key: String, _ task: Task<UIImage?, Error>) async throws -> UIImage? {
+      defer { leave(key, task) }
+      return try await withTaskCancellationHandler { try await task.value } onCancel: {
+        Task { @MainActor in self.abandon(key, task) }
+      }
+    }
+    private func leave(_ key: String, _ task: Task<UIImage?, Error>) {
+      guard let load = running[key], load.task == task else { return }
+      if load.waiters > 1 { running[key]?.waiters -= 1 } else { running[key] = nil }
+    }
+    /// Views that scrolled away stop the download, unless another view still waits for it.
+    private func abandon(_ key: String, _ task: Task<UIImage?, Error>) {
+      guard running[key]?.task == task else { return }
+      running[key]?.abandoned += 1
+      if let load = running[key], load.abandoned >= load.waiters { task.cancel() }
     }
   }
   /// Decoded images by server, identity and path, bounded like a browser's memory cache.
@@ -49,8 +93,8 @@ struct AuthenticatedImage: View {
   }()
   /// Wide enough for a full-width transcript image on any iPhone or iPad. A camera photo decoded
   /// at full size would hold about 46 MB; Quick Look still opens the original.
-  static let maxPixelSize = 1600
-  static func downsampled(_ data: Data) -> UIImage? {
+  nonisolated static let maxPixelSize = 1600
+  nonisolated static func downsampled(_ data: Data) -> UIImage? {
     guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
     let options: [CFString: Any] = [
       kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceCreateThumbnailWithTransform: true,
@@ -67,7 +111,7 @@ struct AuthenticatedImage: View {
 /// elsewhere opens at its own address.
 struct FileAttachmentView: View {
   var file: FileRef
-  @Environment(\.unobservedStore) private var store
+  @Environment(AppStore.self) private var store: AppStore?
   @Environment(\.openURL) private var openURL
   var body: some View {
     let location = file.location(origin: store?.api?.baseURL)
@@ -108,19 +152,24 @@ struct FileAttachmentView: View {
 }
 struct FilePreview: UIViewControllerRepresentable {
   var file: PreviewFile
-  func makeCoordinator() -> Coordinator { Coordinator(url: file.url) }
-  func makeUIViewController(context: Context) -> QLPreviewController {
+  @Environment(\.dismiss) private var dismiss
+  func makeCoordinator() -> Coordinator { Coordinator(url: file.url, close: { dismiss() }) }
+  func makeUIViewController(context: Context) -> UINavigationController {
     let controller = QLPreviewController()
     controller.dataSource = context.coordinator
-    return controller
+    controller.navigationItem.leftBarButtonItem = UIBarButtonItem(barButtonSystemItem: .done,
+      target: context.coordinator, action: #selector(Coordinator.closePreview))
+    return UINavigationController(rootViewController: controller)
   }
-  func updateUIViewController(_ uiViewController: QLPreviewController, context: Context) {}
+  func updateUIViewController(_ uiViewController: UINavigationController, context: Context) {}
   static func dismantleUIViewController(
-    _ uiViewController: QLPreviewController, coordinator: Coordinator
+    _ uiViewController: UINavigationController, coordinator: Coordinator
   ) { try? FileManager.default.removeItem(at: coordinator.url.deletingLastPathComponent()) }
   class Coordinator: NSObject, QLPreviewControllerDataSource {
     var url: URL
-    init(url: URL) { self.url = url }
+    let close: () -> Void
+    init(url: URL, close: @escaping () -> Void) { self.url = url; self.close = close }
+    @objc func closePreview() { close() }
     func numberOfPreviewItems(in controller: QLPreviewController) -> Int { 1 }
     func previewController(_ controller: QLPreviewController, previewItemAt index: Int)
       -> QLPreviewItem
@@ -133,9 +182,13 @@ struct FilePreview: UIViewControllerRepresentable {
 /// text, never an embedded web view.
 struct MarkdownView: View {
   let text: String
-  @Environment(\.unobservedStore) private var store
+  /// A reply still arriving: parsed from its last settled block and kept out of the shared caches.
+  var streaming = false
+  @Environment(AppStore.self) private var store: AppStore?
   var body: some View {
-    MarkdownBlocksView(blocks: Markdown.parse(text))
+    let parsed = streaming
+      ? MarkdownCache.shared.streamingBlocks(text) : (blocks: MarkdownCache.shared.blocks(text), settled: Int.max)
+    MarkdownBlocksView(blocks: parsed.blocks, settled: parsed.settled)
       .frame(maxWidth: .infinity, alignment: .leading)
       .environment(\.openURL, OpenURLAction(handler: open))
   }
@@ -158,23 +211,36 @@ struct MarkdownBlocksView: View {
   var blocks: [MarkdownBlock]
   var listDepth = 0
   var spacing: CGFloat = 12
+  /// Blocks from this index on may still change, as at the end of a streamed reply.
+  var settled = Int.max
+  @Environment(\.markdownSettled) private var inheritedSettled
   var body: some View {
     VStack(alignment: .leading, spacing: spacing) {
-      ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+      ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
         MarkdownBlockView(block: block, listDepth: listDepth)
+          .environment(\.markdownSettled, inheritedSettled && index < settled)
       }
     }
+  }
+}
+private struct MarkdownSettledKey: EnvironmentKey { static let defaultValue = true }
+extension EnvironmentValues {
+  /// Whether the Markdown below can no longer change, so its converted text is worth caching.
+  var markdownSettled: Bool {
+    get { self[MarkdownSettledKey.self] }
+    set { self[MarkdownSettledKey.self] = newValue }
   }
 }
 struct MarkdownBlockView: View {
   var block: MarkdownBlock
   var listDepth: Int
+  @Environment(\.markdownSettled) private var settled
   var body: some View {
     switch block {
     case .paragraph(let text):
-      Text(Markdown.attributed(text)).textSelection(.enabled).lineSpacing(4)
+      Text(MarkdownCache.shared.attributed(text, keep: settled)).textSelection(.enabled).lineSpacing(4)
     case .heading(let level, let text):
-      Text(Markdown.attributed(text)).font(Self.headingFont(level)).textSelection(.enabled)
+      Text(MarkdownCache.shared.attributed(text, keep: settled)).font(Self.headingFont(level)).textSelection(.enabled)
         .padding(.top, 4).accessibilityAddTraits(.isHeader)
     case .code(let language, let text):
       MarkdownCodeBlock(code: text, language: language)
@@ -230,24 +296,35 @@ struct MarkdownListView: View {
 }
 struct MarkdownTableView: View {
   var table: MarkdownTable
+  @Environment(\.markdownSettled) private var settled
   var body: some View {
     ScrollView(.horizontal) {
       Grid(alignment: .leading, horizontalSpacing: 20, verticalSpacing: 10) {
         GridRow {
           ForEach(Array(table.header.enumerated()), id: \.offset) { column, cell in
-            Text(Markdown.attributed(cell)).font(.headline).textSelection(.enabled)
+            Text(MarkdownCache.shared.attributed(cell, keep: settled)).font(.headline).textSelection(.enabled)
               .gridColumnAlignment(Self.alignment(table.alignments[column]))
           }
         }
         ForEach(Array(table.rows.enumerated()), id: \.offset) { _, row in
           GridRow {
             ForEach(Array(row.enumerated()), id: \.offset) { _, cell in
-              Text(Markdown.attributed(cell)).textSelection(.enabled)
+              Text(MarkdownCache.shared.attributed(cell, keep: settled)).textSelection(.enabled)
             }
           }
         }
       }.padding(8)
     }.accessibilityLabel("Table")
+      .contextMenu {
+        Button("Copy as Markdown", systemImage: "doc.on.doc") { copy(table.markdown, "Table copied as Markdown.") }
+        Button("Copy as CSV", systemImage: "tablecells") { copy(table.csv, "Table copied as CSV.") }
+      }
+      .accessibilityAction(named: "Copy as Markdown") { copy(table.markdown, "Table copied as Markdown.") }
+      .accessibilityAction(named: "Copy as CSV") { copy(table.csv, "Table copied as CSV.") }
+  }
+  private func copy(_ text: String, _ announcement: String) {
+    UIPasteboard.general.string = text
+    AccessibilityNotification.Announcement(announcement).post()
   }
   static func alignment(_ value: MarkdownTable.Alignment) -> HorizontalAlignment {
     switch value {
@@ -259,23 +336,31 @@ struct MarkdownTableView: View {
 }
 /// A code block with the web's header: the language or "Code", and a copy button with a status.
 struct MarkdownCodeBlock: View {
+  // Apply the design to the Font value so the app's rounded design cannot replace it.
+  static let codeFont: Font = .footnote.monospaced()
   var code: String
   var language: String?
   @Environment(\.colorScheme) private var scheme
+  @Environment(\.markdownSettled) private var settled
   @State private var copied = false
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
       HStack(spacing: 12) {
-        Text(language ?? "Code").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+        Text(language ?? "Code").font(.caption).foregroundStyle(Palette.muted).lineLimit(1)
         Spacer()
         Button("Copy code", systemImage: "doc.on.doc", action: copy).font(.caption)
       }.padding(.horizontal, 12).padding(.vertical, 8)
       Rectangle().fill(Palette.line).frame(height: 1)
       ScrollView(.horizontal) {
-        Text(code).font(.system(.footnote, design: .monospaced)).textSelection(.enabled).padding(14)
+        // Colored once the block can no longer change; a block still streaming stays plain.
+        Group {
+          if let colored = MarkdownCache.shared.highlighted(code, language: language, settled: settled, style: CodeTheme.style) {
+            Text(colored)
+          } else { Text(code) }
+        }.font(Self.codeFont).textSelection(.enabled).padding(14)
       }.accessibilityLabel(language.map { "\($0) code block" } ?? "Code block")
       if copied {
-        Text("Code copied.").font(.caption).foregroundStyle(.secondary).padding([.horizontal, .bottom], 14)
+        Text("Code copied.").font(.caption).foregroundStyle(Palette.muted).padding([.horizontal, .bottom], 14)
       }
     }.background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 12))
       .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Palette.line))
@@ -284,5 +369,31 @@ struct MarkdownCodeBlock: View {
     UIPasteboard.general.string = code
     copied = true
     AccessibilityNotification.Announcement("Code copied.").post()
+  }
+}
+
+/// Code colors in the app's palette: each holds at least 4.5:1 on the raised code background in
+/// light and dark, and resolves with the appearance, so one cached string serves both.
+enum CodeTheme {
+  static let keyword = Color.adaptive(light: "#8A3FA0", dark: "#D7A6E8")
+  static let string = Color.adaptive(light: "#86561A", dark: "#E6C07B")
+  static let number = Color.adaptive(light: "#1F6A9E", dark: "#8CC4F0")
+  static let type = Color.adaptive(light: "#246F59", dark: "#8BD2B2")
+  static let attribute = Color.adaptive(light: "#9B4D2A", dark: "#F0A984")
+  static func style(_ kind: SyntaxToken.Kind) -> AttributeContainer {
+    var container = AttributeContainer()
+    switch kind {
+    case .keyword: container.foregroundColor = keyword
+    case .string: container.foregroundColor = string
+    case .number, .meta: container.foregroundColor = number
+    case .type: container.foregroundColor = type
+    case .attribute: container.foregroundColor = attribute
+    case .comment:
+      container.foregroundColor = Palette.muted
+      container.inlinePresentationIntent = .emphasized
+    case .added: container.foregroundColor = Palette.accent
+    case .removed: container.foregroundColor = Palette.danger
+    }
+    return container
   }
 }

@@ -3,6 +3,7 @@
 These prove durable upgrade/rollback ordering, not Hermes integration. The shipped
 worker separately requires the complete real Hermes qualification suite.
 """
+import datetime
 import importlib.util
 import base64
 import re
@@ -12,16 +13,20 @@ import time
 import json
 import os
 from pathlib import Path
+import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 import uuid
+from types import SimpleNamespace
 from unittest.mock import patch
 
-spec = importlib.util.spec_from_file_location("worker", Path(__file__).with_name("hermes-upgrade-worker.py"))
-worker = importlib.util.module_from_spec(spec); spec.loader.exec_module(worker)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tests"))
+from support import load_source
+
+worker = load_source("scripts/hermes-upgrade-worker.py", "worker")
 
 HOOK = r'''
 import json, os, pathlib, subprocess, sys, time
@@ -69,8 +74,25 @@ elif action=='restart_service':
     assert (stage/'gate').exists()
     (stage/'gate').unlink()
 elif action=='finish':
+    if os.environ.get('FIXTURE_WORKER_CONFIG'):
+        (stage/'config-at-finish.json').write_bytes(pathlib.Path(os.environ['FIXTURE_WORKER_CONFIG']).read_bytes())
     (stage/'gate').unlink(missing_ok=True)
     if (stage/'fail-finish').exists(): raise SystemExit(1)
+'''
+
+# Fixture managed-runtime helper. It validates controller wiring only; the actual helper has
+# separate tests and the final Hermes suite proves activated libraries.
+MANAGED_HELPER = '''import argparse, hashlib, json, pathlib, shlex, sys
+def fingerprint(python):
+    return {"interpreterSha256":hashlib.sha256(pathlib.Path(sys.executable).read_bytes()).hexdigest(),"dependenciesSha256":"b"*64}
+if __name__=="__main__":
+    parser=argparse.ArgumentParser(); parser.add_argument("action")
+    for key in ("source","stage","launcher","installed-source","installed-home"): parser.add_argument("--"+key)
+    args=parser.parse_args(); stage=pathlib.Path(args.stage)
+    marker=json.loads((stage/".agent-interface-upgrade-stage").read_text()); assert marker["state"]=="active"
+    launcher=stage/"qualified-python"; launcher.write_text("#!/bin/sh\\nexec "+shlex.quote(sys.executable)+" \\\"$@\\\"\\n"); launcher.chmod(0o700)
+    descriptor=stage/"qualified-runtime.json"; descriptor.write_text("{}"); descriptor.chmod(0o600)
+    print(json.dumps({"python":str(launcher),"descriptor":str(descriptor),"fingerprint":fingerprint(str(launcher))}))
 '''
 
 # Native marker double tests worker ownership/handoff wiring, not native locking.
@@ -87,6 +109,53 @@ class UpdateLock:
     def release(self):
         if self.acquired and self.path.exists() and self.path.read_text().splitlines()[0]==str(os.getpid()): self.path.unlink()
 '''
+
+class ChromiumTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.home = Path(self.temporary.name)
+        self.tools = self.home / "tools"
+        self.browser = self.tools / "chromium-1208/chrome-linux64/chrome"
+        self.browser.parent.mkdir(parents=True)
+        self.browser.write_text("#!/bin/sh\n")
+        self.browser.chmod(0o700)
+
+    def facts(self, package):
+        (self.tools / "facts.json").write_text(json.dumps({"packages": {"chromium": package}}))
+
+    def test_legacy_browser_env(self):
+        self.facts({"env": {"AGENT_BROWSER_EXECUTABLE_PATH": "{{store}}/chromium-1208/chrome-linux64/chrome"}})
+        self.assertEqual(worker.native_chromium(self.home), self.browser.resolve())
+
+    def test_new_browser_entry(self):
+        self.facts({"entry": "chromium-1208"})
+        self.assertEqual(worker.native_chromium(self.home), self.browser.resolve())
+
+    def test_browser_entry_requires_an_executable(self):
+        self.facts({"entry": "chromium-1208"})
+        self.browser.chmod(0o600)
+        with self.assertRaisesRegex(RuntimeError, "unavailable"):
+            worker.native_chromium(self.home)
+
+    def test_browser_entry_cannot_escape_store(self):
+        for entry in (None, "../outside", str(self.home), ".", ".."):
+            with self.subTest(entry=entry):
+                self.facts({"entry": entry})
+                with self.assertRaises(RuntimeError): worker.native_chromium(self.home)
+        self.facts({"entry": "linked"})
+        (self.tools / "linked").symlink_to(self.home, target_is_directory=True)
+        with self.assertRaises(RuntimeError): worker.native_chromium(self.home)
+
+    def test_browser_symlink_cannot_escape_entry(self):
+        outside = self.tools / "other/chrome"
+        outside.parent.mkdir()
+        self.browser.rename(outside)
+        self.browser.symlink_to(outside)
+        self.facts({"entry": "chromium-1208"})
+        with self.assertRaisesRegex(RuntimeError, "unavailable"):
+            worker.native_chromium(self.home)
+
 
 class RepairMergeTests(unittest.TestCase):
     def merge(self, base, ours, theirs):
@@ -188,6 +257,30 @@ class MirrorTests(unittest.TestCase):
                     worker.mirror_untracked(self.live, self.staged)
                 (self.live / name).unlink()
 
+    def test_code_inside_a_hermes_product_build_is_mirrored(self):
+        # Hermes copies tracked TUI helpers into ui-tui/dist and rebuilds it when its receipt is stale.
+        (self.live / ".gitignore").write_text((self.live / ".gitignore").read_text() + "ui-tui/dist/\nstray/\n")
+        build = self.live / "ui-tui/dist"
+        (build / "scripts").mkdir(parents=True); (build / "scripts/gateway_bootstrap.py").write_text("helper\n")
+        receipt = {"schema": 1, "product": "tui", "inputs": {"sourceHash": "0" * 64}, "outputHash": "1" * 64}
+        (build / "hermes-build.json").write_text(json.dumps(receipt))
+        worker.mirror_untracked(self.live, self.staged)
+        self.assertEqual((self.staged / "ui-tui/dist/scripts/gateway_bootstrap.py").read_text(), "helper\n")
+        # Only a valid receipt for that product at a known output path excuses code.
+        (self.live / "stray").mkdir()
+        cases = (("stray/run.py", receipt), ("ui-tui/dist/run.py", dict(receipt, product="web")),
+                 ("ui-tui/dist/run.py", dict(receipt, outputHash="")), ("ui-tui/dist/run.py", {"schema": 1, "product": "tui"}),
+                 ("ui-tui/dist/run.py", "not json"))
+        for code, value in cases:
+            with self.subTest(code=code, receipt=value):
+                code = self.live / code
+                code.write_text("unqualified\n")
+                (code.parent / "hermes-build.json").write_text(value if isinstance(value, str) else json.dumps(value))
+                with self.assertRaisesRegex(RuntimeError, "installer review"):
+                    worker.mirror_untracked(self.live, self.staged)
+                code.unlink()
+        (build / "hermes-build.json").write_text(json.dumps(receipt))
+
     def test_candidate_paths_win_over_ignored_live_content(self):
         outside = self.staged.parent / "outside"; outside.mkdir()
         # The candidate tracks a file where live had ignored Python, replaces a directory with a
@@ -245,6 +338,9 @@ class QualificationWorkerTests(unittest.TestCase):
             "qualificationPython":sys.executable,"qualificationReceipt":str(self.receipt),"requiredPatchSha256":None,
             "hooks":{**{action:[sys.executable,str(hook),action] for action in ['quiescence','backup','install','verify','rollback','finish','recover','restart_service']},
                 "regressions":[[sys.executable,str(hook),'regressions']]}})
+        # The headroom check reads the real disk, which a CI runner may not have spare. Tests of it patch their own.
+        ample = type('Usage',(),{'free':200*1024**3,'total':256*1024**3,'used':56*1024**3})()
+        disk = patch.object(worker.shutil,'disk_usage',return_value=ample); disk.start(); self.addCleanup(disk.stop)
         self.original_run = worker.Worker.run
         self.fixture_upstream = self.source
         def run(instance, argv, **kwargs):
@@ -269,7 +365,8 @@ class QualificationWorkerTests(unittest.TestCase):
         worker.atomic(self.state / "status.json",state)
         worker.atomic(self.state / "requests" / (request+'.json'),{"operationId":operation,"candidateRevision":self.new,"status":"pending"})
         instance=worker.Worker(self.config,self.state,"install",operation)
-        if instance.config.get('managedHome'): instance.environment['FIXTURE_MANAGED_HOME']=instance.config['managedHome']
+        if instance.config.get('managedHome'):
+            instance.environment.update(FIXTURE_MANAGED_HOME=instance.config['managedHome'], FIXTURE_WORKER_CONFIG=str(self.config))
         if expect_error:
             with self.assertRaises(Exception): instance.main()
         else: instance.main()
@@ -318,6 +415,19 @@ pathlib.Path({str(output)!r}).write_text(json.dumps({{key: os.environ.get(key) f
     ('HERMES_COMPUTER_PROBE_BROWSER', 'AGENT_BROWSER_EXECUTABLE_PATH')}}))
 ''')
         return output
+
+    def test_check_labels_both_revisions_with_their_commit_dates(self):
+        worker.atomic(self.receipt, {'schemaVersion': 1, 'revision': self.old, 'trackedPatchSha256': None,
+            'integrationDigest': worker.integration_digest(self.app), 'qualifiedAt': worker.now(),
+            'checks': {'realIntegration': True, 'hostRegressions': True}})
+        self.check()
+        status = self.status()
+        for key, revision in (("current", self.old), ("candidate", self.new)):
+            expected = self.git("show", "-s", "--format=%ct", revision).decode().strip()
+            self.assertEqual(status[key]["revision"], revision)
+            self.assertEqual(int(datetime.datetime.fromisoformat(status[key]["committedAt"]).timestamp()), int(expected))
+        # An unknown object keeps the record and only loses its date.
+        self.assertNotIn("committedAt", worker.Worker.revision(SimpleNamespace(source=self.source), "0" * 40))
 
     def test_legacy_receipt_qualifies_without_a_browser_override(self):
         worker.atomic(self.receipt, {'schemaVersion': 1, 'revision': self.old, 'trackedPatchSha256': None,
@@ -821,7 +931,7 @@ print('fixture real candidate patch identity passed')
         tree = self.git('cat-file', '-p', self.new).decode().splitlines()[0].split()[1]
         offline = dict(os.environ, GIT_NO_LAZY_FETCH='1')
         missing = subprocess.run(['git', '-C', str(self.source), 'cat-file', '-e', tree], env=offline,
-                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
         self.assertNotEqual(missing.returncode, 0, 'The fixture must lack the candidate tree')
         self.assertEqual(self.git('config', '--get', 'remote.origin.promisor').decode().strip(), 'true')
         self.git('remote', 'set-url', 'origin', worker.OFFICIAL_UPSTREAM)
@@ -838,7 +948,7 @@ print('fixture real candidate patch identity passed')
         self.assertEqual(worker.git(target, 'rev-list', '--count', 'v0.1.0..HEAD'), self.git('rev-list', '--count', 'v0.1.0..' + self.new))
         self.assertFalse((target / '.git/shallow').exists())
         still_missing = subprocess.run(['git', '-C', str(self.source), 'cat-file', '-e', tree], env=offline,
-                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
         self.assertNotEqual(still_missing.returncode, 0, 'Staging must not hydrate installed Git objects')
         self.assertFalse((target / '.git/objects/info/alternates').exists())
         self.assertFalse(list((target / '.git/objects/pack').glob('*.promisor')))
@@ -972,21 +1082,7 @@ print('fixture real candidate patch identity passed')
         self.assertEqual((stage/'hook-order.txt').read_text().splitlines(),['regressions'])
 
     def test_managed_preparation_qualifies_changed_dependencies_and_binds_returned_launcher(self):
-        # Fixture helper validates controller wiring only. The actual helper has
-        # separate tests and the final Hermes suite proves activated libraries.
-        helper=self.app/'scripts/hermes-qualified-python.py'
-        helper.write_text('''import argparse, hashlib, json, pathlib, shlex, sys
-def fingerprint(python):
-    return {"interpreterSha256":hashlib.sha256(pathlib.Path(sys.executable).read_bytes()).hexdigest(),"dependenciesSha256":"b"*64}
-if __name__=="__main__":
-    parser=argparse.ArgumentParser(); parser.add_argument("action")
-    for key in ("source","stage","launcher","installed-source","installed-home"): parser.add_argument("--"+key)
-    args=parser.parse_args(); stage=pathlib.Path(args.stage)
-    marker=json.loads((stage/".agent-interface-upgrade-stage").read_text()); assert marker["state"]=="active"
-    launcher=stage/"qualified-python"; launcher.write_text("#!/bin/sh\\nexec "+shlex.quote(sys.executable)+" \\\"$@\\\"\\n"); launcher.chmod(0o700)
-    descriptor=stage/"qualified-runtime.json"; descriptor.write_text("{}"); descriptor.chmod(0o600)
-    print(json.dumps({"python":str(launcher),"descriptor":str(descriptor),"fingerprint":fingerprint(str(launcher))}))
-''')
+        (self.app/'scripts/hermes-qualified-python.py').write_text(MANAGED_HELPER)
         self.git('checkout','--detach',self.new); (self.source/'pm').mkdir(); (self.source/'pm/lock.json').write_text('{"dependency":"changed"}')
         self.git('add','.'); self.git('commit','-m','changed dependency lock'); self.new=self.git('rev-parse','HEAD').decode().strip()
         self.git('update-ref','refs/remotes/origin/main',self.new); self.git('checkout','--detach',self.old)
@@ -1006,6 +1102,119 @@ if __name__=="__main__":
         self.assertEqual(qualification['runtimeFingerprint']['dependenciesSha256'],'b'*64)
         self.assertEqual(self.install()['status'],'complete'); self.assertEqual(self.status()['phase'],'succeeded')
         self.assertFalse((self.root/'fixture-live-home/.hermes-update-in-progress').exists())
+
+    def managed_interpreters(self, bootstrap):
+        """Managed qualification on a home with two native store interpreters. The launcher reports
+        3.14.9; every configured interpreter starts as BOOTSTRAP, a version name or a path."""
+        (self.app/'scripts/hermes-qualified-python.py').write_text(MANAGED_HELPER)
+        home=self.root/'fixture-live-home'; tools=home/'tools'
+        pythons={}
+        for version in ('3.14.7','3.14.9'):
+            python=tools/('python-'+version)/'bin/python3'; python.parent.mkdir(parents=True,exist_ok=True)
+            python.write_text('#!/bin/sh\nexec '+shlex.quote(sys.executable)+' "$@"\n'); python.chmod(0o700)
+            pythons[version]=str(python)
+        launcher=self.root/'fixture-managed-launcher'
+        launcher.write_text('#!/bin/sh\nprintf \'["%s","-I"]\\n\' '+shlex.quote(pythons['3.14.9'])+'\n'); launcher.chmod(0o700)
+        browser=tools/'chromium-1/chrome'; browser.parent.mkdir(parents=True,exist_ok=True)
+        browser.write_text('#!/bin/sh\n'); browser.chmod(0o700)
+        (tools/'facts.json').write_text(json.dumps({'packages':{'chromium':{'env':{'AGENT_BROWSER_EXECUTABLE_PATH':'{{store}}/chromium-1/chrome'}}}}))
+        old=pythons.get(bootstrap,bootstrap)
+        config=json.loads(self.config.read_text())
+        config.update(managedLauncher=str(launcher),managedHome=str(home),qualificationPython=old,
+            hooks={**{name:[old,*argv[1:]] for name,argv in config['hooks'].items() if name!='regressions'},'regressions':[[old,*argv[1:]] for argv in config['hooks']['regressions']]})
+        worker.atomic(self.config,config)
+        return config, pythons
+
+    def assert_refreshed(self, before, stage, new):
+        old=before['qualificationPython']
+        after=json.loads(self.config.read_text())
+        expected=dict(before,qualificationPython=new,hooks={name:([[new,*argv[1:]] for argv in value] if name=='regressions' else [new,*value[1:]]) for name,value in before['hooks'].items()})
+        self.assertEqual(after,expected); self.assertEqual(self.config.stat().st_mode&0o777,0o600)
+        worker.check_config(after)
+        # qualificationPython, each single hook, and each regression argv.
+        # The finish hook still saw the old paths: the refresh follows its success.
+        self.assertEqual(json.loads((stage/'config-at-finish.json').read_text())['qualificationPython'],old)
+        self.assertIn('Interpreter path refresh: updated %d path(s)' % (len(before['hooks'])+len(before['hooks']['regressions'])),''.join(path.read_text() for path in self.state.glob('*.log')))
+
+    def test_a_successful_install_refreshes_the_worker_interpreter_paths_after_finish(self):
+        before,pythons=self.managed_interpreters('3.14.7')
+        stage=self.check()
+        self.assertEqual(json.loads(self.config.read_text()),before)
+        self.assertEqual(self.install()['status'],'complete'); self.assertEqual(self.status()['phase'],'succeeded')
+        self.assert_refreshed(before,stage,pythons['3.14.9'])
+
+    def test_a_restored_install_refreshes_the_worker_interpreter_paths_after_finish(self):
+        before,pythons=self.managed_interpreters('3.14.7')
+        stage=self.check(); (stage/'fail-verify').touch()
+        self.assertEqual(self.install()['status'],'complete'); self.assertEqual(self.status()['phase'],'rolled_back')
+        self.assert_refreshed(before,stage,pythons['3.14.9'])
+
+    def test_a_recovered_install_refreshes_the_worker_interpreter_paths(self):
+        before,pythons=self.managed_interpreters('3.14.7')
+        stage=self.check(); qualification=self.status()['qualification']
+        # A worker that died after the host hooks started, under its saved maintenance gate.
+        operation=str(uuid.uuid4())
+        worker.atomic(self.state/'status.json',{'operationId':operation,'phase':'failed','maintenance':True,'checks':[],'qualification':qualification,'message':'Interrupted'})
+        worker.atomic(stage/'recovery.json',{'operationId':operation,'hostHookStarted':True,'installStarted':True,'releaseStarted':False})
+        (stage/'gate').write_text('exclusive')
+        self.control('restart_service')
+        worker.Worker(self.config,self.state,'restart_service',operation).main()
+        self.assertEqual(self.status()['phase'],'succeeded'); self.assertFalse((stage/'gate').exists())
+        after=json.loads(self.config.read_text())
+        self.assertEqual(after['qualificationPython'],pythons['3.14.9']); self.assertEqual(after['hooks']['finish'][0],pythons['3.14.9'])
+        self.assertEqual(after['hooks']['finish'][1:],before['hooks']['finish'][1:])
+
+    def test_hooks_left_on_an_older_interpreter_follow_even_when_qualification_python_is_current(self):
+        # The live host: qualificationPython hand-corrected to 3.14.9, every hook still on 3.14.7.
+        before,pythons=self.managed_interpreters('3.14.7')
+        before['qualificationPython']=pythons['3.14.9']; worker.atomic(self.config,before)
+        self.check(); self.assertEqual(self.install()['status'],'complete'); self.assertEqual(self.status()['phase'],'succeeded')
+        after=json.loads(self.config.read_text())
+        self.assertEqual(after['qualificationPython'],pythons['3.14.9'])
+        self.assertEqual({argv[0] for name,argv in after['hooks'].items() if name!='regressions'},{pythons['3.14.9']})
+        self.assertEqual({argv[0] for argv in after['hooks']['regressions']},{pythons['3.14.9']})
+        worker.check_config(after)
+
+    def test_a_virtualenv_python_that_links_into_the_store_keeps_its_environment(self):
+        before,pythons=self.managed_interpreters('3.14.7')
+        venv=self.root/'hook-venv/bin'; venv.mkdir(parents=True); (venv/'python3').symlink_to(pythons['3.14.7'])
+        before['hooks']['finish']=[str(venv/'python3'),*before['hooks']['finish'][1:]]; worker.atomic(self.config,before)
+        self.check(); self.assertEqual(self.install()['status'],'complete')
+        after=json.loads(self.config.read_text())
+        self.assertEqual(after['hooks']['finish'][0],str(venv/'python3'))
+        self.assertEqual(after['hooks']['backup'][0],pythons['3.14.9'])
+
+    def test_interpreters_written_through_a_linked_home_still_follow(self):
+        before,pythons=self.managed_interpreters('3.14.7')
+        linked=self.root/'linked-home'; linked.symlink_to(before['managedHome'])
+        home=before['managedHome']
+        before['hooks']['backup']=[str(linked/Path(before['hooks']['backup'][0]).relative_to(home)),*before['hooks']['backup'][1:]]
+        before['managedHome']=str(linked)
+        worker.atomic(self.config,before)
+        self.check(); self.assertEqual(self.install()['status'],'complete')
+        self.assertEqual(json.loads(self.config.read_text())['hooks']['backup'][0],pythons['3.14.9'])
+
+    def test_a_failed_release_keeps_the_worker_interpreter_paths_for_review(self):
+        before,_=self.managed_interpreters('3.14.7')
+        stage=self.check(); (stage/'fail-finish').touch(); self.install(expect_error=True)
+        self.assertEqual(self.status()['phase'],'failed'); self.assertEqual(json.loads(self.config.read_text()),before)
+
+    def test_a_system_bootstrap_interpreter_is_never_replaced_by_the_launcher_selection(self):
+        before,_=self.managed_interpreters(sys.executable)
+        self.check(); self.assertEqual(self.install()['status'],'complete')
+        self.assertEqual(json.loads(self.config.read_text()),before)
+
+    def test_a_failed_worker_interpreter_refresh_never_fails_a_released_update(self):
+        directory=self.root/'private-config'; directory.mkdir(mode=0o700)
+        self.config=Path(shutil.move(self.config,directory/'config.json'))
+        before,_=self.managed_interpreters('3.14.7')
+        self.check()
+        # The configuration directory refuses the atomic replacement.
+        directory.chmod(0o500)
+        try: self.assertEqual(self.install()['status'],'complete')
+        finally: directory.chmod(0o700)
+        self.assertEqual(self.status()['phase'],'succeeded'); self.assertEqual(json.loads(self.config.read_text()),before)
+        self.assertIn('Interpreter path refresh: skipped after PermissionError',''.join(path.read_text() for path in self.state.glob('*.log')))
 
     def test_native_updater_claim_refuses_foreign_owner_and_never_removes_replacement(self):
         home=self.root/'native-home'; home.mkdir(mode=0o700)

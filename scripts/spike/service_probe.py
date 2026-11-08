@@ -18,7 +18,11 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 home = Path(tempfile.mkdtemp(prefix="agent-interface-service-probe-"))
 (home / ".agent-interface-isolated").write_text("agent-interface-disposable-spike")
-(home / "config.yaml").write_text("dashboard:\n  public_url: https://fixture.example.test\n")
+config = {"dashboard": {"public_url": "https://fixture.example.test"}}
+if browser := os.environ.get("AGENT_BROWSER_EXECUTABLE_PATH"):
+    # Current Hermes reads browser config; older revisions still read the env var.
+    config["browser"] = {"executable_path": browser}
+(home / "config.yaml").write_text(json.dumps(config))
 os.environ["HERMES_HOME"] = str(home)
 os.environ["HERMES_SKIP_UPDATE_CHECK"] = "1"
 # Set the complete process identity before any native web/gateway imports.
@@ -190,7 +194,7 @@ try:
         payload = {"action": "rpc", "source": source, "home": str(home), "origin": origin,
                    "key": key, "method": action, "operation": owner}
         result = subprocess.run([sys.executable, "-I", "-c", code], input=json.dumps(payload),
-            text=True, capture_output=True, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}, timeout=30)
+            text=True, capture_output=True, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}, timeout=30, check=False)
         if not success:
             assert result.returncode != 0, "An unauthorized installer maintenance request succeeded"
             return

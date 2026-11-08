@@ -1,13 +1,15 @@
 // @vitest-environment jsdom
 import { act, createElement } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Root } from "react-dom/client";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { UPDATE_CHECK_MS, useAppInstall } from "../src/app/use-browser";
 import { UpdateNotice } from "../src/app/UpdateNotice";
+import { mountRoot } from "./ui-harness";
 
 class Target extends EventTarget {}
 let container: HTMLDivElement, root: Root, reload: ReturnType<typeof vi.fn>;
-let worker: Target & { controller: object | null; register: ReturnType<typeof vi.fn> };
+let active: { postMessage: ReturnType<typeof vi.fn> };
+let worker: Target & { controller: object | null; register: ReturnType<typeof vi.fn>; ready: Promise<{ active: typeof active }> };
 let registration: Target & { waiting: { postMessage: ReturnType<typeof vi.fn> } | null; installing: (Target & { state: string }) | null; update: ReturnType<typeof vi.fn> };
 
 function Harness() {
@@ -21,24 +23,32 @@ const button = () => container.querySelector<HTMLButtonElement>(".app-update but
 
 beforeEach(() => {
   vi.useFakeTimers();
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubEnv("PROD", true);
   registration = Object.assign(new Target(), { waiting: null, installing: null, update: vi.fn(async () => undefined) });
-  worker = Object.assign(new Target(), { controller: {}, register: vi.fn(async () => registration) });
+  active = { postMessage: vi.fn() };
+  worker = Object.assign(new Target(), { controller: {}, register: vi.fn(async () => registration), ready: Promise.resolve({ active }) });
   vi.stubGlobal("navigator", { serviceWorker: worker });
   reload = vi.fn();
   vi.stubGlobal("location", { reload });
-  container = document.createElement("div");
-  root = createRoot(container);
-});
-afterEach(() => {
-  act(() => root.unmount());
-  vi.unstubAllEnvs();
-  vi.unstubAllGlobals();
-  vi.useRealTimers();
+  ({ container, root } = mountRoot());
 });
 
 describe("app update notice", () => {
+  it("asks the active worker to cache the lazy screens once the page is idle", async () => {
+    await render();
+    expect(active.postMessage).not.toHaveBeenCalled();
+    await act(async () => vi.advanceTimersByTimeAsync(2000));
+    expect(active.postMessage).toHaveBeenCalledExactlyOnceWith({ type: "WARM" });
+  });
+
+  it("does not ask once the page closes before it is idle", async () => {
+    await render();
+    await act(async () => vi.advanceTimersByTimeAsync(1000));
+    await act(async () => root.unmount());
+    await act(async () => vi.advanceTimersByTimeAsync(2000));
+    expect(active.postMessage).not.toHaveBeenCalled();
+  });
+
   it("shows a build already waiting and switches to it before reloading", async () => {
     registration.waiting = { postMessage: vi.fn() };
     await render();

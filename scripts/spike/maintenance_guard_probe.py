@@ -9,6 +9,7 @@ from pathlib import Path
 import sys
 import tempfile
 import threading
+import time
 import types
 
 from guard import MARKER, verify_home
@@ -216,6 +217,18 @@ def main():
             response = maintenance("acquire")
             assert "error" in response and not (home / "maintenance.json").exists(), response
             checks["queued_long_rpc_refuses_maintenance"] = True
+            # Polled add-on reads never wait for a native worker: this one answers while the
+            # only one is held, through the connection's transport, under its own reservation.
+            replies = []
+            class Replies:
+                def write(self, response): replies.append(response); return True
+            assert not {"agent-interface.open", "agent-interface.discover"} & server._LONG_HANDLERS
+            assert server.dispatch({"id": 5, "method": "agent-interface.discover", "params": {"cursor": "0"}}, Replies()) is None, "Polled add-on reads still run inline"
+            deadline = time.monotonic() + 10
+            while (not replies or retirement.active_count() > 2) and time.monotonic() < deadline:
+                time.sleep(0.05)
+            assert replies and "result" in replies[0] and retirement.active_count() == 2, replies
+            checks["polled_addon_reads_skip_the_native_pool"] = True
         finally:
             release.set(); server._pool.shutdown(wait=True); server._pool = native_pool
         assert queued.is_set() and retirement.active_count() == 0

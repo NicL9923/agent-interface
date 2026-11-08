@@ -75,9 +75,10 @@ final class AvatarPropTests: XCTestCase {
       XCTAssertEqual(pose.lift, lift, accuracy: 1e-9, "\(prop) lift at \(t)")
       XCTAssertEqual(pose.yaw, gazeX * 0.12, accuracy: 1e-9)
     }
+    // Without a granted boop the scale is breathing alone.
     let search = M.pose(.working, 0.7, reduce: false, prop: .search)
-    XCTAssertEqual(search.scaleX, 0.9917717535061659, accuracy: 1e-9)
-    XCTAssertEqual(search.scaleY, 1.0131271330972433, accuracy: 1e-9)
+    XCTAssertEqual(search.scaleX, 0.9922308129766316, accuracy: 1e-9)
+    XCTAssertEqual(search.scaleY, 1.0135960772908945, accuracy: 1e-9)
   }
 
   func testHeldPropReplacesTheSpinWithCalmMotion() {
@@ -122,8 +123,8 @@ final class AvatarPropTests: XCTestCase {
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     let avatars: [(String, AvatarConfig)] = [
       ("blob", AvatarConfig()),
-      ("fox", AvatarConfig(mode: "mascot", shape: nil, family: "fox", color: "#FF6700")),
-      ("triangle", AvatarConfig(shape: "triangle", color: "#292929", eyes: "visor")),
+      ("fox", AvatarConfig(mode: .mascot, shape: nil, family: .fox, color: "#FF6700")),
+      ("triangle", AvatarConfig(shape: .triangle, color: "#292929", eyes: .visor)),
     ]
     let size = 160.0
     let base = Date()
@@ -143,7 +144,7 @@ final class AvatarPropTests: XCTestCase {
                     frame: AvatarMotion.frame(
                       .entering(.working, at: base), at: base.addingTimeInterval(t), still: t == 0,
                       prop: prop, propSince: .distantPast),
-                    still: t == 0, body: AvatarGeometry.path(avatar.geometry),
+                    still: t == 0, body: AvatarGeometry.path(avatar.body),
                     bodyColor: Color(hex: avatar.color ?? "#1084FE")
                   ).draw(ctx)
                 }.frame(width: size * 1.4, height: size * 1.4)

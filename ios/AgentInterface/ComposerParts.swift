@@ -15,6 +15,11 @@ struct ComposerTextView: UIViewRepresentable {
   /// Return on a hardware keyboard. Shift-Return and the on-screen Return start a new line.
   var onReturn: () -> Void
   var onPasteImages: ([Data]) -> Void
+  /// Up or Down on a hardware keyboard. Returns true when it took the key, as prompt recall does.
+  var onArrow: (_ up: Bool) -> Bool = { _ in false }
+  /// A paste too long for the message, which becomes an attachment instead.
+  var onPasteLongText: (String) -> Void = { _ in }
+  var maximumLines = 6
 
   func makeUIView(context: Context) -> ComposerUITextView {
     let view = ComposerUITextView()
@@ -38,6 +43,8 @@ struct ComposerTextView: UIViewRepresentable {
     view.accessibilityHint = readOnly ? "Sending your message…" : nil
     view.onReturn = onReturn
     view.onPasteImages = onPasteImages
+    view.onArrow = onArrow
+    view.onPasteLongText = onPasteLongText
     // Only a change asked for here moves focus. An update still carrying the value from before
     // a tap must not take the keyboard away again.
     guard focused != context.coordinator.focused else { return }
@@ -48,12 +55,12 @@ struct ComposerTextView: UIViewRepresentable {
       DispatchQueue.main.async { view.resignFirstResponder() }
     }
   }
-  /// Two to six lines, like the web's growing text area; longer drafts scroll.
+  /// A single line at rest; multiline drafts grow until they need to scroll.
   func sizeThatFits(_ proposal: ProposedViewSize, uiView: ComposerUITextView, context: Context) -> CGSize? {
     guard let width = proposal.width, width > 0 else { return nil }
     let line = uiView.font?.lineHeight ?? 22
     let fitted = uiView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude)).height
-    return CGSize(width: width, height: min(max(fitted, line * 2), line * 6).rounded(.up))
+    return CGSize(width: width, height: min(max(fitted, line), line * CGFloat(maximumLines)).rounded(.up))
   }
   func makeCoordinator() -> Coordinator { Coordinator(self) }
   final class Coordinator: NSObject, UITextViewDelegate {
@@ -86,18 +93,32 @@ struct ComposerTextView: UIViewRepresentable {
 final class ComposerUITextView: UITextView {
   var onReturn: (() -> Void)?
   var onPasteImages: (([Data]) -> Void)?
+  var onArrow: ((Bool) -> Bool)?
+  var onPasteLongText: ((String) -> Void)?
   var readOnly = false
+  /// Arrows this view took, so their release never reaches the text view either.
+  private var takenArrows: Set<UIKeyboardHIDUsage> = []
   /// Presses come only from hardware keyboards, so the on-screen Return still starts a line.
   override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-    guard presses.count == 1, let key = presses.first?.key,
-      Self.sends(key.keyCode, key.modifierFlags, composing: markedTextRange != nil)
-    else { return super.pressesBegan(presses, with: event) }
-    onReturn?()
+    guard presses.count == 1, let key = presses.first?.key else { return super.pressesBegan(presses, with: event) }
+    if Self.sends(key.keyCode, key.modifierFlags, composing: markedTextRange != nil) { onReturn?(); return }
+    if let up = Self.recallArrow(key.keyCode, key.modifierFlags, composing: markedTextRange != nil), onArrow?(up) == true {
+      takenArrows.insert(key.keyCode)
+      return
+    }
+    super.pressesBegan(presses, with: event)
   }
   override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
     // The release of a Return that sent, so the text view never sees half a press.
     if presses.count == 1, let key = presses.first?.key, Self.sends(key.keyCode, key.modifierFlags, composing: markedTextRange != nil) { return }
+    if presses.count == 1, let key = presses.first?.key, takenArrows.remove(key.keyCode) != nil { return }
     super.pressesEnded(presses, with: event)
+  }
+  /// Plain Up or Down, which may recall an earlier message. Modified arrows select or jump, and
+  /// arrows while composing pick a candidate, so those stay the text view's.
+  static func recallArrow(_ key: UIKeyboardHIDUsage, _ modifiers: UIKeyModifierFlags, composing: Bool) -> Bool? {
+    guard !composing, modifiers.intersection([.shift, .alternate, .command, .control]).isEmpty else { return nil }
+    return key == .keyboardUpArrow ? true : key == .keyboardDownArrow ? false : nil
   }
   /// Return sends, as Enter does on the web. Shift-Return starts a line, and Return while text is
   /// still being composed, such as Japanese input, confirms it.
@@ -111,6 +132,9 @@ final class ComposerUITextView: UITextView {
     return super.canPerformAction(action, withSender: sender)
   }
   override func paste(_ sender: Any?) {
+    if !Self.pastedImagesOnly, let text = UIPasteboard.general.string, LargePaste.attaches(text), let onPasteLongText {
+      return onPasteLongText(text)
+    }
     guard Self.pastedImagesOnly else { return super.paste(sender) }
     let images = UIPasteboard.general.items.compactMap(Self.imageData)
     if !images.isEmpty { onPasteImages?(images) }
@@ -131,9 +155,9 @@ final class ComposerUITextView: UITextView {
 /// Uploaded attachments first, then files still on their way, in the order they were added.
 struct AttachmentTrayView: View {
   var botId: String
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   var body: some View {
-    let uploads = store.attachmentUploads.filter { $0.botId == botId }
+    let uploads = store.uploads.items.filter { $0.botId == botId }
     // A message on its way carries its files in the transcript.
     let files = store.selectedBotId == botId ? store.composerDraft.attachments : []
     if !uploads.isEmpty || !files.isEmpty {
@@ -162,7 +186,7 @@ private func attachmentMeta(name: String, mime: String, size: Int?) -> String {
 
 private struct DraftAttachmentChip: View {
   var file: FileRef
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @Environment(\.colorScheme) private var scheme
   var body: some View {
     HStack(spacing: 8) {
@@ -191,7 +215,7 @@ private struct DraftAttachmentChip: View {
 
 private struct UploadChip: View {
   var upload: AttachmentUpload
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @Environment(\.colorScheme) private var scheme
   var body: some View {
     let failed = upload.status == .failed
@@ -202,11 +226,11 @@ private struct UploadChip: View {
         Text(upload.caption).font(.caption2).foregroundStyle(failed ? Palette.danger : .secondary)
       }.frame(maxWidth: 160, alignment: .leading)
       if failed {
-        Button { Task { await store.retryUpload(upload.id) } } label: {
+        Button { Task { await store.uploads.retry(upload.id) } } label: {
           Label("Retry", systemImage: "arrow.clockwise")
         }.accessibilityLabel("Retry uploading \(upload.name)")
       }
-      Button { store.removeUpload(upload.id) } label: {
+      Button { store.uploads.remove(upload.id) } label: {
         Image(systemName: "xmark.circle.fill").frame(width: 32, height: 32)
       }.accessibilityLabel(failed ? "Remove \(upload.name)" : "Cancel uploading \(upload.name)")
     }.font(.caption).padding(6).background(Palette.user(scheme), in: RoundedRectangle(cornerRadius: 12))
@@ -246,11 +270,12 @@ private struct UploadRing: View {
 private struct AttachmentBadge: View {
   var name: String
   var mime: String
+  @ScaledMetric(relativeTo: .caption2) private var labelSize: CGFloat = 9
   var body: some View {
     VStack(spacing: 1) {
       Image(systemName: "doc").font(.body)
-      Text(UploadRules.kindLabel(name: name, mime: mime)).font(.system(size: 9, weight: .semibold))
-    }.frame(width: 40, height: 40).foregroundStyle(Palette.muted)
+      Text(UploadRules.kindLabel(name: name, mime: mime)).font(.system(size: labelSize, weight: .semibold))
+    }.frame(minWidth: 40, minHeight: 40).foregroundStyle(Palette.muted)
   }
 }
 

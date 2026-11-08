@@ -1,11 +1,14 @@
 // @vitest-environment jsdom
 import { act, createElement } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { beforeEach, afterEach, expect, it, vi } from "vitest";
+import type { Root } from "react-dom/client";
+import { beforeEach, expect, it, vi } from "vitest";
 import { VoiceControls } from "../src/components/VoiceControls.js";
+import { STOP_SPEECH } from "../src/shared/voice.js";
 import type { VoiceState } from "../src/shared/voice.js";
+import { mountRoot } from "./ui-harness";
+vi.mock("../src/components/Avatar", () => ({ Avatar: () => null }));
 const requestApi = vi.hoisted(() => vi.fn());
-vi.mock("../src/client-api.js", () => ({ api: requestApi }));
+vi.mock("../src/client-api.js", async () => (await import("./helpers/request-mock")).withRequest(await (() => ({ api: requestApi }))()));
 let container: HTMLDivElement, root: Root;
 let transcript: ReturnType<typeof vi.fn<(text: string) => void>>, state: ReturnType<typeof vi.fn<(state: VoiceState) => void>>;
 let stopped: ReturnType<typeof vi.fn>, getUserMedia: ReturnType<typeof vi.fn>;
@@ -26,18 +29,17 @@ class FakeAudio {
   constructor(public url: string) { players.push(this); }
 }
 beforeEach(() => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true); requestApi.mockReset(); recorders.length = 0; players.length = 0;
+requestApi.mockReset(); recorders.length = 0; players.length = 0;
   stopped = vi.fn(); getUserMedia = vi.fn(async () => ({ getTracks: () => [{ stop: stopped }] }));
   Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: { getUserMedia } });
   vi.stubGlobal("MediaRecorder", FakeRecorder); vi.stubGlobal("Audio", FakeAudio);
   Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn(() => "blob:voice-fixture") });
   Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
   vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, blob: async () => new Blob(["spoken reply"], { type: "audio/mpeg" }) })));
-  container = document.createElement("div"); document.body.append(container); root = createRoot(container);
+  ({ container, root } = mountRoot());
   transcript = vi.fn(); state = vi.fn();
 });
-afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
-async function render(disabled = false) { await act(async () => root.render(createElement(VoiceControls, { botId: "ranch", onTranscript: transcript, onStateChange: state, reply: { id: "reply", text: "Here is your list." }, disabled }))); }
+async function render(disabled = false) { await act(async () => root.render(createElement(VoiceControls, { botId: "ranch", onTranscript: transcript, onStateChange: state, disabled }))); }
 async function click(label: string) { const button = [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent?.startsWith(label))!; expect(button).toBeTruthy(); await act(async () => button.click()); }
 it("records only after a gesture, stops the microphone and adds a transcript for review", async () => {
   requestApi.mockResolvedValue({ text: "Pick up milk" }); await render(); expect(getUserMedia).not.toHaveBeenCalled();
@@ -68,15 +70,19 @@ it("reports silence without changing the draft, and explains unsupported recordi
   requestApi.mockResolvedValue({ text: "" }); await render(); await click("Record voice"); await click("Stop recording");
   expect(container.textContent).toContain("No speech detected"); expect(transcript).not.toHaveBeenCalled();
   Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: undefined }); await render();
-  expect(container.textContent).toContain("unavailable in this browser"); expect([...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Record voice")?.disabled).toBe(true);
+  expect(container.textContent).not.toContain("unavailable in this browser");
+  await click("Record voice");
+  expect(container.textContent).toContain("Recording needs a browser with microphone support");
+  expect(transcript).not.toHaveBeenCalled();
 });
-it("uses canonical server reply audio, reports speaking only during playback and stops it", async () => {
-  requestApi.mockResolvedValue({ url: "/api/voice/audio/01234567-0123-4123-8123-012345678901", mime: "audio/mpeg", expiresAt: "future" });
-  await render(); await click("Listen to reply");
-  expect(requestApi).toHaveBeenCalledWith("/bots/ranch/voice/speak", expect.objectContaining({ body: JSON.stringify({ messageId: "reply" }) }));
-  expect(fetch).toHaveBeenCalledWith("/api/voice/audio/01234567-0123-4123-8123-012345678901", expect.objectContaining({ credentials: "same-origin", redirect: "error" }));
-  expect(state).toHaveBeenLastCalledWith("speaking");
-  await click("Stop speaking"); expect(players[0]!.pause).toHaveBeenCalled(); expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:voice-fixture"); expect(state).toHaveBeenLastCalledWith("idle");
+it("stops any reply being read aloud when recording starts, so it never reaches the recording", async () => {
+  const stopSpeech = vi.fn(); window.addEventListener(STOP_SPEECH, stopSpeech);
+  await render(); await click("Record voice");
+  window.removeEventListener(STOP_SPEECH, stopSpeech);
+  expect(stopSpeech).toHaveBeenCalledOnce();
+});
+it("has no listen control: replies carry their own", async () => {
+  await render(); expect(container.querySelector('[aria-label="Listen to reply"]')).toBeNull();
 });
 it("aborts a pending transcription when controls become unavailable and ignores its result", async () => {
   let resolve!: (value: { text: string }) => void;

@@ -22,7 +22,9 @@ only. A rollback to such a Hermes leaves add-on receipts pinned to no native lea
 which native claims can never match, so the add-on still delivers each once.
 """
 import contextlib
+import json
 import logging
+import os
 import re
 import threading
 import time
@@ -33,6 +35,8 @@ CONSUMER = "agent-interface"
 # Pin for "the canonical Bot Chat the add-on opens", before the profile has one.
 UNOPENED = "agent-interface:canonical-bot-chat"
 POLL_SECONDS = 2.0
+# Native terminal receipt states, the same set Hermes's waiters treat as settled.
+_TERMINAL = frozenset({"settled", "failed", "cancelled", "ambiguous"})
 _OWNER_KEYS = ("profile_home", "session_id", "lease_id", "live_session_id")
 _BUSY = ("running", "_closing", "_finalized", "queued_prompt", "queued_prompts", "_auto_continue_scheduled")
 _MAILBOX_SEAMS = ("_root", "_locked", "_read", "_write", "_scan_read", "_next_sequence", "_delivery_id",
@@ -42,12 +46,108 @@ _CONSUMER_SERVER = ("_ensure_active_session_slot", "_session_turn_admission", "_
 log = logging.getLogger("agent_interface.bot_delivery")
 
 
+# The native file primitives every supported Hermes keeps for its mailbox directory.
+_FILE_PRIMITIVES = ("_root", "_locked", "_read", "_write", "_delivery_id")
+_SEQUENCE_FILE = ".sequence"
+
+
+def scan_ticket(mailbox, path):
+    """A delivery ticket from a directory scan, or None.
+
+    Hermes's Bot Chat keeps its admission receipts in the same directory in its own schema.
+    They are never runnable here, and the native ticket check reports each one as malformed,
+    which logged 55 warnings at every Hermes start. They are skipped before that check.
+    """
+    try:
+        record = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        record = None
+    if isinstance(record, dict) and "owner" not in record and ("principal_id" in record or "admission_id" in record):
+        return None
+    return mailbox._scan_read(path)
+
+
+def ensure_helpers(mailbox):
+    """Supply the mailbox helpers this add-on needs where Hermes no longer has them.
+
+    Hermes 74915d7 (v0.23) deleted ``has_mailbox``, ``_scan_read``, ``_next_sequence`` and
+    ``complete_delivery`` once its authority FIFO stopped reading the mailbox. The add-on's own
+    records still live there, in the native receipt format native waiters poll, so it keeps
+    those helpers itself, over the native file primitives and lock that remain. A Hermes that
+    still has them keeps its own.
+    """
+    if not all(callable(getattr(mailbox, name, None)) for name in _FILE_PRIMITIVES):
+        return
+    if not callable(getattr(mailbox, "has_mailbox", None)):
+        mailbox.has_mailbox = lambda profile_home: mailbox._root(profile_home).is_dir()
+    if not callable(getattr(mailbox, "_scan_read", None)):
+        def _scan_read(path):
+            # One unreadable or malformed ticket must not wedge a directory scan.
+            shape = getattr(mailbox, "_ticket_shape_error", None)
+            try:
+                record = mailbox._read(path)
+                problem = None if record is None or not callable(shape) else shape(path, record)
+            except (OSError, ValueError) as exc:
+                record, problem = None, str(exc)
+            if problem is not None:
+                log.debug("skipping unreadable delivery ticket %s (%s)", path.name, problem)
+                return None
+            return record
+        mailbox._scan_read = _scan_read
+    if not callable(getattr(mailbox, "_next_sequence", None)):
+        def _next_sequence(root):
+            # Called under the directory lock. The counter file outlives unreadable tickets,
+            # so a sequence is never handed out twice or lower.
+            counter = Path(root) / _SEQUENCE_FILE
+            try:
+                persisted = int(counter.read_text(encoding="utf-8-sig"))
+            except (OSError, ValueError):
+                persisted = 0
+            scanned = max((record.get("sequence", record["created_at"]) for candidate in Path(root).glob("*.json")
+                           if (record := scan_ticket(mailbox, candidate)) is not None), default=0)
+            sequence = max(persisted, scanned) + 1
+            temporary = counter.with_name(f"{_SEQUENCE_FILE}.{uuid.uuid4().hex}.tmp")
+            fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            try:
+                os.write(fd, str(sequence).encode())
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            os.replace(temporary, counter)
+            return sequence
+        mailbox._next_sequence = _next_sequence
+    if not callable(getattr(mailbox, "complete_delivery", None)):
+        def complete_delivery(profile_home, delivery_id, *, status, reply="", error="", reason=""):
+            # An immutable terminal receipt; a duplicate identical completion is safe.
+            key = mailbox._delivery_id(delivery_id)
+            terminal = getattr(mailbox, "_TERMINAL", _TERMINAL)
+            if status not in terminal:
+                raise ValueError("invalid terminal delivery status")
+            outcome = dict(status=status, reply=reply, error=error, reason=reason)
+            with mailbox._locked(profile_home) as root:
+                path = root / f"{key}.json"
+                record = mailbox._read(path)
+                if record is None:
+                    raise FileNotFoundError(f"delivery not found: {key}")
+                if record["status"] in terminal:
+                    if any(record.get(name) != value for name, value in outcome.items()):
+                        raise ValueError("delivery already has a different terminal receipt")
+                    return record
+                if record["status"] != "claimed":
+                    raise ValueError("delivery must be claimed before completion")
+                record.update(outcome, completed_at=time.time_ns())
+                mailbox._write(path, record)
+                return record
+        mailbox.complete_delivery = complete_delivery
+
+
 def bridge_required(mailbox, server=None):
     """Whether native delivery reaches only a gateway authority, never this add-on's chats.
 
     With ``server``, also require the dashboard's native consumer to agree. A Hermes
     with neither or both halves is a delivery design this add-on has not qualified.
     """
+    ensure_helpers(mailbox)
     authority = callable(getattr(mailbox, "authority_delivery", None))
     if server is not None and authority == callable(getattr(server, "_poll_bot_live_delivery_once", None)):
         raise RuntimeError("Native Bot Chat delivery seams require qualification")
@@ -158,7 +258,7 @@ def _pending(mailbox, root, stored, open_db, home, native_records=True):
     """Queued records this canonical session may run, oldest first."""
     found, tips = [], {}
     for path in root.glob("*.json"):
-        record = mailbox._scan_read(path)
+        record = scan_ticket(mailbox, path)
         if not runnable(record, native_records):
             continue
         pinned = record["owner"]["session_id"]
@@ -232,7 +332,7 @@ class Consumer:
         if self.idle.get(home) == stamp:
             return False
         for path in root.glob("*.json"):
-            if runnable(self.mailbox._scan_read(path), self.native_records):
+            if runnable(scan_ticket(self.mailbox, path), self.native_records):
                 return True
         self.idle[home] = stamp
         return False

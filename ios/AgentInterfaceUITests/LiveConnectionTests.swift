@@ -4,15 +4,14 @@ import XCTest
 // Requires the marked isolated Hermes browser fixture and its app server at :3004.
 // The ordinary test scheme never makes real server requests through this suite.
 #if LIVE_HERMES_UI_TESTS
-  final class LiveConnectionTests: XCTestCase {
+  @MainActor final class LiveConnectionTests: XCTestCase {
     func testRealHostSignInConversationAndConfiguration() throws {
       let app = XCUIApplication()
       app.launchEnvironment["AGENT_INTERFACE_UI_RESET"] = "1"
       app.launch()
       let address = app.textFields["serverAddress"]
       XCTAssertTrue(address.waitForExistence(timeout: 10))
-      address.tap()
-      address.typeText("http://127.0.0.1:3004")
+      address.typeWhenFocused("http://127.0.0.1:3004")
       app.buttons["connectServer"].tap()
       let signIn = app.buttons["householdSignIn"]
       XCTAssertTrue(signIn.waitForExistence(timeout: 15))
@@ -40,13 +39,14 @@ import XCTest
       let checkID = String(UUID().uuidString.prefix(8))
       let botName = "Native check \(checkID)"
       app.navigationBars.buttons.matching(identifier: "Your assistants").firstMatch.tap()
-      app.buttons["New assistant"].tap()
+      app.tapNewAssistant()
       let name = app.textFields["Name"]
       XCTAssertTrue(name.waitForExistence(timeout: 10))
-      name.tap()
-      name.typeText(botName)
-      let create = app.collectionViews.buttons["Create assistant"]
-      reveal(create, in: app, direction: .up)
+      name.typeWhenFocused(botName)
+      // Creation is two steps: name and look, then role and model.
+      app.buttons["creationNext"].tap()
+      let create = app.buttons["creationCreate"]
+      XCTAssertTrue(create.waitForExistence(timeout: 5))
       create.tap()
       let newBot = app.buttons.containing(.staticText, identifier: botName).firstMatch
       XCTAssertTrue(newBot.waitForExistence(timeout: 20))
@@ -55,13 +55,12 @@ import XCTest
         "Let's discuss your role."]
       XCTAssertTrue(welcome.waitForExistence(timeout: 15))
       XCTAssertTrue(
-        welcome.isHittable, "The empty welcome must be visible without manually scrolling.")
+        welcome.canTap, "The empty welcome must be visible without manually scrolling.")
       capture(app, "Empty canonical conversation after switching from a long chat")
       let heading = app.staticTexts["A quieter start to the day"]
       XCTAssertFalse(heading.exists, "The test must start with an empty canonical conversation.")
       let prompt = "Native iOS connection check \(checkID). Show a markdown formatting example."
-      composer.tap()
-      composer.typeText(prompt)
+      composer.typeWhenFocused(prompt)
       app.buttons["sendMessage"].tap()
       XCTAssertTrue(app.staticTexts[prompt].waitForExistence(timeout: 20))
       // The final paragraph proves the current canonical response is complete.
@@ -73,18 +72,17 @@ import XCTest
         app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "unreadable response"))
           .firstMatch.exists)
       reveal(heading, in: app, direction: .down)
-      XCTAssertTrue(heading.isHittable)
+      XCTAssertTrue(heading.canTap)
       capture(app, "Current canonical reply, opening and task list")
       reveal(finalParagraph, in: app, direction: .up)
-      XCTAssertTrue(finalParagraph.isHittable)
+      XCTAssertTrue(finalParagraph.canTap)
       capture(app, "Current canonical reply, table and code")
 
-      let configure = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Configure "))
-        .firstMatch
-      configure.tap()
-      XCTAssertTrue(app.textFields["Name"].waitForExistence(timeout: 10))
-      app.buttons["settingsMore"].tap()
-      app.buttons["Tools"].tap()
+      app.buttons["botProfile"].tap()
+      XCTAssertTrue(app.buttons["profileSettings"].waitForExistence(timeout: 10))
+      app.buttons["profileSettings"].tap()
+      XCTAssertTrue(app.collectionViews["settingsSections"].waitForExistence(timeout: 10))
+      app.selectSettingsTab("Behavior")
       // The full Hermes catalog extends beyond the viewport. Its first switch
       // proves the catalog loaded without relying on a lazily rendered footer.
       let firstTool = app.switches.firstMatch
@@ -95,9 +93,9 @@ import XCTest
         XCTWaiter.wait(for: [loaded], timeout: 20), .completed,
         "The real Hermes tool catalog must finish loading.")
       capture(app, "Native configuration with the real Hermes tool catalog")
-      app.buttons["Avatar"].tap()
-      capture(app, "Native avatar configuration")
-      app.buttons["Details"].tap()
+      app.selectSettingsTab("Profile")
+      XCTAssertTrue(app.textFields["Name"].waitForExistence(timeout: 10))
+      capture(app, "Native profile and avatar configuration")
       reveal(app.buttons["Delete assistant"], in: app, direction: .up)
       app.buttons["Delete assistant"].tap()
       let deletion = app.buttons.matching(identifier: "Delete assistant")
@@ -108,7 +106,7 @@ import XCTest
       let back = app.navigationBars.buttons.matching(identifier: "Your assistants").firstMatch
       if back.exists { back.tap() }
       XCTAssertTrue(
-        app.buttons["New assistant"].waitForExistence(timeout: 20),
+        app.newAssistantReady(timeout: 20),
         "Remove the test-owned assistant after capture.")
       XCTAssertFalse(newBot.exists)
     }
@@ -117,11 +115,11 @@ import XCTest
 
     private func reveal(_ element: XCUIElement, in app: XCUIApplication, direction: Direction) {
       for _ in 0..<8 {
-        if element.exists && element.isHittable { return }
+        if element.exists && element.canTap { return }
         if direction == .up { app.swipeUp() } else { app.swipeDown() }
       }
       XCTAssertTrue(
-        element.exists && element.isHittable,
+        element.exists && element.canTap,
         "The expected current reply or control must be visible.")
     }
 

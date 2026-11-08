@@ -1,16 +1,17 @@
+import { botFixture, conversationFixture } from "./helpers/runtime-fixtures.js";
 import Fastify from "fastify";
 import cookie from "@fastify/cookie";
 import multipart from "@fastify/multipart";
-import { randomBytes } from "node:crypto";
 import { afterEach, expect, it, vi } from "vitest";
-import { z } from "zod";
-import { installAuth, hash } from "../src/server/auth.js";
+import { installAuth } from "../src/server/auth.js";
 import { Store } from "../src/server/store.js";
 import { loadConfig } from "../src/server/config.js";
 import { registerVoiceRoutes } from "../src/server/voice.js";
 import { MAX_VOICE_BYTES } from "../src/shared/voice.js";
 import { redactAgents, Roster } from "../src/server/bot-access.js";
-import type { Message, Runtime } from "../src/shared/types.js";
+import type { Conversation } from "../src/shared/types.js";
+import { fakeRuntime, signIn } from "./helpers/server.js";
+import { errorHandler } from "../src/server/http-error.js";
 
 const origin = "https://voice.example.invalid";
 const apps: ReturnType<typeof Fastify>[] = [];
@@ -22,23 +23,17 @@ async function setup() {
   const config = loadConfig({ NODE_ENV: "production", APP_ORIGIN: origin, APP_DATABASE: ":memory:", GOOGLE_CLIENT_ID: "fixture", HOUSEHOLD_EMAILS: "first@example.invalid,second@example.invalid" });
   await app.register(cookie); await app.register(multipart);
   await installAuth(app, store, config);
-  app.setErrorHandler((error, _req, reply) => reply.code(error instanceof z.ZodError ? 400 : (error as { statusCode?: number }).statusCode ?? 502).send({ error: (error as Error).message }));
+  app.setErrorHandler(errorHandler({ production: true }));
   const transcribeVoice = vi.fn(async () => ({ text: " Pick up milk ", provider: "fixture" }));
   const synthesizeVoice = vi.fn(async () => ({ data: Buffer.from("fixture audio"), mime: "audio/mpeg" }));
-  const conversation = vi.fn<() => Promise<{ messages: Message[] }>>(async () => ({ messages: [{ id: "reply", role: "assistant", text: "The list is ready." }, { id: "user", role: "user", text: "secret user text" }, { id: "ranch-inflight", role: "assistant", text: "Unfinished thought" }] }));
-  const listBots = vi.fn(async () => [{ id: "ranch" }]);
-  const runtime = { transcribeVoice, synthesizeVoice, conversation, listBots } as unknown as Runtime;
+  const conversation = vi.fn<() => Promise<Conversation>>(async () => conversationFixture({ botId: "ranch", messages: [{ id: "reply", role: "assistant", text: "The list is ready." }, { id: "user", role: "user", text: "secret user text" }, { id: "ranch-inflight", role: "assistant", text: "Unfinished thought" }] }));
+  const listBots = vi.fn(async () => [botFixture({ id: "ranch" })]);
+  const runtime = fakeRuntime({ transcribeVoice, synthesizeVoice, conversation, listBots });
   const hidden = new Set<string>();
   const roster = new Roster(runtime, store);
   await registerVoiceRoutes(app, runtime, { now: () => clock, visible: botId => !hidden.has(botId), redact: async (message,userId) => (await redactAgents(store,roster,userId)).message(message) });
-  const login = (id: string) => {
-    store.user({ id, name: id, email: `${id}@example.invalid` });
-    const token = randomBytes(32).toString("hex"), csrf = randomBytes(32).toString("hex");
-    store.session(hash(token), id, csrf, clock + 600000);
-    return { origin, cookie: `session=${token}`, "x-csrf-token": csrf };
-  };
   app.addHook("onClose", async () => store.close());
-  return { app, store, runtime, hidden, transcribeVoice, synthesizeVoice, conversation, listBots, first: login("first"), second: login("second"), advance: (ms: number) => { clock += ms; } };
+  return { app, store, runtime, hidden, transcribeVoice, synthesizeVoice, conversation, listBots, first: signIn(store, origin, "first", { now: clock }), second: signIn(store, origin, "second", { now: clock }), advance: (ms: number) => { clock += ms; } };
 }
 function recording(mime = "audio/webm", data = Buffer.from("fixture recording")) {
   const boundary = "voice-fixture";
@@ -118,7 +113,7 @@ it("refuses cached speech once its assistant becomes another member's private on
 
 it("refuses internal replies instead of sending their text to speech", async () => {
   const s=await setup();
-  s.conversation.mockResolvedValue({messages:[{id:'internal',role:'assistant',text:'Internal bot reply',origin:{kind:'agent',visibility:'activity'}}]});
+  s.conversation.mockResolvedValue(conversationFixture({messages:[{id:'internal',role:'assistant',text:'Internal bot reply',origin:{kind:'agent',visibility:'activity'}}]}));
   expect((await s.app.inject({method:'POST',url:'/api/bots/ranch/voice/speak',headers:s.first,payload:{messageId:'internal'}})).statusCode).toBe(404);
   expect(s.synthesizeVoice).not.toHaveBeenCalled();
 });
@@ -127,14 +122,23 @@ it("rechecks message visibility before returning cached speech",async()=>{
   const s=await setup();
   const response=await s.app.inject({method:'POST',url:'/api/bots/ranch/voice/speak',headers:s.first,payload:{messageId:'reply'}});
   expect(response.statusCode).toBe(200);
-  s.conversation.mockResolvedValue({messages:[{id:'reply',role:'assistant',text:'Private bot output',origin:{kind:'agent',visibility:'activity'}}]});
+  s.conversation.mockResolvedValue(conversationFixture({messages:[{id:'reply',role:'assistant',text:'Private bot output',origin:{kind:'agent',visibility:'activity'}}]}));
   expect((await s.app.inject({url:response.json().url,headers:{cookie:s.first.cookie}})).statusCode).toBe(404);
 });
 
 it("redacts a private bot source before sending a shared-chat reply to speech",async()=>{
   const s=await setup();
   s.store.savePresentation('private',{shared:false,ownerId:'second'});
-  s.conversation.mockResolvedValue({messages:[{id:'private-reply',role:'assistant',text:'Private canary',origin:{kind:'agent',visibility:'conversation',handle:'private'}}]});
+  s.conversation.mockResolvedValue(conversationFixture({messages:[{id:'private-reply',role:'assistant',text:'Private canary',origin:{kind:'agent',visibility:'conversation',handle:'private'}}]}));
   expect((await s.app.inject({method:'POST',url:'/api/bots/ranch/voice/speak',headers:s.first,payload:{messageId:'private-reply'}})).statusCode).toBe(404);
   expect(s.synthesizeVoice).not.toHaveBeenCalled();
+});
+
+it("speaks any completed reply in the conversation, not only the latest", async () => {
+  const s = await setup();
+  s.conversation.mockResolvedValue(conversationFixture({ botId: "ranch", messages: [
+    { id: "first", role: "assistant", text: "The first answer." }, { id: "q", role: "user", text: "And then?" }, { id: "latest", role: "assistant", text: "The latest answer." }] }));
+  const response = await s.app.inject({ method: "POST", url: "/api/bots/ranch/voice/speak", headers: s.first, payload: { messageId: "first" } });
+  expect(response.statusCode).toBe(200);
+  expect(s.synthesizeVoice).toHaveBeenCalledExactlyOnceWith("ranch", "The first answer.");
 });

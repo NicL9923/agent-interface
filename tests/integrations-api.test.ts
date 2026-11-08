@@ -1,11 +1,11 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { randomBytes } from "node:crypto";
 import { createApp } from "../src/server/app.js";
 import { hash } from "../src/server/auth.js";
 import { loadConfig } from "../src/server/config.js";
 import { HermesUpgrades } from "../src/server/upgrades.js";
-import type { Runtime } from "../src/shared/types.js";
 import type { IntegrationRequest } from "../src/shared/integrations.js";
+import { fakeRuntime, signIn } from "./helpers/server.js";
 
 const origin = "https://app.example.invalid";
 const apps: Awaited<ReturnType<typeof createApp>>["app"][] = [];
@@ -17,17 +17,11 @@ async function setup() {
   // Only the app's authenticated boundary is under test. Native behavior has its own probe.
   const integrationRequest = vi.fn(async (request: IntegrationRequest) => request.operation === "list"
     ? { profile: request.profile, connections: [], canManage: true }
-    : { kind: "connected", status: "approved", message: "Fixture operation completed" });
-  const runtime = { integrationRequest, close: async () => {} } as unknown as Runtime;
+    : { kind: "connected" as const, status: "approved" as const, message: "Fixture operation completed" });
+  const runtime = fakeRuntime({ integrationRequest, close: async () => {} });
   const upgrades = new HermesUpgrades(config, runtime);
   const result = await createApp(config, runtime, { background: false, upgrades }); apps.push(result.app);
-  const login = (id: string) => {
-    result.store.user({ id, name: id, email: `${id}@example.invalid` });
-    const token = randomBytes(32).toString("hex"), csrf = randomBytes(32).toString("hex");
-    result.store.session(hash(token), id, csrf, Date.now() + 60000);
-    return { origin, cookie: `session=${token}`, "x-csrf-token": csrf };
-  };
-  return { ...result, runtime, integrationRequest, upgrades, admin: login("admin"), member: login("member") };
+  return { ...result, runtime, integrationRequest, upgrades, admin: signIn(result.store, origin, "admin"), member: signIn(result.store, origin, "member") };
 }
 
 it("lets members inspect and check their profile, but reserves connection changes for administrators", async () => {
@@ -88,4 +82,63 @@ it("explains a missing integration add-on without attempting a connection change
   expect(response.statusCode).toBe(409);
   expect(response.json().error).toContain("installed Hermes add-on");
   expect(s.integrationRequest).not.toHaveBeenCalled();
+});
+
+describe("assistant connection requests", () => {
+  async function setupRequests(status: "not_connected" | "configured" = "not_connected") {
+    const config = loadConfig({ NODE_ENV: "production", APP_ORIGIN: origin, APP_DATABASE: ":memory:", GOOGLE_CLIENT_ID: "fixture-client",
+      HOUSEHOLD_EMAILS: "admin@example.invalid,member@example.invalid", HERMES_INTEGRATION_ADMINS: "admin@example.invalid" });
+    const integrationRequest = vi.fn(async (request: IntegrationRequest) => ({ profile: request.profile, canManage: true,
+      connections: [{ id: "key:brave", name: "Brave Search", status }] }) as never);
+    const connectionRequest = vi.fn(async () => ({ status: "ok" as const }));
+    const runtime = fakeRuntime({ integrationRequest, connectionRequest, close: async () => {},
+      listBots: async () => [{ id: "ranch", name: "Ranch hand", shared: true, model: "test", activity: "idle" }] });
+    const upgrades = new HermesUpgrades(config, runtime);
+    const result = await createApp(config, runtime, { background: false, upgrades }); apps.push(result.app);
+    return { ...result, integrationRequest, connectionRequest, member: signIn(result.store, origin, "member") };
+  }
+  const body = (decision: string, extra: Record<string, unknown> = {}) => ({ decision, epoch: "epoch", sessionId: "session", connection: "key:brave", ...extra });
+  const url = "/api/bots/ranch/connection-requests/srq-conn";
+
+  it("lets any member decline, and forwards the binding Hermes checks", async () => {
+    const s = await setupRequests();
+    const response = await s.app.inject({ method: "POST", url, headers: s.member, payload: body("decline") });
+    expect([response.statusCode, response.json()]).toEqual([200, { status: "ok" }]);
+    expect(s.connectionRequest).toHaveBeenCalledExactlyOnceWith({ ...body("decline"), profile: "ranch", requestId: "srq-conn" });
+    expect(s.integrationRequest).not.toHaveBeenCalled();
+  });
+
+  it("continues only once the catalog reads the connection as set up", async () => {
+    const waiting = await setupRequests("not_connected");
+    const refused = await waiting.app.inject({ method: "POST", url, headers: waiting.member, payload: body("connected") });
+    expect([refused.statusCode, refused.json().error]).toEqual([409, "Brave Search isn't set up yet. Finish connecting it, then press Continue."]);
+    expect(waiting.connectionRequest).not.toHaveBeenCalled();
+    const unknown = await waiting.app.inject({ method: "POST", url, headers: waiting.member, payload: body("connected", { connection: "github" }) });
+    expect(unknown.statusCode).toBe(409);
+    const ready = await setupRequests("configured");
+    expect((await ready.app.inject({ method: "POST", url, headers: ready.member, payload: body("connected") })).statusCode).toBe(200);
+    expect(ready.integrationRequest).toHaveBeenCalledWith({ operation: "list", profile: "ranch" });
+    expect(ready.connectionRequest).toHaveBeenCalledOnce();
+  });
+
+  it("refuses connections an assistant may not ask for and unknown assistants before Hermes", async () => {
+    const s = await setupRequests("configured");
+    for (const payload of [body("connected", { connection: "apple" }), body("take"), { ...body("decline"), extra: true }])
+      expect((await s.app.inject({ method: "POST", url, headers: s.member, payload })).statusCode).toBe(400);
+    expect((await s.app.inject({ method: "POST", url: "/api/bots/elsewhere/connection-requests/srq-conn", headers: s.member, payload: body("decline") })).statusCode).toBe(404);
+    expect(s.connectionRequest).not.toHaveBeenCalled();
+  });
+
+  it("matches the Hermes add-on's method and requestable IDs, and keeps the ask open", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const { connectionRequestMethod, requestableConnectionId } = await import("../src/shared/integrations.js");
+    const source = await readFile(new URL("../src/hermes/integrations.py", import.meta.url), "utf8");
+    expect(source).toContain(`CONNECTION_REQUEST = "${connectionRequestMethod}"`);
+    expect(source).toContain(`REQUESTABLE = re.compile(r"${requestableConnectionId.source.slice(1, -1)}")`);
+    expect(await readFile(new URL("../src/hermes/vault.py", import.meta.url), "utf8")).toContain(`CONNECTION_REQUEST = "${connectionRequestMethod}"`);
+    const { applyFrame, emptyLiveState } = await import("../src/server/hermes-mapping.js");
+    const state = emptyLiveState();
+    expect(applyFrame(state, { jsonrpc: "2.0", id: "srq-conn", method: connectionRequestMethod, params: { session_id: "s", connection: "github", reason: "r" } }, 1)).toBe(true);
+    expect(state.state).toBe("blocked");
+  });
 });

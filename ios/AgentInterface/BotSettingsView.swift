@@ -1,173 +1,593 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// The five parts of an assistant's settings, in the order the sheet lists them.
+enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
+  case profile, behavior, access, automation, memory
+  var id: String { rawValue }
+  var label: String {
+    switch self {
+    case .profile: "Profile"
+    case .behavior: "Behavior"
+    case .access: "Access"
+    case .automation: "Automation"
+    case .memory: "Memory & learning"
+    }
+  }
+  var systemImage: String {
+    switch self {
+    case .profile: "person.crop.circle"
+    case .behavior: "slider.horizontal.3"
+    case .access: "key"
+    case .automation: "clock.arrow.circlepath"
+    case .memory: "brain"
+    }
+  }
+  /// The one-line summary under each section in the settings list.
+  func summary(shared: Bool, modelName: String) -> String {
+    switch self {
+    case .profile: shared ? "Shared with your household" : "Personal"
+    case .behavior: modelName
+    case .access: "Connections and logins"
+    case .automation: "Routines, goals, tasks and triggers"
+    case .memory: "What it remembers and learns"
+    }
+  }
+}
+
+/// A page in the settings stack: one section, or a full list that a section opens.
+enum SettingsRoute: Hashable {
+  case section(SettingsSection)
+  case connections, logins, work, memory, learning
+  var title: String {
+    switch self {
+    case .section(let section): section.label
+    case .connections: "Connections"
+    case .logins: "Logins"
+    case .work: "Work"
+    case .memory: "Memory"
+    case .learning: "Learning"
+    }
+  }
+  /// The pages that show `name`, a section or the name of a former tab, for direct captures.
+  static func path(for name: String) -> [SettingsRoute]? {
+    switch name.lowercased() {
+    case "profile", "details", "avatar": [.section(.profile)]
+    case "behavior", "tools", "skills": [.section(.behavior)]
+    case "access": [.section(.access)]
+    case "connections": [.section(.access), .connections]
+    case "logins": [.section(.access), .logins]
+    case "automation", "routines": [.section(.automation)]
+    case "work": [.section(.automation), .work]
+    case "memory & learning", "memoryandlearning": [.section(.memory)]
+    case "memory": [.section(.memory), .memory]
+    case "learning": [.section(.memory), .learning]
+    default: nil
+    }
+  }
+}
+
+/// The MCP server switches: every server the profile has, plus any enabled one it no longer lists.
+enum McpServerChoices {
+  static func names(available: [String], enabled: [String]) -> [String] {
+    Array(Set(available).union(enabled)).sorted()
+  }
+  /// Turning one server on or off keeps the others where they were.
+  static func toggled(_ enabled: [String], _ name: String, on: Bool) -> [String] {
+    on ? (enabled.contains(name) ? enabled : enabled + [name]) : enabled.filter { $0 != name }
+  }
+}
+
+/// What one Save changes says when it finishes. Only the assistant's own fields mention sharing.
+func settingsSavedNotice(patched: Bool, shared: Bool) -> String {
+  guard patched else { return "Saved" }
+  return shared ? "Changes saved for both household members." : "Assistant saved."
+}
+
 struct BotSettingsView: View {
-  var bot: Bot?
-  var close: (() -> Void)? = nil
-  @EnvironmentObject private var store: AppStore
+  private let initialBot: Bot?
+  var close: (() -> Void)?
+  init(bot: Bot?, close: (() -> Void)? = nil) {
+    initialBot = bot
+    self.close = close
+    #if DEBUG
+    if let tab = DebugFixtures.captureSettingsTab, let route = SettingsRoute.path(for: tab) { _path = State(initialValue: route) }
+    #endif
+  }
+  /// Set when creation succeeded but the avatar did not save, turning the sheet into that
+  /// assistant's settings so the chosen look can be retried instead of lost.
+  @State private var createdBot: Bot?
+  /// The assistant being edited: the one opened, or the one this sheet just created.
+  private var bot: Bot? { initialBot ?? createdBot }
+  private var savedName: String { savedForm.name.isEmpty ? bot?.name ?? "New assistant" : savedForm.name }
+  @State private var creationStep = CreationStep.look
+  @State private var avatarFailure: String?
+  @Environment(AppStore.self) private var store
   @Environment(\.dismiss) private var dismiss
+  @Environment(\.colorScheme) private var scheme
   @State private var form = BotInput()
   @State private var savedForm = BotInput()
   @State private var savedAvatar = AvatarConfig()
-  @State private var savedCapabilities: [String: Set<String>] = [:]
-  @State private var discardConfirm = false
+  @State private var savedCapabilities: [CatalogKind: Set<String>] = [:]
+  @State private var confirmation: SettingsConfirmation?
+  @State private var acceptedConfirmation: SettingsConfirmation?
   @State private var initialized = false
   @State private var detailLoaded = false
+  /// Why the assistant's settings didn't load. Page messages clear on navigation; this stays until Retry.
+  @State private var detailError: String?
   @State private var avatar = AvatarConfig()
   @State private var lastDrawn = AvatarConfig()
   @State private var lastPortrait: AvatarConfig?
   @State private var previewState: ActivityState = .idle
-  @State private var tab = "Details"
+  @State private var path: [SettingsRoute] = []
+  /// A page change normally clears the last message; creation's avatar failure keeps its own.
+  @State private var keepMessages = false
+  @State private var memoryDirty = false
+  @State private var memorySaving = false
   @State private var tools: [CapabilityItem] = []
   @State private var skills: [CapabilityItem] = []
   @State private var routines: [Routine] = []
   @State private var busy = false
   @State private var error: String?
   @State private var notice: String?
-  @State private var confirmModel = false
-  @State private var confirmPersonal = false
   @State private var personalConfirmed = false
-  @State private var deleteConfirm = false
   @State private var portraitImport = false
+  @FocusState private var portraitPromptFocused: Bool
+  @FocusState private var nameFocused: Bool
+  /// Raised when a save needs the name, so the Name field takes focus once Profile shows it.
+  @State private var focusNameRequest = 0
   @State private var portraitPrompt = ""
+  @State private var portraitOperation: String?
   @State private var editingRoutine: Routine?
   @State private var addingRoutine = false
-  @State private var mcpText = ""
+  @State private var availableMcpServers: [String] = []
   @State private var templates: [RoutineTemplate] = []
   @State private var deletingRoutine: Routine?
-  @State private var catalogReady: Set<String> = []
-  @State private var catalogLoading: Set<String> = []
-  @State private var loadId = UUID()
+  @State private var catalogReady: Set<CatalogKind> = []
+  @State private var catalogLoading: Set<CatalogKind> = []
+  /// Hermes's installed skills, for the lock and read actions on Behavior's skill rows.
+  @State private var skillControl: HermesAutomationControls?
+  @State private var readingSkill: HermesInstalledSkill?
   @State private var progress = SaveProgress()
-  let tabs = ["Details", "Avatar", "Connections", "Tools", "Skills", "Routines", "Memory", "Logins"]
-  // Split out of body so the type checker stays fast on slower CI machines.
-  private var tabBar: some View {
-    HStack(spacing: 8) {
-      ForEach(tabs.prefix(2), id: \.self) { title in
-        Button(title) { selectTab(title) }.buttonStyle(.bordered).tint(
-          tab == title ? Palette.accent : .secondary).frame(minHeight: 44)
-      }
-      Spacer(minLength: 0)
-      Menu {
-        ForEach(tabs.dropFirst(2), id: \.self) { title in
-          Button {
-            selectTab(title)
-          } label: {
-            if tab == title { Label(title, systemImage: "checkmark") }
-            else { Text(title) }
-          }
-        }
-      } label: {
-        Label(tabs.prefix(2).contains(tab) ? "More" : tab, systemImage: "chevron.down")
-          .font(.subheadline).lineLimit(1).padding(.horizontal, 10).frame(minHeight: 44)
-      }.tint(tabs.prefix(2).contains(tab) ? .secondary : Palette.accent)
-        .accessibilityLabel("More settings")
-        .accessibilityValue(tabs.prefix(2).contains(tab) ? "" : tab)
-        .accessibilityIdentifier("settingsMore")
-    }.font(.subheadline).padding(.horizontal).padding(.vertical, 6)
-  }
-  @ViewBuilder private var tabContent: some View {
-    if let error {
-      ErrorBanner(message: error, dismiss: { self.error = nil }).padding(.horizontal)
-    }
-    if let notice { Text(notice).font(.footnote).foregroundStyle(Palette.accent).padding(10) }
-    if tab == "Connections" {
-      if let bot { IntegrationsView(botId: bot.id) }
-      else { Text("Create the assistant before connecting its services.").padding(); Spacer() }
-    } else if tab == "Logins" {
-      if let bot { VaultView(botId: bot.id) } else { Text("Create the assistant before managing its Hermes logins.").padding(); Spacer() }
-    } else if tab == "Memory" {
-      if let bot { MemoryDrawer(botId: bot.id) } else { Text("Create the assistant before viewing its Hermes memory.").padding(); Spacer() }
-    } else { Form {
-      switch tab {
-      case "Details": details
-      case "Avatar": avatarEditor
-      case "Tools": capabilities("tools")
-      case "Skills": capabilities("skills")
-      default: routineList
-      }
-    }.householdListBackground().disabled(busy || (bot != nil && !detailLoaded)) }
-  }
+  private var advanced: Bool { store.bootstrap?.preferences.presentation == "advanced" }
+
   var body: some View {
-    NavigationStack { routinePresentations(editor) }
+    routinePresentations(NavigationStack(path: $path) {
+      editor.navigationDestination(for: SettingsRoute.self) { destination($0) }
+    })
+    .task { await loadDetail() }
+    .onChange(of: path) { _, _ in
+      // A message belongs to the screen that produced it, so it does not follow you to another page.
+      if keepMessages { keepMessages = false } else { error = nil; notice = nil }
+    }
+    .interactiveDismissDisabled(dirty || busy || memorySaving)
+    .onChange(of: avatar) { _, value in
+      if value.mode != .portrait {
+        lastDrawn = value
+      } else if !(value.src ?? "").isEmpty {
+        lastPortrait = value
+      }
+    }
+    .sheet(item: $confirmation, onDismiss: performConfirmation) { item in
+      AssistantConfirmationSheet(title: item.title, message: item.message,
+        acceptLabel: item.acceptLabel, keepLabel: item.keepLabel, destructive: item.destructive,
+        accept: { acceptedConfirmation = item; confirmation = nil },
+        keep: { confirmation = nil })
+    }
+    .fileImporter(
+      isPresented: $portraitImport, allowedContentTypes: [.png, .jpeg, .webP],
+      allowsMultipleSelection: false
+    ) { result in
+      switch result {
+      case .success(let urls): if let url = urls.first { uploadPortrait(url) }
+      case .failure(let error): self.error = error.localizedDescription
+      }
+    }
   }
-  /// A message belongs to the screen that produced it, so it does not follow you to another tab.
-  private func selectTab(_ title: String) {
-    tab = title
-    error = nil
-    notice = nil
+  enum CreationStep { case look, role }
+  /// Creation is two short steps in one sheet: name and look, then role and model. Sections that
+  /// need an existing assistant stay hidden until it exists.
+  @ViewBuilder private var creationContent: some View {
+    if let error { ErrorBanner(message: error, dismiss: { self.error = nil }).padding(.horizontal) }
+    Form {
+      creationHeader
+      Section { unavailable(.botConfiguration) }
+      if creationStep == .look {
+        nameSection
+        avatarPreview
+        avatarControls
+        Section {
+          Button { creationStep = .role } label: {
+            Text("Next: role and model").frame(maxWidth: .infinity, minHeight: 44)
+          }.buttonStyle(.accentProminent).disabled(!nameReady)
+            .accessibilityIdentifier("creationNextBottom")
+        } footer: { if !nameReady { Text("Name the assistant to continue.").foregroundStyle(Palette.muted) } }
+          .listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+      } else {
+        roleSections
+        Section {
+          Button { saveBot() } label: {
+            Text(progress.label("details", idle: "Create assistant")).frame(maxWidth: .infinity, minHeight: 44)
+          }.buttonStyle(.accentProminent).disabled(!canSave)
+        }.listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+      }
+    }.id(creationStep) // Each step opens at its top, not at the last step's scroll position.
+      .householdListBackground().disabled(busy).accessibilityIdentifier("assistantCreationForm")
+  }
+  private var creationHeader: some View {
+    Section {
+      VStack(alignment: .leading, spacing: 2) {
+        Text(creationStep == .look ? "Step 1 of 2" : "Step 2 of 2").font(.subheadline).foregroundStyle(Palette.muted)
+        Text(creationStep == .look ? "Name and look" : "Role and model").font(.title3.bold())
+          .accessibilityAddTraits(.isHeader)
+      }.accessibilityElement(children: .combine).accessibilityIdentifier("creationStep")
+    }.listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 4, bottom: 0, trailing: 4))
+  }
+  private var closeButton: some View {
+    Button("Close") { if dirty { confirmation = .discard } else { closeSheet() } }.disabled(busy || memorySaving)
+  }
+  @ToolbarContentBuilder private var editorToolbar: some ToolbarContent {
+    ToolbarItem(placement: .cancellationAction) {
+      if bot == nil && creationStep == .role {
+        Button { creationStep = .look } label: { Label("Back", systemImage: "chevron.backward").labelStyle(.titleAndIcon) }
+          .disabled(busy).accessibilityIdentifier("creationBack")
+      } else {
+        closeButton
+      }
+    }
+    if bot == nil {
+      ToolbarItem(placement: .confirmationAction) {
+        if creationStep == .look {
+          Button("Next") { creationStep = .role }.disabled(!nameReady).accessibilityIdentifier("creationNext")
+        } else {
+          Button(progress.label("details", idle: "Create")) { saveBot() }.disabled(busy || !canSave)
+            .accessibilityIdentifier("creationCreate")
+        }
+      }
+    } else {
+      // The list's own title reads "All settings" so each page's back button does; the bar shows the name.
+      ToolbarItem(placement: .principal) {
+        Text(savedName).font(.headline).lineLimit(1).accessibilityAddTraits(.isHeader)
+      }
+    }
   }
   private var editor: some View {
-    VStack(spacing: 0) {
-      tabBar
-      if bot != nil && !detailLoaded {
-        if let error { ErrorBanner(message: error); Button("Retry settings") { Task { await loadTab() } } }
-        else { ProgressView("Loading assistant settings…") }
+    Group {
+      if bot == nil {
+        VStack(spacing: 0) { creationContent }
+      } else {
+        sectionList
       }
-      tabContent
-    }.navigationTitle(bot?.name ?? "New assistant").navigationBarTitleDisplayMode(.inline)
-      .toolbar {
-        ToolbarItem(placement: .cancellationAction) {
-          Button("Close") { if dirty { discardConfirm = true } else { closeSheet() } }.disabled(busy)
-        }
-      }
+    }.navigationTitle(bot == nil ? "New assistant" : "All settings").navigationBarTitleDisplayMode(.inline)
+      .toolbar { editorToolbar }
+      .safeAreaInset(edge: .bottom, spacing: 0) { if bot != nil && configDirty { saveBar } }
       .onAppear {
         guard !initialized else { return }
         initialized = true
         form = BotInput(bot: bot, fallback: store.bootstrap?.bots.first)
         savedForm = form
-        mcpText = form.enabledMcpServers.joined(separator: ", ")
         avatar = bot?.avatar ?? AvatarConfig()
         savedAvatar = avatar
-        if avatar.mode != "portrait" { lastDrawn = avatar } else { lastPortrait = avatar }
+        if avatar.mode != .portrait { lastDrawn = avatar } else { lastPortrait = avatar }
       }
-      .task(id: tab) { await loadTab() }
-      .interactiveDismissDisabled(dirty || busy)
-      .confirmationDialog("Discard your unsaved changes?", isPresented: $discardConfirm, titleVisibility: .visible) {
-        Button("Discard changes", role: .destructive) { closeSheet() }
+  }
+
+  // MARK: Sections
+
+  /// The model name the Behavior row shows: the server's readable name while it still matches.
+  private var modelName: String {
+    let current = store.bootstrap?.bots.first { $0.id == bot?.id } ?? bot
+    if let current, current.model == form.model, let name = current.modelName, !name.isEmpty { return name }
+    return form.model
+  }
+  private var sectionList: some View {
+    List {
+      if !detailLoaded {
+        Section {
+          if let detailError {
+            VStack(alignment: .leading, spacing: 12) {
+              ErrorBanner(message: detailError)
+              Button(action: retryDetail) {
+                Text("Retry settings").frame(minHeight: 44).contentShape(Rectangle())
+              }.buttonStyle(.accentProminent)
+            }
+          } else { ProgressView("Loading assistant settings…") }
+        }
+      } else if error != nil || notice != nil {
+        Section { messageRows }
       }
-      .onChange(of: avatar) { _, value in
-        if value.mode != "portrait" {
-          lastDrawn = value
-        } else if !(value.src ?? "").isEmpty {
-          lastPortrait = value
+      Section {
+        ForEach(SettingsSection.allCases) { section in
+          NavigationLink(value: SettingsRoute.section(section)) {
+            Label {
+              VStack(alignment: .leading, spacing: 2) {
+                Text(section.label).foregroundStyle(Color.primary)
+                Text(section.summary(shared: form.shared, modelName: modelName))
+                  .font(.subheadline).foregroundStyle(Palette.muted).lineLimit(1)
+              }
+            } icon: { Image(systemName: section.systemImage).foregroundStyle(Palette.accent) }
+              .padding(.vertical, 2)
+          }.accessibilityIdentifier("settingsSection.\(section.rawValue)")
         }
       }
-      .confirmationDialog(
-        "Hermes asks for confirmation before using this model.", isPresented: $confirmModel,
-        titleVisibility: .visible
-      ) { Button("Confirm this model") { saveBot(confirmed: true) } }
-      .confirmationDialog(
-        "Make \(bot?.name ?? "this assistant") your personal assistant?", isPresented: $confirmPersonal,
-        titleVisibility: .visible
-      ) {
-        Button("Make it personal", role: .destructive) { saveBot(personal: true) }
-      } message: {
-        Text("It will disappear for the rest of the household, along with its conversation, routines and group chats.")
+    }.householdListBackground().accessibilityIdentifier("settingsSections")
+      .disabled(busy)
+  }
+  @ViewBuilder private var messageRows: some View {
+    if let error { ErrorBanner(message: error, dismiss: { self.error = nil }) }
+    if let notice { Text(notice).font(.footnote).foregroundStyle(Palette.accent).accessibilityIdentifier("settingsNotice") }
+  }
+  @ViewBuilder private var messages: some View {
+    if let error { ErrorBanner(message: error, dismiss: { self.error = nil }).padding(.horizontal).padding(.top, 8) }
+    if let notice {
+      Text(notice).font(.footnote).foregroundStyle(Palette.accent).padding(10)
+        .accessibilityIdentifier("settingsNotice")
+    }
+  }
+  @ViewBuilder private func destination(_ route: SettingsRoute) -> some View {
+    if let bot {
+      page(route) {
+        switch route {
+        case .section(.profile): profilePage
+        case .section(.behavior): behaviorPage
+        case .section(.access): accessPage
+        case .section(.automation): automationPage
+        case .section(.memory): memoryAndLearningPage
+        case .connections: IntegrationsView(botId: bot.id)
+        case .logins: VaultView(botId: bot.id)
+        case .work:
+          HermesWorkView(botId: bot.id).id("work|\(store.scope ?? "")|\(bot.id)").id(store.api.map(ObjectIdentifier.init))
+        case .memory:
+          MemoryDrawer(botId: bot.id, onDirtyChange: { memoryDirty = $0 }, onSavingChange: { memorySaving = $0 })
+            .onDisappear { memoryDirty = false; memorySaving = false }
+        case .learning:
+          HermesLearningView(botId: bot.id).id("learning|\(store.scope ?? "")|\(bot.id)").id(store.api.map(ObjectIdentifier.init))
+        }
       }
-      .confirmationDialog(
-        "Delete \(bot?.name ?? "this assistant")?", isPresented: $deleteConfirm,
-        titleVisibility: .visible
-      ) {
-        Button("Delete assistant", role: .destructive) {
-          action {
-            guard let id = bot?.id, let api = store.api else { return }
-            store.deletedBotId = id
-            try await api.delete("/bots/\(APIClient.component(id))")
-            await store.refreshBootstrap()
-            closeSheet()
+    }
+  }
+  /// Every page shares the sheet's messages, its Close button and, when needed, Save changes.
+  private func page(_ route: SettingsRoute, @ViewBuilder _ content: () -> some View) -> some View {
+    let guarded = route == .memory && (memoryDirty || memorySaving)
+    return VStack(spacing: 0) {
+      messages
+      content()
+    }.navigationTitle(route.title).navigationBarTitleDisplayMode(.inline)
+      .navigationBarBackButtonHidden(guarded)
+      .toolbar {
+        if guarded {
+          ToolbarItem(placement: .topBarLeading) {
+            Button { confirmation = .leaveMemory } label: {
+              Label(path.dropLast().last?.title ?? "All settings", systemImage: "chevron.backward").labelStyle(.titleAndIcon)
+            }.disabled(memorySaving).accessibilityIdentifier("memoryBack")
           }
         }
+        ToolbarItem(placement: .topBarTrailing) { closeButton }
       }
-      .fileImporter(
-        isPresented: $portraitImport, allowedContentTypes: [.png, .jpeg, .webP],
-        allowsMultipleSelection: false
-      ) { result in
-        switch result {
-        case .success(let urls): if let url = urls.first { uploadPortrait(url) }
-        case .failure(let error): self.error = error.localizedDescription
+      .safeAreaInset(edge: .bottom, spacing: 0) { if showsSaveBar(route) { saveBar } }
+  }
+  /// Profile and Behavior always offer Save changes; other pages only while those edits are unsaved.
+  private func showsSaveBar(_ route: SettingsRoute) -> Bool {
+    if route == .section(.profile) { return !portraitPromptFocused }
+    return route == .section(.behavior) || configDirty
+  }
+  private var profilePage: some View {
+    Form {
+      Section { unavailable(.botConfiguration) }
+      if let avatarFailure { avatarFailureSection(avatarFailure) }
+      nameSection
+      avatarControls
+      descriptionSection
+      sharingSection
+      Section {
+        Button("Delete assistant", role: .destructive) { confirmation = .delete(name: savedName) }.disabled(
+          !store.supports(.botConfiguration) || !store.connected)
+      } header: { settingsHeader("Danger zone") }
+    }.householdListBackground().accessibilityIdentifier("settings.profile")
+      .safeAreaInset(edge: .top, spacing: 0) { compactAvatarPreview }
+      .disabled(busy || !detailLoaded)
+  }
+  private var behaviorPage: some View {
+    Form {
+      Section { unavailable(.botConfiguration) }
+      instructionsSection
+      interactiveSection
+      modelSection
+      capabilities(.tools)
+      capabilities(.skills)
+    }.householdListBackground().accessibilityIdentifier("settings.behavior")
+      .disabled(busy || !detailLoaded)
+      .task(id: store.api.map(ObjectIdentifier.init)) { await loadBehavior() }
+      .onDisappear { skillControl?.disappear() }
+      .sheet(item: $readingSkill) { skill in
+        if let skillControl { HermesSkillReader(control: skillControl, skill: skill).appStore(store) }
+      }
+  }
+  private var accessPage: some View {
+    Form {
+      Section {
+        pageLink(.connections, detail: "Accounts and services this assistant can use", systemImage: "link")
+        pageLink(.logins, detail: "Passwords saved for this assistant's profile", systemImage: "person.badge.key")
+      }
+      if advanced { mcpSection.disabled(busy || !detailLoaded) }
+    }.householdListBackground().accessibilityIdentifier("settings.access")
+  }
+  private var automationPage: some View {
+    Form {
+      routineList.disabled(busy || !detailLoaded)
+      Section {
+        pageLink(.work, detail: "Goals, tasks and event triggers", systemImage: "checklist")
+      } header: { settingsHeader("Work") }
+    }.householdListBackground().accessibilityIdentifier("settings.automation")
+      .task(id: store.api.map(ObjectIdentifier.init)) { await loadRoutines() }
+  }
+  private var memoryAndLearningPage: some View {
+    Form {
+      Section {
+        pageLink(.memory, detail: "What this assistant remembers", systemImage: "brain")
+        pageLink(.learning, detail: "Skill changes waiting for review", systemImage: "graduationcap")
+      }
+    }.householdListBackground().accessibilityIdentifier("settings.memoryAndLearning")
+  }
+  private func pageLink(_ route: SettingsRoute, detail: String, systemImage: String) -> some View {
+    NavigationLink(value: route) {
+      Label {
+        VStack(alignment: .leading, spacing: 2) {
+          Text(route.title).foregroundStyle(Color.primary)
+          Text(detail).font(.subheadline).foregroundStyle(Palette.muted)
         }
+      } icon: { Image(systemName: systemImage).foregroundStyle(Palette.accent) }
+    }.accessibilityIdentifier("settingsPage.\(route.title.lowercased())")
+  }
+  @ViewBuilder private var mcpSection: some View {
+    let names = McpServerChoices.names(available: availableMcpServers, enabled: form.enabledMcpServers)
+    Section {
+      if names.isEmpty {
+        Text("No MCP servers are configured for this assistant. Add one under Connections.").foregroundStyle(Palette.muted)
       }
+      ForEach(names, id: \.self) { name in
+        Toggle(name, isOn: Binding(
+          get: { form.enabledMcpServers.contains(name) },
+          set: { form.enabledMcpServers = McpServerChoices.toggled(form.enabledMcpServers, name, on: $0) }))
+          .accessibilityIdentifier("mcpServer.\(name)")
+      }
+    } header: { settingsHeader("MCP servers") } footer: {
+      Text("Choose which of this profile's MCP servers the assistant can use. Save changes to apply them.").foregroundStyle(Palette.muted)
+    }.disabled(!store.supports(.botConfiguration))
+  }
+
+  // MARK: Fields
+
+  /// Creation's second step: everything about the assistant's role, in one form.
+  @ViewBuilder private var roleSections: some View {
+    descriptionSection
+    instructionsSection
+    interactiveSection
+    modelSection
+    sharingSection
+  }
+  private var interactiveSection: some View {
+    Section {
+      Button(interactiveEnabled ? "Interactive replies enabled" : "Enable interactive replies") {
+        form.instructions = (form.instructions.trimmingCharacters(in: .whitespacesAndNewlines) + "\n\n" + NativeInteractiveReplyInstructions)
+          .trimmingCharacters(in: .whitespacesAndNewlines)
+      }.disabled(busy || interactiveEnabled)
+    } footer: {
+      Text("Adds instructions for checklists, itineraries and calendar proposals. Save changes to apply them.").foregroundStyle(Palette.muted)
+    }
+  }
+  private var modelSection: some View {
+    Section {
+      ModelSelectionRow(botId: bot?.id, selection: ModelChoice(provider: form.provider ?? "", model: form.model), disabled: busy || !store.supports(.botConfiguration)) {
+        form.model = $0.model
+        form.provider = $0.provider
+        error = nil
+      }
+    } header: { settingsHeader("Model") } footer: {
+      Text("Model choices come from your connected Hermes providers. Star models to keep them handy.").foregroundStyle(Palette.muted)
+    }
+  }
+  private var sharingSection: some View {
+    Section {
+      Toggle("Shared with your household", isOn: $form.shared)
+    } footer: {
+      Text(
+        form.shared
+          ? "This assistant has one shared model. Provider and model changes are visible to both people."
+          : "Only you see a personal assistant in WildBots. Anyone with Hermes dashboard access can still reach its memory and logins.").foregroundStyle(Palette.muted)
+    }
+  }
+  private var nameReady: Bool { !form.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+  /// Whether the assistant's own fields can be sent: creation, or the PATCH step of Save changes.
+  private var canSave: Bool {
+    store.supports(.botConfiguration) && store.connected && nameReady
+      && !form.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      && form.instructions.count <= SettingsLimits.instructions
+  }
+  private var portraitMissing: Bool { avatar.mode == .portrait && (avatar.src ?? "").isEmpty }
+  private var canSaveChanges: Bool {
+    store.connected && !busy && configDirty && !portraitMissing && (form == savedForm || canSave)
+  }
+  private var saveBar: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      if let portraitOperation {
+        ProgressView(portraitOperation == "upload" ? "Uploading portrait…" : "Generating portrait…")
+          .font(.footnote).foregroundStyle(Palette.muted).tint(Palette.accent)
+      }
+      if portraitMissing {
+        Text(portraitNextStep).font(.footnote).foregroundStyle(Palette.muted)
+      }
+      if !store.connected { Text("Reconnect to save your changes.").font(.footnote).foregroundStyle(Palette.muted) }
+      Button { saveChanges() } label: {
+        Text(progress.label("changes", idle: "Save changes")).frame(maxWidth: .infinity, minHeight: 44)
+      }.buttonStyle(.accentProminent).accessibilityIdentifier("saveChanges").disabled(!canSaveChanges)
+    }.padding(.horizontal, 20).padding(.vertical, 12).background(Palette.surface(scheme))
+      .overlay(alignment: .top) { Divider() }
+      .accessibilityElement(children: .contain).accessibilityIdentifier("saveBar")
+  }
+  /// Split out so the type checker stays fast on slower CI machines.
+  private var nameSection: some View {
+    Section {
+      TextField("Name", text: $form.name, prompt: Text("Name").foregroundColor(Palette.muted))
+        .focused($nameFocused)
+        .task(id: focusNameRequest) {
+          guard focusNameRequest > 0 else { return }
+          nameFocused = true
+          focusNameRequest = 0
+        }
+        .onChange(of: form.name) { _, value in
+          if value.count > SettingsLimits.name { form.name = String(value.prefix(SettingsLimits.name)) }
+        }
+    } header: { settingsHeader("Name") }
+  }
+  private func settingsHeader(_ title: String) -> some View {
+    Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(Palette.muted)
+  }
+  private var descriptionSection: some View {
+    Section {
+      TextField("Description", text: $form.description, prompt: Text("Description").foregroundColor(Palette.muted), axis: .vertical).lineLimit(1...4)
+    } header: { settingsHeader("Description") }
+  }
+  private var instructionsSection: some View {
+    Section {
+      TextEditor(text: $form.instructions).frame(minHeight: 180).accessibilityLabel("Assistant instructions")
+        .overlay(alignment: .topLeading) {
+          if form.instructions.isEmpty {
+            Text("How should this assistant help?").foregroundStyle(Palette.muted).padding(.top, 8).padding(.leading, 5).allowsHitTesting(false)
+          }
+        }
+    } header: { settingsHeader("Instructions") } footer: {
+      if let limit = SettingsLimits.message("Instructions are", count: form.instructions.count, limit: SettingsLimits.instructions) {
+        Text(limit).foregroundStyle(form.instructions.count > SettingsLimits.instructions ? Palette.danger : Palette.muted)
+          .accessibilityIdentifier("instructionsLimit")
+      }
+    }
+  }
+  private var interactiveEnabled: Bool { form.instructions.contains(NativeInteractiveReplyInstructions) }
+  private var compactAvatarPreview: some View {
+    HStack(spacing: 16) {
+      AvatarView(avatar: avatar, state: previewState, size: 64, name: savedName)
+      VStack(alignment: .leading, spacing: 6) {
+        Menu {
+          ForEach([ActivityState.idle, .thinking, .working, .waiting, .blocked, .done], id: \.self) { state in
+            Button { previewState = state } label: {
+              if previewState == state { Label(state.label, systemImage: "checkmark") } else { Text(state.label) }
+            }.accessibilityIdentifier("previewState.\(state.rawValue)")
+          }
+        } label: {
+          HStack { Text("Preview: \(previewState.label)").multilineTextAlignment(.leading); Spacer(); Image(systemName: "chevron.down") }
+            .font(.subheadline).padding(.horizontal, 12).frame(minHeight: 44)
+            .background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 10))
+            .modifier(EnabledPrimaryMenuLabel())
+        }.accessibilityIdentifier("avatarPreviewState")
+          .accessibilityLabel("Preview state").accessibilityValue(previewState.label)
+          .disabled(portraitMissing)
+          .accessibilityHint("Preview only. Real activity comes from Hermes.")
+        Text("Preview only").font(.caption).foregroundStyle(Palette.muted)
+      }
+    }.padding(.horizontal, 20).padding(.vertical, 12).background(Palette.surface(scheme))
+      .overlay(alignment: .bottom) { Divider() }
+      .accessibilityElement(children: .contain).accessibilityIdentifier("avatarPreviewBar")
   }
   private func routinePresentations(_ content: some View) -> some View {
     content
@@ -179,155 +599,99 @@ struct BotSettingsView: View {
         Button("Delete routine", role: .destructive) {
           action {
             try await store.api?.delete("/routines/\(APIClient.component(routine.id))")
-            await loadTab()
+            await loadRoutines()
           }
         }
       }
       .sheet(item: $editingRoutine) { routine in
-        RoutineEditor(routine: routine, onSaved: { Task { await loadTab() } }).appStore(
-          store)
+        RoutineEditor(routine: routine, onSaved: { Task { await loadRoutines() } }).appStore(store)
       }
       .sheet(isPresented: $addingRoutine) {
         if let bot {
-          RoutineEditor(routine: .empty(botId: bot.id), onSaved: { Task { await loadTab() } })
+          RoutineEditor(routine: .empty(botId: bot.id), onSaved: { Task { await loadRoutines() } })
             .appStore(store)
         }
       }
   }
-  @ViewBuilder private var details: some View {
-    Section {
-      unavailable("botConfiguration")
+  private var portraitNextStep: String {
+    if store.supports(.uploads) {
+      return store.supports(.portraitGeneration) ? "Upload or generate a portrait before saving." : "Upload a portrait before saving."
     }
-    nameAndInstructions
-    Section {
-      Button(interactiveEnabled ? "Interactive replies enabled" : "Enable interactive replies") {
-        form.instructions = (form.instructions.trimmingCharacters(in: .whitespacesAndNewlines) + "\n\n" + NativeInteractiveReplyInstructions)
-          .trimmingCharacters(in: .whitespacesAndNewlines)
-      }.disabled(busy || interactiveEnabled)
-    } footer: {
-      Text("Adds instructions for checklists, itineraries and calendar proposals. Save changes to apply them.")
-    }
-    Section {
-      ModelSelectionRow(botId: bot?.id, selection: ModelChoice(provider: form.provider ?? "", model: form.model), disabled: busy || !store.supports("botConfiguration")) {
-        form.model = $0.model
-        form.provider = $0.provider
-      }
-    } header: { Text("Model") } footer: {
-      Text("Model choices come from your connected Hermes providers. Star models to keep them handy.")
-    }
-    Section {
-      Toggle("Shared with your household", isOn: $form.shared)
-    } footer: {
-      Text(
-        form.shared
-          ? "This assistant has one shared model. Provider and model changes are visible to both people."
-          : "Only you see a personal assistant in WildBots. Anyone with Hermes dashboard access can still reach its memory and logins.")
-    }
-    Section {
-      TextField("Existing server ids, separated by commas", text: $mcpText, axis: .vertical)
-        .textInputAutocapitalization(.never).autocorrectionDisabled()
-        .onChange(of: mcpText) { _, value in form.enabledMcpServers = BotInput.serverIds(value) }
-    } header: { Text("Enabled existing MCP servers") } footer: {
-      Text("Only existing Hermes connections can be configured here.")
-    }
-    Section {
-      Button(progress.label("details", idle: bot == nil ? "Create assistant" : "Save changes")) { saveBot() }.disabled(
-        !store.supports("botConfiguration") || !store.connected
-          || form.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-          || form.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-          || form.instructions.count > SettingsLimits.instructions)
-      if bot != nil {
-        Button("Delete assistant", role: .destructive) { deleteConfirm = true }.disabled(
-          !store.supports("botConfiguration") || !store.connected)
-      }
-    }
+    return store.supports(.portraitGeneration) ? "Generate a portrait before saving." : "Portraits are unavailable. Choose Geometric or Mascot."
   }
-  /// Split out of `details` so the type checker stays fast on slower CI machines.
-  @ViewBuilder private var nameAndInstructions: some View {
-    Section("Name") {
-      TextField("Name", text: $form.name)
-        .onChange(of: form.name) { _, value in
-          if value.count > SettingsLimits.name { form.name = String(value.prefix(SettingsLimits.name)) }
-        }
-    }
-    Section("Description") { TextField("Description", text: $form.description, axis: .vertical).lineLimit(1...4) }
+  private var avatarPreview: some View {
     Section {
-      TextEditor(text: $form.instructions).frame(minHeight: 180).accessibilityLabel("Assistant instructions")
-        .overlay(alignment: .topLeading) {
-          if form.instructions.isEmpty {
-            Text("How should this assistant help?").foregroundStyle(.tertiary).padding(.top, 8).padding(.leading, 5).allowsHitTesting(false)
-          }
-        }
-    } header: { Text("Instructions") } footer: {
-      if let limit = SettingsLimits.message("Instructions are", count: form.instructions.count, limit: SettingsLimits.instructions) {
-        Text(limit).foregroundStyle(form.instructions.count > SettingsLimits.instructions ? Color.red : Color.secondary)
-          .accessibilityIdentifier("instructionsLimit")
-      }
-    }
+      AvatarStage(avatar: avatar, state: $previewState, name: bot?.name ?? form.name,
+        caption: bot == nil ? form.name : nil)
+    }.listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
   }
-  private var interactiveEnabled: Bool { form.instructions.contains(NativeInteractiveReplyInstructions) }
-  @ViewBuilder private var avatarEditor: some View {
+  @ViewBuilder private var avatarControls: some View {
     Group {
       Section {
-        AvatarStage(avatar: avatar, state: $previewState, name: bot?.name ?? form.name)
-      }.listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
-      Section("Style") {
-        Picker("Style", selection: Binding(get: { avatar.mode }, set: switchAvatarMode)) {
-          Text("Geometric").tag("geometric")
-          Text("Mascot").tag("mascot")
-          Text("Portrait").tag("portrait")
+        Picker("Style", selection: Binding(get: { avatar.mode }, set: { switchAvatarMode($0) })) {
+          Text("Geometric").tag(AvatarMode.geometric)
+          Text("Mascot").tag(AvatarMode.mascot)
+          if bot != nil { Text("Portrait").tag(AvatarMode.portrait) }
         }.pickerStyle(.segmented).accessibilityIdentifier("avatarStyle")
+      } header: { settingsHeader(bot == nil ? "Style" : "Avatar") } footer: {
+        // A portrait is stored with the assistant, so it can only be added once it exists.
+        if bot == nil { Text("Want a portrait? Upload or generate one in Profile settings after you create the assistant.").foregroundStyle(Palette.muted) }
       }
-      if avatar.mode == "portrait" {
-        Section("Portrait") {
+      if avatar.mode == .portrait {
+        Section {
           Text("Portraits stay still. Activity appears in a separate state indicator.")
-            .font(.caption).foregroundStyle(.secondary)
-          Button("Upload portrait") { portraitImport = true }.disabled(
-            bot == nil || !store.supports("uploads") || !store.connected)
-          unavailable("uploads")
-          TextField("Describe a portrait", text: $portraitPrompt, axis: .vertical).lineLimit(2...5)
-          if let limit = SettingsLimits.message("The description is", count: portraitPrompt.count, limit: SettingsLimits.portraitPrompt) {
-            Text(limit).font(.caption).foregroundStyle(portraitPrompt.count > SettingsLimits.portraitPrompt ? Color.red : Color.secondary)
+            .font(.caption).foregroundStyle(Palette.muted)
+          Button("Upload portrait") { beginPortraitImport() }.disabled(
+            bot == nil || !store.supports(.uploads) || !store.connected)
+          Text("PNG, JPEG, or WebP, up to 15 MB.").font(.caption).foregroundStyle(Palette.muted)
+          unavailable(.uploads)
+        } header: { settingsHeader("Upload a portrait") }
+        Section {
+          VStack(alignment: .leading, spacing: 8) {
+            Text("Describe a portrait").font(.subheadline.weight(.medium)).accessibilityHidden(true)
+            TextField("", text: $portraitPrompt, prompt: Text("Like a friendly ranch companion").foregroundStyle(Palette.muted), axis: .vertical)
+              .lineLimit(2...5).focused($portraitPromptFocused).accessibilityLabel("Describe a portrait").accessibilityIdentifier("portraitPrompt")
+          }
+          if let limit = SettingsLimits.message("The description is", count: portraitPrompt.count, limit: SettingsLimits.portraitPrompt, action: "generate a portrait") {
+            Text(limit).font(.caption).foregroundStyle(portraitPrompt.count > SettingsLimits.portraitPrompt ? Palette.danger : Palette.muted)
               .accessibilityIdentifier("portraitPromptLimit")
           }
-          Button("Generate portrait") { generatePortrait() }.disabled(
-            bot == nil || !store.supports("portraitGeneration") || !store.connected
+          Button { generatePortrait() } label: { Text("Generate portrait").frame(maxWidth: .infinity, minHeight: 44, alignment: .leading) }.disabled(
+            bot == nil || !store.supports(.portraitGeneration) || !store.connected
               || portraitPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
               || portraitPrompt.count > SettingsLimits.portraitPrompt)
-          unavailable("portraitGeneration")
-          Text("Use a PNG, JPEG, or WebP image up to 2 MB.").font(.caption).foregroundStyle(
-            .secondary)
-        }
+          unavailable(.portraitGeneration)
+        } header: { settingsHeader("Generate a portrait") }
       } else {
-        if avatar.mode == "geometric" {
-          Section("Shape") {
+        if avatar.mode == .geometric {
+          Section {
             AvatarTiles(
-              group: "shape", options: AvatarConfig.shapes.map { ($0, $0.capitalized) },
-              selected: avatar.shape ?? "blob",
-              preview: { var a = avatar; a.shape = $0; a.accessory = "none"; return a },
+              group: "shape", options: AvatarConfig.shapes.map { ($0, $0.rawValue.capitalized) },
+              selected: avatar.shape ?? .blob,
+              preview: { var a = avatar; a.shape = $0; a.accessory = .plain; return a },
               select: { avatar.shape = $0 })
-          }
+          } header: { settingsHeader("Shape") }
         } else {
-          Section("Character") { characterTiles(AvatarConfig.everydayFamilies) }
-          Section("Seasonal") { characterTiles(AvatarConfig.seasonalFamilies) }
+          Section { characterTiles(AvatarConfig.everydayFamilies) } header: { settingsHeader("Character") }
+          Section { characterTiles(AvatarConfig.seasonalFamilies) } header: { settingsHeader("Seasonal") }
         }
-        Section("Color") { colorSwatches }
-        Section("Eyes") {
+        Section { colorSwatches } header: { settingsHeader("Color") }
+        Section {
           AvatarTiles(
-            group: "eyes", options: ["oval", "round", "visor", "spark"].map { ($0, $0.capitalized) },
-            selected: avatar.eyes ?? "oval",
-            preview: { var a = avatar; a.eyes = $0; a.accessory = "none"; return a },
+            group: "eyes", options: AvatarEyes.all.map { ($0, $0.rawValue.capitalized) },
+            selected: avatar.eyes ?? .oval,
+            preview: { var a = avatar; a.eyes = $0; a.accessory = .plain; return a },
             select: { avatar.eyes = $0 })
-        }
-        Section("Accessory") {
+        } header: { settingsHeader("Eyes") }
+        Section {
           AvatarTiles(
             group: "accessory",
-            options: [("none", "None"), ("hat", "Cowboy hat"), ("glasses", "Glasses")],
-            selected: avatar.accessory ?? "none",
+            options: [(.plain, "None"), (.hat, "Cowboy hat"), (.glasses, "Glasses")],
+            selected: avatar.accessory ?? .plain,
             preview: { var a = avatar; a.accessory = $0; return a },
             select: { avatar.accessory = $0 })
-        }
-        Section("Fine-tune eyes") {
+        } header: { settingsHeader("Accessory") }
+        Section {
           slider("Eye width", \AvatarConfig.eyeWidth)
           slider("Eye height", \AvatarConfig.eyeHeight)
           slider("Eye spacing", \AvatarConfig.eyeSpacing)
@@ -338,31 +702,37 @@ struct BotSettingsView: View {
               avatar.eyeSpacing = 1
             }
           }
-        }
-      }
-      Section {
-        Button(progress.label("avatar", idle: "Save avatar")) { saveAvatar() }.disabled(
-          bot == nil || !store.connected || avatar.mode == "portrait" && (avatar.src ?? "").isEmpty)
-        if bot == nil { Text("Create the assistant before saving an avatar.").font(.footnote).foregroundStyle(.secondary) }
+        } header: { settingsHeader("Fine-tune eyes") }
       }
     }
   }
-  private func characterTiles(_ families: [(id: String, label: String)]) -> some View {
+  /// Creation went through but the look did not save: say so plainly and offer the retry here.
+  private func avatarFailureSection(_ message: String) -> some View {
+    Section {
+      Label(message, systemImage: "exclamationmark.triangle").foregroundStyle(Palette.danger)
+        .accessibilityIdentifier("avatarFailure")
+      Button(progress.label("changes", idle: "Retry saving avatar")) { saveChanges() }
+        .disabled(busy || !store.connected || portraitMissing).accessibilityIdentifier("retryAvatar")
+    }
+  }
+  private func characterTiles(_ families: [(id: AvatarFamily, label: String)]) -> some View {
     AvatarTiles(
       group: "family", options: families.map { ($0.id, $0.label) },
-      selected: avatar.family ?? "sprout",
-      preview: { var a = avatar.selectingFamily($0); a.accessory = "none"; return a },
+      selected: avatar.family ?? .sprout,
+      preview: { var a = avatar.selectingFamily($0); a.accessory = .plain; return a },
       select: { avatar = avatar.selectingFamily($0) })
   }
   private var colorSwatches: some View {
-    LazyVGrid(columns: [GridItem(.adaptive(minimum: 40), spacing: 6)], spacing: 8) {
+    let custom = !AvatarConfig.colors.contains { $0.lowercased() == (avatar.color ?? "#1084FE").lowercased() }
+    return LazyVGrid(columns: [GridItem(.adaptive(minimum: 44), spacing: 6)], spacing: 8) {
       ForEach(AvatarConfig.colors, id: \.self) { hex in
         let selected = avatar.color?.lowercased() == hex.lowercased()
         Button {
           avatar.color = hex
         } label: {
-          Circle().fill(Color(hex: hex)).overlay(Circle().strokeBorder(.black.opacity(0.1)))
-            .frame(width: 32, height: 32).padding(4)
+          Circle().fill(Color(hex: hex)).padding(2)
+            .overlay(Circle().strokeBorder(Palette.muted, lineWidth: 1))
+            .frame(width: 36, height: 36).frame(width: 44, height: 44).contentShape(Rectangle())
             .overlay(Circle().strokeBorder(selected ? Palette.accent : .clear, lineWidth: 2))
         }.buttonStyle(.plain).accessibilityLabel("Color \(hex)")
           .accessibilityAddTraits(selected ? .isSelected : [])
@@ -381,22 +751,24 @@ struct BotSettingsView: View {
               avatar.color = String(format: "#%02X%02X%02X", byte(r), byte(g), byte(b))
             }
           }), supportsOpacity: false
-      ).labelsHidden().frame(width: 40, height: 40)
+      ).labelsHidden().frame(width: 44, height: 44)
+        .overlay(Circle().strokeBorder(custom ? Palette.accent : .clear, lineWidth: 2).allowsHitTesting(false))
+        .accessibilityAddTraits(custom ? .isSelected : [])
     }.padding(.vertical, 4)
   }
   /// Switching styles keeps the drawn character's color, eyes, accessory, and eye tuning,
   /// returning from Portrait restores the last drawn character, and returning to Portrait
   /// restores the last portrait.
-  private func switchAvatarMode(_ mode: String) {
+  private func switchAvatarMode(_ mode: AvatarMode) {
     guard mode != avatar.mode else { return }
-    if mode == "portrait" {
+    if mode == .portrait {
       // Restore the last uploaded, generated, or saved portrait from this session.
       if let lastPortrait {
         avatar = lastPortrait
         return
       }
       var next = avatar
-      next.mode = "portrait"
+      next.mode = .portrait
       next.src = nil
       next.origin = "uploaded"
       avatar = next
@@ -404,100 +776,179 @@ struct BotSettingsView: View {
     }
     var next = lastDrawn
     next.mode = mode
-    if mode == "geometric" { next.shape = lastDrawn.shape ?? "blob" }
-    if mode == "mascot" { next.family = lastDrawn.family ?? "bear" }
+    if mode == .geometric { next.shape = lastDrawn.shape ?? .blob }
+    if mode == .mascot { next.family = lastDrawn.family ?? .bear }
     avatar = next
   }
-  @ViewBuilder private func capabilities(_ kind: String) -> some View {
+
+  // MARK: Tools and skills
+
+  private func items(_ kind: CatalogKind) -> [CapabilityItem] { kind == .tools ? tools : skills }
+  private func selectedIds(_ kind: CatalogKind) -> [String] {
+    items(kind).filter { $0.enabled || $0.required == true }.map(\.id)
+  }
+  /// A catalog counts as changed only once it has loaded, so an unloaded one is never sent.
+  private func capabilityDirty(_ kind: CatalogKind) -> Bool {
+    guard let saved = savedCapabilities[kind] else { return false }
+    return Set(selectedIds(kind)) != saved
+  }
+  /// The installed skill a catalog skill row stands for, matched by name, when Hermes reports one.
+  private func installedSkill(_ item: CapabilityItem) -> HermesInstalledSkill? {
+    guard let state = skillControl?.value?.skills, state.supported else { return nil }
+    return state.installed.first { $0.name == item.id }
+  }
+  @ViewBuilder private func capabilities(_ kind: CatalogKind) -> some View {
+    let rows = items(kind)
+    let skillState = kind == .skills ? skillControl?.value?.skills : nil
     Section {
-      unavailable(kind)
-      if bot == nil {
-        Text("Create the assistant before configuring its capabilities.")
-      } else {
-        let items = kind == "tools" ? tools : skills
-        ForEach(items) { item in
-          Toggle(
+      unavailable(kind.capability)
+      if bot != nil {
+        ForEach(rows) { item in
+          let installed = kind == .skills ? installedSkill(item) : nil
+          let control = Toggle(
             isOn: Binding(
               get: {
-                (kind == "tools" ? tools : skills).first { $0.id == item.id }?.enabled == true
+                self.items(kind).first { $0.id == item.id }?.enabled == true
                   || item.required == true
               },
               set: { selected in
-                if kind == "tools", let i = tools.firstIndex(where: { $0.id == item.id }) {
+                if kind == .tools, let i = tools.firstIndex(where: { $0.id == item.id }) {
                   tools[i].enabled = selected
                 }
-                if kind == "skills", let i = skills.firstIndex(where: { $0.id == item.id }) {
+                if kind == .skills, let i = skills.firstIndex(where: { $0.id == item.id }) {
                   skills[i].enabled = selected
                 }
               })
           ) {
             VStack(alignment: .leading, spacing: 4) {
-              Text(item.name).font(.headline)
-              Text(item.description).font(.caption).foregroundStyle(.secondary)
-              if item.required == true {
-                Text("Required by Hermes").font(.caption).foregroundStyle(.secondary)
+              HStack(spacing: 6) {
+                Text(item.name).font(.headline)
+                if installed?.locked == true {
+                  Label("Locked", systemImage: "lock.fill").font(.caption.weight(.semibold)).foregroundStyle(Palette.muted)
+                    .accessibilityIdentifier("skill.locked.\(item.id)")
+                }
+              }
+              let description = item.description.trimmingCharacters(in: .whitespacesAndNewlines)
+              if !description.isEmpty && !["required by hermes", "hermes profile skill"].contains(description.lowercased()) {
+                Text(description).font(.footnote).foregroundStyle(Palette.muted)
               }
             }
-          }.disabled(item.required == true || !store.supports(kind) || !catalogReady.contains(kind))
+          }.disabled(item.required == true || !store.supports(kind.capability) || !catalogReady.contains(kind))
+          if item.required == true || installed != nil {
+            VStack(alignment: .leading, spacing: 6) {
+              control
+              if item.required == true { Text("Required by Hermes").font(.footnote).foregroundStyle(Palette.muted) }
+              if let installed { installedSkillActions(installed) }
+            }
+          } else { control }
         }
         if catalogLoading.contains(kind) {
-          ProgressView("Loading \(kind)…")
-        } else if !catalogReady.contains(kind) && store.supports(kind) {
-          Button("Retry loading \(kind)") { Task { await loadTab() } }
+          ProgressView("Loading \(kind.rawValue)…")
+        } else if !catalogReady.contains(kind) && store.supports(kind.capability) {
+          Button("Retry loading \(kind.rawValue)") { Task { await loadCatalog(kind) } }
         }
-        if items.isEmpty && catalogReady.contains(kind) {
-          Text("No \(kind) were reported by Hermes.").foregroundStyle(.secondary)
+        if rows.isEmpty && catalogReady.contains(kind) {
+          Text("No \(kind.rawValue) were reported by Hermes.").foregroundStyle(Palette.muted)
         }
-        Button(progress.label(kind, idle: "Save \(kind)")) {
-          action(progressKey: kind) {
-            guard let bot, catalogReady.contains(kind) else { return }
-            let ids = (kind == "tools" ? tools : skills).filter {
-              $0.enabled || $0.required == true
-            }.map(\.id)
-            try await store.perform(
-              "/bots/\(APIClient.component(bot.id))/\(kind)", ["ids": ids], method: "PUT")
-            savedCapabilities[kind] = Set(ids)
-            notice = "Saved"
-          }
-        }.disabled(!store.supports(kind) || !store.connected || !catalogReady.contains(kind))
+        if let skillControl, kind == .skills { skillLockStatus(skillControl) }
       }
+    } header: { settingsHeader(kind.rawValue.capitalized) } footer: {
+      VStack(alignment: .leading, spacing: 4) {
+        Text(kind == .skills ? "Required skills stay enabled. Save changes to apply your choices." : "Save changes to apply your choices.")
+        if skillState?.lockSupported == true {
+          Text("Lock a skill to keep assistants from changing it. You can still edit it in Hermes.")
+          if skillControl?.value?.canManageLearningPolicy == false { Text("Only an integration administrator can lock or unlock skills.") }
+        }
+      }.foregroundStyle(Palette.muted)
     }
   }
+  /// Read and Lock or Unlock, from what was Learning's installed-skill list. Locks save at once.
+  @ViewBuilder private func installedSkillActions(_ installed: HermesInstalledSkill) -> some View {
+    let control = skillControl
+    let lockable = control?.value?.skills.lockSupported == true
+    if installed.locked == true { Text(hermesSkillLockedNote).font(.caption).foregroundStyle(Palette.muted) }
+    HStack(spacing: 20) {
+      Button { readingSkill = installed } label: {
+        Text("Read skill").frame(minHeight: 44).contentShape(Rectangle())
+      }
+        .accessibilityLabel("Read \(installed.name)")
+        .accessibilityIdentifier("skill.read.\(installed.name)")
+      if lockable, let locked = installed.locked {
+        Button { setSkillLock(installed, locked: !locked) } label: {
+          Text(locked ? "Unlock skill" : "Lock skill").frame(minHeight: 44).contentShape(Rectangle())
+        }
+          .disabled(control?.disabled != false || !store.connected || control?.value?.canManageLearningPolicy == false)
+          .accessibilityLabel("\(locked ? "Unlock" : "Lock") \(installed.name)")
+          .accessibilityIdentifier("skill.lock.\(installed.name)")
+      }
+    }.buttonStyle(.borderless).font(.subheadline)
+  }
+  /// A lock change's outcome, and the refresh it needs before another change.
+  @ViewBuilder private func skillLockStatus(_ control: HermesAutomationControls) -> some View {
+    if let error = control.error { ErrorBanner(message: error) }
+    if control.value != nil, let notice = control.notice { Text(notice).font(.footnote).accessibilityAddTraits(.updatesFrequently) }
+    // A status that never loaded needs the same way back as one a change left uncertain.
+    if control.needsRefresh || control.value == nil && control.error != nil {
+      Button("Refresh skill status") { Task { await control.manualRefresh(store) } }
+        .disabled(control.busy || control.loading)
+        .accessibilityIdentifier("skill.refreshStatus")
+    }
+  }
+  private func setSkillLock(_ skill: HermesInstalledSkill, locked: Bool) {
+    guard let control = skillControl else { return }
+    Task {
+      let _: HermesSkillLock? = await control.change(
+        store, "/skills/lock", HermesSkillLockInput(name: skill.name, locked: locked), method: "PUT")
+    }
+  }
+
+  // MARK: Routines
+
   @ViewBuilder private var routineList: some View {
     Section {
-      unavailable("routines")
+      unavailable(.routines)
       Text("Routines keep working when you are away. Choose notification recipients explicitly.")
-        .font(.footnote).foregroundStyle(.secondary)
-    }
+        .font(.footnote).foregroundStyle(Palette.muted)
+    } header: { settingsHeader("Routines") }
     if let bot {
       if !templates.isEmpty {
         Section("Routine recipes") {
           ForEach(templates) { template in
             Button {
-              editingRoutine = Routine(id: "", botId: bot.id, name: template.name, prompt: template.prompt, schedule: template.schedule, enabled: false, recipientIds: [store.bootstrap?.user.id].compactMap { $0 })
+              editingRoutine = Routine(id: "", botId: bot.id, name: template.name, prompt: template.prompt, schedule: template.schedule, enabled: false, recipientIds: [store.bootstrap?.user.id].compactMap { $0 }, roomIds: [])
             } label: {
               VStack(alignment: .leading, spacing: 2) {
-                Text(template.name).font(.headline).foregroundStyle(.primary)
-                Text(template.description).font(.caption).foregroundStyle(.secondary)
+                Text(template.name).font(.headline)
+                Text(template.description).font(.caption).foregroundStyle(Palette.muted)
               }
-            }.disabled(!store.supports("routines") || !store.connected).accessibilityIdentifier("routineTemplate.\(template.id)")
+            }.disabled(!store.supports(.routines) || !store.connected).accessibilityIdentifier("routineTemplate.\(template.id)")
           }
         }
       }
       ForEach(routines) { routine in
         Section(routine.name) {
-          Text(routine.schedule).font(.subheadline)
-          Text(routine.enabled ? "Active" : "Paused").font(.caption).foregroundStyle(.secondary)
-          Text(routine.prompt).font(.footnote).lineLimit(6)
-          RoutineEnhancements(routine: routine, disabled: !store.supports("routines"))
+          LabeledContent("Schedule") { Text(routine.schedule).font(.subheadline).monospaced().foregroundStyle(Palette.muted) }
+          LabeledContent("Status") {
+            if routine.enabled { Text("Active").foregroundStyle(Palette.muted) }
+            else {
+              Text("Paused").font(.subheadline.weight(.semibold)).foregroundStyle(Palette.muted)
+                .padding(.horizontal, 8).padding(.vertical, 2)
+                .overlay(Capsule().strokeBorder(Palette.line))
+            }
+          }
+          if let rooms = RoutineRooms.names(routine.roomIds, catalog: store.groupCatalog) { LabeledContent("Posts in") { Text(rooms).foregroundStyle(Palette.muted) } }
+          Text(routine.prompt).font(.body).lineLimit(6)
+          RoutineEnhancements(routine: routine, disabled: !store.supports(.routines))
           Button(routine.enabled ? "Pause" : "Resume") {
             action {
               guard let api = store.api else { return }
               var next = routine
               next.enabled.toggle()
+              // Pausing leaves where it posts alone.
+              next.roomIds = nil
               let _: Routine = try await api.write(
                 "/routines/\(APIClient.component(routine.id))", next, method: "PUT")
-              await loadTab()
+              await loadRoutines()
             }
           }
           Button("Edit") { editingRoutine = routine }
@@ -506,17 +957,15 @@ struct BotSettingsView: View {
       }
       Section {
         Button("Add routine") { addingRoutine = true }.disabled(
-          !store.supports("routines") || !store.connected)
+          !store.supports(.routines) || !store.connected)
       }
-      if routines.isEmpty && store.supports("routines") {
+      if routines.isEmpty && store.supports(.routines) {
         Section { Text("No routines for \(bot.name).") }
       }
-    } else {
-      Section { Text("Create the assistant before adding routines.") }
     }
   }
-  @ViewBuilder private func unavailable(_ key: String) -> some View {
-    if !store.supports(key) { Text(store.reason(key)).font(.footnote).foregroundStyle(.secondary) }
+  @ViewBuilder private func unavailable(_ key: CapabilityKey) -> some View {
+    if !store.supports(key) { Text(store.reason(key)).font(.footnote).foregroundStyle(Palette.muted) }
   }
   private func slider(_ title: String, _ key: WritableKeyPath<AvatarConfig, Double?>) -> some View {
     let value = avatar[keyPath: key] ?? 1
@@ -524,7 +973,7 @@ struct BotSettingsView: View {
       HStack {
         Text(title)
         Spacer()
-        Text("\(Int((value * 100).rounded()))%").monospacedDigit().foregroundStyle(.secondary)
+        Text("\(Int((value * 100).rounded()))%").monospacedDigit().foregroundStyle(Palette.muted)
       }.font(.subheadline)
       Slider(
         value: Binding(get: { value }, set: { avatar[keyPath: key] = ($0 * 20).rounded() / 20 }),
@@ -532,6 +981,9 @@ struct BotSettingsView: View {
       ).accessibilityLabel(title)
     }
   }
+
+  // MARK: Saving
+
   private func action(progressKey: String? = nil, _ operation: @escaping () async throws -> Void) {
     guard !busy else { return }
     busy = true
@@ -546,11 +998,36 @@ struct BotSettingsView: View {
       } catch {
         if let progressKey { progress.fail(progressKey) }
         self.error = error.localizedDescription
-        if let e = error as? APIError, e.confirmRequired { confirmModel = true }
-        if let e = error as? APIError, e.code == "private_confirmation_required" {
-          self.error = nil
-          confirmPersonal = true
+        if let e = error as? APIError {
+          if e.code == "private_confirmation_required" {
+            self.error = nil
+            confirmation = .personal(name: savedName)
+          } else if e.confirmRequired {
+            self.error = nil
+            confirmation = .model(warning: e.localizedDescription)
+          }
         }
+      }
+    }
+  }
+  /// Wait for the child sheet to finish closing before another prompt or the editor can close.
+  private func performConfirmation() {
+    guard let choice = acceptedConfirmation else { return }
+    acceptedConfirmation = nil
+    switch choice {
+    case .model: bot == nil ? saveBot(confirmed: true) : saveChanges(confirmed: true)
+    case .personal: bot == nil ? saveBot(personal: true) : saveChanges(personal: true)
+    case .discard: closeSheet()
+    case .leaveMemory:
+      memoryDirty = false
+      if path.last == .memory { path.removeLast() }
+    case .delete:
+      action {
+        guard let id = bot?.id, let api = store.api else { return }
+        store.deletedBotId = id
+        try await api.delete("/bots/\(APIClient.component(id))")
+        await store.refreshBootstrap()
+        closeSheet()
       }
     }
   }
@@ -561,119 +1038,218 @@ struct BotSettingsView: View {
       progress.expire(key)
     }
   }
+  /// Creation's Create button. An existing assistant saves through `saveChanges`.
   private func saveBot(confirmed: Bool = false, personal: Bool? = nil) {
-    let personal = personal ?? personalConfirmed
-    if form.hidesFromHousehold(bot) && !personal {
-      confirmPersonal = true
+    personalConfirmed = !form.shared && (personal ?? personalConfirmed)
+    createBot(confirmed: confirmed)
+  }
+  /// One Save for every configuration edit: the assistant's fields, then its avatar, tools and
+  /// skills, each only if it changed. Each part that saves becomes its new baseline, so after a
+  /// failure the next Save sends only what is still unsaved. A model or make-personal
+  /// confirmation stops at the first step and, once confirmed, continues the whole save.
+  private func saveChanges(confirmed: Bool = false, personal: Bool? = nil) {
+    // Every way to save, Retry included, checks the name before the fields are sent.
+    if form != savedForm && !nameReady {
+      if path != [.section(.profile)] { keepMessages = true; path = [.section(.profile)] }
+      error = "Give your assistant a name."
+      focusNameRequest += 1
+      return
+    }
+    if form != savedForm && !canSave { return }
+    let personal = !form.shared && (personal ?? personalConfirmed)
+    if form != savedForm && form.hidesFromHousehold(bot) && !personal {
+      confirmation = .personal(name: savedName)
       return
     }
     personalConfirmed = personal
+    let retryingCreatedAvatar = avatarFailure != nil
+    action(progressKey: "changes") {
+      guard let bot, let api = store.api else { return }
+      var patched = false
+      var refresh = false
+      do {
+        if form != savedForm {
+          let sent = form
+          var value = sent
+          value.confirmModel = confirmed
+          if personal { value.confirmPrivate = true }
+          let _: Bot = try await api.write("/bots/\(APIClient.component(bot.id))", value, method: "PATCH")
+          savedForm = sent
+          patched = true
+          refresh = true
+        }
+        if avatar != savedAvatar || avatarFailure != nil {
+          let sent = avatar
+          try await putAvatar(bot.id, api, sent)
+          savedAvatar = sent
+          avatarFailure = nil
+          refresh = true
+        }
+        for kind in CatalogKind.allCases where capabilityDirty(kind) {
+          let ids = selectedIds(kind)
+          try await store.perform("/bots/\(APIClient.component(bot.id))/\(kind.rawValue)", ["ids": ids], method: "PUT")
+          savedCapabilities[kind] = Set(ids)
+        }
+      } catch {
+        if refresh { await store.refreshBootstrap() }
+        throw error
+      }
+      if refresh { await store.refreshBootstrap() }
+      notice = settingsSavedNotice(patched: patched, shared: savedForm.shared)
+      // A retried avatar from creation finishes the job the Create button started, unless
+      // other edits made meanwhile still need saving.
+      if retryingCreatedAvatar && !dirty { closeSheet() }
+    }
+  }
+  /// Creates the assistant, then saves the look chosen on the first step. The server takes the
+  /// avatar separately, so a failed avatar save keeps this sheet open on the new assistant's
+  /// Profile with the choice intact and a retry.
+  private func createBot(confirmed: Bool) {
     action(progressKey: "details") {
       guard let api = store.api else { return }
       var value = form
       value.confirmModel = confirmed
-      if bot != nil && personal { value.confirmPrivate = true }
-      let _: Bot = try await api.write(
-        bot.map { "/bots/\(APIClient.component($0.id))" } ?? "/bots", value,
-        method: bot == nil ? "POST" : "PATCH")
-      await store.refreshBootstrap()
+      let created: Bot = try await api.write("/bots", value, method: "POST")
       savedForm = form
-      notice = bot?.shared == true ? "Changes saved for both household members." : "Assistant saved."
-      if bot == nil { closeSheet() }
+      do {
+        try await putAvatar(created.id, api, avatar)
+      } catch {
+        await store.refreshBootstrap()
+        detailLoaded = true
+        createdBot = created
+        keepMessages = true
+        path = [.section(.profile)]
+        avatarFailure = "\(created.name) was created, but its avatar wasn't saved yet."
+        self.error = error.localizedDescription
+        return
+      }
+      savedAvatar = avatar
+      await store.refreshBootstrap()
+      closeSheet()
     }
   }
-  private func saveAvatar() {
-    action(progressKey: "avatar") {
-      guard let bot, let api = store.api else { return }
-      var value = avatar
-      if value.mode == "mascot" { value.family = value.family ?? "sprout" }
-      let _: AvatarConfig = try await api.write(
-        "/bots/\(APIClient.component(bot.id))/avatar", value, method: "PUT")
-      await store.refreshBootstrap()
-      savedAvatar = avatar
-      notice = "Avatar saved"
-    }
+  private func putAvatar(_ id: String, _ api: APIClient, _ avatar: AvatarConfig) async throws {
+    var value = avatar
+    if value.mode == .mascot { value.family = value.family ?? .sprout }
+    let _: AvatarConfig = try await api.write("/bots/\(APIClient.component(id))/avatar", value, method: "PUT")
   }
   private func generatePortrait() {
+    portraitPromptFocused = false
     action {
+      portraitOperation = "generate"
+      defer { portraitOperation = nil }
       guard let bot, let api = store.api else { return }
       let file: FileRef = try await api.write(
         "/bots/\(APIClient.component(bot.id))/portrait", ["prompt": portraitPrompt])
       avatar.src = file.url ?? "/api/files/\(APIClient.component(file.id))"
       avatar.origin = "generated"
-      notice = "Portrait generated. Save avatar to apply it."
+      notice = "Portrait generated. Save changes to apply it."
     }
+  }
+  private func beginPortraitImport() {
+    #if DEBUG
+      do {
+        if let url = try DebugFixtures.portraitUploadURL() { uploadPortrait(url); return }
+      } catch { self.error = error.localizedDescription; return }
+    #endif
+    portraitImport = true
   }
   private func uploadPortrait(_ url: URL) {
     action {
+      portraitOperation = "upload"
+      defer { portraitOperation = nil }
+
       guard let bot, let api = store.api else { return }
       let accessed = url.startAccessingSecurityScopedResource()
       defer { if accessed { url.stopAccessingSecurityScopedResource() } }
       let values = try url.resourceValues(forKeys: [.fileSizeKey, .contentTypeKey])
-      guard (values.fileSize ?? 0) <= 2_000_000 else {
-        throw APIError(message: "Choose a portrait no larger than 2 MB.", status: 400)
+      guard (values.fileSize ?? 0) <= PortraitUpload.maxInputBytes else {
+        throw APIError(message: "Choose a portrait no larger than 15 MB.", status: 400)
       }
       let mime = values.contentType?.preferredMIMEType ?? "application/octet-stream"
       guard ["image/png", "image/jpeg", "image/webp"].contains(mime) else {
         throw APIError(message: "Choose a PNG, JPEG, or WebP portrait.", status: 400)
       }
       let file = try await api.upload(
-        botId: bot.id, name: url.lastPathComponent, mime: mime, data: Data(contentsOf: url))
+        botId: bot.id, name: "portrait.png", mime: "image/png", data: PortraitUpload.prepare(Data(contentsOf: url)))
       avatar.src = file.url ?? "/api/files/\(APIClient.component(file.id))"
       avatar.origin = "uploaded"
-      notice = "Portrait uploaded. Save avatar to apply it."
+      notice = "Portrait uploaded. Save changes to apply it."
     }
   }
   private func closeSheet() { if let close { close() } else { dismiss() } }
-  private var dirty: Bool {
+  /// Edits that Save changes covers: the assistant's fields, avatar, tools, skills and MCP servers.
+  private var configDirty: Bool {
     guard initialized else { return false }
-    return form != savedForm || avatar != savedAvatar || ["tools", "skills"].contains { kind in
-      guard let saved = savedCapabilities[kind] else { return false }
-      return Set((kind == "tools" ? tools : skills).filter { $0.enabled || $0.required == true }.map(\.id)) != saved
+    // An avatar whose first save failed still needs saving, even when it matches the default.
+    return form != savedForm || avatar != savedAvatar || avatarFailure != nil || CatalogKind.allCases.contains(where: capabilityDirty)
+  }
+  /// Everything closing would lose, including unsaved memory.
+  private var dirty: Bool { memoryDirty || configDirty }
+
+  // MARK: Loading
+
+  /// Every explicit retry dismisses the previous failure before starting the next load.
+  private func retryDetail() {
+    detailError = nil
+    Task { await loadDetail() }
+  }
+  private func loadDetail() async {
+    guard let bot, let api = store.api, !detailLoaded else { return }
+    do {
+      let detail: Bot = try await api.get("/bots/\(APIClient.component(bot.id))")
+      guard !Task.isCancelled else { return }
+      form = BotInput(bot: detail, fallback: store.bootstrap?.bots.first)
+      savedForm = form
+      availableMcpServers = detail.availableMcpServers ?? []
+      detailLoaded = true
+    } catch is CancellationError {} catch {
+      if !Task.isCancelled { detailError = error.localizedDescription }
     }
   }
-  private func loadTab() async {
-    guard let bot, let api = store.api else { return }
-    let kind = tab.lowercased()
-    let currentId = UUID()
-    loadId = currentId
-    if ["tools", "skills"].contains(kind), catalogReady.contains(kind) { return }
-    if ["tools", "skills"].contains(kind) {
-      catalogReady.remove(kind)
-      catalogLoading.insert(kind)
-    }
-    defer { if loadId == currentId { catalogLoading.remove(kind) } }
+  /// Behavior's tools and skills, and Hermes's installed skills for their lock and read actions.
+  private func loadBehavior() async {
+    guard let bot else { return }
+    // A fresh controls instance per visit belongs to the current session and client.
+    let control = HermesAutomationControls(botId: bot.id)
+    skillControl = control
+    control.appear(foreground: false)
+    async let installed = control.refresh(store)
+    await loadCatalog(.tools)
+    await loadCatalog(.skills)
+    _ = await installed
+  }
+  private func loadCatalog(_ kind: CatalogKind) async {
+    guard let bot, let api = store.api, store.supports(kind.capability), !catalogReady.contains(kind),
+      !catalogLoading.contains(kind) else { return }
+    catalogLoading.insert(kind)
+    defer { catalogLoading.remove(kind) }
     do {
-      if !detailLoaded {
-        let detail: Bot = try await api.get("/bots/\(APIClient.component(bot.id))")
-        guard !Task.isCancelled, loadId == currentId else { return }
-        form = BotInput(bot: detail, fallback: store.bootstrap?.bots.first)
-        savedForm = form
-        mcpText = form.enabledMcpServers.joined(separator: ", ")
-        detailLoaded = true
-      }
-      if ["tools", "skills"].contains(kind), store.supports(kind) {
-        let values: [CapabilityItem] = try await api.get(
-          "/bots/\(APIClient.component(bot.id))/\(kind)")
-        guard !Task.isCancelled, loadId == currentId else { return }
-        if kind == "tools" { tools = values } else { skills = values }
-        savedCapabilities[kind] = Set(values.filter { $0.enabled || $0.required == true }.map(\.id))
-        catalogReady.insert(kind)
-      }
-      if tab == "Routines", store.supports("routines") {
-        let all: [Routine] = try await api.get("/routines")
-        routines = all.filter { $0.botId == bot.id }
-        templates = try await api.get("/routines/templates")
-      }
+      let values: [CapabilityItem] = try await api.get("/bots/\(APIClient.component(bot.id))/\(kind.rawValue)")
+      guard !Task.isCancelled else { return }
+      if kind == .tools { tools = values } else { skills = values }
+      savedCapabilities[kind] = Set(values.filter { $0.enabled || $0.required == true }.map(\.id))
+      catalogReady.insert(kind)
     } catch is CancellationError {} catch {
-      if loadId == currentId { self.error = error.localizedDescription }
+      if !Task.isCancelled { self.error = error.localizedDescription }
+    }
+  }
+  private func loadRoutines() async {
+    guard let bot, let api = store.api, store.supports(.routines) else { return }
+    do {
+      let all: [Routine] = try await api.get("/routines")
+      guard !Task.isCancelled else { return }
+      routines = all.filter { $0.botId == bot.id }
+      templates = try await api.get("/routines/templates")
+    } catch is CancellationError {} catch {
+      if !Task.isCancelled { self.error = error.localizedDescription }
     }
   }
 }
 struct RoutineEditor: View {
   @State var routine: Routine
   var onSaved: () -> Void
-  @EnvironmentObject private var store: AppStore
+  @Environment(AppStore.self) private var store
   @Environment(\.dismiss) private var dismiss
   @State private var busy = false
   @State private var error: String?
@@ -695,6 +1271,8 @@ struct RoutineEditor: View {
         Section {
           RoutineSchedulePreview(botId: routine.botId, schedule: routine.schedule, onReady: { previewedSchedule = $0 })
         }
+        // Simple presentation keeps saved overrides on the routine and sends them back unchanged.
+        if store.bootstrap?.preferences.presentation == "advanced" { Section { RoutineAdvancedFields(routine: $routine) } }
         Section {
           ForEach(recipients) { user in
             Toggle(
@@ -714,18 +1292,38 @@ struct RoutineEditor: View {
             "No selected recipients means no completion notification. Routine results remain in the assistant conversation."
           )
         }
+        if RoutineRooms.shown(routine.roomIds, catalog: store.groupCatalog, choices: roomChoices) {
+          Section {
+            ForEach(roomChoices) { room in
+              Toggle(room.name, isOn: Binding(
+                get: { routine.roomIds?.contains(room.id) == true },
+                set: { selected in
+                  var ids = routine.roomIds ?? []
+                  if selected { if !ids.contains(room.id) { ids.append(room.id) } } else { ids.removeAll { $0 == room.id } }
+                  routine.roomIds = ids
+                }))
+            }
+          } header: {
+            Text("Also post results in these group chats")
+          } footer: {
+            Text("Results appear in the group as a message from this routine. Assistants answer it only when it @mentions them.")
+          }
+        }
         if !routine.id.isEmpty {
           Section { Button("Delete routine", role: .destructive) { deleteConfirm = true } }
         }
       }.accessibilityIdentifier("routineEditorForm").disabled(busy).navigationTitle(routine.id.isEmpty ? "New routine" : "Edit routine")
         .navigationBarTitleDisplayMode(.inline)
+        // Home keeps the room catalog; read it here when the editor opens before home has.
+        .task { if store.groupCatalog == nil { await store.refreshGroups() } }
         .toolbar {
           ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
           ToolbarItem(placement: .confirmationAction) {
             Button(busy ? "Saving…" : routine.id.isEmpty ? "Add routine" : "Save routine") { save() }.disabled(
               busy || !store.connected
                 || routine.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                || routine.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || !hasPayload
+                || routine.noAgent == true && (routine.script ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 || routine.schedule.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 || routine.prompt.count > 50000 || routine.enabled && !schedulePreviewValid)
           }
@@ -751,11 +1349,20 @@ struct RoutineEditor: View {
     let household = store.bootstrap?.household ?? []
     return store.bootstrap?.bots.first { $0.id == routine.botId }?.routineRecipients(household) ?? household
   }
+  private var roomChoices: [GroupRoom] {
+    GroupActivity.routineRoomChoices(store.groupCatalog, bot: store.bootstrap?.bots.first { $0.id == routine.botId }, bots: store.bootstrap?.bots ?? [])
+  }
+  private var hasPayload: Bool {
+    !routine.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      || !(routine.script ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      || !(routine.skills ?? []).isEmpty
+  }
   private func save() {
     busy = true
     error = nil
     var value = routine
     value.recipientIds = value.recipientIds?.filter { id in recipients.contains { $0.id == id } }
+    value.roomIds = RoutineRooms.saved(value.roomIds, catalog: store.groupCatalog, choices: roomChoices)
     Task {
       defer { busy = false }
       do {
@@ -770,21 +1377,285 @@ struct RoutineEditor: View {
   }
 }
 
+/// Where a routine posts besides its assistant's chat, as the web's routine editor decides it.
+enum RoutineRooms {
+  /// The editor offers rooms only when Hermes can post in them and the server said where this routine posts.
+  static func shown(_ roomIds: [String]?, catalog: GroupCatalog?, choices: [GroupRoom]) -> Bool {
+    guard catalog?.routineDelivery == true, let roomIds else { return false }
+    return !choices.isEmpty || !roomIds.isEmpty
+  }
+  /// The rooms a save sends: the chosen ones still offered, or nil (leave them unchanged) when none were shown.
+  static func saved(_ roomIds: [String]?, catalog: GroupCatalog?, choices: [GroupRoom]) -> [String]? {
+    guard shown(roomIds, catalog: catalog, choices: choices), let roomIds else { return nil }
+    return roomIds.filter { id in choices.contains { $0.id == id } }
+  }
+  /// "Weekend plans, Barn crew", or nil when the routine posts in no room this person can name.
+  static func names(_ roomIds: [String]?, catalog: GroupCatalog?) -> String? {
+    let names = (roomIds ?? []).compactMap { id in catalog?.rooms.first { $0.id == id }?.name }
+    return names.isEmpty ? nil : names.joined(separator: ", ")
+  }
+}
+
+/// Per-routine overrides. Collapsed by default; catalogs never seed a model pin.
+private struct RoutineAdvancedFields: View {
+  @Binding var routine: Routine
+  @Environment(AppStore.self) private var store
+  @State private var expanded = false
+  @State private var skills: [CapabilityItem] = []
+  @State private var tools: [CapabilityItem] = []
+  @State private var sources: [Routine] = []
+  @State private var providers: [ModelProviderInfo] = []
+  @State private var loading = false
+  @State private var loaded = false
+  @State private var errors: [String] = []
+  private var selectedProvider: ModelProviderInfo? { providers.first { $0.matches(routine.provider) } }
+  var body: some View {
+    DisclosureGroup("Advanced", isExpanded: $expanded) {
+      Text("Overrides apply only to this routine. Saved settings stay in place unless you change them.")
+        .font(.caption).foregroundStyle(.secondary)
+      if loading { ProgressView("Loading advanced choices") }
+      ForEach(errors, id: \.self) { message in
+        Text(message).foregroundStyle(Palette.danger).accessibilityAddTraits(.updatesFrequently)
+      }
+      if !errors.isEmpty { Button("Retry advanced choices") { Task { await load() } } }
+      Toggle("Run the script without a model", isOn: Binding(
+        get: { routine.noAgent == true }, set: { routine.noAgent = $0 }))
+        .accessibilityIdentifier("routine.runScriptWithoutModel")
+      TextField("Profile script, e.g. reports/morning.py", text: Binding(
+        get: { routine.script ?? "" }, set: { routine.script = $0.isEmpty ? nil : $0 }))
+        .textInputAutocapitalization(.never).autocorrectionDisabled()
+      Text("Use an existing file in this assistant's Hermes scripts directory. With a model, its output becomes context. This option skips the model for script execution. Delivery to WildBots Bot Chat starts a separate model turn. Shell commands are not supported.")
+        .font(.caption).foregroundStyle(.secondary)
+      if routine.noAgent == true && (routine.script ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        Text("Script-only routines require a profile script.").foregroundStyle(Palette.danger)
+      }
+      agentFields.disabled(routine.noAgent == true)
+    }
+    .task(id: expanded) { if expanded && !loaded { await load() } }
+  }
+  @ViewBuilder private var agentFields: some View {
+    if routine.noAgent == true {
+      Text("Model settings are kept and are used when this option is turned off.").font(.caption).foregroundStyle(.secondary)
+    }
+    Picker("Provider", selection: Binding(
+      get: { routine.provider ?? "" },
+      set: { routine.provider = $0.isEmpty ? nil : $0; routine.model = nil })) {
+      Text("Use assistant provider").tag("")
+      if let provider = routine.provider, selectedProvider == nil || selectedProvider?.id != provider {
+        Text("\(provider) (saved)").tag(provider)
+      }
+      ForEach(providers) { provider in
+        Text(provider.name + (provider.authenticated == false ? " (disconnected)" : ""))
+          .tag(provider.id).disabled(provider.authenticated == false)
+      }
+    }
+    Picker("Model", selection: Binding(
+      get: { routine.model ?? "" }, set: { routine.model = $0.isEmpty ? nil : $0 })) {
+      Text("Use assistant model").tag("")
+      if let model = routine.model, selectedProvider?.models.contains(where: { $0.id == model }) != true {
+        Text("\(model) (saved)").tag(model)
+      }
+      ForEach(selectedProvider?.models ?? []) { model in
+        Text(model.name + (model.available ? "" : " (unavailable)"))
+          .tag(model.id).disabled(!model.available)
+      }
+    }.disabled(selectedProvider == nil)
+    Button("Use assistant model and provider") { routine.model = nil; routine.provider = nil }
+    if loaded && providers.isEmpty { Text("No providers reported. Existing pins are preserved.").font(.caption) }
+    Text("Skills to load").font(.headline)
+    if loaded && skills.isEmpty { Text("No skills reported for this assistant.").font(.caption) }
+    ForEach(choiceIDs(skills, selected: routine.skills ?? []), id: \.self) { id in
+      Toggle(choiceName(skills, id: id), isOn: Binding(
+        get: { routine.skills?.contains(id) == true },
+        set: { routine.skills = toggled(routine.skills ?? [], id: id, selected: $0) }))
+    }
+    Text("Toolsets").font(.headline)
+    Toggle("Use profile tools", isOn: Binding(
+      get: { routine.enabledToolsets == nil },
+      set: { routine.enabledToolsets = $0 ? nil : tools.filter(\.enabled).map(\.id) }))
+    if let selected = routine.enabledToolsets {
+      if loaded && tools.isEmpty { Text("No toolsets reported for this assistant.").font(.caption) }
+      ForEach(choiceIDs(tools, selected: selected), id: \.self) { id in
+        Toggle(choiceName(tools, id: id), isOn: Binding(
+          get: { routine.enabledToolsets?.contains(id) == true },
+          set: { routine.enabledToolsets = toggled(routine.enabledToolsets ?? [], id: id, selected: $0) }))
+      }
+      if selected.isEmpty {
+        Text("No tools allowed. Existing zero-tool settings are preserved, but Hermes cannot save a new empty selection here. Select a toolset or use profile tools.")
+          .font(.caption)
+      }
+    }
+    Text("Context from previous runs").font(.headline)
+    Toggle("Include this routine's previous result", isOn: contextBinding("self"))
+    Text("Include the latest result from other routines for this assistant. This does not change when they run.")
+      .font(.caption).foregroundStyle(.secondary)
+    if loaded && sources.isEmpty { Text("No other routines for this assistant.").font(.caption) }
+    ForEach(sources) { source in Toggle(source.name, isOn: contextBinding(source.id)) }
+    ForEach((routine.contextFrom ?? []).filter { ref in ref != "self" && !sources.contains { $0.id == ref } }, id: \.self) { ref in
+      Toggle("\(ref) (saved, unavailable)", isOn: contextBinding(ref))
+    }
+  }
+  private func contextBinding(_ id: String) -> Binding<Bool> {
+    Binding(get: { routine.contextFrom?.contains(id) == true },
+      set: { routine.contextFrom = toggled(routine.contextFrom ?? [], id: id, selected: $0) })
+  }
+  private func toggled(_ values: [String], id: String, selected: Bool) -> [String] {
+    selected ? (values.contains(id) ? values : values + [id]) : values.filter { $0 != id }
+  }
+  private func choiceIDs(_ choices: [CapabilityItem], selected: [String]) -> [String] {
+    choices.map(\.id) + selected.filter { id in !choices.contains { $0.id == id } }
+  }
+  private func choiceName(_ choices: [CapabilityItem], id: String) -> String {
+    choices.first { $0.id == id }?.name ?? "\(id) (saved, unavailable)"
+  }
+  @MainActor private func load() async {
+    guard let api = store.api, !loading else { return }
+    loading = true
+    errors = []
+    defer { loading = false; loaded = true }
+    let path = "/bots/\(APIClient.component(routine.botId))"
+    do { skills = try await api.get("\(path)/skills") }
+    catch { errors.append("Could not load skills. \(error.localizedDescription)") }
+    do { tools = try await api.get("\(path)/tools") }
+    catch { errors.append("Could not load toolsets. \(error.localizedDescription)") }
+    do {
+      let catalog: ModelCatalog = try await api.get("/models?botId=\(APIClient.component(routine.botId))")
+      providers = catalog.providers
+    } catch { errors.append("Could not load models. \(error.localizedDescription)") }
+    do {
+      let all: [Routine] = try await api.get("/routines")
+      sources = all.filter { $0.botId == routine.botId && $0.id != routine.id }
+    } catch { errors.append("Could not load context sources. \(error.localizedDescription)") }
+  }
+}
+
 /// The editor's preview: the avatar large, with chips to try each live state.
+private enum SettingsConfirmation: Identifiable {
+  case model(warning: String), personal(name: String), delete(name: String), discard, leaveMemory
+  var id: String {
+    switch self {
+    case .model: "model"
+    case .personal: "personal"
+    case .delete: "delete"
+    case .discard: "discard"
+    case .leaveMemory: "leave-memory"
+    }
+  }
+  var title: String {
+    switch self {
+    case .model: "Use this model?"
+    case .personal(let name): "Make \(name) your personal assistant?"
+    case .delete(let name): "Delete \(name)?"
+    case .discard: "Discard your unsaved changes?"
+    case .leaveMemory: "Leave memory without saving?"
+    }
+  }
+  var message: String {
+    switch self {
+    case .model(let warning): warning
+    case .personal: "It will disappear for the rest of the household, along with its conversation, routines and group chats."
+    case .delete: "This deletes the assistant in Hermes and removes its settings from WildBots."
+    case .discard: "Your unsaved changes will be lost."
+    case .leaveMemory: "Your unsaved memory edits will be lost. Save them before leaving if you want to keep them."
+    }
+  }
+  var acceptLabel: String {
+    switch self {
+    case .model: "Confirm this model"
+    case .personal: "Make it personal"
+    case .delete: "Yes, delete"
+    case .discard: "Discard changes"
+    case .leaveMemory: "Discard edits and leave"
+    }
+  }
+  var keepLabel: String { if case .delete = self { "Keep assistant" } else { "Keep editing" } }
+  var destructive: Bool { if case .model = self { false } else { true } }
+}
+
+/// A native modal sheet with explicit colors. System alert glass cannot style warning text.
+struct AssistantConfirmationSheet: View {
+  let title: String
+  let message: String
+  let acceptLabel: String
+  let keepLabel: String
+  let destructive: Bool
+  let accept: () -> Void
+  let keep: () -> Void
+  @Environment(\.colorScheme) private var scheme
+  @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+  @State private var height: CGFloat = 340
+  @AccessibilityFocusState private var titleFocused: Bool
+  private var content: some View {
+    VStack(alignment: .leading, spacing: 20) {
+      Text(title).font(.title3.weight(.semibold)).foregroundStyle(Color.primary)
+        .fixedSize(horizontal: false, vertical: true).accessibilityAddTraits(.isHeader)
+        .accessibilityFocused($titleFocused)
+      Text(message).font(.body).foregroundStyle(Palette.messageMetadata)
+        .fixedSize(horizontal: false, vertical: true)
+      VStack(spacing: 12) {
+        Button(role: destructive ? .destructive : nil, action: accept) {
+          Text(acceptLabel).font(.body.weight(.semibold))
+            .frame(maxWidth: .infinity, minHeight: 44).padding(.vertical, 6).contentShape(Capsule())
+        }.buttonStyle(.plain).foregroundStyle(destructive ? Palette.danger : Palette.accent)
+          .background(Palette.raised(scheme), in: Capsule())
+          .overlay(Capsule().strokeBorder(Palette.line))
+          .accessibilityIdentifier("confirmationAccept")
+        Button(role: .cancel, action: keep) {
+          Text(keepLabel).font(.body.weight(.semibold))
+            .frame(maxWidth: .infinity, minHeight: 44)
+        }.buttonStyle(.accentProminent).keyboardShortcut(.cancelAction)
+          .accessibilityIdentifier("confirmationKeep")
+      }
+    }.padding(24).padding(.top, 8).frame(maxWidth: .infinity, alignment: .leading)
+      .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
+  }
+  private var sheet: some View {
+    ScrollView { content }.scrollBounceBehavior(.basedOnSize).frame(idealHeight: height)
+      .background(Palette.raised(scheme)).presentationBackground(Palette.raised(scheme))
+      .presentationDragIndicator(.visible).interactiveDismissDisabled(false)
+      .accessibilityIdentifier("settingsConfirmation")
+      .accessibilityAction(.escape, keep).onAppear { titleFocused = true }
+  }
+  @ViewBuilder var body: some View {
+    if horizontalSizeClass == .compact {
+      sheet.presentationDetents([.height((height + 20).rounded(.up))])
+    } else if #available(iOS 18, *) {
+      sheet.presentationSizing(.form.fitted(horizontal: false, vertical: true))
+    } else { sheet }
+  }
+}
+
+/// Preserve native disabled styling instead of forcing the enabled label color through it.
+private struct EnabledPrimaryMenuLabel: ViewModifier {
+  @Environment(\.isEnabled) private var enabled
+  @ViewBuilder func body(content: Content) -> some View {
+    if enabled { content.foregroundStyle(.primary) } else { content }
+  }
+}
+
 private struct AvatarStage: View {
   var avatar: AvatarConfig
   @Binding var state: ActivityState
   var name: String
+  /// The name as it is being typed, shown under the avatar while creating.
+  var caption: String? = nil
   @Environment(\.colorScheme) private var scheme
   private let states: [ActivityState] = [.idle, .thinking, .working, .waiting, .blocked, .done]
   var body: some View {
     VStack(spacing: 18) {
       AvatarView(avatar: avatar, state: state, size: 124, name: name).padding(.top, 12)
+      if let caption {
+        Text(caption.trimmingCharacters(in: .whitespaces).isEmpty ? "Your new assistant" : caption)
+          .font(.title3.weight(.semibold)).lineLimit(1).foregroundStyle(caption.isEmpty ? Palette.muted : Color.primary)
+          .accessibilityHidden(true)
+      }
       ChipFlow(spacing: 6) {
         ForEach(states, id: \.self) { option in
           let selected = option == state
-          Button(option.label) { state = option }.buttonStyle(.plain).font(.caption)
-            .padding(.horizontal, 11).padding(.vertical, 6)
+          Button { state = option } label: {
+            Text(option.label).font(.caption).padding(.horizontal, 11).padding(.vertical, 6)
+              .frame(minHeight: 44).contentShape(Capsule())
+          }.buttonStyle(.plain)
             .foregroundStyle(selected ? Palette.surface(scheme) : Color.primary)
             .background(selected ? Palette.accent : Palette.raised(scheme), in: Capsule())
             .overlay(Capsule().strokeBorder(selected ? Palette.accent : Palette.line))
@@ -792,8 +1663,8 @@ private struct AvatarStage: View {
             .accessibilityIdentifier("previewState.\(option.rawValue)")
         }
       }
-      Text("Preview only. The real state always comes from Hermes.").font(.caption2)
-        .foregroundStyle(.secondary)
+      Text("Preview only. The real state always comes from Hermes.").font(.footnote)
+        .foregroundStyle(Palette.messageMetadata)
     }
     .frame(maxWidth: .infinity).padding(.horizontal, 16).padding(.top, 16).padding(.bottom, 14)
     .background(
@@ -807,17 +1678,17 @@ private struct AvatarStage: View {
 }
 
 /// A grid of mini static avatars, one per choice, like the web editor's tile pickers.
-private struct AvatarTiles: View {
+private struct AvatarTiles<Value: OpenVocabulary>: View {
   var group: String
-  var options: [(String, String)]
-  var selected: String
-  var preview: (String) -> AvatarConfig
-  var select: (String) -> Void
+  var options: [(Value, String)]
+  var selected: Value
+  var preview: (Value) -> AvatarConfig
+  var select: (Value) -> Void
   @Environment(\.colorScheme) private var scheme
   @ScaledMetric(relativeTo: .caption) private var tileWidth: CGFloat = 64
   var body: some View {
     LazyVGrid(columns: [GridItem(.adaptive(minimum: tileWidth), spacing: 8)], spacing: 10) {
-      ForEach(options, id: \.0) { value, label in
+      ForEach(options, id: \.0.rawValue) { value, label in
         let on = value == selected
         Button {
           select(value)
@@ -833,12 +1704,12 @@ private struct AvatarTiles: View {
                 RoundedRectangle(cornerRadius: 14).strokeBorder(
                   on ? Palette.accent : Palette.line, lineWidth: on ? 2 : 1))
             Text(label).font(.caption).fontWeight(on ? .semibold : .regular)
-              .foregroundStyle(on ? Color.primary : Color.secondary).lineLimit(2)
+              .foregroundStyle(on ? Color.primary : Palette.muted).lineLimit(2)
               .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
           }.contentShape(Rectangle())
         }.buttonStyle(.plain).accessibilityElement(children: .ignore).accessibilityLabel(label)
           .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
-          .accessibilityIdentifier("avatarTile.\(group).\(value)")
+          .accessibilityIdentifier("avatarTile.\(group).\(value.rawValue)")
       }
     }.padding(.vertical, 4)
   }
@@ -893,13 +1764,6 @@ private struct ChipFlow: Layout {
   }
 }
 
-extension BotInput {
-  /// The web field's comma-separated list of existing MCP server ids.
-  static func serverIds(_ text: String) -> [String] {
-    text.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
-  }
-}
-
 /// Which save button is working or just finished, like the web's per-button Saving… and Saved.
 struct SaveProgress: Equatable {
   enum Phase { case saving, saved }
@@ -926,8 +1790,8 @@ enum SettingsLimits {
   static let instructions = 50_000
   static let portraitPrompt = 2_000
   /// Quiet until a field nears its limit, then a counter, then a plain instruction once it is over.
-  static func message(_ subject: String, count: Int, limit: Int) -> String? {
-    if count > limit { return "\(subject) \((count - limit).formatted()) character\(count - limit == 1 ? "" : "s") over the \(limit.formatted()) limit. Shorten the text to save." }
+  static func message(_ subject: String, count: Int, limit: Int, action: String = "save") -> String? {
+    if count > limit { return "\(subject) \((count - limit).formatted()) character\(count - limit == 1 ? "" : "s") over the \(limit.formatted()) limit. Shorten the text to \(action)." }
     if count * 10 >= limit * 9 { return "\(count.formatted()) of \(limit.formatted()) characters" }
     return nil
   }

@@ -1,9 +1,24 @@
+import SwiftUI
 import XCTest
 @testable import AgentInterface
 
 /// The native Markdown parser against what the web's react-markdown and remark-gfm render
 /// (src/components/MessageMarkdown.tsx).
 @MainActor final class MarkdownTests: XCTestCase {
+  func testCodeKeepsEqualGlyphWidthsUnderTheRoundedAppFontAndScales() throws {
+    func width(_ text: String, size: DynamicTypeSize) throws -> CGFloat {
+      let renderer = ImageRenderer(content: Text(text).font(MarkdownCodeBlock.codeFont)
+        .fixedSize().fontDesign(.rounded).environment(\.dynamicTypeSize, size))
+      return try XCTUnwrap(renderer.uiImage).size.width
+    }
+    let normal = try width("iiiiiiii", size: .large)
+    let accessible = try width("iiiiiiii", size: .accessibility3)
+    XCTAssertGreaterThan(normal, 10)
+    XCTAssertEqual(normal, try width("MMMMMMMM", size: .large), accuracy: 1)
+    XCTAssertEqual(accessible, try width("MMMMMMMM", size: .accessibility3), accuracy: 1)
+    XCTAssertGreaterThan(accessible, normal * 1.5)
+  }
+
   private func parse(_ text: String) -> [MarkdownBlock] { Markdown.parse(text) }
   private func links(_ text: String) -> [String] {
     Markdown.attributed(text).runs.compactMap { $0.link?.absoluteString }
@@ -138,5 +153,14 @@ import XCTest
     XCTAssertEqual(Markdown.tableCells("| A\\|B | C |"), ["A|B", "C"])
     XCTAssertEqual(Markdown.tableCells("A | B"), ["A", "B"])
     XCTAssertEqual(MarkdownTableView.alignment(.trailing), .trailing)
+  }
+}
+
+extension MarkdownTests {
+  func testCachedParsingMatchesFreshParsingAsFencesAndTablesFinish() {
+    let cache = MarkdownCache()
+    let variants = ["hello", "```swift\nlet x", "```swift\nlet x = 1\n```", "| One | Two |\n| --- | --- |\n| 1", "| One | Two |\n| --- | --- |\n| 1 | 2 |"]
+    for text in variants { XCTAssertEqual(cache.blocks(text), Markdown.parse(text)); XCTAssertEqual(cache.blocks(text), Markdown.parse(text)) }
+    cache.clear(); XCTAssertEqual(cache.blocks(variants[0]), Markdown.parse(variants[0]))
   }
 }

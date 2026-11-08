@@ -104,30 +104,44 @@ def install(drain, startup, status, path, inbound, authority=None, refusal=None)
     drain._agent_interface_persistent_gate = str(path)
 
 
+def sibling_module(name):
+    """Load src/hermes/NAME.py once per process, under its one canonical module name.
+
+    A second load under another name would be a separate instance with its own state.
+    Keep every copy of this function identical; tests/hermes_private_fs_test.py checks.
+    """
+    canonical, path = "agent_interface_" + name, Path(__file__).resolve().with_name(name + ".py")
+    if canonical not in sys.modules:
+        spec = importlib.util.spec_from_file_location(canonical, path)
+        sys.modules[canonical] = module = importlib.util.module_from_spec(spec)
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            del sys.modules[canonical]
+            raise
+    module = sys.modules[canonical]
+    if Path(module.__file__).resolve() != path:
+        raise ImportError(canonical + " is already loaded from " + module.__file__)
+    return module
+
+
 def bootstrap():
     configured = os.environ.get("HERMES_AGENT_INTERFACE_MAINTENANCE_FILE", "")
     if not configured or not Path(configured).is_absolute():
         raise SystemExit("Configure the fixed persistent gateway maintenance file before starting this wrapper")
     # The same exact revision/repair receipt as the dashboard protects these
     # native method seams. An unqualified gateway cannot bypass a held lease.
-    spec = importlib.util.spec_from_file_location("agent_interface_extension", Path(__file__).resolve().with_name("extension.py"))
-    extension = importlib.util.module_from_spec(spec); spec.loader.exec_module(extension)
+    extension = sibling_module("extension")
     extension.source_state()
-    computer_spec = importlib.util.spec_from_file_location("agent_interface_computer", Path(__file__).resolve().with_name("computer.py"))
-    computer = importlib.util.module_from_spec(computer_spec); computer_spec.loader.exec_module(computer)
-    computer.install_tools()
-    integration_spec = importlib.util.spec_from_file_location("agent_interface_integrations", Path(__file__).resolve().with_name("integrations.py"))
-    integrations = importlib.util.module_from_spec(integration_spec); integration_spec.loader.exec_module(integrations)
+    sibling_module("computer").install_tools()
+    integrations = sibling_module("integrations")
     integrations.register_file_tool()
     integrations.register_google_tasks_tool()
     integrations.register_tool_catalog()
     # Messaging, scheduled and API runs here have no masked prompt, so the tool refuses clearly.
-    vault_spec = importlib.util.spec_from_file_location("agent_interface_vault", Path(__file__).resolve().with_name("vault.py"))
-    vault = importlib.util.module_from_spec(vault_spec); vault_spec.loader.exec_module(vault)
-    vault.register_tool()
+    sibling_module("vault").register_tool()
     # The gateway delivers routine output. Keep household Bot Chat deliveries with the dashboard add-on.
-    delivery_spec = importlib.util.spec_from_file_location("agent_interface_bot_delivery", Path(__file__).resolve().with_name("bot_delivery.py"))
-    delivery = importlib.util.module_from_spec(delivery_spec); delivery_spec.loader.exec_module(delivery)
+    delivery = sibling_module("bot_delivery")
     import tools.bot_live_delivery as mailbox
     delivery.install_producer(mailbox)
     import gateway.drain_control as drain

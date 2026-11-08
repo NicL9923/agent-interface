@@ -30,6 +30,11 @@ export const publicApiRoutes = [
   "/api/auth/native/complete",
   "/api/auth/native/exchange",
   "/api/csp-report",
+  // Its single-use token authorizes it; a service worker has no CSRF token. Origin is still checked.
+  "/api/push/actions",
+  // The iOS desktop and terminal pages have no session of their own; their single-use tickets are checked by the route.
+  "/api/computer/desktop/ws",
+  "/api/computer/terminal/ws",
 ];
 export async function installAuth(
   app: FastifyInstance,
@@ -94,7 +99,7 @@ export async function installAuth(
       }
       // Browsers send violation reports without an Origin or CSRF token.
       if (route === "/api/csp-report") return;
-      if (req.nativeSessionHash && (!route.startsWith("/api/auth/") || route === "/api/auth/logout")) return;
+      if (req.nativeSessionHash && (!route.startsWith("/api/auth/") || ["/api/auth/logout", "/api/auth/native/renew", "/api/auth/native/confirm"].includes(route))) return;
       if (req.headers.origin !== config.origin)
         return reply
           .code(403)

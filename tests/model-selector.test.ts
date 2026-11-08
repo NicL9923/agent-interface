@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
 import { act, createElement } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { Root } from "react-dom/client";
+import { beforeEach, expect, it, vi } from "vitest";
 import { ModelSelector } from "../src/components/ModelSelector";
 import { api, write } from "../src/client-api";
 import type { ModelCatalog } from "../src/shared/types";
+import { mountRoot, typeInto } from "./ui-harness";
 
-vi.mock("../src/client-api", () => ({ api: vi.fn(), write: vi.fn() }));
+vi.mock("../src/client-api", async () => (await import("./helpers/request-mock")).withRequest(await (() => ({ api: vi.fn(), write: vi.fn() }))()));
 const catalog: ModelCatalog = { provider: "custom:house", model: "saved-model", providers: [
   { id: "house", name: "House provider", aliases: ["custom:house"], authenticated: true, models: [
     { id: "saved-model", name: "Saved model", available: true },
@@ -21,10 +22,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(api).mockReset().mockResolvedValue(catalog);
   vi.mocked(write).mockReset();
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  container = document.createElement("div"); document.body.append(container); root = createRoot(container);
+  ({ container, root } = mountRoot());
 });
-afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.unstubAllGlobals(); });
 const render = async (model = "saved-model") => {
   await act(async () => root.render(createElement(ModelSelector, { value: { provider: "custom:house", model }, profile: "shared",
     favorites: [], disabled: false, onChange, onFavoritesSaved })));
@@ -67,7 +66,7 @@ it("persists favorites separately from household preferences and reports failed 
   const favorite = container.querySelector<HTMLButtonElement>('[aria-label="Add New model to favorites"]')!;
   vi.mocked(write).mockRejectedValueOnce(new Error("Connection lost"));
   await act(async () => favorite.click());
-  expect(favorite.getAttribute("aria-pressed")).toBe("false");
+  expect(favorite.getAttribute("aria-label")).toBe("Add New model to favorites");
   expect(container.textContent).toContain("Connection lost");
   expect(onFavoritesSaved).not.toHaveBeenCalled();
   vi.mocked(write).mockResolvedValueOnce({ modelFavorites: [{ provider: "house", model: "new-model" }] });
@@ -81,16 +80,33 @@ it("persists favorites separately from household preferences and reports failed 
   expect(write).toHaveBeenLastCalledWith("/preferences/models", { modelFavorites: [] }, "PUT");
 });
 
+it("marks an alias favorite selected after choosing the canonical provider", async () => {
+  await act(async () => root.render(createElement(ModelSelector, {
+    value: { provider: "house", model: "saved-model" }, profile: "shared",
+    favorites: [{ provider: "custom:house", model: "saved-model" }], disabled: false,
+    onChange, onFavoritesSaved,
+  })));
+  const selected = container.querySelectorAll('.model-choice[aria-pressed="true"]');
+  expect(selected).toHaveLength(2);
+  expect([...selected].every(row => row.textContent?.includes("Saved model"))).toBe(true);
+  vi.mocked(write).mockResolvedValueOnce({ modelFavorites: [] });
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Remove Saved model from favorites"]')!.click());
+  expect(write).toHaveBeenCalledExactlyOnceWith("/preferences/models", { modelFavorites: [] }, "PUT");
+  expect(onChange).not.toHaveBeenCalled();
+});
+
 it("filters provider groups by search and shows an empty search result", async () => {
   await render();
+  const status = container.querySelector('[role="status"]');
   const input = container.querySelector<HTMLInputElement>('input[type="search"]')!;
-  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
-  await act(async () => { setter.call(input, "new model"); input.dispatchEvent(new Event("input", { bubbles: true })); });
+  await typeInto(input, "new model");
   expect(container.querySelectorAll("details.model-provider")).toHaveLength(1);
   expect(container.querySelector("details.model-provider")?.hasAttribute("open")).toBe(true);
   expect(button("New model")).toBeDefined();
-  await act(async () => { setter.call(input, "missing"); input.dispatchEvent(new Event("input", { bubbles: true })); });
+  await typeInto(input, "missing");
   expect(container.textContent).toContain("No models match your search.");
+  expect(container.querySelector('[role="status"]')).toBe(status);
+  expect(status?.textContent).toBe("No models match your search.");
 });
 
 it("keeps a saved model after a catalog failure and retries without replacing the selection", async () => {

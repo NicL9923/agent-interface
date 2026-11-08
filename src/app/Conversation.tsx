@@ -1,28 +1,57 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react";
-import type { RefCallback, RefObject } from "react";
-import type { ActivityState, Approval, AttentionRequest, Bootstrap, Bot, FileRef, Message, ToolCall } from "../shared/types";
-import { write } from "../client-api";
+import { approvalAttempt, type ApprovalAttempt } from "./approval-attempt";
+import { matchCombo, shortcuts } from "./shortcuts";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode, RefCallback, RefObject } from "react";
+import type { ActivityState, Approval, Bootstrap, Bot, FileRef, Message, ToolCall } from "../shared/types";
+import { ApiError, request as apiRequest } from "../client-api";
 import { Avatar } from "../components/Avatar";
 import { avatarProp } from "../components/avatar-motion";
-import { MessageMarkdown } from "../components/MessageMarkdown";
+import { MessageMarkdown, StreamingMarkdown } from "../components/MessageMarkdown";
 import { ConnectionPanel } from "../components/ConnectionPanel";
 import { Icon } from "../components/Icon";
 import { NotificationOnboarding } from "../components/DeviceNotifications";
 import type { useDeviceNotifications } from "../components/use-device-notifications";
-import { SecureRequestCard } from "../components/SecureRequestCard";
+import { openComputer, usesComputer } from "../components/ComputerHandoffCard";
 import { AgentExchange, isAgentExchange } from "../components/AgentExchange";
 import { ActionReceipt } from "../components/ActionReceipt";
+import { T3ThreadCard } from "../components/T3ThreadCard";
+import { t3ThreadLaunch } from "../shared/t3-code";
 import { When } from "../components/When";
-import { activityLabels, isActivityMessage, messageOrigin, withMessageOrigins } from "../shared/message-origin";
+import { Shimmer } from "../components/Shimmer";
+import { ComputerPeek } from "../components/ComputerPeek";
+import { reactAvatar } from "../components/avatar-attention";
+import { WorkTape } from "./WorkTape";
+import { useLeaving } from "./use-leaving";
+import { prefersReducedMotion } from "./reduced-motion";
+import { receipt } from "../shared/discovery";
+import { activityAction } from "../shared/activity-sentence";
+import { MAX_ATTACHMENTS } from "../shared/uploads";
+import { isActivityMessage, messageOrigin, withMessageOrigins } from "../shared/message-origin";
+import { withoutBotTag } from "../shared/event-copy";
 import type { SavedConversation } from "./storage";
 import type { SentEcho } from "./sent-echo";
 import type { useConversation } from "./use-conversation";
-export function Conversation({ boot, selected, botId, conversation, echo, state, showActivity, avatarState, connectionLost, offline, appUnavailable, checkingConnection, reconnect, error, setError, notifications, scroll, content, history, reply, onScroll, onCreate, onDraft }: {
+import { useStableCallback } from "./use-stable-callback";
+import { useTurnRetry } from "./use-turn-retry";
+import { AttentionList } from "./AttentionList";
+import { FindBar } from "./FindBar";
+import { MessageMeta, QuoteSelection, TranscriptTools } from "./ReplyActions";
+import { useReplySpeech } from "./use-reply-speech";
+import { useTalkLive } from "./talk-live";
+import { attentionAnchor, foldSummary, isHumanMessage, quoteBlock, turnDuration, workGroups } from "./transcript-logic";
+import { RoutineRunCard } from "../components/RoutineRunCard";
+import { placeRuns, type RoutineRun } from "../shared/routine-runs";
+import { useRoutineRuns } from "./use-routine-runs";
+import "./transcript.css";
+const activeStates: ActivityState[] = ["thinking", "working", "waiting", "blocked"];
+export function Conversation({ boot, selected, botId, conversation, canonical, echo, state, showActivity, avatarState, connectionLost, offline, appUnavailable, checkingConnection, reconnect, error, setError, notifications, scroll, endSpace, content, history, reply, onScroll, onCreate, onDraft, onRoutineResults, onHideRoutineRuns, computerOpen = false, reviewed = false }: {
   boot: Bootstrap;
   selected?: Bot;
   botId: string;
   /** Includes the echo of a message still on its way, which is drawn as sending. */
   conversation: SavedConversation | null;
+  /** The conversation as Hermes has it, without messages still drawn from this device. */
+  canonical: SavedConversation | null;
   echo: SentEcho | null;
   state: ActivityState;
   showActivity: boolean;
@@ -36,29 +65,113 @@ export function Conversation({ boot, selected, botId, conversation, echo, state,
   setError(message: string): void;
   notifications: ReturnType<typeof useDeviceNotifications>;
   scroll: RefObject<HTMLDivElement | null>;
+  endSpace: RefObject<HTMLDivElement | null>;
   content: RefCallback<HTMLDivElement>;
   history: ReturnType<typeof useConversation>["history"];
   reply: ReturnType<typeof useConversation>["reply"];
   onScroll(): void;
   onCreate(): void;
-  onDraft(text: string): void;
+  /** Adds text to the draft. False while the draft is on its way, when it must not change. */
+  /** Adds to the person's draft, never replacing it. False while a send is on its way; otherwise how many files didn't fit. */
+  onDraft(text: string, files?: FileRef[]): number | false;
+  /** Opens a routine's full results at one run. */
+  onRoutineResults(routineId: string, resultId: string): void;
+  /** Keeps a routine's runs out of this chat, with a way back. */
+  onHideRoutineRuns(routineId: string, routineName: string): void;
+  /** The full computer view is open, so the transcript's small live view steps aside. */
+  computerOpen?: boolean;
+  /** The person reviewed an interrupted task in the message box; form cards send under the same review. */
+  reviewed?: boolean;
 }) {
   const prefs = boot.preferences;
   const advanced = prefs.presentation === "advanced";
   const blocks = useMemo(() => turns(conversation, advanced), [conversation, advanced]);
-  const actions: Record<ActivityState, string> = {
-    idle: "ready", thinking: "thinking", working: "working", waiting: "waiting for approval",
-    blocked: "waiting for your input", done: "done", failed: "having trouble", interrupted: "stopped", disconnected: "reconnecting",
-  };
-  const detail = conversation?.activity.detail?.trim().replace(/[.…]+$/, "");
-  const prop = connectionLost ? undefined : avatarProp(conversation?.toolCalls?.findLast(call => call.status === "running")?.name);
-  const action = !connectionLost && state === "working" && detail ? detail.charAt(0).toLowerCase() + detail.slice(1) : actions[state];
+  // Routine runs sit among the turns by time. See src/shared/routine-runs.ts for the rules.
+  const hiddenRoutines = useMemo(() => (prefs.hiddenRoutineRuns ?? []).filter(entry => entry.botId === botId).map(entry => entry.routineId), [prefs.hiddenRoutineRuns, botId]);
+  const runs = useRoutineRuns({ botId, messages: canonical?.botId === botId ? canonical.messages : undefined, complete: history.complete,
+    enabled: !!selected && !!boot.capabilities.routines?.supported, hiddenRoutines });
+  const runSlots = useMemo(() => placeRuns(blocks.map(turnTime), runs), [blocks, runs]);
+  const runActions = useMemo(() => ({ onResults: onRoutineResults, onHide: onHideRoutineRuns }), [onRoutineResults, onHideRoutineRuns]);
+  const runningCall = connectionLost ? undefined : conversation?.toolCalls?.findLast(call => call.status === "running");
+  const prop = avatarProp(runningCall?.name);
+  const action = activityAction(state, conversation?.activity.detail, { offline, connectionLost });
+  const running = !!conversation && activeStates.includes(conversation.activity.state);
+  // The running turn's one live row: the current tool's receipt, and in Advanced, the latest reasoning line.
+  const liveTool = runningCall ? `${receipt(runningCall).label} · ${runningCall.name}` : undefined;
+  const liveThought = advanced && running && !connectionLost ? latestReasoning(conversation!.messages) : undefined;
+  // The running turn's tools so far. Hermes lists only the current turn's calls while it runs.
+  const turnCalls = running && !connectionLost ? conversation!.toolCalls ?? [] : [];
+  const peeking = !!selected && !computerOpen && turnCalls.some(call => usesComputer(call.name));
+  // Settled decisions fold away instead of vanishing; Reduce Motion removes them at once.
+  const pendingApprovals = useMemo(() => conversation?.approvals.filter(approval => approval.status === "pending") ?? [], [conversation?.approvals]);
+  const approvals = useLeaving(pendingApprovals, approval => approval.id, prefersReducedMotion() ? 0 : 420, `${boot.user.id}:${botId}`);
+  // Short results of reply actions, each its own node so a repeat still reads out.
+  const [notice, setNotice] = useState<{ id: number; text: string } | null>(null);
+  const announce = useStableCallback((text: string) => setNotice(previous => ({ id: (previous?.id ?? 0) + 1, text })));
+  const quote = useStableCallback((text: string) => {
+    if (onDraft(`${quoteBlock(text)}\n\n`) === false) return announce("Your message is still sending. Quote once it has gone.");
+    announce("Quoted in your message.");
+    // The composer is outside the transcript; its field takes the caret after the quote.
+    requestAnimationFrame(() => {
+      const field = document.getElementById("message");
+      if (!(field instanceof HTMLTextAreaElement)) return;
+      field.focus();
+      field.setSelectionRange(field.value.length, field.value.length);
+    });
+  });
+  // A refused retry's words go back in the message box beside whatever the person already wrote.
+  const putBack = useStableCallback((original: Message) => {
+    const left = onDraft(original.text, original.files);
+    if (left === false) return announce("Your message is still sending. Try again once it has gone.");
+    announce(left ? `Your message is in the message box, without ${left} of its files: a message can carry only ${MAX_ATTACHMENTS}.` : "Your message is in the message box.");
+    requestAnimationFrame(() => document.getElementById("message")?.focus());
+  });
+  // Live Talk owns the speaker, so replies are not read aloud while it runs.
+  const talking = useTalkLive();
+  const speech = useReplySpeech(botId, connectionLost || talking);
+  const tools = useMemo<TranscriptTools>(() => ({ botId, sessionId: conversation?.sessionId, unavailable: connectionLost, quote, announce, speech, reviewedInterruption: reviewed, formKey: boot.formKey }),
+    [botId, conversation?.sessionId, connectionLost, quote, announce, speech, reviewed, boot.formKey]);
+  const frame = useRef<HTMLDivElement>(null);
+  const retry = useTurnRetry({ botId, userId: boot.user.id, canonical, blocked: !!echo || connectionLost || !boot.capabilities.chat.supported,
+    resendable: boot.capabilities.idempotency.supported, report: setError });
+  // Find in chat takes Cmd/Ctrl+F while a conversation is on screen. Covered by a dialog or the
+  // phone's assistant list, the browser's own find stays.
+  const [finding, setFinding] = useState(false);
+  const findReturn = useRef<HTMLElement | null>(null);
+  const findable = !!selected && !!conversation;
+  useEffect(() => setFinding(false), [botId]);
+  useEffect(() => {
+    if (!findable) return;
+    const open = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || !matchCombo(event, shortcuts.find)) return;
+      const view = scroll.current;
+      if (!view || view.closest("[inert]") || document.querySelector("dialog[open]")) return;
+      event.preventDefault();
+      const field = frame.current?.querySelector<HTMLInputElement>(".find-bar input");
+      if (field) return field.select();
+      findReturn.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      setFinding(true);
+    };
+    // Assistant details and the palette ask for find in chat by event, once this chat is on screen.
+    const requested = (event: Event) => {
+      if ((event as CustomEvent<{ botId?: string }>).detail?.botId !== botId) return;
+      const field = frame.current?.querySelector<HTMLInputElement>(".find-bar input");
+      if (field) return field.select();
+      findReturn.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      setFinding(true);
+    };
+    window.addEventListener("keydown", open);
+    window.addEventListener("wildbots:find", requested);
+    return () => { window.removeEventListener("keydown", open); window.removeEventListener("wildbots:find", requested); };
+  }, [findable, scroll, botId]);
+  const closeFind = useStableCallback(() => {
+    setFinding(false);
+    const back = findReturn.current;
+    findReturn.current = null;
+    (back?.isConnected ? back : scroll.current)?.focus({ preventScroll: true });
+  });
   return (
-    <>
-      {connectionLost && selected && (
-        <ConnectionPanel compact connection={boot.connection} offline={offline}
-          appUnavailable={appUnavailable} busy={checkingConnection} retry={() => void reconnect()} />
-      )}
+    <TranscriptTools.Provider value={tools}>
       {error && (
         <div className="notice error" role="alert">
           {error}
@@ -68,12 +181,14 @@ export function Conversation({ boot, selected, botId, conversation, echo, state,
         </div>
       )}
       <NotificationOnboarding notifications={notifications} />
-      <div className="transcript-frame">
+      <div className="transcript-frame" ref={frame}>
+      {finding && findable && <FindBar botId={botId} conversation={conversation} scroll={scroll} openMessage={history.openMessage} onClose={closeFind} />}
       {/* Always mounted, so a screen reader is already watching when a reply lands. */}
       {/* Each reply is its own node, so a repeat of the same words still reads out. */}
       <span className="sr-only" role="status">
         {selected && reply?.botId === botId && <span key={reply.id}>{`${selected.name} replied: ${reply.text}`}</span>}
       </span>
+      <span className="sr-only" role="status">{notice && <span key={notice.id}>{notice.text}</span>}</span>
       <div
         className="transcript"
         ref={scroll}
@@ -116,11 +231,11 @@ export function Conversation({ boot, selected, botId, conversation, echo, state,
           </div>
         ) : !conversation && !connectionLost ? (
           <HistorySkeleton />
-        ) : blocks.length ? (
+        ) : blocks.length || runs.length ? (
           <>
             <HistoryEdge history={history} scroll={scroll} name={selected.name} disabled={connectionLost} />
             <Turns blocks={blocks} advanced={advanced} disconnected={connectionLost} name={selected.name} botId={botId} userId={boot.user.id}
-              outgoingId={echo?.request.requestId} outgoing={echo?.status} />
+              running={running} outgoingId={echo?.request.requestId} outgoing={echo?.status} runSlots={runSlots} runActions={runActions} />
           </>
         ) : !showActivity ? (
           <div className="empty-state">
@@ -131,7 +246,7 @@ export function Conversation({ boot, selected, botId, conversation, echo, state,
               name={selected.name}
               reducedMotion
             />
-            <h2>Let's discuss your role.</h2>
+            <h2>Start with {selected.name}'s role</h2>
             <p>{selected.description || `Tell ${selected.name} what you need help with.`}</p>
             <button type="button" onClick={() => onDraft(`Let's discuss your role${selected.description ? `: ${selected.description}` : ". Ask me what I need help with and how I like to work"}.`)}>Discuss {selected.name}'s role</button>
             {!boot.capabilities.chat.supported && (
@@ -140,33 +255,53 @@ export function Conversation({ boot, selected, botId, conversation, echo, state,
           </div>
         ) : null}
         {selected && showActivity && (
-          <div className={`activity-status conversation-activity message-activity state-${state}`}>
+          <div className={`activity-status conversation-activity message-activity state-${state}${state === "failed" || state === "interrupted" ? " recovery-activity" : ""}`}>
             {/* Headers, home and lists keep avatars still; this one moves to show live work. */}
-            <Avatar avatar={selected.avatar} state={state} size={52} name={selected.name} prop={state === "working" ? prop : undefined} />
-            <div className="activity-copy" role="status">
-              <Shimmer text={`${selected.name} is ${action}...`} />
+            <Avatar avatar={selected.avatar} state={state === "blocked" ? "idle" : state} size={52} name={selected.name} botId={selected.id} offline={offline} prop={state === "working" ? prop : undefined} />
+            <div className="activity-copy">
+              <div role="status" aria-atomic="true">
+                {state === "failed" || state === "interrupted" ? <>
+                  <p className="recovery-title">{state === "failed" ? `${selected.name} couldn't finish.` : `${selected.name}'s task was interrupted.`}</p>
+                  {conversation?.activity.detail?.trim() && <p className="recovery-detail">{conversation.activity.detail}</p>}
+                  {state === "interrupted" && <p className="recovery-guidance">Review the last actions above before continuing.</p>}
+                </> : <Shimmer text={`${selected.name} is ${action}...`} />}
+              </div>
+              {running && (liveTool || liveThought || turnCalls.length > 0) && <div className="activity-live">
+                <WorkTape calls={turnCalls} />
+                {liveTool && (usesComputer(runningCall?.name) ? <div className="activity-live-computer">
+                  <p className="activity-live-tool">{liveTool}</p>
+                  <button type="button" className="activity-watch" aria-label={`Watch ${selected.name} on the computer`}
+                    onClick={() => openComputer()}><Icon name="computer" size={16} />Watch</button>
+                </div> : <p className="activity-live-tool">{liveTool}</p>)}
+                {liveThought && <p className="activity-live-thought">{liveThought}</p>}
+              </div>}
+              {retry.message && <p className="recovery-guidance" role={retry.checking ? "status" : undefined}>{retry.checking
+                ? retry.resendable ? "Checking whether the retry arrived… Retry sends the same request again, so it can't run twice."
+                  : "Hermes hasn't confirmed the retry yet. It's being checked and won't be sent again. If it never arrives, send the message again from the message box."
+                : "Retry sends your last message again. Your draft stays as it is."}</p>}
+              {retry.refusal && <div className="retry-refused">
+                <p role="status">{retry.refusal.text}</p>
+                <button type="button" className="primary retry-turn" onClick={() => putBack(retry.refusal!.message)}>Put my message in the message box</button>
+              </div>}
+              {retry.message && <button type="button" className="primary with-progress retry-turn" disabled={retry.busy || retry.checking && !retry.resendable}
+                title={retry.checking ? retry.resendable ? "Sends the same request again, so it can't run twice" : boot.capabilities.idempotency.reason : undefined}
+                onClick={() => void retry.run(retry.message!)}>
+                {retry.busy ? <Icon name="spinner" className="spin" size={16} /> : <Icon name="refresh" size={16} />}
+                {retry.busy ? "Retrying…" : "Retry"}
+              </button>}
             </div>
           </div>
         )}
-        {conversation?.attention?.map((request) => (
-          request.kind === "secure" && request.secure ? <SecureRequestCard
-            key={`${boot.user.id}:${botId}:${request.id}:${JSON.stringify(request.secure)}`}
-            request={request.secure} requestId={request.id} botId={botId} ownerId={boot.user.id}
-            title={request.title} detail={request.detail} assistantName={selected?.name}
-          /> : <AttentionCard
-            key={request.id}
-            request={request}
-            botId={botId}
-            report={setError}
-          />
-        ))}
-        {conversation?.approvals
-          .filter((approval) => approval.status === "pending")
-          .map((approval) => <ApprovalCard key={`${botId}:${approval.id}`} approval={approval} botId={botId}
-            supported={boot.capabilities.approvals.supported} report={setError} />)}
+        <AttentionList conversation={conversation} botId={botId} userId={boot.user.id} bots={boot.bots} assistantName={selected?.name}
+          disconnected={connectionLost} report={setError} />
+        {approvals.map(({ item: approval, leavingSince }) => <ApprovalCard key={`${boot.user.id}:${botId}:${approval.id}`} approval={approval} botId={botId} userId={boot.user.id} disconnected={connectionLost}
+            supported={boot.capabilities.approvals.supported} unavailableReason={boot.capabilities.approvals.reason} report={setError} leaving={leavingSince !== undefined} />)}
       </div>
+      {/* Room for a message just sent to sit near the top while its reply grows; see use-conversation. */}
+      <div className="transcript-end-space" ref={endSpace} aria-hidden="true" />
       </div>
-      {selected && conversation && !history.atLatest && (
+      <QuoteSelection frame={frame} scroll={scroll} />
+      {selected && conversation && !history.atLatest && !history.atAttention && (
         <button type="button" className={`jump-latest${history.unseen ? " has-new" : ""}`} onClick={() => {
           history.jumpToLatest();
           // The button disappears, so keyboard focus continues from the transcript.
@@ -176,14 +311,18 @@ export function Conversation({ boot, selected, botId, conversation, echo, state,
           {history.unseen ? `${history.unseen} new ${history.unseen === 1 ? "message" : "messages"}` : "Jump to latest"}
         </button>
       )}
+      {peeking && selected && <ComputerPeek name={selected.name} />}
       </div>
-    </>
+    </TranscriptTools.Provider>
   );
 }
-// The sweep copy is hidden from assistive technology; see .shimmer-band for how it moves.
-function Shimmer({ text }: { text: string }) {
-  return <span className="activity-shimmer">{text}<span className="shimmer-band" aria-hidden="true"><span>{text}</span></span></span>;
+/** The last line of reasoning in the running turn, after the person's latest message. */
+function latestReasoning(messages: Message[]) {
+  const start = messages.findLastIndex(isHumanMessage) + 1;
+  const text = messages.slice(start).findLast(message => message.role === "assistant" && message.reasoning?.trim())?.reasoning ?? "";
+  return text.trim().split("\n").findLast(line => line.trim())?.trim();
 }
+// The sweep copy is hidden from assistive technology; see .shimmer-band for how it moves.
 function HistorySkeleton() {
   return <div className="history-skeleton" role="status">
     <span className="sr-only">Opening your conversation…</span>
@@ -220,17 +359,26 @@ function HistoryEdge({ history, scroll, name, disabled }: {
     </button>
   </div>;
 }
-type Turn = { messages: Message[]; tools: Map<string, Message>; reasoning: string[] };
+type Turn = { messages: Message[]; tools: Map<string, Message>; reasoning: string[]; replyAt?: string };
+const startsTurn = (message: Message) => isHumanMessage(message) || message.role === "user" && messageOrigin(message)?.kind === "scheduled";
 function turns(conversation: SavedConversation | null, advanced: boolean) {
   const blocks: Turn[] = [];
   for (const message of withMessageOrigins(conversation?.messages || [])) {
-    if (!blocks.length || message.role === "user") blocks.push({ messages: [], tools: new Map(), reasoning: [] });
+    // A person's message or a scheduled prompt starts a turn. Subagent, process and agent rows that
+    // Hermes files as user messages belong to the work of the turn they arrive in.
+    if (!blocks.length || startsTurn(message)) blocks.push({ messages: [], tools: new Map(), reasoning: [] });
     const block = blocks.at(-1)!;
     // A turn's reasoning parts share one accordion instead of a block per reply row.
     if (advanced && !isActivityMessage(message) && message.role === "assistant" && message.reasoning?.trim()) block.reasoning.push(message.reasoning.trim());
-    if (isActivityMessage(message) || message.role === "tool" || message.toolCall) block.tools.set(message.id, message);
     // A tool-call row with no reply text would render as an empty bubble.
-    if (!isActivityMessage(message) && message.role !== "tool" && visibleMessage(message)) block.messages.push(message);
+    if (!isActivityMessage(message) && message.role !== "tool" && visibleMessage(message)) {
+      if (message.role !== "user" && block.tools.size && block.replyAt === undefined) block.replyAt = message.id;
+      block.messages.push(message);
+    }
+    if (isActivityMessage(message) || message.role === "tool" || message.toolCall) {
+      block.tools.set(message.id, message);
+      block.replyAt = undefined;
+    }
   }
   for (const call of conversation?.toolCalls || []) {
     // Native history can reuse a tool ID. Only a unique row is safe to reconcile.
@@ -244,101 +392,223 @@ function turns(conversation: SavedConversation | null, advanced: boolean) {
       blocks.at(-1)!.tools.set(`live-${call.id}`, { id: `live-${call.id}`, role: "tool", text: "", toolCall: call });
     }
   }
+  // Live calls update receipts, but only saved row order establishes where the reply starts.
+  for (const block of blocks) if ([...block.tools.values()].some(message => message.toolCall?.status === "running")) block.replyAt = undefined;
   return blocks;
 }
-// Memoized so typing in the composer does not re-render the whole transcript.
-const Turns = memo(function Turns({ blocks, advanced, disconnected, name, botId, userId, outgoingId, outgoing }: {
-  blocks: Turn[]; advanced: boolean; disconnected: boolean; name: string; botId: string; userId: string;
-  /** The person's sent message still shown from this device, and how far it got. */
+type TurnProps = {
+  block: Turn; advanced: boolean; disconnected: boolean; name: string; botId: string; userId: string;
+  /** This is the latest turn and it is still working, so its work reads as live rather than finished. */
+  live: boolean;
+  /** The person's sent message still shown from this device, and how far it got. Only the turn that holds it gets these. */
   outgoingId?: string; outgoing?: SentEcho["status"];
+};
+/** When a turn started, for placing routine runs: its first dated message, shown or folded. */
+const turnTime = (block: Turn) => block.messages.find(message => message.createdAt)?.createdAt
+  ?? [...block.tools.values()].find(message => message.createdAt)?.createdAt;
+type RunActions = { onResults(routineId: string, resultId: string): void; onHide(routineId: string, routineName: string): void };
+const runCards = (runs: RoutineRun[] | undefined, botId: string, actions: RunActions) => (runs ?? []).map(run =>
+  <RoutineRunCard key={`run:${run.routineId}:${run.id}`} run={run} botId={botId} onResults={actions.onResults} onHide={actions.onHide} />);
+// Memoized so typing in the composer does not re-render the whole transcript.
+const Turns = memo(function Turns({ blocks, running, outgoingId, outgoing, runSlots, runActions, ...shared }: Omit<TurnProps, "block" | "live" | "outgoingId" | "outgoing"> & {
+  blocks: Turn[];
+  /** The latest turn is still working. */
+  running: boolean;
+  outgoingId?: string; outgoing?: SentEcho["status"];
+  /** Routine runs before each turn, and after the last; see placeRuns. */
+  runSlots: RoutineRun[][];
+  runActions: RunActions;
 }) {
+  // One keyed list, so an opened run card stays open when a new turn lands after it.
   return <>
-    {blocks.map((block, index) => <div className="conversation-turn" key={block.messages[0]?.id || `tools-${index}`}>
-      {block.messages.flatMap((message, position) => {
-        // The conversation is with one assistant, so its replies need no name, and
-        // consecutive reply parts in a turn share the first part's timestamp.
-        const reply = message.role === "assistant" || messageOrigin(message)?.kind === "scheduled";
-        const continued = reply && block.messages[position - 1]?.role === "assistant";
-        const scheduled = messageOrigin(message)?.kind === "scheduled";
-        const label = scheduled ? "Scheduled" : message.role === "user" ? message.sender?.name || "User"
-          : reply ? "" : message.toolName || message.role;
-        // Reasoning follows the prompt and precedes the reply.
-        const opensReply = !!block.reasoning.length && message.role !== "user" && block.messages.slice(0, position).every(item => item.role === "user");
-        // Accepted, it reads as any other message until Hermes's own copy takes its place.
-        const delivery = outgoingId === message.id && outgoing !== "accepted" ? outgoing : undefined;
-        const article = <article
-          className={`message message-${isAgentExchange(message) ? "agent" : message.role}${continued ? " message-continued" : ""}${delivery ? ` message-outgoing message-${delivery}` : ""}`}
-          key={message.id}
-          data-message-id={message.id}
-          aria-busy={delivery === "sending" || undefined}
-        >
-          {!isAgentExchange(message) && !continued && (label || message.createdAt) && <div className="message-attribution">
-            {label}
-            {delivery ? <span className="message-delivery">{delivery === "sending" ? "Sending…" : "Not confirmed yet"}</span>
-              : message.createdAt && <When value={message.createdAt} />}
-          </div>}
-          {isAgentExchange(message) ? <AgentExchange message={message} recipient={name} /> : reply ? (
-            <MessageMarkdown text={message.text} botId={botId} messageId={message.id} userId={userId} unavailable={disconnected} inlineUi={message.role === "assistant"} />
-          ) : message.role !== "tool" && (
-            <div className="message-text">{message.text}</div>
-          )}
-          {message.files?.map((file) => (
-            <FileLink file={file} key={file.id} />
-          ))}
-        </article>;
-        return opensReply ? [<Reasoning key="reasoning" parts={block.reasoning} />, article] : [article];
-      })}
-      {!!block.reasoning.length && block.messages.every(message => message.role === "user") && <Reasoning parts={block.reasoning} />}
-      <ToolCalls messages={[...block.tools.values()]} advanced={advanced} disconnected={disconnected} recipient={name} />
-    </div>)}
+    {blocks.flatMap((block, index) => {
+      const holdsEcho = outgoingId !== undefined && block.messages.some(message => message.id === outgoingId);
+      return [...runCards(runSlots[index], shared.botId, runActions), <TurnView key={block.messages[0]?.id || `tools-${index}`} block={block} {...shared} live={running && index === blocks.length - 1}
+        outgoingId={holdsEcho ? outgoingId : undefined} outgoing={holdsEcho ? outgoing : undefined} />];
+    })}
+    {runCards(runSlots[blocks.length], shared.botId, runActions)}
   </>;
 });
+// A stream changes the latest reply about four times a second, and `turns` rebuilds every block each
+// time. A turn is compared by what it shows, so finished turns, and a reload with the same content, bail out.
+const sameFile = (a: FileRef, b: FileRef) => a === b || a.id === b.id && a.name === b.name && a.mime === b.mime && a.size === b.size && a.url === b.url;
+const sameCall = (a?: ToolCall, b?: ToolCall) => a === b || !!a && !!b && a.id === b.id && a.name === b.name && a.status === b.status
+  && a.arguments === b.arguments && a.result === b.result && a.error === b.error && a.startedAt === b.startedAt && a.completedAt === b.completedAt;
+const sameOrigin = (a?: Message["origin"], b?: Message["origin"]) => a === b || !!a && !!b && a.kind === b.kind && a.visibility === b.visibility
+  && a.title === b.title && a.name === b.name && a.handle === b.handle;
+function sameMessage(a: Message, b: Message) {
+  if (a === b) return true;
+  return a.id === b.id && a.role === b.role && a.text === b.text && a.createdAt === b.createdAt && a.reasoning === b.reasoning
+    && a.toolName === b.toolName && a.runId === b.runId && a.sender?.id === b.sender?.id && a.sender?.name === b.sender?.name
+    && sameOrigin(a.origin, b.origin) && sameCall(a.toolCall, b.toolCall)
+    && (a.files === b.files || !!a.files && !!b.files && a.files.length === b.files.length && a.files.every((file, index) => sameFile(file, b.files![index])));
+}
+const sameMessages = (a: Message[], b: Message[]) => a === b || a.length === b.length && a.every((message, index) => sameMessage(message, b[index]));
+function sameTurn(a: Turn, b: Turn) {
+  if (a === b) return true;
+  if (a.replyAt !== b.replyAt || a.reasoning.length !== b.reasoning.length || a.reasoning.some((part, index) => part !== b.reasoning[index])) return false;
+  if (!sameMessages(a.messages, b.messages) || a.tools.size !== b.tools.size) return false;
+  const left = [...a.tools], right = [...b.tools];
+  return left.every(([id, message], index) => id === right[index][0] && sameMessage(message, right[index][1]));
+}
+const sameTurnProps = (a: TurnProps, b: TurnProps) => a.advanced === b.advanced && a.disconnected === b.disconnected && a.name === b.name
+  && a.botId === b.botId && a.userId === b.userId && a.live === b.live && a.outgoingId === b.outgoingId && a.outgoing === b.outgoing
+  && sameTurn(a.block, b.block);
+const TurnView = memo(function TurnView({ block, advanced, disconnected, name, botId, userId, live: running, outgoingId, outgoing }: TurnProps) {
+  const work = [...block.tools.values()];
+  // A turn's intermediate work folds into one row: before the reply that follows the work, before the
+  // first reply when there is only reasoning, or at the end.
+  const fold = work.length || block.reasoning.length ? <TurnWork key="turn-work" work={work} reasoning={block.reasoning}
+    messages={block.messages} advanced={advanced} disconnected={disconnected} recipient={name} live={running} /> : null;
+  const foldAt = work.length ? block.replyAt : block.messages.find(message => message.role !== "user")?.id;
+  // Work the person should see without opening the fold, such as a T3 Code thread it started, follows it.
+  const shown = work.flatMap(message => {
+    const thread = message.toolCall && t3ThreadLaunch(message.toolCall);
+    return thread ? [<T3ThreadCard key={`t3:${message.id}`} thread={thread} />] : [];
+  });
+  const afterFold = fold ? [fold, ...shown] : [];
+  // One keyed list, so the fold keeps its open state when finishing moves it above the reply.
+  const rows = block.messages.flatMap((message, position) => {
+    // The conversation is with one assistant, so its replies need no name. Consecutive reply parts
+    // in a turn read as one reply, with the time under the last part.
+    const reply = isReplyRow(message);
+    const joins = (earlier: Message | undefined, later: Message | undefined) => !!later && isReplyRow(later) && earlier?.role === "assistant" && later.id !== block.replyAt;
+    const continued = joins(block.messages[position - 1], message);
+    const endsRun = !joins(message, block.messages[position + 1]);
+    const scheduled = messageOrigin(message)?.kind === "scheduled";
+    const own = message.role === "user" && !scheduled;
+    // A name goes above a message only where it tells the reader something: a scheduled prompt, or
+    // another member of the household. The person's own words and the assistant's replies need none.
+    const label = scheduled ? "Scheduled" : own ? message.sender && message.sender.id !== userId ? message.sender.name : ""
+      : reply ? "" : message.toolName || message.role;
+    // Accepted, it reads as any other message until Hermes's own copy takes its place.
+    const delivery = outgoingId === message.id && outgoing !== "accepted" ? outgoing : undefined;
+    const streaming = message.id.endsWith("-inflight");
+    const exchange = isAgentExchange(message);
+    let when = message.createdAt;
+    for (let at = position; !when && at > 0 && joins(block.messages[at - 1], block.messages[at]); at--) when = block.messages[at - 1].createdAt;
+    const files = message.files?.map(file => <FileLink file={file} key={file.id} />);
+    const article = <article
+      className={`message message-${exchange ? "agent" : message.role}${continued ? " message-continued" : ""}${delivery ? ` message-outgoing message-${delivery}` : ""}`}
+      key={message.id}
+      data-message-id={message.id}
+      aria-busy={delivery === "sending" || undefined}
+    >
+      {!exchange && !continued && label && <div className="message-attribution">{label}</div>}
+      {/* Only a person's own message has a bubble, so its meta line can sit beneath it. */}
+      {exchange ? <AgentExchange message={message} recipient={name} /> : reply ? (
+        streaming
+          ? <StreamingMarkdown text={message.text} botId={botId} messageId={message.id} userId={userId} unavailable={disconnected} inlineUi={message.role === "assistant"} />
+          : <MessageMarkdown text={message.text} botId={botId} messageId={message.id} userId={userId} unavailable={disconnected} inlineUi={message.role === "assistant"} />
+      ) : message.role !== "tool" && (
+        own ? <div className="message-bubble"><div className="message-text">{message.text}</div>{files}</div> : <div className="message-text">{message.text}</div>
+      )}
+      {!own && files}
+      {!exchange && !streaming && (reply || own) && <MessageMeta message={message} own={own}
+        when={endsRun ? when : undefined} delivery={delivery}
+        actions={!!message.text.trim() && (message.role === "assistant" || own)} />}
+    </article>;
+    return message.id === foldAt && fold ? [...afterFold, article] : [article];
+  });
+  if (foldAt === undefined && fold) rows.push(...afterFold);
+  return <div className="conversation-turn">{rows}</div>;
+}, sameTurnProps);
+/**
+ * One row for a turn's intermediate work: "Worked for 2m 14s · 3 tool calls, 1 subagent". Open, it
+ * shows the grouped accordions as before, with reasoning first.
+ */
+function TurnWork({ work, reasoning, messages, advanced, disconnected, recipient, live }: {
+  work: Message[]; reasoning: string[]; messages: Message[]; advanced: boolean; disconnected: boolean; recipient: string; live: boolean;
+}) {
+  const summary = foldSummary(work, live ? undefined : turnDuration({ messages, work }), live);
+  return <details className="turn-work">
+    <summary><span>{summary}</span></summary>
+    <div className="turn-work-content">
+      {reasoning.length > 0 && <Reasoning parts={reasoning} />}
+      {work.length > 0 && <ToolCalls messages={work} advanced={advanced} disconnected={disconnected} recipient={recipient} />}
+    </div>
+  </details>;
+}
+const isReplyRow = (message: Message) => message.role === "assistant" || messageOrigin(message)?.kind === "scheduled";
 function visibleMessage(message: Message) {
   return message.role !== "assistant" || isAgentExchange(message) || !!message.text.trim() || !!message.files?.length;
 }
 function Reasoning({ parts }: { parts: string[] }) {
   return <details className="tool-calls reasoning-calls">
-    <summary><Icon name="brain" size={16} /><span>Reasoning</span>{parts.length > 1 && <span className="tool-count">{parts.length}</span>}
-      <Icon name="chevron" size={16} /></summary>
+    <summary><Icon name="brain" size={16} /><span>Reasoning</span>{parts.length > 1 && <span className="tool-count">{parts.length}</span>}</summary>
     <div className="tool-calls-content">{parts.map((part, index) => <p className="reasoning-part" key={index}>{part}</p>)}</div>
   </details>;
 }
-function ApprovalCard({ approval, botId, supported, report }: { approval: Approval; botId: string; supported: boolean; report(message: string): void }) {
-  const [decision, setDecision] = useState<"approved" | "denied" | null>(null);
-  const [settled, setSettled] = useState(false);
+function ApprovalCard({ approval, botId, userId, disconnected, supported, unavailableReason, report, leaving = false }: {
+  approval: Approval; botId: string; userId: string; disconnected: boolean; supported: boolean; unavailableReason?: string; report(message: string): void;
+  /** Hermes no longer lists it; the card folds away for a moment before it goes. */
+  leaving?: boolean;
+}) {
+  const card = useRef<HTMLElement>(null);
+  // The fold starts from the card's own height, measured as it begins.
+  useLayoutEffect(() => {
+    if (leaving && card.current) card.current.style.setProperty("--leave-height", `${card.current.offsetHeight}px`);
+  }, [leaving]);
+  const saved = approvalAttempt(userId, botId, approval.id);
+  const [attempt, setAttempt] = useState<ApprovalAttempt | undefined>(() => saved.read());
+  const [sending, setSending] = useState(false);
+  const pending = useRef(false);
   async function decide(value: "approved" | "denied") {
-    if (decision) return;
-    setDecision(value);
+    const previous = saved.read();
+    if (!supported || disconnected || pending.current || previous && (previous.state !== "unconfirmed" || previous.decision !== value)) return;
+    report("");
+    pending.current = true;
+    setSending(true);
+    const next: ApprovalAttempt = { decision: value, state: "unconfirmed" };
+    // Save before sending: leaving this chat while the POST is in flight must
+    // never offer the opposite decision when the person returns.
+    saved.save(next); setAttempt(next);
     try {
-      await write(`/bots/${encodeURIComponent(botId)}/approvals/${encodeURIComponent(approval.id)}`, { decision: value });
-      setSettled(true);
-    } catch (error) { setDecision(null); report((error as Error).message); }
+      await apiRequest("POST /bots/:id/approvals/:approvalId", { params: { id: botId, approvalId: approval.id }, body: { decision: value } });
+      const sent: ApprovalAttempt = { decision: value, state: "sent" };
+      saved.save(sent); setAttempt(sent);
+      reactAvatar(botId, value === "approved" ? "cheer" : "nod");
+    } catch (error) {
+      if (error instanceof ApiError && error.status < 500 && (error.status !== 409 || error.code === "hermes_maintenance") && !previous) {
+        saved.save(undefined); setAttempt(undefined); report(error.code === "hermes_maintenance" ? "Hermes is being updated. Try your decision again when the update finishes." : error.message);
+      } else {
+        const retained: ApprovalAttempt = { decision: value, state: error instanceof ApiError && error.status === 409 && error.code !== "hermes_maintenance" ? "closed" : "unconfirmed" };
+        saved.save(retained); setAttempt(retained);
+        // Refreshes can remove a resolved card, but a still-pending read cannot
+        // prove an earlier answer isn't still being processed. Never auto-send.
+        window.dispatchEvent(new Event("agent-interface:reconnect"));
+      }
+    } finally { pending.current = false; setSending(false); }
   }
-  return <article className="approval-card" aria-busy={!!decision && !settled}>
-    <p className="eyebrow">Your decision needed</p><h2>{approval.title}</h2><p>{approval.detail}</p>
+  return <article ref={card} className={`approval-card decision-card${leaving ? " leaving" : ""}`} aria-busy={sending} inert={leaving}
+    data-settled={attempt?.state === "sent" ? attempt.decision : undefined} {...(leaving ? {} : attentionAnchor("approval", approval.id))}>
+    <p className="eyebrow">{attempt?.state === "closed" ? "Decision status" : "Your decision needed"}</p><h2>{approval.title}</h2><p>{approval.detail}</p>
     {approval.expiresAt && <small>Expires <When value={approval.expiresAt} inline /></small>}
-    <div className="actions">{(["approved", "denied"] as const).map(value => <button key={value} type="button"
-      className={value === "approved" ? "primary" : undefined} disabled={!supported || !!decision} onClick={() => void decide(value)}>
-      {decision === value && <Icon name={settled ? "check" : "spinner"} className={settled ? undefined : "spin"} size={16} />}
-      {decision === value ? settled ? value === "approved" ? "Approved" : "Declined" : value === "approved" ? "Approving…" : "Declining…" : value === "approved" ? "Approve" : "Decline"}
-    </button>)}</div>
-    {decision && <span className="sr-only" role="status">{settled ? "Decision sent" : "Sending decision"}</span>}
+    {attempt?.state !== "closed" && <div className="actions">{(["approved", "denied"] as const).map(value => <button key={value} type="button"
+      className={value === "approved" ? "primary" : undefined}
+      disabled={!supported || disconnected || sending || !!attempt && (attempt.state !== "unconfirmed" || value !== attempt.decision)} onClick={() => void decide(value)}>
+      {attempt?.decision === value && (sending || attempt.state === "sent") && <Icon name={sending ? "spinner" : "check"} className={sending ? "spin" : undefined} size={16} />}
+      {attempt?.decision === value ? sending ? value === "approved" ? "Approving…" : "Declining…"
+        : attempt.state === "sent" ? value === "approved" ? "Approved" : "Declined"
+        : value === "approved" ? "Send approval again" : "Send decline again"
+        : value === "approved" ? "Approve" : "Decline"}
+    </button>)}</div>}
+    {!supported && <p className="approval-unavailable">{unavailableReason || "This Hermes connection does not support approval decisions. Open the official Hermes interface to answer."}</p>}
+    {disconnected && !attempt && supported && <p className="decision-status" role="status">Reconnect to Hermes to answer.</p>}
+    {attempt && <p className="decision-status" role="status">{sending ? "Sending decision…"
+      : attempt.state === "sent" ? attempt.decision === "approved" ? "Approval sent." : "Decline sent."
+      : attempt.state === "closed" ? "This request is no longer available to answer. Its status will update with the conversation."
+      : `Hermes hasn't confirmed your ${attempt.decision === "approved" ? "approval" : "decline"}. It may still go through, so the other choice stays off. After reconnecting, you can send the same decision again.`}</p>}
   </article>;
 }
-function ToolCalls({ messages, advanced, disconnected, recipient }: { messages: Message[]; advanced: boolean; disconnected: boolean; recipient: string }) {
-  const label = (message: Message) => {
-    const origin = messageOrigin(message);
-    return origin && origin.visibility === "activity" ? activityLabels[origin.kind] : "Tool calls";
-  };
-  const groups = [...new Set(messages.map(label))].map(name => ({ label: name, items: messages.filter(message => label(message) === name) }));
-  return groups.filter(group => group.items.length).map(group => <details className="tool-calls" key={group.label}>
+function ToolCalls({ messages, advanced, disconnected, recipient }: { messages: Message[]; advanced: boolean; disconnected: boolean; recipient: string }): ReactNode {
+  return workGroups(messages).map(group => <details className="tool-calls" key={group.label}>
     <summary><Icon name={group.label === "Subagents" ? "robot" : "terminal"} size={16} /><span>{group.label}</span><span className="tool-count">{group.items.length}</span>
-      {group.items.some(message => message.toolCall?.status === "running") && <span className="muted">{disconnected ? "Last seen running" : "Running"}</span>}
-      <Icon name="chevron" size={16} /></summary>
+      {group.items.some(message => message.toolCall?.status === "running") && <span className="muted">{disconnected ? "Last seen running" : "Running"}</span>}</summary>
     <div className="tool-calls-content">{group.items.map(message => <div key={message.id}>
       {isAgentExchange(message) ? <AgentExchange message={message} recipient={recipient} /> : message.toolCall
         ? advanced ? <ToolCallDetail call={message.toolCall} disconnected={disconnected} /> : <ActionReceipt call={message.toolCall} />
-        : <details className="message-detail"><summary>{messageOrigin(message)?.title || message.toolName || label(message)}{message.createdAt && <> · <When value={message.createdAt} inline /></>}</summary><pre>{message.text || "No result was exposed by Hermes."}</pre></details>}
+        : <details className="message-detail"><summary>{withoutBotTag(messageOrigin(message)?.title ?? "") || message.toolName || group.label}{message.createdAt && <> · <When value={message.createdAt} inline /></>}</summary><pre role="region" tabIndex={0} aria-label="Activity output">{message.text || "No result was exposed by Hermes."}</pre></details>}
       {message.files?.map(file => <FileLink key={file.id} file={file} />)}
     </div>)}</div>
   </details>);
@@ -351,9 +621,9 @@ function ToolCallDetail({ call, disconnected }: { call: ToolCall; disconnected?:
       {call.startedAt && <div><dt>Started</dt><dd><When value={call.startedAt} /></dd></div>}
       {call.completedAt && <div><dt>Finished</dt><dd><When value={call.completedAt} /></dd></div>}
     </dl>
-    {call.arguments !== undefined && <><h3>Arguments</h3><pre>{call.arguments}</pre></>}
-    {call.result !== undefined && <><h3>Result</h3><pre>{call.result}</pre></>}
-    {call.error && <><h3 className="danger">Error</h3><pre className="danger">{call.error}</pre></>}
+    {call.arguments !== undefined && <><h3>Arguments</h3><pre role="region" tabIndex={0} aria-label={`Arguments for ${call.name}`}>{call.arguments}</pre></>}
+    {call.result !== undefined && <><h3>Result</h3><pre role="region" tabIndex={0} aria-label={`Result from ${call.name}`}>{call.result}</pre></>}
+    {call.error && <><h3 className="danger">Error</h3><pre className="danger" role="region" tabIndex={0} aria-label={`Error from ${call.name}`}>{call.error}</pre></>}
     {call.status === "running" && call.result === undefined && <p>{disconnected ? "The current tool status will be checked when Hermes reconnects." : "Waiting for the result from Hermes."}</p>}
   </details>;
 }
@@ -381,85 +651,5 @@ function FileLink({ file }: { file: FileRef }) {
       )}
       <span><Icon name={file.mime.startsWith("image/") ? "download" : "file"} size={16} /> {file.name}</span>
     </a>
-  );
-}
-function AttentionCard({
-  request,
-  botId,
-  report,
-}: {
-  request: AttentionRequest;
-  botId: string;
-  report: (s: string) => void;
-}) {
-  const [answers, setAnswers] = useState<Record<string, string>>({});
-  const [busy, setBusy] = useState(false);
-  return (
-    <article className="approval-card">
-      <p className="eyebrow">
-        {request.kind === "clarify"
-          ? "A question for you"
-          : "Continue in Hermes"}
-      </p>
-      <h2>{request.title}</h2>
-      <p>{request.detail}</p>
-      {request.kind === "clarify" && (
-        <form
-          onSubmit={(event) => {
-            event.preventDefault();
-            setBusy(true);
-            void write(
-              `/bots/${encodeURIComponent(botId)}/requests/${encodeURIComponent(request.id)}`,
-              { answers },
-            )
-              .catch((error) => report(error.message))
-              .finally(() => setBusy(false));
-          }}
-        >
-          {request.questions?.map((question) => (
-            <label key={question.id}>
-              {question.prompt}
-              {question.options?.length ? (
-                <select
-                  required
-                  value={answers[question.id] || ""}
-                  onChange={(event) =>
-                    setAnswers({
-                      ...answers,
-                      [question.id]: event.target.value,
-                    })
-                  }
-                >
-                  <option value="">Choose an answer</option>
-                  {question.options.map((option) => (
-                    <option key={option}>{option}</option>
-                  ))}
-                </select>
-              ) : (
-                <input
-                  required
-                  value={answers[question.id] || ""}
-                  onChange={(event) =>
-                    setAnswers({
-                      ...answers,
-                      [question.id]: event.target.value,
-                    })
-                  }
-                />
-              )}
-            </label>
-          ))}
-          <button className="primary" disabled={busy}>
-            Send answers
-          </button>
-        </form>
-      )}
-      {request.kind === "official" && (
-        <p className="muted">
-          Open the official Hermes interface to handle this request. Return here
-          when it is complete.
-        </p>
-      )}
-    </article>
   );
 }

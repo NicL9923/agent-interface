@@ -1,27 +1,45 @@
+import { botFixture, capabilitiesFixture, experienceRequester, toolFixture } from './helpers/runtime-fixtures.js';
+import type { HistoryPage } from '../src/shared/discovery.js';
 import Fastify from 'fastify';
 import cookie from '@fastify/cookie';
-import { randomBytes } from 'node:crypto';
 import { afterEach, expect, it, vi } from 'vitest';
-import { z } from 'zod';
-import { installAuth, hash } from '../src/server/auth.js';
+import { installAuth } from '../src/server/auth.js';
 import { Store } from '../src/server/store.js';
 import { loadConfig } from '../src/server/config.js';
 import { installDiscoveryRoutes } from '../src/server/discovery.js';
-import type { Runtime } from '../src/shared/types.js';
+import { fakeRuntime, signIn } from "./helpers/server.js";
+import { errorHandler } from "../src/server/http-error.js";
 const apps:ReturnType<typeof Fastify>[]=[];afterEach(async()=>{for(const app of apps.splice(0))await app.close();});
 async function setup() {
   const app=Fastify();apps.push(app);const store=new Store(':memory:');await app.register(cookie);const origin='https://discovery.example.test';
   await installAuth(app,store,loadConfig({NODE_ENV:'production',APP_ORIGIN:origin,APP_DATABASE:':memory:',GOOGLE_CLIENT_ID:'fixture',HOUSEHOLD_EMAILS:'one@example.test,two@example.test'}));
-  app.setErrorHandler((error,_req,reply)=>reply.code(error instanceof z.ZodError?400:(error as {statusCode?:number}).statusCode??502).send({error:(error as Error).message}));
-  const experienceRequest=vi.fn(async(input:any)=>input.operation==='search'?[{botId:input.profile,sessionId:'history',title:'Dinners',snippet:'Plan'}]:input.operation==='history'?{botId:input.profile,sessionId:input.sessionId,messages:[{id:'reply',role:'assistant',text:'Plan'}],offset:input.offset,hasMore:false}:{botId:input.profile,days:30,actualCost:null});
-  const setRoutineEnabled=vi.fn(async()=>{});const saveRoutine=vi.fn();const routineResults=vi.fn(async()=>[{id:'output',title:'Dinners',preview:'Plan dinners'}]);
-  const runtime={listBots:async()=>[{id:'shared',name:'Shared',shared:true},{id:'private',name:'Private',shared:false,ownerId:'two'}],experienceRequest,routines:async()=>[{id:'routine',botId:'shared',name:'Dinners',schedule:'0 7 * * *',prompt:'Report',enabled:true}],routineResults,tools:async()=>[{id:'browser',enabled:false},{id:'terminal',enabled:true}],capabilities:async()=>({uploads:{supported:true}}),setRoutineEnabled,saveRoutine} as unknown as Runtime;
-  await installDiscoveryRoutes(app,runtime,store);store.user({id:'one',name:'One',email:'one@example.test'});const token=randomBytes(32).toString('hex');store.session(hash(token),'one','csrf',Date.now()+600000);const headers={cookie:`session=${token}`,origin,'x-csrf-token':'csrf'};app.addHook('onClose',async()=>store.close());return {app,store,headers,experienceRequest,setRoutineEnabled,saveRoutine};
+  app.setErrorHandler(errorHandler({ production: true }));
+  const history = vi.fn((input: {profile: string; sessionId: string; offset: number}): HistoryPage => ({botId:input.profile,sessionId:input.sessionId,messages:[{id:'reply',role:'assistant',text:'Plan'}],offset:input.offset,hasMore:false}));
+  const experience = experienceRequester({
+    search: input => [{botId:input.profile,botName:'Shared',sessionId:'history',title:'Dinners',snippet:'## **>>>Dinner<<<** plan\\n- tacos'}],
+    history,
+    usage: input => ({botId:input.profile,days:input.days,sessions:0,inputTokens:0,outputTokens:0,actualCost:null,estimatedCost:null,partial:false,notice:'Recorded usage'}),
+  });
+  const setRoutineEnabled=vi.fn(async()=>{});const stopRoutineRun=vi.fn(async()=>true);const saveRoutine=vi.fn();const routineResults=vi.fn(async()=>[{id:'output',title:'Dinners',preview:'Plan dinners',previewOnly:false}]);
+  const runtime=fakeRuntime({listBots:async()=>[botFixture(),botFixture({id:'private',name:'Private',shared:false,ownerId:'two'})],experienceRequest:experience,routines:async()=>[{id:'routine',botId:'shared',name:'Dinners',schedule:'0 7 * * *',prompt:'Report',enabled:true}],routineResults,tools:async()=>[toolFixture({id:'browser',enabled:false}),toolFixture()],capabilities:async()=>capabilitiesFixture({uploads:{supported:true}}),setRoutineEnabled,stopRoutineRun,saveRoutine});
+  const experienceRequest = vi.spyOn(runtime, 'experienceRequest');
+  await installDiscoveryRoutes(app,runtime,store);const headers=signIn(store,origin,'one',{email:'one@example.test',csrf:'csrf'});app.addHook('onClose',async()=>store.close());return {app,store,headers,experienceRequest,history,setRoutineEnabled,stopRoutineRun,saveRoutine,routineResults};
 }
 it('searches only visible profiles and includes routine results without copying their output',async()=>{
   const s=await setup();expect((await s.app.inject('/api/search?q=dinners')).statusCode).toBe(401);
-  const response=await s.app.inject({url:'/api/search?q=dinners',headers:s.headers});expect(response.statusCode).toBe(200);expect(response.json().hits).toHaveLength(2);expect(s.experienceRequest).toHaveBeenCalledWith({operation:'search',profile:'shared',query:'dinners'});expect(s.experienceRequest).not.toHaveBeenCalledWith(expect.objectContaining({profile:'private'}));
+  const response=await s.app.inject({url:'/api/search?q=dinners',headers:s.headers});expect(response.statusCode).toBe(200);expect(response.json().hits).toHaveLength(2);
+  // Snippets arrive as plain words that keep Hermes's match markers, for web and iOS alike.
+  expect(response.json().hits[0].snippet).toBe('>>>Dinner<<< plan tacos');expect(s.experienceRequest).toHaveBeenCalledWith({operation:'search',profile:'shared',query:'dinners'});expect(s.experienceRequest).not.toHaveBeenCalledWith(expect.objectContaining({profile:'private'}));
   expect((await s.app.inject({url:'/api/bots/private/history/history',headers:s.headers})).statusCode).toBe(404);
+});
+it('reads routine results while the native search is still running, and lists native hits first',async()=>{
+  const s=await setup();
+  let finishSearch!:()=>void;const searching=new Promise<void>(resolve=>{finishSearch=resolve;});
+  s.experienceRequest.mockImplementation((async(input:{profile:string})=>{await searching;return [{botId:input.profile,botName:'Shared',sessionId:'history',title:'Dinners',snippet:'Dinner plan'}];}) as never);
+  const response=s.app.inject({url:'/api/search?q=dinners',headers:s.headers});
+  await vi.waitFor(()=>expect(s.routineResults).toHaveBeenCalledWith('shared','routine'));
+  finishSearch();
+  expect((await response).json().hits.map((hit:{sessionId:string})=>hit.sessionId)).toEqual(['history','routine:routine:output']);
 });
 it('validates original reply identity and scoped saved references',async()=>{
   const s=await setup();const body={kind:'session',botId:'shared',sessionId:'history',messageId:'reply',offset:100,title:'Dinner plan'};
@@ -31,6 +49,51 @@ it('validates original reply identity and scoped saved references',async()=>{
 it('pauses without resaving a stale prompt, schedule or recipients',async()=>{
   const s=await setup();const response=await s.app.inject({url:'/api/routines/routine/state',method:'PATCH',headers:s.headers,payload:{enabled:false}});expect(response.statusCode).toBe(200);expect(s.setRoutineEnabled).toHaveBeenCalledWith('shared','routine',false);expect(s.saveRoutine).not.toHaveBeenCalled();
 });
+it('stops a running routine for someone who can see it, and leaves its schedule alone',async()=>{
+  const s=await setup();const stop=(id:string,headers:Record<string,string>=s.headers)=>s.app.inject({url:`/api/routines/${id}/stop`,method:'POST',headers});
+  const response=await stop('routine');expect(response.statusCode).toBe(200);expect(response.json()).toEqual({stopped:true});
+  expect(s.stopRoutineRun).toHaveBeenCalledWith('shared','routine');expect(s.setRoutineEnabled).not.toHaveBeenCalled();expect(s.saveRoutine).not.toHaveBeenCalled();
+  expect((await stop('missing')).statusCode).toBe(404);
+  expect((await stop('routine',{cookie:s.headers.cookie,origin:s.headers.origin})).statusCode).toBe(403);
+  // A trial run is exactly a run someone may want to stop, so its edit lock does not apply.
+  s.store.rememberRoutineTrial('trial-request','one','routine','shared');
+  s.experienceRequest.mockImplementation((async()=>({requestId:'trial-request',routineId:'routine',botId:'shared',status:'accepted'})) as never);
+  expect((await s.app.inject({url:'/api/routines/routine/state',method:'PATCH',headers:s.headers,payload:{enabled:false}})).statusCode).toBe(409);
+  expect((await stop('routine')).statusCode).toBe(200);
+});
 it('offers only enabled tool starters and always leaves sending to the composer',async()=>{
   const s=await setup();const response=await s.app.inject({url:'/api/bots/shared/starters',headers:s.headers});expect(response.json().map((row:any)=>row.id)).toEqual(['meals','document','server']);
+});
+
+it('locates a live reply before saving and re-resolves an old saved pointer on opening',async()=>{
+  const s=await setup();
+  s.history.mockImplementation((input)=>({botId:input.profile,sessionId:input.sessionId,messages:[{id:'stable-uid',role:'assistant',text:'Late answer'}],offset:200,hasMore:false,targetMessageId:'stable-uid'}));
+  const reply=await s.app.inject({url:'/api/saved',method:'POST',headers:s.headers,payload:{kind:'session',botId:'shared',sessionId:'history',messageId:'old-row',title:'Saved answer'}});
+  expect(reply.statusCode).toBe(200);expect(reply.json()).toMatchObject({messageId:'stable-uid',offset:200});
+  expect(s.experienceRequest).toHaveBeenLastCalledWith({operation:'history',profile:'shared',sessionId:'history',messageId:'old-row',offset:0});
+  const opened=await s.app.inject({url:'/api/bots/shared/history/history?offset=0&messageId=stable-uid',headers:s.headers});
+  expect(opened.statusCode).toBe(200);expect(opened.json()).toMatchObject({offset:200,targetMessageId:'stable-uid'});
+  const count=s.experienceRequest.mock.calls.length;
+  expect((await s.app.inject({url:'/api/bots/private/history/history?messageId=stable-uid',headers:s.headers})).statusCode).toBe(404);
+  expect(s.experienceRequest.mock.calls.length).toBe(count);
+});
+it('redacts a hidden assistant named only where flattening would drop it, such as a link address',async()=>{
+  const s=await setup();s.store.savePresentation('private',{shared:false,ownerId:'two'});
+  const original=s.experienceRequest.getMockImplementation()!;
+  s.experienceRequest.mockImplementation((async(input:{operation:string;profile:string})=>input.operation==='search'
+    ?[{botId:input.profile,botName:'Shared',sessionId:'history',title:'Ledger',snippet:'[Ledger](https://private.example.test) balance: >>>42<<<'}]
+    :original(input as never)) as never);
+  const hits=(await s.app.inject({url:'/api/search?q=42&botId=shared',headers:s.headers})).json().hits;
+  expect(hits.find((hit:{title:string})=>hit.title==='Ledger').snippet).toBe("Message from another member's assistant: This message is private.");
+});
+it('narrows a search to one visible assistant and refuses a hidden or unknown one',async()=>{
+  const s=await setup();
+  const response=await s.app.inject({url:'/api/search?q=dinners&botId=shared',headers:s.headers});
+  expect(response.statusCode).toBe(200);expect(response.json().hits.map((hit:{botId:string})=>hit.botId)).toEqual(['shared','shared']);
+  expect(s.experienceRequest).toHaveBeenCalledTimes(1);expect(s.experienceRequest).toHaveBeenCalledWith({operation:'search',profile:'shared',query:'dinners'});
+  for(const botId of ['private','missing']){
+    const refused=await s.app.inject({url:`/api/search?q=dinners&botId=${botId}`,headers:s.headers});
+    expect([refused.statusCode,refused.json().code]).toEqual([404,'assistant_not_found']);
+  }
+  expect(s.experienceRequest).toHaveBeenCalledTimes(1);
 });

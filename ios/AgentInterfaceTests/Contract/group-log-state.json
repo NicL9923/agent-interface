@@ -1,0 +1,99 @@
+{
+  "request": "GET /api/groups/room-dinner/log?since=0&state=1",
+  "response": {
+    "cursor": 1,
+    "latest_seq": 2,
+    "has_more": false,
+    "events": [
+      {
+        "event_id": "group-event-1",
+        "seq": 1,
+        "kind": "message",
+        "created_at": 1790852400.5,
+        "actor": {
+          "kind": "human",
+          "id": "local-one"
+        },
+        "payload": {
+          "text": "Plan dinners together",
+          "thread_id": "thread-1",
+          "member_id": "household"
+        }
+      }
+    ],
+    "state": {
+      "room": {
+        "room_id": "room-dinner",
+        "name": "Dinner team",
+        "latest_seq": 2,
+        "members": [
+          {
+            "member_id": "household",
+            "profile": "household",
+            "handle": "household",
+            "display_name": "Household",
+            "target": {
+              "kind": "local",
+              "profile": "household"
+            }
+          },
+          {
+            "member_id": "garden",
+            "profile": "garden",
+            "handle": "garden",
+            "display_name": "Garden",
+            "target": {
+              "kind": "local",
+              "profile": "garden"
+            }
+          }
+        ]
+      },
+      "driver_status": {
+        "running": true,
+        "working": true,
+        "blocked": true,
+        "pending_actions": [
+          {
+            "kind": "approval",
+            "task_id": "task-1",
+            "member_id": "household",
+            "execution_generation": 1,
+            "request_id": "approval-request-1",
+            "description": "Order groceries",
+            "command": "grocer order --items 12",
+            "approval": {
+              "request_id": "approval-request-1",
+              "description": "Order groceries",
+              "command": "grocer order --items 12"
+            }
+          }
+        ],
+        "member_activity": [
+          {
+            "member_id": "garden",
+            "status": "running",
+            "thread_id": "thread-1",
+            "round_index": 1,
+            "started_at": 1790852410.25,
+            "tool": "web_search",
+            "progress_at": 1790852415.5
+          },
+          {
+            "member_id": "household",
+            "status": "queued",
+            "thread_id": "thread-1",
+            "round_index": 1
+          }
+        ],
+        "max_rounds": 3
+      },
+      "context": {
+        "purpose": "Plan the week's dinners.",
+        "notes": "No mushrooms.\nBudget is $120.",
+        "routing": "lead",
+        "lead_member_id": "garden"
+      }
+    }
+  }
+}

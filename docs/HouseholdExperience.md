@@ -47,7 +47,7 @@ older. When more results are waiting, marking one page loads the next page.
 
 An assistant that cannot be checked has unknown activity. Loaded results remain
 visible after a failed refresh with an explanation that they may be out of date.
-The web overview checks again every 30 seconds while open. Pull to refresh on iOS.
+The overview checks again every 30 seconds while it is open and the page or app is in use, and once on return. Pull to refresh on iOS. "Checked" shows when this device last checked; an unchanged overview is not downloaded again.
 
 ## Voice
 
@@ -57,20 +57,53 @@ transcribes the audio into your draft. Review it before sending. Transcription
 never submits a message. A failed web transcription keeps the recording for an
 explicit retry or discard.
 
-Listen to reply uses the selected Hermes profile's configured speech provider and
-the stored, completed assistant reply. The server returns private audio through a
+The speaker button in each assistant reply's action row uses the selected Hermes profile's configured speech provider and
+that stored, completed reply, one reply playing at a time. The server returns private audio through a
 short-lived, single-use URL bound to the signed-in account. Stop speaking ends
 playback. Provider credentials stay in Hermes. If no speech provider is available,
 the app explains the missing configuration.
 
 iOS records an M4A voice message and shows the transcription for review before
-adding it to the draft. Read aloud uses the device's built-in voice and has a stop
-control. Microphone and audio behavior on a physical phone require separate
+adding it to the draft. Listen to reply plays the same Hermes audio as the web and
+has a stop control. iOS cannot play Ogg or WebM speech and says so. Microphone and audio behavior on a physical phone require separate
 device acceptance.
+
+### Live Talk
+
+Talk, beside Record voice in the web composer, holds a live spoken conversation
+with the open assistant. A voice model listens and speaks; the assistant does the
+work. Each real request goes to the assistant as an ordinary message from the
+person speaking, in their words, so it appears in the chat, uses the same
+admission and steering as typing, and never sends twice for one spoken request.
+While the assistant works, the voice says a short filler and then reads the
+answer back briefly. Long answers end at a sentence and point to the chat. When
+an approval or a question is waiting, the voice asks the person to check the
+screen, and reads the answer once they decide.
+
+The panel above the composer shows whether Talk is connecting, listening,
+thinking, working or speaking, the latest words from each side, Mute and End.
+Starting Talk stops a reply being read aloud and turns off recording and read
+aloud until it ends. Talk ends when you press End, switch assistants, leave the
+chat or the page, after five quiet minutes, after 30 minutes, and on a phone when
+the app goes to the background. The voice knows only this assistant's name and
+description.
+
+Talk needs the WildBots voice plugin enabled in Hermes and the launch profile
+signed in to ChatGPT; see [Hosting](Hosting.md#live-voice-plugin). When it is
+unavailable, Talk shows why. A denied microphone, a signed-out ChatGPT account
+and a lost connection each have their own message. Each person can start Talk
+once every five seconds and 20 times an hour.
+
+Each assistant has a Talk voice in its settings, under **Voice**: Alloy, Ash,
+Ballad, Coral, Echo, Sage, Shimmer, Verse, Marin (the default) and Cedar. Each
+has a short sample to play; one plays at a time, and closing settings stops it.
+Choosing a voice saves it for the household with the assistant's profile.
+
+Live Talk is web-only for now. The iOS app keeps recording and read aloud.
 
 ## Memory
 
-Assistant settings > Memory reads the selected Hermes profile's native notes and
+Assistant settings > Memory & learning reads the selected Hermes profile's native notes and
 user facts. Correct entries or forget them, then save. Each document has a
 revision guard checked inside Hermes's native file lock. If another person or
 native tool changes it first, your edits stay available for review instead of
@@ -79,9 +112,11 @@ disabled-memory settings still apply.
 
 The profile label describes the real scope. WildBots shows a personal
 assistant's memory only to its owner, but anyone with Hermes dashboard access can
-still read and change it. Existing Hermes conversations retain their original
-memory snapshot until Hermes starts a new session. Saving a memory edit does not
-rewrite a conversation's current context.
+still read and change it. App edits refresh the canonical Bot Chat's memory at
+its next safe turn boundary. A running turn keeps its current snapshot. The panel
+distinguishes pending, next-turn and applied status. Refresh preserves the native
+session, history, approvals and task identity. Native memory-tool writes keep
+Hermes's usual snapshot behavior, and other native conversations are unaffected.
 
 ## Interactive replies
 
@@ -108,6 +143,59 @@ and item IDs against that message before saving state. Calendar proposals requir
 review. Web opens an editable Google Calendar draft or downloads an ICS file;
 iOS opens the system event editor, where you choose whether to save.
 
+### Email drafts and forms
+
+Two more card types need no setting. Hermes receives their format with the inline
+view instructions in every WildBots conversation.
+
+- `email`, with a title, a body, and optional `to` and `cc` address lists and
+  subject. **Open in Mail** opens a `mailto:` draft in the device's mail app,
+  **Open in Gmail** opens Gmail's compose window, and **Copy** copies the whole
+  draft as text. Nothing is sent from WildBots.
+- `form`, with a title, optional description and submit label, and 1 to 20
+  fields. Field kinds are `text`, `textarea`, `number`, `date`, `select`,
+  `choice`, `multi` and `toggle`. `select`, `choice` and `multi` carry 1 to 20
+  options. A field can be `required` and can suggest a starting `value`.
+
+**Send answers** posts the answers as your own message, written as the form's
+title and one "Label: answer" line per answered field. It goes through the same
+durable admission as the message box and never reads or changes your draft. If
+you ticked "I've reviewed the task's last actions" after an interruption, the
+answers go under that review too.
+
+The request ID is derived from a key only your devices receive, the message, the
+card and an attempt number, so every tab and device sends the same request, the
+server admits it once, and nobody else can work out the ID to claim it first. An
+answer whose outcome is unknown is checked by that ID, across reloads, until
+Hermes settles it. Answers you have typed are kept on the device until you send
+them. A refusal before Hermes sees the answers keeps the same attempt; a refusal
+from Hermes moves to the next one. A Hermes restart marks the request
+interrupted, which does not say whether the answers arrived, so the card asks you
+to check the conversation and offers to send them again as a new attempt. A sent
+form folds into a read-only list of your answers. Another tab or device that
+opens the form skips refused attempts and finds the one that was sent or
+interrupted.
+
+Web and iOS show both types. iOS opens a draft in Mail or Gmail and sends a form's
+answers under the same request IDs as the web, so a form sent from one is shown as
+sent on the other.
+
+### T3 Code threads
+
+An assistant connected to T3 Code's MCP server can start a T3 Code thread with
+`t3_thread_launch`. The conversation then shows a card between the turn's folded
+work and its reply: the thread's title, the start of its first prompt, the model,
+the workspace and **Open in T3 Code**. While the launch runs, the card says the
+thread is starting; a failed launch shows T3 Code's reason. WildBots does not read
+T3 Code, so the card describes the launch, not the thread's later progress.
+
+T3 Code gives outside MCP clients a hosted `https://app.t3.codes/threads/...`
+link, which offers the desktop app, the mobile app or the browser. A
+`t3-thread://v2/` link is rewritten to that hosted link. Any other link, or one
+that is not HTTPS, opens nothing. The card recognizes the tool under any MCP
+server name Hermes gives it, such as `mcp_t3code_t3_thread_launch`. See
+[connecting T3 Code](Integrations.md#t3-code).
+
 ## Inline views
 
 Web and iOS conversations render an assistant's `wildbots-html` fence as an
@@ -126,7 +214,7 @@ External libraries, fonts and images cannot load. A view has no app API access,
 cookies, local storage or action bridge to Hermes. Controls can calculate,
 filter, expand or draw within the view. They cannot send messages, approve work,
 or save changes. Use the existing checklist, itinerary and calendar cards when
-those saved actions are needed. Keep a short text explanation outside the view
+those saved actions are needed, and a form card to collect answers. Keep a short text explanation outside the view
 for notifications and other clients.
 
 The host supplies `--background`, `--foreground`, `--muted-foreground`, `--card`,
@@ -181,10 +269,64 @@ receipt follows the native execution ledger, including detached native workers.
 An uncertain outcome requires review. The app does not silently start another
 run, and it blocks routine edits while a trial's outcome remains unconfirmed.
 
+## Work and learning
+
+Assistant settings > Automation provides native goals, tasks and event triggers on web
+and iOS. Each section reports whether the installed Hermes supports it. Refresh
+status after an uncertain response; the clients never replay a mutation on their
+own.
+
+A standing goal saves paused with a continuation-turn budget. Resume starts a
+real task through the app's durable admission journal. Pause and Clear remain
+available during execution. An interrupted task requires explicit review before
+another admission. Resume requests retain their identity while their outcome is
+uncertain. After reviewing the conversation, the person can explicitly start a
+new attempt with a fresh request ID. Replacing a goal requires confirmation
+because it resets progress and removes native subgoals, completion contracts and
+verification gates.
+
+The task board lists this assistant's work on Hermes's current board. New tasks
+start blocked. Choose a visible assistant, edit instructions and priority, add
+same-owner dependencies, then Start. Hermes owns dispatch and worker claims.
+Request review hands an unclaimed ready task to a chosen reviewer. An active
+native reviewer owns requests for changes; WildBots does not take over its claim.
+Tasks assigned to a hidden personal assistant and private dependency edges remain
+hidden. The overview shows the newest 100 visible owner tasks and reports when
+older tasks were omitted. Choosing Unassigned clears the native assignment.
+If a create response is lost, Refresh status checks for a new task with the same
+title. A possible match locks the draft for review; nothing is resent automatically.
+
+Event triggers target an existing routine in the same profile. New triggers start
+disabled and return a signing secret once. Copy it to the event sender before
+leaving; the clients never persist it. An integration administrator can create,
+edit, enable or delete triggers. Hermes's webhook channel must be enabled by the
+installer, and the target routine must be enabled. Hermes owns event verification,
+filtering, admission and delivery. A lost creation response cannot reveal the
+secret again; inspect the disabled trigger and replace it if needed.
+
+Behavior's skill rows show installed skill documents and their locks. Memory &
+learning shows pending changes. Read the actual
+diff before approving or rejecting it. The decision names that diff's revision,
+so a changed skill requires another review. Oversized diffs cannot be approved
+here. An uncertain skill decision requires native inspection before another
+attempt. Integration administrators control whether Hermes requires approval for
+skill writes; ordinary assistant editors can review pending changes.
+
+Routine Advanced options select skills, a provider/model pin, toolsets, an
+existing profile script, script-only execution, and previous results from this
+assistant's other routines. Script-only execution skips its model call, but
+delivery to Bot Chat starts a separate model turn. Context sources supply their
+latest saved outputs and do not impose execution order. Cycles and cross-profile
+dependencies are refused. Omitted native settings stay saved during edits. Scripts must exist
+inside the profile's scripts directory. Hermes's dashboard cannot save a new empty
+toolset selection safely, so WildBots rejects that change and preserves existing
+zero-tool settings.
+
 ## Integration and release
 
-The add-on adds one finite, service-authenticated experience endpoint. It calls
-Hermes's native memory stores and scheduler under their existing profile context.
+The add-on provides finite, service-authenticated experience and automation
+endpoints. They call Hermes's native stores and scheduler under their existing
+profile context.
 Voice uses the existing native transcription and speech endpoints. The service
 bridge excludes the native voice configuration endpoint, which can contain secrets.
 
