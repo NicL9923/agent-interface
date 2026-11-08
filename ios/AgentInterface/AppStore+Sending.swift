@@ -31,7 +31,7 @@ extension AppStore {
         "/bots/\(APIClient.component(id))/messages", submission)
       guard currentGeneration == generation else { return }
       await handleReceipt(value, botId: id)
-      if value.status == "accepted" { declinedApprovals[id] = nil; buzz(.sent); Task { await LiveActivityController.shared.sent(to: id) } }
+      if value.status == "accepted" { buzz(.sent); Task { await LiveActivityController.shared.sent(to: id) } }
       else if value.status == "rejected" || value.status == "interrupted" { buzz(.failed) }
     } catch {
       guard currentGeneration == generation else { return }
@@ -107,6 +107,8 @@ extension AppStore {
     guard let original = pendings[botId], value.requestId == original.requestId else { return }
     guard ["accepted", "rejected", "interrupted"].contains(value.status) else { return }
     if value.status == "accepted" {
+      // The next message after a decline answers it, however its acceptance was learned.
+      declinedApprovals[original.botId] = nil
       // The server clears its copy for this send, which a later save here must not mistake
       // for a send from another device.
       if selectedBotId == original.botId && draftReady {

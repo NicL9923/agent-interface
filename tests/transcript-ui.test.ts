@@ -1567,6 +1567,26 @@ describe("approval scopes, the decline handoff, recommended answers and steering
     await waitForUi(() => expect(textarea().placeholder).toBe("Tell Shared what to do instead"));
   });
 
+  it("ends the decline's question once a lost send turns out accepted", async () => {
+    conversation = { ...conversation, activity: { state: "waiting" }, approvals: [scoped] };
+    vi.mocked(write).mockImplementation(async <T>(path: string) => {
+      if (path.endsWith("/steer") || path.endsWith("/messages")) throw new TypeError("Failed to fetch");
+      return {} as T;
+    });
+    const previous = vi.mocked(api).getMockImplementation()!;
+    vi.mocked(api).mockImplementation(async <T>(path: string, ...rest: unknown[]) => path.startsWith("/submissions/")
+      ? { requestId: path.split("/")[2], status: "accepted" } as T : previous(path, ...rest as []) as T);
+    await render();
+    await act(async () => buttonText("Decline")!.click());
+    conversation = { ...conversation, activity: { state: "thinking" }, approvals: [] };
+    await changed();
+    await typeInto(textarea(), "Only the cache folder");
+    await act(async () => labelled("Send guidance").click());
+    // The response was lost; the receipt check learns Hermes accepted it.
+    await waitForUi(() => expect(container.querySelector(".approval-card")).toBeNull(), 20_000);
+    expect(textarea().placeholder).not.toBe("Tell Shared what to do instead");
+  });
+
   it("tags and pre-selects the recommended answer for one choice, sends its raw text, and never pre-selects several", async () => {
     conversation = { ...conversation, activity: { state: "blocked" }, attention: [{ id: "ask", kind: "clarify", title: "Supplies", detail: "", questions: [
       { id: "feed", prompt: "Which feed?", options: ["Hay (Recommended)", "Pellets"], recommended: 0 },
