@@ -1,7 +1,7 @@
 # November 8 form retry answers
 
 Base `298c02dfb0e4ca99b77f26be50f21ad43fa48700`, source fingerprint
-`sha256:1949aeafcbb94381c4b0b48ad6b3f77a2bd276478d8f76f4932f239b3b6d7ea4`.
+`sha256:c1313b2c9a420861b2134ce739a8e297e2b50a2ababeaa58f7a257b0b033ba74`.
 NicolasLaptop, Fedora Linux, Node 24.22.2, npm 11.19.1, Vitest 5.1.0.
 
 The new `tests/form-retry-ui.test.ts` regression keeps both copies mounted. B starts
@@ -39,3 +39,11 @@ The other entry points were checked in code: initial form restore, delayed
 acceptance, interruption polling, refusal retry and explicit send-again. Only
 explicit send-again could discard the already-stored answers while the form
 stayed mounted. The API and stored-record formats are unchanged.
+
+Claude Opus 5.5 at high effort approved the original diff and the native-test
+extraction through `43cf206`. Its test-strength note was applied afterward: the
+native bad-state cases now keep a nonblank mounted answer, so resetting them to
+defaults cannot pass. That final change touches only the unrun native test. The
+web checks above ran at source fingerprint
+`sha256:1949aeafcbb94381c4b0b48ad6b3f77a2bd276478d8f76f4932f239b3b6d7ea4`;
+their inputs are unchanged in the final state.

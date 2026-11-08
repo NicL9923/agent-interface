@@ -217,8 +217,9 @@ final class ReplyActionCardsTests: XCTestCase {
     var other = stored; other.attempt = 1
     var checking = stored; checking.state = "checking"
     var unknown = stored; unknown.elsewhere = true
+    var mounted = blank; mounted["city"] = .text("Austin")
     for candidate in [nil, other, checking, unknown] as [SavedFormReply?] {
-      XCTAssertEqual(FormRecords.retryAnswers(candidate, attempt: 0, answers: blank, card: card), blank)
+      XCTAssertEqual(FormRecords.retryAnswers(candidate, attempt: 0, answers: mounted, card: card), mounted)
     }
   }
 
