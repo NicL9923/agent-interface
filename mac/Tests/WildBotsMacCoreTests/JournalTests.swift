@@ -132,6 +132,12 @@ final class JournalTests: XCTestCase {
       XCTAssertTrue((error as? ActionError)?.message.contains("not a valid accepted invocation") == true, "\(error)")
     }
     XCTAssertEqual(try Data(contentsOf: url), damaged)
+    // A record whose type was lost is damage too: it may have been an acceptance.
+    let untyped = Data(#"{"id":"z","fp":"f","at":1}"#.utf8) + Data("\n".utf8) + valid
+    try untyped.write(to: url)
+    XCTAssertThrowsError(try InvocationJournal(url: url)) { error in
+      XCTAssertTrue((error as? ActionError)?.message.contains("has no known type") == true, "\(error)")
+    }
     try (valid + malformed).write(to: url)
     let reopened = try InvocationJournal(url: url)
     XCTAssertEqual(try reopened.begin(id: "a", fingerprint: "f"), .finished(.success(1)))

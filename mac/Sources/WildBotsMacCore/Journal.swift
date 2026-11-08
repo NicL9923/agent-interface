@@ -182,7 +182,9 @@ public final class InvocationJournal: @unchecked Sendable {
       case "acked":
         entries[id]?.acked = true
       default:
-        continue
+        // An unknown or missing type may be a damaged acceptance; only a torn last record is skipped.
+        if last { continue }
+        throw unreadable("record \(index + 1) has no known type")
       }
     }
   }
