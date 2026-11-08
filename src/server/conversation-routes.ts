@@ -38,20 +38,22 @@ export function readTimingHeader(timing: ReadTiming, runtime: number, total: num
   ].join(", ");
 }
 
-/** Decides a pending approval for this person, as the chat and notification actions do. */
 /**
  * A client's answers as Hermes's clarify tool reads them. A multi-select answer is one JSON array of
- * strings. A client that says so sends exactly that, and anything else is refused. An older client sends
- * its picks joined with ", " in option order and any written answer last; Hermes would read that as one
- * typed answer, so it is split into the options it names, then the rest as written text. When an option
- * itself contains ", " the split could be wrong, so that answer passes unchanged, as Hermes's typed text.
+ * strings. A client that says so sends exactly that, and anything else, including an empty answer, is
+ * refused. An older client sends its picks joined with ", " in option order and any written answer last.
+ * Hermes would read that as one typed answer, so an answer made only of offered options becomes their
+ * array. Anything else passes unchanged as Hermes's typed text: "Water, only if the trough is empty" is
+ * written text that starts with an option, and nothing in the payload tells it apart from a pick plus
+ * writing. That is how these clients behaved before, so no answer becomes a pick the person didn't make.
+ * When an option itself contains ", " the split could be wrong, so that answer also passes unchanged.
  */
 export function multiSelectAnswers(questions: { id: string; options?: string[]; multiple?: boolean }[],
   answers: Record<string, string>, format?: "json"): Record<string, string> {
   const result = { ...answers };
   for (const question of questions) {
     const answer = answers[question.id], options = question.options ?? [];
-    if (!question.multiple || !answer) continue;
+    if (!question.multiple || answer === undefined) continue;
     if (format === "json") {
       let picks: unknown;
       try { picks = JSON.parse(answer); } catch { picks = undefined; }
@@ -59,12 +61,9 @@ export function multiSelectAnswers(questions: { id: string; options?: string[]; 
         throw httpError(400, `Send the answer to "${question.id}" as a JSON array of strings.`);
       continue;
     }
-    if (options.some(option => option.includes(", "))) continue;
+    if (!answer || options.some(option => option.includes(", "))) continue;
     const pieces = answer.split(", ");
-    let named = 0;
-    while (named < pieces.length && options.includes(pieces[named])) named++;
-    const written = pieces.slice(named).join(", ").trim();
-    result[question.id] = JSON.stringify([...pieces.slice(0, named), ...written ? [written] : []]);
+    if (pieces.every(piece => options.includes(piece))) result[question.id] = JSON.stringify(pieces);
   }
   return result;
 }
@@ -80,6 +79,7 @@ export function unofferedChoice(approval: Approval, decision: "approved" | "deni
     : "Hermes didn't offer that choice for this request.";
 }
 
+/** Decides a pending approval for this person, as the chat and notification actions do. */
 export async function decideApproval(runtime: Runtime, store: Store, botId: string, approvalId: string, decision: "approved" | "denied", userId: string, scope?: ApprovalScope) {
   const readAt = Date.now();
   const conversation = await runtime.conversation(botId, { history: false });

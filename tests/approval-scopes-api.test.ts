@@ -89,21 +89,23 @@ describe("multi-select answers", () => {
     const headers = await localLogin(app, origin);
     return { answerRequest, answer: (payload: Record<string, unknown>) => app.inject({ method: "POST", url: "/api/bots/shared/requests/ask", headers, payload }) };
   }
-  it("turns an older client's comma-joined picks into the JSON array Hermes reads, written text last", async () => {
+  it("turns an older client's comma-joined picks into the JSON array Hermes reads, and leaves written text as typed", async () => {
     const { answerRequest, answer } = await asking();
     expect((await answer({ answers: { chores: "Feed (Recommended), Water", pasture: "North (Recommended)", loads: "Straw" } })).statusCode).toBe(200);
     expect(answerRequest.mock.calls[0][2]).toEqual({ chores: JSON.stringify(["Feed (Recommended)", "Water"]), pasture: "North (Recommended)",
       // An option with ", " in it could be split wrongly, so that answer stays as the person's text.
       loads: "Straw" });
-    await answer({ answers: { chores: "Water, Salt block, loose" } });
-    expect(answerRequest.mock.calls[1][2]).toEqual({ chores: JSON.stringify(["Water", "Salt block, loose"]) });
+    // Written text that starts with an option can't be told apart from a pick plus writing, so it stays one typed
+    // answer rather than becoming an unconditional "Water".
+    await answer({ answers: { chores: "Water, only if the trough is empty" } });
+    expect(answerRequest.mock.calls[1][2]).toEqual({ chores: "Water, only if the trough is empty" });
   });
   it("passes a client's JSON array unchanged and refuses anything else from a client that said JSON", async () => {
     const { answerRequest, answer } = await asking();
     const picks = JSON.stringify(["Feed (Recommended)", "Water, extra"]);
     expect((await answer({ answers: { chores: picks, pasture: "South" }, answerFormat: "json" })).statusCode).toBe(200);
     expect(answerRequest.mock.calls[0][2]).toEqual({ chores: picks, pasture: "South" });
-    for (const chores of ["Feed (Recommended), Water", "[]", JSON.stringify(["Feed", 3]), JSON.stringify(["  "]), "{\"a\":1}"]) {
+    for (const chores of ["", "Feed (Recommended), Water", "[]", JSON.stringify(["Feed", 3]), JSON.stringify(["  "]), "{\"a\":1}"]) {
       const refused = await answer({ answers: { chores }, answerFormat: "json" });
       expect([refused.statusCode, refused.json().error], chores).toEqual([400, 'Send the answer to "chores" as a JSON array of strings.']);
     }

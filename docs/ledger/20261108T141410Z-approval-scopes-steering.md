@@ -99,3 +99,21 @@ handoff clear removed from the shared receipt handler, the lookup-recovery test 
 ("approval" still set) and passed again once restored. TranscriptFlowTests: the approval scope
 flow passed; `testQuestionOptionsAdvanceAndSendEveryAnswer` fails as it does on `846ec70`; the
 screenshot test skipped without a screenshot directory.
+
+## Re-review fixes (coordinator)
+
+A scoped GPT-6.1 Sol re-review of `d2157aa..d9f4fdf` found two gaps in the legacy answer
+conversion, both reproduced through Fastify injection:
+
+- An older client's written answer that starts with an offered option ("Water, only if the
+  trough is empty") was split into an unconditional "Water" plus a fragment. The payload can't
+  tell that apart from a pick plus writing, so only an answer made entirely of offered options
+  becomes an array now; anything else passes unchanged as one typed answer, as these clients
+  behaved before this branch.
+- An empty answer with `answerFormat: "json"` skipped validation. It now gets the
+  question-specific 400 and never reaches Hermes.
+
+Mutations in `tests/approval-scopes-api.test.ts`, each applied alone and restored:
+restoring the `!answer` empty shortcut failed "passes a client's JSON array unchanged and
+refuses anything else"; converting any comma-joined answer failed "turns an older client's
+comma-joined picks into the JSON array Hermes reads, and leaves written text as typed".
