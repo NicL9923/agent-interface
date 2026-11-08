@@ -202,7 +202,11 @@ but still ran once, which is why the app server refuses unoffered choices. Clari
 `multi_select`, marked the first of several choices ` (Recommended)`, took a JSON array for a
 multi-select answer and stripped the suffix from a picked answer. The add-on returned its
 steering decision in the admission response, receipt lookup and history row. The older
-qualified revisions `b9cb268` and `d23cc6b` build the same approval `choices` and clarify wire.
+qualified revisions `b9cb268` and `d23cc6b` build the same approval `choices` and clarify wire. They
+do not reread `command_allowlist` once loaded, so the add-on also drops a removed pattern from
+the dashboard process's permanent cache. `tests/hermes_automation_test.py` checks that removal
+against the real `tools.approval` of each qualified revision when `HERMES_SOURCE` names its
+checkout.
 [Evidence](evidence/hermes-approval-scope-probe-ed1afb0.json).
 
 New full spike runs save receipts in their disposable `evidence` directory,

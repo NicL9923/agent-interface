@@ -730,6 +730,31 @@ def profile_sessions(server, profile):
     return keys
 
 
+def withdraw_permanent(approval, server, profile, aliases):
+    """Drops the patterns from this process's permanent grant cache for the profile. Callers hold
+    approval._lock.
+
+    Hermes ed1afb0 resyncs that cache from config.yaml on every check, but qualified b9cb268 and
+    d23cc6b read it once and keep it, so the saved file alone would leave the grant live. The
+    launch profile's grants live in the module-level set under baseline key "", and a routed
+    profile's under its home key; the profile write scope can name either, so both are cleared.
+    The baselines lose the patterns too, so a later save can't read them as this process's grants.
+    """
+    from pathlib import Path
+    from hermes_cli.profiles import get_profile_dir
+    from hermes_constants import hermes_home_key
+    home = Path(get_profile_dir(profile))
+    keys = {hermes_home_key(home)}
+    caches = [getattr(approval, "_permanent_approved_by_home", {}).get(key) for key in keys]
+    if home.resolve() == Path(server._hermes_home).resolve():
+        keys.add("")
+        caches.append(getattr(approval, "_permanent_approved", None))
+    baselines = getattr(approval, "_permanent_baseline_by_home", {})
+    for granted in caches + [baselines.get(key) for key in keys]:
+        if granted:
+            granted.difference_update(aliases)
+
+
 def approval_operation(data, server):
     from hermes_cli.web_routers._common import config_write_scope
     if data["operation"] == "approval_settings":
@@ -757,10 +782,11 @@ def approval_operation(data, server):
         if pattern in current:
             config["command_allowlist"] = sorted(current - {pattern})
             save_config(config)
-        # The native lock guards both grant maps. A pattern granted "always" was also granted
+        # The native lock guards every grant map. A pattern granted "always" was also granted
         # to its session, so withdraw that too, under each key the pattern has had.
         aliases = _approval_key_aliases(pattern) | {pattern}
         with approval._lock:
+            withdraw_permanent(approval, server, data["profile"], aliases)
             for key in profile_sessions(server, data["profile"]):
                 granted = approval._session_approved.get(key)
                 if granted:

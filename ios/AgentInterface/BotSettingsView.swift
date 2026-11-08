@@ -1837,7 +1837,7 @@ struct ApprovalSettingsView: View {
           }
         } header: { Text("Always-allowed commands") } footer: {
           Text("\(botName) runs these kinds of commands without asking, in every conversation. Each one is a kind Hermes flags, so it covers more than the command you first allowed."
-            + (settings.allowlist.isEmpty ? "" : " Removing one takes effect at \(botName)'s next command in this app. A chat already running in another Hermes app, such as Discord, keeps it until that chat ends."))
+            + (settings.allowlist.isEmpty ? "" : " Removing one takes effect at \(botName)'s next command in this app. Another Hermes app, such as Discord, may keep allowing it until its chat ends or Hermes restarts."))
         }
         Section {
           Toggle("Auto-review routine commands", isOn: Binding(

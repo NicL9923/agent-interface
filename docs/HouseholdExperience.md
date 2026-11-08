@@ -127,8 +127,8 @@ choices, asks first: it names the kind of command, such as "recursive delete", a
 says the assistant will run any command of that kind without asking, in every
 conversation, until someone removes it in the assistant's Access settings under
 Always-allowed commands. Removing one takes effect at the assistant's next command in
-WildBots; a chat already running in another Hermes app, such as Discord, keeps it
-until that chat ends. Anyone who can see the assistant can remove one. Only an
+WildBots, on every qualified Hermes. Another Hermes app, such as Discord, may keep
+allowing it until its chat ends or Hermes restarts. Anyone who can see the assistant can remove one. Only an
 integration administrator can turn on Auto-review routine commands, which lets
 Hermes's own guardian run commands it judges safe and send the rest to a person, who
 can then allow only once. Notifications keep Review and Decline only.

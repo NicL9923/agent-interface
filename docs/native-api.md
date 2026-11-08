@@ -438,7 +438,7 @@ A notification's Decline is unchanged and never carries a scope.
 | Route | Request and response |
 | --- | --- |
 | `GET /api/bots/:id/approval-settings` | `{ "supported", "reason"?, "allowlist": [pattern], "mode": "manual" \| "smart" \| "off", "canManageAutoReview" }`. An older add-on answers `supported: false` with a reason and an empty list |
-| `DELETE /api/bots/:id/approval-settings/allowlist` | `{ "pattern" }`; any member who sees the assistant. Removes the pattern from the config and withdraws the matching session grants this Hermes process holds, so Hermes asks again at the next command. A chat running in another Hermes process, such as the Discord gateway, keeps its session grant until that chat ends. Answers the settings |
+| `DELETE /api/bots/:id/approval-settings/allowlist` | `{ "pattern" }`; any member who sees the assistant. Removes the pattern from the config and withdraws the matching permanent and session grants the Hermes dashboard process holds, so Hermes asks again at the next command in the app. Another Hermes process, such as the Discord gateway, may keep allowing it until its chat ends or, on Hermes before `ed1afb0`, until it restarts. Answers the settings |
 | `PUT /api/bots/:id/approval-settings` | `{ "autoReview": true \| false }` sets Hermes's `approvals.mode` to `smart` or `manual`. Integration administrators only (403, `approval_policy_forbidden`); 409 `approvals_off` when Hermes is set never to ask. Answers the settings |
 
 **Recommended answers.** A clarify question may carry `multiple: true` (Hermes's

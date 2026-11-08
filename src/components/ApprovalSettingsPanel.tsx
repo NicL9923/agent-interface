@@ -40,7 +40,7 @@ export function ApprovalSettingsPanel({ botId, name }: { botId: string; name: st
         <Button type="button" disabled={disabled} aria-label={`Remove ${pattern}`} onClick={() => remove(pattern)}>Remove</Button>
       </li>)}</ul>
       : <p className="muted">Nothing yet. Choose Always allow on an approval to add one.</p>)}
-    {settings && settings.allowlist.length > 0 && <p className="capability-note">Removing one takes effect at {name}'s next command in this app. A chat already running in another Hermes app, such as Discord, keeps it until that chat ends.</p>}
+    {settings && settings.allowlist.length > 0 && <p className="capability-note">Removing one takes effect at {name}'s next command in this app. Another Hermes app, such as Discord, may keep allowing it until its chat ends or Hermes restarts.</p>}
     {settings && <section className="automation-section">
       <h3>Auto-review</h3>
       <label className="automation-check">
