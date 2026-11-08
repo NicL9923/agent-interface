@@ -59,7 +59,32 @@ import XCTest
     if !send.canTap { app.scrollViews["conversationTranscript"].swipeUp() }
     XCTAssertTrue(send.wait(until: "isEnabled == true"))
     send.tapWhenReady()
-    XCTAssertTrue(app.staticTexts["extras: Hay, Feed; note: Bring gloves; plan: Second"].waitForExistence(timeout: 10))
+    XCTAssertTrue(app.staticTexts[#"extras: ["Hay","Feed"]; note: Bring gloves; plan: Second"#].waitForExistence(timeout: 10),
+      "Several choices go to Hermes as one JSON array")
+  }
+
+  func testApprovalScopesTheDeclineHandoffARecommendedAnswerAndSteering() throws {
+    let app = launch(["AGENT_INTERFACE_UI_APPROVAL_SCOPES": "1"])
+    let once = app.buttons["approvalAllowOnce"]
+    XCTAssertTrue(once.waitForExistence(timeout: 15), app.debugDescription)
+    XCTAssertTrue(app.buttons["approvalAllowSession"].exists, "Hermes offered this conversation, so it shows")
+    XCTAssertTrue(app.staticTexts["steeredLabel"].exists, "A steered message says it joined the running task")
+    XCTAssertTrue(app.buttons["questionOption-feed-0"].wait(until: "isSelected == true"), "The recommended answer starts chosen")
+    XCTAssertTrue(app.buttons["questionOption-feed-0"].label.hasSuffix("recommended"))
+    try capture(app, "approval-scopes")
+    app.buttons["approvalMore"].tapWhenReady()
+    app.buttons["Always allow…"].tapWhenReady()
+    let alert = app.alerts.firstMatch
+    XCTAssertTrue(alert.waitForExistence(timeout: 5))
+    XCTAssertTrue(alert.label.hasPrefix("Always allow this for"))
+    XCTAssertTrue(alert.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "“recursive delete”")).firstMatch.exists, "It names the pattern it saves")
+    try capture(app, "approval-always-confirm")
+    alert.buttons["Cancel"].tapWhenReady()
+    XCTAssertTrue(alert.waitForDisappearance())
+    app.buttons["approvalDecline"].tapWhenReady()
+    XCTAssertTrue(app.descendants(matching: .any)["declinedStep"].waitForExistence(timeout: 10))
+    XCTAssertTrue(app.textViews["messageComposer"].waitForKeyboardFocus(true), "The message box takes the next step")
+    try capture(app, "approval-declined")
   }
 
   func testAFailedTurnRetriesAndLeavesTheDraftAlone() throws {

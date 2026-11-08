@@ -58,10 +58,12 @@ const messages = [
   { id: "message-tool", runId: "run-dinner", role: "tool", text: "", toolName: "web_search", toolCall: searchCall },
   { id: "message-assistant", runId: "run-dinner", role: "assistant", text: "Here are five dinners.\n\n```agent-ui\n" + JSON.stringify(cards) + "\n```", createdAt: at("11:05"),
     reasoning: "Balanced the week around the pantry list.", files: [generated] },
+  { id: "message-steer", runId: "run-dinner", role: "user", text: "Keep it vegetarian", createdAt: at("11:06"), steered: true },
 ] satisfies Message[];
 const conversation = {
   attention: [
-    { id: "clarify-store", kind: "clarify", title: "Which store?", detail: "Choose where to shop this week.", questions: [{ id: "store", prompt: "Which store should I use?", options: ["Market", "Co-op"] }] },
+    { id: "clarify-store", kind: "clarify", title: "Which store?", detail: "Choose where to shop this week.", questions: [{ id: "store", prompt: "Which store should I use?", options: ["Market", "Co-op"] },
+      { id: "extras", prompt: "Anything else?", options: ["Basil (Recommended)", "Bread"], multiple: true, recommended: 0 }] },
     { id: "secure-login", kind: "secure", title: "Save the grocery login", detail: "Hermes asks to save a login.", secure: { epoch: "epoch-1", sessionId: "session-household", method: "vault.save_login", origin: "https://grocer.example.test", site: "Grocer" } },
     { id: "secure-code", kind: "secure", title: "Enter the code", detail: "Hermes needs a sign-in code.", secure: { epoch: "epoch-1", sessionId: "session-household", method: "vault.code", site: "Grocer", hint: "Sent to the family phone" } },
     { id: "secure-unlock", kind: "secure", title: "Unlock Bitwarden", detail: "Hermes needs the vault unlocked.", secure: { epoch: "epoch-1", sessionId: "session-household", method: "vault.unlock_prompt", backend: "bitwarden", displayName: "Bitwarden" } },
@@ -69,7 +71,8 @@ const conversation = {
   ],
   botId: "household", sessionId: "session-household", messages,
   activity: { state: "working", detail: "Comparing recipes", runId: "run-dinner", updatedAt: at("11:59") },
-  approvals: [{ id: "approval-order", title: "Place grocery order", detail: "Order 12 items from Grocer.", status: "pending", expiresAt: at("13:00") }],
+  approvals: [{ id: "approval-order", title: "Place grocery order", detail: "Order 12 items from Grocer.", status: "pending", expiresAt: at("13:00"),
+    choices: ["once", "session", "always", "deny"], patterns: ["grocery order"], command: "grocer order --items 12" }],
   files: [generated], toolCalls: [searchCall, calendarCall],
 } satisfies Conversation;
 const gardenConversation = { botId: "garden", messages: [], activity: { state: "waiting" }, approvals: [], files: [] } satisfies Conversation;
@@ -205,6 +208,8 @@ const runtime = {
     trigger_delete: () => ({ ok: true }), skill_content: () => skillContent, skill_diff: () => skillDiff,
     skill_decide: () => ({ ok: true }), skill_policy: () => ({ ok: true }),
     skill_lock: input => ({ ok: true, name: input.name, locked: input.locked }),
+    approval_settings: () => ({ allowlist: ["grocery order", "recursive delete"], mode: "manual" }),
+    approval_allowlist_remove: () => ({ ok: true, allowlist: ["grocery order"], mode: "manual" }),
   }),
   groupRequest: async input => {
     switch (input.operation) {
@@ -355,6 +360,8 @@ it("keeps the server responses the iOS app decodes in sync with the committed co
     await record("bot-skill-diff", "GET", "/api/bots/household/automation/skills/pending/deadbeef");
     await record("bot-skill-content", "GET", "/api/bots/household/automation/skills/content?name=ranch%2Ffences");
     await record("bot-skill-lock", "PUT", "/api/bots/household/automation/skills/lock", { name: "ranch/fences", locked: false });
+    await record("approval-settings", "GET", "/api/bots/household/approval-settings");
+    await record("approval-settings-remove", "DELETE", "/api/bots/household/approval-settings/allowlist", { pattern: "recursive delete" });
 
     await record("search", "GET", "/api/search?q=dinner");
     await record("history", "GET", "/api/bots/household/history/session-household?offset=0");

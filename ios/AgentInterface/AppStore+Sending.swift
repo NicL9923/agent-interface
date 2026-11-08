@@ -31,7 +31,7 @@ extension AppStore {
         "/bots/\(APIClient.component(id))/messages", submission)
       guard currentGeneration == generation else { return }
       await handleReceipt(value, botId: id)
-      if value.status == "accepted" { buzz(.sent); Task { await LiveActivityController.shared.sent(to: id) } }
+      if value.status == "accepted" { declinedApprovals[id] = nil; buzz(.sent); Task { await LiveActivityController.shared.sent(to: id) } }
       else if value.status == "rejected" || value.status == "interrupted" { buzz(.failed) }
     } catch {
       guard currentGeneration == generation else { return }

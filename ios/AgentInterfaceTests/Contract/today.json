@@ -39,7 +39,17 @@
             "title": "Place grocery order",
             "detail": "Order 12 items from Grocer.",
             "status": "pending",
-            "expiresAt": "2026-10-01T13:00:00.000Z"
+            "expiresAt": "2026-10-01T13:00:00.000Z",
+            "choices": [
+              "once",
+              "session",
+              "always",
+              "deny"
+            ],
+            "patterns": [
+              "grocery order"
+            ],
+            "command": "grocer order --items 12"
           }
         ],
         "attention": [
@@ -56,6 +66,16 @@
                   "Market",
                   "Co-op"
                 ]
+              },
+              {
+                "id": "extras",
+                "prompt": "Anything else?",
+                "options": [
+                  "Basil (Recommended)",
+                  "Bread"
+                ],
+                "multiple": true,
+                "recommended": 0
               }
             ]
           },
