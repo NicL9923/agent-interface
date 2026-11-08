@@ -1549,5 +1549,6 @@ if __name__ == "__main__":
     sibling_module("automation").install(web, journal)
     sibling_module("vault").install(web, journal)
     sibling_module("integrations").install(web)
+    sibling_module("mac").register()
     sibling_module("service_auth").install_service_auth(web, os.environ["HERMES_AGENT_INTERFACE_TOKEN"])
     web.start_server(host="127.0.0.1", port=args.port, open_browser=False, headless=True, isolated=True)

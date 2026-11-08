@@ -42,6 +42,7 @@ class DashboardContract(unittest.TestCase):
         integrations = types.SimpleNamespace(install=lambda web: step("integrations"))
         voice = types.SimpleNamespace(install=lambda web: step("voice"))
         computer = types.SimpleNamespace(install_tools=lambda: step("computer"))
+        mac = types.SimpleNamespace(register=lambda: step("mac"))
         cli = types.ModuleType("hermes_cli.main")
         cli.main = lambda: events.append(("cli", list(sys.argv)))
         web = types.ModuleType("hermes_cli.web_server")
@@ -58,7 +59,7 @@ class DashboardContract(unittest.TestCase):
             dashboard = load("dashboard", link)
             def sibling_spec(name, path):
                 self.assertEqual(Path(path).parent, ROOT)
-                module = extension if name.endswith("extension") else experience if name.endswith("experience") else automation if name.endswith("automation") else vault if name.endswith("vault") else integrations if name.endswith("integrations") else voice if name.endswith("voice") else computer if name.endswith("computer") else service
+                module = extension if name.endswith("extension") else experience if name.endswith("experience") else automation if name.endswith("automation") else vault if name.endswith("vault") else integrations if name.endswith("integrations") else voice if name.endswith("voice") else computer if name.endswith("computer") else mac if name.endswith("_mac") else service
                 spec = importlib.util.spec_from_loader(name, types.SimpleNamespace(create_module=lambda spec: types.ModuleType(name), exec_module=lambda target: target.__dict__.update(vars(module))), origin=str(path))
                 spec.has_location = True  # Like a real file spec, so the loader can confirm which file it loaded.
                 return spec
@@ -76,7 +77,7 @@ class DashboardContract(unittest.TestCase):
 
     def test_original_cli_receives_unchanged_dashboard_arguments_after_install(self):
         events, argv, web = self.exercise()
-        self.assertEqual(events, [("secret", "private"), "qualify", "computer", "extension", "experience", "automation", "vault", "integrations", "voice", ("service", web, "private"), ("cli", argv)])
+        self.assertEqual(events, [("secret", "private"), "qualify", "computer", "extension", "experience", "automation", "vault", "integrations", "voice", "mac", ("service", web, "private"), ("cli", argv)])
         self.assert_native_updater_off()
 
     def test_native_updater_stays_off_while_the_add_on_is_disabled(self):

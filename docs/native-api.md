@@ -1050,6 +1050,14 @@ is admitted, so the assistant reads it next. A login the assistant asked for by
 address stays open unless the sender is the member whose task asked for it. An
 answer that reaches Hermes after its request closed answers `{ "status": "expired" }`.
 
+## Linked Macs
+
+`GET /api/mac/devices` lists the signed-in person's Macs linked with WildBots for
+Mac, and `DELETE /api/mac/devices/:id` revokes one, with the bearer session. The
+iOS app shows them in Settings > Macs. WildBots for Mac itself uses sign-in
+contract version 1 once, to enroll, then its own device credential. See
+[WildBots for Mac](MacLink.md#protocol-version-1).
+
 ## Live Activity
 
 The app shows one aggregate Live Activity per device: the person's assistants that are

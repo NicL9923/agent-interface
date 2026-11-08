@@ -572,6 +572,16 @@ Nicolas authorized hosting this application at `agentui.wildflowersranch.com`
 on the existing Hermes VPS. The [deployment record](docs/Hosting.md) tracks
 that installation and any remaining acceptance steps.
 
+## WildBots for Mac
+
+[`mac/`](mac/) holds WildBots for Mac, a menu bar app that lets your personal
+assistants run commands, read and write files in folders you choose, and take a
+screenshot on your Mac, unattended when you allow it. The Mac decides what each
+assistant may do and connects out to this server, so it needs no open port. Linked
+Macs appear in Settings > Macs, where Revoke disconnects one at once. The server
+turns Mac links on with `MAC_LINK_KEY`; see [WildBots for Mac](docs/MacLink.md) for
+setup, the confinement model, its limits and the protocol.
+
 ## Native iOS
 
 The SwiftUI app lives in [`ios/`](ios/). It uses the same authenticated application

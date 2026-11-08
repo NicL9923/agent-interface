@@ -7,7 +7,7 @@ import { once } from "node:events";
 import { afterEach, expect, it, vi } from "vitest";
 import WebSocket, { WebSocketServer } from "ws";
 import { installAuth, hash } from "../src/server/auth.js";
-import { installComputerRoutes } from "../src/server/computer.js";
+import { installComputerRoutes, socketFrameLimit } from "../src/server/computer.js";
 import { loadConfig } from "../src/server/config.js";
 import { Store } from "../src/server/store.js";
 import type { Runtime } from "../src/shared/types.js";
@@ -94,6 +94,23 @@ it("binds one-use desktop tickets to the issuing session and exact Origin", asyn
   expect((await output)[0].toString()).toBe("RFB handshake");
   await expect(s.app.injectWS(path, {headers: s.one})).rejects.toThrow("401");
   ws.close(); await once(ws, "close");
+});
+
+it("keeps its own 256 KiB frame limit although the socket plugin admits a linked Mac's larger frames", async () => {
+  const s = await setup();
+  await s.app.close();
+  // The app registers the plugin with the Mac link's 8 MiB limit; this socket must still refuse more than its own.
+  const app = Fastify(), store = new Store(":memory:");
+  const config = loadConfig({ NODE_ENV: "production", APP_ORIGIN: origin, GOOGLE_CLIENT_ID: "fixture", HOUSEHOLD_EMAILS: "one@example.invalid" });
+  await app.register(cookie); await app.register(websocket, {options: {maxPayload: 8 * 1024 * 1024}}); await installAuth(app, store, config);
+  await installComputerRoutes(app, config, store, s.runtime, () => false);
+  cleanups.push(async () => { await app.close(); store.close(); });
+  const one = {...signIn(store, origin, "one", {csrf: "fixture-csrf", confirmed: true}), "user-agent": "fixture-browser"};
+  const {path} = (await app.inject({method: "POST", url: "/api/computer/desktop", headers: one, payload: {}})).json();
+  const ws = await app.injectWS(path, {headers: one});
+  const closed = once(ws, "close");
+  ws.send(Buffer.alloc(socketFrameLimit + 1));
+  expect((await closed)[0]).toBe(1009);
 });
 
 it("revokes an attached stream when its session expires and fences control during maintenance", async () => {

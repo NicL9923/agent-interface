@@ -11,6 +11,7 @@ import { NotificationRepository } from "./store-notifications.js";
 import { EventRepository } from "./store-events.js";
 import { RetentionRepository } from "./store-retention.js";
 import { CheckInRepository } from "./store-check-ins.js";
+import { MacRepository } from "./store-macs.js";
 
 export { schemaVersion } from "./store-database.js";
 export type { CoveredRun, LiveActivityRegistration, LiveActivityStartRegistration } from "./store-devices.js";
@@ -37,6 +38,7 @@ export class Store {
   readonly events: EventRepository;
   readonly retention: RetentionRepository;
   readonly checkIns: CheckInRepository;
+  readonly macs: MacRepository;
   constructor(path: string) {
     this.database = new StoreDatabase(path);
     this.db = this.database.db;
@@ -55,6 +57,7 @@ export class Store {
     });
     this.events = new EventRepository(this.database, this.notifications, this.presentations, this.checkIns);
     this.retention = new RetentionRepository(this.database, this.accounts, this.personalState, this.checkIns);
+    this.macs = new MacRepository(this.database);
   }
   close() {
     this.database.close();

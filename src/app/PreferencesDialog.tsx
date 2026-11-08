@@ -17,6 +17,7 @@ import type { Section } from "./preferences-editing";
 import { usePreferenceEdits, type PreferenceEdit } from "./use-preference-edits";
 import "./home.css";
 import { SettingsConfirmation } from "../components/SettingsConfirmation";
+import { MacSettings } from "./MacSettings";
 import { formatCombo, shortcuts } from "./shortcuts";
 
 type Page = { kind: "main" } | { kind: "following" } | { kind: "section"; id: string };
@@ -114,6 +115,8 @@ export function PreferencesDialog({ boot, connectionLost, offline, editPreferenc
           <NavRow icon="computer" label="Computer" detail="Shared desktop and terminal" onClick={onComputer} />
           <NavRow icon="plug" label="Integrations" detail="Accounts your assistants can use" onClick={onIntegrations} />
         </div>
+
+        <MacSettings />
 
         <h3 className="settings-heading">Display</h3>
         <div className="settings-group">

@@ -7,6 +7,12 @@ export type ErrorCode =
   | "created_incomplete"
   | "draft_conflict"
   | "file_too_large"
+  // Linking a Mac: see docs/MacLink.md.
+  | "confirmation_required"
+  | "link_unavailable"
+  | "mac_limit"
+  | "mac_not_found"
+  | "native_required"
   | "hermes_maintenance"
   | "hermes_unauthorized"
   | "interruption_pending"
