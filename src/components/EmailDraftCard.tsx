@@ -47,7 +47,7 @@ export function EmailDraftCard({ card, previous }: { card: EmailCard; previous?:
   return <>
     {changes && <div className="email-draft-revision">
       <span className="muted">{changes.changed ? `Revises “${previous!.title}”` : `Same as “${previous!.title}”`}</span>
-      {changes.changed && <Button type="button" aria-pressed={!hidden} onClick={() => setHidden(value => !value)}>
+      {changes.changed && <Button type="button" onClick={() => setHidden(value => !value)}>
         <Icon name={hidden ? "pencil" : "check"} size={16} /> {hidden ? "Show changes" : "Hide changes"}</Button>}
     </div>}
     <dl className="email-draft-headers">
