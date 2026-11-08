@@ -171,3 +171,10 @@ each a missing case rather than dead code, and went red after:
 - sending rosters one at a time needed a test where Hermes finishes the older send last;
 - main assistants' update, resume and run needed calls naming only their own chat;
 - confirming the run ended needed the case where the delete succeeds while the run continues.
+
+Checks at `c5f8b04`, the round-two fix commit: `npm test` 152 files and 2,138 tests passed;
+typecheck, lint, build, Ruff and the e2e smoke suite (2) passed; `npm run test:py` 38 files
+passed. iOS, through `validate-ios.sh` on the Mac mini (it takes the heavy lock itself), exit 0:
+`MainAssistantTests`, `ContractFixtureTests`, `SettingsParityTests` and `HomeParityTests` ran 54
+tests with no failures, and `MainAssistantFlowTests` passed both tests, light and dark. This
+round changed no iOS source.
