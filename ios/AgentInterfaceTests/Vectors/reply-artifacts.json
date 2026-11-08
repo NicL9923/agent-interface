@@ -300,7 +300,14 @@
     {
      "id": "a1",
      "role": "assistant",
-     "text": "Hello"
+     "text": "Hello",
+     "files": [
+      {
+       "id": "notes",
+       "name": "notes.plain",
+       "mime": "text/plain"
+      }
+     ]
     },
     {
      "id": "c1",
@@ -322,11 +329,18 @@
    ],
    "artifacts": [
     [
+     "notes",
+     "Generated"
+    ],
+    [
      "brief",
      "Generated"
     ]
    ],
    "replies": {
+    "a1": [
+     "notes"
+    ],
     "a2": [
      "brief"
     ]
@@ -464,6 +478,44 @@
    "replies": {
     "a1": [
      "only"
+    ]
+   }
+  },
+  {
+   "name": "an empty assistant row after the reply is not where the chips go",
+   "messages": [
+    {
+     "id": "u1",
+     "role": "user",
+     "text": "Go"
+    },
+    {
+     "id": "a1",
+     "role": "assistant",
+     "text": "Done",
+     "files": [
+      {
+       "id": "result",
+       "name": "result.png",
+       "mime": "image/png"
+      }
+     ]
+    },
+    {
+     "id": "a2",
+     "role": "assistant",
+     "text": "  "
+    }
+   ],
+   "artifacts": [
+    [
+     "result",
+     "Generated"
+    ]
+   ],
+   "replies": {
+    "a1": [
+     "result"
     ]
    }
   }

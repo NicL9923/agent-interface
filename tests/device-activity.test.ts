@@ -76,8 +76,12 @@ it("keeps a browser in use under its session, folds the ID to lowercase, and end
   store.deviceActivity("one", "other-session", tablet, "web", "active");
   expect((await server.inject({ ...beat({ deviceId: tablet, state: "inactive" }), headers: one })).statusCode).toBe(200);
   expect([...store.activeDevices("one")]).toEqual([laptop]);
+  // Another session's device outlives this sign-out.
+  store.deviceActivity("one", "other-session", phone, "web", "active");
   expect((await server.inject({ method: "POST", url: "/api/auth/logout", headers: one })).statusCode).toBe(200);
-  expect(store.activeDevices("one").size).toBe(0);
+  expect(store.activeDevices("one").has(laptop)).toBe(false);
+  // Signing out removes its row at once rather than leaving it for retention.
+  expect(store.db.prepare("SELECT device_id FROM device_activity").all()).toEqual([{ device_id: phone }]);
 });
 
 it("lets the person who signs in next on an iPhone take over its device, and ends native activity at sign-out", async () => {
@@ -134,6 +138,9 @@ it("attaches a device only to the caller's own subscription, and forgets it when
   expect((await server.inject({ method: "POST", url: "/api/push/subscriptions", headers: one, payload: { endpoint, keys } })).statusCode).toBe(200);
   expect(store.subscriptionDevices("one").size).toBe(0);
   expect((await server.inject({ method: "POST", url: "/api/push/subscriptions", headers: one, payload: { endpoint, keys, deviceId: laptop } })).statusCode).toBe(200);
+  expect(store.subscriptionDevices("one").get(endpoint)).toBe(laptop);
+  // The store refuses a label for someone else's endpoint even without the route's check.
+  store.attachSubscriptionDevice("two", endpoint, tablet);
   expect(store.subscriptionDevices("one").get(endpoint)).toBe(laptop);
   expect((await server.inject({ method: "DELETE", url: "/api/push/subscriptions", headers: one, payload: { endpoint } })).statusCode).toBe(200);
   expect(store.db.prepare("SELECT count(*) AS n FROM push_subscription_devices").get()).toEqual({ n: 0 });

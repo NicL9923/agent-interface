@@ -54,6 +54,16 @@ Reading a chat on one device stops its pending notifications to the others and
 removes its delivered ones from your iPhone and iPad. A browser tab counts while
 it is focused and has had input in the last five minutes.
 
+<!-- BEGIN device activity -->
+Notifications go to the device you are using. While a browser window is focused
+and touched in the last five minutes, or the iOS app is open and touched in the
+last five minutes, only those devices get the alert; your other iPhones and iPads
+get the new badge count silently, and other browsers update theirs when you next
+open the app. With no device in use, or none of those able to receive it, every
+device gets it as before. Security alerts always reach every device. See
+[Device activity](docs/native-api.md#device-activity).
+<!-- END device activity -->
+
 The browser tab title, favicon and installed app, and the iPhone and iPad app icon,
 show how many assistants have unread messages or a decision waiting for you. A web
 approval notification offers **Review** and **Decline** where the browser supports
@@ -301,6 +311,10 @@ without touching your draft. When an assistant connected to T3 Code starts a
 thread, the chat shows a card with **Open in T3 Code**. These work on web and
 iOS. See [email drafts and forms](docs/HouseholdExperience.md#email-drafts-and-forms)
 and [T3 Code threads](docs/HouseholdExperience.md#t3-code-threads).
+<!-- BEGIN draft revisions -->
+When an assistant revises an email draft from earlier in the chat, the new draft
+marks the words it added and removed, with **Hide changes** to read it clean.
+<!-- END draft revisions -->
 
 **Routines** includes morning brief, meal plan and VPS health recipes, schedule
 previews in the actual Hermes timezone, and **Try once** with durable run
@@ -466,6 +480,11 @@ Open Artifacts from the assistant's details (tap its name in the conversation he
 outputs and shared attachments. Search filenames, filter by type, and preview
 images, text, or supported media. PDFs and other files can be opened or downloaded.
 External file sources open only when you choose their link.
+<!-- BEGIN reply files -->
+A reply whose turn produced files lists them as chips under it, up to four and
+then **+N more**. A chip opens Artifacts on that file; **+N more** opens the whole
+list. Files you shared yourself are not chips.
+<!-- END reply files -->
 
 ## Validate
 
