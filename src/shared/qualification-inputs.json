@@ -114,6 +114,7 @@
   "src/shared/integrations.ts",
   "src/shared/live-activity.ts",
   "src/shared/message-origin.ts",
+  "src/shared/model-name.ts",
   "src/shared/plain-text.ts",
   "src/shared/qualification-inputs.json",
   "src/shared/reply-cards.ts",

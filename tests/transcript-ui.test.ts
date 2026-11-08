@@ -3,12 +3,13 @@ import { act, createElement } from "react";
 import type { Root } from "react-dom/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
+import { keepKnownAnswers, mayReplace, nextRecord, type Saved } from "../src/components/FormReplyCard";
 import { ApiError, api, write } from "../src/client-api";
 import { defaultPreferences } from "../src/shared/types";
-import type { AttentionRequest, Bootstrap, Conversation, Message } from "../src/shared/types";
+import type { AttentionRequest, Bootstrap, Conversation, Message, ToolCall } from "../src/shared/types";
 import { useConversation } from "../src/app/use-conversation";
 import { useTurnRetry } from "../src/app/use-turn-retry";
-import { retryRequestId } from "../src/shared/retry-id";
+import { formRequestId, retryRequestId } from "../src/shared/retry-id";
 import { FakeEventSource } from "./fake-event-source";
 import { advance, mountRoot, stubMatchMedia, typeInto, waitForUi } from "./ui-harness";
 
@@ -37,6 +38,7 @@ const bootstrap: Bootstrap = {
   ].map((key) => [key, { supported: true }])) as Bootstrap["capabilities"],
   connection: { connected: true },
   csrfToken: "test",
+  formKey: "form-key-one",
 };
 const savedDraft = { text: "My saved draft", attachments: [] };
 const writeText = vi.fn<(value: string) => Promise<void>>();
@@ -1034,5 +1036,541 @@ describe("live work", () => {
       await changed();
       expect(container.querySelector(".work-tape")).toBeNull();
     } finally { bootstrap.bots = original; }
+  });
+});
+
+describe("T3 Code threads", () => {
+  // As Hermes records an MCP call to T3 Code's t3_thread_launch: the tool's text wrapped as {"result": ...}.
+  const launch = (status: "running" | "completed" | "failed", extra: Partial<ToolCall> = {}): ToolCall => ({ id: "launch", name: "mcp_t3code_t3_thread_launch", status,
+    arguments: JSON.stringify({ title: "Fix the gate sensor", message: "Find out why the north gate reads open.", workspaceStrategy: { type: "worktree", branch: "fix/gate" } }),
+    ...status === "completed" ? { result: JSON.stringify({ result: JSON.stringify({ threadId: "t-1", link: "https://app.t3.codes/threads/env-1/t-1", projectId: "p",
+      modelSelection: { model: "claude-opus-5-5" }, runId: "r", status: "queued" }) }) } : {}, ...extra });
+
+  it("shows the started thread between the folded work and the reply, with Open in T3 Code", async () => {
+    conversation = { ...conversation, messages: [prompt("q", "Start a thread to fix the gate"), { id: "t", role: "tool", text: "", toolCall: launch("completed") },
+      answer("a", "Started a thread for it.")] };
+    await render();
+    const fold = container.querySelector(".turn-work")!;
+    const card = container.querySelector<HTMLElement>(".t3-thread-card")!;
+    expect(fold.nextElementSibling).toBe(card);
+    expect(card.nextElementSibling?.getAttribute("data-message-id")).toBe("a");
+    expect(fold.contains(card)).toBe(false);
+    expect(card.textContent).toContain("T3 Code thread started");
+    expect(card.querySelector("h3")?.textContent).toBe("Fix the gate sensor");
+    expect([...card.querySelectorAll(".t3-thread-facts li")].map(item => item.textContent)).toEqual(["Claude Opus 5.5", "New worktree on fix/gate"]);
+    const open = card.querySelector<HTMLAnchorElement>("a")!;
+    expect(open.textContent?.trim()).toBe("Open in T3 Code");
+    expect(open.href).toBe("https://app.t3.codes/threads/env-1/t-1");
+    expect(open.target).toBe("_blank");
+    expect(open.rel).toContain("noopener");
+  });
+
+  it("shows the thread starting while the call runs, then its link once T3 Code answers", async () => {
+    conversation = { ...conversation, activity: { state: "working", runId: "r" }, messages: [prompt("q", "Start a thread")], toolCalls: [launch("running")] };
+    await render();
+    const card = () => container.querySelector<HTMLElement>(".t3-thread-card")!;
+    expect(card().textContent).toContain("Starting a T3 Code thread");
+    expect(card().querySelector("a")).toBeNull();
+    conversation = { ...conversation, activity: { state: "idle" }, toolCalls: [launch("completed")] };
+    await changed();
+    expect(card().textContent).toContain("T3 Code thread started");
+    expect(card().querySelector("a")?.getAttribute("href")).toBe("https://app.t3.codes/threads/env-1/t-1");
+  });
+
+  it("says why a launch failed and offers no link", async () => {
+    conversation = { ...conversation, messages: [prompt("q", "Start a thread"),
+      { id: "t", role: "tool", text: "", toolCall: launch("failed", { error: "Runtime mode exceeds this client's ceiling" }) }, answer("a", "That didn't work.")] };
+    await render();
+    const card = container.querySelector<HTMLElement>(".t3-thread-card")!;
+    expect(card.textContent).toContain("T3 Code thread didn't start");
+    expect(card.querySelector(".form-error")?.textContent).toBe("Runtime mode exceeds this client's ceiling");
+    expect(card.querySelector("a")).toBeNull();
+  });
+});
+
+describe("form replies", () => {
+  const form = { id: "trip", type: "form", title: "Trip details", fields: [
+    { id: "city", label: "Destination", kind: "text", required: true },
+    { id: "pace", label: "Pace", kind: "choice", options: ["Relaxed", "Packed"], value: "Relaxed" },
+    { id: "dog", label: "Bringing the dog", kind: "toggle" },
+  ] };
+  const reply = (card: object = form) => answer("a", "A few details first.\n\n```agent-ui\n" + JSON.stringify({ version: 1, cards: [card] }) + "\n```");
+  const composer = () => container.querySelector<HTMLTextAreaElement>("#message")!;
+  const card = () => container.querySelector<HTMLElement>(".reply-card-form")!;
+  const field = (label: string) => [...card().querySelectorAll("label")].find(item => item.textContent?.startsWith(label))!;
+  const send = () => act(async () => buttonText("Send answers")!.click());
+  const sent = () => card().querySelector(".form-reply-sent")?.textContent?.trim();
+  const answers = 'My answers to "Trip details":\n- Destination: Marfa\n- Pace: Packed\n- Bringing the dog: Yes';
+  const saved = "agent-interface:form-reply:one:shared:a:trip";
+  // The ID every tab and device derives for this person's attempt at this form.
+  const formId = (attempt: number) => formRequestId("form-key-one", "shared", "a", "trip", attempt);
+  const fill = async () => {
+    await typeInto(card().querySelector<HTMLInputElement>('input[type="text"]')!, "Marfa");
+    await act(async () => field("Packed").querySelector("input")!.click());
+    await act(async () => field("Bringing the dog").querySelector("input")!.click());
+  };
+  // The ID is derived with Web Crypto, which settles outside fake timers.
+  const posted = (count: number) => waitForUi(() => expect(messagesWritten()).toHaveLength(count));
+  const reload = async () => { await act(async () => root.unmount()); await render(); };
+  /** Answers GET /submissions/:id from a table of receipts by ID, "uncertain" for any other. Returns the IDs looked up, in order. */
+  const receipts = (statuses: Map<string, string>, otherwise = "uncertain") => {
+    const looked: string[] = [];
+    const previous = vi.mocked(api).getMockImplementation()!;
+    vi.mocked(api).mockImplementation(async <T>(path: string, ...rest: unknown[]) => {
+      if (!path.startsWith("/submissions/")) return previous(path, ...rest as []) as T;
+      const id = path.split("/")[2];
+      looked.push(id);
+      return { requestId: id, status: statuses.get(id) ?? otherwise } as T;
+    });
+    return looked;
+  };
+  const accept = () => vi.mocked(write).mockImplementation(async <T>(path: string, body: unknown) =>
+    (path === "/bots/shared/messages" ? { requestId: (body as { requestId: string }).requestId, status: "accepted" } : {}) as T);
+  beforeEach(() => { conversation = { ...conversation, messages: [prompt("q", "Plan a trip"), reply()] }; });
+
+  it("sends the answers as the person's message under the form's own ID, never touching the draft", async () => {
+    accept();
+    await render();
+    expect(composer().value).toBe("My saved draft");
+    await fill();
+    await send();
+    await posted(1);
+    const body = messagesWritten()[0][1] as Record<string, unknown>;
+    expect(body).toEqual({ requestId: await formId(0), text: answers, attachments: [] });
+    await waitForUi(() => expect(sent()).toBe("Sent"));
+    expect(card().querySelector("form")).toBeNull();
+    expect(card().querySelector(".form-reply-answers")?.textContent).toContain("Marfa");
+    expect(composer().value).toBe("My saved draft");
+    expect(vi.mocked(write).mock.calls.some(([path]) => String(path).endsWith("/draft"))).toBe(false);
+  });
+
+  it("starts over from the card's suggestions when the saved answers are malformed", async () => {
+    localStorage.setItem(saved, JSON.stringify({ attempt: -1, answers: { city: "Marfa" }, state: "sent" }));
+    await render();
+    await waitForUi(() => expect(buttonText("Send answers")?.disabled).toBe(false));
+    expect(card().querySelector<HTMLInputElement>('input[type="text"]')!.value).toBe("");
+    expect(field("Relaxed").querySelector("input")!.checked).toBe(true);
+  });
+
+  it("keeps unsent answers across leaving the chat", async () => {
+    await render();
+    await fill();
+    await reload();
+    await waitForUi(() => expect(card().querySelector<HTMLInputElement>('input[type="text"]')!.value).toBe("Marfa"));
+    expect(field("Packed").querySelector("input")!.checked).toBe(true);
+    expect(messagesWritten()).toHaveLength(0);
+  });
+
+  it("names a required field left empty and sends nothing", async () => {
+    await render();
+    await send();
+    expect(messagesWritten()).toHaveLength(0);
+    const input = card().querySelector<HTMLInputElement>('input[type="text"]')!;
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+    expect(document.getElementById(input.getAttribute("aria-describedby")!)?.textContent).toBe("This one needs an answer.");
+    expect(document.activeElement).toBe(input);
+  });
+
+  it("shows a form sent from another tab or device as sent, and sends nothing", async () => {
+    receipts(new Map([[await formId(0), "rejected"], [await formId(1), "accepted"]]));
+    await render();
+    await waitForUi(() => expect(sent()).toBe("Sent"));
+    expect(card().textContent).toContain("Your answers were sent from another tab or device.");
+    expect(messagesWritten()).toHaveLength(0);
+  });
+
+  it("finds a form sent after many refusals, however many", async () => {
+    const statuses = new Map<string, string>();
+    for (let attempt = 0; attempt < 7; attempt++) statuses.set(await formId(attempt), "rejected");
+    statuses.set(await formId(7), "accepted");
+    receipts(statuses);
+    await render();
+    await waitForUi(() => expect(sent()).toBe("Sent"));
+    expect(messagesWritten()).toHaveLength(0);
+  });
+
+  it("stops looking after 100 refused attempts and offers the next one", async () => {
+    const looked = receipts(new Map(), "rejected");
+    accept();
+    await render();
+    await waitForUi(() => expect(buttonText("Send answers")?.disabled).toBe(false), 5000);
+    expect(looked).toHaveLength(100);
+    await fill();
+    await send();
+    await posted(1);
+    expect((messagesWritten()[0][1] as { requestId: string }).requestId).toBe(await formId(100));
+  });
+
+  it("treats a Hermes restart as maybe arrived, and sends again only when the person says so", async () => {
+    receipts(new Map([[await formId(0), "interrupted"]]));
+    accept();
+    await render();
+    await waitForUi(() => expect(card().textContent).toContain("may or may not have arrived"));
+    expect(buttonText("Send answers")).toBeUndefined();
+    expect(messagesWritten()).toHaveLength(0);
+    await act(async () => buttonText("They didn't arrive. Edit and send again")!.click());
+    await fill();
+    await send();
+    await posted(1);
+    expect((messagesWritten()[0][1] as { requestId: string }).requestId).toBe(await formId(1));
+  });
+
+  it("follows the attempt it sent, not a refused earlier one, while Hermes hasn't confirmed it", async () => {
+    const statuses = new Map<string, string>();
+    const looked = receipts(statuses);
+    let status = "rejected";
+    vi.mocked(write).mockImplementation(async <T>(path: string, body: unknown) =>
+      (path === "/bots/shared/messages" ? { requestId: (body as { requestId: string }).requestId, status } : {}) as T);
+    await render();
+    await fill();
+    await send();
+    await waitForUi(() => expect(card().querySelector('[role="alert"]')?.textContent).toBe("Hermes didn't take your answers."));
+    statuses.set(await formId(0), "rejected");
+    status = "uncertain";
+    await send();
+    await posted(2);
+    const checkedFrom = looked.length;
+    await advance(2100);
+    await advance(4100);
+    // Attempt 0's refusal must not reopen the form while attempt 1 is unconfirmed.
+    expect(buttonText("Checking…")?.disabled).toBe(true);
+    expect(buttonText("Send answers")).toBeUndefined();
+    expect(messagesWritten()).toHaveLength(2);
+    // Every check after the second send asks about the request that send made.
+    expect(looked.slice(checkedFrom).length).toBeGreaterThan(0);
+    expect(new Set(looked.slice(checkedFrom))).toEqual(new Set([(messagesWritten()[1][1] as { requestId: string }).requestId]));
+  });
+
+  it.each([["no", undefined], ["an empty", ""], ["a malformed", "not-an-id"]])("checks a saved request with %s ID under the ID its attempt derives, keeping its answers", async (_, requestId) => {
+    const looked = receipts(new Map([[await formId(1), "accepted"]]));
+    localStorage.setItem(saved, JSON.stringify({ attempt: 1, answers: { city: "Marfa", pace: "Packed", dog: true }, state: "checking", ...(requestId !== undefined && { requestId }) }));
+    await render();
+    await advance(2100);
+    await waitForUi(() => expect(sent()).toBe("Sent"));
+    expect(looked).toContain(await formId(1));
+    expect(card().querySelector(".form-reply-answers")?.textContent).toContain("Marfa");
+    expect(messagesWritten()).toHaveLength(0);
+  });
+
+  it("never lets a late answer to an earlier attempt overwrite a newer attempt's saved record", async () => {
+    let finish!: (value: unknown) => void;
+    vi.mocked(write).mockImplementation(async <T>(path: string) => path === "/bots/shared/messages"
+      ? await new Promise<T>(resolve => { finish = value => resolve(value as T); }) : {} as T);
+    await render();
+    await fill();
+    await send();
+    await posted(1);
+    // Another copy of this card moved on to attempt 1 while attempt 0 was out.
+    const newer = { attempt: 1, answers: { city: "Austin", pace: "Relaxed", dog: false }, state: "editing" };
+    localStorage.setItem(saved, JSON.stringify(newer));
+    await act(async () => finish({ requestId: await formId(0), status: "accepted" }));
+    expect(JSON.parse(localStorage.getItem(saved)!)).toEqual(newer);
+  });
+
+  it("lets a stale copy of the card undo no other copy's progress", () => {
+    const record = (attempt: number, state: Saved["state"], requestId?: string): Saved => ({ attempt, answers: {}, state, ...(requestId && { requestId }) });
+    const cases: [string, Saved | null, Saved, Parameters<typeof mayReplace>[2], boolean][] = [
+      ["nothing saved yet", null, record(0, "editing"), {}, true],
+      ["a later attempt's record", record(1, "sent"), record(0, "sent"), {}, false],
+      ["moving on from the attempt saved", record(0, "checking", "a"), record(1, "editing"), { from: 0 }, true],
+      ["moving on from an attempt another copy already moved past", record(1, "sent"), record(1, "editing"), { from: 0 }, false],
+      ["typing over a sent record of the same attempt", record(1, "sent"), record(1, "editing"), {}, false],
+      ["typing over another copy's request on its way", record(1, "checking", "a"), record(1, "editing"), {}, false],
+      ["typing over an interrupted record", record(1, "interrupted"), record(1, "editing"), {}, false],
+      ["sending again over a sent record of the same attempt", record(1, "sent"), record(1, "checking", "a"), {}, false],
+      ["the owner's request refused outright", record(1, "checking", "a"), record(1, "editing"), { owns: "a" }, true],
+      ["another request's refusal", record(1, "checking", "a"), record(1, "editing"), { owns: "b" }, false],
+      ["sending from editing", record(1, "editing"), record(1, "checking", "a"), {}, true],
+      ["a request settling as sent", record(1, "checking", "a"), record(1, "sent"), {}, true],
+      ["only knowing the answers went, over a record that holds them", record(1, "sent"), { ...record(1, "sent"), elsewhere: true }, {}, false],
+      ["the answers that went, over a record that only knows they went", { ...record(1, "sent"), elsewhere: true }, record(1, "sent"), {}, true],
+      ["a restart, which only ever follows acceptance, over a sent record", record(1, "sent"), { ...record(1, "interrupted"), elsewhere: true }, {}, true],
+      ["a stale acceptance over a restart", record(1, "interrupted"), record(1, "sent"), {}, false],
+    ];
+    for (const [name, stored, next, change, allowed] of cases) expect(mayReplace(stored, next, change), name).toBe(allowed);
+  });
+
+  it("keeps the answers another copy saw admitted when this one only knows they went", () => {
+    const known: Saved = { attempt: 1, answers: { city: "Austin" }, state: "sent" };
+    const restart: Saved = { attempt: 1, answers: { city: "" }, state: "interrupted", elsewhere: true };
+    expect(keepKnownAnswers(known, restart)).toEqual({ attempt: 1, answers: { city: "Austin" }, state: "interrupted" });
+    // Nothing known to keep: another attempt, an unconfirmed request, or a record that only knew it went too.
+    for (const stored of [{ ...known, attempt: 0 }, { ...known, state: "checking" as const }, { ...known, elsewhere: true }, null])
+      expect(keepKnownAnswers(stored, restart)).toBe(restart);
+    expect(keepKnownAnswers(known, { ...restart, elsewhere: undefined })).toEqual({ ...restart, elsewhere: undefined });
+  });
+
+  it("keeps another copy's sent record when a stale copy is edited after a late refusal", async () => {
+    let finish!: (value: unknown) => void;
+    vi.mocked(write).mockImplementation(async <T>(path: string) => path === "/bots/shared/messages"
+      ? await new Promise<T>(resolve => { finish = value => resolve(value as T); }) : {} as T);
+    await render();
+    await fill();
+    await send();
+    await posted(1);
+    const newer = { attempt: 1, answers: { city: "Austin", pace: "Relaxed", dog: false }, state: "sent" };
+    localStorage.setItem(saved, JSON.stringify(newer));
+    await act(async () => finish({ requestId: await formId(0), status: "rejected" }));
+    // This copy moved on to attempt 1 and is editable; typing in it must not reopen the sent form.
+    await typeInto(card().querySelector<HTMLInputElement>('input[type="text"]')!, "Marfa2");
+    expect(JSON.parse(localStorage.getItem(saved)!)).toEqual(newer);
+  });
+
+  it("shows another copy's different answers as sent from elsewhere, not its own, after losing its response", async () => {
+    // Another copy sent other answers under this attempt's ID; this copy's own request got no answer.
+    const theirs = 'My answers to "Trip details":\n- Destination: Austin\n- Pace: Relaxed\n- Bringing the dog: No';
+    const previous = vi.mocked(api).getMockImplementation()!;
+    // Until this copy sends, the lookup on open finds nothing; after, the server holds the admitted text.
+    let tried = false;
+    vi.mocked(api).mockImplementation(async <T>(path: string, ...rest: unknown[]) => path.startsWith("/submissions/")
+      ? { requestId: path.split("/")[2], status: tried ? "accepted" : "uncertain", ...(tried && { text: theirs }) } as T : previous(path, ...rest as []) as T);
+    vi.mocked(write).mockImplementation(async <T>(path: string) => {
+      if (path === "/bots/shared/messages") { tried = true; throw new TypeError("Failed to fetch"); }
+      return {} as T;
+    });
+    await render();
+    await fill();
+    await send();
+    await posted(1);
+    await advance(2100);
+    await waitForUi(() => expect(sent()).toBe("Sent"));
+    expect(card().textContent).toContain("Your answers were sent from another tab or device.");
+    expect(card().querySelector(".form-reply-answers")).toBeNull();
+    expect(JSON.parse(localStorage.getItem(saved)!)).toMatchObject({ state: "sent", elsewhere: true });
+  });
+
+  it("merges admitted answers into a record that only knew they went, whichever arrives first", () => {
+    const record = (state: Saved["state"], answers: Record<string, string>, elsewhere?: boolean): Saved =>
+      ({ attempt: 0, answers, state, ...(elsewhere && { elsewhere: true }) });
+    const marfa = { city: "Marfa" }, blank = { city: "" };
+    // The known acceptance arrives after the restart was saved: the status stays, the answers join it.
+    expect(nextRecord(record("interrupted", blank, true), record("sent", marfa))).toEqual(record("interrupted", marfa));
+    // The restart arrives after the known acceptance: the status moves on, the answers stay.
+    expect(nextRecord(record("sent", marfa), record("interrupted", blank, true))).toEqual(record("interrupted", marfa));
+    // Nothing admitted to merge: another copy's unconfirmed or unknown answers, or another attempt's.
+    expect(nextRecord(record("interrupted", blank, true), record("checking", marfa))).toBeNull();
+    expect(nextRecord(record("interrupted", blank, true), record("sent", blank, true))).toBeNull();
+    expect(nextRecord(record("interrupted", blank, true), { ...record("sent", marfa), attempt: 1 }, { from: 0 })).toEqual({ ...record("sent", marfa), attempt: 1 });
+  });
+
+  it("keeps this copy's admitted answers when a restart was saved before its acceptance arrived", async () => {
+    let finish!: (value: unknown) => void;
+    vi.mocked(write).mockImplementation(async <T>(path: string) => path === "/bots/shared/messages"
+      ? await new Promise<T>(resolve => { finish = value => resolve(value as T); }) : {} as T);
+    await render();
+    await fill();
+    await send();
+    await posted(1);
+    // Meanwhile another copy learned of a restart and saved it, knowing only that answers went.
+    localStorage.setItem(saved, JSON.stringify({ attempt: 0, answers: { city: "", pace: "Relaxed", dog: false }, state: "interrupted", elsewhere: true }));
+    await act(async () => finish({ requestId: await formId(0), status: "accepted" }));
+    expect(JSON.parse(localStorage.getItem(saved)!)).toEqual({ attempt: 0, answers: { city: "Marfa", pace: "Packed", dog: true }, state: "interrupted" });
+    await reload();
+    await waitForUi(() => expect(buttonText("They didn't arrive. Edit and send again")).toBeDefined());
+    await act(async () => buttonText("They didn't arrive. Edit and send again")!.click());
+    expect(card().querySelector<HTMLInputElement>('input[type="text"]')!.value).toBe("Marfa");
+  });
+
+  it("records a restart learned from another copy's request through a reload, keeping that copy's answers", async () => {
+    const austin = { city: "Austin", pace: "Relaxed", dog: false };
+    const theirs = 'My answers to "Trip details":\n- Destination: Austin\n- Pace: Relaxed\n- Bringing the dog: No';
+    let tried = false;
+    const previous = vi.mocked(api).getMockImplementation()!;
+    vi.mocked(api).mockImplementation(async <T>(path: string, ...rest: unknown[]) => path.startsWith("/submissions/")
+      ? { requestId: path.split("/")[2], status: tried ? "interrupted" : "uncertain", ...(tried && { text: theirs }) } as T : previous(path, ...rest as []) as T);
+    vi.mocked(write).mockImplementation(async <T>(path: string) => {
+      if (path === "/bots/shared/messages") { tried = true; throw new TypeError("Failed to fetch"); }
+      return {} as T;
+    });
+    await render();
+    await fill();
+    // Another copy sent Austin and saw it accepted, while this one fills in Marfa.
+    localStorage.setItem(saved, JSON.stringify({ attempt: 0, answers: austin, state: "sent" }));
+    await send();
+    await posted(1);
+    await advance(2100);
+    await waitForUi(() => expect(card().textContent).toContain("may or may not have arrived"));
+    expect(JSON.parse(localStorage.getItem(saved)!)).toEqual({ attempt: 0, answers: austin, state: "interrupted" });
+    await reload();
+    await waitForUi(() => expect(buttonText("They didn't arrive. Edit and send again")).toBeDefined());
+    expect(sent()).toBeUndefined();
+  });
+
+  it("shows its own answers as sent when the server's text is theirs", async () => {
+    const previous = vi.mocked(api).getMockImplementation()!;
+    // Until this copy sends, the lookup on open finds nothing; after, the server holds the admitted text.
+    let tried = false;
+    vi.mocked(api).mockImplementation(async <T>(path: string, ...rest: unknown[]) => path.startsWith("/submissions/")
+      ? { requestId: path.split("/")[2], status: tried ? "accepted" : "uncertain", ...(tried && { text: answers }) } as T : previous(path, ...rest as []) as T);
+    vi.mocked(write).mockImplementation(async <T>(path: string) => {
+      if (path === "/bots/shared/messages") { tried = true; throw new TypeError("Failed to fetch"); }
+      return {} as T;
+    });
+    await render();
+    await fill();
+    await send();
+    await posted(1);
+    await advance(2100);
+    await waitForUi(() => expect(sent()).toBe("Sent"));
+    expect(card().querySelector(".form-reply-answers")?.textContent).toContain("Marfa");
+  });
+
+  it("never lets a late refusal of an earlier attempt overwrite a later attempt that was sent", async () => {
+    let finish!: (value: unknown) => void;
+    vi.mocked(write).mockImplementation(async <T>(path: string) => path === "/bots/shared/messages"
+      ? await new Promise<T>(resolve => { finish = value => resolve(value as T); }) : {} as T);
+    await render();
+    await fill();
+    await send();
+    await posted(1);
+    // Another copy of this card saw attempt 0 refused and sent attempt 1.
+    const newer = { attempt: 1, answers: { city: "Austin", pace: "Relaxed", dog: false }, state: "sent" };
+    localStorage.setItem(saved, JSON.stringify(newer));
+    await act(async () => finish({ requestId: await formId(0), status: "rejected" }));
+    expect(JSON.parse(localStorage.getItem(saved)!)).toEqual(newer);
+  });
+
+  it("keeps a refused answer's words in the form across leaving the chat, under the same ID", async () => {
+    vi.mocked(write).mockImplementation(async <T>(path: string) => {
+      if (path === "/bots/shared/messages") throw new ApiError("Review the interrupted task before starting another message.", 409);
+      return {} as T;
+    });
+    await render();
+    await fill();
+    await send();
+    await waitForUi(() => expect(card().querySelector('[role="alert"]')?.textContent).toBe("Review the interrupted task before starting another message."));
+    expect(buttonText("Send answers")!.disabled).toBe(false);
+    await reload();
+    await waitForUi(() => expect(card().querySelector<HTMLInputElement>('input[type="text"]')!.value).toBe("Marfa"));
+    expect(field("Packed").querySelector("input")!.checked).toBe(true);
+    await send();
+    await posted(2);
+    // The server never recorded the refused request, so the same attempt is free.
+    expect(messagesWritten().map(([, body]) => (body as { requestId: string }).requestId)).toEqual([await formId(0), await formId(0)]);
+  });
+
+  it("moves to a new attempt only after Hermes refuses one", async () => {
+    let status = "rejected";
+    vi.mocked(write).mockImplementation(async <T>(path: string, body: unknown) =>
+      (path === "/bots/shared/messages" ? { requestId: (body as { requestId: string }).requestId, status, message: "Hermes is busy." } : {}) as T);
+    await render();
+    await fill();
+    await send();
+    await waitForUi(() => expect(card().querySelector('[role="alert"]')?.textContent).toBe("Hermes didn't take your answers. Hermes is busy."));
+    status = "accepted";
+    await send();
+    await posted(2);
+    expect(messagesWritten().map(([, body]) => (body as { requestId: string }).requestId)).toEqual([await formId(0), await formId(1)]);
+    await waitForUi(() => expect(sent()).toBe("Sent"));
+  });
+
+  it("sends the same request again when browser storage failed, so the server admits it once", async () => {
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new DOMException("Full", "QuotaExceededError"); });
+    vi.mocked(write).mockImplementation(async <T>(path: string) => {
+      if (path === "/bots/shared/messages") throw new TypeError("Failed to fetch");
+      return {} as T;
+    });
+    await render();
+    await fill();
+    await send();
+    await posted(1);
+    await reload();
+    await waitForUi(() => expect(buttonText("Send answers")?.disabled).toBe(false));
+    await fill();
+    await send();
+    await posted(2);
+    const [firstId, secondId] = messagesWritten().map(([, body]) => (body as { requestId: string }).requestId);
+    expect(secondId).toBe(firstId);
+  });
+
+  it("checks answers whose outcome is unknown by their ID, across a reload, and never sends them twice", async () => {
+    const statuses = new Map<string, string>();
+    receipts(statuses);
+    vi.mocked(write).mockImplementation(async <T>(path: string) => {
+      if (path === "/bots/shared/messages") throw new TypeError("Failed to fetch");
+      return {} as T;
+    });
+    await render();
+    await fill();
+    await send();
+    await waitForUi(() => expect(card().querySelector('[role="alert"]')?.textContent).toContain("won't be sent twice"));
+    expect(buttonText("Checking…")!.disabled).toBe(true);
+    await reload();
+    await advance(2100);
+    expect(buttonText("Send answers")).toBeUndefined();
+    statuses.set(await formId(0), "accepted");
+    await advance(4100);
+    await waitForUi(() => expect(sent()).toBe("Sent"));
+    expect(card().querySelector(".form-reply-answers")?.textContent).toContain("Marfa");
+    expect(messagesWritten()).toHaveLength(1);
+  });
+
+  it("follows another tab's different answers under the same ID instead of reporting a failure", async () => {
+    const statuses = new Map<string, string>();
+    receipts(statuses);
+    vi.mocked(write).mockImplementation(async <T>(path: string) => {
+      if (path === "/bots/shared/messages") throw new ApiError("This submission ID was already used for different content", 409, "submission_conflict");
+      return {} as T;
+    });
+    await render();
+    await fill();
+    await send();
+    await waitForUi(() => expect(buttonText("Checking…")).toBeDefined());
+    expect(card().querySelector('[role="alert"]')).toBeNull();
+    statuses.set(await formId(0), "accepted");
+    await advance(2100);
+    await waitForUi(() => expect(sent()).toBe("Sent"));
+    expect(card().textContent).toContain("Your answers were sent from another tab or device.");
+  });
+
+  it("sends under the person's review of an interrupted task", async () => {
+    accept();
+    conversation = { ...conversation, activity: { state: "interrupted", runId: "r" } };
+    await render();
+    const review = [...container.querySelectorAll("label")].find(label => label.textContent?.includes("I've reviewed the task's last actions"))!;
+    await act(async () => review.querySelector("input")!.click());
+    await fill();
+    await send();
+    await posted(1);
+    expect(messagesWritten()[0][1]).toMatchObject({ reviewedInterruption: true });
+  });
+
+  it("works with field IDs that name what every object inherits", async () => {
+    accept();
+    conversation = { ...conversation, messages: [prompt("q", "Plan"), reply({ ...form, fields: [
+      { id: "__proto__", label: "Destination", kind: "text", required: true }, { id: "constructor", label: "Notes", kind: "text" },
+    ] })] };
+    await render();
+    await send();
+    expect(messagesWritten()).toHaveLength(0);
+    await typeInto(card().querySelector<HTMLInputElement>('input[type="text"]')!, "Marfa");
+    await send();
+    await posted(1);
+    expect((messagesWritten()[0][1] as { text: string }).text).toBe('My answers to "Trip details":\n- Destination: Marfa');
+  });
+
+  it("refuses answers longer than a message can be, saying by how much", async () => {
+    conversation = { ...conversation, messages: [prompt("q", "Plan"), reply({ ...form, fields: Array.from({ length: 20 }, (_, i) => ({ id: `f${i}`, label: `Field ${i}`, kind: "textarea" })) })] };
+    await render();
+    for (const area of card().querySelectorAll("textarea")) await typeInto(area, "x".repeat(3000));
+    await send();
+    expect(messagesWritten()).toHaveLength(0);
+    expect(card().querySelector('[role="alert"]')?.textContent).toMatch(/^Your answers are [\d,]+ characters too long to send\./);
+  });
+});
+
+describe("email drafts", () => {
+  it("opens the draft in the mail app or Gmail and copies it, saying nothing was sent", async () => {
+    const draft = { id: "reply", type: "email", title: "Reply to Sam", to: ["sam@example.com"], subject: "Saturday", body: "Hi Sam,\nSee you then." };
+    conversation = { ...conversation, messages: [prompt("q", "Draft a reply to Sam"), answer("a", "Here's a draft.\n\n```agent-ui\n" + JSON.stringify({ version: 1, cards: [draft] }) + "\n```")] };
+    await render();
+    const card = container.querySelector<HTMLElement>(".reply-card-email")!;
+    const links = Object.fromEntries([...card.querySelectorAll("a")].map(link => [link.textContent?.trim(), link.getAttribute("href")]));
+    expect(links["Open in Mail"]).toBe("mailto:sam@example.com?subject=Saturday&body=Hi%20Sam%2C%0D%0ASee%20you%20then.");
+    expect(new URL(links["Open in Gmail"]!).searchParams.get("su")).toBe("Saturday");
+    expect(card.textContent).toContain("Nothing has been sent.");
+    await act(async () => buttonText("Copy")!.click());
+    expect(writeText).toHaveBeenCalledWith("To: sam@example.com\nSubject: Saturday\n\nHi Sam,\nSee you then.");
+    expect(buttonText("Copied")).toBeDefined();
   });
 });

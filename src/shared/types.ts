@@ -388,6 +388,8 @@ export interface Bootstrap {
   capabilities: Capabilities;
   connection: RuntimeStatus;
   csrfToken: string | null;
+  /** This person's private key for deriving form request IDs; see formRequestId. Absent from an older server. */
+  formKey?: string;
   vapidPublicKey?: string;
   /** The newest distributed iOS build, when the host advertises one. */
   nativeApp?: { latestBuild: number; updateUrl: string };
@@ -410,6 +412,12 @@ export interface SubmissionReceipt {
   runId?: string;
   messageId?: string;
   message?: string;
+  /**
+   * The text the server recorded under this request ID, from `GET /submissions/:id` and only to the
+   * person who sent it. A form card compares it with its own answers, since another tab or device
+   * may have sent different answers under the same derived ID.
+   */
+  text?: string;
 }
 export interface RuntimeEvent {
   id: string;

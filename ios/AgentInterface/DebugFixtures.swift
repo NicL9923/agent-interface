@@ -212,6 +212,36 @@
     nonisolated(unsafe) static var workDesign: WorkDesignFixture?
     // The fixture server's state. Unchecked because `lock` guards every access: requests read and
     // write it only inside `startLoading`, and `configure` seeds it under the same lock.
+    /// A T3 Code thread launch, an email draft and a form, as `AGENT_INTERFACE_UI_CHAT_CARDS` shows them.
+    /// Sending the form appends its answers through the ordinary message route.
+    nonisolated(unsafe) static var chatCardMessages: [[String: Any]] = {
+      let json = { (value: Any) -> String in String(decoding: try! JSONSerialization.data(withJSONObject: value), as: UTF8.self) }
+      let fence = { (card: [String: Any]) -> String in "```agent-ui\n" + json(["version": 1, "cards": [card]]) + "\n```" }
+      let launch: [String: Any] = ["title": "Fix the north gate sensor", "message": "The north gate sensor reports open when the gate is shut. Find the cause and fix it.",
+        "workspaceStrategy": ["type": "worktree", "branch": "fix/north-gate-sensor"]]
+      let answer: [String: Any] = ["threadId": "t-1", "link": "https://app.t3.codes/threads/env-1/t-1", "projectId": "p",
+        "modelSelection": ["model": "claude-opus-5-5"], "runId": "r", "status": "queued"]
+      let email: [String: Any] = ["id": "sam", "type": "email", "title": "Hay delivery on Saturday", "to": ["sam@example.com"], "subject": "Saturday hay delivery",
+        "body": "Hi Sam,\n\nSaturday works. Could you bring 40 bales instead of 30?\n\nThanks,\nNicolas"]
+      let form: [String: Any] = ["id": "trip", "type": "form", "title": "Marfa weekend", "fields": [
+        ["id": "city", "label": "Destination", "kind": "text", "required": true],
+        ["id": "lodging", "label": "Lodging", "kind": "choice", "options": ["Hotel in town", "Cabin outside town"], "required": true],
+        ["id": "dog", "label": "Bringing Biscuit", "kind": "toggle", "value": true],
+        // The same word spelled two ways: two options on the web, so two here.
+        ["id": "cafe", "label": "Stop at", "kind": "multi", "options": ["Caf\u{E9}", "Cafe\u{301}"]],
+      ]]
+      let me: [String: Any] = ["id": "native-test", "name": "Local test member"]
+      return [
+        ["id": "cards-q1", "role": "user", "text": "Start a T3 Code thread to fix the north gate sensor.", "sender": me],
+        ["id": "cards-t1", "role": "tool", "text": "", "toolName": "mcp_t3code_t3_thread_launch", "toolCall": ["id": "launch-1", "name": "mcp_t3code_t3_thread_launch",
+          "status": "completed", "arguments": json(launch), "result": json(["result": json(answer)])]],
+        ["id": "cards-a1", "role": "assistant", "text": "Started Fix the north gate sensor in a new worktree."],
+        ["id": "cards-q2", "role": "user", "text": "Draft a reply to Sam.", "sender": me],
+        ["id": "cards-a2", "role": "assistant", "text": "Here's a draft.\n\n" + fence(email)],
+        ["id": "cards-q3", "role": "user", "text": "Help me plan a Marfa weekend.", "sender": me],
+        ["id": "cards-a3", "role": "assistant", "text": "A few details first.\n\n" + fence(form)],
+      ]
+    }()
     nonisolated(unsafe) static var messages: [[String: Any]] = [
       [
         "id": "welcome", "role": "assistant",
@@ -511,7 +541,7 @@
             ],
           ], "bots": ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_CAPTURE_SURVIVAL"] == "empty" ? [] : Self.bots, "preferences": Self.preferences,
           "connection": ["connected": true, "code": "ready", "version": Self.currentRevision, "revisionDate": "2026-10-14T16:20:00Z"],
-          "csrfToken": NSNull(),
+          "csrfToken": NSNull(), "formKey": "fixture-form-key",
           "capabilities": Dictionary(
             uniqueKeysWithValues: CapabilityKey.allCases.map { ($0.rawValue, ["supported": true]) }),
         ]
@@ -625,6 +655,10 @@
         }
         if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_EXPERIENCE"] == "1" {
           object = ["botId": path.components(separatedBy: "/")[3], "messages": [["id": "fixture-cards", "role": "assistant", "text": "Fixture grocery suggestion.\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"groceries\",\"type\":\"checklist\",\"title\":\"Grocery checklist\",\"items\":[{\"id\":\"milk\",\"text\":\"Milk\"}]}]}\n```"]], "activity": ["state": "idle"], "approvals": [], "files": [], "attention": [], "draft": Self.draft, "readPosition": Self.readPosition]
+        }
+        if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_CHAT_CARDS"] == "1" {
+          object = ["botId": path.components(separatedBy: "/")[3], "messages": Self.chatCardMessages, "activity": ["state": "idle"],
+            "approvals": [], "files": [], "attention": [], "draft": Self.draft, "readPosition": Self.readPosition]
         }
         if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_INLINE_UI"] == "1" {
           let html = "<h3>Hay supply planner</h3><p>Explicit simulator fixture.</p><button id='compare' onclick=\"document.getElementById('days').textContent='40 days';document.getElementById('extra').hidden=false\">Compare supply</button><p id='days'>24 days</p><p id='extra' hidden>At half a bale per day, twenty bales lasts forty days.</p>"
@@ -939,6 +973,9 @@
         }
       } else if path.hasSuffix("/messages") {
         let id = body["requestId"] as? String ?? UUID().uuidString
+        if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_CHAT_CARDS"] == "1" {
+          Self.chatCardMessages.append(["id": id, "role": "user", "text": body["text"] ?? "", "sender": ["id": "native-test", "name": "Local test member"]])
+        }
         Self.messages.append([
           "id": id, "role": "user", "text": body["text"] ?? "",
           "sender": ["id": "native-test", "name": "Local test member"],

@@ -303,6 +303,15 @@ again on the primary origin if it cannot have reached the server: the connection
 never opened, or the handshake failed, or the request is a GET. A write that timed
 out or lost its connection is not repeated; the app's usual retry rules apply.
 
+## Reusing a request ID
+
+`POST /api/bots/:id/messages` and `/steer` admit one message per `requestId`. The same
+ID with the same content answers that message's receipt again. The same ID with
+different text, files or sender answers 409 with `code: "submission_conflict"`, even
+when both arrive at once. The web's form cards rely on this: they derive one ID per
+person, message, card and attempt, so a second tab or device that sends different
+answers learns that the first one already went and follows its receipt.
+
 ## Retrying a failed turn
 
 `POST /api/bots/:id/messages` accepts `retryOf`, the ID of a user message in this
@@ -374,6 +383,34 @@ vectors:
 | `ranch` | `msg-42` | `run-7` | `97260a13-beba-8fb5-9218-204b5e8a2010` |
 | `ranch` | `msg-42` | empty | `3bba2658-e84c-8ad5-a391-77d34308f4b8` |
 | `café` | `👋` | `run` | `f0431e86-8678-8bc4-92de-7d27336108fb` |
+
+### Form request ID
+
+A form card's answers are sent as an ordinary message under an ID every device of the
+same person derives alike, so the server admits them once:
+
+1. Join `wildbots-form`, the person's `formKey` from `GET /api/bootstrap`, the
+   assistant ID, the message ID, the card's `id` and the attempt number in decimal,
+   with NUL between them, and encode the result as UTF-8.
+2. Take the first 16 bytes of its SHA-256 digest.
+3. Set byte 6 to `(byte6 & 0x0F) | 0x40` (version 4) and byte 8 to
+   `(byte8 & 0x3F) | 0x80`.
+4. Format the bytes as a lowercase UUID.
+
+`formKey` is private to the signed-in person and stable across their devices and
+the server's restarts; never log or share it. A server without it is older than form
+cards. Attempt 0 comes first. Move to the next attempt only after a receipt says
+`rejected`. On opening a form with nothing saved, look up attempts in order with
+`GET /api/submissions/:id`, skipping `rejected`, until one says where the form stands:
+`accepted` means sent, `interrupted` means Hermes restarted while holding it and the
+person decides whether to send again, and anything else means not sent yet.
+`src/shared/retry-id.ts` implements it; `tests/retry-id.test.ts` checks these vectors:
+
+| `formKey` | Assistant | Message | Card | Attempt | `requestId` |
+| --- | --- | --- | --- | --- | --- |
+| `k3y_A-b` | `ranch` | `msg-42` | `trip` | 0 | `1ab28536-230d-4777-84cf-8dcda31bb28c` |
+| `k3y_A-b` | `ranch` | `msg-42` | `trip` | 3 | `76bbd8a5-8259-4c9e-8b2b-3b3fa7bec9d2` |
+| `café` | `👋` | `m` | `c` | 1 | `f2ec6d4c-7663-410f-88ba-49c4a6921df8` |
 
 ## Drafts
 

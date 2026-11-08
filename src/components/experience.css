@@ -75,6 +75,38 @@
 .event-proposal-dialog .actions { display: flex; gap: 10px; flex-wrap: wrap; }
 .button-link { display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; text-decoration: none; color: var(--ink); }
 .preserve-lines { white-space: pre-wrap; overflow-wrap: anywhere; }
+.reply-card .actions { display: flex; gap: 10px; flex-wrap: wrap; margin: 14px 0 10px; }
+.reply-card .button-link, .reply-card .actions button { display: inline-flex; align-items: center; gap: 7px; min-height: 40px; }
+/* Reply links take the accent color, which would hide a filled button's label. */
+.reply-card .button-link.primary { color: var(--surface); }
+/* Email drafts: headers as a compact table, then the body in a quiet well that scrolls past a screenful. */
+.email-draft-headers { display: grid; gap: 6px; margin: 0 0 12px; }
+.email-draft-headers > div { display: grid; grid-template-columns: 4.5rem 1fr; gap: 10px; }
+.email-draft-headers dt { color: var(--muted); font-size: 0.8125rem; padding-top: 1px; }
+.email-draft-headers dd { margin: 0; overflow-wrap: anywhere; }
+.email-draft-body { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; max-height: 22rem; overflow: auto; line-height: 1.55; background: var(--surface); }
+/* Forms: one field per row, choices as tappable rows like Hermes questions. */
+.form-reply { display: grid; gap: 16px; }
+.form-reply > p { margin: 0; }
+.form-reply-field { display: flex; flex-direction: column; gap: 6px; border: 0; margin: 0; padding: 0; min-width: 0; }
+.form-reply-label { display: block; font-weight: 600; font-size: 0.9375rem; padding: 0; margin: 0; }
+.form-reply-field input:not([type="checkbox"], [type="radio"]), .form-reply-field textarea, .form-reply-field select { width: 100%; box-sizing: border-box; }
+.form-reply-field textarea { resize: vertical; }
+.form-reply-field [aria-invalid="true"] { border-color: var(--danger); }
+.form-reply-options { gap: 8px; }
+.form-reply-options .form-reply-label { margin-bottom: 6px; }
+.form-reply-option { display: flex; flex-direction: row; margin: 0; font-size: 0.9375rem; align-items: center; gap: 10px; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; cursor: pointer; }
+.form-reply-option:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+.form-reply-option:has(input:disabled) { cursor: default; opacity: .7; }
+.form-reply-option input, .form-reply-toggle input { width: 18px; padding: 0; height: 18px; margin: 0; flex-shrink: 0; accent-color: var(--accent); }
+.form-reply-toggle label { display: flex; flex-direction: row; margin: 0; align-items: center; gap: 10px; font-weight: 600; font-size: 0.9375rem; }
+.form-reply-required { color: var(--danger); }
+.form-reply-problem { color: var(--danger); }
+.form-reply .actions { margin: 0; }
+.form-reply-answers { display: grid; gap: 10px; margin: 0 0 12px; }
+.form-reply-answers dt { color: var(--muted); font-size: 0.8125rem; }
+.form-reply-answers dd { margin: 2px 0 0; }
+.form-reply-sent { display: inline-flex; align-items: center; gap: 6px; margin: 0; color: var(--accent); font-weight: 600; }
 .routine-presets { display: grid; gap: 10px; margin-bottom: 22px; }
 .routine-preset { text-align: left; display: flex; flex-direction: column; gap: 5px; }
 .routine-preset small { color: var(--muted); }
