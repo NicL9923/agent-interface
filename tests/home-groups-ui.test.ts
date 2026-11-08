@@ -165,7 +165,7 @@ describe("group chats on home", () => {
 
   it("makes a group from the plus menu and opens the new room", async () => {
     await render();
-    const plus = container.querySelector<HTMLButtonElement>('.home-bar [aria-haspopup="menu"]')!;
+    const plus = container.querySelector<HTMLButtonElement>('.home-bar [aria-haspopup="menu"][aria-label="New"]')!;
     expect(plus.getAttribute("aria-label")).toBe("New");
     expect(container.querySelector('[role="menu"]')).toBeNull();
     await act(async () => plus.click());
@@ -197,7 +197,7 @@ describe("group chats on home", () => {
   it("says why a group cannot be made yet, and still offers the assistant", async () => {
     catalog = { ...catalog, canSend: false, reason: "Hermes group history is available. Its group coordinator must be running to create rooms or send messages." };
     await render();
-    await act(async () => container.querySelector<HTMLButtonElement>('.home-bar [aria-haspopup="menu"]')!.click());
+    await act(async () => container.querySelector<HTMLButtonElement>('.home-bar [aria-haspopup="menu"][aria-label="New"]')!.click());
     const items = [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')];
     expect(items[0].disabled).toBe(false);
     expect(items[1].disabled).toBe(true);

@@ -17,6 +17,7 @@ import { isUnread, type ReadThrough } from "./unread";
 import { glanceAtAvatar, reactAvatar } from "../components/avatar-attention";
 import { homeSeason } from "./season";
 import { SeasonalAmbience } from "./SeasonalAmbience";
+import { AccountMenu, initials } from "./AccountMenu";
 import { mainBot } from "../shared/main-assistant";
 import "./home.css";
 
@@ -38,13 +39,12 @@ export type HomeGroups = {
 /** Home without group chats, for a household whose Hermes cannot host them. */
 export const noGroups: HomeGroups = { rooms: [], roomId: "", canCreate: false, pending: null, onSelect: () => {}, onCreate: () => {} };
 
-const initials = (name: string) => name.split(/\s+/).filter(Boolean).slice(0, 2).map(word => word[0]).join("").toUpperCase() || "?";
 
 /**
  * Home: pinned assistants up top, then everyone else with their latest message.
  * Memoized so typing and streamed replies do not redraw every row and live avatar.
  */
-export const Sidebar = memo(function Sidebar({ boot, botId, shownBotId, readThrough, groups = noGroups, view, state, connectionLost, offline, mobile, open, update, onSelectBot, onView, onNewBot, onSettings, onPin, onBotSettings, onMoveToSection, onNewSection, onChooseMain, onDismissMainSuggestion }: {
+export const Sidebar = memo(function Sidebar({ boot, botId, shownBotId, readThrough, groups = noGroups, view, state, connectionLost, offline, mobile, open, update, onSelectBot, onView, onNewBot, onSettings, onUsage, onSignOut, onPin, onBotSettings, onMoveToSection, onNewSection, onChooseMain, onDismissMainSuggestion }: {
   boot: Bootstrap;
   botId: string;
   /** The chat on screen now, which is never marked unread. */
@@ -63,6 +63,8 @@ export const Sidebar = memo(function Sidebar({ boot, botId, shownBotId, readThro
   onView(view: View): void;
   onNewBot(): void;
   onSettings(): void;
+  onUsage(): void;
+  onSignOut(): void;
   onPin(bot: Bot): void;
   onBotSettings(bot: Bot): void;
   onMoveToSection(bot: Bot, sectionId: string | null): void;
@@ -164,10 +166,7 @@ export const Sidebar = memo(function Sidebar({ boot, botId, shownBotId, readThro
     <aside id="assistant-navigation" className={`bot-rail home${open ? " open" : ""}`} aria-label="Assistants" inert={mobile && !open} data-season={season ?? undefined}>
       {season && <SeasonalAmbience season={season} />}
       <header className="home-bar">
-        <Button className="home-account" aria-label="Settings" title="Settings" onClick={onSettings}>
-          {boot.user.picture ? <img src={boot.user.picture} alt="" referrerPolicy="no-referrer" /> : initials(boot.user.name)}
-          <span className={`home-status home-status-${status}`} aria-hidden="true" />
-        </Button>
+        <AccountMenu user={boot.user} status={status} onUsage={onUsage} onSettings={onSettings} onSignOut={onSignOut} />
         {connectionLost && <span className="home-sync" role="status">
           <Icon name="spinner" size={16} className={offline ? undefined : "spin"} />{offline ? "Offline" : "Reconnecting"}</span>}
         <span className="home-bar-actions">

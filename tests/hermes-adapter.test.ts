@@ -1816,6 +1816,11 @@ describe('owned Hermes operation response decoding', () => {
     {input:{operation:'history',profile,sessionId:'stored',offset:0},result:{...history,messages:[{id:'row',role:'unexpected',text:'private-canary'}]}},
     {input:{operation:'routine_results',profile,routineId:'routine'},result:[{id:'run',title:'Fence',previewOnly:'false'}]},
     {input:{operation:'run_receipt',profile,routineId:'routine',requestId:'request',senderId:'person'},result:null},
+    // An account key must be the add-on's digest: a raw credential in its place is refused, never relayed.
+    {input:{operation:'accounts',profile},result:{accounts:[{key:'sk-or-v1-private-canary',provider:'openrouter',role:'main'}]}},
+    {input:{operation:'account_usage',profile,key:'a'.repeat(32)},result:{key:'a'.repeat(32),provider:'openrouter',plan:null,title:'Account limits',fetchedAt:'2026-11-08T12:00:00Z',
+      windows:[{label:'Week',usedPercent:150,resetsAt:null,detail:null,scope:'account'}],details:[],unavailableReason:null,bankedResets:0,identity:null}},
+    {input:{operation:'account_reset',profile,key:'a'.repeat(32),requestId:'request-0001',force:false},result:{status:'queued',message:'Later',availableCount:0,windowsReset:0}},
   ] satisfies {input:ExperienceRequest;result:unknown}[])('rejects malformed or wrong-operation experience $input.operation data', async ({input,result}) => {
     const fetcher=vi.fn(async()=>Response.json(result)); vi.stubGlobal('fetch',fetcher);
     await expect(runtime.experienceRequest!(input)).rejects.toMatchObject({statusCode:502,message:`Hermes returned an invalid experience response for ${input.operation}.`});

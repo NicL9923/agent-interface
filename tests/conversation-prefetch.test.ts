@@ -56,7 +56,7 @@ describe("home rows prefetch the chat they open", () => {
   const props = (botId = "ranch"): ComponentProps<typeof Sidebar> => ({
     boot: { user: { id: "one", name: "One" }, preferences: { ...defaultPreferences, favorites: ["garden"] }, bots } as Bootstrap,
     botId, readThrough: {}, view: "conversation", state: "idle", connectionLost: false, offline: false, mobile: false,
-    open: true, update: null, onSelectBot: vi.fn(), onView: vi.fn(), onNewBot: vi.fn(), onSettings: vi.fn(),
+    open: true, update: null, onSelectBot: vi.fn(), onView: vi.fn(), onNewBot: vi.fn(), onSettings: vi.fn(), onUsage: vi.fn(), onSignOut: vi.fn(),
     onPin: vi.fn(), onBotSettings: vi.fn(), onMoveToSection: vi.fn(), onNewSection: vi.fn(),
   });
   const row = (name: string) => [...container.querySelectorAll<HTMLButtonElement>("button.bot-item")].find(item => item.textContent?.includes(name))!;

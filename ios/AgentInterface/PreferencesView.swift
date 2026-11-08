@@ -1,5 +1,15 @@
 import SwiftUI
 
+extension View {
+  /// The one confirmation every sign-out goes through, from Settings and from the profile menu.
+  /// Nothing signs out until the person confirms; `signedOut` runs once the sign-out went through.
+  func signOutConfirmation(isPresented: Binding<Bool>, store: AppStore, signedOut: @escaping () -> Void = {}) -> some View {
+    confirmationDialog("Sign out on this device? Your personal drafts stay saved for your next sign-in.", isPresented: isPresented, titleVisibility: .visible) {
+      Button("Sign out", role: .destructive) { Task { if await store.signOut() { signedOut() } } }
+    }
+  }
+}
+
 struct PreferencesView: View {
   var close: (() -> Void)? = nil
   @Environment(AppStore.self) private var store
@@ -164,9 +174,7 @@ struct PreferencesView: View {
           Button("Discard changes", role: .destructive) { store.discardPreferenceChanges(); closeSheet() }
         }
         .onChange(of: store.scope) { _, _ in dismiss() }
-        .confirmationDialog("Sign out on this device? Your personal drafts stay saved for your next sign-in.", isPresented: $signOutConfirm, titleVisibility: .visible) {
-          Button("Sign out", role: .destructive) { Task { if await store.signOut() { closeSheet() } } }
-        }
+        .signOutConfirmation(isPresented: $signOutConfirm, store: store) { closeSheet() }
         .confirmationDialog("Change the app server? Sign-out will revoke this device's session and notifications first.", isPresented: $changeServerConfirm, titleVisibility: .visible) {
           Button("Change server") { Task { await store.changeConnection(); if store.api == nil { closeSheet() } } }
         }
