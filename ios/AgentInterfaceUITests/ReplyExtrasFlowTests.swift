@@ -52,13 +52,13 @@ import XCTest
   }
   func testARevisedDraftShowsAndHidesItsChanges() {
     let app = launch()
-    let toggle = element(app, "emailChanges.sam2")
+    let toggle = element(app, "emailChanges.sam2__revises__sam1")
     XCTAssertTrue(toggle.waitForExistence(timeout: 15), app.debugDescription)
-    center(element(app, "emailBody.sam2"), in: app)
+    center(element(app, "emailBody.sam2__revises__sam1"), in: app)
     XCTAssertTrue(app.staticTexts["Revises “Fence help”"].exists)
     // The earlier draft revises nothing, so it has no toggle.
     XCTAssertFalse(element(app, "emailChanges.sam1").exists)
-    let body = element(app, "emailBody.sam2")
+    let body = element(app, "emailBody.sam2__revises__sam1")
     let flat = { body.label.replacingOccurrences(of: "\n", with: " / ") }
     XCTAssertTrue(body.label.contains("removed: Saturday"), "\(body.elementType.rawValue): " + flat())
     XCTAssertTrue(body.label.contains("added: Sunday"), flat())

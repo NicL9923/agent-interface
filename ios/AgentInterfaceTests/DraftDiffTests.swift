@@ -29,7 +29,7 @@ import XCTest
   func testRevisionLineageMatchesTheSharedVectors() throws {
     for vector in try vectors().lineage {
       let found = DraftDiff.previousDrafts(vector.messages).reduce(into: [String: String]()) { result, entry in
-        result[entry.key.replacingOccurrences(of: "\n", with: "/")] = entry.value.id
+        result[entry.key.replacingOccurrences(of: "\n", with: "/")] = entry.value.body
       }
       XCTAssertEqual(found, vector.revises, vector.name)
     }
@@ -38,20 +38,19 @@ import XCTest
     // "é" written two ways: equal to Swift's ==, different code units to JavaScript.
     XCTAssertEqual(DraftDiff.words("caf\u{E9}", "cafe\u{301}").map(\.kind), [.removed, .added])
   }
-  func testMalformedLineageDropsTheLinkButKeepsTheDraft() {
-    func cards(_ extra: String) -> [ReplyCard] {
-      ReplyCards.parseFresh("```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"reply\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Hi\"\(extra)}]}\n```").flatMap { $0.cards ?? [] }
+  func testLineageLivesInTheIdAndNoOtherEmailFieldIsAccepted() {
+    func cards(_ fields: String) -> [ReplyCard] {
+      ReplyCards.parseFresh("```agent-ui\n{\"version\":1,\"cards\":[{\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Hi\"\(fields)}]}\n```").flatMap { $0.cards ?? [] }
     }
-    for extra in [#","draftId":"bad id!""#, #","draftId":7"#, #","revises":null"#, #","draftId":"""#] {
-      let parsed = cards(extra)
-      XCTAssertEqual(parsed.map(\.id), ["reply"], extra)
-      XCTAssertNil(parsed.first?.lineage.draftId, extra); XCTAssertNil(parsed.first?.lineage.revises, extra)
+    XCTAssertEqual(cards(#","id":"b__revises__a""#).map { DraftDiff.lineage($0.id).revises }, ["a"])
+    XCTAssertEqual(DraftDiff.lineage("a__revises__a").revises, nil, "A draft cannot revise itself")
+    XCTAssertEqual(DraftDiff.lineage("__revises__a").draft, "__revises__a")
+    XCTAssertEqual(DraftDiff.lineage("__revises__a__revises__b").revises, "b", "As the web's lazy pattern splits it")
+    XCTAssertNil(DraftDiff.lineage("e__revises__").revises)
+    // As released clients do, any field beyond the first email shape refuses the card.
+    for extra in [#","draftId":"d1""#, #","revises":"d0""#, #","subject":null"#] {
+      XCTAssertEqual(cards(#","id":"reply""# + extra).count, 0, extra)
     }
-    XCTAssertEqual(cards(#","draftId":"d1","revises":"d1""#).first.map { [$0.lineage.draftId, $0.lineage.revises] }, ["d1", nil])
-    XCTAssertEqual(cards(#","draftId":"d1","revises":"d0""#).first.map { [$0.lineage.draftId, $0.lineage.revises] }, ["d1", "d0"])
-    // Lineage is lenient; other unknown fields still refuse the card.
-    XCTAssertEqual(cards(#","revision":2"#).count, 0)
-    XCTAssertEqual(cards(#","subject":null"#).count, 0)
   }
   func testChangesNameEachFieldAndWhetherAnythingChanged() throws {
     let base = ReplyCard(id: "a", type: "email", title: "Reply", to: ["sam@example.com"], subject: "Saturday", body: "See you Saturday.")

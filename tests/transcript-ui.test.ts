@@ -1465,11 +1465,11 @@ describe("email drafts", () => {
 
 describe("email draft revisions", () => {
   const card = (cards: object[]) => "Here's the draft.\n\n```agent-ui\n" + JSON.stringify({ version: 1, cards }) + "\n```";
-  const first = { id: "reply", type: "email", title: "Reply to Sam", to: ["sam@example.com"], subject: "Saturday", body: "See you Saturday at noon.", draftId: "d1" };
+  const first = { id: "d1", type: "email", title: "Reply to Sam", to: ["sam@example.com"], subject: "Saturday", body: "See you Saturday at noon." };
   const marks = (root: Element) => [...root.querySelectorAll("ins, del")].map(node => `${node.tagName.toLowerCase()}:${node.textContent}`);
   it("marks what a revision changed, and hides and shows the changes", async () => {
     conversation = { ...conversation, messages: [prompt("q1", "Draft it"), answer("a1", card([first])),
-      prompt("q2", "Make it Sunday and copy Kim"), answer("a2", card([{ ...first, id: "reply2", draftId: "d2", revises: "d1", to: ["sam@example.com", "kim@example.com"], body: "See you Sunday at noon." }]))] };
+      prompt("q2", "Make it Sunday and copy Kim"), answer("a2", card([{ ...first, id: "d2__revises__d1", to: ["sam@example.com", "kim@example.com"], body: "See you Sunday at noon." }]))] };
     await render();
     const [original, revised] = [...container.querySelectorAll<HTMLElement>(".reply-card-email")];
     // The first draft revises nothing.
@@ -1486,8 +1486,8 @@ describe("email draft revisions", () => {
   });
   it("links drafts only through revises, never by subject or recipients", async () => {
     conversation = { ...conversation, messages: [prompt("q1", "Draft it"), answer("a1", card([first])),
-      prompt("q2", "Again"), answer("a2", card([{ ...first, id: "again", draftId: "d2", body: "See you Sunday at noon." }])),
-      prompt("q3", "Same again"), answer("a3", card([{ ...first, id: "copy", draftId: "d3", revises: "d2", body: "See you Sunday at noon." }]))] };
+      prompt("q2", "Again"), answer("a2", card([{ ...first, id: "d2", body: "See you Sunday at noon." }])),
+      prompt("q3", "Same again"), answer("a3", card([{ ...first, id: "d3__revises__d2", body: "See you Sunday at noon." }]))] };
     await render();
     const [, unlinked, same] = [...container.querySelectorAll<HTMLElement>(".reply-card-email")];
     expect(unlinked.querySelector(".email-draft-revision")).toBeNull();

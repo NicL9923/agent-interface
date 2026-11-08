@@ -1,5 +1,5 @@
 {
- "comment": "Shared by tests/draft-diff.test.ts (src/shared/draft-diff.ts) and DraftDiffTests.swift (DraftDiff.swift). diff: before, after, the optional cell limit, and the parts. lineage: messages and, per message and card, the card id of the draft it revises.",
+ "comment": "Shared by tests/draft-diff.test.ts (src/shared/draft-diff.ts) and DraftDiffTests.swift (DraftDiff.swift). diff: before, after, the optional cell limit, and the parts. lineage: messages and, per message and card id, the body of the card it revises. Lineage lives in the card id, NEW__revises__EARLIER.",
  "diff": [
   {
    "name": "identical drafts have no changes",
@@ -282,21 +282,45 @@
  ],
  "lineage": [
   {
-   "name": "a revision names the earlier draft",
+   "name": "a revision names the earlier draft in its id",
    "messages": [
     {
      "id": "m1",
      "role": "assistant",
-     "text": "Draft below.\n\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"first\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Body first\",\"draftId\":\"d1\"}]}\n```"
+     "text": "Draft below.\n\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"sam\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Body sam\"}]}\n```"
     },
     {
      "id": "m2",
      "role": "assistant",
-     "text": "Draft below.\n\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"second\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Body second\",\"draftId\":\"d2\",\"revises\":\"d1\"}]}\n```"
+     "text": "Draft below.\n\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"sam2__revises__sam\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Body sam2__revises__sam\"}]}\n```"
     }
    ],
    "revises": {
-    "m2/second": "first"
+    "m2/sam2__revises__sam": "Body sam"
+   }
+  },
+  {
+   "name": "a chain names each earlier draft by the part before __revises__",
+   "messages": [
+    {
+     "id": "m1",
+     "role": "assistant",
+     "text": "Draft below.\n\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"v1\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Body v1\"}]}\n```"
+    },
+    {
+     "id": "m2",
+     "role": "assistant",
+     "text": "Draft below.\n\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"v2__revises__v1\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Body v2__revises__v1\"}]}\n```"
+    },
+    {
+     "id": "m3",
+     "role": "assistant",
+     "text": "Draft below.\n\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"v3__revises__v2\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Body v3__revises__v2\"}]}\n```"
+    }
+   ],
+   "revises": {
+    "m2/v2__revises__v1": "Body v1",
+    "m3/v3__revises__v2": "Body v2__revises__v1"
    }
   },
   {
@@ -305,37 +329,37 @@
     {
      "id": "m1",
      "role": "assistant",
-     "text": "Draft below.\n\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"early\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Body early\",\"draftId\":\"d1\",\"revises\":\"d2\"}]}\n```"
+     "text": "Draft below.\n\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"early__revises__late\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Body early__revises__late\"}]}\n```"
     },
     {
      "id": "m2",
      "role": "assistant",
-     "text": "Draft below.\n\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"late\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Body late\",\"draftId\":\"d2\",\"revises\":\"nope\"}]}\n```"
+     "text": "Draft below.\n\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"late__revises__nope\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Body late__revises__nope\"}]}\n```"
     }
    ],
    "revises": {}
   },
   {
-   "name": "the latest earlier draft with that id wins",
+   "name": "the latest earlier draft with that name wins",
    "messages": [
     {
      "id": "m1",
      "role": "assistant",
-     "text": "Draft below.\n\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"v1\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Body v1\",\"draftId\":\"d\"}]}\n```"
+     "text": "Draft below.\n\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"d\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"first\"}]}\n```"
     },
     {
      "id": "m2",
      "role": "assistant",
-     "text": "Draft below.\n\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"v2\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Body v2\",\"draftId\":\"d\"}]}\n```"
+     "text": "Draft below.\n\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"d\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"second\"}]}\n```"
     },
     {
      "id": "m3",
      "role": "assistant",
-     "text": "Draft below.\n\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"v3\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Body v3\",\"draftId\":\"d3\",\"revises\":\"d\"}]}\n```"
+     "text": "Draft below.\n\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"d3__revises__d\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Body d3__revises__d\"}]}\n```"
     }
    ],
    "revises": {
-    "m3/v3": "v2"
+    "m3/d3__revises__d": "second"
    }
   },
   {
@@ -344,7 +368,12 @@
     {
      "id": "m1",
      "role": "assistant",
-     "text": "Draft below.\n\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"self\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Body self\",\"draftId\":\"d\",\"revises\":\"d\"}]}\n```"
+     "text": "Draft below.\n\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"d\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Body d\"}]}\n```"
+    },
+    {
+     "id": "m2",
+     "role": "assistant",
+     "text": "Draft below.\n\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"d__revises__d\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Body d__revises__d\"}]}\n```"
     }
    ],
    "revises": {}
@@ -355,31 +384,70 @@
     {
      "id": "u1",
      "role": "user",
-     "text": "Draft below.\n\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"pasted\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Body pasted\",\"draftId\":\"d\"}]}\n```"
+     "text": "Draft below.\n\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"pasted\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Body pasted\"}]}\n```"
     },
     {
      "id": "m1",
      "role": "assistant",
-     "text": "Draft below.\n\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"reply\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Body reply\",\"draftId\":\"d2\",\"revises\":\"d\"}]}\n```"
+     "text": "Draft below.\n\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"reply__revises__pasted\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Body reply__revises__pasted\"}]}\n```"
     }
    ],
    "revises": {}
   },
   {
-   "name": "a malformed draft id drops the lineage but keeps the draft",
+   "name": "an empty part is no lineage",
    "messages": [
     {
      "id": "m1",
      "role": "assistant",
-     "text": "Draft below.\n\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"first\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Body first\",\"draftId\":\"bad id!\"}]}\n```"
+     "text": "Draft below.\n\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"d\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Body d\"}]}\n```"
     },
     {
      "id": "m2",
      "role": "assistant",
-     "text": "Draft below.\n\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"second\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Body second\",\"draftId\":\"d2\",\"revises\":\"bad id!\"}]}\n```"
+     "text": "Draft below.\n\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"__revises__d\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Body __revises__d\"}]}\n```"
+    },
+    {
+     "id": "m3",
+     "role": "assistant",
+     "text": "Draft below.\n\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"e__revises__\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Body e__revises__\"}]}\n```"
     }
    ],
    "revises": {}
+  },
+  {
+   "name": "only the first __revises__ splits the id",
+   "messages": [
+    {
+     "id": "m1",
+     "role": "assistant",
+     "text": "Draft below.\n\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"b\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Body b\"}]}\n```"
+    },
+    {
+     "id": "m2",
+     "role": "assistant",
+     "text": "Draft below.\n\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"a__revises__b__revises__c\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Body a__revises__b__revises__c\"}]}\n```"
+    }
+   ],
+   "revises": {}
+  },
+  {
+   "name": "a name may itself begin with the separator",
+   "messages": [
+    {
+     "id": "m1",
+     "role": "assistant",
+     "text": "Draft below.\n\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"b\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Body b\"}]}\n```"
+    },
+    {
+     "id": "m2",
+     "role": "assistant",
+     "text": "Draft below.\n\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"__revises__a__revises__b\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Body __revises__a__revises__b\"}]}\n```"
+    }
+   ],
+   "revises": {
+    "m2/__revises__a__revises__b": "Body b"
+   }
   },
   {
    "name": "two cards in one reply, the second revising the first",
@@ -387,11 +455,11 @@
     {
      "id": "m1",
      "role": "assistant",
-     "text": "Draft below.\n\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"a\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Body a\",\"draftId\":\"d1\"},{\"id\":\"b\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Body b\",\"draftId\":\"d2\",\"revises\":\"d1\"}]}\n```"
+     "text": "Draft below.\n\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"a\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Body a\"},{\"id\":\"b__revises__a\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Body b__revises__a\"}]}\n```"
     }
    ],
    "revises": {
-    "m1/b": "a"
+    "m1/b__revises__a": "Body a"
    }
   },
   {
@@ -405,7 +473,7 @@
     {
      "id": "m2",
      "role": "assistant",
-     "text": "Draft below.\n\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"b\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Body b\",\"to\":[\"sam@example.com\"],\"subject\":\"Saturday\",\"draftId\":\"d2\"}]}\n```"
+     "text": "Draft below.\n\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"b\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Body b\",\"to\":[\"sam@example.com\"],\"subject\":\"Saturday\"}]}\n```"
     }
    ],
    "revises": {}
