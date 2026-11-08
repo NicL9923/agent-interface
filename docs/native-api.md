@@ -735,15 +735,23 @@ While the app is in the foreground (iOS) or the window is visible and focused (w
 and the person touched it in the last five minutes, send `active` every 15 seconds on
 any screen, with `idleMs` the milliseconds since their last input, below 300000. Send
 `inactive` when that stops: the app leaves the foreground, the window loses focus or
-hides, five minutes pass without input, or the account signs out or switches. The
-server answers 400 for a device ID that is not a UUID, a missing or unknown `state`,
-`idleMs` that is not a whole number from 0 to 299999, or any other field.
+hides, five minutes pass without input, or the account signs out or switches. Send one
+report at a time and keep at most one waiting, the latest; work out its state and
+`idleMs` only as it goes, so a slow server never receives an old `active` after the
+device was left. The server answers 400 for a device ID that is not a UUID, a missing
+or unknown `state`, `idleMs` that is not a whole number from 0 to 299999, or any other
+field. A server from before device activity answers 404; one from before device IDs
+refuses `deviceId` on the status route with 400, so ask again without it.
 
 A device counts as in use while its last beat is under 45 seconds old, its last input
 under five minutes old, and the session that sent it is still signed in. Signing out
-ends it at once. One account holds a device ID at a time: a beat from another account
-on the same device, after switching, takes it over, and one account's `inactive` never
-ends another's.
+ends it at once. A device ID belongs to one account at a time: the account whose
+signed-in session last reported it, or that registered it for push (an iOS device or a
+labelled browser subscription). Another account's `active` report for it is refused
+with 409 and `{ "error": "This device is signed in to another household member. Sign
+out there first." }` until that session signs out or expires, as switching accounts
+on the device does. An `inactive` report keeps the account's hold, and one account's
+`inactive` never ends another's.
 
 When the person has a device in use that can receive the notification (an iOS device
 registered for push, or a browser subscription that named its device), only those get

@@ -68,7 +68,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   /// The transcript grouped into turns, computed once per change instead of on every render.
   private(set) var turns: [ConversationTurn] = []
   /// Each reply's file chips and each revised email draft's changes, computed with the turns.
-  private(set) var replyFiles: [String: [Artifact]] = [:]
+  internal(set) var replyFiles: [String: [Artifact]] = [:]
   private(set) var draftRevisions: [String: DraftRevision] = [:]
   /// The open assistant's sent messages, shown in the transcript at once while Send keeps spinning
   /// until Hermes answers, and each kept until Hermes's own copy arrives, as on the web.
