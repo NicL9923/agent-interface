@@ -28,6 +28,7 @@ import {
 } from "./avatar-motion";
 import { startFrames } from "./avatar-frames";
 import { avatarConductor } from "./avatar-conductor";
+import { useAvatarAttention, useAvatarReactions, withGaze } from "./avatar-attention";
 import "./avatar.css";
 import {
   characterAnchors,
@@ -239,6 +240,9 @@ const morphTargets = (state: ActivityState) => ({
   bang: state === "blocked" ? 1 : 0,
 });
 
+/** The directions a cheer's sparks fly, in degrees. */
+const sparks = [0, 45, 90, 135, 180, 225, 270, 315];
+
 /**
  * Who the conductor sees. A bot's ID wins over its name, because two bots can share a name and
  * must still move independently; an avatar with neither counts as its own bot.
@@ -257,6 +261,7 @@ export function Avatar({
   showState = false,
   offline = false,
   prop,
+  aware = false,
 }: {
   avatar?: AvatarConfig;
   state?: ActivityState;
@@ -270,6 +275,8 @@ export function Avatar({
   offline?: boolean;
   /** A tool to hold while working, such as a magnifying glass during a search. */
   prop?: AvatarProp;
+  /** Featured avatars glance at a nearby mouse pointer, and at siblings that finish, while idle. */
+  aware?: boolean;
 }) {
   const wrapper = useRef<HTMLSpanElement>(null);
   const [visible, setVisible] = useState(true);
@@ -308,6 +315,8 @@ export function Avatar({
   const expression = useRef<Expression>(expressionFor(state, 0));
   const morph = useRef(morphTargets(state));
   const still = reduce || !visible || avatar.mode === "portrait" || frozenStates.includes(state);
+  const gaze = useAvatarAttention(wrapper, botId, aware && !still && (state === "idle" || state === "done"));
+  const burst = useAvatarReactions(wrapper, botId, !reduce);
   useLayoutEffect(() => {
     if (motion.current.prop === prop) return;
     motion.current = { ...motion.current, prop, propSince: performance.now() };
@@ -369,7 +378,7 @@ export function Avatar({
   const t = still || fresh ? 0 : clock.elapsed;
   const plan = still || fresh ? soloPlan : clock.plan;
   const held = state === "working" && avatar.mode !== "portrait" ? prop : undefined;
-  const pose = avatarPose(state, t, still, held, plan);
+  const pose = withGaze(avatarPose(state, t, still, held, plan), gaze);
   const { level: trailLevel, sweep } = still
     ? { level: 0, sweep: 0 }
     : fresh
@@ -683,6 +692,11 @@ export function Avatar({
       )}
       {showState && (
         <span className="avatar-caption">{statusLabel}</span>
+      )}
+      {burst > 0 && (
+        <span className="avatar-burst" key={burst} aria-hidden="true">
+          {sparks.map(turn => <i key={turn} style={{ ["--spark-turn" as string]: `${turn}deg` }} />)}
+        </span>
       )}
     </span>
   );

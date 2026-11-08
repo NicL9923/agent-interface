@@ -56,6 +56,8 @@ struct AssistantActivityState: Codable, Hashable {
     /// wire format stays a number and views convert it.
     var since: Double?
     var color: String?
+    /// A waiting row's pending approval, which the Lock Screen can decline.
+    var approvalId: String?
     var id: String { botId }
     var sinceDate: Date? { since.map(Date.init(timeIntervalSince1970:)) }
     /// Out-of-date running rows must not claim to still be working.
@@ -73,8 +75,19 @@ struct AssistantActivityState: Codable, Hashable {
   var updatedAt: Double
   var rows: [Row]
 
-  /// The first row drives the tint, the minimal symbol and the tap target.
+  /// The first row drives the tint, the minimal symbol, the tap target and the one action.
   var hero: Row? { rows.first }
+  /// What the Lock Screen and Dynamic Island offer for the first row: Decline a pending approval, or
+  /// Stop running work. Nothing while out of date, since the row may no longer be true. Approving
+  /// stays in the chat, where the approval card shows what it would run.
+  func action(stale: Bool) -> ActivityAction.Kind? {
+    guard !stale, let hero else { return nil }
+    switch hero.phase {
+    case .waiting: return hero.approvalId.map { .decline(approvalId: $0) }
+    case .thinking, .working: return .stop
+    default: return nil
+    }
+  }
   var updatedDate: Date { Date(timeIntervalSince1970: updatedAt) }
   static func empty(at now: Date) -> Self {
     Self(title: "", activeCount: 0, attentionCount: 0, updatedAt: now.timeIntervalSince1970, rows: [])

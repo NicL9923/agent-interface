@@ -9,7 +9,7 @@ import { TodayPanel } from "./components/TodayPanel";
 import "./components/discovery.css";
 import { hasDestination, initialPanel, initialRoom, initialView, startsOnToday, useUrlSync } from "./app/view";
 import type { Panel, View } from "./app/view";
-import { useSession } from "./app/use-session";
+import { GROUP_FALLBACK_POLL_MS, GROUP_UNNOTIFIED_POLL_MS, GROUPS_EVENT, useSession } from "./app/use-session";
 import { useDraft, useDraftPersistence } from "./app/use-draft";
 import { useConversation } from "./app/use-conversation";
 import { useChatPresence } from "./app/use-chat-presence";
@@ -32,6 +32,8 @@ import { ShortcutsDialog } from "./app/ShortcutsDialog";
 import { StopConfirm } from "./app/StopConfirm";
 import { Toast, useToast } from "./app/Toast";
 import { useShortcuts } from "./app/shortcuts";
+import { headerAvatar, morphNavigate, railAvatar } from "./app/navigation-morph";
+import { tintProps } from "./app/bot-tint";
 import { waitingPlaceholder } from "./app/waiting-input";
 import { badgeCount, useAppBadge } from "./app/badge";
 import { ConnectionPanel } from "./components/ConnectionPanel";
@@ -72,11 +74,13 @@ export function App() {
   const toast = useToast(session.auth ? undefined : userId);
   useUrlSync(view, panel, botId, userId, roomId);
   // Home lists the household's group chats beside its assistants. The catalog carries each room's
-  // newest message, so one slow poll serves every row; no room's log is read from here.
-  // A poll that finds nothing new returns the copy already held, so home does not redraw for it.
+  // newest message, so one read serves every row; no room's log is read from here. The household
+  // stream's notices drive reads; the slow poll only covers one it missed.
+  // A read that finds nothing new returns the copy already held, so home does not redraw for it.
   const groupsHeld = useRef<{ json: string; value: { userId: string; catalog: GroupCatalog } }>(undefined);
   const groupLoad = useResource<{ userId: string; catalog: GroupCatalog }>(userId ? "/groups" : null, {
-    deps: [userId], pollMs: 30_000, wake: true,
+    // A server that never sends `groups` notices gets the 30-second poll home always had.
+    deps: [userId], pollMs: session.groupsNotified ? GROUP_FALLBACK_POLL_MS : GROUP_UNNOTIFIED_POLL_MS, wake: true,
     load: async (path, signal) => {
       const catalog = await api<GroupCatalog>(path, { signal });
       const json = JSON.stringify([userId, catalog]);
@@ -89,6 +93,15 @@ export function App() {
   const catalog = userId && groupLoad.data?.userId === userId ? groupLoad.data.catalog : null;
   const rooms = useMemo(() => orderRooms(catalog?.rooms ?? []), [catalog]);
   const reloadGroups = useStableCallback(() => void groupLoad.reload());
+  useEffect(() => {
+    if (!userId) return;
+    window.addEventListener(GROUPS_EVENT, reloadGroups);
+    window.addEventListener("agent-interface:reconnect", reloadGroups);
+    return () => {
+      window.removeEventListener(GROUPS_EVENT, reloadGroups);
+      window.removeEventListener("agent-interface:reconnect", reloadGroups);
+    };
+  }, [userId, reloadGroups]);
   const pendingCreate = useMemo(() => userId && !creatingGroup ? pendingGroup(userId) : null, [userId, creatingGroup]);
   const notifications = useDeviceNotifications(userId, boot?.vapidPublicKey);
   const { draft, setDraft, draftReady, uploads, previews, uploading, upload, retryUpload, cancelUpload, clearUploads } = useDraft({ botId, userId, identityEpoch, setError });
@@ -110,9 +123,13 @@ export function App() {
   // The anchored send follows the ID Hermes gave its message, once the receipt names one.
   const { sentAs } = history;
   useEffect(() => { if (receipt?.messageId) sentAs(receipt.requestId, receipt.messageId); }, [receipt, sentAs]);
-  // A handoff card's Take over and the live row's Watch open the computer from the transcript.
+  // A handoff card's Take over, a terminal card's Open terminal and the live row's Watch open the computer from the transcript.
   useEffect(() => {
-    const opened = (event: Event) => setPanel({ kind: "computer", ...((event as CustomEvent<{ take?: boolean }>).detail?.take ? { take: Date.now() } : {}) });
+    const opened = (event: Event) => {
+      const detail = (event as CustomEvent<{ take?: boolean; terminal?: { command?: string } }>).detail;
+      setPanel({ kind: "computer", ...(detail?.take ? { take: Date.now() } : {}),
+        ...(detail?.terminal ? { tab: "terminal" as const, terminal: { at: Date.now(), ...(detail.terminal.command ? { command: detail.terminal.command } : {}) } } : {}) });
+    };
     window.addEventListener("wildbots:computer", opened);
     return () => window.removeEventListener("wildbots:computer", opened);
   }, []);
@@ -144,6 +161,16 @@ export function App() {
     setBotId(id);
     setRailOpen(false);
     setError("");
+  });
+  // On a phone, choosing an assistant on home pushes its chat in, carrying the avatar to the header.
+  const selectFromHome = useStableCallback((id: string) => {
+    if (!mobile || !railOpen) return selectBot(id);
+    morphNavigate(() => selectBot(id), railAvatar(id), headerAvatar, "forward");
+  });
+  // Back reverses it, returning the avatar to its place on home.
+  const backToHome = useStableCallback(() => {
+    if (!mobile || railOpen || view !== "conversation" || !botId) return setRailOpen(true);
+    morphNavigate(() => setRailOpen(true), headerAvatar, railAvatar(botId), "back");
   });
   const selectRoom = useStableCallback((id: string) => {
     persistPosition(true);
@@ -297,11 +324,11 @@ export function App() {
     <div className="app-shell">
       <Sidebar boot={boot} botId={botId} shownBotId={shownBotId} readThrough={readThrough} groups={homeGroups} view={view} state={state}
         connectionLost={connectionLost} offline={offline} mobile={mobile} open={railOpen} update={update}
-        onSelectBot={selectBot} onView={showView} onNewBot={newBot} onSettings={openPreferences} onPin={togglePin}
+        onSelectBot={selectFromHome} onView={showView} onNewBot={newBot} onSettings={openPreferences} onPin={togglePin}
         onBotSettings={botSettings} onMoveToSection={moveToSection} onNewSection={newSection} />
-      <main className="conversation-panel" inert={mobile && railOpen}>
+      <main className="conversation-panel" inert={mobile && railOpen} {...(view === "conversation" ? tintProps(selected) : {})}>
         <ChatHeader offline={offline} view={view} boot={boot} selected={selected} room={rooms.find(room => room.room_id === roomId)} modelLocked={connectionLost || sending} onModelSaved={refreshSession} avatarState={avatarState} railOpen={railOpen}
-          onOpenRail={() => setRailOpen(true)}
+          onOpenRail={backToHome}
           onDetails={bot => open({ kind: "details", botId: bot.id })} />
         {/* On a computer the rail is always beside this, so its notice is enough. In a chat it joins the composer's dock. */}
         {mobile && !(view === "conversation" && selected) && <UpdateNotice update={update} />}
@@ -311,7 +338,7 @@ export function App() {
             offline={offline} appUnavailable={appUnavailable} checkingConnection={session.checkingConnection}
             reconnect={session.reconnect} error={error} setError={setError}
             notifications={notifications} scroll={scroll} endSpace={endSpace} content={content} history={history} reply={reply} onScroll={scrolled}
-            onRoutineResults={openRoutineRun} onHideRoutineRuns={hideRoutineRuns}
+            onRoutineResults={openRoutineRun} onHideRoutineRuns={hideRoutineRuns} computerOpen={panel?.kind === "computer"} reviewed={reviewed}
             onDraft={(text, files = []) => {
               // Drafts are known by their text, so one on its way must not change.
               if (sendingDraft(draft, pending, sending)) return false;
@@ -344,6 +371,7 @@ export function App() {
             onOpenRoutine={(botId, routineId) => { selectBot(botId); setPanel({ kind: "routine", botId, routineId }); }}
             editPreferences={session.editPreferences}
             onSaved={() => void session.refresh()}
+            onCreated={id => void session.refresh().then(next => { if (next?.bots.some(bot => bot.id === id)) selectBot(id); })}
           />
         </Loading>
       )}
@@ -356,10 +384,10 @@ export function App() {
             onSettings={bot => open({ kind: "settings", bot })} onClose={() => closePanels("details")} />
         </Loading>
       )}
-      {panel?.kind === "routine" && <Loading><RoutineResults key={`${boot.user.id}:${panel.botId}:${panel.routineId}`} botId={panel.botId} routineId={panel.routineId} userId={boot.user.id} resultId={panel.resultId} onClose={() => closePanels("routine")} /></Loading>}
+      {panel?.kind === "routine" && <Loading><RoutineResults key={`${boot.user.id}:${panel.botId}:${panel.routineId}`} botId={panel.botId} routineId={panel.routineId} resultId={panel.resultId} onClose={() => closePanels("routine")} /></Loading>}
       {panel?.kind === "integrations" && <Loading><IntegrationsPanel key={`integrations:${boot.user.id}`} bots={boot.bots} accountScope={boot.user.id} onClose={() => closePanels("integrations")} /></Loading>}
       {computerLoaded && <Loading><ComputerPanel key={`computer:${boot.user.id}`} initialTab={panel?.kind === "computer" ? panel.tab : undefined} open={panel?.kind === "computer"}
-        take={panel?.kind === "computer" ? panel.take : undefined} onClose={() => closePanels("computer")} /></Loading>}
+        take={panel?.kind === "computer" ? panel.take : undefined} terminal={panel?.kind === "computer" ? panel.terminal : undefined} onClose={() => closePanels("computer")} /></Loading>}
       {upgradeLoaded && <Loading><HermesUpgradePanel key={`upgrades:${boot.user.id}`} open={panel?.kind === "upgrade"} onClose={() => closePanels("upgrade")}
         bots={boot.bots} currentVersion={boot.connection.version} currentRevisionDate={boot.connection.revisionDate} /></Loading>}
       {panel?.kind === "preferences" && (

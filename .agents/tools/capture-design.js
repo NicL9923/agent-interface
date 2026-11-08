@@ -24,6 +24,15 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
     }) });
   });
   const tab = await context.newPage();
+  // Open a settings section by label in either layout: tabs on wide screens, the section list on phones.
+  const openSection = async (scope, label) => {
+    await scope.locator('nav[aria-label="Settings sections"], button[aria-label="All settings"]').first().waitFor();
+    const tabs = scope.locator("nav.settings-tabs");
+    if (await tabs.count()) { await tabs.getByRole("button",{name:label,exact:true}).click(); return; }
+    const index = scope.locator("nav.settings-index");
+    if (!await index.count()) await scope.getByRole("button",{name:"All settings",exact:true}).click();
+    await index.locator(".settings-row").filter({has:scope.page().locator(".row-label").filter({hasText:new RegExp(`^${label}$`)})}).click();
+  };
   const browserErrors = [];
   if (["models", "memory", "work"].includes(screen)) tab.on("dialog", dialog => dialog.type() === "beforeunload" ? dialog.accept() : dialog.dismiss());
   tab.on("pageerror", error => browserErrors.push(error.message));
@@ -508,8 +517,7 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
         await tab.locator('.chat-header [title="Details, pin, artifacts and settings"]').click();
         await tab.locator(".bot-details").getByRole("button",{name:"Settings",exact:true}).click();
         await dialog.waitFor();
-        const overflow=dialog.locator(".settings-tabs-overflow"); if(await overflow.count()) await overflow.locator("summary").click();
-        await dialog.getByRole("button",{name:"work",exact:true}).click();
+        await openSection(dialog,"Automation");
         await panel.waitFor();
         let readTimeout;
         try { await Promise.race([readStarted,new Promise((_,reject)=>{readTimeout=setTimeout(()=>reject(Error("Work overview request did not start")),10000);})]); }
@@ -993,9 +1001,8 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
           await subjectShot(name,panel.locator(".automation-goal-callout"),390,"dark");
         }
         await reset(); const writes=workSubmissions.length;
-        const overflow=dialog.locator(".settings-tabs-overflow");if(await overflow.count()) await overflow.locator("summary").click();
-        await dialog.getByRole("button",{name:"learning",exact:true}).click();
-        await panel.getByRole("heading",{name:"Skills & learning"}).waitFor();
+        await openSection(dialog,"Memory & learning");
+        await panel.getByRole("heading",{name:"Learning",exact:true}).waitFor();
         await panel.getByRole("checkbox",{name:"Require approval before skill changes are saved"}).waitFor();
         if(workSubmissions.length!==writes) throw Error("Learning regression smoke made a write");
         await shot("learning-smoke");workChecks.push({check:"learning-read-only-smoke",writes:0,scored:false});
@@ -1031,9 +1038,7 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
         await tab.locator('.chat-header [title="Details, pin, artifacts and settings"]').click();
         await tab.locator(".bot-details").getByRole("button",{name:"Settings",exact:true}).click();
         await dialog.waitFor();
-        const overflow=dialog.locator(".settings-tabs-overflow");
-        if(await overflow.count()) await overflow.locator("summary").click();
-        await dialog.getByRole("button",{name:"memory",exact:true}).click();
+        await openSection(dialog,"Memory & learning");
         await panel.waitFor();
         if(!["loading","load-error"].includes(mode)) await doc("memory").waitFor();
       };
@@ -1117,7 +1122,9 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
         await dialog.getByRole("button",{name:"Close assistant settings",exact:true}).click();
         await dialog.getByText("Discard your unsaved changes?",{exact:true}).waitFor(); await shot("close-confirmation");
         await dialog.getByRole("button",{name:"Keep editing",exact:true}).click();
-        await dialog.getByRole("button",{name:"details",exact:true}).click();
+        // Phones leave a section with the back button, which asks the same question.
+        if(await dialog.locator("nav.settings-tabs").count()) await openSection(dialog,"Profile");
+        else await dialog.getByRole("button",{name:"All settings",exact:true}).click();
         const leave=tab.getByRole("alertdialog",{name:"Leave memory without saving?"}); await leave.waitFor(); await shot("leave-confirmation");
         await leave.getByRole("button",{name:"Keep editing",exact:true}).click();
         if(await doc("user").locator("textarea").first().inputValue()!==otherDraft) throw Error("Keep editing lost the other draft.");
@@ -1217,15 +1224,14 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
         await tab.goto(`${origin.origin}/?bot=ranch`);
         await tab.evaluate(({large,theme}) => {document.documentElement.style.fontSize=large?"200%":"";document.documentElement.dataset.theme=theme;},{large,theme});
       };
+      // Tools and Skills are checklists on the Behavior section.
+      const catalog = kind => dialog.locator(`.catalog-editor[aria-label="${kind==="skills"?"Skills":"Tools"}"]`);
       const settings = async kind => {
         await tab.locator('.chat-header [title="Details, pin, artifacts and settings"]').click();
         await tab.locator(".bot-details").getByRole("button",{name:"Settings",exact:true}).click();
         await dialog.waitFor();
-        if (kind !== "models") {
-          const overflow=dialog.locator(".settings-tabs-overflow");
-          if (await overflow.count()) await overflow.locator("summary").click();
-          await dialog.getByRole("button",{name:kind,exact:true}).click();
-        } else {
+        await openSection(dialog,"Behavior");
+        if (kind === "models") {
           await dialog.locator(".model-picker > summary").click();
           await dialog.getByRole("searchbox",{name:"Search models"}).waitFor();
         }
@@ -1252,10 +1258,10 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
         state="loaded";
         for (const kind of ["models","tools","skills"]) {
           await reset({width,theme,large}); await settings(kind);
-          await (kind==="models" ? dialog.getByRole("button",{name:"daily-planner",exact:true}).first() : dialog.locator(".capability-item").first()).waitFor();
+          await (kind==="models" ? dialog.getByRole("button",{name:"daily-planner",exact:true}).first() : catalog(kind).locator(".capability-item").first()).waitFor();
           await shot(`${kind}-${name}`,width,theme);
           if (kind === "skills") {
-            const required=dialog.getByRole("checkbox").first();
+            const required=catalog("skills").getByRole("checkbox").first();
             if (!await required.isChecked() || await required.isEnabled()) throw Error("Required skill must remain checked and disabled.");
           }
         }
@@ -1322,8 +1328,8 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
           await tab.waitForFunction(message=>[...document.querySelectorAll('.model-popover [role="alert"]')].some(el=>{const p=el.closest('.model-popover').getBoundingClientRect(),r=el.getBoundingClientRect(),h=el.closest('.model-popover').querySelector('header').getBoundingClientRect();return el.textContent.includes(message)&&r.top>=h.bottom&&r.bottom<=p.bottom&&document.activeElement===el;}),fixture.modelSaveError);
           await shot(`model-error-visible-${width}`,width);
           state="loaded"; await reset({width,denseTools:true}); await settings("tools");
-          await dialog.locator('.capability-item').nth(11).waitFor();
-          if(await dialog.locator('.capability-item').count()!==12) throw Error("Dense catalog fixture did not load twelve tools.");
+          await catalog("tools").locator('.capability-item').nth(11).waitFor();
+          if(await catalog("tools").locator('.capability-item').count()!==12) throw Error("Dense catalog fixture did not load twelve tools.");
           await dialog.locator('.settings-content').evaluate(el=>{el.scrollTop=el.scrollHeight;});
           await shot(`tools-long-bottom-${width}`,width);
         }
@@ -1332,15 +1338,17 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
         state=mode; await reset(); const kind=mode==="capabilities-save-error"||mode==="capabilities-empty"?"skills":"tools"; await settings(kind);
         if(mode==="capabilities-load-error") {
           await dialog.getByText(fixture.capabilityLoadError,{exact:true}).waitFor(); await shot(mode);
-          if(await dialog.getByRole("button",{name:"Save tools",exact:true}).isEnabled()) throw Error("Unloaded catalog can be saved.");
+          // Nothing is editable before the catalog loads, so the shared save stays disabled.
+          if(await catalog("tools").getByRole("checkbox").count()) throw Error("Unloaded catalog offers tools to change.");
+          if(await dialog.locator("[data-settings-save]").isEnabled()) throw Error("Unloaded catalog can be saved.");
           await dialog.getByRole("button",{name:"Retry loading tools",exact:true}).click();
-          await dialog.locator(".capability-item").first().waitFor(); await shot("capabilities-retried");
+          await catalog("tools").locator(".capability-item").first().waitFor(); await shot("capabilities-retried");
         } else if(mode==="capabilities-save-error") {
-          await dialog.getByRole("checkbox").last().check();
-          await dialog.getByRole("button",{name:"Save skills",exact:true}).click();
+          await catalog("skills").getByRole("checkbox").last().check();
+          await dialog.getByRole("button",{name:"Save changes",exact:true}).click();
           await dialog.getByText(fixture.skillSaveError,{exact:true}).waitFor(); await shot(mode);
-          if(!await dialog.getByRole("checkbox").last().isChecked()) throw Error("Failure lost catalog draft.");
-          await dialog.getByRole("button",{name:"Save skills",exact:true}).click();
+          if(!await catalog("skills").getByRole("checkbox").last().isChecked()) throw Error("Failure lost catalog draft.");
+          await dialog.getByRole("button",{name:"Save changes",exact:true}).click();
           await tab.waitForFunction(()=>[...document.querySelectorAll("button")].some(el=>el.textContent.trim()==="Saved"));
           await shot("capabilities-saved");
           if(!catalogs.skills.find(item=>item.id==="packing-list")?.enabled) throw Error("Catalog retry did not persist.");
@@ -1349,7 +1357,7 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
           modelChecks.push({requiredSkillIncluded});
           if(stage==="after" && !requiredSkillIncluded) throw Error("Required skill was omitted from save.");
         } else {
-          await dialog.getByText(mode==="capabilities-empty"?"No skills were reported by Hermes.":fixture.capabilityUnsupportedReason,{exact:true}).waitFor();
+          await catalog(kind).getByText(mode==="capabilities-empty"?"No skills were reported by Hermes.":fixture.capabilityUnsupportedReason,{exact:true}).waitFor();
           await shot(mode);
         }
       }
@@ -1362,7 +1370,9 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
       const content=dialog.locator(".settings-content");
       const top=()=>content.evaluate(el=>{el.scrollTop=0;});
       const bottom=()=>content.evaluate(el=>{el.scrollTop=el.scrollHeight;});
-      const save=()=>dialog.getByRole("button",{name:"Save avatar",exact:true});
+      // One Save changes button now covers the avatar with the rest of the assistant's settings.
+      const save=()=>dialog.locator("[data-settings-save]");
+      const waitSaved=()=>save().filter({hasText:"Saved"}).waitFor();
       const previewState=async state=>{
         const select=dialog.locator(".avatar-stage select");
         if(await select.count()) await select.selectOption(state);
@@ -1378,7 +1388,7 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
         await tab.evaluate(({large,theme})=>{document.documentElement.style.fontSize=large?"200%":"";document.documentElement.dataset.theme=theme;},{large,theme});
         await tab.locator('.chat-header [title="Details, pin, artifacts and settings"]').click();
         await tab.locator(".bot-details").getByRole("button",{name:"Settings",exact:true}).click();
-        await dialog.getByRole("button",{name:"avatar",exact:true}).click();
+        await openSection(dialog,"Profile");
         await dialog.locator(".avatar-stage").waitFor();
       };
       const checkAccessoryKeyboard=async compact=>{
@@ -1390,7 +1400,7 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
           const content=root.querySelector(".settings-content").getBoundingClientRect();
           const header=root.querySelector(":scope > header").getBoundingClientRect();
           const stage=root.querySelector(".avatar-stage").getBoundingClientRect();
-          const footer=root.querySelector(compact?".avatar-save-actions":".settings-save-actions").getBoundingClientRect();
+          const footer=root.querySelector(".settings-save-actions").getBoundingClientRect();
           const input=document.activeElement;
           const group=input.closest("fieldset")?.querySelector("legend")?.textContent;
           const tile=input.closest("label")?.querySelector(".choice-art")?.getBoundingClientRect();
@@ -1410,7 +1420,7 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
           return {scrollTop:root.querySelector('.settings-content').scrollTop, outerScrollTop:root.scrollTop,
             controls:[...root.querySelectorAll('.swatch,.choice,.avatar-stage-states button')].map(el=>({label:el.textContent||el.title||el.querySelector('input')?.getAttribute('aria-label'),...bounds(el)})),
             preview:bounds(root.querySelector('.avatar-stage')),
-            footer:bounds(root.querySelector('.avatar-save-actions')),
+            footer:bounds(root.querySelector('.settings-save-actions')),
             promptLimit:(()=>{const el=root.querySelector('.portrait-prompt-limit');return el&&{text:el.textContent,color:getComputedStyle(el).color,fontSize:getComputedStyle(el).fontSize,...bounds(el)};})(),
             portrait:[...root.querySelectorAll('img.avatar-portrait')].map(el=>({src:el.getAttribute('src'),loaded:el.complete&&el.naturalWidth>0}))};
         });
@@ -1431,7 +1441,6 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
       if(stage === "after") await previewState("idle");
       await choose("Cowboy hat");
       await shot("choices-phone");
-      const range=dialog.locator('input[type="range"]').first();
       await tune();await bottom();await shot("tune-bottom-phone");
       const draft=await dialog.getByRole("radio",{name:"Pumpkin",exact:true}).isChecked();
       if(!draft)throw Error("Seasonal draft was lost while tuning.");
@@ -1440,7 +1449,7 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
       state="save-error";await save().click();await dialog.getByText(fixture.avatarSaveError,{exact:true}).waitFor();
       await shot("save-error-phone");
       const failedBody=structuredClone(avatarSubmissions.at(-1).body);
-      await save().click();await dialog.getByText("Avatar saved",{exact:true}).waitFor();
+      await save().click();await waitSaved();
       if(JSON.stringify(avatarSubmissions.at(-1).body)!==JSON.stringify(failedBody))throw Error("Retry changed the draft.");
       await open({reset:false});
       if(!await dialog.getByRole("radio",{name:"Pumpkin",exact:true}).isChecked())throw Error("Saved avatar reverted on reopen.");
@@ -1460,7 +1469,7 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
       await dialog.getByText(stage === "before" ? "Portrait uploaded. Save avatar to apply it." : "Portrait ready to save.",{exact:true}).waitFor();
       await top();await dialog.locator("img.avatar-portrait").evaluate(el=>el.decode());
       await shot("portrait-uploaded-phone-dark",390,"dark");
-      await bottom();await save().click();await dialog.getByText("Avatar saved",{exact:true}).waitFor();
+      await bottom();await save().click();await waitSaved();
       if(settingsBots[0].avatar.src!==`/api/files/${uploaded.id}`||settingsBots[0].avatar.origin!=="uploaded")throw Error("Upload was not persisted.");
       for(const width of [1440,390]){
         await open({width});await choose("Portrait");
@@ -1521,6 +1530,8 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
         await tab.locator('.chat-header [title="Details, pin, artifacts and settings"]').click();
         await tab.locator(".bot-details").getByRole("button",{name:"Settings",exact:true}).click();
         await dialog.waitFor();
+        // Phones open on the section list. Load and unsupported states have no sections to open.
+        if (await dialog.locator("nav.settings-index").count()) await openSection(dialog,"Profile");
       };
       const closeDirty = async () => {
         if (await dialog.locator('[role="alertdialog"][open]').count()) await tab.keyboard.press("Escape");
@@ -1573,7 +1584,7 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
       await dialog.getByRole("button",{name:"Delete assistant",exact:true}).click(); await capture("edit-delete-confirmation",390,844);
       await closeDirty(); state="load-error";settingsLoadFailed=false;await openEdit();
       await dialog.getByRole("button",{name:"Retry settings",exact:true}).waitFor(); await capture("edit-load-error",390,844);
-      await dialog.getByRole("button",{name:"Retry settings",exact:true}).click();await dialog.getByLabel("Name",{exact:true}).waitFor();
+      await dialog.getByRole("button",{name:"Retry settings",exact:true}).click();await dialog.locator('nav[aria-label="Settings sections"]').waitFor();await openSection(dialog,"Profile");await dialog.getByLabel("Name",{exact:true}).waitFor();
       await closeDirty();state="unsupported";await openEdit();await dialog.getByText(fixture.unsupportedReason,{exact:true}).waitFor();await capture("edit-unsupported",390,844);
       await closeDirty();state="loaded";await openNew();await dialog.getByLabel("Name",{exact:true}).fill(fixture.createdName);
       await dialog.getByRole("button",{name:"Next: role and model",exact:true}).click();await dialog.getByRole("button",{name:"Create assistant",exact:true}).click();await dialog.waitFor({state:"hidden"});

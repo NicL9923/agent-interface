@@ -7,7 +7,7 @@ import { useDeviceNotifications } from "../src/components/use-device-notificatio
 import { NotificationSettings, NotificationOnboarding } from "../src/components/DeviceNotifications";
 import { mountRoot, stubMatchMedia } from "./ui-harness";
 
-vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(await (() => ({ write: vi.fn() }))()));
+vi.mock("../src/client-api", async () => (await import("./helpers/request-mock")).withRequest(await (() => ({ write: vi.fn() }))()));
 let container: HTMLDivElement, root: Root;
 let notifications: ReturnType<typeof useDeviceNotifications>;
 let subscription: PushSubscription | null;
@@ -212,4 +212,20 @@ it("offers another account its own invitation when browser permission was alread
   expect(container.querySelector(".notification-onboarding")).not.toBeNull();
   expect(requestPermission).not.toHaveBeenCalled();
   expect(write).not.toHaveBeenCalledWith("/push/subscriptions", expect.anything());
+});
+
+it("leaves checking after Enable supersedes a refresh and then fails", async () => {
+  await render();
+  let finishRead!: (subscription: PushSubscription | null) => void;
+  vi.mocked(worker.pushManager.getSubscription).mockImplementationOnce(() => new Promise(resolve => { finishRead = resolve; }));
+  let refresh!: Promise<void>;
+  await act(async () => { refresh = notifications.refresh(); });
+  expect(notifications.checking).toBe(true);
+  subscribe.mockRejectedValueOnce(new Error("Push service unavailable"));
+  await act(async () => { await notifications.enable(); });
+  expect(notifications.checking).toBe(false);
+  expect(notifications.busy).toBe(false);
+  expect(notifications.error).toBe("Push service unavailable");
+  await act(async () => { finishRead(null); await refresh; });
+  expect(notifications.checking).toBe(false);
 });

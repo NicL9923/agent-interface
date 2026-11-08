@@ -81,7 +81,8 @@ it("opens ready to name a new section when the home menu asks for one", async ()
 });
 
 it("says when the assistant last spoke and opens Find in its chat", async () => {
-  props.bot = { ...props.bot, lastMessage: { text: "**Gate battery replaced**\n\n- Check next month.", at: new Date(Date.now() - 5 * 60_000).toISOString() } };
+  // The server sends a preview as plain words.
+  props.bot = { ...props.bot, lastMessage: { text: "Gate battery replaced Check next month.", at: new Date(Date.now() - 5 * 60_000).toISOString() } };
   props.avatarState = "idle";
   await render();
   const last = facts()["Last message"]!;

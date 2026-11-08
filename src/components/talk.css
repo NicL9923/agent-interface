@@ -1,0 +1,56 @@
+/* Live Talk sits above the composer, in its rounded language, and never widens the page. */
+.talk-panel {
+  min-width: 0;
+  margin: 0 0 10px;
+  padding: 8px 8px 8px 14px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--raised);
+  box-shadow: 0 5px 18px #1b251a05;
+}
+.talk-panel[data-talk-status] { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.talk-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.talk-status { flex: 1; min-width: 0; margin: 0; font-size: 0.875rem; font-weight: 600; overflow-wrap: anywhere; }
+.talk-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.talk-actions button { display: flex; align-items: center; gap: 6px; min-height: 44px; padding: 8px 12px; border-radius: 22px; font-size: 0.8125rem; }
+.talk-actions button[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); }
+.talk-actions .talk-end { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, var(--line)); }
+.talk-actions .talk-end:hover:enabled { background: color-mix(in srgb, var(--danger) 12%, transparent); }
+
+/* Five bars: still while connecting, rising with the person's voice, pulsing while the assistant speaks. */
+.talk-meter { display: flex; align-items: center; gap: 3px; height: 22px; flex-shrink: 0; color: var(--accent); }
+.talk-meter i { display: block; width: 3px; height: 6px; border-radius: 2px; background: currentColor; opacity: 0.45; }
+[data-talk-status="listening"] .talk-meter i,
+[data-talk-status="speaking"] .talk-meter i { opacity: 1; animation: talk-level 1.1s ease-in-out infinite; }
+[data-talk-status="speaking"] .talk-meter i { animation-duration: 0.7s; }
+[data-talk-status="thinking"] .talk-meter i,
+[data-talk-status="working"] .talk-meter i { opacity: 0.8; animation: talk-wait 1.4s ease-in-out infinite; }
+.talk-meter i:nth-child(2) { animation-delay: -0.25s; }
+.talk-meter i:nth-child(3) { animation-delay: -0.5s; }
+.talk-meter i:nth-child(4) { animation-delay: -0.15s; }
+.talk-meter i:nth-child(5) { animation-delay: -0.4s; }
+@keyframes talk-level { 0%, 100% { height: 6px; } 50% { height: 20px; } }
+@keyframes talk-wait { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .talk-meter i { animation: none !important; }
+  [data-talk-status="speaking"] .talk-meter i:nth-child(3), [data-talk-status="listening"] .talk-meter i:nth-child(3) { height: 16px; }
+}
+
+.talk-captions { display: grid; gap: 4px; margin: 6px 6px 2px 0; max-height: 7.5em; overflow-y: auto; }
+.talk-captions p { margin: 0; font-size: 0.875rem; line-height: 1.45; color: var(--ink); overflow-wrap: anywhere; }
+.talk-who { margin-right: 6px; font-size: 0.75rem; font-weight: 600; color: var(--muted); }
+.talk-inline-error { margin: 6px 0 0; font-size: 0.8125rem; color: var(--danger); }
+
+.talk-message { display: flex; align-items: center; gap: 8px; color: var(--muted); }
+.talk-message p { flex: 1; min-width: 0; margin: 0; font-size: 0.8125rem; line-height: 1.45; overflow-wrap: anywhere; }
+.talk-error { color: var(--danger); }
+.talk-message .icon-button { min-width: 44px; min-height: 44px; display: grid; place-items: center; border: 0; padding: 0; color: var(--muted); }
+
+/* The Talk button beside Record voice shows it is live. */
+.voice-actions .talk-start[aria-pressed="true"] { color: var(--accent); }
+
+@media (max-width: 420px) {
+  .talk-panel { padding-left: 10px; }
+  .talk-actions button span { display: none; }
+  .talk-actions button { padding: 8px 12px; min-width: 44px; justify-content: center; }
+}

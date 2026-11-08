@@ -228,6 +228,9 @@ export class LiveActivities {
           if (current?.activity.runId) runs.set(bot.id, current.activity.runId);
           row = { botId: bot.id, name: bot.name, phase, status: status[phase], detail: fit(current?.activity.detail, 80),
             since: before?.phase === phase && before.since ? before.since : seconds(now) };
+          // Decline from the Lock Screen names one approval. An ID too long to send intact gets no button.
+          const approvalId = phase === "waiting" ? current?.approvals.find(value => value.status === "pending")?.id : undefined;
+          if (approvalId && Buffer.byteLength(approvalId) <= 200) row.approvalId = approvalId;
         } else if (mine && before && !terminal(before.phase) && before.phase !== "starting" || arming.has(bot.id) && finishedSince(bot, armed!.armedAt)) {
           const phase: LivePhase = state === "failed" || state === "interrupted" ? state : "done";
           row = { botId: bot.id, name: bot.name, phase, status: status[phase], detail: fit(phase === "done" ? bot.lastMessage?.text : current?.activity.detail, 80), since: seconds(now) };

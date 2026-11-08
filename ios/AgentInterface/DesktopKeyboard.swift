@@ -3,27 +3,59 @@ import UIKit
 import UniformTypeIdentifiers
 import WebKit
 
-/// Typing for the shared desktop. Text and keys go to the viewer page's `desktopInput`, which
-/// sends nothing unless this viewer is connected and holds the desktop.
+/// Typing for the shared desktop or the system terminal. Text and keys go to the page's bridge
+/// function, which sends nothing unless the page is connected (and, for the desktop, this viewer
+/// holds it). The same keyboard drives either page; only the bridge's function names differ.
 @MainActor final class DesktopTyping {
+  /// Which page the keys go to. The terminal page has no clipboard or view commands.
+  enum Bridge: Equatable {
+    case desktop, terminal
+    var inputFunction: String { self == .desktop ? "desktopInput" : "terminalInput" }
+    var pasteFunction: String { self == .desktop ? "desktopPaste" : "terminalPaste" }
+  }
+  let bridge: Bridge
+  init(bridge: Bridge = .desktop) { self.bridge = bridge }
   /// The keys the page knows by name, the same as the web panel's.
   enum Key: String, CaseIterable { case enter, tab, backspace, escape, delete, left, up, right, down, home, end, pageUp, pageDown }
   enum Input: Equatable { case text(String), key(Key) }
   /// The viewer page, once its web view exists.
   weak var webView: WKWebView?
   func send(_ input: Input, control: Bool = false) {
-    webView?.evaluateJavaScript(Self.script(input, control: control))
+    webView?.evaluateJavaScript(Self.script(input, control: control, bridge: bridge))
   }
-  /// A call with its input as a JSON literal, so typed text can never end the statement.
-  static func script(_ input: Input, control: Bool) -> String {
+  /// A call with its input as a JSON literal, so typed text can never end the statement. A shell
+  /// reads Return as a carriage return, so the terminal gets a lone newline as the Enter key.
+  static func script(_ input: Input, control: Bool, bridge: Bridge = .desktop) -> String {
     var body: [String: Any] = [:]
     switch input {
+    case .text(let text) where bridge == .terminal && (text == "\n" || text == "\r"): body["key"] = Key.enter.rawValue
     case .text(let text): body["text"] = text
     case .key(let key): body["key"] = key.rawValue
     }
     if control { body["control"] = true }
     let data = (try? JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])) ?? Data("{}".utf8)
-    return "window.desktopInput?.(\(String(decoding: data, as: UTF8.self))) === true"
+    return "window.\(bridge.inputFunction)?.(\(String(decoding: data, as: UTF8.self))) === true"
+  }
+  /// The most text one paste types, as the page and the web panel allow.
+  static let pasteLimit = 8192
+  enum ViewCommand: String, CaseIterable { case recenter, resetZoom }
+  /// Puts the trackpad pointer back on screen, or zooms the viewer back out.
+  func view(_ command: ViewCommand) {
+    webView?.evaluateJavaScript("window.desktopView?.(\"\(command.rawValue)\") === true")
+  }
+  /// The desktop's clipboard, which it shares only with a viewer that has control.
+  func copied() async -> String? {
+    guard let webView else { return nil }
+    do { return try await webView.callAsyncJavaScript("return window.desktopCopied?.() ?? null", contentWorld: .page) as? String }
+    catch { return nil }
+  }
+  /// Puts the text on the desktop's clipboard and types it into the selected field. Whether it sent.
+  func paste(_ text: String) async -> Bool {
+    guard let webView else { return false }
+    do {
+      // An argument, never part of the script, so the text cannot change what runs.
+      return try await webView.callAsyncJavaScript("return window.\(bridge.pasteFunction)?.(text) === true", arguments: ["text": text], contentWorld: .page) as? Bool ?? false
+    } catch { return false }
   }
   /// Whether this web view holds the first responder, as after a tap on the desktop.
   var holdsFocus: Bool {
@@ -33,7 +65,7 @@ import WebKit
   }
 }
 
-/// The system keyboard for the shared desktop, shown while `shown` is on; `hidden` reports that it
+/// The system keyboard for the shared desktop or the terminal, shown while `shown` is on; `hidden` reports that it
 /// went away. Each key goes straight to the desktop: Return presses Enter and Delete presses
 /// Backspace. A row above the keyboard adds Escape, Tab, a one-shot Control and arrows, and pastes
 /// without a permission prompt. A tap on the desktop, which moves focus into the web view, keeps
@@ -68,6 +100,16 @@ struct DesktopKeyboard: UIViewRepresentable {
     func send(_ input: DesktopTyping.Input) {
       parent.typing.send(input, control: control)
       if control { control = false }
+    }
+    /// Text from the Paste key. The desktop types it; the terminal pastes it, so a shell with
+    /// bracketed paste on takes it as one paste rather than as typed commands.
+    func paste(_ text: String) {
+      switch parent.typing.bridge {
+      case .desktop: send(.text(text))
+      case .terminal:
+        let typing = parent.typing
+        Task { _ = await typing.paste(text) }
+      }
     }
     /// The keyboard went away. Done or leaving already turned `shown` off; a tap on the desktop
     /// moved focus into the web view, so take it back; anything else, such as the system, ends it.
@@ -113,7 +155,7 @@ struct DesktopKeyboard: UIViewRepresentable {
       for provider in itemProviders where provider.canLoadObject(ofClass: String.self) {
         _ = provider.loadObject(ofClass: String.self) { [weak self] text, _ in
           guard let text else { return }
-          DispatchQueue.main.async { self?.coordinator?.send(.text(text)) }
+          DispatchQueue.main.async { self?.coordinator?.paste(text) }
         }
       }
     }

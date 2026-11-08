@@ -69,9 +69,20 @@ const paths = {
   quote: "M5 11h4v6H5ZM5 11c0-3 1-5 4-6M14 11h4v6h-4ZM14 11c0-3 1-5 4-6",
   up: "M6 15l6-6 6 6",
   down: "M6 9l6 6 6-6",
+  hand: "M8 12V6a1.5 1.5 0 0 1 3 0v5M11 11V4.5a1.5 1.5 0 0 1 3 0V11M14 11V6a1.5 1.5 0 0 1 3 0v7a7 7 0 0 1-7 7h-.5a6 6 0 0 1-4.6-2.2L3.6 15.9a1.6 1.6 0 0 1 2.4-2L8 15.5V12",
+  scroll: "M8 4v16M5 7l3-3 3 3M16 20V4M13 17l3 3 3-3",
+  tap: "M10 14V7a1.5 1.5 0 0 1 3 0v5l4.2.9a2 2 0 0 1 1.6 2.2l-.6 4.9H11l-3.6-4a1.5 1.5 0 0 1 2.2-2.1ZM6.5 7.5a5 5 0 0 1 10 0",
+  trackpad: "M4 5h16v12H4ZM11 17v2M6 21h12M10 9l5 3-2.3.5L11.5 15Z",
+  help: "M21 12a9 9 0 1 1-18 0a9 9 0 1 1 18 0ZM9.5 9.5a2.5 2.5 0 0 1 4.9-.7c.4 1.5-.9 2.2-1.7 2.7-.5.3-.7.8-.7 1.3M12 16.5h.01",
+  // Live Talk: a voice level rising and falling.
+  talk: "M4 10.5v3M8 7.5v9M12 4.5v15M16 7.5v9M20 10.5v3",
+  micOff: "M9 5a3 3 0 0 1 6 0v6a3 3 0 0 1-.9 2.1M9 9v2a3 3 0 0 0 4.5 2.6M5.5 11a6.5 6.5 0 0 0 10.4 5.2M18.5 11a6.5 6.5 0 0 1-.6 2.7M12 17.5V21M4 4l16 16",
+  play: "M8 5.5v13l10.5-6.5Z",
+  pencil: "M4.5 19.5l1-4.2L15.8 5a2 2 0 0 1 2.9 0l.3.3a2 2 0 0 1 0 2.9L8.7 18.5ZM13.8 7l3.2 3.2",
+  mail: "M3.5 6h17v12h-17ZM4 6.5l8 6.5 8-6.5",
 } as const;
 export type IconName = keyof typeof paths;
-const filledIcons: IconName[] = ["stop"];
+const filledIcons: IconName[] = ["stop", "play"];
 
 export function Icon({ name, size = 20, filled = false, className }: {
   name: IconName;

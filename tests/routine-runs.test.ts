@@ -11,7 +11,7 @@ import { errorHandler } from "../src/server/http-error.js";
 import type { RoutineResult } from "../src/shared/collaboration.js";
 import type { Routine } from "../src/shared/types.js";
 import {
-  deliveredRoutineName, deliveredRuns, placeRuns, routineRun, runStatusLabel, runsHidden, runsInWindow, runTone, withRunsShown,
+  deliveredRoutineName, deliveredRuns, placeRuns, routineRun, runStatus, runStatusLabel, runsHidden, runsInWindow, runTone, withRunsShown,
   type RoutineRun,
 } from "../src/shared/routine-runs.js";
 
@@ -26,6 +26,8 @@ describe("run status", () => {
     const undelivered = routineRun(routine, { id: "c", title: "Run", previewOnly: false, status: "succeeded", deliveryFailed: true });
     expect([runStatusLabel(undelivered), runTone(undelivered)]).toEqual(["Finished, not delivered", "warning"]);
     expect(runStatusLabel(run("d", undefined, { status: "failed", deliveryFailed: true }))).toBe("Failed");
+    // A stopped or missed run is neither a success nor a failure, and a newer word still reads as unknown.
+    expect(["stopped", "missed", "paused"].map(status => runStatusLabel(run("e", undefined, { status: runStatus(status) })))).toEqual(["Stopped", "Didn't run", "Status unknown"]);
     expect(runStatusLabel(run("e", undefined, { status: "unknown" }))).toBe("Status unknown");
   });
 });

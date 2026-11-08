@@ -65,18 +65,17 @@ import XCTest
     app.buttons["sendMessage"].tap()
     XCTAssertTrue(app.staticTexts["Remember the fence inspection"].waitForExistence(timeout: 10))
     app.openAssistantSettings("Ranch hand")
+    selectSettingsTab(app, "Profile")
     XCTAssertTrue(app.textFields["Name"].waitForExistence(timeout: 5))
-    selectSettingsTab(app, "Tools")
-    XCTAssertTrue(
-      app.switches.matching(NSPredicate(format: "label BEGINSWITH %@", "Web search")).firstMatch
-        .waitForExistence(timeout: 5))
-    XCTAssertTrue(app.buttons["Save tools"].isEnabled)
-    app.buttons["Avatar"].tap()
-    for _ in 0..<4 {
-      if app.buttons["Save avatar"].exists { break }
-      app.swipeUp()
-    }
-    XCTAssertTrue(app.buttons["Save avatar"].waitForExistence(timeout: 5))
+    selectSettingsTab(app, "Behavior")
+    let web = app.switches.matching(NSPredicate(format: "label BEGINSWITH %@", "Web search")).firstMatch
+    XCTAssertTrue(web.waitForExistence(timeout: 5))
+    let save = app.buttons["saveChanges"]
+    XCTAssertTrue(save.exists); XCTAssertFalse(save.isEnabled, "Nothing to save yet")
+    web.switches.firstMatch.tapWhenReady()
+    XCTAssertTrue(save.wait(until: "enabled == true"), "A tool change enables Save changes")
+    save.tap()
+    XCTAssertTrue(app.staticTexts["settingsNotice"].wait(until: "label == %@", "Saved"), "Only the tools were sent")
     app.buttons["Close"].tap()
     let back = app.navigationBars.buttons.matching(identifier: "Your assistants").firstMatch
     if back.exists { back.tap() } else { app.navigationBars.buttons.firstMatch.tap() }
@@ -97,21 +96,29 @@ import XCTest
     app.openAssistantSettings("Ranch hand")
     selectSettingsTab(app, "Tools")
     XCTAssertTrue(app.buttons["Retry loading tools"].waitForExistence(timeout: 10))
-    XCTAssertFalse(app.buttons["Save tools"].isEnabled)
+    XCTAssertFalse(app.buttons["saveChanges"].isEnabled)
     XCTAssertFalse(app.staticTexts["No tools were reported by Hermes."].exists)
   }
   func testSeasonalAvatarChoicesSaveAndRemainSelected() {
     let app = app()
     XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 10))
     app.openAssistantSettings("Ranch hand")
-    app.buttons["Avatar"].tapWhenReady()
+    selectSettingsTab(app, "Profile")
     app.buttons["Mascot"].tapWhenReady()
+    let form = app.collectionViews["settings.profile"]
+    // Accessibility hit tests see through the sticky preview and Save bars, so a tile under
+    // either reads as tappable while a real tap lands on the bar.
+    func clear(_ button: XCUIElement) -> Bool {
+      guard button.exists, button.canTap else { return false }
+      let top = app.descendants(matching: .any)["avatarPreviewBar"], bottom = app.descendants(matching: .any)["saveBar"]
+      return (!top.exists || button.frame.minY >= top.frame.maxY) && (!bottom.exists || button.frame.maxY <= bottom.frame.minY)
+    }
     func scrollTo(_ button: XCUIElement, up: Bool) {
-      for _ in 0..<8 {
-        if button.exists && button.canTap { return }
-        if up { app.swipeUp() } else { app.swipeDown() }
+      for _ in 0..<12 {
+        if clear(button) { return }
+        if up { form.swipeUp(velocity: .slow) } else { form.swipeDown(velocity: .slow) }
       }
-      XCTAssertTrue(button.canTap)
+      XCTAssertTrue(clear(button), "\(button) is clear of the sticky bars")
     }
     // The UI tests cannot see app types; SettingsParityTests pins this list to AvatarConfig.seasonalFamilies.
     for family in ["leprechaun", "bunny", "eagle", "pumpkin", "bat", "ghost", "turkey", "santa", "rudolph", "snowman"] {
@@ -119,35 +126,41 @@ import XCTest
       scrollTo(choice, up: true)
       choice.tap()
       XCTAssertTrue(choice.wait(until: "selected == true"), "\(family) is selected")
-      scrollTo(app.buttons["previewState.idle"], up: false)
+      // The preview bar stays in view above the form, so the screenshot shows the new look.
       screenshot(app, "Seasonal native \(family)")
-      scrollTo(app.buttons["Save avatar"], up: true)
-      app.buttons["Save avatar"].tap()
-      XCTAssertTrue(app.staticTexts["Avatar saved"].waitForExistence(timeout: 5))
+      app.buttons["saveChanges"].tapWhenReady()
+      XCTAssertTrue(app.staticTexts["settingsNotice"].wait(until: "label == %@", "Saved"))
       app.buttons["Close"].tap()
       app.openAssistantSettings("Ranch hand")
-      app.buttons["Avatar"].tapWhenReady()
+      selectSettingsTab(app, "Profile")
       scrollTo(app.buttons["avatarTile.family.\(family)"], up: true)
       XCTAssertTrue(app.buttons["avatarTile.family.\(family)"].wait(until: "selected == true"), "\(family) stays selected")
     }
   }
-  func testSettingsOverflowSelectsEverySectionAndKeepsAvatarVisible() {
+  func testSettingsListOpensEachSectionAndProfileKeepsAvatarVisible() {
     let app = app()
     XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 10))
     app.openAssistantSettings("Ranch hand")
-    let more = app.buttons["settingsMore"]
-    for title in ["Connections", "Tools", "Skills", "Routines"] {
-      XCTAssertTrue(app.buttons["Details"].waitUntilHittable())
-      XCTAssertTrue(app.buttons["Avatar"].waitUntilHittable())
-      selectSettingsTab(app, title)
-      XCTAssertEqual(more.value as? String, title)
-      XCTAssertGreaterThanOrEqual(more.frame.minX, 0)
-      XCTAssertLessThanOrEqual(more.frame.maxX, app.frame.maxX)
-      screenshot(app, "Native settings \(title) selected")
-      app.buttons["Avatar"].tap()
-      XCTAssertTrue(app.buttons["previewState.idle"].waitForExistence(timeout: 5))
-      XCTAssertTrue((more.value as? String ?? "").isEmpty)
+    XCTAssertFalse(app.buttons["settingsMore"].exists, "No overflow menu")
+    let sections = [("profile", "Profile", "Shared with your household"), ("behavior", "Behavior", ""),
+      ("access", "Access", "Connections and logins"), ("automation", "Automation", "Routines, goals, tasks and triggers"),
+      ("memory", "Memory & learning", "What it remembers and learns")]
+    for (id, title, summary) in sections {
+      app.showSettingsSections()
+      let row = app.buttons["settingsSection.\(id)"]
+      XCTAssertTrue(row.waitUntilHittable())
+      XCTAssertTrue(row.label.contains(title), row.label)
+      if !summary.isEmpty { XCTAssertTrue(row.label.contains(summary), row.label) }
+      row.tap()
+      XCTAssertTrue(app.navigationBars[title].waitForExistence(timeout: 5), "\(title) opens")
+      XCTAssertTrue(app.navigationBars[title].buttons["All settings"].exists, "Back returns to all settings")
+      screenshot(app, "Native settings \(title)")
     }
+    selectSettingsTab(app, "Profile")
+    XCTAssertTrue(app.descendants(matching: .any)["avatarPreviewBar"].waitForExistence(timeout: 5))
+    for _ in 0..<4 { app.collectionViews["settings.profile"].swipeUp() }
+    XCTAssertTrue(app.buttons["avatarPreviewState"].canTap, "The avatar stays in view while scrolling")
+    XCTAssertTrue(app.buttons["saveChanges"].exists)
   }
   func testNativeUpgradeQualificationAndUncertainInstallRecovery() {
     let app = app(upgradeUncertain: true)

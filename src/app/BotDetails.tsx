@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
-import type { ActivityState, Bootstrap, Bot, Preferences } from "../shared/types";
+import type { ActivityState, Bootstrap, Bot } from "../shared/types";
 import { excerpt } from "../shared/event-copy";
 import { Avatar, stateLabels } from "../components/Avatar";
 import { ArtifactsButton } from "../components/Artifacts";

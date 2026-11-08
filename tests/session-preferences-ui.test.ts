@@ -11,7 +11,7 @@ vi.mock("../src/client-api", async original => (await import("./helpers/request-
   ...await original<typeof import("../src/client-api")>(), api: vi.fn(), write: vi.fn(),
   changeStream: () => ({ open() {}, close() {} }),
 }))(original)));
-let root: Root, container: HTMLDivElement, session: ReturnType<typeof useSession>;
+let root: Root, session: ReturnType<typeof useSession>;
 function Harness() {
   session = useSession({ onIdentityChange() {}, onFirstBootstrap() {}, onError() {}, onBotGone() {} });
   return null;
@@ -21,7 +21,7 @@ const bootstrap = (favorites: string[]) => ({
   user: { id: "one", name: "One" }, bots: [], preferences: preferences(favorites), connection: { connected: true }, csrfToken: "t",
 }) as unknown as Bootstrap;
 beforeEach(() => {
-  ({ container, root } = mountRoot());
+  ({ root } = mountRoot());
 });
 
 it("holds back preferences from a read that overlapped a save, then takes them from the next identical read", async () => {

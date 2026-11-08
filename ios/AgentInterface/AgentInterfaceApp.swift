@@ -21,6 +21,7 @@ import UserNotifications
             if await DebugFixtures.configure(store) { return }
           #endif
           await store.restore()
+          await store.refreshFocus()
         }
         .onChange(of: scenePhase) { _, phase in
           if phase == .active {
@@ -29,12 +30,14 @@ import UserNotifications
               // A control that ran in the widget extension left its link for the app.
               if let link = IntentLinks.takePending() { await NotificationController.shared.open(link.url, at: link.at) }
               await store.resume()
+              await store.refreshFocus()
               await NotificationController.shared.synchronize()
               await LiveActivityController.shared.foreground()
             }
           } else {
             store.suspend()
             LiveActivityController.shared.background()
+            if phase == .background { BackgroundRefresh.schedule() }
           }
         }
         .onChange(of: store.connected) { _, connected in
@@ -61,6 +64,9 @@ import UserNotifications
           guard let id = activity.userInfo?[CSSearchableItemActivityIdentifier] as? String else { return }
           Task { await NotificationController.shared.open(DeepLink.bot(id)) }
         }
+        // A chat handed off from another device's app, and universal links or Safari pages for a chat or Today.
+        .onContinueUserActivity(ChatHandoff.activityType) { activity in Task { await NotificationController.shared.continueActivity(activity) } }
+        .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { activity in Task { await NotificationController.shared.continueActivity(activity) } }
     }
     .commands { AssistantCommands(store: store) }
   }
@@ -77,6 +83,9 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     LiveActivityController.shared.watchSystem()
     // Controls and other intents that run in the app open their link here.
     IntentLinks.handler = { await NotificationController.shared.open($0) }
+    // The Live Activity's Stop and Decline run in the app, which holds the sign-in.
+    ActivityActions.handler = { await NotificationController.shared.act($0) }
+    BackgroundRefresh.register()
     return true
   }
   func application(
@@ -105,20 +114,24 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     let reading = await MainActor.run { !notice && botId != nil && botId == NotificationController.shared.store?.viewingBotId }
     return reading ? [] : [.banner, .sound, .badge]
   }
-  /// A silent push after the person read chats on another device or in the browser.
+  /// A silent push after the person read chats on another device or in the browser, or when what
+  /// the widgets show changed.
   func application(
     _ application: UIApplication, didReceiveRemoteNotification userInfo: [AnyHashable: Any],
     fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
   ) {
     let tags = (userInfo["clear"] as? [String: Any])?["tags"] as? [String] ?? []
     let badge = AppBadge.cleared(userInfo)
-    guard !tags.isEmpty || badge != nil else { completionHandler(.noData); return }
+    // The open app keeps the snapshot current from what it shows.
+    let widgets = BackgroundRefresh.requested(by: userInfo) && application.applicationState != .active
+    guard !tags.isEmpty || badge != nil || widgets else { completionHandler(.noData); return }
     Task { @MainActor in
       if !tags.isEmpty { await NotificationController.shared.removeDelivered(tags: Set(tags)) }
       // The server's count, which also holds decisions only it knows about. While the app is open
       // it shows its own count, which `AppBadgeSync` keeps.
       if let badge, UIApplication.shared.applicationState != .active { try? await UNUserNotificationCenter.current().setBadgeCount(badge) }
-      completionHandler(.newData)
+      let refreshed = widgets ? await BackgroundRefresh.refreshWidgets() : false
+      completionHandler(tags.isEmpty && badge == nil && !refreshed ? .noData : .newData)
     }
   }
   nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
@@ -139,13 +152,15 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
   /// A Siri or Shortcuts question that arrived before the store was ready.
   var earlyAsk: AskRequest?
   var token: String?
-  var pendingBotId: String?
+  var navigationAt: Date?
+  var navigationScope: String?
+  var pendingBotId: String? { didSet { if pendingBotId != nil { navigationAt = Date(); navigationScope = store?.scope } } }
   var pendingRoutineId: String?
   /// The pending chat should start a voice message once open, as the Talk to assistant control asks.
   var pendingListen = false
   /// When the last link asking to listen arrived. A link that waited for sign-in is not fresh.
   var listenLinkAt: Date?
-  var pendingURL: String?
+  var pendingURL: String? { didSet { if pendingURL != nil { navigationAt = Date(); navigationScope = store?.scope } } }
   /// Text typed into notifications' Reply, in arrival order, until a signed-in store can hold it for its draft.
   var pendingReplies: [NotificationReply] = []
   /// The sign-in a notification action uses. After a launch in the background just for the action, the
@@ -156,6 +171,8 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     return api.token == nil ? nil : api
   }
   var deliverNotice: @MainActor (UNNotificationRequest) async -> Void = { try? await UNUserNotificationCenter.current().add($0) }
+  /// The account the saved sign-in belongs to, before the store loads it.
+  var savedScope: @MainActor () -> String? = { UserDefaults.standard.string(forKey: DeviceDefaults.signedInScope) }
   /// Approvals being decided from a notification, so the same one is never sent twice at once.
   private var deciding: Set<String> = []
   private(set) var permissions: NotificationPermissions
@@ -382,7 +399,14 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
       await deliverNotice(notice)
     }
   }
+  func clearPendingNavigation() {
+    pendingURL = nil; pendingBotId = nil; pendingRoutineId = nil; pendingListen = false
+    navigationAt = nil; navigationScope = nil; listenLinkAt = nil
+  }
   func openPendingConversation() async {
+    if let at = navigationAt, Date().timeIntervalSince(at) > 120 || navigationScope != nil && navigationScope != store?.scope {
+      clearPendingNavigation()
+    }
     // Held by the store before anything awaits, so a second reply arriving meanwhile queues behind this one.
     if let store, store.bootstrap != nil, !pendingReplies.isEmpty {
       let replies = pendingReplies
@@ -416,9 +440,12 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     // Taken before opening the chat waits, so an account change meanwhile cannot inherit the request.
     let listen = pendingListen ? store.scope.map { ListenRequest(botId: botId, scope: $0, at: listenLinkAt ?? .distantPast) } : nil
     pendingListen = false
-    await store.select(botId)
-    if let routineId = pendingRoutineId { store.routineResult = RoutineResultDestination(botId: botId, routineId: routineId) }
+    let routineId = pendingRoutineId
     pendingRoutineId = nil
+    let generation = store.generation
+    await store.select(botId)
+    guard generation == store.generation, store.selectedBotId == botId else { return }
+    if let routineId { store.routineResult = RoutineResultDestination(botId: botId, routineId: routineId) }
     if let listen, listen.scope == store.scope { store.listenRequest = listen }
   }
 }

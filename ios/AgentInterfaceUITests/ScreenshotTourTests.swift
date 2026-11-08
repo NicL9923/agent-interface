@@ -607,7 +607,7 @@ import CryptoKit
         app.buttons["Close"].tapWhenReady()
       }
       app.openAssistantSettings("Ranch hand"); app.selectSettingsTab("Skills")
-      let form = app.descendants(matching: .any)["assistantSettingsForm"].firstMatch
+      let form = app.collectionViews["settings.behavior"]
       let required = app.switches.matching(NSPredicate(format: "label BEGINSWITH %@", "weekly-plan")).firstMatch
       XCTAssertTrue(required.waitForExistence(timeout: 5)); XCTAssertFalse(required.isEnabled)
       XCTAssertEqual(required.value as? String, "1")
@@ -620,11 +620,11 @@ import CryptoKit
         revealModels(packing, in: form, app: app)
         packing.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
         XCTAssertTrue(packing.wait(until: "value == %@", "1"))
-        let save = app.buttons["Save skills"]; revealModels(save, in: form, app: app); save.tapWhenReady()
+        let save = app.buttons["saveChanges"]; save.tapWhenReady()
         let error = app.staticTexts[original["skillSaveError"] as! String]
         XCTAssertTrue(error.waitForExistence(timeout: 5)); XCTAssertTrue(app.windows.firstMatch.frame.contains(error.frame))
         XCTAssertEqual(packing.value as? String, "1"); try capture(name + "-skills-save-error")
-        revealModels(save, in: form, app: app); save.tapWhenReady()
+        save.tapWhenReady()
         XCTAssertTrue(app.staticTexts["Saved"].firstMatch.waitForExistence(timeout: 5)); try capture(name + "-skills-saved")
         app.buttons["Close"].tapWhenReady()
         app.openAssistantSettings("Ranch hand"); app.selectSettingsTab("Skills")
@@ -685,7 +685,7 @@ import CryptoKit
         try capture("learning-smoke"); app.terminate(); continue
       }
       app.selectSettingsTab("Work")
-      XCTAssertEqual(app.buttons["settingsMore"].value as? String, "Work")
+      XCTAssertTrue(app.collectionViews["automation.work"].exists)
       let form = app.collectionViews["automation.work"]
       XCTAssertTrue(form.waitForExistence(timeout: 5))
       func events() throws -> [[String: Any]] {
@@ -740,7 +740,7 @@ import CryptoKit
           let save = app.buttons["Save paused"]; XCTAssertTrue(save.wait(until: "enabled == true")); save.tapWhenReady()
           XCTAssertTrue(objective.waitForDisappearance(timeout: 5), "Saving closes the goal editor")
           XCTAssertTrue(form.waitUntilHittable(), "Saving returns to interactive Work")
-          XCTAssertEqual(app.buttons["settingsMore"].value as? String, "Work")
+          XCTAssertTrue(app.collectionViews["automation.work"].exists)
           XCTAssertTrue(text("Prepare the garden for spring.").waitForExistence(timeout: 10))
         case "goal-replace":
           press(app.buttons["Replace goal"])
@@ -751,7 +751,7 @@ import CryptoKit
           else { app.sheets.buttons["Replace goal"].tapWhenReady() }
           XCTAssertTrue(app.navigationBars["Replace goal"].wait(until: "exists == false"))
           XCTAssertTrue(form.waitUntilHittable(), "Replacement returns to interactive Work")
-          XCTAssertEqual(app.buttons["settingsMore"].value as? String, "Work")
+          XCTAssertTrue(app.collectionViews["automation.work"].exists)
           XCTAssertTrue(goalHeading.waitForExistence(timeout: 10))
           XCTAssertFalse(text("Last resume:").exists, "Replacing a goal removes its receipt")
         case "goal-clear":
@@ -772,7 +772,7 @@ import CryptoKit
           else { app.sheets.buttons["Clear goal"].tapWhenReady() }
           XCTAssertTrue(text("Clear this standing goal?").waitForDisappearance(timeout: 5))
           XCTAssertTrue(form.waitUntilHittable(), "Clearing returns to interactive Work")
-          XCTAssertEqual(app.buttons["settingsMore"].value as? String, "Work")
+          XCTAssertTrue(app.collectionViews["automation.work"].exists)
           XCTAssertTrue(text("No standing goal.").waitForExistence(timeout: 10))
         case "goal-interrupted":
           let resume = app.buttons["Resume goal"], review = app.switches["automation.reviewedInterruption"]
@@ -815,7 +815,7 @@ import CryptoKit
           let start = app.buttons["Start new attempt"]; if stage == "after" { revealModels(start, in: sheet, app: app) }; XCTAssertTrue(start.wait(until: "enabled == true")); start.tapWhenReady()
           XCTAssertTrue(app.navigationBars[stage == "after" ? "New attempt" : "New resume attempt"].waitForDisappearance(timeout: 5))
           XCTAssertTrue(form.waitUntilHittable(), "A new attempt returns to interactive Work")
-          XCTAssertEqual(app.buttons["settingsMore"].value as? String, "Work")
+          XCTAssertTrue(app.collectionViews["automation.work"].exists)
           let pausedAction = app.buttons["Pause goal"]; reveal(pausedAction, up: false)
           XCTAssertTrue(pausedAction.waitForExistence(timeout: 10))
         case "goal-rejected":
@@ -939,9 +939,9 @@ import CryptoKit
         try String(contentsOf: auditURL, encoding: .utf8).split(separator: "\n").map { try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any]) }
       }
       func headerVisible(_ header: XCUIElement) {
-        XCTAssertTrue(header.isHittable)
-        let sticky = app.buttons["settingsMore"]
-        if sticky.exists { XCTAssertGreaterThanOrEqual(header.frame.minY, sticky.frame.maxY) }
+        XCTAssertTrue(header.waitUntilHittable())
+        let bar = app.navigationBars.firstMatch
+        if bar.exists { XCTAssertGreaterThanOrEqual(header.frame.minY, bar.frame.maxY) }
       }
       switch variant {
       case "task-board", "task-board-dark", "task-board-large-text":
@@ -962,7 +962,7 @@ import CryptoKit
           }
         }
         XCTAssertEqual(observed, headers)
-        let done = board.buttons["Done (1)"]; XCTAssertTrue(done.isHittable)
+        let done = board.buttons["Done (1)"]; XCTAssertTrue(done.waitUntilHittable())
         XCTAssertFalse(board.buttons["automation.task.t_00000001"].exists, "Done starts collapsed")
         reveal(heading, board, up: false); headerVisible(heading); try capture(variant)
         press(done, board)
@@ -1009,7 +1009,7 @@ import CryptoKit
         reveal(detail.buttons["Start task"], detail); try capture("task-detail-actions")
         press(detail.buttons["Add an optional start note"], detail)
         let noteLabel = detail.staticTexts["Start note (optional)"]
-        reveal(noteLabel, detail); XCTAssertTrue(noteLabel.isHittable)
+        reveal(noteLabel, detail); XCTAssertTrue(noteLabel.waitUntilHittable())
         let noteFooter = detail.staticTexts["Hermes checks the task's current state and dependencies before changing it."]
         if !noteFooter.hasFrame { reveal(noteFooter, detail) }
         revealRange(noteLabel, through: noteFooter, detail)
@@ -1186,7 +1186,7 @@ import CryptoKit
         let query = app.buttons.matching(NSPredicate(format: "label == %@", label))
         XCTAssertTrue(query.firstMatch.waitForExistence(timeout: 5))
         for _ in 0..<10 {
-          let visible = query.allElementsBoundByIndex.filter { $0.isHittable }
+          let visible = query.allElementsBoundByIndex.filter { $0.canTap }
           if visible.count == 1 { visible[0].tapWhenReady(); return }
           usleep(100_000)
         }
@@ -1324,7 +1324,7 @@ import CryptoKit
       ])
       XCTAssertTrue(app.textViews["messageComposer"].waitForExistence(timeout: 15))
       app.openAssistantSettings("Ranch hand"); app.selectSettingsTab("Work")
-      XCTAssertEqual(app.buttons["settingsMore"].value as? String, "Work")
+      XCTAssertTrue(app.collectionViews["automation.work"].exists)
       let board = app.collectionViews["automation.work"]
       XCTAssertTrue(board.waitForExistence(timeout: 5))
       func events() throws -> [[String: Any]] {
@@ -1351,7 +1351,7 @@ import CryptoKit
         let query = app.buttons.matching(NSPredicate(format: "label == %@", label))
         XCTAssertTrue(query.firstMatch.waitForExistence(timeout: 5))
         for _ in 0..<10 {
-          let visible = query.allElementsBoundByIndex.filter { $0.isHittable }
+          let visible = query.allElementsBoundByIndex.filter { $0.canTap }
           if visible.count == 1 { visible[0].tapWhenReady(); return }
           usleep(100_000)
         }
@@ -1410,7 +1410,7 @@ import CryptoKit
         }
       case "task-status-details":
         open("Running (1)", "t_00000006"); var detail = app.collectionViews["automation.taskDetail"]; reveal(detail.buttons["Start task"], detail); try capture("task-running")
-        app.navigationBars["Task details"].buttons["Done"].tapWhenReady(); XCTAssertTrue(board.waitUntilHittable()); XCTAssertEqual(app.buttons["settingsMore"].value as? String, "Work")
+        app.navigationBars["Task details"].buttons["Done"].tapWhenReady(); XCTAssertTrue(board.waitUntilHittable()); XCTAssertTrue(app.collectionViews["automation.work"].exists)
         open("Review (1)", "t_00000003"); detail = app.collectionViews["automation.taskDetail"]; let hint = text("The reviewing assistant can request changes", in: detail); reveal(hint, detail); XCTAssertTrue(hint.waitForExistence(timeout: 5)); try capture("task-review")
       case "task-empty", "task-unsupported": try capture(variant)
       case "task-create", "task-create-dark", "task-create-large-text", "task-create-uncertain":
@@ -1525,7 +1525,7 @@ import CryptoKit
     func landing(_ name: String, _ element: XCUIElement, in container: XCUIElement) {
       let present = element.exists, frame = present && element.hasFrame ? String(describing: element.frame) : "unmaterialized"
       let intersects = present && element.hasFrame && element.frame.intersects(container.frame)
-      print("DESIGN_WORK_TRIGGER_LANDING \(name) exists=\(present) frame=\(frame) viewport=\(container.frame) intersects=\(intersects) hittable=\(present && element.isHittable)")
+      print("DESIGN_WORK_TRIGGER_LANDING \(name) exists=\(present) frame=\(frame) viewport=\(container.frame) intersects=\(intersects) hittable=\(present && element.canTap)")
     }
     func shot(_ name: String) throws {
       guard name.hasPrefix("trigger-"), !FileManager.default.fileExists(atPath: directory.appendingPathComponent("\(name).png").path) else { XCTFail("Invalid or duplicate W3 image name"); return }
@@ -1556,7 +1556,7 @@ import CryptoKit
       XCTAssertTrue(query.firstMatch.waitForExistence(timeout: 5))
       XCTAssertEqual(app.buttons.matching(NSPredicate(format: "label == %@", excluded)).count, 0, "Routine menu must hide \(excluded)")
       for _ in 0..<10 {
-        let visible = query.allElementsBoundByIndex.filter { $0.isHittable }
+        let visible = query.allElementsBoundByIndex.filter { $0.canTap }
         if visible.count == 1 { visible[0].tapWhenReady(); return }
         usleep(100_000)
       }
@@ -1596,7 +1596,7 @@ import CryptoKit
     switch variant {
     case "trigger-list", "trigger-list-dark", "trigger-list-large-text":
       let first = row(try XCTUnwrap(freezer["description"] as? String))
-      XCTAssertTrue(first.isHittable, "Collapsed trigger list must show its first row before capture")
+      XCTAssertTrue(first.waitUntilHittable(), "Collapsed trigger list must show its first row before capture")
       if variant == "trigger-list" { try shot("trigger-list") }
       if variant == "trigger-list-dark" && !pad { try shot("trigger-list-dark") }
       if variant == "trigger-list-large-text" { try shot("trigger-list-large-text") }
@@ -1929,7 +1929,7 @@ import CryptoKit
     func landing(_ name: String, _ element: XCUIElement, in container: XCUIElement) {
       let present = element.exists, frame = present && element.hasFrame ? String(describing: element.frame) : "unmaterialized"
       let intersects = present && element.hasFrame && element.frame.intersects(container.frame)
-      print("DESIGN_WORK_TRIGGER_AFTER_LANDING \(name) exists=\(present) frame=\(frame) viewport=\(container.frame) intersects=\(intersects) hittable=\(present && element.isHittable)")
+      print("DESIGN_WORK_TRIGGER_AFTER_LANDING \(name) exists=\(present) frame=\(frame) viewport=\(container.frame) intersects=\(intersects) hittable=\(present && element.canTap)")
     }
     func shot(_ name: String) throws {
       guard name.hasPrefix("trigger-"), !FileManager.default.fileExists(atPath: directory.appendingPathComponent("\(name).png").path) else { XCTFail("Invalid or duplicate W3 image name"); return }
@@ -2152,7 +2152,7 @@ import CryptoKit
       XCTAssertTrue(query.firstMatch.waitForExistence(timeout: 5))
       XCTAssertEqual(app.buttons.matching(NSPredicate(format: "label == %@", excluded)).count, 0, "Routine menu must hide \(excluded)")
       for _ in 0..<10 {
-        let visible = query.allElementsBoundByIndex.filter { $0.isHittable }
+        let visible = query.allElementsBoundByIndex.filter { $0.canTap }
         if visible.count == 1 { visible[0].tapWhenReady(); return }
         usleep(100_000)
       }
@@ -2229,12 +2229,12 @@ import CryptoKit
     switch variant {
     case "trigger-list", "trigger-list-dark", "trigger-list-large-text":
       let first = row(try XCTUnwrap(freezer["description"] as? String))
-      XCTAssertTrue(first.isHittable, "Collapsed trigger list must show its first row before capture")
+      XCTAssertTrue(first.waitUntilHittable(), "Collapsed trigger list must show its first row before capture")
       if variant == "trigger-list" {
         for trigger in triggers {
           let id = try XCTUnwrap(trigger["id"] as? String)
           let item = form.buttons["automation.trigger.\(id)"]
-          XCTAssertTrue(item.exists && item.isHittable && form.frame.contains(item.frame), "All three trigger rows must be fully visible: \(id)")
+          XCTAssertTrue(item.exists && item.canTap && form.frame.contains(item.frame), "All three trigger rows must be fully visible: \(id)")
           XCTAssertGreaterThanOrEqual(item.frame.height, 44)
         }
         try shot("trigger-list")
@@ -2274,7 +2274,7 @@ import CryptoKit
         let pickerQuery = editor.buttons.matching(identifier: "automation.triggerRoutine")
         print("DESIGN_W3_STAGE AX-bottom routine-picker reveal")
         reveal(pickerQuery.firstMatch, editor); let picker = unique(pickerQuery, "routine picker")
-        XCTAssertTrue(picker.isHittable); XCTAssertTrue(app.keyboards.firstMatch.exists, "The AX editor capture must include the keyboard.")
+        XCTAssertTrue(picker.waitUntilHittable()); XCTAssertTrue(app.keyboards.firstMatch.exists, "The AX editor capture must include the keyboard.")
         try shot("trigger-create-large-text-bottom")
       }
       create(editor)
@@ -2466,7 +2466,7 @@ import CryptoKit
         if after {
           let progress = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Saving memories in Hermes…")).firstMatch
           XCTAssertTrue(progress.waitForExistence(timeout: 3)); try capture("memory-saving"); XCTAssertTrue(progress.exists)
-          XCTAssertFalse(app.buttons["Close"].isEnabled); XCTAssertFalse(app.buttons["settingsMore"].isEnabled)
+          XCTAssertFalse(app.buttons["Close"].isEnabled); XCTAssertFalse(app.buttons["memoryBack"].isEnabled)
         }
         XCTAssertTrue(app.buttons["memoryDiscard.memory"].waitForDisappearance())
         reveal(added, up: false); XCTAssertTrue(added.wait(until: "value == %@", config["newEntry"]!))
@@ -2561,9 +2561,9 @@ import CryptoKit
       }
       if after && variant == "large-text" {
         editFirst()
-        app.buttons["settingsMore"].tapWhenReady(); app.buttons["Details"].tapWhenReady()
+        app.buttons["memoryBack"].tapWhenReady()
         XCTAssertTrue(app.buttons["confirmationKeep"].waitForExistence(timeout: 5)); try capture("memory-large-text-leave")
-        app.buttons["confirmationKeep"].tapWhenReady(); XCTAssertEqual(app.buttons["settingsMore"].value as? String, "Memory")
+        app.buttons["confirmationKeep"].tapWhenReady(); XCTAssertTrue(app.buttons["memoryBack"].waitForExistence(timeout: 5))
       }
       if after && variant == "reload-error" { try capture("memory-reload-recovered") }
       app.terminate()
@@ -3192,7 +3192,7 @@ import CryptoKit
         XCTAssertTrue(app.buttons["Discard changes"].waitForExistence(timeout: 5))
         try capture("settings-discard-confirmation")
         if stage == "after" {
-          XCTAssertTrue(app.buttons["confirmationKeep"].isHittable)
+          XCTAssertTrue(app.buttons["confirmationKeep"].waitUntilHittable())
           app.buttons["confirmationKeep"].tapWhenReady()
           XCTAssertTrue(form.exists, "Keeping unsaved changes leaves the editor open")
           XCTAssertFalse(app.staticTexts["Assistant saved."].exists)

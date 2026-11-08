@@ -112,6 +112,9 @@
             FixtureProtocol.inference = inference
           }
         }
+        if let presentation = environment["AGENT_INTERFACE_UI_PRESENTATION"] {
+          FixtureProtocol.preferences["presentation"] = presentation
+        }
         if environment["AGENT_INTERFACE_UI_AUTOMATION"] == "1" {
           FixtureProtocol.automation = AutomationDebugFixture()
           FixtureProtocol.routines = [["id": "trial", "botId": "ranch", "name": "Morning brief trial",
@@ -149,6 +152,12 @@
             ["event_id": "group-2", "seq": 2, "kind": "message.member", "created_at": 1_790_000_060, "actor": ["kind": "member", "id": "kitchen"],
              "payload": ["text": "Brisket, if the smoker is free.", "thread_id": "thread-1", "member_id": "kitchen"]],
           ]
+          if environment["AGENT_INTERFACE_UI_GROUP_WORKING"] == "1" {
+            // A routine's post, as Hermes writes one for `deliver: room:<id>`.
+            FixtureProtocol.groupEvents.append(["event_id": "cron-post:1", "seq": 3, "kind": "message.user", "created_at": 1_790_000_120,
+              "actor": ["kind": "user", "id": "cron:fixture-job", "display_name": "[bot:ranch] Morning brief"],
+              "payload": ["text": "Fixture routine post: the smoker is free Sunday.", "thread_id": "cron-1"]])
+          }
         }
         if environment["AGENT_INTERFACE_UI_LONG_HISTORY"] == "1" {
           // Enough turns for three history pages, with replies tall enough to scroll.
@@ -203,6 +212,36 @@
     nonisolated(unsafe) static var workDesign: WorkDesignFixture?
     // The fixture server's state. Unchecked because `lock` guards every access: requests read and
     // write it only inside `startLoading`, and `configure` seeds it under the same lock.
+    /// A T3 Code thread launch, an email draft and a form, as `AGENT_INTERFACE_UI_CHAT_CARDS` shows them.
+    /// Sending the form appends its answers through the ordinary message route.
+    nonisolated(unsafe) static var chatCardMessages: [[String: Any]] = {
+      let json = { (value: Any) -> String in String(decoding: try! JSONSerialization.data(withJSONObject: value), as: UTF8.self) }
+      let fence = { (card: [String: Any]) -> String in "```agent-ui\n" + json(["version": 1, "cards": [card]]) + "\n```" }
+      let launch: [String: Any] = ["title": "Fix the north gate sensor", "message": "The north gate sensor reports open when the gate is shut. Find the cause and fix it.",
+        "workspaceStrategy": ["type": "worktree", "branch": "fix/north-gate-sensor"]]
+      let answer: [String: Any] = ["threadId": "t-1", "link": "https://app.t3.codes/threads/env-1/t-1", "projectId": "p",
+        "modelSelection": ["model": "claude-opus-5-5"], "runId": "r", "status": "queued"]
+      let email: [String: Any] = ["id": "sam", "type": "email", "title": "Hay delivery on Saturday", "to": ["sam@example.com"], "subject": "Saturday hay delivery",
+        "body": "Hi Sam,\n\nSaturday works. Could you bring 40 bales instead of 30?\n\nThanks,\nNicolas"]
+      let form: [String: Any] = ["id": "trip", "type": "form", "title": "Marfa weekend", "fields": [
+        ["id": "city", "label": "Destination", "kind": "text", "required": true],
+        ["id": "lodging", "label": "Lodging", "kind": "choice", "options": ["Hotel in town", "Cabin outside town"], "required": true],
+        ["id": "dog", "label": "Bringing Biscuit", "kind": "toggle", "value": true],
+        // The same word spelled two ways: two options on the web, so two here.
+        ["id": "cafe", "label": "Stop at", "kind": "multi", "options": ["Caf\u{E9}", "Cafe\u{301}"]],
+      ]]
+      let me: [String: Any] = ["id": "native-test", "name": "Local test member"]
+      return [
+        ["id": "cards-q1", "role": "user", "text": "Start a T3 Code thread to fix the north gate sensor.", "sender": me],
+        ["id": "cards-t1", "role": "tool", "text": "", "toolName": "mcp_t3code_t3_thread_launch", "toolCall": ["id": "launch-1", "name": "mcp_t3code_t3_thread_launch",
+          "status": "completed", "arguments": json(launch), "result": json(["result": json(answer)])]],
+        ["id": "cards-a1", "role": "assistant", "text": "Started Fix the north gate sensor in a new worktree."],
+        ["id": "cards-q2", "role": "user", "text": "Draft a reply to Sam.", "sender": me],
+        ["id": "cards-a2", "role": "assistant", "text": "Here's a draft.\n\n" + fence(email)],
+        ["id": "cards-q3", "role": "user", "text": "Help me plan a Marfa weekend.", "sender": me],
+        ["id": "cards-a3", "role": "assistant", "text": "A few details first.\n\n" + fence(form)],
+      ]
+    }()
     nonisolated(unsafe) static var messages: [[String: Any]] = [
       [
         "id": "welcome", "role": "assistant",
@@ -243,10 +282,41 @@
     nonisolated(unsafe) static var groupEvents: [[String: Any]] = []
     /// An assistant's answer to the last group message, announced on the next watching stream.
     nonisolated(unsafe) static var groupReplyPending = false
+    /// Another member makes a room once home has read the catalog, and every household stream from
+    /// then on opens with a `groups` notice, as the server's does: on with AGENT_INTERFACE_UI_GROUP_NOTICE=1.
+    static let groupNotices = ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_GROUP_NOTICE"] == "1"
+    nonisolated(unsafe) static var groupNoticeRoomMade = false
+    nonisolated(unsafe) static var groupCatalogReads = 0
     /// Who has the shared desktop: an assistant until this person takes over.
     nonisolated(unsafe) static var computerControl: [String: Any] = ["kind": "bot", "name": "Ranch hand"]
     nonisolated(unsafe) static var desktopTickets = 0
-    static var groupState: [String: Any] { ["room": groupRooms.first ?? [:], "driver_status": ["working": false, "blocked": false, "pending_actions": []]] }
+    /// The system terminal: this session's sign-in is confirmed once /api/auth/native/confirm ran,
+    /// and the shell has ended after /api/computer/terminal/end until the next ticket.
+    nonisolated(unsafe) static var terminalConfirmed = false
+    nonisolated(unsafe) static var terminalTickets = 0
+    nonisolated(unsafe) static var terminalEnded = 0
+    static var terminalStatus: [String: Any] {
+      if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_TERMINAL_UNAVAILABLE"] == "1" {
+        return ["available": false, "target": "", "reason": "The system terminal is limited to household administrators."]
+      }
+      var status: [String: Any] = ["available": true, "target": "wildbots@fixture-host"]
+      if !terminalConfirmed && ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_TERMINAL_CONFIRMED"] != "1" { status["confirmationRequired"] = true }
+      return status
+    }
+    /// AGENT_INTERFACE_UI_TERMINAL: an assistant's terminal request until it is settled.
+    nonisolated(unsafe) static var terminalRequestOpen = true
+    /// Room settings, from Hermes versions that have them: on with AGENT_INTERFACE_UI_GROUP=1.
+    nonisolated(unsafe) static var groupContext: [String: Any]? = ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_GROUP"] == "1"
+      ? ["purpose": "", "notes": "", "routing": "everyone", "lead_member_id": ""] : nil
+    static var groupState: [String: Any] {
+      // AGENT_INTERFACE_UI_GROUP_WORKING=1 shows two assistants at work, for screenshots of the activity lines.
+      let working = ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_GROUP_WORKING"] == "1"
+      var driver: [String: Any] = ["working": working, "blocked": false, "pending_actions": [], "max_rounds": 3]
+      if working { driver["member_activity"] = [["member_id": "kitchen", "status": "running", "round_index": 1, "tool": "web_search"], ["member_id": "ranch", "status": "queued", "round_index": 1]] }
+      var state: [String: Any] = ["room": groupRooms.first ?? [:], "driver_status": driver]
+      if let groupContext { state["context"] = groupContext }
+      return state
+    }
     nonisolated(unsafe) static var designMemory: [String: Any]?
     nonisolated(unsafe) static var memoryEntries: [[String: Any]] = [["id": "m1", "text": "Weeknight dinners under 30 minutes"]]
     nonisolated(unsafe) static var vaultItems: [[String: Any]] = [["id": "fixture-login", "kind": "login", "label": "Fixture school portal", "origin": "https://school.example.test", "createdAt": "2026-10-02T12:00:00Z", "identifier": "fixture.parent@example.test", "identifierType": "email", "hasOtp": false, "backend": "local", "canRemove": true]]
@@ -277,7 +347,16 @@
     nonisolated(unsafe) static var deletedSettingsBotIds: Set<String> = []
     nonisolated(unsafe) static var uploadedPortraits: [String: Data] = [:]
     nonisolated(unsafe) static var designAvatarSaveFailed = false
-    nonisolated(unsafe) static var avatarFailures = ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_AVATAR_FAILURE"] == "1" ? 1 : 0
+    /// How many avatar saves fail: "1", or a larger count for repeated retries.
+    nonisolated(unsafe) static var avatarFailures = Int(ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_AVATAR_FAILURE"] ?? "") ?? 0
+    nonisolated(unsafe) static var avatarFailuresSeen = 0
+    /// Each failure after the first says so, so a test can tell a retry was really sent.
+    static func avatarFailure() -> [String: Any] {
+      avatarFailures -= 1; avatarFailuresSeen += 1
+      return ["error": avatarFailuresSeen == 1 ? "Fixture avatar save failed" : "Fixture avatar save failed again"]
+    }
+    /// The first assistant detail read fails, for the settings load retry.
+    nonisolated(unsafe) static var detailFailures = ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_DETAIL_FAILURE"] == "1" ? 1 : 0
     static let currentRevision = "3f9c2a71b0d4e8f6a5c3b2d1e0f9a8b7c6d5e4f3"
     static let candidateRevision = "8e1d4c7b2a9f6e3d0c5b8a7f4e1d2c3b6a9f0e8d"
     nonisolated(unsafe) static var preferencesFailures = ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_PREFERENCES_FAILURE"] == "1" ? 1 : 0
@@ -389,6 +468,18 @@
         respond(raw: Data(stream.utf8), type: "text/event-stream")
         return
       }
+      if path == "/api/events", Self.groupNotices, Self.groupCatalogReads > 0 {
+        // The household stream: another member made a room. The notice, then the stream ends and the
+        // app reconnects, as after a dropped connection, and hears it again.
+        if !Self.groupNoticeRoomMade {
+          Self.groupNoticeRoomMade = true
+          Self.groupRooms.append(["room_id": "fixture-notice-room", "name": "Garden crew", "members": [
+            ["member_id": "ranch", "profile": "ranch", "handle": "ranch", "display_name": "Ranch hand"],
+            ["member_id": "kitchen", "profile": "kitchen", "handle": "kitchen", "display_name": "Kitchen companion"]]])
+        }
+        respond(raw: Data("event: groups\ndata: groups\n\n".utf8), type: "text/event-stream")
+        return
+      }
       if path.hasPrefix("/api/voice/audio/") {
         // Ten seconds of quiet, so a test can stop the reply while it plays.
         respond(raw: Self.silence(seconds: 10), type: "audio/wav")
@@ -450,7 +541,7 @@
             ],
           ], "bots": ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_CAPTURE_SURVIVAL"] == "empty" ? [] : Self.bots, "preferences": Self.preferences,
           "connection": ["connected": true, "code": "ready", "version": Self.currentRevision, "revisionDate": "2026-10-14T16:20:00Z"],
-          "csrfToken": NSNull(),
+          "csrfToken": NSNull(), "formKey": "fixture-form-key",
           "capabilities": Dictionary(
             uniqueKeysWithValues: CapabilityKey.allCases.map { ($0.rawValue, ["supported": true]) }),
         ]
@@ -565,6 +656,10 @@
         if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_EXPERIENCE"] == "1" {
           object = ["botId": path.components(separatedBy: "/")[3], "messages": [["id": "fixture-cards", "role": "assistant", "text": "Fixture grocery suggestion.\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"groceries\",\"type\":\"checklist\",\"title\":\"Grocery checklist\",\"items\":[{\"id\":\"milk\",\"text\":\"Milk\"}]}]}\n```"]], "activity": ["state": "idle"], "approvals": [], "files": [], "attention": [], "draft": Self.draft, "readPosition": Self.readPosition]
         }
+        if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_CHAT_CARDS"] == "1" {
+          object = ["botId": path.components(separatedBy: "/")[3], "messages": Self.chatCardMessages, "activity": ["state": "idle"],
+            "approvals": [], "files": [], "attention": [], "draft": Self.draft, "readPosition": Self.readPosition]
+        }
         if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_INLINE_UI"] == "1" {
           let html = "<h3>Hay supply planner</h3><p>Explicit simulator fixture.</p><button id='compare' onclick=\"document.getElementById('days').textContent='40 days';document.getElementById('extra').hidden=false\">Compare supply</button><p id='days'>24 days</p><p id='extra' hidden>At half a bale per day, twenty bales lasts forty days.</p>"
           let payload: [String: Any] = ["version": 1, "title": "Hay supply planner", "html": html]
@@ -580,6 +675,16 @@
           object = ["botId": path.components(separatedBy: "/")[3], "sessionId": "fixture-session",
             "messages": [["id": "handoff-fixture", "role": "assistant", "text": Self.handoffOpen ? "The bank sign-in needs you." : "Thanks, I'll check the page again."]],
             "activity": ["state": Self.handoffOpen ? "blocked" : "idle"], "approvals": [], "files": [], "attention": attention,
+            "draft": Self.draft, "readPosition": Self.readPosition]
+        }
+        if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_TERMINAL"] == "1" {
+          let attention: [[String: Any]] = Self.terminalRequestOpen ? [["id": "fixture-terminal", "kind": "terminal", "title": "Use the terminal?",
+            "detail": "Tailscale needs a person to sign in.",
+            "terminal": ["epoch": "fixture-epoch", "sessionId": "fixture-session", "reason": "Tailscale needs a person to sign in.",
+              "whatToDo": "Run the command, then open the link it prints.", "command": "sudo tailscale up"]]] : []
+          object = ["botId": path.components(separatedBy: "/")[3], "sessionId": "fixture-session",
+            "messages": [["id": "terminal-fixture", "role": "assistant", "text": Self.terminalRequestOpen ? "I need you at the terminal." : "Thanks, I'll check the result."]],
+            "activity": ["state": Self.terminalRequestOpen ? "blocked" : "idle"], "approvals": [], "files": [], "attention": attention,
             "draft": Self.draft, "readPosition": Self.readPosition]
         }
         if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_CONNECTION"] == "1" {
@@ -662,13 +767,18 @@
         if method == "POST" {
           let room: [String: Any] = ["room_id": body["requestId"] ?? "room", "name": body["name"] ?? "Group", "members": (body["botIds"] as? [String] ?? []).map { id -> [String: Any] in ["member_id": id, "profile": id, "handle": id, "display_name": Self.bots.first { $0["id"] as? String == id }?["name"] ?? id] }]
           Self.groupRooms.append(room); object = ["room": room]
-        } else { object = ["supported": true, "canSend": true, "rooms": Self.groupRooms] }
+        } else { Self.groupCatalogReads += 1; object = ["supported": true, "canSend": true, "rooms": Self.groupRooms] }
       } else if path.hasPrefix("/api/groups/") {
         if path.hasSuffix("/messages") {
           let event: [String: Any] = ["event_id": body["requestId"] ?? "event", "seq": Self.groupEvents.count + 1, "kind": "message.user", "created_at": Date().timeIntervalSince1970, "payload": ["text": body["text"] ?? "", "thread_id": body["threadId"] ?? "thread-1"],
             "sender": ["id": "native-test", "name": "Local test member"]]
           Self.groupEvents.append(event); object = ["accepted": true]
           if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_GROUP"] == "1" { Self.groupReplyPending = true }
+        } else if path.hasSuffix("/context") {
+          let lead = body["leadMemberId"] as? String
+          let context: [String: Any] = ["purpose": body["purpose"] ?? "", "notes": body["notes"] ?? "", "routing": lead == nil ? "everyone" : "lead", "lead_member_id": lead ?? ""]
+          Self.groupContext = context
+          object = ["context": context, "event": ["event_id": "context-\(Self.groupEvents.count + 1)", "seq": Self.groupEvents.count + 1, "kind": "room.context_set", "created_at": Date().timeIntervalSince1970, "payload": context]]
         } else if path.hasSuffix("/log") {
           var page: [String: Any] = ["events": Self.groupEvents, "cursor": Self.groupEvents.count, "has_more": false]
           // Like the app server, `state=1` brings the room state along.
@@ -745,11 +855,30 @@
         object = ["available": !unavailable, "running": !unavailable, "browserReady": !unavailable, "label": "Fixture host",
           "reason": unavailable ? "The fixture desktop is stopped." as Any : NSNull(),
           "control": Self.computerControl,
-          "terminal": ["available": false, "target": ""]]
+          "terminal": Self.terminalStatus]
       } else if path == "/api/computer/desktop", method == "POST" {
         Self.desktopTickets += 1
         object = ["path": "/api/computer/desktop/ws?ticket=fixture-\(Self.desktopTickets)",
           "expiresAt": ISO8601DateFormatter().string(from: Date().addingTimeInterval(30)), "viewerId": body["viewerId"] ?? "fixture-viewer-000001"]
+      } else if path == "/api/auth/native/confirm", method == "POST" {
+        Self.terminalConfirmed = true
+        object = ["confirmedAt": ISO8601DateFormatter().string(from: Date())]
+      } else if path == "/api/computer/terminal", method == "POST" {
+        if (Self.terminalStatus["confirmationRequired"] as? Bool) == true {
+          status = 401; object = ["error": "Confirm it's you to open the terminal.", "code": "reauthentication_required"]
+        } else {
+          Self.terminalTickets += 1
+          // A real ticket is 43 base64url characters; the app refuses anything else.
+          let ticket = "fixtureterminalticket" + String(repeating: "x", count: 19) + String(format: "%03d", Self.terminalTickets)
+          object = ["path": "/api/computer/terminal/ws?ticket=\(ticket)",
+            "expiresAt": ISO8601DateFormatter().string(from: Date().addingTimeInterval(30)),
+            "sessionId": "fixture-terminal-session", "target": "wildbots@fixture-host"]
+        }
+      } else if path == "/api/computer/terminal/end", method == "POST" {
+        if body["sessionId"] as? String == "fixture-terminal-session" { Self.terminalEnded += 1; object = ["ok": true] }
+        else { status = 403; object = ["error": "This terminal belongs to another household member."] }
+      } else if path.contains("/terminal-requests/"), method == "POST" {
+        object = ["status": Self.terminalRequestOpen ? "ok" : "expired"]; Self.terminalRequestOpen = false
       } else if path.contains("/computer-handoffs/"), method == "POST" {
         object = ["status": Self.handoffOpen ? "ok" : "expired"]; Self.handoffOpen = false
       } else if path.contains("/connection-requests/"), method == "POST" {
@@ -759,7 +888,7 @@
         if body["action"] as? String == "release" { Self.handoffOpen = false }
         Self.computerControl = body["action"] as? String == "take" ? ["kind": "human", "name": "Local test member", "mine": true] : ["kind": "idle"]
         object = ["available": true, "running": true, "browserReady": true, "label": "Fixture host", "reason": NSNull(),
-          "control": Self.computerControl, "terminal": ["available": false, "target": ""]]
+          "control": Self.computerControl, "terminal": Self.terminalStatus]
       } else if path.hasPrefix("/api/hermes/upgrade") {
         if path.hasSuffix("/control") {
           Self.upgradePhase = "recovering"
@@ -844,6 +973,9 @@
         }
       } else if path.hasSuffix("/messages") {
         let id = body["requestId"] as? String ?? UUID().uuidString
+        if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_CHAT_CARDS"] == "1" {
+          Self.chatCardMessages.append(["id": id, "role": "user", "text": body["text"] ?? "", "sender": ["id": "native-test", "name": "Local test member"]])
+        }
         Self.messages.append([
           "id": id, "role": "user", "text": body["text"] ?? "",
           "sender": ["id": "native-test", "name": "Local test member"],
@@ -888,7 +1020,10 @@
           status = 503
           object = ["error": "Catalog unavailable for this test"]
         } else if method == "GET" {
-          object = Self.items
+          // With the automation fixture, one catalog skill is also Hermes's installed ranch/fences skill.
+          object = path.hasSuffix("/skills") && ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_AUTOMATION"] == "1"
+            ? Self.items + [["id": "ranch/fences", "name": "ranch/fences", "description": "Fixture pasture inspection instructions", "enabled": true]]
+            : Self.items
         } else {
           let ids = body["ids"] as? [String] ?? []
           Self.items = Self.items.map {
@@ -952,14 +1087,18 @@
         }
       } else if path.hasSuffix("/avatar"), let index = Self.createdBots.firstIndex(where: { path.hasPrefix("/api/bots/\($0["id"] as? String ?? "")/") }) {
         if Self.avatarFailures > 0 {
-          Self.avatarFailures -= 1; status = 503; object = ["error": "Fixture avatar save failed"]
+          status = 503; object = Self.avatarFailure()
         } else {
           Self.createdBots[index]["avatar"] = body
           object = body
         }
       } else if path.hasSuffix("/avatar") {
-        Self.avatar = body
-        object = body
+        if Self.avatarFailures > 0 {
+          status = 503; object = Self.avatarFailure()
+        } else {
+          Self.avatar = body
+          object = body
+        }
       } else if path == "/api/routines", method == "GET", Self.designFixture?["screen"] as? String == "work", Self.designFixture?["mode"] as? String == "routines-error" {
         status = 409; object = ["error": "routines is unavailable"]
       } else if path == "/api/routines", method == "GET", Self.designFixture?["screen"] as? String == "work", Self.designFixture?["mode"] as? String == "no-routines" {
@@ -1001,10 +1140,13 @@
         var detail = Self.bots.first { $0["id"] as? String == path.components(separatedBy: "/").last } ?? Self.bots[0]
         detail["instructions"] = detail["instructions"] ?? "Be clear and useful."
         detail["enabledMcpServers"] = ["existing-calendar"]
+        detail["availableMcpServers"] = ["existing-calendar", "household-files"]
         detail["enabledTools"] = ["terminal"]
         detail["enabledSkills"] = []
         object = detail
-        if Self.designFixture?["settingsLoadError"] as? Bool == true, (!Self.settingsLoadFailed || Self.designFixture?["settingsLoadAlways"] as? Bool == true) {
+        if Self.detailFailures > 0 {
+          Self.detailFailures -= 1; status = 503; object = ["error": "Fixture settings unavailable"]
+        } else if Self.designFixture?["settingsLoadError"] as? Bool == true, (!Self.settingsLoadFailed || Self.designFixture?["settingsLoadAlways"] as? Bool == true) {
           Self.settingsLoadFailed = true; status = 503
           object = ["error": Self.designFixture?["loadError"] ?? "Settings could not be loaded."]
         }

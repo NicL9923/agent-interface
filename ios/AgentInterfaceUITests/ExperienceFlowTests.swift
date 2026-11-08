@@ -65,6 +65,24 @@ import XCTest
     app.collectionViews["routineEditorForm"].swipeUp()
     capture(app, name: "Native routine timezone preview")
   }
+  func testLeavingUnsavedMemoryAsksBeforeGoingBack() {
+    let app = launch()
+    XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 10))
+    app.openAssistantSettings("Ranch hand"); tab("Memory", app: app)
+    app.buttons["memoryAdd.memory"].tapWhenReady()
+    let fact = app.descendants(matching: .any).matching(identifier: "memoryEntry.memory.2").firstMatch
+    fact.typeWhenFocused("Prefers the south pasture")
+    let back = app.buttons["memoryBack"]
+    XCTAssertTrue(back.waitForExistence(timeout: 5), "Unsaved memory guards the back button")
+    back.tapWhenReady()
+    XCTAssertTrue(app.staticTexts["Leave memory without saving?"].waitForExistence(timeout: 5))
+    app.buttons["confirmationKeep"].tapWhenReady()
+    XCTAssertTrue(fact.wait(until: "value == %@", "Prefers the south pasture"), "Keep editing stays on Memory with the edit")
+    back.tapWhenReady()
+    app.buttons["confirmationAccept"].tapWhenReady()
+    XCTAssertTrue(app.buttons["settingsPage.learning"].waitForExistence(timeout: 5), "Discarding goes back to Memory & learning")
+    XCTAssertFalse(back.exists)
+  }
   func testTodayOpensCanonicalAssistantAndVoiceTranscribesIntoTheDraft() {
     let app = launch()
     XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 10))

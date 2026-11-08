@@ -9,16 +9,18 @@ import functools
 import hashlib
 import hmac
 import importlib.util
+import ipaddress
 import json
 import os
 from pathlib import Path
 import secrets
 import re
+from bisect import bisect_left
 import subprocess
 import sys
 import time
 import threading
-from urllib.parse import urlsplit
+from urllib.parse import unquote_to_bytes, urlsplit
 import urllib.request
 
 
@@ -184,6 +186,201 @@ def configured():
             or url.path not in ("", "/")):
         raise ComputerError("The household browser requires a fixed HTTP loopback CDP origin.")
     return home, endpoint.rstrip("/")
+
+
+# This matcher is defense in depth: literal text cannot show every URL a script builds. See
+# docs/SharedComputer.md for the network-level control.
+#
+# WHATWG URL parsing removes tabs and newlines anywhere, reads a special scheme case-insensitively,
+# treats "\" as "/" and accepts any number of slashes, none included, before the authority:
+# "http:/169.254.169.254/", "HTTP:169.254.169.254" and "http:\\169.254.169.254" all reach that host
+# from a page with another scheme. Native Hermes's literal scan finds only "http(s)://" and "//host".
+# A JavaScript string spells the same forms with "\/" or the "\t", "\n" and "\r" escapes.
+_SCHEME_COLON_RE = re.compile(r"(?<![A-Za-z0-9+.\-])(?:https?|wss?):[/\\]*", re.IGNORECASE)
+_URL_WHITESPACE_RE = re.compile(r"\\[tnr]|[\t\n\r]")
+# A special-scheme authority ends at the first of these.
+_AUTHORITY_END_RE = re.compile(r"[/\\?#\n]")
+# Where a literal in script text plausibly ends: a quote or whitespace. WHATWG would read on, but a
+# host holding one of these is either rejected or no metadata host. Userinfo may hold them, so an "@"
+# after one is read as well.
+_SOFT_END_RE = re.compile(r"['\"`<> \t\r\f\v]")
+# Where CSS url(), @import, an unquoted HTML attribute or a srcset entry ends a URL. WHATWG would keep
+# this punctuation in the host, so the host is judged both with and without it.
+_MARKUP_END_RE = re.compile(r"[);'\",>} \t\r\f\v]")
+_AT_RE = re.compile(r"@")
+_COLON_RE = re.compile(r":")
+# An ASCII character no spelling of an IPv4 address or a metadata name holds, before or after
+# percent-decoding and UTS 46 mapping. A long host holding one cannot name a metadata address.
+_NOT_ADDRESS_RE = re.compile(r"[^A-Za-z0-9.%\x80-\U0010ffff]")
+# Hosts up to this length are judged whole. A longer one is blocked unless it holds a character
+# that rules out an address, so padding such as leading zeros or percent-encoding cannot hide one.
+HOST_LIMIT = 1024
+OVERLONG_HOST = "\x00overlong host"
+
+
+class _Delimiters:
+    """Sorted positions of one character class in a text, found in one pass and searched by bisection."""
+
+    def __init__(self, pattern, text):
+        self.positions = [match.start() for match in pattern.finditer(text)]
+
+    def next(self, start, limit):
+        """The first position in [start, limit), else limit."""
+        index = bisect_left(self.positions, start)
+        return min(self.positions[index], limit) if index < len(self.positions) else limit
+
+    def last(self, start, limit):
+        """The last position in [start, limit), else -1."""
+        index = bisect_left(self.positions, limit) - 1
+        return self.positions[index] if index >= 0 and self.positions[index] >= start else -1
+
+
+def scheme_colon_hosts(text):
+    """Each host a special-scheme URL literal in text can name, read as WHATWG reads an authority.
+
+    The userinfo ends at the last "@" before the first "/", "\\", "?" or "#", and a bracketed host stays
+    whole. When an "@" follows a quote or space inside that span, both readings come back. Every
+    scheme occurrence is read on its own, one inside another URL's query included: no earlier
+    candidate's extent ever hides later text. Delimiter positions are found once per text, so each
+    occurrence costs a few bisections and the length of the hosts it yields, at most ``HOST_LIMIT``.
+    """
+    if not isinstance(text, str):
+        return []
+    variants = dict.fromkeys((text, _URL_WHITESPACE_RE.sub("", text.replace("\\/", "/"))))
+    return list(dict.fromkeys(host for variant in variants for host in _variant_hosts(variant)))
+
+
+def _variant_hosts(variant):
+    # A match spans only one scheme and its slashes, so no occurrence can hide inside another.
+    matches = list(_SCHEME_COLON_RE.finditer(variant))
+    if not matches:
+        return []
+    hosts = []
+    end, soft, markup, at = (_Delimiters(pattern, variant) for pattern in (_AUTHORITY_END_RE, _SOFT_END_RE, _MARKUP_END_RE, _AT_RE))
+    found = {}
+
+    def delimiters(pattern):
+        if pattern not in found:
+            found[pattern] = _Delimiters(pattern, variant)
+        return found[pattern]
+
+    def host_in(authority_start, authority_end):
+        """The host after the authority's last "@", cut at a quote or space."""
+        separator = at.last(authority_start, authority_end)
+        start = separator + 1 if separator >= 0 else authority_start
+        return start, soft.next(start, authority_end)
+
+    def add(start, stop):
+        for cut in (stop, markup.next(start, stop)):
+            if cut <= start:
+                continue
+            if cut - start <= HOST_LIMIT:
+                hosts.append(variant[start:cut])
+            elif variant[start] == "[":
+                # An IPv6 address fits in 64 characters; a longer bracket is rejected by WHATWG.
+                close = variant.find("]", start, start + 64)
+                if close >= 0:
+                    hosts.append(variant[start:close + 1])
+            else:
+                name_end = delimiters(_COLON_RE).next(start, cut)
+                if name_end - start <= HOST_LIMIT:
+                    hosts.append(variant[start:name_end])
+                elif delimiters(_NOT_ADDRESS_RE).next(start, name_end) == name_end:
+                    hosts.append(OVERLONG_HOST)
+
+    for match in matches:
+        start = match.end()
+        stop = end.next(start, len(variant))
+        first_soft = soft.next(start, stop)
+        add(*host_in(start, first_soft))
+        if at.last(first_soft, stop) >= 0:
+            add(*host_in(start, stop))
+        # CSS and markup end the URL first, so the userinfo split must not reach past that end.
+        add(*host_in(start, markup.next(start, stop)))
+    return hosts
+
+
+# IPv6 prefixes that carry an IPv4 address in their low 32 bits: IPv4-compatible (::/96), the
+# NAT64 well-known prefix and 6to4 (bits 16-48). Native already reads IPv4-mapped and -translated.
+_NAT64 = ipaddress.IPv6Network("64:ff9b::/96")
+
+
+def embedded_ipv4(ip):
+    """IPv4 addresses an IPv6 address can stand for."""
+    found = [ip.ipv4_mapped, ip.sixtofour]
+    if ip in _NAT64 or (int(ip) >> 32 == 0 and int(ip) > 0xFFFF):
+        found.append(ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF))
+    if int(ip) >> 32 == 0xFFFF0000:  # ::ffff:0:a.b.c.d
+        found.append(ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF))
+    return [address for address in found if address is not None]
+
+
+# WHATWG forbidden domain code points: a special-scheme host holding one is a parse failure.
+_FORBIDDEN_DOMAIN = frozenset("\x00\t\n\r #/:<>?@[\\]^|%\x7f") | frozenset(chr(code) for code in range(0x20))
+
+
+def uts46_ascii(name):
+    """WHATWG domain to ASCII for a non-ASCII name: UTS 46 mapping, nontransitional, without STD3 rules.
+
+    None when the ``idna`` package is missing or cannot map the name. The caller then blocks.
+    """
+    try:
+        import idna
+    except ImportError:
+        return None
+    try:
+        mapped = idna.uts46_remap(name, std3_rules=False, transitional=False)
+        return mapped if mapped.isascii() else idna.encode(mapped, uts46=False).decode("ascii")
+    except (idna.IDNAError, UnicodeError, ValueError):
+        return None
+
+
+def host_targets_metadata(host, judge):
+    """Whether a host from ``scheme_colon_hosts`` is one WHATWG accepts and that names a metadata address.
+
+    ``judge`` is native ``literal_targets_metadata``, which reads metadata names and every IPv4
+    spelling without DNS. A host WHATWG rejects fetches nothing and passes: an unclosed, empty or
+    invalid bracketed host such as ``[]`` from ``{https:[]}``, an empty host, a non-numeric port or a
+    forbidden code point. A non-ASCII name goes through UTS 46 first; one it can't map is blocked.
+    """
+    if host == OVERLONG_HOST:
+        return True
+    if host.startswith("["):
+        inner, closed, after = host[1:].partition("]")
+        if not closed or not re.fullmatch(r"(?::[0-9]*)?", after):
+            return False
+        try:
+            ip = ipaddress.IPv6Address(inner)
+        except ValueError:
+            return False
+        return judge("//[" + inner + "]/") or any(judge("//" + str(address) + "/") for address in embedded_ipv4(ip))
+    name, colon, port = host.rpartition(":")
+    if not colon:
+        name = host
+    elif port and not port.isdigit():
+        return False
+    name = unquote_to_bytes(name).decode("utf-8", "replace")
+    if not name:
+        return False
+    if not name.isascii():
+        name = uts46_ascii(name)
+        if name is None:
+            return True
+    name = name.lower()
+    if not name or any(c in _FORBIDDEN_DOMAIN for c in name):
+        return False
+    return judge("//" + name + "/")
+
+
+def param_strings(value):
+    """Every string in CDP params at any depth."""
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [text for item in value.values() for text in param_strings(item)]
+    if isinstance(value, (list, tuple)):
+        return [text for item in value for text in param_strings(item)]
+    return []
 
 
 @contextlib.contextmanager
@@ -433,6 +630,8 @@ class Computer:
             raise ComputerError("Private application authentication is required.")
         if action == "handoff":
             return decline_handoff(params)
+        if action == "terminal_request":
+            return settle_terminal_request(params)
         if action not in ("observe", "take", "release"):
             raise ComputerError("Unknown household computer action.")
         with self.operation():
@@ -545,7 +744,7 @@ def install_tools():
         from tools import browser_extension_router as router, browser_tool_eval_policy as browser_policy, browser_cdp_tool
         modern = False
     else:
-        from tools import browser_session_cdp as cdp, browser_session_cloud as cloud, browser_url_policy as browser_policy
+        from tools import browser_session_cdp as cdp, browser_session_cloud as cloud, browser_url_policy as browser_policy, browser_cdp_tool
         modern = True
     cdp_name = "get_cdp_override_raw" if modern else "_get_cdp_override_raw"
     local_name = "is_local_backend" if modern else "_is_local_backend"
@@ -569,7 +768,14 @@ def install_tools():
                 (browser_use_cli, "_route_backend"), (browser_use_cli, "_set_cdp_env"),
                 (browser_use_cli, "_run_cli_killing_process_group"), (cloud, local_name))
     if modern:
-        required += ((cdp, dialog_name), (browser_policy, "url_literals"))
+        # Native browser_cdp's own metadata floor: every URL a fetching method's params name,
+        # including scheme-relative //host and userinfo forms, judged without DNS for //host.
+        required += ((cdp, dialog_name), (browser_policy, "url_literals"), (browser_policy, "literal_targets_metadata"),
+                     (browser_cdp_tool, "_fetched_param_urls"))
+        # Native's methods whose params are never fetched: text input, block lists, cookie scopes.
+        if (not isinstance(getattr(browser_cdp_tool, "_TEXT_INPUT_METHOD_PREFIX", None), str)
+                or not isinstance(getattr(browser_cdp_tool, "_CDP_NON_FETCHING_METHODS", None), frozenset)):
+            raise ComputerError("Shared computer native tool seams require qualification.")
     else:
         required += ((session, "_run_browser_command"), (lifecycle, "_cleanup_single_browser_session"),
                      (router, "routed_browser_handler"))
@@ -691,6 +897,35 @@ def install_tools():
         router.routed_browser_handler = lambda action, args, *, fallback, **kwargs: fallback()
         bt.routed_browser_handler = router.routed_browser_handler
         browser_cdp_tool.routed_browser_handler = router.routed_browser_handler
+    def metadata_target(name, args):
+        """Whether the call names a cloud metadata address. Native eval guards skip all checks for
+        local backends, so this keeps the metadata floor for explicit literals using native parsing."""
+        if name == "browser_cdp" and modern:
+            # The same URLs and matcher native browser_cdp applies before its private-address guard.
+            params = args.get("params") or {}
+            method = args.get("method")
+            if not isinstance(params, dict) or not isinstance(method, str):
+                return False
+            judge = browser_policy.literal_targets_metadata
+            if any(judge(url) for url in browser_cdp_tool._fetched_param_urls(method, params)):
+                return True
+            if method.startswith(browser_cdp_tool._TEXT_INPUT_METHOD_PREFIX) or method in browser_cdp_tool._CDP_NON_FETCHING_METHODS:
+                return False
+            # Forms native's scan misses that a browser still reads as a special-scheme authority.
+            return any(host_targets_metadata(host, judge) for text in param_strings(params) for host in scheme_colon_hosts(text))
+        # An older revision: its browser_console expression and the two CDP methods it can fetch with.
+        expression, target = "", ""
+        if name == "browser_console":
+            expression = args.get("expression", "")
+        elif name == "browser_cdp":
+            params = args.get("params") or {}
+            if args.get("method") == "Page.navigate":
+                target = str(params.get("url") or "").strip()
+            elif args.get("method") == "Runtime.evaluate":
+                expression = params.get("expression", "")
+        found_literals = literals(expression) if isinstance(expression, str) else []
+        urls = ([target] if target else []) + [literal.rstrip(".,;") for literal in found_literals]
+        return any(url_safety.is_always_blocked_url(url) for url in urls)
     native_dispatch = registry.dispatch
     @functools.wraps(native_dispatch)
     def dispatch(name, args, **kwargs):
@@ -708,20 +943,7 @@ def install_tools():
             args["session"] = "household-" + hashlib.sha256(identity.encode()).hexdigest()[:32]
         try:
             with computer.bot_operation(profile):
-                # Native eval guards skip all checks for local backends. Keep
-                # the metadata floor for explicit literals using native parsing.
-                expression, target = "", ""
-                if name == "browser_console":
-                    expression = args.get("expression", "")
-                elif name == "browser_cdp":
-                    params = args.get("params") or {}
-                    if args.get("method") == "Page.navigate":
-                        target = str(params.get("url") or "").strip()
-                    elif args.get("method") == "Runtime.evaluate":
-                        expression = params.get("expression", "")
-                found_literals = literals(expression) if isinstance(expression, str) else []
-                urls = ([target] if target else []) + [literal.rstrip(".,;") for literal in found_literals]
-                if any(url_safety.is_always_blocked_url(url) for url in urls):
+                if metadata_target(name, args):
                     return json.dumps({"success": False, "error": "Blocked: URL targets a cloud metadata endpoint"})
                 return native_dispatch(name, args, **kwargs)
         except (ComputerError, lease.HumanHasControl) as exc:
@@ -927,22 +1149,141 @@ def register_handoff(computer):
                       handler=lambda args, **kwargs: request_handoff(computer, args, **kwargs))
 
 
-def decline_handoff(params):
-    """Not now on a handoff card. Only this executor's open handoff for that profile's conversation settles."""
+def settle_request(params, method, outcomes, noun):
+    """Settles one open ask of this executor's, which the app answers with a card button.
+
+    Only the open ask of that method in that profile's live conversation settles, and a
+    decision outside outcomes is refused before anything is looked up.
+    """
     from tui_gateway import server_requests
     request_id, sid, epoch, profile = (params.get(key) for key in ("requestId", "sessionId", "epoch", "profile"))
-    if params.get("decision") != "decline" or not all(isinstance(value, str) and 1 <= len(value) <= 200
-                                                      for value in (request_id, sid, epoch, profile)):
-        raise ComputerError("This computer request is invalid.")
+    decision = params.get("decision")
+    if decision not in outcomes or not all(isinstance(value, str) and 1 <= len(value) <= 200
+                                           for value in (request_id, sid, epoch, profile)):
+        raise ComputerError(f"This {noun} request is invalid.")
     with server_requests._lock:
         request = server_requests._open.get(request_id)
     if request is None:
         return {"status": "expired"}
     journal = _journal
-    if (journal is None or request.method != HANDOFF or request.sid != sid or epoch != journal.epoch
+    if (journal is None or request.method != method or request.sid != sid or epoch != journal.epoch
             or journal.live_profile_for_session(sid) != profile or journal.canonical_session(profile) != sid):
-        raise ComputerError("This computer request changed. Refresh the conversation.")
-    return {"status": "ok" if settle_handoff(request_id, "declined") else "expired"}
+        raise ComputerError(f"This {noun} request changed. Refresh the conversation.")
+    return {"status": "ok" if settle_handoff(request_id, outcomes[decision]) else "expired"}
+
+
+def decline_handoff(params):
+    """Not now on a handoff card. Only this executor's open handoff for that profile's conversation settles."""
+    return settle_request(params, HANDOFF, {"decline": "declined"}, "computer")
+
+
+TERMINAL_REQUEST = "agent_interface.terminal_request"
+TERMINAL_TOOL = "computer_request_terminal"
+# A terminal card nobody answers closes after this long. The person may be away from a keyboard.
+TERMINAL_WAIT = 1800
+
+TERMINAL_RESULTS = {
+    "done": dict(success=True, status="done", next=(
+        "The person says they finished in their own system terminal. You cannot see that terminal or its output. "
+        "Check the result yourself before relying on it, for example by reading the state the command should have "
+        "changed, and tell the user what you found.")),
+    "declined": dict(success=False, error_type="declined", error=(
+        "The person chose Not now. You cannot see their terminal, so do not assume whether anything ran there. "
+        "Continue without that step, or tell them what it blocks. Do not ask again unless they ask you to.")),
+    "timed_out": dict(success=False, error_type="timed_out", error=(
+        "Nobody answered within 30 minutes, so the request closed. Whether anything ran in the terminal is unknown. "
+        "Tell the user what is waiting and ask them to reply when they are ready.")),
+}
+
+
+def terminal_command(args):
+    """The optional command to offer: one line of 1 to 500 visible characters, shown to the person as written."""
+    value = args.get("command")
+    # Checked before trimming, so a trailing newline is refused rather than silently dropped.
+    if not isinstance(value, str) or HIDDEN.search(value) or not 1 <= len(value.strip()) <= 500:
+        raise ComputerError("Give command as one line of 1 to 500 visible characters, or leave it out.")
+    return value.strip()
+
+
+def request_terminal(args, **_kwargs):
+    """Asks a person in WildBots to do a step in the system terminal, and waits until they answer."""
+    vault = sibling_module("vault")
+    try:
+        if not isinstance(args, dict) or set(args) - {"reason", "what_to_do", "command"}:
+            raise ComputerError("Pass only reason, what_to_do and command.")
+        reason, todo = handoff_text(args, "reason", 200), handoff_text(args, "what_to_do", 300)
+        command = terminal_command(args) if "command" in args else None
+    except ComputerError as error:
+        return handoff_failure("invalid_arguments", str(error))
+    from gateway.session_context import get_session_env
+    sid = get_session_env("HERMES_UI_SESSION_ID")
+    if not sid or not person_waiting(sid):
+        return handoff_failure("no_person", "Nobody is waiting in this WildBots conversation to open a terminal, as in a "
+                               "scheduled or messaging run. Tell the user what needs a person at the system terminal "
+                               "and ask them to open Computer in WildBots when they can.")
+    from tui_gateway import server_requests
+    started = time.monotonic()
+    with vault.watched_asks() as asks:
+        # No suspend_for_prompt: the terminal is not the household desktop, so bot computer actions continue.
+        result = server_requests.send(TERMINAL_REQUEST, sid, {"reason": reason, "what_to_do": todo, **({"command": command} if command else {})},
+                                      timeout=TERMINAL_WAIT)
+    value = (result or {}).get("value", "")
+    if value in TERMINAL_RESULTS:
+        return json.dumps(TERMINAL_RESULTS[value])
+    if vault.replied_in_chat(asks):
+        return handoff_failure("user_replied_in_chat", "The user sent a chat message instead of answering the terminal card, "
+                               "so the request closed. They may or may not have run anything in the terminal. Their "
+                               "message is the next user message: read it before doing anything else. If they still "
+                               "want help, ask again with what they corrected.")
+    if result is None and time.monotonic() - started >= TERMINAL_WAIT - 1:
+        return json.dumps(TERMINAL_RESULTS["timed_out"])
+    return handoff_failure("cancelled", "The request closed without an answer, for example because the task was "
+                           "stopped. Do not continue the step that needed a person.")
+
+
+TERMINAL_SCHEMA = dict(name=TERMINAL_TOOL, description=(
+    "Ask a person to do a step in the system terminal on the Hermes host. Use it for a step that needs a person at a "
+    "real shell, such as a command that needs sudo or an interactive sign-in (gh auth login, tailscale up), or one the "
+    "person should run themselves. Only household terminal administrators can open the terminal. "
+    "The person sees a card in WildBots with your reason, what you want them to do and the command you suggest, and "
+    "buttons for Open terminal, Done and Not now. Open terminal shows the command beside the shell with a Paste at "
+    "prompt button; nothing is pasted until they press it, and pasting never runs it, so they press Enter themselves. "
+    "The call waits until they answer, up to 30 minutes. "
+    "Results: status done: they say they finished, but you cannot see the terminal or its output, so check the result "
+    "yourself before relying on it. declined: they chose Not now; continue without it or explain what it blocks, and do "
+    "not ask again unless they ask you to. user_replied_in_chat: they sent a message instead; read it next and ask "
+    "again only if they still want this. timed_out: nobody answered within 30 minutes; tell them what is waiting. "
+    "no_person: nobody can see a card now; explain what is blocked. invalid_arguments: fix the arguments and call "
+    "again. cancelled: the task was stopped; do not continue that step. "
+    "Never ask the person to type passwords or codes into chat; they type them in the terminal itself."),
+    parameters=dict(type="object", additionalProperties=False, required=["reason", "what_to_do"], properties=dict(
+        reason=dict(type="string", description="Why you need a person at the terminal, in one short sentence the user "
+                    "sees, such as This install needs sudo. At most 200 characters."),
+        what_to_do=dict(type="string", description="What the person should do, such as Run the command, enter your "
+                        "password when asked, then press Done. At most 300 characters."),
+        command=dict(type="string", description="Optional command to paste at the prompt, one line of at most 500 "
+                     "characters. It is pasted, never run for them."))))
+
+
+def register_terminal_request():
+    """Registers the terminal ask's wire contract and tool. Older Hermes revisions without either seam get no tool."""
+    from tui_gateway.contracts import registry as contracts
+    from tui_gateway.contracts.server_requests import ServerRequestParams, ValueResult
+    if TERMINAL_REQUEST not in contracts.SERVER_REQUESTS:
+        from typing import Optional
+        class TerminalRequestParams(ServerRequestParams):
+            reason: str
+            what_to_do: str
+            command: Optional[str] = None
+        contracts.server_request(TERMINAL_REQUEST, params=TerminalRequestParams, result=ValueResult,
+                                 doc="WildBots: ask a person to do a step in the system terminal.")
+    from tools.registry import registry
+    registry.register(name=TERMINAL_TOOL, toolset="clarify", schema=TERMINAL_SCHEMA, emoji="⌨️", handler=request_terminal)
+
+
+def settle_terminal_request(params):
+    """Done or Not now on a terminal card."""
+    return settle_request(params, TERMINAL_REQUEST, {"done": "done", "decline": "declined"}, "terminal")
 
 
 def install(server):
@@ -965,6 +1306,10 @@ def install(server):
         register_handoff(computer)
     except ImportError:
         pass  # A revision without the contract seam keeps the computer without the handoff tool.
+    try:
+        register_terminal_request()
+    except ImportError:
+        pass  # Likewise without the terminal ask.
     native_ask = server._ask
     @functools.wraps(native_ask)
     def ask(method, sid, params, timeout=300):

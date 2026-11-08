@@ -3,6 +3,7 @@ import type { KeyboardEvent } from "react";
 import type { AttentionRequest } from "../shared/types";
 import { request as apiRequest } from "../client-api";
 import { Icon } from "../components/Icon";
+import { reactAvatar } from "../components/avatar-attention";
 import { attentionAnchor, joinAnswer, nextUnanswered, optionForKey, toggleOption } from "./transcript-logic";
 
 type Question = NonNullable<AttentionRequest["questions"]>[number];
@@ -77,7 +78,7 @@ export function AttentionCard({ request, botId, report, disconnected = false }: 
           setBusy(true);
           report("");
           void apiRequest("POST /bots/:id/requests/:approvalId", { params: { id: botId, approvalId: request.id }, body: { answers } })
-            .then(() => setSettled(true))
+            .then(() => { setSettled(true); reactAvatar(botId, "cheer"); })
             .catch((error) => report(error.message))
             .finally(() => setBusy(false));
         }}>

@@ -151,6 +151,10 @@
       "avatarMetadata": {
         "supported": true
       },
+      "liveVoice": {
+        "supported": false,
+        "reason": "The WildBots voice plugin is not linked into Hermes."
+      },
       "imageGeneration": {
         "supported": false,
         "reason": "The connected Hermes profile has no image provider."
@@ -166,6 +170,7 @@
       "lastConnectedAt": "2026-10-01T11:58:00.000Z"
     },
     "csrfToken": null,
+    "formKey": "normalized-formKey",
     "nativeApp": {
       "latestBuild": 12,
       "updateUrl": "https://testflight.apple.com/join/CONTRACT"

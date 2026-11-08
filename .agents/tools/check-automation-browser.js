@@ -14,13 +14,18 @@
     (await wait(() => textButton('Settings', document.querySelector('.bot-details-actions') || document.createElement('div')), 'assistant settings')).click();
   }
   await wait(dialog, 'settings dialog');
-  const section = async name => {
-    const menu = document.querySelector('.settings-tabs-overflow'); if (menu) menu.open = true;
-    const item = await wait(() => textButton(name, document.querySelector('.settings-tabs')), name + ' tab');
+  // Open a settings section by label: tabs on wide screens, the section list on phones.
+  const section = async (name, ready) => {
+    if (!document.querySelector('.settings-tabs') && !document.querySelector('.settings-index')) document.querySelector('button[aria-label="All settings"]').click();
+    const tabs = document.querySelector('.settings-tabs');
+    const item = await wait(() => tabs
+      ? textButton(name, tabs)
+      : [...document.querySelectorAll('.settings-index .settings-row')].find(row => row.querySelector('.row-label')?.textContent.trim() === name), name + ' section');
     item.click();
-    await wait(() => document.querySelector('.automation-panel') && textButton('Refresh status') && !textButton('Refresh status').disabled, 'loaded ' + name);
+    await wait(ready, 'loaded ' + name);
   };
-  await section('work');
+  const automationLoaded = () => document.querySelector('.automation-panel') && textButton('Refresh status') && !textButton('Refresh status').disabled;
+  await section('Automation', automationLoaded);
   await wait(() => textButton('Resume goal') || textButton('Pause goal'), 'goal controls');
   if (textButton('Resume goal')) { await click('Resume goal'); await wait(() => textButton('Pause goal'), 'goal started'); }
   await click('Pause goal'); await wait(() => textButton('Resume goal'), 'goal paused');
@@ -36,14 +41,16 @@
   fill('Task title', title); fill('Instructions (optional)', 'Read the last inspection report. Ask before purchases.');
   await new Promise(resolve => setTimeout(resolve, 40));
   await click('Create task');
-  const created = await wait(() => [...dialog().querySelectorAll('details.automation-item')].find(item => item.querySelector('summary')?.textContent.includes(title)), 'created blocked task');
+  // The panel re-renders after each native refresh, so look the task up again instead of holding a node.
+  const findTask = () => [...dialog().querySelectorAll('details.automation-item')].find(item => item.querySelector('summary')?.textContent.includes(title));
+  const created = await wait(findTask, 'created blocked task');
   if (!created.querySelector('.automation-task-status')?.textContent.includes('Blocked')) throw Error('Task did not start blocked');
   if (!created.open) created.querySelector('summary').click();
-  textButton('Start task', created).click();
-  await wait(() => created.querySelector('.automation-task-status')?.textContent.includes('Ready'), 'native task status refreshed');
+  textButton('Start task', findTask()).click();
+  await wait(() => findTask()?.querySelector('.automation-task-status')?.textContent.includes('Ready'), 'native task status refreshed');
   const overflow = [...dialog().querySelectorAll('.automation-panel, .automation-form, .automation-code')].some(item => item.scrollWidth > item.clientWidth + 1);
   if (overflow) throw Error('Automation content overflows');
-  await section('learning');
+  await section('Memory & learning', () => document.querySelector('.automation-learning') && textButton('Refresh status') && !textButton('Refresh status').disabled);
   if (textButton('Review change')) {
     await click('Review change');
     await wait(() => document.querySelector('.automation-code')?.textContent.includes('+Check water'), 'actual skill diff');

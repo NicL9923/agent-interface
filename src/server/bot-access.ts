@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { agentEnvelope } from "../shared/collaboration.js";
 import type { Bot, Message, Runtime, ToolCall } from "../shared/types.js";
 import { routePattern } from "./route-path.js";
+import { httpError } from "./http-error.js";
 import type { Store } from "./store.js";
 declare module "fastify" { interface FastifyRequest { privacyVersion?: number; assistantId?: string } }
 
@@ -25,6 +26,17 @@ export async function visibleBots(runtime: Pick<Runtime, "listBots">, store: Sto
 }
 
 export const notFound = { error: "Assistant not found", code: "assistant_not_found" } as const;
+
+/**
+ * The routine a route that names only its ID acts on. Hermes lets two assistants hold jobs with the same
+ * ID, so the ID alone can name several: it means the one this person can see, and Hermes is then told its
+ * assistant. A copy they cannot see is never chosen or revealed, and two they can see are ambiguous.
+ */
+export function routineById<T extends { id: string; botId: string }>(routines: T[], routineId: string, store: Store, userId: string): T | undefined {
+  const seen = routines.filter(routine => routine.id === routineId && visibleTo(store, routine.botId, userId));
+  if (seen.length > 1) throw httpError(409, "More than one of your assistants has a routine with this ID. Change it from that assistant's routines.", { code: "routine_ambiguous" });
+  return seen[0];
+}
 
 // Only a genuine signature names a file's assistant, so a forged ID naming a private one
 // fails exactly like any other forged ID. A runtime without signatures, as in tests,
@@ -145,7 +157,9 @@ export const assistantRoutes: Readonly<Record<string, BotScope>> = {
   "POST /api/auth/native/complete": "none",
   "POST /api/auth/native/exchange": "none",
   "POST /api/auth/native/renew": "none",
+  "POST /api/auth/native/confirm": "none",
   "POST /api/csp-report": "none",
+  "POST /api/client-errors": "none",
   "GET /api/health": "none",
   "GET /api/health/ready": "none",
   "GET /api/bootstrap": "list",
@@ -172,6 +186,7 @@ export const assistantRoutes: Readonly<Record<string, BotScope>> = {
   "PUT /api/routines/:id": "routine and body",
   "DELETE /api/routines/:id": "routine",
   "PATCH /api/routines/:id/state": "routine",
+  "POST /api/routines/:id/stop": "routine",
   "POST /api/routines/:id/run": "routine",
   "GET /api/routines/:id/runs/:requestId": "routine",
   "POST /api/routines/preview": "body",
@@ -182,6 +197,7 @@ export const assistantRoutes: Readonly<Record<string, BotScope>> = {
   "GET /api/groups/:roomId/log": "group",
   "POST /api/groups/:roomId/messages": "group",
   "POST /api/groups/:roomId/stop": "group",
+  "POST /api/groups/:roomId/context": "group",
   "POST /api/groups/:roomId/approve": "group",
   "GET /api/integrations": "query",
   "POST /api/integrations/:id/check": "body",
@@ -210,6 +226,8 @@ export const assistantRoutes: Readonly<Record<string, BotScope>> = {
   "POST /api/push/test": "body",
   // The token names the assistant; the handler checks this person still sees it.
   "POST /api/push/actions": "none",
+  // This server's own addresses; no assistant is involved.
+  "GET /api/native/routes": "none",
   "GET /api/native/push/config": "none",
   "PUT /api/native/push/device": "none",
   "DELETE /api/native/push/device": "none",
@@ -263,12 +281,13 @@ export function installBotAccess(app: FastifyInstance, store: Store, runtime: Pi
     const scope = assistantRoutes[key(req.method, routePattern(req))];
     if (scope?.startsWith("routine")) {
       const routineId = (req.params as { id?: string }).id;
-      const row = (await runtime.routines()).find(routine => routine.id === routineId);
+      // Refused only when every routine with this ID is hidden; the handler acts on the one this person sees.
+      const rows = (await runtime.routines()).filter(routine => routine.id === routineId);
       // A trial remembers its assistant even after its routine is deleted.
       const requestId = (req.params as { requestId?: unknown }).requestId ?? (req.body as { requestId?: unknown } | undefined)?.requestId;
       const trial = typeof requestId === "string" ? store.routineTrial(requestId) : undefined;
       // A missing routine is the handler's 404, worded the same.
-      if (row && hidden(req, row.botId) || trial && hidden(req, trial.botId)) return reply.code(404).send({ error: "Routine not found" });
+      if (rows.length && rows.every(row => hidden(req, row.botId)) || trial && hidden(req, trial.botId)) return reply.code(404).send({ error: "Routine not found" });
     }
     if (scope === "body" || scope === "routine and body") {
       req.assistantId ??= named(req.body);

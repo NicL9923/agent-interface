@@ -15,8 +15,9 @@ const runtime = createHermesRuntime({
   qualificationFile: config.hermesQualificationFile,
 });
 // pino writes JSON lines to stdout; systemd keeps them in journald.
-const { app } = await createApp({ ...config, logLevel: config.logLevel ?? "info" }, runtime);
+const { app, directRoutes } = await createApp({ ...config, logLevel: config.logLevel ?? "info" }, runtime);
 await app.listen({ host: config.host, port: config.port });
+await directRoutes?.start();
 app.log.info({ origin: config.origin, schemaVersion, node: process.version }, "WildBots started");
 let stopping: Promise<void> | undefined;
 for (const signal of ["SIGINT", "SIGTERM"] as const)

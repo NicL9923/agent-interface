@@ -1,0 +1,13 @@
+manifest_version: 1
+name: wildbots-voice
+version: 1.0.0
+kind: standalone
+description: >-
+  WildBots live voice. Mints short-lived OpenAI Realtime client secrets on the
+  household ChatGPT sign-in through Hermes, so the WildBots app can hold live
+  voice conversations. It sees no credential: Hermes attaches the sign-in to
+  each request. It adds no tools or hooks.
+provides_tools: []
+provides_hooks: []
+requires_auth:
+  - openai-codex

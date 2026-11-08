@@ -167,9 +167,13 @@ class BoundaryTests(unittest.TestCase):
         self.value['open_requests'] = [dict(id='native-approval')]
         self.entries = [dict(session_id='canonical', lease_id='foreign', pid=os.getpid() + 1)]
         with patch.object(automation, 'task_operation', return_value={'ok': True}) as task, patch.object(automation, 'trigger_operation', return_value={'ok': True}) as trigger, patch.object(automation, 'skill_operation', return_value={'ok': True}) as skill:
-            for operation in ('task_create', 'trigger_create', 'skill_policy'):
+            for operation in ('task_create', 'trigger_create', 'skill_policy', 'skill_lock'):
                 self.assertEqual(self.controller.run(dict(profile='ranch', operation=operation)), {'ok': True})
-            self.assertEqual((task.call_count, trigger.call_count, skill.call_count), (1, 1, 1))
+            self.assertEqual((task.call_count, trigger.call_count, skill.call_count), (1, 1, 2))
+            self.maintenance = True
+            with self.assertRaisesRegex(automation.AutomationError, 'upgraded'):
+                self.controller.run(dict(profile='ranch', operation='skill_lock', name='fence', locked=True))
+            self.assertEqual(skill.call_count, 2)
         self.assertEqual(self.entered, 0)
 
     def test_resume_uses_durable_submit_once_and_pause_clear_work_while_busy(self):
@@ -624,6 +628,42 @@ class SkillTests(unittest.TestCase):
         self.assertTrue(automation.skill_refusal_is_definite(dict(payload=dict(action='create')), dict(success=False, error='Skill already exists')))
         self.assertTrue(automation.skill_refusal_is_definite(batch, dict(success=False, error='Invalid operation shape')))
 
+    def test_approving_a_change_to_a_locked_skill_is_a_definite_refusal(self):
+        # Native skill_manage refuses a locked skill in its preflight, before any write or batch snapshot,
+        # even for a delete, whose other false results stay uncertain.
+        for payload in (dict(action='delete', name='fence'), dict(operations=[dict(action='delete', name='fence')])):
+            with self.subTest(payload=payload):
+                self.db.execute('DELETE FROM automation_skill_decisions')
+                self.record['payload'] = payload
+                request = dict(profile='ranch', operation='skill_diff', pendingId='deadbeef')
+                decision = dict(request, operation='skill_decide', revision=automation.skill_operation(request, self.journal)['revision'], decision='approve')
+                refusal = dict(success=False, error="Refusing delete: Skill 'fence' is locked by the user", _locked=True)
+                sys.modules['hermes_cli.write_approval_commands']._apply_one = lambda *_, _refusal=refusal: (False, _refusal['error'], _refusal)
+                with self.assertRaisesRegex(automation.AutomationError, 'skill is locked') as raised:
+                    automation.skill_operation(decision, self.journal)
+                self.assertEqual(raised.exception.status, 409)
+                self.assertEqual(self.db.execute('SELECT status FROM automation_skill_decisions').fetchone()[0], 'rejected')
+        self.assertFalse(automation.skill_refusal_is_definite(dict(payload=dict(action='delete')), dict(success=False, _locked=False)))
+
+    def test_a_lock_that_stops_a_batch_midway_is_definite_only_after_a_complete_rollback(self):
+        # Another process locked the second skill after the first op applied. Native copies the
+        # failing op's _locked onto the batch result, whatever its rollback did.
+        self.record['payload'] = dict(operations=[dict(action='patch', name='fence'), dict(action='patch', name='gate')])
+        request = dict(profile='ranch', operation='skill_diff', pendingId='deadbeef')
+        decision = dict(request, operation='skill_decide', revision=automation.skill_operation(request, self.journal)['revision'], decision='approve')
+        partial = dict(success=False, failed_index=1, completed_before_failure=1, _locked=True,
+                       error="operations[1] (patch on 'gate') failed: Refusing patch: Skill 'gate' is locked — batch aborted, ROLLBACK FAILED for fence.")
+        applier = sys.modules['hermes_cli.write_approval_commands']
+        applier._apply_one = lambda *_: (False, partial['error'], partial)
+        with self.assertRaisesRegex(automation.AutomationError, 'could not confirm whether'):
+            automation.skill_operation(decision, self.journal)
+        self.assertEqual(self.db.execute('SELECT status FROM automation_skill_decisions').fetchone()[0], 'uncertain')
+        applier._apply_one = lambda *_: self.fail('an uncertain partial batch was replayed')
+        with self.assertRaisesRegex(automation.AutomationError, 'already attempted'):
+            automation.skill_operation(decision, self.journal)
+        rolled_back = dict(partial, error="operations[1] (patch on 'gate') failed: Refusing patch — batch aborted, all touched skills rolled back.")
+        self.assertTrue(automation.skill_refusal_is_definite(self.record, rolled_back))
+
     def test_truncated_diff_and_path_traversal_are_not_approvable(self):
         self.diff = 'x' * 100001
         detail = automation.skill_operation(dict(profile='ranch', operation='skill_diff', pendingId='deadbeef'), self.journal)
@@ -632,6 +672,70 @@ class SkillTests(unittest.TestCase):
             automation.skill_operation(dict(profile='ranch', operation='skill_decide', pendingId='deadbeef', revision=detail['revision'], decision='approve'), self.journal)
         self.assertEqual(self.applies, 0)
         with self.assertRaises(automation.AutomationError): automation.identity('../native')
+
+
+class SkillLockTests(unittest.TestCase):
+    """The lock uses native Hermes's own record, keyed by skill directory, inside the profile's write scope."""
+    def setUp(self):
+        self.locks, self.scope, self.writes = {'fence-check'}, [], []
+        self.saved = True
+        self.skills = {'ranch/fence': Path('/profiles/ranch/skills/ranch/fence-check'), 'gate': Path('/profiles/ranch/skills/gate')}
+        @contextlib.contextmanager
+        def write_scope(profile):
+            self.scope.append(profile)
+            try:
+                yield
+            finally:
+                self.scope.pop()
+        def set_locked(key, locked):
+            self.writes.append((key, locked, list(self.scope)))
+            return self.saved
+        catalog = lambda: (set(self.locks), {'ranch/fence': 'fence-check', 'gate': 'gate'})
+        self.usage = module('tools.skill_usage', set_locked=set_locked)
+        self.routers = module('hermes_cli.web_routers.skills', _locked_index=catalog)
+        wa = module('tools.write_approval', SKILLS='skills', list_pending=lambda *_: [], write_approval_enabled=lambda *_: True)
+        skills_tool = module('tools.skills_tool', find_all_skills=lambda **_: [dict(name='ranch/fence', description='Fence'), dict(name='gate', description='Gate')])
+        manager = module('tools.skill_manager_tool', _find_skill=lambda name: dict(path=self.skills[name]) if name in self.skills else None)
+        self.patcher = patch.dict(sys.modules, {
+            'tools': module('tools', write_approval=wa, skill_usage=self.usage, skills_tool=skills_tool, skill_manager_tool=manager),
+            'tools.write_approval': wa, 'tools.skill_usage': self.usage, 'tools.skills_tool': skills_tool, 'tools.skill_manager_tool': manager,
+            'hermes_cli.web_routers.skills': self.routers,
+            'hermes_cli.web_routers._common': module('hermes_cli.web_routers._common', config_write_scope=write_scope)})
+        self.patcher.start()
+        self.addCleanup(self.patcher.stop)
+
+    def lock(self, **fields):
+        return automation.skill_operation(dict(profile='ranch', operation='skill_lock', **fields))
+
+    def test_list_reports_each_skills_lock_by_its_directory(self):
+        listed = automation.skill_list()
+        self.assertTrue(listed['lockSupported'])
+        self.assertEqual([(row['name'], row['locked']) for row in listed['installed']], [('ranch/fence', True), ('gate', False)])
+
+    def test_lock_and_unlock_write_the_directory_key_inside_the_profile_write_scope(self):
+        self.assertEqual(self.lock(name='gate', locked=True), dict(ok=True, name='gate', locked=True))
+        self.assertEqual(self.lock(name='ranch/fence', locked=False), dict(ok=True, name='ranch/fence', locked=False))
+        self.assertEqual(self.writes, [('gate', True, ['ranch']), ('fence-check', False, ['ranch'])])
+
+    def test_invalid_missing_or_unsaved_locks_refuse(self):
+        for fields, status in ((dict(name='../gate', locked=True), 400), (dict(name='gate', locked='yes'), 400),
+                               (dict(name='gone', locked=True), 404)):
+            with self.subTest(fields=fields), self.assertRaises(automation.AutomationError) as raised:
+                self.lock(**fields)
+            self.assertEqual(raised.exception.status, status)
+        self.assertEqual(self.writes, [])
+        self.saved = False
+        with self.assertRaisesRegex(automation.AutomationError, "couldn't save"):
+            self.lock(name='gate', locked=True)
+
+    def test_a_hermes_without_skill_locks_lists_skills_but_cannot_lock(self):
+        del self.routers._locked_index
+        listed = automation.skill_list()
+        self.assertFalse(listed['lockSupported'])
+        self.assertNotIn('locked', listed['installed'][0])
+        with self.assertRaisesRegex(automation.AutomationError, "can't lock skills") as raised:
+            self.lock(name='gate', locked=True)
+        self.assertEqual((raised.exception.status, self.writes), (409, []))
 
 
 if __name__ == '__main__': unittest.main()

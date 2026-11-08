@@ -7,6 +7,8 @@ import { api, ApiError, write } from '../src/client-api';
 import { contentHash } from '../src/app/draft-merge';
 import { defaultPreferences, type Bootstrap, type SavedDraft } from '../src/shared/types';
 import { advance, mountRoot, stubMatchMedia, typeInto } from './ui-harness';
+import { FakeEventSource } from './fake-event-source';
+import { DRAFT_POLL_MS } from '../src/app/use-draft';
 
 vi.mock('../src/client-api', async original => (await import("./helpers/request-mock")).withRequest(await (async original=>({...await original<typeof import('../src/client-api')>(),api:vi.fn(),cachedResponse:vi.fn(),write:vi.fn(),clearResponseCache:vi.fn()}))(original)));
 vi.mock('../src/components/Avatar',async original=>({...await original<typeof import('../src/components/Avatar')>(),Avatar:()=>null}));
@@ -258,17 +260,66 @@ describe('draft sync across devices',()=>{
     expect(textarea().value).toBe('');
   });
 
-  it('refreshes the open draft when the page is shown again and while it stays open',async()=>{
-    phone.edit('shared','Buy feed');
-    await renderApp();
-    expect(textarea().value).toBe('Buy feed');
-    phone.send('shared','Buy feed');
-    await act(async()=>document.dispatchEvent(new Event('visibilitychange')));await advance(0);
-    expect(textarea().value).toBe('');
-    phone.edit('shared','Fix the gate');
-    await advance(1600);
-    expect(textarea().value).toBe('Fix the gate');
-    expect(draftPuts('shared')).toEqual([]);
+  it('refreshes the open draft when the page is shown again',async()=>{
+    let visibility:DocumentVisibilityState='visible';
+    Object.defineProperty(document,'visibilityState',{configurable:true,get:()=>visibility});
+    try{
+      phone.edit('shared','Buy feed');
+      await renderApp();
+      expect(textarea().value).toBe('Buy feed');
+      visibility='hidden';await act(async()=>document.dispatchEvent(new Event('visibilitychange')));
+      phone.send('shared','Buy feed');
+      visibility='visible';await act(async()=>document.dispatchEvent(new Event('visibilitychange')));await advance(0);
+      expect(textarea().value).toBe('');
+      expect(draftPuts('shared')).toEqual([]);
+    }finally{Reflect.deleteProperty(document,'visibilityState');}
+  });
+
+  it('reloads the open draft when its stream announces a newer revision, and polls only as a slow fallback',async()=>{
+    FakeEventSource.reset();vi.stubGlobal('EventSource',FakeEventSource);
+    try{
+      phone.edit('shared','Buy feed');
+      await renderApp();
+      const stream=[...FakeEventSource.streams].find(stream=>stream.url.startsWith('/api/bots/shared/events'))!;
+      const reads=()=>vi.mocked(api).mock.calls.filter(([path])=>path==='/bots/shared/draft').length;
+      const before=reads();
+      // A notice for the revision already shown reads nothing.
+      await act(async()=>stream.emit('draft',String(draft('shared').revision)));await advance(0);
+      expect(reads()).toBe(before);
+      phone.edit('shared','Fix the gate');
+      await act(async()=>stream.emit('draft',String(draft('shared').revision)));await advance(0);
+      expect(textarea().value).toBe('Fix the gate');
+      expect(reads()).toBe(before+1);
+      // Without a notice, as when the stream failed unnoticed, the slow poll still catches up.
+      phone.edit('shared','Oil the hinge');
+      await advance(DRAFT_POLL_MS-1000);
+      expect(textarea().value).toBe('Fix the gate');
+      await advance(1000);
+      expect(textarea().value).toBe('Oil the hinge');
+      expect(draftPuts('shared')).toEqual([]);
+    }finally{vi.unstubAllGlobals();stubMatchMedia();}
+  });
+
+  it('reads again when a newer revision is announced while a read is still on its way',async()=>{
+    FakeEventSource.reset();vi.stubGlobal('EventSource',FakeEventSource);
+    try{
+      phone.edit('shared','Buy feed');
+      await renderApp();
+      const stream=[...FakeEventSource.streams].find(stream=>stream.url.startsWith('/api/bots/shared/events'))!;
+      // The next draft read answers with the draft as it is now, but only once released.
+      let release!:()=>void;const held=new Promise<void>(resolve=>{release=resolve;});
+      const serve=vi.mocked(api).getMockImplementation()!;let taken=false;
+      vi.mocked(api).mockImplementation(async <T>(path:string,init?:RequestInit)=>{
+        if(taken||path!=='/bots/shared/draft')return serve(path,init) as Promise<T>;
+        taken=true;const answer=structuredClone(draft('shared'));await held;return answer as T;
+      });
+      phone.edit('shared','Fix the gate');
+      await act(async()=>stream.emit('draft',String(draft('shared').revision)));await advance(0);
+      phone.send('shared','Fix the gate');
+      await act(async()=>stream.emit('draft',String(draft('shared').revision)));await advance(0);
+      await act(async()=>release());await advance(0);
+      expect(textarea().value).toBe('');
+    }finally{vi.unstubAllGlobals();stubMatchMedia();}
   });
 
   it('sends a save as an ordinary request when overlapping keepalive saves would exceed the browser budget',async()=>{

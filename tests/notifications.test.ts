@@ -33,7 +33,7 @@ it("persists durable event discovery with participant/routine recipient semantic
   store.recordEvents([event], "cursor-1");
   expect(store.cursor()).toBe("cursor-1");
   expect(store.outbox()).toHaveLength(1);
-  store.routineRecipients("routine", ["two"]);
+  store.routineRecipients("shared", "routine", ["two"]);
   store.recordEvents(
     [{ ...event, id: "routine-event", routineId: "routine" }],
     "cursor-2",
@@ -46,8 +46,9 @@ it("names the assistant and quotes the reply in queued notifications", () => {
   const store = storeWithUsers();
   store.participate("run", "one");
   store.botNames = new Map([["shared", "Nic's Chief"]]);
-  store.recordEvents([{ ...event, title: "Hermes completed", body: "Tailscale is up on the NAS." }], "cursor-1");
-  expect(JSON.parse(store.outbox()[0].payload)).toMatchObject({ title: "Nic's Chief", body: "Tailscale is up on the NAS." });
+  // A reply's Markdown reaches the notification as its words; inline code keeps its contents.
+  store.recordEvents([{ ...event, title: "Hermes completed", body: "**Tailscale is up** on the NAS.\n\nRun `tailscale __status__`." }], "cursor-1");
+  expect(JSON.parse(store.outbox()[0].payload)).toMatchObject({ title: "Nic's Chief", body: "Tailscale is up on the NAS. Run tailscale __status__." });
   store.close();
 });
 it("keeps completion pending without a subscription and retries failed delivery without resending successful endpoints", async () => {
@@ -289,7 +290,7 @@ it.each(["runtime", "outbox", "live"] as const)("drains every job before closing
   const finished = { runtime: deferred(), outbox: deferred(), live: deferred() };
   const close = vi.fn();
   const sender = Object.assign(vi.fn(async () => { await gates.outbox.promise; finished.outbox.resolve(); }), {
-    close, liveActivity: vi.fn(async () => {}), clear: vi.fn(async () => {}),
+    close, liveActivity: vi.fn(async () => {}), clear: vi.fn(async () => {}), refresh: vi.fn(async () => {}),
   });
   const factory = vi.spyOn(apns, "createApnsSender").mockReturnValue(sender);
   const config = household();
@@ -344,7 +345,7 @@ it.each(["runtime", "outbox", "live"] as const)("drains every job before closing
 });
 it("lists explicit routine recipients without adding bot followers", () => {
   const store = storeWithUsers();
-  store.routineRecipients("routine", ["one"]);
+  store.routineRecipients("shared", "routine", ["one"]);
   store.savePreferences("two", {
     presentation: "simple",
     theme: "system",
@@ -352,7 +353,7 @@ it("lists explicit routine recipients without adding bot followers", () => {
     sections: [],
     followBots: ["shared"],
   });
-  expect(store.getRoutineRecipients("routine")).toEqual(["one"]);
+  expect(store.getRoutineRecipients("shared", "routine")).toEqual(["one"]);
   expect(store.recipients({ ...event, routineId: "routine" })).toEqual([
     "one",
     "two",
@@ -504,4 +505,55 @@ it("drains the worker before closing its runtime and database", async () => {
   }
   expect(close).toHaveBeenCalledTimes(1);
   expect(() => store.users()).toThrow();
+});
+
+it("never replaces settled admission with a delayed uncertain or conflicting receipt", () => {
+  const store = storeWithUsers();
+  try {
+    for (const status of ["accepted", "rejected", "interrupted"] as const) {
+      store.intent({ requestId: status, botId: "shared", senderId: "one", text: "Hello", attachments: [] });
+      const settled = { requestId: status, status, messageId: status === "accepted" ? "message" : undefined };
+      store.receipt(settled);
+      store.receipt({ requestId: status, status: "uncertain" });
+      store.receipt({ requestId: status, status: status === "accepted" ? "rejected" : "accepted" });
+      expect(store.submission(status)?.receipt).toEqual(settled);
+    }
+  } finally { store.close(); }
+});
+
+it("preserves a reviewed interruption retry as the only explicit reopening of rejection", () => {
+  const store = storeWithUsers();
+  try {
+    store.intent({ requestId: "reviewed", botId: "shared", senderId: "one", text: "Hello", attachments: [] });
+    store.receipt({ requestId: "reviewed", status: "rejected" }, "interruption_pending");
+    store.receipt({ requestId: "reviewed", status: "accepted", runId: "run" }, undefined, true);
+    expect(store.submission("reviewed")?.receipt.status).toBe("accepted");
+    expect(store.participants("run")).toEqual(["one"]);
+  } finally { store.close(); }
+});
+
+it.each([404, 410, 500])("handles web push status %i for queued notifications", async status => {
+  const store = storeWithUsers();
+  const endpoint = "https://push.example.test/device", healthy = "https://push.example.test/healthy";
+  store.subscribe("one", { endpoint, keys: { p256dh: "key", auth: "auth" } });
+  store.subscribe("one", { endpoint: healthy, keys: { p256dh: "key", auth: "auth" } });
+  queue(store, "first-push", Date.now());
+  queue(store, "second-push", Date.now());
+  store.db.prepare("INSERT INTO notification_batches VALUES(?,?,?)").run("push-batch", "one", JSON.stringify({ title: "Batch", body: "", url: "/", tag: "batch" }));
+  for (const id of ["first-push", "second-push"]) store.db.prepare("INSERT INTO notification_batch_items VALUES(?,?)").run(id, "push-batch");
+  const sender = vi.fn(async (subscription: { endpoint: string }) => {
+    if (subscription.endpoint === endpoint) throw Object.assign(new Error("push failure"), { statusCode: status });
+  });
+  try {
+    await new BackgroundWorker(store, offline, household(), sender).tick();
+    // One batched send per endpoint; only the dead endpoint is pruned, and only on 404/410.
+    expect(sender).toHaveBeenCalledTimes(2);
+    expect(sender.mock.calls.map(call => call[0].endpoint).sort()).toEqual([endpoint, healthy].sort());
+    expect(store.subscriptions("one").map(item => item.endpoint).sort()).toEqual((status === 500 ? [endpoint, healthy] : [healthy]).sort());
+    for (const id of ["first-push", "second-push"]) {
+      expect(store.delivered(id, healthy)).toBe(true);
+      expect(store.delivered(id, endpoint)).toBe(status !== 500);
+      expect(outboxRow(store, id)?.state).toBe(status === 500 ? "pending" : "delivered");
+    }
+  } finally { store.close(); }
 });

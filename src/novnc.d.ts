@@ -6,7 +6,7 @@ declare module "@novnc/novnc" {
     resizeSession: boolean;
     showDotCursor: boolean;
     disconnect(): void;
-    focus(): void;
+    focus(options?: FocusOptions): void;
     sendCtrlAltDel(): void;
     sendKey(keysym: number, code?: string, down?: boolean): void;
     clipboardPasteFrom(text: string): void;

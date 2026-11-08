@@ -131,3 +131,36 @@ it('keeps the catalog when a preview cannot be read', async () => {
   expect(response.json().rooms).toMatchObject([{room_id: 'shared'}]);
   expect(response.json().rooms[0].latest).toBeUndefined();
 });
+it("hides rooms a person cannot open from routine run errors", async () => {
+  const s = await fixture();
+  // Exact Hermes strings (cron/scheduler_delivery_room.py), joined as cron/scheduler_delivery.py joins them.
+  s.routineResults.mockResolvedValueOnce([
+    { id: 'run1', title: 'Morning', previewOnly: false, status: 'failed', error: "room:private@private-bot delivery failed: This Group Chat is managed by another gateway. @private-bot does not host it. If a profile's gateway hosts this room, deliver to room:private@<that profile> (Room settings shows the exact target).; room:shared: no live Group Chat with that id on this machine" },
+    { id: 'run2', title: 'Morning', previewOnly: false, status: 'failed', error: 'room:shared: no live Group Chat with that id on this machine' },
+  ] as never);
+  const response = await s.app.inject({ url: '/api/bots/ranch/routines/r1/results', headers: s.headers });
+  expect(response.json().map((run: { error: string }) => run.error)).toEqual(["Couldn't post in a group chat you can't open.", 'room:shared: no live Group Chat with that id on this machine']);
+});
+it("saves a room's purpose, notes and lead for anyone who can open it, with checked limits", async () => {
+  const s = await fixture();
+  const save = (roomId: string, payload: object, headers: Record<string, string> = s.headers) => s.app.inject({ method: 'POST', url: `/api/groups/${roomId}/context`, headers, payload });
+  const requestId = crypto.randomUUID();
+  const body = { requestId, purpose: 'Plan the weekend', notes: '  Gate code is 1234.  ', leadMemberId: 'planner' };
+  expect((await save('shared', body, { cookie: s.headers.cookie })).statusCode).toBe(403);
+  expect((await save('private', body)).statusCode).toBe(404);
+  expect((await save('shared', { ...body, leadMemberId: 'private-bot' })).statusCode).toBe(400);
+  expect((await save('shared', { ...body, purpose: 'p'.repeat(501) })).statusCode).toBe(400);
+  // Hermes counts trimmed notes in bytes: 1,366 three-byte characters are over, trailing space is not.
+  expect((await save('shared', { ...body, notes: '€'.repeat(1366) })).statusCode).toBe(400);
+  expect((await save('shared', { ...body, notes: `${'a'.repeat(4096)}\n\n` })).statusCode).toBe(200);
+  expect((await save('shared', body)).statusCode).toBe(200);
+  expect((await save('shared', { ...body, leadMemberId: null })).statusCode).toBe(200);
+  const saves = s.groupRequest.mock.calls.map(([input]) => input).filter(input => input.operation === 'context');
+  expect(saves).toHaveLength(3);
+  expect(saves[1]).toMatchObject({ roomId: 'shared', purpose: 'Plan the weekend', notes: body.notes, routing: 'lead', leadMemberId: 'planner' });
+  expect(saves[2]).toMatchObject({ routing: 'everyone', leadMemberId: '' });
+  // One person's retry is the same save; the key never carries the raw request ID.
+  expect(saves[1].requestId).toBe(saves[2].requestId);
+  expect(saves[1].requestId).toMatch(/^context:[0-9a-f]{64}$/);
+  expect(saves[1].requestId).not.toContain(requestId);
+});

@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
+import { DatabaseSync } from "node:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -596,16 +597,9 @@ describe("safe admission, steering, and approvals", () => {
     expect((await submit()).json().status).toBe("uncertain");
     expect((await submit()).json().status).toBe("uncertain");
     expect(fake.calls).toBe(1);
-    expect(
-      (
-        await result.app.inject({
-          method: "POST",
-          url: "/api/bots/shared/messages",
-          headers,
-          payload: { ...payload, text: "Changed" },
-        })
-      ).statusCode,
-    ).toBe(409);
+    // The code tells a client that another tab or device already sent under this ID.
+    const changed = await result.app.inject({ method: "POST", url: "/api/bots/shared/messages", headers, payload: { ...payload, text: "Changed" } });
+    expect([changed.statusCode, changed.json().code]).toEqual([409, "submission_conflict"]);
     await result.app.close();
     result = await createApp(c, fake.runtime, { background: false });
     expect((await submit()).json().status).toBe("uncertain");
@@ -1023,4 +1017,69 @@ it("requires production identity and HTTPS on any public listener or origin, eve
     HOUSEHOLD_EMAILS: "family@example.test",
   });
   expect(configured.production).toBe(true);
+});
+
+describe("submission records", () => {
+  // Two requests with one ID can both pass the route's check before either is recorded; the store decides.
+  it("refuses a request ID reused for other content with the code clients follow", () => {
+    const store = new Store(":memory:");
+    try {
+      store.user({ id: "local-one", name: "One", email: "one@example.test" });
+      const input: Submission = { requestId: randomUUID(), botId: "shared", senderId: "local-one", text: "A", attachments: [] };
+      expect(store.intent(input).created).toBe(true);
+      expect(store.intent(input).created).toBe(false);
+      expect(() => store.intent({ ...input, text: "B" })).toThrow(expect.objectContaining({ statusCode: 409, code: "submission_conflict" }));
+    } finally {
+      store.close();
+    }
+  });
+});
+
+describe("form keys", () => {
+  // A form's request ID is derived from this key, so it must be private to its person, the same on
+  // every device, and stable across restarts, or a second device would send the answers again.
+  it("gives each person a private key that stays the same across restarts", () => {
+    const dir = mkdtempSync(join(tmpdir(), "form-key-"));
+    const path = join(dir, "app.db");
+    try {
+      let store = new Store(path);
+      for (const id of ["one", "two"]) store.user({ id, name: id, email: `${id}@example.test` });
+      const one = store.formKey("one"), two = store.formKey("two");
+      expect(one).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      expect(two).not.toBe(one);
+      expect(store.formKey("one")).toBe(one);
+      store.close();
+      store = new Store(path);
+      // Reading an existing key never writes, so it works while another connection holds the write lock.
+      const locker = new DatabaseSync(path);
+      locker.exec("BEGIN IMMEDIATE");
+      try { expect(store.formKey("one")).toBe(one); }
+      finally { locker.exec("ROLLBACK"); locker.close(); }
+      store.close();
+      // A store opened before another connection took the write lock never needs it for a key,
+      // even for the first one it hands out.
+      const fresh = join(dir, "fresh.db");
+      new Store(fresh).close();
+      const opened = new Store(fresh), holder = new DatabaseSync(fresh);
+      holder.exec("BEGIN IMMEDIATE");
+      try { expect(opened.formKey("one")).toMatch(/^[A-Za-z0-9_-]{43}$/); }
+      finally { holder.exec("ROLLBACK"); holder.close(); opened.close(); }
+      // Another installation's secret gives the same person a different key.
+      const elsewhere = new Store(join(dir, "other.db"));
+      expect(elsewhere.formKey("one")).not.toBe(one);
+      elsewhere.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("hands each signed-in person only their own key in bootstrap", async () => {
+    const { app, store } = await createApp(config(), runtimeDouble().runtime, { background: false });
+    try {
+      const keys = await Promise.all(["one", "two"].map(async member =>
+        (await app.inject({ url: "/api/bootstrap", headers: await login(app, member) })).json()));
+      expect(keys.map(boot => boot.formKey)).toEqual(keys.map(boot => store.formKey(boot.user.id)));
+      expect(keys[0].formKey).not.toBe(keys[1].formKey);
+    } finally { await app.close(); }
+  });
 });

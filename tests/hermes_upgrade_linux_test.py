@@ -236,6 +236,19 @@ class PlatformTests(unittest.TestCase):
             self.assertFalse(self.platform.gate)
             self.assertFalse((self.home / ".drain_request.json").exists())
 
+    def test_failed_baseline_is_a_harmless_refusal(self):
+        # An expired verification session fails the read-only baseline before anything is held.
+        def google(): raise RuntimeError("Original Google HTTP and fresh WebSocket authentication were not verified")
+        self.platform.google = google
+        before = self.states.read_bytes()
+        errors = io.StringIO()
+        with contextlib.redirect_stderr(errors), self.assertRaises(SystemExit) as refusal: self.platform.quiescence()
+        self.assertEqual(refusal.exception.code, 75)
+        self.assertIn("Quiescence refused before maintenance: Original Google HTTP", errors.getvalue())
+        self.assertEqual(self.states.read_bytes(), before)
+        self.assertFalse(self.platform.gate)
+        self.assertFalse(self.platform.record.exists())
+
     def test_partial_clone_candidate_materializes_before_stop_and_installs_without_upstream(self):
         upstream = self.directory / "upstream"
         subprocess.run(["git", "clone", "--no-hardlinks", str(self.source), str(upstream)],
@@ -299,6 +312,34 @@ class PlatformTests(unittest.TestCase):
         imported = [line.split()[1] for index in (self.source / ".git/objects/pack").glob("*.idx")
             for line in subprocess.check_output(["git", "show-index"], stdin=index.open("rb")).decode().splitlines()]
         self.assertEqual(sorted(imported), sorted(new[1:]))
+
+    def test_regressions_import_the_candidate_objects_before_any_drain(self):
+        new = [line.split()[0] for line in self.platform.git(self.target, "rev-list", "--objects", self.candidate, "^" + self.old).splitlines()]
+        for oid in new[1:]: (self.source / ".git/objects" / oid[:2] / oid[2:]).unlink()
+        refs, state = self.git("for-each-ref"), self.platform.source_state()
+        original_run = self.platform.run
+        self.platform.run = lambda argv, **kwargs: None if argv[0] == self.environment["HERMES_UPGRADE_QUALIFICATION_PYTHON"] else original_run(argv, **kwargs)
+        self.platform.regressions()
+        for oid in new: self.git("cat-file", "-e", oid)
+        self.assertFalse((self.home / ".drain_request.json").exists())
+        self.assertEqual((self.git("for-each-ref"), self.platform.source_state()), (refs, state))
+
+    def test_regressions_keep_the_live_reserve_before_importing_objects(self):
+        new = [line.split()[0] for line in self.platform.git(self.target, "rev-list", "--objects", self.candidate, "^" + self.old).splitlines()]
+        for oid in new[1:]: (self.source / ".git/objects" / oid[:2] / oid[2:]).unlink()
+        original_run = self.platform.run
+        self.platform.run = lambda argv, **kwargs: None if argv[0] == self.environment["HERMES_UPGRADE_QUALIFICATION_PYTHON"] else original_run(argv, **kwargs)
+        usage = shutil._ntuple_diskusage(100 * 1024 ** 3, 99 * 1024 ** 3, 1024 ** 3)
+        with patch.object(linux.shutil, "disk_usage", return_value=usage), self.assertRaisesRegex(RuntimeError, "needs about .* GB free"):
+            self.platform.regressions()
+        offline = dict(os.environ, GIT_NO_LAZY_FETCH="1")
+        self.assertNotEqual(subprocess.run(["git", "-C", str(self.source), "cat-file", "-e", new[1]], env=offline,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False).returncode, 0)
+
+    def test_timeouts_name_the_command_but_no_paths(self):
+        error = subprocess.TimeoutExpired(["git", "-C", "/home/private/source", "-c", "core.x=1", "pack-objects", "--stdout"], 900)
+        self.assertEqual(linux.describe(error), "TimeoutExpired after 900s (git pack-objects)")
+        self.assertEqual(linux.describe(subprocess.TimeoutExpired(["/usr/bin/systemctl", "--user", "stop", "x.service"], 90)), "TimeoutExpired after 90s (systemctl)")
 
     def test_candidate_import_restores_an_old_object_the_installed_store_lacks(self):
         # A partial clone can lack an old object that the candidate's history still reaches.
@@ -615,8 +656,8 @@ class PlatformTests(unittest.TestCase):
         self.assertEqual(self.platform.source_state()[0], self.old)
 
     def test_regressions_run_through_qualified_interpreter_in_disposable_home(self):
-        calls = []
-        self.platform.run = lambda argv, **kwargs: calls.append((argv, kwargs))
+        calls, original_run = [], self.platform.run
+        self.platform.run = lambda argv, **kwargs: original_run(argv, **kwargs) if argv[0] == "git" else calls.append((argv, kwargs))
         self.platform.regressions()
         self.assertEqual(len(calls), 2)
         for argv, kwargs in calls:
@@ -795,7 +836,10 @@ def sync_venv(extras=None, **kwargs):
 
     def test_an_interpreter_outside_the_tool_store_is_refused(self):
         self.select(os.sys.executable)
-        with self.assertRaisesRegex(RuntimeError, "^The baseline managed interpreter is outside the native tool store$"): self.platform.quiescence()
+        errors = io.StringIO()
+        with contextlib.redirect_stderr(errors), self.assertRaises(SystemExit) as refusal: self.platform.quiescence()
+        self.assertEqual(refusal.exception.code, 75)
+        self.assertEqual(errors.getvalue(), "Quiescence refused before maintenance: The baseline managed interpreter is outside the native tool store\n")
         self.assertFalse((self.stage / "platform.json").exists())
         # A record from an older helper has no interpreter; the tool store still bounds it.
         self.platform.save({"baseline": {"source": list(self.platform.source_state())}, "phase": "quiescent"})

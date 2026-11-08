@@ -170,6 +170,9 @@ MANAGED_WRAPPERS = {
 MIRROR_SKIP = {".git", ".hermes", ".venv", "venv", "node_modules", "__pycache__", ".pytest_cache"}
 MIRROR_SKIP_ROOT = MIRROR_SKIP | {"build", "dist", "release"}
 UNQUALIFIED_CODE = (".py", ".pth", ".so", ".pyd", ".pyc", ".pyo")
+PRODUCT_RECEIPT = "hermes-build.json"
+# Where Hermes writes each product (scripts/build/freshness.mjs) and the product its receipt names.
+PRODUCT_BUILDS = {"ui-tui/dist": "tui", "hermes_cli/web_dist": "web"}
 
 
 def mirror_skipped(parts):
@@ -187,9 +190,27 @@ def candidate_replaces(staged, parts):
     return False
 
 
+def product_builds(live, ignored):
+    """Hermes product builds holding a valid receipt. Hermes compiles these from tracked sources,
+    such as the TUI copying its helper scripts into ui-tui/dist, and rebuilds them when the
+    receipt's source hash no longer matches, so their code is never run unqualified. Only the
+    known output directories count, and only while Git tracks nothing in them."""
+    builds = set()
+    for directory, product in PRODUCT_BUILDS.items():
+        if str(Path(directory) / PRODUCT_RECEIPT) not in ignored or git(live, "ls-files", "-z", "--", directory): continue
+        try: receipt = json.loads((live / directory / PRODUCT_RECEIPT).read_text())
+        except (OSError, ValueError): continue
+        inputs = receipt.get("inputs") if isinstance(receipt, dict) else None
+        if (receipt.get("schema") == 1 and receipt.get("product") == product and isinstance(inputs, dict)
+                and all(isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) for value in (inputs.get("sourceHash"), receipt.get("outputHash")))):
+            builds.add(Path(directory))
+    return builds
+
+
 def mirror_untracked(live, staged):
     live, staged = Path(live), Path(staged)
     ignored = [name for name in git(live, "ls-files", "--others", "--ignored", "--exclude-standard", "-z").decode().split("\0") if name]
+    builds = product_builds(live, set(ignored))
     for name in ignored:
         parts = Path(name).parts
         if mirror_skipped(parts) or candidate_replaces(staged, parts[:-1]) or os.path.lexists(staged / name):
@@ -197,7 +218,7 @@ def mirror_untracked(live, staged):
         origin, target = live / name, staged / name
         if origin.is_symlink() or not origin.is_file():
             raise RuntimeError("Ignored links or special files in the Hermes source require installer review")
-        if origin.suffix in UNQUALIFIED_CODE:
+        if origin.suffix in UNQUALIFIED_CODE and not any(parent in builds for parent in Path(name).parents):
             raise RuntimeError("Ignored Python or bytecode in the Hermes source would run unqualified; installer review is required")
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(origin, target)
@@ -982,7 +1003,8 @@ class Worker:
             next(item for item in checks if item["id"] == "integration")["detail"] = "Passed on a second run after one intermittent failure. Both runs are in the private log."
             self.update(checks=checks)
         def regressions():
-            for argv in self.config["hooks"]["regressions"]: self.run(argv)
+            # The hook also imports the candidate's Git objects: up to 900 s each to pack and index.
+            for argv in self.config["hooks"]["regressions"]: self.run(argv, timeout=self.config.get("regressionTimeoutSeconds", 3600))
         self.check_step("regressions", "Host OAuth, Google authentication and profile regressions", regressions)
         if (self.managed_fingerprint(qualified_python) if managed else runtime_fingerprint(qualified_python)) != runtime:
             raise RuntimeError("The dependency environment changed during qualification")
@@ -1063,7 +1085,7 @@ class Worker:
             if action == "retry":
                 # Retrying means a new qualification, never replaying an install.
                 self.operation = str(uuid.uuid4())
-                self.state = {"operationId": self.operation, "phase": "checking", "checks": [], "message": "Checking the update again."}
+                self.state = {"operationId": self.operation, "phase": "checking", "checks": [], "message": "Checking the update again.", "workerPid": os.getpid(), "updatedAt": now()}
                 atomic(self.state_file, self.state)
                 self.environment["HERMES_UPGRADE_OPERATION_ID"] = self.operation
                 self.recovering = False

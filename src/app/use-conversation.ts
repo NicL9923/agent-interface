@@ -8,6 +8,7 @@ import type { Inflight, Message } from "../shared/types";
 import { replySnippet, watchReplies } from "./reply-announcement";
 import type { ReplyWatch } from "./reply-announcement";
 import type { SavedConversation } from "./storage";
+import { DRAFT_EVENT } from "./use-draft";
 import { firstPage, firstQuery, prefetchedFirstPage, type PageQuery } from "./conversation-page";
 import { ANCHOR_GAP, afterIntent, atTrueEnd, distanceToEnd, endReserve, scrollIntent } from "./scroll-follow";
 import type { Intent, ScrollMode } from "./scroll-follow";
@@ -222,13 +223,16 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
       holdPlace();
       setConversation(previous => previous?.botId === botId ? patch(previous, value) : previous);
     };
-    const stream = changeStream(`/bots/${encodeURIComponent(botId)}/events?inflight=2`, () => {
+    const stream = changeStream(`/bots/${encodeURIComponent(botId)}/events?inflight=2&drafts=1`, () => {
       latestInflight = undefined;
       void load();
     }, value => {
       if (!live || value.botId !== botId) return;
       showInflight(value);
-    }, {}, delta => {
+    }, {
+      // The person's own draft for this assistant has a new revision, from this or another device.
+      draft: data => window.dispatchEvent(new CustomEvent(DRAFT_EVENT, { detail: { botId, revision: Number(data) } })),
+    }, delta => {
       if (!live || delta.botId !== botId) return true;
       // Growth that does not continue the held reply is dropped for a reload, never guessed at.
       const value = applyInflightDelta(latestInflight, delta);

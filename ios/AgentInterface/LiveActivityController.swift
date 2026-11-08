@@ -129,7 +129,7 @@ struct LiveActivityStartRegistration: Encodable {
     // A server that can start activities by push holds off while this app starts its own.
     let path = statePath(scope: scope) + (registeredStart?.scope == scope ? "&local=1" : "")
     guard let status: LiveActivityStatus = try? await api.get(path),
-      token == api.token, scope == store.scope, status.available
+      token == api.token, scope == store.scope, !store.suspended, status.available
     else { return }
     await show(seeded(status.state), scope: scope)
     startForegroundUpdates()
@@ -148,7 +148,7 @@ struct LiveActivityStartRegistration: Encodable {
     }
     let token = api.token
     guard let status: LiveActivityStatus = try? await api.get(statePath(scope: scope)),
-      token == api.token, scope == store.scope
+      token == api.token, scope == store.scope, !store.suspended
     else { return }
     guard status.available else { await endAll(unregister: false); return }
     let state = seeded(status.state)
@@ -183,6 +183,7 @@ struct LiveActivityStartRegistration: Encodable {
     for activity in activities { await activity.end(nil, dismissalPolicy: .immediate) }
   }
   private func startForegroundUpdates() {
+    guard store?.suspended == false else { return }
     foregroundTask?.cancel()
     foregroundTask = Task { [weak self] in
       while !Task.isCancelled {
@@ -192,7 +193,7 @@ struct LiveActivityStartRegistration: Encodable {
         else { return }
         let token = api.token
         guard let status: LiveActivityStatus = try? await api.get(self.statePath(scope: scope)),
-          token == api.token, scope == store.scope, status.available, activity.activityState == .active || activity.activityState == .stale
+          token == api.token, scope == store.scope, !store.suspended, status.available, activity.activityState == .active || activity.activityState == .stale
         else { continue }
         let state = self.seeded(status.state)
         if state.activeCount > 0 {
