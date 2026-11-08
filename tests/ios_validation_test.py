@@ -8,7 +8,7 @@ import sys
 import tempfile
 import unittest
 
-TOOLS = Path(__file__).resolve().parent
+TOOLS = Path(__file__).resolve().parents[1] / '.agents/tools'
 
 
 class ValidationTests(unittest.TestCase):
@@ -67,7 +67,7 @@ else:sys.exit('unexpected xcodebuild action')
 result=pathlib.Path(args[args.index('-resultBundlePath')+1]);result.mkdir(parents=True,exist_ok=True)
 passed=int(os.environ.get('TEST_PASSED','1'));failed=int(os.environ.get('TEST_FAILED','0'))
 (result/'evidence.json').write_text(json.dumps({'result':'Passed' if failed==0 else 'Failed','passedTests':passed,'failedTests':failed,'testFailures':[]}))
-sys.exit(int(os.environ.get('TEST_NATIVE_EXIT','0')))
+sys.exit(int(os.environ.get('TEST_NATIVE_EXIT','0')) if 'test-without-building' in args else 0)
 ''', python=True)
         self.executable(self.bin / 'xcrun', '''import os,sys,pathlib,json
 args=sys.argv[1:]; root=pathlib.Path(os.environ['TEST_ROOT'])
@@ -95,7 +95,7 @@ sys.exit('unexpected xcrun call: '+repr(args))
 
     def run_validation(self, operation='test', options=(), timeout=20, **env):
         return subprocess.run(['bash', str(self.tools / 'validate-ios.sh'), 'PHONE', operation, *options],
-                              cwd=self.root, env=dict(self.env, **env), capture_output=True, text=True, timeout=timeout)
+                              check=False, cwd=self.root, env=dict(self.env, **env), capture_output=True, text=True, timeout=timeout)
 
     def actions(self):
         return [json.loads(x) for x in self.calls.read_text().splitlines()] if self.calls.exists() else []
@@ -164,7 +164,7 @@ sys.exit('unexpected xcrun call: '+repr(args))
         self.assertNotIn('Reused successful',p.stdout)
 
     def test_live_checks_are_not_eligible_for_reuse(self):
-        p=subprocess.run([sys.executable,str(self.tools/'ios-validation-state.py'),'eligible','live'],env=self.env,capture_output=True,text=True)
+        p=subprocess.run([sys.executable,str(self.tools/'ios-validation-state.py'),'eligible','live'],check=False,env=self.env,capture_output=True,text=True)
         self.assertEqual(p.returncode,1)
 
     def test_changed_inputs_during_tests_fail_and_are_not_reusable(self):
@@ -229,6 +229,15 @@ sys.exit('unexpected xcrun call: '+repr(args))
         self.assertIn('Cannot clean up selected simulator in state Unknown',p.stderr)
         self.assertEqual(self.receipts(),[])
 
+    def test_cleanup_failure_preserves_test_failure_and_summary(self):
+        p=self.run_validation(TEST_NATIVE_EXIT='65',TEST_CLEANUP_STATE='Unknown')
+        self.assertEqual(p.returncode,65,p.stderr)
+        self.assertIn('Cannot clean up selected simulator in state Unknown',p.stderr)
+        summary=next((self.repo/'.private').glob('ios-test-*.txt')).read_text()
+        self.assertIn('exit status: 65',summary)
+        self.assertIn('cleanup exit status: 1',summary)
+        self.assertEqual(self.receipts(),[])
+
     def test_stalled_shutdown_is_bounded_and_not_cached(self):
         p=self.run_validation(TEST_CLEANUP_STATE='Shutting Down',timeout=40)
         self.assertNotEqual(p.returncode,0)
@@ -236,7 +245,7 @@ sys.exit('unexpected xcrun call: '+repr(args))
         self.assertEqual(self.receipts(),[])
 
     def test_invalid_device_and_missing_option_value_fail_before_native_execution(self):
-        p=subprocess.run(['bash',str(self.tools/'validate-ios.sh'),'UNKNOWN','test'],env=self.env,capture_output=True,text=True,timeout=8)
+        p=subprocess.run(['bash',str(self.tools/'validate-ios.sh'),'UNKNOWN','test'],check=False,env=self.env,capture_output=True,text=True,timeout=8)
         self.assertNotEqual(p.returncode,0)
         self.assertIn('available simulator UUID',p.stderr)
         self.assertEqual(self.actions(),[])

@@ -36,33 +36,46 @@ if "build-for-testing" in args or args[-1] == "build":
         run = {"__xctestrun_metadata__": {"FormatVersion": 1}, "UITests": {"IsUITestBundle": True}}
         (products / "Fake.xctestrun").write_bytes(plistlib.dumps(run))
 if "test-without-building" in args:
+    Path(os.environ["FAKE_LOG"] + ".booted").touch()
     sys.exit(int(os.environ.get("FAKE_TEST_STATUS", "0")))
 """
 
-FAKE_XCRUN = """#!/usr/bin/env python3
+FAKE_XCRUN = r"""#!/usr/bin/env python3
 import json, os, sys
-
+from pathlib import Path
 args = sys.argv[1:]
+marker = Path(os.environ["FAKE_LOG"] + ".booted")
 with open(os.environ["FAKE_LOG"], "a") as log:
-    log.write(json.dumps({"tool": "xcrun", "argv": args}) + "\\n")
-if args[:3] == ["simctl", "list", "devices"]:
+    log.write(json.dumps({"tool": "xcrun", "argv": args}) + "\n")
+if args == ["--sdk", "iphonesimulator", "--show-sdk-build-version"]:
+    print("FAKE_SDK")
+elif args[:3] == ["simctl", "list", "devices"]:
     sim = os.environ["FAKE_SIMULATOR"]
-    if "booted" in args:
-        for index in range(int(os.environ.get("FAKE_OTHER_BOOTED", "0"))):
-            print(f"    Other {index} (0000000{index}-0000-0000-0000-000000000000) (Booted)")
-        if os.environ.get("FAKE_SIMULATOR_BOOTED"):
-            print(f"    iPhone ({sim}) (Booted)")
+    booted = marker.exists() or os.environ.get("FAKE_SIMULATOR_BOOTED")
+    if "--json" in args:
+        devices = [{"udid": sim, "state": "Booted" if booted else "Shutdown", "deviceTypeIdentifier": "FakePhone"}]
+        if "booted" in args and not booted: devices = []
+        print(json.dumps({"devices": {"fake-runtime": devices}}))
     else:
-        print(f"-- iOS 27.0 --\\n    iPhone ({sim}) (Shutdown)")
-elif args[:1] == ["xcresulttool"] or args[:2] == ["xcresulttool", "get"]:
+        print(f"-- iOS 27.0 --\n    iPhone ({sim}) (Shutdown)")
+elif args == ["simctl", "list", "runtimes", "--json"]:
+    print(json.dumps({"runtimes": [{"identifier": "fake-runtime", "version": "27.0", "buildversion": "FAKE"}]}))
+elif args == ["simctl", "shutdown", os.environ["FAKE_SIMULATOR"]]:
+    marker.unlink(missing_ok=True)
+elif args[:4] == ["xcresulttool", "get", "test-results", "summary"]:
     print("{}")
+else:
+    sys.exit("Unexpected xcrun call: " + repr(args))
 """
 
 # Execute the wrapped command without touching the host's lock.
-FAKE_HEAVY_LOCK = """#!/usr/bin/env python3
+FAKE_HEAVY_LOCK = r"""#!/usr/bin/env python3
 import json, os, sys
+if sys.argv[1:] == ["--check-held"]:
+    sys.exit(0 if os.environ.get("FAKE_LOCK_HELD") == "1" else 1)
 with open(os.environ["FAKE_LOG"], "a") as log:
-    log.write(json.dumps({"tool": "mac-heavy-lock", "argv": sys.argv[1:]}) + "\\n")
+    log.write(json.dumps({"tool": "mac-heavy-lock", "argv": sys.argv[1:]}) + "\n")
+os.environ["FAKE_LOCK_HELD"] = "1"
 os.execvp(sys.argv[1], sys.argv[1:])
 """
 
@@ -81,6 +94,10 @@ class ValidateIosTests(unittest.TestCase):
         tools = self.repo / ".agents" / "tools"
         tools.mkdir(parents=True)
         (tools / "validate-ios.sh").write_bytes(SCRIPT.read_bytes())
+        (self.repo / "ios").mkdir()
+        (self.repo / "ios/Input.swift").write_text("fixture")
+        for name in ["ios-validation-state.py", "source-state.py"]:
+            (tools / name).write_bytes((ROOT / ".agents/tools" / name).read_bytes())
         (tools / "patch-xctestrun.py").write_bytes((ROOT / ".agents/tools/patch-xctestrun.py").read_bytes())
         (tools / "native-smoke.mjs").write_text("")
         subprocess.run(["git", "init", "-q"], cwd=self.repo, check=True)
@@ -91,6 +108,8 @@ class ValidateIosTests(unittest.TestCase):
         )
         bin_dir = root / "bin"
         bin_dir.mkdir()
+        write_executable(bin_dir / "xcode-select", '#!/bin/sh\n[ "$1" = -p ] || exit 99\necho /Fake/Xcode\n')
+        write_executable(bin_dir / "sw_vers", '#!/bin/sh\n[ "$1" = -buildVersion ] || exit 99\necho FAKE_OS\n')
         write_executable(bin_dir / "xcodebuild", FAKE_XCODEBUILD)
         write_executable(bin_dir / "xcrun", FAKE_XCRUN)
         home = root / "home"
@@ -180,10 +199,10 @@ class ValidateIosTests(unittest.TestCase):
         self.assertEqual(default_build, ["CODE_SIGNING_ALLOWED=YES", "CODE_SIGN_IDENTITY=-", "DEVELOPMENT_TEAM="])
         self.assertEqual(release_build, [*default_build, "-configuration", "Release", flags])
         self.assertNotEqual(default["build options"], release["build options"])
-        self.assertEqual(shlex.split(default["test options"]), ["-parallel-testing-enabled", "NO", "-collect-test-diagnostics", "never"])
+        self.assertEqual(shlex.split(default["test options"]), ["-parallel-testing-enabled", "NO", "-test-timeouts-enabled", "YES", "-collect-test-diagnostics", "never"])
         self.assertEqual(
             shlex.split(release["test options"]),
-            ["-parallel-testing-enabled", "NO", "-parallel-testing-worker-count", "2", "-collect-test-diagnostics", "never"],
+            ["-parallel-testing-worker-count", "2", "-parallel-testing-enabled", "NO", "-test-timeouts-enabled", "YES", "-collect-test-diagnostics", "never"],
         )
         # The other inputs that decide whether a result applies to a later run.
         self.assertEqual(release["operation"], "test")
@@ -213,17 +232,20 @@ class ValidateIosTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(len(self.calls("mac-heavy-lock")), 1)
         entries = [json.loads(line) for line in self.log.read_text().splitlines()]
-        self.assertEqual(entries[0]["tool"], "mac-heavy-lock")
-        self.assertIn(["simctl", "shutdown", "all"], self.calls("xcrun"))
-        self.assertIn(["simctl", "boot", SIMULATOR], self.calls("xcrun"))
-        self.assertIn(["simctl", "bootstatus", SIMULATOR, "-b"], self.calls("xcrun"))
-        self.assertEqual(entries[-1], {"tool": "xcrun", "argv": ["simctl", "shutdown", SIMULATOR]})
+        lock_index = next(i for i, entry in enumerate(entries) if entry["tool"] == "mac-heavy-lock")
+        build_index = next(i for i, entry in enumerate(entries) if "build-for-testing" in entry["argv"])
+        self.assertLess(lock_index, build_index)
+        self.assertNotIn(["simctl", "shutdown", "all"], self.calls("xcrun"))
+        self.assertNotIn(["simctl", "boot", SIMULATOR], self.calls("xcrun"))
+        test_index = next(i for i, entry in enumerate(entries) if "test-without-building" in entry["argv"])
+        shutdown_index = next(i for i, entry in enumerate(entries) if entry["argv"] == ["simctl", "shutdown", SIMULATOR])
+        self.assertGreater(shutdown_index, test_index)
 
     def test_failed_test_stage_still_shuts_down_the_simulator(self):
         # A failing test stage must also leave its simulator stopped.
         result = self.run_script("test", FAKE_TEST_STATUS="65")
         self.assertEqual(result.returncode, 65)
-        self.assertEqual(self.calls("xcrun")[-1], ["simctl", "shutdown", SIMULATOR])
+        self.assertIn(["simctl", "shutdown", SIMULATOR], self.calls("xcrun"))
 
 
 if __name__ == "__main__":
