@@ -218,6 +218,8 @@ final class ReplyActionCardsTests: XCTestCase {
     var checking = stored; checking.state = "checking"
     var unknown = stored; unknown.elsewhere = true
     var mounted = blank; mounted["city"] = .text("Austin")
+    XCTAssertEqual(FormRecords.retryAnswers(stored, attempt: 0, answers: mounted, card: card), expected,
+      "The same attempt's admitted answers also replace a mounted copy's nonblank stale answers")
     for candidate in [nil, other, checking, unknown] as [SavedFormReply?] {
       XCTAssertEqual(FormRecords.retryAnswers(candidate, attempt: 0, answers: mounted, card: card), mounted)
     }
