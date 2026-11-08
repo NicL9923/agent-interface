@@ -1189,10 +1189,42 @@ class AccountUsageTests(unittest.TestCase):
             self.assertEqual(self.reset(first)['status'], 'reset')
         self.assertEqual(len([call for call in self.network if call[0] == 'POST']), 1)
 
-    def test_never_returns_wording_that_can_quote_the_provider(self):
-        with self.hermes(chatgpt={'code': 'queued'}):
+    def test_a_consume_answer_chatgpt_does_not_document_leaves_the_request_open_and_never_quotes_it(self):
+        chatgpt = {'code': 'queued'}
+        with self.hermes(chatgpt=chatgpt):
+            key = experience.account_list()['accounts'][0]['key']
+            result = self.reset(key)
+            self.assertEqual(result, dict(status='uncertain', message=experience._RESET_MESSAGES['uncertain'], availableCount=0, windowsReset=0))
+            # Unrecorded, so trying again resends the same consume.
+            chatgpt['code'] = None
+            self.assertEqual(self.reset(key)['status'], 'reset')
+        self.assertEqual([call[3] for call in self.network if call[0] == 'POST'], [{'redeem_request_id': self.REQUEST}] * 2)
+
+    def test_a_count_chatgpt_could_not_be_asked_for_is_unknown_not_zero(self):
+        chatgpt = {}
+        def after_consume():
+            if any(call[0] == 'POST' for call in self.network):
+                raise RuntimeError('usage read failed after the consume')
+        chatgpt['on_get'] = after_consume
+        with self.hermes(chatgpt=chatgpt):
             result = self.reset(experience.account_list()['accounts'][0]['key'])
-        self.assertEqual(result, dict(status='unavailable', message=experience._RESET_MESSAGES['unavailable'], availableCount=2, windowsReset=2))
+        self.assertEqual((result['status'], result['availableCount']), ('reset', None))
+
+    def test_an_open_receipt_from_before_the_sent_column_is_treated_as_maybe_consumed(self):
+        owner = experience._digest('openai-codex', 'identity', 'codex:acct1:user')
+        db = sqlite3.connect(Path(self.directory.name) / 'old.db', check_same_thread=False)
+        db.execute('CREATE TABLE account_resets(request_id TEXT PRIMARY KEY,account TEXT NOT NULL,result TEXT)')
+        db.execute('INSERT INTO account_resets VALUES(?,?,NULL)', (self.REQUEST, owner))
+        db.execute('INSERT INTO account_resets VALUES(?,?,?)', ('7f1d2c3b-4a59-4e7d-8c1b-2a3f4e5d6c7b', owner, '{"status":"reset"}'))
+        db.commit()
+        resets = experience.AccountResets(types.SimpleNamespace(lock=threading.RLock(), db=db))
+        self.assertEqual(dict(db.execute('SELECT request_id,sent FROM account_resets').fetchall()), {self.REQUEST: 1, '7f1d2c3b-4a59-4e7d-8c1b-2a3f4e5d6c7b': 0})
+        # Its consume may already have emptied the bank, so it is resent rather than refused by the guard.
+        with self.hermes(chatgpt={'exhausted': False}):
+            result = resets.spend(dict(key=experience.account_list()['accounts'][0]['key'], requestId=self.REQUEST, force=False))
+        self.assertEqual(result['status'], 'reset')
+        self.assertEqual([call[0] for call in self.network], ['POST', 'GET'])
+        db.close()
 
     def test_an_expiring_token_is_renewed_only_through_its_own_pool_entry_and_only_as_the_same_account(self):
         old, renewed, other = self.jwt('acct1-old', 30), self.jwt('acct1-new', 3600), self.jwt('acct2-new', 3600)

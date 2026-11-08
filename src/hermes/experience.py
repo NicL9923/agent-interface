@@ -444,6 +444,8 @@ _RESET_MESSAGES = {
     "unavailable": "ChatGPT did not confirm the reset. Refresh to see whether it went through before trying again.",
     "uncertain": "ChatGPT did not answer after the reset was sent. Try again: it goes as the same request, so it cannot spend a second reset.",
 }
+# What ChatGPT's consume answers that settle a request; anything else leaves it uncertain.
+_CONSUME_ANSWERS = ("reset", "nothing_to_reset", "no_credit", "already_redeemed")
 _account_locks = {}
 _account_locks_guard = threading.Lock()
 
@@ -699,6 +701,8 @@ class AccountResets:
             journal.db.execute("CREATE TABLE IF NOT EXISTS account_resets(request_id TEXT PRIMARY KEY,account TEXT NOT NULL,result TEXT,sent INTEGER NOT NULL DEFAULT 0)")
             if "sent" not in {row[1] for row in journal.db.execute("PRAGMA table_info(account_resets)")}:
                 journal.db.execute("ALTER TABLE account_resets ADD COLUMN sent INTEGER NOT NULL DEFAULT 0")
+                # A receipt from before this column with no answer may stand for a consume that went out.
+                journal.db.execute("UPDATE account_resets SET sent=1 WHERE result IS NULL")
 
     def spend(self, data):
         request_id, force = data.get("requestId"), data.get("force")
@@ -734,8 +738,10 @@ class AccountResets:
 
     @staticmethod
     def _result(status, available=0, windows=0):
+        """``available`` None means the count left could not be read."""
         status = status if status in _RESET_MESSAGES else "unavailable"
-        return dict(status=status, message=_RESET_MESSAGES[status], availableCount=max(0, int(available)), windowsReset=max(0, int(windows)))
+        return dict(status=status, message=_RESET_MESSAGES[status], availableCount=None if available is None else max(0, int(available)),
+                    windowsReset=max(0, int(windows)))
 
     def _mark_sent(self, request_id):
         with self.journal.lock, self.journal.db:
@@ -781,7 +787,10 @@ class AccountResets:
             # Once the consume may have gone out its answer is unknown; only the same ID is ever sent for it.
             return self._result("uncertain" if sent else "unavailable")
         outcome = usage._codex_reset_outcome(body, (left + 1) if left is not None else 1)
-        return self._result(outcome.status, left if left is not None else outcome.available_count, outcome.windows_reset)
+        if outcome.status not in _CONSUME_ANSWERS:
+            # An answer ChatGPT's consume does not document says nothing about whether it spent.
+            return self._result("uncertain")
+        return self._result(outcome.status, 0 if outcome.status == "no_credit" else left, outcome.windows_reset)
 
 
 MAX_MODEL_NAMES = 4000

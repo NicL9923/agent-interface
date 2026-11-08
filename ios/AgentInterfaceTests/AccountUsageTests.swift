@@ -86,6 +86,7 @@ import XCTest
     XCTAssertEqual(AccountUsage.resetOutcome(result(.reset, available: 1)), "Limits reset. 1 banked reset left.")
     XCTAssertEqual(AccountUsage.resetOutcome(result(.reset, available: 0)), "Limits reset. 0 banked resets left.")
     XCTAssertEqual(AccountUsage.resetOutcome(result(.reset, available: 2)), "Limits reset. 2 banked resets left.")
+    XCTAssertEqual(AccountUsage.resetOutcome(ResetResult(status: .reset, message: "", availableCount: nil, windowsReset: 2, account: nil)), "Limits reset.", "An unread count is never shown as zero")
     XCTAssertEqual(AccountUsage.resetOutcome(result(.nothingToReset)), "Nothing needed resetting, so no reset was used.")
     XCTAssertEqual(AccountUsage.resetOutcome(result(.alreadyRedeemed)), "That reset was already used. No other reset was spent.")
     XCTAssertEqual(AccountUsage.resetOutcome(result(.noCredit)), "This account has no banked resets.")

@@ -69,7 +69,8 @@ struct ResetResult: Decodable, Equatable {
   var status: ResetStatus
   /// The add-on's fixed sentence for the status, never the provider's words. Shown only for a status this app does not know.
   var message: String
-  var availableCount: Int
+  /// Banked resets left, or nil when ChatGPT could not be asked after the reset.
+  var availableCount: Int?
   var windowsReset: Int
   /// The account after the attempt, when Hermes could read it again.
   var account: UsageAccount?
@@ -131,7 +132,7 @@ enum AccountUsage {
   /// What happened to a reset, in the app's words. Hermes's own words only where the app has none.
   static func resetOutcome(_ result: ResetResult) -> String {
     switch result.status {
-    case .reset: "Limits reset. \(plural(result.availableCount, "banked reset")) left."
+    case .reset: result.availableCount.map { "Limits reset. \(plural($0, "banked reset")) left." } ?? "Limits reset."
     case .nothingToReset: "Nothing needed resetting, so no reset was used."
     case .alreadyRedeemed: "That reset was already used. No other reset was spent."
     case .noCredit, .noCreditsBanked: "This account has no banked resets."

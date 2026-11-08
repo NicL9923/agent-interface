@@ -53,7 +53,8 @@ export interface ResetOutcome {
   status: ResetStatus;
   /** The add-on's fixed sentence for the status. Never Hermes's or the provider's words. */
   message: string;
-  availableCount: number;
+  /** Banked resets left, or null when ChatGPT could not be asked after the reset. */
+  availableCount: number | null;
   windowsReset: number;
 }
 
@@ -107,7 +108,7 @@ const plural = (count: number, word: string) => `${count} ${word}${count === 1 ?
 /** What happened to a reset, in the app's words. Hermes's own words only where the app has none. */
 export function resetOutcomeMessage(result: ResetOutcome) {
   switch (result.status) {
-    case 'reset': return `Limits reset. ${plural(result.availableCount, 'banked reset')} left.`;
+    case 'reset': return result.availableCount === null ? 'Limits reset.' : `Limits reset. ${plural(result.availableCount, 'banked reset')} left.`;
     case 'nothing_to_reset': return "Nothing needed resetting, so no reset was used.";
     case 'already_redeemed': return 'That reset was already used. No other reset was spent.';
     case 'no_credit': case 'no_credits_banked': return 'This account has no banked resets.';

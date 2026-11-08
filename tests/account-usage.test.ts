@@ -59,6 +59,8 @@ it('words every reset outcome in the app\'s own words', () => {
   const message = (status: ResetStatus, availableCount = 0, text = 'Codex backend error (HTTP 500)') => resetOutcomeMessage({ status, message: text, availableCount, windowsReset: 0 });
   expect(message('reset', 1)).toBe('Limits reset. 1 banked reset left.');
   expect(message('reset', 0)).toBe('Limits reset. 0 banked resets left.');
+  // A count ChatGPT could not be asked for is left out, never shown as zero.
+  expect(resetOutcomeMessage({ status: 'reset', message: '', availableCount: null, windowsReset: 2 })).toBe('Limits reset.');
   expect(message('nothing_to_reset')).toMatch(/no reset was used/);
   expect(message('already_redeemed')).toMatch(/No other reset was spent/);
   expect(message('no_credit')).toBe('This account has no banked resets.');
