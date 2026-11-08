@@ -1,0 +1,90 @@
+{
+  "request": "GET /api/usage/accounts",
+  "response": {
+    "accounts": [
+      {
+        "key": "cccccccccccccccccccccccccccccccc",
+        "provider": "openai-codex",
+        "plan": "Pro",
+        "title": "Account limits",
+        "fetchedAt": "2026-10-01T11:59:00.000Z",
+        "windows": [
+          {
+            "label": "Session",
+            "usedPercent": 100,
+            "resetsAt": "2026-10-01T14:00:00.000Z",
+            "detail": null,
+            "scope": "account"
+          },
+          {
+            "label": "Weekly",
+            "usedPercent": 62.5,
+            "resetsAt": "2026-10-04T09:00:00.000Z",
+            "detail": null,
+            "scope": "account"
+          }
+        ],
+        "details": [
+          "Credits balance: $4.00"
+        ],
+        "unavailableReason": null,
+        "bankedResets": 2,
+        "botIds": [
+          "household",
+          "garden"
+        ],
+        "fallbackOnly": false
+      },
+      {
+        "key": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "provider": "openrouter",
+        "plan": null,
+        "title": "Account limits",
+        "fetchedAt": "2026-10-01T11:59:00.000Z",
+        "windows": [
+          {
+            "label": "API key quota",
+            "usedPercent": 25,
+            "resetsAt": null,
+            "detail": "$15.00 of $20.00 remaining",
+            "scope": "account"
+          },
+          {
+            "label": "Opus week",
+            "usedPercent": null,
+            "resetsAt": null,
+            "detail": null,
+            "scope": "model"
+          }
+        ],
+        "details": [
+          "Credits balance: $12.00"
+        ],
+        "unavailableReason": null,
+        "bankedResets": 0,
+        "botIds": [
+          "household"
+        ],
+        "fallbackOnly": true
+      },
+      {
+        "key": "dddddddddddddddddddddddddddddddd",
+        "provider": "custom",
+        "plan": null,
+        "title": "Account limits",
+        "fetchedAt": "2026-10-01T11:59:00.000Z",
+        "windows": [],
+        "details": [],
+        "unavailableReason": "This provider does not report plan limits or credits to Hermes.",
+        "bankedResets": 0,
+        "botIds": [
+          "garden"
+        ],
+        "fallbackOnly": true
+      }
+    ],
+    "unavailableBots": [
+      "archive"
+    ]
+  }
+}
