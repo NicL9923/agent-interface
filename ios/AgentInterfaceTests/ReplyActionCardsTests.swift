@@ -182,10 +182,19 @@ final class ReplyActionCardsTests: XCTestCase {
       ("a request settling as sent", record(1, "checking", "a"), record(1, "sent"), nil, nil, true),
       ("only knowing the answers went, over a record that holds them", record(1, "sent"), elsewhere(record(1, "sent")), nil, nil, false),
       ("the answers that went, over a record that only knows they went", elsewhere(record(1, "sent")), record(1, "sent"), nil, nil, true),
+      ("a restart, which only ever follows acceptance, over a sent record", record(1, "sent"), elsewhere(record(1, "interrupted")), nil, nil, true),
+      ("a stale acceptance over a restart", record(1, "interrupted"), record(1, "sent"), nil, nil, false),
     ]
     for (name, stored, next, from, owns, allowed) in cases {
       XCTAssertEqual(FormRecords.mayReplace(stored, with: next, from: from, owns: owns), allowed, name)
     }
+    // Learning of a restart from another copy's request keeps the answers that copy saw admitted.
+    let known = SavedFormReply(attempt: 1, answers: ["city": .text("Austin")], state: "sent")
+    let restart = SavedFormReply(attempt: 1, answers: ["city": .text("")], state: "interrupted", elsewhere: true)
+    XCTAssertEqual(FormRecords.keepingKnownAnswers(known, restart), SavedFormReply(attempt: 1, answers: ["city": .text("Austin")], state: "interrupted"))
+    var checking = known; checking.state = "checking"
+    var otherAttempt = known; otherAttempt.attempt = 0
+    for stored in [checking, otherAttempt, elsewhere(known)] { XCTAssertEqual(FormRecords.keepingKnownAnswers(stored, restart), restart) }
   }
 
   func testAnswerTextSplitsAndTrimsAsTheWebDoes() throws {

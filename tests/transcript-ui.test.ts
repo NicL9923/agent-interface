@@ -3,7 +3,7 @@ import { act, createElement } from "react";
 import type { Root } from "react-dom/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
-import { mayReplace, type Saved } from "../src/components/FormReplyCard";
+import { keepKnownAnswers, mayReplace, type Saved } from "../src/components/FormReplyCard";
 import { ApiError, api, write } from "../src/client-api";
 import { defaultPreferences } from "../src/shared/types";
 import type { AttentionRequest, Bootstrap, Conversation, Message, ToolCall } from "../src/shared/types";
@@ -1284,8 +1284,20 @@ describe("form replies", () => {
       ["a request settling as sent", record(1, "checking", "a"), record(1, "sent"), {}, true],
       ["only knowing the answers went, over a record that holds them", record(1, "sent"), { ...record(1, "sent"), elsewhere: true }, {}, false],
       ["the answers that went, over a record that only knows they went", { ...record(1, "sent"), elsewhere: true }, record(1, "sent"), {}, true],
+      ["a restart, which only ever follows acceptance, over a sent record", record(1, "sent"), { ...record(1, "interrupted"), elsewhere: true }, {}, true],
+      ["a stale acceptance over a restart", record(1, "interrupted"), record(1, "sent"), {}, false],
     ];
     for (const [name, stored, next, change, allowed] of cases) expect(mayReplace(stored, next, change), name).toBe(allowed);
+  });
+
+  it("keeps the answers another copy saw admitted when this one only knows they went", () => {
+    const known: Saved = { attempt: 1, answers: { city: "Austin" }, state: "sent" };
+    const restart: Saved = { attempt: 1, answers: { city: "" }, state: "interrupted", elsewhere: true };
+    expect(keepKnownAnswers(known, restart)).toEqual({ attempt: 1, answers: { city: "Austin" }, state: "interrupted" });
+    // Nothing known to keep: another attempt, an unconfirmed request, or a record that only knew it went too.
+    for (const stored of [{ ...known, attempt: 0 }, { ...known, state: "checking" as const }, { ...known, elsewhere: true }, null])
+      expect(keepKnownAnswers(stored, restart)).toBe(restart);
+    expect(keepKnownAnswers(known, { ...restart, elsewhere: undefined })).toEqual({ ...restart, elsewhere: undefined });
   });
 
   it("keeps another copy's sent record when a stale copy is edited after a late refusal", async () => {
@@ -1325,6 +1337,31 @@ describe("form replies", () => {
     expect(card().textContent).toContain("Your answers were sent from another tab or device.");
     expect(card().querySelector(".form-reply-answers")).toBeNull();
     expect(JSON.parse(localStorage.getItem(saved)!)).toMatchObject({ state: "sent", elsewhere: true });
+  });
+
+  it("records a restart learned from another copy's request through a reload, keeping that copy's answers", async () => {
+    const austin = { city: "Austin", pace: "Relaxed", dog: false };
+    const theirs = 'My answers to "Trip details":\n- Destination: Austin\n- Pace: Relaxed\n- Bringing the dog: No';
+    let tried = false;
+    const previous = vi.mocked(api).getMockImplementation()!;
+    vi.mocked(api).mockImplementation(async <T>(path: string, ...rest: unknown[]) => path.startsWith("/submissions/")
+      ? { requestId: path.split("/")[2], status: tried ? "interrupted" : "uncertain", ...(tried && { text: theirs }) } as T : previous(path, ...rest as []) as T);
+    vi.mocked(write).mockImplementation(async <T>(path: string) => {
+      if (path === "/bots/shared/messages") { tried = true; throw new TypeError("Failed to fetch"); }
+      return {} as T;
+    });
+    await render();
+    await fill();
+    // Another copy sent Austin and saw it accepted, while this one fills in Marfa.
+    localStorage.setItem(saved, JSON.stringify({ attempt: 0, answers: austin, state: "sent" }));
+    await send();
+    await posted(1);
+    await advance(2100);
+    await waitForUi(() => expect(card().textContent).toContain("may or may not have arrived"));
+    expect(JSON.parse(localStorage.getItem(saved)!)).toEqual({ attempt: 0, answers: austin, state: "interrupted" });
+    await reload();
+    await waitForUi(() => expect(buttonText("They didn't arrive. Edit and send again")).toBeDefined());
+    expect(sent()).toBeUndefined();
   });
 
   it("shows its own answers as sent when the server's text is theirs", async () => {

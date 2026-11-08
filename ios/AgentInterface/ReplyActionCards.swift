@@ -490,7 +490,16 @@ struct EmailDraftCardView: View {
 /// when the copy that owns the checking request learns the server refused it outright, and at the
 /// same point a record that only knows the answers went elsewhere never replaces one that holds them.
 enum FormRecords {
-  private static let progress = ["editing": 0, "checking": 1, "sent": 2, "interrupted": 2]
+  // A Hermes restart turns an accepted request into an interrupted one and never the reverse.
+  private static let progress = ["editing": 0, "checking": 1, "sent": 2, "interrupted": 3]
+  /// A record that only knows the answers went from elsewhere keeps the answers another copy saw
+  /// admitted for the same attempt, as the web's `keepKnownAnswers`.
+  static func keepingKnownAnswers(_ stored: SavedFormReply?, _ next: SavedFormReply) -> SavedFormReply {
+    guard next.elsewhere == true, let stored, stored.elsewhere != true, stored.attempt == next.attempt,
+      progress[stored.state, default: 0] >= progress["sent"]! else { return next }
+    var known = next; known.answers = stored.answers; known.elsewhere = nil
+    return known
+  }
   static func mayReplace(_ stored: SavedFormReply?, with next: SavedFormReply, from: Int? = nil, owns: String? = nil) -> Bool {
     guard let stored else { return true }
     if stored.attempt > (from ?? next.attempt) { return false }
@@ -555,8 +564,9 @@ struct FormReplyCardView: View {
   }
   /// Saves unless that would undo another copy's progress; see `FormRecords.mayReplace`.
   private func save(_ next: SavedFormReply, from: Int? = nil, owns: String? = nil) {
-    guard let store, FormRecords.mayReplace(readSaved(), with: next, from: from, owns: owns) else { return }
-    store.save(next, storageKey)
+    let stored = readSaved()
+    guard let store, FormRecords.mayReplace(stored, with: next, from: from, owns: owns) else { return }
+    store.save(FormRecords.keepingKnownAnswers(stored, next), storageKey)
   }
 
 

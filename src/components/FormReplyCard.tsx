@@ -42,7 +42,9 @@ const restore = (card: FormCard, answers: FormAnswers): FormAnswers => {
   return Object.fromEntries(card.fields.map(field => [field.id, fieldEntry(answers, field.id) ?? fieldEntry(start, field.id)!]));
 };
 /** How far a record has got within its attempt. Only its own request's refusal moves one back. */
-const progress: Record<Saved["state"], number> = { editing: 0, checking: 1, sent: 2, interrupted: 2 };
+// A Hermes restart turns an accepted request into an interrupted one and never the reverse, so
+// interrupted is the later word on a request.
+const progress: Record<Saved["state"], number> = { editing: 0, checking: 1, sent: 2, interrupted: 3 };
 /**
  * What a write says about itself: `from`, the attempt it happened to when it moves the form on to
  * the next one, and `owns`, the request it settles.
@@ -68,6 +70,15 @@ export function mayReplace(stored: Saved | null, next: Saved, { from = next.atte
   // At the same point, a record that knows the answers outranks one that only knows they went.
   if (ahead === 0) return !next.elsewhere || !!stored.elsewhere;
   return stored.state === "checking" && owns !== undefined && stored.requestId === owns;
+}
+/**
+ * A record that only knows the answers went from elsewhere keeps the answers another copy saw
+ * admitted for the same attempt, so learning of a restart, say, never loses them.
+ */
+export function keepKnownAnswers(stored: Saved | null, next: Saved): Saved {
+  if (!next.elsewhere || !stored || stored.elsewhere || stored.attempt !== next.attempt || progress[stored.state] < progress.sent) return next;
+  const { elsewhere: _, ...known } = next;
+  return { ...known, answers: stored.answers };
 }
 const refused = "Hermes didn't take your answers.";
 const unconfirmed = "Hermes hasn't confirmed your answers yet. They're being checked and won't be sent twice.";
@@ -106,7 +117,8 @@ export function FormReplyCard({ card, botId, messageId, userId, unavailable }: {
   const inFlight = useRef(false);
   const formId = useId();
   const save = (next: Saved, change: Change = {}) => {
-    if (mayReplace(readSaved(key), next, change)) localSave(key, next);
+    const stored = readSaved(key);
+    if (mayReplace(stored, next, change)) localSave(key, keepKnownAnswers(stored, next));
   };
   // A checking record saved without a usable ID follows the ID its attempt derives.
   const recovering = status === "checking" && !pending;
