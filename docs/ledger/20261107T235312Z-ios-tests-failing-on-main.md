@@ -34,3 +34,11 @@ Runs:
 - The app-side label fix is covered by the UI test, which failed without it in the run above.
 
 Not exercised: the rest of the UI test target, VoiceOver itself, a physical phone.
+
+## November 8 integration note
+
+Merged main at `9648375` without changing the retained route tests or accessibility fix.
+Main already carries the `sendingRequests` observation update through PR #270. The before-run
+covered 156 selected unit tests; the after-run covered the full unit target and the selected
+ExperienceFlowTests, so those denominators describe different scopes. No iOS tests ran on
+NicolasLaptop. The original Mac Mini results above remain the native evidence.
