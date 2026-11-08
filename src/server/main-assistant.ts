@@ -52,7 +52,9 @@ export function managedConfig(job: Routine) {
   return tokens.length === 1 && (tokens[0] === `bot-chat:${job.botId.toLowerCase()}` || tokens[0] === "bot-chat")
     && empty(failure) && empty(job.roomIds) && empty(job.skills) && empty(job.model) && empty(job.provider)
     && empty(job.enabledToolsets) && empty(job.script) && job.noAgent !== true
-    && context.every(ref => ref === "self" || ref === job.id);
+    && context.every(ref => ref === "self" || ref === job.id)
+    // Every other native setting must be unset; a runtime that cannot list them can't prove that.
+    && Array.isArray(job.nativeOverrides) && job.nativeOverrides.length === 0;
 }
 
 export function checkInPrompt(input: { marker: string; member: string; timezone: string; everyHours: number }) {
@@ -104,9 +106,9 @@ export class MainAssistants {
   private policy = { key: "", at: 0 };
   /** Assistants whose sharing is changing: no roster lists them, and they reach nobody, until the change settles. */
   private readonly withdrawn = new Set<string>();
-  /** Withdrawn assistants whose change settled but whose roster Hermes has not taken yet. */
-  private readonly releasing = new Set<string>();
   private bots: Bot[] = [];
+  /** Rosters go to Hermes one at a time, each built from who sees what when it is sent. */
+  private publishing: Promise<void> = Promise.resolve();
   constructor(private readonly runtime: Runtime, private readonly store: Store, private readonly config: Config, private readonly log: Log = quietLog) {}
 
   start() {
@@ -177,10 +179,7 @@ export class MainAssistants {
     }
     // The roster is guidance and a gate in Hermes, separate from anyone's check-ins.
     this.bots = bots;
-    const released = [...this.releasing];
-    for (const botId of released) this.withdrawn.delete(botId);
-    try { await this.pushPolicies(bots, household, released.length > 0); for (const botId of released) this.releasing.delete(botId); }
-    catch (error) { for (const botId of released) this.withdrawn.add(botId); failures.push(error); }
+    try { await this.publish(); } catch (error) { failures.push(error); }
     if (failures.length) {
       this.log.warn({ errors: failures.map(error => error instanceof Error ? error.message : String(error)) }, "Main assistant check-ins could not be reconciled yet");
       throw new ReconcileError(failures, members, whole);
@@ -223,7 +222,7 @@ export class MainAssistants {
       let unsafe = false;
       for (const job of have) if (job !== keep) {
         try { await this.remove(job); }
-        catch (error) { failed(userId, error); if (!(error instanceof RemovalError && error.paused)) unsafe = true; }
+        catch (error) { failed(userId, error); if (!(error instanceof RemovalError && error.safe)) unsafe = true; }
       }
       if (!want) continue;
       const input = { botId: want.botId, name: CHECK_IN_ROUTINE_NAME, prompt: want.prompt, schedule: checkInSchedule(want.everyHours), enabled: true, recipientIds: [userId] };
@@ -249,15 +248,22 @@ export class MainAssistants {
    * Hermes will not delete the job, it is paused instead, and the error says whether that worked.
    */
   private async remove(job: Routine) {
+    // A pause only stops future runs, so a run in progress must be seen to have ended.
+    let settled = !job.running;
     try {
-      if (job.running && this.runtime.stopRoutineRun) await this.runtime.stopRoutineRun(job.botId, job.id);
+      if (job.running) {
+        if (!this.runtime.stopRoutineRun) throw new Error("This Hermes can't stop a routine's run.");
+        await this.runtime.stopRoutineRun(job.botId, job.id);
+        settled = !(await this.runtime.routines()).find(row => row.botId === job.botId && row.id === job.id)?.running;
+        if (!settled) throw new Error("The routine's run is still going.");
+      }
       await this.runtime.deleteRoutine(job.id, job.botId);
     } catch (error) {
       let paused = !job.enabled;
       if (!paused && this.runtime.setRoutineEnabled) {
-        try { await this.runtime.setRoutineEnabled(job.botId, job.id, false); paused = true; } catch { /* Still running. */ }
+        try { await this.runtime.setRoutineEnabled(job.botId, job.id, false); paused = true; } catch { /* Still scheduled. */ }
       }
-      throw new RemovalError(error, paused);
+      throw new RemovalError(error, paused && settled);
     }
     this.store.checkIns.removed(job.botId, job.id);
     this.store.routineRecipients(job.botId, job.id, []);
@@ -314,14 +320,24 @@ export class MainAssistants {
     return policies;
   }
 
-  private async pushPolicies(bots: Bot[], members: { id: string; name: string }[], force = false) {
-    if (!this.runtime.delegationPolicy) return;
-    const policies = this.policies(bots, members);
-    const key = JSON.stringify(policies);
-    // Sent again now and then, in case the add-on restarted from an older copy.
-    if (!force && key === this.policy.key && Date.now() - this.policy.at < policyRefresh) return;
-    await this.runtime.delegationPolicy(policies);
-    this.policy = { key, at: Date.now() };
+  /**
+   * Sends every assistant's roster, after any send already going. It is built when its turn comes, from
+   * the sharing this app records at that moment over the last roster Hermes reported, so a send can never
+   * carry sharing older than one that went before it.
+   */
+  private publish(force = false): Promise<void> {
+    const run = this.publishing.then(async () => {
+      if (!this.runtime.delegationPolicy) return;
+      const bots = this.bots.map(bot => ({ ...bot, ...this.store.presentation(bot.id) }));
+      const policies = this.policies(bots, this.household());
+      const key = JSON.stringify(policies);
+      // Sent again now and then, in case the add-on restarted from an older copy.
+      if (!force && key === this.policy.key && Date.now() - this.policy.at < policyRefresh) return;
+      await this.runtime.delegationPolicy(policies);
+      this.policy = { key, at: Date.now() };
+    });
+    this.publishing = run.catch(() => {});
+    return run;
   }
 
   private household() { return this.store.users().filter(user => allowedIdentity(this.config, user)); }
@@ -333,26 +349,28 @@ export class MainAssistants {
    */
   async withdraw(botId: string) {
     if (!this.runtime.delegationPolicy) return;
+    this.bots = (await this.roster()) ?? this.bots;
     this.withdrawn.add(botId);
-    this.releasing.delete(botId);
-    const bots = (await this.roster()) ?? this.bots;
-    try { await this.pushPolicies(bots.map(bot => ({ ...bot, ...this.store.presentation(bot.id) })), this.household(), true); }
+    try { await this.publish(true); }
     catch (error) {
       this.log.warn({ error: error instanceof Error ? error.message : String(error) }, "Hermes did not take the withdrawn roster");
       throw httpError(502, "Hermes didn't update who this assistant can reach, so its sharing is unchanged. Try again.", { code: "roster_update_failed", expose: true });
     }
   }
-  /** After the sharing change settles, either way: its roster follows its sharing again once Hermes takes it. */
+  /**
+   * After the sharing change settles, either way, its roster follows its sharing again. If Hermes does
+   * not take that now it keeps the withdrawn roster, which reaches less, until a later send succeeds.
+   */
   async release(botId: string) {
-    if (!this.withdrawn.has(botId)) return;
-    this.releasing.add(botId);
+    if (!this.withdrawn.delete(botId)) return;
+    await this.publish(true).catch(() => {});
     await this.reconcile().catch(() => {});
   }
 }
 
-/** A deletion Hermes refused; `paused` says whether the job was at least stopped from running. */
+/** A deletion Hermes refused; `safe` says the job can no longer run: paused, with no run in progress. */
 export class RemovalError extends Error {
-  constructor(readonly cause: unknown, readonly paused: boolean) {
+  constructor(readonly cause: unknown, readonly safe: boolean) {
     super(cause instanceof Error ? cause.message : "Hermes did not remove the routine.");
   }
 }

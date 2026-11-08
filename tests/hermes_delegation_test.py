@@ -66,6 +66,9 @@ class DelegationTest(unittest.TestCase):
         self.gate = delegation.Delegation(self.db, self.lock, lambda agent: getattr(agent, "profile", None),
                                           current_profile=lambda: self.profile, hermes_root=lambda: self.root)
         self.gate.replace(POLICY)
+        # Hermes's live local profiles and registered peers; tests change them where they matter.
+        self.local, self.peers = {"mom-main", "mom-notes", "ranch", "default", "dads-diary", "notes"}, set()
+        self.gate.local_targets = lambda agent: (self.local, self.peers)
         self.sent = []
         self.tool = self.gate.gated(lambda **kwargs: self.sent.append(kwargs) or json.dumps({"status": "queued"}))
 
@@ -144,6 +147,18 @@ class DelegationTest(unittest.TestCase):
         self.tool(target="notes", message="Private list", agent=Agent("mom-main", self.answer("Send it")))
         self.assertEqual([call["target"] for call in self.sent], ["mom-notes"])
 
+    def test_an_id_hermes_would_send_to_a_peer_or_relay_is_refused(self):
+        # Hermes tries registered peers before local profiles, and relays a name it can't find locally.
+        for local, peers in ((self.local, {"mom-notes"}), (self.local - {"mom-notes"}, set())):
+            self.gate.local_targets = lambda agent, local=local, peers=peers: (local, peers)
+            result = json.loads(self.tool(target="Notes", message="Private list", agent=Agent("mom-main")))
+            self.assertIn("can't be reached as a local assistant", result["error"])
+        def unreadable(agent):
+            raise OSError("config unreadable")
+        self.gate.local_targets = unreadable
+        self.assertIn("error", json.loads(self.tool(target="Notes", message="x", agent=Agent("mom-main"))))
+        self.assertEqual(self.sent, [])
+
     def test_a_name_two_roster_assistants_share_names_neither(self):
         self.gate.replace({"mom-main": {**POLICY["mom-main"], "personal": [{"id": "a", "name": "Helper"}, {"id": "b", "name": "Helper"}]}})
         result = json.loads(self.tool(target="Helper", message="x", agent=Agent("mom-main")))
@@ -171,6 +186,22 @@ class DelegationTest(unittest.TestCase):
             with self.assertRaises(delegation.PolicyError):
                 self.gate.replace(bad)
         self.assertEqual(set(self.gate.policies), set(POLICY))
+
+    def test_a_first_protocol_roster_is_a_main_assistants_and_leaves_the_others_as_hermes_has_them(self):
+        legacy = {"mom-main": {"member": "Mom", "personal": [], "shared": [{"id": "ranch", "name": "Ranch Hand"}]}}
+        server = types.SimpleNamespace(_ok=lambda rid, result: {"result": result}, _err=lambda rid, code, message: {"error": [code, message]})
+        self.gate.rpc(server)(1, {"policies": legacy})
+        self.assertTrue(self.gate.policies["mom-main"]["main"])
+        self.assertFalse(self.gate.enforcing)
+        agent = Agent("mom-main", self.answer("Don't send"))
+        self.tool(target="ranch", message="x", agent=agent)
+        self.assertEqual(len(agent.asked), 1, "A shared hand-off still asks")
+        self.tool(target="anyone", message="x", agent=Agent("dads-diary"))
+        self.assertEqual([call["target"] for call in self.sent], ["anyone"])
+        # A row an older add-on stored, without `main`, is still a main assistant's after a restart.
+        self.db.execute("UPDATE delegation SET value=? WHERE profile='mom-main'", (json.dumps(legacy["mom-main"]),))
+        self.assertTrue(delegation.Delegation(self.db, self.lock, lambda agent: agent.profile).policies["mom-main"]["main"])
+        self.assertEqual(self.gate.rpc(server)(2, {"version": True, "policies": {}})["error"][0], -32602)
 
     def test_the_roster_survives_a_restart_and_an_empty_replace_clears_it(self):
         again = delegation.Delegation(self.db, self.lock, lambda agent: agent.profile)
@@ -225,22 +256,41 @@ class DeliveryAndHostTest(unittest.TestCase):
         result = self.call(name, args, profile)
         return len(self.ran) == before and "error" in json.loads(result)
 
-    def test_a_main_assistants_routines_deliver_only_to_its_own_and_its_members_personal_chats(self):
-        for deliver in ("origin", "local", "bot-chat", "bot-chat:mom-main", "bot-chat:mom-notes", "origin,bot-chat:mom-notes"):
-            self.assertFalse(self.refused("cronjob_manage", {"action": "create", "deliver": deliver}), deliver)
-        for deliver in ("bot-chat:ranch", "bot-chat:dad-diary", "room:public", "all", "telegram:-100123", "origin,bot-chat:ranch", ["local", "room:x"]):
-            self.assertTrue(self.refused("cronjob_manage", {"action": "create", "deliver": deliver}), deliver)
-        self.assertTrue(self.refused("cronjob_manage", {"action": "update", "job_id": "j", "failure_deliver": "bot-chat:ranch"}))
+    def test_a_main_assistant_only_lists_pauses_removes_and_creates_routines_for_its_own_chat(self):
+        for args in ({"action": "list"}, {"action": "pause", "job_id": "j"}, {"action": "remove", "job_id": "j"}, {"action": "cancel", "job_id": "j"},
+                     {"action": "create", "deliver": "bot-chat"}, {"action": "create", "deliver": "bot-chat:mom-main"}, {"action": "create", "deliver": "local"}):
+            self.assertFalse(self.refused("cronjob_manage", args), args)
+        for args in ({"action": "create"}, {"action": "create", "deliver": "origin"}, {"action": "create", "deliver": "bot-chat:mom-notes"},
+                     {"action": "create", "deliver": "bot-chat:ranch"}, {"action": "create", "deliver": "room:public"}, {"action": "create", "deliver": "all"},
+                     {"action": "create", "deliver": "telegram:-100123"}, {"action": "create", "deliver": ["local", "room:x"]},
+                     {"action": "create", "deliver": "bot-chat", "failure_deliver": "bot-chat:ranch"},
+                     {"action": "create", "deliver": "bot-chat", "monitor": "curl x"}, {"action": "create", "deliver": "bot-chat", "workdir": "/tmp"},
+                     {"action": "update", "job_id": "j", "prompt": "x"}, {"action": "resume", "job_id": "j"}, {"action": "run", "job_id": "j"},
+                     # Refused as actions, even when they name only this chat.
+                     {"action": "update", "job_id": "j", "deliver": "bot-chat"}, {"action": "run", "job_id": "j", "deliver": "bot-chat"},
+                     {"action": "resume", "job_id": "j", "deliver": "local"}):
+            self.assertTrue(self.refused("cronjob_manage", args), args)
 
-    def test_other_assistants_deliver_only_within_their_roster(self):
+    def test_other_assistants_routines_are_checked_as_they_will_be(self):
+        stored = {"own": {"deliver": "bot-chat:mom-notes"}, "leaky": {"deliver": "bot-chat:dad-diary"}, "fails": {"deliver": "bot-chat", "failure_deliver": "room:public"}}
+        self.gate.read_job = stored.get
         self.assertFalse(self.refused("cronjob_manage", {"action": "create", "deliver": "bot-chat:ranch"}, "mom-notes"))
-        for deliver in ("bot-chat:dad-diary", "room:public"):
-            self.assertTrue(self.refused("cronjob_manage", {"action": "create", "deliver": deliver}, "mom-notes"), deliver)
+        for args in ({"action": "update", "job_id": "own", "prompt": "x"}, {"action": "resume", "job_id": "own"}, {"action": "run", "job_id": "own"},
+                     {"action": "update", "job_id": "leaky", "deliver": "bot-chat"}):
+            self.assertFalse(self.refused("cronjob_manage", args, "mom-notes"), args)
+        for args in ({"action": "update", "job_id": "leaky", "prompt": "x"}, {"action": "run", "job_id": "leaky"}, {"action": "resume", "job_id": "fails"},
+                     {"action": "run", "job_id": "missing"}, {"action": "create"}, {"action": "create", "deliver": "origin"},
+                     {"action": "create", "deliver": "bot-chat:dad-diary"}, {"action": "create", "deliver": "room:public"}):
+            self.assertTrue(self.refused("cronjob_manage", args, "mom-notes"), args)
         # The household's own assistant may post in rooms, never into a member's private chat.
         self.assertFalse(self.refused("cronjob_manage", {"action": "create", "deliver": "room:public"}, "ranch"))
         self.assertTrue(self.refused("cronjob_manage", {"action": "create", "deliver": "bot-chat:mom-notes"}, "ranch"))
         # A profile WildBots has not described yet reaches nobody.
         self.assertTrue(self.refused("cronjob_manage", {"action": "create", "deliver": "bot-chat:ranch"}, "brand-new"))
+        def unreadable(job_id):
+            raise OSError("jobs.json unreadable")
+        self.gate.read_job = unreadable
+        self.assertTrue(self.refused("cronjob_manage", {"action": "run", "job_id": "own"}, "mom-notes"))
 
     def test_a_main_assistant_cannot_drive_hermes_or_other_profiles_from_the_host(self):
         for command in ("hermes -p ranch chat -q hi", "cat ~/.hermes/profiles/dad-diary/memories/MEMORY.md", "HERMES_HOME=/x python run.py"):
@@ -288,7 +338,7 @@ class RosterSectionTest(unittest.TestCase):
                 home = root / "profiles" / profile
                 home.mkdir(parents=True)
                 (home / "profile.yaml").write_text(f"description: {description}\nui_meta:\n  hermes-bots:\n    title: {profile.title()}\n")
-            (root / "config.yaml").write_text("{}\n")
+            (root / "config.yaml").write_text("bot_peers:\n  ranch:\n    url: https://peer.invalid\n")
             home = root / "profiles" / "mom-main"
             native = probe.get_bot_mode_protocol_section(home, force_refresh=True)
             self.assertIn("Dad private diary", native, "Hermes lists every profile; the fix is needed")
@@ -306,6 +356,21 @@ class RosterSectionTest(unittest.TestCase):
             gate.replace({"mom-main": {"member": "Mom", "main": True, "owned": True, "personal": [], "shared": []}})
             self.assertNotEqual(after, probe.capability_fingerprint(home))
             self.assertIn("(no teammates yet)", probe.get_bot_mode_protocol_section(home))
+            # What message_agent itself would read: live local profiles, and peers it tries first.
+            agent = types.SimpleNamespace(_session_db=types.SimpleNamespace(db_path=str(home / "state.db")))
+            local, peers = gate.local_targets(agent)
+            self.assertTrue({"default", "mom-main", "dad-diary", "ranch"} <= local)
+            self.assertEqual(peers, {"ranch"})
+            self.assertEqual(gate.not_local(agent, ["mom-main", "ranch"]), "ranch")
+            # A routine as Hermes keeps it for the profile the tool runs for.
+            from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+            token = set_hermes_home_override(str(home))
+            try:
+                from cron.jobs import create_job
+                job = create_job(prompt="hi", schedule="every 2h", name="x", deliver="bot-chat:dad-diary")
+                self.assertEqual(gate.read_job(job["id"])["deliver"], "bot-chat:dad-diary")
+            finally:
+                reset_hermes_home_override(token)
         finally:
             sys.path.remove(SOURCE)
 

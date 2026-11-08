@@ -400,6 +400,8 @@ export interface Routine {
   lastDeliveryError?: string;
   /** Kept by WildBots for a feature, not edited as a routine: "check-in" is a member's main-assistant check-ins. */
   managed?: "check-in";
+  /** Server only, never sent to clients: native job settings the app does not read, such as a monitor script. */
+  nativeOverrides?: string[];
 }
 export interface Bootstrap {
   user: User;

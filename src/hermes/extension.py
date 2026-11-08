@@ -1525,7 +1525,7 @@ def install(path=None):
     # A Hermes without message_agent gets no roster or gate, and says so.
     delegation = bridge.delegation.install()
     from agent.skill_utils import ESSENTIAL_SKILLS
-    server.register_method("agent-interface.capabilities", lambda rid, _: server._ok(rid, {"revision": actual_revision, "tracked_patch_sha256": patch_hash, "executor_epoch": journal.epoch, "durable_admission": True, "durable_events": True, "canonical_open": True, "explicit_credentials": True, "canonical_submit": True, "incremental_discovery": True, "delegation": delegation, "essential_skills": sorted(ESSENTIAL_SKILLS)}))
+    server.register_method("agent-interface.capabilities", lambda rid, _: server._ok(rid, {"revision": actual_revision, "tracked_patch_sha256": patch_hash, "executor_epoch": journal.epoch, "durable_admission": True, "durable_events": True, "canonical_open": True, "explicit_credentials": True, "canonical_submit": True, "incremental_discovery": True, "delegation": delegation, "delegation_version": sibling_module("delegation").PROTOCOL if delegation else 0, "essential_skills": sorted(ESSENTIAL_SKILLS)}))
     for name, handler in bridge.rpc_methods().items():
         server.register_method(name, handler)
     bridge.install_delivery()

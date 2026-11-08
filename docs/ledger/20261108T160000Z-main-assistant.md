@@ -133,3 +133,41 @@ itself: `AgentInterfaceTests` ran 629 tests with 2 skipped and 3 failing, all am
 above (a fourth `DirectRouteTests` case passed this time). `MainAssistantFlowTests` passed
 both tests, light and dark. The base `846ec70` run of `DirectRouteTests` and
 `NativeContractTests` failed the same four.
+
+## Review fixes, round two
+
+A second GPT-6.1 Sol review of `f57166d..13479e0` found six more issues. All six held against
+the code and Hermes `ed1afb0`, and all are fixed. Where exact modeling got complicated, the
+fix narrows the feature.
+
+1. Roster protocol versions. The add-on reports `delegation_version: 2`. A version 1 add-on
+   gets main rosters only, in the old shape. A policy without `main`, from a version 1 server
+   or an older journal row, is a main roster. Only version 2 makes undescribed profiles reach
+   nobody, so a rolled-back server leaves the others as Hermes has them.
+2. Rosters go to Hermes one at a time, each built at send time from the sharing the app records
+   then, so no send carries sharing older than one before it.
+3. Narrowed: a main assistant's `cronjob_manage` may only list, pause, remove, cancel, and
+   create with an explicit own-chat delivery and no script, monitor, working directory or
+   context. Update, resume and run are refused; members do those in WildBots. Other assistants'
+   changes are checked after merging the saved job, read with Hermes's own `cron.jobs.get_job`;
+   `origin` and unreadable jobs are refused. The app's routine save, resume and trial routes
+   now also refuse deliveries into chats not everyone who sees the assistant can read, and,
+   for a main assistant, anything outside WildBots.
+4. A hand-off ID that is also a registered peer's name, or is not a live local profile, is
+   refused, since Hermes's `_dispatch` tries peers first and relays unknown names; so is any
+   hand-off when those can't be read.
+5. The runtime lists every set native cron field outside an allowlist taken from a real
+   `ed1afb0` job record; a check-in with any of them, or whose fields weren't listed, is
+   replaced.
+6. A replacement waits until a run in progress is seen to end. A pause alone no longer counts
+   as safe.
+
+`tests/hermes_delegation_test.py` now also runs the real `_roster`, `bot_peers` config read
+and `cron.jobs.get_job` when `HERMES_SOURCE` is set: 22 tests passed against the `ed1afb0`
+clone.
+
+Mutation checks, the same way: 28 lines broke and went red. Three survived the first pass,
+each a missing case rather than dead code, and went red after:
+- sending rosters one at a time needed a test where Hermes finishes the older send last;
+- main assistants' update, resume and run needed calls naming only their own chat;
+- confirming the run ended needed the case where the delete succeeds while the run continues.

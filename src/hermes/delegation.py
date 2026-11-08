@@ -36,6 +36,11 @@ SEND = "Send it"
 KEEP = "Don't send"
 PROFILE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 MAX_PROFILES = 200
+# The roster protocol this add-on speaks. Version 1 servers sent only main assistants' rosters, without
+# `main`; version 2 sends every assistant's, each saying whether it is a main one.
+PROTOCOL = 2
+# Cron actions a main assistant may take itself. Changing, resuming or running a routine happens in WildBots.
+MAIN_CRON_ACTIONS = {"list", "create", "pause", "remove", "cancel"}
 MAX_TARGETS = 200
 ROSTER_HEADING = re.compile(r"^You are `@[^`]+`\. Your teammates .*:$")
 HOST_TOOLS = {"terminal", "execute_code", "process_manage"}
@@ -66,15 +71,21 @@ def _targets(value, field):
     return targets
 
 
-def validate(policies):
-    """The policies as stored, or PolicyError naming the first thing wrong with them."""
+def validate(policies, version=PROTOCOL):
+    """The policies as stored, or PolicyError naming the first thing wrong with them.
+
+    A policy without `main`, from a version 1 server or an older journal row, is a main assistant's:
+    those were the only rosters version 1 sent, and treating them as anything less would drop the
+    approval a shared hand-off needs.
+    """
     if not isinstance(policies, dict) or len(policies) > MAX_PROFILES:
         raise PolicyError(f"policies must map at most {MAX_PROFILES} profiles to rosters")
     valid = {}
     for profile, policy in policies.items():
         if not isinstance(profile, str) or not PROFILE_ID.match(profile) or not isinstance(policy, dict):
             raise PolicyError("each policy needs a Hermes profile id and a roster")
-        main, owned = policy.get("main", False), policy.get("owned", False)
+        legacy = version < 2 or "main" not in policy
+        main, owned = (True, True) if legacy else (policy.get("main"), policy.get("owned", False))
         if not isinstance(main, bool) or not isinstance(owned, bool):
             raise PolicyError("main and owned must be true or false")
         valid[profile] = {"member": _text(policy.get("member"), 200, "member").strip() or "your member",
@@ -185,20 +196,28 @@ class Delegation:
         with lock:
             for profile, value in db.execute("SELECT profile,value FROM delegation").fetchall():
                 try:
-                    self.policies.update(validate({profile: json.loads(value)}))
+                    # Rows this version wrote carry `main`; an older add-on's rows are main rosters.
+                    self.policies.update(validate({profile: json.loads(value)}, PROTOCOL))
                 except (ValueError, TypeError):
                     continue
             # Once WildBots has sent rosters, a profile without one is unknown and reaches nobody.
             self.enforcing = db.execute("SELECT 1 FROM delegation_state WHERE key='enforcing'").fetchone() is not None
         self.installed = False
 
-    def replace(self, policies):
-        valid = validate(policies)
+    def replace(self, policies, version=PROTOCOL):
+        """Replaces every roster. Only version 2, which describes every assistant, makes a profile
+        without one reach nobody; a version 1 server, as after a rollback, leaves the others as Hermes
+        has them."""
+        valid = validate(policies, version)
+        enforcing = version >= 2
         with self.lock, self.db:
             self.db.execute("DELETE FROM delegation")
             self.db.executemany("INSERT INTO delegation(profile,value) VALUES(?,?)", [(profile, json.dumps(policy)) for profile, policy in valid.items()])
-            self.db.execute("INSERT OR REPLACE INTO delegation_state(key,value) VALUES('enforcing','1')")
-            self.policies, self.enforcing = valid, True
+            if enforcing:
+                self.db.execute("INSERT OR REPLACE INTO delegation_state(key,value) VALUES('enforcing','1')")
+            else:
+                self.db.execute("DELETE FROM delegation_state WHERE key='enforcing'")
+            self.policies, self.enforcing = valid, enforcing
         return valid
 
     def policy_for(self, profile):
@@ -210,8 +229,12 @@ class Delegation:
 
     def rpc(self, server):
         def handle(rid, params):
+            params = params or {}
+            version = params.get("version", 1)
+            if not isinstance(version, int) or isinstance(version, bool) or version < 1:
+                return server._err(rid, -32602, "Invalid delegation policies: version must be a positive integer")
             try:
-                self.replace((params or {}).get("policies"))
+                self.replace(params.get("policies"), min(version, PROTOCOL))
             except PolicyError as error:
                 return server._err(rid, -32602, f"Invalid delegation policies: {error}")
             return server._ok(rid, {"ok": True})
@@ -271,8 +294,14 @@ class Delegation:
                     return refusal(f"{name} isn't one of the assistants you can hand work to. Targets: {allowed}. Do not retry with this target.")
                 entries.append(entry)
             # Exactly the profiles authorized, by ID: Hermes prefers an ID over a name, so forwarding the
-            # words the model wrote could reach a different profile than the one checked here.
-            destination = ",".join(dict.fromkeys(entry["id"] for entry in entries))
+            # words the model wrote could reach a different profile than the one checked here. Hermes also
+            # tries registered peers first and relays a name it can't resolve locally, so an ID that is a
+            # peer's name, or not a live local profile now, is refused rather than sent somewhere else.
+            ids = list(dict.fromkeys(entry["id"] for entry in entries))
+            elsewhere = self.not_local(agent, ids)
+            if elsewhere:
+                return refusal(f"{elsewhere} can't be reached as a local assistant right now, so nothing was sent.")
+            destination = ",".join(ids)
             shared_ids = {row["id"] for row in policy["shared"]}
             shared = [entry for entry in entries if entry["id"] in shared_ids]
             if not shared or not policy["main"]:
@@ -286,6 +315,71 @@ class Delegation:
             return refusal(f"{member} did not approve sending this, so nothing was sent. Do not resend it or try another way unless {member} asks.")
         message_agent_tool.__wrapped__ = original
         return message_agent_tool
+
+    def not_local(self, agent, ids):
+        """The first ID Hermes would not deliver to as that local profile, or None. Unreadable counts."""
+        try:
+            local, peers = self.local_targets(agent)
+        except Exception:
+            return ids[0]
+        return next((profile for profile in ids if profile not in local or profile.lower() in peers), None)
+
+    def local_targets(self, agent):
+        """Live local profile IDs and registered peer names, as message_agent reads them."""
+        from tools.bot_mode_dm import _agent_home
+        from tools.bot_mode_probe import _hermes_root, _roster
+        from hermes_cli.config_backend import read_config_doc_readonly
+        root = _hermes_root(Path(_agent_home(agent)))
+        doc = read_config_doc_readonly(root / "config.yaml")
+        peers = doc.get("bot_peers") if isinstance(doc, dict) else None
+        return {name for name, _ in _roster(root)}, {str(name).lower() for name in peers} if isinstance(peers, dict) else set()
+
+    def read_job(self, job_id):
+        """The routine as Hermes keeps it for the profile running this tool, or None."""
+        from cron.jobs import get_job
+        return get_job(job_id)
+
+    def cron_refusal(self, profile, policy, args):
+        """Why a cron action may not go ahead, or None.
+
+        A main assistant may only list, pause, remove and cancel its routines, and create ones that
+        deliver to its own chat and nowhere else, named explicitly. Any other assistant's change is
+        checked against the routine as it will be, its saved delivery merged with what the call
+        changes, and before a resume or a run, as it is. `origin` is refused everywhere: Hermes
+        resolves it to wherever the routine was made, which this add-on cannot see.
+        """
+        action = str(args.get("action") or "").strip().lower()
+        if action in ("list", "pause", "remove", "cancel"):
+            return None
+        if policy["main"]:
+            if action not in MAIN_CRON_ACTIONS:
+                return "Your main assistant can't change, resume or run routines itself. Your member can do that in WildBots."
+            for field in ("deliver", "failure_deliver"):
+                tokens = deliver_tokens(args.get(field))
+                if field == "deliver" and not tokens:
+                    return "Name this routine's delivery explicitly: deliver=\"bot-chat\" posts its results in this chat."
+                for token in tokens:
+                    kind, _, rest = token.partition(":")
+                    if not (kind.strip().lower() == "local" or kind.strip().lower() == "bot-chat" and rest.strip() in ("", profile)):
+                        return f"Your main assistant's routines deliver only to its own chat, not {token}."
+            for field in ("script", "no_agent", "monitor", "monitor_script", "monitor_url", "workdir", "attach_to_session", "context_from"):
+                if args.get(field) not in (None, "", [], False):
+                    return f"Your main assistant can't set {field} on a routine. Your member can do that in WildBots."
+            return None
+        merged = dict(args)
+        if action != "create":
+            try:
+                job = self.read_job(args.get("job_id"))
+            except Exception:
+                job = None
+            if not isinstance(job, dict):
+                return "That routine can't be checked, so it was left as it is."
+            for field in ("deliver", "failure_deliver"):
+                if args.get(field) is None:
+                    merged[field] = job.get(field)
+        elif not deliver_tokens(merged.get("deliver")):
+            return "Name this routine's delivery explicitly, for example deliver=\"bot-chat\" for this chat."
+        return self.delivery_refusal(profile, policy, merged)
 
     def delivery_refusal(self, profile, policy, args):
         """Why a cron create or update may not deliver where it asks, or None.
@@ -301,8 +395,10 @@ class Delegation:
             for token in deliver_tokens(args.get(field)):
                 kind, _, rest = token.partition(":")
                 kind, rest = kind.strip().lower(), rest.strip()
-                if kind in ("origin", "local") or (kind == "bot-chat" and rest in ("", profile)):
+                if kind == "local" or (kind == "bot-chat" and rest in ("", profile)):
                     continue
+                if kind in ("origin", "room") and not rest:
+                    return "This routine can't deliver to where it was made: name the chat it should post in."
                 if kind == "bot-chat":
                     if rest in personal or (rest in shared and not policy["main"]):
                         continue
@@ -350,7 +446,7 @@ class Delegation:
                 profile = self.current_profile()
                 policy = self.policy_for(profile)
                 if policy is not None and isinstance(args, dict):
-                    reason = self.delivery_refusal(profile, policy, args) if __name == "cronjob_manage" else self.host_refusal(__name, profile, policy, args)
+                    reason = self.cron_refusal(profile, policy, args) if __name == "cronjob_manage" else self.host_refusal(__name, profile, policy, args)
                     if reason:
                         return refusal(reason)
                 return __original(args, *rest, **kwargs)

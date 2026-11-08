@@ -36,6 +36,23 @@ const DESCRIPTION_MS = 10_000;
 // How long a roster read answers later requests when Hermes reported no change meanwhile.
 export const ROSTER_REUSE_MS = 2_000;
 
+/**
+ * The fields of a native cron job the app reads as routine fields, or as status and history. Anything
+ * else Hermes holds with a value, such as a monitor script, a working directory, a pinned endpoint or a
+ * setting a later Hermes adds, can change how the job runs without the app seeing it.
+ */
+const ROUTINE_FIELDS = new Set(['id', 'job_id', 'name', 'prompt', 'schedule', 'schedule_display', 'enabled', 'state', 'deliver', 'failure_deliver',
+  'origin', 'context_from', 'skills', 'model', 'provider', 'enabled_toolsets', 'script', 'no_agent', 'created_at', 'next_run_at', 'last_run_at',
+  'last_status', 'last_error', 'last_failure', 'last_delivery_error', 'last_delivery_unverified', 'failure_streak', 'paused_at', 'paused_reason',
+  'latest_execution', 'live_execution', 'monitor_state']);
+/** The native fields outside ROUTINE_FIELDS that are set. An unlimited `repeat` is the default and counts as unset. */
+export function nativeOverrides(job: Wire): string[] {
+  const set = (value: unknown) => value !== null && value !== undefined && value !== '' && value !== false
+    && !(Array.isArray(value) && !value.length) && !(typeof value === 'object' && !Array.isArray(value) && !Object.keys(value as object).length);
+  return Object.entries(job ?? {}).filter(([key, value]) => !ROUTINE_FIELDS.has(key) && set(value)
+    && !(key === 'repeat' && typeof value === 'object' && value !== null && (value as Wire).times == null)).map(([key]) => key).sort();
+}
+
 export function createHermesRuntime(options: HermesOptions = {}): Runtime {
   let discoveryFull = false;
   let discoveryGeneration = 0;
@@ -942,7 +959,7 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
             enabled: job.enabled !== false && job.state !== 'paused',
             nextRunAt: job.next_run_at ?? undefined, lastRunAt: job.last_run_at ?? undefined,
             lastStatus: job.last_status ?? undefined, lastError: job.last_error ?? undefined, lastDeliveryError: job.last_delivery_error ?? undefined,
-            ...(job.live_execution ? {running: true} : {})});
+            ...(job.live_execution ? {running: true} : {}), nativeOverrides: nativeOverrides(job)});
         }
       }
       return all;
@@ -971,9 +988,14 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     },
     async delegationPolicy(policies) {
       await connect();
-      // An older add-on has no gate, so it gets no roster: its main assistants work as before.
+      // An add-on with no gate gets no roster: its assistants work as before. One that speaks only the
+      // first protocol takes main assistants' rosters alone, in that protocol's shape; the rest of the
+      // household it leaves as Hermes has it.
       if (!contract.delegation) return;
-      const result = await rpc('agent-interface.delegation', {policies});
+      const params = contract.delegation >= 2 ? {version: 2, policies}
+        : {policies: Object.fromEntries(Object.entries(policies).filter(([, policy]) => policy.main)
+          .map(([profile, {member, personal, shared}]) => [profile, {member, personal, shared}]))};
+      const result = await rpc('agent-interface.delegation', params);
       if (result?.ok !== true) throw new Error('Hermes did not save the main assistants\' rosters.');
     },
     async discoverEvents(cursor): Promise<RuntimeDiscovery> {

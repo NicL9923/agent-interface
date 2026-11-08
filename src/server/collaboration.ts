@@ -54,7 +54,7 @@ export async function routinesFor<T extends Routine>(runtime: Pick<Runtime, 'gro
   const touches = (routine: Routine) => !!routine.roomIds?.length || mentionsRoom(routine.lastError) || mentionsRoom(routine.lastDeliveryError);
   const errs = (routine: Routine) => routine.lastError !== undefined || routine.lastDeliveryError !== undefined;
   // Every target the delivery names is the server's to check, never anyone's to read.
-  const listed = routines.map(({ delivery: _, ...routine }) => routine as T);
+  const listed = routines.map(({ delivery: _, nativeOverrides: __, ...routine }) => routine as T);
   if (!listed.some(routine => touches(routine) || errs(routine))) return listed;
   const redact = await errorRedactor(runtime, store, roster, userId, listed.some(touches));
   return listed.map(routine => {
@@ -80,6 +80,7 @@ export async function assertDeliveryPrivate(runtime: Pick<Runtime, 'groupRequest
   const unknown = () => httpError(409, "WildBots couldn't read or check the group chats this routine posts in, so it stays as it was. Review its delivery in Hermes, or try again in a moment.", { code: 'routine_rooms_unknown' });
   // A routine or setting the app cannot read is refused, never waved through.
   if (!targets || targets.unknown) throw unknown();
+  await assertChatsPrivate(runtime, store, botId, targets);
   const roomIds = targets.rooms;
   if (!roomIds.length) return;
   if (!runtime.groupRequest) throw unknown();
@@ -91,6 +92,29 @@ export async function assertDeliveryPrivate(runtime: Pick<Runtime, 'groupRequest
   const bot = open.presentation(botId);
   if (roomIds.some(roomId => { const room = open.all.get(roomId); return !!room && roomLeaks(bot, room, open.presentation); }))
     throw httpError(409, "This routine posts in a group chat that people who can't see its assistant could open, so it can't run. Pause it, or have someone who can open that group chat remove it from the routine.", { code: 'routine_rooms' });
+}
+
+/**
+ * Every other assistant's chat a routine delivers into must be one everyone who can see this routine's
+ * assistant can see: its owner's own personal assistants for a personal assistant, the household's for
+ * a shared one. A main assistant's routines post nowhere outside WildBots either. Any target that is not
+ * a current assistant is refused.
+ */
+export async function assertChatsPrivate(runtime: Pick<Runtime, 'listBots'>, store: Store, botId: string, targets: DeliveryRooms) {
+  const refuse = (detail: string) => httpError(409, `This routine delivers ${detail}, so it can't run. Pause it, or change where it delivers in Hermes.`, { code: 'routine_chats' });
+  const others = (targets.chats ?? []).filter(chat => chat !== botId);
+  const main = store.users().some(user => store.preferences(user.id).mainBotId === botId);
+  if (main && targets.outward) throw refuse("outside WildBots from a main assistant");
+  if (!others.length) return;
+  const presentation = await presentations(runtime, store);
+  const self = presentation(botId);
+  for (const chat of others) {
+    const other = presentation(chat);
+    const allowed = !!self && !!other && (self.shared === false && self.ownerId
+      ? other.shared === false && other.ownerId === self.ownerId
+      : visible(other, undefined));
+    if (!allowed) throw refuse("into another assistant's chat that not everyone who sees this one can read");
+  }
 }
 
 /** Routine run errors as one person sees them, by the same rules as `routinesFor`. */

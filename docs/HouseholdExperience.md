@@ -82,9 +82,11 @@ member leaving the household all remove it. The server records each check-in job
 it creates and also marks its instructions with the member, signed with this
 installation's secret, so a job created after a lost answer is found and adopted,
 and a copied marker is never trusted. A check-in must deliver only to its own
-assistant's chat, with no failure delivery, rooms, scripts or other overrides;
-one that does anything else is deleted and replaced. No replacement is made while
-an earlier check-in could still run. A completed run of a check-in this server
+assistant's chat, with no failure delivery, rooms, scripts or other overrides,
+and any native setting the app does not read, such as a monitor script or a
+working directory, counts as one; a job like that is deleted and replaced. No
+replacement is made while an earlier check-in could still run: a run in progress
+must be seen to end, and pausing alone does not count. A completed run of a check-in this server
 has not recorded yet is still quiet, because discovery checks the job first. It reconciles after every
 change, at startup and every five minutes; a run in progress is stopped before its
 job is deleted. A Hermes without routines hides the switch.
@@ -98,13 +100,23 @@ only that roster. A personal assistant's roster is its owner's other personal
 assistants and the assistants the whole household sees; a shared assistant's,
 or an older one's without an owner, is only the latter. Another member's personal
 assistant is never listed or reached. The add-on sends each hand-off to exactly
-the assistant it checked, by its Hermes ID. Before an assistant's sharing
-changes, Hermes stops listing it and stops it reaching anyone; if Hermes does
-not take that, the change is refused. An assistant the server has not described
-yet reaches nobody. Routines an assistant makes with Hermes's own cron tool
-deliver only within its roster, never into a group room from a personal
-assistant, and a main assistant's deliver only to its own chat or its member's
-personal assistants' chats.
+the assistant it checked, by its Hermes ID, and refuses one whose ID is also a
+registered peer gateway's name or is not a live local assistant, since Hermes
+would send those elsewhere. Before an assistant's sharing changes, Hermes stops
+listing it and stops it reaching anyone; if Hermes does not take that, the
+change is refused. Rosters go to Hermes one at a time, each built from who sees
+what when it is sent. An assistant the server has not described yet reaches
+nobody.
+
+Routines an assistant changes with Hermes's own cron tool are checked as they
+will be, their saved delivery merged with the change, and must deliver within its
+roster: never into a group room from a personal assistant, and never to "where
+it was made" (`origin`), which must be named instead. A main assistant can only
+list, pause, remove and stop its routines, and create ones that post only in its
+own chat; changing, resuming or running one happens in WildBots. The app's own
+routine saves, resumes and trial runs refuse a routine that posts into a chat
+not everyone who sees its assistant can read, or, for a main assistant, anywhere
+outside WildBots.
 
 On each turn the main assistant also reads that roster as guidance and can hand
 specialist work to it with Hermes's agent-message tool. A message to a shared assistant first asks
@@ -113,8 +125,11 @@ in the household can read its chat," with the message shown; nothing is sent
 unless they choose Send it. Hand-offs to the member's own personal assistants need
 no approval. Roster changes reach the assistant on its next turn. A hand-off in
 a transcript offers **Open Ranch Hand's chat** when the reader can open that
-chat. An add-on older than this gate gets no roster, and its main assistants
-behave as before.
+chat. An add-on older than this gate gets no roster, and its assistants behave as
+before. The roster protocol is versioned: an add-on that speaks only the first
+version gets main assistants' rosters alone and leaves the others as Hermes has
+them, and a roster without a main flag, from an older server or journal, is
+treated as a main assistant's, so it still asks before shared hand-offs.
 <!-- Main assistant: end -->
 
 ## Today

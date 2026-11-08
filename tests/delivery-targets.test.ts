@@ -5,7 +5,8 @@ import { deliverRooms, deliveryRooms, parseRoomToken, PYTHON_WHITESPACE, routine
 // _ROOM_TOKEN_RE), tests/cron/test_cron_room_delivery.py, cron/scheduler_delivery.py (_normalize_deliver_value,
 // _delivery_lane_value, _resolve_single_delivery_target) and tests/cron/test_cron_failure_deliver.py.
 const ROOM_ID = 'room-cron';
-const rooms = (job: Parameters<typeof deliveryRooms>[0]) => deliveryRooms(job);
+// Rooms only: the chat and outward targets have their own tests below.
+const rooms = (job: Parameters<typeof deliveryRooms>[0]) => { const { chats: _, outward: __, ...value } = deliveryRooms(job); return value; };
 
 describe('parse_room_deliver_token', () => {
   it('reads a room token as Hermes does, with any case and spacing it trims', () => {
@@ -70,7 +71,7 @@ describe("the app's own rooms", () => {
   it("finds every room after a save from Hermes's delivery, never by subtracting the client's rooms", () => {
     const current = { roomIds: ['den'], delivery: { deliver: 'bot-chat:shared,room:den,room:den@keeper', failure_deliver: 'room:alerts' } };
     expect(routineTargetsAfter(current, 'shared', []).rooms.sort()).toEqual(['alerts', 'den']);
-    expect(routineTargetsAfter(undefined, 'shared', ['team'])).toEqual({ rooms: ['team'], unknown: false });
+    expect(routineTargetsAfter(undefined, 'shared', ['team'])).toMatchObject({ rooms: ['team'], unknown: false, chats: ['shared'], outward: false });
     expect(routineTargetsAfter({ delivery: { deliver: 42n } }, 'shared', ['team']).unknown).toBe(true);
   });
 });
@@ -92,5 +93,17 @@ describe("Python's str.strip(), which Hermes trims targets with", () => {
     expect(parseRoomToken('﻿room:crew')).toBeNull();
     expect(deliveryRooms({ deliver: 'bot-chat:shared,\u001froom:crew\u0085' }).rooms).toEqual(['crew']);
     expect(deliveryRooms({ deliver: 'local', failure_deliver: '\u001c' }).rooms).toEqual([]);
+  });
+});
+
+describe("other assistants' chats and destinations outside WildBots", () => {
+  it("lists every Bot Chat a routine posts into, from both lanes, and anything that leaves WildBots", () => {
+    expect(deliveryRooms({ deliver: 'bot-chat:mom-main, bot-chat ,room:den', failure_deliver: 'bot-chat:ranch' })).toMatchObject({ chats: ['mom-main', 'ranch'], outward: false });
+    for (const deliver of ['telegram:-100123', 'all', 'discord', 'local,slack:C1'])
+      expect(deliveryRooms({ deliver }).outward, deliver).toBe(true);
+    // origin posts outside WildBots unless the routine was made in a room.
+    expect(deliveryRooms({ deliver: 'origin', origin: { platform: 'telegram', chat_id: 5 } }).outward).toBe(true);
+    expect(deliveryRooms({ deliver: 'origin', origin: { platform: 'room', chat_id: 'den' } })).toMatchObject({ rooms: ['den'], outward: false });
+    expect(deliveryRooms({ deliver: 'local' })).toMatchObject({ chats: [], outward: false });
   });
 });

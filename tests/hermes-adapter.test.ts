@@ -28,6 +28,7 @@ let addonReady:boolean;
 let explicitCredentials:boolean;
 let canonicalSubmission:boolean;
 let incrementalDiscovery:boolean;
+let delegation:Record<string,unknown>;
 let metadataConflict:boolean;
 let connectionFails:boolean;
 let imageReady:boolean;
@@ -61,7 +62,7 @@ class WireSocket extends EventTarget {
       return;
     }
     let result:unknown={};
-    if(request.method==='agent-interface.capabilities')result={revision:reportedRevision,durable_admission:true,durable_events:addonReady,canonical_open:addonReady,executor_epoch:'epoch-one',...(incrementalDiscovery?{incremental_discovery:true}:{}),...(canonicalSubmission?{canonical_submit:true}:{}),...(explicitCredentials?{explicit_credentials:true}:{})};
+    if(request.method==='agent-interface.capabilities')result={revision:reportedRevision,durable_admission:true,durable_events:addonReady,canonical_open:addonReady,executor_epoch:'epoch-one',...(incrementalDiscovery?{incremental_discovery:true}:{}),...(canonicalSubmission?{canonical_submit:true}:{}),...(explicitCredentials?{explicit_credentials:true}:{}),...delegation};
     if(request.method==='agent-interface.open')result=structuredClone(snapshot);
     if(request.method==='file.attach')result={path:'/workspace/staged/portrait.png'};
     if(request.method==='agent-interface.submit')result={requestId:request.params.request_id,status:'accepted',runId:'task-one',...(canonicalSubmission?{app_run_id:'task-one',admission:'canonical'}:{})};
@@ -71,6 +72,7 @@ class WireSocket extends EventTarget {
     if(request.method==='config.get')result={value:request.params.key==='reasoning'?'high':'normal'};
     if(request.method==='image.generate')result={available:imageReady,success:false,error:'No image generation backend configured'};
     if(request.method==='profiles.set_asset')result={ok:true};
+    if(request.method==='agent-interface.delegation')result={ok:true};
     if(request.method==='agent-interface.discover')result={cursor:'2',events:[{id:'2',botId:'routine-bot',kind:'completed',title:'Routine result',occurredAt:'2026-10-14T12:00:00Z'}]};
     queueMicrotask(()=>this.receive({jsonrpc:'2.0',id:request.id,result}));
   }
@@ -78,7 +80,7 @@ class WireSocket extends EventTarget {
 }
 beforeEach(()=>{
   reportedRevision=revision;
-  snapshot={session_id:'live-one',canonical_stored_session_id:'stored-one',info:{running:false},messages:[]};calls=[];sockets=[];addonReady=true;explicitCredentials=true;canonicalSubmission=false;incrementalDiscovery=false;metadataConflict=false;connectionFails=false;imageReady=false;rosterSession=undefined;opening='open';deferredMethods=new Set();rpcErrors=new Map();beforeSend=undefined;
+  snapshot={session_id:'live-one',canonical_stored_session_id:'stored-one',info:{running:false},messages:[]};calls=[];sockets=[];addonReady=true;explicitCredentials=true;canonicalSubmission=false;incrementalDiscovery=false;delegation={};metadataConflict=false;connectionFails=false;imageReady=false;rosterSession=undefined;opening='open';deferredMethods=new Set();rpcErrors=new Map();beforeSend=undefined;
   vi.stubGlobal('WebSocket',WireSocket);
   vi.stubGlobal('fetch',vi.fn(async()=>Response.json({profiles:[]})));
   runtime=createHermesRuntime({url:'http://127.0.0.1:19119',token});
@@ -124,6 +126,24 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     deferredMethods.delete('agent-interface.discover');
     await runtime.discoverEvents('1');
     expect(calls.filter(call=>call.method==='agent-interface.discover').at(-1)?.params).toEqual({cursor:'1',full:true});
+  });
+  it('sends each add-on the roster protocol it reports, and none to one without the gate', async () => {
+    const policies = {main:{member:'Mom',main:true,owned:true,personal:[],shared:[{id:'ranch',name:'Ranch'}]},
+      ranch:{member:'the household',main:false,owned:false,personal:[],shared:[]}};
+    const sent = () => calls.filter(call => call.method === 'agent-interface.delegation').map(call => call.params);
+    await runtime.delegationPolicy!(policies);
+    expect(sent()).toEqual([]);
+    for (const [reported, expected] of [
+      // The first protocol takes main assistants' rosters only, without the fields it predates.
+      [{delegation:true}, {policies:{main:{member:'Mom',personal:[],shared:[{id:'ranch',name:'Ranch'}]}}}],
+      [{delegation:true, delegation_version:2}, {version:2, policies}],
+    ] as const) {
+      delegation = reported; calls = [];
+      runtime = createHermesRuntime({url:'http://127.0.0.1:19119',token});
+      await runtime.status();
+      await runtime.delegationPolicy!(policies);
+      expect(sent()).toEqual([expected]);
+    }
   });
   it('keeps older discovery add-ons free of new parameters', async () => {
     await runtime.discoverEvents('1');

@@ -533,7 +533,9 @@ keeps the saved one.
 | `PUT /api/preferences/check-ins` | `{ "enabled": true, "everyHours": 1-4, "timezone": "IANA_NAME" }`. Returns `Preferences`. 400 `check_in_hours`; 409 `main_required`, or when Hermes has no routines; 502 `check_in_unavailable` when Hermes couldn't create or update the routine (the switch is saved off), 502 `check_in_removal_pending` when it is off but Hermes still has the routine, which the server keeps removing |
 | `PATCH /api/bots/:id` | Sharing the caller's main assistant, or a personal assistant a check-in is still on, answers 409 `main_share_confirmation_required` until the body has `"confirmMainCleared": true`; then check-ins end first, or 502 `check_in_removal_pending` leaves it personal. Any change to who sees an assistant answers 502 `roster_update_failed`, changing nothing, when Hermes did not take the narrowed roster first |
 
-A routine with `managed: "check-in"` is a member's check-ins: show it without Edit,
+Saving an enabled routine, resuming one or running a trial answers 409 `routine_chats` when it
+delivers into another assistant's chat that not everyone who sees its own assistant can read, or,
+for a main assistant's routine, anywhere outside WildBots. A routine with `managed: "check-in"` is a member's check-ins: show it without Edit,
 Pause or Delete, which answer 409 `check_in_managed`. A transcript `message_agent`
 handoff or incoming agent envelope may offer the other assistant's chat when its
 `target` or sender names, by ID or name, an assistant in the caller's bootstrap

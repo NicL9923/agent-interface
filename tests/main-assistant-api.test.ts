@@ -18,7 +18,10 @@ let jobs: Routine[];
 let calls: string[];
 let bots: Bot[];
 let pushed: DelegationPolicies[];
-let fail: { create?: "refused" | "uncertain"; delete?: boolean; update?: boolean; status?: boolean; pause?: boolean; policy?: boolean; routines?: boolean };
+let fail: { create?: "refused" | "uncertain"; delete?: boolean; update?: boolean; status?: boolean; pause?: boolean; policy?: boolean; routines?: boolean; stop?: boolean };
+let holdRoutines: Promise<void> | undefined;
+let holdPolicy: Promise<void> | undefined;
+let applied: DelegationPolicies[];
 let discovered: RuntimeEvent[];
 let routinesSupported: boolean;
 let nextId: number;
@@ -26,7 +29,7 @@ let mom: Record<string, string>, dad: Record<string, string>;
 let results: Record<string, { id: string; status: RoutineRunStatus; startedAt: string; error?: string }[]>;
 
 beforeEach(async () => {
-  jobs = []; calls = []; pushed = []; fail = {}; discovered = []; routinesSupported = true; nextId = 1; results = {};
+  jobs = []; calls = []; pushed = []; fail = {}; discovered = []; holdRoutines = undefined; holdPolicy = undefined; applied = []; routinesSupported = true; nextId = 1; results = {};
   bots = [
     botFixture({ id: "mom-main", name: "Sage", description: "Mom's chief of staff", shared: false, ownerId: "mom" }),
     botFixture({ id: "mom-notes", name: "Notes", shared: false, ownerId: "mom" }),
@@ -38,7 +41,12 @@ beforeEach(async () => {
     status: async () => fail.status ? { connected: false } : { connected: true },
     capabilities: async () => capabilitiesFixture({ routines: { supported: routinesSupported }, botConfiguration: { supported: true }, durableEvents: { supported: true } }),
     listBots: async () => structuredClone(bots),
-    routines: async () => { if (fail.routines) throw new Error("Hermes routines unavailable."); return structuredClone(jobs); },
+    routines: async () => {
+      if (fail.routines) throw new Error("Hermes routines unavailable.");
+      // Holds one read back, as a slow Hermes would, then answers with the jobs as they are by then.
+      if (holdRoutines) { const wait = holdRoutines; holdRoutines = undefined; await wait; }
+      return structuredClone(jobs);
+    },
     // Cursor-based like the add-on: events after a cursor come back until the cursor moves past them.
     discoverEvents: async cursor => cursor === "" && discovered.length ? { cursor: "c1", events: structuredClone(discovered) } : { cursor, events: [] },
     // Hermes stores "every 2h" as an interval and shows it back in minutes.
@@ -49,7 +57,7 @@ beforeEach(async () => {
       const hours = /^every (\d+)h$/.exec(input.schedule)?.[1];
       // A new job delivers to its own assistant's chat, as Hermes records the app's create.
       const saved: Routine = { ...input, id: id ?? `job${nextId++}`, schedule: hours ? `every ${Number(hours) * 60}m` : input.schedule,
-        ...(!id ? { delivery: { deliver: `bot-chat:${input.botId}` }, contextFrom: ["self"] } : {}) };
+        ...(!id ? { delivery: { deliver: `bot-chat:${input.botId}` }, contextFrom: ["self"], nativeOverrides: [] } : {}) };
       if (id) jobs = jobs.map(job => job.id === id && job.botId === input.botId ? { ...job, ...saved } : job);
       else jobs.push(saved);
       if (!id && fail.create === "uncertain") throw new Error("Hermes response lost.");
@@ -65,9 +73,15 @@ beforeEach(async () => {
       if (fail.pause) throw new Error("Hermes refused the pause.");
       jobs = jobs.map(job => job.id === id && job.botId === botId ? { ...job, enabled } : job);
     },
-    stopRoutineRun: async (botId, id) => { calls.push(`stop:${id}`); jobs = jobs.map(job => job.id === id && job.botId === botId ? { ...job, running: false } : job); return true; },
+    // With fail.stop, Hermes answers but the run goes on, as when cancellation hasn't reached it yet.
+    stopRoutineRun: async (botId, id) => { calls.push(`stop:${id}`); if (!fail.stop) jobs = jobs.map(job => job.id === id && job.botId === botId ? { ...job, running: false } : job); return true; },
     routineResults: async (_botId, routineId) => (results[routineId] ?? []).map(run => ({ ...run, title: "Run", previewOnly: true })),
-    delegationPolicy: async policies => { calls.push("policy"); if (fail.policy) throw new Error("Hermes refused the roster."); pushed.push(structuredClone(policies)); },
+    // `applied` is the order Hermes takes rosters in; holdPolicy keeps one send in flight, as a slow Hermes would.
+    delegationPolicy: async policies => {
+      calls.push("policy"); if (fail.policy) throw new Error("Hermes refused the roster."); pushed.push(structuredClone(policies));
+      if (holdPolicy) { const wait = holdPolicy; holdPolicy = undefined; await wait; }
+      applied.push(structuredClone(policies));
+    },
     saveBot: async (input, id) => { calls.push(`saveBot:${id}`); const bot = { ...bots.find(row => row.id === id)!, ...input }; bots = bots.map(row => row.id === id ? bot : row); return bot; },
     deleteBot: async id => { calls.push(`deleteBot:${id}`); bots = bots.filter(bot => bot.id !== id); jobs = jobs.filter(job => job.botId !== id); },
     close: async () => {},
@@ -262,7 +276,7 @@ describe("check-ins", () => {
     await checkIns();
     const [kept] = momJobs();
     // A copy Hermes made after an answer was lost, another member's left behind on a deleted main, and an unrelated routine.
-    jobs.push({ ...kept, id: "copy" }, { ...kept, id: "stray", botId: "ranch", prompt: `${checkInMarker(created.store, "ranch", "dad")}\n\nOld`, delivery: { deliver: "bot-chat:ranch" } },
+    jobs.push({ ...kept, id: "copy" }, { ...kept, id: "stray", botId: "ranch", prompt: `${checkInMarker(created.store, "ranch", "dad")}\n\nOld`, delivery: { deliver: "bot-chat:ranch" }, nativeOverrides: [] },
       { id: "brief", botId: "mom-main", name: "Brief", prompt: "Morning brief", schedule: "0 7 * * *", enabled: true });
     await created.mains.reconcile();
     expect(jobs.map(job => job.id).sort()).toEqual([kept.id, "brief"].sort());
@@ -452,7 +466,7 @@ describe("a check-in job that isn't exactly managed", () => {
   });
   it("is known as a check-in before its first run is stored, even before this server reconciled it", async () => {
     // As after a create whose answer was lost and a restart: Hermes has the job, this server has no record.
-    jobs.push({ id: "lost", botId: "mom-main", name: "Check-ins", schedule: "every 120m", enabled: true, delivery: { deliver: "bot-chat:mom-main" },
+    jobs.push({ id: "lost", botId: "mom-main", name: "Check-ins", schedule: "every 120m", enabled: true, delivery: { deliver: "bot-chat:mom-main" }, nativeOverrides: [],
       prompt: `${checkInMarker(created.store, "mom-main", "mom")}\n\nCheck in` });
     const event: RuntimeEvent = { id: "lost-run", botId: "mom-main", routineId: "lost", runId: "routine:mom-main:lost:1", kind: "completed", title: "[bot:mom-main] Check-ins", occurredAt: new Date().toISOString() };
     await created.mains.identify([event]);
@@ -468,7 +482,7 @@ describe("a check-in job that isn't exactly managed", () => {
     expect(created.store.outbox()).toEqual([]);
   });
   it("leaves discovered runs undiscovered while Hermes can't say which are check-ins", async () => {
-    jobs.push({ id: "lost", botId: "mom-main", name: "Check-ins", schedule: "every 120m", enabled: true, delivery: { deliver: "bot-chat:mom-main" },
+    jobs.push({ id: "lost", botId: "mom-main", name: "Check-ins", schedule: "every 120m", enabled: true, delivery: { deliver: "bot-chat:mom-main" }, nativeOverrides: [],
       prompt: `${checkInMarker(created.store, "mom-main", "mom")}\n\nCheck in` });
     discovered = [{ id: "lost-run", botId: "mom-main", routineId: "lost", runId: "routine:mom-main:lost:1", kind: "completed", title: "[bot:mom-main] Check-ins", occurredAt: new Date().toISOString() }];
     fail.routines = true;
@@ -479,5 +493,113 @@ describe("a check-in job that isn't exactly managed", () => {
     expect(created.store.cursor()).toBe("c1");
     expect(created.store.outbox()).toEqual([]);
     expect(created.store.checkIns.isCheckIn("mom-main", "lost")).toBe(true);
+  });
+});
+
+describe("review round two", () => {
+  const ids = (list: { id: string }[]) => list.map(row => row.id);
+  it("never sends a roster from before a sharing change after it, even from a pass that began earlier", async () => {
+    await main("mom-main");
+    let open!: () => void;
+    holdRoutines = new Promise(resolve => { open = resolve; });
+    const pass = created.mains.reconcile();
+    // The pass read the roster with Notes personal and now waits on Hermes's routines.
+    for (let tick = 0; tick < 20 && holdRoutines !== undefined; tick++) await new Promise(resolve => setImmediate(resolve));
+    const sharing = created.app.inject({ method: "PATCH", url: "/api/bots/mom-notes", headers: mom, payload: { name: "Notes", instructions: "", model: "test", shared: true } });
+    for (let tick = 0; tick < 200 && !calls.includes("saveBot:mom-notes"); tick++) await new Promise(resolve => setImmediate(resolve));
+    const shared = pushed.length;
+    open();
+    await pass;
+    expect((await sharing).statusCode).toBe(200);
+    // Every roster sent once Notes was shared treats it as shared: never personal to Mom's main assistant, never reaching her others.
+    for (const policies of pushed.slice(shared)) {
+      expect(ids(policies["mom-main"].personal)).not.toContain("mom-notes");
+      expect(policies["mom-notes"].personal).toEqual([]);
+    }
+    expect(ids(pushed.at(-1)!["mom-main"].shared)).toContain("mom-notes");
+  });
+  it("replaces a check-in carrying a native setting the app doesn't read, or whose settings Hermes didn't list", async () => {
+    await main("mom-main");
+    await checkIns();
+    for (const overrides of [["monitor_script"], ["workdir"], undefined]) {
+      const [current] = momJobs();
+      jobs = jobs.map(job => job === current ? { ...job, nativeOverrides: overrides } : job);
+      await created.mains.reconcile();
+      expect(momJobs()).toHaveLength(1);
+      expect(momJobs()[0].id).not.toBe(current.id);
+    }
+  });
+  it("makes no replacement while an old check-in's run is still going, even once it is paused", async () => {
+    await main("mom-main");
+    await checkIns();
+    const [old] = momJobs();
+    jobs = jobs.map(job => job.id === old.id ? { ...job, running: true } : job);
+    fail.stop = true; fail.delete = true;
+    await main("mom-notes");
+    expect((await checkIns()).statusCode).toBe(502);
+    // Paused, but its run goes on, so nothing new runs beside it.
+    expect(jobs.find(job => job.id === old.id)).toMatchObject({ enabled: false, running: true });
+    expect(momJobs().filter(job => job.botId === "mom-notes")).toEqual([]);
+    fail.stop = false; fail.delete = false;
+    expect((await checkIns()).statusCode).toBe(200);
+    expect(momJobs()).toMatchObject([{ botId: "mom-notes" }]);
+  });
+  describe("a routine's chat and outward deliveries, through the app's own routes", () => {
+    const routine = (botId: string, deliver: string): Routine => ({ id: `r-${botId}`, botId, name: "R", prompt: "Report", schedule: "0 7 * * *", enabled: false,
+      delivery: { deliver }, nativeOverrides: [] });
+    const resume = (id: string) => created.app.inject({ method: "PATCH", url: `/api/routines/${id}/state`, headers: mom, payload: { enabled: true } });
+    it("refuses one that would post into a chat not everyone who sees its assistant can read", async () => {
+      jobs.push(routine("mom-notes", "bot-chat:dad-diary"), routine("ranch", "bot-chat:mom-notes"));
+      expect((await resume("r-mom-notes")).json().code).toBe("routine_chats");
+      expect((await resume("r-ranch")).json().code).toBe("routine_chats");
+      expect(calls.filter(call => call.startsWith("pause:"))).toEqual([]);
+    });
+    it("lets a personal assistant post to its owner's other personal assistants, and a shared one to the household's", async () => {
+      jobs.push(routine("mom-notes", "bot-chat:mom-main"), routine("ranch", "bot-chat:legacy"));
+      expect((await resume("r-mom-notes")).statusCode).toBe(200);
+      expect((await resume("r-ranch")).statusCode).toBe(200);
+    });
+    it("refuses a main assistant's routine that posts outside WildBots, but not another assistant's", async () => {
+      await main("mom-main");
+      jobs.push(routine("mom-main", "telegram:-100123"), routine("mom-notes", "telegram:-100123"));
+      expect((await resume("r-mom-main")).json().code).toBe("routine_chats");
+      expect((await resume("r-mom-notes")).statusCode).toBe(200);
+    });
+  });
+});
+
+describe("review round two, ordering", () => {
+  const ids = (list: { id: string }[]) => list.map(row => row.id);
+  it("lets Hermes take only one roster at a time, so an older one can't land after a newer one", async () => {
+    await main("mom-main");
+    let open!: () => void;
+    holdPolicy = new Promise(resolve => { open = resolve; });
+    applied = [];
+    // A pass with a roster change (a rename made in Hermes) stalls in Hermes while Notes is shared.
+    bots = bots.map(bot => bot.id === "ranch" ? { ...bot, name: "Foreman" } : bot);
+    const pass = created.mains.reconcile();
+    for (let tick = 0; tick < 200 && holdPolicy !== undefined; tick++) await new Promise(resolve => setImmediate(resolve));
+    expect(holdPolicy).toBeUndefined();
+    const sharing = created.app.inject({ method: "PATCH", url: "/api/bots/mom-notes", headers: mom, payload: { name: "Notes", instructions: "", model: "test", shared: true } });
+    for (let tick = 0; tick < 50; tick++) await new Promise(resolve => setImmediate(resolve));
+    open();
+    await pass;
+    expect((await sharing).statusCode).toBe(200);
+    // Once Hermes took the roster that withdrew Notes, it never again takes one listing Notes as Mom's personal assistant.
+    const withdrawn = applied.findIndex(policies => policies["mom-notes"].personal.length === 0 && !ids(policies["mom-main"].personal).includes("mom-notes"));
+    expect(withdrawn).toBeGreaterThan(-1);
+    for (const policies of applied.slice(withdrawn)) expect(ids(policies["mom-main"].personal)).not.toContain("mom-notes");
+    expect(ids(applied.at(-1)!["mom-main"].shared)).toContain("mom-notes");
+  });
+  it("deletes no check-in while its run goes on, so nothing new runs beside it", async () => {
+    await main("mom-main");
+    await checkIns();
+    const [old] = momJobs();
+    jobs = jobs.map(job => job.id === old.id ? { ...job, running: true } : job);
+    fail.stop = true;
+    await main("mom-notes");
+    expect((await checkIns()).statusCode).toBe(502);
+    expect(jobs.find(job => job.id === old.id)).toMatchObject({ running: true, enabled: false });
+    expect(momJobs().filter(job => job.botId === "mom-notes")).toEqual([]);
   });
 });
