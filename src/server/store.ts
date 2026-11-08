@@ -39,6 +39,7 @@ export class Store {
     this.database = new StoreDatabase(path);
     this.db = this.database.db;
     this.accounts = new AccountRepository(this.database);
+    this.accounts.ensureFormSecret();
     this.devices = new DeviceRepository(this.database, this.accounts);
     this.personalState = new PersonalRepository(this.database);
     this.drafts = new DraftRepository(this.database);

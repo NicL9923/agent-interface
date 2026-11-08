@@ -29,6 +29,16 @@ enum FormValue: Codable, Equatable {
   var text: String? { if case .text(let value) = self { value } else { nil } }
   var list: [String]? { if case .list(let value) = self { value } else { nil } }
   var toggle: Bool? { if case .toggle(let value) = self { value } else { nil } }
+  /// Equal as JavaScript compares them, code unit by code unit. Swift's own `==` on strings would
+  /// call "Café" written two ways the same answer, where the web sees two options.
+  static func == (a: FormValue, b: FormValue) -> Bool {
+    switch (a, b) {
+    case (.text(let x), .text(let y)): JS.same(x, y)
+    case (.list(let x), .list(let y)): x.count == y.count && zip(x, y).allSatisfy(JS.same)
+    case (.toggle(let x), .toggle(let y)): x == y
+    default: false
+    }
+  }
 }
 
 /// JavaScript's string rules, so a card is accepted, measured and written exactly as on the web.
@@ -209,6 +219,12 @@ enum FormAnswers {
     Dictionary(uniqueKeysWithValues: (card.fields ?? []).map { field in
       (field.id, field.value ?? (field.kind == "multi" ? .list([]) : field.kind == "toggle" ? .toggle(false) : .text("")))
     })
+  }
+  /// The answer after tapping `option`: the one choice for `choice`, otherwise `option` added to or
+  /// removed from `chosen`, matched by exact code units as the web matches them.
+  static func choose(_ option: String, kind: String, from chosen: [String]) -> FormValue {
+    if kind == "choice" { return .text(option) }
+    return .list(JS.contains(chosen, option) ? chosen.filter { !JS.same($0, option) } : chosen + [option])
   }
   static func answered(_ value: FormValue?) -> Bool {
     switch value {
@@ -595,10 +611,12 @@ struct FormReplyCardView: View {
     case "choice", "multi":
       let chosen = answers[field.id]?.list ?? answers[field.id]?.text.map { [$0] } ?? []
       VStack(spacing: 8) {
-        ForEach(field.options ?? [], id: \.self) { option in
-          let on = chosen.contains(option)
+        // Options are told apart as the web tells them apart: by position and exact code units,
+        // never by Swift's string equality, which merges canonically equivalent spellings.
+        ForEach(Array((field.options ?? []).enumerated()), id: \.offset) { _, option in
+          let on = JS.contains(chosen, option)
           Button {
-            set(field, field.kind == "choice" ? .text(option) : .list(on ? chosen.filter { $0 != option } : chosen + [option]))
+            set(field, FormAnswers.choose(option, kind: field.kind, from: chosen))
           } label: {
             HStack(spacing: 10) {
               Image(systemName: field.kind == "choice" ? (on ? "largecircle.fill.circle" : "circle") : (on ? "checkmark.square.fill" : "square"))
@@ -616,9 +634,13 @@ struct FormReplyCardView: View {
         Text(field.label).font(.subheadline.weight(.semibold))
       }.tint(Palette.accent).accessibilityHint(hint(field))
     case "select":
-      Picker(field.label, selection: Binding(get: { answers[field.id]?.text ?? "" }, set: { set(field, .text($0)) })) {
-        Text("Choose…").tag("")
-        ForEach(field.options ?? [], id: \.self) { Text($0).tag($0) }
+      let options = field.options ?? []
+      // Tagged by position, so two spellings of the same word stay two choices.
+      Picker(field.label, selection: Binding(
+        get: { answers[field.id]?.text.flatMap { value in options.firstIndex { JS.same($0, value) } } ?? -1 },
+        set: { set(field, .text($0 >= 0 && $0 < options.count ? options[$0] : "")) })) {
+        Text("Choose…").tag(-1)
+        ForEach(Array(options.enumerated()), id: \.offset) { index, option in Text(option).tag(index) }
       }.pickerStyle(.menu).accessibilityLabel(Self.spoken(field)).accessibilityHint(hint(field))
     case "date":
       let text = answers[field.id]?.text ?? ""

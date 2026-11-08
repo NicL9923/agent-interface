@@ -1056,6 +1056,14 @@ describe("form keys", () => {
       try { expect(store.formKey("one")).toBe(one); }
       finally { locker.exec("ROLLBACK"); locker.close(); }
       store.close();
+      // A store opened before another connection took the write lock never needs it for a key,
+      // even for the first one it hands out.
+      const fresh = join(dir, "fresh.db");
+      new Store(fresh).close();
+      const opened = new Store(fresh), holder = new DatabaseSync(fresh);
+      holder.exec("BEGIN IMMEDIATE");
+      try { expect(opened.formKey("one")).toMatch(/^[A-Za-z0-9_-]{43}$/); }
+      finally { holder.exec("ROLLBACK"); holder.close(); opened.close(); }
       // Another installation's secret gives the same person a different key.
       const elsewhere = new Store(join(dir, "other.db"));
       expect(elsewhere.formKey("one")).not.toBe(one);

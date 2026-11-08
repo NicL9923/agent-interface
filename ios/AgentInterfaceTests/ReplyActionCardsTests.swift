@@ -150,6 +150,17 @@ final class ReplyActionCardsTests: XCTestCase {
     XCTAssertNil(cards([field(["value": "\u{0663}"], at: 1)]), "Arabic-Indic digits are not a number to JavaScript")
   }
 
+  /// Two spellings of "Café" are two options on the web, so picking one never picks the other here.
+  func testChoosingTellsCanonicallyEquivalentOptionsApart() {
+    let composed = "Caf\u{E9}", decomposed = "Cafe\u{301}"
+    XCTAssertNotEqual(FormValue.text(composed), FormValue.text(decomposed))
+    XCTAssertNotEqual(FormValue.list([composed]), FormValue.list([decomposed]))
+    XCTAssertEqual(FormAnswers.choose(composed, kind: "multi", from: []), .list([composed]))
+    XCTAssertEqual(FormAnswers.choose(decomposed, kind: "multi", from: [composed]), .list([composed, decomposed]))
+    XCTAssertEqual(FormAnswers.choose(composed, kind: "multi", from: [composed, decomposed]), .list([decomposed]))
+    XCTAssertEqual(FormAnswers.choose(decomposed, kind: "choice", from: [composed]), .text(decomposed))
+  }
+
   func testAnswerTextSplitsAndTrimsAsTheWebDoes() throws {
     let card = try XCTUnwrap(cards([["id": "f", "type": "form", "title": "  Trip  ", "fields": [["id": "a", "label": "A", "kind": "textarea"]]]])?.first)
     XCTAssertEqual(FormAnswers.text(card, ["a": .text("one\r\ntwo")]), "My answers to \"Trip\":\n- A:\n  one\n  two")

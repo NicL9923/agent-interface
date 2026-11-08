@@ -1,6 +1,6 @@
 # November 7 iOS chat cards and private form key validation
 
-Code state `a73cd4c7`, on branch `t3/t3code-mcp-chat-integrations` over `a3dfff6`, built from
+Code state `a73cd4c3`, on branch `t3/t3code-mcp-chat-integrations` over `a3dfff6`, built from
 NicolasLaptop (Linux, Node 24.22.2, Python 3.14.10) and the Mac mini (macOS 27.0.1, Xcode
 27.2 27B52, iPhone 17 simulator on iOS 27.0, reached through the Hermes VPS because
 NicolasLaptop has no Mac key and NicolasDESKTOP was offline). The Mac checkout was the pushed

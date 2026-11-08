@@ -25,13 +25,19 @@ export class AccountRepository {
   }
   private secret?: string;
   /**
-   * The installation's form-key secret, read once per process. Only the first read ever writes, so
-   * bootstrap never waits on another connection's write lock. Two processes creating it at once
-   * keep whichever row landed first; the loser reads that one.
+   * Creates the installation's form-key secret if it is missing. The store calls this once when it
+   * opens, beside its other startup writes, so bootstrap only ever reads the secret and never needs
+   * the write lock. Two processes opening at once keep whichever row landed first.
    */
+  ensureFormSecret() {
+    // Read first: even an ignored INSERT takes the write lock, which only a new installation needs.
+    if (this.db.prepare("SELECT 1 FROM metadata WHERE key='form_key_secret'").get()) return;
+    this.db.prepare("INSERT OR IGNORE INTO metadata VALUES('form_key_secret',?)").run(randomBytes(32).toString("base64url"));
+  }
+  /** The secret, read once per process. A store that opened without creating it is a programming error. */
   private formSecret(): string {
-    const read = () => (this.db.prepare("SELECT value FROM metadata WHERE key='form_key_secret'").get() as { value: string } | undefined)?.value;
-    this.secret ??= read() ?? (this.db.prepare("INSERT OR IGNORE INTO metadata VALUES('form_key_secret',?)").run(randomBytes(32).toString("base64url")), read()!);
+    this.secret ??= (this.db.prepare("SELECT value FROM metadata WHERE key='form_key_secret'").get() as { value: string } | undefined)?.value;
+    if (this.secret === undefined) throw new Error("The form-key secret is missing; the store creates it when it opens.");
     return this.secret;
   }
   users(): User[] {
