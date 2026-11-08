@@ -6,6 +6,7 @@
   "scripts/spike/advanced_routine_probe.py",
   "scripts/spike/app-probe-scope.mjs",
   "scripts/spike/app-probe.mjs",
+  "scripts/spike/approval_scope_probe.py",
   "scripts/spike/automation_probe.py",
   "scripts/spike/computer_acceptance.py",
   "scripts/spike/computer_local_network_probe.py",
