@@ -112,9 +112,35 @@ struct ActivityRowView: View {
   }
 }
 
+/// The Live Activity's one button, for its first row: Decline or Stop. It needs the phone unlocked.
+struct ActivityActionButton: View {
+  var state: AssistantActivityState
+  var stale: Bool
+  var scope: String
+  var body: some View {
+    if let hero = state.hero, let kind = state.action(stale: stale) {
+      Group {
+        switch kind {
+        case .stop:
+          Button(intent: StopAssistantActivityIntent(botId: hero.botId, name: hero.name, scope: scope)) {
+            Label("Stop", systemImage: "stop.fill")
+          }.accessibilityLabel("Stop \(hero.name)")
+        case .decline(let approvalId):
+          Button(intent: DeclineApprovalActivityIntent(botId: hero.botId, name: hero.name, approvalId: approvalId, scope: scope)) {
+            Label("Decline", systemImage: "xmark")
+          }.accessibilityLabel("Decline \(hero.name)'s request")
+        }
+      }.font(.caption.weight(.semibold)).labelStyle(.titleAndIcon).buttonStyle(.bordered).buttonBorderShape(.capsule)
+        .controlSize(.small).tint(WidgetPalette.color(hero.phase))
+    }
+  }
+}
+
 struct ActivityLockScreenView: View {
   var state: AssistantActivityState
   var stale: Bool
+  /// The account the activity belongs to, for its button.
+  var scope = ""
   @Environment(\.widgetRenderingMode) private var mode
   @Environment(\.isLuminanceReduced) private var reduced
   var body: some View {
@@ -128,6 +154,7 @@ struct ActivityLockScreenView: View {
         (Text(header.text) + Text(header.attention ?? "").foregroundStyle(tone.color(.waiting)))
           .font(.subheadline.weight(.semibold)).lineLimit(1)
         Spacer(minLength: 0)
+        ActivityActionButton(state: state, stale: stale, scope: scope)
       }
       ForEach(state.rows.prefix(4)) { ActivityRowView(row: $0, stale: stale, tone: tone) }
     }.padding(.horizontal, 16).padding(.vertical, 13)
@@ -192,12 +219,16 @@ struct IslandExpandedTrailing: View {
 struct IslandExpandedBottom: View {
   var state: AssistantActivityState
   var stale: Bool
+  var scope = ""
   var body: some View {
     VStack(alignment: .leading, spacing: 6) {
       if stale { Text("Assistant status out of date").font(.caption.weight(.semibold)).foregroundStyle(.secondary) }
-      ForEach(state.rows.prefix(3)) {
+      // With a button there is room for two rows beside it.
+      let action = state.action(stale: stale) != nil
+      ForEach(state.rows.prefix(action ? 2 : 3)) {
         ActivityRowView(row: $0, stale: stale, tone: WidgetTone(mode: .fullColor, reduced: false), font: .caption)
       }
+      if action { ActivityActionButton(state: state, stale: stale, scope: scope).frame(maxWidth: .infinity, alignment: .trailing) }
     }
   }
 }

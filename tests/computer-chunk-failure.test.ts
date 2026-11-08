@@ -6,6 +6,7 @@ import { ComputerPanel } from "../src/components/ComputerPanel";
 import { Loading } from "../src/app/panels";
 import { api, write } from "../src/client-api";
 import { advance, mountRoot } from "./ui-harness";
+import { quietConsoleErrors } from "./act-guard";
 
 // A deploy retired these chunks, as an old tab sees it: loading the module fails with the browser's own wording.
 const gone = vi.hoisted(() => () => { throw new TypeError("Failed to fetch dynamically imported module: https://app.example/assets/rfb-OLD12345.js"); });
@@ -20,7 +21,7 @@ const requests = (path: string) => vi.mocked(api).mock.calls.filter(([called]) =
 const computer = (available: boolean) => ({ available, running: available, browserReady: available, label: "Family VPS", reason: "off", control: { kind: "idle" }, terminal: { available: true, target: "nicolas@hermes" } });
 beforeEach(() => {
   vi.useFakeTimers(); vi.clearAllMocks();
-  vi.spyOn(console, "error").mockImplementation(() => {});
+  quietConsoleErrors();
   Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: function(this: HTMLDialogElement) { this.open = true; } });
   Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: function(this: HTMLDialogElement) { this.open = false; } });
   vi.mocked(write).mockResolvedValue({} as never);

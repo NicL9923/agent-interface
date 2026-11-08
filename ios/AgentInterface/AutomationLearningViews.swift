@@ -41,7 +41,7 @@ import SwiftUI
   }
 }
 
-private let hermesSkillLockedNote = "Assistants can't change this skill while it's locked."
+let hermesSkillLockedNote = "Assistants can't change this skill while it's locked."
 
 private func hermesSkillSource(_ origin: String) -> String {
   "Source: " + (origin.isEmpty ? "Not reported" : origin.prefix(1).uppercased() + String(origin.dropFirst()))
@@ -52,7 +52,6 @@ struct HermesLearningView: View {
   @Environment(AppStore.self) private var store
   @State private var control: HermesAutomationControls
   @State private var pending: HermesPendingSkill?
-  @State private var installed: HermesInstalledSkill?
   @State private var allowingWrites = false
   init(botId: String) {
     self.botId = botId
@@ -60,21 +59,20 @@ struct HermesLearningView: View {
   }
   var body: some View {
     Form {
-      HermesAutomationStatus(control: control, introduction: "Inspect reusable instructions and review changes the assistant wants to save.")
+      HermesAutomationStatus(control: control, introduction: "Review skill changes the assistant wants to save. Installed skills are under Behavior.")
       if let state = control.value?.skills {
         if !state.supported {
           Section { Text(state.reason ?? "Learning review is unavailable on this Hermes installation.").foregroundStyle(Palette.muted) }
         } else {
-          policy(state)
+          // Simple presentation leaves the write policy as Hermes has it.
+          if store.bootstrap?.preferences.presentation == "advanced" { policy(state) }
           pendingChanges(state)
-          installedSkills(state)
         }
       }
     }.householdListBackground().accessibilityIdentifier("automation.learning")
       .task { control.appear(foreground: false); await control.refresh(store) }
       .onDisappear { control.disappear() }
       .sheet(item: $pending) { item in HermesSkillReview(control: control, pending: item) }
-      .sheet(item: $installed) { item in HermesSkillReader(control: control, skill: item) }
       .confirmationDialog("Allow skill changes without review?", isPresented: $allowingWrites, titleVisibility: .visible) {
         Button("Allow changes without review", role: .destructive) { setPolicy(false) }
       } message: { Text("Hermes can save new skills, edits and deletions without asking for approval.") }
@@ -107,44 +105,22 @@ struct HermesLearningView: View {
       }
     }
   }
-  private func installedSkills(_ state: HermesAutomationOverview.Skills) -> some View {
-    Section {
-      if state.installed.isEmpty { Text("No installed skills reported.").foregroundStyle(Palette.muted) }
-      ForEach(state.installed) { item in
-        Button { installed = item } label: {
-          VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-              Text(item.name).foregroundStyle(Color.primary)
-              if item.locked == true {
-                Label("Locked", systemImage: "lock.fill").font(.caption.weight(.semibold)).foregroundStyle(Palette.muted)
-              }
-            }
-            if !item.description.isEmpty { Text(item.description).font(.caption).foregroundStyle(Palette.muted) }
-            if item.locked == true { Text(hermesSkillLockedNote).font(.caption).foregroundStyle(Palette.muted) }
-            Text("Read skill").font(.subheadline)
-          }.padding(.vertical, 4)
-        }.disabled(control.busy).accessibilityIdentifier("automation.installedSkill.\(item.id)")
-      }
-    } header: { Text("Installed skills") } footer: {
-      if state.lockSupported == true {
-        VStack(alignment: .leading, spacing: 4) {
-          Text("Lock a skill to keep assistants from changing it. Open the skill to lock or unlock it. You can still edit it in Hermes.")
-          if control.value?.canManageLearningPolicy == false { Text("Only an integration administrator can lock or unlock skills.") }
-        }.font(.footnote).foregroundStyle(Palette.muted)
-      }
-    }
-  }
   private func setPolicy(_ required: Bool) {
     Task { _ = await control.changeOK(store, "/skills/policy", HermesPolicyInput(approvalRequired: required), method: "PUT") }
   }
 }
 
-private struct HermesSkillReader: View {
+/// One installed skill's content and lock, opened from Behavior's skill rows.
+struct HermesSkillReader: View {
   var control: HermesAutomationControls
   var skill: HermesInstalledSkill
   @Environment(AppStore.self) private var store
   @Environment(\.dismiss) private var dismiss
   @State private var loader = HermesLearningLoader<HermesSkillContent>()
+  init(control: HermesAutomationControls, skill: HermesInstalledSkill) {
+    self.control = control
+    self.skill = skill
+  }
   var body: some View {
     NavigationStack {
       Form {

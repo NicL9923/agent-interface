@@ -2,7 +2,7 @@ import { expect, it } from "vitest";
 import { digestCopy, eventHeadline, excerpt, notificationCopy, withoutBotTag } from "../src/shared/event-copy";
 
 it("titles task notifications with the assistant and quotes what happened", () => {
-  expect(notificationCopy({ kind: "completed", title: "Hermes completed", body: "**Tailscale is up** on the NAS. Run `tailscale status` to confirm." }, "Nic's Chief"))
+  expect(notificationCopy({ kind: "completed", title: "Hermes completed", body: "Tailscale is up on the NAS. Run tailscale status to confirm." }, "Nic's Chief"))
     .toEqual({ title: "Nic's Chief", body: "Tailscale is up on the NAS. Run tailscale status to confirm." });
   expect(eventHeadline({ kind: "approval", title: "Approval requested", body: "curl -H 'Authorization: Bearer SYNTHETIC_SECRET'" })).toBe("Needs your approval to continue.");
   expect(eventHeadline({ kind: "failed", title: "Hermes failed", body: "Provider rate limit" })).toBe("Couldn't finish: Provider rate limit");
@@ -20,7 +20,7 @@ it("keeps meaningful titles, such as routine results, in the body", () => {
 });
 
 it("names routines without their owner tag and says when a run did not finish", () => {
-  expect(notificationCopy({ kind: "completed", title: "[bot:patch] Daily AI news", body: "**Three** model launches.", routineId: "job" }, "Patch"))
+  expect(notificationCopy({ kind: "completed", title: "[bot:patch] Daily AI news", body: "Three model launches.", routineId: "job" }, "Patch"))
     .toEqual({ title: "Patch", body: "Daily AI news: Three model launches." });
   expect(notificationCopy({ kind: "completed", title: "[bot:patch] Daily AI news", routineId: "job" }))
     .toEqual({ title: "Daily AI news", body: "Daily AI news" });
@@ -44,9 +44,11 @@ it("digests name one assistant once and several beside what each said", () => {
     .toEqual({ title: "3 updates from 2 assistants", body: "Patch: Done. · Kimberly: Top up hay. · Patch: Ready." });
 });
 
-it("flattens Markdown and cuts long replies at a word", () => {
-  expect(excerpt("# Plan\n\n- [Docs](https://example.test) first\n- then ```code``` done")).toBe("Plan Docs first then done");
+it("cuts long plain text at a word", () => {
+  expect(excerpt("  Plan\n\n Docs first  ")).toBe("Plan Docs first");
   const long = excerpt("word ".repeat(80), 40);
   expect(long.endsWith("word…")).toBe(true);
   expect(long.length).toBeLessThanOrEqual(41);
+  // Callers pass words, so a literal mark stays as written.
+  expect(excerpt("Call __init__ with **kwargs and use # for comments.")).toBe("Call __init__ with **kwargs and use # for comments.");
 });

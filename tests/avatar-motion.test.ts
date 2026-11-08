@@ -19,6 +19,8 @@ import {
   orbitArcs,
   pitchEyes,
   project,
+  propMotion,
+  tint,
   restingPose,
   tickMarks,
   type GestureKind,
@@ -34,6 +36,25 @@ const samples = (from: number, to: number, step = 0.02) =>
 const plan = (kind: GestureKind, start: number, side = -1): MotionPlan => ({ phase: 0, tempo: 1, gesture: { kind, side, start } });
 
 describe("avatar motion", () => {
+  it("positions the writing prop and preserves invalid colors", () => {
+    expect(propMotion("write", 0)).toEqual({ x: 74, y: 79.2, rotate: 0 });
+    // A quarter turn in: the pen is at its full 2.5 swing to the right.
+    const swung = propMotion("write", Math.PI / 14);
+    expect(swung.x).toBeCloseTo(76.5, 6);
+    expect(swung.y).toBeCloseTo(78.4012, 3);
+    expect(swung.rotate).toBe(0);
+    expect(tint("invalid", 0.5)).toBe("invalid");
+    expect(tint("#abc", 0.5)).toBe("#abc");
+    expect(tint("#000000", 0.5)).toBe("#808080");
+  });
+
+  it("runs a failed gesture at its start and stops after it ends", () => {
+    const late = plan("shake", 1);
+    expect(animatesAt("failed", 0.9, late)).toBe(false);
+    expect(animatesAt("failed", 1, late)).toBe(true);
+    expect(animatesAt("failed", 1.46, late)).toBe(false);
+  });
+
   it.each<ActivityState>(["disconnected", "interrupted"])("never moves while %s", (state) => {
     expect(animatesAt(state, 0)).toBe(false);
     for (const t of samples(0, 6, 0.37)) expect(avatarPose(state, t, false)).toEqual(restingPose);

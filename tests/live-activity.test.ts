@@ -14,7 +14,7 @@ type Push = { token: string; payload: { aps: { event: string; timestamp: number;
   "attributes-type"?: string; attributes?: { scope: string }; alert?: { title: string; body: string }; "input-push-token"?: number } }; priority: number };
 
 let clock: number, store: Store, pushes: Push[], failure: Error | undefined;
-let bots: Bot[], conversations: Record<string, Partial<Conversation["activity"]>>, live: LiveActivities;
+let bots: Bot[], conversations: Record<string, Partial<Conversation["activity"]>>, approvals: Record<string, Conversation["approvals"]>, live: LiveActivities;
 let duringSend: (() => void) | undefined;
 const bot = (id: string, activity: ActivityState = "idle", extra: Partial<Bot> = {}): Bot => ({ id, name: id[0].toUpperCase() + id.slice(1), shared: true, model: "test", activity, ...extra });
 const set = (id: string, state: ActivityState, extra: Partial<Conversation["activity"]> = {}, botExtra: Partial<Bot> = {}) => {
@@ -36,12 +36,12 @@ beforeEach(() => {
     store.nativeSession(id, id, Date.now() + 7 * 86400000);
   }
   bots = [bot("kitchen"), bot("garden"), bot("secret")];
-  conversations = {};
+  conversations = {}; approvals = {};
   pushes = []; failure = undefined; duringSend = undefined;
   const config = loadConfig({ HOUSEHOLD_EMAILS: "one@example.test,two@example.test" }); config.apns = apns();
   const runtime = {
     listBots: async () => bots,
-    conversation: async (botId: string) => ({ botId, messages: [], approvals: [], files: [], activity: { state: "idle", ...conversations[botId] } }) as Conversation,
+    conversation: async (botId: string) => ({ botId, messages: [], approvals: approvals[botId] ?? [], files: [], activity: { state: "idle", ...conversations[botId] } }) as Conversation,
   };
   live = new LiveActivities(store, runtime, config, async (target, payload, priority) => {
     duringSend?.();
@@ -119,6 +119,24 @@ describe("aggregate Live Activity", () => {
     expect(rows()).toEqual(["garden:waiting", "kitchen:failed"]);
     await tick(FINISHED_MS);
     expect(rows()).toEqual(["garden:waiting"]);
+  });
+
+  it("names a waiting row's pending approval so the Lock Screen can decline it", async () => {
+    store.savePreferences("one", { ...defaultPreferences, followBots: ["kitchen", "garden"] });
+    approvals.kitchen = [{ id: "old", title: "Done", detail: "", status: "denied" }, { id: "request-7", title: "Run", detail: "secret", status: "pending" }];
+    set("kitchen", "waiting");
+    approvals.garden = [{ id: "x".repeat(201), title: "Run", detail: "", status: "pending" }];
+    set("garden", "waiting");
+    register("one");
+    await tick();
+    const shown = last().payload.aps["content-state"].rows;
+    expect(shown.find(row => row.botId === "kitchen")).toMatchObject({ approvalId: "request-7" });
+    // Never what it would run, and an ID that cannot travel intact gets no button.
+    expect(JSON.stringify(shown)).not.toContain("secret");
+    expect(shown.find(row => row.botId === "garden")).not.toHaveProperty("approvalId");
+    set("kitchen", "working");
+    await tick(15_000);
+    expect(last().payload.aps["content-state"].rows.find(row => row.botId === "kitchen")).not.toHaveProperty("approvalId");
   });
 
   it("shows only assistants this person sent to or follows, and a private one only to its owner", async () => {
@@ -423,6 +441,30 @@ describe("push-to-start", () => {
     live["runtime"].conversation = read;
     await tick(5_000);
     expect(starts()).toHaveLength(1);
+  });
+
+  it("covers an unreadable dismissed assistant even while another assistant has an active run", async () => {
+    registerStart();
+    store.savePreferences("one", { ...defaultPreferences, followBots: ["garden"] });
+    store.participate("run-k", "one");
+    set("kitchen", "working", { runId: "run-k" });
+    set("garden", "working", { runId: "run-g" });
+    const token = "one".repeat(32).slice(0, 64);
+    register("one", [], token);
+    store.dismissLiveActivity("one", "one-device", token);
+    const read = live["runtime"].conversation;
+    live["runtime"].conversation = async (botId, options) => {
+      if (botId === "kitchen") throw new Error("Hermes could not read the conversation");
+      return read(botId, options);
+    };
+    await tick();
+    expect(covered()).toEqual(["garden", "kitchen"]);
+    live["runtime"].conversation = read;
+    await tick(5_000);
+    expect(starts()).toEqual([]);
+    expect(store.liveActivityStarts("sandbox", clock)[0].started).toEqual(expect.arrayContaining([
+      { botId: "kitchen", runId: "run-k" }, { botId: "garden", runId: "run-g" },
+    ]));
   });
 
   it("covers a run dismissed while its conversation could not be read once it can be", async () => {

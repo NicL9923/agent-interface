@@ -14,6 +14,10 @@ import urllib.error
 import urllib.request
 
 
+# The Hermes plugin directory name of src/hermes/wildbots_voice; src/hermes/voice.py PLUGIN must match.
+VOICE_PLUGIN = "wildbots-voice"
+
+
 class Fence(AssertionError):
     """A cutover guard refused to continue. It subclasses AssertionError, so every
     handler and test written for the former asserts treats it the same way."""
@@ -130,6 +134,27 @@ class Deployment:
     def switch(self, target):
         temporary = self.current.with_name("current." + self.operation)
         temporary.symlink_to(target); temporary.replace(self.current)
+
+    @property
+    def voice_plugin(self):
+        """Hermes's plugin link for live voice, and the target it must hold. The target goes
+        through current, so switch() moves it to each new release with everything else."""
+        return self.home / "plugins" / VOICE_PLUGIN, self.current / "src/hermes/wildbots_voice"
+
+    def voice_plugin_ready(self):
+        """Whether link_voice_plugin can run: the path is free, or already the expected link."""
+        link, target = self.voice_plugin
+        return not os.path.lexists(link) or link.is_symlink() and os.readlink(link) == str(target)
+
+    def link_voice_plugin(self):
+        """Links the live voice plugin into Hermes once. Enabling it stays a person's choice
+        (`hermes plugins enable wildbots-voice`), since it lets the plugin use the ChatGPT sign-in."""
+        link, target = self.voice_plugin
+        fence(self.voice_plugin_ready(), "voice plugin path is free or already linked through current")
+        if os.path.lexists(link): return
+        link.parent.mkdir(parents=True, exist_ok=True)
+        temporary = link.with_name("." + link.name + "." + self.operation)
+        temporary.symlink_to(target, target_is_directory=True); temporary.replace(link)
 
     def gateway_state(self):
         return json.loads((self.home / "gateway_state.json").read_text())

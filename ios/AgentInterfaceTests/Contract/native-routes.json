@@ -1,0 +1,17 @@
+{
+  "request": "GET /api/native/routes",
+  "response": {
+    "routes": [
+      {
+        "kind": "lan",
+        "url": "https://127.0.0.1:3443",
+        "certificateSha256": "q1Ue7mHzv1bS0n9yKXGJmWjv2sQxRZbL0dYc3Hc8V2E"
+      },
+      {
+        "kind": "tailnet",
+        "url": "https://127.0.0.2:3444",
+        "certificateSha256": "q1Ue7mHzv1bS0n9yKXGJmWjv2sQxRZbL0dYc3Hc8V2E"
+      }
+    ]
+  }
+}

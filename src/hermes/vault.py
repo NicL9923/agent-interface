@@ -18,11 +18,13 @@ MANAGERS = frozenset(("onepassword", "bitwarden"))
 TOOL = "vault_save_login"
 # computer.py's household computer handoff ask. Kept here so a chat reply can close it too.
 HANDOFF = "agent_interface.computer_handoff"
+# computer.py's ask for a person at the system terminal.
+TERMINAL_REQUEST = "agent_interface.terminal_request"
 # integrations.py's ask to set up a connection inline.
 CONNECTION_REQUEST = "agent_interface.connection_request"
 # Native asks the app shows and a chat message closes, so the waiting tool returns and the
 # message, already admitted as steering, reaches the assistant. Approvals keep their own decision.
-CHAT_CLOSES = METHODS | {"clarify", HANDOFF, CONNECTION_REQUEST}
+CHAT_CLOSES = METHODS | {"clarify", HANDOFF, TERMINAL_REQUEST, CONNECTION_REQUEST}
 CHAT_REPLY = ("The user sent a chat message instead of answering this request, so Hermes closed it. Nothing was "
               "entered, saved or filled. Their message is the next user message: read it before doing anything else. "
               "If they still want this, ask again with the details they corrected. Never ask for passwords, codes "

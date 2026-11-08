@@ -37,6 +37,8 @@ describe("exact Hermes upgrade qualification", () => {
     const plumbing: Record<string, string> = {
       "src/server/apns.ts": "Apple push transport",
       "src/server/auth.ts": "sign-in and sessions",
+      "src/server/client-errors.ts": "client crash reports",
+      "src/server/direct-routes.ts": "LAN and tailnet listeners for the native API",
       "src/server/etag.ts": "HTTP validators",
       "src/server/logging.ts": "log formatting",
       "src/server/route-path.ts": "route pattern lookup",

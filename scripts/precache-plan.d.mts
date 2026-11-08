@@ -9,7 +9,7 @@ export interface BuildManifestEntry {
 export function precachePlan(
   manifest: Record<string, BuildManifestEntry>,
   files: string[],
-): { install: string[]; warm: string[]; onDemand: string[] };
+): { install: string[]; warm: string[]; onDemand: string[]; network: string[] };
 export function assertPopupLibraryIsLazy(
   manifest: Record<string, BuildManifestEntry>,
   read: (file: string) => string,

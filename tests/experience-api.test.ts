@@ -56,16 +56,34 @@ it('authenticates profile memory reads, protects edits and validates native prof
 it('builds Today from canonical activity and attention without hiding unavailable assistants', async () => {
   const s = await setup();
   const since = new Date(Date.now() - 3600000).toISOString();
-  s.store.recordEvents([{ id: 'event', botId: 'ranch', kind: 'completed', title: 'Finished', occurredAt: new Date().toISOString() }, { id: 'gone', botId: 'deleted', kind: 'completed', title: 'Deleted profile', occurredAt: new Date().toISOString() }], '1');
+  s.store.recordEvents([{ id: 'event', botId: 'ranch', kind: 'completed', title: 'Finished', body: '## Fence\n\n| Post | State |\n|---|---|\n| North | Set |', occurredAt: new Date().toISOString() }, { id: 'gone', botId: 'deleted', kind: 'completed', title: 'Deleted profile', occurredAt: new Date().toISOString() }], '1');
   const response = await s.app.inject({ url: `/api/today?since=${encodeURIComponent(since)}`, headers: s.first });
   expect(response.statusCode).toBe(200); const today = response.json();
   expect(today.since).toBe(since); expect(today.events.map((x: { id: string }) => x.id)).toEqual(['event']);
+  // Web and iOS show a result as one plain line.
+  expect(today.events[0].body).toBe('Fence Post · State · North · Set');
   expect(today.items[0].approvals.map((x: { id: string }) => x.id)).toEqual(['pending']); expect(today.items[0].attention[0].id).toBe('clarify');
   expect(today.items[0].files[0].name).toBe('plan.pdf'); expect(today.unavailableBots).toEqual(['offline']); expect(today.items[1].activity.state).toBe('disconnected'); expect(JSON.stringify(today)).not.toContain('private transport');
   await s.app.inject({ method: 'PUT', url: '/api/today/seen', headers: s.first, payload: { seenAt: since, frontier: today.frontier } });
   expect((await s.app.inject({ url: '/api/today', headers: s.first })).json().since).toBe(since);
   expect((await s.app.inject({ url: '/api/today', headers: s.second })).json().since).not.toBe(since);
   expect((await s.app.inject({ method: 'PUT', url: '/api/today/seen', headers: s.first, payload: { seenAt: new Date(Date.now() + 86400000).toISOString(), frontier: today.frontier } })).statusCode).toBe(400);
+});
+it('builds a recap from a recent window and its earlier file context, reading everything only when the window has no reply', async () => {
+  const s = await setup();
+  const at = new Date().toISOString();
+  const file = { id: 'early', name: 'early.pdf', mime: 'application/pdf' };
+  let windowed: Conversation = { botId: 'ranch', messages: [{ id: 'reply', role: 'assistant', text: 'Fence is up.', createdAt: at }], activity: { state: 'idle' }, approvals: [], files: [],
+    window: { earlier: 40, context: [{ id: 'old', role: 'assistant', text: 'Here it is.', createdAt: at, files: [file] }] } };
+  const full: Conversation = { ...windowed, window: undefined, messages: [{ id: 'first', role: 'assistant', text: 'Hello.', createdAt: at }, { id: 'later', role: 'user', text: 'Thanks', createdAt: at }] };
+  s.conversation.mockImplementation(async (id: string, options?: { history?: false; window?: { turns?: number } }) =>
+    (id === 'offline' ? Promise.reject(new Error('offline')) : options?.window ? windowed : full) as never);
+  const ranch = async (headers: typeof s.first) => (await s.app.inject({ url: '/api/today', headers })).json().items.find((item: { botId: string }) => item.botId === 'ranch');
+  expect(await ranch(s.first)).toMatchObject({ files: [{ name: 'early.pdf' }], latestMessage: { id: 'reply' } });
+  expect(s.conversation.mock.calls.filter(call => (call as unknown[])[1] === undefined)).toHaveLength(0);
+  // Activity alone fills the window, so the whole history is read for the latest reply.
+  windowed = { ...windowed, messages: [{ id: 'mine', role: 'user', text: 'Status?', createdAt: at }] };
+  expect((await ranch(s.second)).latestMessage.id).toBe('first');
 });
 it('reads a settled assistant\'s history again only after its roster preview changes', async () => {
   const s = await setup();
@@ -74,7 +92,7 @@ it('reads a settled assistant\'s history again only after its roster preview cha
   s.runtime.listBots = vi.fn(async () => [{ id: 'ranch', name: 'Ranch', model: 'test', shared: true, activity: 'idle' as const, lastMessage: preview }]);
   const read = s.conversation.getMockImplementation()!;
   s.conversation.mockImplementation(async (id: string) => ({ ...await read(id), activity: { state } }) as never);
-  const histories = () => s.conversation.mock.calls.filter(call => (call as unknown[])[1] === undefined).length;
+  const histories = () => s.conversation.mock.calls.filter(call => ((call as unknown[])[1] as { history?: false } | undefined)?.history !== false).length;
   const today = async () => (await s.app.inject({ url: '/api/today', headers: s.first })).json();
   expect((await today()).items[0].files[0].name).toBe('plan.pdf');
   expect(histories()).toBe(1);
@@ -105,7 +123,7 @@ it('never reuses a recap redacted under privacy that changed while it was read',
   });
   const read = s.conversation.getMockImplementation()!;
   s.conversation.mockImplementation(async (id: string) => ({ ...await read(id), activity: { state: 'done' } }) as never);
-  const histories = () => s.conversation.mock.calls.filter(call => (call as unknown[])[1] === undefined).length;
+  const histories = () => s.conversation.mock.calls.filter(call => ((call as unknown[])[1] as { history?: false } | undefined)?.history !== false).length;
   await s.app.inject({ url: '/api/today', headers: s.first });
   expect(lists).toBeGreaterThanOrEqual(2);
   await s.app.inject({ url: '/api/today', headers: s.first });

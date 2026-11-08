@@ -15,6 +15,43 @@ const { inlineUiShell, inlineUiShellPolicy } = await tsImport('../../src/server/
 const port = Number(process.env.PREVIEW_PORT || 3000);
 const host = process.env.PREVIEW_HOST || '127.0.0.1';
 const root = resolve(process.env.PREVIEW_CLIENT_DIR || 'dist/client');
+// PREVIEW_TALK=1 stands in for the microphone, WebRTC and OpenAI, so live Talk runs offline: the
+// person asks one question, the voice calls ask_assistant, and the fixture answer is spoken back.
+const talkFixture = `(() => {
+  const silent = () => { const context = new AudioContext(); return context.createMediaStreamDestination().stream; };
+  navigator.mediaDevices.getUserMedia = async () => silent();
+  const realFetch = window.fetch.bind(window);
+  window.fetch = (url, init) => String(url).startsWith('https://api.openai.com/') ? Promise.resolve(new Response('v=0 preview answer', { status: 201 })) : realFetch(url, init);
+  window.RTCPeerConnection = class {
+    constructor() { this.connectionState = 'new'; }
+    addTrack() {} close() { this.connectionState = 'closed'; }
+    async createOffer() { return { type: 'offer', sdp: 'v=0 preview offer' }; }
+    async setLocalDescription() {}
+    async setRemoteDescription() { setTimeout(() => this.channel.open(), 300); }
+    createDataChannel() {
+      let output = '';
+      const channel = this.channel = { readyState: 'connecting', onopen: null, onmessage: null, onclose: null,
+        emit: (event, delay) => setTimeout(() => channel.readyState === 'open' && channel.onmessage?.({ data: JSON.stringify(event) }), delay),
+        open() { channel.readyState = 'open'; channel.onopen?.();
+          channel.emit({ type: 'input_audio_buffer.speech_started' }, 600);
+          channel.emit({ type: 'conversation.item.input_audio_transcription.completed', transcript: 'Is the north gate shut tonight?' }, 2200);
+          channel.emit({ type: 'response.created' }, 2400);
+          channel.emit({ type: 'response.output_audio_transcript.done', transcript: 'Let me check with Ranch hand.' }, 2600);
+          channel.emit({ type: 'response.function_call_arguments.done', name: 'ask_assistant', call_id: 'preview-call', arguments: JSON.stringify({ request: 'Is the north gate shut tonight?' }) }, 2800);
+          channel.emit({ type: 'response.done' }, 2900); },
+        close() { channel.readyState = 'closed'; },
+        send(raw) { const event = JSON.parse(raw);
+          if (event.item?.output) output = event.item.output;
+          if (event.type !== 'response.create') return;
+          const words = output ? output.replace(/^[^:]*answered: /, '') : 'Howdy.';
+          channel.emit({ type: 'response.created' }, 50);
+          words.split(' ').forEach((word, index) => channel.emit({ type: 'response.output_audio_transcript.delta', delta: (index ? ' ' : '') + word }, 200 + index * 120));
+          channel.emit({ type: 'response.output_audio_transcript.done', transcript: words }, 300 + words.split(' ').length * 120);
+          channel.emit({ type: 'response.done' }, 400 + words.split(' ').length * 120); } };
+      return channel;
+    }
+  };
+})();`;
 // LAN previews need request IDs even when HTTPS-only randomUUID is unavailable.
 // Microphone and push remain subject to the browser's real secure-context rules.
 // Served as a file, not inline, so the app's own Content-Security-Policy applies unchanged.
@@ -24,7 +61,8 @@ const fixtureScript = `if (!crypto.randomUUID) crypto.randomUUID = () => {
   const hex = Array.from(bytes, value => value.toString(16).padStart(2, '0')).join('');
   return [hex.slice(0,8), hex.slice(8,12), hex.slice(12,16), hex.slice(16,20), hex.slice(20)].join('-');
 };
-${process.env.PREVIEW_NOTIFICATION_PROMPT === '1' ? 'if(window.Notification)Object.defineProperty(Notification,"permission",{get:()=>"default",configurable:true});' : ''}`;
+${process.env.PREVIEW_NOTIFICATION_PROMPT === '1' ? 'if(window.Notification)Object.defineProperty(Notification,"permission",{get:()=>"default",configurable:true});' : ''}
+${process.env.PREVIEW_TALK === '1' ? talkFixture : ''}`;
 const fixtureHtml = async () => (await readFile(resolve(root, 'index.html'), 'utf8'))
   .replace('<head>', '<head><script src="/preview-fixture.js"></script>');
 const documentHeaders = request => ({ 'Content-Security-Policy': contentSecurityPolicy(`http://${request.headers.host || `${host}:${port}`}`),
@@ -400,8 +438,8 @@ const server = createServer(async (request, response) => {
       if (process.env.PREVIEW_AVATAR_FAILURE === '1' && !bot.avatarFailed) { bot.avatarFailed = true; return json(response, { error: 'Fixture: Hermes is restarting.' }, 503); }
       bot.avatar = body; return json(response, bot.avatar);
     }
-    if (/^\/bots\/[^/]+$/.test(path) && request.method === 'GET') return json(response, { ...bots.find(bot => bot.id === path.split('/')[2]), instructions: 'Be clear and useful.', enabledMcpServers: [] });
-    if (path === '/bootstrap') return json(response, { user: { id: 'preview', name: 'Nicolas', email: 'preview@localhost.invalid' }, household: [{ id: 'preview', name: 'Nicolas' }, { id: 'two', name: 'Jordan' }], bots, preferences, vapidPublicKey: previewPushKey, connection: { connected: process.env.PREVIEW_DISCONNECTED !== '1', version: '5c1d0e7a9b3f4c2d8e6a1b0c9d8e7f6a5b4c3d2e', revisionDate: '2026-09-18T16:20:00Z' }, csrfToken: 'fixture-only', capabilities: Object.fromEntries(['chat', 'steering', 'approvals', 'uploads', 'generatedFiles', 'botConfiguration', 'tools', 'skills', 'routines', 'stop', 'avatarMetadata', 'durableEvents', 'idempotency', 'imageGeneration', 'portraitGeneration'].map(key => [key, { supported: true }])) });
+    if (/^\/bots\/[^/]+$/.test(path) && request.method === 'GET') return json(response, { ...bots.find(bot => bot.id === path.split('/')[2]), instructions: 'Be clear and useful.', enabledMcpServers: ['calendar'], availableMcpServers: ['calendar', 'recipes'] });
+    if (path === '/bootstrap') return json(response, { user: { id: 'preview', name: 'Nicolas', email: 'preview@localhost.invalid' }, household: [{ id: 'preview', name: 'Nicolas' }, { id: 'two', name: 'Jordan' }], bots, preferences, vapidPublicKey: previewPushKey, connection: { connected: process.env.PREVIEW_DISCONNECTED !== '1', version: '5c1d0e7a9b3f4c2d8e6a1b0c9d8e7f6a5b4c3d2e', revisionDate: '2026-09-18T16:20:00Z' }, csrfToken: 'fixture-only', capabilities: Object.fromEntries(['chat', 'steering', 'approvals', 'uploads', 'generatedFiles', 'botConfiguration', 'tools', 'skills', 'routines', 'stop', 'avatarMetadata', 'durableEvents', 'idempotency', 'imageGeneration', 'portraitGeneration', 'liveVoice'].map(key => [key, { supported: true }])) });
     const fixtureUser = request.headers['x-preview-user'] || 'preview';
     const experiencePath = path === '/today' || path === '/today/seen' || /\/memory(?:\/|$)|\/vault(?:\/|$)|\/secure-requests\/|\/voice\/|\/cards\/|^\/routines\//.test(path);
     if (experiencePath && !signedIn) return json(response, { error: 'Sign in to use the preview fixture.' }, 401);
@@ -612,7 +650,7 @@ const server = createServer(async (request, response) => {
     return json(response, {});
   }
   if (url.pathname === '/inline-ui') { response.writeHead(200, { 'Content-Type': 'text/html', 'Content-Security-Policy': inlineUiShellPolicy, 'X-Frame-Options': 'SAMEORIGIN' }); return response.end(inlineUiShell); }
-  try { const file = resolve(root, '.' + url.pathname); if (!file.startsWith(root + '/') && file !== root) throw Error(); const content = url.pathname === '/' ? await fixtureHtml() : await readFile(file); response.writeHead(200, { ...documentHeaders(request), 'Content-Type': ({ '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.html': 'text/html', '.webmanifest': 'application/manifest+json' })[extname(file)] || 'text/html' }); response.end(content); }
+  try { const file = resolve(root, '.' + url.pathname); if (!file.startsWith(root + '/') && file !== root) throw Error(); const content = url.pathname === '/' ? await fixtureHtml() : await readFile(file); response.writeHead(200, { ...documentHeaders(request), 'Content-Type': ({ '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.html': 'text/html', '.webmanifest': 'application/manifest+json', '.m4a': 'audio/mp4' })[extname(file)] || 'text/html' }); response.end(content); }
   catch { try { const fallback = await fixtureHtml(); response.writeHead(200, { ...documentHeaders(request), 'Content-Type': 'text/html' }); response.end(fallback); } catch { response.writeHead(404); response.end('Run npm run build first.'); } }
 }).listen(port, host, () => process.stdout.write(`Fixture-only preview: http://${host}:${port}\n`));
 
@@ -640,6 +678,21 @@ server.on('upgrade', (request, socket, head) => {
     });
   });
 });
+
+// PREVIEW_LOG_INPUT=1 prints the desktop input the viewer sends, and answers a released mouse button
+// with a desktop clipboard change, as if the click copied something, for touch and clipboard checks.
+function logFixtureInput(client, type, message) {
+  if (type === 4) console.error(`fixture key ${message[1] ? 'down' : 'up'} 0x${message.readUInt32BE(4).toString(16)}`);
+  else if (type === 6) console.error(`fixture clipboard ${JSON.stringify(message.subarray(8).toString('latin1'))}`);
+  else if (type === 5) {
+    console.error(`fixture pointer ${message.readUInt16BE(2)} ${message.readUInt16BE(4)} mask ${message[1]}`);
+    if (message[1] === 0) {
+      const text = Buffer.from('Copied on the fixture desktop');
+      const header = Buffer.alloc(8); header[0] = 3; header.writeUInt32BE(text.length, 4);
+      client.send(Buffer.concat([header, text]));
+    }
+  }
+}
 
 // Minimal RFB server with one static desktop frame for visual and takeover checks.
 function fixtureDesktop(client) {
@@ -686,6 +739,7 @@ function fixtureDesktop(client) {
         if (!length) return;
         if (pending.length < length) return;
         const fullRefresh = type === 3 && pending[1] === 0;
+        if (process.env.PREVIEW_LOG_INPUT === '1') logFixtureInput(client, type, pending.subarray(0, length));
         pending = pending.subarray(length);
         if (type === 3 && (!frameSent || fullRefresh)) {
           frameSent = true;

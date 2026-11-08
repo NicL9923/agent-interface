@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { eventCalendarFile, eventGoogleCalendarUrl, parseReplyDocument, replyCardsFromText, validReplyCardState } from "../src/shared/reply-cards";
+import { emailGmailUrl, emailMailtoUrl, emailText, eventCalendarFile, eventGoogleCalendarUrl, formAnswerText, formProblems, formStart, parseReplyDocument, replyCardsFromText, validReplyCardState } from "../src/shared/reply-cards";
+import type { EmailCard, FormCard } from "../src/shared/reply-cards";
 const card = { id: "groceries", type: "checklist" as const, title: "Groceries", items: [{ id: "milk", text: "Milk" }] };
 const document = (cards: unknown[]) => JSON.stringify({ version: 1, cards });
 const block = (cards: unknown[]) => "```agent-ui\n" + document(cards) + "\n```";
@@ -87,5 +88,131 @@ describe("interactive reply contracts", () => {
     expect(url.origin).toBe("https://calendar.google.com");
     expect(url.searchParams.get("dates")).toBe("20261003T230000Z/20261004T000000Z");
     expect(url.searchParams.get("text")).toBe(event.title);
+  });
+
+  describe("email drafts", () => {
+    const draft = { id: "reply", type: "email", title: "Reply to Sam", to: ["sam@example.com"], cc: ["ann@example.com"], subject: "Saturday", body: "Hi Sam,\nSee you then." };
+    it("accepts a draft with only a body, and trims headers but keeps the body as written", () => {
+      expect(parseReplyDocument(document([{ id: "note", type: "email", title: "Note", body: "  Indented\n" }]))?.cards[0])
+        .toEqual({ id: "note", type: "email", title: "Note", body: "  Indented\n" });
+      expect(parseReplyDocument(document([{ ...draft, to: [" sam@example.com "], subject: " Saturday " }]))?.cards[0]).toEqual(draft);
+    });
+    it.each([
+      ["a display name in an address", { to: ["Sam <sam@example.com>"] }],
+      ["two addresses in one entry", { to: ["sam@example.com, ann@example.com"] }],
+      ["an address with no domain", { cc: ["sam@"] }],
+      ["an empty recipient list", { to: [] }],
+      ["more than 20 recipients", { to: Array.from({ length: 21 }, (_, i) => `p${i}@example.com`) }],
+      ["recipients that are not a list", { to: "sam@example.com" }],
+      ["a blank body", { body: "  \n " }],
+      ["a body over 20,000 characters", { body: "x".repeat(20_001) }],
+      ["a blank subject", { subject: " " }],
+      ["an unknown field", { bcc: ["x@example.com"] }],
+    ])("keeps a draft with %s as code", (_, change) => {
+      expect(parseReplyDocument(document([{ ...draft, ...change }]))).toBeNull();
+    });
+    it("opens in a mail app or Gmail with every header and CRLF line breaks, and copies as plain text", () => {
+      const card = parseReplyDocument(document([draft]))!.cards[0] as EmailCard;
+      expect(emailMailtoUrl(card)).toBe("mailto:sam@example.com?cc=ann@example.com&subject=Saturday&body=Hi%20Sam%2C%0D%0ASee%20you%20then.");
+      const gmail = new URL(emailGmailUrl(card));
+      expect(gmail.origin + gmail.pathname).toBe("https://mail.google.com/mail/");
+      expect(Object.fromEntries(gmail.searchParams)).toEqual({ view: "cm", fs: "1", to: "sam@example.com", cc: "ann@example.com", su: "Saturday", body: draft.body });
+      expect(emailText(card)).toBe("To: sam@example.com\nCc: ann@example.com\nSubject: Saturday\n\nHi Sam,\nSee you then.");
+      const bare: EmailCard = { id: "x", type: "email", title: "X", body: "Just this & that?" };
+      expect(emailMailtoUrl(bare)).toBe("mailto:?body=Just%20this%20%26%20that%3F");
+      expect(emailText(bare)).toBe("Just this & that?");
+    });
+  });
+
+  describe("forms", () => {
+    const fields = [
+      { id: "city", label: "Destination", kind: "text", required: true, placeholder: "Town" },
+      { id: "nights", label: "Nights", kind: "number", value: 2 },
+      { id: "when", label: "Arrive", kind: "date", value: "2026-11-20" },
+      { id: "pace", label: "Pace", kind: "choice", options: ["Relaxed", "Packed"], value: "Relaxed" },
+      { id: "room", label: "Room", kind: "select", options: ["King", "Twin"] },
+      { id: "extras", label: "Extras", kind: "multi", options: ["Breakfast", "Parking"], required: true },
+      { id: "pets", label: "Bringing the dog", kind: "toggle", value: true },
+      { id: "notes", label: "Notes", kind: "textarea", help: "Anything else" },
+    ];
+    const formCard = { id: "trip", type: "form", title: "Trip details", fields };
+    const parsed = () => parseReplyDocument(document([formCard]))!.cards[0] as FormCard;
+    it("accepts every field kind and keeps a JSON number as the text a number input holds", () => {
+      const card = parsed();
+      expect(card.fields.map(field => field.kind)).toEqual(["text", "number", "date", "choice", "select", "multi", "toggle", "textarea"]);
+      expect(card.fields[1].value).toBe("2");
+      expect(formStart(card)).toEqual({ city: "", nights: "2", when: "2026-11-20", pace: "Relaxed", room: "", extras: [], pets: true, notes: "" });
+    });
+    const field = (change: object, index = 0) => document([{ ...formCard, fields: fields.map((entry, at) => at === index ? { ...entry, ...change } : entry) }]);
+    it.each([
+      ["an unknown kind", { kind: "slider" }, 0],
+      ["options on a text field", { options: ["A"] }, 0],
+      ["a choice whose options are not a list", { options: "Relaxed, Packed" }, 3],
+      ["repeated options", { options: ["King", " King"] }, 4],
+      ["more than 20 options", { options: Array.from({ length: 21 }, (_, i) => `o${i}`) }, 4],
+      ["a starting choice that is not an option", { value: "Frantic" }, 3],
+      ["a starting multi value with an unknown option", { value: ["Spa"] }, 5],
+      ["a starting date that is not a real day", { value: "2026-02-30" }, 2],
+      ["a starting number that is not a number", { value: "two" }, 1],
+      ["a toggle that starts as text", { value: "yes" }, 6],
+      ["required that is not a switch", { required: "yes" }, 0],
+      ["a blank label", { label: " " }, 0],
+      ["an invalid field ID", { id: "has space" }, 0],
+      ["an unknown field property", { max: 3 }, 1],
+      ["an empty option list", { options: [] }, 4],
+      ["a blank option", { options: ["King", "  "] }, 4],
+      ["an option over 200 characters", { options: ["King", "x".repeat(201)] }, 4],
+      ["a starting multi value that repeats an option", { value: ["Parking", "Parking"] }, 5],
+      ["help over 500 characters", { help: "x".repeat(501) }, 7],
+      ["a placeholder over 200 characters", { placeholder: "x".repeat(201) }, 0],
+      ["a starting number a number input cannot show", { value: "0x10" }, 1],
+      ["a starting number with a trailing point", { value: "1." }, 1],
+      ["a starting number spelled as a word", { value: "Infinity" }, 1],
+      ["a starting number too large to be finite", { value: "1e309" }, 1],
+    ])("keeps a form with %s as code", (_, change, index) => {
+      expect(parseReplyDocument(field(change, index))).toBeNull();
+    });
+    it("accepts every number a number input can show", () => {
+      for (const value of ["0", "-2", "2.5", ".5", "1e3", "-1.5E-2"])
+        expect(parseReplyDocument(field({ value }, 1)), value).not.toBeNull();
+    });
+    it("keeps a choosing field without options as code", () => {
+      expect(parseReplyDocument(document([{ ...formCard, fields: [{ id: "pace", label: "Pace", kind: "choice" }] }]))).toBeNull();
+    });
+    it("keeps forms with repeated field IDs, no fields, more than 20 fields or a long submit label as code", () => {
+      expect(parseReplyDocument(document([{ ...formCard, fields: [fields[0], fields[0]] }]))).toBeNull();
+      expect(parseReplyDocument(document([{ ...formCard, fields: [] }]))).toBeNull();
+      expect(parseReplyDocument(document([{ ...formCard, fields: Array.from({ length: 21 }, (_, i) => ({ ...fields[0], id: `f${i}` })) }]))).toBeNull();
+      expect(parseReplyDocument(document([{ ...formCard, fields: Array.from({ length: 20 }, (_, i) => ({ ...fields[0], id: `f${i}` })) }]))).not.toBeNull();
+      expect(parseReplyDocument(document([{ ...formCard, submitLabel: "x".repeat(41) }]))).toBeNull();
+    });
+    it("names each field that stops the answers, and why", () => {
+      const card = parsed();
+      expect(formProblems(card, formStart(card))).toEqual({ city: "This one needs an answer.", extras: "Choose at least one." });
+      expect(formProblems(card, { ...formStart(card), city: "Marfa", extras: ["Parking"], nights: "lots", when: "2026-13-01", room: "Suite", pets: "yes" as never }))
+        .toEqual({ nights: "Enter a number.", when: "Enter a real date.", room: "Choose one of the options.", pets: "Turn this on or off." });
+      expect(formProblems(card, { ...formStart(card), city: "x".repeat(4001), extras: ["Parking"] })).toEqual({ city: "Keep this under 4,000 characters." });
+      expect(formProblems(card, { ...formStart(card), city: "Marfa", extras: ["Parking"] })).toEqual({});
+    });
+    it("never reads an inherited value as an answer to a field named like one", () => {
+      const card: FormCard = { id: "f", type: "form", title: "F", fields: [{ id: "constructor", label: "A", kind: "text", required: true }] };
+      expect(formProblems(card, {})).toEqual({ constructor: "This one needs an answer." });
+      expect(formAnswerText(card, {})).toBe('My answers to "F":\n- (No answers given)');
+    });
+    it("writes the answers as one readable message, leaving out unanswered optional fields", () => {
+      const card = parsed();
+      expect(formAnswerText(card, { ...formStart(card), city: " Marfa ", extras: ["Breakfast", "Parking"], pets: false, notes: "Late check-in\nQuiet room" })).toBe([
+        'My answers to "Trip details":', "- Destination: Marfa", "- Nights: 2", "- Arrive: 2026-11-20", "- Pace: Relaxed",
+        "- Extras: Breakfast, Parking", "- Bringing the dog: No", "- Notes:", "  Late check-in", "  Quiet room",
+      ].join("\n"));
+      const single: FormCard = { id: "f", type: "form", title: "One", fields: [{ id: "a", label: "A", kind: "text" }] };
+      expect(formAnswerText(single, { a: "" })).toBe('My answers to "One":\n- (No answers given)');
+    });
+    it("saves no per-person state for drafts or forms", () => {
+      const card = parsed();
+      expect(validReplyCardState(card, { checkedIds: [], notes: {} })).toBe(true);
+      expect(validReplyCardState(card, { checkedIds: ["city"], notes: {} })).toBe(false);
+      expect(validReplyCardState(card, { checkedIds: [], notes: { city: "Marfa" } })).toBe(false);
+    });
   });
 });

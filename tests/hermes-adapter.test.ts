@@ -11,7 +11,7 @@ import type { AddressInfo } from 'node:net';
 import { Readable } from 'node:stream';
 import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
 import { gzipSync } from 'node:zlib';
-import { createHermesRuntime } from '../src/server/hermes.js';
+import { createHermesRuntime, ROSTER_REUSE_MS } from '../src/server/hermes.js';
 import { createHermesTransport } from '../src/server/hermes-transport.js';
 import type { ReadTiming, Runtime, Submission } from '../src/shared/types.js';
 
@@ -66,7 +66,7 @@ class WireSocket extends EventTarget {
     if(request.method==='file.attach')result={path:'/workspace/staged/portrait.png'};
     if(request.method==='agent-interface.submit')result={requestId:request.params.request_id,status:'accepted',runId:'task-one',...(canonicalSubmission?{app_run_id:'task-one',admission:'canonical'}:{})};
     if(request.method==='profiles.list')result={profiles:[{name:'shared',ui_meta:{agent_interface:{name:'Shared',unrelated:'preserve'}},ui_meta_revisions:{agent_interface:3},...(rosterSession?{canonical_session:rosterSession}:{})}]};
-    if(request.method==='profiles.describe')result={toolsets:[{name:'terminal',enabled:true}],skills:[],mcp_servers:[]};
+    if(request.method==='profiles.describe')result={toolsets:[{name:'terminal',enabled:true}],skills:[],mcp_servers:[{name:'calendar',enabled:true},{name:'notes',enabled:false}]};
     if(request.method==='profiles.configure')result=metadataConflict?{ok:false,applied:{ui_meta:false,ui_meta_conflicts:{agent_interface:{actual:4}}}}:{ok:true,applied:{ui_meta:true}};
     if(request.method==='config.get')result={value:request.params.key==='reasoning'?'high':'normal'};
     if(request.method==='image.generate')result={available:imageReady,success:false,error:'No image generation backend configured'};
@@ -183,6 +183,56 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     deferredMethods.delete('profiles.list');
     expect((await runtime.listBots())[0].id).toBe('new');
   });
+  it('reuses a settled roster read briefly, until Hermes reports a change', async () => {
+    vi.useFakeTimers({toFake:['Date']});
+    const reads=()=>calls.filter(call=>call.method==='profiles.list').length;
+    await runtime.listBots();
+    const first=reads();
+    const reused=await runtime.listBots();
+    expect(reads()).toBe(first);
+    // Each caller gets its own list, so one cannot change what another holds.
+    reused.pop();
+    expect(await runtime.listBots()).toHaveLength(1);
+    sockets[0].receive({method:'event',params:{session_id:'',type:'sessions.changed',payload:{}}});
+    await runtime.listBots();
+    expect(reads()).toBe(first+1);
+    vi.advanceTimersByTime(ROSTER_REUSE_MS);
+    await runtime.listBots();
+    expect(reads()).toBe(first+2);
+  });
+  it('reads the roster again after any profile write, without waiting for a Hermes change notice', async () => {
+    vi.useFakeTimers({toFake:['Date']});
+    const reads=()=>calls.filter(call=>call.method==='profiles.list').length;
+    await runtime.listBots();
+    const before=reads();
+    await runtime.setAvatar!('shared',{mode:'mascot',family:'cactus',color:'#4a7',eyes:'round',accessory:'none'} as never);
+    await runtime.listBots();
+    // setAvatar reads the roster once itself; the listing after it reads again instead of reusing.
+    expect(reads()).toBe(before+2);
+    metadataConflict=true;
+    await runtime.listBots();
+    await expect(runtime.setAvatar!('shared',{mode:'mascot',family:'bear',color:'#4a7',eyes:'round',accessory:'none'} as never)).rejects.toThrow('changed on another client');
+    const failed=reads();
+    await runtime.listBots();
+    expect(reads()).toBe(failed+1);
+  });
+  it('reads every profile\'s routines at once and keeps roster order', async () => {
+    beforeSend=(request,socket)=>{
+      if(request.method!=='profiles.list')return;
+      deferredMethods.add('profiles.list');
+      queueMicrotask(()=>socket.receive({jsonrpc:'2.0',id:request.id,result:{profiles:[{name:'first'},{name:'second'}]}}));
+    };
+    const pending=new Map<string,(jobs:unknown[])=>void>();
+    vi.stubGlobal('fetch',vi.fn((url:URL)=>new Promise<Response>(resolve=>{
+      pending.set(new URL(url).searchParams.get('profile')!,jobs=>resolve(Response.json(jobs)));
+    })));
+    const listed=runtime.routines();
+    await vi.waitFor(()=>expect([...pending.keys()]).toEqual(['first','second']));
+    const job=(id:string)=>({id,name:id,schedule_display:'daily',enabled:true});
+    pending.get('second')!([job('later')]);
+    pending.get('first')!([job('earlier')]);
+    expect((await listed).map(routine=>[routine.botId,routine.id])).toEqual([['first','earlier'],['second','later']]);
+  });
   it('admits through one canonical submit RPC and maps interruption rejection', async () => {
     canonicalSubmission=true;
     await runtime.status(); calls=[];
@@ -215,7 +265,7 @@ describe('Hermes adapter trust and recovery boundary',()=>{
   it('lists bots without loading profile descriptions and loads detail lazily', async () => {
     await runtime.listBots(); await runtime.listBots();
     expect(calls.filter(call=>call.method==='profiles.describe')).toHaveLength(0);
-    expect((await runtime.botDetail!('shared')).enabledTools).toEqual(['terminal']);
+    expect(await runtime.botDetail!('shared')).toMatchObject({enabledTools:['terminal'],enabledMcpServers:['calendar'],availableMcpServers:['calendar','notes']});
     expect(calls.filter(call=>call.method==='profiles.describe')).toHaveLength(1);
   });
   it('streams only the unpersisted tail with the saved prompt origin and no open RPC', async () => {
@@ -278,6 +328,28 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     expect(result.activity.state).toBe('blocked');
   });
 
+  it('shows an assistant\'s terminal request only when this executor owns it and its command is one visible line', async () => {
+    snapshot.executor_epoch='epoch-one';
+    const asks=(id:string,params:Record<string,unknown>,owned=true)=>({id,method:'agent_interface.terminal_request',...(owned?{app_local_secure:true}:{}),params});
+    snapshot.open_requests=[
+      asks('srq-term',{reason:'r'.repeat(250),what_to_do:'Run it, then press Done.',command:'sudo systemctl restart hermes'}),
+      asks('srq-bare',{reason:'No command',what_to_do:'Look around.'}),
+      asks('srq-mirrored',{reason:'Mirrored',what_to_do:'Nothing'},false),
+      asks('srq-malformed',{reason:'No action'}),
+      asks('srq-newline',{reason:'Runs on paste',what_to_do:'Press Done.',command:'ls\nrm -rf ~'}),
+      asks('srq-hidden',{reason:'Disguised',what_to_do:'Press Done.',command:'ls\u202e'}),
+      asks('srq-long',{reason:'Too long',what_to_do:'Press Done.',command:'x'.repeat(501)}),
+      asks('srq-typed',{reason:'Not text',what_to_do:'Press Done.',command:7}),
+    ];
+    const result=await runtime.conversation('shared');
+    expect(result.attention![0]).toEqual({id:'srq-term',kind:'terminal',title:'Use the terminal?',detail:'r'.repeat(200),secure:undefined,
+      questions:undefined,terminal:{epoch:'epoch-one',sessionId:'live-one',reason:'r'.repeat(200),whatToDo:'Run it, then press Done.',command:'sudo systemctl restart hermes'}});
+    expect(result.attention![1].terminal).toEqual({epoch:'epoch-one',sessionId:'live-one',reason:'No command',whatToDo:'Look around.'});
+    // Anything that is not an owned, well-formed ask stays an official-client request with no terminal card.
+    expect(result.attention!.slice(2).map(request=>[request.kind,request.terminal])).toEqual(Array(6).fill(['official',undefined]));
+    expect(result.activity.state).toBe('blocked');
+  });
+
   it('shows an assistant\'s connection request only when this executor owns it and names a requestable connection', async () => {
     snapshot.executor_epoch='epoch-one';
     snapshot.open_requests=[
@@ -304,7 +376,7 @@ describe('Hermes adapter trust and recovery boundary',()=>{
   });
 
   it('bridges profile-scoped native speech and caps the returned audio', async () => {
-    const fetcher = vi.fn(async (url: URL | string, init?: RequestInit) => {
+    const fetcher = vi.fn(async (url: URL | string, _init?: RequestInit) => {
       const path = new URL(url).pathname;
       if (path.endsWith('/transcribe')) return Response.json({ok:true,transcript:'Pick up milk',provider:'fixture'});
       if (path.endsWith('/speak')) return Response.json({ok:true,data_url:'data:audio/mpeg;base64,' + Buffer.from('audio').toString('base64'),provider:'fixture'});
@@ -870,6 +942,43 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     vi.stubGlobal('fetch',vi.fn(async()=>new Response(new ReadableStream(),{headers:{'Content-Length':'2000001'}})));
     await expect(runtime.setAvatar!('shared',{mode:'portrait',origin:'uploaded',src:file.url!})).rejects.toThrow('Hermes portraits must be 2 MB or smaller.');
     expect(calls.some(call=>call.method==='profiles.set_asset')).toBe(false);
+  });
+
+  it('saves the Talk voice beside the avatar, preserving other metadata and refusing a stale revision',async()=>{
+    await runtime.setVoice!('shared','cedar');
+    const metadata=calls.find(call=>call.method==='profiles.configure')?.params;
+    expect(metadata?.ui_meta.agent_interface).toEqual({name:'Shared',unrelated:'preserve',voice:'cedar'});
+    expect(metadata?.ui_meta_expected_revisions.agent_interface).toBe(3);
+    metadataConflict=true;
+    await expect(runtime.setVoice!('shared','ash')).rejects.toMatchObject({statusCode:409});
+  });
+
+  it('reads live voice from the add-on over the service path and mints only a matching session',async()=>{
+    const fetcher=vi.fn(async(url: URL | string, _init?: RequestInit)=>{
+      const path=new URL(url).pathname;
+      if(path.endsWith('/voice/status'))return Response.json({available:false,reason:'The WildBots voice plugin is not linked into Hermes.'});
+      if(path.endsWith('/voice/client-secret'))return Response.json({clientSecret:'ek_fixture',expiresAt:1790000000,model:'gpt-realtime-2.1',voice:'marin'});
+      return Response.json({profiles:[]});
+    });
+    vi.stubGlobal('fetch',fetcher);
+    expect((await runtime.capabilities()).liveVoice).toEqual({supported:false,reason:'The WildBots voice plugin is not linked into Hermes.'});
+    const status=fetcher.mock.calls.find(call=>new URL(call[0]).pathname.endsWith('/voice/status'))!;
+    expect(new URL(status[0]).pathname).toBe('/api/agent-interface/service/agent-interface/voice/status');
+    expect(new Headers(status[1]!.headers).get('Authorization')).toBe('Bearer '+token);
+    const input={voice:'marin' as const,instructions:'Speak for Shared.',tools:[]};
+    expect(await runtime.realtimeSession!(input)).toEqual({clientSecret:'ek_fixture',expiresAt:1790000000,model:'gpt-realtime-2.1',voice:'marin'});
+    const minted=fetcher.mock.calls.find(call=>new URL(call[0]).pathname.endsWith('/voice/client-secret'))!;
+    expect(JSON.parse(minted[1]!.body as string)).toEqual({model:'gpt-realtime-2.1',...input});
+    await expect(runtime.realtimeSession!({...input,voice:'ash'})).rejects.toMatchObject({statusCode:502});
+  });
+
+  it('passes on the add-on\'s plain voice errors and names an add-on that predates live voice',async()=>{
+    let answer=Response.json({error:'Sign in to ChatGPT in Hermes to use live voice.'},{status:409});
+    vi.stubGlobal('fetch',vi.fn(async()=>answer));
+    const input={voice:'marin' as const,instructions:'Speak.',tools:[]};
+    await expect(runtime.realtimeSession!(input)).rejects.toMatchObject({statusCode:409,message:'Sign in to ChatGPT in Hermes to use live voice.'});
+    answer=Response.json({error:'Service operation not available'},{status:404});
+    await expect(runtime.realtimeSession!(input)).rejects.toMatchObject({statusCode:503,message:expect.stringContaining('predates live voice')});
   });
 
   it('does not overwrite a native portrait after metadata CAS rejects a stale save',async()=>{
@@ -1660,6 +1769,7 @@ describe('owned Hermes operation response decoding', () => {
     expect(await runtime.automationRequest!(input)).toEqual(result);
   });
   it.each([
+    {input:{operation:'search',profile,query:'fence'},result:[{botId:profile,botName:'Shared',sessionId:42,title:'Fence',snippet:'Fixed'}]},
     {input:{operation:'memory',profile},result:preview},
     {input:{operation:'usage',profile,days:30},result:[]},
     {input:{operation:'history',profile,sessionId:'stored',offset:0},result:{...history,messages:[{id:'row',role:'unexpected',text:'private-canary'}]}},
@@ -1671,6 +1781,7 @@ describe('owned Hermes operation response decoding', () => {
     expect(fetcher).toHaveBeenCalledOnce();
   });
   it.each([
+    {input:{operation:'task_get',profile,taskId:'task'},result:{...task,id:42}},
     {input:{operation:'overview',profile},result:{ok:true}},
     {input:{operation:'task_get',profile,taskId:'task'},result:overview},
     {input:{operation:'goal_pause',profile},result:{...overview,tasks:{supported:true,items:[{id:'invalid'}]}}},

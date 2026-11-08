@@ -349,7 +349,7 @@ it("finds pending decisions through indexes on a realistically sized history", (
       AND EXISTS(SELECT 1 FROM outbox o WHERE o.event_id=asked.id AND o.user_id=?)`).all(now - 86400000, "one") as { detail: string }[]).map(row => row.detail);
     // Only the last day of events is read, and every other step is a keyed lookup: no step reads a whole table.
     expect(plan).toContainEqual(expect.stringMatching(/^SEARCH asked USING INDEX notification_events_created \(created_at>\?\)/));
-    expect(plan.filter(detail => /^SCAN /.test(detail))).toEqual([]);
+    expect(plan.filter(detail => detail.startsWith("SCAN "))).toEqual([]);
     const started = performance.now();
     expect(store.pendingDecisions("one").size).toBeGreaterThan(0);
     expect(performance.now() - started).toBeLessThan(250);

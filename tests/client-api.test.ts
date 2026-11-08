@@ -27,6 +27,12 @@ describe('client request recovery',()=>{
     expect(transport.fetch).toHaveBeenCalledTimes(1);
   });
 
+  it.each([{method:undefined,draft:false,deadline:20_000},{method:'POST',draft:true,deadline:60_000}])('mentions the draft only when a $method request was a write',async({method,draft,deadline})=>{
+    stalledBody();
+    const failure=expect(api('/today',method?{method,body:'{}'}:{})).rejects.toSatisfy((error:Error)=>error.message.includes('draft')===draft);
+    await vi.advanceTimersByTimeAsync(deadline);await failure;
+  });
+
   it('reads once more when an assistant turned private mid-read, and only once',async()=>{
     const changed={ok:false,status:503,headers:new Headers(),text:async()=>JSON.stringify({error:'Assistants changed',code:'assistants_changed'})};
     const fetch=vi.fn().mockResolvedValueOnce(changed).mockResolvedValueOnce({ok:true,status:200,headers:new Headers(),text:async()=>'{"bots":[]}'});

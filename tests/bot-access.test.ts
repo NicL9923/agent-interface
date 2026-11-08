@@ -331,7 +331,17 @@ describe("private assistants under concurrency and side channels", () => {
     const theirs = (await s.app.inject({ url: `/api/submissions/${requestId}`, headers: s.member })).json();
     expect(theirs).toMatchObject({ status: "uncertain" });
     expect(JSON.stringify(theirs)).not.toContain("run-x");
-    expect((await s.app.inject({ url: `/api/submissions/${requestId}`, headers: s.owner })).json()).toMatchObject({ runId: "run-x" });
+    expect((await s.app.inject({ url: `/api/submissions/${requestId}`, headers: s.owner })).json()).toMatchObject({ runId: "run-x", text: "Hi" });
+    expect(theirs).not.toHaveProperty("text");
+    // Anyone who sees the assistant can follow a retry's receipt, but only its sender learns its text.
+    const retry = randomUUID();
+    s.store.intent({ requestId: retry, botId: "family", senderId: "local-one", text: "Try again", attachments: [], retryOf: "m1" });
+    s.store.receipt({ requestId: retry, status: "accepted", runId: "run-r" });
+    s.runtime.lookupSubmission = async () => null;
+    const followed = (await s.app.inject({ url: `/api/submissions/${retry}`, headers: s.member })).json();
+    expect(followed).toMatchObject({ status: "accepted", runId: "run-r" });
+    expect(followed).not.toHaveProperty("text");
+    expect((await s.app.inject({ url: `/api/submissions/${retry}`, headers: s.owner })).json()).toMatchObject({ text: "Try again" });
     // Kim ran a trial while the assistant was shared; it became private and the routine was deleted.
     const trial = randomUUID();
     s.store.rememberRoutineTrial(trial, "local-two", "r-gone", "family");
@@ -430,6 +440,21 @@ describe("private assistant notification history", () => {
     store.recordEvents([event("hidden-1"), event("hidden-2")], "2");
     expect(store.eventPage("local-two", 0, store.latestEventFrontier(), ["family"]).frontier).toBe(before);
     expect(Number(store.eventPage("local-one", 0, store.latestEventFrontier(), ["family", secret]).frontier)).toBeGreaterThan(Number(before));
+  });
+
+  it("passes over visible events before the recap start, moving the frontier past them but not past hidden ones", () => {
+    const store = seeded();
+    store.savePresentation("family", { shared: true });
+    store.recordEvents([event("old", "family"), event("recent", "family")], "1");
+    const since = Date.now() - 60_000;
+    store.db.prepare("UPDATE notification_events SET created_at=? WHERE id='old'").run(since - 1);
+    const visible = store.latestEventFrontier();
+    store.recordEvents([event("hidden")], "2");
+    const page = store.eventPage("local-two", 0, store.latestEventFrontier(), ["family", secret], new Date(since).toISOString());
+    expect(page.events.map(row => row.id)).toEqual(["recent"]);
+    expect(page).toMatchObject({ frontier: String(visible), hasMore: false });
+    // Without a recap start the same page includes the older event.
+    expect(store.eventPage("local-two", 0, store.latestEventFrontier(), ["family"]).events.map(row => row.id)).toEqual(["old", "recent"]);
   });
 });
 

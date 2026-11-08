@@ -1,0 +1,18 @@
+{
+  "request": "GET /api/computer",
+  "response": {
+    "available": true,
+    "running": true,
+    "browserReady": true,
+    "label": "Household computer",
+    "control": {
+      "kind": "bot",
+      "name": "garden"
+    },
+    "terminal": {
+      "available": false,
+      "target": "",
+      "reason": "The system terminal is turned off for this household."
+    }
+  }
+}

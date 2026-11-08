@@ -9,6 +9,17 @@ type SessionEvents = {
   /** The open assistant left this person's roster, as when another member made it personal. */
   onBotGone(botId: string): void;
 };
+/**
+ * Dispatched on window when this person's group catalog may have changed: the household stream's
+ * `groups` notice, a roster notice, or the stream (re)connecting, since notices sent while it was
+ * down are lost.
+ */
+export const GROUPS_EVENT = "agent-interface:groups";
+/** Group chat reads that only cover a notice the stream missed. */
+export const GROUP_FALLBACK_POLL_MS = 5 * 60_000;
+/** Until the server has sent a `groups` notice, it may be one that never does, so poll as before. */
+export const GROUP_UNNOTIFIED_POLL_MS = 30_000;
+const groupsChanged = () => window.dispatchEvent(new Event(GROUPS_EVENT));
 /** A bootstrap this recent already answers a focus or visibility change, such as alt-tabbing back. */
 const FRESH_MS = 5_000;
 export function useSession(events: SessionEvents) {
@@ -17,6 +28,8 @@ export function useSession(events: SessionEvents) {
   const initialDestination = useRef(false);
   const [boot, setBoot] = useState<Bootstrap | null>(null);
   const [auth, setAuth] = useState(false);
+  /** The account whose household stream has sent a `groups` notice: that server pushes catalog changes. */
+  const [groupsNotifiedFor, setGroupsNotifiedFor] = useState<string | null>(null);
   const [botId, setBotId] = useState(
     () => new URLSearchParams(location.search).get("bot") || "",
   );
@@ -142,7 +155,10 @@ export function useSession(events: SessionEvents) {
   }, [refresh]);
   useEffect(() => {
     if (!boot?.user.id || auth) return;
-    const stream = changeStream("/events", () => void refresh());
+    const userId = boot.user.id;
+    // The server sends `groups` once on every connect and on each catalog change, so connecting or a
+    // roster notice does not read the group catalog itself.
+    const stream = changeStream("/events", () => { void refresh(); }, undefined, { groups: () => { setGroupsNotifiedFor(userId); groupsChanged(); } });
     const wake = () => {
       if (document.visibilityState !== "hidden" && navigator.onLine !== false) stream.open();
       else stream.close();
@@ -189,5 +205,8 @@ export function useSession(events: SessionEvents) {
   return {
     boot, auth, botId, setBotId, disconnected, appUnavailable, offline, checkingConnection,
     identityEpoch, refresh, reconnect, savePreferences, editPreferences, signedIn, signedOut,
+    /** This server sends `groups` notices, so a slow fallback poll is enough. */
+    // Per account, so another account starts unproven in the same render that switches to it.
+    groupsNotified: !!boot?.user.id && groupsNotifiedFor === boot.user.id,
   };
 }

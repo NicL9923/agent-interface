@@ -27,7 +27,7 @@ The revision-bound [add-on](../src/hermes/extension.py) adds durable admission, 
 
 The add-on runs `agent-interface.open` and `agent-interface.discover` on Hermes's RPC pool instead of the socket's read loop, with one lock per assistant, so one assistant's history read never waits on another's. It reuses decorated history for up to ten minutes while the session's history, journal, database files and redaction state are unchanged, or 30 seconds when it cannot read the redaction state. Each open reports its phase timings, which the app server sends as a `Server-Timing` header on conversation reads.
 
-After the add-on admits an app message as steering, it closes that session's open clarify, secure-input, computer handoff and connection requests, except a login asked for by address that belongs to another member, so the blocked tool returns and native steering drains. It withdraws each exact request under the native `server_requests` lock with the same settlement as native `cancel`, and wraps tool dispatch so a result whose request was closed this way says the user replied in chat. When the household computer is configured, it also registers the `agent_interface.computer_handoff` server request contract and the `computer_request_handoff` tool; a revision without the contract seam keeps the computer without that tool. It always registers the `agent_interface.connection_request` contract and the `request_connection` tool the same way, when the seam exists. These use private native seams, so a new Hermes revision needs qualification before release, as for the rest of the add-on. `tests/hermes_chat_reply_test.py` runs against a Hermes checkout's real `tui_gateway/server_requests.py` when `HERMES_SOURCE` names it.
+After the add-on admits an app message as steering, it closes that session's open clarify, secure-input, computer handoff, terminal and connection requests, except a login asked for by address that belongs to another member, so the blocked tool returns and native steering drains. It withdraws each exact request under the native `server_requests` lock with the same settlement as native `cancel`, and wraps tool dispatch so a result whose request was closed this way says the user replied in chat. When the household computer is configured, it also registers the `agent_interface.computer_handoff` server request contract and the `computer_request_handoff` tool, and likewise the `agent_interface.terminal_request` contract and the `computer_request_terminal` tool; a revision without the contract seam keeps the computer without those tools. It always registers the `agent_interface.connection_request` contract and the `request_connection` tool the same way, when the seam exists. These use private native seams, so a new Hermes revision needs qualification before release, as for the rest of the add-on. `tests/hermes_chat_reply_test.py` runs against a Hermes checkout's real `tui_gateway/server_requests.py` when `HERMES_SOURCE` names it.
 
 The dashboard wrapper sets the native switch for externally managed installs, so
 the native dashboard hides its update control and its check and install routes
@@ -149,6 +149,20 @@ conflicts, paused trial execution and same-request deduplication in a disposable
 home. Voice delegates to native audio routes. See
 [Household experience](HouseholdExperience.md) for client behavior and limits.
 
+Live Talk uses `hermes_cli.plugin_provider_requests.credentialed_provider_request`
+from the WildBots voice plugin (`requires_auth: [openai-codex]`) to mint OpenAI
+Realtime client secrets, with Hermes attaching the ChatGPT credential. The
+session shape, the frame check through the plugins link and the browser's WebRTC
+call were verified by hand against production Hermes and OpenAI. The application
+tests use a fake `credentialed_provider_request` and never contact OpenAI, and no
+isolated probe covers this seam yet. A host rehearsal showed Hermes mints for the
+linked plugin even when it is not enabled, so the add-on gates on the plugin's
+enabled state through `hermes_cli.plugins._get_enabled_plugins` and
+`_get_disabled_plugins`, the readers Hermes's own loader uses; those private names
+are checked against Hermes 0.15.2 source only, and their absence fails closed. An
+older Hermes without the module reports live voice as unavailable. See
+[Hosting](Hosting.md#live-voice-plugin).
+
 The November 4 follow-up for Hermes 3a1e9ef adopts three native features and
 degrades on an older revision. Without native skill locks, the overview omits
 `lockSupported` and both clients hide the lock control. Without `needs_auth`
@@ -158,6 +172,22 @@ in `mcp.servers.status`, connection cards keep the earlier token rule. A
 computer stays off rather than run a weaker metadata check. The automation
 probe now locks a skill, checks that an approved assistant edit to it is
 refused, and unlocks it again.
+
+The November 6 follow-up qualifies Hermes main `74915d7af8d3115c3eb821893f3c01ab783146a5`, which
+contains v0.23.0. Upstream commits `e9f8551` and `1fcc57e` deleted the Bot Chat mailbox helpers
+`has_mailbox`, `_scan_read`, `_next_sequence` and `complete_delivery` once the authority FIFO stopped
+reading the mailbox. The add-on's own deliveries still use that directory, so `bot_delivery.ensure_helpers`
+supplies the four over the native `_root`, `_locked`, `_read`, `_write` and `_delivery_id` that remain,
+and keeps Hermes's own where they exist. Without it the guarded gateway refused to start. The full spike,
+native and real-application probes passed against that revision in disposable homes.
+
+The same follow-up adopts the native cron cancel route (`POST /api/cron/jobs/{id}/cancel`) and the job
+list's `live_execution`. A routine with a run in flight shows Stop run on web and iOS; the schedule is
+unchanged. Stop works during a trial too: the trial then ends, reads as failed with "This trial was stopped
+before it finished.", and releases its maintenance reservation. In run history, an attempt Hermes records
+as `cancelled` reads as Stopped and one recorded as `missed` as Didn't run wherever Hermes names the
+attempt exactly: session execution IDs, ledger rows and native `exec:N` output rows. Output documents
+matched by time still pair only with finished runs, so a stopped run never takes another run's document. Both routes exist at `ed1afb0` too.
 
 New full spike runs save receipts in their disposable `evidence` directory,
 printed at completion. Archive a successful run with

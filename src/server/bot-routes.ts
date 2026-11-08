@@ -9,6 +9,7 @@ import { notFound, visible, type Roster } from "./bot-access.js";
 import { httpError } from "./http-error.js";
 import { assertRoutinesStayPrivate, serialDelivery } from "./routine-delivery.js";
 import { avatar, botSaveRequest, id } from "./schemas.js";
+import { TALK_VOICES } from "../shared/voice.js";
 import type { Store } from "./store.js";
 
 /** Marks a row unread when its latest message is newer than this person's last read of the chat. */
@@ -28,11 +29,14 @@ export class BotDirectory {
   forget(botId: string) {
     this.details.delete(botId);
   }
+  /** nativeAvatar means Hermes keeps profile metadata, the avatar and the Talk voice; otherwise this app's store does. */
   decorate(bot: Bot, nativeAvatar = false): Bot {
-    return { ...bot, ...this.store.presentation(bot.id), ...(nativeAvatar ? { avatar: bot.avatar } : {}) };
+    const voice = nativeAvatar ? bot.voice : this.store.botVoice(bot.id) ?? bot.voice;
+    const { voice: _, ...rest } = bot;
+    return { ...rest, ...this.store.presentation(bot.id), ...(nativeAvatar ? { avatar: bot.avatar } : {}), ...(voice ? { voice } : {}) };
   }
   lean(bots: Bot[]): Bot[] {
-    return bots.map(({ instructions, enabledMcpServers, enabledTools, enabledSkills, ...bot }) => bot);
+    return bots.map(({ instructions, enabledMcpServers, availableMcpServers, enabledTools, enabledSkills, ...bot }) => bot);
   }
   /** The roster this person may see, lean or with each assistant's writable configuration. */
   async rosterFor(userId: string, bots: Bot[], nativeAvatar: boolean, lean: boolean) {
@@ -177,6 +181,14 @@ export function installBotRoutes(app: FastifyInstance, collaborators: {
       await runtime.setAvatar(bot.id, value);
     store.saveAvatar(bot.id, value, bot.shared);
     return value;
+  });
+  // Like the avatar, anyone who sees the assistant may change how it sounds.
+  apiRoute(app, "PUT /bots/:id/voice", { body: z.object({ voice: z.enum(TALK_VOICES) }).strict() }, async (req, { voice }) => {
+    const bot = (await runtime.listBots()).find(b => b.id === req.params.id);
+    if (!bot) throw httpError(404, "Bot not found");
+    if (await nativeAvatar() && runtime.setVoice) await runtime.setVoice(bot.id, voice);
+    else store.saveVoice(bot.id, voice);
+    return { voice };
   });
   apiRoute(app, "POST /bots/:id/portrait", { before: () => requireCapability("portraitGeneration"),
     body: z.object({ prompt: z.string().min(1).max(2000) }) }, async (req, { prompt }) => {

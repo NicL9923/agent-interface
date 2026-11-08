@@ -81,10 +81,6 @@ export function foldSummary(work: Message[], duration?: number, running = false)
 export function quoteBlock(text: string) {
   return text.trim().replace(/\r\n?/g, "\n").split("\n").map(line => line.trim() ? `> ${line}` : ">").join("\n");
 }
-/** A saved reply's title: its words without Markdown marks, on one line. */
-export function replyTitle(text: string) {
-  return text.replace(/[#*_`]/g, " ").replace(/\s+/g, " ").trim().slice(0, 120) || "Saved reply";
-}
 
 type Question = NonNullable<AttentionRequest["questions"]>[number];
 /** Whether a question has an answer worth sending. */

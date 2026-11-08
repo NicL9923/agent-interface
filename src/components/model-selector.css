@@ -56,6 +56,8 @@
 .model-chip-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* A 24 px chip keeps the header light; its touch target is still 44 px. */
 .model-chip::after { content: ""; position: absolute; inset: -10px -4px; }
+/* Under the header's name, the larger target grows only downward, into the header's padding, never over the name. */
+.chat-model-slot .model-chip::after { inset: 0 -4px -8px; }
 .model-popover { width: min(420px, calc(100vw - 24px)); padding: 12px; background: var(--raised); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 12px 32px #0000002e; }
 .model-popover .model-selector.inline { margin: 0; }
 .model-popover .model-picker-content { border-top: 0; padding: 0; }

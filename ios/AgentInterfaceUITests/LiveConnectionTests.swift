@@ -81,8 +81,8 @@ import XCTest
       app.buttons["botProfile"].tap()
       XCTAssertTrue(app.buttons["profileSettings"].waitForExistence(timeout: 10))
       app.buttons["profileSettings"].tap()
-      XCTAssertTrue(app.textFields["Name"].waitForExistence(timeout: 10))
-      app.selectSettingsTab("Tools")
+      XCTAssertTrue(app.collectionViews["settingsSections"].waitForExistence(timeout: 10))
+      app.selectSettingsTab("Behavior")
       // The full Hermes catalog extends beyond the viewport. Its first switch
       // proves the catalog loaded without relying on a lazily rendered footer.
       let firstTool = app.switches.firstMatch
@@ -93,9 +93,9 @@ import XCTest
         XCTWaiter.wait(for: [loaded], timeout: 20), .completed,
         "The real Hermes tool catalog must finish loading.")
       capture(app, "Native configuration with the real Hermes tool catalog")
-      app.buttons["Avatar"].tap()
-      capture(app, "Native avatar configuration")
-      app.buttons["Details"].tap()
+      app.selectSettingsTab("Profile")
+      XCTAssertTrue(app.textFields["Name"].waitForExistence(timeout: 10))
+      capture(app, "Native profile and avatar configuration")
       reveal(app.buttons["Delete assistant"], in: app, direction: .up)
       app.buttons["Delete assistant"].tap()
       let deletion = app.buttons.matching(identifier: "Delete assistant")

@@ -236,6 +236,19 @@ class PlatformTests(unittest.TestCase):
             self.assertFalse(self.platform.gate)
             self.assertFalse((self.home / ".drain_request.json").exists())
 
+    def test_failed_baseline_is_a_harmless_refusal(self):
+        # An expired verification session fails the read-only baseline before anything is held.
+        def google(): raise RuntimeError("Original Google HTTP and fresh WebSocket authentication were not verified")
+        self.platform.google = google
+        before = self.states.read_bytes()
+        errors = io.StringIO()
+        with contextlib.redirect_stderr(errors), self.assertRaises(SystemExit) as refusal: self.platform.quiescence()
+        self.assertEqual(refusal.exception.code, 75)
+        self.assertIn("Quiescence refused before maintenance: Original Google HTTP", errors.getvalue())
+        self.assertEqual(self.states.read_bytes(), before)
+        self.assertFalse(self.platform.gate)
+        self.assertFalse(self.platform.record.exists())
+
     def test_partial_clone_candidate_materializes_before_stop_and_installs_without_upstream(self):
         upstream = self.directory / "upstream"
         subprocess.run(["git", "clone", "--no-hardlinks", str(self.source), str(upstream)],
@@ -823,7 +836,10 @@ def sync_venv(extras=None, **kwargs):
 
     def test_an_interpreter_outside_the_tool_store_is_refused(self):
         self.select(os.sys.executable)
-        with self.assertRaisesRegex(RuntimeError, "^The baseline managed interpreter is outside the native tool store$"): self.platform.quiescence()
+        errors = io.StringIO()
+        with contextlib.redirect_stderr(errors), self.assertRaises(SystemExit) as refusal: self.platform.quiescence()
+        self.assertEqual(refusal.exception.code, 75)
+        self.assertEqual(errors.getvalue(), "Quiescence refused before maintenance: The baseline managed interpreter is outside the native tool store\n")
         self.assertFalse((self.stage / "platform.json").exists())
         # A record from an older helper has no interpreter; the tool store still bounds it.
         self.platform.save({"baseline": {"source": list(self.platform.source_state())}, "phase": "quiescent"})

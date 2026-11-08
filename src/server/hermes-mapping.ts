@@ -1,16 +1,19 @@
 import type { ActivityState, Bot, Conversation, FileRef, Message, SubmissionReceipt, ToolCall } from '../shared/types.js';
 import type { ExplicitLoginRequest, SecureRequest } from '../shared/vault.js';
-import { computerHandoffMethod as COMPUTER_HANDOFF, type ComputerHandoff } from '../shared/computer.js';
+import { computerHandoffMethod as COMPUTER_HANDOFF, terminalCommandPattern, terminalRequestLimits, terminalRequestMethod as TERMINAL_REQUEST, type ComputerHandoff, type TerminalRequest } from '../shared/computer.js';
 import { connectionRequestMethod as CONNECTION_REQUEST, requestableConnectionId, type ConnectionRequest } from '../shared/integrations.js';
 import { messageOrigin, withMessageOrigins, wireOrigin } from '../shared/message-origin.js';
+import { excerpt } from '../shared/event-copy.js';
+import { markdownPlain } from '../shared/plain-text.js';
+import { isTalkVoice } from '../shared/voice.js';
 import type { Wire } from './hermes-transport.js';
 
 /** What a session's frames have said since its last read: streamed text, open requests and tools. */
 export type LiveState = {text: string; reasoning: string; state: ActivityState; requests: Wire[]; tools: ToolCall[]; detail?: string};
 export const emptyLiveState = (): LiveState => ({text: '', reasoning: '', state: 'idle', requests: [], tools: []});
 // Requests a person answers, which this client must leave open rather than refuse. The add-on's
-// computer handoff and connection request are two: refusing one would settle the assistant's request at once.
-const blockingRequests = ['clarify', 'sudo', 'secret', 'vault.save_login', 'vault.code', 'vault.unlock_prompt', 'connection', COMPUTER_HANDOFF, CONNECTION_REQUEST];
+// computer handoff, terminal request and connection request are three: refusing one would settle the assistant's request at once.
+const blockingRequests = ['clarify', 'sudo', 'secret', 'vault.save_login', 'vault.code', 'vault.unlock_prompt', 'connection', COMPUTER_HANDOFF, TERMINAL_REQUEST, CONNECTION_REQUEST];
 
 /**
  * Removes persisted segments from the front of accumulated live text. Whitespace
@@ -146,8 +149,10 @@ export function applyFrame(state: LiveState, frame: Wire, fallbackSeq: number): 
 }
 
 export function preview(session?: Wire): Bot['lastMessage'] {
-  const text = typeof session?.preview === 'string' ? session.preview.replace(/\s+/g, ' ').trim().slice(0, 160) : '';
-  if (!text || messageOrigin({id: 'preview', role: 'user', text})?.visibility === 'activity') return undefined;
+  const raw = typeof session?.preview === 'string' ? session.preview.replace(/\s+/g, ' ').trim() : '';
+  if (!raw || messageOrigin({id: 'preview', role: 'user', text: raw})?.visibility === 'activity') return undefined;
+  // Home shows the preview as plain text, so it carries the reply's words without its Markdown.
+  const text = excerpt(markdownPlain(session!.preview), 160);
   const at = typeof session?.last_active === 'number' && Number.isFinite(session.last_active)
     ? new Date(session.last_active * 1000).toISOString()
     : undefined;
@@ -166,9 +171,11 @@ export function bot(row: Wire, activity: ActivityState, detail?: Wire): Bot {
     provider: row.provider ?? detail?.model?.provider,
     shared: meta.shared ?? true,
     avatar: meta.avatar,
+    ...(isTalkVoice(meta.voice) ? {voice: meta.voice} : {}),
     enabledTools: enabled(detail?.toolsets),
     enabledSkills: enabled(detail?.skills),
     enabledMcpServers: enabled(detail?.mcp_servers),
+    availableMcpServers: detail?.mcp_servers?.map((x: Wire) => x.name),
     sessionId: row.canonical_session?.resolved_id,
     activity,
     lastMessage: preview(row.canonical_session),
@@ -256,6 +263,12 @@ export function openRequests(value: Wire, sid: string): {approvals: Conversation
     const computer: ComputerHandoff | undefined = x.method === COMPUTER_HANDOFF && x.app_local_secure === true
       && typeof owner.epoch === 'string' && typeof params.reason === 'string' && typeof params.what_to_do === 'string'
       ? {...owner, reason: params.reason.slice(0, 200), whatToDo: params.what_to_do.slice(0, 300)} : undefined;
+    // The add-on's ask for a person at the system terminal. Only this executor can settle it.
+    const terminal: TerminalRequest | undefined = x.method === TERMINAL_REQUEST && x.app_local_secure === true
+      && typeof owner.epoch === 'string' && typeof params.reason === 'string' && typeof params.what_to_do === 'string'
+      && (params.command === undefined || params.command === null || typeof params.command === 'string' && terminalCommandPattern.test(params.command))
+      ? {...owner, reason: params.reason.slice(0, terminalRequestLimits.reason), whatToDo: params.what_to_do.slice(0, terminalRequestLimits.whatToDo),
+        ...(params.command ? {command: params.command} : {})} : undefined;
     // The add-on's ask to set up one of this assistant's connections inline. Only this executor can settle it.
     const connection: ConnectionRequest | undefined = x.method === CONNECTION_REQUEST && x.app_local_secure === true
       && typeof owner.epoch === 'string' && typeof params.connection === 'string' && requestableConnectionId.test(params.connection)
@@ -263,21 +276,24 @@ export function openRequests(value: Wire, sid: string): {approvals: Conversation
       ? {...owner, connectionId: params.connection, reason: params.reason.slice(0, 200)} : undefined;
     return {
       id: String(x.id),
-      kind: secure ? 'secure' as const : clarify ? 'clarify' as const : computer ? 'computer' as const : connection ? 'connection' as const : 'official' as const,
+      kind: secure ? 'secure' as const : clarify ? 'clarify' as const : computer ? 'computer' as const : terminal ? 'terminal' as const : connection ? 'connection' as const : 'official' as const,
       title: explicit ? 'Hermes asks to save a login'
         : secure ? 'Hermes needs secure input'
-        : clarify ? 'Hermes needs your answer'
+        : clarify ? 'The assistant needs your answer'
         : computer ? 'Take over the computer?'
+        : terminal ? 'Use the terminal?'
         : connection ? 'Set up a connection?'
         : 'Continue in the official Hermes client',
       detail: explicit ? 'Check the address and reason first. The password goes directly to the encrypted Hermes vault, never into this chat or to the assistant.'
         : secure ? 'Enter this value securely. It will go directly to Hermes without becoming a chat message.'
-        : clarify ? 'Answer the questions to continue this task.'
+        : clarify ? `Answer ${(params.questions ?? []).length === 1 ? 'the question' : 'the questions'} to continue this task.`
         : computer ? computer.reason
+        : terminal ? terminal.reason
         : connection ? connection.reason
         : `Hermes is waiting for ${x.method}. Use the official client to complete credential or service setup.`,
       secure,
       ...(computer ? {computer} : {}),
+      ...(terminal ? {terminal} : {}),
       ...(connection ? {connection} : {}),
       questions: clarify ? (params.questions ?? []).map((q: Wire) => ({id: q.qid, prompt: q.question ?? '', options: q.choices})) : undefined,
     };

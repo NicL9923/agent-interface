@@ -99,6 +99,17 @@ describe("command palette", () => {
     expect(mount.container.querySelector("#message")?.getAttribute("placeholder")).toBe("Message…");
   });
 
+  it("names each group once and leaves no group behind once filtering starts", async () => {
+    await render();
+    await key({ key: "k", ctrlKey: true });
+    const groups = [...palette()!.querySelectorAll('[role="group"]')].map(group => group.getAttribute("aria-label"));
+    expect(new Set(groups).size).toBe(groups.length);
+    await typeInto(paletteInput(), "find");
+    expect(palette()!.querySelectorAll('[role="group"]')).toHaveLength(0);
+    expect(new Set(options()).size).toBe(options().length);
+    expect(activeOption()).toBe(options()[0]);
+  });
+
   it("closes with Escape or Ctrl+K and returns focus", async () => {
     await render();
     const composer = mount.container.querySelector<HTMLTextAreaElement>("#message")!;

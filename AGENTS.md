@@ -9,3 +9,22 @@
 - Keep all optional tsrs macOS arm64 and Linux x64/arm64 GNU/musl packages in
   `package-lock.json`; macOS-only lockfile regeneration must not drop Linux binaries.
 - See `docs/Dependencies.md` for the tool choice and `README.md` for validation.
+
+# Tests
+
+The global Testing rules apply in full. The ones this repo has tripped on, restated:
+
+- Server tests run the real Fastify app with the in-memory store and a fake
+  runtime that throws on any method the test did not configure. UI tests mock
+  only the client API module. Python tests use temp directories and fake
+  executables on PATH, never patched private methods of the code under test.
+- Every validation guard and every decision table gets bad-input and
+  cross-state cases, not just the path through. Upgrade restore-or-restart,
+  delivery pruning, and live-activity filters are the past misses.
+- Middleware and gates that enforce a security boundary (service auth, bot
+  access, routine room visibility) have offline tests for every rejection
+  branch and the reason they return.
+- Per-variant `it.each` over cases that exercise the same branch is noise.
+  One smoke case plus specific assertions beats fifty "the SVG changed" cases.
+- A test written to protect a specific line is broken by hand once to prove it
+  goes red before it is committed. Record the run in `docs/ledger/`.

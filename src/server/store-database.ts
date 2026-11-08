@@ -1,4 +1,4 @@
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { chmodSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
@@ -79,6 +79,11 @@ const additions = `
   -- When each native session's person last signed in with Google, which caps its renewals. A
   -- session without a row here, from before renewal, started a session lifetime before it expires.
   CREATE TABLE IF NOT EXISTS native_session_starts(hash TEXT PRIMARY KEY REFERENCES native_sessions(hash) ON DELETE CASCADE,signed_in_at INTEGER NOT NULL);
+  -- When each native session's person last proved who they are, for the terminal's step-up, and
+  -- when the person behind each unexchanged native code did. Signing in counts; a row is missing
+  -- when the sign-in carried no proof time.
+  CREATE TABLE IF NOT EXISTS native_session_confirmations(hash TEXT PRIMARY KEY REFERENCES native_sessions(hash) ON DELETE CASCADE,confirmed_at INTEGER NOT NULL);
+  CREATE TABLE IF NOT EXISTS native_code_confirmations(hash TEXT PRIMARY KEY REFERENCES native_codes(hash) ON DELETE CASCADE,confirmed_at INTEGER NOT NULL);
   -- Which household member sent each group chat message through this app, by Hermes event ID.
   CREATE TABLE IF NOT EXISTS group_senders(room_id TEXT NOT NULL,event_id TEXT NOT NULL,user_id TEXT NOT NULL REFERENCES users(id),created_at INTEGER NOT NULL,PRIMARY KEY(room_id,event_id));
   -- Single-use web push notification actions, by token hash, each bound to one person, approval and decision.
@@ -97,6 +102,8 @@ const additions = `
   CREATE TABLE IF NOT EXISTS routine_profile_recipients(bot_id TEXT NOT NULL,routine_id TEXT NOT NULL,user_id TEXT NOT NULL REFERENCES users(id),PRIMARY KEY(bot_id,routine_id,user_id));
   CREATE TABLE IF NOT EXISTS routine_recipient_sets(bot_id TEXT NOT NULL,routine_id TEXT NOT NULL,PRIMARY KEY(bot_id,routine_id));
   CREATE TABLE IF NOT EXISTS routine_recipients_adopted(routine_id TEXT PRIMARY KEY);
+  -- Each assistant's live Talk voice, for a Hermes without profile metadata. Hermes keeps it otherwise.
+  CREATE TABLE IF NOT EXISTS bot_voices(bot_id TEXT PRIMARY KEY,voice TEXT NOT NULL);
   CREATE TABLE IF NOT EXISTS draft_revisions(user_id TEXT NOT NULL REFERENCES users(id),bot_id TEXT NOT NULL,revision INTEGER NOT NULL,reason TEXT NOT NULL,sent_revision INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(user_id,bot_id));
 `;
 export const schemaVersion = migrations.length;
@@ -130,6 +137,31 @@ function migrate(db: DatabaseSync) {
   }
 }
 
+// Statements built from a variable number of placeholders, such as IN lists, add one entry per
+// shape; past this many the oldest is dropped and compiled again on its next use.
+const STATEMENT_CACHE = 256;
+/**
+ * A connection that compiles each SQL text once. Repositories call prepare() on every use, and
+ * compiling costs about ten times the run of a short query. Every call returns rows eagerly
+ * (all, get, run), or iterates without touching the database until it finishes, so one statement
+ * is never stepped by two callers at once.
+ */
+class CachedDatabase extends DatabaseSync {
+  readonly #statements = new Map<string, StatementSync>();
+  override prepare(sql: string): StatementSync {
+    let statement = this.#statements.get(sql);
+    if (statement) return statement;
+    statement = super.prepare(sql);
+    if (this.#statements.size >= STATEMENT_CACHE) this.#statements.delete(this.#statements.keys().next().value!);
+    this.#statements.set(sql, statement);
+    return statement;
+  }
+  override close() {
+    this.#statements.clear();
+    super.close();
+  }
+}
+
 /**
  * The one SQLite connection every store repository shares, with its one transaction helper.
  * Transactions do not nest: a repository method that runs inside another's transaction
@@ -140,9 +172,12 @@ export class StoreDatabase {
   constructor(path: string) {
     if (path !== ":memory:")
       mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-    this.db = new DatabaseSync(path);
+    this.db = new CachedDatabase(path);
     if (path !== ":memory:") chmodSync(path, 0o600);
-    this.db.exec("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;");
+    // node:sqlite blocks the event loop, so a commit that waits on fsync stalls every request and
+    // stream. In WAL mode NORMAL syncs at checkpoints instead: the database cannot corrupt, but a
+    // power loss or OS crash, not an app crash, can roll back the last few commits.
+    this.db.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;");
     migrate(this.db);
     this.db.exec(additions);
     this.db.exec("INSERT INTO notification_ingestion(event_id) SELECT id FROM notification_events e WHERE NOT EXISTS(SELECT 1 FROM notification_ingestion i WHERE i.event_id=e.id) ORDER BY e.rowid");

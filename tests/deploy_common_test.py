@@ -106,6 +106,27 @@ class DeploymentTests(unittest.TestCase):
         self.assertEqual(sorted(path.name for path in self.host.ops.iterdir()), ["commands.log", "phase.json"])
         self.assertEqual(sorted(path.name for path in self.host.base.iterdir()), ["current", "releases", "shared"])
 
+    def test_voice_plugin_link_follows_current_and_never_replaces_another_path(self):
+        link = self.host.home / "plugins/wildbots-voice"
+        self.assertTrue(self.d.voice_plugin_ready())
+        self.d.link_voice_plugin()
+        self.assertEqual(os.readlink(link), str(self.host.base / "current/src/hermes/wildbots_voice"))
+        # Activating the next release moves the plugin with current; the link itself stays.
+        for release in ("old", "new"):
+            (self.host.base / "releases" / release / "src/hermes/wildbots_voice").mkdir(parents=True)
+        self.d.switch(self.host.base / "releases/new")
+        self.assertEqual(link.resolve(), (self.host.base / "releases/new/src/hermes/wildbots_voice").resolve())
+        self.d.link_voice_plugin()
+        self.assertEqual(sorted(path.name for path in link.parent.iterdir()), ["wildbots-voice"])
+        # A folder or a link someone else put there is never replaced.
+        for occupy in (lambda: link.mkdir(), lambda: link.symlink_to(self.host.base / "releases/old/src/hermes/wildbots_voice")):
+            link.unlink() if link.is_symlink() else link.rmdir()
+            occupy()
+            with self.subTest(occupied=link.is_symlink()):
+                self.assertFalse(self.d.voice_plugin_ready())
+                with self.assertRaisesRegex(deploy_common.Fence, "voice plugin path"):
+                    self.d.link_voice_plugin()
+
     def test_wait_retries_transient_reads_but_never_swallows_a_guard(self):
         answers = iter([OSError("not yet"), ValueError("partial json"), False, True])
         def predicate():

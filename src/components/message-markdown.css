@@ -217,3 +217,10 @@
 .hljs-title, .hljs-title.class_, .hljs-title.function_, .hljs-property, .hljs-params, .hljs-variable { color: var(--code-title); }
 .hljs-addition { color: var(--accent); background: var(--accent-soft); }
 .hljs-deletion { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); }
+
+/* A file the assistant named by its path on the Hermes computer: readable, but not a link that leads nowhere. */
+.markdown-local-file {
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+  cursor: help;
+}

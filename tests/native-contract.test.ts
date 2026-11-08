@@ -1,6 +1,7 @@
 import { experienceRequester, automationRequester } from "./helpers/runtime-fixtures.js";
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
@@ -21,7 +22,7 @@ import type { AutomationOverview as ProfileAutomationOverview, AutomationTask, E
 // The iOS app decodes these responses. Every optional field the app reads is populated, so a
 // renamed or retyped field changes a committed fixture and the Swift decoding test sees it.
 const directory = fileURLToPath(new URL("../ios/AgentInterfaceTests/Contract/", import.meta.url));
-const instruction = "If the API change is intended, run `UPDATE_CONTRACT=1 npx vitest run tests/native-contract.test.ts`, commit the fixtures, and update the Swift types and ios/AgentInterfaceTests/ContractFixtureTests.swift.";
+const instruction = "If the API change is intended, run `UPDATE_CONTRACT=1 npx vitest run tests/native-contract.test.ts`, commit the fixtures, update the Swift types and ios/AgentInterfaceTests/ContractFixtureTests.swift, then run the iOS contract tests on the Mac mini: `bash .agents/tools/validate-ios.sh SIMULATOR_UUID test -only-testing:AgentInterfaceTests/ContractFixtureTests`.";
 const now = "2026-10-01T12:00:00.000Z";
 const origin = "http://127.0.0.1:3000";
 const at = (time: string) => `2026-10-01T${time}:00.000Z`;
@@ -44,6 +45,7 @@ const bots = [
 const supported = { supported: true };
 const capabilities = { chat: supported, steering: supported, approvals: supported, uploads: supported, generatedFiles: supported, botConfiguration: supported, tools: supported,
   skills: supported, routines: supported, durableEvents: supported, idempotency: supported, stop: supported, portraitGeneration: supported, avatarMetadata: supported,
+  liveVoice: { supported: false, reason: "The WildBots voice plugin is not linked into Hermes." },
   imageGeneration: { supported: false, reason: "The connected Hermes profile has no image provider." } } satisfies Capabilities;
 const status = { connected: true, code: "ready", version: "0.9.4", detail: "Connected to Hermes on the household VPS.", address: "wss://hermes.example.test/agent-ui",
   retryAt: at("12:05"), lastConnectedAt: at("11:58") } satisfies RuntimeStatus;
@@ -234,6 +236,9 @@ const runtime = {
       default: return flow;
     }
   },
+  // The shared desktop as Hermes reports it; the server adds this person's terminal access.
+  computerRequest: async () => ({ available: true, running: true, browserReady: true, label: "Household computer",
+    control: { kind: "bot", name: "garden" }, terminal: { available: false, target: "" } }),
   close: async () => {},
 } satisfies Runtime;
 const upgrades: Pick<HermesUpgrades, "status" | "maintenance" | "revisionDate"> = { status: async () => upgrade, maintenance: () => false, revisionDate: () => undefined };
@@ -244,7 +249,7 @@ function normalize(value: unknown, seen = new Map<string, string>()): unknown {
   if (Array.isArray(value)) return value.map(item => normalize(item, seen));
   if (value && typeof value === "object")
     return Object.fromEntries(Object.entries(value).map(([key, item]) =>
-      [key, ["token", "csrfToken"].includes(key) && typeof item === "string" ? `normalized-${key}` : normalize(item, seen)]));
+      [key, ["token", "csrfToken", "formKey"].includes(key) && typeof item === "string" ? `normalized-${key}` : normalize(item, seen)]));
   if (typeof value === "string" && uuid.test(value) && !ourIds.has(value)) {
     if (!seen.has(value)) seen.set(value, `00000000-0000-4000-8000-${String(seen.size + 1).padStart(12, "0")}`);
     return seen.get(value);
@@ -264,7 +269,11 @@ it("keeps the server responses the iOS app decodes in sync with the committed co
   const config = loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" });
   config.apns = { teamId: "TEAM123456", keyId: "KEY1234567", topic: "dev.agentinterface.ios", privateKeyFile: "unused-by-contract-test", environment: "sandbox" };
   config.nativeApp = { latestBuild: 12, updateUrl: "https://testflight.apple.com/join/CONTRACT" };
-  const { app, store } = await createApp(config, runtime, { background: false, sendApns: async () => {}, upgrades: upgrades as HermesUpgrades });
+  const tlsDirectory = mkdtempSync(join(tmpdir(), "contract-direct-"));
+  config.directRoutes = { kinds: ["lan", "tailnet"], port: 0, stateDirectory: tlsDirectory };
+  const { app, store, directRoutes } = await createApp(config, runtime, { background: false, sendApns: async () => {}, upgrades: upgrades as HermesUpgrades,
+    directAddresses: () => [{ kind: "tailnet", address: "127.0.0.2" }, { kind: "lan", address: "127.0.0.1" }] });
+  await directRoutes!.start(3_600_000);
   const fixtures = new Map<string, { request: string; response: unknown }>();
   try {
     const signIn = async (member: "one" | "two") => {
@@ -314,6 +323,7 @@ it("keeps the server responses the iOS app decodes in sync with the committed co
     await record("bot-read-position", "PUT", "/api/bots/household/read-position", { messageId: "message-assistant", scrollTop: 240.5 });
     await record("bot-presence", "PUT", "/api/bots/household/presence", { client: "8F0C2F6E-1D7A-4D35-9B53-3C1E6E2F9A10", state: "active" });
     await record("conversation", "GET", "/api/bots/household/conversation");
+    await record("bot-files", "GET", "/api/bots/household/files?before=message-assistant");
     const card = "/api/bots/household/messages/message-assistant/cards/groceries/state";
     await record("card-state-save", "PUT", card, { checkedIds: ["milk"], notes: {} });
     await record("card-state", "GET", card);
@@ -378,6 +388,16 @@ it("keeps the server responses the iOS app decodes in sync with the committed co
 
     await record("upgrade", "GET", "/api/hermes/upgrade");
     await record("push-config", "GET", "/api/native/push/config");
+    // Listeners take any free port and make a new key each run, so both are normalized.
+    await record("native-routes", "GET", "/api/native/routes");
+    for (const route of (fixtures.get("native-routes")!.response as { routes: { url: string; certificateSha256: string }[] }).routes) {
+      route.url = route.url.replace(/:\d+$/, route.url.includes("127.0.0.1") ? ":3443" : ":3444");
+      route.certificateSha256 = "q1Ue7mHzv1bS0n9yKXGJmWjv2sQxRZbL0dYc3Hc8V2E";
+    }
+    await record("computer", "GET", "/api/computer");
+    // The terminal names this host's account and machine, which differ wherever the test runs.
+    const computer = fixtures.get("computer")!.response as { terminal: { target: string } };
+    if (computer.terminal.target) computer.terminal.target = "normalized-target";
     // The aggregate shows a run this person sent to and an assistant they follow, waiting first.
     store.participate("run-dinner", "local-one");
     store.savePreferences("local-one", { ...preferences, followBots: ["garden"] });
@@ -385,6 +405,7 @@ it("keeps the server responses the iOS app decodes in sync with the committed co
     await record("live-activity", "GET", "/api/native/live-activity");
   } finally {
     await app.close();
+    rmSync(tlsDirectory, { recursive: true, force: true });
   }
 
   const files = new Map([...fixtures].map(([name, fixture]) => [`${name}.json`, JSON.stringify(normalize(fixture), null, 2) + "\n"]));

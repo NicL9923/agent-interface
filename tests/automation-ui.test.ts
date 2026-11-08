@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { api, ApiError, write } from "../src/client-api";
-import { AutomationPanel, LearningPanel, likelyCreatedTask, likelyCreatedTrigger } from "../src/components/AutomationPanel";
+import { AutomationPanel, LearningPanel, SkillLocks, likelyCreatedTask, likelyCreatedTrigger } from "../src/components/AutomationPanel";
 import type { AutomationOverview } from "../src/shared/automation";
 
 vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(await (async original => ({ ...await original<typeof import("../src/client-api")>(), api: vi.fn(), write: vi.fn() }))(original)));
@@ -836,6 +836,10 @@ it("enables skill approval immediately without a confirmation", async () => {
   expect(policy.checked).toBe(true);
 });
 
+// Skill rows as the settings sheet's Behavior section lists them, each with its lock controls.
+const skillRows = (names: string[]) => createElement(SkillLocks, { botId: "ranch", children: (extras, messages) =>
+  createElement("div", null, messages, ...names.map(name => createElement("article", { key: name, "data-skill": name }, createElement("strong", null, name), extras({ id: name })))) });
+
 it("locks and unlocks an installed skill and says what the lock does", async () => {
   const value = initial();
   value.canManageLearningPolicy = true; value.skills.lockSupported = true;
@@ -846,19 +850,20 @@ it("locks and unlocks an installed skill and says what the lock does", async () 
     value.skills.installed = value.skills.installed.map(item => item.name === name ? { ...item, locked } : item);
     return { ok: true, name, locked };
   });
-  await act(async () => root.render(createElement(LearningPanel, { botId: "ranch" })));
-  const article = (name: string) => Array.from(container.querySelectorAll(".automation-installed-skills article")).find(item => item.querySelector("h4")?.textContent?.startsWith(name))!;
-  expect(article("ranch-plan").querySelector("h4")?.textContent).toBe("ranch-plan Locked");
-  expect(article("ranch-plan").textContent).toContain("Assistants can't change this skill while it's locked.");
+  await act(async () => root.render(skillRows(["ranch-plan", "feed-check", "not-installed"])));
+  const article = (name: string) => container.querySelector(`[data-skill="${name}"]`)!;
+  expect(article("ranch-plan").textContent).toContain("Locked Assistants can't change this skill while it's locked.");
   expect(article("feed-check").textContent).not.toContain("Locked");
+  expect(article("not-installed").querySelector("button")).toBeNull();
   expect(container.textContent).not.toContain("Only an integration administrator can lock");
-  await act(async () => Array.from(article("ranch-plan").querySelectorAll("button")).find(item => item.textContent === "Unlock skill")!.click());
+  const press = (name: string, skill: string) => act(async () => Array.from(article(skill).querySelectorAll("button")).find(item => item.textContent === name)!.click());
+  await press("Unlock skill", "ranch-plan");
   expect(write).toHaveBeenCalledExactlyOnceWith("/bots/ranch/automation/skills/lock", { name: "ranch-plan", locked: false }, "PUT");
   expect(container.querySelector(".form-notice")?.textContent).toBe("Unlocked ranch-plan. Assistants can change it again.");
   expect(article("ranch-plan").textContent).not.toContain("Assistants can't change this skill");
-  await act(async () => Array.from(article("feed-check").querySelectorAll("button")).find(item => item.textContent === "Lock skill")!.click());
+  await press("Lock skill", "feed-check");
   expect(write).toHaveBeenLastCalledWith("/bots/ranch/automation/skills/lock", { name: "feed-check", locked: true }, "PUT");
-  expect(article("feed-check").querySelector("h4")?.textContent).toBe("feed-check Locked");
+  expect(article("feed-check").textContent).toContain("Locked");
 });
 
 it.each([
@@ -869,10 +874,18 @@ it.each([
   value.canManageLearningPolicy = canManageLearningPolicy; value.skills.lockSupported = lockSupported;
   value.skills.installed = [{ name: "ranch-plan", description: "Seasonal planning", ...(lockSupported ? { locked: true } : {}) }];
   vi.mocked(api).mockResolvedValue(value);
-  await act(async () => root.render(createElement(LearningPanel, { botId: "ranch" })));
+  await act(async () => root.render(skillRows(["ranch-plan"])));
   expect(button("Lock skill")).toBeUndefined(); expect(button("Unlock skill")).toBeUndefined();
+  expect(button("Read skill")).toBeDefined();
   expect(container.textContent?.includes("Only an integration administrator can lock or unlock skills.")).toBe(note);
   expect(container.textContent?.includes("Assistants can't change this skill while it's locked.")).toBe(lockSupported);
+});
+
+it("hides the skill write policy in Simple presentation but keeps pending changes", async () => {
+  vi.mocked(api).mockResolvedValue(initial());
+  await act(async () => root.render(createElement(LearningPanel, { botId: "ranch", advanced: false })));
+  expect(container.querySelector(".automation-learning-policy")).toBeNull();
+  expect(container.textContent).toContain("Improve feed check");
 });
 
 it("collapses a reviewed skill change without fetching and reloads its revision when reopened", async () => {

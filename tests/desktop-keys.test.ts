@@ -14,3 +14,12 @@ it("names the same keys as the iOS keyboard", () => {
   const cases = /enum Key: String, CaseIterable \{ case ([^}]+) \}/.exec(swift)?.[1].split(",").map(name => name.trim());
   expect(cases).toEqual(Object.keys(desktopKeys));
 });
+
+it("cuts a long paste at a whole character", async () => {
+  const { limitPaste, pasteLimit } = await import("../src/lib/desktop-keys");
+  expect(limitPaste("hi")).toEqual({ text: "hi", cut: false });
+  const long = limitPaste("a".repeat(pasteLimit - 1) + "🌵🌵");
+  expect(long.cut).toBe(true);
+  expect(Array.from(long.text)).toHaveLength(pasteLimit);
+  expect(long.text.endsWith("🌵")).toBe(true);
+});

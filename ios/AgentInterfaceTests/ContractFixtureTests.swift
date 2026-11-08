@@ -92,6 +92,9 @@ private typealias Check = @MainActor (Data) throws -> Void
     "bot-draft": check(SavedDraft?.self) { XCTAssertEqual($0?.text, "Add basil"); XCTAssertEqual($0?.revision, 2); XCTAssertEqual($0?.reason, "edit") },
     "bot-draft-conflict": check(DraftConflict.self) { XCTAssertEqual($0.draft.revision, 2); XCTAssertEqual($0.draft.sentRevision, 1) },
     "bot-draft-save": check(SavedDraft.self) { XCTAssertEqual($0.attachments.first?.id, "pantry.signature"); XCTAssertEqual($0.revision, 2) },
+    "bot-files": check(EarlierFiles.self) {
+      XCTAssertEqual($0.messages.map(\.id), ["message-user"]); XCTAssertEqual($0.messages.first?.files?.first?.id, "pantry.signature")
+    },
     "bot-portrait": check(FileRef.self) { XCTAssertEqual($0.url, "/api/files/portrait.signature") },
     "bot-presence": check(EmptyResponse.self) { XCTAssertEqual($0.ok, true) },
     "bot-read-position": check(ReadPosition.self) { XCTAssertEqual($0.messageId, "message-assistant"); XCTAssertEqual($0.scrollTop, 240.5) },
@@ -102,6 +105,10 @@ private typealias Check = @MainActor (Data) throws -> Void
     "bot-upload": check(FileRef.self) { XCTAssertEqual($0.mime, "text/plain"); XCTAssertNotNil($0.size) },
     "card-state": check(ReplyCardState.self) { XCTAssertEqual($0.checkedIds, ["milk"]) },
     "card-state-save": check(ReplyCardState.self) { XCTAssertEqual($0.checkedIds, ["milk"]); XCTAssertTrue($0.notes.isEmpty) },
+    "computer": check(ComputerStatus.self) {
+      XCTAssertTrue($0.available); XCTAssertEqual($0.running, true); XCTAssertEqual($0.control.kind, "bot")
+      XCTAssertEqual($0.detail, "garden is using the computer")
+    },
     "connection-retry": check(RuntimeStatus.self) { XCTAssertTrue($0.connected); XCTAssertNotNil($0.retryAt) },
     "conversation": check(Conversation.self) {
       XCTAssertEqual($0.messages.first?.sender?.name, "Local member one")
@@ -180,6 +187,11 @@ private typealias Check = @MainActor (Data) throws -> Void
     "preferences": check(Preferences.self) {
       XCTAssertEqual($0.presentation, "advanced"); XCTAssertEqual($0.startPage, "today"); XCTAssertEqual($0.notifications?.quietStart, "22:00")
     },
+    "native-routes": check(DirectRoutesResponse.self) {
+      XCTAssertEqual($0.routes.map(\.kind), [.lan, .tailnet])
+      XCTAssertEqual($0.routes.first?.url, URL(string: "https://127.0.0.1:3443"))
+      XCTAssertEqual($0.routes.first?.certificateSha256, "q1Ue7mHzv1bS0n9yKXGJmWjv2sQxRZbL0dYc3Hc8V2E")
+    },
     "push-config": check(PushConfig.self) { XCTAssertTrue($0.available); XCTAssertEqual($0.environment, "sandbox") },
     "routine-output": check(RoutineOutput.self) { XCTAssertEqual($0.messages.first?.role, "assistant"); XCTAssertFalse($0.previewOnly) },
     "routine-preview": check(SchedulePreview.self) { XCTAssertEqual($0.timezone, "America/Chicago"); XCTAssertEqual($0.nextRuns.count, 2) },
@@ -198,7 +210,7 @@ private typealias Check = @MainActor (Data) throws -> Void
     "search": check(SearchResponse.self) {
       XCTAssertEqual($0.hits.map(\.routineId), [nil, "routine-morning"]); XCTAssertEqual($0.unavailableBots, ["archive"])
     },
-    "submission": check(Receipt.self) { XCTAssertEqual($0.runId, "run-dinner"); XCTAssertNotNil($0.message) },
+    "submission": check(Receipt.self) { XCTAssertEqual($0.runId, "run-dinner"); XCTAssertNotNil($0.message); XCTAssertEqual($0.text, "Plan five dinners") },
     "today": check(TodayOverview.self) { overview in
       XCTAssertEqual(overview.items.map(\.botId), ["household", "garden", "archive"])
       XCTAssertEqual(overview.recentMessage(overview.items[0])?.id, "message-assistant")

@@ -39,6 +39,7 @@ export class Store {
     this.database = new StoreDatabase(path);
     this.db = this.database.db;
     this.accounts = new AccountRepository(this.database);
+    this.accounts.ensureFormSecret();
     this.devices = new DeviceRepository(this.database, this.accounts);
     this.personalState = new PersonalRepository(this.database);
     this.drafts = new DraftRepository(this.database);
@@ -65,6 +66,7 @@ export class Store {
   set botNames(names: Map<string, string>) { this.notifications.botNames = names; }
   // accounts
   user(...args: Parameters<AccountRepository["user"]>) { return this.accounts.user(...args); }
+  formKey(userId: string) { return this.accounts.formKey(userId); }
   users(...args: Parameters<AccountRepository["users"]>) { return this.accounts.users(...args); }
   getUser(...args: Parameters<AccountRepository["getUser"]>) { return this.accounts.getUser(...args); }
   session(...args: Parameters<AccountRepository["session"]>) { return this.accounts.session(...args); }
@@ -74,6 +76,8 @@ export class Store {
   sessionConfirmedAt(...args: Parameters<AccountRepository["sessionConfirmedAt"]>) { return this.accounts.sessionConfirmedAt(...args); }
   nativeSession(...args: Parameters<AccountRepository["nativeSession"]>) { return this.accounts.nativeSession(...args); }
   getNativeSession(...args: Parameters<AccountRepository["getNativeSession"]>) { return this.accounts.getNativeSession(...args); }
+  confirmNativeSession(...args: Parameters<AccountRepository["confirmNativeSession"]>) { return this.accounts.confirmNativeSession(...args); }
+  nativeSessionConfirmedAt(...args: Parameters<AccountRepository["nativeSessionConfirmedAt"]>) { return this.accounts.nativeSessionConfirmedAt(...args); }
   deleteNativeSession(...args: Parameters<AccountRepository["deleteNativeSession"]>) { return this.accounts.deleteNativeSession(...args); }
   renewNativeSession(...args: Parameters<AccountRepository["renewNativeSession"]>) { return this.accounts.renewNativeSession(...args); }
   pruneNativeAuth(...args: Parameters<AccountRepository["pruneNativeAuth"]>) { return this.accounts.pruneNativeAuth(...args); }
@@ -85,6 +89,7 @@ export class Store {
   registerNativeDevice(...args: Parameters<DeviceRepository["registerNativeDevice"]>) { return this.devices.registerNativeDevice(...args); }
   removeNativeDevice(...args: Parameters<DeviceRepository["removeNativeDevice"]>) { return this.devices.removeNativeDevice(...args); }
   nativeDevices(...args: Parameters<DeviceRepository["nativeDevices"]>) { return this.devices.nativeDevices(...args); }
+  allNativeDevices(...args: Parameters<DeviceRepository["allNativeDevices"]>) { return this.devices.allNativeDevices(...args); }
   registerLiveActivity(...args: Parameters<DeviceRepository["registerLiveActivity"]>) { return this.devices.registerLiveActivity(...args); }
   liveActivityContext(...args: Parameters<DeviceRepository["liveActivityContext"]>) { return this.devices.liveActivityContext(...args); }
   removeLiveActivity(...args: Parameters<DeviceRepository["removeLiveActivity"]>) { return this.devices.removeLiveActivity(...args); }
@@ -116,6 +121,7 @@ export class Store {
   draft(...args: Parameters<DraftRepository["draft"]>) { return this.drafts.draft(...args); }
   saveDraft(...args: Parameters<DraftRepository["saveDraft"]>) { return this.drafts.saveDraft(...args); }
   clearSubmittedDraft(...args: Parameters<DraftRepository["clearSubmittedDraft"]>) { return this.drafts.clearSubmittedDraft(...args); }
+  watchDrafts(...args: Parameters<DraftRepository["watch"]>) { return this.drafts.watch(...args); }
   // presentation
   presentation(...args: Parameters<PresentationRepository["presentation"]>) { return this.presentations.presentation(...args); }
   changedSince(...args: Parameters<PresentationRepository["changedSince"]>) { return this.presentations.changedSince(...args); }
@@ -128,6 +134,8 @@ export class Store {
   swapPresentation(...args: Parameters<PresentationRepository["swapPresentation"]>) { return this.presentations.swapPresentation(...args); }
   restorePresentation(...args: Parameters<PresentationRepository["restorePresentation"]>) { return this.presentations.restorePresentation(...args); }
   saveAvatar(...args: Parameters<PresentationRepository["saveAvatar"]>) { return this.presentations.saveAvatar(...args); }
+  botVoice(...args: Parameters<PresentationRepository["voice"]>) { return this.presentations.voice(...args); }
+  saveVoice(...args: Parameters<PresentationRepository["saveVoice"]>) { return this.presentations.saveVoice(...args); }
   // submissions
   intent(...args: Parameters<SubmissionRepository["intent"]>) { return this.submissions.intent(...args); }
   claimRetry(...args: Parameters<SubmissionRepository["claimRetry"]>) { return this.submissions.claimRetry(...args); }
@@ -180,6 +188,7 @@ export class Store {
   recordEvents(...args: Parameters<EventRepository["recordEvents"]>) { return this.events.recordEvents(...args); }
   enqueueKnownEvents(...args: Parameters<EventRepository["enqueueKnownEvents"]>) { return this.events.enqueueKnownEvents(...args); }
   latestEventFrontier(...args: Parameters<EventRepository["latestEventFrontier"]>) { return this.events.latestEventFrontier(...args); }
+  runOutcome(...args: Parameters<EventRepository["runOutcome"]>) { return this.events.runOutcome(...args); }
   eventPage(...args: Parameters<EventRepository["eventPage"]>) { return this.events.eventPage(...args); }
   todaySeen(...args: Parameters<EventRepository["todaySeen"]>) { return this.events.todaySeen(...args); }
   todayFrontier(...args: Parameters<EventRepository["todayFrontier"]>) { return this.events.todayFrontier(...args); }

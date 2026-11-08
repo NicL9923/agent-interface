@@ -244,6 +244,9 @@ struct GroupCreateView: View {
                 Text(bot.name)
               }
             }
+              // The hidden avatar's own label ("Ranch hand: Ready") still reached the switch's label on the
+              // iOS 27 simulator, so VoiceOver would read the name twice with a status. Name the switch directly.
+              .accessibilityLabel(Text(bot.name))
               .disabled(busy || botIds.count >= 6 && !botIds.contains(bot.id))
           }
         } header: { Text("Choose 2–6 assistants · \(botIds.count) chosen") } footer: {
@@ -652,24 +655,6 @@ enum GroupRows {
   static func creationHint(_ catalog: GroupCatalog?, connected: Bool) -> String? {
     if catalog?.canSend != true { return catalog?.reason ?? "The Hermes group coordinator must be running to make a group chat." }
     return connected ? nil : "Reconnect to Hermes to make a group chat."
-  }
-}
-
-extension AppStore {
-  /// Reads the room catalog for home. A failure keeps the rooms already shown; the next poll tries again.
-  func refreshGroups() async {
-    let id = UUID(); groupLoadId = id
-    let result = await attempt(current: { [weak self] in self?.groupLoadId == id }) { try await $0.api.get("/groups") as GroupCatalog }
-    guard case .success(let value)? = result, value != groupCatalog else { return }
-    groupCatalog = value
-  }
-  /// A room just made shows at once; the next read of the catalog replaces this copy.
-  func groupRoomCreated(_ room: GroupRoom) {
-    guard var catalog = groupCatalog else { return }
-    catalog.rooms.removeAll { $0.id == room.id }
-    catalog.rooms.append(room)
-    groupCatalog = catalog
-    Task { await refreshGroups() }
   }
 }
 

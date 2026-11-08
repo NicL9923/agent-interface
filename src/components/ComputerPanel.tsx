@@ -7,8 +7,13 @@ import type RFB from "@novnc/novnc";
 import type { Terminal } from "@xterm/xterm";
 import { api, ApiError, write } from "../client-api";
 import { isChunkFailure, useRaise } from "../app/chunk-failure";
-import type { ComputerStatus, ComputerStreamTicket } from "../shared/computer";
-import { desktopKeys, keysymsFor } from "../lib/desktop-keys";
+import { terminalCommandPattern, type ComputerStatus, type ComputerStreamTicket } from "../shared/computer";
+import { desktopKeys, keysymsFor, limitPaste, pasteLimit } from "../lib/desktop-keys";
+import { attachDesktopTouch, type DesktopTouch } from "../lib/desktop-touch";
+import { computerSocketUrl } from "../lib/socket-url";
+import { chunkInput, terminalOptions } from "../lib/terminal-input";
+import { useMediaQuery } from "../app/use-browser";
+import { ComputerHelp } from "./ComputerHelp";
 import { useGoogleButton } from "./google-identity";
 import { useAction } from "../app/use-action";
 import { useResource } from "../app/use-resource";
@@ -21,14 +26,7 @@ type Connection = "connecting" | "connected" | "reconnecting" | "ended" | "faile
 type Tab = "desktop" | "terminal";
 const RETRY_DELAY = 2500;
 
-function socketUrl(path: string) {
-  const url = new URL(path, location.href);
-  if (url.origin !== location.origin || !url.pathname.startsWith("/api/computer/")) {
-    throw new Error("The computer returned an invalid connection address.");
-  }
-  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  return url.href;
-}
+const socketUrl = computerSocketUrl;
 function failure(cause: unknown, fallback: string) {
   // The general request helper discusses chat drafts. Computer errors need their own context.
   return cause instanceof ApiError && cause.code === "CONNECTION_UNAVAILABLE"
@@ -66,12 +64,14 @@ function useReconnecting(connect: (attachment: Attachment) => Promise<void>, { f
   const [error, setError] = useState("");
   const [attempt, setAttempt] = useState(0);
   const raise = useRaise();
+  const cancelConnection = useRef<() => void>(() => {});
   const latest = useRef({ connect, onReauthenticate, onRetry, canRetry, raise });
   latest.current = { connect, onReauthenticate, onRetry, canRetry, raise };
   useEffect(() => {
     const controller = new AbortController();
     const teardowns: Array<() => void> = [];
     let timer: ReturnType<typeof setTimeout> | undefined;
+    cancelConnection.current = () => { controller.abort(); clearTimeout(timer); };
     const attachment: Attachment = {
       signal: controller.signal,
       connected: () => {
@@ -83,7 +83,9 @@ function useReconnecting(connect: (attachment: Attachment) => Promise<void>, { f
         latest.current.onRetry?.();
         setError(message); setConnection("reconnecting");
         clearTimeout(timer);
-        timer = setTimeout(() => setAttempt(value => value + 1), RETRY_DELAY);
+        timer = setTimeout(() => {
+          if (!controller.signal.aborted && latest.current.canRetry?.() !== false) setAttempt(value => value + 1);
+        }, RETRY_DELAY);
       },
       onCleanup: teardown => { teardowns.push(teardown); },
     };
@@ -103,7 +105,16 @@ function useReconnecting(connect: (attachment: Attachment) => Promise<void>, { f
     };
   }, [attempt, fallback]);
   const reconnect = useCallback(() => setAttempt(value => value + 1), []);
-  return { connection, setConnection, error, setError, reconnect };
+  const stop = useCallback(() => cancelConnection.current(), []);
+  return { connection, setConnection, error, setError, reconnect, stop };
+}
+const TRACKPAD_KEY = "computer.trackpad";
+/** Trackpad mode is a per-device habit; storage can be missing or refuse, as in a private window. */
+function storedTrackpad() {
+  try { return localStorage.getItem(TRACKPAD_KEY) === "1"; } catch { return false; }
+}
+function storeTrackpad(on: boolean) {
+  try { if (on) localStorage.setItem(TRACKPAD_KEY, "1"); else localStorage.removeItem(TRACKPAD_KEY); } catch { /* Only this session remembers it. */ }
 }
 function ownerLabel(status: ComputerStatus | null, controlling: boolean) {
   if (controlling) return "You have control";
@@ -114,7 +125,11 @@ function ownerLabel(status: ComputerStatus | null, controlling: boolean) {
   return "Watching the shared desktop";
 }
 
-export function ComputerPanel({ open, onClose, initialTab = "desktop", take }: { open: boolean; onClose: () => void; initialTab?: Tab; take?: number }) {
+export function ComputerPanel({ open, onClose, initialTab = "desktop", take, terminal: opening }: {
+  open: boolean; onClose: () => void; initialTab?: Tab; take?: number;
+  /** An assistant's terminal card opened the shell. Each opening has its own `at`; its command waits for the person to paste it, and is never run. */
+  terminal?: { at: number; command?: string };
+}) {
   const [tab, setTab] = useState<Tab>(initialTab);
   const [desktopOpened, setDesktopOpened] = useState(initialTab === "desktop");
   const [terminalOpened, setTerminalOpened] = useState(initialTab === "terminal");
@@ -163,6 +178,12 @@ export function ComputerPanel({ open, onClose, initialTab = "desktop", take }: {
     setTab("desktop"); setDesktopOpened(true);
   }, [take]);
 
+  // Open terminal on an assistant's card always lands on the Terminal tab, even when the panel was already open.
+  useEffect(() => {
+    if (!opening) return;
+    setTab("terminal"); setTerminalOpened(true);
+  }, [opening]);
+
   const terminal = status?.terminal;
   useEffect(() => {
     if (terminalOpened && terminalStep === null && terminal?.available)
@@ -210,7 +231,7 @@ export function ComputerPanel({ open, onClose, initialTab = "desktop", take }: {
       {open && terminalOpened && terminal?.available && terminalStep === "confirm"
         ? <ConfirmIdentity onConfirmed={() => setTerminalStep("shell")} />
         : open && terminalOpened && terminal?.available && terminalStep === "shell"
-          ? <TerminalView target={terminal.target} active={tab === "terminal"} onReauthenticate={confirmTerminal} />
+          ? <TerminalView target={terminal.target} active={tab === "terminal"} onReauthenticate={confirmTerminal} opening={opening} />
           : <Unavailable icon="terminal" title={!status || terminal?.available ? "Checking the terminal" : "Terminal unavailable"}
             detail={terminal?.reason || (terminal?.available ? "Checking your access to the system terminal."
               : "The system terminal is not available on this Hermes host yet.")} />}
@@ -274,6 +295,16 @@ function DesktopView({ status, onStatus, viewerId, take }: {
   const [submitting, setSubmitting] = useState(false);
   const [textOpen, setTextOpen] = useState(false);
   const [typedText, setTypedText] = useState("");
+  const [note, setNote] = useState("");
+  const [trackpad, setTrackpad] = useState(storedTrackpad);
+  const [zoomed, setZoomed] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const touchScreen = useMediaQuery("(any-pointer: coarse)");
+  const touch = useRef<DesktopTouch | null>(null);
+  const trackpadOn = useRef(trackpad);
+  trackpadOn.current = trackpad;
+  /** The desktop's clipboard as it last told this viewer. It only tells a viewer with control. */
+  const copied = useRef("");
   const attachmentEpoch = useRef(0);
   const { connection, error, setError, reconnect } = useReconnecting(async ({ signal, connected, retry, onCleanup }) => {
     let client: RFB | null = null;
@@ -297,6 +328,19 @@ function DesktopView({ status, onStatus, viewerId, take }: {
     client.viewOnly = true;
     client.scaleViewport = true;
     client.resizeSession = false;
+    const layer = attachDesktopTouch(client, screen.current, { onZoom: setZoomed });
+    layer?.setTrackpad(trackpadOn.current);
+    touch.current = layer;
+    onCleanup(() => {
+      layer?.detach();
+      if (touch.current === layer) touch.current = null;
+      setZoomed(false);
+    });
+    copied.current = "";
+    client.addEventListener("clipboard", event => {
+      const text = (event as CustomEvent<{ text?: unknown }>).detail?.text;
+      if (typeof text === "string") copied.current = text;
+    });
     // noVNC's canvas keeps the remote framebuffer dimensions even when its CSS
     // viewport scales. Observe resolution changes without polling the desktop.
     const measure = () => {
@@ -327,11 +371,44 @@ function DesktopView({ status, onStatus, viewerId, take }: {
     }
   }, [status.control.kind, status.control.mine]);
   useEffect(() => {
-    if (!controlling) { setTextOpen(false); setTypedText(""); }
+    if (!controlling) { setTextOpen(false); setTypedText(""); setNote(""); }
   }, [controlling]);
+  useEffect(() => {
+    touch.current?.setTrackpad(trackpad);
+    storeTrackpad(trackpad);
+  }, [trackpad]);
 
   const key = (keysym: number) => {
     if (controlling && connection === "connected") rfb.current?.sendKey(keysym);
+  };
+
+  /** Sets the desktop's clipboard and types the text, so it lands in the selected field either way. */
+  const paste = (text: string) => {
+    if (!controlling || connection !== "connected" || !rfb.current) return;
+    const limited = limitPaste(text);
+    rfb.current.clipboardPasteFrom(limited.text);
+    for (const keysym of keysymsFor(limited.text)) key(keysym);
+    setNote(limited.cut ? `Pasted the first ${pasteLimit} characters.` : "Pasted into the desktop.");
+  };
+  const copyToDevice = async () => {
+    const text = copied.current;
+    if (!text) { setNote("Nothing is copied on the desktop yet. Copy there first, then try again."); return; }
+    try {
+      await navigator.clipboard.writeText(text);
+      setNote("Copied the desktop's clipboard to this device.");
+    } catch { setNote("This browser didn't allow copying. Try again, or select the text on the desktop and type it here."); }
+  };
+  const pasteFromDevice = async () => {
+    let text: string;
+    try { text = await navigator.clipboard.readText(); }
+    catch {
+      // Some browsers only paste into a field. Type text's box takes a normal paste.
+      setTextOpen(true);
+      setNote("This browser didn't share its clipboard. Paste into the box below, then Send text.");
+      return;
+    }
+    if (text) paste(text);
+    else setNote("This device's clipboard is empty.");
   };
 
   const control = async (requestedAction?: "take" | "release") => {
@@ -372,12 +449,14 @@ function DesktopView({ status, onStatus, viewerId, take }: {
       <div className="computer-ownership" role="status"><span className={`computer-state-dot ${connection === "connected" ? "ready" : ""}`} />
         <strong>{ownerLabel(status, controlling)}</strong><span>{hint}</span></div>
       <div className="computer-control-actions">
+        {touchScreen && <Button className="icon-button" aria-label="How to use the desktop" aria-haspopup="dialog" onClick={() => setHelpOpen(true)}><Icon name="help" /></Button>}
         {!controlling && status.control.kind === "human" && status.control.mine && <Button disabled={connection !== "connected" || submitting} onClick={() => void control("release")}>Hand back</Button>}
         <Button className={controlling ? "" : "primary"} disabled={connection !== "connected" || submitting || status.control.kind === "human" && !status.control.mine}
           onClick={() => void control()}>{submitting ? "Updating control…" : controlling ? "Hand back" : "Take over"}</Button>
       </div>
     </div>
     {(error || status.reason) && <p className="computer-notice" role="status">{error || status.reason}</p>}
+    {note && !error && <p className="computer-notice is-info" role="status">{note}</p>}
     <div className={`computer-screen-wrap desktop-stage${controlling ? " is-controlling" : ""}`} style={{ "--desktop-aspect": aspect } as CSSProperties}>
       <div className="computer-screen" ref={screen} aria-label={controlling ? "Shared desktop. You have control." : "Shared desktop. Watching."} />
       {connection !== "connected" && <div className="computer-connection-overlay" role="status">
@@ -390,7 +469,14 @@ function DesktopView({ status, onStatus, viewerId, take }: {
       <Button disabled={!controlling} onClick={() => key(desktopKeys.enter)}>Enter</Button>
       <Button disabled={!controlling} onClick={() => key(desktopKeys.tab)}>Tab</Button>
       <Button disabled={!controlling} onClick={() => key(desktopKeys.backspace)}>Backspace</Button>
+      <Button disabled={!controlling} onClick={() => void copyToDevice()}>Copy to device</Button>
+      <Button disabled={!controlling} onClick={() => void pasteFromDevice()}>Paste from device</Button>
     </div>
+    {touchScreen && <div className="terminal-tools desktop-touch-tools" role="group" aria-label="Touch">
+      <Button aria-pressed={trackpad} onClick={() => setTrackpad(value => !value)}><Icon name="trackpad" size={18} />Trackpad</Button>
+      {trackpad && <Button onClick={() => touch.current?.recenter()}>Recenter pointer</Button>}
+      {zoomed && <Button onClick={() => touch.current?.resetZoom()}>Reset zoom</Button>}
+    </div>}
     {textOpen && <form id="desktop-text" className="terminal-paste" onSubmit={event => {
       event.preventDefault();
       if (!controlling || connection !== "connected") return;
@@ -401,10 +487,11 @@ function DesktopView({ status, onStatus, viewerId, take }: {
       <div className="actions"><small>Select a field on the desktop first. Text is cleared after sending.</small><Button type="submit" disabled={!controlling || !typedText}>Send text</Button></div>
     </form>}
     <p className="computer-footnote">The desktop and browser logins stay on the server when you close this panel.</p>
+    {touchScreen && <ComputerHelp open={helpOpen} onClose={() => setHelpOpen(false)} />}
   </div>;
 }
 
-function TerminalView({ target, active, onReauthenticate }: { target: string; active: boolean; onReauthenticate: () => void }) {
+function TerminalView({ target, active, onReauthenticate, opening }: { target: string; active: boolean; onReauthenticate: () => void; opening?: { at: number; command?: string } }) {
   const surface = useRef<HTMLDivElement>(null);
   const terminal = useRef<Terminal | null>(null);
   const socket = useRef<WebSocket | null>(null);
@@ -421,7 +508,7 @@ function TerminalView({ target, active, onReauthenticate }: { target: string; ac
     if (socket.current?.readyState === WebSocket.OPEN) socket.current.send(JSON.stringify(message));
   }, []);
 
-  const { connection, setConnection, error, setError, reconnect } = useReconnecting(async ({ signal, connected, retry, onCleanup }) => {
+  const { connection, setConnection, error, setError, reconnect, stop } = useReconnecting(async ({ signal, connected, retry, onCleanup }) => {
     let client: WebSocket | undefined;
     let emulator: Terminal | undefined;
     let observer: ResizeObserver | undefined;
@@ -441,8 +528,7 @@ function TerminalView({ target, active, onReauthenticate }: { target: string; ac
     if (signal.aborted || !surface.current) return;
     if (!ticket.sessionId) throw new Error("The terminal did not provide a shell session.");
     sessionId.current = ticket.sessionId;
-    emulator = new Emulator({ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 14,
-      cursorBlink: true, screenReaderMode: true, scrollback: 3000, theme: { background: "#151c18", foreground: "#f1efdf", cursor: "#8bd2b2", selectionBackground: "#3a5947" } });
+    emulator = new Emulator(terminalOptions);
     terminal.current = emulator;
     const fitting = new FitAddon();
     emulator.loadAddon(fitting);
@@ -454,18 +540,8 @@ function TerminalView({ target, active, onReauthenticate }: { target: string; ac
     };
     fit.current = resize;
     resize();
-    emulator.onData(data => {
-      // xterm emits an entire paste at once. Keep each wire message bounded
-      // without splitting Unicode code points or queueing disconnected input.
-      let chunk = "", bytes = 0;
-      const encoder = new TextEncoder();
-      for (const character of data) {
-        const size = encoder.encode(character).length;
-        if (bytes + size > 16384) { send({type: "input", data: chunk}); chunk = ""; bytes = 0; }
-        chunk += character; bytes += size;
-      }
-      if (chunk) send({type: "input", data: chunk});
-    });
+    // xterm emits an entire paste at once. Keep each wire message bounded without queueing disconnected input.
+    emulator.onData(data => { for (const chunk of chunkInput(data)) send({type: "input", data: chunk}); });
     client = new WebSocket(socketUrl(ticket.path));
     socket.current = client;
     client.addEventListener("open", () => {
@@ -501,15 +577,35 @@ function TerminalView({ target, active, onReauthenticate }: { target: string; ac
   const end = async () => {
     if (!sessionId.current || ending) return;
     setEnding(true);
+    stopped.current = true;
+    stop();
+    socket.current?.close();
     try {
       await write("/computer/terminal/end", { sessionId: sessionId.current });
       stopped.current = true;
       socket.current?.close();
       setConnection("ended"); setConfirmEnd(false); setError("");
-    } catch (cause) { setError(failure(cause, "Couldn't confirm whether your shell ended. Check the connection before trying again.")); }
+    } catch (cause) {
+      stopped.current = false;
+      reconnect();
+      setError(failure(cause, "Couldn't confirm whether your shell ended. Check the connection before trying again."));
+    }
     finally { setEnding(false); }
   };
   const connected = connection === "connected";
+  // An assistant's suggested command waits beside the shell until the person pastes it. The persistent
+  // shell may still be running a program waiting for one key, so text arriving on its own could answer
+  // it. Pasting never runs the command: a command with a line break is never offered, and xterm uses
+  // bracketed paste when the shell asked for it. Each card opening offers it once.
+  const [offered, setOffered] = useState<{ at: number; command: string } | null>(null);
+  useEffect(() => {
+    setOffered(opening?.command && terminalCommandPattern.test(opening.command) ? { at: opening.at, command: opening.command } : null);
+  }, [opening]);
+  const pasteOffered = () => {
+    if (!connected || !offered) return;
+    terminal.current?.paste(offered.command);
+    setOffered(null); terminal.current?.focus();
+  };
 
   return <div className="computer-view">
     <div className="computer-toolbar">
@@ -530,6 +626,14 @@ function TerminalView({ target, active, onReauthenticate }: { target: string; ac
         {(connection === "ended" || connection === "failed") && <Button onClick={() => { setConfirmEnd(false); reconnect(); }}>{connection === "ended" ? "Start terminal" : "Reconnect"}</Button>}
       </div>}
     </div>
+    {offered && <div className="terminal-offer" role="group" aria-label="Assistant's command">
+      <code>{offered.command}</code>
+      <small>Check the terminal is at a prompt first. Pasting doesn't run it; you press Enter.</small>
+      <div className="actions">
+        <Button onClick={() => setOffered(null)}>Dismiss</Button>
+        <Button className="primary" disabled={!connected} onClick={pasteOffered}>Paste at prompt</Button>
+      </div>
+    </div>}
     <div className="terminal-tools">
       <Button disabled={!connected} onClick={() => terminal.current?.focus()}>Keyboard</Button>
       <Button disabled={!connected} aria-label="Send Ctrl+C" onClick={() => send({ type: "input", data: "\u0003" })}>Ctrl+C</Button>

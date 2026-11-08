@@ -33,7 +33,7 @@ function runtimeDouble() {
   const bots: Bot[] = [{ id: "shared", name: "Shared", model: "test", shared: true, activity: "idle" }];
   const fixed: Partial<Runtime> = {
     watchRoster(changed) { rosterWatchers.add(changed); return () => { rosterWatchers.delete(changed); }; },
-    botDetail: async botId => ({id:botId,name:"Shared",model:"test",shared:true,activity:"idle",instructions:"Saved soul",enabledMcpServers:["calendar"],enabledTools:["terminal"],enabledSkills:["research"]}),
+    botDetail: async botId => ({id:botId,name:"Shared",model:"test",shared:true,activity:"idle",instructions:"Saved soul",enabledMcpServers:["calendar"],availableMcpServers:["calendar","notes"],enabledTools:["terminal"],enabledSkills:["research"]}),
     status: async () => ({ connected: true }),
     capabilities: async () => new Proxy({}, { get: () => ({ supported: true }) }) as never,
     listBots: vi.fn(async () => bots),
@@ -266,6 +266,34 @@ describe("conversation change stream", () => {
     await events.close();
   });
 
+  it("announces a person's new draft revisions only on their own opted-in streams, without the draft", async () => {
+    const s = await setup();
+    const login = await fetch(`${s.base}/api/auth/local`, { method: "POST", headers: { origin, "content-type": "application/json" }, body: JSON.stringify({ member: "two" }) });
+    const other = login.headers.getSetCookie()[0].split(";")[0];
+    const mine = await stream(`${s.base}/api/bots/shared/events?drafts=1`, s.cookie);
+    const theirs = await stream(`${s.base}/api/bots/shared/events?drafts=1`, other);
+    // The iOS app reads every data line as a change, so a stream that did not ask hears no drafts.
+    const legacy = await stream(`${s.base}/api/bots/shared/events?inflight=1`, s.cookie);
+    for (const opened of [mine, theirs, legacy]) await opened.until(() => opened.text.includes("retry"));
+    const headers = { cookie: s.cookie, origin, "x-csrf-token": s.csrfToken, "content-type": "application/json" };
+    const save = (text: string) => fetch(`${s.base}/api/bots/shared/draft`, { method: "PUT", headers, body: JSON.stringify({ text, attachments: [] }) });
+    expect((await save("Buy feed")).status).toBe(200);
+    await mine.until(() => mine.text.includes("event: draft\ndata: 1\n\n"));
+    // The same content again is no new revision.
+    expect((await save("Buy feed")).status).toBe(200);
+    // Sending clears the draft, which is the next revision.
+    const sent = await fetch(`${s.base}/api/bots/shared/messages`, { method: "POST", headers,
+      body: JSON.stringify({ requestId: randomUUID(), text: "Buy feed", draftBaseRevision: 1 }) });
+    expect(sent.status).toBe(200);
+    await mine.until(() => mine.text.includes("event: draft\ndata: 2\n\n"));
+    expect(mine.text.match(/event: draft/g)).toHaveLength(2);
+    expect(mine.text).not.toContain("Buy feed");
+    await pass(1000);
+    expect(theirs.text).not.toContain("event: draft");
+    expect(legacy.text).not.toContain("event: draft");
+    await mine.close(); await theirs.close(); await legacy.close();
+  });
+
   it("ends the stream instead of notifying once its session is signed out", async () => {
     const s = await setup();
     const events = await stream(`${s.base}/api/bots/shared/events`, s.cookie);
@@ -314,10 +342,10 @@ describe("roster compatibility and household events", () => {
         return route === "bootstrap" ? value.bots[0] : value[0];
       };
       const full = await read("");
-      expect(full).toMatchObject({ instructions: "Saved soul", enabledMcpServers: ["calendar"],
+      expect(full).toMatchObject({ instructions: "Saved soul", enabledMcpServers: ["calendar"], availableMcpServers: ["calendar", "notes"],
         enabledTools: ["terminal"], enabledSkills: ["research"] });
       const lean = await read("?roster=lean");
-      for (const key of ["instructions", "enabledMcpServers", "enabledTools", "enabledSkills"]) expect(lean).not.toHaveProperty(key);
+      for (const key of ["instructions", "enabledMcpServers", "availableMcpServers", "enabledTools", "enabledSkills"]) expect(lean).not.toHaveProperty(key);
     }
   });
 

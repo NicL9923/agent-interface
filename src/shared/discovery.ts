@@ -19,18 +19,39 @@ export function receipt(call: ToolCall) {
 
 /** Keep unfamiliar Hermes statuses visible rather than guessing their outcome. */
 export function routineResultLabel(status: string): string {
-  const labels: Record<string, string> = { ok: "Succeeded", success: "Succeeded", succeeded: "Succeeded", error: "Failed", failed: "Failed", delivery_failed: "Delivery failed", running: "Running", pending: "Pending", skipped: "Skipped", cancelled: "Canceled" };
+  const labels: Record<string, string> = { ok: "Succeeded", success: "Succeeded", succeeded: "Succeeded", error: "Failed", failed: "Failed", delivery_failed: "Delivery failed", running: "Running", pending: "Pending", skipped: "Skipped", cancelled: "Canceled", missed: "Didn't run" };
   return Object.hasOwn(labels, status) ? labels[status] : status;
 }
-export function savedReplyTitle(text: string): string {
-  // Keep identifier underscores and punctuation next to inline code intact.
-  const first = text.split(/\r?\n/).find(line => line.trim()) || "";
-  const title = first.replace(/^\s*(?:#{1,6}\s+|[-+*]\s+|\d+[.)]\s+)/, "")
-    .replace(/[`*]/g, "").replace(/\s+/g, " ").trim();
-  if (!title) return "Saved reply";
-  const characters = Array.from(title);
-  if (characters.length <= 80) return title;
-  const prefix = characters.slice(0, 79).join("");
-  const boundary = prefix.lastIndexOf(" ");
-  return (boundary > 0 ? prefix.slice(0, boundary) : prefix) + "…";
+/** One stretch of a search snippet, marked when it matched the search. */
+export interface SnippetPart { text: string; match: boolean }
+
+/**
+ * A search snippet with its matches marked. The server has already made it plain text and kept
+ * Hermes's >>>match<<< markers. Markers count only in order, an opening one then its closing one,
+ * so a stray marker stays as written. Reads at most `limit` characters.
+ */
+export function snippetParts(snippet: string, limit = 300): SnippetPart[] {
+  const text = snippet.slice(0, limit * 4);
+  const pieces: SnippetPart[] = [];
+  for (let at = 0; at < text.length;) {
+    const open = text.indexOf(">>>", at), close = open < 0 ? -1 : text.indexOf("<<<", open + 3);
+    if (close < 0) { pieces.push({ text: text.slice(at), match: false }); break; }
+    pieces.push({ text: text.slice(at, open), match: false }, { text: text.slice(open + 3, close), match: true });
+    at = close + 3;
+  }
+  const parts: SnippetPart[] = [];
+  let used = 0;
+  for (const piece of pieces) {
+    let words = piece.text.replace(/\s+/g, " ");
+    if (!parts.length) words = words.trimStart();
+    if (!words) continue;
+    // Something is left out, so the last part says so.
+    if (used >= limit) { const last = parts.at(-1); if (last && !last.text.endsWith("…")) last.text += "…"; break; }
+    if (used + words.length > limit) words = `${words.slice(0, limit - used).trimEnd()}…`;
+    used += words.length;
+    const last = parts.at(-1);
+    if (last && last.match === piece.match) last.text += words;
+    else parts.push({ text: words, match: piece.match });
+  }
+  return parts;
 }

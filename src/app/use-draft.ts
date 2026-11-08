@@ -2,11 +2,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RefObject } from "react";
 import type { FileRef, SavedDraft } from "../shared/types";
 import { routeUrl, type ApiResponse } from "../shared/api";
-import { ApiError, request, uploadFile, write } from "../client-api";
+import { ApiError, pollWhileVisible, request, uploadFile, write } from "../client-api";
 import { contentHash, mergeDraft, nextSeq, savedDraft } from "./draft-merge";
 import { draftKey, isSentCopy, localRead, localSave, sameDraft } from "./storage";
 import type { Draft, LocalUpload, Pending } from "./storage";
 type Epoch = RefObject<number>;
+/** Dispatched on window by the open chat's event stream when the person's draft gets a new revision. */
+export const DRAFT_EVENT = "agent-interface:draft";
+export type DraftNotice = { botId: string; revision: number };
+// Only a stream that fails unnoticed leaves this poll to catch another device's edit.
+export const DRAFT_POLL_MS = 30_000;
 type SetDraft = (update: (current: Draft) => Draft) => void;
 // Keepalive requests in flight share a 64 KiB budget, and the browser rejects one over it. A
 // save that does not fit is sent as an ordinary request instead.
@@ -105,13 +110,15 @@ export function useDraft({ botId, userId, identityEpoch, setError }: {
     // the page is shown: it may have been edited or sent from another device since.
     let draftLoaded = false;
     let loadingDraft = false;
+    // A notice or poll during a read may announce a newer revision than that read returns.
+    let loadAgain = false;
     // Restoring the cached copy is not an edit: it keeps its own sequence, so a copy that was sent
     // is still the sent copy after a reload or a switch back.
     setDraftState({ ...(cached || { text: "", attachments: [] }), botId, userId });
     if (cached) setDraftReady(true);
     // Personal drafts remain available even when the separate executor is down.
     const loadDraft = async () => {
-      if (loadingDraft) return;
+      if (loadingDraft) { loadAgain = true; return; }
       loadingDraft = true;
       try {
         const saved = savedDraft(await request("GET /bots/:id/draft", { params: { id: botId } }));
@@ -126,22 +133,32 @@ export function useDraft({ botId, userId, identityEpoch, setError }: {
         if (live && !draftLoaded && !cached?.dirty) setError(`Your saved draft could not be loaded. Retrying. ${(e as Error).message}`);
       } finally {
         loadingDraft = false;
+        if (loadAgain && live) { loadAgain = false; void loadDraft(); }
       }
     };
     void loadDraft();
     const wake = () => {
       if (navigator.onLine !== false && document.visibilityState !== "hidden") void loadDraft();
     };
-    const timer = setInterval(wake, 1500);
+    // The chat's event stream announces each new revision; a copy that already has it skips the read.
+    const announced = (event: Event) => {
+      const { botId: changed, revision } = (event as CustomEvent<DraftNotice>).detail;
+      const shown = latestDraft.current;
+      if (changed !== botId || shown.botId !== botId || shown.userId !== userId) return;
+      if (!Number.isSafeInteger(revision) || draftLoaded && revision <= (shown.baseRevision ?? 0)) return;
+      wake();
+    };
+    // Change notices drive updates. This slow poll covers a stream that fails unnoticed.
+    const stopPolling = pollWhileVisible(wake, DRAFT_POLL_MS);
+    window.addEventListener(DRAFT_EVENT, announced);
     window.addEventListener("online", wake);
     window.addEventListener("agent-interface:reconnect", wake);
-    document.addEventListener("visibilitychange", wake);
     return () => {
       live = false;
-      clearInterval(timer);
+      stopPolling();
+      window.removeEventListener(DRAFT_EVENT, announced);
       window.removeEventListener("online", wake);
       window.removeEventListener("agent-interface:reconnect", wake);
-      document.removeEventListener("visibilitychange", wake);
     };
   }, [botId, userId]);
   const latestDraft = useRef(draft);

@@ -1,5 +1,6 @@
 import type { GroupEvent, GroupLatest, GroupPage, GroupRoom } from "../shared/collaboration.js";
 import { scheduledPost } from "../shared/group-activity.js";
+import { markdownPlain } from "../shared/plain-text.js";
 
 /** Events read back from a room's end to find its newest message. Driver notices in between rarely pass a handful. */
 export const LATEST_LOOKBACK = 30;
@@ -21,7 +22,8 @@ export function newestMessage(events: GroupEvent[]) {
  */
 export function previewOf(event: GroupEvent, room: GroupRoom, viewerId: string, person: (userId: string) => string | undefined): GroupLatest {
   const raw = typeof event.payload?.text === "string" ? event.payload.text : "";
-  const text = raw.replace(/\s+/g, " ").trim();
+  // Home shows the preview as plain text, so it carries the message's words without its Markdown.
+  const text = markdownPlain(raw);
   let author: string;
   const routine = scheduledPost(event);
   if (routine) author = routine.name;
@@ -40,7 +42,7 @@ type Read = (roomId: string, since: number) => Promise<GroupPage>;
 
 /**
  * The newest message of each room, read from Hermes only when the room's `latest_seq` moves.
- * Home polls the catalog, so a quiet household costs no log reads at all, a new room costs one,
+ * Home and the household stream's catalog check read it often, so a quiet household costs no log reads, a new room costs one,
  * and a cold start costs one per room, a few at a time. A failed read leaves that room without
  * a preview until the next catalog read tries again.
  */

@@ -19,11 +19,43 @@ The shared desktop/browser and the administrators' VPS terminal are documented i
 [Shared computer](SharedComputer.md). Their supervisor is independent of chat
 sessions; its browser data stays in the private shared resource directory.
 
-The app's last recorded runtime pin is Node 24.21.0. Before the next production
-release, verify the app-specific host runtime and update it to Node 24.22.2 if
-needed. The release tool builds with that host binary, and 24.21.0 is outside
-the updated package engine range. Track this prerequisite in [issue #210](https://github.com/NicL9923/agent-interface/issues/210).
-This dependency update does not change the production host.
+The app runs its own Node binary, kept under the application directory's `runtime/`.
+`agent-interface.service` names it in `ExecStart` and `PATH`. Release builds, qualification and
+the guarded deploy use the same binary, recorded as `node` in each release's deploy configuration.
+To change it, as [issue #210](https://github.com/NicL9923/agent-interface/issues/210) asks for
+24.22.2:
+
+1. Install the new release from nodejs.org beside the old one under `runtime/`, after checking
+   the archive against the official `SHASUMS256.txt`.
+2. Point the service at it with a drop-in,
+   `~/.config/systemd/user/agent-interface.service.d/20-node.conf`, keeping the unit's own
+   arguments:
+
+   ```ini
+   [Service]
+   Environment=PATH=APP_BASE/runtime/node-vX.Y.Z-linux-x64/bin:/usr/local/bin:/usr/bin:/bin
+   ExecStart=
+   ExecStart=APP_BASE/runtime/node-vX.Y.Z-linux-x64/bin/node --env-file=APP_BASE/shared/app.env --import tsx src/server/index.ts
+   ```
+
+   The empty `ExecStart=` clears the unit's own command; without it systemd refuses a second one.
+   Set `PATH` here only. systemd applies an `EnvironmentFile` after `Environment=`, so a file that
+   sets `PATH` would override this, and releases refuse a service that has one.
+   Run `systemctl --user daemon-reload`, since a restart alone keeps the command systemd already
+   loaded. Then run `systemctl --user restart agent-interface.service` and check
+   `/api/health/ready`. Confirm the process runs the new binary:
+   `readlink -f /proc/$(systemctl --user show -p MainPID --value agent-interface.service)/exe`.
+   To roll back, remove the drop-in, then reload and restart the same way.
+3. Prepare the next release with `release-app.py prepare COMMIT --node ABSOLUTE_PATH`. The
+   release records the binary that path resolved to when the host built it, and qualification,
+   activation and recovery run that binary even if a symlink in the path is retargeted later.
+
+Preparation refuses a runtime outside `package.json`'s `engines`, and one the app service is not
+wholly on: by real path, its running process, the `node` that process's `PATH` finds, its
+`ExecStart` and the `node` its configured `PATH` finds must all be that binary, and no
+`EnvironmentFile` may set `PATH`. Activation and recovery check again before they change anything, and the build
+and qualification refuse when `node` on their `PATH` is any other binary. A release can't build,
+qualify or deploy with a different Node than production runs.
 
 The app has its own pinned runtime, release directories, private
 configuration and SQLite database under the host user's application directory.
@@ -54,6 +86,57 @@ release was activated.
 
 Secrets, household email addresses, host access details, backups and rollback
 receipts belong in private operating notes. They are not release artifacts.
+
+## Live voice plugin
+
+Live Talk mints short-lived OpenAI Realtime client secrets on the household
+ChatGPT sign-in that Hermes holds for its launch profile. Hermes lets only code
+inside an installed plugin whose `plugin.yaml` declares
+`requires_auth: [openai-codex]` make such a request, and it attaches the
+credential itself. The app's plugin is `src/hermes/wildbots_voice`. Its
+`realtime.py` makes the one request; the add-on in `src/hermes/voice.py` loads
+that file through the plugins link, so the frame Hermes checks is under the
+plugins folder.
+
+The guarded activation links `<HERMES_HOME>/plugins/wildbots-voice` to
+`<app base>/current/src/hermes/wildbots_voice`. The link goes through
+`current`, so every later activation moves it with the release. Activation
+refuses before stopping anything if that path holds a folder or another link.
+It never enables the plugin. Hermes itself lets a linked plugin make the
+credentialed request whether or not it is enabled, so the add-on checks the
+launch profile's `plugins.enabled` and `plugins.disabled` through Hermes's own
+config readers on every status check and again right before each mint. Enabling
+is the consent for the plugin to use the ChatGPT sign-in, so a person does that
+once on the host, then restarts the dashboard. Disabling it stops new sessions
+within the app's 30-second status refresh, and refuses any mint at once:
+
+```sh
+hermes plugins enable wildbots-voice
+systemctl --user restart hermes-dashboard.service
+```
+
+The launch profile must be signed in to ChatGPT (`openai-codex`) in Hermes.
+`GET /api/agent-interface/voice/status` on the service bridge reports
+`{available, reason}`, and the app shows the reason in place of Talk:
+
+| Reason | Meaning and fix |
+| --- | --- |
+| The plugin is not linked into Hermes | The link is missing. Activate a current release. |
+| The plugin link is broken | The link's target is gone, usually a pruned release. Activate a current release. |
+| The plugin links to a different release | The link resolves to another release than the running add-on. Activate the current release again. |
+| The plugin manifest does not ask for the ChatGPT sign-in | The linked `plugin.yaml` lost `requires_auth`. Restore the release. |
+| Enable the wildbots-voice plugin in Hermes | The launch profile's config does not enable it, disables it, or cannot be read. Run the enable command above. |
+| This Hermes version cannot share its ChatGPT sign-in | Hermes lacks `hermes_cli.plugin_provider_requests`. Update Hermes. |
+
+Status does not contact OpenAI or refresh the sign-in. Starting Talk can still
+fail: signed out of ChatGPT answers 409 with "Sign in to ChatGPT in Hermes", a
+plugin disabled since the last status check or refused by Hermes answers 503
+with the enable command, and an OpenAI error answers 502 with only its HTTP status. No
+secret or upstream body is logged or returned.
+
+The browser sends its WebRTC offer straight to `https://api.openai.com`, which
+the document Content-Security-Policy allows in `connect-src`. Caddy needs no
+change.
 
 ## Metadata egress floor
 

@@ -12,6 +12,24 @@ A second household member can watch, but cannot steal another person's control.
 After a lost connection, the desktop reconnects in watch mode; take over explicitly
 to resume input. Closing the last desktop attachment normally hands control back.
 
+On a phone or tablet, in the web app and the iOS app, touch works like this:
+
+- Tap clicks where you tapped, and one finger drags. A quick second tap on the same
+  spot double-clicks.
+- Two-finger tap, or press and hold, right-clicks. Two fingers scroll.
+- Pinch zooms the view, not the desktop. Zoomed in, two fingers pan instead of
+  scrolling. **Reset zoom** zooms back out.
+- **Trackpad mode** turns a finger into a trackpad: it moves a pointer, a tap
+  clicks there, and double-tap and hold drags. **Recenter pointer** brings the
+  pointer back on screen.
+- **Copy to** this device copies what was last copied on the desktop. **Paste
+  from** this device puts the device's clipboard on the desktop's clipboard and
+  types it into the selected field, up to 8192 characters.
+
+The **?** button explains these. On the web, the touch buttons sit below the
+desktop; in the iOS app, the bottom bar holds the keyboard and clipboard, and its
+**⋯** menu holds trackpad mode and zoom. Mouse and keyboard input are unchanged.
+
 An assistant can ask for a person from the conversation with its
 `computer_request_handoff` tool, for a CAPTCHA, a sign-in that needs a phone, a
 purchase confirmation or a choice only a person should make. The tool exists only
@@ -29,6 +47,28 @@ open handoff, since each asked a person to use the same computer.
 While an assistant's running tool uses the browser or desktop, its live row in
 the conversation offers **Watch**, which opens the computer without taking control.
 
+An assistant can also ask for a person at the system terminal with its
+`computer_request_terminal` tool, for a step that needs a real shell on the Hermes
+host, such as a command that needs `sudo` or an interactive sign-in like
+`gh auth login`. The tool exists only when the household computer is configured. It
+takes a reason, what to do and an optional one-line command of up to 500 visible
+characters. Its card shows all three, with a **Copy** button for the command, and
+warns that the assistant cannot see the terminal. **Open terminal** opens the
+Terminal tab with the command offered beside the shell. **Paste at prompt** pastes it
+without running it, and the person reads it and presses Enter. Nothing is pasted on
+its own, because the persistent shell may still be running a program that waits for
+a single key, which pasted text could answer. A command with a line break or a
+hidden character is refused by both the add-on and the app, because a pasted newline
+would run it. **Done** tells the assistant the person finished; its result says the
+assistant cannot see the terminal or its output and must check the outcome itself.
+Every other result tells the assistant that whether anything ran is unknown.
+**Not now** declines, and sending a message instead closes the card. A request
+nobody answers closes after 30 minutes. Only terminal administrators can open the
+terminal or press Done, so everyone else sees why the buttons are off and can still
+choose Not now. Opening the terminal from the card follows the usual rules,
+including the sign-in confirmed in the last 2 hours. The ask never pauses the
+assistant's desktop and browser actions, because the terminal is a separate shell.
+
 The **Terminal** tab opens a real shell on the Hermes VPS. Its host and starting
 folder appear above it. Each terminal administrator gets a separate persistent tmux
 session. Closing the panel or reconnecting preserves the shell and running commands;
@@ -42,11 +82,11 @@ the shell. It defaults to the integration administrators, must be part of
 `HOUSEHOLD_EMAILS` in production, and an empty value turns the shell off for
 everyone. Other members see why the Terminal tab is unavailable.
 
-Opening or reconnecting a shell needs a browser sign-in confirmed in the last
-2 hours. Signing in counts. After that, the Terminal tab asks you to confirm it's
-you with Google again. An open shell is not cut at the 2 hour mark; only a new
+Opening or reconnecting a shell needs a sign-in confirmed in the last 2 hours, in
+the browser or app that opens it. Signing in counts. After that, the Terminal tab
+asks you to confirm it's you with Google again. An open shell is not cut at the 2 hour mark; only a new
 attachment asks again. Each attachment is logged with the person, address and
-browser, never the ticket, and sends one "System terminal opened" alert to every
+browser or app, never the ticket, and sends one "System terminal opened" alert to every
 terminal administrator per confirmed sign-in, even during quiet hours. When the
 app starts, it ends shells that belong to anyone who is no longer a terminal
 administrator. It skips that cleanup until at least one administrator has signed
@@ -55,9 +95,11 @@ in, so a new database or a mistyped list cannot end the owner's shell.
 The iOS app's **Settings > Computer** shows the desktop through `/native/computer`
 and types with the system keyboard while the person has control. The page's
 `desktopInput` sends nothing unless that viewer is connected with control. The
-terminal opens the web workspace in the system browser, which needs its own
-household Google sign-in. The shell opens only there; the iOS app's own session
-cannot request one.
+terminal opens in the app too, through `/native/terminal`, for terminal
+administrators. The app first asks you to confirm it's you with Google in its own
+sign-in sheet, which follows the same 2 hour rule. The page never shows the web
+keyboard; the app's keyboard types, with Escape, Tab, Control, the arrows and Paste
+above it. See [the native API](native-api.md#system-terminal).
 
 ## Host setup
 
@@ -86,7 +128,8 @@ terminal detach/reconnect. VNC uses a private Unix socket; CDP listens only on
 loopback. Neither needs a public firewall or Caddy port.
 
 Control and attachment requests require household authentication. Terminal
-requests also require a terminal administrator's recent browser sign-in. Browser writes
+requests also require a terminal administrator's recent sign-in, confirmed in the
+browser or iOS app that asks. Browser writes
 use the app's existing Origin and CSRF checks. Streaming uses a session-bound,
 single-use ticket expiring after 30 seconds and checks session revocation while
 connected. The permanent Hermes service key remains on the server.

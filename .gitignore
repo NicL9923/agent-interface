@@ -3,6 +3,8 @@ dist/
 build/
 coverage/
 .vite/
+test-results/
+playwright-report/
 data/
 .env
 .env.*
