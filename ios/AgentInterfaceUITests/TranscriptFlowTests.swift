@@ -87,6 +87,38 @@ import XCTest
     try capture(app, "approval-declined")
   }
 
+  /// The approval scope states for visual review, in light and dark. Runs only when screenshots are written.
+  func testApprovalScopeScreens() throws {
+    try XCTSkipIf(ProcessInfo.processInfo.environment["AGENT_INTERFACE_SCREENSHOT_DIR"] == nil, "Set AGENT_INTERFACE_SCREENSHOT_DIR to capture")
+    for appearance in [XCUIDevice.Appearance.light, .dark] {
+      XCUIDevice.shared.appearance = appearance
+      let theme = appearance == .dark ? "dark" : "light"
+      let app = launch(["AGENT_INTERFACE_UI_APPROVAL_SCOPES": "1"])
+      XCTAssertTrue(app.buttons["approvalAllowOnce"].waitForExistence(timeout: 15))
+      try capture(app, "ios-approval-choices-and-steered-\(theme)")
+      app.scrollViews["conversationTranscript"].swipeUp()
+      try capture(app, "ios-question-recommended-\(theme)")
+      app.buttons["approvalMore"].tapWhenReady()
+      app.buttons["Always allow…"].tapWhenReady()
+      XCTAssertTrue(app.alerts.firstMatch.waitForExistence(timeout: 5))
+      try capture(app, "ios-always-allow-confirm-\(theme)")
+      app.alerts.firstMatch.buttons["Cancel"].tapWhenReady()
+      app.buttons["approvalDecline"].tapWhenReady()
+      XCTAssertTrue(app.descendants(matching: .any)["declinedStep"].waitForExistence(timeout: 10))
+      XCTAssertTrue(app.textViews["messageComposer"].waitForKeyboardFocus(true))
+      try capture(app, "ios-declined-composer-focused-\(theme)")
+      app.buttons["hideKeyboard"].tapWhenReady()
+      app.buttons["botProfile"].tapWhenReady()
+      app.buttons["profileSettings"].tapWhenReady()
+      app.descendants(matching: .any)["settingsSection.access"].tapWhenReady()
+      app.descendants(matching: .any)["settingsPage.always-allowed commands"].tapWhenReady()
+      XCTAssertTrue(app.descendants(matching: .any)["approvalAutoReview"].waitForExistence(timeout: 10))
+      try capture(app, "ios-always-allowed-settings-\(theme)")
+      app.terminate()
+    }
+    XCUIDevice.shared.appearance = .light
+  }
+
   func testAFailedTurnRetriesAndLeavesTheDraftAlone() throws {
     let app = launch(["AGENT_INTERFACE_UI_RETRY": "1"])
     let retry = app.buttons["retryTurn"]

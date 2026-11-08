@@ -517,9 +517,6 @@
       } else if path == "/api/automations" {
         object = ["routines":[["id":"routine-1","botId":"ranch","name":"Morning report","prompt":"Report","schedule":"0 7 * * *","enabled":true,"recipientIds":["fixture-user"],"nextRunAt":"2026-10-03T12:00:00Z","lastStatus":"delivery_failed","lastDeliveryError":"Fixture: notification destination unavailable"]],"usage":[["botId":"ranch","sessions":4,"inputTokens":1200,"outputTokens":400,"actualCost":NSNull(),"estimatedCost":0.02,"partial":true]],"unavailableBots":[]]
       } else if path == "/api/bootstrap" {
-        if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_APPROVAL_SCOPES"] == "1" {
-          object = TranscriptFixtures.approvalScopes(decision: Self.scopedDecision, draft: Self.draft)
-        }
         if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_LIVE_ACTIVITY"] == "1" {
           Self.preferences["presentation"] = "advanced"
         }
@@ -635,6 +632,9 @@
           window["messages"] = Array(Self.messages[from...]); window["earlier"] = from; window["earlierFiles"] = 0
           window["sessionId"] = TranscriptFixtures.longSession
           object = window
+        }
+        if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_APPROVAL_SCOPES"] == "1" {
+          object = TranscriptFixtures.approvalScopes(decision: Self.scopedDecision, draft: Self.draft)
         }
         if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_LIVE_ACTIVITY"] == "1" {
           object = [
