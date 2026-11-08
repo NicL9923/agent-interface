@@ -21,6 +21,11 @@ export type ErrorCode =
   | "sharing_changed"
   // A request ID came back with different content: another tab or device already sent under it.
   | "submission_conflict"
+  // Approval scopes (Workstream B): a choice Hermes did not offer, settings an older add-on lacks, and policy guards.
+  | "approval_choice_unavailable"
+  | "approval_settings_unsupported"
+  | "approval_policy_forbidden"
+  | "approvals_off"
   // A Hermes transport failure carries its connection diagnosis.
   | NonNullable<RuntimeStatus["code"]>
   // The web client sets these for failures that never reached the server.

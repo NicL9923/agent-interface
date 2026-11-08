@@ -6,6 +6,8 @@ import { messageOrigin, withMessageOrigins, wireOrigin } from '../shared/message
 import { excerpt } from '../shared/event-copy.js';
 import { markdownPlain } from '../shared/plain-text.js';
 import { isTalkVoice } from '../shared/voice.js';
+import { recommendedOption } from '../shared/recommended.js';
+import type { ApprovalChoice } from '../shared/types.js';
 import type { Wire } from './hermes-transport.js';
 
 /** What a session's frames have said since its last read: streamed text, open requests and tools. */
@@ -188,7 +190,16 @@ export function receipt(value: Wire): SubmissionReceipt {
     runId: value.runId,
     ...(value.userRowId != null ? {messageId: String(value.userRowId)} : {}),
     message: value.message,
+    // The add-on's admission decision. An older add-on sends none, which stays unknown.
+    ...(value.status === 'accepted' && typeof value.steering === 'boolean' ? {steered: value.steering} : {}),
   };
+}
+const approvalChoiceNames: readonly ApprovalChoice[] = ['once', 'session', 'always', 'deny'];
+/** The choices Hermes offered for one approval, in its order. Anything else, or nothing known, reads as an older Hermes. */
+export function approvalChoices(value: unknown): ApprovalChoice[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const choices = [...new Set(value.filter((choice): choice is ApprovalChoice => approvalChoiceNames.includes(choice)))];
+  return choices.length ? choices : undefined;
 }
 // The add-on's context for a login requested by address. Every field is assistant text except the requester.
 function explicitLogin(value: unknown): {explicit?: ExplicitLoginRequest} {
@@ -228,6 +239,7 @@ export function historyMessages(sid: string, history: Wire[], files: (row: Wire)
       toolName: typeof bridged(row.name, row.args).name === 'string' ? String(bridged(row.name, row.args).name) : undefined,
       toolCall,
       files: files(row),
+      ...(row.role === 'user' && row.app_steering === true ? {steered: true} : {}),
     };
     const origin = wireOrigin(message, row);
     return origin ? {...message, origin} : message;
@@ -237,12 +249,20 @@ export function historyMessages(sid: string, history: Wire[], files: (row: Wire)
 /** The approvals and other requests an open session is waiting on. */
 export function openRequests(value: Wire, sid: string): {approvals: Conversation['approvals']; attention: NonNullable<Conversation['attention']>} {
   const requests = Array.isArray(value.open_requests) ? value.open_requests : [];
-  const approvals = requests.filter((x: Wire) => x.method === 'approval').map((x: Wire) => ({
-    id: String(x.id),
-    title: 'Action approval',
-    detail: x.params?.description ?? x.params?.command ?? 'Hermes requests approval.',
-    status: 'pending' as const,
-  }));
+  const approvals = requests.filter((x: Wire) => x.method === 'approval').map((x: Wire) => {
+    const choices = approvalChoices(x.params?.choices);
+    // Session and always grants are saved by these pattern keys, not by the one command.
+    const patterns = Array.isArray(x.params?.pattern_keys)
+      ? [...new Set<string>(x.params.pattern_keys.filter((key: unknown) => typeof key === 'string' && key.trim()).map((key: string) => key.slice(0, 200)))] : [];
+    return {
+      id: String(x.id),
+      title: 'Action approval',
+      detail: x.params?.description ?? x.params?.command ?? 'Hermes requests approval.',
+      status: 'pending' as const,
+      ...(choices ? {choices} : {}),
+      ...(patterns.length ? {patterns} : {}),
+    };
+  });
   const attention = requests.filter((x: Wire) => x.method !== 'approval').map((x: Wire) => {
     const params = x.params ?? {};
     let secure: SecureRequest | undefined;
@@ -286,7 +306,14 @@ export function openRequests(value: Wire, sid: string): {approvals: Conversation
       secure,
       ...(computer ? {computer} : {}),
       ...(connection ? {connection} : {}),
-      questions: clarify ? (params.questions ?? []).map((q: Wire) => ({id: q.qid, prompt: q.question ?? '', options: q.choices})) : undefined,
+      questions: clarify ? (params.questions ?? []).map((q: Wire) => {
+        const options: string[] | undefined = Array.isArray(q.choices) ? q.choices.filter((choice: unknown) => typeof choice === 'string') : undefined;
+        const recommended = recommendedOption(options);
+        return {id: q.qid, prompt: q.question ?? '', options,
+          // Hermes takes several picks as one JSON array answer; a free-text question has nothing to pick.
+          ...(q.multi_select === true && options?.length ? {multiple: true} : {}),
+          ...(recommended !== undefined ? {recommended} : {})};
+      }) : undefined,
     };
   });
   return {approvals, attention};

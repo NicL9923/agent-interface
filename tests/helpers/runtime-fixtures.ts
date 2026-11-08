@@ -73,6 +73,9 @@ export function automationRequester(handlers: AutomationHandlers): AutomationReq
       case 'skill_decide': return configured(handlers.skill_decide, input.operation)(input);
       case 'skill_policy': return configured(handlers.skill_policy, input.operation)(input);
       case 'skill_lock': return configured(handlers.skill_lock, input.operation)(input);
+      case 'approval_settings': return configured(handlers.approval_settings, input.operation)(input);
+      case 'approval_allowlist_remove': return configured(handlers.approval_allowlist_remove, input.operation)(input);
+      case 'approval_mode': return configured(handlers.approval_mode, input.operation)(input);
     }
   }
   return request;

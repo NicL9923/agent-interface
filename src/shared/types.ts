@@ -265,8 +265,11 @@ export interface AttentionRequest {
   kind: "clarify" | "official" | "secure" | "computer" | "connection";
   title: string;
   detail: string;
-  /** `multiple` lets a person choose several options, sent as one comma-separated answer. Absent means one. */
-  questions?: { id: string; prompt: string; options?: string[]; multiple?: boolean }[];
+  /**
+   * `multiple` lets a person choose several options, sent as one JSON array of strings. Absent means one.
+   * `recommended` indexes the one option Hermes marked " (Recommended)"; see src/shared/recommended.ts.
+   */
+  questions?: { id: string; prompt: string; options?: string[]; multiple?: boolean; recommended?: number }[];
   secure?: SecureRequest;
   computer?: ComputerHandoff;
   connection?: ConnectionRequest;
@@ -494,6 +497,8 @@ export interface Runtime {
     approvalId: string,
     decision: "approved" | "denied",
     senderId: string,
+    /** How far an approval reaches. Absent means this one command. */
+    scope?: ApprovalScope,
   ): Promise<void>;
   upload(
     botId: string,
@@ -528,3 +533,33 @@ export const defaultPreferences: Preferences = {
   sections: [],
   followBots: [],
 };
+
+// --- Approval scopes and steering (Workstream B). Additive fields merged into the interfaces above. ---
+/** A request.answer choice Hermes can offer for one approval. */
+export type ApprovalChoice = "once" | "session" | "always" | "deny";
+/** How far an approval reaches: this command, this conversation, or this assistant from now on. */
+export type ApprovalScope = Exclude<ApprovalChoice, "deny">;
+export interface Approval {
+  /** The choices Hermes offered for this request, in its order. Absent from an older Hermes: approve once or decline. */
+  choices?: ApprovalChoice[];
+  /** The command patterns "Always allow" saves, such as "recursive delete". */
+  patterns?: string[];
+}
+export interface Message {
+  /** The add-on admitted this person's message into the task that was already running. Absent when unknown. */
+  steered?: boolean;
+}
+export interface SubmissionReceipt {
+  /** Whether this message joined the running task. Absent from an older add-on. */
+  steered?: boolean;
+}
+/** An assistant's always-allowed command patterns and Hermes's own review of routine commands. */
+export interface ApprovalSettings {
+  supported: boolean;
+  reason?: string;
+  allowlist: string[];
+  /** Hermes's approvals.mode: smart lets its guardian approve routine commands; off never asks. */
+  mode: "manual" | "smart" | "off";
+  canManageAutoReview: boolean;
+}
+// --- End approval scopes and steering. ---

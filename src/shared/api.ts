@@ -5,6 +5,7 @@ import type { RoutineOutput, RoutineResult } from "./collaboration.js";
 import type { RoutineRunPage } from "./routine-runs.js";
 import type { ReplyCardState } from "./reply-cards.js";
 import type { Routine } from "./types.js";
+import type { ApprovalScope, ApprovalSettings } from "./types.js";
 import type { routinePresets } from "./routine-presets.js";
 import type { EarlierFiles } from "./history.js";
 import type { LiveState } from "./live-activity.js";
@@ -221,7 +222,13 @@ export interface ApiRoutes {
   "GET /submissions/:id": { response: SubmissionReceipt };
   "POST /bots/:id/requests/:approvalId": { body: { answers: Record<string, string> }; response: Ok };
   "POST /bots/:id/stop": { response: Ok };
-  "POST /bots/:id/approvals/:approvalId": { body: { decision: "approved" | "denied"; account?: string }; response: Ok };
+  /** `scope` reaches past this one command only when Hermes offered it for this approval. Absent means once. */
+  "POST /bots/:id/approvals/:approvalId": { body: { decision: "approved" | "denied"; scope?: ApprovalScope; account?: string }; response: Ok };
+  // --- Approval settings (Workstream B) ---
+  "GET /bots/:id/approval-settings": { response: ApprovalSettings };
+  "PUT /bots/:id/approval-settings": { body: { autoReview: boolean }; response: ApprovalSettings };
+  "DELETE /bots/:id/approval-settings/allowlist": { body: { pattern: string }; response: ApprovalSettings };
+  // --- End approval settings ---
   "GET /bots/:id/draft": { response: SavedDraft | null };
   "PUT /bots/:id/draft": { body: DraftSave; response: SavedDraft };
   "GET /bots/:id/read-position": { response: ReadPosition | null };

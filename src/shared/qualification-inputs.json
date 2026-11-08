@@ -117,6 +117,7 @@
   "src/shared/model-name.ts",
   "src/shared/plain-text.ts",
   "src/shared/qualification-inputs.json",
+  "src/shared/recommended.ts",
   "src/shared/reply-cards.ts",
   "src/shared/retry-id.ts",
   "src/shared/routine-presets.ts",
