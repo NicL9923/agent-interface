@@ -27,6 +27,8 @@ extension AppStore {
       "readHere": \.readHere, "openComputer": \.openComputer,
       // Transcript entry points (I1): Retry, opening at a message, and the attention scroll.
       "retryAttempt": \.retryAttempt, "focusedMessage": \.focusedMessage, "attentionScrollRequest": \.attentionScrollRequest,
+      // The decline handoff (Workstream B).
+      "declinedApprovals": \.declinedApprovals,
     ]
   }
   /// The names of the stored properties the Observation macro tracks, read from the backing storage it generates.

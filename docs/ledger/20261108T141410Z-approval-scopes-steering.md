@@ -51,3 +51,41 @@ confirmation, the decline with the focused composer, the settings list, a recomm
 question), and the iOS simulator in light and dark (the same states). The scripted runtime
 does not serve Connections or Logins, so those panels show a load error in the settings
 captures. No page errors or CSP reports besides those two refused reads.
+
+## Cross-provider review follow-up
+
+An independent GPT-6.1 Sol review of `846ec70..d2157aa` found four issues; all four were real.
+
+1. Removing an always-allowed pattern left it live on qualified `b9cb268` and `d23cc6b`, whose
+   `tools.approval._permanent_set()` keeps the permanent set without rereading
+   `command_allowlist`. The add-on now drops the pattern from the profile's permanent cache and
+   baseline, including the launch profile's module-level set (`ea00f3d`).
+   `RealApprovalCacheTests` runs the removal against the real `tools.approval` of each qualified
+   revision through `HERMES_SOURCE`: it passed on `b9cb268`, `d23cc6b` and `ed1afb0`. With the
+   cache withdrawal removed it failed on `b9cb268` and `d23cc6b` ("The routed profile still
+   allows it from its cache") and passed on `ed1afb0`, which resyncs from disk; with only the
+   launch-profile branch removed it failed on `b9cb268` ("The live session keeps it"). The fake
+   module now models the cache, and both breaks also fail the default tests. The full
+   approval scope probe then passed against both `ed1afb0` and `b9cb268`, using
+   `ed1afb0`'s dependency set ([b9cb268 receipt](../evidence/hermes-approval-scope-probe-b9cb268.json)).
+   The removal note now says another Hermes app may keep the grant until its chat ends or
+   Hermes restarts.
+2. Exposing `multi_select` let installed apps send comma-joined picks, which Hermes's real
+   `_clean_answer` on `b9cb268` and `ed1afb0` reads as one typed answer
+   (`['Feed (Recommended), Water']`). New clients now send `answerFormat: "json"`, which the
+   server validates; an answer without it is split into the options it names, then written
+   text, unless an option contains ", " (`adbe227`). Six hand mutations of the conversion,
+   the guard and the web client's flag each failed their tests.
+3. An older add-on passed Hermes's `always` through without a way to remove the grant. The
+   server now leaves `always` out of the choices unless the add-on reports `approval_settings`,
+   which both clients and the decision guard follow (`f482ddb`). Removing the filter, or forcing
+   the capability on, failed the adapter test.
+4. iOS cleared the decline handoff only after a send's own response. The shared receipt handler
+   clears it now, and `testAnAcceptanceLearnedByLookupEndsTheDeclineHandoff` covers recovery
+   through lookup (`75a7f4a`). The web clears on its shared receipt state already; a new test
+   with every POST failing shows a lookup-recovered acceptance ends it, and it failed with the
+   composer's clear disabled.
+
+After the fixes: `npm test` 151 files and 2,103 tests passed on six of seven runs; the one
+failing run started right after a hand mutation was restored and did not recur. Typecheck,
+lint, Python (37 files) and ruff passed.
