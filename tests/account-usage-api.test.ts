@@ -69,7 +69,7 @@ async function setup(options: { accounts?: Record<string, Accounts | Error>; usa
   const get = async (query = '', as = headers) => app.inject({ url: `/api/usage/accounts${query}`, headers: as });
   const redeem = (key: string, payload: unknown, as: Record<string, string> = headers) => app.inject({ url: `/api/usage/accounts/${key}/reset`, method: 'POST', headers: as, payload: payload as object });
   const usageCalls = () => ask.mock.calls.map(([input]) => input).filter((input): input is ExperienceRequest<'account_usage'> => input.operation === 'account_usage');
-  return { app, ask, reset, get, redeem, usageCalls, headers, owner, usage, advance: (ms: number) => { clock += ms; } };
+  return { app, ask, reset, get, redeem, usageCalls, headers, owner, usage, accounts, advance: (ms: number) => { clock += ms; } };
 }
 
 it('reads each shared account once and lists only the assistants this person can see', async () => {
@@ -210,6 +210,55 @@ it('never keeps a read that started before a reset and answered after it', async
   await before;
   const after = (await s.get()).json() as { accounts: UsageAccount[] };
   expect(after.accounts.find(row => row.key === CODEX)?.bankedResets).toBe(1);
+});
+
+it('forgets the other sign-in\'s read of the same account even while it is still loading at the reset', async () => {
+  const s = await setup();
+  await s.get();
+  s.advance(USAGE_KEPT_MS);
+  let late!: (value: AccountSnapshot) => void;
+  s.usage[SECOND_CODEX] = new Promise<AccountSnapshot>(resolve => { late = resolve; }) as never;
+  s.usage[CODEX] = snapshotFixture(CODEX, 'openai-codex', { windows: [window('Weekly', 0)], bankedResets: 1, identity: 'i'.repeat(32) });
+  const before = s.get();
+  await vi.waitFor(() => expect(s.usageCalls().filter(input => input.key === SECOND_CODEX)).toHaveLength(2));
+  expect((await s.redeem(CODEX, { confirmed: true, requestId: REQUEST, force: false })).statusCode).toBe(200);
+  late(snapshotFixture(SECOND_CODEX, 'openai-codex', { windows: [window('Weekly', 100)], bankedResets: 2, identity: 'i'.repeat(32) }));
+  await before;
+  s.usage[SECOND_CODEX] = snapshotFixture(SECOND_CODEX, 'openai-codex', { windows: [window('Weekly', 0)], bankedResets: 1, identity: 'i'.repeat(32) });
+  await s.get();
+  expect(s.usageCalls().filter(input => input.key === SECOND_CODEX)).toHaveLength(3);
+});
+
+it('keeps another account\'s read that is loading during a reset', async () => {
+  const s = await setup();
+  await s.get();
+  s.advance(USAGE_KEPT_MS);
+  let late!: (value: AccountSnapshot) => void;
+  s.usage[CLAUDE] = new Promise<AccountSnapshot>(resolve => { late = resolve; }) as never;
+  const before = s.get();
+  await vi.waitFor(() => expect(s.usageCalls().filter(input => input.key === CLAUDE)).toHaveLength(2));
+  await s.redeem(CODEX, { confirmed: true, requestId: REQUEST, force: false });
+  late(snapshotFixture(CLAUDE, 'anthropic', { windows: [window('Current week', 20)] }));
+  await before;
+  await s.get();
+  expect(s.usageCalls().filter(input => input.key === CLAUDE)).toHaveLength(2);
+});
+
+it('forgets a first read still loading at a reset, since it may be this account through another sign-in', async () => {
+  const s = await setup({ accounts: { helper: [{ key: CLAUDE, provider: 'anthropic', role: 'main' }] } });
+  await s.get();
+  let late!: (value: AccountSnapshot) => void;
+  s.usage[SECOND_CODEX] = new Promise<AccountSnapshot>(resolve => { late = resolve; }) as never;
+  s.advance(USAGE_KEPT_MS);
+  // Helper now also signs in to ChatGPT another way; that read has never answered.
+  s.accounts.helper = [{ key: CLAUDE, provider: 'anthropic', role: 'main' }, { key: SECOND_CODEX, provider: 'openai-codex', role: 'fallback' }];
+  const before = s.get();
+  await vi.waitFor(() => expect(s.usageCalls().filter(input => input.key === SECOND_CODEX)).toHaveLength(1));
+  await s.redeem(CODEX, { confirmed: true, requestId: REQUEST, force: false });
+  late(snapshotFixture(SECOND_CODEX, 'openai-codex', { windows: [window('Weekly', 100)], bankedResets: 2, identity: 'i'.repeat(32) }));
+  await before;
+  await s.get();
+  expect(s.usageCalls().filter(input => input.key === SECOND_CODEX)).toHaveLength(2);
 });
 
 it('refuses a reset without confirmation or a request ID, for an account the person cannot see, or for a provider without resets', async () => {

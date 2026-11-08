@@ -35,13 +35,15 @@ class Kept<T> {
     if (entry?.pending) return entry.pending;
     if (entry?.settledAt !== undefined && this.now() - entry.settledAt < Math.min(maxAge, entry.lifetime!)) return Promise.resolve(entry.value!);
     const pending = load();
-    this.entries.set(key, { pending });
+    // The last answer stays readable through peek while the next one loads, so a reset still knows whose read it is.
+    this.entries.set(key, { pending, value: entry?.value });
     pending.then(
       value => { if (this.entries.get(key)?.pending === pending) this.entries.set(key, { value, settledAt: this.now(), lifetime: lifetime(value) }); },
       () => { if (this.entries.get(key)?.pending === pending) this.entries.delete(key); });
     return pending;
   }
   peek(key: string) { return this.entries.get(key)?.value; }
+  loading(key: string) { return !!this.entries.get(key)?.pending; }
   forget(key: string) { this.entries.delete(key); }
   keys() { return [...this.entries.keys()]; }
   prune() {
@@ -96,10 +98,14 @@ export async function installAccountUsageRoutes(app: FastifyInstance, runtime: R
   }
   const account = ({ identity: _identity, transient: _transient, ...snapshot }: AccountSnapshot, group: Group): UsageAccount =>
     ({ ...snapshot, botIds: group.botIds, fallbackOnly: !group.main });
-  /** Every key last read as the same account as `key`, `key` included. */
+  /**
+   * Every key that may hold this account's limits from before a reset: `key`, keys last read as the same account,
+   * and reads still loading whose account is not known yet. Forgetting one only costs a fresh read.
+   */
   const aliases = (key: string) => {
     const identity = snapshots.peek(key)?.identity;
-    return identity ? snapshots.keys().filter(other => other === key || snapshots.peek(other)?.identity === identity) : [key];
+    return snapshots.keys().filter(other => other === key || !!identity && snapshots.peek(other)?.identity === identity
+      || snapshots.loading(other) && !snapshots.peek(other));
   };
 
   apiRoute(app, 'GET /usage/accounts', {}, async req => {

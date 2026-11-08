@@ -515,7 +515,7 @@ def _route_base(provider, base_url):
 def _credentials(provider, base_url, explicit):
     """Each credential a route can run on, read from the pool without selecting, rotating or refreshing one."""
     if explicit:
-        return [(explicit, base_url)]
+        return [(explicit, base_url, False)]
     from agent.credential_pool import STATUS_DEAD, load_pool
     try:
         entries = load_pool(provider).entries()
@@ -525,7 +525,7 @@ def _credentials(provider, base_url, explicit):
     for entry in entries:
         token = str(getattr(entry, "runtime_api_key", "") or "").strip()
         if token and getattr(entry, "last_status", None) != STATUS_DEAD:
-            found.append((token, base_url or getattr(entry, "runtime_base_url", None)))
+            found.append((token, base_url or getattr(entry, "runtime_base_url", None), True))
     return found
 
 
@@ -539,12 +539,15 @@ def _accounts():
     accounts = {}
     for provider, role, base_url, explicit in _account_routes():
         if provider == "nous":
-            found = [dict(key=_digest("nous", "portal"), provider="nous", role=role, token=None, base_url=None, identity=None)]
+            # The Portal login is found when it is read, so until then the account is this profile's.
+            from hermes_constants import get_hermes_home
+            found = [dict(key=_digest("nous", "portal", str(get_hermes_home().resolve())), provider="nous", role=role, token=None, base_url=None, identity=None)]
         else:
             found = []
-            for token, base in _credentials(provider, base_url, explicit):
+            for token, base, pooled in _credentials(provider, base_url, explicit):
                 identity = _identity(provider, token)
-                route = _route_base(provider, base)
+                # A pooled ChatGPT credential goes to its pool route; an explicit fallback key goes where the fallback names.
+                route = _route_base(provider, base) if pooled else base
                 found.append(dict(key=_digest(provider, (route or "").lower(), identity), provider=provider, role=role,
                                   token=token, base_url=route, identity=identity))
             if not found:
@@ -617,7 +620,12 @@ def account_usage(data):
             return _usage_document(provider, key, None, "Hermes could not read this account's credits right now.", transient=True)
         if info is None or not getattr(info, "logged_in", False):
             return _usage_document(provider, key, None, "Sign in to Nous Portal in Hermes to see its credits.")
-        return _usage_document(provider, key, usage.build_nous_credits_snapshot(info), "Hermes could not read this account's credits right now.", transient=True)
+        document = _usage_document(provider, key, usage.build_nous_credits_snapshot(info), "Hermes could not read this account's credits right now.", transient=True)
+        # Profiles signed in to one Portal account show as one account.
+        who = getattr(info, "user_id", None) or getattr(info, "email", None)
+        if isinstance(who, str) and who:
+            document["identity"] = _digest("nous", "identity", who, str(getattr(info, "org_id", None) or ""))
+        return document
     supported = _hermes("agent.account_usage_cache", "has_account_usage")
     if supported is None:
         # Hermes before the usage cache (late September 2026) has only the built-in fetchers.
@@ -629,8 +637,10 @@ def account_usage(data):
         return _usage_document(provider, key, None, "Hermes has no signed-in account for this provider.")
     options = dict(base_url=account["base_url"], api_key=account["token"])
     accepted = __import__("inspect").signature(usage.fetch_account_usage).parameters
-    # A read never refreshes or rotates a credential it does not own, as Hermes's own model picker reads.
-    options.update({name: value for name, value in (("read_only", True), ("identity_id", account["identity"])) if name in accepted})
+    # Never read_only: an expired ChatGPT token is then refreshed once, and only the credential this account
+    # was listed with (Hermes matches it by the key given), as Hermes's own /usage does. Nothing is selected or rotated.
+    if "identity_id" in accepted:
+        options["identity_id"] = account["identity"]
     snapshot = usage.fetch_account_usage(provider, **options)
     return _usage_document(provider, key, snapshot, "Hermes could not read this account's limits right now.", transient=snapshot is None)
 

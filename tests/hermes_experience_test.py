@@ -888,7 +888,7 @@ class AccountUsageTests(unittest.TestCase):
         return types.SimpleNamespace(runtime_api_key=token, runtime_base_url=base_url, last_status=status)
 
     def hermes(self, *, main='openai-codex', fallback=(), pools=None, auto='openrouter', snapshots=None, supported=None,
-               portal=None, redeem=None, legacy=False):
+               portal=None, redeem=None, legacy=False, home='/srv/hermes/profiles/ranch'):
         pools = {'openai-codex': [self.entry('codex-acct1-a')], 'openrouter': [self.entry('sk-or-1')], 'anthropic': [self.entry('sk-ant-oat-1')], **(pools or {})}
         self.fetched, self.redeemed = [], []
         config = {'fallback_providers': list(fallback)}
@@ -918,9 +918,11 @@ class AccountUsageTests(unittest.TestCase):
             'hermes_cli.auth': strict(resolve_provider=lambda requested: auto),
             'hermes_cli.fallback_config': strict(get_fallback_chain=lambda cfg: [dict(entry) for entry in cfg['fallback_providers']],
                                                  resolve_entry_api_key=lambda entry: entry.get('api_key')),
-            'hermes_cli.auth_codex': strict(_codex_pool_route_base_url=lambda base: base or 'https://chatgpt.com/backend-api/codex'),
+            # Hermes sends pooled ChatGPT rows through its configured route (HERMES_CODEX_BASE_URL); here that route is gateway A.
+            'hermes_cli.auth_codex': strict(_codex_pool_route_base_url=lambda base: (base or 'https://chatgpt.com/backend-api/codex').replace('gateway-b', 'gateway-a')),
             'agent': types.SimpleNamespace(account_usage=usage, account_usage_cache=cache, credential_pool=pool),
             'agent.account_usage': usage, 'agent.account_usage_cache': None if legacy else cache, 'agent.credential_pool': pool,
+            'hermes_constants': strict(get_hermes_home=lambda: Path(home)),
         }
         return patch.dict(sys.modules, modules)
 
@@ -967,7 +969,8 @@ class AccountUsageTests(unittest.TestCase):
             first, second = (row['key'] for row in experience.account_list()['accounts'])
             self.assertEqual(experience.account_usage(dict(key=second))['details'], ['read b'])
             self.assertEqual(experience.account_usage(dict(key=first))['details'], ['read a'])
-        self.assertEqual(self.fetched[0], dict(provider='openai-codex', base_url='https://gw.example/codex', api_key='codex-acct2-b', read_only=True, identity_id='codex:acct2:user'))
+        # Not read-only: an expired token is refreshed once, matched by this very key, as Hermes's /usage does.
+        self.assertEqual(self.fetched[0], dict(provider='openai-codex', base_url='https://gw.example/codex', api_key='codex-acct2-b', read_only=False, identity_id='codex:acct2:user'))
         self.assertEqual(self.fetched[1]['api_key'], 'codex-acct1-a')
 
     def test_normalizes_a_codex_snapshot_and_turns_banked_resets_into_a_count(self):
@@ -1002,10 +1005,26 @@ class AccountUsageTests(unittest.TestCase):
                 self.assertEqual((result['windows'], result['bankedResets'], result['transient']), ([], 0, transient))
 
     def test_reads_nous_credits_through_the_portal_resolver_whatever_login_it_finds(self):
-        account = types.SimpleNamespace(logged_in=True, snapshot=self.snapshot(details=('Top-up credits: $3.00', 'Top up: https://portal')))
+        account = types.SimpleNamespace(logged_in=True, user_id='portal-user', org_id='org', snapshot=self.snapshot(details=('Top-up credits: $3.00', 'Top up: https://portal')))
         with self.hermes(main='nous', portal=account):
             result = experience.account_usage(dict(key=experience.account_list()['accounts'][0]['key']))
         self.assertEqual(result['details'], ['Top-up credits: $3.00'])
+        # The app merges profiles signed in to one Portal account by this digest; the user id never leaves.
+        self.assertRegex(result['identity'], '^[0-9a-f]{32}$')
+        self.assertNotIn('portal-user', json.dumps(result))
+
+    def test_each_profile_has_its_own_nous_account_until_the_portal_says_whose_it_is(self):
+        ranch, garden = (self.accounts(main='nous', home=home)[0]['key'] for home in ('/srv/hermes/profiles/ranch', '/srv/hermes/profiles/garden'))
+        self.assertNotEqual(ranch, garden)
+
+    def test_an_explicit_chatgpt_fallback_key_is_read_and_spent_where_the_fallback_names(self):
+        outcome = types.SimpleNamespace(status='reset', message='Done', available_count=0, windows_reset=2)
+        with self.hermes(main='openrouter', fallback=[dict(provider='openai-codex', model='m', api_key='codex-acct2-route', base_url='https://gateway-b.example/codex')],
+                         snapshots={'openai-codex': self.snapshot()}, redeem=outcome):
+            key = experience.account_list()['accounts'][1]['key']
+            experience.account_usage(dict(key=key))
+            self.reset(key)
+        self.assertEqual((self.fetched[0]['base_url'], self.redeemed[0]['base_url']), ('https://gateway-b.example/codex', 'https://gateway-b.example/codex'))
 
     def test_an_older_hermes_without_the_usage_cache_or_read_only_fetches_still_reads(self):
         with self.hermes(main='openrouter', fallback=[dict(provider='spike-fixture', model='m')], pools={'spike-fixture': [self.entry('k')]},
