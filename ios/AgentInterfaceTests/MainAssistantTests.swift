@@ -58,6 +58,41 @@ import XCTest
     }
   }
 
+  /// A refusal that comes after the server saved the change carries what it saved, as when Hermes
+  /// hasn't removed a check-in yet; the screen shows that, and the reason still reaches the person.
+  func testARefusalAfterTheServerSavedShowsWhatItSavedAndKeepsTheReason() async throws {
+    let server = FakeServer()
+    let store = AppStore(); store.api = server.api()
+    defer {
+      if let scope = store.scope {
+        for key in UserDefaults.standard.dictionaryRepresentation().keys where key.hasPrefix("native.\(scope).") { UserDefaults.standard.removeObject(forKey: key) }
+      }
+    }
+    let base = #""presentation":"simple","theme":"system","favorites":[],"sections":[],"followBots":[]"#
+    store.bootstrap = try JSONDecoder().decode(Bootstrap.self, from: Data(#"""
+      {"user":{"id":"main-\#(UUID().uuidString)","name":"Mom","email":"m@example.test"},"household":[],
+       "preferences":{\#(base),"mainBotId":"sage","checkIns":{"enabled":true,"everyHours":2,"timezone":"America/Chicago"}},
+       "bots":[{"id":"sage","name":"Sage","model":"m","shared":false,"ownerId":"mom","activity":"idle"}],
+       "capabilities":{"chat":{"supported":true}},"connection":{"connected":true},"csrfToken":null}
+      """#.utf8))
+    func refused(_ work: () async throws -> Void) async -> String? {
+      do { try await work(); return nil } catch { return error.localizedDescription }
+    }
+    server.reply = .init(status: 502, body: #"{"error":"Check-ins are off, but Hermes hasn't removed the routine yet.","code":"check_in_removal_pending","preferences":{\#(base),"mainBotId":"sage","checkIns":{"enabled":false,"everyHours":2,"timezone":"America/Chicago"}}}"#)
+    let checkInsReason = await refused { try await store.setCheckIns(enabled: false) }
+    XCTAssertEqual(checkInsReason, "Check-ins are off, but Hermes hasn't removed the routine yet.")
+    XCTAssertEqual(store.bootstrap?.preferences.checkIns?.enabled, false)
+    server.reply = .init(status: 502, body: #"{"error":"Your previous main assistant still has a check-in in Hermes.","code":"main_clear_pending","preferences":{\#(base)}}"#)
+    let clearReason = await refused { try await store.setMainAssistant(nil) }
+    XCTAssertEqual(clearReason, "Your previous main assistant still has a check-in in Hermes.")
+    XCTAssertNil(store.bootstrap?.preferences.mainBotId)
+    // A refusal that saved nothing changes nothing.
+    server.reply = .init(status: 409, body: #"{"error":"Sage can't be your main assistant yet.","code":"main_routine_busy"}"#)
+    let busyReason = await refused { try await store.setMainAssistant("sage") }
+    XCTAssertEqual(busyReason, "Sage can't be your main assistant yet.")
+    XCTAssertNil(store.bootstrap?.preferences.mainBotId)
+  }
+
   func testTheSwitcherLeadsWithTheMainAssistantAndAsksItWithTypedWords() throws {
     let bots = try [bot("alpha", shared: true, owner: nil), bot("sage"), bot("ranch", shared: true, owner: nil)]
     XCTAssertEqual(QuickSwitch.entries(query: "", bots: bots, pinned: ["ranch"], main: "sage").prefix(3).map(\.target), [.bot("sage"), .bot("ranch"), .bot("alpha")])

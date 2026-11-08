@@ -60,8 +60,21 @@ extension AppStore {
   func setMainAssistant(_ botId: String?) async throws {
     guard let api else { return }
     let currentGeneration = generation
-    let saved: Preferences = try await api.write("/preferences/main", MainChoice(botId: botId), method: "PUT")
+    let saved: Preferences = try await applyingSaved(currentGeneration) { try await api.write("/preferences/main", MainChoice(botId: botId), method: "PUT") }
     if currentGeneration == generation { bootstrap?.preferences = saved }
+  }
+  /// Applies the preferences a failed request reports the server saved first, as when Hermes hasn't
+  /// removed a check-in yet, so the screen shows what was saved beside the error. True when it did.
+  @discardableResult func applySavedPreferences(from error: Error, generation expected: Int? = nil) -> Bool {
+    struct Saved: Decodable { var preferences: Preferences }
+    guard let body = (error as? APIError)?.body, let saved = try? JSONDecoder().decode(Saved.self, from: body),
+      expected.map({ $0 == generation }) ?? true, bootstrap != nil
+    else { return false }
+    bootstrap?.preferences = saved.preferences
+    return true
+  }
+  private func applyingSaved<T>(_ expected: Int, _ work: () async throws -> T) async throws -> T {
+    do { return try await work() } catch { applySavedPreferences(from: error, generation: expected); throw error }
   }
   /// Turns check-ins on or off, or changes how often, keeping the other setting.
   func setCheckIns(enabled: Bool? = nil, everyHours: Int? = nil) async throws {
@@ -70,7 +83,7 @@ extension AppStore {
     let body = CheckInSettings(enabled: enabled ?? current?.enabled ?? false, everyHours: everyHours ?? current?.everyHours ?? MainAssistant.defaultHours,
       timezone: TimeZone.current.identifier)
     let currentGeneration = generation
-    let saved: Preferences = try await api.write("/preferences/check-ins", body, method: "PUT")
+    let saved: Preferences = try await applyingSaved(currentGeneration) { try await api.write("/preferences/check-ins", body, method: "PUT") }
     if currentGeneration == generation { bootstrap?.preferences = saved }
   }
   func dismissMainSuggestion() {

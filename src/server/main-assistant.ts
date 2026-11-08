@@ -1,4 +1,5 @@
 import { timingSafeEqual } from "node:crypto";
+import { visiblePreferences } from "./bootstrap-routes.js";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { CHECK_IN_ROUTINE_NAME, checkInSchedule, scheduleMinutes, mainEligible, mainIneligibleReason, validCheckInHours } from "../shared/main-assistant.js";
@@ -436,7 +437,8 @@ export async function endCheckInsBeforeSharing(store: Store, mains: MainAssistan
   if (main) store.savePreferences(userId, { ...value, mainBotId: undefined, checkIns: value.checkIns && { ...value.checkIns, enabled: false } });
   await mains.reconcile().catch(() => {});
   if (await mains.checkInsOn(botId))
-    throw httpError(502, "Hermes hasn't removed this assistant's check-ins yet, so it stays personal. Try again in a minute.", { code: "check_in_removal_pending", expose: true });
+    throw httpError(502, "Hermes hasn't removed this assistant's check-ins yet, so it stays personal. Try again in a minute.",
+      { code: "check_in_removal_pending", expose: true, preferences: visiblePreferences(store, userId) });
 }
 
 export function installMainAssistantRoutes(app: FastifyInstance, collaborators: {
@@ -507,7 +509,7 @@ export function installMainAssistantRoutes(app: FastifyInstance, collaborators: 
       await mains.reconcile().catch(() => {});
       if (await mains.checkInsOn(before))
         throw httpError(502, "Your previous main assistant still has a check-in in Hermes, so it keeps a main assistant's limits until WildBots removes it. WildBots will keep trying.",
-          { code: "main_clear_pending", expose: true });
+          { code: "main_clear_pending", expose: true, preferences: preferences(userId) });
     }
     return preferences(userId);
   });
@@ -532,13 +534,13 @@ export function installMainAssistantRoutes(app: FastifyInstance, collaborators: 
       const now = store.preferences(userId);
       store.savePreferences(userId, { ...now, checkIns: { ...settings, enabled: false } });
       void mains.reconcile().catch(() => {});
-      throw httpError(502, "Hermes couldn't set up check-ins. Try again.", { code: "check_in_unavailable", expose: true });
+      throw httpError(502, "Hermes couldn't set up check-ins. Try again.", { code: "check_in_unavailable", expose: true, preferences: preferences(userId) });
     }
     if (!settings.enabled && job)
-      throw httpError(502, "Check-ins are off, but Hermes hasn't removed the routine yet. WildBots will keep trying.", { code: "check_in_removal_pending", expose: true });
+      throw httpError(502, "Check-ins are off, but Hermes hasn't removed the routine yet. WildBots will keep trying.", { code: "check_in_removal_pending", expose: true, preferences: preferences(userId) });
     // Running, but perhaps on the old frequency.
     if (mine && settings.enabled)
-      throw httpError(502, "Hermes couldn't update check-ins yet. WildBots will keep trying.", { code: "check_in_unavailable", expose: true });
+      throw httpError(502, "Hermes couldn't update check-ins yet. WildBots will keep trying.", { code: "check_in_unavailable", expose: true, preferences: preferences(userId) });
     return preferences(userId);
   });
 }

@@ -194,8 +194,16 @@ describe("check-ins", () => {
     const response = await checkIns();
     expect(response.statusCode).toBe(502);
     expect(response.json().code).toBe("check_in_unavailable");
+    expect(response.json().preferences).toMatchObject({ checkIns: { enabled: false } });
     expect(prefs().checkIns?.enabled).toBe(false);
     expect(jobs).toEqual([]);
+  });
+  it("keeps the new frequency and says Hermes hasn't caught up when it refuses the update", async () => {
+    await checkIns();
+    fail.update = true;
+    const response = await checkIns({ everyHours: 3 });
+    expect(response.json()).toMatchObject({ code: "check_in_unavailable", preferences: { checkIns: { enabled: true, everyHours: 3 } } });
+    expect(momJobs()[0].schedule).toBe("every 120m");
   });
   it("removes a routine Hermes created after all when the create looked failed", async () => {
     fail.create = "uncertain";
@@ -209,6 +217,7 @@ describe("check-ins", () => {
     fail.delete = true;
     const off = await checkIns({ enabled: false });
     expect(off.json().code).toBe("check_in_removal_pending");
+    expect(off.json().preferences).toMatchObject({ mainBotId: "mom-main", checkIns: { enabled: false } });
     expect(prefs().checkIns?.enabled).toBe(false);
     expect(momJobs()).toHaveLength(1);
     fail.delete = false;
@@ -259,6 +268,9 @@ describe("check-ins", () => {
       payload: { name: "Sage", instructions: "", model: "test", shared: true, confirmMainCleared: true } });
     expect(response.json().code).toBe("check_in_removal_pending");
     expect(created.store.presentation("mom-main")).toMatchObject({ shared: false, ownerId: "mom" });
+    // Sharing ended it being main before Hermes refused, and the error says so, so a client shows it.
+    expect(response.json().preferences).toMatchObject({ checkIns: { enabled: false } });
+    expect(response.json().preferences).not.toHaveProperty("mainBotId");
   });
   it("clears the main assistant and its routine when the assistant is deleted", async () => {
     await checkIns();
@@ -765,6 +777,7 @@ describe("moving into and out of being main", () => {
       const cleared = await main(null);
       expect(cleared.statusCode).toBe(502);
       expect(cleared.json()).toMatchObject({ code: "main_clear_pending" });
+      expect(cleared.json().preferences).not.toHaveProperty("mainBotId");
       expect(prefs().mainBotId).toBeUndefined();
       expect(momJobs()).toHaveLength(1);
       expect(lastMain()).toBe(true);

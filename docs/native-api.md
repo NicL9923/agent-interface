@@ -542,7 +542,12 @@ routines posts anywhere else, and when its routines or the deliveries Hermes hol
 `main_routine_busy`, naming them, while one is running or Hermes still holds a delivery from it, wherever it
 posts. Show the message and let the member try again. Clearing or changing it answers 502
 `main_clear_pending` when Hermes still has the previous main assistant's check-in: the change is saved, and
-that assistant keeps a main assistant's limits until the server removes it. Reload preferences after it. A routine with `managed: "check-in"` is a member's check-ins: show it without Edit,
+that assistant keeps a main assistant's limits until the server removes it.
+
+A refusal that comes after the server saved the member's preferences carries them as `preferences` in its
+error body: `main_clear_pending`, `check_in_removal_pending` (from `PUT /api/preferences/check-ins` and from
+sharing in `PATCH /api/bots/:id`) and `check_in_unavailable`. Apply them, or reload, so the screen shows
+what was saved, and keep showing the message. A routine with `managed: "check-in"` is a member's check-ins: show it without Edit,
 Pause or Delete, which answer 409 `check_in_managed`. A transcript `message_agent`
 handoff or incoming agent envelope may offer the other assistant's chat when its
 `target` or sender names, by ID or name, an assistant in the caller's bootstrap

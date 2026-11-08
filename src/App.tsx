@@ -217,9 +217,10 @@ export function App() {
   const botSettings = useStableCallback((bot: Bot) => setPanel({ kind: "settings", bot }));
   // --- Main assistant ---
   const [choosingMain, setChoosingMain] = useState(false);
-  const setMain = useStableCallback((id: string | null) => chooseMain(id).then(saved => { session.applyPreferences(saved); return saved; }));
+  // A refusal that comes after the server saved the change still shows what it saved.
+  const setMain = useStableCallback((id: string | null) => chooseMain(id, session.applyPreferences));
   const setCheckIns = useStableCallback((change: Parameters<typeof saveCheckIns>[1]) =>
-    saveCheckIns(boot?.preferences.checkIns, change).then(saved => { session.applyPreferences(saved); return saved; }));
+    saveCheckIns(boot?.preferences.checkIns, change, session.applyPreferences));
   const chooseMainFromHome = useStableCallback(() => setChoosingMain(true));
   const dismissMainSuggestion = useStableCallback(() => void session.editPreferences(value => ({ ...value, mainSuggestionDismissed: true })));
   // "Ask Sage…" from the palette opens the main assistant's chat with the question in its draft, once that draft has loaded.

@@ -76,7 +76,7 @@ it("suggests choosing a main assistant until it is dismissed", async () => {
 
 it("picks only the member's own personal assistants and explains the others", async () => {
   const onMakePersonal = vi.fn(), onClose = vi.fn();
-  await act(async () => root.render(createElement(MainAssistantPicker, { boot, onChoose: chooseMain, onMakePersonal, onClose })));
+  await act(async () => root.render(createElement(MainAssistantPicker, { boot, onChoose: (id: string | null) => chooseMain(id, vi.fn()), onMakePersonal, onClose })));
   const own = container.querySelector('[aria-label="Your personal assistants"]')!;
   expect([...own.querySelectorAll("strong")].map(node => node.textContent)).toEqual(["Sage", "Notes"]);
   const others = container.querySelector('[aria-label="Other assistants"]')!.textContent!;
@@ -92,19 +92,44 @@ it("picks only the member's own personal assistants and explains the others", as
 it("says why choosing failed and stays open", async () => {
   vi.mocked(write).mockRejectedValueOnce(new ApiError("Sage can't be your main assistant. Shared with the household.", 409, "main_not_personal"));
   const onClose = vi.fn();
-  await act(async () => root.render(createElement(MainAssistantPicker, { boot, onChoose: chooseMain, onMakePersonal: vi.fn(), onClose })));
+  await act(async () => root.render(createElement(MainAssistantPicker, { boot, onChoose: (id: string | null) => chooseMain(id, vi.fn()), onMakePersonal: vi.fn(), onClose })));
   await act(async () => button("Make main").click());
   expect(container.textContent).toContain("Sage can't be your main assistant.");
   expect(onClose).not.toHaveBeenCalled();
 });
 
 describe("in the main assistant's details", () => {
+  let apply = vi.fn();
+  beforeEach(() => { apply = vi.fn(); });
   const details = async (preferences: Partial<Preferences>, bot = sage) => {
     const current = { ...boot, preferences: { ...boot.preferences, ...preferences } };
     await act(async () => root.render(createElement(BotDetails, { boot: current, bot, avatarState: "idle", conversation: null, connectionLost: false,
       editPreferences: vi.fn(), onSettings: vi.fn(), onFind: vi.fn(), onClose: vi.fn(),
-      onMain: chooseMain, onCheckIns: change => saveCheckIns(current.preferences.checkIns, change) })));
+      onMain: id => chooseMain(id, apply), onCheckIns: change => saveCheckIns(current.preferences.checkIns, change, apply) })));
   };
+  it("shows what the server saved when it saved a change Hermes hasn't finished, and says why", async () => {
+    await details({ mainBotId: "sage" });
+    const cleared = { ...boot.preferences, mainBotId: undefined };
+    vi.mocked(write).mockRejectedValueOnce(new ApiError("Your previous main assistant still has a check-in in Hermes.", 502, "main_clear_pending", undefined,
+      { code: "main_clear_pending", preferences: cleared }));
+    await act(async () => button("Main").click());
+    expect(apply).toHaveBeenCalledWith(cleared);
+    expect(container.textContent).toContain("Your previous main assistant still has a check-in in Hermes.");
+    await details({ mainBotId: "sage", checkIns: { enabled: true, everyHours: 2, timezone: "America/Chicago" } });
+    const off = { ...boot.preferences, mainBotId: "sage", checkIns: { enabled: false, everyHours: 2, timezone: "America/Chicago" } };
+    vi.mocked(write).mockRejectedValueOnce(new ApiError("Check-ins are off, but Hermes hasn't removed the routine yet.", 502, "check_in_removal_pending", undefined,
+      { code: "check_in_removal_pending", preferences: off }));
+    apply.mockClear();
+    await act(async () => container.querySelector<HTMLInputElement>('.main-check-ins [role="switch"]')!.click());
+    expect(apply).toHaveBeenCalledWith(off);
+    expect(container.textContent).toContain("Hermes hasn't removed the routine yet.");
+    // A refusal that saved nothing changes nothing on screen.
+    vi.mocked(write).mockRejectedValueOnce(new ApiError("Sage can't be your main assistant.", 409, "main_routine_busy"));
+    apply.mockClear();
+    await details({});
+    await act(async () => button("Make main").click());
+    expect(apply).not.toHaveBeenCalled();
+  });
   it("makes or clears the main assistant in one action, and only offers it on the member's own", async () => {
     await details({});
     expect(container.textContent).not.toContain("Check in with me");

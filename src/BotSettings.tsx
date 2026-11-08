@@ -1,4 +1,5 @@
 import { preparePortrait } from "./portrait-upload";
+import { savedPreferences } from "./app/main-assistant";
 import { Dialog } from "./components/ui/dialog";
 import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
@@ -214,6 +215,8 @@ function LoadedBotSettings({
       if (cause instanceof ApiError && cause.code === "private_confirmation_required") { setConfirmPersonal(true); return null; }
       if (cause instanceof ApiError && cause.code === "main_share_confirmation_required") { setConfirmation({ kind: "main" }); return null; }
       if (cause instanceof ApiError && cause.confirmRequired) { setConfirmModel(cause.message); return null; }
+      // Sharing ended this assistant being main before Hermes refused; reload so the screen shows that, beside the message.
+      if (savedPreferences(cause)) onSaved();
     },
   });
   const createBot = (submitted: BotInput, confirmed: boolean) => actions.run(async () => {

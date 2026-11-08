@@ -1114,6 +1114,8 @@ struct BotSettingsView: View {
           savedCapabilities[kind] = Set(ids)
         }
       } catch {
+        // Sharing may have ended it being main before Hermes refused; the error carries what was saved.
+        store.applySavedPreferences(from: error)
         if refresh { await store.refreshBootstrap() }
         throw error
       }
