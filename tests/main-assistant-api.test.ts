@@ -6,6 +6,11 @@ import type { Bot, DelegationPolicies, Routine, RuntimeEvent } from "../src/shar
 import { fakeRuntime, signIn } from "./helpers/server.js";
 import { botFixture, capabilitiesFixture } from "./helpers/runtime-fixtures.js";
 import type { RoutineRunStatus } from "../src/shared/routine-runs.js";
+import { nativeOverrides } from "../src/server/hermes.js";
+import { readFileSync } from "node:fs";
+
+// A job as Hermes ed1afb0's real scheduler left it, mid-run and after completing.
+const scheduled = JSON.parse(readFileSync(new URL("./fixtures/hermes-ed1afb0-scheduled-job.json", import.meta.url), "utf8")) as Record<"running" | "completed", Record<string, unknown>>;
 
 // A member's main assistant and its check-ins, through the real app with an in-memory Hermes cron
 // store. Every path that changes what a member wants, or what they may have, must leave Hermes with
@@ -601,5 +606,49 @@ describe("review round two, ordering", () => {
     expect((await checkIns()).statusCode).toBe(502);
     expect(jobs.find(job => job.id === old.id)).toMatchObject({ running: true, enabled: false });
     expect(momJobs().filter(job => job.botId === "mom-notes")).toEqual([]);
+  });
+});
+
+describe("review round three", () => {
+  const routine = (botId: string, deliver: string, enabled = true): Routine => ({ id: `r-${botId}`, botId, name: `${botId} report`, prompt: "Report",
+    schedule: "0 7 * * *", enabled, delivery: { deliver }, nativeOverrides: [] });
+  const patch = (botId: string, payload: object) => created.app.inject({ method: "PATCH", url: `/api/bots/${botId}`, headers: mom,
+    payload: { name: bots.find(bot => bot.id === botId)!.name, instructions: "", model: "test", ...payload } });
+  it("refuses a main assistant's routine that delivers to where it was made when no origin was recorded", async () => {
+    await main("mom-main");
+    jobs.push({ ...routine("mom-main", "origin"), enabled: false });
+    const resume = await created.app.inject({ method: "PATCH", url: "/api/routines/r-mom-main/state", headers: mom, payload: { enabled: true } });
+    expect(resume.json().code).toBe("routine_chats");
+  });
+  it("refuses sharing an assistant that an enabled personal routine posts into, naming the routine", async () => {
+    jobs.push(routine("mom-main", "bot-chat:mom-notes"));
+    const share = await patch("mom-notes", { shared: true });
+    expect(share.json()).toMatchObject({ code: "routine_chats", error: expect.stringContaining('"mom-main report"') });
+    expect(created.store.presentation("mom-notes")).toMatchObject({ shared: false, ownerId: "mom" });
+    expect(calls).not.toContain("saveBot:mom-notes");
+  });
+  it("refuses sharing an assistant whose enabled routine posts into its owner's personal chats", async () => {
+    jobs.push(routine("mom-notes", "bot-chat:mom-main"));
+    expect((await patch("mom-notes", { shared: true })).json().code).toBe("routine_chats");
+  });
+  it("refuses making an assistant personal while a household routine posts into it", async () => {
+    jobs.push(routine("ranch", "bot-chat:legacy"));
+    expect((await patch("legacy", { shared: false, confirmPrivate: true })).json().code).toBe("routine_chats");
+  });
+  it("lets the sharing change go ahead when those routines are paused", async () => {
+    jobs.push(routine("mom-main", "bot-chat:mom-notes", false));
+    expect((await patch("mom-notes", { shared: true })).statusCode).toBe(200);
+  });
+  it("keeps a healthy check-in through its runs, reading its native fields as Hermes's scheduler left them", async () => {
+    await main("mom-main");
+    await checkIns();
+    const [job] = momJobs();
+    for (const [state, running] of [["running", true], ["completed", false]] as const) {
+      jobs = jobs.map(row => row.id === job.id ? { ...row, running, nativeOverrides: nativeOverrides(scheduled[state]) } : row);
+      calls.length = 0;
+      await created.mains.reconcile();
+      expect(momJobs().map(row => row.id)).toEqual([job.id]);
+      expect(calls.filter(call => /^(stop|delete|create)/.test(call))).toEqual([]);
+    }
   });
 });

@@ -56,6 +56,19 @@ export function serialDelivery<T>(store: Store, work: () => Promise<T>): Promise
 }
 
 /**
+ * Whether a routine of the `sender` assistant may post into the `target` assistant's chat: everyone who
+ * can read the target's chat must be able to see the sender. A personal assistant's routine may post only
+ * into its owner's own personal assistants' chats; a shared or ownerless one's only into chats the whole
+ * household sees. Undefined, as for an assistant that is gone, is never allowed.
+ */
+export function chatAllowed(sender: Presentation | undefined, target: Presentation | undefined) {
+  if (!sender || !target) return false;
+  return sender.shared === false && sender.ownerId
+    ? target.shared === false && target.ownerId === sender.ownerId
+    : visible(target, undefined);
+}
+
+/**
  * Refuses a change to an assistant that would let a routine post where people who cannot see its
  * assistant read it: a sharing change, or creating an assistant whose ID a room still lists from an
  * earlier one, which opens that room again. Refusing, rather than quietly dropping or pausing deliveries,
@@ -67,19 +80,37 @@ export function serialDelivery<T>(store: Store, work: () => Promise<T>): Promise
  * leaving or disbanding a room only stops its posts.
  */
 export async function assertRoutinesStayPrivate(runtime: Runtime, store: Store, userId: string, botId: string, next: Presentation) {
-  if (!runtime.groupRequest) return;
   const unreadable = () => httpError(409, "WildBots couldn't check which group chats this household's routines post in, so nothing changed. Try again in a moment.", { code: "routine_rooms_unknown" });
   let current: (botId: string) => Presentation | undefined;
   try { current = await presentations(runtime, store); }
   catch { throw unreadable(); }
   const before = current(botId);
-  // A sharing change that keeps who can see the assistant changes no room.
+  // A sharing change that keeps who can see the assistant changes no room or chat.
   if (before && (before.shared !== false) === (next.shared !== false) && before.ownerId === next.ownerId) return;
+  let all: Routine[];
+  try { all = await runtime.routines(); }
+  catch { throw unreadable(); }
+  const after = (id: string) => id === botId ? next : current(id);
+  const sees = (id: string) => { const bot = current(id); return !!bot && visible(bot, userId); };
+  // Hermes's scheduler posts into another assistant's chat whatever the rosters say, so an enabled routine
+  // posting into this assistant's chat, or from it into another's, is checked with the new sharing.
+  const chatConflicts = all.filter(routine => routine.enabled).flatMap(routine => {
+    const found = routineTargets(routine);
+    if (found.unknown) throw unreadable();
+    return (found.chats ?? []).filter(chat => chat !== routine.botId && (routine.botId === botId || chat === botId)
+      && !chatAllowed(after(routine.botId), after(chat))).map(() => routine);
+  });
+  if (chatConflicts.length) {
+    const named = [...new Set(chatConflicts.map(routine => sees(routine.botId) ? `"${routine.name}"` : "another member's routine"))];
+    throw httpError(409, `This would let people who can't see an assistant read its routine results in another assistant's chat: ${named.join(", ")}. Change where those routines deliver, or pause them, then try again.`,
+      { code: "routine_chats" });
+  }
+  if (!runtime.groupRequest) return;
   let routines: Routine[];
   let targets: Map<Routine, string[]>;
   try {
     // Every room each routine posts in, from every delivery field Hermes honors (src/server/delivery-targets.ts).
-    targets = new Map((await runtime.routines()).map(routine => {
+    targets = new Map(all.map(routine => {
       const found = routineTargets(routine);
       if (found.unknown) throw unreadable();
       return [routine, found.rooms] as const;
@@ -94,13 +125,11 @@ export async function assertRoutinesStayPrivate(runtime: Runtime, store: Store, 
   // Routines post in rooms, so a catalog Hermes does not offer is as unreadable as one that failed.
   if (!catalog?.supported || !Array.isArray(catalog.rooms)) throw unreadable();
   const rooms = new Map(catalog.rooms.map(room => [room.room_id, room]));
-  const after = (id: string) => id === botId ? next : current(id);
   const conflicts = routines.flatMap(routine => targets.get(routine)!.flatMap(roomId => {
     const room = rooms.get(roomId);
     return room && roomLeaks(after(routine.botId), room, after) ? [{ routine, room }] : [];
   }));
   if (!conflicts.length) return;
-  const sees = (id: string) => { const bot = current(id); return !!bot && visible(bot, userId); };
   const named = conflicts.map(({ routine, room }) => {
     const routineName = sees(routine.botId) ? `"${routine.name}"` : "another member's routine";
     const roomName = room.members.every(member => sees(member.profile)) ? `"${room.name}"` : "a group chat";

@@ -105,5 +105,8 @@ describe("other assistants' chats and destinations outside WildBots", () => {
     expect(deliveryRooms({ deliver: 'origin', origin: { platform: 'telegram', chat_id: 5 } }).outward).toBe(true);
     expect(deliveryRooms({ deliver: 'origin', origin: { platform: 'room', chat_id: 'den' } })).toMatchObject({ rooms: ['den'], outward: false });
     expect(deliveryRooms({ deliver: 'local' })).toMatchObject({ chats: [], outward: false });
+    // Without a recorded origin, Hermes falls back to a configured platform's home channel.
+    expect(deliveryRooms({ deliver: 'origin' }).outward).toBe(true);
+    expect(deliveryRooms({ deliver: 'room', origin: null }).outward).toBe(true);
   });
 });

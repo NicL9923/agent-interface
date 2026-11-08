@@ -178,3 +178,36 @@ passed. iOS, through `validate-ios.sh` on the Mac mini (it takes the heavy lock 
 `MainAssistantTests`, `ContractFixtureTests`, `SettingsParityTests` and `HomeParityTests` ran 54
 tests with no failures, and `MainAssistantFlowTests` passed both tests, light and dark. This
 round changed no iOS source.
+
+## Review fixes, round three
+
+A third GPT-6.1 Sol review of `13479e0..2e6b730` found five issues. All five held against the
+code and Hermes `ed1afb0`, this time checked by running Hermes's own code rather than reading it,
+and all are fixed:
+
+1. Resume and run disguised the saved destination. Hermes ignores delivery arguments there, so
+   the add-on now checks a resume or run (and the `run_now` and `trigger` aliases) against the
+   saved routine alone, merges delivery arguments only on an update, and refuses unknown actions.
+2. A sharing change checked only rooms. It now also refuses, naming the routines, while an
+   enabled routine posts into the changing assistant's chat, or from it into another's, that the
+   new sharing would let the wrong people read. Paused routines don't block it; resuming one is
+   checked.
+3. `deliver="origin"` with no recorded origin counted as staying inside WildBots. Hermes then
+   posts to a platform's home channel, so it now counts as outward and is refused for a main
+   assistant.
+4. Scheduler bookkeeping read as overrides. The field lists moved to
+   `src/shared/hermes-job-fields.json`, split into routine and bookkeeping fields. A new test runs
+   a real job through `ed1afb0`'s `cron.scheduler_tick.tick`, using a script-only job so no model
+   is needed, and checks every field it carries mid-run (`fire_claim`, `last_dispatch`,
+   `live_execution`) and after completion is listed. The real records are kept as
+   `tests/fixtures/hermes-ed1afb0-scheduled-job.json`, and a reconciliation test keeps a healthy
+   check-in through both states without stopping, deleting or creating anything.
+5. Routine names stopped working. The add-on now resolves references with Hermes's own
+   `resolve_job_ref`, case-insensitive names included, refuses an ambiguous name, and forwards
+   the ID it checked. Tested against the real resolver.
+
+Mutation checks, the same way: 14 lines broke and went red at once, after adding one positive
+case for the `run_now` and `trigger` aliases. They cover the aliases, update-only merging,
+unknown actions, the real resolver, ID forwarding, ambiguity, `last_dispatch` (both the fixture
+and the real-scheduler test), the mid-run claim, outward on a missing origin, and the sharing
+check's chat deliveries, paused routines, incoming deliveries and the personal-sender rule.

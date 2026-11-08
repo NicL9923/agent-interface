@@ -1,0 +1,7 @@
+{
+  "comment": "Native Hermes cron job fields, from Hermes ed1afb0. `routine` fields the app reads as routine settings and checks itself; `status` fields Hermes's scheduler writes as bookkeeping (claims, dispatch, completions, outcomes) and never change what a job does. Any other field that is set, such as monitor_script, workdir, base_url, interpreter, timezone or a field a later Hermes adds, can change how a job runs. tests/hermes_delegation_test.py runs a real job through ed1afb0's scheduler and checks every field it ends up with is listed here.",
+  "routine": ["id", "job_id", "name", "prompt", "schedule", "enabled", "deliver", "failure_deliver", "origin", "context_from", "skills", "model", "provider", "enabled_toolsets", "script", "no_agent"],
+  "status": ["state", "schedule_display", "created_at", "next_run_at", "last_run_at", "last_status", "last_error", "last_failure", "last_delivery_error",
+    "last_delivery_unverified", "last_delivery_queued", "last_fire_error", "last_dispatch", "failure_streak", "paused_at", "paused_reason", "latest_execution",
+    "live_execution", "monitor_state", "fire_claim", "run_claim", "canonical_completions", "execution_id", "manual_run_at", "pending_slot", "preflight_alerted"]
+}

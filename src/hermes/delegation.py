@@ -41,6 +41,8 @@ MAX_PROFILES = 200
 PROTOCOL = 2
 # Cron actions a main assistant may take itself. Changing, resuming or running a routine happens in WildBots.
 MAIN_CRON_ACTIONS = {"list", "create", "pause", "remove", "cancel"}
+# cronjob_manage's other names for an action (tools/cronjob_tools.py _JOB_ACTIONS).
+CRON_ALIASES = {"run_now": "run", "trigger": "run"}
 MAX_TARGETS = 200
 ROSTER_HEADING = re.compile(r"^You are `@[^`]+`\. Your teammates .*:$")
 HOST_TOOLS = {"terminal", "execute_code", "process_manage"}
@@ -173,6 +175,10 @@ def filter_section(section, policy, handle_for):
     if in_roster and not kept:
         out.append("- (no teammates yet)")
     return "\n".join(out)
+
+
+class AmbiguousRoutine(Exception):
+    pass
 
 
 def deliver_tokens(value):
@@ -334,21 +340,29 @@ class Delegation:
         peers = doc.get("bot_peers") if isinstance(doc, dict) else None
         return {name for name, _ in _roster(root)}, {str(name).lower() for name in peers} if isinstance(peers, dict) else set()
 
-    def read_job(self, job_id):
-        """The routine as Hermes keeps it for the profile running this tool, or None."""
-        from cron.jobs import get_job
-        return get_job(job_id)
+    def read_job(self, ref):
+        """The routine a reference names for the profile running this tool, as cronjob_manage finds it:
+        an exact ID, else a case-insensitive name. None when nothing matches; AmbiguousRoutine when a
+        name matches several."""
+        from cron.jobs import AmbiguousJobReference, resolve_job_ref
+        try:
+            return resolve_job_ref(ref)
+        except AmbiguousJobReference as error:
+            raise AmbiguousRoutine(str(error)) from error
 
     def cron_refusal(self, profile, policy, args):
         """Why a cron action may not go ahead, or None.
 
         A main assistant may only list, pause, remove and cancel its routines, and create ones that
-        deliver to its own chat and nowhere else, named explicitly. Any other assistant's change is
-        checked against the routine as it will be, its saved delivery merged with what the call
-        changes, and before a resume or a run, as it is. `origin` is refused everywhere: Hermes
-        resolves it to wherever the routine was made, which this add-on cannot see.
+        deliver to its own chat and nowhere else, named explicitly. Any other assistant's create is
+        checked as written; an update as the saved routine with the call's delivery over it; a resume
+        or a run as the saved routine alone, since Hermes ignores delivery arguments there. The
+        routine is found as Hermes finds it, and its ID is passed on so Hermes acts on the one checked.
+        `origin` is refused everywhere: Hermes resolves it to wherever the routine was made, or a home
+        channel, which this add-on cannot see.
         """
         action = str(args.get("action") or "").strip().lower()
+        action = CRON_ALIASES.get(action, action)
         if action in ("list", "pause", "remove", "cancel"):
             return None
         if policy["main"]:
@@ -366,20 +380,27 @@ class Delegation:
                 if args.get(field) not in (None, "", [], False):
                     return f"Your main assistant can't set {field} on a routine. Your member can do that in WildBots."
             return None
-        merged = dict(args)
-        if action != "create":
-            try:
-                job = self.read_job(args.get("job_id"))
-            except Exception:
-                job = None
-            if not isinstance(job, dict):
-                return "That routine can't be checked, so it was left as it is."
-            for field in ("deliver", "failure_deliver"):
-                if args.get(field) is None:
-                    merged[field] = job.get(field)
-        elif not deliver_tokens(merged.get("deliver")):
-            return "Name this routine's delivery explicitly, for example deliver=\"bot-chat\" for this chat."
-        return self.delivery_refusal(profile, policy, merged)
+        if action == "create":
+            if not deliver_tokens(args.get("deliver")):
+                return "Name this routine's delivery explicitly, for example deliver=\"bot-chat\" for this chat."
+            return self.delivery_refusal(profile, policy, args)
+        if action not in ("update", "resume", "run"):
+            return f"This assistant can't {action or 'do that to'} a routine here."
+        try:
+            job = self.read_job(str(args.get("job_id") or ""))
+        except AmbiguousRoutine:
+            return "More than one routine has that name. Use its ID."
+        except Exception:
+            job = None
+        if not isinstance(job, dict) or not job.get("id"):
+            return "That routine can't be checked, so it was left as it is."
+        saved = {field: job.get(field) for field in ("deliver", "failure_deliver")}
+        if action == "update":
+            saved.update({field: args[field] for field in ("deliver", "failure_deliver") if args.get(field) is not None})
+        reason = self.delivery_refusal(profile, policy, saved)
+        if reason is None:
+            args["job_id"] = job["id"]
+        return reason
 
     def delivery_refusal(self, profile, policy, args):
         """Why a cron create or update may not deliver where it asks, or None.

@@ -12,6 +12,7 @@ import { formatBytes } from '../shared/uploads.js';
 import { IncompleteCreationError, interruptionPendingMessage } from '../shared/errors.js';
 import { httpError } from './http-error.js';
 import { createModelNames } from './model-names.js';
+import jobFields from '../shared/hermes-job-fields.json' with { type: 'json' };
 import { createHermesTransport, TransportError, type Connection, type HermesOptions, type Wire } from './hermes-transport.js';
 import { fileSigner, safeStagedPath, type RegisteredFile } from './hermes-files.js';
 import { deliverRooms, withDeliverRooms } from './delivery-targets.js';
@@ -37,19 +38,16 @@ const DESCRIPTION_MS = 10_000;
 export const ROSTER_REUSE_MS = 2_000;
 
 /**
- * The fields of a native cron job the app reads as routine fields, or as status and history. Anything
- * else Hermes holds with a value, such as a monitor script, a working directory, a pinned endpoint or a
- * setting a later Hermes adds, can change how the job runs without the app seeing it.
+ * Native cron job fields the app reads as routine settings, and those Hermes's scheduler writes as
+ * bookkeeping. Anything else Hermes holds with a value can change how the job runs without the app
+ * seeing it: a monitor script, a working directory, a pinned endpoint, or a setting a later Hermes adds.
  */
-const ROUTINE_FIELDS = new Set(['id', 'job_id', 'name', 'prompt', 'schedule', 'schedule_display', 'enabled', 'state', 'deliver', 'failure_deliver',
-  'origin', 'context_from', 'skills', 'model', 'provider', 'enabled_toolsets', 'script', 'no_agent', 'created_at', 'next_run_at', 'last_run_at',
-  'last_status', 'last_error', 'last_failure', 'last_delivery_error', 'last_delivery_unverified', 'failure_streak', 'paused_at', 'paused_reason',
-  'latest_execution', 'live_execution', 'monitor_state']);
-/** The native fields outside ROUTINE_FIELDS that are set. An unlimited `repeat` is the default and counts as unset. */
+const KNOWN_FIELDS = new Set([...jobFields.routine, ...jobFields.status]);
+/** The native fields that are set and are neither. Private `_` bookkeeping and an unlimited `repeat` count as unset. */
 export function nativeOverrides(job: Wire): string[] {
   const set = (value: unknown) => value !== null && value !== undefined && value !== '' && value !== false
     && !(Array.isArray(value) && !value.length) && !(typeof value === 'object' && !Array.isArray(value) && !Object.keys(value as object).length);
-  return Object.entries(job ?? {}).filter(([key, value]) => !ROUTINE_FIELDS.has(key) && set(value)
+  return Object.entries(job ?? {}).filter(([key, value]) => !KNOWN_FIELDS.has(key) && !key.startsWith('_') && set(value)
     && !(key === 'repeat' && typeof value === 'object' && value !== null && (value as Wire).times == null)).map(([key]) => key).sort();
 }
 

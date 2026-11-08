@@ -110,6 +110,7 @@
   "src/shared/event-copy.ts",
   "src/shared/experience.ts",
   "src/shared/group-activity.ts",
+  "src/shared/hermes-job-fields.json",
   "src/shared/history.ts",
   "src/shared/inline-ui-instructions.json",
   "src/shared/inline-ui.ts",

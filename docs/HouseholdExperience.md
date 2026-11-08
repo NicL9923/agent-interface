@@ -84,7 +84,8 @@ installation's secret, so a job created after a lost answer is found and adopted
 and a copied marker is never trusted. A check-in must deliver only to its own
 assistant's chat, with no failure delivery, rooms, scripts or other overrides,
 and any native setting the app does not read, such as a monitor script or a
-working directory, counts as one; a job like that is deleted and replaced. No
+working directory, counts as one, while the scheduler's own bookkeeping, such
+as its claim on a run in progress or its record of the last dispatch, does not; a job like that is deleted and replaced. No
 replacement is made while an earlier check-in could still run: a run in progress
 must be seen to end, and pausing alone does not count. A completed run of a check-in this server
 has not recorded yet is still quiet, because discovery checks the job first. It reconciles after every
@@ -108,15 +109,21 @@ change is refused. Rosters go to Hermes one at a time, each built from who sees
 what when it is sent. An assistant the server has not described yet reaches
 nobody.
 
-Routines an assistant changes with Hermes's own cron tool are checked as they
-will be, their saved delivery merged with the change, and must deliver within its
+Routines an assistant changes with Hermes's own cron tool are found the way
+Hermes finds them, by ID or name (a name two routines share is refused), and
+checked as they will be: an update as the saved routine with the change over it,
+a resume or a run as the saved routine alone. They must deliver within its
 roster: never into a group room from a personal assistant, and never to "where
 it was made" (`origin`), which must be named instead. A main assistant can only
 list, pause, remove and stop its routines, and create ones that post only in its
 own chat; changing, resuming or running one happens in WildBots. The app's own
 routine saves, resumes and trial runs refuse a routine that posts into a chat
 not everyone who sees its assistant can read, or, for a main assistant, anywhere
-outside WildBots.
+outside WildBots, which includes "where it was made" without a recorded origin,
+since Hermes then posts to a platform's home channel. Changing who sees an
+assistant is refused, naming the routines, while an enabled routine posts into
+its chat, or from it into another's, that the change would let the wrong people
+read.
 
 On each turn the main assistant also reads that roster as guidance and can hand
 specialist work to it with Hermes's agent-message tool. A message to a shared assistant first asks

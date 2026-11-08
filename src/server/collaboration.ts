@@ -15,7 +15,7 @@ export const RUNS_CACHE_MS = 5_000;
 import { GroupLatestCache, previewOf } from './group-latest.js';
 import type { CatalogRead } from './group-catalog-watch.js';
 import type { DeliveryRooms } from './delivery-targets.js';
-import { mentionsRoom, presentations, redactRooms, roomLeaks, type Presentation } from './routine-delivery.js';
+import { chatAllowed, mentionsRoom, presentations, redactRooms, roomLeaks, type Presentation } from './routine-delivery.js';
 const uuid = z.string().uuid();
 
 /** Whether a room has only local assistants this person may see, as every group route requires. */
@@ -108,13 +108,8 @@ export async function assertChatsPrivate(runtime: Pick<Runtime, 'listBots'>, sto
   if (!others.length) return;
   const presentation = await presentations(runtime, store);
   const self = presentation(botId);
-  for (const chat of others) {
-    const other = presentation(chat);
-    const allowed = !!self && !!other && (self.shared === false && self.ownerId
-      ? other.shared === false && other.ownerId === self.ownerId
-      : visible(other, undefined));
-    if (!allowed) throw refuse("into another assistant's chat that not everyone who sees this one can read");
-  }
+  for (const chat of others)
+    if (!chatAllowed(self, presentation(chat))) throw refuse("into another assistant's chat that not everyone who sees this one can read");
 }
 
 /** Routine run errors as one person sees them, by the same rules as `routinesFor`. */

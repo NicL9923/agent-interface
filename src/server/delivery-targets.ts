@@ -92,7 +92,8 @@ export function deliveryRooms(job: RoutineDelivery): DeliveryRooms {
   const from = origin(job);
   const originRoom = () => {
     if (from === "unknown") { unknown = true; return; }
-    if (from?.platform !== "room") { if (from) outward = true; return; }
+    // Without a recorded origin Hermes falls back to a configured platform's home channel.
+    if (from?.platform !== "room") { outward = true; return; }
     const room = roomOfAddress(from.chat);
     if (room) rooms.add(room);
   };

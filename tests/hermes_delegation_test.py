@@ -272,13 +272,18 @@ class DeliveryAndHostTest(unittest.TestCase):
             self.assertTrue(self.refused("cronjob_manage", args), args)
 
     def test_other_assistants_routines_are_checked_as_they_will_be(self):
-        stored = {"own": {"deliver": "bot-chat:mom-notes"}, "leaky": {"deliver": "bot-chat:dad-diary"}, "fails": {"deliver": "bot-chat", "failure_deliver": "room:public"}}
+        stored = {"own": {"id": "own", "deliver": "bot-chat:mom-notes"}, "leaky": {"id": "leaky", "deliver": "bot-chat:dad-diary"},
+                  "fails": {"id": "fails", "deliver": "bot-chat", "failure_deliver": "room:public"}}
         self.gate.read_job = stored.get
         self.assertFalse(self.refused("cronjob_manage", {"action": "create", "deliver": "bot-chat:ranch"}, "mom-notes"))
         for args in ({"action": "update", "job_id": "own", "prompt": "x"}, {"action": "resume", "job_id": "own"}, {"action": "run", "job_id": "own"},
+                     {"action": "run_now", "job_id": "own"}, {"action": "trigger", "job_id": "own"},
                      {"action": "update", "job_id": "leaky", "deliver": "bot-chat"}):
             self.assertFalse(self.refused("cronjob_manage", args, "mom-notes"), args)
         for args in ({"action": "update", "job_id": "leaky", "prompt": "x"}, {"action": "run", "job_id": "leaky"}, {"action": "resume", "job_id": "fails"},
+                     # Hermes ignores delivery arguments on a resume or a run, so they can't stand in for the saved one.
+                     {"action": "resume", "job_id": "leaky", "deliver": "bot-chat"}, {"action": "run", "job_id": "leaky", "deliver": "bot-chat"},
+                     {"action": "run_now", "job_id": "leaky"}, {"action": "trigger", "job_id": "leaky", "deliver": "local"}, {"action": "explode", "job_id": "own"},
                      {"action": "run", "job_id": "missing"}, {"action": "create"}, {"action": "create", "deliver": "origin"},
                      {"action": "create", "deliver": "bot-chat:dad-diary"}, {"action": "create", "deliver": "room:public"}):
             self.assertTrue(self.refused("cronjob_manage", args, "mom-notes"), args)
@@ -287,6 +292,14 @@ class DeliveryAndHostTest(unittest.TestCase):
         self.assertTrue(self.refused("cronjob_manage", {"action": "create", "deliver": "bot-chat:mom-notes"}, "ranch"))
         # A profile WildBots has not described yet reaches nobody.
         self.assertTrue(self.refused("cronjob_manage", {"action": "create", "deliver": "bot-chat:ranch"}, "brand-new"))
+        # A reference is found as Hermes finds it, and Hermes is handed the ID that was checked.
+        self.gate.read_job = lambda ref: {"id": "own", "deliver": "bot-chat:mom-notes"} if ref == "Morning Brief" else None
+        self.assertFalse(self.refused("cronjob_manage", {"action": "run", "job_id": "Morning Brief"}, "mom-notes"))
+        self.assertEqual(self.ran[-1][1]["job_id"], "own")
+        def ambiguous(ref):
+            raise delegation.AmbiguousRoutine(ref)
+        self.gate.read_job = ambiguous
+        self.assertIn("More than one routine", json.loads(self.call("cronjob_manage", {"action": "resume", "job_id": "Brief"}, "mom-notes"))["error"])
         def unreadable(job_id):
             raise OSError("jobs.json unreadable")
         self.gate.read_job = unreadable
@@ -367,12 +380,72 @@ class RosterSectionTest(unittest.TestCase):
             token = set_hermes_home_override(str(home))
             try:
                 from cron.jobs import create_job
-                job = create_job(prompt="hi", schedule="every 2h", name="x", deliver="bot-chat:dad-diary")
+                job = create_job(prompt="hi", schedule="every 2h", name="Morning Brief", deliver="bot-chat:dad-diary")
                 self.assertEqual(gate.read_job(job["id"])["deliver"], "bot-chat:dad-diary")
+                # Names resolve as cronjob_manage resolves them: case-insensitive, and never a guess between two.
+                self.assertEqual(gate.read_job("morning brief")["id"], job["id"])
+                create_job(prompt="hi", schedule="every 3h", name="MORNING BRIEF", deliver="local")
+                with self.assertRaises(delegation.AmbiguousRoutine):
+                    gate.read_job("Morning Brief")
             finally:
                 reset_hermes_home_override(token)
         finally:
             sys.path.remove(SOURCE)
+
+
+SCHEDULED_RUN = """
+import datetime, json, threading, time
+from cron.jobs import create_job, list_jobs, load_jobs, save_jobs
+from cron.scheduler_tick import tick
+job = create_job(prompt="", schedule="every 2h", name="[bot:mom-main] Check-ins", deliver="bot-chat", context_from=["self"], script="slow.sh", no_agent=True)
+jobs = load_jobs()
+for row in jobs:
+    row["next_run_at"] = (datetime.datetime.now().astimezone() - datetime.timedelta(seconds=5)).isoformat()
+save_jobs(jobs)
+seen = {}
+def watch():
+    for _ in range(100):
+        time.sleep(0.1)
+        row = [j for j in list_jobs(True) if j["id"] == job["id"]][0]
+        if row.get("live_execution"):
+            seen["running"] = row
+            return
+threading.Thread(target=watch, daemon=True).start()
+tick(verbose=False, sync=True)
+time.sleep(1)
+seen["completed"] = [j for j in list_jobs(True) if j["id"] == job["id"]][0]
+print("RESULT " + json.dumps(seen, default=str))
+"""
+
+
+class RealSchedulerTest(unittest.TestCase):
+    @unittest.skipUnless(SOURCE, "needs HERMES_SOURCE")
+    def test_every_field_a_real_scheduled_run_leaves_is_known(self):
+        """A job Hermes's own scheduler dispatched and completed carries only fields the app reads or
+        that are bookkeeping, so a healthy check-in is never mistaken for one with overrides."""
+        import subprocess
+        home = Path(tempfile.mkdtemp())
+        (home / "scripts").mkdir()
+        script = home / "scripts" / "slow.sh"
+        script.write_text("#!/bin/sh\nsleep 2\necho '[SILENT]'\n")
+        script.chmod(0o755)
+        env = {**os.environ, "HERMES_HOME": str(home), "PYTHONPATH": SOURCE}
+        run = subprocess.run([sys.executable, "-c", SCHEDULED_RUN], cwd=SOURCE, env=env, capture_output=True, text=True, timeout=240, check=False)
+        self.assertEqual(run.returncode, 0, run.stderr[-2000:])
+        line = next(line for line in run.stdout.splitlines() if line.startswith("RESULT "))
+        seen = json.loads(line[len("RESULT "):])
+        self.assertEqual(set(seen), {"running", "completed"}, run.stderr[-2000:])
+        self.assertEqual(seen["completed"]["last_status"], "ok")
+        self.assertTrue(seen["running"]["fire_claim"])
+        self.assertTrue(seen["completed"]["last_dispatch"])
+        fields = json.loads((Path(__file__).resolve().parents[1] / "src" / "shared" / "hermes-job-fields.json").read_text())
+        known = set(fields["routine"]) | set(fields["status"])
+        for state, job in seen.items():
+            set_fields = {key for key, value in job.items() if value not in (None, "", [], {}, False) and not key.startswith("_")}
+            # An unlimited repeat is Hermes's default, never an override.
+            if isinstance(job.get("repeat"), dict) and job["repeat"].get("times") is None:
+                set_fields.discard("repeat")
+            self.assertEqual(set_fields - known, set(), state)
 
 if __name__ == "__main__":
     unittest.main()
