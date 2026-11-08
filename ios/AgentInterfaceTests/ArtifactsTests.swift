@@ -55,6 +55,55 @@ import XCTest
     XCTAssertEqual(store.conversationArtifacts.first { $0.id == "photo" }?.source, .shared, "The list agrees")
   }
 
+  private func window(_ start: String, _ replies: [(String, FileRef)], earlier: Int) -> Conversation {
+    var value = conversation(files: replies.map(\.1), messages: replies.flatMap { reply, file in
+      [Message(id: reply == replies[0].0 ? start : "q-" + reply, role: "user", text: "Go", sender: Sender(id: "one", name: "One")),
+       Message(id: reply, role: "assistant", text: "Done", files: [file])]
+    })
+    value.earlier = earlier
+    return value
+  }
+
+  func testLoadingOlderTurnsReadsTheHistoryBeforeTheNewStartInsteadOfReusingTheOldPage() async throws {
+    let old = file("old", "image/png"), recent = file("recent", "image/png")
+    // Before q9 the server has the file that a1 carries; before q1 it has nothing.
+    let server = FakeServer { request in
+      request.url?.query == "before=q9" ? .init(body: #"{"messages":[{"id":"a1","role":"assistant","files":[{"id":"old","name":"old","mime":"image/png"}]}]}"#)
+        : .init(body: #"{"messages":[]}"#)
+    }
+    let store = AppStore(); store.widgetSnapshotURL = nil; store.api = server.api()
+    defer { FakeExchange.remove(host: server.origin.host!) }
+    store.selectedBotId = "bot"
+    store.conversation = window("q9", [("a9", recent)], earlier: 2)
+    try await until { store.replyFiles["a9"]?.map(\.id) == ["recent"] }
+    // Older turns load: the window now starts at q1 and shows a1 itself.
+    store.conversation = window("q1", [("a1", old), ("a9", recent)], earlier: 1)
+    try await until { store.replyFiles["a1"]?.map(\.id) == ["old"] }
+    XCTAssertEqual(store.replyFiles["a9"]?.map(\.id), ["recent"])
+    XCTAssertTrue(server.requests.contains { $0.url?.query == "before=q1" }, "The new start is read, not the old page reused")
+  }
+
+  func testAReadForAnAssistantLeftMidwayStillLetsTheOpenOneReadItsOwn() async throws {
+    let server = HoldingServer()
+    let store = AppStore(); store.widgetSnapshotURL = nil; store.api = FakeExchange.client(for: server)
+    defer { FakeExchange.remove(host: server.origin.host!) }
+    let photo = file("photo", "image/png"), other = file("other", "image/png")
+    store.selectedBotId = "a"
+    store.conversation = window("qa", [("aa", photo)], earlier: 3)
+    try await until { server.requests.count == 1 }
+    // Another assistant opens while the first one's read is still out.
+    store.selectionGeneration = UUID()
+    store.selectedBotId = "b"
+    store.conversation = window("qb", [("ab", other)], earlier: 3)
+    XCTAssertEqual(server.requests.count, 1, "Only one read at a time")
+    server.releaseNext(body: #"{"messages":[]}"#)
+    // The first read's answer is for a closed chat; the open one reads its own and gets its chips.
+    try await until { server.requests.count == 2 }
+    XCTAssertEqual(server.requests.last, "/api/bots/b/files?before=qb")
+    server.releaseNext(body: #"{"messages":[]}"#)
+    try await until { store.replyFiles["ab"]?.map(\.id) == ["other"] }
+  }
+
   func testAFilePreviewUsesItsOwningSheetInsteadOfTheRootPresenter() async throws {
     let server = FakeServer { _ in .init(body: "Gate battery plan") }
     let store = AppStore(); store.widgetSnapshotURL = nil; store.api = server.api()

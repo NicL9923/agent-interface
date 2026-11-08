@@ -196,8 +196,9 @@ extension AppStore {
   }
   private var currentEarlierFiles: EarlierFilePage? {
     guard let id = selectedBotId, let page = earlierFileCache[id],
-      page.sessionId == conversation?.sessionId,
-      page.before == nil || conversation?.messages.contains(where: { $0.id == page.before }) == true
+      // Only the page for this exact window start: after older turns load, a page read for a later
+      // start would count files the window now shows as earlier ones.
+      page.sessionId == conversation?.sessionId, page.before == conversation?.messages.first?.id
     else { return nil }
     return page
   }
@@ -211,7 +212,9 @@ extension AppStore {
     let key = earlierFilesKey
     earlierFilesFailure = nil
     loadingEarlierFiles = true
-    defer { loadingEarlierFiles = false }
+    // However this read ends, even for an assistant no longer open, the window now on screen is looked
+    // at again: its own read may have waited for this one.
+    defer { loadingEarlierFiles = false; refreshReplyFiles() }
     do {
       let suffix = before.map { "?before=\(APIClient.component($0))" } ?? ""
       let page: EarlierFiles = try await api.get("/bots/\(APIClient.component(id))/files\(suffix)")

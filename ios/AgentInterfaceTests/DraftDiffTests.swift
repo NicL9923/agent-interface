@@ -7,8 +7,10 @@ import XCTest
   private struct Vectors: Decodable {
     struct Diff: Decodable { var name: String; var before: String; var after: String; var limit: Int?; var parts: [DiffPart] }
     struct Lineage: Decodable { var name: String; var messages: [Message]; var revises: [String: String] }
+    struct Budget: Decodable { var name: String; var text: String; var id: String; var accepted: Bool }
     var diff: [Diff]
     var lineage: [Lineage]
+    var budget: [Budget]
   }
   private func vectors() throws -> Vectors {
     let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Vectors/draft-diff.json")
@@ -32,6 +34,13 @@ import XCTest
         result[entry.key.replacingOccurrences(of: "\n", with: "/")] = entry.value.body
       }
       XCTAssertEqual(found, vector.revises, vector.name)
+    }
+  }
+  func testCardIdsFitTheSharedBudget() throws {
+    let cases = try vectors().budget
+    XCTAssertFalse(cases.isEmpty)
+    for vector in cases {
+      XCTAssertEqual(ReplyCards.parseFresh(vector.text).flatMap { $0.cards ?? [] }.map(\.id), vector.accepted ? [vector.id] : [], vector.name)
     }
   }
   func testComposedAndDecomposedLettersAreDifferentWordsAsOnTheWeb() {
@@ -72,9 +81,16 @@ final class HoldingServer: FakeHost, @unchecked Sendable {
   private let lock = NSLock()
   private var held: [FakeExchange] = []
   private var bodies: [Data] = []
+  private var urls: [URL] = []
   func receive(_ exchange: FakeExchange) {
     let body = FakeExchange.body(exchange.request) ?? Data()
-    lock.withLock { held.append(exchange); bodies.append(body) }
+    lock.withLock { held.append(exchange); bodies.append(body); urls.append(exchange.request.url!) }
+  }
+  /// Each request's path and query, in arrival order.
+  var requests: [String] { lock.withLock { urls.map { $0.path + ($0.query.map { "?" + $0 } ?? "") } } }
+  func releaseNext(body: String) {
+    let exchange = lock.withLock { held.isEmpty ? nil : held.removeFirst() }
+    exchange?.respond(status: 200, data: Data(body.utf8))
   }
   var count: Int { lock.withLock { bodies.count } }
   func json(_ index: Int) -> [String: Any] {

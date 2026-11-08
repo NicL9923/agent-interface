@@ -746,8 +746,8 @@ refuses `deviceId` on the status route with 400, so ask again without it.
 A device counts as in use while its last beat is under 45 seconds old, its last input
 under five minutes old, and the session that sent it is still signed in. Signing out
 ends it at once. A device ID belongs to one account at a time: the account whose
-signed-in session last reported it, or that registered it for push (an iOS device or a
-labelled browser subscription). Another account's `active` report for it is refused
+signed-in session last reported it. Push registrations name a device but never hold one,
+so a stale or mistaken label only affects routing. Another account's `active` report for it is refused
 with 409 and `{ "error": "This device is signed in to another household member. Sign
 out there first." }` until that session signs out or expires, as switching accounts
 on the device does. An `inactive` report keeps the account's hold, and one account's

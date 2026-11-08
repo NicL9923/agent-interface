@@ -71,10 +71,10 @@ export class DeviceRepository {
   // BEGIN device activity
   /**
    * Records that this person is using this installation now, `idleMs` after their last input, or
-   * that they stopped. An installation belongs to one account at a time: the account whose signed-in
-   * session last reported it, or that registered it for push. Another account takes it over only
-   * after that session signs out or expires, as switching accounts on the device does; until then
-   * its reports are refused.
+   * that they stopped. An installation belongs to the account whose live session last reported it,
+   * and to nobody else: push registrations name a device but never hold one. Another account takes
+   * it over once that session signs out or expires, as switching accounts on the device does; until
+   * then its reports are refused.
    */
   deviceActivity(userId: string, sessionHash: string, deviceId: string, platform: "web" | "ios", state: "active" | "inactive", idleMs = 0, now = Date.now()) {
     if (state === "inactive") {
@@ -90,13 +90,12 @@ export class DeviceRepository {
         .run(deviceId, userId, sessionHash, platform, now, now - idleMs);
     });
   }
-  /** Another account that holds this installation now, if any. */
+  /** Another account whose live session holds this installation now, if any. */
   private deviceOwner(deviceId: string, userId: string, now: number): string | undefined {
-    const live = `(EXISTS(SELECT 1 FROM sessions s WHERE s.hash=a.session_hash AND s.user_id=a.user_id AND s.expires>?)
-      OR EXISTS(SELECT 1 FROM native_sessions n WHERE n.hash=a.session_hash AND n.user_id=a.user_id AND n.expires>?))`;
-    const row = (this.db.prepare(`SELECT user_id FROM device_activity a WHERE device_id=? AND user_id<>? AND ${live}`).get(deviceId, userId, now, now)
-      ?? this.db.prepare("SELECT user_id FROM native_devices WHERE device_id=? AND user_id<>?").get(deviceId, userId)
-      ?? this.db.prepare("SELECT s.user_id FROM push_subscription_devices d JOIN subscriptions s ON s.endpoint=d.endpoint WHERE d.device_id=? AND s.user_id<>?").get(deviceId, userId)) as { user_id: string } | undefined;
+    const row = this.db.prepare(`SELECT user_id FROM device_activity a WHERE device_id=? AND user_id<>?
+      AND (EXISTS(SELECT 1 FROM sessions s WHERE s.hash=a.session_hash AND s.user_id=a.user_id AND s.expires>?)
+        OR EXISTS(SELECT 1 FROM native_sessions n WHERE n.hash=a.session_hash AND n.user_id=a.user_id AND n.expires>?))`)
+      .get(deviceId, userId, now, now) as { user_id: string } | undefined;
     return row?.user_id;
   }
   /** The installations this person is using now, whose sign-in is still current. */

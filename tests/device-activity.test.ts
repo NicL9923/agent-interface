@@ -108,19 +108,23 @@ it("refuses another member's reports for a device until its account signs out th
   expect([...store.activeDevices("two")]).toEqual([phone]);
 });
 
-it("refuses a device another member registered for push, and frees one whose session expired", async () => {
+it("never lets a push registration hold a device, and frees one whose holder's session expired", async () => {
   const { app: server, store } = await app();
   const one = signIn(store, origin, "one"), two = nativeSignIn(store, "two");
-  // Member one's iPhone, registered for push under one's native session.
-  store.nativeSession("one-phone", "one", Date.now() + 600_000);
-  store.registerNativeDevice("one", "one-phone", phone, "ab".repeat(32), "sandbox");
-  expect((await server.inject({ ...beat({ deviceId: phone, state: "active" }), headers: two })).statusCode).toBe(409);
-  // Member one's browser, labelled on its push subscription.
-  store.subscribe("one", { endpoint: "https://push.example.invalid/one", keys: { p256dh: "key", auth: "auth" } }, laptop);
-  const labelled = await server.inject({ ...beat({ deviceId: laptop, state: "active" }), headers: two });
-  expect([labelled.statusCode, labelled.json().error]).toEqual([409, "This device is signed in to another household member. Sign out there first."]);
-  // A device whose holder's session expired is free to take.
+  // Member two names member one's browser on two's own subscription, and one's phone on two's push device.
+  store.subscribe("two", { endpoint: "https://push.example.invalid/two", keys: { p256dh: "key", auth: "auth" } }, laptop);
+  store.nativeSession("two-phone", "two", Date.now() + 600_000);
+  store.registerNativeDevice("two", "two-phone", phone, "ab".repeat(32), "sandbox");
+  // Neither blocks member one using them.
+  expect((await server.inject({ ...beat({ deviceId: laptop, state: "active" }), headers: one })).statusCode).toBe(200);
+  expect((await server.inject({ ...beat({ deviceId: phone, state: "active" }), headers: one })).statusCode).toBe(200);
+  expect(store.activeDevices("one")).toEqual(new Set([laptop, phone]));
+  // A shared browser whose holder's session expired without signing out is free to take, whatever
+  // push labels still name it.
+  store.subscribe("one", { endpoint: "https://push.example.invalid/one", keys: { p256dh: "key", auth: "auth" } }, tablet);
   expect((await server.inject({ ...beat({ deviceId: tablet, state: "active" }), headers: one })).statusCode).toBe(200);
+  const held = await server.inject({ ...beat({ deviceId: tablet, state: "active" }), headers: two });
+  expect([held.statusCode, held.json().error]).toEqual([409, "This device is signed in to another household member. Sign out there first."]);
   store.db.prepare("UPDATE sessions SET expires=0 WHERE user_id='one'").run();
   expect((await server.inject({ ...beat({ deviceId: tablet, state: "active" }), headers: two })).statusCode).toBe(200);
   expect([...store.activeDevices("two")]).toEqual([tablet]);

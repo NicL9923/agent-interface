@@ -156,6 +156,9 @@ view instructions in every WildBots conversation.
   A revised draft names the draft it revises in its `id`: `NEW__revises__EARLIER`,
   where EARLIER is the earlier card's id up to any `__revises__`. The card shape
   is unchanged, because the first clients with email cards refuse any other field.
+  An id holds at most 80 characters, lineage included, or the whole block shows as
+  code; the guidance asks for short draft ids and, when a revision id would be too
+  long, a new short id without lineage, which keeps the email without highlights.
   A card that revises an earlier email card in the same conversation shows the
   recipients, subject and body words it added and removed, with **Hide changes**
   and **Show changes**. Only that explicit lineage links drafts; subjects and

@@ -11,6 +11,7 @@ const file = fileURLToPath(new URL("../ios/AgentInterfaceTests/Vectors/draft-dif
 const vectors = JSON.parse(readFileSync(file, "utf8")) as {
   diff: { name: string; before: string; after: string; limit?: number; parts: DiffPart[] }[];
   lineage: { name: string; messages: { id: string; role: string; text: string }[]; revises: Record<string, string> }[];
+  budget: { name: string; text: string; id: string; accepted: boolean }[];
 };
 
 describe("word diff vectors", () => {
@@ -25,6 +26,18 @@ describe("word diff vectors", () => {
 describe("revision lineage vectors", () => {
   it.each(vectors.lineage)("$name", ({ messages, revises }) => {
     expect(Object.fromEntries([...draftRevisions(messages)].map(([key, card]) => [key.replace("\n", "/"), card.body]))).toEqual(revises);
+  });
+});
+
+describe("card id budget vectors", () => {
+  it.each(vectors.budget)("$name", ({ text, id, accepted }) => {
+    // Both the current parser and the one released with email cards agree on what fits.
+    expect(replyCardsFromText(text).map(card => card.id)).toEqual(accepted ? [id] : []);
+    expect(releasedCards(text).map(card => card.id)).toEqual(accepted ? [id] : []);
+  });
+  it("tells assistants the budget and the fallback", () => {
+    expect(instructions).toContain("at most 80 characters");
+    expect(instructions).toContain("new short id without __revises__");
   });
 });
 
