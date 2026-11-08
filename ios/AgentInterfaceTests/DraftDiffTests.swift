@@ -100,25 +100,22 @@ import XCTest
     let envelope = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: fixture)) as? [String: Any])
     store.bootstrap = try JSONDecoder().decode(Bootstrap.self, from: JSONSerialization.data(withJSONObject: envelope["response"] ?? envelope))
     clock = start.addingTimeInterval(15); activity.update()
-    try await waitFor { server.requests.count == 1 }
+    try await until { server.requests.count == 1 }
     XCTAssertEqual(server.lastRequest?.url?.path, "/api/devices/activity")
     XCTAssertEqual(server.lastRequest?.httpMethod, "PUT")
     XCTAssertEqual(try server.lastJSON() as NSDictionary, ["deviceId": NotificationController.shared.deviceId, "state": "active", "idleMs": 15_000] as NSDictionary)
     activity.backgrounded()
-    try await waitFor { server.requests.count == 2 }
+    try await until { server.requests.count == 2 }
     XCTAssertEqual(try server.lastJSON()["state"] as? String, "inactive")
     // Signing out: the server ended the old session's activity, and a session-less app sends nothing.
     activity.foregrounded()
-    try await waitFor { server.requests.count == 3 }
+    try await until { server.requests.count == 3 }
     store.api?.token = nil
     activity.accountChanged()
     activity.input()
+    // Absence: a report would have been sent at once, so a short pause shows none went.
     try await Task.sleep(for: .milliseconds(100))
     XCTAssertEqual(server.requests.count, 3)
     XCTAssertFalse(activity.reporting)
-  }
-  private func waitFor(_ condition: () -> Bool) async throws {
-    for _ in 0..<200 where !condition() { try await Task.sleep(for: .milliseconds(10)) }
-    XCTAssertTrue(condition())
   }
 }
