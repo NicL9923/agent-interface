@@ -112,7 +112,13 @@ export class MainAssistants {
   private bots: Bot[] = [];
   /** Assistants being made main: Hermes holds them to a main assistant's limits before the choice is recorded. */
   private readonly activating = new Set<string>();
-  /** Assistants a check-in job was still on after the last pass, including ones Hermes refused to delete. */
+  /**
+   * Protection is the default while unknown: until a routine inventory succeeds after this server starts,
+   * every member's personal assistant is held to a main assistant's limits. After one, an assistant keeps
+   * them while the last inventory left a signed check-in on it, whether kept, just made, or one Hermes
+   * refused to delete. Both change only inside a pass, in turn with every other routine and main change.
+   */
+  private inventoried = false;
   private checkInBots = new Set<string>();
   /** The roster protocol Hermes enforced at the last send; 0 when it enforces none. */
   private enforced = 0;
@@ -175,20 +181,25 @@ export class MainAssistants {
     const failures: unknown[] = [], members = new Set<string>();
     let whole = false;
     const household = this.store.users().filter(user => allowedIdentity(this.config, user));
-    // A main assistant that was deleted, shared, or is no longer this member's own stops being one.
-    for (const user of household) {
-      const value = this.store.preferences(user.id);
-      if (value.mainBotId && !mainEligible(bots.find(bot => bot.id === value.mainBotId), user.id)) this.clearMain(user.id);
-    }
     const capabilities = await this.runtime.capabilities();
-    if (capabilities.routines.supported) {
-      const failed = (userId: string, error: unknown) => { failures.push(error); members.add(userId); };
-      try { await serialDelivery(this.store, () => this.reconcileJobs(bots, household, failed)); }
-      catch (error) { failures.push(error); whole = true; }
-    }
-    // The roster is guidance and a gate in Hermes, separate from anyone's check-ins.
-    this.bots = bots;
-    try { await this.publish(); } catch (error) { failures.push(error); }
+    const failed = (userId: string, error: unknown) => { failures.push(error); members.add(userId); };
+    // In turn with making assistants main and routine changes, so protection comes off only on what this pass saw.
+    await serialDelivery(this.store, async () => {
+      // A main assistant that was deleted, shared, or is no longer this member's own stops being one.
+      for (const user of household) {
+        const value = this.store.preferences(user.id);
+        if (value.mainBotId && !mainEligible(bots.find(bot => bot.id === value.mainBotId), user.id)) this.clearMain(user.id);
+      }
+      if (capabilities.routines.supported) {
+        try { await this.reconcileJobs(bots, household, failed); }
+        catch (error) { failures.push(error); whole = true; }
+      }
+      // Routines Hermes says are unavailable, as it does while disconnected, prove nothing: only an
+      // inventory that listed them changes protection.
+      // The roster is guidance and a gate in Hermes, separate from anyone's check-ins.
+      this.bots = bots;
+      try { await this.publish(); } catch (error) { failures.push(error); }
+    });
     if (failures.length) {
       this.log.warn({ errors: failures.map(error => error instanceof Error ? error.message : String(error)) }, "Main assistant check-ins could not be reconciled yet");
       throw new ReconcileError(failures, members, whole);
@@ -219,8 +230,7 @@ export class MainAssistants {
       const member = tracked.find(row => same(job, row))?.userId ?? signedCheckInMember(this.store, job);
       if (member) held.set(member, [...held.get(member) ?? [], job]);
     }
-    // Every assistant a check-in cleanup missed in this pass. Each stays a main assistant in Hermes until
-    // its check-ins are confirmed gone; the member's current main one already is.
+    // Every assistant a signed check-in is still on, or may be, after this pass: kept, just made, or not deleted.
     const remaining = new Set<string>();
     const wanted = new Map(members.flatMap(user => { const want = this.wanted(user, bots); return want ? [[user.id, want] as const] : []; }));
     for (const userId of new Set([...held.keys(), ...wanted.keys()])) {
@@ -232,6 +242,7 @@ export class MainAssistants {
       const keep = onBot.find(job => tracked.some(row => same(job, row))) ?? onBot[0];
       // A replacement waits until every job it would replace is deleted or at least paused.
       let unsafe = false;
+      if (keep) remaining.add(keep.botId);
       for (const job of have) if (job !== keep) {
         try { await this.remove(job); }
         catch (error) { remaining.add(job.botId); failed(userId, error); if (!(error instanceof RemovalError && error.safe)) unsafe = true; }
@@ -241,6 +252,8 @@ export class MainAssistants {
       try {
         if (!keep) {
           if (unsafe) throw new Error("An earlier check-in is still running in Hermes, so no new one was made.");
+          // A create whose answer is lost may still have made it.
+          remaining.add(want.botId);
           const created = await this.runtime.saveRoutine(input);
           this.store.checkIns.track({ botId: want.botId, jobId: created.id, userId });
           this.store.routineRecipients(want.botId, created.id, [userId]);
@@ -254,11 +267,12 @@ export class MainAssistants {
       } catch (error) { failed(userId, error); }
     }
     this.checkInBots = remaining;
+    this.inventoried = true;
   }
 
-  /** Whether a check-in job is on this assistant, as the last pass found or as recorded here. */
+  /** Whether this assistant may have a check-in on it: unknown until an inventory succeeds, then what the last one left. */
   private holdsCheckIn(botId: string) {
-    return this.checkInBots.has(botId) || this.store.checkIns.current().some(row => row.botId === botId);
+    return !this.inventoried || this.checkInBots.has(botId);
   }
 
   /**
@@ -429,12 +443,17 @@ export class RemovalError extends Error {
  * check-in job on it must be confirmed gone before the sharing changes.
  */
 export async function endCheckInsBeforeSharing(store: Store, mains: MainAssistants, userId: string, botId: string, confirmed: boolean | undefined) {
-  const value = store.preferences(userId);
-  const main = value.mainBotId === botId;
-  if (!main && !await mains.checkInsOn(botId)) return;
-  if (!confirmed) throw httpError(409, main ? `This is your main assistant. Sharing it ends that${value.checkIns?.enabled ? " and turns off its check-ins" : ""}.`
-    : "This assistant still has check-ins. Sharing it turns them off.", { code: "main_share_confirmation_required" });
-  if (main) store.savePreferences(userId, { ...value, mainBotId: undefined, checkIns: value.checkIns && { ...value.checkIns, enabled: false } });
+  // Decided and cleared in turn with every other main change, from the designation as it is then.
+  const ending = await serialDelivery(store, async () => {
+    const value = store.preferences(userId);
+    const main = value.mainBotId === botId;
+    if (!main && !await mains.checkInsOn(botId)) return false;
+    if (!confirmed) throw httpError(409, main ? `This is your main assistant. Sharing it ends that${value.checkIns?.enabled ? " and turns off its check-ins" : ""}.`
+      : "This assistant still has check-ins. Sharing it turns them off.", { code: "main_share_confirmation_required" });
+    if (main) store.savePreferences(userId, { ...value, mainBotId: undefined, checkIns: value.checkIns && { ...value.checkIns, enabled: false } });
+    return true;
+  });
+  if (!ending) return;
   await mains.reconcile().catch(() => {});
   if (await mains.checkInsOn(botId))
     throw httpError(502, "Hermes hasn't removed this assistant's check-ins yet, so it stays personal. Try again in a minute.",
@@ -486,23 +505,21 @@ export function installMainAssistantRoutes(app: FastifyInstance, collaborators: 
   // Clearing is an explicit null, never a missing field, so no client can clear it by not knowing it.
   apiRoute(app, "PUT /preferences/main", { body: z.object({ botId: id.nullable() }).strict() }, async (req, { botId }) => {
     const userId = signedIn(req).id;
-    const before = store.preferences(userId).mainBotId;
     const commit = () => {
       const value = store.preferences(userId);
       // A new main assistant starts without check-ins; the member turns them on for it.
       const changed = value.mainBotId !== (botId ?? undefined);
       store.savePreferences(userId, { ...value, mainBotId: botId ?? undefined, ...(changed && value.checkIns ? { checkIns: { ...value.checkIns, enabled: false } } : {}) });
     };
-    if (botId !== null && botId !== before) {
-      // In turn with routine saves and triggers, so none lands between the check and the choice.
-      await serialDelivery(store, async () => {
-        const bot = await eligibleBot(userId, botId);
-        await mains.activate(bot.id, () => assertRoutinesSettled(bot), commit);
-      });
-    } else {
-      if (botId !== null) await eligibleBot(userId, botId);
-      commit();
-    }
+    // Every request, a reaffirmation or a no-op included, decides from the designation as it is in its turn,
+    // after any other main change, routine save or trigger ahead of it.
+    const before = await serialDelivery(store, async () => {
+      const current = store.preferences(userId).mainBotId;
+      if (botId === null) { commit(); return current; }
+      const bot = await eligibleBot(userId, botId);
+      if (store.preferences(userId).mainBotId !== botId) await mains.activate(bot.id, () => assertRoutinesSettled(bot), commit);
+      return current;
+    });
     if (before && before !== botId) {
       // The old main's check-ins go now. Until Hermes confirms they are gone, that assistant keeps a main
       // assistant's limits in Hermes, and the member hears the change isn't finished.
@@ -513,16 +530,26 @@ export function installMainAssistantRoutes(app: FastifyInstance, collaborators: 
     }
     return preferences(userId);
   });
+  // Each member's latest check-ins save, so a failed setup's rollback never undoes a newer request, even
+  // one that asked for identical settings.
+  const checkInRevisions = new Map<string, number>();
   apiRoute(app, "PUT /preferences/check-ins", {
     before: () => requireCapability("routines"),
     body: z.object({ enabled: z.boolean(), everyHours: z.number(), timezone }).strict(),
   }, async (req, settings) => {
     const userId = signedIn(req).id;
     if (!validCheckInHours(settings.everyHours)) throw httpError(400, "Check in every 1 to 4 hours.", { code: "check_in_hours" });
-    const value = store.preferences(userId);
-    if (!value.mainBotId) throw httpError(409, "Choose a main assistant before turning on check-ins.", { code: "main_required" });
-    if (settings.enabled) await eligibleBot(userId, value.mainBotId);
-    store.savePreferences(userId, { ...value, checkIns: settings });
+    // Read, checked and written in turn with main changes, so a clear can't land between the read and the
+    // write and be undone by it. Reconciled after the turn, since a pass takes its own.
+    const revision = await serialDelivery(store, async () => {
+      const mainBotId = store.preferences(userId).mainBotId;
+      if (!mainBotId) throw httpError(409, "Choose a main assistant before turning on check-ins.", { code: "main_required" });
+      if (settings.enabled) await eligibleBot(userId, mainBotId);
+      store.savePreferences(userId, { ...store.preferences(userId), checkIns: settings });
+      const saved = (checkInRevisions.get(userId) ?? 0) + 1;
+      checkInRevisions.set(userId, saved);
+      return saved;
+    });
     let failed = await mains.reconcile().then(() => undefined, (error: unknown) => error);
     // A create whose answer was lost may still have made the job, which one more pass adopts.
     if (failed && settings.enabled && !store.checkIns.current().some(row => row.userId === userId))
@@ -530,9 +557,13 @@ export function installMainAssistantRoutes(app: FastifyInstance, collaborators: 
     const job = store.checkIns.current().find(row => row.userId === userId);
     const mine = !!failed && (!(failed instanceof ReconcileError) || failed.affects(userId));
     if (settings.enabled && !job) {
-      // Nothing runs, so the switch must not say it does. A job Hermes made after all goes on the next pass.
-      const now = store.preferences(userId);
-      store.savePreferences(userId, { ...now, checkIns: { ...settings, enabled: false } });
+      // Nothing runs, so the switch must not say it does, unless a later request saved since, even with the
+      // same settings. A job Hermes made after all goes on the next pass.
+      await serialDelivery(store, async () => {
+        if (checkInRevisions.get(userId) !== revision) return;
+        const now = store.preferences(userId);
+        store.savePreferences(userId, { ...now, checkIns: { ...settings, enabled: false } });
+      });
       void mains.reconcile().catch(() => {});
       throw httpError(502, "Hermes couldn't set up check-ins. Try again.", { code: "check_in_unavailable", expose: true, preferences: preferences(userId) });
     }

@@ -965,8 +965,9 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
             nextRunAt: job.next_run_at ?? undefined, lastRunAt: job.last_run_at ?? undefined,
             lastStatus: job.last_status ?? undefined, lastError: job.last_error ?? undefined, lastDeliveryError: job.last_delivery_error ?? undefined,
             ...(job.live_execution ? {running: true} : {}),
-            // A claimed fire, or a Bot Chat delivery Hermes still holds, carries the job as it was then.
-            ...(job.fire_claim || job.last_delivery_queued ? {inFlight: true} : {}), nativeOverrides: nativeOverrides(job)});
+            // A claimed fire carries the job as it was then. `last_delivery_queued` outlives its receipt, so
+            // held deliveries come from the add-on, which reads the receipts (routineDeliveries).
+            ...(job.fire_claim ? {inFlight: true} : {}), nativeOverrides: nativeOverrides(job)});
         }
       }
       return all;

@@ -48,6 +48,15 @@ WildBots. It does not stop someone deliberately probing the server.
   group-chat destinations against sharing. Closing this for every assistant,
   with a migration for results already queued, is follow-up work on the branch
   `t3/routine-delivery-privacy`.
+- Making an assistant main waits for its routines' runs and held deliveries,
+  but that check is best-effort for each routine's latest run only. Hermes
+  records a routine's unfinished Bot Chat receipts per run and overwrites that
+  record on the next run, so an older run's unfinished delivery can stay
+  hidden and the assistant can still become main. That delivery's content was
+  produced under the rules for an assistant that wasn't main, and it would
+  have been delivered whether or not the assistant became main, so becoming
+  main adds no new exposure. It is part of the cross-profile routine delivery
+  limit above, taken up on `t3/routine-delivery-privacy`.
 
 <!-- Main assistant: begin -->
 ## Main assistant
@@ -131,6 +140,16 @@ progress and a held delivery keep the routine as it was when they began. The
 refusal names them. Hermes holds an assistant to a main assistant's limits
 before WildBots records the choice, so the choice never runs ahead of them; if
 Hermes doesn't take them, nothing changes.
+
+Protection is the default while WildBots doesn't know. Until its first
+successful look at Hermes's routines after it starts (one that actually listed
+them, not one Hermes answered as unavailable, as it does while disconnected), every member's personal
+assistant is held to a main assistant's limits in Hermes. After that, an
+assistant keeps them while it is a member's main assistant or the last
+successful look found a WildBots check-in on it. They come off only after a
+look shows neither, taken in turn with every routine change, sharing change
+and main assistant choice. Every main assistant request, even one that changes
+nothing, waits its turn behind those and decides from what is current then.
 
 A check-in is WildBots's alone. No assistant's cron tool can change, resume or
 run one, whatever its designation; only pausing or removing it is allowed. An

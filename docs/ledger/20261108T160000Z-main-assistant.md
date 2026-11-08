@@ -415,3 +415,127 @@ Checks at `bdf5dcc`:
   - `SettingsParityTests`: 24
   - `MainAssistantFlowTests`: 2, light and dark
   - `SettingsPolishTests`: 9
+
+## Final review fixes: protection by default
+
+A final GPT-6.1 Sol review of `4edd56a..d1cb1f3` found three issues, all reproduced. Commit `dc9db64`
+applies one rule rather than patching each race. An assistant's Hermes roster marks it main while
+any of these holds:
+- it is a member's designated main;
+- the last successful routine inventory left a signed check-in on it, whether kept, just created,
+  or one Hermes refused to delete;
+- no inventory has succeeded since this server started.
+
+Protection comes off only in a reconciliation pass. Its inventory, its main-designation cleanup and
+its roster send all run inside `serialDelivery`, in turn with routine saves, triggers, sharing and
+main changes. A Hermes without routines counts as an inventory that found nothing.
+
+1. A concurrent request bypassed activation. Every `PUT /preferences/main`, a reaffirmation or a
+   no-op included, now runs in that turn and reads the designation there. So does the main decision
+   in sharing an assistant. Two tests cover it:
+   - A reaffirmation held mid-request, then a clear, then a routine posting elsewhere: the requests
+     take effect in order and the assistant ends cleared.
+   - A share sent while the assistant is being made main now asks for confirmation instead of
+     leaving a shared assistant designated main.
+2. Untracked check-ins lost protection across a restart. The in-memory set is no longer trusted
+   before an inventory. A test restarts with a signed, untracked check-in on an assistant that isn't
+   main and makes another assistant main before any inventory. Every personal assistant stays
+   protected, a failed inventory changes nothing, and protection comes off for the orphan's
+   assistant only once its check-in is confirmed deleted. Two further tests clear main while Hermes
+   can't list routines, after a check-in was just made and after one was kept; both stay protected.
+   Not persisted: the review asked to persist what the inventory found, but the unknown-at-start
+   rule already protects everyone until the first successful scan, and nothing reads a persisted
+   copy before that scan replaces it. A persisted set could not fail a test, so it was left out.
+3. Settled deliveries blocked promotion forever. The runtime no longer treats `last_delivery_queued`
+   as in flight; only `fire_claim` is. The add-on's `routine_deliveries` now reads each queued marker's
+   receipt in the target profile's mailbox with Hermes's `read_delivery_result`. A marker counts only
+   when its receipt is queued or claimed, or is missing with no finished parked record. A real-Hermes
+   test admits receipts into a real mailbox, records the markers with `_record_delivery_verification`,
+   and settles one and fails another with `complete_delivery`. Only the unfinished one still counts,
+   while Hermes keeps all three markers.
+
+The main-assistant API test setup now runs a reconciliation first, as the server's start does.
+
+Hand-breaks: 19 lines broke and all went red:
+- both request-ordering changes, failing on the race tests themselves;
+- the unknown-at-start rule, marking an inventory successful, the no-routines case, and adding kept,
+  just-created and undeleted check-ins to the protected set;
+- the adapter's marker handling;
+- the receipt statuses: claimed, settled or failed, and missing;
+- a finished parked record;
+- the own, default and invalid targets;
+- the three malformed-input guards.
+
+Checks at `dc9db64`:
+- `npm test`: 152 files and 2,165 tests passed. `tests/main-assistant-api.test.ts` passed five more
+  runs in a row.
+- Typecheck, lint, build and Ruff passed.
+- The e2e smoke suite (2) passed on a rerun. The first attempt couldn't start because port 4173 was
+  briefly in use by another process.
+- `npm run test:py`: 38 files passed.
+- With `HERMES_SOURCE` at the `ed1afb0` clone, `tests/hermes_delegation_test.py` ran 34 tests and
+  `tests/hermes_bot_delivery_test.py` ran 17 (one skip, the `6ebd92d` rollback case), all passing.
+- No iOS source changed, so iOS was not rerun.
+
+## Re-review fixes: unavailable routines and check-in settings
+
+A GPT-6.1 Sol re-review of `d1cb1f3..114cc06` found three issues. Commit `098e84a` fixes the first two.
+The coordinator ruled the third out of scope; it is documented as a limit.
+
+1. A disconnect erased protection without a successful scan. Hermes's capabilities report routines
+   unsupported while disconnected, and the pass treated that as an empty inventory. Only a pass that
+   listed routines now changes protection or the "no successful scan yet" state. A test restarts with
+   a signed orphan and runs a pass that reports routines unavailable. It then makes another assistant
+   main: the orphan's assistant stays protected. A later pass that lists routines takes protection
+   off only for assistants without a check-in, and a following unavailable pass changes nothing.
+2. Check-in settings bypassed main activation. `PUT /preferences/check-ins` now reads the
+   designation, checks eligibility and writes inside `serialDelivery`, and reconciles after leaving
+   it. Turning the switch back off after a failed setup also runs in that turn, and leaves a newer
+   check-ins change alone.
+   - A test holds a settings request mid-check while main is cleared: main ends cleared, with
+     check-ins off.
+   - Another holds a failed setup's routine read while a newer change waits behind it: the newer
+     frequency survives.
+   Audit of every other write to the main designation or check-in settings:
+   - `PUT /preferences/main` and the main decision in sharing already ran in the lane.
+   - The pass's `clearMain` and assistant deletion (`store.forgetBot`) also run in the lane.
+   - `PATCH /preferences` and `PUT /preferences/models` read and write with no await between, and
+     the first copies the stored designation and check-ins unchanged.
+   Nothing else writes them.
+3. Out of scope, documented: receipt discovery follows `last_delivery_queued`, which Hermes
+   overwrites on each run, so an older run's unfinished delivery can stay hidden. Such a delivery
+   carries content made under non-main rules and would deliver whether or not the assistant became
+   main, so activation adds no exposure. It is part of the cross-profile routine delivery limit on
+   `t3/routine-delivery-privacy`. Promotion's in-flight check is best-effort for each routine's
+   latest run. Recorded in docs/HouseholdExperience.md and the capability matrix.
+
+Hand-breaks: 4 lines broke and 3 went red, each on its own test:
+- treating unavailable routines as an inventory;
+- reading and writing settings outside the lane;
+- turning the switch back off over a newer change.
+One survived, as an equivalent mutant: reading preferences before rather than after the eligibility
+await inside the lane. Every other writer is excluded from the lane or never awaits, so the two
+reads cannot differ.
+
+Checks at `098e84a`:
+- `npm test`: 152 files and 2,167 tests passed. `tests/main-assistant-api.test.ts` passed five more
+  runs in a row.
+- Typecheck, lint, build, Ruff and the e2e smoke suite (2) passed.
+- `npm run test:py`: 38 files passed.
+- With `HERMES_SOURCE` at the `ed1afb0` clone, `tests/hermes_delegation_test.py` ran 34 tests and
+  `tests/hermes_bot_delivery_test.py` ran 17 (one skip, the `6ebd92d` rollback case), all passing.
+- No iOS source changed.
+
+## Final re-review fix (coordinator)
+
+The last scoped GPT-6.1 Sol re-review (`114cc06..cba802c`) confirmed the disconnect and
+check-in-settings fixes and the writer audit. It found one P2, reproduced through the real app:
+a failed setup's rollback compared settings, so it turned off a newer request that asked for
+the same settings. Both requests returned 502 and check-ins stayed off after Hermes
+recovered. The rollback now applies only while its own save is the member's latest
+(a per-member revision taken inside the main lane).
+
+Test: "never lets a failed setup turn off a newer request that asked for the same settings".
+Restoring the settings-equality rule made it fail (newer request 502, not 200); with the
+revision rule it passed, then passed three more runs. `tests/main-assistant-api.test.ts`:
+70 passed.

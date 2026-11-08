@@ -75,13 +75,35 @@ def read_job(ref):
         raise AmbiguousRoutine(str(error)) from error
 
 
-def pending_deliveries(home):
-    """Routine results Hermes still holds for delivery from this profile home: rows in the gateway
-    delivery queue not yet finished (cron/delivery_queue.py), and Bot Chat outputs parked while their
-    target was down (cron/bot_chat_legacy.py). Each outlives its run and keeps the destination the run
-    had. Raises when either can't be read, so a caller can fail closed."""
+def _receipt_reader():
+    from tools.bot_live_delivery import read_delivery_result
+    return read_delivery_result
+
+
+def _target_home(home, target):
+    """The profile home a Bot Chat receipt's target names, as cron/scheduler_delivery.py labels it."""
+    profile = target.partition(":")[2].strip()
+    if profile in ("", "(own)"):
+        return home
+    if not PROFILE_ID.match(profile):
+        raise ValueError(f"unknown Bot Chat target {target!r}")
+    root = home.parent.parent if home.parent.name == "profiles" else home
+    return root if profile == "default" else root / "profiles" / profile
+
+
+def pending_deliveries(home, read_receipt=None):
+    """Routine results Hermes still holds for delivery from this profile home, by routine:
+
+    - rows in the gateway delivery queue not yet finished (cron/delivery_queue.py);
+    - Bot Chat outputs parked while their target was down (cron/bot_chat_legacy.py);
+    - Bot Chat receipts a routine's ``last_delivery_queued`` names that are still queued or claimed in
+      the target's mailbox (tools/bot_live_delivery.py). Hermes keeps that marker after the receipt
+      settles, so each one is read; a settled, failed, cancelled or ambiguous one is finished.
+
+    Each outlives its run and keeps the destination the run had. Raises when any can't be read, so a
+    caller can fail closed."""
     home = Path(home)
-    found = []
+    found = {}
     database = home / "cron" / "deliveries.db"
     if database.exists():
         import sqlite3
@@ -92,7 +114,7 @@ def pending_deliveries(home):
             connection.close()
         for (job_json,) in rows:
             job = json.loads(job_json)
-            found.append({"id": str(job.get("id") or ""), "name": str(job.get("name") or "")})
+            found.setdefault(str(job.get("id") or ""), str(job.get("name") or ""))
     parked = home / "cron" / "bot_chat_pending"
     if parked.exists():
         for path in sorted(parked.glob("*.json")):
@@ -101,8 +123,41 @@ def pending_deliveries(home):
                 raise ValueError(f"{path.name} is not a delivery record")
             if record.get("status") == "queued":
                 job = record.get("job") if isinstance(record.get("job"), dict) else {}
-                found.append({"id": str(job.get("id") or ""), "name": str(job.get("name") or "")})
-    return found
+                found.setdefault(str(job.get("id") or ""), str(job.get("name") or ""))
+    jobs_file = home / "cron" / "jobs.json"
+    if jobs_file.exists():
+        data = json.loads(jobs_file.read_text(encoding="utf-8-sig"))
+        jobs = data.get("jobs") if isinstance(data, dict) else data
+        if not isinstance(jobs, list):
+            raise ValueError("jobs.json has no job list")
+        for job in jobs:
+            queued = job.get("last_delivery_queued") if isinstance(job, dict) else None
+            if not queued:
+                continue
+            if not isinstance(queued, dict):
+                raise ValueError("last_delivery_queued is not a map of receipts")
+            read = read_receipt or _receipt_reader()
+            for target, receipt in queued.items():
+                key = receipt.get("delivery_id") if isinstance(receipt, dict) else None
+                if not isinstance(key, str) or not key:
+                    raise ValueError(f"receipt for {target!r} has no delivery id")
+                record = read(_target_home(home, str(target)), key)
+                if record is None:
+                    # Not admitted yet: parked for a target that isn't running, unless that record is finished.
+                    record = parked_record(parked, key)
+                if record is None or record.get("status") in ("queued", "claimed", "canonical"):
+                    found.setdefault(str(job.get("id") or ""), str(job.get("name") or ""))
+    return [{"id": job_id, "name": name} for job_id, name in found.items()]
+
+
+def parked_record(parked, key):
+    path = parked / f"{key}.json"
+    if not path.exists():
+        return None
+    record = json.loads(path.read_text(encoding="utf-8-sig"))
+    if not isinstance(record, dict):
+        raise ValueError(f"{path.name} is not a delivery record")
+    return record
 
 
 def _text(value, limit, field):
