@@ -156,11 +156,22 @@ public final class InvocationJournal: @unchecked Sendable {
         if index == records.count - 1 { continue }
         throw unreadable("record \(index + 1) is damaged")
       }
-      guard let id = record["id"]?.stringValue else { continue }
+      let last = index == records.count - 1
+      guard let id = record["id"]?.stringValue, !id.isEmpty else {
+        if last { continue }
+        throw unreadable("record \(index + 1) has no invocation ID")
+      }
       switch record["t"]?.stringValue {
       case "accepted":
-        guard entries[id] == nil, let fingerprint = record["fp"]?.stringValue else { continue }
-        let at = Date(timeIntervalSince1970: record["at"]?.doubleValue ?? 0)
+        // An accepted record is what stops an ID from running twice, so a malformed or repeated one
+        // is damage, never something to skip.
+        guard entries[id] == nil, let fingerprint = record["fp"]?.stringValue, !fingerprint.isEmpty,
+          let seconds = record["at"]?.doubleValue
+        else {
+          if last { continue }
+          throw unreadable("record \(index + 1) is not a valid accepted invocation")
+        }
+        let at = Date(timeIntervalSince1970: seconds)
         entries[id] = Entry(id: id, fingerprint: fingerprint, acceptedAt: at)
         order.append(id)
       case "result":

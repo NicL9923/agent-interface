@@ -214,6 +214,45 @@ final class SafeFilesTests: XCTestCase {
     XCTAssertEqual(leftovers, [])
   }
 
+  /// APFS folds names its own way, and Σ and ς name one file on a case-insensitive volume. A key
+  /// built from the name kept them apart, so two versioned writes could both win; writes now take
+  /// turns per folder.
+  func testWritesUnderTwoSpellingsOfOneNameStillLetExactlyOneWin() throws {
+    let original = Data(repeating: 0x61, count: 16 << 20)
+    FileManager.default.createFile(atPath: box.granted + "/Σ.txt", contents: original)
+    guard FileManager.default.fileExists(atPath: box.granted + "/ς.txt") else {
+      throw XCTSkip("This volume treats Σ and ς as different names.")
+    }
+    let expected = SHA256.hash(data: original).map { String(format: "%02x", $0) }.joined()
+    let spellings = try ["Σ.txt", "ς.txt", "σ.txt"].map { try resolve($0) }
+    let lock = NSLock()
+    var winners: [Int] = []
+    var losers: [ErrorCode] = []
+    DispatchQueue.concurrentPerform(iterations: 6) { index in
+      let (folder, resolved) = spellings[index % spellings.count]
+      do {
+        _ = try SafeFiles.writeFile(
+          folder: folder, path: resolved, content: Data("writer \(index)".utf8), expectedSha256: expected, createOnly: false)
+        lock.withLock { winners.append(index) }
+      } catch {
+        lock.withLock { losers.append((error as? ActionError)?.code ?? .failed) }
+      }
+    }
+    XCTAssertEqual(winners.count, 1, "winners: \(winners)")
+    XCTAssertEqual(losers, Array(repeating: .conflict, count: 5))
+  }
+
+  func testAListingStopsWhenCancelled() throws {
+    for index in 0..<3 { box.write(box.granted + "/f\(index).txt", "x") }
+    let (folder, resolved) = try resolve(box.granted)
+    let flag = CancellationFlag()
+    flag.cancel()
+    assertActionError(.paused, containing: "stopped") {
+      try SafeFiles.listDir(folder: folder, path: resolved, offset: 0, limit: 10, cancel: flag)
+    }
+    XCTAssertEqual(try SafeFiles.listDir(folder: folder, path: resolved, offset: 0, limit: 10)["total"], 3)
+  }
+
   func testHashingRefusesFilesOverOneGiBAtEveryEntryPoint() throws {
     let huge = box.granted + "/huge.bin"
     FileManager.default.createFile(atPath: huge, contents: nil)

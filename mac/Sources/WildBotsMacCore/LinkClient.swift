@@ -101,6 +101,8 @@ public actor LinkClient {
   private var loop: Task<Void, Never>?
   /// The open socket, set once its hello is sent, so a result never goes out before hello.
   private var socket: LinkSocket?
+  /// A socket still sending its hello, so Stop and a nudge can close it too.
+  private var settingUp: LinkSocket?
   /// The device `socket` speaks for. A result is only sent as the device that ran it.
   private var socketDeviceId: String?
   private var restartRequested = false
@@ -139,6 +141,8 @@ public actor LinkClient {
   public func stop() {
     loop?.cancel()
     loop = nil
+    settingUp?.close(code: 1000)
+    settingUp = nil
     socket?.close(code: 1000)
     socket = nil
     socketDeviceId = nil
@@ -153,6 +157,13 @@ public actor LinkClient {
   /// not yet acknowledged go out after its hello.
   public func nudge() {
     failures = 0
+    if socket == nil, let starting = settingUp {
+      restartRequested = true
+      generation += 1
+      settingUp = nil
+      starting.close(code: 1000)
+      return
+    }
     guard let socket else { return wakeUp() }
     restartRequested = true
     generation += 1
@@ -211,7 +222,7 @@ public actor LinkClient {
 
   private func endLink(reason: String) {
     credentials.delete()
-    dispatcher.cancelAll()
+    dispatcher.close()
     socket = nil
     socketDeviceId = nil
     loop = nil
@@ -235,8 +246,17 @@ public actor LinkClient {
     let current = generation
     revokedByServer = false
     lastActivity = Date()
+    settingUp = socket
     do {
       try await socket.send(LinkCodec.hello(appVersion: appVersion, state: state()))
+      // Stop, a nudge or a newer session may have run while hello was sent; this socket is then
+      // stale and must not become the one results go out on.
+      guard !Task.isCancelled, generation == current else {
+        if settingUp === socket { settingUp = nil }
+        socket.close(code: 1000)
+        return nil
+      }
+      settingUp = nil
       // From here every result that finishes is sent on this socket by `deliver`, and every one
       // that finished earlier is in the journal read just below; none waits for a reconnect.
       self.socket = socket
@@ -246,6 +266,7 @@ public actor LinkClient {
       }
     } catch {
       socket.close(code: 1000)
+      if settingUp === socket { settingUp = nil }
       if self.socket === socket {
         self.socket = nil
         socketDeviceId = nil
@@ -287,7 +308,7 @@ public actor LinkClient {
         try? journal.acknowledge(id: id)
       case .revoked:
         revokedByServer = true
-        dispatcher.cancelAll()
+        dispatcher.close()
         socket.close(code: 1000)
         return LinkCloseCode.unauthorized
       case .invoke, .malformedInvoke:

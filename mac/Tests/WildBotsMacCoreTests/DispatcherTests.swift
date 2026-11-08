@@ -158,6 +158,19 @@ final class DispatcherTests: XCTestCase {
     XCTAssertEqual(journal.unacknowledged().first?.outcome, outcome)
   }
 
+  /// Unlink closes admission itself, so an invocation that reads its snapshot after Unlink, when
+  /// the cancel epoch has already moved, still does not start. Linking again opens it.
+  func testNothingStartsAfterUnlinkUntilLinkedAgain() async throws {
+    let dispatcher = try dispatcher()
+    dispatcher.close()
+    assertFailure(
+      await dispatcher.handle(invoke("w1", "write_file", ["path": "a.txt", "content": "x"])), .paused, containing: "did not start")
+    XCTAssertNil(box.read(box.granted + "/a.txt"))
+    dispatcher.open()
+    XCTAssertNotNil(await dispatcher.handle(invoke("w2", "write_file", ["path": "a.txt", "content": "x"])).value)
+    XCTAssertEqual(box.read(box.granted + "/a.txt"), "x")
+  }
+
   func testPauseDuringAVersionedWriteOfALargeFileLeavesItUnchanged() async throws {
     let big = box.granted + "/big.bin"
     let size: Int64 = 512 << 20

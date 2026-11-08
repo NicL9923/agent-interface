@@ -10,15 +10,41 @@ final class FakeSocket: LinkSocket, @unchecked Sendable {
   private var waiter: CheckedContinuation<String, Error>?
   private var _sent: [String] = []
   private var _closedByClient: Int?
+  private var held: CheckedContinuation<Void, Never>?
+  private var holdNext = false
+  private var releasedHold = false
   var pingSucceeds = true
+
+  /// The next send goes out and then does not return until `releaseHold()`, like a send whose
+  /// completion arrives late, so a test can stop and restart the client in between.
+  func holdNextSend() { lock.withLock { holdNext = true } }
+  func releaseHold() {
+    let waiting = lock.withLock { () -> CheckedContinuation<Void, Never>? in
+      releasedHold = true
+      defer { held = nil }
+      return held
+    }
+    waiting?.resume()
+  }
 
   var sent: [JSONValue] { lock.withLock { _sent.compactMap { try? JSONValue.parse($0) } } }
   var closedByClient: Int? { lock.withLock { _closedByClient } }
 
   func send(_ text: String) async throws {
-    try lock.withLock {
+    let hold = try lock.withLock { () -> Bool in
       if _closedByClient != nil { throw LinkClosed(code: nil) }
       _sent.append(text)
+      defer { holdNext = false }
+      return holdNext
+    }
+    guard hold else { return }
+    await withCheckedContinuation { continuation in
+      let resumeNow = lock.withLock { () -> Bool in
+        if releasedHold { return true }
+        held = continuation
+        return false
+      }
+      if resumeNow { continuation.resume() }
     }
   }
 
@@ -67,7 +93,11 @@ final class FakeConnector: LinkConnector, @unchecked Sendable {
   private var failures: Int
   var pingSucceeds = true
   private(set) var authorizations: [String] = []
-  init(failFirst: Int = 0) { failures = failFirst }
+  private let holdFirstHello: Bool
+  init(failFirst: Int = 0, holdFirstHello: Bool = false) {
+    failures = failFirst
+    self.holdFirstHello = holdFirstHello
+  }
   var sockets: [FakeSocket] { lock.withLock { _sockets } }
 
   func connect(url: URL, authorization: String) async throws -> LinkSocket {
@@ -79,6 +109,7 @@ final class FakeConnector: LinkConnector, @unchecked Sendable {
       }
       let socket = FakeSocket()
       socket.pingSucceeds = pingSucceeds
+      if holdFirstHello && _sockets.isEmpty { socket.holdNextSend() }
       _sockets.append(socket)
       return socket
     }
@@ -224,6 +255,30 @@ final class LinkClientTests: XCTestCase {
     shots.release()
     try await waitUntil { second.sent.contains { $0["id"] == "s1" } }
     XCTAssertEqual(types(second).first, "hello")
+    await link.stop()
+  }
+
+  /// Stop and start while the first socket's hello is still being sent. When that send finally
+  /// returns, the stale socket must not become the one results go out on: before the fix it did,
+  /// and its own cleanup then left the new socket connected with nowhere to send results.
+  func testASocketStoppedDuringItsHelloNeverTakesOverFromTheNewOne() async throws {
+    let connector = FakeConnector(holdFirstHello: true)
+    let link = try client(connector)
+    await link.start()
+    try await waitUntil { connector.sockets.count == 1 && connector.sockets[0].sent.count == 1 }
+    let first = connector.sockets[0]
+    await link.stop()
+    XCTAssertEqual(first.closedByClient, 1000, "Stop closes a socket that is still saying hello")
+    await link.start()
+    try await waitUntil { connector.sockets.count == 2 && connector.sockets[1].sent.count == 1 }
+    let second = connector.sockets[1]
+    first.releaseHold()
+    try await Task.sleep(nanoseconds: 200_000_000)
+    second.push(#"{"type":"welcome","protocol":1}"#)
+    try await waitUntil { self.statuses.last == .linked }
+    second.push(#"{"type":"invoke","id":"n1","assistantId":"patch","scheduled":false,"action":"list_dir","args":{}}"#)
+    try await waitUntil { second.sent.contains { $0["id"] == "n1" } }
+    XCTAssertFalse(first.sent.contains { $0["id"] == "n1" })
     await link.stop()
   }
 

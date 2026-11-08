@@ -44,6 +44,14 @@ public enum ActionRequest: Equatable, Sendable {
   }
 
   /// What the activity log shows: the command or the path, never file contents.
+  /// Reads and screenshots only gather; their result can be withheld without hiding a change.
+  public var revealsOnly: Bool {
+    switch self {
+    case .readFile, .listDir, .screenshot: return true
+    case .run, .writeFile: return false
+    }
+  }
+
   public var summary: String {
     switch self {
     case .run(let command, let cwd, _): return cwd.map { "\(command)  (in \($0))" } ?? command

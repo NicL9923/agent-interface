@@ -154,6 +154,7 @@ enum Defaults {
       credential = saved
       try? journal.discardUnacknowledged()
       updatePolicy { $0.knownAssistants = assistants }
+      dispatcher.open()
       await link.start()
     } catch {
       if (error as? ASWebAuthenticationSessionError)?.code != .canceledLogin { self.error = error.localizedDescription }
@@ -171,7 +172,7 @@ enum Defaults {
   /// deletes that credential. If the server cannot be reached, the Mac still forgets the credential
   /// and says to revoke it in WildBots Settings.
   func unlink() async {
-    dispatcher.cancelAll()
+    dispatcher.close()
     await link.stop()
     if let credential, let server = URL(string: credential.server) {
       do { try await HouseholdAPI(server: server).unlinkSelf(credential) } catch {

@@ -179,8 +179,9 @@ public enum SafeFiles {
     defer { close(parent) }
     var parentInfo = stat()
     guard fstat(parent, &parentInfo) == 0 else { throw posixError(errno, display: path.display) }
-    // APFS is usually case- and normalization-insensitive; a wider key only makes more writes wait.
-    let key = "\(parentInfo.st_dev):\(parentInfo.st_ino)/\(name.precomposedStringWithCanonicalMapping.lowercased())"
+    // One turn per folder, not per name: APFS folds case and Unicode its own way (Σ and ς name
+    // one file), so no key built from the name can be sure two names are different files.
+    let key = "\(parentInfo.st_dev):\(parentInfo.st_ino)"
     return try WriteTurns.shared.take(key) {
       try writeInTurn(parent: parent, name: name, path: path, content: content, expectedSha256: expectedSha256,
         createOnly: createOnly, cancel: cancel)
@@ -257,7 +258,9 @@ public enum SafeFiles {
     ]
   }
 
-  public static func listDir(folder: FolderHandle, path: ResolvedPath, offset: Int, limit: Int) throws -> JSONValue {
+  public static func listDir(
+    folder: FolderHandle, path: ResolvedPath, offset: Int, limit: Int, cancel: CancellationFlag? = nil
+  ) throws -> JSONValue {
     try folder.verify()
     let directory: Int32
     if let name = path.relative.last {
@@ -275,6 +278,7 @@ public enum SafeFiles {
     let formatter = ISO8601DateFormatter()
     var entries: [JSONValue] = []
     for name in names[offset..<min(names.count, offset + limit)] {
+      if cancel?.isCancelled == true { throw stopped }
       var info = stat()
       guard fstatat(directory, name, &info, AT_SYMLINK_NOFOLLOW) == 0 else { continue }
       let type: String

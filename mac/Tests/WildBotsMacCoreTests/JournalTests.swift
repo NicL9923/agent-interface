@@ -116,6 +116,27 @@ final class JournalTests: XCTestCase {
     XCTAssertEqual(try Data(contentsOf: url), damaged)
   }
 
+  /// An accepted record is what keeps an ID from running twice. One without its fingerprint before
+  /// the last record is damage that stops startup; as a torn last record it is skipped.
+  func testAMalformedAcceptedRecordBeforeTheLastStopsStartup() throws {
+    do {
+      let journal = try InvocationJournal(url: url)
+      _ = try journal.begin(id: "a", fingerprint: "f")
+      try journal.finish(id: "a", outcome: .success(1))
+    }
+    let valid = try Data(contentsOf: url)
+    let malformed = Data(#"{"t":"accepted","id":"z","at":1}"#.utf8)
+    let damaged = malformed + Data("\n".utf8) + valid
+    try damaged.write(to: url)
+    XCTAssertThrowsError(try InvocationJournal(url: url)) { error in
+      XCTAssertTrue((error as? ActionError)?.message.contains("not a valid accepted invocation") == true, "\(error)")
+    }
+    XCTAssertEqual(try Data(contentsOf: url), damaged)
+    try (valid + malformed).write(to: url)
+    let reopened = try InvocationJournal(url: url)
+    XCTAssertEqual(try reopened.begin(id: "a", fingerprint: "f"), .finished(.success(1)))
+  }
+
   /// After 7 days an unacknowledged result loses its value but not its ID: a late repeat is
   /// answered `uncertain`, not run. The ID itself is forgotten 30 days after it was accepted.
   func testAnUnacknowledgedResultLosesItsValueAfter7DaysAndItsIdAfter30() throws {

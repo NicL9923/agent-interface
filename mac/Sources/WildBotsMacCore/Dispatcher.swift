@@ -168,6 +168,7 @@ public final class Dispatcher: @unchecked Sendable {
   /// Bumped by every `cancelAll`. An invocation admitted under a different value than it read
   /// its snapshot under was authorized before a Pause or Unlink, so it does not start.
   private var cancelEpoch = 0
+  private var admitting = true
 
   public init(
     journal: InvocationJournal, activity: ActivityLog, environment: HostEnvironment, runner: CommandRunner = CommandRunner(),
@@ -194,6 +195,16 @@ public final class Dispatcher: @unchecked Sendable {
     }
     flags.forEach { $0.cancel() }
   }
+
+  /// Unlinking or revocation: stops everything and admits nothing until `open()`. An invocation
+  /// already past authorization when this lands is refused at admission, whatever its snapshot said.
+  public func close() {
+    lock.withLock { admitting = false }
+    cancelAll()
+  }
+
+  /// Linked again: actions may start.
+  public func open() { lock.withLock { admitting = true } }
 
   static let stoppedBeforeStart = ActionError(
     .paused, "The action did not start because assistants were paused or this Mac was unlinked.")
@@ -251,7 +262,7 @@ public final class Dispatcher: @unchecked Sendable {
 
     let flag = CancellationFlag()
     let refusal: ActionError? = lock.withLock {
-      guard cancelEpoch == epoch else { return Self.stoppedBeforeStart }
+      guard admitting, cancelEpoch == epoch else { return Self.stoppedBeforeStart }
       guard running.count < maxConcurrent else {
         return ActionError(.busy, "This Mac is already running \(maxConcurrent) actions. Try again shortly.")
       }
@@ -264,6 +275,11 @@ public final class Dispatcher: @unchecked Sendable {
     onEvent(.activeCount(activeCount))
     var outcome = await perform(request, snapshot: current, cancel: flag)
     lock.withLock { running[invocation.id] = nil }
+    // What a read gathered never leaves after Pause or Unlink. A write or command that already
+    // finished reports what it did, because it did it.
+    if case .success = outcome, flag.isCancelled, request.revealsOnly {
+      outcome = .failure(SafeFiles.stopped)
+    }
     onEvent(.activeCount(activeCount))
     if case .success = outcome, LinkCodec.result(id: invocation.id, outcome: outcome).utf8.count > maxFrameBytes - 4096 {
       outcome = .failure(ActionError(.tooLarge, "The result is larger than the link can carry."))
@@ -301,9 +317,8 @@ public final class Dispatcher: @unchecked Sendable {
       switch request {
       case .screenshot:
         guard let screenshots else { throw ActionError(.permissionNeeded, "Screenshots are not available.") }
+        // Capture cannot be interrupted; the fence after `perform` keeps a paused one from leaving.
         let shot = try await screenshots.capture(maxWidth: 1920)
-        // Capture cannot be interrupted; a Pause during it still keeps the image from leaving.
-        if cancel.isCancelled { throw SafeFiles.stopped }
         return .success([
           "pngBase64": .string(shot.png.base64EncodedString()), "width": .int(shot.width), "height": .int(shot.height),
         ])
@@ -325,7 +340,7 @@ public final class Dispatcher: @unchecked Sendable {
         return try await background {
           let (folder, resolved) = try PathResolver.resolve(
             path ?? snapshot.folders.first?.path ?? "", folders: snapshot.folders, home: self.environment.home)
-          return .success(try SafeFiles.listDir(folder: folder, path: resolved, offset: offset, limit: limit))
+          return .success(try SafeFiles.listDir(folder: folder, path: resolved, offset: offset, limit: limit, cancel: cancel))
         }
       }
     } catch let error as ActionError {
