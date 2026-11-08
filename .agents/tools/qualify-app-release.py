@@ -80,6 +80,10 @@ ops = Path(PAYLOAD["operationDir"])
 assert release.parent == base / "releases" and ops.parent == base / "operations"
 assert release.is_dir() and not release.is_symlink()
 assert sha(ops / "release.tar.gz") == PAYLOAD["archiveSha256"]
+# Probes call `node` by name from the runtime's directory, so it must be the runtime the stage
+# recorded and no other. Checked before anything is staged.
+node_path = str(Path(PAYLOAD["node"]).parent) + ":" + os.environ.get("PATH", "/usr/bin:/bin")
+assert os.path.realpath(shutil.which("node", path=node_path) or "") == os.path.realpath(PAYLOAD["node"]), "node on the qualification PATH is not " + PAYLOAD["node"]
 sweep_stale_stages(base / "operations", time.time())
 worker_path = base / "shared/hermes-worker.json"
 worker = json.loads(worker_path.read_text())

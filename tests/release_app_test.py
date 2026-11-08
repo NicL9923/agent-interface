@@ -56,13 +56,26 @@ def closed_probe(listing_uid=None):
             "unit": "agent-interface-test-absent.service", "liveRulesCommand": [sys.executable, "-c", f"print({listing!r})"]}
 
 
-SERVICE_SHOW = "{ path=/srv/app/runtime/node-v24.22.2/bin/node ; argv[]=/srv/app/runtime/node-v24.22.2/bin/node src/server/index.ts ; }"
+# A runtime directory whose `node` is this interpreter, so the fixture service's running process, this
+# test process, is that binary by real path.
+RUNTIME = Path(tempfile.mkdtemp(prefix="release-runtime-"))
+(RUNTIME / "bin").mkdir()
+(RUNTIME / "bin/node").symlink_to(sys.executable)
+NODE = str(RUNTIME / "bin/node")
+REAL_NODE = os.path.realpath(NODE)
 
 
-def facts_payload(base, probe=None, shown=SERVICE_SHOW):
-    """REMOTE_FACTS's payload, with the app service's ExecStart answered by a fixture command."""
+def service_show(pid=None, exec_start=NODE, path=str(RUNTIME / "bin") + ":/usr/bin"):
+    """`systemctl show` output for the app service: MainPID, ExecStart and Environment."""
+    return "\n".join([f"MainPID={os.getpid() if pid is None else pid}",
+                      f"ExecStart={{ path={exec_start} ; argv[]={exec_start} src/server/index.ts ; ignore_errors=no }}",
+                      f"Environment=HOME=/srv PATH={path} NODE_ENV=production"])
+
+
+def facts_payload(base, probe=None, shown=None):
+    """REMOTE_FACTS's payload, with the app service answered by a fixture command."""
     return {"appBase": str(base), "metadataProbe": probe or closed_probe(),
-            "serviceCommand": [sys.executable, "-c", f"print({shown!r})"]}
+            "serviceCommand": [sys.executable, "-c", f"print({service_show() if shown is None else shown!r})"]}
 
 
 def healthy_floor(**overrides):
@@ -136,6 +149,14 @@ if __name__ == "__main__":
             self.assertEqual(receipt_path.stat().st_mode & 0o777, 0o600)
             self.assertEqual(json.loads(seen.read_text()), {'HERMES_COMPUTER_PROBE_BROWSER': str(browser),
                 'AGENT_BROWSER_EXECUTABLE_PATH': str(pm)})
+            # A recorded runtime whose directory holds no node would run the probes on whatever node
+            # PATH finds next; qualification refuses before staging anything.
+            (base / 'no-runtime/bin').mkdir(parents=True)
+            stages = sorted(base.rglob('.agent-interface-upgrade-stage'))
+            code, _, error = run_remote(qualify_app.REMOTE, {**payload, 'node': str(base / 'no-runtime/bin/node')})
+            self.assertNotEqual(code, 0)
+            self.assertIn('node on the qualification PATH is not ' + str(base / 'no-runtime/bin/node'), error)
+            self.assertEqual(sorted(base.rglob('.agent-interface-upgrade-stage')), stages)
 
     def test_cli_forwards_host_path_without_resolving_it_on_operator_machine(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -280,12 +301,12 @@ class ReleaseRules(unittest.TestCase):
         self.assertEqual(self.config(qualification="/srv/q.json")["newQualificationReceipt"], "/srv/q.json")
 
     def facts(self, **overrides):
-        return {"prior": PRIOR, "serviceNode": PRIOR["node"], "maintenance": False, "leasePresent": False, "drainPresent": False,
+        return {"prior": PRIOR, "serviceRuntime": {"running": "/real/node", "execStart": "/real/node", "path": "/real/node"}, "maintenance": False, "leasePresent": False, "drainPresent": False,
                 "upgradePhase": "idle", "managedPython": "/home/.hermes/tools/python/bin/python3",
                 "metadataFloor": healthy_floor(), **overrides}
 
     def built(self, **overrides):
-        return {"webBuild": "bbbbbbbbbbbbbbbb", "nodeVersion": "v24.22.2", "helperSha256": "helper",
+        return {"webBuild": "bbbbbbbbbbbbbbbb", "nodeVersion": "v24.22.2", "nodeRealpath": "/real/node", "helperSha256": "helper",
                 "receipt": {"valid": True, "error": None}, **overrides}
 
     def problems(self, facts=None, built=None, **options):
@@ -311,13 +332,24 @@ class ReleaseRules(unittest.TestCase):
         stale = self.problems(built=self.built(nodeVersion="v24.21.0"), engines=engines)
         self.assertEqual(len(stale), 1)
         self.assertIn("Node v24.21.0, outside package.json's engines (^24.22.2 || ^26.13.0)", stale[0])
-        new = "/srv/app/runtime/node-v24.22.2/bin/node"
-        # A release built with a new runtime while the service still runs the old one.
-        mismatch = self.problems(node=new, engines=engines)
-        self.assertEqual(len(mismatch), 1)
-        self.assertIn(f"The app service runs {PRIOR['node']}, but this release builds and deploys with {new}", mismatch[0])
-        self.assertEqual(self.problems(self.facts(serviceNode=new), node=new, engines=engines), [])
-        self.assertIn("runs an unknown Node", self.problems(self.facts(serviceNode=None))[0])
+        # Built with a runtime the service is not wholly on: still running the old process, starting
+        # the old binary, or finding another node on its PATH.
+        running = {"running": "/real/node", "execStart": "/real/node", "path": "/real/node"}
+        for key, text in (("running", "its running process is /old/node"), ("execStart", "its ExecStart is /old/node"),
+                          ("path", "the node on its PATH is /old/node")):
+            problems = self.problems(self.facts(serviceRuntime={**running, key: "/old/node"}), engines=engines)
+            self.assertEqual(len(problems), 1, key)
+            self.assertIn(f"The app service does not run /real/node: {text}.", problems[0])
+        self.assertIn("its running process is unknown", self.problems(self.facts(serviceRuntime={**running, "running": None}))[0])
+        self.assertIn("does not run", self.problems(self.facts(serviceRuntime=None))[0])
+
+    def test_node_must_be_an_absolute_path_to_a_binary_named_node(self):
+        # npm and the build call `node` by name from the runtime's directory, so another name would
+        # build with whatever node comes next on PATH.
+        for path in ("/srv/app/runtime/bin/node24", "runtime/bin/node"):
+            with patch.object(release_app, "git", lambda *_: self.fail("checked before any work")):
+                with self.assertRaisesRegex(SystemExit, "--node must be an absolute host path to a binary named node"):
+                    release_app.prepare(types.SimpleNamespace(node=path, commit="HEAD"))
 
     def test_engine_ranges_are_met_only_by_the_same_major_at_or_above_its_floor(self):
         engines = "^24.22.2 || ^26.13.0"
@@ -411,12 +443,13 @@ class Activation(unittest.TestCase):
         release_app.ROOT, release_app.MANIFESTS = root, root / ".private/releases"
         self.root = root
         self.live = {"current": "/srv/app/releases/old", "workerSha256": "worker"}
-        release_app.remote = lambda host, program, payload: self.live
+        self.runtime = {"running": "/real/node", "execStart": "/real/node", "path": "/real/node"}
+        release_app.remote = lambda host, program, payload: {"serviceRuntime": self.runtime} if program is release_app.REMOTE_FACTS else self.live
         release_app.save_manifest({"name": self.NAME, "status": "prepared", "host": "host",
             "commit": "7fac68e44e7d" + "0" * 28, "origin": "https://app.example.test", "webBuild": "b" * 16,
             "archiveSha256": "f" * 64, "hermesRevision": PRIOR["hermesRevision"], "qualification": "reused",
             "pullRequest": 8, "appBase": "/srv/app", "operationId": "op",
-            "expectedRelease": "/srv/app/releases/old", "workerSha256": "worker"})
+            "expectedRelease": "/srv/app/releases/old", "workerSha256": "worker", "node": "/srv/node", "nodeRealpath": "/real/node"})
 
     def tearDown(self):
         (release_app.ROOT, release_app.MANIFESTS, release_app.guarded,
@@ -448,6 +481,12 @@ class Activation(unittest.TestCase):
     def test_refuses_when_live_state_changed_since_preparation(self):
         self.live["workerSha256"] = "edited"
         with self.assertRaises(SystemExit):
+            self.activate(lambda *_, **__: self.fail("must not activate"), {})
+        self.assertEqual(self.status(), "prepared")
+
+    def test_refuses_when_the_service_was_switched_off_the_releases_runtime(self):
+        self.runtime["running"] = "/old/node"
+        with self.assertRaisesRegex(SystemExit, "Not activating:\n- The app service does not run /real/node"):
             self.activate(lambda *_, **__: self.fail("must not activate"), {})
         self.assertEqual(self.status(), "prepared")
 
@@ -538,9 +577,32 @@ class RecoveryCommand(unittest.TestCase):
         self.assertEqual(calls, [])
         self.assertEqual(release_app.load_manifest("release-x")["status"], "prepared")
 
+    def test_recovery_uses_the_stages_runtime_and_refuses_a_service_not_running_it(self):
+        release_app.save_manifest({**release_app.load_manifest("release-x"), "node": "/srv/app/runtime/new/bin/node", "nodeRealpath": "/real/new"})
+        runtime = {"running": "/real/old", "execStart": "/real/new", "path": "/real/new"}
+        sent = []
+        def remote(host, program, payload, timeout=None):
+            if program is release_app.REMOTE_FACTS:
+                return {"serviceRuntime": runtime}
+            sent.append(payload)
+            return {"checked": True}
+        original = release_app.remote
+        release_app.remote = remote
+        try:
+            with self.assertRaisesRegex(SystemExit, "Not recovering:\n- The app service does not run /real/new: its running process is /real/old"):
+                release_app.main(["recover", "release-x", "--check"])
+            self.assertEqual(sent, [], "No recovery step runs on the wrong runtime")
+            runtime["running"] = "/real/new"
+            release_app.main(["recover", "release-x", "--check"])
+            self.assertEqual(sent[0]["node"], "/srv/app/runtime/new/bin/node")
+        finally:
+            release_app.remote = original
+
     def test_uncertain_recovery_is_held_for_review_and_cannot_run_again(self):
         replies = iter([{"currentReleaseQualificationVerified": True}, ConnectionError("lost reply")])
-        def remote(host, program, payload, timeout):
+        def remote(host, program, payload, timeout=None):
+            if program is release_app.REMOTE_FACTS:
+                return {"serviceRuntime": {"running": "/real/node", "execStart": "/real/node", "path": "/real/node"}}
             reply = next(replies)
             if isinstance(reply, Exception):
                 self.assertEqual(release_app.load_manifest("release-x")["status"], "recovering")
@@ -575,7 +637,7 @@ class HostPrograms(unittest.TestCase):
         self.assertEqual(code, 0, error)
         facts = json.loads(output)
         self.assertEqual(facts["prior"]["node"], "new-node")
-        self.assertEqual(facts["serviceNode"], "/srv/app/runtime/node-v24.22.2/bin/node")
+        self.assertEqual(facts["serviceRuntime"], {"running": REAL_NODE, "execStart": REAL_NODE, "path": REAL_NODE})
         self.assertEqual(facts["current"], str((self.host.base / "releases/release-live").resolve()))
         self.assertEqual(facts["profileHashes"], {str(self.host.profile): hashlib.sha256(b"model: default\n").hexdigest()})
         self.assertFalse(facts["maintenance"] or facts["leasePresent"] or facts["drainPresent"])
@@ -626,11 +688,21 @@ class HostPrograms(unittest.TestCase):
         self.assertEqual([name for name, passed in checks.items() if not passed], ["metadataEgressFloor"])
         self.assertEqual(sent[0]["metadataProbe"], release_app.METADATA_PROBE)
 
-    def test_facts_report_no_service_node_when_systemd_shows_none(self):
+    def test_facts_tell_the_running_runtime_from_the_one_the_next_start_would_use(self):
         self.host.deployment("latest", "op-2", True)
-        code, output, error = run_remote(release_app.REMOTE_FACTS, facts_payload(self.host.base, shown=""))
-        self.assertEqual(code, 0, error)
-        self.assertIsNone(json.loads(output)["serviceNode"])
+        other = RUNTIME / "other/bin"; other.mkdir(parents=True, exist_ok=True)
+        (other / "node").write_text("#!/bin/sh\n"); (other / "node").chmod(0o700)
+        cases = {
+            # The unit was edited and reloaded, but the old process still runs.
+            "edited, not restarted": (service_show(exec_start=str(other / "node"), path=str(other) + ":/usr/bin"),
+                                      {"running": REAL_NODE, "execStart": str(other / "node"), "path": str(other / "node")}),
+            "stopped": (service_show(pid=0), {"running": None, "execStart": REAL_NODE, "path": REAL_NODE}),
+            "nothing shown": ("", {"running": None, "execStart": None, "path": None}),
+        }
+        for name, (shown, expected) in cases.items():
+            code, output, error = run_remote(release_app.REMOTE_FACTS, facts_payload(self.host.base, shown=shown))
+            self.assertEqual(code, 0, error)
+            self.assertEqual(json.loads(output)["serviceRuntime"], expected, name)
 
     def test_facts_report_active_maintenance(self):
         self.host.deployment("latest", "op-2", True)
@@ -644,6 +716,21 @@ class HostPrograms(unittest.TestCase):
         code, _, error = run_remote(release_app.REMOTE_FACTS, facts_payload(self.host.base))
         self.assertNotEqual(code, 0)
         self.assertIn("No successful guarded release", error)
+
+    def test_build_refuses_a_runtime_that_is_not_the_node_on_its_path(self):
+        import tarfile
+        operation = self.host.base / "operations/release-new"; operation.mkdir()
+        with tarfile.open(operation / "release.tar.gz", "w:gz"):
+            pass
+        (self.host.base / "no-runtime/bin").mkdir(parents=True)
+        payload = {"appBase": str(self.host.base), "release": str(self.host.base / "releases/release-new"),
+                   "operationDir": str(operation), "archiveSha256": hashlib.sha256((operation / "release.tar.gz").read_bytes()).hexdigest(),
+                   "node": str(self.host.base / "no-runtime/bin/node"), "qualification": None,
+                   "qualificationReceipt": "/none", "hermesRevision": "x", "repairSha256": "y"}
+        code, _, error = run_remote(release_app.REMOTE_BUILD, payload)
+        self.assertNotEqual(code, 0)
+        self.assertIn("node on the build PATH is not " + payload["node"], error)
+        self.assertFalse((operation / "build.log").exists(), "Nothing is built with the wrong node")
 
     def test_configuration_is_private_and_never_overwritten(self):
         path = self.host.base / "operations/deploy-config.json"
@@ -828,6 +915,14 @@ class HostPrograms(unittest.TestCase):
         self.assertEqual((code, json.loads(output or "null")), (0, {"checked": False}), error)
         self.assertEqual(json.loads((tools / "calls.json").read_text()),
                          [["--config", str(path), "--check"], ["--config", str(path)]])
+
+    def test_recovery_configuration_runs_with_the_stages_runtime(self):
+        self.recovery_host()
+        self.heartbeat()
+        code, _, error = self.recover(check=True, node="/srv/app/runtime/new/bin/node")
+        self.assertEqual(code, 0, error)
+        config = json.loads((self.host.base / "operations/native-recovery-config-op-new/config.json").read_text())
+        self.assertEqual(config["node"], "/srv/app/runtime/new/bin/node")
 
     def test_recovery_check_pins_the_shared_module_the_live_helper_imports(self):
         tools, _ = self.recovery_host()
