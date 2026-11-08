@@ -193,11 +193,9 @@ export class MainAssistants {
       if (capabilities.routines.supported) {
         try { await this.reconcileJobs(bots, household, failed); }
         catch (error) { failures.push(error); whole = true; }
-      } else {
-        // Without routines there are no check-ins to find.
-        this.checkInBots = new Set();
-        this.inventoried = true;
       }
+      // Routines Hermes says are unavailable, as it does while disconnected, prove nothing: only an
+      // inventory that listed them changes protection.
       // The roster is guidance and a gate in Hermes, separate from anyone's check-ins.
       this.bots = bots;
       try { await this.publish(); } catch (error) { failures.push(error); }
@@ -538,10 +536,14 @@ export function installMainAssistantRoutes(app: FastifyInstance, collaborators: 
   }, async (req, settings) => {
     const userId = signedIn(req).id;
     if (!validCheckInHours(settings.everyHours)) throw httpError(400, "Check in every 1 to 4 hours.", { code: "check_in_hours" });
-    const value = store.preferences(userId);
-    if (!value.mainBotId) throw httpError(409, "Choose a main assistant before turning on check-ins.", { code: "main_required" });
-    if (settings.enabled) await eligibleBot(userId, value.mainBotId);
-    store.savePreferences(userId, { ...value, checkIns: settings });
+    // Read, checked and written in turn with main changes, so a clear can't land between the read and the
+    // write and be undone by it. Reconciled after the turn, since a pass takes its own.
+    await serialDelivery(store, async () => {
+      const mainBotId = store.preferences(userId).mainBotId;
+      if (!mainBotId) throw httpError(409, "Choose a main assistant before turning on check-ins.", { code: "main_required" });
+      if (settings.enabled) await eligibleBot(userId, mainBotId);
+      store.savePreferences(userId, { ...store.preferences(userId), checkIns: settings });
+    });
     let failed = await mains.reconcile().then(() => undefined, (error: unknown) => error);
     // A create whose answer was lost may still have made the job, which one more pass adopts.
     if (failed && settings.enabled && !store.checkIns.current().some(row => row.userId === userId))
@@ -549,9 +551,12 @@ export function installMainAssistantRoutes(app: FastifyInstance, collaborators: 
     const job = store.checkIns.current().find(row => row.userId === userId);
     const mine = !!failed && (!(failed instanceof ReconcileError) || failed.affects(userId));
     if (settings.enabled && !job) {
-      // Nothing runs, so the switch must not say it does. A job Hermes made after all goes on the next pass.
-      const now = store.preferences(userId);
-      store.savePreferences(userId, { ...now, checkIns: { ...settings, enabled: false } });
+      // Nothing runs, so the switch must not say it does, unless a later request already changed it.
+      // A job Hermes made after all goes on the next pass.
+      await serialDelivery(store, async () => {
+        const now = store.preferences(userId);
+        if (JSON.stringify(now.checkIns) === JSON.stringify(settings)) store.savePreferences(userId, { ...now, checkIns: { ...settings, enabled: false } });
+      });
       void mains.reconcile().catch(() => {});
       throw httpError(502, "Hermes couldn't set up check-ins. Try again.", { code: "check_in_unavailable", expose: true, preferences: preferences(userId) });
     }

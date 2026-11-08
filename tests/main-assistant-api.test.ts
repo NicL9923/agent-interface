@@ -840,11 +840,52 @@ describe("protection while check-ins are unknown, and requests that race", () =>
     expect(jobs).toEqual([]);
     expect(lastMain("mom-notes")).toBe(false);
   });
-  it("takes protection off on a Hermes without routines, which can hold no check-ins", async () => {
-    routinesSupported = false;
+  it("keeps protection through a pass that couldn't list routines, as when Hermes drops after the roster read", async () => {
+    jobs.push(signed("mom-notes"));
     const restarted = new MainAssistants(runtime, created.store, config);
+    // Hermes answers the roster, then reports routines unavailable, as its capabilities do while disconnected.
+    routinesSupported = false;
     await restarted.reconcile();
-    expect(lastMain("mom-notes")).toBe(false);
+    routinesSupported = true;
+    await restarted.activate("mom-main", async () => {}, () => {});
+    expect([lastMain("mom-notes"), lastMain("dad-diary")]).toEqual([true, true]);
+    // A pass that lists them finds the orphan, and protection comes off only for those without one.
+    fail.delete = true; fail.pause = true;
+    await restarted.reconcile().catch(() => {});
+    expect([lastMain("mom-notes"), lastMain("dad-diary")]).toEqual([true, false]);
+    // After that, unavailable routines change nothing either.
+    routinesSupported = false;
+    await restarted.reconcile();
+    expect(lastMain("mom-notes")).toBe(true);
+  });
+  it("saves check-in settings in turn with main changes, so a clear isn't undone by a request that read before it", async () => {
+    await main("mom-main");
+    let release!: () => void;
+    holdBots = new Promise(resolve => { release = resolve; });
+    const settings = checkIns();
+    const clear = main(null);
+    await new Promise(resolve => setTimeout(resolve, 100));
+    release();
+    await settings; await clear;
+    // In order: check-ins went on, then main was cleared, which turned them off; neither came back.
+    expect(prefs().mainBotId).toBeUndefined();
+    expect(prefs().checkIns?.enabled).toBe(false);
+    expect(lastMain("mom-main")).toBe(false);
+  });
+  it("turns a switch back off without undoing a newer check-ins change", async () => {
+    await main("mom-main");
+    fail.create = "refused";
+    // The first request's pass holds its routine read while the newer change waits its turn behind it.
+    let release!: () => void;
+    holdRoutines = new Promise(resolve => { release = resolve; });
+    const on = checkIns();
+    await new Promise(resolve => setTimeout(resolve, 100));
+    const later = checkIns({ enabled: false, everyHours: 4 });
+    await new Promise(resolve => setTimeout(resolve, 100));
+    release();
+    expect((await on).json().code).toBe("check_in_unavailable");
+    expect((await later).statusCode).toBe(200);
+    expect(prefs().checkIns).toMatchObject({ enabled: false, everyHours: 4 });
   });
   it("keeps a check-in's assistant protected when main is cleared while Hermes can't list routines, whether it was just made or kept", async () => {
     // Just made: the last inventory that succeeded is the one that created it.
