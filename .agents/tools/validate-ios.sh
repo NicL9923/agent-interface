@@ -36,10 +36,23 @@ mkdir -p .private
 if [[ $operation == test ]]; then python3 "$state_tool" invalidate "$inputs_before"; fi
 booted_here=0
 cleanup() {
-  if [[ $booted_here == 1 ]]; then
-    xcrun simctl shutdown "$simulator_id"
-    booted_here=0
-  fi
+  [[ $booted_here == 1 ]] || return 0
+  booted_here=0
+  local deadline=$((SECONDS + 30)) device_state
+  while (( SECONDS < deadline )); do
+    device_state=$(xcrun simctl list devices available --json | python3 -c 'import json,sys; groups=json.load(sys.stdin)["devices"]; print(next(d["state"] for ds in groups.values() for d in ds if d["udid"]==sys.argv[1]))' "$simulator_id")
+    case "$device_state" in
+      Shutdown) return 0 ;;
+      Booted|Booting)
+        if xcrun simctl shutdown "$simulator_id"; then continue; fi
+        ;;
+      "Shutting Down") ;;
+      *) echo "Cannot clean up selected simulator in state $device_state" >&2; return 1 ;;
+    esac
+    sleep 1
+  done
+  echo "Selected simulator did not shut down within 30 seconds: $simulator_id" >&2
+  return 1
 }
 trap cleanup EXIT
 

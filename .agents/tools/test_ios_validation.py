@@ -58,6 +58,9 @@ if 'build-for-testing' in args or 'build' in args:
  if 'build-for-testing' in args:
   with (products/'Fixture.xctestrun').open('wb') as f:plistlib.dump({'UITests':{'IsUITestBundle':True}},f)
 elif 'test-without-building' in args:
+ if os.environ.get('TEST_XCTEST_SHUTDOWN')=='1':(root/'xctest-shutdown').touch()
+ else:
+  (root/'xctest-shutdown').unlink(missing_ok=True);(root/'xctest-booted').touch()
  if '-test-timeouts-enabled' not in args:sys.exit('timeouts not specified')
  if os.environ.get('TEST_CHANGE_INPUT')=='1':(root/'ios/Input.swift').write_text('changed during tests')
 else:sys.exit('unexpected xcodebuild action')
@@ -70,13 +73,15 @@ sys.exit(int(os.environ.get('TEST_NATIVE_EXIT','0')))
 args=sys.argv[1:]; root=pathlib.Path(os.environ['TEST_ROOT'])
 if args==['--sdk','iphonesimulator','--show-sdk-build-version']:print('TestSDK');sys.exit(0)
 if args[:3]==['simctl','list','devices']:
- devices=[{'udid':'PHONE','state':'Booted' if os.environ.get('TEST_BOOTED')=='1' else 'Shutdown','deviceTypeIdentifier':'TestPhone'}]
- if args[3]=='booted' and os.environ.get('TEST_BOOTED')!='1':devices=[]
+ devices=[{'udid':'PHONE','state':os.environ['TEST_CLEANUP_STATE'] if (root/'xctest-booted').exists() and 'TEST_CLEANUP_STATE' in os.environ else 'Shutdown' if (root/'xctest-shutdown').exists() else 'Booted' if os.environ.get('TEST_BOOTED')=='1' or (root/'xctest-booted').exists() else 'Shutdown','deviceTypeIdentifier':'TestPhone'}]
+ if args[3]=='booted':devices=[d for d in devices if d['state']=='Booted']
  elif args[3] not in ['booted','available']:sys.exit('unexpected device list')
  print(json.dumps({'devices':{'runtime-test':devices}}));sys.exit(0)
 if args==['simctl','list','runtimes','--json']:
  print(json.dumps({'runtimes':[{'identifier':'runtime-test','version':'27.0','buildversion':os.environ.get('TEST_RUNTIME_BUILD','TestRuntime')}]}));sys.exit(0)
 if args==['simctl','shutdown','PHONE']:
+ if (root/'xctest-shutdown').exists():sys.exit(149)
+ (root/'xctest-booted').unlink(missing_ok=True);(root/'xctest-shutdown').touch()
  with open(os.environ['TEST_CALLS'],'a') as f:f.write(json.dumps(['xcrun',*args])+'\\n')
  sys.exit(0)
 if args[:4]==['xcresulttool','get','test-results','summary']:
@@ -88,9 +93,9 @@ sys.exit('unexpected xcrun call: '+repr(args))
         path.write_text(('#!' + sys.executable + '\n' if python else '') + text)
         path.chmod(0o755)
 
-    def run_validation(self, operation='test', options=(), **env):
+    def run_validation(self, operation='test', options=(), timeout=20, **env):
         return subprocess.run(['bash', str(self.tools / 'validate-ios.sh'), 'PHONE', operation, *options],
-                              cwd=self.root, env=dict(self.env, **env), capture_output=True, text=True, timeout=20)
+                              cwd=self.root, env=dict(self.env, **env), capture_output=True, text=True, timeout=timeout)
 
     def actions(self):
         return [json.loads(x) for x in self.calls.read_text().splitlines()] if self.calls.exists() else []
@@ -211,6 +216,24 @@ sys.exit('unexpected xcrun call: '+repr(args))
         execution=next(a for a in self.actions() if 'test-without-building' in a)
         self.assertEqual(execution.count('-test-timeouts-enabled'),1)
         self.assertEqual(execution[execution.index('-test-timeouts-enabled')+1],'NO')
+
+    def test_xctest_already_shutdown_is_success_and_can_be_reused(self):
+        p=self.run_validation(TEST_XCTEST_SHUTDOWN='1')
+        self.assertEqual(p.returncode,0,p.stderr)
+        self.assertFalse(any(a[:3]==['xcrun','simctl','shutdown'] for a in self.actions()))
+        self.assertEqual(len(self.receipts()),1)
+
+    def test_unknown_cleanup_state_fails_without_recording_success(self):
+        p=self.run_validation(TEST_CLEANUP_STATE='Unknown')
+        self.assertNotEqual(p.returncode,0)
+        self.assertIn('Cannot clean up selected simulator in state Unknown',p.stderr)
+        self.assertEqual(self.receipts(),[])
+
+    def test_stalled_shutdown_is_bounded_and_not_cached(self):
+        p=self.run_validation(TEST_CLEANUP_STATE='Shutting Down',timeout=40)
+        self.assertNotEqual(p.returncode,0)
+        self.assertIn('did not shut down within 30 seconds',p.stderr)
+        self.assertEqual(self.receipts(),[])
 
     def test_invalid_device_and_missing_option_value_fail_before_native_execution(self):
         p=subprocess.run(['bash',str(self.tools/'validate-ios.sh'),'UNKNOWN','test'],env=self.env,capture_output=True,text=True,timeout=8)
