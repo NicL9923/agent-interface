@@ -7,10 +7,11 @@ import type RFB from "@novnc/novnc";
 import type { Terminal } from "@xterm/xterm";
 import { api, ApiError, write } from "../client-api";
 import { isChunkFailure, useRaise } from "../app/chunk-failure";
-import type { ComputerStatus, ComputerStreamTicket } from "../shared/computer";
+import { terminalCommandPattern, type ComputerStatus, type ComputerStreamTicket } from "../shared/computer";
 import { desktopKeys, keysymsFor, limitPaste, pasteLimit } from "../lib/desktop-keys";
 import { attachDesktopTouch, type DesktopTouch } from "../lib/desktop-touch";
 import { computerSocketUrl } from "../lib/socket-url";
+import { chunkInput, terminalOptions } from "../lib/terminal-input";
 import { useMediaQuery } from "../app/use-browser";
 import { ComputerHelp } from "./ComputerHelp";
 import { useGoogleButton } from "./google-identity";
@@ -124,7 +125,11 @@ function ownerLabel(status: ComputerStatus | null, controlling: boolean) {
   return "Watching the shared desktop";
 }
 
-export function ComputerPanel({ open, onClose, initialTab = "desktop", take }: { open: boolean; onClose: () => void; initialTab?: Tab; take?: number }) {
+export function ComputerPanel({ open, onClose, initialTab = "desktop", take, terminal: opening }: {
+  open: boolean; onClose: () => void; initialTab?: Tab; take?: number;
+  /** An assistant's terminal card opened the shell. Each opening has its own `at`; its command waits for the person to paste it, and is never run. */
+  terminal?: { at: number; command?: string };
+}) {
   const [tab, setTab] = useState<Tab>(initialTab);
   const [desktopOpened, setDesktopOpened] = useState(initialTab === "desktop");
   const [terminalOpened, setTerminalOpened] = useState(initialTab === "terminal");
@@ -173,6 +178,12 @@ export function ComputerPanel({ open, onClose, initialTab = "desktop", take }: {
     setTab("desktop"); setDesktopOpened(true);
   }, [take]);
 
+  // Open terminal on an assistant's card always lands on the Terminal tab, even when the panel was already open.
+  useEffect(() => {
+    if (!opening) return;
+    setTab("terminal"); setTerminalOpened(true);
+  }, [opening]);
+
   const terminal = status?.terminal;
   useEffect(() => {
     if (terminalOpened && terminalStep === null && terminal?.available)
@@ -220,7 +231,7 @@ export function ComputerPanel({ open, onClose, initialTab = "desktop", take }: {
       {open && terminalOpened && terminal?.available && terminalStep === "confirm"
         ? <ConfirmIdentity onConfirmed={() => setTerminalStep("shell")} />
         : open && terminalOpened && terminal?.available && terminalStep === "shell"
-          ? <TerminalView target={terminal.target} active={tab === "terminal"} onReauthenticate={confirmTerminal} />
+          ? <TerminalView target={terminal.target} active={tab === "terminal"} onReauthenticate={confirmTerminal} opening={opening} />
           : <Unavailable icon="terminal" title={!status || terminal?.available ? "Checking the terminal" : "Terminal unavailable"}
             detail={terminal?.reason || (terminal?.available ? "Checking your access to the system terminal."
               : "The system terminal is not available on this Hermes host yet.")} />}
@@ -480,7 +491,7 @@ function DesktopView({ status, onStatus, viewerId, take }: {
   </div>;
 }
 
-function TerminalView({ target, active, onReauthenticate }: { target: string; active: boolean; onReauthenticate: () => void }) {
+function TerminalView({ target, active, onReauthenticate, opening }: { target: string; active: boolean; onReauthenticate: () => void; opening?: { at: number; command?: string } }) {
   const surface = useRef<HTMLDivElement>(null);
   const terminal = useRef<Terminal | null>(null);
   const socket = useRef<WebSocket | null>(null);
@@ -517,8 +528,7 @@ function TerminalView({ target, active, onReauthenticate }: { target: string; ac
     if (signal.aborted || !surface.current) return;
     if (!ticket.sessionId) throw new Error("The terminal did not provide a shell session.");
     sessionId.current = ticket.sessionId;
-    emulator = new Emulator({ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 14,
-      cursorBlink: true, screenReaderMode: true, scrollback: 3000, theme: { background: "#151c18", foreground: "#f1efdf", cursor: "#8bd2b2", selectionBackground: "#3a5947" } });
+    emulator = new Emulator(terminalOptions);
     terminal.current = emulator;
     const fitting = new FitAddon();
     emulator.loadAddon(fitting);
@@ -530,18 +540,8 @@ function TerminalView({ target, active, onReauthenticate }: { target: string; ac
     };
     fit.current = resize;
     resize();
-    emulator.onData(data => {
-      // xterm emits an entire paste at once. Keep each wire message bounded
-      // without splitting Unicode code points or queueing disconnected input.
-      let chunk = "", bytes = 0;
-      const encoder = new TextEncoder();
-      for (const character of data) {
-        const size = encoder.encode(character).length;
-        if (bytes + size > 16384) { send({type: "input", data: chunk}); chunk = ""; bytes = 0; }
-        chunk += character; bytes += size;
-      }
-      if (chunk) send({type: "input", data: chunk});
-    });
+    // xterm emits an entire paste at once. Keep each wire message bounded without queueing disconnected input.
+    emulator.onData(data => { for (const chunk of chunkInput(data)) send({type: "input", data: chunk}); });
     client = new WebSocket(socketUrl(ticket.path));
     socket.current = client;
     client.addEventListener("open", () => {
@@ -593,6 +593,19 @@ function TerminalView({ target, active, onReauthenticate }: { target: string; ac
     finally { setEnding(false); }
   };
   const connected = connection === "connected";
+  // An assistant's suggested command waits beside the shell until the person pastes it. The persistent
+  // shell may still be running a program waiting for one key, so text arriving on its own could answer
+  // it. Pasting never runs the command: a command with a line break is never offered, and xterm uses
+  // bracketed paste when the shell asked for it. Each card opening offers it once.
+  const [offered, setOffered] = useState<{ at: number; command: string } | null>(null);
+  useEffect(() => {
+    setOffered(opening?.command && terminalCommandPattern.test(opening.command) ? { at: opening.at, command: opening.command } : null);
+  }, [opening]);
+  const pasteOffered = () => {
+    if (!connected || !offered) return;
+    terminal.current?.paste(offered.command);
+    setOffered(null); terminal.current?.focus();
+  };
 
   return <div className="computer-view">
     <div className="computer-toolbar">
@@ -613,6 +626,14 @@ function TerminalView({ target, active, onReauthenticate }: { target: string; ac
         {(connection === "ended" || connection === "failed") && <Button onClick={() => { setConfirmEnd(false); reconnect(); }}>{connection === "ended" ? "Start terminal" : "Reconnect"}</Button>}
       </div>}
     </div>
+    {offered && <div className="terminal-offer" role="group" aria-label="Assistant's command">
+      <code>{offered.command}</code>
+      <small>Check the terminal is at a prompt first. Pasting doesn't run it; you press Enter.</small>
+      <div className="actions">
+        <Button onClick={() => setOffered(null)}>Dismiss</Button>
+        <Button className="primary" disabled={!connected} onClick={pasteOffered}>Paste at prompt</Button>
+      </div>
+    </div>}
     <div className="terminal-tools">
       <Button disabled={!connected} onClick={() => terminal.current?.focus()}>Keyboard</Button>
       <Button disabled={!connected} aria-label="Send Ctrl+C" onClick={() => send({ type: "input", data: "\u0003" })}>Ctrl+C</Button>

@@ -44,6 +44,9 @@ cannot sign the app out. It never extends a session past 90 days after its Googl
 sign-in; at that limit it returns the unchanged expiry. A gone session returns 401
 with `session_expired`. Exchange credentials are never
 accepted in query parameters; session credentials never appear in callback URLs.
+Signing in counts as confirming it's you for the system terminal: the new session
+starts confirmed at the Google credential's issue time, or now for a local member.
+A Google credential without an issue time leaves the session unconfirmed.
 The hosted page and API auth responses use `Cache-Control: no-store`. The server
 disables request logging. Reverse proxies should avoid retaining the sign-in
 query or request bodies.
@@ -717,7 +720,87 @@ The iOS app shows the shared desktop in a `WKWebView` without a web session:
    state in a status line.
 
 The page accepts only a desktop ticket path. It is served with the app's content
-security policy and needs no Hermes credential. The terminal stays in the browser.
+security policy and needs no Hermes credential.
+
+### Confirming it's you
+
+The system terminal needs a confirmation from the last 2 hours, as on the web. A
+signed-in app confirms with the sign-in flow above:
+
+1. Open the `ASWebAuthenticationSession` at
+   `/native/sign-in?state=STATE&code_challenge=CHALLENGE&code_challenge_method=S256&purpose=confirm`
+   with a fresh state and PKCE verifier. `purpose=confirm` only changes the page's
+   heading to "Confirm it's you" and asks for the same household account. Any
+   other `purpose` is a 400.
+2. Take the code from the same `agentinterface://auth/callback?code=CODE&state=STATE`
+   callback, checking the state.
+3. `POST /api/auth/native/confirm` with the bearer token, no Origin header, and
+   `{ "code": "CODE", "state": "STATE", "codeVerifier": "VERIFIER" }`, validated
+   as for exchange. It spends the code and answers `{ "confirmedAt": "ISO8601" }`.
+   The session keeps the later of this and any earlier confirmation.
+
+Failures leave the session signed in. None of them uses `session_expired`:
+
+- 401 `{ "error": "That confirmation expired. Try again.", "code": "confirmation_expired" }`
+  for an unknown, used or expired code, or a wrong state or verifier.
+- 403 `{ "error": "Use the same Google account you signed in with." }` when the
+  code belongs to another household member. The code is spent.
+- 401 `{ "error": "That confirmation is too old. Try again.", "code": "confirmation_expired" }`
+  when the Google credential behind the code is more than 10 minutes old or has
+  no issue time.
+- 403 `{ "error": "Confirm your identity in the iOS app." }` for a browser session.
+
+### System terminal
+
+`GET /api/computer` reports `terminal: { "available", "target", "reason"?, "confirmationRequired"? }`.
+Only terminal administrators get `available: true`; everyone else gets the reason.
+`confirmationRequired: true` means the session has no confirmation from the last
+2 hours; confirm it first.
+
+1. `POST /api/computer/terminal` with the bearer token and `{}` returns
+   `{ "path": "/api/computer/terminal/ws?ticket=TICKET", "expiresAt": "...", "sessionId": "ID", "target": "..." }`.
+   The ticket works once, within 30 seconds, and only for the terminal socket. Without
+   a recent confirmation the answer is 401
+   `{ "error": "Confirm it's you to open the terminal.", "code": "reauthentication_required" }`;
+   confirm and try again. A non-administrator gets 403, a turned-off or unavailable
+   terminal 403 or 409 with the reason, and maintenance 409.
+2. Load `ORIGIN/native/terminal#path=ENCODED_PATH`. The page connects to the ticketed
+   WebSocket with no bearer token or cookie, as the desktop page does: a terminal
+   ticket issued to a native session is accepted on its own from the app's Origin.
+   The connection ends when that native session ends. A new `path` reconnects with
+   that ticket.
+3. `POST /api/computer/terminal/end` with the bearer token and `{ "sessionId": "ID" }`
+   ends the member's own shell and answers `{ "ok": true }`.
+
+The page reports to the `terminal` script message handler with:
+
+- `{ "type": "connected" }` once the shell is attached.
+- `{ "type": "disconnected", "reason": "closed" | "lost" }` when the connection ends
+  without the shell ending. Request a fresh ticket and set the new path.
+- `{ "type": "failed", "reason": "invalid_ticket" | "viewer_unavailable" }` for a path
+  that is not a terminal ticket or an emulator that could not load.
+- `{ "type": "ended" }` when the shell exited. Offer to start a new one.
+- `{ "type": "error", "message": "..." }` with the server's words, such as the
+  maintenance pause. The connection stays open.
+- `{ "type": "focus" }` when the person taps the terminal. Show the app's keyboard.
+
+The page never raises the web keyboard, so iOS smart quotes and autocorrect never
+reach the shell. The app types with its own keyboard through two functions, each
+returning whether it sent anything; both send nothing unless the shell is connected:
+
+- `terminalInput({ "text": "..." })` types text, with line breaks as Return.
+  `terminalInput({ "key": NAME })` presses one of `enter`, `tab`, `backspace`,
+  `escape`, `delete`, `left`, `up`, `right`, `down`, `home`, `end`, `pageUp` or
+  `pageDown`, using application cursor keys when the running program asks for them.
+  Add `"control": true` to text of one letter, `@`, `[`, `\`, `]`, `^`, `_` or a space
+  to send its control character, so `{ "text": "c", "control": true }` is Control-C.
+  Control with a key, or with longer text, sends them unchanged.
+- `terminalPaste(text)` pastes up to 8,192 characters through the terminal, bracketed
+  when the shell asked for it, so a pasted command waits for Return.
+
+The page fits the shell to the web view and sends the size on connect and on every
+size change. A finger drag scrolls as a mouse wheel does. The page sets `data-state`
+on its root element and announces the state in a status line.
 
 ### Handoff requests
 
@@ -731,6 +814,23 @@ control hands back, so the client sends nothing extra. For **Not now**, call
 `{ "decision": "decline", "epoch": "...", "sessionId": "..." }`. It answers
 `{ "status": "ok" }`, or `{ "status": "expired" }` when the request already
 closed, and 409 when the binding no longer matches the assistant's conversation.
+
+### Terminal requests
+
+An assistant's request for a person at the system terminal arrives in `attention`
+with `kind: "terminal"` and
+`terminal: { "epoch", "sessionId", "reason", "whatToDo", "command"? }`. The three
+texts are the assistant's own words, at most 200, 300 and 500 characters.
+`command` is one line with no control or hidden characters; the server drops the
+whole card to an official-client request when it is not. Open the terminal with
+the terminal routes and offer `command` for the person to paste at the prompt
+with `terminalPaste`; never paste it on its own or run it. To answer, call `POST /api/bots/:id/terminal-requests/:requestId`
+with `{ "decision": "done" | "decline", "epoch": "...", "sessionId": "..." }`. It
+answers `{ "status": "ok" }`, or `{ "status": "expired" }` when the request already
+closed. `done` answers 403 unless the person is a terminal administrator, 409
+when the binding no longer matches the conversation, and `decline` is open to
+anyone who can see the chat. Hermes tells the assistant that `done` is the
+person's word, because it cannot see the terminal.
 
 ### Connection requests
 

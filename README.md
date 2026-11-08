@@ -209,6 +209,9 @@ right-click, pinch to zoom the view, trackpad mode and clipboard copy and paste.
 An assistant can ask for a person in the conversation; the card's Take over opens the
 computer with control in one step, and handing back tells the assistant to continue.
 While a browser tool runs, the live row offers Watch.
+An assistant can also offer the system terminal in chat; its card's Open terminal offers the
+suggested command for you to paste at the prompt, never runs it, and Done tells the assistant to
+check the result.
 
 The [capability matrix](docs/HermesCapabilityMatrix.md) records the tested upstream
 revision, native integration probes, and the small revision-bound extension for

@@ -91,6 +91,7 @@
   "src/server/store.ts",
   "src/server/talk.ts",
   "src/server/terminal-host.py",
+  "src/server/terminal-requests.ts",
   "src/server/terminal.ts",
   "src/server/upgrade-routes.ts",
   "src/server/upgrades.ts",

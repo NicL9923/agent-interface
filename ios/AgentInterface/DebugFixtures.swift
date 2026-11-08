@@ -260,6 +260,21 @@
     /// Who has the shared desktop: an assistant until this person takes over.
     nonisolated(unsafe) static var computerControl: [String: Any] = ["kind": "bot", "name": "Ranch hand"]
     nonisolated(unsafe) static var desktopTickets = 0
+    /// The system terminal: this session's sign-in is confirmed once /api/auth/native/confirm ran,
+    /// and the shell has ended after /api/computer/terminal/end until the next ticket.
+    nonisolated(unsafe) static var terminalConfirmed = false
+    nonisolated(unsafe) static var terminalTickets = 0
+    nonisolated(unsafe) static var terminalEnded = 0
+    static var terminalStatus: [String: Any] {
+      if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_TERMINAL_UNAVAILABLE"] == "1" {
+        return ["available": false, "target": "", "reason": "The system terminal is limited to household administrators."]
+      }
+      var status: [String: Any] = ["available": true, "target": "wildbots@fixture-host"]
+      if !terminalConfirmed && ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_TERMINAL_CONFIRMED"] != "1" { status["confirmationRequired"] = true }
+      return status
+    }
+    /// AGENT_INTERFACE_UI_TERMINAL: an assistant's terminal request until it is settled.
+    nonisolated(unsafe) static var terminalRequestOpen = true
     /// Room settings, from Hermes versions that have them: on with AGENT_INTERFACE_UI_GROUP=1.
     nonisolated(unsafe) static var groupContext: [String: Any]? = ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_GROUP"] == "1"
       ? ["purpose": "", "notes": "", "routing": "everyone", "lead_member_id": ""] : nil
@@ -628,6 +643,16 @@
             "activity": ["state": Self.handoffOpen ? "blocked" : "idle"], "approvals": [], "files": [], "attention": attention,
             "draft": Self.draft, "readPosition": Self.readPosition]
         }
+        if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_TERMINAL"] == "1" {
+          let attention: [[String: Any]] = Self.terminalRequestOpen ? [["id": "fixture-terminal", "kind": "terminal", "title": "Use the terminal?",
+            "detail": "Tailscale needs a person to sign in.",
+            "terminal": ["epoch": "fixture-epoch", "sessionId": "fixture-session", "reason": "Tailscale needs a person to sign in.",
+              "whatToDo": "Run the command, then open the link it prints.", "command": "sudo tailscale up"]]] : []
+          object = ["botId": path.components(separatedBy: "/")[3], "sessionId": "fixture-session",
+            "messages": [["id": "terminal-fixture", "role": "assistant", "text": Self.terminalRequestOpen ? "I need you at the terminal." : "Thanks, I'll check the result."]],
+            "activity": ["state": Self.terminalRequestOpen ? "blocked" : "idle"], "approvals": [], "files": [], "attention": attention,
+            "draft": Self.draft, "readPosition": Self.readPosition]
+        }
         if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_CONNECTION"] == "1" {
           let attention: [[String: Any]] = Self.connectionOpen ? [["id": "fixture-connection", "kind": "connection", "title": "Set up a connection?",
             "detail": "I need your calendar to plan the week.",
@@ -796,11 +821,30 @@
         object = ["available": !unavailable, "running": !unavailable, "browserReady": !unavailable, "label": "Fixture host",
           "reason": unavailable ? "The fixture desktop is stopped." as Any : NSNull(),
           "control": Self.computerControl,
-          "terminal": ["available": false, "target": ""]]
+          "terminal": Self.terminalStatus]
       } else if path == "/api/computer/desktop", method == "POST" {
         Self.desktopTickets += 1
         object = ["path": "/api/computer/desktop/ws?ticket=fixture-\(Self.desktopTickets)",
           "expiresAt": ISO8601DateFormatter().string(from: Date().addingTimeInterval(30)), "viewerId": body["viewerId"] ?? "fixture-viewer-000001"]
+      } else if path == "/api/auth/native/confirm", method == "POST" {
+        Self.terminalConfirmed = true
+        object = ["confirmedAt": ISO8601DateFormatter().string(from: Date())]
+      } else if path == "/api/computer/terminal", method == "POST" {
+        if (Self.terminalStatus["confirmationRequired"] as? Bool) == true {
+          status = 401; object = ["error": "Confirm it's you to open the terminal.", "code": "reauthentication_required"]
+        } else {
+          Self.terminalTickets += 1
+          // A real ticket is 43 base64url characters; the app refuses anything else.
+          let ticket = "fixtureterminalticket" + String(repeating: "x", count: 19) + String(format: "%03d", Self.terminalTickets)
+          object = ["path": "/api/computer/terminal/ws?ticket=\(ticket)",
+            "expiresAt": ISO8601DateFormatter().string(from: Date().addingTimeInterval(30)),
+            "sessionId": "fixture-terminal-session", "target": "wildbots@fixture-host"]
+        }
+      } else if path == "/api/computer/terminal/end", method == "POST" {
+        if body["sessionId"] as? String == "fixture-terminal-session" { Self.terminalEnded += 1; object = ["ok": true] }
+        else { status = 403; object = ["error": "This terminal belongs to another household member."] }
+      } else if path.contains("/terminal-requests/"), method == "POST" {
+        object = ["status": Self.terminalRequestOpen ? "ok" : "expired"]; Self.terminalRequestOpen = false
       } else if path.contains("/computer-handoffs/"), method == "POST" {
         object = ["status": Self.handoffOpen ? "ok" : "expired"]; Self.handoffOpen = false
       } else if path.contains("/connection-requests/"), method == "POST" {
@@ -810,7 +854,7 @@
         if body["action"] as? String == "release" { Self.handoffOpen = false }
         Self.computerControl = body["action"] as? String == "take" ? ["kind": "human", "name": "Local test member", "mine": true] : ["kind": "idle"]
         object = ["available": true, "running": true, "browserReady": true, "label": "Fixture host", "reason": NSNull(),
-          "control": Self.computerControl, "terminal": ["available": false, "target": ""]]
+          "control": Self.computerControl, "terminal": Self.terminalStatus]
       } else if path.hasPrefix("/api/hermes/upgrade") {
         if path.hasSuffix("/control") {
           Self.upgradePhase = "recovering"

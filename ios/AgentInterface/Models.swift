@@ -359,6 +359,7 @@ struct Attention: Codable, Identifiable, Equatable {
   var secure: SecureRequest? = nil
   var computer: ComputerHandoff? = nil
   var connection: ConnectionRequest? = nil
+  var terminal: TerminalRequest? = nil
 }
 /// What this device reports about the chat on screen: reading it, or gone after reading it.
 struct ChatPresenceReport: Codable, Equatable {
@@ -771,6 +772,27 @@ struct ComputerStatus: Decodable, Equatable {
   var running: Bool? = nil
   var reason: String?
   var control: Control
+  /// Absent from older servers. The system terminal, for terminal administrators.
+  var terminal: Terminal? = nil
+  struct Terminal: Decodable, Equatable {
+    var available: Bool
+    /// Blank when this person may not use the shell.
+    var target: String = ""
+    var reason: String? = nil
+    /// The server wants a sign-in confirmed in the last 2 hours before it opens a shell.
+    var confirmationRequired: Bool? = nil
+    init(from decoder: Decoder) throws {
+      let values = try decoder.container(keyedBy: CodingKeys.self)
+      available = try values.decode(Bool.self, forKey: .available)
+      target = try values.decodeIfPresent(String.self, forKey: .target) ?? ""
+      reason = try values.decodeIfPresent(String.self, forKey: .reason)
+      confirmationRequired = try values.decodeIfPresent(Bool.self, forKey: .confirmationRequired)
+    }
+    init(available: Bool, target: String = "", reason: String? = nil, confirmationRequired: Bool? = nil) {
+      self.available = available; self.target = target; self.reason = reason; self.confirmationRequired = confirmationRequired
+    }
+    private enum CodingKeys: String, CodingKey { case available, target, reason, confirmationRequired }
+  }
   /// What the Settings row says under "Computer", worded like the web panel.
   var detail: String {
     guard available else { return reason?.isEmpty == false ? reason! : "Desktop unavailable" }

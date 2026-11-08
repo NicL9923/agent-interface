@@ -175,7 +175,7 @@ import XCTest
     let control = app.buttons["computerControl"]
     XCTAssertTrue(control.wait(until: "enabled == true", timeout: 15), "The fixture viewer connects: \(app.debugDescription)")
     XCTAssertEqual(control.label, "Take over")
-    XCTAssertTrue(app.links["computerTerminal"].exists || app.buttons["computerTerminal"].exists, "The terminal stays a Safari link")
+    XCTAssertTrue(app.buttons["computerTerminal"].exists, "The terminal opens in the app")
     try capture("07-computer-watching")
     control.tap()
     XCTAssertTrue(control.wait(until: "label == %@", "Hand back"), control.label)
@@ -232,6 +232,67 @@ import XCTest
     control.tapWhenReady()
     XCTAssertTrue(control.wait(until: "label == %@", "Take over"), control.label)
     XCTAssertFalse(app.buttons["computerKeyboard"].exists, "Watching offers no keyboard")
+  }
+
+  func testTerminalConfirmsThenTypesIntoAShellAndEndsIt() throws {
+    let app = launch(home: true)
+    app.buttons["openSettings"].tapWhenReady(timeout: 15)
+    app.descendants(matching: .any)["sharedComputer"].tapWhenReady()
+    app.buttons["computerTerminal"].tapWhenReady()
+    // The sign-in is older than the terminal's 2-hour window, so confirming comes first.
+    let confirm = app.buttons["terminalConfirm"]
+    XCTAssertTrue(confirm.waitForExistence(timeout: 15), app.debugDescription)
+    XCTAssertTrue(app.staticTexts["Confirm it's you"].exists)
+    XCTAssertFalse(app.descendants(matching: .any)["terminalScreen"].exists, "No shell before the confirmation")
+    try capture("10-terminal-confirm")
+    confirm.tapWhenReady()
+    let status = app.descendants(matching: .any)["terminalStatus"]
+    XCTAssertTrue(status.waitForExistence(timeout: 15), app.debugDescription)
+    XCTAssertTrue(status.wait(until: "label CONTAINS %@", "Your system terminal"), status.label)
+    XCTAssertTrue(status.label.contains("wildbots@fixture-host"), status.label)
+    XCTAssertTrue(app.staticTexts["Fixture terminal"].waitForExistence(timeout: 10), app.debugDescription)
+    try capture("11-terminal-shell")
+    // Tapping the terminal raises the native keyboard, which types straight into the shell.
+    app.descendants(matching: .any)["terminalScreen"].tapWhenReady()
+    let input = app.textViews.matching(NSPredicate(format: "hasKeyboardFocus == true")).firstMatch
+    XCTAssertTrue(input.waitForExistence(timeout: 10), "The terminal keyboard takes focus: \(app.debugDescription)")
+    input.typeWhenFocused("ls")
+    let control = app.buttons["desktopKey.control"]
+    control.waitForKeyboardLayout()
+    control.tapWhenReady()
+    input.typeWhenFocused("c")
+    XCTAssertTrue(app.staticTexts["Typed: ls[ctrl+c]"].waitForExistence(timeout: 10), "Ctrl+C reaches the shell as Control plus c: \(app.debugDescription)")
+    try capture("12-terminal-typing")
+    // End shell asks first; tapping away from the question changes nothing.
+    app.buttons["terminalKeyboard"].tapWhenReady()
+    app.buttons["terminalEnd"].tapWhenReady()
+    // The question's own End shell button, not the toolbar's.
+    let sure = app.popovers.buttons["End shell"]
+    XCTAssertTrue(sure.waitForExistence(timeout: 5), app.debugDescription)
+    app.otherElements["PopoverDismissRegion"].tap()
+    XCTAssertTrue(sure.waitForDisappearance(), "Dismissing the question leaves the shell running")
+    XCTAssertTrue(status.label.contains("Your system terminal"), status.label)
+    app.buttons["terminalEnd"].tapWhenReady()
+    sure.tapWhenReady()
+    let start = app.buttons["terminalStart"]
+    XCTAssertTrue(start.waitForExistence(timeout: 10), "An ended shell offers a new one: \(app.debugDescription)")
+    XCTAssertTrue(app.staticTexts["Your shell has ended"].exists)
+    try capture("13-terminal-ended")
+    start.tapWhenReady()
+    XCTAssertTrue(status.wait(until: "label CONTAINS %@", "Your system terminal"), status.label)
+    XCTAssertTrue(app.staticTexts["Fixture terminal"].waitForExistence(timeout: 10), "A new shell connects")
+  }
+
+  func testTerminalSaysWhyAnotherMemberCannotOpenIt() throws {
+    let app = launch(["TERMINAL_UNAVAILABLE"], home: true)
+    app.buttons["openSettings"].tapWhenReady(timeout: 15)
+    app.descendants(matching: .any)["sharedComputer"].tapWhenReady()
+    app.buttons["computerTerminal"].tapWhenReady()
+    let refused = app.descendants(matching: .any)["terminalUnavailable"]
+    XCTAssertTrue(refused.waitForExistence(timeout: 15), app.debugDescription)
+    XCTAssertTrue(refused.label.contains("limited to household administrators"), refused.label)
+    XCTAssertFalse(app.buttons["terminalConfirm"].exists); XCTAssertFalse(app.descendants(matching: .any)["terminalScreen"].exists)
+    try capture("14-terminal-unavailable")
   }
 
   func testCommandKOpensTheQuickSwitcherAndGoesWhereChosen() throws {
