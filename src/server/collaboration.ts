@@ -15,7 +15,7 @@ export const RUNS_CACHE_MS = 5_000;
 import { GroupLatestCache, previewOf } from './group-latest.js';
 import type { CatalogRead } from './group-catalog-watch.js';
 import type { DeliveryRooms } from './delivery-targets.js';
-import { chatAllowed, mentionsRoom, presentations, redactRooms, roomLeaks, type Presentation } from './routine-delivery.js';
+import { mentionsRoom, presentations, redactRooms, roomLeaks, type Presentation } from './routine-delivery.js';
 const uuid = z.string().uuid();
 
 /** Whether a room has only local assistants this person may see, as every group route requires. */
@@ -79,8 +79,8 @@ export async function routinesFor<T extends Routine>(runtime: Pick<Runtime, 'gro
 export async function assertDeliveryPrivate(runtime: Pick<Runtime, 'groupRequest' | 'listBots'>, store: Store, botId: string, targets: DeliveryRooms | undefined) {
   const unknown = () => httpError(409, "WildBots couldn't read or check the group chats this routine posts in, so it stays as it was. Review its delivery in Hermes, or try again in a moment.", { code: 'routine_rooms_unknown' });
   // A routine or setting the app cannot read is refused, never waved through.
+  assertMainOwnChat(store, botId, targets);
   if (!targets || targets.unknown) throw unknown();
-  await assertChatsPrivate(runtime, store, botId, targets);
   const roomIds = targets.rooms;
   if (!roomIds.length) return;
   if (!runtime.groupRequest) throw unknown();
@@ -94,22 +94,21 @@ export async function assertDeliveryPrivate(runtime: Pick<Runtime, 'groupRequest
     throw httpError(409, "This routine posts in a group chat that people who can't see its assistant could open, so it can't run. Pause it, or have someone who can open that group chat remove it from the routine.", { code: 'routine_rooms' });
 }
 
+/** Whether a routine's deliveries, as Hermes would make them, reach only its own assistant's chat, or nowhere. */
+export function ownChatOnly(botId: string, targets: DeliveryRooms | undefined) {
+  return !!targets && !targets.unknown && !targets.outward && !targets.rooms.length && (targets.chats ?? []).every(chat => chat === botId);
+}
+
 /**
- * Every other assistant's chat a routine delivers into must be one everyone who can see this routine's
- * assistant can see: its owner's own personal assistants for a personal assistant, the household's for
- * a shared one. A main assistant's routines post nowhere outside WildBots either. Any target that is not
- * a current assistant is refused.
+ * A main assistant's routines deliver only to its own chat: never another assistant's chat, a group chat
+ * or anywhere outside WildBots, through every route that saves, resumes or runs one. What it reads, such
+ * as its member's calendar and email, then reaches nobody else. Other assistants' routine deliveries are as
+ * Hermes has them, a known limit taken up separately (docs/HouseholdExperience.md#privacy-limits).
  */
-export async function assertChatsPrivate(runtime: Pick<Runtime, 'listBots'>, store: Store, botId: string, targets: DeliveryRooms) {
-  const refuse = (detail: string) => httpError(409, `This routine delivers ${detail}, so it can't run. Pause it, or change where it delivers in Hermes.`, { code: 'routine_chats' });
-  const others = (targets.chats ?? []).filter(chat => chat !== botId);
-  const main = store.users().some(user => store.preferences(user.id).mainBotId === botId);
-  if (main && targets.outward) throw refuse("outside WildBots from a main assistant");
-  if (!others.length) return;
-  const presentation = await presentations(runtime, store);
-  const self = presentation(botId);
-  for (const chat of others)
-    if (!chatAllowed(self, presentation(chat))) throw refuse("into another assistant's chat that not everyone who sees this one can read");
+export const isMainAssistant = (store: Store, botId: string) => store.users().some(user => store.preferences(user.id).mainBotId === botId);
+export function assertMainOwnChat(store: Store, botId: string, targets: DeliveryRooms | undefined) {
+  if (!isMainAssistant(store, botId)) return;
+  if (!ownChatOnly(botId, targets)) throw httpError(409, "A main assistant's routines post only in its own chat. Change where this routine delivers.", { code: 'routine_chats' });
 }
 
 /** Routine run errors as one person sees them, by the same rules as `routinesFor`. */

@@ -11,6 +11,8 @@ import { allowedIdentity, type Config } from "./config.js";
 import { httpError } from "./http-error.js";
 import { quietLog, type Log } from "./logging.js";
 import { serialDelivery } from "./routine-delivery.js";
+import { ownChatOnly } from "./collaboration.js";
+import { routineTargets } from "./delivery-targets.js";
 import { id, timezone } from "./schemas.js";
 import type { Store } from "./store.js";
 export { scheduleMinutes };
@@ -409,10 +411,27 @@ export function installMainAssistantRoutes(app: FastifyInstance, collaborators: 
     if (reason) throw httpError(409, `${shown.name} can't be your main assistant. ${reason}`, { code: "main_not_personal" });
     return shown;
   };
+  /**
+   * A main assistant's routines post only in its own chat. An assistant with a routine already posting
+   * anywhere else, from before it was made main or outside WildBots, waits until that routine changes.
+   */
+  const assertRoutinesOwnChat = async (bot: Bot) => {
+    if (!(await runtime.capabilities()).routines.supported) return;
+    let routines: Routine[];
+    try { routines = (await runtime.routines()).filter(routine => routine.botId === bot.id); }
+    catch { throw httpError(409, `WildBots couldn't check where ${bot.name}'s routines post, so it isn't your main assistant yet. Try again.`, { code: "main_routine_delivery" }); }
+    const elsewhere = routines.filter(routine => !ownChatOnly(bot.id, routineTargets(routine)));
+    if (elsewhere.length)
+      throw httpError(409, `${bot.name} can't be your main assistant while these routines post outside its own chat: ${elsewhere.map(routine => `"${routine.name}"`).join(", ")}. Change where they deliver first.`,
+        { code: "main_routine_delivery" });
+  };
   // Clearing is an explicit null, never a missing field, so no client can clear it by not knowing it.
   apiRoute(app, "PUT /preferences/main", { body: z.object({ botId: id.nullable() }).strict() }, async (req, { botId }) => {
     const userId = signedIn(req).id;
-    if (botId !== null) await eligibleBot(userId, botId);
+    if (botId !== null) {
+      const bot = await eligibleBot(userId, botId);
+      if (store.preferences(userId).mainBotId !== botId) await assertRoutinesOwnChat(bot);
+    }
     const value = store.preferences(userId);
     // A new main assistant starts without check-ins; the member turns them on for it.
     const changed = value.mainBotId !== (botId ?? undefined);

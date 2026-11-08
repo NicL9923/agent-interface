@@ -224,35 +224,6 @@ class BotDeliveryTests(unittest.TestCase):
         self.assertFalse(consumer.deliver_once("penny", self.home))
         self.assertEqual(len(server.turns), 1)
 
-    def test_a_delivery_records_where_it_was_sent_from_and_one_its_sender_may_not_post_is_held(self):
-        self.box = mailbox()
-        store = Store()
-        delivery.install_producer(self.box, store)
-        constants = types.ModuleType("hermes_constants")
-        constants.get_hermes_home = lambda: self.home.parent / "mom-main"
-        saved = sys.modules.get("hermes_constants")
-        sys.modules["hermes_constants"] = constants
-        try:
-            self.box.deliver_to_live_owner(self.home, self.box.find_canonical_live_owner(self.home), "[Cronjob] private", delivery_id=KEY)
-        finally:
-            if saved is None:
-                sys.modules.pop("hermes_constants", None)
-            else:
-                sys.modules["hermes_constants"] = saved
-        self.assertEqual(self.record()["source_home"], str((self.home.parent / "mom-main").resolve()))
-        checked = []
-        def permits(record, profile):
-            checked.append((record["source_home"], profile))
-            return False, "Held: mom-main can't post here."
-        server = Server({"session_key": "stored", "agent": object()})
-        consumer = delivery.Consumer(server, self.box, lambda: [("penny", self.home)], lambda profile: "sid", lambda sid: contextlib.nullcontext(True),
-                                     open_db=store, permits=permits)
-        self.assertFalse(consumer.deliver_once("penny", self.home))
-        self.assertEqual(server.turns, [])
-        self.assertEqual(checked, [(str((self.home.parent / "mom-main").resolve()), "penny")])
-        self.assertEqual((self.record()["status"], self.record()["reason"], self.record()["error"]), ("failed", "not_allowed", "Held: mom-main can't post here."))
-        self.assertFalse(server._sessions["sid"].get("running"))
-
     def test_consumer_waits_for_idle_chat_and_admission(self):
         self.box = mailbox()
         delivery.install_producer(self.box, Store())

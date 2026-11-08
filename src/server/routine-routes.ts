@@ -6,7 +6,7 @@ import type { CapabilityKey, Runtime } from "../shared/types.js";
 import { apiRoute } from "./api-route.js";
 import { signedIn } from "./auth.js";
 import { routineById, visibleTo, type Roster } from "./bot-access.js";
-import { assertDeliveryPrivate, routineRooms, routinesFor } from "./collaboration.js";
+import { assertDeliveryPrivate, assertMainOwnChat, routineRooms, routinesFor } from "./collaboration.js";
 import { allowedIdentity, type Config } from "./config.js";
 import { routineTargetsAfter } from "./delivery-targets.js";
 import { assertRoutineEditable } from "./experience.js";
@@ -110,6 +110,8 @@ export function installRoutineRoutes(app: FastifyInstance, collaborators: {
         const rooms = await routineRooms(runtime, store, userId, input, current?.roomIds);
         if (rooms === undefined) delete input.roomIds; else input.roomIds = rooms;
       }
+      // A main assistant's routine posts only in its own chat, paused or not, so it never waits to leak on a resume.
+      assertMainOwnChat(store, input.botId, routineTargetsAfter(current, input.botId, input.roomIds));
       // An enabled routine delivers, so every room it will post in is checked, including any its owner
       // cannot see and any written outside the app, even when this save changes none of them.
       if (input.enabled) {

@@ -554,14 +554,8 @@ describe("review round two", () => {
     const routine = (botId: string, deliver: string): Routine => ({ id: `r-${botId}`, botId, name: "R", prompt: "Report", schedule: "0 7 * * *", enabled: false,
       delivery: { deliver }, nativeOverrides: [] });
     const resume = (id: string) => created.app.inject({ method: "PATCH", url: `/api/routines/${id}/state`, headers: mom, payload: { enabled: true } });
-    it("refuses one that would post into a chat not everyone who sees its assistant can read", async () => {
+    it("leaves other assistants' routine deliveries as Hermes has them, a known limit taken up separately", async () => {
       jobs.push(routine("mom-notes", "bot-chat:dad-diary"), routine("ranch", "bot-chat:mom-notes"));
-      expect((await resume("r-mom-notes")).json().code).toBe("routine_chats");
-      expect((await resume("r-ranch")).json().code).toBe("routine_chats");
-      expect(calls.filter(call => call.startsWith("pause:"))).toEqual([]);
-    });
-    it("lets a personal assistant post to its owner's other personal assistants, and a shared one to the household's", async () => {
-      jobs.push(routine("mom-notes", "bot-chat:mom-main"), routine("ranch", "bot-chat:legacy"));
       expect((await resume("r-mom-notes")).statusCode).toBe(200);
       expect((await resume("r-ranch")).statusCode).toBe(200);
     });
@@ -621,31 +615,6 @@ describe("review round three", () => {
     const resume = await created.app.inject({ method: "PATCH", url: "/api/routines/r-mom-main/state", headers: mom, payload: { enabled: true } });
     expect(resume.json().code).toBe("routine_chats");
   });
-  it("refuses sharing an assistant that an enabled personal routine posts into, naming the routine", async () => {
-    jobs.push(routine("mom-main", "bot-chat:mom-notes"));
-    const share = await patch("mom-notes", { shared: true });
-    expect(share.json()).toMatchObject({ code: "routine_chats", error: expect.stringContaining('"mom-main report"') });
-    expect(created.store.presentation("mom-notes")).toMatchObject({ shared: false, ownerId: "mom" });
-    expect(calls).not.toContain("saveBot:mom-notes");
-  });
-  it("refuses sharing an assistant whose enabled routine posts into its owner's personal chats", async () => {
-    jobs.push(routine("mom-notes", "bot-chat:mom-main"));
-    expect((await patch("mom-notes", { shared: true })).json().code).toBe("routine_chats");
-  });
-  it("refuses making an assistant personal while a household routine posts into it", async () => {
-    jobs.push(routine("ranch", "bot-chat:legacy"));
-    expect((await patch("legacy", { shared: false, confirmPrivate: true })).json().code).toBe("routine_chats");
-  });
-  it("refuses it while such a routine is paused but still running, or paused at all", async () => {
-    // Pausing stops future runs, not the one in progress or a delivery it already queued.
-    jobs.push({ ...routine("mom-main", "bot-chat:mom-notes", false), running: true });
-    expect((await patch("mom-notes", { shared: true })).json().code).toBe("routine_chats");
-    jobs = jobs.map(job => ({ ...job, running: false }));
-    expect((await patch("mom-notes", { shared: true })).json().code).toBe("routine_chats");
-    // Once it no longer posts there, the change goes ahead.
-    jobs = jobs.map(job => ({ ...job, delivery: { deliver: "bot-chat:mom-main" } }));
-    expect((await patch("mom-notes", { shared: true })).statusCode).toBe(200);
-  });
   it("keeps a healthy check-in through its runs, failures, retries and quota holds, reading its native fields as Hermes left them", async () => {
     await main("mom-main");
     await checkIns();
@@ -659,5 +628,60 @@ describe("review round three", () => {
       expect(momJobs().map(row => row.id)).toEqual([job.id]);
       expect(calls.filter(call => /^(stop|delete|create)/.test(call))).toEqual([]);
     }
+  });
+});
+
+describe("a main assistant's routines post only in its own chat", () => {
+  const routine = (id: string, deliver: string, enabled = false): Routine => ({ id, botId: "mom-main", name: `Routine ${id}`, prompt: "Report",
+    schedule: "0 7 * * *", enabled, delivery: { deliver }, nativeOverrides: [] });
+  const elsewhere = ["bot-chat:mom-notes", "bot-chat:ranch", "room:team", "telegram:-100123", "origin", "bot-chat:mom-main,room:team", "all"];
+  it("isn't made main while one of its routines posts anywhere else, paused or not, and says which", async () => {
+    for (const deliver of elsewhere) {
+      jobs = [routine("r1", "bot-chat:mom-main"), routine("r2", deliver)];
+      const response = await main("mom-main");
+      expect(response.json(), deliver).toMatchObject({ code: "main_routine_delivery", error: expect.stringContaining('"Routine r2"') });
+      expect(prefs().mainBotId).toBeUndefined();
+    }
+    // Its own chat, or saving without delivering, is fine.
+    jobs = [routine("r1", "bot-chat:mom-main"), routine("r2", "bot-chat"), routine("r3", "local")];
+    expect((await main("mom-main")).json().mainBotId).toBe("mom-main");
+  });
+  it("isn't made main while WildBots can't read its routines", async () => {
+    fail.routines = true;
+    expect((await main("mom-main")).json().code).toBe("main_routine_delivery");
+  });
+  describe("once it is main", () => {
+    beforeEach(async () => { await main("mom-main"); });
+    // As if made outside WildBots after it became main.
+    const add = (deliver: string) => { jobs.push(routine("outside", deliver)); };
+    it("refuses saving one that posts elsewhere, even paused", async () => {
+      for (const deliver of elsewhere) {
+        jobs = jobs.filter(job => job.id !== "outside"); add(deliver);
+        const save = await created.app.inject({ method: "PUT", url: "/api/routines/outside", headers: mom,
+          payload: { botId: "mom-main", name: "Renamed", prompt: "Report", schedule: "0 7 * * *", enabled: false, recipientIds: ["mom"] } });
+        expect(save.json().code, deliver).toBe("routine_chats");
+      }
+      expect(calls.filter(call => call.startsWith("update:outside"))).toEqual([]);
+      // A new routine of its own posts in its own chat.
+      const created_ = await created.app.inject({ method: "POST", url: "/api/routines", headers: mom,
+        payload: { botId: "mom-main", name: "Mine", prompt: "Report", schedule: "0 7 * * *", enabled: true, recipientIds: ["mom"] } });
+      expect(created_.statusCode).toBe(200);
+    });
+    it("refuses resuming one that posts elsewhere", async () => {
+      add("bot-chat:mom-notes");
+      expect((await created.app.inject({ method: "PATCH", url: "/api/routines/outside/state", headers: mom, payload: { enabled: true } })).json().code).toBe("routine_chats");
+      expect(calls.filter(call => call.startsWith("pause:"))).toEqual([]);
+    });
+    it("refuses a trial run of one that posts elsewhere", async () => {
+      add("room:team");
+      const run = await created.app.inject({ method: "POST", url: "/api/routines/outside/run", headers: mom, payload: { requestId: "3f1c2a4e-8b7d-4c6e-9a5f-1d2e3c4b5a69" } });
+      expect(run.json().code).toBe("routine_chats");
+    });
+    it("refuses an event trigger for one that posts elsewhere, even without group chats", async () => {
+      add("telegram:-100123");
+      const trigger = await created.app.inject({ method: "POST", url: "/api/bots/mom-main/automation/triggers", headers: mom,
+        payload: { id: "fence", description: "Fence", events: ["issue.created"], routineId: "outside" } });
+      expect(trigger.json().code).toBe("routine_chats");
+    });
   });
 });

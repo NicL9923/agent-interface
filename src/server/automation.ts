@@ -7,7 +7,7 @@ import { notFound, visibleBots } from './bot-access.js';
 import { httpError } from './http-error.js';
 import { apiRoute } from './api-route.js';
 import type { Store } from './store.js';
-import { assertDeliveryPrivate } from './collaboration.js';
+import { assertDeliveryPrivate, assertMainOwnChat, isMainAssistant } from './collaboration.js';
 import { routineTargets } from './delivery-targets.js';
 import { serialDelivery } from './routine-delivery.js';
 
@@ -45,7 +45,16 @@ export async function installAutomationRoutes(app: FastifyInstance, runtime: Run
   apiRoute(app, "PUT /bots/:id/automation/tasks/:taskId/dependencies/:dependencyId", { body: z.object({ remove: z.boolean() }).strict() }, async (req, body) => request(req, { operation: 'task_dependency', ...z.object({ taskId: id, dependencyId: id }).parse(req.params), ...body }));
   // An event trigger runs its routine, which then delivers, so the routine's rooms are checked as Hermes has
   // them, in turn with sharing changes and routine saves. Turning a trigger off always goes ahead.
-  const delivering = async <T>(req: FastifyRequest, routineId: string, work: () => Promise<T>) => !runtime.groupRequest ? work() : serialDelivery(store, async () => {
+  const delivering = async <T>(req: FastifyRequest, routineId: string, work: () => Promise<T>) => {
+    // A main assistant's routine posts only in its own chat, whether or not this Hermes has group chats.
+    const owner = z.object({ id }).parse(req.params).id;
+    if (isMainAssistant(store, owner)) {
+      const routine = (await runtime.routines()).find(row => row.id === routineId && row.botId === owner);
+      assertMainOwnChat(store, owner, routine && routineTargets(routine));
+    }
+    return checkRooms(req, routineId, work);
+  };
+  const checkRooms = async <T>(req: FastifyRequest, routineId: string, work: () => Promise<T>) => !runtime.groupRequest ? work() : serialDelivery(store, async () => {
     // The trigger runs the routine in its own assistant's profile, so that assistant's copy is the one checked.
     const profile = z.object({ id }).parse(req.params).id;
     const routine = (await runtime.routines()).find(row => row.id === routineId && row.botId === profile);

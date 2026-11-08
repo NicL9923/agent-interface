@@ -518,8 +518,7 @@ class Bridge:
             return home.parent.parent if home.parent.name == "profiles" else home
         self.delegation = sibling_module("delegation").Delegation(
             journal.db, journal.lock, self.profile_for_agent,
-            current_profile=lambda: self.profile_name_for_home(self.get_hermes_home()) or "default", hermes_root=hermes_root,
-            profile_of_home=lambda home: self.profile_name_for_home(home) or "default")
+            current_profile=lambda: self.profile_name_for_home(self.get_hermes_home()) or "default", hermes_root=hermes_root)
 
     def profile_for_agent(self, agent):
         """The profile a tool-calling agent belongs to, from its own session store, as message_agent finds it."""
@@ -1502,7 +1501,7 @@ class Bridge:
         from tools.bot_failure_reasons import classify_agent_error
         self.journal.bot_delivery = bot_delivery.Consumer(self.server, mailbox, bot_delivery.profile_homes(self.get_hermes_home()),
                                                           self.open_canonical, self.delivery_admission, classify=classify_agent_error,
-                                                          native_records=native_records, permits=self.delegation.delivery_permit)
+                                                          native_records=native_records)
         self.journal.bot_delivery.start()
 
     def install_automation(self):

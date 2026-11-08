@@ -40,10 +40,14 @@ WildBots. It does not stop someone deliberately probing the server.
   stops a main assistant from running the Hermes command line or writing into
   another profile through those tools, but that is a guard against mistakes,
   not a boundary.
-- The add-on checks routine deliveries as they run only for the Bot Chats it
-  runs, which are the chats WildBots has opened. A result queued by a routine
-  that has since been deleted, for a chat WildBots never opened or for a group
-  chat, is posted as Hermes queued it.
+- Routines of assistants other than a main one can deliver into another
+  assistant's Bot Chat, as Hermes allows today. A personal assistant's routine
+  can post into a shared assistant's chat, a shared assistant's into a personal
+  one's, or into another member's, and a result already queued keeps its
+  destination after either assistant's sharing changes. WildBots checks only
+  group-chat destinations against sharing. Closing this for every assistant,
+  with a migration for results already queued, is follow-up work on the branch
+  `t3/routine-delivery-privacy`.
 
 <!-- Main assistant: begin -->
 ## Main assistant
@@ -113,24 +117,16 @@ change is refused. Rosters go to Hermes one at a time, each built from who sees
 what when it is sent. An assistant the server has not described yet reaches
 nobody.
 
-Routines an assistant changes with Hermes's own cron tool are found the way
-Hermes finds them, by ID or name (a name two routines share is refused), and
-checked as they will be: an update as the saved routine with the change over it,
-a resume or a run as the saved routine alone. They must deliver within its
-roster: never into a group room from a personal assistant, and never to "where
-it was made" (`origin`), which must be named instead. A main assistant can only
-list, pause, remove and stop its routines, and create ones that post only in its
-own chat; changing, resuming or running one happens in WildBots. The app's own
-routine saves, resumes and trial runs refuse a routine that posts into a chat
-not everyone who sees its assistant can read, or, for a main assistant, anywhere
-outside WildBots, which includes "where it was made" without a recorded origin,
-since Hermes then posts to a platform's home channel. Changing who sees an
-assistant is refused, naming the routines, while any routine, paused or not,
-posts into its chat, or from it into another's, that the change would let the
-wrong people read: pausing stops future runs, not one in progress or a result
-already queued. The Hermes add-on also checks every Bot Chat delivery it runs at
-the moment it runs, against sharing as it is then, and holds one that would now
-reach the wrong people, recording why instead of posting it.
+A main assistant's routines post only in its own chat. Its own use of Hermes's
+cron tool may list, pause, remove and stop routines, and create ones that name
+its own chat as their only destination, with no script, monitor, working
+directory or context source; changing, resuming or running one happens in
+WildBots. WildBots's own routine saves (paused or not), resumes, trial runs and
+event triggers refuse a main assistant's routine that posts anywhere else:
+another assistant's chat, including the member's other personal ones, a group
+chat, a messaging platform, or "where it was made" (`origin`). An assistant
+can't be made main while any of its routines posts elsewhere; the refusal names
+them.
 
 On each turn the main assistant also reads that roster as guidance and can hand
 specialist work to it with Hermes's agent-message tool. A message to a shared assistant first asks

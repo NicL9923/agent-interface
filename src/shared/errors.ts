@@ -32,6 +32,7 @@ export type ErrorCode =
   | "check_in_removal_pending"
   | "roster_update_failed"
   | "routine_chats"
+  | "main_routine_delivery"
   // --- End main assistant ---
   // A Hermes transport failure carries its connection diagnosis.
   | NonNullable<RuntimeStatus["code"]>

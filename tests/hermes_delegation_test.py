@@ -271,39 +271,13 @@ class DeliveryAndHostTest(unittest.TestCase):
                      {"action": "resume", "job_id": "j", "deliver": "local"}):
             self.assertTrue(self.refused("cronjob_manage", args), args)
 
-    def test_other_assistants_routines_are_checked_as_they_will_be(self):
-        stored = {"own": {"id": "own", "deliver": "bot-chat:mom-notes"}, "leaky": {"id": "leaky", "deliver": "bot-chat:dad-diary"},
-                  "fails": {"id": "fails", "deliver": "bot-chat", "failure_deliver": "room:public"}}
-        self.gate.read_job = stored.get
-        self.assertFalse(self.refused("cronjob_manage", {"action": "create", "deliver": "bot-chat:ranch"}, "mom-notes"))
-        for args in ({"action": "update", "job_id": "own", "prompt": "x"}, {"action": "resume", "job_id": "own"}, {"action": "run", "job_id": "own"},
-                     {"action": "run_now", "job_id": "own"}, {"action": "trigger", "job_id": "own"},
-                     {"action": "update", "job_id": "leaky", "deliver": "bot-chat"}):
-            self.assertFalse(self.refused("cronjob_manage", args, "mom-notes"), args)
-        for args in ({"action": "update", "job_id": "leaky", "prompt": "x"}, {"action": "run", "job_id": "leaky"}, {"action": "resume", "job_id": "fails"},
-                     # Hermes ignores delivery arguments on a resume or a run, so they can't stand in for the saved one.
-                     {"action": "resume", "job_id": "leaky", "deliver": "bot-chat"}, {"action": "run", "job_id": "leaky", "deliver": "bot-chat"},
-                     {"action": "run_now", "job_id": "leaky"}, {"action": "trigger", "job_id": "leaky", "deliver": "local"}, {"action": "explode", "job_id": "own"},
-                     {"action": "run", "job_id": "missing"}, {"action": "create"}, {"action": "create", "deliver": "origin"},
-                     {"action": "create", "deliver": "bot-chat:dad-diary"}, {"action": "create", "deliver": "room:public"}):
-            self.assertTrue(self.refused("cronjob_manage", args, "mom-notes"), args)
-        # The household's own assistant may post in rooms, never into a member's private chat.
-        self.assertFalse(self.refused("cronjob_manage", {"action": "create", "deliver": "room:public"}, "ranch"))
-        self.assertTrue(self.refused("cronjob_manage", {"action": "create", "deliver": "bot-chat:mom-notes"}, "ranch"))
-        # A profile WildBots has not described yet reaches nobody.
-        self.assertTrue(self.refused("cronjob_manage", {"action": "create", "deliver": "bot-chat:ranch"}, "brand-new"))
-        # A reference is found as Hermes finds it, and Hermes is handed the ID that was checked.
-        self.gate.read_job = lambda ref: {"id": "own", "deliver": "bot-chat:mom-notes"} if ref == "Morning Brief" else None
-        self.assertFalse(self.refused("cronjob_manage", {"action": "run", "job_id": "Morning Brief"}, "mom-notes"))
-        self.assertEqual(self.ran[-1][1]["job_id"], "own")
-        def ambiguous(ref):
-            raise delegation.AmbiguousRoutine(ref)
-        self.gate.read_job = ambiguous
-        self.assertIn("More than one routine", json.loads(self.call("cronjob_manage", {"action": "resume", "job_id": "Brief"}, "mom-notes"))["error"])
-        def unreadable(job_id):
-            raise OSError("jobs.json unreadable")
-        self.gate.read_job = unreadable
-        self.assertTrue(self.refused("cronjob_manage", {"action": "run", "job_id": "own"}, "mom-notes"))
+    def test_other_assistants_routines_are_left_as_hermes_has_them(self):
+        # Cross-profile routine delivery by any assistant is a known limit taken up separately
+        # (branch t3/routine-delivery-privacy); this add-on narrows only main assistants.
+        for profile in ("mom-notes", "ranch", "brand-new"):
+            for args in ({"action": "create", "deliver": "bot-chat:dad-diary"}, {"action": "update", "job_id": "j", "deliver": "room:public"},
+                         {"action": "run", "job_id": "j"}, {"action": "create", "deliver": "origin"}):
+                self.assertFalse(self.refused("cronjob_manage", args, profile), (profile, args))
 
     def test_a_main_assistant_cannot_drive_hermes_or_other_profiles_from_the_host(self):
         for command in ("hermes -p ranch chat -q hi", "cat ~/.hermes/profiles/dad-diary/memories/MEMORY.md", "HERMES_HOME=/x python run.py"):
@@ -375,20 +349,6 @@ class RosterSectionTest(unittest.TestCase):
             self.assertTrue({"default", "mom-main", "dad-diary", "ranch"} <= local)
             self.assertEqual(peers, {"ranch"})
             self.assertEqual(gate.not_local(agent, ["mom-main", "ranch"]), "ranch")
-            # A routine as Hermes keeps it for the profile the tool runs for.
-            from hermes_constants import reset_hermes_home_override, set_hermes_home_override
-            token = set_hermes_home_override(str(home))
-            try:
-                from cron.jobs import create_job
-                job = create_job(prompt="hi", schedule="every 2h", name="Morning Brief", deliver="bot-chat:dad-diary")
-                self.assertEqual(gate.read_job(job["id"])["deliver"], "bot-chat:dad-diary")
-                # Names resolve as cronjob_manage resolves them: case-insensitive, and never a guess between two.
-                self.assertEqual(gate.read_job("morning brief")["id"], job["id"])
-                create_job(prompt="hi", schedule="every 3h", name="MORNING BRIEF", deliver="local")
-                with self.assertRaises(delegation.AmbiguousRoutine):
-                    gate.read_job("Morning Brief")
-            finally:
-                reset_hermes_home_override(token)
         finally:
             sys.path.remove(SOURCE)
 
@@ -487,111 +447,6 @@ class RealSchedulerTest(unittest.TestCase):
             self.assertEqual(unknown_fields(job, known), set(), state)
 
 
-class DeliveryPermitTest(unittest.TestCase):
-    """Each queued Bot Chat delivery is checked when it runs, against sharing as it is then."""
-    def setUp(self):
-        homes = {"/h/profiles/mom-main": "mom-main", "/h/profiles/mom-notes": "mom-notes", "/h/profiles/ranch": "ranch"}
-        self.gate = delegation.Delegation(sqlite3.connect(":memory:"), threading.RLock(), lambda agent: None, profile_of_home=homes.get)
-        self.gate.replace(POLICY)
-
-    def permit(self, target, **record):
-        return self.gate.delivery_permit(record, target)
-
-    def test_routine_output_follows_the_routine_rule(self):
-        self.assertTrue(self.permit("mom-notes", source_home="/h/profiles/mom-main")[0])
-        self.assertTrue(self.permit("mom-main", source_home="/h/profiles/mom-main")[0])
-        # A personal assistant's results never land in a chat the household reads, and a shared one's never in a private chat.
-        allowed, reason = self.permit("ranch", source_home="/h/profiles/mom-main")
-        self.assertFalse(allowed)
-        self.assertIn("can't post in ranch's chat", reason)
-        self.assertFalse(self.permit("mom-notes", source_home="/h/profiles/ranch")[0])
-
-    def test_agent_messages_follow_the_senders_roster(self):
-        self.assertTrue(self.permit("ranch", author={"id": "bot:mom-main"})[0], "A main assistant's approved shared hand-off")
-        self.assertFalse(self.permit("dads-diary", author={"id": "bot:mom-main"})[0])
-        self.assertFalse(self.permit("mom-notes", author={"id": "bot:mom-notes@other-host"})[0])
-
-    def test_a_delivery_whose_sender_cant_be_told_is_held_and_nothing_changes_before_rosters(self):
-        self.assertFalse(self.permit("mom-notes")[0])
-        self.assertFalse(self.permit("mom-notes", source_home="/elsewhere")[0])
-        before = delegation.Delegation(sqlite3.connect(":memory:"), threading.RLock(), lambda agent: None)
-        self.assertEqual(before.delivery_permit({}, "mom-notes"), (True, None))
-
-
-QUEUED_BEFORE_SHARING = """
-import contextlib, importlib.util, json, sqlite3, sys, threading
-from pathlib import Path
-def load(name):
-    spec = importlib.util.spec_from_file_location("agent_interface_" + name, sys.argv[1] + "/src/hermes/" + name + ".py")
-    module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module); return module
-delivery, delegation = load("bot_delivery"), load("delegation")
-class Store:
-    def __call__(self, home): return self
-    def get_session_by_title(self, title): return {"id": "stored"} if title == "Bot Chat" else None
-    def get_compression_tip(self, sid): return sid
-    def get_session(self, sid): return {"id": sid, "session_key": "", "chat_id": "", "origin_json": None}
-    def close(self): pass
-import tools.bot_live_delivery as mailbox
-from hermes_constants import set_hermes_home_override, reset_hermes_home_override, profile_name_for_home
-from hermes_cli.profiles import get_profile_dir
-from cron.scheduler_delivery import _deliver_to_bot_chat
-delivery.install_producer(mailbox, open_db=Store())
-# Mom's routine on her main assistant delivers its private report into her Notes assistant's chat.
-token = set_hermes_home_override(str(get_profile_dir("mom-main")))
-try:
-    queued = _deliver_to_bot_chat({"id": "abc123", "name": "Brief", "deliver": "bot-chat:mom-notes", "execution_id": "exec-1"}, "Private report", "mom-notes")
-finally:
-    reset_hermes_home_override(token)
-# The routine is paused, then Notes is shared: its roster now says what everyone sees.
-shared = sys.argv[2] == "shared"
-gate = delegation.Delegation(sqlite3.connect(":memory:"), threading.RLock(), lambda agent: None, profile_of_home=lambda home: profile_name_for_home(home) or "default")
-gate.replace({"mom-main": {"member": "Mom", "main": True, "owned": True, "personal": [] if shared else [{"id": "mom-notes", "name": "Notes"}],
-                           "shared": [{"id": "mom-notes", "name": "Notes"}] if shared else []}})
-class Server:
-    def __init__(self): self._sessions = {"sid": {"session_key": "stored", "agent": object()}}; self.turns = []
-    def _ensure_active_session_slot(self, sid, session): return None
-    @contextlib.contextmanager
-    def _session_turn_admission(self, session): yield True
-    def _run_prompt_submit(self, rid, sid, session, text, **kwargs):
-        self.turns.append(text); kwargs["terminal_callback"]({"status": "settled", "text": "ok"}); return True
-    def _notif_release_turn(self, session): session["running"] = False
-server = Server()
-@contextlib.contextmanager
-def admission(sid): yield True
-home = get_profile_dir("mom-notes")
-consumer = delivery.Consumer(server, mailbox, lambda: [("mom-notes", home)], lambda profile: "sid", admission, open_db=Store(), permits=gate.delivery_permit)
-consumer.deliver_once("mom-notes", home)
-record = [json.loads(path.read_text()) for path in mailbox._root(home).glob("*.json")][0]
-print("RESULT " + json.dumps({"queued": queued, "turns": server.turns, "status": record["status"], "reason": record.get("reason"), "error": record.get("error")}))
-"""
-
-
-class RealQueuedDeliveryTest(unittest.TestCase):
-    def run_case(self, sharing):
-        import subprocess
-        home = Path(tempfile.mkdtemp())
-        for profile in ("mom-main", "mom-notes"):
-            (home / "profiles" / profile).mkdir(parents=True)
-            (home / "profiles" / profile / "config.yaml").write_text("{}\n")
-            (home / "profiles" / profile / "state.db").write_text("")
-        env = {**os.environ, "HERMES_HOME": str(home), "PYTHONPATH": SOURCE}
-        run = subprocess.run([sys.executable, "-c", QUEUED_BEFORE_SHARING, str(Path(__file__).resolve().parents[1]), sharing],
-                             cwd=SOURCE, env=env, capture_output=True, text=True, timeout=240, check=False)
-        self.assertEqual(run.returncode, 0, run.stderr[-2000:])
-        return json.loads(next(line for line in run.stdout.splitlines() if line.startswith("RESULT "))[len("RESULT "):])
-
-    @unittest.skipUnless(SOURCE, "needs HERMES_SOURCE")
-    def test_a_private_report_queued_before_its_destination_is_shared_is_held_not_posted(self):
-        """Hermes's real cron delivery queues the report through the add-on; Notes is shared before it runs."""
-        held = self.run_case("shared")
-        self.assertIn("queued", held["queued"])
-        self.assertEqual(held["turns"], [])
-        self.assertEqual((held["status"], held["reason"]), ("failed", "not_allowed"))
-        self.assertIn("can't post in mom-notes's chat", held["error"])
-        # While Notes is still Mom's own, the same report is posted.
-        posted = self.run_case("personal")
-        self.assertEqual(len(posted["turns"]), 1)
-        self.assertEqual(posted["status"], "settled")
 
 if __name__ == "__main__":
     unittest.main()

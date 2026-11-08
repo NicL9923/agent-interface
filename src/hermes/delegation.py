@@ -13,8 +13,9 @@ from everyone else, so the server sends each profile's roster here and this modu
   the roster, so a cached or stored prompt is rebuilt once when it changes.
 - ``message_agent`` resolves its target against the roster once and sends to exactly the profile
   it authorized, by profile ID. A main assistant must ask its member first for a shared assistant.
-- ``cronjob_manage`` deliveries go only where the roster allows. A main assistant may deliver only
-  to itself or its member's personal assistants; rooms and messaging platforms are refused.
+- A main assistant's ``cronjob_manage`` creates routines that deliver only to its own chat, and it
+  cannot change, resume or run them. Other assistants' routine deliveries are as Hermes has them, a
+  known limit taken up separately.
 - A main assistant cannot run the Hermes CLI or touch another profile's files through the
   terminal, code or file tools. Those tools act on the whole host, so this is a guard, not a
   boundary: see docs/HouseholdExperience.md#privacy-limits.
@@ -177,10 +178,6 @@ def filter_section(section, policy, handle_for):
     return "\n".join(out)
 
 
-class AmbiguousRoutine(Exception):
-    pass
-
-
 def deliver_tokens(value):
     """Cron delivery targets, from Hermes's comma-separated string or a list."""
     if value is None:
@@ -190,9 +187,8 @@ def deliver_tokens(value):
 
 
 class Delegation:
-    def __init__(self, db, lock, profile_for_agent, current_profile=None, hermes_root=None, profile_of_home=None):
+    def __init__(self, db, lock, profile_for_agent, current_profile=None, hermes_root=None):
         self.db, self.lock, self.profile_for_agent = db, lock, profile_for_agent
-        self.profile_of_home = profile_of_home or (lambda home: None)
         # The profile a registry tool runs for, from Hermes's profile-scoped home.
         self.current_profile = current_profile or (lambda: None)
         self.hermes_root = hermes_root
@@ -323,33 +319,6 @@ class Delegation:
         message_agent_tool.__wrapped__ = original
         return message_agent_tool
 
-    def delivery_permit(self, record, target):
-        """Whether a queued Bot Chat delivery may run in ``target``'s chat, as sharing is now: (allowed, reason).
-
-        A routine's output (no author) follows the routine rule: a personal assistant's results go only to
-        its owner's personal assistants' chats, a shared one's only to chats the household sees. An agent
-        message (``author`` "bot:<profile>") must go to an assistant on its sender's roster; a main
-        assistant's shared hand-offs were approved when sent. A delivery whose sender can't be told is held.
-        """
-        if not self.enforcing:
-            return True, None
-        source = self.profile_of_home(record["source_home"]) if isinstance(record.get("source_home"), str) else None
-        author = record.get("author") if isinstance(record.get("author"), dict) else None
-        if not source and author and isinstance(author.get("id"), str) and author["id"].startswith("bot:"):
-            source = author["id"][len("bot:"):]
-        if not source:
-            return False, "WildBots couldn't tell which assistant sent this, so it was held."
-        if source == target:
-            return True, None
-        policy = self.policy_for(source)
-        if author:
-            allowed = roster_ids(policy)
-        else:
-            allowed = {row["id"] for row in (policy["personal"] if policy["owned"] else policy["shared"])}
-        if target in allowed:
-            return True, None
-        return False, f"Held: {source} can't post in {target}'s chat, which people who can't see {source} could read."
-
     def not_local(self, agent, ids):
         """The first ID Hermes would not deliver to as that local profile, or None. Unreadable counts."""
         try:
@@ -368,96 +337,34 @@ class Delegation:
         peers = doc.get("bot_peers") if isinstance(doc, dict) else None
         return {name for name, _ in _roster(root)}, {str(name).lower() for name in peers} if isinstance(peers, dict) else set()
 
-    def read_job(self, ref):
-        """The routine a reference names for the profile running this tool, as cronjob_manage finds it:
-        an exact ID, else a case-insensitive name. None when nothing matches; AmbiguousRoutine when a
-        name matches several."""
-        from cron.jobs import AmbiguousJobReference, resolve_job_ref
-        try:
-            return resolve_job_ref(ref)
-        except AmbiguousJobReference as error:
-            raise AmbiguousRoutine(str(error)) from error
-
     def cron_refusal(self, profile, policy, args):
-        """Why a cron action may not go ahead, or None.
+        """Why a main assistant's cron action may not go ahead, or None.
 
         A main assistant may only list, pause, remove and cancel its routines, and create ones that
-        deliver to its own chat and nowhere else, named explicitly. Any other assistant's create is
-        checked as written; an update as the saved routine with the call's delivery over it; a resume
-        or a run as the saved routine alone, since Hermes ignores delivery arguments there. The
-        routine is found as Hermes finds it, and its ID is passed on so Hermes acts on the one checked.
-        `origin` is refused everywhere: Hermes resolves it to wherever the routine was made, or a home
-        channel, which this add-on cannot see.
+        deliver to its own chat and nowhere else, named explicitly; `local`, which saves without
+        delivering, also stays private. Changing, resuming or running one happens in WildBots, which
+        checks it there. Other assistants' routines are as Hermes has them: cross-profile routine
+        delivery is a known limit, taken up separately (docs/HouseholdExperience.md#privacy-limits).
         """
+        if not policy["main"]:
+            return None
         action = str(args.get("action") or "").strip().lower()
         action = CRON_ALIASES.get(action, action)
         if action in ("list", "pause", "remove", "cancel"):
             return None
-        if policy["main"]:
-            if action not in MAIN_CRON_ACTIONS:
-                return "Your main assistant can't change, resume or run routines itself. Your member can do that in WildBots."
-            for field in ("deliver", "failure_deliver"):
-                tokens = deliver_tokens(args.get(field))
-                if field == "deliver" and not tokens:
-                    return "Name this routine's delivery explicitly: deliver=\"bot-chat\" posts its results in this chat."
-                for token in tokens:
-                    kind, _, rest = token.partition(":")
-                    if not (kind.strip().lower() == "local" or kind.strip().lower() == "bot-chat" and rest.strip() in ("", profile)):
-                        return f"Your main assistant's routines deliver only to its own chat, not {token}."
-            for field in ("script", "no_agent", "monitor", "monitor_script", "monitor_url", "workdir", "attach_to_session", "context_from"):
-                if args.get(field) not in (None, "", [], False):
-                    return f"Your main assistant can't set {field} on a routine. Your member can do that in WildBots."
-            return None
-        if action == "create":
-            if not deliver_tokens(args.get("deliver")):
-                return "Name this routine's delivery explicitly, for example deliver=\"bot-chat\" for this chat."
-            return self.delivery_refusal(profile, policy, args)
-        if action not in ("update", "resume", "run"):
-            return f"This assistant can't {action or 'do that to'} a routine here."
-        try:
-            job = self.read_job(str(args.get("job_id") or ""))
-        except AmbiguousRoutine:
-            return "More than one routine has that name. Use its ID."
-        except Exception:
-            job = None
-        if not isinstance(job, dict) or not job.get("id"):
-            return "That routine can't be checked, so it was left as it is."
-        saved = {field: job.get(field) for field in ("deliver", "failure_deliver")}
-        if action == "update":
-            saved.update({field: args[field] for field in ("deliver", "failure_deliver") if args.get(field) is not None})
-        reason = self.delivery_refusal(profile, policy, saved)
-        if reason is None:
-            args["job_id"] = job["id"]
-        return reason
-
-    def delivery_refusal(self, profile, policy, args):
-        """Why a cron create or update may not deliver where it asks, or None.
-
-        Its own chat is always allowed. Its member's personal assistants' chats are allowed, and
-        household-visible chats except from a main assistant. Group rooms only from an assistant the
-        whole household sees, since this add-on cannot tell who can open a room. A main assistant's
-        results never go to a messaging platform either.
-        """
-        personal = {row["id"] for row in policy["personal"]}
-        shared = {row["id"] for row in policy["shared"]}
+        if action not in MAIN_CRON_ACTIONS:
+            return "Your main assistant can't change, resume or run routines itself. Your member can do that in WildBots."
         for field in ("deliver", "failure_deliver"):
-            for token in deliver_tokens(args.get(field)):
+            tokens = deliver_tokens(args.get(field))
+            if field == "deliver" and not tokens:
+                return "Name this routine's delivery explicitly: deliver=\"bot-chat\" posts its results in this chat."
+            for token in tokens:
                 kind, _, rest = token.partition(":")
-                kind, rest = kind.strip().lower(), rest.strip()
-                if kind == "local" or (kind == "bot-chat" and rest in ("", profile)):
-                    continue
-                if kind in ("origin", "room") and not rest:
-                    return "This routine can't deliver to where it was made: name the chat it should post in."
-                if kind == "bot-chat":
-                    if rest in personal or (rest in shared and not policy["main"]):
-                        continue
-                    return f"This routine can't deliver to {rest}'s chat. Deliver to this chat instead."
-                if kind == "room" and not policy["owned"]:
-                    continue
-                if kind not in ("bot-chat", "room") and not policy["main"]:
-                    continue
-                return (f"This routine can't deliver to {token}: results from this assistant stay in its member's own chats. "
-                        "Deliver to this chat instead.")
+                if not (kind.strip().lower() == "local" or kind.strip().lower() == "bot-chat" and rest.strip() in ("", profile)):
+                    return f"Your main assistant's routines deliver only to its own chat, not {token}."
+        for field in ("script", "no_agent", "monitor", "monitor_script", "monitor_url", "workdir", "attach_to_session", "context_from"):
+            if args.get(field) not in (None, "", [], False):
+                return f"Your main assistant can't set {field} on a routine. Your member can do that in WildBots."
         return None
 
     def host_refusal(self, name, profile, policy, args):

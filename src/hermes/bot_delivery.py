@@ -192,21 +192,8 @@ def owned_owner(home, open_db=open_session_db):
             "live_session_id": CONSUMER, "consumer": CONSUMER}
 
 
-def source_home():
-    """The profile home a delivery is made from: Hermes runs a routine's delivery, and drains its deferred
-    ones, under that routine's own profile home. None when it can't be read."""
-    try:
-        from hermes_constants import get_hermes_home
-        return str(get_hermes_home().resolve())
-    except Exception:
-        return None
-
-
 def admit(mailbox, profile_home, owner, message, *, delivery_id=None, author=None, notification_category="result"):
-    """Queue one delivery for the add-on consumer. A replayed id returns its receipt.
-
-    The record carries the home it was sent from, so the consumer can check, when it runs, that the
-    sender may still post into this chat."""
+    """Queue one delivery for the add-on consumer. A replayed id returns its receipt."""
     home = Path(profile_home).resolve()
     pinned = {key: owner.get(key) for key in _OWNER_KEYS}
     if not all(isinstance(value, str) and value for value in pinned.values()) or pinned["profile_home"] != str(home):
@@ -230,9 +217,6 @@ def admit(mailbox, profile_home, owner, message, *, delivery_id=None, author=Non
                       **({"author": dict(author)} if author else {}))
         if notification_category == "diagnostic":
             record["notification_category"] = notification_category
-        sent_from = source_home()
-        if sent_from:
-            record["source_home"] = sent_from
         mailbox._write(path, record)
         return record
 
@@ -326,15 +310,13 @@ class Consumer:
     """
 
     def __init__(self, server, mailbox, homes, open_canonical, admission, open_db=open_session_db, classify=None,
-                 native_records=True, permits=None):
+                 native_records=True):
         if not all(callable(getattr(mailbox, name, None)) for name in _CONSUMER_MAILBOX) or not all(
                 callable(getattr(server, name, None)) for name in _CONSUMER_SERVER):
             raise RuntimeError("Native Bot Chat delivery turn seams require qualification")
         self.server, self.mailbox, self.homes = server, mailbox, homes
         self.open_canonical, self.admission, self.open_db = open_canonical, admission, open_db
         self.classify, self.native_records = classify, native_records
-        # (record, profile) -> (allowed, reason): whether its sender may post into this chat as sharing is now.
-        self.permits = permits
         self.idle = {}
         self.warned = 0.0
 
@@ -376,14 +358,6 @@ class Consumer:
                 claimed = claim(self.mailbox, home, session.get("session_key"), self.open_db, self.native_records)
                 if claimed is None:
                     return False
-                # Checked as the chat is shared now, not when the routine was set up: a routine paused or deleted
-                # since can still have queued this, and its chat may since have become one more people read.
-                if self.permits is not None:
-                    allowed, reason = self.permits(claimed, profile)
-                    if not allowed:
-                        self.mailbox.complete_delivery(home, str(claimed["id"]), status="failed", error=reason, reason="not_allowed")
-                        log.warning("Held a Bot Chat delivery to %s: %s", profile, reason)
-                        return False
                 session["running"] = True
             return self.run(claimed, sid, session, home)
 
