@@ -191,8 +191,12 @@ export function FormReplyCard({ card, botId, messageId, userId, unavailable }: {
   useReceiptCheck(status === "checking" ? pending?.id : undefined, receipt => { if (pending) settle(pending, receipt); });
   // After a restart, the person decides whether the answers arrived; sending again is a new attempt.
   const sendAgain = () => {
+    // This mounted copy may not have seen another copy's delayed acceptance reach storage.
+    const known = keepKnownAnswers(readSaved(key), { attempt, answers, state: "interrupted", elsewhere: true });
+    const nextAnswers = restore(card, known.answers);
+    setAnswers(nextAnswers);
     setAttempt(attempt + 1); setElsewhere(false); setStatus("editing"); setError("");
-    save({ attempt: attempt + 1, answers, state: "editing" }, { from: attempt });
+    save({ attempt: attempt + 1, answers: nextAnswers, state: "editing" }, { from: attempt });
   };
 
   async function send() {

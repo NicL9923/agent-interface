@@ -849,6 +849,10 @@ struct FormReplyCardView: View {
     }
   }
   private func sendAgain() {
+    // A delayed acceptance may have saved known answers while this copy stayed interrupted.
+    let known = FormRecords.keepingKnownAnswers(readSaved(), SavedFormReply(attempt: attempt, answers: answers, state: "interrupted", elsewhere: true))
+    let start = FormAnswers.start(card)
+    answers = start.merging(known.answers.filter { start.keys.contains($0.key) }) { $1 }
     save(SavedFormReply(attempt: attempt + 1, answers: answers, state: "editing"), from: attempt)
     attempt += 1; elsewhere = false; status = .editing; error = nil
   }
