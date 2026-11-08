@@ -483,6 +483,21 @@ struct EmailDraftCardView: View {
 
 // MARK: Forms
 
+/// When one saved form record may replace another, as the web's `mayReplace` in FormReplyCard.tsx.
+/// Several copies of a card share one record, so a stale copy never undoes another's progress: a
+/// later attempt's record is never overwritten by what happened to an earlier one (moving on from
+/// attempt `from` counts as happening to `from`), and within an attempt a record never goes back,
+/// except when the copy that owns the checking request learns the server refused it outright.
+enum FormRecords {
+  private static let progress = ["editing": 0, "checking": 1, "sent": 2, "interrupted": 2]
+  static func mayReplace(_ stored: SavedFormReply?, with next: SavedFormReply, from: Int? = nil, owns: String? = nil) -> Bool {
+    guard let stored else { return true }
+    if stored.attempt > (from ?? next.attempt) { return false }
+    if stored.attempt != next.attempt || progress[next.state, default: 0] >= progress[stored.state, default: 0] { return true }
+    return stored.state == "checking" && owns != nil && stored.requestId == owns
+  }
+}
+
 /// What this device keeps for one form, as the web's FormReplyCard keeps it.
 struct SavedFormReply: Codable, Equatable {
   var attempt: Int
@@ -533,12 +548,12 @@ struct FormReplyCardView: View {
     if let id = saved.requestId, id.range(of: #"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"#, options: .regularExpression) == nil { kept.requestId = nil }
     return kept
   }
-  /// Never back from a newer attempt: what happens to attempt `from` must not overwrite a later one's record.
-  private func save(_ next: SavedFormReply, from: Int? = nil) {
-    guard let store else { return }
-    if let stored = readSaved(), stored.attempt > (from ?? next.attempt) { return }
+  /// Saves unless that would undo another copy's progress; see `FormRecords.mayReplace`.
+  private func save(_ next: SavedFormReply, from: Int? = nil, owns: String? = nil) {
+    guard let store, FormRecords.mayReplace(readSaved(), with: next, from: from, owns: owns) else { return }
     store.save(next, storageKey)
   }
+
 
   var body: some View {
     VStack(alignment: .leading, spacing: 14) {
@@ -613,7 +628,7 @@ struct FormReplyCardView: View {
       VStack(spacing: 8) {
         // Options are told apart as the web tells them apart: by position and exact code units,
         // never by Swift's string equality, which merges canonically equivalent spellings.
-        ForEach(Array((field.options ?? []).enumerated()), id: \.offset) { _, option in
+        ForEach(Array((field.options ?? []).enumerated()), id: \.offset) { index, option in
           let on = JS.contains(chosen, option)
           Button {
             set(field, FormAnswers.choose(option, kind: field.kind, from: chosen))
@@ -626,7 +641,7 @@ struct FormReplyCardView: View {
               .background(RoundedRectangle(cornerRadius: 10).fill(on ? Palette.accentSoft : Color.clear))
               .overlay(RoundedRectangle(cornerRadius: 10).stroke(on ? Palette.accent : Palette.line))
           }.buttonStyle(.plain).accessibilityAddTraits(on ? .isSelected : []).accessibilityHint(hint(field))
-            .accessibilityIdentifier("form.\(card.id).\(field.id).\(option)")
+            .accessibilityIdentifier("form.\(card.id).\(field.id).\(index)")
         }
       }
     case "toggle":
@@ -753,7 +768,7 @@ struct FormReplyCardView: View {
       } else if let failure = failure as? APIError, (400..<500).contains(failure.status) {
         // Refused before Hermes saw it, so this attempt's ID is still free.
         status = .editing; error = failure.message.isEmpty ? Self.refused : failure.message
-        save(SavedFormReply(attempt: from.attempt, answers: from.answers, state: "editing"))
+        save(SavedFormReply(attempt: from.attempt, answers: from.answers, state: "editing"), owns: from.id)
       } else {
         pending = from; status = .checking; error = Self.unconfirmed
       }

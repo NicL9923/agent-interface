@@ -3,6 +3,7 @@ import { act, createElement } from "react";
 import type { Root } from "react-dom/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
+import { mayReplace, type Saved } from "../src/components/FormReplyCard";
 import { ApiError, api, write } from "../src/client-api";
 import { defaultPreferences } from "../src/shared/types";
 import type { AttentionRequest, Bootstrap, Conversation, Message, ToolCall } from "../src/shared/types";
@@ -1263,6 +1264,41 @@ describe("form replies", () => {
     const newer = { attempt: 1, answers: { city: "Austin", pace: "Relaxed", dog: false }, state: "editing" };
     localStorage.setItem(saved, JSON.stringify(newer));
     await act(async () => finish({ requestId: await formId(0), status: "accepted" }));
+    expect(JSON.parse(localStorage.getItem(saved)!)).toEqual(newer);
+  });
+
+  it("lets a stale copy of the card undo no other copy's progress", () => {
+    const record = (attempt: number, state: Saved["state"], requestId?: string): Saved => ({ attempt, answers: {}, state, ...(requestId && { requestId }) });
+    const cases: [string, Saved | null, Saved, Parameters<typeof mayReplace>[2], boolean][] = [
+      ["nothing saved yet", null, record(0, "editing"), {}, true],
+      ["a later attempt's record", record(1, "sent"), record(0, "sent"), {}, false],
+      ["moving on from the attempt saved", record(0, "checking", "a"), record(1, "editing"), { from: 0 }, true],
+      ["moving on from an attempt another copy already moved past", record(1, "sent"), record(1, "editing"), { from: 0 }, false],
+      ["typing over a sent record of the same attempt", record(1, "sent"), record(1, "editing"), {}, false],
+      ["typing over another copy's request on its way", record(1, "checking", "a"), record(1, "editing"), {}, false],
+      ["typing over an interrupted record", record(1, "interrupted"), record(1, "editing"), {}, false],
+      ["sending again over a sent record of the same attempt", record(1, "sent"), record(1, "checking", "a"), {}, false],
+      ["the owner's request refused outright", record(1, "checking", "a"), record(1, "editing"), { owns: "a" }, true],
+      ["another request's refusal", record(1, "checking", "a"), record(1, "editing"), { owns: "b" }, false],
+      ["sending from editing", record(1, "editing"), record(1, "checking", "a"), {}, true],
+      ["a request settling as sent", record(1, "checking", "a"), record(1, "sent"), {}, true],
+    ];
+    for (const [name, stored, next, change, allowed] of cases) expect(mayReplace(stored, next, change), name).toBe(allowed);
+  });
+
+  it("keeps another copy's sent record when a stale copy is edited after a late refusal", async () => {
+    let finish!: (value: unknown) => void;
+    vi.mocked(write).mockImplementation(async <T>(path: string) => path === "/bots/shared/messages"
+      ? await new Promise<T>(resolve => { finish = value => resolve(value as T); }) : {} as T);
+    await render();
+    await fill();
+    await send();
+    await posted(1);
+    const newer = { attempt: 1, answers: { city: "Austin", pace: "Relaxed", dog: false }, state: "sent" };
+    localStorage.setItem(saved, JSON.stringify(newer));
+    await act(async () => finish({ requestId: await formId(0), status: "rejected" }));
+    // This copy moved on to attempt 1 and is editable; typing in it must not reopen the sent form.
+    await typeInto(card().querySelector<HTMLInputElement>('input[type="text"]')!, "Marfa2");
     expect(JSON.parse(localStorage.getItem(saved)!)).toEqual(newer);
   });
 

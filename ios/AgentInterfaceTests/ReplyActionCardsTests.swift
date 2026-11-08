@@ -161,6 +161,30 @@ final class ReplyActionCardsTests: XCTestCase {
     XCTAssertEqual(FormAnswers.choose(decomposed, kind: "choice", from: [composed]), .text(decomposed))
   }
 
+  /// The web's `mayReplace` cases: a stale copy of a card never undoes another copy's progress.
+  func testAStaleCopyOfAFormUndoesNoOtherCopysProgress() {
+    func record(_ attempt: Int, _ state: String, _ requestId: String? = nil) -> SavedFormReply {
+      SavedFormReply(attempt: attempt, answers: [:], state: state, requestId: requestId)
+    }
+    let cases: [(String, SavedFormReply?, SavedFormReply, Int?, String?, Bool)] = [
+      ("nothing saved yet", nil, record(0, "editing"), nil, nil, true),
+      ("a later attempt's record", record(1, "sent"), record(0, "sent"), nil, nil, false),
+      ("moving on from the attempt saved", record(0, "checking", "a"), record(1, "editing"), 0, nil, true),
+      ("moving on from an attempt another copy moved past", record(1, "sent"), record(1, "editing"), 0, nil, false),
+      ("typing over a sent record of the same attempt", record(1, "sent"), record(1, "editing"), nil, nil, false),
+      ("typing over another copy's request on its way", record(1, "checking", "a"), record(1, "editing"), nil, nil, false),
+      ("typing over an interrupted record", record(1, "interrupted"), record(1, "editing"), nil, nil, false),
+      ("sending again over a sent record", record(1, "sent"), record(1, "checking", "a"), nil, nil, false),
+      ("the owner's request refused outright", record(1, "checking", "a"), record(1, "editing"), nil, "a", true),
+      ("another request's refusal", record(1, "checking", "a"), record(1, "editing"), nil, "b", false),
+      ("sending from editing", record(1, "editing"), record(1, "checking", "a"), nil, nil, true),
+      ("a request settling as sent", record(1, "checking", "a"), record(1, "sent"), nil, nil, true),
+    ]
+    for (name, stored, next, from, owns, allowed) in cases {
+      XCTAssertEqual(FormRecords.mayReplace(stored, with: next, from: from, owns: owns), allowed, name)
+    }
+  }
+
   func testAnswerTextSplitsAndTrimsAsTheWebDoes() throws {
     let card = try XCTUnwrap(cards([["id": "f", "type": "form", "title": "  Trip  ", "fields": [["id": "a", "label": "A", "kind": "textarea"]]]])?.first)
     XCTAssertEqual(FormAnswers.text(card, ["a": .text("one\r\ntwo")]), "My answers to \"Trip\":\n- A:\n  one\n  two")

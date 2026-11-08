@@ -227,6 +227,8 @@
         ["id": "city", "label": "Destination", "kind": "text", "required": true],
         ["id": "lodging", "label": "Lodging", "kind": "choice", "options": ["Hotel in town", "Cabin outside town"], "required": true],
         ["id": "dog", "label": "Bringing Biscuit", "kind": "toggle", "value": true],
+        // The same word spelled two ways: two options on the web, so two here.
+        ["id": "cafe", "label": "Stop at", "kind": "multi", "options": ["Caf\u{E9}", "Cafe\u{301}"]],
       ]]
       let me: [String: Any] = ["id": "native-test", "name": "Local test member"]
       return [

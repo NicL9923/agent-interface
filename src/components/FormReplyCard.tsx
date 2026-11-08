@@ -21,7 +21,7 @@ import { Icon } from "./Icon";
  * attempt keeps the exact request ID it went under. `elsewhere` marks an attempt another tab or
  * device sent, whose answers this one never saw.
  */
-type Saved = { attempt: number; answers: FormAnswers; state: "editing" | "checking" | "sent" | "interrupted"; requestId?: string; elsewhere?: boolean };
+export type Saved = { attempt: number; answers: FormAnswers; state: "editing" | "checking" | "sent" | "interrupted"; requestId?: string; elsewhere?: boolean };
 type Status = "looking" | "editing" | "sending" | "checking" | "sent" | "interrupted";
 /** The one request a check follows: its ID, attempt and the answers it carried. */
 type Pending = { id: string; attempt: number; answers: FormAnswers; elsewhere: boolean };
@@ -41,6 +41,28 @@ const restore = (card: FormCard, answers: FormAnswers): FormAnswers => {
   const start = formStart(card);
   return Object.fromEntries(card.fields.map(field => [field.id, fieldEntry(answers, field.id) ?? fieldEntry(start, field.id)!]));
 };
+/** How far a record has got within its attempt. Only its own request's refusal moves one back. */
+const progress: Record<Saved["state"], number> = { editing: 0, checking: 1, sent: 2, interrupted: 2 };
+/**
+ * What a write says about itself: `from`, the attempt it happened to when it moves the form on to
+ * the next one, and `owns`, the request it settles.
+ */
+type Change = { from?: number; owns?: string };
+/**
+ * Whether `next` may replace the saved record. Several copies of a card, in other tabs or left open
+ * while a request was out, share one record, so a stale copy must never undo another's progress:
+ * - a later attempt's record is never overwritten by what happened to an earlier one, and moving on
+ *   from attempt `from` counts as happening to `from`;
+ * - within an attempt a record never goes back, from checking, sent or interrupted to editing,
+ *   except when the copy that owns the checking request learns the server refused it outright.
+ * iOS applies the same rule in `FormRecords.mayReplace`.
+ */
+export function mayReplace(stored: Saved | null, next: Saved, { from = next.attempt, owns }: Change = {}): boolean {
+  if (!stored) return true;
+  if (stored.attempt > from) return false;
+  if (stored.attempt !== next.attempt || progress[next.state] >= progress[stored.state]) return true;
+  return stored.state === "checking" && owns !== undefined && stored.requestId === owns;
+}
 const refused = "Hermes didn't take your answers.";
 const unconfirmed = "Hermes hasn't confirmed your answers yet. They're being checked and won't be sent twice.";
 /**
@@ -77,12 +99,8 @@ export function FormReplyCard({ card, botId, messageId, userId, unavailable }: {
   const [error, setError] = useState("");
   const inFlight = useRef(false);
   const formId = useId();
-  // Never back from a newer attempt: what happens to one attempt, `from`, must not overwrite a later
-  // attempt's record, such as a late answer to a copy of this card that closed while its request was
-  // out. Moving on from `from` to the next attempt counts as happening to `from`.
-  const save = (next: Saved, from = next.attempt) => {
-    const stored = readSaved(key);
-    if (!stored || stored.attempt <= from) localSave(key, next);
+  const save = (next: Saved, change: Change = {}) => {
+    if (mayReplace(readSaved(key), next, change)) localSave(key, next);
   };
   // A checking record saved without a usable ID follows the ID its attempt derives.
   const recovering = status === "checking" && !pending;
@@ -129,7 +147,7 @@ export function FormReplyCard({ card, botId, messageId, userId, unavailable }: {
       // A refused ID stays refused, so the person's next Send is a new attempt.
       setPending(null); setAttempt(from.attempt + 1); setStatus("editing"); setElsewhere(false); setAnswers(from.answers);
       setError(receipt.message ? `${refused} ${receipt.message}` : refused);
-      save({ attempt: from.attempt + 1, answers: from.answers, state: "editing" }, from.attempt);
+      save({ attempt: from.attempt + 1, answers: from.answers, state: "editing" }, { from: from.attempt });
     } else if (receipt.status === "interrupted") {
       setPending(null); setStatus("interrupted"); setError(""); save({ ...kept, state: "interrupted" });
     } else {
@@ -140,7 +158,7 @@ export function FormReplyCard({ card, botId, messageId, userId, unavailable }: {
   // After a restart, the person decides whether the answers arrived; sending again is a new attempt.
   const sendAgain = () => {
     setAttempt(attempt + 1); setElsewhere(false); setStatus("editing"); setError("");
-    save({ attempt: attempt + 1, answers, state: "editing" }, attempt);
+    save({ attempt: attempt + 1, answers, state: "editing" }, { from: attempt });
   };
 
   async function send() {
@@ -175,7 +193,7 @@ export function FormReplyCard({ card, botId, messageId, userId, unavailable }: {
           save({ attempt, answers, state: "checking", requestId: from.id, elsewhere: true });
         } else if (cause instanceof ApiError && cause.status < 500) {
           // Refused before Hermes saw it, so this attempt's ID is still free.
-          setStatus("editing"); setError(cause.message || refused); save({ attempt, answers, state: "editing" });
+          setStatus("editing"); setError(cause.message || refused); save({ attempt, answers, state: "editing" }, { owns: from.id });
         } else {
           setPending(from); setStatus("checking"); setError(unconfirmed);
         }
