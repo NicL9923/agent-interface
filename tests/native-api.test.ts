@@ -11,7 +11,7 @@ import { accountMarker, ApnsError, apnsCollapseId, createApnsSender, apnsClearPa
 import { BackgroundWorker } from "../src/server/notifications.js";
 import { Store } from "../src/server/store.js";
 import { defaultPreferences, type RuntimeEvent } from "../src/shared/types.js";
-import { fakeRuntime } from "./helpers/server.js";
+import { fakeRuntime, localLogin } from "./helpers/server.js";
 import Fastify from "fastify";
 import { errorHandler } from "../src/server/http-error.js";
 
@@ -23,9 +23,9 @@ async function setup(config = loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE:
   const result = await createApp(config, runtime, { background: false, verifyGoogle, sendApns: config.apns ? async () => {} : undefined });
   apps.push(result); return result;
 }
-async function flow(app: Awaited<ReturnType<typeof createApp>>["app"]) {
+async function flow(app: Awaited<ReturnType<typeof createApp>>["app"], purpose?: "confirm") {
   const state = randomBytes(32).toString("base64url"), codeVerifier = randomBytes(32).toString("base64url");
-  const query = new URLSearchParams({ state, code_challenge: createHash("sha256").update(codeVerifier).digest("base64url"), code_challenge_method: "S256" });
+  const query = new URLSearchParams({ state, code_challenge: createHash("sha256").update(codeVerifier).digest("base64url"), code_challenge_method: "S256", ...(purpose ? { purpose } : {}) });
   const response = await app.inject(`/native/sign-in?${query}`);
   expect(response.statusCode).toBe(200);
   return { state, codeVerifier, cookie: `native_flow=${response.cookies[0].value}`, cookieValue: response.cookies[0].value, response };
@@ -105,6 +105,94 @@ it("verifies the Google flow nonce and rechecks the household on each native req
   config.householdEmails = [];
   expect((await app.inject({ url: "/api/bootstrap", headers })).statusCode).toBe(401);
   expect(store.getNativeSession(hash(result.json().token))).toBeUndefined();
+});
+
+/** A completed native sign-in page: the code the app receives, with its state and verifier. */
+async function nativeCode(app: Awaited<ReturnType<typeof createApp>>["app"], body: Record<string, string>, purpose?: "confirm") {
+  const started = await flow(app, purpose);
+  const completed = await app.inject({ method: "POST", url: "/api/auth/native/complete", headers: { origin, cookie: started.cookie }, payload: body });
+  expect(completed.statusCode).toBe(200);
+  return { code: new URL(completed.json().callback).searchParams.get("code")!, state: started.state, codeVerifier: started.codeVerifier };
+}
+
+it("records signing in to the app as confirming it's you, from Google's issue time", async () => {
+  const config = loadConfig({ GOOGLE_CLIENT_ID: "google", HOUSEHOLD_EMAILS: "one@example.test", APP_DATABASE: ":memory:" });
+  let identity: { iat?: number } = {};
+  const { app, store } = await setup(config, async () => ({ sub: "google-one", email: "one@example.test", email_verified: true, nonce: store.getNativeFlow(hash(flowCookie))!.nonce, ...identity }));
+  let flowCookie = "";
+  const signIn = async () => {
+    const started = await flow(app);
+    flowCookie = started.cookieValue;
+    const completed = await app.inject({ method: "POST", url: "/api/auth/native/complete", headers: { origin, cookie: started.cookie }, payload: { credential: "verified-test-token" } });
+    const payload = { code: new URL(completed.json().callback).searchParams.get("code"), state: started.state, codeVerifier: started.codeVerifier };
+    return hash((await app.inject({ method: "POST", url: "/api/auth/native/exchange", payload })).json().token);
+  };
+  identity = { iat: Math.floor(Date.now() / 1000) - 120 };
+  expect(store.nativeSessionConfirmedAt(await signIn())).toBe(identity.iat! * 1000);
+  // A credential from the future counts from now; one without an issue time proves nothing.
+  identity = { iat: Math.floor(Date.now() / 1000) + 3600 };
+  expect(store.nativeSessionConfirmedAt(await signIn())).toBeLessThanOrEqual(Date.now());
+  identity = {};
+  expect(store.nativeSessionConfirmedAt(await signIn())).toBeUndefined();
+});
+
+it("confirms a signed-in app's person with a fresh PKCE-bound code for the same account, never signing it out", async () => {
+  const { app, store } = await setup();
+  const { token } = await connectNative(app, "one");
+  const headers = { authorization: `Bearer ${token}` };
+  // Signing in with a local member counts as confirming now.
+  expect(Date.now() - store.nativeSessionConfirmedAt(hash(token))!).toBeLessThan(5000);
+  store.db.prepare("DELETE FROM native_session_confirmations").run();
+  const confirm = (payload: unknown, extra: Record<string, string> = headers) =>
+    app.inject({ method: "POST", url: "/api/auth/native/confirm", headers: extra, payload: payload as object });
+  // The confirmation page says what it is for; any other purpose is refused.
+  const page = (await flow(app, "confirm")).response.body;
+  expect(page).toContain("<h1>Confirm it's you</h1><p>Choose the same household account to open the terminal.</p>");
+  const query = (purpose: string) => `/native/sign-in?state=${"s".repeat(32)}&code_challenge=${"c".repeat(43)}&code_challenge_method=S256&purpose=${purpose}`;
+  expect((await app.inject(query("sign-in"))).statusCode).toBe(400);
+
+  const good = await nativeCode(app, { member: "one" }, "confirm");
+  // Only the app's own bearer, without a browser Origin, reaches it; a browser session is refused.
+  expect((await confirm(good, {})).json()).toEqual({ error: "Sign in required", code: "session_expired" });
+  expect((await confirm(good, { ...headers, origin })).statusCode).toBe(403);
+  const browser = await localLogin(app, origin);
+  expect((await confirm(good, browser)).json()).toEqual({ error: "Confirm your identity in the iOS app." });
+  // Malformed bodies fail validation before anything is spent.
+  for (const bad of [{ ...good, code: "short" }, { ...good, extra: true }, { code: good.code, state: good.state }])
+    expect((await confirm(bad)).statusCode).toBe(400);
+  // A wrong verifier leaves the code unspent, and the refusal never says session_expired, so the app stays signed in.
+  const wrong = await confirm({ ...good, codeVerifier: randomBytes(32).toString("base64url") });
+  expect([wrong.statusCode, wrong.json()]).toEqual([401, { error: "That confirmation expired. Try again.", code: "confirmation_expired" }]);
+  expect(store.nativeSessionConfirmedAt(hash(token))).toBeUndefined();
+  const confirmed = await confirm(good);
+  expect(confirmed.statusCode).toBe(200);
+  const at = Date.parse(confirmed.json().confirmedAt);
+  expect(store.nativeSessionConfirmedAt(hash(token))).toBe(at);
+  expect(Math.abs(Date.now() - at)).toBeLessThan(5000);
+  // Each code works once, for confirming or for signing in.
+  expect((await confirm(good)).json().code).toBe("confirmation_expired");
+  expect((await app.inject({ method: "POST", url: "/api/auth/native/exchange", payload: good })).statusCode).toBe(401);
+  expect((await app.inject({ url: "/api/bootstrap", headers })).statusCode).toBe(200);
+
+  // Another household member's code never confirms this person.
+  const theirs = await nativeCode(app, { member: "two" }, "confirm");
+  expect((await confirm(theirs)).json()).toEqual({ error: "Use the same Google account you signed in with." });
+  // An expired code, and a code whose proof is missing or more than ten minutes old, are refused.
+  const expired = await nativeCode(app, { member: "one" }, "confirm");
+  store.db.prepare("UPDATE native_codes SET expires=0").run();
+  expect((await confirm(expired)).json().code).toBe("confirmation_expired");
+  const old = await nativeCode(app, { member: "one" }, "confirm");
+  store.db.prepare("UPDATE native_code_confirmations SET confirmed_at=?").run(Date.now() - 10 * 60000 - 1000);
+  expect((await confirm(old)).json()).toEqual({ error: "That confirmation is too old. Try again.", code: "confirmation_expired" });
+  const unproven = await nativeCode(app, { member: "one" }, "confirm");
+  store.db.prepare("DELETE FROM native_code_confirmations").run();
+  expect((await confirm(unproven)).json().error).toBe("That confirmation is too old. Try again.");
+  // Just inside ten minutes counts, and never moves a later confirmation back.
+  const recent = await nativeCode(app, { member: "one" }, "confirm");
+  store.db.prepare("UPDATE native_code_confirmations SET confirmed_at=?").run(Date.now() - 10 * 60000 + 30000);
+  expect((await confirm(recent)).statusCode).toBe(200);
+  expect(store.nativeSessionConfirmedAt(hash(token))).toBe(at);
+  expect((await app.inject({ url: "/api/bootstrap", headers })).statusCode).toBe(200);
 });
 
 it("keeps device ownership explicit, controls APNs environment on the host, and unregisters on native logout", async () => {

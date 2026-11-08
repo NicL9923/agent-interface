@@ -45,6 +45,7 @@ export function installBootstrapRoutes(app: FastifyInstance, collaborators: {
         (req.query as { roster?: string }).roster === "lean"),
     })),
     csrfToken: req.csrfToken,
+    formKey: store.formKey(signedIn(req).id),
     vapidPublicKey: config.vapidPublicKey || undefined,
     nativeApp: config.nativeApp,
   }));

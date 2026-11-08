@@ -191,4 +191,56 @@ import XCTest
     XCTAssertTrue(app.descendants(matching: .any)["computerStatus"].waitForExistence(timeout: 10), app.debugDescription)
     XCTAssertTrue(app.buttons["computerControl"].wait(until: "label == %@", "Take over", timeout: 15), "Watch does not take control")
   }
+  func testTerminalRequestOffersTheCommandToPasteNeverRunsIt() {
+    let app = launchHandoff(["AGENT_INTERFACE_UI_TERMINAL": "1", "AGENT_INTERFACE_UI_TERMINAL_CONFIRMED": "1"])
+    let open = app.buttons["terminal.open"]
+    XCTAssertTrue(open.waitForExistence(timeout: 15), app.debugDescription)
+    let card = app.descendants(matching: .any)["terminalRequest"]
+    for text in ["Tailscale needs a person to sign in.", "Run the command, then open the link it prints.", "sudo tailscale up"] {
+      XCTAssertTrue(card.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", text)).firstMatch.exists, text)
+    }
+    XCTAssertTrue(app.buttons["terminal.copy"].exists)
+    for button in ["terminal.open", "terminal.done", "terminal.decline"] { XCTAssertGreaterThanOrEqual(app.buttons[button].frame.height.rounded(), 44, button) }
+    capture(app, name: "Native terminal request")
+    open.tapWhenReady()
+    XCTAssertTrue(app.descendants(matching: .any)["terminalStatus"].wait(until: "label CONTAINS %@", "Your system terminal", timeout: 20), app.debugDescription)
+    // The shell may be waiting on one key, so the command waits for the person to paste it.
+    XCTAssertTrue(app.descendants(matching: .any)["terminalOffer"].waitForExistence(timeout: 10), app.debugDescription)
+    XCTAssertFalse(app.staticTexts["Typed: [paste:sudo tailscale up]"].exists, "Nothing is pasted on its own")
+    let paste = app.buttons["terminalOfferPaste"]
+    XCTAssertTrue(paste.wait(until: "enabled == true", timeout: 10), "Paste waits for the shell to connect")
+    paste.tap()
+    XCTAssertTrue(app.staticTexts["Typed: [paste:sudo tailscale up]"].waitForExistence(timeout: 10), "The command is pasted with no Return: \(app.debugDescription)")
+    XCTAssertTrue(app.descendants(matching: .any)["terminalInfo"].exists)
+    XCTAssertFalse(app.buttons["terminalOfferPaste"].exists, "The offer goes away once pasted")
+    capture(app, name: "Native terminal request pasted")
+    app.buttons["terminalClose"].tapWhenReady()
+    app.buttons["terminal.done"].tapWhenReady()
+    let receipt = app.descendants(matching: .any)["settledReceipt"]
+    XCTAssertTrue(receipt.waitForExistence(timeout: 10), app.debugDescription)
+    XCTAssertTrue(receipt.label.contains("You said you finished in the terminal."), receipt.label)
+    XCTAssertFalse(app.buttons["terminal.open"].exists)
+  }
+  func testTerminalRequestNotNowLeavesOneLine() {
+    let app = launchHandoff(["AGENT_INTERFACE_UI_TERMINAL": "1"])
+    let decline = app.buttons["terminal.decline"]
+    XCTAssertTrue(decline.waitForExistence(timeout: 15), app.debugDescription)
+    decline.tapWhenReady()
+    let receipt = app.descendants(matching: .any)["settledReceipt"]
+    XCTAssertTrue(receipt.waitForExistence(timeout: 5), app.debugDescription)
+    XCTAssertTrue(receipt.label.contains("You chose Not now."), receipt.label)
+    XCTAssertFalse(app.buttons["terminal.open"].exists)
+  }
+  func testTerminalRequestAsksForConfirmationBeforeAShellOpens() {
+    let app = launchHandoff(["AGENT_INTERFACE_UI_TERMINAL": "1"])
+    app.buttons["terminal.open"].tapWhenReady(timeout: 15)
+    let confirm = app.buttons["terminalConfirm"]
+    XCTAssertTrue(confirm.waitForExistence(timeout: 15), app.debugDescription)
+    confirm.tapWhenReady()
+    XCTAssertTrue(app.descendants(matching: .any)["terminalStatus"].wait(until: "label CONTAINS %@", "Your system terminal", timeout: 20), app.debugDescription)
+    let paste = app.buttons["terminalOfferPaste"]
+    XCTAssertTrue(paste.wait(until: "enabled == true", timeout: 10), "Paste waits for the shell to connect")
+    paste.tap()
+    XCTAssertTrue(app.staticTexts["Typed: [paste:sudo tailscale up]"].waitForExistence(timeout: 10), "After confirming, the command is still offered: \(app.debugDescription)")
+  }
 }

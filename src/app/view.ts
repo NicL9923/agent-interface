@@ -1,12 +1,14 @@
 import { useEffect } from "react";
 import type { Bot, Preferences } from "../shared/types";
 export type View = "conversation" | "today" | "group" | "find";
+/** An assistant's terminal card opened the shell; each opening is a new number. The command is pasted once, never run. */
+export type TerminalOpening = { at: number; command?: string };
 // Modal overlays. Only one can be interactive at a time.
 export type Panel =
   | { kind: "preferences"; destination?: { kind: "following" } | { kind: "section"; id: string } | { kind: "signout" } }
   | { kind: "integrations" | "upgrade" }
   /** take asks the desktop to take control once it connects; each request is a new number. */
-  | { kind: "computer"; tab?: "desktop" | "terminal"; take?: number }
+  | { kind: "computer"; tab?: "desktop" | "terminal"; take?: number; terminal?: TerminalOpening }
   | { kind: "settings"; bot: Bot | "new" }
   | { kind: "details"; botId: string; newSection?: boolean }
   | { kind: "routine"; botId: string; routineId: string; resultId?: string };

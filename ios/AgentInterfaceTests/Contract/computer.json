@@ -12,7 +12,7 @@
     "terminal": {
       "available": false,
       "target": "",
-      "reason": "Open the computer in a browser to use the system terminal."
+      "reason": "The system terminal is turned off for this household."
     }
   }
 }

@@ -1,7 +1,7 @@
 import type { AutomationRequester } from './automation.js';
 import type { ExperienceRequester } from "./experience.js";
 import type { IntegrationRequest, IntegrationCatalog, IntegrationConnection, IntegrationFlow, ConnectionRequestSettle, ConnectionRequestResult, ConnectionRequest } from "./integrations.js";
-import type { ComputerRequest, ComputerStatus, ComputerAttachment, ComputerHandoff } from "./computer.js";
+import type { ComputerRequest, ComputerStatus, ComputerAttachment, ComputerHandoff, TerminalRequest } from "./computer.js";
 import type { SecureRequest, VaultRequest, VaultResponse } from "./vault.js";
 import type { GroupRequest, GroupResponse, RoutineOutput, RoutineResult } from './collaboration.js';
 import type { TalkSession, TalkVoice } from "./voice.js";
@@ -262,13 +262,14 @@ export interface Activity {
 }
 export interface AttentionRequest {
   id: string;
-  kind: "clarify" | "official" | "secure" | "computer" | "connection";
+  kind: "clarify" | "official" | "secure" | "computer" | "terminal" | "connection";
   title: string;
   detail: string;
   /** `multiple` lets a person choose several options, sent as one comma-separated answer. Absent means one. */
   questions?: { id: string; prompt: string; options?: string[]; multiple?: boolean }[];
   secure?: SecureRequest;
   computer?: ComputerHandoff;
+  terminal?: TerminalRequest;
   connection?: ConnectionRequest;
 }
 export interface Conversation {
@@ -387,6 +388,8 @@ export interface Bootstrap {
   capabilities: Capabilities;
   connection: RuntimeStatus;
   csrfToken: string | null;
+  /** This person's private key for deriving form request IDs; see formRequestId. Absent from an older server. */
+  formKey?: string;
   vapidPublicKey?: string;
   /** The newest distributed iOS build, when the host advertises one. */
   nativeApp?: { latestBuild: number; updateUrl: string };
@@ -409,6 +412,12 @@ export interface SubmissionReceipt {
   runId?: string;
   messageId?: string;
   message?: string;
+  /**
+   * The text the server recorded under this request ID, from `GET /submissions/:id` and only to the
+   * person who sent it. A form card compares it with its own answers, since another tab or device
+   * may have sent different answers under the same derived ID.
+   */
+  text?: string;
 }
 export interface RuntimeEvent {
   id: string;

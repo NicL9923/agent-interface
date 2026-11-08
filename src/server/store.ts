@@ -39,6 +39,7 @@ export class Store {
     this.database = new StoreDatabase(path);
     this.db = this.database.db;
     this.accounts = new AccountRepository(this.database);
+    this.accounts.ensureFormSecret();
     this.devices = new DeviceRepository(this.database, this.accounts);
     this.personalState = new PersonalRepository(this.database);
     this.drafts = new DraftRepository(this.database);
@@ -65,6 +66,7 @@ export class Store {
   set botNames(names: Map<string, string>) { this.notifications.botNames = names; }
   // accounts
   user(...args: Parameters<AccountRepository["user"]>) { return this.accounts.user(...args); }
+  formKey(userId: string) { return this.accounts.formKey(userId); }
   users(...args: Parameters<AccountRepository["users"]>) { return this.accounts.users(...args); }
   getUser(...args: Parameters<AccountRepository["getUser"]>) { return this.accounts.getUser(...args); }
   session(...args: Parameters<AccountRepository["session"]>) { return this.accounts.session(...args); }
@@ -74,6 +76,8 @@ export class Store {
   sessionConfirmedAt(...args: Parameters<AccountRepository["sessionConfirmedAt"]>) { return this.accounts.sessionConfirmedAt(...args); }
   nativeSession(...args: Parameters<AccountRepository["nativeSession"]>) { return this.accounts.nativeSession(...args); }
   getNativeSession(...args: Parameters<AccountRepository["getNativeSession"]>) { return this.accounts.getNativeSession(...args); }
+  confirmNativeSession(...args: Parameters<AccountRepository["confirmNativeSession"]>) { return this.accounts.confirmNativeSession(...args); }
+  nativeSessionConfirmedAt(...args: Parameters<AccountRepository["nativeSessionConfirmedAt"]>) { return this.accounts.nativeSessionConfirmedAt(...args); }
   deleteNativeSession(...args: Parameters<AccountRepository["deleteNativeSession"]>) { return this.accounts.deleteNativeSession(...args); }
   renewNativeSession(...args: Parameters<AccountRepository["renewNativeSession"]>) { return this.accounts.renewNativeSession(...args); }
   pruneNativeAuth(...args: Parameters<AccountRepository["pruneNativeAuth"]>) { return this.accounts.pruneNativeAuth(...args); }

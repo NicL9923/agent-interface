@@ -249,7 +249,7 @@ function normalize(value: unknown, seen = new Map<string, string>()): unknown {
   if (Array.isArray(value)) return value.map(item => normalize(item, seen));
   if (value && typeof value === "object")
     return Object.fromEntries(Object.entries(value).map(([key, item]) =>
-      [key, ["token", "csrfToken"].includes(key) && typeof item === "string" ? `normalized-${key}` : normalize(item, seen)]));
+      [key, ["token", "csrfToken", "formKey"].includes(key) && typeof item === "string" ? `normalized-${key}` : normalize(item, seen)]));
   if (typeof value === "string" && uuid.test(value) && !ourIds.has(value)) {
     if (!seen.has(value)) seen.set(value, `00000000-0000-4000-8000-${String(seen.size + 1).padStart(12, "0")}`);
     return seen.get(value);

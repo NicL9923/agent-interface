@@ -123,9 +123,13 @@ export function App() {
   // The anchored send follows the ID Hermes gave its message, once the receipt names one.
   const { sentAs } = history;
   useEffect(() => { if (receipt?.messageId) sentAs(receipt.requestId, receipt.messageId); }, [receipt, sentAs]);
-  // A handoff card's Take over and the live row's Watch open the computer from the transcript.
+  // A handoff card's Take over, a terminal card's Open terminal and the live row's Watch open the computer from the transcript.
   useEffect(() => {
-    const opened = (event: Event) => setPanel({ kind: "computer", ...((event as CustomEvent<{ take?: boolean }>).detail?.take ? { take: Date.now() } : {}) });
+    const opened = (event: Event) => {
+      const detail = (event as CustomEvent<{ take?: boolean; terminal?: { command?: string } }>).detail;
+      setPanel({ kind: "computer", ...(detail?.take ? { take: Date.now() } : {}),
+        ...(detail?.terminal ? { tab: "terminal" as const, terminal: { at: Date.now(), ...(detail.terminal.command ? { command: detail.terminal.command } : {}) } } : {}) });
+    };
     window.addEventListener("wildbots:computer", opened);
     return () => window.removeEventListener("wildbots:computer", opened);
   }, []);
@@ -334,7 +338,7 @@ export function App() {
             offline={offline} appUnavailable={appUnavailable} checkingConnection={session.checkingConnection}
             reconnect={session.reconnect} error={error} setError={setError}
             notifications={notifications} scroll={scroll} endSpace={endSpace} content={content} history={history} reply={reply} onScroll={scrolled}
-            onRoutineResults={openRoutineRun} onHideRoutineRuns={hideRoutineRuns} computerOpen={panel?.kind === "computer"}
+            onRoutineResults={openRoutineRun} onHideRoutineRuns={hideRoutineRuns} computerOpen={panel?.kind === "computer"} reviewed={reviewed}
             onDraft={(text, files = []) => {
               // Drafts are known by their text, so one on its way must not change.
               if (sendingDraft(draft, pending, sending)) return false;
@@ -383,7 +387,7 @@ export function App() {
       {panel?.kind === "routine" && <Loading><RoutineResults key={`${boot.user.id}:${panel.botId}:${panel.routineId}`} botId={panel.botId} routineId={panel.routineId} resultId={panel.resultId} onClose={() => closePanels("routine")} /></Loading>}
       {panel?.kind === "integrations" && <Loading><IntegrationsPanel key={`integrations:${boot.user.id}`} bots={boot.bots} accountScope={boot.user.id} onClose={() => closePanels("integrations")} /></Loading>}
       {computerLoaded && <Loading><ComputerPanel key={`computer:${boot.user.id}`} initialTab={panel?.kind === "computer" ? panel.tab : undefined} open={panel?.kind === "computer"}
-        take={panel?.kind === "computer" ? panel.take : undefined} onClose={() => closePanels("computer")} /></Loading>}
+        take={panel?.kind === "computer" ? panel.take : undefined} terminal={panel?.kind === "computer" ? panel.terminal : undefined} onClose={() => closePanels("computer")} /></Loading>}
       {upgradeLoaded && <Loading><HermesUpgradePanel key={`upgrades:${boot.user.id}`} open={panel?.kind === "upgrade"} onClose={() => closePanels("upgrade")}
         bots={boot.bots} currentVersion={boot.connection.version} currentRevisionDate={boot.connection.revisionDate} /></Loading>}
       {panel?.kind === "preferences" && (

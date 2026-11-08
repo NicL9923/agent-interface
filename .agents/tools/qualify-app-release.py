@@ -80,6 +80,11 @@ ops = Path(PAYLOAD["operationDir"])
 assert release.parent == base / "releases" and ops.parent == base / "operations"
 assert release.is_dir() and not release.is_symlink()
 assert sha(ops / "release.tar.gz") == PAYLOAD["archiveSha256"]
+# Probes call `node` by name from the runtime's directory, so it must be the runtime the stage
+# recorded and no other. Checked before anything is staged.
+node_path = str(Path(PAYLOAD["node"]).parent) + ":" + os.environ.get("PATH", "/usr/bin:/bin")
+assert os.path.realpath(shutil.which("node", path=node_path) or "") == os.path.realpath(PAYLOAD["node"]), "node on the qualification PATH is not " + PAYLOAD["node"]
+assert os.path.realpath(PAYLOAD["node"]) == PAYLOAD.get("nodeRealpath", os.path.realpath(PAYLOAD["node"])), PAYLOAD["node"] + " is no longer the runtime the release was built with"
 sweep_stale_stages(base / "operations", time.time())
 worker_path = base / "shared/hermes-worker.json"
 worker = json.loads(worker_path.read_text())
@@ -215,7 +220,8 @@ def main(argv=None):
     if manifest["status"] not in ("preparing", "prepared"):
         parser.error("Qualify an unactivated staged release only")
     facts = release_app.host_facts(manifest["host"], manifest["appBase"])
-    payload = {**manifest, "node": facts["prior"]["node"], "computerProbeBrowser": args.computer_probe_browser}
+    # The runtime the staged release was built with and will deploy with, recorded at preparation.
+    payload = {**manifest, "node": manifest.get("node") or facts["prior"]["node"], "computerProbeBrowser": args.computer_probe_browser}
     result = release_app.remote(manifest["host"], REMOTE, payload, timeout=7200)
     release_app.MANIFESTS.joinpath(args.name + "-qualification.json").write_text(json.dumps(result, indent=2) + "\n")
     print(json.dumps(result, indent=2))

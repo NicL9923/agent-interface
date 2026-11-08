@@ -44,6 +44,9 @@ cannot sign the app out. It never extends a session past 90 days after its Googl
 sign-in; at that limit it returns the unchanged expiry. A gone session returns 401
 with `session_expired`. Exchange credentials are never
 accepted in query parameters; session credentials never appear in callback URLs.
+Signing in counts as confirming it's you for the system terminal: the new session
+starts confirmed at the Google credential's issue time, or now for a local member.
+A Google credential without an issue time leaves the session unconfirmed.
 The hosted page and API auth responses use `Cache-Control: no-store`. The server
 disables request logging. Reverse proxies should avoid retaining the sign-in
 query or request bodies.
@@ -300,6 +303,15 @@ again on the primary origin if it cannot have reached the server: the connection
 never opened, or the handshake failed, or the request is a GET. A write that timed
 out or lost its connection is not repeated; the app's usual retry rules apply.
 
+## Reusing a request ID
+
+`POST /api/bots/:id/messages` and `/steer` admit one message per `requestId`. The same
+ID with the same content answers that message's receipt again. The same ID with
+different text, files or sender answers 409 with `code: "submission_conflict"`, even
+when both arrive at once. The web's form cards rely on this: they derive one ID per
+person, message, card and attempt, so a second tab or device that sends different
+answers learns that the first one already went and follows its receipt.
+
 ## Retrying a failed turn
 
 `POST /api/bots/:id/messages` accepts `retryOf`, the ID of a user message in this
@@ -371,6 +383,34 @@ vectors:
 | `ranch` | `msg-42` | `run-7` | `97260a13-beba-8fb5-9218-204b5e8a2010` |
 | `ranch` | `msg-42` | empty | `3bba2658-e84c-8ad5-a391-77d34308f4b8` |
 | `café` | `👋` | `run` | `f0431e86-8678-8bc4-92de-7d27336108fb` |
+
+### Form request ID
+
+A form card's answers are sent as an ordinary message under an ID every device of the
+same person derives alike, so the server admits them once:
+
+1. Join `wildbots-form`, the person's `formKey` from `GET /api/bootstrap`, the
+   assistant ID, the message ID, the card's `id` and the attempt number in decimal,
+   with NUL between them, and encode the result as UTF-8.
+2. Take the first 16 bytes of its SHA-256 digest.
+3. Set byte 6 to `(byte6 & 0x0F) | 0x40` (version 4) and byte 8 to
+   `(byte8 & 0x3F) | 0x80`.
+4. Format the bytes as a lowercase UUID.
+
+`formKey` is private to the signed-in person and stable across their devices and
+the server's restarts; never log or share it. A server without it is older than form
+cards. Attempt 0 comes first. Move to the next attempt only after a receipt says
+`rejected`. On opening a form with nothing saved, look up attempts in order with
+`GET /api/submissions/:id`, skipping `rejected`, until one says where the form stands:
+`accepted` means sent, `interrupted` means Hermes restarted while holding it and the
+person decides whether to send again, and anything else means not sent yet.
+`src/shared/retry-id.ts` implements it; `tests/retry-id.test.ts` checks these vectors:
+
+| `formKey` | Assistant | Message | Card | Attempt | `requestId` |
+| --- | --- | --- | --- | --- | --- |
+| `k3y_A-b` | `ranch` | `msg-42` | `trip` | 0 | `1ab28536-230d-4777-84cf-8dcda31bb28c` |
+| `k3y_A-b` | `ranch` | `msg-42` | `trip` | 3 | `76bbd8a5-8259-4c9e-8b2b-3b3fa7bec9d2` |
+| `café` | `👋` | `m` | `c` | 1 | `f2ec6d4c-7663-410f-88ba-49c4a6921df8` |
 
 ## Drafts
 
@@ -717,7 +757,87 @@ The iOS app shows the shared desktop in a `WKWebView` without a web session:
    state in a status line.
 
 The page accepts only a desktop ticket path. It is served with the app's content
-security policy and needs no Hermes credential. The terminal stays in the browser.
+security policy and needs no Hermes credential.
+
+### Confirming it's you
+
+The system terminal needs a confirmation from the last 2 hours, as on the web. A
+signed-in app confirms with the sign-in flow above:
+
+1. Open the `ASWebAuthenticationSession` at
+   `/native/sign-in?state=STATE&code_challenge=CHALLENGE&code_challenge_method=S256&purpose=confirm`
+   with a fresh state and PKCE verifier. `purpose=confirm` only changes the page's
+   heading to "Confirm it's you" and asks for the same household account. Any
+   other `purpose` is a 400.
+2. Take the code from the same `agentinterface://auth/callback?code=CODE&state=STATE`
+   callback, checking the state.
+3. `POST /api/auth/native/confirm` with the bearer token, no Origin header, and
+   `{ "code": "CODE", "state": "STATE", "codeVerifier": "VERIFIER" }`, validated
+   as for exchange. It spends the code and answers `{ "confirmedAt": "ISO8601" }`.
+   The session keeps the later of this and any earlier confirmation.
+
+Failures leave the session signed in. None of them uses `session_expired`:
+
+- 401 `{ "error": "That confirmation expired. Try again.", "code": "confirmation_expired" }`
+  for an unknown, used or expired code, or a wrong state or verifier.
+- 403 `{ "error": "Use the same Google account you signed in with." }` when the
+  code belongs to another household member. The code is spent.
+- 401 `{ "error": "That confirmation is too old. Try again.", "code": "confirmation_expired" }`
+  when the Google credential behind the code is more than 10 minutes old or has
+  no issue time.
+- 403 `{ "error": "Confirm your identity in the iOS app." }` for a browser session.
+
+### System terminal
+
+`GET /api/computer` reports `terminal: { "available", "target", "reason"?, "confirmationRequired"? }`.
+Only terminal administrators get `available: true`; everyone else gets the reason.
+`confirmationRequired: true` means the session has no confirmation from the last
+2 hours; confirm it first.
+
+1. `POST /api/computer/terminal` with the bearer token and `{}` returns
+   `{ "path": "/api/computer/terminal/ws?ticket=TICKET", "expiresAt": "...", "sessionId": "ID", "target": "..." }`.
+   The ticket works once, within 30 seconds, and only for the terminal socket. Without
+   a recent confirmation the answer is 401
+   `{ "error": "Confirm it's you to open the terminal.", "code": "reauthentication_required" }`;
+   confirm and try again. A non-administrator gets 403, a turned-off or unavailable
+   terminal 403 or 409 with the reason, and maintenance 409.
+2. Load `ORIGIN/native/terminal#path=ENCODED_PATH`. The page connects to the ticketed
+   WebSocket with no bearer token or cookie, as the desktop page does: a terminal
+   ticket issued to a native session is accepted on its own from the app's Origin.
+   The connection ends when that native session ends. A new `path` reconnects with
+   that ticket.
+3. `POST /api/computer/terminal/end` with the bearer token and `{ "sessionId": "ID" }`
+   ends the member's own shell and answers `{ "ok": true }`.
+
+The page reports to the `terminal` script message handler with:
+
+- `{ "type": "connected" }` once the shell is attached.
+- `{ "type": "disconnected", "reason": "closed" | "lost" }` when the connection ends
+  without the shell ending. Request a fresh ticket and set the new path.
+- `{ "type": "failed", "reason": "invalid_ticket" | "viewer_unavailable" }` for a path
+  that is not a terminal ticket or an emulator that could not load.
+- `{ "type": "ended" }` when the shell exited. Offer to start a new one.
+- `{ "type": "error", "message": "..." }` with the server's words, such as the
+  maintenance pause. The connection stays open.
+- `{ "type": "focus" }` when the person taps the terminal. Show the app's keyboard.
+
+The page never raises the web keyboard, so iOS smart quotes and autocorrect never
+reach the shell. The app types with its own keyboard through two functions, each
+returning whether it sent anything; both send nothing unless the shell is connected:
+
+- `terminalInput({ "text": "..." })` types text, with line breaks as Return.
+  `terminalInput({ "key": NAME })` presses one of `enter`, `tab`, `backspace`,
+  `escape`, `delete`, `left`, `up`, `right`, `down`, `home`, `end`, `pageUp` or
+  `pageDown`, using application cursor keys when the running program asks for them.
+  Add `"control": true` to text of one letter, `@`, `[`, `\`, `]`, `^`, `_` or a space
+  to send its control character, so `{ "text": "c", "control": true }` is Control-C.
+  Control with a key, or with longer text, sends them unchanged.
+- `terminalPaste(text)` pastes up to 8,192 characters through the terminal, bracketed
+  when the shell asked for it, so a pasted command waits for Return.
+
+The page fits the shell to the web view and sends the size on connect and on every
+size change. A finger drag scrolls as a mouse wheel does. The page sets `data-state`
+on its root element and announces the state in a status line.
 
 ### Handoff requests
 
@@ -731,6 +851,23 @@ control hands back, so the client sends nothing extra. For **Not now**, call
 `{ "decision": "decline", "epoch": "...", "sessionId": "..." }`. It answers
 `{ "status": "ok" }`, or `{ "status": "expired" }` when the request already
 closed, and 409 when the binding no longer matches the assistant's conversation.
+
+### Terminal requests
+
+An assistant's request for a person at the system terminal arrives in `attention`
+with `kind: "terminal"` and
+`terminal: { "epoch", "sessionId", "reason", "whatToDo", "command"? }`. The three
+texts are the assistant's own words, at most 200, 300 and 500 characters.
+`command` is one line with no control or hidden characters; the server drops the
+whole card to an official-client request when it is not. Open the terminal with
+the terminal routes and offer `command` for the person to paste at the prompt
+with `terminalPaste`; never paste it on its own or run it. To answer, call `POST /api/bots/:id/terminal-requests/:requestId`
+with `{ "decision": "done" | "decline", "epoch": "...", "sessionId": "..." }`. It
+answers `{ "status": "ok" }`, or `{ "status": "expired" }` when the request already
+closed. `done` answers 403 unless the person is a terminal administrator, 409
+when the binding no longer matches the conversation, and `decline` is open to
+anyone who can see the chat. Hermes tells the assistant that `done` is the
+person's word, because it cannot see the terminal.
 
 ### Connection requests
 

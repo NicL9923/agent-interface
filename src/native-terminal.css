@@ -1,0 +1,7 @@
+html, body { margin: 0; height: 100%; background: #151c18; overflow: hidden; }
+/* The fit addon sizes the terminal to this box's content area. */
+#screen { position: fixed; inset: 0; padding: 4px; box-sizing: border-box; touch-action: none; }
+/* The app shows its own status; this line is for VoiceOver and tests. */
+#status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+/* A long press never selects page text or opens a callout; the app has its own Paste. */
+#screen { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }

@@ -209,6 +209,9 @@ right-click, pinch to zoom the view, trackpad mode and clipboard copy and paste.
 An assistant can ask for a person in the conversation; the card's Take over opens the
 computer with control in one step, and handing back tells the assistant to continue.
 While a browser tool runs, the live row offers Watch.
+An assistant can also offer the system terminal in chat; its card's Open terminal offers the
+suggested command for you to paste at the prompt, never runs it, and Done tells the assistant to
+check the result.
 
 The [capability matrix](docs/HermesCapabilityMatrix.md) records the tested upstream
 revision, native integration probes, and the small revision-bound extension for
@@ -294,6 +297,13 @@ HTML. Their controls affect only the view; changes reset when you reopen the
 conversation. Hermes receives the format instructions automatically in WildBots
 conversations. See [inline views](docs/HouseholdExperience.md#inline-views) for
 the reply format and supported behavior.
+
+Assistants can also hand you an email draft to open in your mail app or Gmail, or
+a short form to fill in. **Send answers** posts your answers as your own message
+without touching your draft. When an assistant connected to T3 Code starts a
+thread, the chat shows a card with **Open in T3 Code**. These work on web and
+iOS. See [email drafts and forms](docs/HouseholdExperience.md#email-drafts-and-forms)
+and [T3 Code threads](docs/HouseholdExperience.md#t3-code-threads).
 
 **Routines** includes morning brief, meal plan and VPS health recipes, schedule
 previews in the actual Hermes timezone, and **Try once** with durable run
