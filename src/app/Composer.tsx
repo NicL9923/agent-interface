@@ -211,12 +211,10 @@ export const Composer = memo(function Composer({ boot, selected, botId, prompts,
   const drop = useFileDrop(footer, addFiles);
   // After a declined approval the message box asks what to do instead, until Hermes accepts the next message.
   const declinedStep = useDeclined(botId);
-  // The receipt already showing when the decline happened belongs to an earlier message.
-  const receiptAtDecline = useRef<string | undefined>(undefined);
-  useEffect(() => { receiptAtDecline.current = declinedStep ? receipt?.requestId : undefined; }, [declinedStep]);
+  // Only a receipt arriving after the decline counts: the one already showing belongs to an earlier message.
   useEffect(() => {
-    if (declinedStep && receipt?.status === "accepted" && receipt.requestId !== receiptAtDecline.current) clearDecline(botId);
-  }, [receipt]);
+    if (declinedStep && receipt?.status === "accepted") clearDecline(botId);
+  }, [receipt?.requestId, receipt?.status]);
   // Up and Down in an empty composer browse this person's earlier messages here, newest first.
   const [recall, setRecall] = useState<Recall>(null);
   const caret = useRef<"start" | "end" | null>(null);

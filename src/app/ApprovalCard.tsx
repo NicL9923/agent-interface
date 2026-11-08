@@ -96,7 +96,7 @@ export function ApprovalCard({ approval, botId, userId, assistantName, disconnec
     const mine = !!attempt && sameAttempt(attempt, value, scope);
     return <button key={`${value}:${scope ?? ""}`} type="button" className={primary ? "primary" : undefined}
       disabled={busy || !!attempt && (attempt.state !== "unconfirmed" || !mine)}
-      onClick={() => scope === "always" ? setConfirming(true) : void decide(value, scope)}>
+      onClick={() => void decide(value, scope)}>
       {mine && (sending || attempt!.state === "sent") && <Icon name={sending ? "spinner" : "check"} className={sending ? "spin" : undefined} size={16} />}
       {mine ? sending ? sendingLabel
         : attempt!.state === "sent" ? scoped ? grantedText(attempt!.scope, assistantName, scoped).replace(/\.$/, "") : "Approved"

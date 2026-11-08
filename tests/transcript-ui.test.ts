@@ -1552,6 +1552,21 @@ describe("approval scopes, the decline handoff, recommended answers and steering
     expect(textarea().placeholder).not.toBe("Tell Shared what to do instead");
   });
 
+  it("keeps the decline's question in the message box when the chat opens again over an earlier accepted message", async () => {
+    conversation = { ...conversation, activity: { state: "waiting" }, approvals: [scoped] };
+    vi.mocked(write).mockImplementation(async <T>(path: string, body: unknown) =>
+      (path.endsWith("/messages") || path.endsWith("/steer") ? { requestId: (body as { requestId: string }).requestId, status: "accepted" } : {}) as T);
+    await render();
+    await typeInto(textarea(), "Before the approval");
+    await act(async () => labelled("Send guidance").click());
+    await waitForUi(() => expect(textarea().value).toBe(""));
+    await act(async () => buttonText("Decline")!.click());
+    await act(async () => root.unmount());
+    ({ container, root } = mountRoot());
+    await render();
+    await waitForUi(() => expect(textarea().placeholder).toBe("Tell Shared what to do instead"));
+  });
+
   it("tags and pre-selects the recommended answer for one choice, sends its raw text, and never pre-selects several", async () => {
     conversation = { ...conversation, activity: { state: "blocked" }, attention: [{ id: "ask", kind: "clarify", title: "Supplies", detail: "", questions: [
       { id: "feed", prompt: "Which feed?", options: ["Hay (Recommended)", "Pellets"], recommended: 0 },
