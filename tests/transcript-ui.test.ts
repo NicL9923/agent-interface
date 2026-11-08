@@ -1105,6 +1105,9 @@ describe("form replies", () => {
   // The ID every tab and device derives for this person's attempt at this form.
   const formId = (attempt: number) => formRequestId("form-key-one", "shared", "a", "trip", attempt);
   const fill = async () => {
+    // A form first looks up whether its answers already went, with its fields disabled. Text still
+    // lands in a disabled field but clicks don't, so filling before then sends other answers.
+    await waitForUi(() => expect(card().querySelector(".form-reply")?.getAttribute("aria-busy")).toBe("false"));
     await typeInto(card().querySelector<HTMLInputElement>('input[type="text"]')!, "Marfa");
     await act(async () => field("Packed").querySelector("input")!.click());
     await act(async () => field("Bringing the dog").querySelector("input")!.click());
