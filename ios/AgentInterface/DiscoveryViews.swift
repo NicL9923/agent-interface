@@ -297,10 +297,13 @@ struct DiscoveryView: View {
             overview = try await api.get("/automations")
           } } }.disabled(busy)
         }
-        Button(row.enabled ? "Pause" : "Resume") { Task { await perform { api in
-          let _: EmptyResponse = try await api.write("/routines/\(APIClient.component(row.id))/state", ["enabled": !row.enabled], method: "PATCH")
-          overview = try await api.get("/automations")
-        } } }.disabled(busy)
+        // Check-ins are turned off from the main assistant's details, never paused here.
+        if !row.isCheckIn {
+          Button(row.enabled ? "Pause" : "Resume") { Task { await perform { api in
+            let _: EmptyResponse = try await api.write("/routines/\(APIClient.component(row.id))/state", ["enabled": !row.enabled], method: "PATCH")
+            overview = try await api.get("/automations")
+          } } }.disabled(busy)
+        }
       }.buttonStyle(.bordered).controlSize(.large)
     }
   }

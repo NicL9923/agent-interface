@@ -20,6 +20,15 @@ describe("sent message echo", () => {
     expect(shown.messages.at(-1)).toMatchObject({ id: "req", role: "user", text: "Hello there", sender });
   });
 
+  it("says a steered message joined the running task before Hermes's copy arrives, and an unknown one says nothing", () => {
+    const steered = step(sending, { receipt: { ...accepted, steered: true } })!;
+    expect(withEchoes(conversation(), [steered])!.messages.at(-1)!.steered).toBe(true);
+    for (const receipt of [accepted, { ...accepted, steered: false }]) {
+      const plain = step(sending, { receipt })!;
+      expect(withEchoes(conversation(), [plain])!.messages.at(-1)).not.toHaveProperty("steered");
+    }
+  });
+
   it("waits unconfirmed when the request ends without a receipt", () => {
     expect(step(sending, { pending: request })?.status).toBe("unconfirmed");
   });

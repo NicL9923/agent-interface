@@ -11,7 +11,10 @@ import type { AutomationRequest, AutomationResult } from '../shared/automation.j
 import { formatBytes } from '../shared/uploads.js';
 import { IncompleteCreationError, interruptionPendingMessage } from '../shared/errors.js';
 import { httpError } from './http-error.js';
+
+const approvalSettingsUnsupported = "This Hermes integration can't list always-allowed commands. Update it to manage them here.";
 import { createModelNames } from './model-names.js';
+import jobFields from '../shared/hermes-job-fields.json' with { type: 'json' };
 import { createHermesTransport, TransportError, type Connection, type HermesOptions, type Wire } from './hermes-transport.js';
 import { fileSigner, safeStagedPath, type RegisteredFile } from './hermes-files.js';
 import { deliverRooms, withDeliverRooms } from './delivery-targets.js';
@@ -35,6 +38,20 @@ const SHARED_READ_MS = 3_000;
 const DESCRIPTION_MS = 10_000;
 // How long a roster read answers later requests when Hermes reported no change meanwhile.
 export const ROSTER_REUSE_MS = 2_000;
+
+/**
+ * Native cron job fields the app reads as routine settings, and those Hermes's scheduler writes as
+ * bookkeeping. Anything else Hermes holds with a value can change how the job runs without the app
+ * seeing it: a monitor script, a working directory, a pinned endpoint, or a setting a later Hermes adds.
+ */
+const KNOWN_FIELDS = new Set([...jobFields.routine, ...jobFields.status]);
+/** The native fields that are set and are neither. Private `_` bookkeeping and an unlimited `repeat` count as unset. */
+export function nativeOverrides(job: Wire): string[] {
+  const set = (value: unknown) => value !== null && value !== undefined && value !== '' && value !== false
+    && !(Array.isArray(value) && !value.length) && !(typeof value === 'object' && !Array.isArray(value) && !Object.keys(value as object).length);
+  return Object.entries(job ?? {}).filter(([key, value]) => !KNOWN_FIELDS.has(key) && !key.startsWith('_') && set(value)
+    && !(key === 'repeat' && typeof value === 'object' && value !== null && (value as Wire).times == null)).map(([key]) => key).sort();
+}
 
 export function createHermesRuntime(options: HermesOptions = {}): Runtime {
   let discoveryFull = false;
@@ -375,7 +392,7 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
       state.tools = [];
     }
     if (active && state && settledStates.includes(state.state)) settleSoon(botId);
-    const {approvals, attention} = openRequests(value, sid);
+    const {approvals, attention} = openRequests(value, sid, {revocable: contract.approvalSettings});
     const toolCalls: ToolCall[] = Array.isArray(value.app_tool_calls) ? value.app_tool_calls.map(unbridged) : state?.tools ?? [];
     if (active && state && generation === structuralGenerationOf(botId)) state.tools = toolCalls;
     const runningTool = toolCalls.find(tool => tool.status === 'running');
@@ -764,9 +781,9 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     },
     // Routes verify profile and request kind with one light read. Native answers prove
     // final staleness, so do not repeat that read here.
-    async approve(botId, approvalId, decision, _senderId) {
+    async approve(botId, approvalId, decision, _senderId, scope = 'once') {
       await checkRequest(botId, approvalId, 'approval');
-      const result = await rpc('request.answer', {id: approvalId, profile: botId, result: {choice: decision === 'approved' ? 'once' : 'deny'}})
+      const result = await rpc('request.answer', {id: approvalId, profile: botId, result: {choice: decision === 'approved' ? scope : 'deny'}})
         .finally(() => touched(botId));
       if (result.status === 'expired') throw new Error('That approval expired before it was answered.');
     },
@@ -822,6 +839,11 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
       return { data, mime: match[1], ...(typeof value.provider === 'string' ? { provider: value.provider.slice(0, 100) } : {}) };
     },
     async automationRequest<R extends AutomationRequest>(input: R): Promise<AutomationResult<R['operation']>> {
+      if (input.operation.startsWith('approval_')) {
+        await connect();
+        // An older add-on refuses these operations as unknown, which would read as a failure.
+        if (!contract.approvalSettings) throw httpError(409, approvalSettingsUnsupported, {code: 'approval_settings_unsupported'});
+      }
       const response = await http('/api/agent-interface/automation', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) });
       const value = await readOperationJson(response, 'automation', input.operation);
       return decodeAutomation<R['operation']>(input.operation, value);
@@ -942,7 +964,10 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
             enabled: job.enabled !== false && job.state !== 'paused',
             nextRunAt: job.next_run_at ?? undefined, lastRunAt: job.last_run_at ?? undefined,
             lastStatus: job.last_status ?? undefined, lastError: job.last_error ?? undefined, lastDeliveryError: job.last_delivery_error ?? undefined,
-            ...(job.live_execution ? {running: true} : {})});
+            ...(job.live_execution ? {running: true} : {}),
+            // A claimed fire carries the job as it was then. `last_delivery_queued` outlives its receipt, so
+            // held deliveries come from the add-on, which reads the receipts (routineDeliveries).
+            ...(job.fire_claim ? {inFlight: true} : {}), nativeOverrides: nativeOverrides(job)});
         }
       }
       return all;
@@ -968,6 +993,26 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
       await http(`/api/cron/jobs/${encodeURIComponent(id)}?profile=${encodeURIComponent(botId)}`, {method: 'DELETE'});
       discoveryFull = true;
       discoveryGeneration++;
+    },
+    async delegationPolicy(policies) {
+      await connect();
+      // An add-on with no gate gets no roster: its assistants work as before. One that speaks only the
+      // first protocol takes main assistants' rosters alone, in that protocol's shape; the rest of the
+      // household it leaves as Hermes has it.
+      if (!contract.delegation) return 0;
+      const params = contract.delegation >= 2 ? {version: 2, policies}
+        : {policies: Object.fromEntries(Object.entries(policies).filter(([, policy]) => policy.main)
+          .map(([profile, {member, personal, shared}]) => [profile, {member, personal, shared}]))};
+      const result = await rpc('agent-interface.delegation', params);
+      if (result?.ok !== true) throw new Error('Hermes did not save the main assistants\' rosters.');
+      return contract.delegation;
+    },
+    async routineDeliveries(botId) {
+      await connect();
+      if (!contract.extension) throw new Error('Reading held routine deliveries requires the verified Hermes add-on.');
+      const result = await rpc('agent-interface.routine_deliveries', {profile: botId});
+      if (!Array.isArray(result?.pending)) throw new Error('Hermes did not list the routine deliveries it holds.');
+      return result.pending.map((row: Wire) => ({id: String(row?.id ?? ''), name: String(row?.name ?? '')}));
     },
     async discoverEvents(cursor): Promise<RuntimeDiscovery> {
       await connect();

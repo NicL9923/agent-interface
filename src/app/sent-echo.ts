@@ -20,6 +20,8 @@ export type SentEcho = {
   acceptedAt?: number;
   /** The conversation has shown activity since Hermes accepted it. */
   ran?: boolean;
+  /** Hermes admitted it into the task that was already running. */
+  steered?: boolean;
 };
 const active = (state: string) => ["thinking", "working", "waiting", "blocked"].includes(state);
 /** Whether Hermes's own copy of the message is in the conversation. */
@@ -64,7 +66,7 @@ export function nextEcho(echo: SentEcho | null, { pending, receipt, sending, con
   } else if (next.status !== "accepted") {
     // A refused, interrupted or abandoned send leaves only the draft it came from.
     if (receipt?.requestId !== next.request.requestId || receipt.status !== "accepted") return null;
-    next = { ...next, status: "accepted", messageId: receipt.messageId, acceptedAt: now };
+    next = { ...next, status: "accepted", messageId: receipt.messageId, acceptedAt: now, ...(receipt.steered ? { steered: true } : {}) };
   }
   if (conversation?.botId !== next.request.botId) return next;
   if (echoShown(next, conversation)) return null;
@@ -103,6 +105,7 @@ export function withEchoes(conversation: SavedConversation | null, echoes: SentE
     createdAt: echo.sentAt,
     sender: echo.sender,
     ...(echo.request.attachments.length ? { files: echo.request.attachments } : {}),
+    ...(echo.steered ? { steered: true } : {}),
   }));
   return { ...conversation, messages: [...conversation.messages, ...messages] };
 }

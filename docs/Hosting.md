@@ -64,6 +64,15 @@ available to existing services. The app sends its own Content-Security-Policy,
 Permissions-Policy and HSTS headers. Caddy should pass them through rather than
 add its own, because browsers enforce every policy they receive.
 
+On `SIGINT` or `SIGTERM`, the primary listener stops accepting connections and
+gives active responses 25 seconds to finish. Responses that finish during shutdown
+close their connections instead of keeping them reusable. After the grace period,
+the server logs the remaining connection count and destroys those sockets,
+including silent TCP peers and WebSockets that did not complete their close handshake.
+The worker, runtime, and store then close through the normal cleanup hooks.
+A separate 30-second process watchdog still exits with failure if shutdown or
+cleanup remains stuck.
+
 Hermes keeps execution, profiles, sessions, provider credentials, tools, memory
 and scheduling. Its existing dashboard process must load the integration add-on;
 starting another owner against the same Hermes home is not a deployment method.

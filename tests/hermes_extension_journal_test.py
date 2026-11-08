@@ -380,6 +380,32 @@ class OpenTests(unittest.TestCase):
                 self.assertEqual(submit("send", {**params, "request_id": "third", "text": "Again"})["result"]["status"], "accepted")
             self.assertEqual(len(calls), 1)
 
+    def test_the_steering_decision_survives_admission_receipt_recovery_and_history(self):
+        rows = [{"row_id": 1, "role": "user", "text": "Start"}, {"row_id": 2, "role": "user", "text": "Use the other address"}]
+        with FakeGateway(rows) as hermes:
+            hermes.open()
+            submit, native = hermes.methods["agent-interface.submit"], hermes.server.handle_request
+            hermes.server.handle_request = Mock(return_value=hermes.server._ok("native", {"status": "accepted"}))
+            params = {"profile": "default", "request_id": "first", "sender_id": "member", "text": "Start"}
+            self.assertIs(submit("send", params)["result"]["steering"], False)
+            hermes.server._sessions["sid"]["running"] = True
+            hermes.server.handle_request = Mock(return_value=hermes.server._ok("native", {"status": "queued"}))
+            steer = {**params, "request_id": "steer", "text": "Use the other address"}
+            self.assertIs(submit("send", steer)["result"]["steering"], True)
+            # A replay answers the saved decision, however the session moved since.
+            hermes.server._sessions["sid"]["running"] = False
+            self.assertIs(submit("again", steer)["result"]["steering"], True)
+            lookup = lambda key: hermes.methods["agent-interface.receipt"]("lookup", {"request_id": key})["result"]["receipt"]
+            self.assertEqual((lookup("first")["steering"], lookup("steer")["steering"]), (False, True))
+            with hermes.journal.db:
+                hermes.journal.db.execute("UPDATE receipts SET row_id=1 WHERE request_id='first'")
+                hermes.journal.db.execute("UPDATE receipts SET row_id=2 WHERE request_id='steer'")
+            hermes.server.handle_request = native
+            messages = {row["row_id"]: row for row in hermes.open()["messages"]}
+            self.assertNotIn("app_steering", messages[1])
+            self.assertIs(messages[2]["app_steering"], True)
+            self.assertEqual(messages[2]["app_request_id"], "steer")
+
     def test_submit_resolves_canonical_and_preserves_interruption_guard(self):
         with FakeGateway([]) as hermes:
             hermes.open()
@@ -914,7 +940,7 @@ class CanonicalOpenTests(unittest.TestCase):
              "app_tool_call": {"id": "first:read", "name": "read_file", "arguments": json.dumps({"path": "report.pdf"})}},
             # A reused call ID keeps its matching output but cannot claim one call's detail.
             {**messages[2], "app_run_id": "first", "app_artifacts": [{"path": "/srv/a.txt"}]},
-            {**messages[3], "app_request_id": "steer", "app_sender_id": "nicolas", "app_run_id": "first", "app_attachments": [], "app_display_text": "Shorter please"},
+            {**messages[3], "app_request_id": "steer", "app_sender_id": "nicolas", "app_run_id": "first", "app_attachments": [], "app_display_text": "Shorter please", "app_steering": True},
             {**messages[4], "app_run_id": "first"},
             {**messages[5], "app_request_id": "photo", "app_sender_id": "nicolas", "app_run_id": "photo", "app_attachments": [photo], "app_display_text": ""},
             {**messages[6], "app_run_id": "photo", "app_artifacts": []},

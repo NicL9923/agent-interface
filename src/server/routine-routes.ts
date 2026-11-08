@@ -6,7 +6,7 @@ import type { CapabilityKey, Runtime } from "../shared/types.js";
 import { apiRoute } from "./api-route.js";
 import { signedIn } from "./auth.js";
 import { routineById, visibleTo, type Roster } from "./bot-access.js";
-import { assertDeliveryPrivate, routineRooms, routinesFor } from "./collaboration.js";
+import { assertDeliveryPrivate, assertMainOwnChat, routineRooms, routinesFor } from "./collaboration.js";
 import { allowedIdentity, type Config } from "./config.js";
 import { routineTargetsAfter } from "./delivery-targets.js";
 import { assertRoutineEditable } from "./experience.js";
@@ -14,6 +14,7 @@ import { httpError } from "./http-error.js";
 import { serialDelivery } from "./routine-delivery.js";
 import { id } from "./schemas.js";
 import type { Store } from "./store.js";
+import { assertNoMarker, assertNotManaged, isManagedCheckIn } from "./main-assistant.js";
 
 /** Listing, creating, changing and deleting routines. Running, pausing and trials live in experience.ts. */
 export function installRoutineRoutes(app: FastifyInstance, collaborators: {
@@ -32,6 +33,7 @@ export function installRoutineRoutes(app: FastifyInstance, collaborators: {
     return routinesFor(runtime, store, roster, userId, all.filter(r => visibleTo(store, r.botId, userId)).map((r) => ({
       ...r,
       recipientIds: store.getRoutineRecipients(r.botId, r.id),
+      ...(isManagedCheckIn(store, r) ? { managed: "check-in" as const } : {}),
     })));
   });
   const routineSchema = z
@@ -60,6 +62,8 @@ export function installRoutineRoutes(app: FastifyInstance, collaborators: {
     // Hermes lets two assistants hold jobs with one ID; this save is for the named assistant's.
     const previous = routineId ? all.find(row => row.id === routineId && row.botId === input.botId) : undefined;
     if (routineId && (!previous || previous.botId !== input.botId)) throw httpError(404, "Routine not found");
+    if (previous) assertNotManaged(store, previous);
+    assertNoMarker(input.prompt);
     // Compare against native state before forwarding updates. This also preserves
     // uneditable settings and avoids revalidating an untouched, missing script/source.
     for (const key of ['skills','model','provider','enabledToolsets','script','noAgent','contextFrom'] as const) {
@@ -106,6 +110,8 @@ export function installRoutineRoutes(app: FastifyInstance, collaborators: {
         const rooms = await routineRooms(runtime, store, userId, input, current?.roomIds);
         if (rooms === undefined) delete input.roomIds; else input.roomIds = rooms;
       }
+      // A main assistant's routine posts only in its own chat, paused or not, so it never waits to leak on a resume.
+      assertMainOwnChat(store, input.botId, routineTargetsAfter(current, input.botId, input.roomIds));
       // An enabled routine delivers, so every room it will post in is checked, including any its owner
       // cannot see and any written outside the app, even when this save changes none of them.
       if (input.enabled) {
@@ -127,6 +133,7 @@ export function installRoutineRoutes(app: FastifyInstance, collaborators: {
     // and Hermes is told its assistant. Without that, Hermes picks the copy itself, which may be hidden.
     const routine = routineById(await runtime.routines(), req.params.id, store, signedIn(req).id);
     if (!routine) throw httpError(404, "Routine not found");
+    assertNotManaged(store, routine);
     await assertRoutineEditable(runtime, store, routine.id, routine.botId);
     // Hermes treats the profile as a hint and deletes another assistant's copy when this one is gone
     // (hermes_cli/web_routers/cron.py _job_owner_profile), and nothing in it deletes strictly by profile

@@ -23,6 +23,8 @@ struct BotProfileView: View {
         Section { header; actions }.listRowBackground(Color.clear).listRowSeparator(.hidden)
           .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 12, trailing: 0))
         Section { details }
+        // Only your own personal assistant can be your main one.
+        if MainAssistant.eligible(bot, userId: store.bootstrap?.user.id ?? "") { MainAssistantSection(bot: bot) }
         Section {
           Toggle("Notify me about all activity", isOn: follow).disabled(!store.homeCanOrganize).accessibilityIdentifier("followBot")
           HomeSectionPicker(botId: bot.id) { sectionFor = bot }

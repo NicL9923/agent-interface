@@ -70,7 +70,9 @@ export class NotificationRepository {
   }
   /** Assistant display names for notification titles, refreshed by the background worker. */
   botNames = new Map<string, string>();
-  enqueue(event: RuntimeEvent) {
+  enqueue(event: RuntimeEvent & { quiet?: boolean }) {
+    // A silent check-in run: see CheckInRepository.quiet.
+    if (event.quiet) return;
     // A notification is plain text, so the reply's Markdown becomes its words.
     const copy = notificationCopy({ ...event, body: event.body && markdownPlain(event.body) }, this.botNames.get(event.botId));
     for (const userId of this.recipients(event))
@@ -175,12 +177,16 @@ export class NotificationRepository {
       if (typeof id === "string" && id && !still.has(id)) resolved += Number(resolve.run(id, botId, now).changes);
     return resolved;
   }
-  /** iOS deliveries of notifications their recipient has since read, with who read them, that no clear was sent for. */
+  /**
+   * iOS deliveries of notifications their recipient has since read, with who read them, that no clear
+   * was sent for. A device left quiet while its person used another (a `skipped:` endpoint) is
+   * listed too: it showed nothing, but its badge counted the news.
+   */
   readOnDevices(now = Date.now()) {
     // A week covers what a lock screen plausibly still shows.
     return (this.db.prepare(`SELECT d.outbox_id,d.endpoint,o.user_id,json_extract(o.payload,'$.tag') AS tag,r.client_id AS reader FROM delivered d
       JOIN outbox o ON o.id=d.outbox_id JOIN chat_reads r ON r.user_id=o.user_id AND r.bot_id=json_extract(o.payload,'$.botId')
-      WHERE d.endpoint LIKE 'apns:%' AND o.created_at>? AND NOT EXISTS(SELECT 1 FROM delivered c WHERE c.outbox_id=d.outbox_id AND c.endpoint='cleared:'||d.endpoint) ORDER BY o.created_at`)
+      WHERE (d.endpoint LIKE 'apns:%' OR d.endpoint LIKE 'skipped:apns:%') AND o.created_at>? AND NOT EXISTS(SELECT 1 FROM delivered c WHERE c.outbox_id=d.outbox_id AND c.endpoint='cleared:'||d.endpoint) ORDER BY o.created_at`)
       .all(now - 7 * 86400000) as { outbox_id: string; endpoint: string; user_id: string; tag: string; reader: string }[])
       .filter(row => this.seenInChat(row.outbox_id, now));
   }
@@ -190,6 +196,7 @@ export class NotificationRepository {
   subscribe(
     userId: string,
     subscription: { endpoint: string; keys: { p256dh: string; auth: string } },
+    deviceId?: string,
   ) {
     const existing = this.db
       .prepare("SELECT user_id FROM subscriptions WHERE endpoint=?")
@@ -201,11 +208,26 @@ export class NotificationRepository {
         "INSERT INTO subscriptions VALUES(?,?,?) ON CONFLICT(endpoint) DO UPDATE SET value=excluded.value",
       )
       .run(subscription.endpoint, userId, JSON.stringify(subscription));
+    // A registration from a client without a device ID forgets any earlier one: that ID may be stale.
+    this.attachSubscriptionDevice(userId, subscription.endpoint, deviceId);
   }
+  // BEGIN device activity
+  /** Names the installation behind this person's own subscription. Another person's endpoint is left alone. */
+  attachSubscriptionDevice(userId: string, endpoint: string, deviceId: string | undefined) {
+    if (!this.hasSubscription(userId, endpoint)) return;
+    if (deviceId) this.db.prepare("INSERT INTO push_subscription_devices VALUES(?,?) ON CONFLICT(endpoint) DO UPDATE SET device_id=excluded.device_id").run(endpoint, deviceId);
+    else this.db.prepare("DELETE FROM push_subscription_devices WHERE endpoint=?").run(endpoint);
+  }
+  /** The installation behind each of this person's subscriptions, by endpoint, for those that named one. */
+  subscriptionDevices(userId: string): Map<string, string> {
+    const rows = this.db.prepare("SELECT d.endpoint,d.device_id FROM push_subscription_devices d JOIN subscriptions s ON s.endpoint=d.endpoint WHERE s.user_id=?")
+      .all(userId) as { endpoint: string; device_id: string }[];
+    return new Map(rows.map(row => [row.endpoint, row.device_id]));
+  }
+  // END device activity
   unsubscribe(userId: string, endpoint: string) {
-    this.db
-      .prepare("DELETE FROM subscriptions WHERE user_id=? AND endpoint=?")
-      .run(userId, endpoint);
+    const removed = this.db.prepare("DELETE FROM subscriptions WHERE user_id=? AND endpoint=?").run(userId, endpoint).changes;
+    if (removed) this.db.prepare("DELETE FROM push_subscription_devices WHERE endpoint=?").run(endpoint);
   }
   hasSubscription(userId: string, endpoint: string): boolean {
     return !!this.db.prepare("SELECT 1 FROM subscriptions WHERE user_id=? AND endpoint=?").get(userId, endpoint);

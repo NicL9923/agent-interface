@@ -2,10 +2,12 @@ import type { AccountRepository } from "./store-accounts.js";
 import { presenceTtl } from "./store-notifications.js";
 import type { PersonalRepository } from "./store-personal.js";
 import type { StoreDatabase } from "./store-database.js";
+import type { CheckInRepository } from "./store-check-ins.js";
 
 /** Removals that span every area: a deleted assistant's records, and rows past their retention. */
 export class RetentionRepository {
-  constructor(private readonly database: StoreDatabase, private readonly accounts: AccountRepository, private readonly personal: PersonalRepository) {}
+  constructor(private readonly database: StoreDatabase, private readonly accounts: AccountRepository, private readonly personal: PersonalRepository,
+    private readonly checkIns?: CheckInRepository) {}
   private get db() { return this.database.db; }
   /** Removes what this app keeps about a deleted assistant, so a new one reusing its ID starts clean. */
   // Its news, runs and receipts go too: with no owner left on record, anything kept would
@@ -27,13 +29,16 @@ export class RetentionRepository {
       this.db.prepare("DELETE FROM routine_recipient_sets WHERE bot_id=?").run(botId);
       for (const table of ["bot_presentation", "bot_voices", "bot_visibility_periods", "bot_names", "drafts", "draft_revisions", "read_positions", "chat_presence", "chat_reads", "card_state", "submissions", "approval_attribution", "approval_resolutions", "retry_claims", "routine_trials", "push_action_tokens"])
         this.db.prepare(`DELETE FROM ${table} WHERE bot_id=?`).run(botId);
+      for (const job of this.checkIns?.current().filter(job => job.botId === botId) ?? []) this.checkIns!.removed(botId, job.jobId);
       this.db.prepare("DELETE FROM saved_items WHERE json_extract(value,'$.botId')=?").run(botId);
       for (const user of this.accounts.users()) {
         const value = this.personal.preferences(user.id);
         const kept = (id: string) => id !== botId;
         const next = { ...value, favorites: value.favorites.filter(kept), followBots: value.followBots.filter(kept),
           sections: value.sections.map(section => ({ ...section, botIds: section.botIds.filter(kept) })),
-          defaultBotId: value.defaultBotId === botId ? undefined : value.defaultBotId };
+          defaultBotId: value.defaultBotId === botId ? undefined : value.defaultBotId,
+          // Its check-ins went with its profile, so it stops being anyone's main assistant.
+          ...(value.mainBotId === botId ? { mainBotId: undefined, checkIns: value.checkIns && { ...value.checkIns, enabled: false } } : {}) };
         if (JSON.stringify(next) !== JSON.stringify(value)) this.personal.savePreferences(user.id, next);
       }
     });
@@ -45,6 +50,10 @@ export class RetentionRepository {
     return this.database.transaction(() => {
       const sessions = this.db.prepare("DELETE FROM sessions WHERE expires<=?").run(now).changes;
       this.db.prepare("DELETE FROM chat_presence WHERE updated_at<?").run(now - presenceTtl);
+      // A row holds its device while its session lives; one whose session ended holds nothing.
+      this.db.prepare(`DELETE FROM device_activity WHERE NOT EXISTS(SELECT 1 FROM sessions s WHERE s.hash=device_activity.session_hash AND s.expires>?)
+        AND NOT EXISTS(SELECT 1 FROM native_sessions n WHERE n.hash=device_activity.session_hash AND n.expires>?)`).run(now, now);
+      this.db.prepare("DELETE FROM push_subscription_devices WHERE NOT EXISTS(SELECT 1 FROM subscriptions s WHERE s.endpoint=push_subscription_devices.endpoint)").run();
       this.db.prepare("DELETE FROM push_action_tokens WHERE expires<=?").run(now);
       // Pending decisions look back a day.
       this.db.prepare("DELETE FROM approval_resolutions WHERE resolved_at<?").run(now - 2 * 86400000);

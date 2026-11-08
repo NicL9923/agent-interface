@@ -90,6 +90,7 @@ const overview = z.object({ botId: text, owner: z.literal('Hermes'),
     pending: z.array(z.object({ id: text, summary: text, origin: text, revision: text })), approvalRequired: flag, lockSupported: flag.optional() }),
 });
 const ok = z.object({ ok: z.literal(true) });
+const approvalPolicy = z.object({ allowlist: z.array(z.string().min(1).max(200)).max(500), mode: z.enum(['manual', 'smart', 'off']) });
 const automationSchemas: { [O in AutomationOperation]: z.ZodType<AutomationResult<O>> } = {
   overview, goal_set: overview, goal_pause: overview, goal_clear: overview, goal_resume: overview,
   task_create: task, task_get: task, task_update: task, task_action: task, task_dependency: task,
@@ -98,6 +99,9 @@ const automationSchemas: { [O in AutomationOperation]: z.ZodType<AutomationResul
   skill_content: z.object({ name: text, content: text, truncated: flag }),
   skill_diff: z.object({ id: text, diff: text, revision: text, truncated: flag }), skill_decide: ok, skill_policy: ok,
   skill_lock: z.object({ ok: z.literal(true), name: text, locked: flag }),
+  approval_settings: approvalPolicy,
+  approval_allowlist_remove: approvalPolicy.extend({ ok: z.literal(true) }),
+  approval_mode: approvalPolicy.extend({ ok: z.literal(true) }),
 };
 function decode<T>(schema: z.ZodType<T>, value: unknown, family: string, operation: string): T {
   const result = schema.safeParse(value);

@@ -52,6 +52,8 @@ struct ConversationView: View {
   @State private var unseen = 0
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var fileSheetOpen = false
+  /// The file a reply's chip opened the artifacts sheet on.
+  @State private var fileFocus: String?
   @State private var profileOpen = false
   @State private var modelOpen = false
   /// Reads replies aloud, one at a time, from each reply's own row.
@@ -134,7 +136,7 @@ struct ConversationView: View {
     // Audio belongs to a reachable chat on screen, so it stops when the connection drops or the chat closes.
     .onChange(of: store.connected) { _, connected in if !connected { speech.cancel() } }
     .sheet(isPresented: $modelOpen) { ChatModelSheet(botId: bot.id).appStore(store) }
-    .sheet(isPresented: $fileSheetOpen) { ConversationFilesView().appStore(store).coveringChat(store) }
+    .sheet(isPresented: $fileSheetOpen) { ConversationFilesView(focus: fileFocus).appStore(store).coveringChat(store) }
     .sheet(item: Bindable(store).openComputer) { opening in
       NavigationStack {
         ComputerView(take: opening.take).toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { store.openComputer = nil } } }
@@ -236,7 +238,7 @@ struct ConversationView: View {
     profileAction = nil
     switch action {
     case .find: openFind()
-    case .artifacts: fileSheetOpen = true
+    case .artifacts: fileFocus = nil; fileSheetOpen = true
     case .settings: edit()
     case nil: break
     }
@@ -439,7 +441,9 @@ struct ConversationView: View {
       }
       emptyState
       TranscriptTurns(turns: store.turns, advanced: advanced, delivery: store.outgoing,
-        liveTurn: store.activity.active ? store.turns.last?.id : nil, runSlots: runSlots, botId: bot.id)
+        liveTurn: store.activity.active ? store.turns.last?.id : nil, runSlots: runSlots, botId: bot.id,
+        replyFiles: store.replyFiles, revisions: store.draftRevisions)
+        .environment(\.openReplyFile, { id in fileFocus = id; fileSheetOpen = true })
         .environment(\.foundMessage, findTarget ?? highlighted)
         .environment(\.hideRoutineRuns, { run in
           store.setRunsShown(botId: bot.id, routineId: run.routineId, shown: false)
@@ -466,6 +470,10 @@ struct ConversationView: View {
         let target = "approval-" + approval.id
         approvalCard(approval, proxy).id(target)
           .onGeometryChange(for: OpeningCardMetrics?.self) { OpeningCardMetrics($0) } action: { openingCardMoved($0, target, proxy) }
+      }
+      if let declined = store.declinedApprovals[bot.id],
+        !(store.conversation?.approvals.contains { $0.id == declined && $0.status == "pending" } ?? false) {
+        DeclinedStepView(botName: bot.name)
       }
       // The end of the real content, then room for a sent message to sit at the top.
       Color.clear.frame(height: 0)
@@ -739,11 +747,11 @@ struct ConversationView: View {
     }
   }
   private func approvalCard(_ approval: Approval, _ proxy: ScrollViewProxy) -> some View {
-    ApprovalDecisionView(approval: approval, botId: bot.id, sendStarted: {
+    ApprovalDecisionView(approval: approval, botId: bot.id, botName: bot.name, sendStarted: {
       openingCard = nil; attentionPosition = nil
       following = true
       scrollToLatest(proxy)
-    })
+    }, declined: { composerFocused = true })
   }
 }
 /// A conversation row. Tool calls and reasoning render in the turn's groups, not here.
@@ -757,6 +765,8 @@ struct MessageView: View {
   /// Set while the person's sent message is on its way: faint while sending, with its progress
   /// in place of the time.
   var delivery: SentEcho.Status? = nil
+  /// The files this reply's turn produced, shown as chips under it.
+  var replyFiles: [Artifact]? = nil
   @Environment(\.transcriptRecipient) private var recipient
   @Environment(\.transcriptUserId) private var userId
   @Environment(\.colorScheme) private var scheme
@@ -778,12 +788,17 @@ struct MessageView: View {
           ReplyContentView(message: message)
         }
         ForEach(message.files ?? []) { FileAttachmentView(file: $0) }
+        if let replyFiles, !message.id.hasSuffix("-inflight") { ReplyFilesView(artifacts: replyFiles) }
       }.padding(bubble ? 14 : 0).background(
         bubble ? Palette.user(scheme) : Color.clear,
         in: RoundedRectangle(cornerRadius: 14)
       )
         // The outline hugs the message itself, inside a person's indent.
         .overlay { if foundMessage == message.id { RoundedRectangle(cornerRadius: 14).stroke(Palette.accent, lineWidth: 2) } }
+      if own && message.steered == true {
+        Text("Added to the current task").font(.caption).foregroundStyle(Palette.messageMetadata)
+          .frame(maxWidth: .infinity, alignment: .trailing).accessibilityIdentifier("steeredLabel")
+      }
       if showsMeta {
         MessageMetaRow(message: message, own: own, when: endsRun ? when ?? message.createdAt : nil, delivery: delivery,
           actions: (message.role == "assistant" && !message.isInternalActivity || own) && !message.id.hasSuffix("-inflight")
@@ -845,12 +860,16 @@ private struct SendingMessage: ViewModifier {
 struct AgentExchangeView: View {
   var message: Message
   var recipient: String
+  @Environment(AppStore.self) private var store
   var body: some View {
     let handoff = AgentHandoff(message: message)
+    // A handoff to or from one of this person's assistants opens its chat; anyone else's is never named.
+    let partner = MainAssistant.exchangePartner(target: handoff.incoming == nil ? handoff.target : nil, incomingName: handoff.incoming?.name,
+      bots: store.bootstrap?.bots ?? [], currentBotId: store.selectedBotId ?? "")
     VStack(alignment: .leading, spacing: 8) {
       HStack(spacing: 8) {
         Text("↔").accessibilityHidden(true)
-        Text(handoff.incoming.map { "\($0.name) → \(recipient)" } ?? "\(recipient) → \(handoff.target)").bold()
+        Text(handoff.incoming.map { "\($0.name) → \(recipient)" } ?? "\(recipient) → \(partner?.name ?? handoff.target)").bold()
         Text("Agent message").foregroundStyle(.secondary)
       }.font(.caption)
       if let incoming = handoff.incoming {
@@ -862,6 +881,11 @@ struct AgentExchangeView: View {
             Text(handoff.response).font(.caption.monospaced()).textSelection(.enabled)
           }.frame(maxWidth: .infinity, alignment: .leading).padding(.top, 4)
         }.font(.subheadline)
+      }
+      if let partner {
+        Button("Open \(partner.name)'s chat") { Task { await store.select(partner.id) } }
+          .font(.subheadline.weight(.semibold)).buttonStyle(.bordered).tint(Palette.accent)
+          .accessibilityIdentifier("openExchangeChat.\(partner.id)")
       }
     }.padding(.horizontal, 16).padding(.vertical, 12).frame(maxWidth: .infinity, alignment: .leading)
       .background(Palette.accentSoft, in: UnevenRoundedRectangle(bottomTrailingRadius: 12, topTrailingRadius: 12))
@@ -954,7 +978,11 @@ struct AttentionView: View {
   @Environment(AppStore.self) private var store
   @Environment(\.colorScheme) private var scheme
   @Environment(\.scrollTranscript) private var scrollTranscript
-  @State private var answers = QuestionAnswers()
+  @State private var answers: QuestionAnswers
+  init(request: Attention, botId: String, interacted: @escaping () -> Void = {}, sendStarted: @escaping () -> Void = {}) {
+    self.request = request; self.botId = botId; self.interacted = interacted; self.sendStarted = sendStarted
+    _answers = State(initialValue: QuestionAnswers(recommending: request.questions ?? []))
+  }
   @State private var busy = false
   @State private var settled = false
   @FocusState private var focusedQuestion: String?
@@ -1017,7 +1045,8 @@ struct AttentionView: View {
       if !options.isEmpty {
         VStack(spacing: 6) {
           ForEach(options.indices, id: \.self) { index in
-            QuestionOption(text: options[index], selected: answers.isSelected(index, question), multiple: multiple) {
+            QuestionOption(text: question.label(index), selected: answers.isSelected(index, question), multiple: multiple,
+              recommended: index == question.recommended) {
               if answers.choose(index, in: question) { advance(after: question) }
             }.accessibilityIdentifier("questionOption-\(question.id)-\(index)")
           }
@@ -1062,7 +1091,7 @@ struct AttentionView: View {
       do {
         try await store.perform(
           "/bots/\(APIClient.component(botId))/requests/\(APIClient.component(request.id))",
-          ["answers": answers.payload(questions)])
+          QuestionAnswers.Submission(answers: answers.payload(questions)))
         guard scope == store.scope else { return }
         settled = true
         AccessibilityNotification.Announcement("Answers sent.").post()
@@ -1077,6 +1106,7 @@ private struct QuestionOption: View {
   var text: String
   var selected: Bool
   var multiple: Bool
+  var recommended = false
   var action: () -> Void
   @Environment(\.colorScheme) private var scheme
   var body: some View {
@@ -1085,21 +1115,40 @@ private struct QuestionOption: View {
         Image(systemName: multiple ? selected ? "checkmark.square.fill" : "square" : selected ? "largecircle.fill.circle" : "circle")
           .foregroundStyle(selected ? Palette.accent : Palette.muted).accessibilityHidden(true)
         Text(text).multilineTextAlignment(.leading).frame(maxWidth: .infinity, alignment: .leading)
+        if recommended {
+          Text("Recommended").font(.caption.weight(.semibold)).foregroundStyle(Palette.accent)
+            .padding(.horizontal, 8).padding(.vertical, 2)
+            .background(selected ? Palette.raised(scheme) : Palette.accentSoft, in: Capsule())
+        }
       }.padding(.horizontal, 12).padding(.vertical, 10).frame(minHeight: 44).contentShape(RoundedRectangle(cornerRadius: 10))
         .background(selected ? Palette.accentSoft : Palette.surface(scheme), in: RoundedRectangle(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(selected ? Palette.accent : Palette.line))
     }.buttonStyle(.plain)
       .accessibilityAddTraits(selected ? .isSelected : [])
+      .accessibilityLabel(recommended ? "\(text), recommended" : text)
   }
 }
 /// The person's answers to a question card: chosen options, written answers, and which questions
 /// they chose to answer in their own words. One answer per question, as the server takes them; a
-/// question with several choices sends them joined with commas.
+/// question with several choices sends them as one JSON array, which Hermes's clarify tool reads.
 struct QuestionAnswers: Equatable {
+  /// What `POST /bots/:id/requests/:id` takes. `answerFormat` says multi-select answers are JSON arrays.
+  struct Submission: Encodable {
+    var answers: [String: String]
+    var answerFormat = "json"
+  }
   /// Chosen option indices per question, in the order they were chosen.
   var chosen: [String: [Int]] = [:]
   var writing: Set<String> = []
   var text: [String: String] = [:]
+  init() {}
+  /// Hermes's recommended option starts chosen for a single-choice question, so one tap sends it.
+  /// Several picks are the person's to make, so a multi-select question starts empty.
+  init(recommending questions: [Question]) {
+    for question in questions where question.multiple != true {
+      if let index = question.recommended, question.options?.indices.contains(index) == true { chosen[question.id] = [index] }
+    }
+  }
   /// Changes with each choice, for the selection haptic. Typing does not change it.
   var choices: [String: [Int]] { chosen.merging(Dictionary(uniqueKeysWithValues: writing.map { ($0, [-1]) })) { $0 + $1 } }
   func isSelected(_ index: Int, _ question: Question) -> Bool { chosen[question.id]?.contains(index) == true }
@@ -1131,7 +1180,11 @@ struct QuestionAnswers: Equatable {
     let written = (text[question.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
     if options.isEmpty { return written }
     let picked = (chosen[question.id] ?? []).sorted().compactMap { options.indices.contains($0) ? options[$0] : nil }
-    if question.multiple == true { return (picked + (writing.contains(question.id) && !written.isEmpty ? [written] : [])).joined(separator: ", ") }
+    if question.multiple == true {
+      let all = picked + (writing.contains(question.id) && !written.isEmpty ? [written] : [])
+      guard !all.isEmpty, let data = try? JSONEncoder().encode(all) else { return "" }
+      return String(decoding: data, as: UTF8.self)
+    }
     return writing.contains(question.id) ? written : picked.first ?? ""
   }
   func complete(_ questions: [Question]) -> Bool { questions.allSatisfy { !answer($0).isEmpty } }

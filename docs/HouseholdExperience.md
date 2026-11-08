@@ -35,6 +35,142 @@ WildBots. It does not stop someone deliberately probing the server.
   of their own message.
 - While a Hermes update is waiting, "An assistant" in the busy list shows that
   some assistant is working, without saying which.
+- Hermes keeps no boundary between profiles on the host. An assistant with the
+  terminal, code or file tools can read or write any profile's files. The add-on
+  stops a main assistant from running the Hermes command line or writing into
+  another profile through those tools, but that is a guard against mistakes,
+  not a boundary.
+- Routines of assistants other than a main one can deliver into another
+  assistant's Bot Chat, as Hermes allows today. A personal assistant's routine
+  can post into a shared assistant's chat, a shared assistant's into a personal
+  one's, or into another member's, and a result already queued keeps its
+  destination after either assistant's sharing changes. WildBots checks only
+  group-chat destinations against sharing. Closing this for every assistant,
+  with a migration for results already queued, is follow-up work on the branch
+  `t3/routine-delivery-privacy`.
+- Making an assistant main waits for its routines' runs and held deliveries,
+  but that check is best-effort for each routine's latest run only. Hermes
+  records a routine's unfinished Bot Chat receipts per run and overwrites that
+  record on the next run, so an older run's unfinished delivery can stay
+  hidden and the assistant can still become main. That delivery's content was
+  produced under the rules for an assistant that wasn't main, and it would
+  have been delivered whether or not the assistant became main, so becoming
+  main adds no new exposure. It is part of the cross-profile routine delivery
+  limit above, taken up on `t3/routine-delivery-privacy`.
+
+<!-- Main assistant: begin -->
+## Main assistant
+
+Each member can make one of their own personal assistants their main assistant, on
+web and iOS. Shared assistants and personal ones without a recorded owner can't be
+one: routines, delivery and followers belong to the assistant's profile, so only an
+owned personal assistant keeps check-ins private to that member. The picker says
+why each other assistant can't be chosen and offers **Make it personal**, which
+opens its settings.
+
+The main assistant leads home, above the pinned ones, with a **Main** mark, and
+appears nowhere else on home. It is first in the command palette and the iPad
+"Go to…" switcher, whose **Ask** entry puts the typed words in the main
+assistant's draft for review. A member without one sees a suggestion card,
+"Choose a main assistant: it checks in on what's coming up and hands work to your
+other assistants," until they choose or dismiss it. **Make main** in an
+assistant's details sets or clears it in one tap. Deleting the assistant, sharing
+it, or losing it any other way clears it. Sharing your main assistant asks first
+and turns off its check-ins before anyone else can read its chat.
+
+### Check-ins
+
+**Check in with me** in the main assistant's details is off by default. On, the
+server keeps one routine named Check-ins on that assistant, running every 1 to 4
+hours (2 by default) on a Hermes interval schedule. Its instructions carry the
+member's timezone and tell the assistant to stay silent overnight there, to look
+over connected calendars, email and task lists and the recent conversation, and to
+speak only for something that clearly needs the member soon. When nothing does,
+it answers with Hermes's `[SILENT]` marker. A silent, failed or stopped check-in
+sends no notification and adds no Today entry, and no unread dot appears because
+Hermes delivers nothing to the chat. Only a failed check-in shows as a run card in
+the chat; one that found something is its own message there. Check-ins are not
+listed in Today's scheduled work.
+
+The routine shows in routine lists as Check-ins, managed from the assistant's
+details: it can't be edited, paused or deleted as a routine. Turning the switch
+off, choosing another main assistant, sharing or deleting the assistant, and the
+member leaving the household all remove it. The server records each check-in job
+it creates and also marks its instructions with the member, signed with this
+installation's secret, so a job created after a lost answer is found and adopted,
+and a copied marker is never trusted. A check-in must deliver only to its own
+assistant's chat, with no failure delivery, rooms, scripts or other overrides,
+and any native setting the app does not read, such as a monitor script or a
+working directory, counts as one, while the scheduler's own bookkeeping, such
+as its claim on a run in progress or its record of the last dispatch, does not; a job like that is deleted and replaced. No
+replacement is made while an earlier check-in could still run: a run in progress
+must be seen to end, and pausing alone does not count. A completed run of a check-in this server
+has not recorded yet is still quiet, because discovery checks the job first. It reconciles after every
+change, at startup and every five minutes; a run in progress is stopped before its
+job is deleted. A Hermes without routines hides the switch.
+
+### Hand-offs
+
+Hermes lists every assistant in each one's instructions and lets any of them
+message any other. WildBots narrows that for every assistant, not only main ones:
+the server sends each its roster, and the Hermes add-on lists and lets it reach
+only that roster. A personal assistant's roster is its owner's other personal
+assistants and the assistants the whole household sees; a shared assistant's,
+or an older one's without an owner, is only the latter. Another member's personal
+assistant is never listed or reached. The add-on sends each hand-off to exactly
+the assistant it checked, by its Hermes ID, and refuses one whose ID is also a
+registered peer gateway's name or is not a live local assistant, since Hermes
+would send those elsewhere. Before an assistant's sharing changes, Hermes stops
+listing it and stops it reaching anyone; if Hermes does not take that, the
+change is refused. Rosters go to Hermes one at a time, each built from who sees
+what when it is sent. An assistant the server has not described yet reaches
+nobody.
+
+A main assistant's routines post only in its own chat. Its own use of Hermes's
+cron tool may list, pause, remove and stop routines, and create ones that name
+its own chat as their only destination, with no script, monitor, working
+directory or context source; changing, resuming or running one happens in
+WildBots. WildBots's own routine saves (paused or not), resumes, trial runs and
+event triggers refuse a main assistant's routine that posts anywhere else:
+another assistant's chat, including the member's other personal ones, a group
+chat, a messaging platform, or "where it was made" (`origin`). An assistant
+can't be made main while any of its routines posts elsewhere, or while one is
+running or Hermes still holds a delivery from it, wherever it posts: a run in
+progress and a held delivery keep the routine as it was when they began. The
+refusal names them. Hermes holds an assistant to a main assistant's limits
+before WildBots records the choice, so the choice never runs ahead of them; if
+Hermes doesn't take them, nothing changes.
+
+Protection is the default while WildBots doesn't know. Until its first
+successful look at Hermes's routines after it starts (one that actually listed
+them, not one Hermes answered as unavailable, as it does while disconnected), every member's personal
+assistant is held to a main assistant's limits in Hermes. After that, an
+assistant keeps them while it is a member's main assistant or the last
+successful look found a WildBots check-in on it. They come off only after a
+look shows neither, taken in turn with every routine change, sharing change
+and main assistant choice. Every main assistant request, even one that changes
+nothing, waits its turn behind those and decides from what is current then.
+
+A check-in is WildBots's alone. No assistant's cron tool can change, resume or
+run one, whatever its designation; only pausing or removing it is allowed. An
+assistant also keeps a main assistant's limits in Hermes while any check-in is
+still on it, so a check-in Hermes refused to delete when the member cleared or
+changed their main assistant can't be pointed elsewhere. The member hears that
+the change isn't finished until WildBots removes it.
+
+On each turn the main assistant also reads that roster as guidance and can hand
+specialist work to it with Hermes's agent-message tool. A message to a shared assistant first asks
+the member, through the usual question card, "Send this to Ranch Hand? Everyone
+in the household can read its chat," with the message shown; nothing is sent
+unless they choose Send it. Hand-offs to the member's own personal assistants need
+no approval. Roster changes reach the assistant on its next turn. A hand-off in
+a transcript offers **Open Ranch Hand's chat** when the reader can open that
+chat. An add-on older than this gate gets no roster, and its assistants behave as
+before. The roster protocol is versioned: an add-on that speaks only the first
+version gets main assistants' rosters alone and leaves the others as Hermes has
+them, and a roster without a main flag, from an older server or journal, is
+treated as a main assistant's, so it still asks before shared hand-offs.
+<!-- Main assistant: end -->
 
 ## Today
 
@@ -118,6 +254,31 @@ distinguishes pending, next-turn and applied status. Refresh preserves the nativ
 session, history, approvals and task identity. Native memory-tool writes keep
 Hermes's usual snapshot behavior, and other native conversations are unaffected.
 
+## Approvals, questions and steering
+
+An approval card shows what Hermes asks to run and the choices Hermes allows for that
+request. Allow once runs this command. Allow for this conversation lets the assistant
+run that kind of command in this chat without asking again. Always allow, under More
+choices, asks first: it names the kind of command, such as "recursive delete", and
+says the assistant will run any command of that kind without asking, in every
+conversation, until someone removes it in the assistant's Access settings under
+Always-allowed commands. Removing one takes effect at the assistant's next command in
+WildBots, on every qualified Hermes. Another Hermes app, such as Discord, may keep
+allowing it until its chat ends or Hermes restarts. Anyone who can see the assistant can remove one. Only an
+integration administrator can turn on Auto-review routine commands, which lets
+Hermes's own guardian run commands it judges safe and send the rest to a person, who
+can then allow only once. Notifications keep Review and Decline only.
+
+Decline stops that step. The card folds to "Declined. The assistant stopped that
+step." and the message box asks what to do instead, until the next message is sent.
+
+When Hermes recommends one answer to a question, the card tags it Recommended and,
+for a single choice, chooses it already, so one tap sends it. Several choices are
+never chosen for the person.
+
+A message sent while the assistant is working joins the task it is on. Once Hermes
+admits it that way, it shows "Added to the current task" on every device.
+
 ## Interactive replies
 
 In assistant Details, choose Enable interactive replies and save. This adds
@@ -152,6 +313,25 @@ view instructions in every WildBots conversation.
   subject. **Open in Mail** opens a `mailto:` draft in the device's mail app,
   **Open in Gmail** opens Gmail's compose window, and **Copy** copies the whole
   draft as text. Nothing is sent from WildBots.
+  <!-- BEGIN draft revisions -->
+  A revised draft names the draft it revises in its `id`: `NEW__revises__EARLIER`,
+  where EARLIER is the earlier card's id up to any `__revises__`. The card shape
+  is unchanged, because the first clients with email cards refuse any other field.
+  An id holds at most 80 characters, lineage included, or the whole block shows as
+  code; the guidance asks for short draft ids and, when a revision id would be too
+  long, a new short id without lineage, which keeps the email without highlights.
+  A card that revises an earlier email card in the same conversation shows the
+  recipients, subject and body words it added and removed, with **Hide changes**
+  and **Show changes**. Only that explicit lineage links drafts; subjects and
+  recipients are never matched. When several earlier cards share the name, the
+  latest wins; a card cannot revise itself or a later card. Changes compare word
+  by word: runs of spaces, tabs and line breaks, and runs of everything else. Past
+  a million compared word pairs the changed middle shows as replaced whole. The
+  rules are in `src/shared/draft-diff.ts`, mirrored by iOS's `DraftDiff.swift`
+  with shared vectors in `ios/AgentInterfaceTests/Vectors/draft-diff.json`;
+  `tests/fixtures/reply-cards-c2fae16.ts` keeps the released parser to prove
+  older clients still show these cards.
+  <!-- END draft revisions -->
 - `form`, with a title, optional description and submit label, and 1 to 20
   fields. Field kinds are `text`, `textarea`, `number`, `date`, `select`,
   `choice`, `multi` and `toggle`. `select`, `choice` and `multi` carry 1 to 20

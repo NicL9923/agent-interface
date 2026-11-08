@@ -290,7 +290,7 @@ it.each(["runtime", "outbox", "live"] as const)("drains every job before closing
   const finished = { runtime: deferred(), outbox: deferred(), live: deferred() };
   const close = vi.fn();
   const sender = Object.assign(vi.fn(async () => { await gates.outbox.promise; finished.outbox.resolve(); }), {
-    close, liveActivity: vi.fn(async () => {}), clear: vi.fn(async () => {}), refresh: vi.fn(async () => {}),
+    close, liveActivity: vi.fn(async () => {}), clear: vi.fn(async () => {}), refresh: vi.fn(async () => {}), badge: vi.fn(async () => {}),
   });
   const factory = vi.spyOn(apns, "createApnsSender").mockReturnValue(sender);
   const config = household();
@@ -552,7 +552,9 @@ it.each([404, 410, 500])("handles web push status %i for queued notifications", 
     expect(store.subscriptions("one").map(item => item.endpoint).sort()).toEqual((status === 500 ? [endpoint, healthy] : [healthy]).sort());
     for (const id of ["first-push", "second-push"]) {
       expect(store.delivered(id, healthy)).toBe(true);
-      expect(store.delivered(id, endpoint)).toBe(status !== 500);
+      // A dead endpoint is recorded apart, so it never reads as having shown the notification.
+      expect(store.delivered(id, endpoint)).toBe(false);
+      expect(store.delivered(id, `dead:${endpoint}`)).toBe(status !== 500);
       expect(outboxRow(store, id)?.state).toBe(status === 500 ? "pending" : "delivered");
     }
   } finally { store.close(); }
