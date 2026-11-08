@@ -607,8 +607,6 @@ describe("review round two, ordering", () => {
 describe("review round three", () => {
   const routine = (botId: string, deliver: string, enabled = true): Routine => ({ id: `r-${botId}`, botId, name: `${botId} report`, prompt: "Report",
     schedule: "0 7 * * *", enabled, delivery: { deliver }, nativeOverrides: [] });
-  const patch = (botId: string, payload: object) => created.app.inject({ method: "PATCH", url: `/api/bots/${botId}`, headers: mom,
-    payload: { name: bots.find(bot => bot.id === botId)!.name, instructions: "", model: "test", ...payload } });
   it("refuses a main assistant's routine that delivers to where it was made when no origin was recorded", async () => {
     await main("mom-main");
     jobs.push({ ...routine("mom-main", "origin"), enabled: false });
