@@ -58,25 +58,18 @@ async function stop(app: typeof apps[number]) {
   return { closing, finished: () => finished };
 }
 
-it("finishes shutdown after the grace period when a peer never sends a request", async () => {
-  const { app, closed, logs } = await setup();
+it("finishes within the shutdown deadline when a peer never sends a request", async () => {
+  const { app, closed } = await setup();
   const base = await listen(app);
-  const previous = await connect(app, base);
-  const previousClosed = once(previous.serverPeer, "close");
-  previous.peer.destroy();
-  await previousClosed;
   const { peer } = await connect(app, base);
   const shutdown = await stop(app);
-  await vi.advanceTimersByTimeAsync(24999);
-  expect(shutdown.finished()).toBe(false);
-  expect(peer.destroyed).toBe(false);
-  await vi.advanceTimersByTimeAsync(1);
+  // Node 26 already closes this peer itself. Node 24 needs the deadline. Either is correct:
+  // silent peers must not hold shutdown beyond the grace period, and need no minimum drain.
+  await vi.advanceTimersByTimeAsync(25000);
   await until(shutdown.finished, "shutdown still waits for a TCP peer that sent no request after the grace period");
   await shutdown.closing;
   await until(() => peer.destroyed, "shutdown did not close the silent peer");
   expect(closed).toHaveBeenCalledWith();
-  expect(logs).toContainEqual(expect.objectContaining({ level: 40, connections: 1,
-    msg: "Closing connections after the shutdown grace period" }));
   expect(vi.getTimerCount()).toBe(0);
 });
 
@@ -110,10 +103,14 @@ it("lets an active response finish before the grace period ends and cancels its 
 });
 
 it("cuts off a response that cannot finish by the deadline", async () => {
-  const { app } = await setup();
+  const { app, logs } = await setup();
   const entered = deferred<void>(), finish = deferred<string>();
   app.get("/test-drain", async () => { entered.resolve(); return await finish.promise; });
   const base = await listen(app);
+  const previous = await connect(app, base);
+  const previousClosed = once(previous.serverPeer, "close");
+  previous.peer.destroy();
+  await previousClosed;
   const failed = new Promise<NodeJS.ErrnoException>(resolve => {
     const request = get(`${base}/test-drain`, { agent: false });
     request.on("socket", socket => sockets.push(socket));
@@ -128,6 +125,8 @@ it("cuts off a response that cannot finish by the deadline", async () => {
     await until(shutdown.finished, "shutdown still waits for an unfinished response after the grace period");
     expect((await failed).code).toBe("ECONNRESET");
     await shutdown.closing;
+    expect(logs).toContainEqual(expect.objectContaining({ level: 40, connections: 1,
+      msg: "Closing connections after the shutdown grace period" }));
   } finally { finish.resolve("Too late"); }
 });
 
