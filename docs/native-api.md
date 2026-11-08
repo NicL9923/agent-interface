@@ -566,6 +566,8 @@ Web and native clients share these authenticated operations. See
 | `GET /api/groups/:id/log?since=CURSOR&state=1` | The group's events after `since`. `state=1` adds the room and its driver status as `state`, so an open group polls with one request and one Hermes read. Servers before this option answer 400; then read `GET /api/groups/:id` separately. A `message.user` event sent through this app carries `sender: { "id": "USER_ID", "name": "NAME" }`; label others "Household member" |
 | `GET /api/groups/:id` | A routine's post is a `message.user` event whose `actor.id` starts with `cron:` (`cron-notice:` for a failed run's notice) and whose `actor.display_name` is the routine's name, which may start with an `[bot:ID] ` tag to drop; show it as the routine's post. The room, its driver status and, from Hermes versions with room settings, `context: { "purpose", "notes", "routing": "everyone" or "lead", "lead_member_id" }`. `driver_status.member_activity` lists each assistant's live turn (`member_id`, `status` of queued, running or stopping, 0-based `round_index`, `started_at`, current `tool`), and `max_rounds` bounds a discussion. Older Hermes versions omit them; then say only that the room is working |
 | `POST /api/groups/:id/context` | `{ "requestId": "UUID", "purpose": "TEXT", "notes": "TEXT", "leadMemberId": "MEMBER_ID" or null }`. Anyone who can open the room may save; null means every assistant answers a message that names no one. Purpose is at most 500 characters and trimmed notes at most 4,096 UTF-8 bytes. Answers 409 when Hermes cannot save room settings. `GET /api/groups` reports `settings: true` where it can |
+| `GET /api/usage/accounts?refresh=1` | `{ "accounts": [...], "unavailableBots": [...] }`: plan limits and credits for the provider accounts the caller's visible assistants use, main provider and fallbacks, each account once. An account has `key` (a 32-character digest, never the credential), `provider`, `plan`, `windows` (`label`, `usedPercent` 0 to 100 or null, `resetsAt`, `detail`, `scope` of `account` or `model`), `details`, `unavailableReason`, `bankedResets`, `botIds` and `fallbackOnly`. The server keeps one answer for a minute, and a failed read for 15 seconds; `refresh=1` reads again once the answer is 15 seconds old. A read still running is shared. 409 when the Hermes add-on predates account usage |
+| `POST /api/usage/accounts/:key/reset` | `{ "confirmed": true, "requestId": "UUID", "force": false }`; spends one banked ChatGPT reset. Send it only after the person confirms. Keep the request ID until a 200 answer and reuse it to retry: Hermes records each request before asking ChatGPT, so a retry returns the recorded outcome, or `uncertain` when Hermes stopped before recording it, and never spends twice. `force: true` spends one before any account-wide limit is used up, which wastes most of it; ask again with that warning first. Returns `{ "status", "message", "availableCount", "windowsReset", "account"? }`, status one of `reset`, `nothing_to_reset`, `no_credit`, `already_redeemed`, `not_exhausted`, `no_credits_banked`, `unavailable`, `uncertain`. `message` is a fixed sentence per status. `availableCount` is null when ChatGPT could not be asked after the reset; say nothing about the count then. Keep the request ID on `uncertain`. 404 for an account none of the caller's assistants uses, 409 for a provider without resets or while another reset for that account is in progress through any of its sign-ins |
 | `GET /api/search?q=TEXT&botId=ID` | `{ "hits": [...], "unavailableBots": [...] }`. `botId` is optional and searches only that assistant, answering 404 with `code: "assistant_not_found"` for one the person cannot see. A hit whose `sessionId` is the assistant's current session and that has a `messageId` can open the live chat with `GET /api/bots/:id/conversation?start=MESSAGE_ID` |
 
 Preserve memory drafts after a 409 revision conflict. Persist a trial's request ID
@@ -1049,6 +1051,14 @@ question, a secure request, a handoff or a connection request closes those reque
 is admitted, so the assistant reads it next. A login the assistant asked for by
 address stays open unless the sender is the member whose task asked for it. An
 answer that reaches Hermes after its request closed answers `{ "status": "expired" }`.
+
+## Linked Macs
+
+`GET /api/mac/devices` lists the signed-in person's Macs linked with WildBots for
+Mac, and `DELETE /api/mac/devices/:id` revokes one, with the bearer session. The
+iOS app shows them in Settings > Macs. WildBots for Mac itself uses sign-in
+contract version 1 once, to enroll, then its own device credential. See
+[WildBots for Mac](MacLink.md#protocol-version-1).
 
 ## Live Activity
 

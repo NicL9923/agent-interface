@@ -50,6 +50,8 @@ const paths = {
   check: "M5 12.5l4.5 4.5L19 7.5",
   undo: "M9 15L4 10l5-5M4 10h10a5.5 5.5 0 0 1 0 11h-3",
   upgrade: "M12 17V7M7.5 11.5L12 7l4.5 4.5M5 20h14",
+  gauge: "M4.2 17.5a8.5 8.5 0 1 1 15.6 0M12 14l4-4.5M12 14h.01",
+  signout: "M13.5 4.5h-8v15h8M10 12h10M16.5 8.5 20 12l-3.5 3.5",
   file: "M7 3h7l5 5v13H7ZM14 3v5h5",
   "file-text": "M7 3h7l5 5v13H7ZM14 3v5h5M10 13h6M10 17h4",
   image: "M4 5h16v14H4ZM4 16l5-5 4 4 2.5-2.5L20 17M15 9.5h.01",

@@ -23,7 +23,7 @@ it("navigates the palette, selects a command and restores focus", async () => {
   function Host() {
     const [open, setOpen] = useState(false);
     return h("div", null, h("button", { onClick: () => setOpen(true) }, "Open palette"), open && h(CommandPalette, { boot, botId: "one", readThrough: {}, connectionLost: false,
-      onClose: () => setOpen(false), onSelectBot: select, onView: () => {}, onSearch: () => {}, onSettings: () => {}, onNewBot: () => {}, onTheme: () => {}, onShortcuts: () => {} }));
+      onClose: () => setOpen(false), onSelectBot: select, onView: () => {}, onSearch: () => {}, onSettings: () => {}, onUsage: () => {}, onNewBot: () => {}, onTheme: () => {}, onShortcuts: () => {} }));
   }
   const mount = mountRoot();
   await mount.render(h(Host));

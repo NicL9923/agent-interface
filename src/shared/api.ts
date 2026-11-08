@@ -1,8 +1,10 @@
 import type { AutomationOverview as WorkOverview, AutomationTask, AutomationRequest, TaskInput, TriggerInput, SkillContent, SkillDiff, SkillLock, EventSubscription } from "./automation.js";
 import type { AutomationOverview, HistoryPage, SavedItem, SearchHit, Starter } from "./discovery.js";
+import type { AccountUsageOverview, ResetResult } from "./account-usage.js";
 import type { ProfileMemory, RoutinePreview, RoutineRunReceipt, TodayOverview } from "./experience.js";
 import type { RoutineOutput, RoutineResult } from "./collaboration.js";
 import type { RoutineRunPage } from "./routine-runs.js";
+import type { LinkedMacs } from "./mac.js";
 import type { ReplyCardState } from "./reply-cards.js";
 import type { Routine } from "./types.js";
 import type { ApprovalScope, ApprovalSettings } from "./types.js";
@@ -153,6 +155,12 @@ export interface ApiRoutes {
   "POST /saved": { body: SaveItem; response: SavedItem };
   "DELETE /saved/:id": { response: Ok };
   "GET /automations": { query: { days?: number }; response: AutomationOverview };
+  "GET /usage/accounts": { query: { refresh?: "1" }; response: AccountUsageOverview };
+  /**
+   * Spends one banked ChatGPT reset. `confirmed` is the person's answer to the confirmation; `force` spends one before a
+   * limit is used up. Reuse `requestId` to retry the same reset: it is never spent twice.
+   */
+  "POST /usage/accounts/:key/reset": { body: { confirmed: true; requestId: string; force: boolean }; response: ResetResult };
   "GET /bots/:id/starters": { response: Starter[] };
   "GET /bots/:id/memory": { response: ProfileMemory };
   "PUT /bots/:id/memory/:target": { body: MemorySave; response: ProfileMemory };
@@ -259,6 +267,8 @@ export interface ApiRoutes {
   "GET /native/push/config": { response: { available: boolean; environment?: "sandbox" | "production" } };
   "PUT /native/push/device": { body: { deviceId: string; token: string }; response: Ok };
   "DELETE /native/push/device": { body: { deviceId: string }; response: Ok };
+  "GET /mac/devices": { response: LinkedMacs };
+  "DELETE /mac/devices/:id": { response: Ok };
   "GET /native/live-activity": { query: { deviceId?: string; local?: "1" }; response: { available: boolean; state: LiveState } };
   "PUT /native/live-activity": { body: { deviceId: string; token: string; botIds?: string[]; scope?: string }; response: Ok };
   "DELETE /native/live-activity": { body: { deviceId: string; token: string }; response: Ok };

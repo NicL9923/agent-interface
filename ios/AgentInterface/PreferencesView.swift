@@ -1,5 +1,15 @@
 import SwiftUI
 
+extension View {
+  /// The one confirmation every sign-out goes through, from Settings and from the profile menu.
+  /// Nothing signs out until the person confirms; `signedOut` runs once the sign-out went through.
+  func signOutConfirmation(isPresented: Binding<Bool>, store: AppStore, signedOut: @escaping () -> Void = {}) -> some View {
+    confirmationDialog("Sign out on this device? Your personal drafts stay saved for your next sign-in.", isPresented: isPresented, titleVisibility: .visible) {
+      Button("Sign out", role: .destructive) { Task { if await store.signOut() { signedOut() } } }
+    }
+  }
+}
+
 struct PreferencesView: View {
   var close: (() -> Void)? = nil
   @Environment(AppStore.self) private var store
@@ -14,6 +24,7 @@ struct PreferencesView: View {
   @State private var signOutConfirm = false
   @State private var changeServerConfirm = false
   @State private var quietError: String?
+  @State private var macs: MacDeviceList?
   #if DEBUG
     @State private var captureComputerOpen = false
     @State private var captureUpgradeOpen = false
@@ -46,10 +57,17 @@ struct PreferencesView: View {
             settingsRow("Computer", icon: "desktopcomputer", detail: store.computerStatus?.detail ?? "Shared desktop and terminal")
           }.disabled(store.computerStatus.map { !$0.available && $0.terminal?.available != true } ?? false)
             .accessibilityIdentifier("sharedComputer")
+          // Hidden while the server has no Mac link key, and on servers from before Mac links.
+          if let macs, macs.available {
+            NavigationLink { MacsView(list: $macs) } label: {
+              settingsRow("Macs", icon: "laptopcomputer", detail: macs.summary)
+            }.accessibilityIdentifier("macs")
+          }
           NavigationLink { IntegrationsView() } label: {
             settingsRow("Integrations", icon: "powerplug", detail: "Accounts your assistants can use")
           }.accessibilityIdentifier("Integrations")
         }.task { await watchComputer() }
+          .task(id: store.scope) { if let api = store.api { macs = try? await MacDeviceList.load(api) } }
         if let error = store.error {
           Section {
             ErrorBanner(message: error, dismiss: { store.dismissError() })
@@ -164,9 +182,7 @@ struct PreferencesView: View {
           Button("Discard changes", role: .destructive) { store.discardPreferenceChanges(); closeSheet() }
         }
         .onChange(of: store.scope) { _, _ in dismiss() }
-        .confirmationDialog("Sign out on this device? Your personal drafts stay saved for your next sign-in.", isPresented: $signOutConfirm, titleVisibility: .visible) {
-          Button("Sign out", role: .destructive) { Task { if await store.signOut() { closeSheet() } } }
-        }
+        .signOutConfirmation(isPresented: $signOutConfirm, store: store) { closeSheet() }
         .confirmationDialog("Change the app server? Sign-out will revoke this device's session and notifications first.", isPresented: $changeServerConfirm, titleVisibility: .visible) {
           Button("Change server") { Task { await store.changeConnection(); if store.api == nil { closeSheet() } } }
         }

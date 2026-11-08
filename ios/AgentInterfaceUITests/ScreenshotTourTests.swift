@@ -3388,15 +3388,15 @@ import CryptoKit
   }
 
   private func goToAssistantList(_ app: XCUIApplication) {
-    if app.buttons["Settings"].exists { return }
+    if app.profileMenu.exists { return }
     let back = app.navigationBars.buttons.matching(identifier: "Your assistants").firstMatch
     if back.exists { back.tap() } else { app.navigationBars.buttons.firstMatch.tap() }
-    XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.profileMenu.waitForExistence(timeout: 5))
   }
 
   private func openPreferences(_ app: XCUIApplication) {
     goToAssistantList(app)
-    app.buttons["Settings"].tap()
+    app.openSettingsFromProfileMenu()
     XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
   }
 

@@ -39,7 +39,7 @@ const buttons = () => [...container.querySelectorAll("button")];
 const button = (text: string) => buttons().find(item => item.textContent === text)!;
 const sidebar = async (preferences: Partial<Preferences>, more: object = {}) => {
   const props = { boot: { ...boot, preferences: { ...boot.preferences, ...preferences } }, botId: "", readThrough: {}, view: "today" as const, state: "idle" as const,
-    connectionLost: false, offline: false, mobile: false, open: true, update: null, onSelectBot: vi.fn(), onView: vi.fn(), onNewBot: vi.fn(), onSettings: vi.fn(),
+    connectionLost: false, offline: false, mobile: false, open: true, update: null, onSelectBot: vi.fn(), onView: vi.fn(), onNewBot: vi.fn(), onSettings: vi.fn(), onUsage: vi.fn(), onSignOut: vi.fn(),
     onPin: vi.fn(), onBotSettings: vi.fn(), onMoveToSection: vi.fn(), onNewSection: vi.fn(), onChooseMain: vi.fn(), onDismissMainSuggestion: vi.fn(), ...more };
   await act(async () => root.render(createElement(Sidebar, props)));
   await act(async () => { await preloadBotMenu(); });
@@ -166,7 +166,7 @@ describe("in the main assistant's details", () => {
 it("asks the main assistant from the palette with the typed words", async () => {
   const onAsk = vi.fn();
   const props = { boot: { ...boot, preferences: { ...boot.preferences, mainBotId: "sage" } }, botId: "", readThrough: {}, connectionLost: false, onClose: vi.fn(), onSelectBot: vi.fn(),
-    onView: vi.fn(), onSearch: vi.fn(), onSettings: vi.fn(), onNewBot: vi.fn(), onTheme: vi.fn(), onShortcuts: vi.fn(), onAsk };
+    onView: vi.fn(), onSearch: vi.fn(), onSettings: vi.fn(), onUsage: vi.fn(), onNewBot: vi.fn(), onTheme: vi.fn(), onShortcuts: vi.fn(), onAsk };
   await act(async () => root.render(createElement(CommandPalette, props)));
   // The main assistant leads the assistants, ahead of pinned ones.
   expect(container.querySelector('[role="option"]')!.textContent).toContain("Sage");

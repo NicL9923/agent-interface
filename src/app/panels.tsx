@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 // Screens most visits never open load on first use, so they stay out of the code every launch parses.
 export const BotSettings = lazy(() => import("../BotSettings").then(module => ({ default: module.BotSettings })));
 export const RoutineResults = lazy(() => import("../components/RoutineResults").then(module => ({ default: module.RoutineResults })));
+export const UsagePanel = lazy(() => import("../components/UsagePanel").then(module => ({ default: module.UsagePanel })));
 export const IntegrationsPanel = lazy(() => import("../components/IntegrationsPanel").then(module => ({ default: module.IntegrationsPanel })));
 export const ComputerPanel = lazy(() => import("../components/ComputerPanel").then(module => ({ default: module.ComputerPanel })));
 export const HermesUpgradePanel = lazy(() => import("../components/HermesUpgradePanel").then(module => ({ default: module.HermesUpgradePanel })));

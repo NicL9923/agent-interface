@@ -16,14 +16,14 @@ import XCTest
     XCTAssertTrue(app.staticTexts["A new version of WildBots is available"].waitForExistence(timeout: 5))
     XCTAssertTrue(app.buttons["appUpdateButton"].waitUntilHittable())
     // Home keeps the banner too.
-    if !app.buttons["Settings"].exists { app.navigationBars.buttons.firstMatch.tap() }
-    XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 5))
+    if !app.profileMenu.exists { app.navigationBars.buttons.firstMatch.tap() }
+    XCTAssertTrue(app.profileMenu.waitForExistence(timeout: 5))
     XCTAssertTrue(app.buttons["appUpdateButton"].waitUntilHittable())
     let home = XCTAttachment(screenshot: app.screenshot())
     home.name = "Update banner on home"
     home.lifetime = .keepAlways
     add(home)
-    app.buttons["Settings"].tap()
+    app.openSettingsFromProfileMenu()
     let update = app.buttons["preferencesUpdateButton"]
     for _ in 0..<8 where !update.canTap { app.swipeUp() }
     XCTAssertTrue(update.canTap)

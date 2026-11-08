@@ -179,6 +179,39 @@ final class SettingsParityTests: XCTestCase {
     XCTAssertEqual(try status(#"{"available":true,"control":{"kind":"idle"}}"#).detail, "Watching. Assistants can use this computer.")
   }
 
+  // MARK: Macs
+
+  func testMacsRowSummarizesLinkedMacsAndEachShowsOnlineOrLastSeen() throws {
+    func list(_ json: String) throws -> MacDeviceList { try JSONDecoder().decode(MacDeviceList.self, from: Data(json.utf8)) }
+    XCTAssertEqual(try list(#"{"available":true,"devices":[]}"#).summary, "No Macs linked")
+    let two = try list(#"{"available":true,"devices":[{"id":"mac_1","name":"Studio","online":true},{"id":"mac_2","name":"Laptop","online":false,"lastSeenAt":"2026-11-08T10:00:00.000Z"}]}"#)
+    XCTAssertEqual(two.summary, "2 Macs, 1 online")
+    XCTAssertEqual(try list(#"{"available":true,"devices":[{"id":"m","name":"Laptop","online":false}]}"#).summary, "1 Mac, offline")
+    XCTAssertEqual(two.devices?[0].status(), "Online")
+    let now = try XCTUnwrap(ServerDate.parse("2026-11-08T12:00:00.000Z"))
+    XCTAssertEqual(two.devices?[1].status(now: now), "Last seen 2 hours ago")
+    XCTAssertEqual(try list(#"{"available":true,"devices":[{"id":"m","name":"New","online":false}]}"#).devices?[0].status(), "Never connected")
+    // A server without a link key answers available false and no devices; Settings hides the row.
+    let off = try list(#"{"available":false,"reason":"Mac links are not configured."}"#)
+    XCTAssertFalse(off.available)
+    XCTAssertNil(off.devices)
+  }
+
+  @MainActor func testRevokingAMacDeletesThatMacByItsEscapedId() async throws {
+    let server = FakeServer()
+    server.reply = .init(status: 200, body: #"{"ok":true}"#)
+    try await MacDeviceList.revoke("mac_1/../x", api: server.api())
+    XCTAssertEqual(server.lastRequest?.httpMethod, "DELETE")
+    XCTAssertEqual(server.lastRequest?.url?.path(percentEncoded: true), "/api/mac/devices/mac_1%2F..%2Fx")
+    server.reply = .init(status: 404, body: #"{"error":"Not found"}"#)
+    do {
+      try await MacDeviceList.revoke("mac_2", api: server.api())
+      XCTFail("a refused revoke reported success")
+    } catch {
+      XCTAssertEqual((error as? APIError)?.status, 404)
+    }
+  }
+
   // MARK: Vault
 
   func testVaultSourceStatusAndLoginBackendUseTheWebWording() {

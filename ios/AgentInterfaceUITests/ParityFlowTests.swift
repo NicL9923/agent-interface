@@ -94,7 +94,7 @@ import UIKit
     expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.staticTexts["The north gate battery needs replacing."])
     waitForExpectations(timeout: 5)
     try capture("home-pinned")
-    app.buttons["openSettings"].tap()
+    app.openSettingsFromProfileMenu()
     XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
     try capture("settings-light")
     app.switches["advancedDetails"].tap()
@@ -104,7 +104,7 @@ import UIKit
     scroll(app, to: appearance); appearance.tap()
     app.buttons["Dark"].tapWhenReady()
     closeSettings(app)
-    app.buttons["openSettings"].tap()
+    app.openSettingsFromProfileMenu()
     XCTAssertTrue(app.switches["advancedDetails"].wait(until: "value == %@", "1"), "Advanced details stays on")
     try capture("settings-dark")
     closeSettings(app)
@@ -201,7 +201,7 @@ import UIKit
       app.launchEnvironment["AGENT_INTERFACE_UI_SCOPE"] = UUID().uuidString.lowercased()
       if unavailable { app.launchEnvironment["AGENT_INTERFACE_UI_COMPUTER_UNAVAILABLE"] = "1" }
       app.launch()
-      XCTAssertTrue(app.buttons["openSettings"].waitForExistence(timeout: 10)); app.buttons["openSettings"].tap()
+      XCTAssertTrue(app.buttons["openSettings"].waitForExistence(timeout: 10)); app.openSettingsFromProfileMenu()
       let row = app.descendants(matching: .any)["sharedComputer"]
       XCTAssertTrue(row.waitForExistence(timeout: 10))
       let detail = unavailable ? "The fixture desktop is stopped." : "Ranch hand is using the computer"
@@ -218,7 +218,7 @@ import UIKit
     app.launchEnvironment["AGENT_INTERFACE_UI_SCOPE"] = UUID().uuidString.lowercased()
     app.launchEnvironment["AGENT_INTERFACE_UI_PREFERENCES_FAILURE"] = "1"
     app.launch()
-    XCTAssertTrue(app.buttons["openSettings"].waitForExistence(timeout: 10)); app.buttons["openSettings"].tap()
+    XCTAssertTrue(app.buttons["openSettings"].waitForExistence(timeout: 10)); app.openSettingsFromProfileMenu()
     app.switches["advancedDetails"].tapWhenReady()
     let retry = app.buttons["Retry saving settings"]
     XCTAssertTrue(retry.waitForExistence(timeout: 5))
@@ -228,7 +228,7 @@ import UIKit
     retry.tap()
     expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: retry); waitForExpectations(timeout: 5)
     closeSettings(app)
-    app.buttons["openSettings"].tap()
+    app.openSettingsFromProfileMenu()
     XCTAssertTrue(app.switches["advancedDetails"].wait(until: "value == %@", "1"), "The retried save kept Advanced details on")
     try capture("settings-save-recovered")
   }
@@ -366,7 +366,7 @@ import UIKit
     XCTAssertTrue(app.staticTexts["Enable notifications on this device?"].waitForExistence(timeout: 10), app.debugDescription)
     app.buttons["enableNotifications"].tap()
     expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.staticTexts["Enable notifications on this device?"]); waitForExpectations(timeout: 5)
-    app.buttons["openSettings"].tap()
+    app.openSettingsFromProfileMenu()
     let toggle = app.switches["deviceNotifications"]
     // Settings is a lazy form; on a landscape iPad the Notifications section starts below the fold.
     if !toggle.waitForExistence(timeout: 3) { scroll(app, to: toggle) }
@@ -383,7 +383,7 @@ import UIKit
     XCTAssertTrue(app.buttons["notNowNotifications"].waitForExistence(timeout: 10))
     app.buttons["notNowNotifications"].tap()
     XCTAssertTrue(app.staticTexts["Enable notifications on this device?"].waitForDisappearance())
-    app.buttons["openSettings"].tap()
+    app.openSettingsFromProfileMenu()
     let toggle = app.switches["deviceNotifications"]
     // Settings is a lazy form; on a landscape iPad the Notifications section starts below the fold.
     if !toggle.waitForExistence(timeout: 3) { scroll(app, to: toggle) }
