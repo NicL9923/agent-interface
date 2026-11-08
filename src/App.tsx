@@ -38,7 +38,7 @@ import { waitingPlaceholder } from "./app/waiting-input";
 import { badgeCount, useAppBadge } from "./app/badge";
 import { ConnectionPanel } from "./components/ConnectionPanel";
 import { DecisionsNotice, reviewFirstDecision, type DockItem } from "./app/StatusDock";
-import { BotDetails, BotSettings, ComputerPanel, DiscoveryPanel, GroupCreate, GroupRoomView, HermesUpgradePanel, IntegrationsPanel, Loading, PreferencesDialog, RoutineResults, useOnceActive } from "./app/panels";
+import { BotDetails, BotSettings, ComputerPanel, DiscoveryPanel, UsagePanel, GroupCreate, GroupRoomView, HermesUpgradePanel, IntegrationsPanel, Loading, PreferencesDialog, RoutineResults, useOnceActive } from "./app/panels";
 export function App() {
   const [view, setView] = useState<View>(initialView);
   // The group chat open in the main pane when the view is "group".
@@ -62,7 +62,7 @@ export function App() {
   const session = useSession({
     onIdentityChange: () => {
       reset(); clearUploads(); toast.dismiss();
-      closePanels("settings", "details", "preferences", "upgrade", "integrations", "computer"); setError("");
+      closePanels("settings", "details", "preferences", "upgrade", "integrations", "usage", "computer"); setError("");
       setRoomId(""); setCreatingGroup(false); setView(current => current === "group" ? "conversation" : current);
     },
     onFirstBootstrap: next => { if (startsOnToday(next.preferences)) setView("today"); },
@@ -189,7 +189,7 @@ export function App() {
       // The signed-out account's in-flight work can never clear these once the identity changes.
       reset(); clearUploads(); toast.dismiss();
       setRailOpen(mobile);
-      closePanels("settings", "details", "preferences", "upgrade", "integrations");
+      closePanels("settings", "details", "preferences", "upgrade", "integrations", "usage");
     } catch (e) {
       setNotice((e as Error).message);
     }
@@ -208,6 +208,9 @@ export function App() {
     reloadGroups();
   });
   const openPreferences = useStableCallback(() => setPanel({ kind: "preferences" }));
+  const openUsage = useStableCallback(() => setPanel({ kind: "usage" }));
+  // Sign out keeps its confirmation in Settings, so the profile menu opens Settings at that step.
+  const confirmSignOut = useStableCallback(() => setPanel({ kind: "preferences", destination: { kind: "signout" } }));
   // Home menu changes can be taken back for a few seconds, by the toast's Undo or Cmd+Z. The
   // toast belongs to whoever made the change; useToast drops it for anyone else.
   const undoable = (change: UndoableEdit) => {
@@ -324,7 +327,7 @@ export function App() {
     <div className="app-shell">
       <Sidebar boot={boot} botId={botId} shownBotId={shownBotId} readThrough={readThrough} groups={homeGroups} view={view} state={state}
         connectionLost={connectionLost} offline={offline} mobile={mobile} open={railOpen} update={update}
-        onSelectBot={selectFromHome} onView={showView} onNewBot={newBot} onSettings={openPreferences} onPin={togglePin}
+        onSelectBot={selectFromHome} onView={showView} onNewBot={newBot} onSettings={openPreferences} onUsage={openUsage} onSignOut={confirmSignOut} onPin={togglePin}
         onBotSettings={botSettings} onMoveToSection={moveToSection} onNewSection={newSection} />
       <main className="conversation-panel" inert={mobile && railOpen} {...(view === "conversation" ? tintProps(selected) : {})}>
         <ChatHeader offline={offline} view={view} boot={boot} selected={selected} room={rooms.find(room => room.room_id === roomId)} modelLocked={connectionLost || sending} onModelSaved={refreshSession} avatarState={avatarState} railOpen={railOpen}
@@ -385,6 +388,7 @@ export function App() {
         </Loading>
       )}
       {panel?.kind === "routine" && <Loading><RoutineResults key={`${boot.user.id}:${panel.botId}:${panel.routineId}`} botId={panel.botId} routineId={panel.routineId} resultId={panel.resultId} onClose={() => closePanels("routine")} /></Loading>}
+      {panel?.kind === "usage" && <Loading><UsagePanel key={`usage:${boot.user.id}`} bots={boot.bots} onClose={() => closePanels("usage")} /></Loading>}
       {panel?.kind === "integrations" && <Loading><IntegrationsPanel key={`integrations:${boot.user.id}`} bots={boot.bots} accountScope={boot.user.id} onClose={() => closePanels("integrations")} /></Loading>}
       {computerLoaded && <Loading><ComputerPanel key={`computer:${boot.user.id}`} initialTab={panel?.kind === "computer" ? panel.tab : undefined} open={panel?.kind === "computer"}
         take={panel?.kind === "computer" ? panel.take : undefined} terminal={panel?.kind === "computer" ? panel.terminal : undefined} onClose={() => closePanels("computer")} /></Loading>}
@@ -402,7 +406,7 @@ export function App() {
       {overlay === "palette" && <CommandPalette boot={boot} botId={botId} rooms={rooms} onSelectRoom={id => { setPanel(null); selectRoom(id); }} onNewGroup={homeGroups.canCreate ? () => { setPanel(null); newGroup(); } : undefined} shownBotId={shownBotId} readThrough={readThrough}
         connectionLost={connectionLost} onClose={closeOverlay} onSelectBot={id => { setPanel(null); selectBot(id); }}
         onView={next => { setPanel(null); showView(next); }} onSearch={text => { setPanel(null); searchMessages(text); }}
-        onSettings={destination => setPanel({ kind: "preferences", destination })} onNewBot={newBot} onTheme={setTheme} onShortcuts={showShortcuts}
+        onSettings={destination => setPanel({ kind: "preferences", destination })} onUsage={openUsage} onNewBot={newBot} onTheme={setTheme} onShortcuts={showShortcuts}
         onFind={selected && view === "conversation" ? () => findInChat(selected.id) : undefined} />}
       {overlay === "shortcuts" && <ShortcutsDialog onClose={closeOverlay} />}
       {overlay === "stop" && liveBot && <StopConfirm name={liveBot.name} onStop={stop} onClose={closeOverlay} />}

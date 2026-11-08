@@ -950,6 +950,15 @@ class AccountUsageTests(unittest.TestCase):
                 self.assertEqual((result['windows'], result['bankedResets']), ([], 0))
         self.assertEqual(self.fetched, [])
 
+    def test_an_older_hermes_without_the_usage_cache_asks_only_its_built_in_fetchers(self):
+        usage = strict(fetch_account_usage=lambda provider: self.snapshot(details=('Credits balance: $1.00',)), _USAGE_FETCHERS={'openrouter': object()})
+        with self.hermes(main='openrouter', fallback=dict(provider='spike-fixture', model='m'), keys={'spike-fixture': 'k'}):
+            modules = {'agent': types.SimpleNamespace(account_usage=usage), 'agent.account_usage': usage, 'agent.account_usage_cache': None}
+            with patch.dict(sys.modules, modules):
+                router, fixture = (row['key'] for row in experience.account_list()['accounts'])
+                self.assertEqual(experience.account_usage(dict(key=router))['details'], ['Credits balance: $1.00'])
+                self.assertIn('does not report', experience.account_usage(dict(key=fixture))['unavailableReason'])
+
     def test_reads_nous_credits_from_the_portal_account(self):
         with self.hermes(main='nous', keys=dict(nous='k'), nous=True, portal=self.snapshot(details=('Top-up credits: $3.00', 'Top up: https://portal'))):
             result = experience.account_usage(dict(key=experience.account_list()['accounts'][0]['key']))

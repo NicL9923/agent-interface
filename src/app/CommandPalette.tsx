@@ -22,7 +22,7 @@ export function paletteBots(boot: Bootstrap) {
 
 const themes: [Preferences["theme"], string][] = [["light", "Light"], ["dark", "Dark"], ["system", "Follow device"]];
 
-export function CommandPalette({ boot, botId, rooms = [], onSelectRoom, onNewGroup, shownBotId, readThrough, connectionLost, onClose, onSelectBot, onView, onSearch, onSettings, onNewBot, onTheme, onShortcuts, onFind }: {
+export function CommandPalette({ boot, botId, rooms = [], onSelectRoom, onNewGroup, shownBotId, readThrough, connectionLost, onClose, onSelectBot, onView, onSearch, onSettings, onUsage, onNewBot, onTheme, onShortcuts, onFind }: {
   boot: Bootstrap;
   botId: string;
   /** The household's group chats, which open like assistants do. */
@@ -41,6 +41,7 @@ export function CommandPalette({ boot, botId, rooms = [], onSelectRoom, onNewGro
   onNewBot(): void;
   onTheme(theme: Preferences["theme"]): void;
   onShortcuts(): void;
+  onUsage(): void;
   /** Find in the open chat, when one is open. */
   onFind?(): void;
 }) {
@@ -79,6 +80,7 @@ export function CommandPalette({ boot, botId, rooms = [], onSelectRoom, onNewGro
       { id: "action:new", group: "Actions", label: "New assistant", keywords: ["create", "add"], icon: icon("plus"), run: onNewBot },
       ...onNewGroup ? [{ id: "action:new-group", group: "Actions", label: "New group chat", keywords: ["create", "add", "room", "discussion"], icon: icon("groups"), run: onNewGroup }] : [],
       { id: "action:settings", group: "Actions", label: "Settings", keywords: ["preferences", "account", "notifications"], icon: icon("gear"), run: onSettings },
+      { id: "action:usage", group: "Actions", label: "Usage", keywords: ["limits", "credits", "quota", "subscription", "plan", "billing"], icon: icon("gauge"), run: onUsage },
       { id: "action:shortcuts", group: "Actions", label: "Keyboard shortcuts", keywords: ["keys", "help"], icon: icon("keyboard"), hint: formatCombo(shortcuts.help), run: onShortcuts },
       { id: "settings:following", group: "Settings", label: "Following", icon: icon("gear"), run: () => onSettings({ kind: "following" }) },
       ...boot.preferences.sections.map(section => ({ id: `settings:section:${section.id}`, group: "Settings", label: `Home section: ${section.name}`, icon: icon("gear"), run: () => onSettings({ kind: "section", id: section.id }) })),
@@ -90,7 +92,7 @@ export function CommandPalette({ boot, botId, rooms = [], onSelectRoom, onNewGro
       })),
       { id: "search", group: "Search", label: "", trailing: true, icon: icon("search"), run: () => onSearch(query.trim()) },
     ];
-  }, [boot, botId, rooms, onSelectRoom, onNewGroup, shownBotId, readThrough, connectionLost, pins, query, onSelectBot, onView, onNewBot, onSettings, onShortcuts, onTheme, onSearch, onFind]);
+  }, [boot, botId, rooms, onSelectRoom, onNewGroup, shownBotId, readThrough, connectionLost, pins, query, onSelectBot, onView, onNewBot, onSettings, onUsage, onShortcuts, onTheme, onSearch, onFind]);
   const searching = !!query.trim();
   const results = useMemo(() => rankItems(query, commands), [query, commands]);
   useEffect(() => setActive(0), [query]);

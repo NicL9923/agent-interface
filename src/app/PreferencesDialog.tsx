@@ -48,7 +48,8 @@ export function PreferencesDialog({ boot, connectionLost, offline, editPreferenc
   const notify = (update: Partial<NonNullable<Preferences["notifications"]>>) =>
     commit(value => ({ ...value, notifications: { timezone, batchMinutes: 0, ...value.notifications, ...update } }));
   const [quietError, setQuietError] = useState("");
-  const [confirmSignOut, setConfirmSignOut] = useState(false);
+  // Sign out from the profile menu or the palette opens straight to its confirmation.
+  const [confirmSignOut, setConfirmSignOut] = useState(destination?.kind === "signout");
   const changeQuietTime = (field: "quietStart" | "quietEnd", value: string) => {
     const other = field === "quietStart" ? prefs.notifications?.quietEnd : prefs.notifications?.quietStart;
     if (value === other) { setQuietError("Start and end times can't match."); return; }

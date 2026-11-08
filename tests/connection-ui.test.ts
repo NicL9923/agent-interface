@@ -470,7 +470,9 @@ it('lets the next sign-in send after signing out while a send was unanswered',as
   vi.mocked(write).mockImplementation(async <T>(path:string)=>path==='/bots/shared/messages'?await new Promise<T>(()=>{}):{} as T);
   await renderApp();await advance(400);
   await act(async()=>container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')!.click());
-  await act(async()=>container.querySelector<HTMLButtonElement>('[aria-label="Settings"]')!.click());
+  // The avatar opens the profile menu; Settings is one of its items.
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Account"]')!.click());
+  await act(async () => [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(item => item.textContent === "Settings")!.click());
   await loaded();
   await act(async()=>button('Sign out').click());
   await act(async()=>container.querySelector<HTMLButtonElement>('.settings-confirmation .danger')!.click());

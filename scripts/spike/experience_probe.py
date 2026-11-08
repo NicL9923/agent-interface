@@ -189,6 +189,18 @@ async def main():
         status, usage = call("usage", days=30)
         assert status == 200 and usage["sessions"] > 0 and usage["actualCost"] is None, usage
         assert call("search", query="")[0] == 400
+        # Account usage goes through Hermes's own provider resolution and usage fetchers. The fixture
+        # provider has no usage endpoint, so the read must say so instead of reaching any network.
+        status, listed = call("accounts")
+        assert status == 200 and [row["role"] for row in listed["accounts"]][:1] == ["main"], listed
+        account = listed["accounts"][0]
+        assert len(account["key"]) == 32 and os.environ["HERMES_SPIKE_TOKEN"] not in json.dumps(listed), listed
+        status, read = call("account_usage", key=account["key"])
+        assert status == 200 and read["key"] == account["key"] and read["windows"] == [] and "does not report" in read["unavailableReason"], read
+        assert call("account_usage", key="0" * 32)[0] == 404
+        assert call("account_usage", key="not-a-key")[0] == 400
+        assert call("account_reset", key=account["key"], force=False)[0] == 409, "A provider without resets accepted one"
+        checks.update(native_account_list=True, native_account_usage_unsupported=True, account_reset_provider_scope=True)
         checks.update(native_profile_search=True, native_history_read=True, history_profile_scope=True, native_usage_unknown_cost=True)
         checks.update(native_routine_history=True, native_routine_output=True, routine_output_profile_scope=True)
         group_caps = await c.call("groups.capabilities")

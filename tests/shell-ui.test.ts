@@ -248,7 +248,9 @@ describe("undo toast", () => {
     await render();
     await pinFromMenu("Shared", "Pin to top");
     expect(toast()).not.toBeNull();
-    await act(async () => mount.container.querySelector<HTMLButtonElement>('[aria-label="Settings"]')!.click());
+    // The avatar opens the profile menu; Settings is one of its items.
+    await act(async () => mount.container.querySelector<HTMLButtonElement>('[aria-label="Account"]')!.click());
+    await act(async () => [...mount.container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(item => item.textContent === "Settings")!.click());
     await loaded();
     await act(async () => [...mount.container.querySelectorAll("button")].find(button => button.textContent?.trim() === "Sign out")!.click());
     expect(write).not.toHaveBeenCalledWith("/auth/logout", {});

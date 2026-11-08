@@ -539,7 +539,12 @@ def account_usage(data):
         except Exception:
             snapshot = None
         return _usage_document(provider, key, snapshot, "Hermes could not read this account's credits right now.")
-    from agent.account_usage_cache import has_account_usage
+    try:
+        from agent.account_usage_cache import has_account_usage
+    except ImportError:
+        # Hermes before the usage cache (late September 2026) has only the built-in fetchers.
+        def has_account_usage(slug):
+            return slug in getattr(usage, "_USAGE_FETCHERS", {})
     if not has_account_usage(provider):
         return _usage_document(provider, key, None, "This provider does not report plan limits or credits to Hermes.")
     return _usage_document(provider, key, usage.fetch_account_usage(provider), "Hermes could not read this account's limits right now.")

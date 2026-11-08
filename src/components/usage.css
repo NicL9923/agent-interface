@@ -1,0 +1,21 @@
+.usage-panel { width: min(640px, calc(100vw - max(16px, env(safe-area-inset-left)) - max(16px, env(safe-area-inset-right)))); }
+.usage-accounts { display: grid; gap: 12px; }
+.usage-card h3 { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 0; font-size: 1rem; }
+.usage-plan { padding: 2px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 0.8125rem; font-weight: 600; }
+.usage-windows { display: grid; gap: 14px; margin: 16px 0 6px; padding: 0; list-style: none; }
+.usage-window small { display: block; margin-top: 4px; color: var(--muted); font-size: 0.8125rem; }
+.usage-window-row { display: flex; justify-content: space-between; gap: 12px; font-size: 0.875rem; }
+.usage-window-row strong { font-weight: 600; font-variant-numeric: tabular-nums; }
+.usage-bar { height: 8px; margin-top: 6px; overflow: hidden; border-radius: 999px; background: var(--rail); }
+.usage-bar > span { display: block; height: 100%; border-radius: inherit; background: var(--accent); }
+.usage-window[data-level="warn"] .usage-bar > span { background: var(--attention); }
+.usage-window[data-level="alarm"] .usage-bar > span { background: var(--danger); }
+.usage-window[data-level="alarm"] .usage-window-row strong { color: var(--danger); }
+.usage-card > .usage-detail { margin: 8px 0 0; color: var(--ink); font-size: 0.875rem; overflow-wrap: anywhere; }
+.usage-card > .usage-detail.muted { color: var(--muted); }
+.usage-resets { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); font-size: 0.875rem; }
+.usage-resets > [data-slot="form-message"] { flex-basis: 100%; margin: 0; }
+.usage-card > .usage-outcome { margin: 10px 0 0; color: var(--ink); font-size: 0.875rem; }
+.usage-card > .usage-users { margin: 12px 0 0; color: var(--muted); font-size: 0.8125rem; }
+.usage-empty, .usage-unavailable { margin-top: 16px; font-size: 0.875rem; }
+@media (prefers-reduced-motion: no-preference) { .usage-bar > span { transition: width 300ms ease; } }

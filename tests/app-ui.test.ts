@@ -230,7 +230,9 @@ describe("conversation state", () => {
     vi.mocked(api).mockImplementation(async <T>(path: string) => path === "/auth/config" ? { localDevAuth: true } as T : original(path) as Promise<T>);
     vi.mocked(write).mockImplementation(async <T>(path: string) => { order.push(path); return {} as T; });
     await render();
-    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Settings"]')!.click());
+    // The avatar opens the profile menu; Settings is one of its items.
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Account"]')!.click());
+    await act(async () => [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(item => item.textContent === "Settings")!.click());
     await loaded();
     await act(async () => Array.from(container.querySelectorAll("button")).find(button => button.textContent?.trim() === "Sign out")!.click());
     expect(order).toEqual([]);
@@ -242,13 +244,36 @@ describe("conversation state", () => {
     vi.mocked(write).mockReset().mockResolvedValue({});
   });
 
+  it("asks before signing out from the profile menu, and opens Usage from it", async () => {
+    Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: function(this: HTMLDialogElement) { this.open = true; } });
+    Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: function(this: HTMLDialogElement) { this.open = false; } });
+    const original = vi.mocked(api).getMockImplementation()!;
+    vi.mocked(api).mockImplementation(async <T>(path: string) => path === "/usage/accounts" ? { accounts: [], unavailableBots: [] } as T : original(path) as Promise<T>);
+    await render();
+    const item = (text: string) => [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(row => row.textContent?.startsWith(text))!;
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Account"]')!.click());
+    await act(async () => item("Sign out").click());
+    await loaded();
+    // The menu goes straight to the question; nothing is signed out until it is answered.
+    expect(document.querySelector('[role="alertdialog"]')?.textContent).toContain("Sign out");
+    expect(write).not.toHaveBeenCalledWith("/auth/logout", {});
+    await act(async () => [...document.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')].find(button => !button.classList.contains("danger"))!.click());
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Close settings"]')!.click());
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Account"]')!.click());
+    await act(async () => item("Usage").click());
+    await loaded();
+    expect(container.querySelector("#usage-title")?.textContent).toBe("Usage");
+  });
+
   it("keeps one integrations dialog across repeated household refreshes", async () => {
     Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: function(this: HTMLDialogElement) { this.open = true; } });
     Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: function(this: HTMLDialogElement) { this.open = false; } });
     const original = vi.mocked(api).getMockImplementation()!;
     vi.mocked(api).mockImplementation(async <T>(path: string) => path.startsWith("/integrations") ? { profile: "shared", canManage: true, connections: [] } as T : original(path) as Promise<T>);
     await render();
-    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Settings"]')!.click());
+    // The avatar opens the profile menu; Settings is one of its items.
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Account"]')!.click());
+    await act(async () => [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(item => item.textContent === "Settings")!.click());
     await loaded();
     expect(container.querySelectorAll(".hermes-upgrade-panel")).toHaveLength(0);
     await act(async () => [...container.querySelectorAll<HTMLButtonElement>(".settings-row")].find(button => button.textContent?.startsWith("Integrations"))!.click());
@@ -263,7 +288,9 @@ describe("conversation state", () => {
     Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: function(this: HTMLDialogElement) { this.open = true; } });
     Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: function(this: HTMLDialogElement) { this.open = false; } });
     await render();
-    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Settings"]')!.click());
+    // The avatar opens the profile menu; Settings is one of its items.
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Account"]')!.click());
+    await act(async () => [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(item => item.textContent === "Settings")!.click());
     await loaded();
     await act(async () => [...container.querySelectorAll<HTMLButtonElement>(".settings-row")].find(button => button.textContent?.startsWith("Hermes and updates"))!.click());
     await loaded();
