@@ -1,7 +1,7 @@
 # November 8 iPhone Find reproduction preparation
 
-Base `298c02dfb0e4ca99b77f26be50f21ad43fa48700`, iOS source fingerprint
-`sha256:2719a128466aa67832742ca01895d028ad87af0f97eda1a71d3f0b948b16770f`.
+Based on `298c02dfb0e4ca99b77f26be50f21ad43fa48700`. The prepared branch's iOS fingerprint is
+`sha256:cc0a19d36367b21aa3499105310f77017d55f575d38a0c3e1f09f33b87189053`.
 Prepared on NicolasLaptop, Fedora Linux. No Swift compiler or Xcode is installed.
 No iOS compilation, test, simulator, mutation check or physical-device run took place.
 
@@ -10,6 +10,7 @@ change production command routing or claim to fix the bug. The old non-strict
 expected-failure wrapper hid missing Find and missing keyboard focus together.
 The reproduction now fails normally, reports how many Cmd+1 attempts preceded
 Find, and attaches the screen and accessibility hierarchy for either failure.
+Cmd+F gets one attempt after the chat is ready, so retrying cannot hide a lost press.
 The other shortcut-helper callers retain their retries and ignore its new result.
 
 Claude Opus 5.5 at high effort reviewed the diagnosis against the named base.
@@ -37,6 +38,17 @@ Set IOS_DERIVED_DATA to a task directory on DevSSD before the run. The runner
 already acquires mac-heavy-lock. Record the exact head, simulator, Xcode version,
 test results and failure attachments here. On a failing run, inspect key delivery,
 the key window, the first responder and command callback execution in the app
-debugger. Then repeat 20 iterations without run-tests-until-failure to measure
-the fixed behavior. The current reproduction has not been observed fail on Linux,
+debugger. Repeat 20 iterations without run-tests-until-failure to measure how
+often the current code fails. After a future production fix, repeat that run
+and record the red-to-green comparison. The current reproduction has not been observed fail on Linux,
 because Linux cannot execute XCTest. Do not merge this branch as a completed fix.
+
+The diagnostics flag requests the simulator diagnostic bundle. The runner notes
+that collecting it after a failure can take 10 minutes on the Mac Mini. The
+test's own screenshot and hierarchy attachments are separate from that bundle.
+
+Claude Opus 5.5 at high effort reviewed the draft and found that retrying Cmd+F
+could hide the lost press. That finding is addressed by allowing one attempt.
+The review's fingerprint and repetition wording notes are also addressed. The
+remaining code and existing helper callers had no findings. Xcode compilation,
+an observed failing reproduction and command-delivery diagnosis remain blocked.

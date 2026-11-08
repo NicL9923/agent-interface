@@ -74,7 +74,7 @@ import UIKit
     XCTAssertTrue(app.textViews["messageComposer"].waitUntilHittable())
     let find = app.textFields["findConversation"]
     // Strict reproduction for #178. Distinguish missing command delivery from missing field focus.
-    app.shortcut("f", shows: find, failureContext: "Cmd+1 needed \(pinAttempts) attempts before the chat appeared.")
+    app.shortcut("f", shows: find, attempts: 1, failureContext: "Cmd+1 needed \(pinAttempts) attempts before the chat appeared.")
     let focused = find.waitForKeyboardFocus()
     let focusFailure = "Find appeared but did not take keyboard focus after Cmd+1 needed \(pinAttempts) attempts."
     if !focused { app.attachShortcutDiagnostics(focusFailure) }
