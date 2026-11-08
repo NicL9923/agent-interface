@@ -8,6 +8,7 @@ private struct TranscriptConnectedKey: EnvironmentKey { static let defaultValue 
 private struct TranscriptRecipientKey: EnvironmentKey { static let defaultValue = "Assistant" }
 private struct FoundMessageKey: EnvironmentKey { static let defaultValue: String? = nil }
 private struct TranscriptUserKey: EnvironmentKey { static let defaultValue: String? = nil }
+private struct DraftRevisionsKey: EnvironmentKey { static let defaultValue: [String: DraftRevision] = [:] }
 extension EnvironmentValues {
   /// The signed-in person, so only another member's message carries a name.
   var transcriptUserId: String? {
@@ -17,6 +18,11 @@ extension EnvironmentValues {
   var foundMessage: String? {
     get { self[FoundMessageKey.self] }
     set { self[FoundMessageKey.self] = newValue }
+  }
+  /// The turn's revised email drafts, by `DraftDiff.key`.
+  var draftRevisions: [String: DraftRevision] {
+    get { self[DraftRevisionsKey.self] }
+    set { self[DraftRevisionsKey.self] = newValue }
   }
   var transcriptConnected: Bool {
     get { self[TranscriptConnectedKey.self] }
@@ -45,6 +51,9 @@ struct TranscriptTurns: View, Equatable {
   /// Routine runs before each turn and after the last; see `RoutineRunRules.place`.
   var runSlots: [[RoutineRun]] = []
   var botId = ""
+  /// Each reply's file chips and each revised email draft, by message; see AppStore.replyFiles.
+  var replyFiles: [String: [Artifact]] = [:]
+  var revisions: [String: DraftRevision] = [:]
   /// One keyed list, so an opened run card stays open when a new turn lands after it.
   private enum Row: Identifiable {
     case run(RoutineRun), turn(ConversationTurn)
@@ -65,8 +74,11 @@ struct TranscriptTurns: View, Equatable {
     ForEach(rows) { row in
       switch row {
       case .turn(let turn):
+        let ids = Set(turn.messages.map(\.id))
         ConversationTurnView(turn: turn, advanced: advanced,
-          delivery: turn.messages.contains { $0.id == delivery?.id } ? delivery : nil, live: turn.id == liveTurn)
+          delivery: turn.messages.contains { $0.id == delivery?.id } ? delivery : nil, live: turn.id == liveTurn,
+          files: replyFiles.filter { ids.contains($0.key) },
+          revisions: revisions.filter { ids.contains(String($0.key.prefix { $0 != "\n" })) })
       case .run(let run):
         RoutineRunCard(run: run, botId: botId).id(run.key)
       }
@@ -79,10 +91,13 @@ struct ConversationTurnView: View, Equatable {
   var advanced: Bool
   var delivery: SentEcho.Delivery? = nil
   var live = false
+  /// File chips by reply, and revised email drafts, for this turn's messages only.
+  var files: [String: [Artifact]] = [:]
+  var revisions: [String: DraftRevision] = [:]
   @Environment(\.transcriptConnected) private var connected
   @Environment(\.transcriptRecipient) private var recipient
   nonisolated static func == (a: Self, b: Self) -> Bool {
-    a.turn == b.turn && a.advanced == b.advanced && a.delivery == b.delivery && a.live == b.live
+    a.turn == b.turn && a.advanced == b.advanced && a.delivery == b.delivery && a.live == b.live && a.files == b.files && a.revisions == b.revisions
   }
   var body: some View {
     let visible = turn.visibleMessages
@@ -96,10 +111,10 @@ struct ConversationTurnView: View, Equatable {
         case .message(let index, let message):
         let run = turn.replyRun(at: index, in: visible)
         MessageView(message: message, continued: run.continued, endsRun: run.endsRun, when: run.when,
-          delivery: delivery?.id == message.id ? delivery?.status : nil).id(message.id)
+          delivery: delivery?.id == message.id ? delivery?.status : nil, replyFiles: files[message.id]).id(message.id)
         }
       }
-    }
+    }.environment(\.draftRevisions, revisions)
   }
   /// All of a turn's intermediate work behind one row, so the conversation reads as messages.
   /// Expanded, it shows the grouped views as they were: reasoning, tool calls and each activity group.

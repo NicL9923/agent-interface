@@ -25,6 +25,9 @@ struct ReplyCard: Decodable, Identifiable {
   var cc: [String]?
   var subject: String?
   var body: String?
+  /// Revision lineage: this draft's ID, and the ID of the earlier draft it revises. See DraftDiff.
+  var draftId: LenientId? = nil
+  var revises: LenientId? = nil
   // A form.
   var submitLabel: String?
   var fields: [FormField]?
@@ -144,11 +147,12 @@ enum ReplyCards {
     // it as absent. A JSON number may start only a number field.
     func clean(_ value: [String: Any]) -> Bool { !value.values.contains { $0 is NSNull } }
     return cards.allSatisfy { card in
-      guard clean(card) else { return false }
+      // A malformed lineage ID, null included, drops the lineage, never the draft.
+      guard clean(card.filter { $0.key != "draftId" && $0.key != "revises" }) else { return false }
       let type = card["type"] as? String ?? ""
       let allowed: Set<String> = switch type {
       case "event": ["id", "type", "title", "start", "end", "location", "description"]
-      case "email": ["id", "type", "title", "to", "cc", "subject", "body"]
+      case "email": ["id", "type", "title", "to", "cc", "subject", "body", "draftId", "revises"]
       case "form": ["id", "type", "title", "description", "submitLabel", "fields"]
       default: ["id", "type", "title", "items"]
       }
@@ -223,6 +227,7 @@ struct InteractiveReplyCard: View {
   var messageId: String
   @Environment(AppStore.self) private var store: AppStore?
   @Environment(\.transcriptConnected) private var connected
+  @Environment(\.draftRevisions) private var revisions
   @Environment(\.colorScheme) private var scheme
   @State private var saved = ReplyCardState()
   @State private var draft = ReplyCardState()
@@ -252,7 +257,7 @@ struct InteractiveReplyCard: View {
         Button("Review calendar event", systemImage: "calendar.badge.plus") { eventOpen = true }.buttonStyle(.bordered)
         Text("Review and choose Save in Apple's event editor to add it to your calendar.").font(.caption).foregroundStyle(.secondary)
       } else if card.type == "email" {
-        EmailDraftCardView(card: card)
+        EmailDraftCardView(card: card, revision: revisions[DraftDiff.key(messageId, card.id)])
       } else if card.type == "form" {
         FormReplyCardView(card: card, messageId: messageId)
       } else {

@@ -11,6 +11,22 @@ import XCTest
     Conversation(botId: "bot", messages: messages, activity: Activity(state: .idle), approvals: [], files: files)
   }
 
+  /// The web's src/shared/artifacts.ts reads the same vectors, so chips and the panel agree on both clients.
+  func testReplyFilesMatchTheSharedVectors() throws {
+    struct Case: Decodable { var name: String; var messages: [Message]; var files: [FileRef]?; var artifacts: [[String]]; var replies: [String: [String]] }
+    struct Vectors: Decodable { var cases: [Case] }
+    let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Vectors/reply-artifacts.json")
+    let cases = try JSONDecoder().decode(Vectors.self, from: Data(contentsOf: url)).cases
+    XCTAssertFalse(cases.isEmpty)
+    for vector in cases {
+      let listed = Artifacts.list(conversation(files: vector.files ?? [], messages: vector.messages))
+      XCTAssertEqual(listed.map { [$0.id, $0.source.rawValue] }, vector.artifacts, vector.name)
+      let chips = Artifacts.replyFiles(vector.messages, artifacts: listed)
+      XCTAssertEqual(chips.mapValues { $0.map(\.id) }, vector.replies, vector.name)
+      for artifact in chips.values.flatMap({ $0 }) { XCTAssertTrue(listed.contains(artifact), vector.name) }
+    }
+  }
+
   func testAFilePreviewUsesItsOwningSheetInsteadOfTheRootPresenter() async throws {
     let server = FakeServer { _ in .init(body: "Gate battery plan") }
     let store = AppStore(); store.widgetSnapshotURL = nil; store.api = server.api()

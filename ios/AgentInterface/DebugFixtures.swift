@@ -242,6 +242,30 @@
         ["id": "cards-a3", "role": "assistant", "text": "A few details first.\n\n" + fence(form)],
       ]
     }()
+    /// A reply with six generated files and a revised email draft, as `AGENT_INTERFACE_UI_REPLY_EXTRAS` shows them.
+    static let replyExtraMessages: [[String: Any]] = {
+      let json = { (value: Any) -> String in String(decoding: try! JSONSerialization.data(withJSONObject: value), as: UTF8.self) }
+      let fence = { (card: [String: Any]) -> String in "```agent-ui\n" + json(["version": 1, "cards": [card]]) + "\n```" }
+      let file = { (id: String, name: String, mime: String) -> [String: Any] in ["id": id, "name": name, "mime": mime, "size": 2048, "url": "/api/files/\(id)"] }
+      let first: [String: Any] = ["id": "sam1", "type": "email", "title": "Fence help", "to": ["sam@example.com"], "subject": "Fence work Saturday",
+        "body": "Hi Sam,\n\nCan you come Saturday at 9? Bring your post driver.\n\nThanks,\nNicolas", "draftId": "sam-1"]
+      var second = first
+      second["id"] = "sam2"; second["draftId"] = "sam-2"; second["revises"] = "sam-1"; second["to"] = ["sam@example.com", "kim@example.com"]
+      second["subject"] = "Fence work Sunday"; second["body"] = "Hi Sam,\n\nCan you come Sunday at 10 instead? Kim will join us. Bring your post driver.\n\nThanks,\nNicolas"
+      let me: [String: Any] = ["id": "native-test", "name": "Local test member"]
+      return [
+        ["id": "extra-q1", "role": "user", "text": "Walk the north fence and send me what you found.", "sender": me],
+        ["id": "extra-t1", "role": "tool", "text": "Rendered the survey.", "toolName": "image_generate",
+          "files": [file("fence-chart", "north-fence-posts.png", "image/png"), file("fence-csv", "fence-inspection.csv", "text/csv")]],
+        ["id": "extra-a1", "role": "assistant", "text": "Done. Post 2 was leaning and post 3 was rotted through, so I replaced it.",
+          "files": [file("pasture-map", "pasture-map.pdf", "application/pdf"), file("repair-notes", "repair-notes.md", "text/markdown"),
+            file("supply-quote", "supply-quote.pdf", "application/pdf"), file("gate-audio", "gate-hinge.m4a", "audio/mp4")]],
+        ["id": "extra-q2", "role": "user", "text": "Draft a note asking Sam to help.", "sender": me],
+        ["id": "extra-a2", "role": "assistant", "text": "Here's a draft.\n\n" + fence(first)],
+        ["id": "extra-q3", "role": "user", "text": "Make it Sunday at 10 and copy Kim.", "sender": me],
+        ["id": "extra-a3", "role": "assistant", "text": "Updated.\n\n" + fence(second)],
+      ]
+    }()
     nonisolated(unsafe) static var messages: [[String: Any]] = [
       [
         "id": "welcome", "role": "assistant",
@@ -644,6 +668,12 @@
         if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_CHAT_CARDS"] == "1" {
           object = ["botId": path.components(separatedBy: "/")[3], "messages": Self.chatCardMessages, "activity": ["state": "idle"],
             "approvals": [], "files": [], "attention": [], "draft": Self.draft, "readPosition": Self.readPosition]
+        }
+        if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_REPLY_EXTRAS"] == "1" {
+          let messages = Self.replyExtraMessages
+          let files = messages.flatMap { $0["files"] as? [[String: Any]] ?? [] }
+          object = ["botId": path.components(separatedBy: "/")[3], "messages": messages, "activity": ["state": "idle"],
+            "approvals": [], "files": files, "attention": [], "draft": Self.draft, "readPosition": Self.readPosition]
         }
         if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_INLINE_UI"] == "1" {
           let html = "<h3>Hay supply planner</h3><p>Explicit simulator fixture.</p><button id='compare' onclick=\"document.getElementById('days').textContent='40 days';document.getElementById('extra').hidden=false\">Compare supply</button><p id='days'>24 days</p><p id='extra' hidden>At half a bale per day, twenty bales lasts forty days.</p>"
