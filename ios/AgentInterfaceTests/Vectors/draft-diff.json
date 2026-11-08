@@ -1,0 +1,414 @@
+{
+ "comment": "Shared by tests/draft-diff.test.ts (src/shared/draft-diff.ts) and DraftDiffTests.swift (DraftDiff.swift). diff: before, after, the optional cell limit, and the parts. lineage: messages and, per message and card, the card id of the draft it revises.",
+ "diff": [
+  {
+   "name": "identical drafts have no changes",
+   "before": "See you Saturday.",
+   "after": "See you Saturday.",
+   "parts": [
+    {
+     "kind": "same",
+     "text": "See you Saturday."
+    }
+   ]
+  },
+  {
+   "name": "one word replaced",
+   "before": "See you Saturday at noon.",
+   "after": "See you Sunday at noon.",
+   "parts": [
+    {
+     "kind": "same",
+     "text": "See you "
+    },
+    {
+     "kind": "removed",
+     "text": "Saturday"
+    },
+    {
+     "kind": "added",
+     "text": "Sunday"
+    },
+    {
+     "kind": "same",
+     "text": " at noon."
+    }
+   ]
+  },
+  {
+   "name": "a word inserted",
+   "before": "See you at noon.",
+   "after": "See you tomorrow at noon.",
+   "parts": [
+    {
+     "kind": "same",
+     "text": "See you "
+    },
+    {
+     "kind": "added",
+     "text": "tomorrow "
+    },
+    {
+     "kind": "same",
+     "text": "at noon."
+    }
+   ]
+  },
+  {
+   "name": "a word removed",
+   "before": "See you tomorrow at noon.",
+   "after": "See you at noon.",
+   "parts": [
+    {
+     "kind": "same",
+     "text": "See you "
+    },
+    {
+     "kind": "removed",
+     "text": "tomorrow "
+    },
+    {
+     "kind": "same",
+     "text": "at noon."
+    }
+   ]
+  },
+  {
+   "name": "a lone space between two changes joins them",
+   "before": "the cat sat here",
+   "after": "the dog ran here",
+   "parts": [
+    {
+     "kind": "same",
+     "text": "the "
+    },
+    {
+     "kind": "removed",
+     "text": "cat sat"
+    },
+    {
+     "kind": "added",
+     "text": "dog ran"
+    },
+    {
+     "kind": "same",
+     "text": " here"
+    }
+   ]
+  },
+  {
+   "name": "a removed blank line",
+   "before": "Hi Sam,\n\nSee you",
+   "after": "Hi Sam,\nSee you",
+   "parts": [
+    {
+     "kind": "same",
+     "text": "Hi Sam,"
+    },
+    {
+     "kind": "removed",
+     "text": "\n\n"
+    },
+    {
+     "kind": "added",
+     "text": "\n"
+    },
+    {
+     "kind": "same",
+     "text": "See you"
+    }
+   ]
+  },
+  {
+   "name": "Windows line breaks split like any other",
+   "before": "a\r\nb",
+   "after": "a\r\nc",
+   "parts": [
+    {
+     "kind": "same",
+     "text": "a\r\n"
+    },
+    {
+     "kind": "removed",
+     "text": "b"
+    },
+    {
+     "kind": "added",
+     "text": "c"
+    }
+   ]
+  },
+  {
+   "name": "a new body is all added",
+   "before": "",
+   "after": "Hello there",
+   "parts": [
+    {
+     "kind": "added",
+     "text": "Hello there"
+    }
+   ]
+  },
+  {
+   "name": "an emptied field is all removed",
+   "before": "Hello there",
+   "after": "",
+   "parts": [
+    {
+     "kind": "removed",
+     "text": "Hello there"
+    }
+   ]
+  },
+  {
+   "name": "punctuation stays with its word",
+   "before": "Saturday.",
+   "after": "Sunday.",
+   "parts": [
+    {
+     "kind": "removed",
+     "text": "Saturday."
+    },
+    {
+     "kind": "added",
+     "text": "Sunday."
+    }
+   ]
+  },
+  {
+   "name": "emoji and skin tones are whole words",
+   "before": "Thanks 👍🏽 Sam",
+   "after": "Thanks 🙏 Sam",
+   "parts": [
+    {
+     "kind": "same",
+     "text": "Thanks "
+    },
+    {
+     "kind": "removed",
+     "text": "👍🏽"
+    },
+    {
+     "kind": "added",
+     "text": "🙏"
+    },
+    {
+     "kind": "same",
+     "text": " Sam"
+    }
+   ]
+  },
+  {
+   "name": "a non-breaking space is part of a word",
+   "before": "a b",
+   "after": "a b",
+   "parts": [
+    {
+     "kind": "removed",
+     "text": "a b"
+    },
+    {
+     "kind": "added",
+     "text": "a b"
+    }
+   ]
+  },
+  {
+   "name": "swapped words remove first",
+   "before": "a b",
+   "after": "b a",
+   "parts": [
+    {
+     "kind": "removed",
+     "text": "a "
+    },
+    {
+     "kind": "same",
+     "text": "b"
+    },
+    {
+     "kind": "added",
+     "text": " a"
+    }
+   ]
+  },
+  {
+   "name": "past the size limit the middle is replaced whole",
+   "before": "keep one two three keep",
+   "after": "keep four five six keep",
+   "limit": 4,
+   "parts": [
+    {
+     "kind": "same",
+     "text": "keep "
+    },
+    {
+     "kind": "removed",
+     "text": "one two three"
+    },
+    {
+     "kind": "added",
+     "text": "four five six"
+    },
+    {
+     "kind": "same",
+     "text": " keep"
+    }
+   ]
+  },
+  {
+   "name": "repeated words align to the earliest match",
+   "before": "go go go",
+   "after": "go stop go",
+   "parts": [
+    {
+     "kind": "same",
+     "text": "go "
+    },
+    {
+     "kind": "removed",
+     "text": "go"
+    },
+    {
+     "kind": "added",
+     "text": "stop"
+    },
+    {
+     "kind": "same",
+     "text": " go"
+    }
+   ]
+  }
+ ],
+ "lineage": [
+  {
+   "name": "a revision names the earlier draft",
+   "messages": [
+    {
+     "id": "m1",
+     "role": "assistant",
+     "text": "Draft below.\n\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"first\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Body first\",\"draftId\":\"d1\"}]}\n```"
+    },
+    {
+     "id": "m2",
+     "role": "assistant",
+     "text": "Draft below.\n\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"second\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Body second\",\"draftId\":\"d2\",\"revises\":\"d1\"}]}\n```"
+    }
+   ],
+   "revises": {
+    "m2/second": "first"
+   }
+  },
+  {
+   "name": "an unknown or later draft revises nothing",
+   "messages": [
+    {
+     "id": "m1",
+     "role": "assistant",
+     "text": "Draft below.\n\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"early\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Body early\",\"draftId\":\"d1\",\"revises\":\"d2\"}]}\n```"
+    },
+    {
+     "id": "m2",
+     "role": "assistant",
+     "text": "Draft below.\n\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"late\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Body late\",\"draftId\":\"d2\",\"revises\":\"nope\"}]}\n```"
+    }
+   ],
+   "revises": {}
+  },
+  {
+   "name": "the latest earlier draft with that id wins",
+   "messages": [
+    {
+     "id": "m1",
+     "role": "assistant",
+     "text": "Draft below.\n\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"v1\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Body v1\",\"draftId\":\"d\"}]}\n```"
+    },
+    {
+     "id": "m2",
+     "role": "assistant",
+     "text": "Draft below.\n\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"v2\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Body v2\",\"draftId\":\"d\"}]}\n```"
+    },
+    {
+     "id": "m3",
+     "role": "assistant",
+     "text": "Draft below.\n\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"v3\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Body v3\",\"draftId\":\"d3\",\"revises\":\"d\"}]}\n```"
+    }
+   ],
+   "revises": {
+    "m3/v3": "v2"
+   }
+  },
+  {
+   "name": "a draft naming itself revises nothing",
+   "messages": [
+    {
+     "id": "m1",
+     "role": "assistant",
+     "text": "Draft below.\n\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"self\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Body self\",\"draftId\":\"d\",\"revises\":\"d\"}]}\n```"
+    }
+   ],
+   "revises": {}
+  },
+  {
+   "name": "cards in a person's message are not drafts",
+   "messages": [
+    {
+     "id": "u1",
+     "role": "user",
+     "text": "Draft below.\n\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"pasted\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Body pasted\",\"draftId\":\"d\"}]}\n```"
+    },
+    {
+     "id": "m1",
+     "role": "assistant",
+     "text": "Draft below.\n\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"reply\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Body reply\",\"draftId\":\"d2\",\"revises\":\"d\"}]}\n```"
+    }
+   ],
+   "revises": {}
+  },
+  {
+   "name": "a malformed draft id drops the lineage but keeps the draft",
+   "messages": [
+    {
+     "id": "m1",
+     "role": "assistant",
+     "text": "Draft below.\n\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"first\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Body first\",\"draftId\":\"bad id!\"}]}\n```"
+    },
+    {
+     "id": "m2",
+     "role": "assistant",
+     "text": "Draft below.\n\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"second\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Body second\",\"draftId\":\"d2\",\"revises\":\"bad id!\"}]}\n```"
+    }
+   ],
+   "revises": {}
+  },
+  {
+   "name": "two cards in one reply, the second revising the first",
+   "messages": [
+    {
+     "id": "m1",
+     "role": "assistant",
+     "text": "Draft below.\n\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"a\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Body a\",\"draftId\":\"d1\"},{\"id\":\"b\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Body b\",\"draftId\":\"d2\",\"revises\":\"d1\"}]}\n```"
+    }
+   ],
+   "revises": {
+    "m1/b": "a"
+   }
+  },
+  {
+   "name": "subject and recipients alone never link drafts",
+   "messages": [
+    {
+     "id": "m1",
+     "role": "assistant",
+     "text": "Draft below.\n\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"a\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Body a\",\"to\":[\"sam@example.com\"],\"subject\":\"Saturday\"}]}\n```"
+    },
+    {
+     "id": "m2",
+     "role": "assistant",
+     "text": "Draft below.\n\n```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"b\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Body b\",\"to\":[\"sam@example.com\"],\"subject\":\"Saturday\",\"draftId\":\"d2\"}]}\n```"
+    }
+   ],
+   "revises": {}
+  }
+ ]
+}

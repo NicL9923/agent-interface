@@ -1463,6 +1463,39 @@ describe("email drafts", () => {
   });
 });
 
+describe("email draft revisions", () => {
+  const card = (cards: object[]) => "Here's the draft.\n\n```agent-ui\n" + JSON.stringify({ version: 1, cards }) + "\n```";
+  const first = { id: "reply", type: "email", title: "Reply to Sam", to: ["sam@example.com"], subject: "Saturday", body: "See you Saturday at noon.", draftId: "d1" };
+  const marks = (root: Element) => [...root.querySelectorAll("ins, del")].map(node => `${node.tagName.toLowerCase()}:${node.textContent}`);
+  it("marks what a revision changed, and hides and shows the changes", async () => {
+    conversation = { ...conversation, messages: [prompt("q1", "Draft it"), answer("a1", card([first])),
+      prompt("q2", "Make it Sunday and copy Kim"), answer("a2", card([{ ...first, id: "reply2", draftId: "d2", revises: "d1", to: ["sam@example.com", "kim@example.com"], body: "See you Sunday at noon." }]))] };
+    await render();
+    const [original, revised] = [...container.querySelectorAll<HTMLElement>(".reply-card-email")];
+    // The first draft revises nothing.
+    expect(original.querySelector(".email-draft-revision")).toBeNull();
+    expect(revised.textContent).toContain("Revises “Reply to Sam”");
+    expect(marks(revised)).toEqual(["ins:Added: kim@example.com", "del:Removed: Saturday", "ins:Added: Sunday"]);
+    await act(async () => [...revised.querySelectorAll("button")].find(button => button.textContent?.includes("Hide changes"))!.click());
+    expect(marks(revised)).toEqual([]);
+    expect(revised.querySelector(".email-draft-body")!.textContent).toBe("See you Sunday at noon.");
+    await act(async () => [...revised.querySelectorAll("button")].find(button => button.textContent?.includes("Show changes"))!.click());
+    expect(marks(revised)).toHaveLength(3);
+    // Mail still opens with the new draft, never the marks.
+    expect(revised.querySelector<HTMLAnchorElement>("a")!.getAttribute("href")).toContain("Sunday");
+  });
+  it("links drafts only through revises, never by subject or recipients", async () => {
+    conversation = { ...conversation, messages: [prompt("q1", "Draft it"), answer("a1", card([first])),
+      prompt("q2", "Again"), answer("a2", card([{ ...first, id: "again", draftId: "d2", body: "See you Sunday at noon." }])),
+      prompt("q3", "Same again"), answer("a3", card([{ ...first, id: "copy", draftId: "d3", revises: "d2", body: "See you Sunday at noon." }]))] };
+    await render();
+    const [, unlinked, same] = [...container.querySelectorAll<HTMLElement>(".reply-card-email")];
+    expect(unlinked.querySelector(".email-draft-revision")).toBeNull();
+    expect(same.textContent).toContain("Same as “Reply to Sam”");
+    expect(same.textContent).not.toContain("Hide changes");
+  });
+});
+
 describe("reply file chips", () => {
   const png = (id: string) => ({ id, name: `${id}.png`, mime: "image/png", url: `/api/files/${id}` });
   beforeEach(() => {

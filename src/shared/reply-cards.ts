@@ -8,7 +8,13 @@ export interface ItineraryCard {
 }
 export interface EventCard { id: string; type: "event"; title: string; start: string; end?: string; location?: string; description?: string }
 /** An email the assistant drafted. Nothing is sent: the person copies it or opens it in their mail app. */
-export interface EmailCard { id: string; type: "email"; title: string; to?: string[]; cc?: string[]; subject?: string; body: string }
+export interface EmailCard {
+  id: string; type: "email"; title: string; to?: string[]; cc?: string[]; subject?: string; body: string;
+  /** This draft's identity across the conversation, so a later revision can name it. */
+  draftId?: string;
+  /** The `draftId` of the earlier draft this one revises. */
+  revises?: string;
+}
 export const formFieldKinds = ["text", "textarea", "number", "date", "select", "choice", "multi", "toggle"] as const;
 export type FormFieldKind = (typeof formFieldKinds)[number];
 /** A value a form field starts with, or a person's answer: text for most kinds, a list for multi, a switch for toggle. */
@@ -116,9 +122,13 @@ function email(card: Fields): EmailCard | null {
   const id = identifier(card.id), name = title(card.title), to = addresses(card, "to"), cc = addresses(card, "cc");
   const subject = Object.hasOwn(card, "subject") ? text(card.subject, 500, 1, true) : undefined;
   const body = text(card.body, 20_000, 1);
-  if (!only(card, ["id", "type", "title", "to", "cc", "subject", "body"]) || id === null || name === null || to === null || cc === null
+  // Revision lineage; a malformed ID drops the lineage, never the draft.
+  const draftId = Object.hasOwn(card, "draftId") ? identifier(card.draftId) : undefined;
+  const revises = Object.hasOwn(card, "revises") ? identifier(card.revises) : undefined;
+  if (!only(card, ["id", "type", "title", "to", "cc", "subject", "body", "draftId", "revises"]) || id === null || name === null || to === null || cc === null
     || subject === null || body === null || !body.trim()) return null;
-  return { id, type: "email", title: name, ...(to && { to }), ...(cc && { cc }), ...(subject !== undefined && { subject }), body };
+  return { id, type: "email", title: name, ...(to && { to }), ...(cc && { cc }), ...(subject !== undefined && { subject }), body,
+    ...(draftId && { draftId }), ...(revises && revises !== draftId && { revises }) };
 }
 const choiceKinds: readonly FormFieldKind[] = ["select", "choice", "multi"];
 // A real calendar day, as a date input reports it.

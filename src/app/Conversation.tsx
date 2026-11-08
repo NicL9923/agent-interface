@@ -43,6 +43,8 @@ import { RoutineRunCard } from "../components/RoutineRunCard";
 import { placeRuns, type RoutineRun } from "../shared/routine-runs";
 import { useRoutineRuns } from "./use-routine-runs";
 import { ReplyFiles } from "./ReplyFiles";
+import { DraftRevisions } from "../components/EmailDraftCard";
+import { draftRevisions } from "../shared/draft-diff";
 import { conversationArtifacts, replyArtifacts, type Artifact } from "../shared/artifacts";
 import "./transcript.css";
 // The panel loads when a file chip first opens it, as it does from the assistant's details.
@@ -92,6 +94,8 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
   const blocks = useMemo(() => turns(conversation, advanced), [conversation, advanced]);
   // Each reply's files, attributed the same way the Artifacts panel lists them.
   const replyFiles = useMemo(() => conversation ? replyArtifacts(conversation.messages, conversationArtifacts(conversation.messages, [], conversation.files)) : new Map<string, Artifact[]>(), [conversation]);
+  // Email drafts that revise an earlier one here, so their cards can mark what changed.
+  const revisions = useMemo(() => draftRevisions(conversation?.messages ?? []), [conversation?.messages]);
   // The Artifacts panel opened from a chip, on one file or, from "+N more", on the first.
   const [artifactFocus, setArtifactFocus] = useState<{ fileId?: string } | null>(null);
   const openFile = useStableCallback((fileId?: string) => setArtifactFocus({ fileId }));
@@ -180,6 +184,7 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
     (back?.isConnected ? back : scroll.current)?.focus({ preventScroll: true });
   });
   return (
+    <DraftRevisions.Provider value={revisions}>
     <TranscriptTools.Provider value={tools}>
       {error && (
         <div className="notice error" role="alert">
@@ -326,6 +331,7 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
         focus={artifactFocus.fileId} onClose={() => setArtifactFocus(null)} /></Suspense>}
       </div>
     </TranscriptTools.Provider>
+    </DraftRevisions.Provider>
   );
 }
 /** The last line of reasoning in the running turn, after the person's latest message. */
