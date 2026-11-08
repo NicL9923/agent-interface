@@ -305,6 +305,25 @@ describe("assistant requests from Hermes", () => {
     expect(await link.next("ack")).toEqual({ type: "ack", id: "inv-long-gone" });
   });
 
+  it("shortens a long error and fails, without dropping the link, a result it cannot read", async () => {
+    const s = await setup();
+    const mac = await s.enroll();
+    const link = await s.connect(mac);
+    const long = s.invoke({ action: "read_file", args: { path: "x".repeat(4096) } });
+    const first = await link.next("invoke");
+    link.send({ type: "result", id: first.id, ok: false, error: { code: "outside_folders", message: "Outside: " + "x".repeat(4096) } });
+    const error = (await long).json().error;
+    expect(error.code).toBe("outside_folders");
+    expect(error.message).toHaveLength(4000);
+    expect(await link.next("ack")).toEqual({ type: "ack", id: first.id });
+    const garbled = s.invoke({ action: "read_file", args: { path: "a" } });
+    const second = await link.next("invoke");
+    link.send({ type: "result", id: second.id, ok: false, error: { code: "Not A Code", message: "x" } });
+    expect((await garbled).json().error.code).toBe("failed");
+    expect(await link.next("ack")).toEqual({ type: "ack", id: second.id });
+    expect(link.socket.readyState).toBe(WebSocket.OPEN);
+  });
+
   it("keeps waiting across a reconnect for the result the Mac resends", async () => {
     const s = await setup();
     const mac = await s.enroll();

@@ -46,7 +46,10 @@ const stateSchema = z.object({
   }).strict()).max(200),
 }).strict();
 export type MacState = z.infer<typeof stateSchema>;
-const errorSchema = z.object({ code: z.string().regex(/^[a-z_]{1,64}$/), message: z.string().max(4000) }).passthrough();
+// A long message, such as one quoting a long path, is shortened rather than refused.
+const MAX_MESSAGE = 4000;
+const errorSchema = z.object({ code: z.string().regex(/^[a-z_]{1,64}$/),
+  message: z.string().transform(message => message.length > MAX_MESSAGE ? message.slice(0, MAX_MESSAGE - 1) + "…" : message) }).passthrough();
 const resultSchema = z.union([
   z.object({ type: z.literal("result"), id: z.string().min(1).max(100), ok: z.literal(true), value: z.unknown() }).strict(),
   z.object({ type: z.literal("result"), id: z.string().min(1).max(100), ok: z.literal(false), error: errorSchema }).strict(),
@@ -146,10 +149,22 @@ export class MacBroker {
 
   private receive(link: Link, data: RawData, binary: boolean) {
     let message: z.infer<typeof incoming>;
+    let raw: unknown;
     try {
       if (binary) throw new Error("binary");
-      message = incoming.parse(JSON.parse(data.toString()));
+      raw = JSON.parse(data.toString());
+      message = incoming.parse(raw);
     } catch {
+      // A result this server cannot read is acknowledged and fails its call. Closing instead would
+      // make the Mac resend it after every reconnect, and the link would never stay up.
+      const id = link.state && typeof raw === "object" && raw !== null && (raw as { type?: unknown }).type === "result"
+        ? (raw as { id?: unknown }).id : undefined;
+      if (typeof id === "string" && id.length >= 1 && id.length <= 100) {
+        this.send(link, { type: "ack", id });
+        if (this.pending.get(id)?.deviceId === link.device.id)
+          this.settle(id, failure("failed", "The Mac sent a result this server could not read. Whether the action finished is unknown."));
+        return;
+      }
       link.socket.close(1007, "Invalid message");
       return;
     }

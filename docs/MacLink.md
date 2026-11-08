@@ -150,7 +150,9 @@ Server to Mac:
 
 - `{"type":"welcome","protocol":1}` after a valid hello.
 - `{"type":"invoke","id":"…","assistantId":"patch","assistantName":"Patch","scheduled":false,"action":"run","args":{…},"timeoutMs":130000}`.
-- `{"type":"ack","id":"…"}` once a result is recorded. The Mac keeps a result until
+- `{"type":"ack","id":"…"}` once a result is recorded, including a result the server
+  cannot read, which fails its call instead of dropping the link. Error messages are
+  at most 2000 characters from the Mac; the server shortens anything over 4000. The Mac keeps a result until
   it is acknowledged and sends it again after reconnecting.
 - `{"type":"revoked"}`, then close 4401. The Mac deletes its credential and stops
   running actions.
