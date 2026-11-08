@@ -28,8 +28,12 @@ class Provider(BaseHTTPRequestHandler):
         tools = body.get("tools", [])
         tool_names = {x.get("function", {}).get("name") for x in tools}
         after_tool = bool(messages and messages[-1]["role"] == "tool")
-        if ("PROBE_TOOL" in user or "PROBE_SLOW_TOOL" in user or "PROBE_APPROVAL" in user or "PROBE_FILE" in user or "PROBE_READ" in user) and not after_tool and "terminal" in tool_names:
-            command = "rm -rf ./approval-probe-does-not-exist" if "PROBE_APPROVAL" in user else "printf synthetic-file-proof > generated-proof.txt; printf 'MEDIA:%s/generated-proof.txt' \"$PWD\"" if "PROBE_FILE" in user else "sleep 2; printf hermes-real-tool-proof" if "PROBE_SLOW_TOOL" in user else "printf hermes-real-tool-proof"
+        system = next((str(x.get("content", "")) for x in messages if x["role"] == "system"), "")
+        if "security reviewer for an AI coding agent" in system:
+            # Hermes's smart-approval guardian. A command naming smart-approve passes; anything else is denied.
+            message = {"role": "assistant", "content": "APPROVE" if "smart-approve" in user else "DENY"}
+        elif ("PROBE_TOOL" in user or "PROBE_SLOW_TOOL" in user or "PROBE_APPROVAL" in user or "PROBE_FILE" in user or "PROBE_READ" in user) and not after_tool and "terminal" in tool_names:
+            command = "rm -rf ./smart-approve-probe" if "PROBE_APPROVAL_SMART_SAFE" in user else "rm -rf ./smart-deny-probe" if "PROBE_APPROVAL_SMART_DENY" in user else "rm -rf ./approval-probe-does-not-exist" if "PROBE_APPROVAL" in user else "printf synthetic-file-proof > generated-proof.txt; printf 'MEDIA:%s/generated-proof.txt' \"$PWD\"" if "PROBE_FILE" in user else "sleep 2; printf hermes-real-tool-proof" if "PROBE_SLOW_TOOL" in user else "printf hermes-real-tool-proof"
             if "PROBE_READ" in user:
                 match = re.search(r'@file:(?:"([^"\n]+)"|([^\s<>]+))', user)
                 command = "cat " + shlex.quote(match.group(1) or match.group(2)) if match else "printf missing-attachment-reference"
@@ -54,6 +58,8 @@ class Provider(BaseHTTPRequestHandler):
         elif "PROBE_VAULT_EXPLICIT" in user and after_tool:
             # Repeat exactly what the model received, so a transcript shows the tool kept the password out.
             message = {"role": "assistant", "content": "Credential tool returned: " + str(messages[-1].get("content", ""))}
+        elif "PROBE_CLARIFY_MULTI" in user and not after_tool and "clarify" in tool_names:
+            message = {"role": "assistant", "content": None, "tool_calls": [{"id": "probe-clarify-multi", "type": "function", "function": {"name": "clarify", "arguments": json.dumps({"questions": [{"question": "Which synthetic chores?", "choices": ["Feed", "Water", "Fence"], "multi_select": True}, {"question": "Which synthetic pasture?", "choices": ["North", "South"]}]})}}]}
         elif "PROBE_CLARIFY" in user and not after_tool and "clarify" in tool_names:
             message = {"role": "assistant", "content": None, "tool_calls": [{"id": "probe-clarify", "type": "function", "function": {"name": "clarify", "arguments": json.dumps({"questions": [{"qid": "spike-question", "question": "Which synthetic option?", "choices": ["First", "Second"]}]})}}]}
         elif "markdown formatting example" in user.lower():

@@ -122,16 +122,44 @@ import XCTest
     XCTAssertFalse(answers.choose(9, in: one), "An option that is not there is ignored")
   }
 
-  func testSeveralChoicesToggleAndJoinWithAWrittenAnswer() {
+  func testSeveralChoicesToggleAndGoAsOneJSONArrayWithAWrittenAnswer() {
     var answers = QuestionAnswers()
     XCTAssertFalse(answers.choose(2, in: several)); XCTAssertFalse(answers.choose(0, in: several))
-    XCTAssertEqual(answers.answer(several), "Hay, Feed", "Choices read in the options' order")
+    XCTAssertEqual(answers.answer(several), #"["Hay","Feed"]"#, "Choices read in the options' order")
     _ = answers.choose(2, in: several)
-    XCTAssertEqual(answers.answer(several), "Hay")
-    answers.writeOwn(several); answers.text["extras"] = "  Salt block "
-    XCTAssertEqual(answers.answer(several), "Hay, Salt block")
+    XCTAssertEqual(answers.answer(several), #"["Hay"]"#)
+    answers.writeOwn(several); answers.text["extras"] = "  Salt block, loose "
+    XCTAssertEqual(answers.answer(several), #"["Hay","Salt block, loose"]"#, "A comma stays inside its answer")
     answers.writeOwn(several)
-    XCTAssertEqual(answers.answer(several), "Hay", "Turning the written answer off drops it")
+    XCTAssertEqual(answers.answer(several), #"["Hay"]"#, "Turning the written answer off drops it")
+    _ = answers.choose(0, in: several)
+    XCTAssertEqual(answers.answer(several), "", "Nothing chosen is no answer, so Send stays off")
+  }
+
+  func testAnApprovalOffersOnlyWhatHermesListedAndAnOlderHermesOffersOnceAndDecline() {
+    var approval = Approval(id: "a", title: "Action approval", detail: "recursive delete", status: "pending")
+    XCTAssertEqual(["once", "session", "always", "deny"].map(approval.offers), [true, false, false, true])
+    approval.choices = ["once", "deny"]
+    XCTAssertFalse(approval.offers("always"), "A guardian-denied request offers one operation")
+    approval.choices = ["once", "session", "always", "deny"]
+    XCTAssertTrue(approval.offers("always"))
+  }
+
+  func testTheRecommendedOptionIsTaggedAndChosenForOneChoiceOnly() {
+    let pick = Question(id: "feed", prompt: "Feed", options: ["Hay (Recommended)", "Pellets"], recommended: 0)
+    let many = Question(id: "chores", prompt: "Chores", options: ["Water (recommended)", "Fence"], multiple: true, recommended: 0)
+    let unmarked = Question(id: "gate", prompt: "Gate", options: ["A (Recommended)", "B (Recommended)"])
+    let answers = QuestionAnswers(recommending: [pick, many, unmarked])
+    XCTAssertTrue(answers.isSelected(0, pick))
+    XCTAssertEqual(answers.answer(pick), "Hay (Recommended)", "The answer is the raw option, which Hermes strips")
+    XCTAssertEqual(answers.answer(many), "", "Several picks are never made for the person")
+    XCTAssertEqual(answers.answer(unmarked), "")
+    XCTAssertEqual([pick.label(0), pick.label(1), many.label(0)], ["Hay", "Pellets", "Water"])
+    XCTAssertEqual(unmarked.label(0), "A (Recommended)", "Without one recommendation the label stays as written")
+    let bare = Question(id: "only", prompt: "Only", options: ["(Recommended)", "Other"], recommended: 0)
+    XCTAssertEqual(bare.label(0), "(Recommended)", "A suffix alone stays as text")
+    let outOfRange = Question(id: "far", prompt: "Far", options: ["One"], recommended: 4)
+    XCTAssertEqual(QuestionAnswers(recommending: [outOfRange]).answer(outOfRange), "")
   }
 
   func testWritingYourOwnAnswerReplacesASingleChoiceAndGatesSend() {

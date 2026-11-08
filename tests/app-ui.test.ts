@@ -9,6 +9,7 @@ import { useChatPresence } from "../src/app/use-chat-presence";
 import { defaultPreferences } from "../src/shared/types";
 import type { Bootstrap, Conversation } from "../src/shared/types";
 import { FakeEventSource } from "./fake-event-source";
+import { clearDecline } from "../src/app/decline-handoff";
 import { contentHash } from "../src/app/draft-merge";
 import { advance, mountRoot, stubMatchMedia, typeInto } from "./ui-harness";
 
@@ -23,6 +24,8 @@ const renders = vi.hoisted(() => ({ avatar: 0, markdown: 0 }));
 // SVG geometry and animation are browser concerns, not part of these state regressions.
 // Presence heartbeats would interleave with the writes these tests count; they have their own tests.
 vi.mock("../src/app/use-chat-presence", () => ({ useChatPresence: vi.fn() }));
+// Covered by device-activity-ui.test.ts; here its heartbeats would interleave with the writes under test.
+vi.mock("../src/app/use-device-activity", () => ({ useDeviceActivity: vi.fn() }));
 vi.mock("../src/components/Avatar", async (original) => ({
   ...await original<typeof import("../src/components/Avatar")>(),
   Avatar: (props: { state?: string; size?: number; prop?: string; reducedMotion?: boolean }) => (renders.avatar++, createElement("span", {
@@ -54,6 +57,8 @@ let container: HTMLDivElement;
 let root: Root;
 
 beforeEach(() => {
+  // A decline in one test would otherwise still be waiting for the next message in the next.
+  clearDecline("shared");
   vi.useFakeTimers();
   vi.clearAllMocks();
   FakeEventSource.reset();
@@ -112,13 +117,13 @@ describe("conversation state", () => {
     await typeInto(custom, "A different plan");
     vi.mocked(write).mockRejectedValueOnce(new Error("Try again"));
     await act(async () => submit.click());
-    expect(write).toHaveBeenCalledWith("/bots/shared/requests/ask", { answers: { plan: "A different plan", note: "Keep the draft" } });
+    expect(write).toHaveBeenCalledWith("/bots/shared/requests/ask", { answers: { plan: "A different plan", note: "Keep the draft" }, answerFormat: "json" });
     expect(custom.value).toBe("A different plan");
     // An option that happens to read "Write my own answer" is still an option, not the field.
     await act(async () => options()[1].click());
     expect(container.querySelector('[aria-label="Your answer: Which plan?"]')).toBeNull();
     await act(async () => submit.click());
-    expect(write).toHaveBeenLastCalledWith("/bots/shared/requests/ask", { answers: { plan: "Write my own answer", note: "Keep the draft" } });
+    expect(write).toHaveBeenLastCalledWith("/bots/shared/requests/ask", { answers: { plan: "Write my own answer", note: "Keep the draft" }, answerFormat: "json" });
   });
 
   it("reopens a refused household stream at the fallback interval", async () => {
@@ -994,7 +999,12 @@ describe("conversation state", () => {
     expect(approve.disabled).toBe(false); expect(decline.disabled).toBe(false);
     expect(container.textContent).toContain("Could not send decision");
     vi.mocked(write).mockResolvedValueOnce({}); await act(async () => decline.click());
-    expect(decline.textContent).toBe("Declined"); expect(decline.disabled).toBe(true);
+    // Declined, the card folds to one line and the message box asks what to do instead.
+    expect(container.querySelector(".approval-card")?.textContent).toBe("Declined. Shared stopped that step.");
+    expect(container.querySelector(".approval-card button")).toBeNull();
+    await act(async () => { vi.advanceTimersToNextFrame(); });
+    const message = container.querySelector<HTMLTextAreaElement>("#message")!;
+    expect([message.placeholder, document.activeElement]).toEqual(["Tell Shared what to do instead", message]);
     vi.mocked(write).mockReset().mockResolvedValue({});
   });
 

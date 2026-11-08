@@ -53,6 +53,9 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   @ObservationIgnored var commandCount = 0
   /// Search should take the keyboard when it appears, as after Cmd+F from anywhere else.
   var searchFocusPending = false
+  /// The approval each chat's person just declined, until their next message there is accepted. The
+  /// transcript says the assistant stopped that step and the message box asks what to do instead.
+  var declinedApprovals: [String: String] = [:]
   var conversation: Conversation? {
     didSet {
       appliedConversationTag = nil
@@ -69,6 +72,9 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   private(set) var transcript: Conversation?
   /// The transcript grouped into turns, computed once per change instead of on every render.
   private(set) var turns: [ConversationTurn] = []
+  /// Each reply's file chips and each revised email draft's changes, computed with the turns.
+  internal(set) var replyFiles: [String: [Artifact]] = [:]
+  private(set) var draftRevisions: [String: DraftRevision] = [:]
   /// The open assistant's sent messages, shown in the transcript at once while Send keeps spinning
   /// until Hermes answers, and each kept until Hermes's own copy arrives, as on the web.
   private(set) var echoes: [SentEcho] = []
@@ -238,7 +244,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   @ObservationIgnored var windowGeneration = 0
   /// Files from before the loaded window, fetched when the file list is opened. They are good
   /// while the message they were fetched before is still loaded, as on the web.
-  var earlierFileCache: [String: EarlierFilePage] = [:] { didSet { cachedArtifacts = nil } }
+  var earlierFileCache: [String: EarlierFilePage] = [:] { didSet { cachedArtifacts = nil; refreshReplyFiles() } }
   struct EarlierFilePage {
     var sessionId: String?
     var before: String?
@@ -384,6 +390,8 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     if changed || conversationChanged {
       transcript = SentEcho.transcript(conversation, echoes)
       turns = transcript?.presentationTurns ?? []
+      refreshReplyFiles()
+      draftRevisions = DraftDiff.revisions(transcript?.messages ?? [])
     }
     // An accepted message that never shows is checked again once its patience runs out. Only the
     // open conversation can retire one, so another assistant's echo waits for its return.

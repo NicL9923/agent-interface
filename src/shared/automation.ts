@@ -46,7 +46,12 @@ type AutomationRequestUnion = { profile: string; visibleProfiles?: string[] } & 
   | { operation: 'skill_decide'; pendingId: string; revision: string; decision: 'approve' | 'reject' }
   | { operation: 'skill_policy'; approvalRequired: boolean }
   | { operation: 'skill_lock'; name: string; locked: boolean }
+  | { operation: 'approval_settings' }
+  | { operation: 'approval_allowlist_remove'; pattern: string }
+  | { operation: 'approval_mode'; mode: 'manual' | 'smart' }
 );
+/** The add-on's approval policy for one assistant: its command_allowlist and approvals.mode. */
+export interface ApprovalPolicy { allowlist: string[]; mode: 'manual' | 'smart' | 'off' }
 export interface AutomationResults {
   overview: AutomationOverview;
   goal_set: AutomationOverview;
@@ -67,6 +72,9 @@ export interface AutomationResults {
   skill_decide: { ok: true };
   skill_policy: { ok: true };
   skill_lock: SkillLock;
+  approval_settings: ApprovalPolicy;
+  approval_allowlist_remove: ApprovalPolicy & { ok: true };
+  approval_mode: ApprovalPolicy & { ok: true };
 }
 export type AutomationOperation = AutomationRequestUnion['operation'];
 export type AutomationRequests = { [O in AutomationOperation]: Extract<AutomationRequestUnion, { operation: O }> };

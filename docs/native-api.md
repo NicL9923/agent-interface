@@ -412,6 +412,61 @@ person decides whether to send again, and anything else means not sent yet.
 | `k3y_A-b` | `ranch` | `msg-42` | `trip` | 3 | `76bbd8a5-8259-4c9e-8b2b-3b3fa7bec9d2` |
 | `café` | `👋` | `m` | `c` | 1 | `f2ec6d4c-7663-410f-88ba-49c4a6921df8` |
 
+## Approval scopes, recommended answers and steering
+
+<!-- Workstream B: approval scopes, the decline handoff, recommended answers and the steering label. -->
+
+Every field below is additive. A client that ignores them keeps today's behavior.
+
+**Approval choices.** A pending `Approval` may carry `choices`, the `request.answer` choices
+Hermes offered for that request in its order (`once`, `session`, `always`, `deny`), plus
+`patterns`, the Hermes pattern keys a session or always grant covers (such as
+`recursive delete`), and `command`, the command as Hermes shows it, already redacted.
+Without `choices` the request comes from a Hermes that offers approve once or decline.
+A request Hermes's smart guardian denied offers only `once` and `deny`. The server
+leaves `always` out when the add-on cannot list and remove always-allowed commands
+(it reports no `approval_settings`), so no client can save a grant nobody could
+remove in the app, and the server refuses `always` there too.
+
+`POST /api/bots/:id/approvals/:approvalId` takes an optional `scope`: `once` (the
+default when absent), `session` (this conversation) or `always` (this assistant, from
+now on, in every conversation). `scope` is valid only with `decision: "approved"`.
+The server refuses a choice Hermes did not offer with 409 and
+`code: "approval_choice_unavailable"`, naming the choice; Hermes itself runs an
+unoffered `always` as a one-time approval, so a client must never show a scope the
+request does not list. `always` saves each pattern to the assistant's Hermes
+`command_allowlist` and also grants the current session. Ask before sending
+`always` and name the patterns, since a pattern covers commands other than this one.
+A notification's Decline is unchanged and never carries a scope.
+
+**Always-allowed commands.** These need an add-on that reports `approval_settings`.
+
+| Route | Request and response |
+| --- | --- |
+| `GET /api/bots/:id/approval-settings` | `{ "supported", "reason"?, "allowlist": [pattern], "mode": "manual" \| "smart" \| "off", "canManageAutoReview" }`. An older add-on answers `supported: false` with a reason and an empty list |
+| `DELETE /api/bots/:id/approval-settings/allowlist` | `{ "pattern" }`; any member who sees the assistant. Removes the pattern from the config and withdraws the matching permanent and session grants the Hermes dashboard process holds, so Hermes asks again at the next command in the app. Another Hermes process, such as the Discord gateway, may keep allowing it until its chat ends or, on Hermes before `ed1afb0`, until it restarts. Answers the settings |
+| `PUT /api/bots/:id/approval-settings` | `{ "autoReview": true \| false }` sets Hermes's `approvals.mode` to `smart` or `manual`. Integration administrators only (403, `approval_policy_forbidden`); 409 `approvals_off` when Hermes is set never to ask. Answers the settings |
+
+**Recommended answers.** A clarify question may carry `multiple: true` (Hermes's
+`multi_select`) and `recommended`, the index of the one option Hermes marked with a
+trailing ` (Recommended)`; Hermes marks the first of several choices. Several marked
+options, or a suffix with nothing before it, carry no `recommended`. Show the option
+without the suffix and a Recommended tag, pre-select it for a single-choice question,
+and never pre-select a multi-select one. Answer with the raw option text, which Hermes
+strips. A multi-select answer is one JSON array of strings, such as `["Hay","Feed"]`,
+with any written answer as one more item. Send `answerFormat: "json"` with the answers
+to say so; the server then refuses a multi-select answer that is not a non-empty JSON
+array of strings with 400, naming the question. Without it, the server reads the
+answer as an older client's: picks joined with `, ` in option order and any written
+text last, which it turns into that array for Hermes. When an option itself contains
+`, `, that answer goes to Hermes unchanged, as the person's typed text.
+
+**Steering.** A `SubmissionReceipt` from an add-on that reports `steering_decision`
+carries `steered`: whether the add-on admitted the message into the task that was
+already running, decided under its submission lock. A user `Message` it admitted that
+way carries `steered: true`, in every history read and on every device. Show "Added to
+the current task" under it. Absent means unknown, so show nothing.
+
 ## Drafts
 
 Each person has one draft per assistant, shared by their devices.
@@ -521,6 +576,43 @@ automatically. iOS read aloud plays `POST /api/bots/:id/voice/speak` audio from 
 the web does, and refuses replies over 12,000 characters; transcription uses Hermes.
 Live Talk is web-only for now. iOS decodes the `liveVoice` capability and ignores
 a bot's `voice`.
+
+<!-- Main assistant: begin -->
+### Main assistant and check-ins
+
+`mainBotId`, `checkIns: { "enabled", "everyHours", "timezone" }` and
+`mainSuggestionDismissed` are optional `Preferences` fields; servers before them
+omit all three. The server owns `mainBotId` and `checkIns`: `PATCH /api/preferences`
+ignores whatever a client sends for them, so an older client's save can neither
+change nor clear them. Send `mainSuggestionDismissed: true` there; an omitted value
+keeps the saved one.
+
+| Method and route | Body or response |
+| --- | --- |
+| `PUT /api/preferences/main` | `{ "botId": "ID" }` or `{ "botId": null }` to clear; the key is required, so encode null explicitly. Returns `Preferences`. 409 `main_not_personal` for an assistant that isn't the caller's own personal one, with the reason; 404 for one they can't see. A new main assistant starts with check-ins off |
+| `PUT /api/preferences/check-ins` | `{ "enabled": true, "everyHours": 1-4, "timezone": "IANA_NAME" }`. Returns `Preferences`. 400 `check_in_hours`; 409 `main_required`, or when Hermes has no routines; 502 `check_in_unavailable` when Hermes couldn't create or update the routine (the switch is saved off), 502 `check_in_removal_pending` when it is off but Hermes still has the routine, which the server keeps removing |
+| `PATCH /api/bots/:id` | Sharing the caller's main assistant, or a personal assistant a check-in is still on, answers 409 `main_share_confirmation_required` until the body has `"confirmMainCleared": true`; then check-ins end first, or 502 `check_in_removal_pending` leaves it personal. Any change to who sees an assistant answers 502 `roster_update_failed`, changing nothing, when Hermes did not take the narrowed roster first |
+
+For a main assistant's routine, saving (paused or not), resuming, a trial run or an event trigger answers
+409 `routine_chats` unless its only destination is its own chat. `PUT /api/preferences/main` making an
+assistant main records nothing unless Hermes first takes, and enforces, its main assistant's limits:
+502 `main_activation_failed` when Hermes didn't take them, 409 `main_activation_failed` when its add-on
+can't enforce them. It then answers 409 `main_routine_delivery`, naming them, while any of that assistant's
+routines posts anywhere else, and when its routines or the deliveries Hermes holds can't be read; 409
+`main_routine_busy`, naming them, while one is running or Hermes still holds a delivery from it, wherever it
+posts. Show the message and let the member try again. Clearing or changing it answers 502
+`main_clear_pending` when Hermes still has the previous main assistant's check-in: the change is saved, and
+that assistant keeps a main assistant's limits until the server removes it.
+
+A refusal that comes after the server saved the member's preferences carries them as `preferences` in its
+error body: `main_clear_pending`, `check_in_removal_pending` (from `PUT /api/preferences/check-ins` and from
+sharing in `PATCH /api/bots/:id`) and `check_in_unavailable`. Apply them, or reload, so the screen shows
+what was saved, and keep showing the message. A routine with `managed: "check-in"` is a member's check-ins: show it without Edit,
+Pause or Delete, which answer 409 `check_in_managed`. A transcript `message_agent`
+handoff or incoming agent envelope may offer the other assistant's chat when its
+`target` or sender names, by ID or name, an assistant in the caller's bootstrap
+`bots`; a comma-separated fan-out names none.
+<!-- Main assistant: end -->
 
 ## Work and learning
 
@@ -719,6 +811,69 @@ throttles background pushes and drops them for an app the person force-quit, so
 the app also clears a chat's notifications when it opens. Browsers get no clearing
 push: Safari revokes a Web Push subscription after three pushes that show no
 notification. A browser closes its own notifications for a chat when it opens.
+
+<!-- BEGIN device activity -->
+### Device activity
+
+Notifications go only to the devices their person is using now. A device is one
+installation, named by a **device ID**: a lowercase UUID chosen once and kept across
+sign-ins. iOS uses the push `deviceId` it registers with `PUT /api/native/push/device`,
+one per install. The web keeps one per browser profile in local storage, shared by its
+tabs, and attaches it to its Web Push subscription with `deviceId` on
+`POST /api/push/subscriptions` or `POST /api/push/subscriptions/status`. The server
+accepts upper case and stores lower case. A registration without `deviceId` clears any
+earlier one for that endpoint.
+
+| Route | Body |
+| --- | --- |
+| `PUT /api/devices/activity` | `{ "deviceId": "UUID", "state": "active", "idleMs": 1200 }` or `{ "deviceId": "UUID", "state": "inactive" }`; returns `{ "ok": true }` |
+
+While the app is in the foreground (iOS) or the window is visible and focused (web),
+and the person touched it in the last five minutes, send `active` every 15 seconds on
+any screen, with `idleMs` the milliseconds since their last input, below 300000. Send
+`inactive` when that stops: the app leaves the foreground, the window loses focus or
+hides, five minutes pass without input, or the account signs out or switches. Send one
+report at a time and keep at most one waiting, the latest; work out its state and
+`idleMs` only as it goes, so a slow server never receives an old `active` after the
+device was left. The server answers 400 for a device ID that is not a UUID, a missing
+or unknown `state`, `idleMs` that is not a whole number from 0 to 299999, or any other
+field. A server from before device activity answers 404; one from before device IDs
+refuses `deviceId` on the status route with 400, so ask again without it.
+
+A device counts as in use while its last beat is under 45 seconds old, its last input
+under five minutes old, and the session that sent it is still signed in. Signing out
+ends it at once. A device ID belongs to one account at a time: the account whose
+signed-in session last reported it. Push registrations name a device but never hold one,
+so a stale or mistaken label only affects routing. Another account's `active` report for it is refused
+with 409 and `{ "error": "This device is signed in to another household member. Sign
+out there first." }` until that session signs out or expires, as switching accounts
+on the device does. An `inactive` report keeps the account's hold, and one account's
+`inactive` never ends another's.
+
+The device ID is the only proof of the installation: a random UUID kept on the device,
+never returned to anyone but its own account. A member who copied another member's ID
+off their device could hold it before any session has claimed it, or once that ID's own
+session has signed out or expired. The real device's reports would get the 409 until the
+holder's session ends, so its alerts might arrive as a badge on that device and as alerts
+on the owner's other devices. The alerts still go only to their owner. Reading the ID
+needs the unlocked device, which already gives far more than this, so no separate
+installation credential is issued.
+
+When the person has a device in use that can receive the notification (an iOS device
+registered for push, or a browser subscription that named its device), only those get
+the alert. Each other iOS device gets the badge alone, `{ "aps": { "badge": N } }` at
+priority 5, and its later read-elsewhere clears lower that badge. Other browsers get
+nothing: Web Push cannot set a badge without showing a notification, so a browser left
+quiet updates its badge when it next opens the app. When no device is in use, or none of
+those in use could take it (no subscription, permission removed, an endpoint the push
+service reports gone, or a failed send), every device gets the alert as before. Security
+alerts always reach every device. A chat open on any device still silences that chat's
+notifications everywhere.
+
+A client that sends no device ID is never in use, so it keeps the earlier behavior: it
+gets alerts unless its person is using another device. A server without this route
+answers 404; clients ignore the failure.
+<!-- END device activity -->
 
 Configure `APNS_TEAM_ID`, `APNS_KEY_ID`, `APNS_TOPIC`, `APNS_PRIVATE_KEY_FILE`, and
 `APNS_ENVIRONMENT` together. `APNS_TOPIC` is the app's actual bundle ID.

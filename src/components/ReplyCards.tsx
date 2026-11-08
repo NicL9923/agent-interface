@@ -9,7 +9,7 @@ import { useAction } from "../app/use-action";
 import { useResource } from "../app/use-resource";
 import { eventCalendarFile, eventGoogleCalendarUrl, savesState } from "../shared/reply-cards";
 import type { ChecklistCard, EventCard, ItineraryCard, ReplyCard, ReplyCardState, ReplyDocument } from "../shared/reply-cards";
-import { EmailDraftCard } from "./EmailDraftCard";
+import { EmailDraftCard, useRevisedDraft } from "./EmailDraftCard";
 import { FormReplyCard } from "./FormReplyCard";
 import "./experience.css";
 import { When } from "./When";
@@ -44,11 +44,12 @@ type CardProps<T extends ReplyCard = ReplyCard> = { card: T; botId?: string; mes
 const eyebrows: Record<ReplyCard["type"], string> = { checklist: "Checklist", itinerary: "Itinerary", event: "Calendar proposal", email: "Email draft", form: "Questions" };
 /** Cards that save nothing for the person: a calendar proposal, an email draft and a form. */
 function PlainCard({ card, botId, messageId, userId, unavailable }: CardProps) {
+  const previous = useRevisedDraft(messageId, card.id);
   return <section className={`reply-card reply-card-${card.type}`} aria-label={card.title}>
     <div className="reply-card-heading"><span className="eyebrow">{eyebrows[card.type]}</span></div>
     <h3>{card.title}</h3>
     {card.type === "event" && <CalendarProposal card={card} />}
-    {card.type === "email" && <EmailDraftCard card={card} />}
+    {card.type === "email" && <EmailDraftCard card={card} previous={previous} />}
     {card.type === "form" && <FormReplyCard card={card} botId={botId ?? ""} messageId={messageId ?? ""} userId={userId ?? ""} unavailable={unavailable || !botId || !messageId || !userId} />}
   </section>;
 }

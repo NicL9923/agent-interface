@@ -3,7 +3,7 @@ import { fakeRuntime } from './helpers/server.js';
 import Fastify from 'fastify';
 import cookie from '@fastify/cookie';
 import { randomBytes, randomUUID } from 'node:crypto';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { installAuth, hash } from '../src/server/auth.js';
 import { Store } from '../src/server/store.js';
@@ -20,6 +20,7 @@ async function setup(extra: Partial<import('../src/shared/types.js').Runtime> = 
   app.setErrorHandler((error, _req, reply) => reply.code(error instanceof z.ZodError ? 400 : (error as { statusCode?: number }).statusCode ?? 502).send({ error: (error as Error).message }));
   const overview = vi.fn(() => automationOverviewFixture());
   const task = vi.fn(() => automationTaskFixture());
+  const policy: { allowlist: string[]; mode: 'manual' | 'smart' | 'off' } = { allowlist: ['SQL DROP', 'recursive delete'], mode: 'manual' };
   const automation = automationRequester({
     overview, goal_set: overview, goal_pause: overview, goal_resume: overview, goal_clear: overview,
     task_create: task, task_get: task, task_update: task, task_action: task, task_dependency: task,
@@ -27,6 +28,9 @@ async function setup(extra: Partial<import('../src/shared/types.js').Runtime> = 
     trigger_update: () => ({subscription: subscriptionFixture()}), trigger_toggle: () => ({subscription: subscriptionFixture()}),
     trigger_delete: () => ({ok: true}), skill_policy: () => ({ok: true}), skill_decide: () => ({ok: true}),
     skill_lock: input => ({ok: true, name: input.name, locked: input.locked}),
+    approval_settings: () => ({...policy}),
+    approval_allowlist_remove: input => { policy.allowlist = policy.allowlist.filter(pattern => pattern !== input.pattern); return {ok: true, ...policy}; },
+    approval_mode: input => { policy.mode = input.mode; return {ok: true, ...policy}; },
   });
   const runtime = fakeRuntime({ automationRequest: automation, listBots: vi.fn(async () => [botFixture({id:'ranch',name:'Ranch'}), botFixture({id:'private',name:'Private'})]), ...extra });
   const automationRequest = vi.spyOn(runtime, 'automationRequest');
@@ -40,7 +44,7 @@ async function setup(extra: Partial<import('../src/shared/types.js').Runtime> = 
     return { origin, cookie: `session=${token}`, 'x-csrf-token': csrf };
   };
   app.addHook('onClose', async () => store.close());
-  return { app, store, runtime, automationRequest, overview, first: login('first'), second: login('second'), maintain: () => { maintenance = true; } };
+  return { app, store, runtime, automationRequest, overview, policy, first: login('first'), second: login('second'), maintain: () => { maintenance = true; } };
 }
 it('authenticates and scopes every automation request to the visible roster', async () => {
   const s = await setup();
@@ -188,4 +192,56 @@ it("checks the trigger's own assistant's routine when another assistant has a jo
   const created = await s.app.inject({ method: 'POST', url: '/api/bots/mine/automation/triggers', headers: admin, payload: { id: 'gate', description: 'Gate', events: ['gate.open'], routineId: 'gate-check' } });
   expect(created.statusCode).toBe(409);
   expect(s.automationRequest.mock.calls.some(([input]) => input.operation === 'trigger_create')).toBe(false);
+});
+
+describe('approval settings', () => {
+  const url = '/api/bots/ranch/approval-settings';
+  it('lists always-allowed commands for anyone who sees the assistant and hides other members\' private ones', async () => {
+    const s = await setup();
+    expect((await s.app.inject(url)).statusCode).toBe(401);
+    expect((await s.app.inject({ url: '/api/bots/private/approval-settings', headers: s.first })).statusCode).toBe(404);
+    const read = await s.app.inject({ url, headers: s.first });
+    expect([read.statusCode, read.headers['cache-control']]).toEqual([200, 'no-store']);
+    expect(read.json()).toEqual({ supported: true, allowlist: ['SQL DROP', 'recursive delete'], mode: 'manual', canManageAutoReview: false });
+    expect(s.automationRequest).toHaveBeenLastCalledWith({ operation: 'approval_settings', profile: 'ranch', visibleProfiles: ['ranch'] });
+  });
+  it('lets any member remove an always-allowed command, which only narrows what runs unasked', async () => {
+    const s = await setup();
+    const removed = await s.app.inject({ method: 'DELETE', url: url + '/allowlist', headers: s.first, payload: { pattern: 'recursive delete' } });
+    expect([removed.statusCode, removed.json().allowlist]).toEqual([200, ['SQL DROP']]);
+    expect(s.automationRequest).toHaveBeenLastCalledWith({ operation: 'approval_allowlist_remove', pattern: 'recursive delete', profile: 'ranch', visibleProfiles: ['ranch'] });
+    for (const payload of [{}, { pattern: '' }, { pattern: '   ' }, { pattern: 'x'.repeat(201) }, { pattern: 'SQL DROP', extra: true }]) {
+      const refused = await s.app.inject({ method: 'DELETE', url: url + '/allowlist', headers: s.first, payload });
+      expect(refused.statusCode, JSON.stringify(payload)).toBe(400);
+    }
+    s.maintain();
+    const paused = await s.app.inject({ method: 'DELETE', url: url + '/allowlist', headers: s.first, payload: { pattern: 'SQL DROP' } });
+    expect([paused.statusCode, paused.json().error]).toEqual([409, 'Hermes is being upgraded. Automation changes are paused.']);
+    expect((await s.app.inject({ url, headers: s.first })).json().allowlist).toEqual(['SQL DROP']);
+  });
+  it('lets only an integration administrator turn auto-review on or off, and never over approvals turned off in Hermes', async () => {
+    const s = await setup(), admin = { ...s.first, 'x-admin-fixture': 'yes' };
+    const forbidden = await s.app.inject({ method: 'PUT', url, headers: s.first, payload: { autoReview: true } });
+    expect([forbidden.statusCode, forbidden.json().error]).toEqual([403, 'Only an integration administrator can change how Hermes reviews commands.']);
+    expect(s.policy.mode).toBe('manual');
+    const on = await s.app.inject({ method: 'PUT', url, headers: admin, payload: { autoReview: true } });
+    expect([on.statusCode, on.json().mode, on.json().canManageAutoReview]).toEqual([200, 'smart', true]);
+    expect(s.automationRequest).toHaveBeenLastCalledWith({ operation: 'approval_mode', mode: 'smart', profile: 'ranch', visibleProfiles: ['ranch'] });
+    expect((await s.app.inject({ method: 'PUT', url, headers: admin, payload: { autoReview: false } })).json().mode).toBe('manual');
+    expect((await s.app.inject({ method: 'PUT', url, headers: admin, payload: { autoReview: 'yes' } })).statusCode).toBe(400);
+    s.policy.mode = 'off';
+    const off = await s.app.inject({ method: 'PUT', url, headers: admin, payload: { autoReview: true } });
+    expect([off.statusCode, off.json().error]).toEqual([409, "Hermes doesn't ask before commands for this assistant. Change that in Hermes."]);
+    expect(s.policy.mode).toBe('off');
+  });
+  it('reports an add-on without approval settings as unsupported instead of failing', async () => {
+    const s = await setup();
+    s.runtime.automationRequest = vi.fn(async () => { throw Object.assign(new Error('Update the integration.'), { statusCode: 409, code: 'approval_settings_unsupported' }); }) as never;
+    expect((await s.app.inject({ url, headers: s.first })).json()).toEqual({ supported: false, reason: 'Update the integration.', allowlist: [], mode: 'manual', canManageAutoReview: false });
+    // Any other failure is still a failure.
+    s.runtime.automationRequest = vi.fn(async () => { throw Object.assign(new Error('Hermes could not confirm.'), { statusCode: 502 }); }) as never;
+    expect((await s.app.inject({ url, headers: s.first })).statusCode).toBe(502);
+    s.runtime.automationRequest = undefined;
+    expect((await s.app.inject({ url, headers: s.first })).json()).toMatchObject({ supported: false, allowlist: [] });
+  });
 });

@@ -187,6 +187,8 @@ export function useSession(events: SessionEvents) {
     account: () => identityEpoch.current,
   });
   const savePreferences = (value: Preferences) => preferences.current!.save(value);
+  /** Puts preferences a server route answered with on screen, such as a new main assistant. */
+  const applyPreferences = (value: Preferences) => setBoot(previous => previous ? { ...previous, preferences: value } : previous);
   /** Applies an edit to the newest preferences, including a save still on its way. */
   const editPreferences = (edit: (value: Preferences) => Preferences) =>
     preferences.current!.edit(edit, bootRef.current?.preferences);
@@ -204,7 +206,7 @@ export function useSession(events: SessionEvents) {
   };
   return {
     boot, auth, botId, setBotId, disconnected, appUnavailable, offline, checkingConnection,
-    identityEpoch, refresh, reconnect, savePreferences, editPreferences, signedIn, signedOut,
+    identityEpoch, refresh, reconnect, savePreferences, editPreferences, applyPreferences, signedIn, signedOut,
     /** This server sends `groups` notices, so a slow fallback poll is enough. */
     // Per account, so another account starts unproven in the same render that switches to it.
     groupsNotified: !!boot?.user.id && groupsNotifiedFor === boot.user.id,

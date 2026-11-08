@@ -275,6 +275,10 @@ struct RootView: View {
     case .room(let id):
       if let room = store.groupCatalog?.rooms.first(where: { $0.id == id }) { open(room) }
     case .search: store.searchFocusPending = true; destination = .find; path = [.search]; compactColumn = .detail
+    case .ask(let id, let text):
+      // Joins the draft for review like a Siri Ask, never sent for the person.
+      if let scope = store.scope { store.hold(DraftAddition(source: .ask, botId: id, text: text, scope: scope, opens: true)) }
+      go(.bot(id))
     }
   }
   private func checkShares() {
@@ -466,6 +470,7 @@ struct BotListView: View {
   /// Everyone on home despite the Focus, until the Focus changes.
   @State private var ignoringFocus = false
   @State private var signOutConfirm = false
+  @State private var choosingMain = false
   private var pinnedMinimum: CGFloat { sizeClass == .compact ? pinColumn : pinColumn * 0.76 }
   private var lost: Bool { store.householdConnectionLost(offline: reachability.offline) }
   private var selectionVisible: Bool { sizeClass != .compact }
@@ -493,6 +498,11 @@ struct BotListView: View {
           let filtering = focused.count < bootstrap.bots.count
           let bots = filtering && !ignoringFocus ? focused : bootstrap.bots
           if filtering { focusBanner(showing: focused.count, of: bootstrap.bots.count) }
+          // The main assistant leads home, above the pinned ones; without one, home suggests choosing.
+          if let main = bootstrap.preferences.mainAssistant(bots) { mainRow(main) }
+          else if bootstrap.preferences.mainSuggestionDismissed != true && !bootstrap.bots.isEmpty {
+            MainSuggestionCard { choosingMain = true }
+          }
           let pinned = bootstrap.preferences.pinnedAssistants(bots)
           if !pinned.isEmpty {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: pinnedMinimum), spacing: 8, alignment: .top)], alignment: .center, spacing: 12) {
@@ -530,6 +540,7 @@ struct BotListView: View {
         }
       }.padding(16)
     }.background(homeBackground).accessibilityIdentifier("assistantHome")
+      .sheet(isPresented: $choosingMain) { MainAssistantPicker(makePersonal: edit).appStore(store) }
       .navigationTitle("Your assistants").navigationBarTitleDisplayMode(.inline).homeTitleHidden()
       .toolbarBackground(homeBackground, for: .navigationBar)
       .bareToolbarItem(.topBarLeading) { accountButton }
@@ -683,6 +694,36 @@ struct BotListView: View {
       .background(selectionVisible && destination == .conversation && bot.id == store.selectedBotId ? Palette.accentSoft : Color.clear, in: RoundedRectangle(cornerRadius: 16))
       .accessibilityAddTraits(destination == .conversation && bot.id == store.selectedBotId ? .isSelected : [])
       .accessibilityIdentifier("bot.\(bot.id)")
+      .contextMenu { botMenu(bot) }
+  }
+  /// The main assistant, as a featured row with its Main mark.
+  private func mainRow(_ bot: Bot) -> some View {
+    let activity = state(bot)
+    let unread = store.unread(bot)
+    return Button { open(bot) } label: {
+      HStack(spacing: 14) {
+        AvatarView(avatar: bot.avatar ?? AvatarConfig(), state: activity == .done || activity == .blocked ? .idle : activity,
+          size: 64, name: bot.name, botId: bot.id).accessibilityHidden(true)
+        VStack(alignment: .leading, spacing: 5) {
+          HStack(alignment: .firstTextBaseline, spacing: 8) {
+            if unread { UnreadDot() }
+            Text(bot.name).font(.body.weight(.bold)).foregroundStyle(.primary).lineLimit(2)
+            Text("Main").font(.caption2.weight(.semibold)).foregroundStyle(Palette.onAccent)
+              .padding(.horizontal, 7).padding(.vertical, 2).background(Palette.accent, in: Capsule())
+            Spacer(minLength: 0)
+          }
+          if activity != .idle && activity != .done { ActivityLabel(state: activity) }
+          else {
+            Text(bot.lastMessage?.text.isEmpty == false ? bot.lastMessage!.text : "Your main assistant")
+              .font(.subheadline).foregroundStyle(.secondary).lineLimit(typeSize.isAccessibilitySize ? 3 : 2)
+          }
+        }.frame(maxWidth: .infinity, alignment: .leading)
+      }.padding(12).contentShape(RoundedRectangle(cornerRadius: 18))
+    }.buttonStyle(.plain).accessibilityLabel("\(bot.name), main assistant").accessibilityValue(unread ? "Unread" : "")
+      .background(Palette.accentSoft.opacity(selectionVisible && destination == .conversation && bot.id == store.selectedBotId ? 1 : 0.45), in: RoundedRectangle(cornerRadius: 18))
+      .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(Palette.accent.opacity(0.25)))
+      .accessibilityAddTraits(destination == .conversation && bot.id == store.selectedBotId ? .isSelected : [])
+      .accessibilityIdentifier("mainBot.\(bot.id)")
       .contextMenu { botMenu(bot) }
   }
   private func row(_ bot: Bot) -> some View {

@@ -8,6 +8,8 @@ export interface NativeDevice { deviceId: string; token: string; environment: "s
 export type ApnsSender = (device: NativeDevice, payload: string) => Promise<unknown>;
 /** Asks a device to remove these delivered notifications, named by tag, and to show this badge if known. */
 export type ApnsClearSender = (device: NativeDevice, tags: string[], badge?: number) => Promise<unknown>;
+/** Sets the app icon's badge with no alert, for a device left quiet because its person is using another. */
+export type ApnsBadgeSender = (device: NativeDevice, badge: number) => Promise<unknown>;
 /** Wakes the app in the background to refresh what its widgets show. */
 export type ApnsRefreshSender = (device: NativeDevice) => Promise<unknown>;
 export type ApnsTransport = (origin: string, headers: Record<string, string>, body: string) => Promise<{ statusCode: number; reason?: string }>;
@@ -95,7 +97,7 @@ export const apnsRefreshPayload = () => JSON.stringify({ aps: { "content-availab
 /** A silent alert push that only sets the app icon's badge, which iOS applies even while the app is closed. */
 export const apnsBadgePayload = (badge: number) => JSON.stringify({ aps: { badge } });
 
-export function createApnsSender(config: Config["apns"], transport?: ApnsTransport): (ApnsSender & { close(): void; liveActivity: LiveActivitySender; clear: ApnsClearSender; refresh: ApnsRefreshSender }) | undefined {
+export function createApnsSender(config: Config["apns"], transport?: ApnsTransport): (ApnsSender & { close(): void; liveActivity: LiveActivitySender; clear: ApnsClearSender; refresh: ApnsRefreshSender; badge: ApnsBadgeSender }) | undefined {
   if (!config) return undefined;
   const key = createPrivateKey(readFileSync(config.privateKeyFile));
   if (key.asymmetricKeyType !== "ec" || key.asymmetricKeyDetails?.namedCurve !== "prime256v1")
@@ -166,6 +168,14 @@ export function createApnsSender(config: Config["apns"], transport?: ApnsTranspo
       "apns-push-type": "alert", "apns-priority": "5", "apns-expiration": String(Math.floor(Date.now() / 1000) + 86400), "content-type": "application/json" }, apnsBadgePayload(badge));
     if (shown.statusCode !== 200) throw new ApnsError(`APNs rejected badge update (${shown.statusCode})`, shown.statusCode, shown.reason);
   };
+  // The same silent alert push a clear follows with. iOS applies it even while the app is closed.
+  const badge: ApnsBadgeSender = async (device, value) => {
+    if (device.environment !== config.environment) throw new Error("APNs device environment does not match this host");
+    if (!count(value)) throw new Error("A badge must be a whole number of zero or more");
+    const result = await sendRequest(origin, { ":method": "POST", ":path": `/3/device/${device.token}`, authorization: `bearer ${providerToken()}`, "apns-topic": config.topic,
+      "apns-push-type": "alert", "apns-priority": "5", "apns-expiration": String(Math.floor(Date.now() / 1000) + 86400), "content-type": "application/json" }, apnsBadgePayload(value));
+    if (result.statusCode !== 200) throw new ApnsError(`APNs rejected badge update (${result.statusCode})`, result.statusCode, result.reason);
+  };
   // Budgeted by iOS like a clear; WidgetRefresh sends at most one per device every 15 minutes.
   const refresh: ApnsRefreshSender = async device => {
     if (device.environment !== config.environment) throw new Error("APNs device environment does not match this host");
@@ -173,5 +183,5 @@ export function createApnsSender(config: Config["apns"], transport?: ApnsTranspo
       "apns-push-type": "background", "apns-priority": "5", "apns-expiration": String(Math.floor(Date.now() / 1000) + 3600), "content-type": "application/json" }, apnsRefreshPayload());
     if (result.statusCode !== 200) throw new ApnsError(`APNs rejected widget refresh (${result.statusCode})`, result.statusCode, result.reason);
   };
-  return Object.assign(send, { close() { session?.destroy(); }, liveActivity, clear, refresh });
+  return Object.assign(send, { close() { session?.destroy(); }, liveActivity, clear, refresh, badge });
 }

@@ -244,6 +244,9 @@ struct GroupCreateView: View {
                 Text(bot.name)
               }
             }
+              // The hidden avatar's own label ("Ranch hand: Ready") still reached the switch's label on the
+              // iOS 27 simulator, so VoiceOver would read the name twice with a status. Name the switch directly.
+              .accessibilityLabel(Text(bot.name))
               .disabled(busy || botIds.count >= 6 && !botIds.contains(bot.id))
           }
         } header: { Text("Choose 2–6 assistants · \(botIds.count) chosen") } footer: {

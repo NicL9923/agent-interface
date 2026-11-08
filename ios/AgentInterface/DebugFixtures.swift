@@ -126,6 +126,25 @@
             "prompt": "Inspect the pasture.", "schedule": "0 7 * * *", "enabled": false, "recipientIds": [],
             "provider": "openrouter", "model": "fixture-fast", "contextFrom": ["self"]]]
         }
+        // The main assistant: "1" makes My assistant main with check-ins on, a check-in and a handoff in its chat;
+        // "suggest" leaves it unchosen so home suggests one.
+        if let main = environment["AGENT_INTERFACE_UI_MAIN"] {
+          FixtureProtocol.routines = []
+          if main == "1" {
+            FixtureProtocol.preferences["mainBotId"] = "personal"
+            FixtureProtocol.preferences["checkIns"] = ["enabled": true, "everyHours": 2, "timezone": "America/Chicago"]
+            FixtureProtocol.routines = [["id": "checkin", "botId": "personal", "name": "Check-ins", "prompt": "[WildBots check-in for member native-test]",
+              "schedule": "every 120m", "enabled": true, "recipientIds": ["native-test"], "managed": "check-in"]]
+            FixtureProtocol.messages = [
+              ["id": "ask", "role": "user", "text": "Can the ranch hand fix the north gate Tuesday?", "sender": ["id": "native-test", "name": "Local test member"], "createdAt": "2026-11-08T14:00:00Z"],
+              ["id": "handoff", "role": "assistant", "text": "", "toolName": "message_agent", "createdAt": "2026-11-08T14:00:05Z",
+                "toolCall": ["id": "dm-1", "name": "message_agent", "status": "completed", "arguments": "{\"target\":\"ranch\",\"message\":\"Can you fix the north gate on Tuesday morning?\"}", "result": "Ranch hand: Tuesday at 9 works."]],
+              ["id": "done", "role": "assistant", "text": "Ranch hand will fix the north gate Tuesday at 9.", "createdAt": "2026-11-08T14:01:00Z"],
+              ["id": "check", "role": "assistant", "text": "Your 3 PM dentist moved to 4 PM, which overlaps soccer pickup. Want me to ask Ranch hand to cover pickup?",
+                "origin": ["kind": "scheduled", "visibility": "conversation", "title": "Check-ins"], "createdAt": "2026-11-08T16:00:00Z"],
+            ]
+          }
+        }
         if environment["AGENT_INTERFACE_UI_COORDINATION"] == "1" {
           FixtureProtocol.messages = [
             ["id": "cron", "role": "user", "text": "Scheduled job handoff: hay, water, and bunny check", "origin": ["kind": "scheduled", "visibility": "activity", "title": "Bunny care"]],
@@ -247,6 +266,32 @@
         ["id": "cards-a3", "role": "assistant", "text": "A few details first.\n\n" + fence(form)],
       ]
     }()
+    /// A reply with six generated files and a revised email draft, as `AGENT_INTERFACE_UI_REPLY_EXTRAS` shows them.
+    nonisolated(unsafe) static let replyExtraMessages: [[String: Any]] = {
+      let json = { (value: Any) -> String in String(decoding: try! JSONSerialization.data(withJSONObject: value), as: UTF8.self) }
+      let fence = { (card: [String: Any]) -> String in "```agent-ui\n" + json(["version": 1, "cards": [card]]) + "\n```" }
+      let file = { (id: String, name: String, mime: String) -> [String: Any] in ["id": id, "name": name, "mime": mime, "size": 2048, "url": "/api/files/\(id)"] }
+      let first: [String: Any] = ["id": "sam1", "type": "email", "title": "Fence help", "to": ["sam@example.com"], "subject": "Fence work Saturday",
+        "body": "Hi Sam,\n\nCan you come Saturday at 9? Bring your post driver.\n\nThanks,\nNicolas"]
+      var second = first
+      second["id"] = "sam2__revises__sam1"; second["to"] = ["sam@example.com", "kim@example.com"]
+      second["subject"] = "Fence work Sunday"; second["body"] = "Hi Sam,\n\nCan you come Sunday at 10 instead? Kim will join us. Bring your post driver.\n\nThanks,\nNicolas"
+      let me: [String: Any] = ["id": "native-test", "name": "Local test member"]
+      return [
+        ["id": "extra-q1", "role": "user", "text": "Walk the north fence and send me what you found.", "sender": me],
+        ["id": "extra-t1", "role": "tool", "text": "Rendered the survey.", "toolName": "image_generate",
+          "files": [file("fence-chart", "north-fence-posts.png", "image/png"), file("fence-csv", "fence-inspection.csv", "text/csv"),
+            file("supply-quote", "supply-quote.pdf", "application/pdf"), file("gate-audio", "gate-hinge.m4a", "audio/mp4"),
+            file("post-photos", "post-photos.png", "image/png"), file("weather", "weather-window.txt", "text/plain")]],
+        // The reply's own attachments show once, as attachment rows, never again as chips.
+        ["id": "extra-a1", "role": "assistant", "text": "Done. Post 2 was leaning and post 3 was rotted through, so I replaced it.",
+          "files": [file("pasture-map", "pasture-map.pdf", "application/pdf"), file("repair-notes", "repair-notes.md", "text/markdown")]],
+        ["id": "extra-q2", "role": "user", "text": "Draft a note asking Sam to help.", "sender": me],
+        ["id": "extra-a2", "role": "assistant", "text": "Here's a draft.\n\n" + fence(first)],
+        ["id": "extra-q3", "role": "user", "text": "Make it Sunday at 10 and copy Kim.", "sender": me],
+        ["id": "extra-a3", "role": "assistant", "text": "Updated.\n\n" + fence(second)],
+      ]
+    }()
     nonisolated(unsafe) static var messages: [[String: Any]] = [
       [
         "id": "welcome", "role": "assistant",
@@ -260,6 +305,10 @@
     nonisolated(unsafe) static var questionFailed = false
     nonisolated(unsafe) static var approvalFailed = false
     nonisolated(unsafe) static var approvalChoice: String?
+    /// AGENT_INTERFACE_UI_APPROVAL_SCOPES: the decision sent for the scoped approval, and the saved allowlist.
+    nonisolated(unsafe) static var scopedDecision: [String: Any]?
+    nonisolated(unsafe) static var scopedAllowlist = ["recursive delete", "SQL DROP"]
+    nonisolated(unsafe) static var scopedMode = "manual"
     nonisolated(unsafe) static var retried = false
     nonisolated(unsafe) static var retryClaim: [String: Any]?
     nonisolated(unsafe) static var draft: [String: Any] = ["text": "", "attachments": []]
@@ -684,6 +733,9 @@
           window["sessionId"] = TranscriptFixtures.longSession
           object = window
         }
+        if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_APPROVAL_SCOPES"] == "1" {
+          object = TranscriptFixtures.approvalScopes(decision: Self.scopedDecision, draft: Self.draft)
+        }
         if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_LIVE_ACTIVITY"] == "1" {
           object = [
             "botId": path.components(separatedBy: "/")[3],
@@ -699,6 +751,12 @@
         if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_CHAT_CARDS"] == "1" {
           object = ["botId": path.components(separatedBy: "/")[3], "messages": Self.chatCardMessages, "activity": ["state": "idle"],
             "approvals": [], "files": [], "attention": [], "draft": Self.draft, "readPosition": Self.readPosition]
+        }
+        if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_REPLY_EXTRAS"] == "1" {
+          let messages = Self.replyExtraMessages
+          let files = messages.flatMap { $0["files"] as? [[String: Any]] ?? [] }
+          object = ["botId": path.components(separatedBy: "/")[3], "messages": messages, "activity": ["state": "idle"],
+            "approvals": [], "files": files, "attention": [], "draft": Self.draft, "readPosition": Self.readPosition]
         }
         if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_INLINE_UI"] == "1" {
           let html = "<h3>Hay supply planner</h3><p>Explicit simulator fixture.</p><button id='compare' onclick=\"document.getElementById('days').textContent='40 days';document.getElementById('extra').hidden=false\">Compare supply</button><p id='days'>24 days</p><p id='extra' hidden>At half a bale per day, twenty bales lasts forty days.</p>"
@@ -757,6 +815,12 @@
           }
           object = ["botId": path.components(separatedBy: "/")[3], "sessionId": "fixture-session", "messages": [["id": "vault-fixture", "role": "assistant", "text": "Fixture browser task needs a login. Enter it in the secure request below."]], "activity": ["state": attention.isEmpty ? "idle" : "blocked"], "approvals": [], "files": [], "attention": attention, "draft": Self.draft, "readPosition": Self.readPosition]
         }
+      } else if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_APPROVAL_SCOPES"] == "1", path.hasSuffix("/approvals/scoped-approval"), method == "POST" {
+        Self.scopedDecision = body; object = ["ok": true]
+      } else if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_APPROVAL_SCOPES"] == "1", path.contains("/approval-settings") {
+        if method == "DELETE", let pattern = body["pattern"] as? String { Self.scopedAllowlist.removeAll { $0 == pattern } }
+        if method == "PUT", let on = body["autoReview"] as? Bool { Self.scopedMode = on ? "smart" : "manual" }
+        object = ["supported": true, "allowlist": Self.scopedAllowlist, "mode": Self.scopedMode, "canManageAutoReview": true]
       } else if path.hasSuffix("/vault") {
         object = ["botId": path.components(separatedBy: "/")[3], "profile": "default", "scope": "profile", "owner": "Hermes", "notice": "Explicit simulator fixture. Logins belong to this Hermes profile and follow its household access.", "items": Self.vaultItems, "sources": [
           ["name": "local", "displayName": "Hermes saved logins", "enabled": true, "needsUnlock": false, "unlocked": true, "installed": true, "canToggle": false, "canUnlock": false, "canLock": false],
@@ -1072,6 +1136,19 @@
             return item
           }
         }
+      } else if path == "/api/preferences/main" {
+        // As the server: only the member's own personal assistant, and a new one starts without check-ins.
+        let botId = body["botId"] as? String
+        if let botId, botId != "personal" {
+          status = 409; object = ["error": "That assistant can't be your main assistant. Shared with the household.", "code": "main_not_personal"]
+        } else {
+          if Self.preferences["mainBotId"] as? String != botId { Self.preferences["checkIns"] = nil }
+          Self.preferences["mainBotId"] = botId
+          object = Self.preferences
+        }
+      } else if path == "/api/preferences/check-ins" {
+        Self.preferences["checkIns"] = body
+        object = Self.preferences
       } else if path == "/api/preferences/models" {
         if Self.designFixture?["screen"] as? String == "models" { print("DESIGN_FAVORITES_PUT \(body)") }
         if Self.designFixture?["failFavorite"] as? Bool == true, Self.designFailures.insert("favorite").inserted {
@@ -1092,7 +1169,11 @@
         if method == "PATCH" && Self.preferencesFailures > 0 {
           Self.preferencesFailures -= 1; status = 503; object = ["error": "Fixture settings save failed"]
         } else {
-          if method == "PATCH" { let favorites = Self.preferences["modelFavorites"]; Self.preferences = body; Self.preferences["modelFavorites"] = favorites }
+          if method == "PATCH" {
+            // As the server: model stars, the main assistant and its check-ins keep their own routes.
+            let kept = ["modelFavorites", "mainBotId", "checkIns"].reduce(into: [String: Any]()) { $0[$1] = Self.preferences[$1] }
+            Self.preferences = body; Self.preferences.merge(kept) { _, old in old }
+          }
           object = Self.preferences
         }
       } else if path.hasSuffix("/uploads"), method == "POST", Self.designFixture?["screen"] as? String == "avatar" {
@@ -1347,6 +1428,20 @@
       "rr-feed": "This run is still in progress.",
     ]
     static let longSession = "fixture-long-session"
+    /// A working turn with a steered message, an approval offering every scope and a question with a
+    /// recommended answer. Once a decision is sent, Hermes stops listing the approval.
+    static func approvalScopes(decision: [String: Any]?, draft: [String: Any]) -> [String: Any] {
+      let member: [String: Any] = ["id": "native-test", "name": "Local test member"]
+      let approval: [String: Any] = ["id": "scoped-approval", "title": "Action approval", "detail": "recursive delete", "status": "pending",
+        "command": "rm -rf ./build", "choices": ["once", "session", "always", "deny"], "patterns": ["recursive delete"]]
+      let question: [String: Any] = ["id": "scope-question", "kind": "clarify", "title": "The assistant needs your answer", "detail": "Answer the question to continue this task.",
+        "questions": [["id": "feed", "prompt": "Which feed should go out?", "options": ["Hay (Recommended)", "Pellets", "Sweet feed"], "recommended": 0]]]
+      return ["botId": "ranch", "sessionId": "scope-session", "messages": [
+        ["id": "scope-prompt", "role": "user", "text": "Clean out the old build folder.", "createdAt": "2026-11-07T15:00:00.000Z", "sender": member],
+        ["id": "scope-steer", "role": "user", "text": "Keep the logs folder.", "createdAt": "2026-11-07T15:00:20.000Z", "sender": member, "steered": true],
+      ], "activity": ["state": decision == nil ? "waiting" : "thinking"], "approvals": decision == nil ? [approval] : [], "files": [],
+        "attention": decision == nil ? [question] : [], "draft": draft]
+    }
     static var questions: [[String: Any]] { [
       ["id": "plan", "prompt": "Your plan", "options": ["First", "Second"]],
       ["id": "extras", "prompt": "What should come along?", "options": ["Hay", "Water", "Feed"], "multiple": true],

@@ -1,8 +1,22 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { request } from "../client-api";
+import { ApiError, request } from "../client-api";
 import type { WebPushSubscription } from "../shared/api";
 import { notificationPromptKey as promptKey } from "../app/storage";
+import { deviceId } from "../app/device-id";
 
+/**
+ * Whether this person's server holds this browser's subscription, naming this browser's device as it
+ * asks. A server from before device IDs refuses the field with 400, so the question is asked again
+ * without it rather than reading as a broken registration.
+ */
+async function registrationStatus(endpoint: string) {
+  try {
+    return await request("POST /push/subscriptions/status", { body: { endpoint, deviceId: deviceId() } });
+  } catch (error) {
+    if (!(error instanceof ApiError) || error.status !== 400) throw error;
+    return request("POST /push/subscriptions/status", { body: { endpoint } });
+  }
+}
 const promptedInPage = new Set<string>();
 function alreadyPrompted(userId: string) {
   try { return localStorage.getItem(promptKey(userId)) === "shown"; }
@@ -53,7 +67,7 @@ export function useDeviceNotifications(userId?: string, vapid?: string) {
       }
       const subscription = await worker.pushManager.getSubscription();
       if (!current()) return;
-      const result = subscription ? await request("POST /push/subscriptions/status", { body: { endpoint: subscription.endpoint } }) : { registered: false };
+      const result = subscription ? await registrationStatus(subscription.endpoint) : { registered: false };
       if (!current()) return;
       const enabled = Notification.permission === "granted" && !!subscription && result.registered === true;
       setState({ enabled, blocked: false, checking: false, busy: false, canEnable: true, error: "",
@@ -112,7 +126,7 @@ export function useDeviceNotifications(userId?: string, vapid?: string) {
       if (!existing) created = subscription;
       if (user.current !== account) { await created?.unsubscribe(); return; }
       // The DOM types the keys as optional; a subscription made with an application server key carries both.
-      await request("POST /push/subscriptions", { body: subscription.toJSON() as WebPushSubscription });
+      await request("POST /push/subscriptions", { body: { ...subscription.toJSON() as WebPushSubscription, deviceId: deviceId() } });
       if (user.current === account) {
         setState({ ...initialState, checking: false, enabled: true, canEnable: true,
           message: "You'll get alerts here for finished work and requests that need you." });

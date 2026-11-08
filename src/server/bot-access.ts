@@ -168,6 +168,9 @@ export const assistantRoutes: Readonly<Record<string, BotScope>> = {
   "POST /api/connection/retry": "none",
   "PATCH /api/preferences": "none",
   "PUT /api/preferences/models": "none",
+  // The main assistant named in the body; check-ins act on the member's current main assistant.
+  "PUT /api/preferences/main": "body",
+  "PUT /api/preferences/check-ins": "none",
   "GET /api/bots": "list",
   "POST /api/bots": "none",
   "GET /api/models": "query",
@@ -227,6 +230,8 @@ export const assistantRoutes: Readonly<Record<string, BotScope>> = {
   "POST /api/push/subscriptions/status": "none",
   "POST /api/push/subscriptions": "none",
   "DELETE /api/push/subscriptions": "none",
+  // Device activity names an installation, never an assistant.
+  "PUT /api/devices/activity": "none",
   "POST /api/push/test": "body",
   // The token names the assistant; the handler checks this person still sees it.
   "POST /api/push/actions": "none",

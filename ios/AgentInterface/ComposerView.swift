@@ -111,7 +111,7 @@ struct ComposerView: View {
     ComposerTextView(
       text: Binding(
         get: { store.composerDraft.text },
-        set: { text in store.editComposer { $0.text = text } }),
+        set: { text in DeviceActivity.shared.input(); store.editComposer { $0.text = text } }),
       label: "Message \(bot.name)", editable: store.draftReady, readOnly: store.sendingDraft, focused: $focused,
       onReturn: { if store.canSend { send() } },
       onPasteImages: { images in Task { await store.uploads.attach(images: images, named: "Pasted image") } },
@@ -127,7 +127,8 @@ struct ComposerView: View {
   }
   private var placeholder: String {
     store.sendingDraft ? "Sending…"
-      : WaitingInput.placeholder(store.conversation, userId: store.bootstrap?.user.id) ?? (store.active ? "Guide…" : "Message…")
+      : WaitingInput.placeholder(store.conversation, userId: store.bootstrap?.user.id)
+        ?? (store.declinedApprovals[bot.id] != nil ? "Tell \(bot.name) what to do instead" : store.active ? "Guide…" : "Message…")
   }
   /// Always there while typing, so the keyboard can be put away without finding a spot to drag.
   private var hideKeyboardButton: some View {

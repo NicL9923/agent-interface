@@ -18,6 +18,7 @@ import { glanceAtAvatar, reactAvatar } from "../components/avatar-attention";
 import { homeSeason } from "./season";
 import { SeasonalAmbience } from "./SeasonalAmbience";
 import { AccountMenu, initials } from "./AccountMenu";
+import { mainBot } from "../shared/main-assistant";
 import "./home.css";
 
 /** Group chats on home: the rooms in order, what is open, and how to make or finish one. */
@@ -43,7 +44,7 @@ export const noGroups: HomeGroups = { rooms: [], roomId: "", canCreate: false, p
  * Home: pinned assistants up top, then everyone else with their latest message.
  * Memoized so typing and streamed replies do not redraw every row and live avatar.
  */
-export const Sidebar = memo(function Sidebar({ boot, botId, shownBotId, readThrough, groups = noGroups, view, state, connectionLost, offline, mobile, open, update, onSelectBot, onView, onNewBot, onSettings, onUsage, onSignOut, onPin, onBotSettings, onMoveToSection, onNewSection }: {
+export const Sidebar = memo(function Sidebar({ boot, botId, shownBotId, readThrough, groups = noGroups, view, state, connectionLost, offline, mobile, open, update, onSelectBot, onView, onNewBot, onSettings, onUsage, onSignOut, onPin, onBotSettings, onMoveToSection, onNewSection, onChooseMain, onDismissMainSuggestion }: {
   boot: Bootstrap;
   botId: string;
   /** The chat on screen now, which is never marked unread. */
@@ -68,10 +69,17 @@ export const Sidebar = memo(function Sidebar({ boot, botId, shownBotId, readThro
   onBotSettings(bot: Bot): void;
   onMoveToSection(bot: Bot, sectionId: string | null): void;
   onNewSection(bot: Bot): void;
+  /** Opens the main assistant picker. Without it, home never suggests choosing one. */
+  onChooseMain?(): void;
+  onDismissMainSuggestion?(): void;
 }) {
   const prefs = boot.preferences;
-  const pinned = prefs.favorites.map(id => boot.bots.find(bot => bot.id === id)).filter((bot): bot is Bot => !!bot);
-  const unpinned = boot.bots.filter(bot => !prefs.favorites.includes(bot.id));
+  // The main assistant leads home, above the pinned ones, and appears nowhere else on it.
+  const main = mainBot(prefs, boot.bots);
+  const others = boot.bots.filter(bot => bot !== main);
+  const pinned = prefs.favorites.map(id => others.find(bot => bot.id === id)).filter((bot): bot is Bot => !!bot);
+  const unpinned = others.filter(bot => !prefs.favorites.includes(bot.id));
+  const suggestMain = !main && !prefs.mainSuggestionDismissed && !!onChooseMain && boot.bots.length > 0;
   const sections = prefs.sections.map(section => ({ ...section, bots: unpinned.filter(bot => section.botIds.includes(bot.id)) }))
     .filter(section => section.bots.length);
   const rest = unpinned.filter(bot => !prefs.sections.some(section => section.botIds.includes(bot.id)));
@@ -170,6 +178,37 @@ export const Sidebar = memo(function Sidebar({ boot, botId, shownBotId, readThro
       </header>
       <UpdateNotice update={update} />
       <div className="home-scroll">
+        {main && (() => {
+          const botState = activity(main);
+          const working = !connectionLost && botState !== "idle" && botState !== "done";
+          return <div className="home-main" role="group" aria-label="Main assistant">
+            <BotMenu bot={main} preferences={prefs} onPin={() => onPin(main)} onSettings={() => onBotSettings(main)}
+              onMove={sectionId => onMoveToSection(main, sectionId)} onNewSection={() => onNewSection(main)}>
+              <Button className={`bot-item main-bot${current(main) ? " selected" : ""}${unread(main) ? " unread" : ""}`} aria-current={current(main) ? "page" : undefined}
+                {...intent(main)} onClick={() => onSelectBot(main.id)}>
+                <span className="pinned-avatar" aria-hidden="true" data-morph={main.id} data-glance-target={main.id}>
+                  <Avatar avatar={main.avatar} state={botState === "done" || botState === "blocked" ? "idle" : botState} size={mobile ? 64 : 52} name={main.name} botId={main.id} offline={offline} aware={!mobile} />
+                </span>
+                <span className="bot-row-text">
+                  <span className="bot-row-top"><span className="bot-row-name"><strong>{main.name}</strong><span className="main-chip">Main</span></span>
+                    {(unread(main) || main.lastMessage?.at) && <span className="bot-row-meta">
+                      {unread(main) && <UnreadMark />}{main.lastMessage?.at && <ListDate value={main.lastMessage.at} />}
+                    </span>}</span>
+                  <small className={working ? `bot-activity state-${botState}` : undefined}>
+                    {working ? offline ? "Offline" : stateLabels[botState] : main.lastMessage?.text || "Your main assistant"}
+                  </small>
+                </span>
+              </Button>
+            </BotMenu>
+          </div>;
+        })()}
+        {suggestMain && <section className="home-main-suggestion" aria-label="Main assistant">
+          <p><strong>Choose a main assistant:</strong> it checks in on what's coming up and hands work to your other assistants.</p>
+          <span className="home-main-suggestion-actions">
+            <Button className="primary" onClick={onChooseMain}>Choose</Button>
+            <Button onClick={onDismissMainSuggestion}>Not now</Button>
+          </span>
+        </section>}
         {pinned.length > 0 && <ul className="home-pinned" aria-label="Pinned assistants">
           {pinned.map(bot => {
             const botState = activity(bot);

@@ -107,7 +107,27 @@ export interface Preferences {
   notifications?: { timezone: string; quietStart?: string; quietEnd?: string; batchMinutes: number };
   /** Routines whose runs this person keeps out of their assistant's chat. Runs show by default. */
   hiddenRoutineRuns?: { botId: string; routineId: string }[];
+  // --- Main assistant and check-ins (src/shared/main-assistant.ts) ---
+  /**
+   * This person's main assistant: one of their own personal assistants. The server owns it: a
+   * preferences save never changes it, only PUT /preferences/main, so an older client keeps it.
+   */
+  mainBotId?: string;
+  /** Proactive check-ins by the main assistant. Server-owned like mainBotId; PUT /preferences/check-ins. */
+  checkIns?: CheckInSettings;
+  /** This person dismissed the suggestion to choose a main assistant. */
+  mainSuggestionDismissed?: boolean;
+  // --- End main assistant ---
 }
+// --- Main assistant and check-ins ---
+export interface CheckInSettings {
+  enabled: boolean;
+  /** Whole hours between check-ins, 1 to 4. */
+  everyHours: number;
+  /** The IANA timezone the main assistant reads as night, when it stays silent. */
+  timezone: string;
+}
+// --- End main assistant ---
 export const reasoningLevels = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"] as const;
 export const serviceTiers = ["normal", "fast", "ultrafast"] as const;
 export interface InferenceSettings {
@@ -265,8 +285,11 @@ export interface AttentionRequest {
   kind: "clarify" | "official" | "secure" | "computer" | "terminal" | "connection";
   title: string;
   detail: string;
-  /** `multiple` lets a person choose several options, sent as one comma-separated answer. Absent means one. */
-  questions?: { id: string; prompt: string; options?: string[]; multiple?: boolean }[];
+  /**
+   * `multiple` lets a person choose several options, sent as one JSON array of strings. Absent means one.
+   * `recommended` indexes the one option Hermes marked " (Recommended)"; see src/shared/recommended.ts.
+   */
+  questions?: { id: string; prompt: string; options?: string[]; multiple?: boolean; recommended?: number }[];
   secure?: SecureRequest;
   computer?: ComputerHandoff;
   terminal?: TerminalRequest;
@@ -374,11 +397,17 @@ export interface Routine {
   contextFrom?: string[] | null;
   /** A run is in flight now, which Stop run can end. Read only. */
   running?: boolean;
+  /** Server only: Hermes has claimed a run of this routine, with a copy of it as it was then. Read only. */
+  inFlight?: boolean;
   nextRunAt?: string;
   lastRunAt?: string;
   lastStatus?: string;
   lastError?: string;
   lastDeliveryError?: string;
+  /** Kept by WildBots for a feature, not edited as a routine: "check-in" is a member's main-assistant check-ins. */
+  managed?: "check-in";
+  /** Server only, never sent to clients: native job settings the app does not read, such as a monitor script. */
+  nativeOverrides?: string[];
 }
 export interface Bootstrap {
   user: User;
@@ -434,6 +463,15 @@ export interface RuntimeEvent {
   body?: string;
   occurredAt: string;
 }
+// --- Main assistant delegation ---
+export interface DelegationTarget { id: string; name: string; description?: string }
+/**
+ * Per profile, every assistant: the member it serves ("the household" for a shared one), whether it is
+ * that member's main assistant (which must ask before reaching `shared`), whether it is anyone's own,
+ * the member's personal assistants it may reach, and the household-visible ones.
+ */
+export type DelegationPolicies = Record<string, { member: string; main: boolean; owned: boolean; personal: DelegationTarget[]; shared: DelegationTarget[] }>;
+// --- End main assistant delegation ---
 export interface RuntimeDiscovery {
   cursor: string;
   events: RuntimeEvent[];
@@ -501,6 +539,8 @@ export interface Runtime {
     approvalId: string,
     decision: "approved" | "denied",
     senderId: string,
+    /** How far an approval reaches. Absent means this one command. */
+    scope?: ApprovalScope,
   ): Promise<void>;
   upload(
     botId: string,
@@ -519,6 +559,17 @@ export interface Runtime {
   /** `botId` names the assistant whose job this is: Hermes lets several hold one ID. */
   deleteRoutine(id: string, botId: string): Promise<void>;
   discoverEvents(cursor: string): Promise<RuntimeDiscovery>;
+  /**
+   * Who each assistant may see and reach, replacing every earlier policy. Resolves once Hermes holds
+   * it, with the roster protocol Hermes enforces: 0 when this add-on has no gate, so nothing is
+   * enforced. Absent when the runtime can't send rosters at all.
+   */
+  delegationPolicy?(policies: DelegationPolicies): Promise<number>;
+  /**
+   * Routine results Hermes still holds for delivery from this assistant's profile, each keeping the
+   * destination its run had. Throws when they can't be read. Absent when the add-on can't say.
+   */
+  routineDeliveries?(botId: string): Promise<{ id: string; name: string }[]>;
   close(): Promise<void>;
 }
 export type DownloadedFile = {
@@ -535,3 +586,35 @@ export const defaultPreferences: Preferences = {
   sections: [],
   followBots: [],
 };
+
+// --- Approval scopes and steering (Workstream B). Additive fields merged into the interfaces above. ---
+/** A request.answer choice Hermes can offer for one approval. */
+export type ApprovalChoice = "once" | "session" | "always" | "deny";
+/** How far an approval reaches: this command, this conversation, or this assistant from now on. */
+export type ApprovalScope = Exclude<ApprovalChoice, "deny">;
+export interface Approval {
+  /** The choices Hermes offered for this request, in its order. Absent from an older Hermes: approve once or decline. */
+  choices?: ApprovalChoice[];
+  /** The command patterns "Always allow" saves, such as "recursive delete". */
+  patterns?: string[];
+  /** The command as Hermes shows it, already redacted by Hermes, when the description is not the command itself. */
+  command?: string;
+}
+export interface Message {
+  /** The add-on admitted this person's message into the task that was already running. Absent when unknown. */
+  steered?: boolean;
+}
+export interface SubmissionReceipt {
+  /** Whether this message joined the running task. Absent from an older add-on. */
+  steered?: boolean;
+}
+/** An assistant's always-allowed command patterns and Hermes's own review of routine commands. */
+export interface ApprovalSettings {
+  supported: boolean;
+  reason?: string;
+  allowlist: string[];
+  /** Hermes's approvals.mode: smart lets its guardian approve routine commands; off never asks. */
+  mode: "manual" | "smart" | "off";
+  canManageAutoReview: boolean;
+}
+// --- End approval scopes and steering. ---

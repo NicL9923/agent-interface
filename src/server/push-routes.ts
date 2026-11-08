@@ -2,7 +2,8 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { Runtime } from "../shared/types.js";
 import { apiRoute } from "./api-route.js";
-import { signedIn } from "./auth.js";
+import { sessionHash, signedIn } from "./auth.js";
+import { deviceIdleMs, deviceIdPattern } from "../shared/device-activity.js";
 import { visibleTo } from "./bot-access.js";
 import { allowedIdentity, type Config } from "./config.js";
 import { decideApproval } from "./conversation-routes.js";
@@ -20,9 +21,25 @@ export function installPushRoutes(app: FastifyInstance, collaborators: {
   live: () => LiveActivities;
 }) {
   const { config, runtime, store, live } = collaborators;
-  const endpoint = z.object({ endpoint: z.string().url().max(8192) }).strict();
-  apiRoute(app, "POST /push/subscriptions/status", { body: endpoint }, async (req, { endpoint }) =>
-    ({ registered: store.hasSubscription(signedIn(req).id, endpoint) }));
+  const deviceId = z.string().regex(deviceIdPattern, "deviceId must be a UUID").transform(value => value.toLowerCase());
+  const endpoint = z.object({ endpoint: z.string().url().max(8192), deviceId: deviceId.optional() }).strict();
+  // A client that names its installation attaches it to its own registration while checking it,
+  // so subscriptions made before device IDs existed join routing without another request.
+  apiRoute(app, "POST /push/subscriptions/status", { body: endpoint }, async (req, { endpoint, deviceId }) => {
+    const userId = signedIn(req).id, registered = store.hasSubscription(userId, endpoint);
+    if (registered && deviceId) store.attachSubscriptionDevice(userId, endpoint, deviceId);
+    return { registered };
+  });
+  // BEGIN device activity
+  // A heartbeat from the installation its person is using now, on any screen. A notification then
+  // goes only to such installations; see BackgroundWorker.deliver.
+  const activity = z.object({ deviceId, state: z.enum(["active", "inactive"]),
+    idleMs: z.number().int().min(0).max(deviceIdleMs - 1).optional() }).strict();
+  apiRoute(app, "PUT /devices/activity", { body: activity }, async (req, body) => {
+    store.deviceActivity(signedIn(req).id, sessionHash(req), body.deviceId, req.nativeSessionHash ? "ios" : "web", body.state, body.idleMs ?? 0);
+    return { ok: true };
+  });
+  // END device activity
   const subscription = z
     .object({
       endpoint: z
@@ -33,6 +50,7 @@ export function installPushRoutes(app: FastifyInstance, collaborators: {
         p256dh: z.string().min(1).max(1000),
         auth: z.string().min(1).max(1000),
       }),
+      deviceId: deviceId.optional(),
     });
   const webPush = {
     before: async () => {
@@ -40,8 +58,8 @@ export function installPushRoutes(app: FastifyInstance, collaborators: {
         throw httpError(409, "Web Push is not configured");
     },
   };
-  apiRoute(app, "POST /push/subscriptions", { ...webPush, body: subscription }, async (req, input) => {
-    store.subscribe(signedIn(req).id, input);
+  apiRoute(app, "POST /push/subscriptions", { ...webPush, body: subscription }, async (req, { deviceId, ...input }) => {
+    store.subscribe(signedIn(req).id, input, deviceId);
     return { ok: true };
   });
   // A service worker's notification action, such as Decline, has no session or CSRF token. The

@@ -54,7 +54,7 @@ export async function routinesFor<T extends Routine>(runtime: Pick<Runtime, 'gro
   const touches = (routine: Routine) => !!routine.roomIds?.length || mentionsRoom(routine.lastError) || mentionsRoom(routine.lastDeliveryError);
   const errs = (routine: Routine) => routine.lastError !== undefined || routine.lastDeliveryError !== undefined;
   // Every target the delivery names is the server's to check, never anyone's to read.
-  const listed = routines.map(({ delivery: _, ...routine }) => routine as T);
+  const listed = routines.map(({ delivery: _, nativeOverrides: __, inFlight: ___, ...routine }) => routine as T);
   if (!listed.some(routine => touches(routine) || errs(routine))) return listed;
   const redact = await errorRedactor(runtime, store, roster, userId, listed.some(touches));
   return listed.map(routine => {
@@ -79,6 +79,7 @@ export async function routinesFor<T extends Routine>(runtime: Pick<Runtime, 'gro
 export async function assertDeliveryPrivate(runtime: Pick<Runtime, 'groupRequest' | 'listBots'>, store: Store, botId: string, targets: DeliveryRooms | undefined) {
   const unknown = () => httpError(409, "WildBots couldn't read or check the group chats this routine posts in, so it stays as it was. Review its delivery in Hermes, or try again in a moment.", { code: 'routine_rooms_unknown' });
   // A routine or setting the app cannot read is refused, never waved through.
+  assertMainOwnChat(store, botId, targets);
   if (!targets || targets.unknown) throw unknown();
   const roomIds = targets.rooms;
   if (!roomIds.length) return;
@@ -91,6 +92,23 @@ export async function assertDeliveryPrivate(runtime: Pick<Runtime, 'groupRequest
   const bot = open.presentation(botId);
   if (roomIds.some(roomId => { const room = open.all.get(roomId); return !!room && roomLeaks(bot, room, open.presentation); }))
     throw httpError(409, "This routine posts in a group chat that people who can't see its assistant could open, so it can't run. Pause it, or have someone who can open that group chat remove it from the routine.", { code: 'routine_rooms' });
+}
+
+/** Whether a routine's deliveries, as Hermes would make them, reach only its own assistant's chat, or nowhere. */
+export function ownChatOnly(botId: string, targets: DeliveryRooms | undefined) {
+  return !!targets && !targets.unknown && !targets.outward && !targets.rooms.length && (targets.chats ?? []).every(chat => chat === botId);
+}
+
+/**
+ * A main assistant's routines deliver only to its own chat: never another assistant's chat, a group chat
+ * or anywhere outside WildBots, through every route that saves, resumes or runs one. What it reads, such
+ * as its member's calendar and email, then reaches nobody else. Other assistants' routine deliveries are as
+ * Hermes has them, a known limit taken up separately (docs/HouseholdExperience.md#privacy-limits).
+ */
+export const isMainAssistant = (store: Store, botId: string) => store.users().some(user => store.preferences(user.id).mainBotId === botId);
+export function assertMainOwnChat(store: Store, botId: string, targets: DeliveryRooms | undefined) {
+  if (!isMainAssistant(store, botId)) return;
+  if (!ownChatOnly(botId, targets)) throw httpError(409, "A main assistant's routines post only in its own chat. Change where this routine delivers.", { code: 'routine_chats' });
 }
 
 /** Routine run errors as one person sees them, by the same rules as `routinesFor`. */
@@ -167,8 +185,11 @@ export async function installCollaborationRoutes(app: FastifyInstance, runtime: 
     if (!runtime.routineResults) throw httpError(409, 'Routine history is unavailable on this Hermes integration.');
     const page = await assistantRuns(botId);
     const from = since ? Date.parse(since) : -Infinity;
+    // A check-in that found something is its own message in the chat, and one that found nothing says
+    // nothing, so only a check-in that went wrong shows as a run card.
+    const checkIn = (run: RoutineRun) => store.checkIns.isCheckIn(botId, run.routineId) && run.status !== "failed" && !run.deliveryFailed;
     const redact = await redactAgents(store, roster, signedIn(req).id);
-    return { unavailable: page.unavailable, runs: await runErrorsFor(runtime, store, roster, signedIn(req).id, page.runs.filter(run => runTime(run) >= from).map(run => ({
+    return { unavailable: page.unavailable, runs: await runErrorsFor(runtime, store, roster, signedIn(req).id, page.runs.filter(run => runTime(run) >= from && !checkIn(run)).map(run => ({
       ...run, preview: run.preview === undefined ? undefined : redact.text(run.preview), error: run.error === undefined ? undefined : redact.text(run.error) }))) };
   });
   apiRoute(app, "GET /bots/:botId/routines/:routineId/results/:resultId", {}, async req => {

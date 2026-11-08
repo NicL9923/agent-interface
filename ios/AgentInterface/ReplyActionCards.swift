@@ -443,23 +443,52 @@ struct T3ThreadCardView: View {
 
 struct EmailDraftCardView: View {
   var card: ReplyCard
+  /// The earlier draft in this conversation that this one revises, and what changed since.
+  var revision: DraftRevision? = nil
   @Environment(\.colorScheme) private var scheme
   @State private var copied = false
+  @State private var changesHidden = false
+  private var marked: DraftChanges? { revision.flatMap { $0.changes.changed && !changesHidden ? $0.changes : nil } }
   var body: some View {
     VStack(alignment: .leading, spacing: 10) {
-      Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 6) {
-        if let to = card.to { header("To", to.joined(separator: ", ")) }
-        if let cc = card.cc { header("Cc", cc.joined(separator: ", ")) }
-        header("Subject", card.subject ?? "No subject")
+      if let revision {
+        ViewThatFits(in: .horizontal) {
+          HStack { revisionNote(revision); Spacer(); toggle(revision) }
+          VStack(alignment: .leading, spacing: 6) { revisionNote(revision); toggle(revision) }
+        }
       }
-      Text(card.body ?? "").font(.subheadline).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+      Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 6) {
+        if let marked, !marked.to.isEmpty { header("To", EmailDiffText.addresses(marked.to), EmailDiffText.spoken(marked.to)) }
+        else if marked == nil, let to = card.to { header("To", AttributedString(to.joined(separator: ", "))) }
+        if let marked, !marked.cc.isEmpty { header("Cc", EmailDiffText.addresses(marked.cc), EmailDiffText.spoken(marked.cc)) }
+        else if marked == nil, let cc = card.cc { header("Cc", AttributedString(cc.joined(separator: ", "))) }
+        if let marked, !marked.subject.isEmpty { header("Subject", EmailDiffText.words(marked.subject), EmailDiffText.spoken(marked.subject)) }
+        else { header("Subject", AttributedString(card.subject ?? "No subject")) }
+      }
+      (marked.map { Text(EmailDiffText.words($0.body)) } ?? Text(card.body ?? ""))
+        .font(.subheadline).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
         .padding(12).background(Palette.surface(scheme), in: RoundedRectangle(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(Palette.line))
+        // One element read with "added" and "removed" before each change, not the styled runs.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(marked.map { EmailDiffText.spoken($0.body) } ?? card.body ?? "")
+        .accessibilityIdentifier("emailBody.\(card.id)")
       ViewThatFits(in: .horizontal) {
         HStack(spacing: 10) { actions }
         VStack(alignment: .leading, spacing: 10) { actions }
       }
       Text("Nothing has been sent. Your mail app opens with this draft so you can review it first.").font(.caption).foregroundStyle(Palette.muted)
+    }
+  }
+  private func revisionNote(_ revision: DraftRevision) -> some View {
+    Text(revision.changes.changed ? "Revises “\(revision.previousTitle)”" : "Same as “\(revision.previousTitle)”")
+      .font(.footnote).foregroundStyle(Palette.muted)
+  }
+  @ViewBuilder private func toggle(_ revision: DraftRevision) -> some View {
+    if revision.changes.changed {
+      Button { changesHidden.toggle() } label: {
+        Label(changesHidden ? "Show changes" : "Hide changes", systemImage: changesHidden ? "pencil" : "checkmark")
+      }.buttonStyle(.bordered).controlSize(.small).accessibilityIdentifier("emailChanges.\(card.id)")
     }
   }
   @ViewBuilder private var actions: some View {
@@ -473,10 +502,11 @@ struct EmailDraftCardView: View {
       Label(copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc")
     }.buttonStyle(.bordered).accessibilityIdentifier("emailCopy.\(card.id)")
   }
-  private func header(_ name: String, _ value: String) -> some View {
+  private func header(_ name: String, _ value: AttributedString, _ spoken: String? = nil) -> some View {
     GridRow {
       Text(name).font(.caption).foregroundStyle(Palette.muted)
-      Text(value).font(.subheadline).foregroundStyle(card.subject == nil && name == "Subject" ? Palette.muted : Color.primary).textSelection(.enabled)
+      Text(value).font(.subheadline).foregroundStyle(card.subject == nil && name == "Subject" && marked == nil ? Palette.muted : Color.primary).textSelection(.enabled)
+        .accessibilityElement(children: .ignore).accessibilityLabel(spoken.map { Text($0) } ?? Text(value))
     }
   }
 }
@@ -851,5 +881,52 @@ struct FormReplyCardView: View {
   private func sendAgain() {
     save(SavedFormReply(attempt: attempt + 1, answers: answers, state: "editing"), from: attempt)
     attempt += 1; elsewhere = false; status = .editing; error = nil
+  }
+}
+
+/// A revised draft's changes as styled text: additions tinted and underlined, removals struck
+/// through, as the web marks them. VoiceOver hears "added" and "removed" before each change.
+enum EmailDiffText {
+  static func words(_ parts: [DiffPart]) -> AttributedString {
+    parts.enumerated().reduce(into: AttributedString()) { result, entry in
+      // A replaced word reads as two: a thin space between what went and what came, as the web spaces them.
+      if entry.element.kind == .added, entry.offset > 0, parts[entry.offset - 1].kind == .removed { result += AttributedString("\u{2009}") }
+      result += styled(AttributedString(entry.element.text), entry.element.kind)
+    }
+  }
+  static func addresses(_ parts: [AddressPart]) -> AttributedString {
+    parts.enumerated().reduce(into: AttributedString()) { result, entry in
+      if entry.offset > 0 { result += AttributedString(", ") }
+      result += styled(AttributedString(entry.element.address), entry.element.kind)
+    }
+  }
+  private static func styled(_ text: AttributedString, _ kind: DiffPart.Kind) -> AttributedString {
+    var text = text
+    switch kind {
+    case .same: break
+    case .added:
+      text.backgroundColor = Palette.accent.opacity(0.2)
+      text.underlineStyle = Text.LineStyle(pattern: .solid, color: Palette.accent)
+    case .removed:
+      text.backgroundColor = Palette.danger.opacity(0.14)
+      text.strikethroughStyle = Text.LineStyle(pattern: .solid, color: Palette.danger)
+      text.foregroundColor = Palette.muted
+    }
+    return text
+  }
+  static func spoken(_ parts: [DiffPart]) -> String {
+    let text = parts.map { part in
+      let words = part.text.trimmingCharacters(in: .whitespacesAndNewlines)
+      switch part.kind {
+      case .same: return part.text
+      case .added: return words.isEmpty ? " added line break " : " added: \(words) "
+      case .removed: return words.isEmpty ? " removed line break " : " removed: \(words) "
+      }
+    }.joined()
+    // The markers' own spaces never add a pause the draft does not have.
+    return text.replacingOccurrences(of: " {2,}", with: " ", options: .regularExpression).trimmingCharacters(in: .whitespaces)
+  }
+  static func spoken(_ parts: [AddressPart]) -> String {
+    parts.map { $0.kind == .same ? $0.address : "\($0.kind == .added ? "added" : "removed"): \($0.address)" }.joined(separator: ", ")
   }
 }

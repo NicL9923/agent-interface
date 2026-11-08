@@ -40,6 +40,19 @@ recorded stay visible to everyone. WildBots hides a personal assistant, but the
 Hermes dashboard is household-wide, so anyone with dashboard access can still reach
 its memory and logins.
 
+<!-- Main assistant: begin -->
+Each member can make one of their own personal assistants their **main assistant**, on
+web and iOS. It leads home with a **Main** mark, is first in the command palette, whose
+Ask entry sends typed words to its draft, and hands specialist work to the member's
+other assistants. A hand-off to a shared assistant asks the member first, because the
+whole household can read that chat. **Check in with me** in its details runs a quiet
+routine every 1 to 4 hours that speaks only when something needs the member and stays
+silent overnight in their timezone. A main assistant's routines post only in its own chat.
+Every assistant lists and reaches only its own roster
+inside Hermes, so another member's personal assistant never appears in its instructions or
+receives its messages. See [main assistant](docs/HouseholdExperience.md#main-assistant).
+<!-- Main assistant: end -->
+
 Web Settings > Notifications shows whether this account has notifications enabled
 on the current device. Turn the browser switch on or off there. The iOS app asks the
 same question in its own card after household sign-in when the server supports Apple
@@ -54,11 +67,34 @@ Reading a chat on one device stops its pending notifications to the others and
 removes its delivered ones from your iPhone and iPad. A browser tab counts while
 it is focused and has had input in the last five minutes.
 
+<!-- BEGIN device activity -->
+Notifications go to the device you are using. While a browser window is focused
+and touched in the last five minutes, or the iOS app is open and touched in the
+last five minutes, only those devices get the alert; your other iPhones and iPads
+get the new badge count silently, and other browsers update theirs when you next
+open the app. With no device in use, or none of those able to receive it, every
+device gets it as before. Security alerts always reach every device. See
+[Device activity](docs/native-api.md#device-activity).
+<!-- END device activity -->
+
 The browser tab title, favicon and installed app, and the iPhone and iPad app icon,
 show how many assistants have unread messages or a decision waiting for you. A web
 approval notification offers **Review** and **Decline** where the browser supports
 notification buttons, as the iOS notification does. Decline works without opening
 the app and can only decline that one request.
+
+An approval card in a chat offers the choices Hermes allows for that request: Allow
+once, Allow for this conversation, Decline and, under More choices, Always allow.
+Always allow first says which kind of command Hermes will run for that assistant from
+now on, in every conversation. A command Hermes's guardian doubted offers only Allow
+once and Decline, and an older Hermes keeps Approve and Decline. Notifications never
+offer more than Review and Decline. After Decline, the card reads "Declined. The
+assistant stopped that step." and the message box asks what to do instead. Each
+assistant's Access settings list its always-allowed commands with Remove, and an
+integration administrator can turn on Hermes's auto-review of routine commands.
+A question's recommended answer is tagged and, for a single choice, already chosen.
+A message sent while the assistant works says "Added to the current task" once Hermes
+adds it to that task.
 
 ## Run locally
 
@@ -306,6 +342,10 @@ without touching your draft. When an assistant connected to T3 Code starts a
 thread, the chat shows a card with **Open in T3 Code**. These work on web and
 iOS. See [email drafts and forms](docs/HouseholdExperience.md#email-drafts-and-forms)
 and [T3 Code threads](docs/HouseholdExperience.md#t3-code-threads).
+<!-- BEGIN draft revisions -->
+When an assistant revises an email draft from earlier in the chat, the new draft
+marks the words it added and removed, with **Hide changes** to read it clean.
+<!-- END draft revisions -->
 
 **Routines** includes morning brief, meal plan and VPS health recipes, schedule
 previews in the actual Hermes timezone, and **Try once** with durable run
@@ -471,6 +511,11 @@ Open Artifacts from the assistant's details (tap its name in the conversation he
 outputs and shared attachments. Search filenames, filter by type, and preview
 images, text, or supported media. PDFs and other files can be opened or downloaded.
 External file sources open only when you choose their link.
+<!-- BEGIN reply files -->
+A reply whose turn produced files it does not already show as attachments lists
+them as chips under it, up to four and then **+N more**. A chip opens Artifacts on
+that file; **+N more** opens the whole list. Files you shared yourself are not chips.
+<!-- END reply files -->
 
 ## Validate
 

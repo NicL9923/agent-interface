@@ -149,3 +149,10 @@
 .automation-diff-line { display: block; min-height: 1.6em; white-space: pre-wrap; }
 .settings-confirmation.learning-policy-confirmation .actions { flex-direction: column; align-items: stretch; }
 .settings-confirmation.learning-policy-confirmation .actions > button { flex: none; width: 100%; min-height: 44px; }
+
+/* --- Always-allowed commands (Workstream B) --- */
+.approval-allowlist { display: grid; gap: 8px; margin: 8px 0; padding: 0; list-style: none; }
+.approval-allowlist li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.approval-allowlist li span { min-width: 0; overflow-wrap: anywhere; font-family: var(--font-mono); font-size: 0.875rem; }
+.approval-allowlist li button { flex: none; min-height: 40px; }
+/* --- End always-allowed commands --- */

@@ -255,6 +255,7 @@ approvals:
                 subprocess.run([str(python), str(REPO / "scripts/spike/advanced_routine_probe.py")], cwd=REPO, env=env, check=True)
             subprocess.run([str(python), str(REPO / "scripts/spike/experience_probe.py")], cwd=REPO, env=env, check=True)
             subprocess.run([str(python), str(REPO / "scripts/spike/automation_probe.py")], cwd=REPO, env=env, check=True)
+            subprocess.run([str(python), str(REPO / "scripts/spike/approval_scope_probe.py")], cwd=REPO, env=env, check=True)
             subprocess.run([str(python), str(REPO / "scripts/spike/integrations_probe.py")], cwd=REPO, env=env, check=True)
             subprocess.run([str(python), str(REPO / "scripts/spike/service_probe.py")], cwd=REPO, env=env, check=True)
             run_computer_probes(python, env)

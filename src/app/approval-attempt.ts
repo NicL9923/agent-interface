@@ -1,6 +1,9 @@
+import type { ApprovalScope } from "../shared/types";
 import { approvalDecisionKey } from "./storage";
 
-export type ApprovalAttempt = { decision: "approved" | "denied"; state: "unconfirmed" | "sent" | "closed" };
+/** `scope` is how far an approval reaches; absent means one command, as every earlier attempt was. */
+export type ApprovalAttempt = { decision: "approved" | "denied"; scope?: ApprovalScope; state: "unconfirmed" | "sent" | "closed" };
+const scopes: readonly (ApprovalScope | undefined)[] = [undefined, "once", "session", "always"];
 // Fallback when browser storage is unavailable. Neither navigation nor a failed read
 // proves an earlier decision did not reach Hermes.
 const memory = new Map<string, ApprovalAttempt>();
@@ -9,7 +12,8 @@ export function approvalAttempt(user: string, bot: string, approval: string) {
   function read(): ApprovalAttempt | undefined {
     try {
       const value = JSON.parse(sessionStorage.getItem(key) || "null");
-      if (value && ["approved", "denied"].includes(value.decision) && ["unconfirmed", "sent", "closed"].includes(value.state)) return value;
+      if (value && ["approved", "denied"].includes(value.decision) && ["unconfirmed", "sent", "closed"].includes(value.state)
+        && scopes.includes(value.scope) && !(value.decision === "denied" && value.scope !== undefined)) return value;
     } catch { return memory.get(key); }
   }
   function save(value: ApprovalAttempt | undefined) {
@@ -20,3 +24,6 @@ export function approvalAttempt(user: string, bot: string, approval: string) {
   }
   return { read, save };
 }
+/** The same decision: a retry may only resend exactly what may already have reached Hermes. */
+export const sameAttempt = (attempt: ApprovalAttempt, decision: ApprovalAttempt["decision"], scope?: ApprovalScope) =>
+  attempt.decision === decision && (attempt.scope ?? "once") === (decision === "denied" ? "once" : scope ?? "once");

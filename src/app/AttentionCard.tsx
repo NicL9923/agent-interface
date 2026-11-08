@@ -5,6 +5,7 @@ import { request as apiRequest } from "../client-api";
 import { Icon } from "../components/Icon";
 import { reactAvatar } from "../components/avatar-attention";
 import { attentionAnchor, joinAnswer, nextUnanswered, optionForKey, toggleOption } from "./transcript-logic";
+import { optionLabel } from "../shared/recommended";
 
 type Question = NonNullable<AttentionRequest["questions"]>[number];
 /** One question's answer as the card holds it: chosen options, and the person's own words when they chose to write them. */
@@ -18,7 +19,11 @@ export function answerText(question: Question, draft: Draft = empty) {
 }
 
 export function AttentionCard({ request, botId, report, disconnected = false }: { request: AttentionRequest; botId: string; report(message: string): void; disconnected?: boolean }) {
-  const [drafts, setDrafts] = useState<Record<string, Draft>>({});
+  // Hermes's recommended option starts chosen for a single-choice question, so one tap or Enter sends it.
+  // Several picks are the person's to make, so a multi-select question starts empty.
+  const [drafts, setDrafts] = useState<Record<string, Draft>>(() => Object.fromEntries((request.questions ?? [])
+    .flatMap(question => !question.multiple && question.recommended !== undefined && question.options?.[question.recommended] !== undefined
+      ? [[question.id, { ...empty, selected: [question.options[question.recommended]] }]] : [])));
   const [busy, setBusy] = useState(false);
   const [settled, setSettled] = useState(false);
   const guidance = useId();
@@ -77,7 +82,7 @@ export function AttentionCard({ request, botId, report, disconnected = false }: 
           if (disconnected || busy || settled) return;
           setBusy(true);
           report("");
-          void apiRequest("POST /bots/:id/requests/:approvalId", { params: { id: botId, approvalId: request.id }, body: { answers } })
+          void apiRequest("POST /bots/:id/requests/:approvalId", { params: { id: botId, approvalId: request.id }, body: { answers, answerFormat: "json" } })
             .then(() => { setSettled(true); reactAvatar(botId, "cheer"); })
             .catch((error) => report(error.message))
             .finally(() => setBusy(false));
@@ -106,7 +111,8 @@ export function AttentionCard({ request, botId, report, disconnected = false }: 
                       choose(question, index, option, moveOn);
                     }} />
                     <span className="option-mark" aria-hidden="true">{checked && <Icon name="check" size={14} />}</span>
-                    <span className="option-label">{option ?? "Write my own answer"}</span>
+                    <span className="option-label">{option === null ? "Write my own answer" : optionLabel(question, position)}</span>
+                    {option !== null && position === question.recommended && <span className="option-tag">Recommended</span>}
                     {position < 9 && <kbd className="option-key" aria-hidden="true">{position + 1}</kbd>}
                   </label>;
                 })}

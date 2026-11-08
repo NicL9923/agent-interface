@@ -19,7 +19,7 @@ names = ["app-probe.json", "hermes-environment.json", "hermes-extension-probe.js
 environment = json.loads((args.source / "hermes-environment.json").read_text())
 service_name = "hermes-service-probe-upgrade-route-" + environment["revision"][:3] + ".json"
 names.append(service_name)
-for optional in ("hermes-managed-python-probe.json", "qualification-probe.json", "hermes-computer-probe.json", "hermes-experience-probe.json", "hermes-automation-probe.json", "hermes-advanced-routine-probe.json"):
+for optional in ("hermes-managed-python-probe.json", "qualification-probe.json", "hermes-computer-probe.json", "hermes-experience-probe.json", "hermes-automation-probe.json", "hermes-advanced-routine-probe.json", "hermes-approval-scope-probe.json"):
     if (args.source / optional).is_file():
         names.append(optional)
 receipts = {name: json.loads((args.source / name).read_text()) for name in names}

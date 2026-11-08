@@ -1,0 +1,60 @@
+{
+  "revision": "ed1afb082eb3e46cf2edae9d8f68fb67b09ee4df",
+  "provider": "deterministic wire fixture; real Hermes approval and clarify execution",
+  "checks": {
+    "offered_choices": {
+      "choices": [
+        "once",
+        "session",
+        "always",
+        "deny"
+      ],
+      "pattern_keys": [
+        "recursive delete"
+      ],
+      "command_shown": true
+    },
+    "session_choice": {
+      "granted_for_session": true,
+      "saved_to_config": false
+    },
+    "session_grant_withdrawn": true,
+    "always_choice": {
+      "saved_to_profile_command_allowlist": true,
+      "listed_by_add_on": true
+    },
+    "always_removed": {
+      "config_entry_removed": true,
+      "live_session_grant_removed": true,
+      "asks_again_at_once": true
+    },
+    "deny_choice": {
+      "command_blocked": true
+    },
+    "add_on_refusals": {
+      "blank_pattern": true,
+      "approvals_off": true
+    },
+    "smart_mode": {
+      "guardian_approved_without_asking": true,
+      "guardian_denied_offers": [
+        "once",
+        "deny"
+      ],
+      "unoffered_always_not_persisted": true,
+      "unoffered_always_still_ran_once": true
+    },
+    "clarify_shapes": {
+      "multi_select_on_wire": true,
+      "first_of_several_marked_recommended": true,
+      "json_array_answer": true,
+      "recommended_suffix_stripped": true
+    },
+    "steering_decision": {
+      "admission_response": true,
+      "receipt_lookup": true,
+      "history_row": true,
+      "idle_send_unmarked": true
+    }
+  }
+}
