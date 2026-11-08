@@ -124,7 +124,7 @@ class DelegationTest(unittest.TestCase):
 
     def test_bad_policies_are_refused_and_the_last_good_one_kept(self):
         for bad in (None, [], {"bad id!": {"member": "x", "personal": [], "shared": []}},
-                    {"mom-main": {"member": "x", "personal": [{"id": "../etc"}], "shared": []}},
+                    {"mom-main": {"member": "x", "personal": [{"id": "../etc", "name": "Etc"}], "shared": []}},
                     {"mom-main": {"member": "x", "personal": "all", "shared": []}},
                     {"mom-main": {"member": 3, "personal": [], "shared": []}}):
             with self.assertRaises(delegation.PolicyError):

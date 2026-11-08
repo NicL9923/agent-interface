@@ -66,7 +66,7 @@ export function mainBot(preferences: Pick<Preferences, "mainBotId">, bots: Bot[]
  * The assistant an agent message names, for "Open <name>'s chat": the target of a handoff this
  * assistant sent, or the sender of one it received. Only assistants on this person's home can be
  * named, so another member's personal assistant never resolves; nor does the chat already open.
- * A message to several assistants at once names none.
+ * A message to several assistants at once, "ranch, notes", matches no single name, so it names none.
  */
 export function exchangePartner(message: Pick<Message, "toolCall" | "role">, incomingName: string | undefined, bots: Bot[], currentBotId: string): Bot | undefined {
   let name = incomingName;
@@ -75,7 +75,7 @@ export function exchangePartner(message: Pick<Message, "toolCall" | "role">, inc
     catch { return undefined; }
   }
   const wanted = name?.trim().replace(/^@/, "").toLowerCase();
-  if (!wanted || wanted.includes(",")) return undefined;
+  if (!wanted) return undefined;
   const bot = bots.find(row => row.id.toLowerCase() === wanted) ?? bots.find(row => row.name.trim().toLowerCase() === wanted);
   return bot && bot.id !== currentBotId ? bot : undefined;
 }

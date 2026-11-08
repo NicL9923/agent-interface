@@ -304,6 +304,12 @@ describe("a check-in that finds nothing", () => {
     created.store.recordEvents([event({ routineId: "brief", body: "[SILENT]" })], "3");
     expect(created.store.outbox()).toHaveLength(2);
   });
+  it("is not listed as upcoming work in Today, unlike other routines", async () => {
+    jobs = jobs.map(job => ({ ...job, nextRunAt: "2026-11-08T18:00:00Z" }));
+    jobs.push({ id: "brief", botId: "mom-main", name: "Brief", prompt: "Morning brief", schedule: "0 7 * * *", enabled: true, nextRunAt: "2026-11-09T07:00:00Z" });
+    const today = (await created.app.inject({ url: "/api/today", headers: mom })).json();
+    expect(today.upcoming.map((row: Routine) => row.id)).toEqual(["brief"]);
+  });
   it("shows only a failed check-in as a run card in the chat", async () => {
     const id = momJobs()[0].id;
     results[id] = [{ id: "r1", status: "succeeded", startedAt: "2026-11-07T10:00:00Z" }, { id: "r2", status: "failed", error: "Provider down", startedAt: "2026-11-07T12:00:00Z" },

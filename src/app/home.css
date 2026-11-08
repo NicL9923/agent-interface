@@ -735,3 +735,5 @@ button.settings-row:hover:enabled { background: color-mix(in srgb, var(--accent-
 .main-picker-row .row-text { flex: 1; min-width: 0; }
 .main-picker-row small { display: block; color: var(--muted); line-height: 1.4; }
 /* --- End main assistant --- */
+/* Main assistant picker's second list. */
+.main-picker .settings-heading { margin: 18px 0 8px; font-size: 0.8125rem; font-weight: 600; letter-spacing: .04em; color: var(--muted); }

@@ -132,7 +132,7 @@
               "schedule": "every 120m", "enabled": true, "recipientIds": ["native-test"], "managed": "check-in"]]
             FixtureProtocol.messages = [
               ["id": "ask", "role": "user", "text": "Can the ranch hand fix the north gate Tuesday?", "sender": ["id": "native-test", "name": "Local test member"], "createdAt": "2026-11-08T14:00:00Z"],
-              ["id": "handoff", "role": "assistant", "text": "", "toolName": "message_agent", "origin": ["kind": "agent", "visibility": "conversation"], "createdAt": "2026-11-08T14:00:05Z",
+              ["id": "handoff", "role": "assistant", "text": "", "toolName": "message_agent", "createdAt": "2026-11-08T14:00:05Z",
                 "toolCall": ["id": "dm-1", "name": "message_agent", "status": "completed", "arguments": "{\"target\":\"ranch\",\"message\":\"Can you fix the north gate on Tuesday morning?\"}", "result": "Ranch hand: Tuesday at 9 works."]],
               ["id": "done", "role": "assistant", "text": "Ranch hand will fix the north gate Tuesday at 9.", "createdAt": "2026-11-08T14:01:00Z"],
               ["id": "check", "role": "assistant", "text": "Your 3 PM dentist moved to 4 PM, which overlaps soccer pickup. Want me to ask Ranch hand to cover pickup?",

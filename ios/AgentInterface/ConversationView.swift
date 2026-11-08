@@ -849,7 +849,7 @@ struct AgentExchangeView: View {
     VStack(alignment: .leading, spacing: 8) {
       HStack(spacing: 8) {
         Text("↔").accessibilityHidden(true)
-        Text(handoff.incoming.map { "\($0.name) → \(recipient)" } ?? "\(recipient) → \(handoff.target)").bold()
+        Text(handoff.incoming.map { "\($0.name) → \(recipient)" } ?? "\(recipient) → \(partner?.name ?? handoff.target)").bold()
         Text("Agent message").foregroundStyle(.secondary)
       }.font(.caption)
       if let incoming = handoff.incoming {

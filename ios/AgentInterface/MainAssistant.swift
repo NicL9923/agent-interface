@@ -33,7 +33,7 @@ enum MainAssistant {
     guard let name = incomingName ?? target else { return nil }
     var wanted = name.trimmingCharacters(in: .whitespaces).lowercased()
     if wanted.hasPrefix("@") { wanted.removeFirst() }
-    guard !wanted.isEmpty, !wanted.contains(",") else { return nil }
+    guard !wanted.isEmpty else { return nil }
     let bot = bots.first { $0.id.lowercased() == wanted } ?? bots.first { $0.name.trimmingCharacters(in: .whitespaces).lowercased() == wanted }
     return bot?.id == currentBotId ? nil : bot
   }
