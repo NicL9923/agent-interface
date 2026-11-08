@@ -24,6 +24,7 @@ struct PreferencesView: View {
   @State private var signOutConfirm = false
   @State private var changeServerConfirm = false
   @State private var quietError: String?
+  @State private var macs: MacDeviceList?
   #if DEBUG
     @State private var captureComputerOpen = false
     @State private var captureUpgradeOpen = false
@@ -56,10 +57,17 @@ struct PreferencesView: View {
             settingsRow("Computer", icon: "desktopcomputer", detail: store.computerStatus?.detail ?? "Shared desktop and terminal")
           }.disabled(store.computerStatus.map { !$0.available && $0.terminal?.available != true } ?? false)
             .accessibilityIdentifier("sharedComputer")
+          // Hidden while the server has no Mac link key, and on servers from before Mac links.
+          if let macs, macs.available {
+            NavigationLink { MacsView(list: $macs) } label: {
+              settingsRow("Macs", icon: "laptopcomputer", detail: macs.summary)
+            }.accessibilityIdentifier("macs")
+          }
           NavigationLink { IntegrationsView() } label: {
             settingsRow("Integrations", icon: "powerplug", detail: "Accounts your assistants can use")
           }.accessibilityIdentifier("Integrations")
         }.task { await watchComputer() }
+          .task(id: store.scope) { if let api = store.api { macs = try? await MacDeviceList.load(api) } }
         if let error = store.error {
           Section {
             ErrorBanner(message: error, dismiss: { store.dismissError() })

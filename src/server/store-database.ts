@@ -117,6 +117,9 @@ const additions = `
   -- job is gone; the row stays so a run that settles later is still known as a check-in.
   CREATE TABLE IF NOT EXISTS check_in_jobs(bot_id TEXT NOT NULL,job_id TEXT NOT NULL,user_id TEXT NOT NULL REFERENCES users(id),created_at INTEGER NOT NULL,removed_at INTEGER,PRIMARY KEY(bot_id,job_id));
   CREATE TABLE IF NOT EXISTS draft_revisions(user_id TEXT NOT NULL REFERENCES users(id),bot_id TEXT NOT NULL,revision INTEGER NOT NULL,reason TEXT NOT NULL,sent_revision INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(user_id,bot_id));
+  -- Macs linked with WildBots for Mac. The credential is stored as its SHA-256 only. A revoked Mac
+  -- keeps its row with revoked_at set, so its ID and credential can never be used again.
+  CREATE TABLE IF NOT EXISTS mac_devices(id TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),name TEXT NOT NULL,model TEXT,os_version TEXT,app_version TEXT,credential_hash TEXT NOT NULL,created_at INTEGER NOT NULL,last_seen_at INTEGER,revoked_at INTEGER);
 `;
 export const schemaVersion = migrations.length;
 function addColumn(db: DatabaseSync, table: string, column: string, definition: string) {

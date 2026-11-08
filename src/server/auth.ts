@@ -36,6 +36,9 @@ export const publicApiRoutes = [
   "/api/computer/desktop/ws",
   "/api/computer/terminal/ws",
 ];
+// Routes that check their own credential: a linked Mac's device credential and the Hermes add-on's
+// Mac link key. The session hook leaves their Authorization header alone and never signs them in.
+export const selfAuthenticatedRoutes = ["/api/mac/link", "/api/agent-link/mac"];
 export async function installAuth(
   app: FastifyInstance,
   store: Store,
@@ -60,6 +63,7 @@ export async function installAuth(
     if (!isApiRequest(req)) return;
     const route = routePattern(req);
     reply.header("Cache-Control", "no-store");
+    if (selfAuthenticatedRoutes.includes(route)) return;
     const authorization = req.headers.authorization;
     if (authorization !== undefined) {
       // Browser-origin requests always use the cookie/CSRF path; never let a bearer bypass it.

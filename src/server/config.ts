@@ -36,6 +36,8 @@ export interface Config {
   };
   /** Optional LAN and tailnet listeners the iOS app prefers when it can reach them. */
   directRoutes?: DirectRoutesConfig;
+  /** Shared with the Hermes add-on, which uses it to ask linked Macs to act. Unset turns Mac links off. */
+  macLinkKey?: string;
   /** The newest distributed iOS build and where to get it, for the app's update banner. */
   nativeApp?: { latestBuild: number; updateUrl: string };
   apns?: {
@@ -80,6 +82,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     hermesQualificationFile: env.HERMES_QUALIFICATION_FILE || undefined,
     logLevel: (env.LOG_LEVEL || undefined) as LogLevel | undefined,
     backupDirectory: env.APP_BACKUP_DIR || undefined,
+    macLinkKey: env.MAC_LINK_KEY || undefined,
   };
   if (config.logLevel && !logLevels.includes(config.logLevel))
     throw new Error(`LOG_LEVEL must be one of ${logLevels.join(", ")}`);
@@ -105,6 +108,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (!["static", "service"].includes(config.hermesAuthMode)) throw new Error("HERMES_AUTH_MODE must be static or service");
   if (config.hermesAuthMode === "service" && config.hermesToken && !/^[A-Za-z0-9_-]{43}$/.test(config.hermesToken))
     throw new Error("HERMES_TOKEN must be the private 32-byte base64url service key in service mode");
+  if (config.macLinkKey !== undefined && (!/^[A-Za-z0-9_-]{43}$/.test(config.macLinkKey) || config.macLinkKey === config.hermesToken))
+    throw new Error("MAC_LINK_KEY must be its own generated 32-byte base64url key, different from HERMES_TOKEN");
   config.production =
     config.production || !loopback(config.host) || !loopback(origin.hostname);
   if (config.hermesUpgrade && config.production && config.hermesUpgrade.adminEmails.some(email => !config.householdEmails.includes(email)))

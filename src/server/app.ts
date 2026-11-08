@@ -27,6 +27,7 @@ import { installAccountUsageRoutes } from "./account-usage.js";
 import { installExperienceRoutes } from "./experience.js";
 import { installAutomationRoutes } from "./automation.js";
 import { installComputerRoutes } from "./computer.js";
+import { installMacLink, MAX_FRAME } from "./mac-link.js";
 import { installTerminalRequestRoutes } from "./terminal-requests.js";
 import { installCollaborationRoutes } from "./collaboration.js";
 import { installRoutineRoutes } from "./routine-routes.js";
@@ -90,7 +91,9 @@ export async function createApp(
   installInlineUi(app);
   installEtags(app);
   await app.register(cookie);
-  await app.register(websocket, {options: {maxPayload: 256 * 1024}});
+  // Large enough for a linked Mac's file read or screenshot. Every other socket refuses frames over
+  // 256 KiB itself; see socketFrameLimit.
+  await app.register(websocket, {options: {maxPayload: MAX_FRAME}});
   await app.register(multipart, {
     limits: { fileSize: MAX_UPLOAD_BYTES, files: 1 },
   });
@@ -121,6 +124,7 @@ export async function createApp(
   });
   await installComputerRoutes(app, config, store, runtime, () => upgrades.maintenance());
   await installTerminalRequestRoutes(app, config, store, runtime);
+  installMacLink(app, config, store);
   await installExperienceRoutes(app, runtime, store, roster);
   await installAutomationRoutes(app, runtime, store, () => upgrades.maintenance(), canManageIntegrations);
   await installDiscoveryRoutes(app, runtime, store, roster);

@@ -19,6 +19,14 @@ The shared desktop/browser and the administrators' VPS terminal are documented i
 [Shared computer](SharedComputer.md). Their supervisor is independent of chat
 sessions; its browser data stays in the private shared resource directory.
 
+Mac links are off until `shared/app.env` has `MAC_LINK_KEY` and the environment both
+Hermes units load, `shared/computer.env`, has the same value as
+`HERMES_AGENT_INTERFACE_MAC_LINK_KEY` plus `HERMES_AGENT_INTERFACE_APP_URL` set to the
+app's loopback address. The key is its own 32-byte base64url value, never the Hermes
+service key. Caddy forwards every request with `X-Forwarded-For`, which the add-on's
+`/api/agent-link/mac` route refuses, so only a process on this host can call it. See
+[WildBots for Mac](MacLink.md#server-setup).
+
 The app runs its own Node binary, kept under the application directory's `runtime/`.
 `agent-interface.service` names it in `ExecStart` and `PATH`. Release builds, qualification and
 the guarded deploy use the same binary, recorded as `node` in each release's deploy configuration.

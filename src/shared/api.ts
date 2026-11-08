@@ -4,6 +4,7 @@ import type { AccountUsageOverview, ResetResult } from "./account-usage.js";
 import type { ProfileMemory, RoutinePreview, RoutineRunReceipt, TodayOverview } from "./experience.js";
 import type { RoutineOutput, RoutineResult } from "./collaboration.js";
 import type { RoutineRunPage } from "./routine-runs.js";
+import type { LinkedMacs } from "./mac.js";
 import type { ReplyCardState } from "./reply-cards.js";
 import type { Routine } from "./types.js";
 import type { ApprovalScope, ApprovalSettings } from "./types.js";
@@ -266,6 +267,8 @@ export interface ApiRoutes {
   "GET /native/push/config": { response: { available: boolean; environment?: "sandbox" | "production" } };
   "PUT /native/push/device": { body: { deviceId: string; token: string }; response: Ok };
   "DELETE /native/push/device": { body: { deviceId: string }; response: Ok };
+  "GET /mac/devices": { response: LinkedMacs };
+  "DELETE /mac/devices/:id": { response: Ok };
   "GET /native/live-activity": { query: { deviceId?: string; local?: "1" }; response: { available: boolean; state: LiveState } };
   "PUT /native/live-activity": { body: { deviceId: string; token: string; botIds?: string[]; scope?: string }; response: Ok };
   "DELETE /native/live-activity": { body: { deviceId: string; token: string }; response: Ok };

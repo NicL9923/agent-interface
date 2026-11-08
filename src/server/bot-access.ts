@@ -222,6 +222,15 @@ export const assistantRoutes: Readonly<Record<string, BotScope>> = {
   "POST /api/computer/terminal": "none",
   "POST /api/computer/terminal/end": "none",
   "GET /api/computer/terminal/ws": "none",
+  // A person's own linked Macs; no assistant is named.
+  "GET /api/mac/devices": "none",
+  "POST /api/mac/devices": "none",
+  "DELETE /api/mac/devices/:id": "none",
+  // A Mac's device credential, and the Hermes add-on's link key, which names an assistant but no
+  // person: the handler serves only the assistant owner's own Macs.
+  "GET /api/mac/link": "none",
+  "DELETE /api/mac/link": "none",
+  "POST /api/agent-link/mac": "none",
   // Busy assistants block an update; another member's private one is not named.
   "GET /api/hermes/upgrade": "list",
   "POST /api/hermes/upgrade/check": "list",

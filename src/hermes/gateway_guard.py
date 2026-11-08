@@ -140,6 +140,8 @@ def bootstrap():
     integrations.register_tool_catalog()
     # Messaging, scheduled and API runs here have no masked prompt, so the tool refuses clearly.
     sibling_module("vault").register_tool()
+    # Scheduled and messaging runs reach the user's linked Mac only where its grants allow unattended use.
+    sibling_module("mac").register()
     # The gateway delivers routine output. Keep household Bot Chat deliveries with the dashboard add-on.
     delivery = sibling_module("bot_delivery")
     import tools.bot_live_delivery as mailbox
