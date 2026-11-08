@@ -132,7 +132,9 @@ booted_here=$(xcrun simctl list devices booted --json | python3 -c 'import json,
 status=0
 xcodebuild test-without-building -xctestrun "$patched" -destination "$destination" \
   -resultBundlePath "$result_path" ${test_options[@]+"${test_options[@]}"} || status=$?
-cleanup
+cleanup_status=0
+cleanup || cleanup_status=$?
+if [[ $status == 0 && $cleanup_status != 0 ]]; then status=$cleanup_status; fi
 inputs_after=$(python3 "$state_tool" key "$operation" "$simulator_id" ${request_options[@]+"${request_options[@]}"})
 if [[ $inputs_before != "$inputs_after" ]]; then
   echo "iOS inputs changed while validation ran; these results do not validate one source state." >&2
@@ -156,6 +158,7 @@ summary=".private/ios-${run_id}.txt"
   echo "build options: $(shell_words "${build_options[@]}")"
   echo "test options: $(shell_words ${test_options[@]+"${test_options[@]}"})"
   echo "exit status: $status"
+  echo "cleanup exit status: $cleanup_status"
   echo "result bundle: $result_path"
   xcrun xcresulttool get test-results summary --path "$result_path" --compact 2>/dev/null || echo 'No test summary in the result bundle.'
 } > "$summary"
