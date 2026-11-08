@@ -211,3 +211,9 @@ case for the `run_now` and `trigger` aliases. They cover the aliases, update-onl
 unknown actions, the real resolver, ID forwarding, ambiguity, `last_dispatch` (both the fixture
 and the real-scheduler test), the mid-run claim, outward on a missing origin, and the sharing
 check's chat deliveries, paused routines, incoming deliveries and the personal-sender rule.
+
+Checks at `9438f9c`: `npm test` 152 files and 2,145 tests passed; typecheck, lint, build, Ruff
+and the e2e smoke suite (2) passed; `npm run test:py` 38 files passed. With `HERMES_SOURCE` at
+the `ed1afb0` clone, `tests/hermes_delegation_test.py` ran 23 tests, all passing, including the
+real scheduler run, the real resolver, profile list, peers config and roster section. No iOS
+source changed this round, so iOS was not rerun.
