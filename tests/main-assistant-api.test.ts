@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/server/app.js";
 import { loadConfig, type Config } from "../src/server/config.js";
-import { checkInMarker, MainAssistants, ReconcileError, signedCheckInMember } from "../src/server/main-assistant.js";
+import { checkInMarker, checkInPrompt, MainAssistants, ReconcileError, signedCheckInMember } from "../src/server/main-assistant.js";
 import type { Bot, DelegationPolicies, Routine, Runtime, RuntimeEvent } from "../src/shared/types.js";
 import { fakeRuntime, signIn } from "./helpers/server.js";
 import { botFixture, capabilitiesFixture } from "./helpers/runtime-fixtures.js";
@@ -29,6 +29,7 @@ let held: Record<string, { id: string; name: string }[]>;
 let enforcing: number;
 let runtime: Runtime;
 let holdRoutines: Promise<void> | undefined;
+let holdBots: Promise<void> | undefined;
 let holdPolicy: Promise<void> | undefined;
 let applied: DelegationPolicies[];
 let discovered: RuntimeEvent[];
@@ -39,7 +40,7 @@ let results: Record<string, { id: string; status: RoutineRunStatus; startedAt: s
 
 beforeEach(async () => {
   held = {}; enforcing = 2;
-  jobs = []; calls = []; pushed = []; fail = {}; discovered = []; holdRoutines = undefined; holdPolicy = undefined; applied = []; routinesSupported = true; nextId = 1; results = {};
+  jobs = []; calls = []; pushed = []; fail = {}; discovered = []; holdRoutines = undefined; holdBots = undefined; holdPolicy = undefined; applied = []; routinesSupported = true; nextId = 1; results = {};
   bots = [
     botFixture({ id: "mom-main", name: "Sage", description: "Mom's chief of staff", shared: false, ownerId: "mom" }),
     botFixture({ id: "mom-notes", name: "Notes", shared: false, ownerId: "mom" }),
@@ -50,7 +51,8 @@ beforeEach(async () => {
   runtime = fakeRuntime({
     status: async () => fail.status ? { connected: false } : { connected: true },
     capabilities: async () => capabilitiesFixture({ routines: { supported: routinesSupported }, botConfiguration: { supported: true }, durableEvents: { supported: true } }),
-    listBots: async () => structuredClone(bots),
+    // Holds one roster read back, as a slow Hermes would.
+    listBots: async () => { if (holdBots) { const wait = holdBots; holdBots = undefined; await wait; } return structuredClone(bots); },
     routines: async () => {
       if (fail.routines) throw new Error("Hermes routines unavailable.");
       // Holds one read back, as a slow Hermes would, then answers with the jobs as they are by then.
@@ -105,6 +107,9 @@ beforeEach(async () => {
   dad = signIn(created.store, origin, "dad", { email: "dad@example.test" });
   created.store.user({ id: "mom", name: "Mom", email: "mom@example.test" });
   for (const bot of bots) if (bot.ownerId || bot.shared === false) created.store.savePresentation(bot.id, { shared: bot.shared, ownerId: bot.ownerId });
+  // As the server's start does: until a first inventory, every personal assistant is held to a main assistant's limits.
+  await created.mains.reconcile();
+  calls = []; pushed = []; applied = [];
 });
 afterEach(async () => { await created?.app.close(); });
 
@@ -806,5 +811,84 @@ describe("moving into and out of being main", () => {
       expect(prefs().mainBotId).toBe("mom-notes");
       expect([lastMain("mom-main"), lastMain("mom-notes")]).toEqual([true, true]);
     });
+  });
+});
+
+describe("protection while check-ins are unknown, and requests that race", () => {
+  const signed = (botId: string, id = "orphan"): Routine => ({ id, botId, name: "Check-ins", prompt: checkInPrompt({ marker: checkInMarker(created.store, botId, "mom"), member: "Mom", timezone: "America/Chicago", everyHours: 2 }),
+    schedule: "every 120m", enabled: true, delivery: { deliver: `bot-chat:${botId}` }, contextFrom: ["self"], nativeOverrides: [] });
+  const lastMain = (botId: string) => applied.at(-1)?.[botId]?.main;
+  it("holds every personal assistant to a main assistant's limits after a restart until a routine inventory succeeds", async () => {
+    // A signed check-in nothing here tracks, as after a create whose answer was lost, on an assistant that isn't main.
+    jobs.push(signed("mom-notes"));
+    expect(created.store.checkIns.current()).toEqual([]);
+    const restarted = new MainAssistants(runtime, created.store, config);
+    // Making another assistant main first sends rosters before any inventory: nobody's protection comes off.
+    await restarted.activate("mom-main", async () => {}, () => {});
+    expect([lastMain("mom-notes"), lastMain("dad-diary")]).toEqual([true, true]);
+    // An inventory that fails changes nothing.
+    fail.routines = true;
+    await expect(restarted.reconcile()).rejects.toThrow();
+    await restarted.activate("mom-main", async () => {}, () => {});
+    expect(lastMain("mom-notes")).toBe(true);
+    // The first one that succeeds finds the orphan; it stays protected until it is confirmed gone.
+    fail.routines = false; fail.delete = true; fail.pause = true;
+    await restarted.reconcile().catch(() => {});
+    expect([lastMain("mom-notes"), lastMain("dad-diary")]).toEqual([true, false]);
+    fail.delete = false; fail.pause = false;
+    await restarted.reconcile();
+    expect(jobs).toEqual([]);
+    expect(lastMain("mom-notes")).toBe(false);
+  });
+  it("takes protection off on a Hermes without routines, which can hold no check-ins", async () => {
+    routinesSupported = false;
+    const restarted = new MainAssistants(runtime, created.store, config);
+    await restarted.reconcile();
+    expect(lastMain("mom-notes")).toBe(false);
+  });
+  it("keeps a check-in's assistant protected when main is cleared while Hermes can't list routines, whether it was just made or kept", async () => {
+    // Just made: the last inventory that succeeded is the one that created it.
+    await main("mom-main");
+    await checkIns();
+    fail.routines = true;
+    expect((await main(null)).json().code).toBe("main_clear_pending");
+    expect(lastMain("mom-main")).toBe(true);
+    // Kept: a later inventory found it and left it in place.
+    fail.routines = false;
+    await created.mains.reconcile();
+    await main("mom-main");
+    await checkIns();
+    await created.mains.reconcile();
+    fail.routines = true;
+    expect((await main(null)).json().code).toBe("main_clear_pending");
+    expect(lastMain("mom-main")).toBe(true);
+  });
+  it("decides a reaffirmation in turn, so a clear that came after it can't let it skip the checks", async () => {
+    await main("mom-main");
+    let release!: () => void;
+    holdBots = new Promise(resolve => { release = resolve; });
+    const reaffirm = main("mom-main");
+    const clear = main(null);
+    // Long enough for a clear that didn't wait its turn to finish, and a routine posting elsewhere to appear after it.
+    await new Promise(resolve => setTimeout(resolve, 100));
+    jobs.push({ id: "outward", botId: "mom-main", name: "Outward", prompt: "Report", schedule: "0 7 * * *", enabled: true, delivery: { deliver: "bot-chat:ranch" }, nativeOverrides: [] });
+    release();
+    expect((await reaffirm).statusCode).toBe(200);
+    expect((await clear).statusCode).toBe(200);
+    // The requests took effect in order: it was reaffirmed, then cleared, never main again with an outward routine.
+    expect(prefs().mainBotId).toBeUndefined();
+  });
+  it("decides a share in turn with making the assistant main, so a shared assistant is never left designated main", async () => {
+    let release!: () => void;
+    holdPolicy = new Promise(resolve => { release = resolve; });
+    const making = main("mom-main");
+    await vi.waitFor(() => expect(pushed.at(-1)?.["mom-main"]?.main).toBe(true));
+    // Sent from a screen that didn't know yet that it was becoming main, so without a yes.
+    const sharing = created.app.inject({ method: "PATCH", url: "/api/bots/mom-main", headers: mom, payload: { name: "Sage", instructions: "", model: "test", shared: true } });
+    await new Promise(resolve => setTimeout(resolve, 100));
+    release();
+    expect((await making).json().mainBotId).toBe("mom-main");
+    expect((await sharing).json().code).toBe("main_share_confirmation_required");
+    expect(created.store.presentation("mom-main")).toMatchObject({ shared: false, ownerId: "mom" });
   });
 });

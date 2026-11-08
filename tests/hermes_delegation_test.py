@@ -491,6 +491,43 @@ print("RESULT " + json.dumps(out))
 """
 
 
+SETTLED_RECEIPTS = """
+import json, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from support import load_source
+from hermes_constants import get_hermes_home
+from cron.jobs import create_job, get_job, list_jobs
+from cron.scheduler_delivery import _record_delivery_verification
+from tools import bot_live_delivery as mailbox
+delegation = load_source("src/hermes/delegation.py", "delegation_real")
+home = get_hermes_home()
+ranch = home / "profiles" / "ranch"
+ranch.mkdir(parents=True)
+def admitted(key, status):
+    owner = dict(profile_home=str(ranch.resolve()), session_id="chat", lease_id="lease", live_session_id="live")
+    with mailbox._locked(ranch) as root:
+        mailbox._write(root / (key + ".json"), dict(id=key, delivery_id=key, owner=owner, **owner, status=status, message="Digest", created_at=1))
+def queued(name, key):
+    job = create_job(prompt="Digest", schedule="every 2h", name=name, deliver="bot-chat:ranch")
+    job = get_job(job["id"])
+    job["_bot_chat_delivery_receipts"] = {"bot-chat:ranch": {"status": "queued", "delivery_id": key}}
+    _record_delivery_verification(job, [])
+    return job["id"]
+pending = lambda: sorted(row["name"] for row in delegation.pending_deliveries(home))
+out = {}
+admitted("a" * 32, "claimed"); settled = queued("Settles", "a" * 32)
+admitted("b" * 32, "claimed"); failed = queued("Fails", "b" * 32)
+admitted("c" * 32, "queued"); queued("Waits", "c" * 32)
+out["before"] = pending()
+mailbox.complete_delivery(ranch, "a" * 32, status="settled")
+mailbox.complete_delivery(ranch, "b" * 32, status="failed", error="refused")
+out["after"] = pending()
+out["markers_kept"] = sorted(job["name"] for job in list_jobs(True) if job.get("last_delivery_queued"))
+print("RESULT " + json.dumps(out))
+"""
+
+
 def run_real(script, home):
     import subprocess
     env = {**os.environ, "HERMES_HOME": str(home), "PYTHONPATH": SOURCE}
@@ -545,6 +582,40 @@ class PendingDeliveriesTest(unittest.TestCase):
         self.assertIn("no such profile", handle(1, {"profile": "gone"})["error"])
         (root / "profiles" / "ranch" / "cron" / "bot_chat_pending" / "k.json").write_text("{")
         self.assertIn("could not be read", handle(1, {"profile": "ranch"})["error"])
+
+    def test_a_queued_marker_counts_only_while_its_receipt_is_unfinished(self):
+        root = Path(tempfile.mkdtemp())
+        home = root / "profiles" / "mom-main"
+        (home / "cron" / "bot_chat_pending").mkdir(parents=True)
+        receipts = {"k-own": "queued", "k-done": "settled", "k-failed": "failed", "k-claimed": "claimed", "k-gone": None, "k-parked-done": None}
+        jobs = [{"id": f"j{index}", "name": key, "last_delivery_queued": {target: {"status": "queued", "delivery_id": key}}}
+                for index, (key, target) in enumerate((("k-own", "bot-chat:(own)"), ("k-done", "bot-chat:ranch"), ("k-failed", "bot-chat:default"),
+                                                       ("k-claimed", "bot-chat:ranch"), ("k-gone", "bot-chat:ranch"), ("k-parked-done", "bot-chat:ranch")))]
+        jobs.append({"id": "quiet", "name": "Quiet", "last_delivery_queued": None})
+        (home / "cron" / "jobs.json").write_text(json.dumps({"jobs": jobs}))
+        (home / "cron" / "bot_chat_pending" / "k-parked-done.json").write_text(json.dumps({"status": "transferred", "job": {"id": "j5"}}))
+        homes = {"k-own": home, "k-done": root / "profiles" / "ranch", "k-failed": root, "k-claimed": root / "profiles" / "ranch"}
+        read = []
+
+        def receipt(target_home, key):
+            read.append(key)
+            if key in homes:
+                self.assertEqual(target_home, homes[key], key)
+            return {"status": receipts[key]} if receipts[key] else None
+        names = sorted(row["name"] for row in delegation.pending_deliveries(home, receipt))
+        self.assertEqual(names, ["k-claimed", "k-gone", "k-own"], "settled, failed and a finished parked record don't count; an unknown one does")
+        for bad in ([{"id": "x", "last_delivery_queued": ["bot-chat:ranch"]}], [{"id": "x", "last_delivery_queued": {"bot-chat:ranch": {}}}],
+                    [{"id": "x", "last_delivery_queued": {"bot-chat:../x": {"delivery_id": "k"}}}], {"jobs": "x"}):
+            (home / "cron" / "jobs.json").write_text(json.dumps(bad))
+            with self.assertRaises(ValueError, msg=bad):
+                delegation.pending_deliveries(home, receipt)
+
+    @unittest.skipUnless(SOURCE, "needs HERMES_SOURCE")
+    def test_real_hermes_settled_and_failed_receipts_stop_counting_though_their_markers_stay(self):
+        out = run_real(SETTLED_RECEIPTS, self.home)
+        self.assertEqual(out["before"], ["Fails", "Settles", "Waits"])
+        self.assertEqual(out["after"], ["Waits"])
+        self.assertEqual(out["markers_kept"], ["Fails", "Settles", "Waits"], "Hermes keeps last_delivery_queued after the receipt settles")
 
     @unittest.skipUnless(SOURCE, "needs HERMES_SOURCE")
     def test_real_hermes_queued_and_parked_deliveries_are_seen_until_sent(self):

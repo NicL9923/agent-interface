@@ -393,10 +393,7 @@ export interface Routine {
   contextFrom?: string[] | null;
   /** A run is in flight now, which Stop run can end. Read only. */
   running?: boolean;
-  /**
-   * Server only: Hermes has claimed a run or still holds a Bot Chat delivery for this routine, each
-   * with a copy of the routine as it was then. Read only.
-   */
+  /** Server only: Hermes has claimed a run of this routine, with a copy of it as it was then. Read only. */
   inFlight?: boolean;
   nextRunAt?: string;
   lastRunAt?: string;

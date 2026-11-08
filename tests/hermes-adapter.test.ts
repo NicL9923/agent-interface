@@ -158,13 +158,13 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     rpcErrors.set('agent-interface.routine_deliveries', {code: -32000, message: 'Routine deliveries could not be read'});
     await expect(runtime.routineDeliveries!('shared')).rejects.toThrow();
   });
-  it('marks a routine Hermes has claimed a run of, or holds a Bot Chat delivery for, as in flight', async () => {
+  it('marks a routine Hermes has claimed a run of as in flight, but not one with only a queued-delivery marker, which outlives its receipt', async () => {
     rosterSession = undefined;
     const jobs = [{id: 'idle', name: 'Idle', schedule_display: '1h'}, {id: 'claimed', name: 'Claimed', schedule_display: '1h', fire_claim: {owner: 'x'}},
       {id: 'held', name: 'Held', schedule_display: '1h', last_delivery_queued: {'bot-chat:ranch': {status: 'queued'}}}, {id: 'live', name: 'Live', schedule_display: '1h', live_execution: {id: 'e'}}];
     vi.stubGlobal('fetch', vi.fn(async () => Response.json(jobs)));
     const routines = await runtime.routines();
-    expect(routines.map(row => [row.id, !!row.inFlight, !!row.running])).toEqual([['idle', false, false], ['claimed', true, false], ['held', true, false], ['live', false, true]]);
+    expect(routines.map(row => [row.id, !!row.inFlight, !!row.running])).toEqual([['idle', false, false], ['claimed', true, false], ['held', false, false], ['live', false, true]]);
   });
   it('keeps older discovery add-ons free of new parameters', async () => {
     await runtime.discoverEvents('1');
