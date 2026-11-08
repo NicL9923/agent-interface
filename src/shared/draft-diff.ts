@@ -87,9 +87,18 @@ export function draftChanges(previous: EmailCard, current: EmailCard): DraftChan
 /** Where an email card sits: the reply's message ID and the card's ID. */
 export const draftKey = (messageId: string, cardId: string) => `${messageId}\n${cardId}`;
 /**
- * The earlier draft each email card revises, by draftKey. Only explicit lineage counts: a card's
- * `revises` names the `draftId` of a card earlier in this conversation, and the latest such card
- * wins. Subjects and recipients are never matched. A card naming itself or a later card revises nothing.
+ * An email card's revision lineage, carried in its `id` because clients released with email cards
+ * refuse any other field: `NEW__revises__EARLIER` is draft NEW revising draft EARLIER, and any other
+ * id is a draft of that name revising nothing. Both parts are non-empty; a card cannot revise itself.
+ */
+export function draftLineage(id: string): { draft: string; revises?: string } {
+  const match = /^(.+?)__revises__(.+)$/.exec(id);
+  return match && match[1] !== match[2] ? { draft: match[1], revises: match[2] } : { draft: match ? match[1] : id };
+}
+/**
+ * The earlier draft each email card revises, by draftKey. Only explicit lineage counts: a card's id
+ * names the draft it revises, and the latest earlier card of that draft wins. Subjects and recipients
+ * are never matched. A card naming itself or a later card revises nothing.
  */
 export function draftRevisions(messages: { id: string; role: string; text: string }[]): Map<string, EmailCard> {
   const drafts = new Map<string, EmailCard>(), revisions = new Map<string, EmailCard>();
@@ -97,9 +106,10 @@ export function draftRevisions(messages: { id: string; role: string; text: strin
     if (message.role !== "assistant") continue;
     for (const card of replyCardsFromText(message.text)) {
       if (card.type !== "email") continue;
-      const previous = card.revises ? drafts.get(card.revises) : undefined;
+      const { draft, revises } = draftLineage(card.id);
+      const previous = revises ? drafts.get(revises) : undefined;
       if (previous) revisions.set(draftKey(message.id, card.id), previous);
-      if (card.draftId) drafts.set(card.draftId, card);
+      drafts.set(draft, card);
     }
   }
   return revisions;

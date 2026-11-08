@@ -184,24 +184,37 @@ extension AppStore {
   var conversationFileCount: Int {
     conversationFiles.count + (currentEarlierFiles == nil ? conversation?.earlierFiles ?? 0 : 0)
   }
+  /// Each reply's chips, attributed from the same history as the file list. A window that starts after
+  /// the beginning reads the files before it, only when it holds a reply with files of its own; until
+  /// they arrive it shows none rather than a guess.
+  func refreshReplyFiles() {
+    let earlier = currentEarlierFiles?.messages
+    replyFiles = Artifacts.windowReplyFiles(transcript, earlier: earlier)
+    guard let window = transcript, earlier == nil, Artifacts.needsEarlier(window), !loadingEarlierFiles, !earlierFilesFailed,
+      !Artifacts.replyFiles(window.messages, artifacts: Artifacts.list(window)).isEmpty else { return }
+    Task { await loadEarlierFiles() }
+  }
   private var currentEarlierFiles: EarlierFilePage? {
     guard let id = selectedBotId, let page = earlierFileCache[id],
-      page.sessionId == conversation?.sessionId,
-      page.before == nil || conversation?.messages.contains(where: { $0.id == page.before }) == true
+      // Only the page for this exact window start: after older turns load, a page read for a later
+      // start would count files the window now shows as earlier ones.
+      page.sessionId == conversation?.sessionId, page.before == conversation?.messages.first?.id
     else { return nil }
     return page
   }
   /// Fetches the files of the history before the loaded window. Called when the file list opens.
   func loadEarlierFiles() async {
     guard let id = selectedBotId, let api, let current = conversation,
-      (current.earlierFiles ?? 0) > 0, !loadingEarlierFiles, currentEarlierFiles == nil
+      Artifacts.needsEarlier(current), !loadingEarlierFiles, currentEarlierFiles == nil
     else { return }
     let selectedGeneration = selectionGeneration
     let before = current.messages.first?.id
     let key = earlierFilesKey
     earlierFilesFailure = nil
     loadingEarlierFiles = true
-    defer { loadingEarlierFiles = false }
+    // However this read ends, even for an assistant no longer open, the window now on screen is looked
+    // at again: its own read may have waited for this one.
+    defer { loadingEarlierFiles = false; refreshReplyFiles() }
     do {
       let suffix = before.map { "?before=\(APIClient.component($0))" } ?? ""
       let page: EarlierFiles = try await api.get("/bots/\(APIClient.component(id))/files\(suffix)")

@@ -2,9 +2,9 @@ import { Dialog } from "./ui/dialog";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { NativeSelect } from "./ui/native-select";
-import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { request as apiRequest } from "../client-api";
+import { useId, useMemo, useState } from "react";
 import { useResource } from "../app/use-resource";
+import { useEarlierFiles } from "../app/use-earlier-files";
 import type { EarlierFiles } from "../shared/history";
 import { conversationArtifacts, fileKind, fileTypeNames as typeNames, type Artifact, type FileKind } from "../shared/artifacts";
 import type { Bot, Conversation, FileRef } from "../shared/types";
@@ -71,26 +71,14 @@ export function ArtifactsButton({ bot, conversation, unavailable = false }: {
 export function ArtifactsPanel({ bot, conversation, unavailable = false, focus, onClose }: {
   bot: Pick<Bot, "id" | "name">; conversation?: ConversationWindow | null; unavailable?: boolean; focus?: string; onClose(): void;
 }) {
-  // Files of history before the loaded window, fetched while the list is open. They belong
-  // to one session and window start, so history that replaces either fetches them again.
-  const [earlier, setEarlier] = useState<{ session?: string; before?: string; messages?: EarlierFiles["messages"]; loading?: boolean; failed?: boolean }>({});
-  const request = useRef(0);
   const current = conversation?.botId === bot.id ? conversation : undefined;
-  const session = current?.sessionId ?? "", before = current?.messages[0]?.id;
-  const fetched = !!current && earlier.session === session
-    && (!earlier.before || current.messages.some(message => message.id === earlier.before));
-  const older = fetched ? earlier.messages : undefined;
+  // The history before the loaded window, read while the list is open, from the same cache the reply
+  // chips use. Opening the list again retries a failed read.
+  const earlier = useEarlierFiles(bot.id, current, true, true);
+  const older = earlier.messages;
   const artifacts = useMemo(() => artifactsFor(current, older), [current, older]);
-  useEffect(() => {
-    if (!current?.earlierFiles || fetched) return;
-    const id = ++request.current;
-    const settle = (value: typeof earlier) => { if (request.current === id) setEarlier({ session, before, ...value }); };
-    settle({ loading: true });
-    apiRequest("GET /bots/:id/files", { params: { id: bot.id }, query: { before } })
-      .then(value => settle({ messages: value.messages }), () => settle({ failed: true }));
-  }, [bot.id, session, before, !!current?.earlierFiles, fetched]);
   return <ArtifactsView bot={bot} artifacts={artifacts} reloading={!current} focus={focus}
-    earlier={!fetched ? undefined : earlier.loading ? "loading" : earlier.failed ? "failed" : undefined}
+    earlier={!earlier.needed ? undefined : earlier.loading ? "loading" : earlier.failed ? "failed" : undefined}
     unavailable={unavailable} onClose={onClose} />;
 }
 

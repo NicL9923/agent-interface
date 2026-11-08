@@ -25,9 +25,6 @@ struct ReplyCard: Decodable, Identifiable {
   var cc: [String]?
   var subject: String?
   var body: String?
-  /// Revision lineage: this draft's ID, and the ID of the earlier draft it revises. See DraftDiff.
-  var draftId: LenientId? = nil
-  var revises: LenientId? = nil
   // A form.
   var submitLabel: String?
   var fields: [FormField]?
@@ -147,12 +144,12 @@ enum ReplyCards {
     // it as absent. A JSON number may start only a number field.
     func clean(_ value: [String: Any]) -> Bool { !value.values.contains { $0 is NSNull } }
     return cards.allSatisfy { card in
-      // A malformed lineage ID, null included, drops the lineage, never the draft.
-      guard clean(card.filter { $0.key != "draftId" && $0.key != "revises" }) else { return false }
+      guard clean(card) else { return false }
       let type = card["type"] as? String ?? ""
       let allowed: Set<String> = switch type {
       case "event": ["id", "type", "title", "start", "end", "location", "description"]
-      case "email": ["id", "type", "title", "to", "cc", "subject", "body", "draftId", "revises"]
+      // Released clients refuse any other email field, so revision lineage lives in `id`; see DraftDiff.
+      case "email": ["id", "type", "title", "to", "cc", "subject", "body"]
       case "form": ["id", "type", "title", "description", "submitLabel", "fields"]
       default: ["id", "type", "title", "items"]
       }

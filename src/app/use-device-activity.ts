@@ -4,12 +4,25 @@ import { deviceHeartbeatMs, deviceIdleMs } from "../shared/device-activity";
 import { deviceId } from "./device-id";
 
 const inputs = ["pointerdown", "keydown", "wheel", "touchstart"] as const;
-// One report at a time, so stopping can never land after starting again.
-let reports = Promise.resolve();
-function report(state: "active" | "inactive", idleMs?: number) {
-  const body = { deviceId: deviceId(), state, ...(idleMs !== undefined && { idleMs }) };
-  // Activity is a hint: a failed report only means this device's alerts follow the old rule a while longer.
-  reports = reports.then(() => request("PUT /devices/activity", { body })).then(() => {}, () => {});
+type Report = { state: "active" | "inactive"; idleMs?: number };
+// One report in flight at a time, and at most one waiting behind it: the latest. A waiting report is
+// worked out only as it goes, so a slow server never receives an old "active" after the window was
+// left, and the idle time it carries is the time at sending, which the server stamps.
+let sending = false;
+let next: (() => Report) | undefined;
+function report(current: () => Report) {
+  next = current;
+  if (sending) return;
+  sending = true;
+  void (async () => {
+    while (next) {
+      const body = { deviceId: deviceId(), ...next() };
+      next = undefined;
+      // Activity is a hint: a failed report only means this device's alerts follow the old rule a while longer.
+      await request("PUT /devices/activity", { body }).catch(() => {});
+    }
+    sending = false;
+  })();
 }
 
 /**
@@ -20,13 +33,14 @@ function report(state: "active" | "inactive", idleMs?: number) {
 export function useDeviceActivity(userId: string | undefined) {
   useEffect(() => {
     if (!userId) return;
-    let using = false, lastInput = Date.now();
+    let using = false, lastInput = Date.now(), mounted = true;
     const attended = () => document.visibilityState === "visible" && document.hasFocus();
+    const inUse = () => mounted && attended() && Date.now() - lastInput < deviceIdleMs;
+    // What to say when the report actually goes: in use now, with the idle time now, or not.
+    const current = (): Report => inUse() ? { state: "active", idleMs: Date.now() - lastInput } : { state: "inactive" };
     const update = () => {
-      const idle = Date.now() - lastInput;
-      const now = attended() && idle < deviceIdleMs;
-      if (now) report("active", idle);
-      else if (using) report("inactive");
+      const now = inUse();
+      if (now || using) report(current);
       using = now;
     };
     const input = () => {
@@ -45,7 +59,8 @@ export function useDeviceActivity(userId: string | undefined) {
       window.removeEventListener("focus", update);
       window.removeEventListener("blur", update);
       document.removeEventListener("visibilitychange", update);
-      if (using) report("inactive");
+      mounted = false;
+      if (using) report(() => ({ state: "inactive" }));
     };
   }, [userId]);
 }

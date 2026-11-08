@@ -33,7 +33,6 @@ struct DeviceActivityReport: Encodable, Equatable {
   private(set) var reporting = false
   private var foreground = false
   private var beat: Task<Void, Never>?
-  private var reports: Task<Void, Never>?
 
   /// The app came to the foreground: opening it is use.
   func foregrounded() {
@@ -67,19 +66,34 @@ struct DeviceActivityReport: Encodable, Equatable {
   func update() {
     guard let decision = Self.decide(foreground: foreground, lastInput: lastInput, now: now(), reporting: reporting) else { return }
     // Before sign-in finishes nothing is sent, so the next beat tries again.
-    let sent = send(DeviceActivityReport(deviceId: NotificationController.shared.deviceId, state: decision.state, idleMs: decision.idleMs))
-    reporting = sent ? decision.state == "active" : false
+    guard signedIn() != nil else { reporting = false; return }
+    reporting = decision.state == "active"
+    waiting = true
+    drain()
   }
-  @discardableResult private func send(_ report: DeviceActivityReport) -> Bool {
-    guard let store, let api = store.api, api.token != nil, store.bootstrap != nil, !store.sessionExpired else { return false }
-    // A hint: a failed report, or a server without the route, only keeps the earlier routing. One
-    // goes at a time, so stopping can never land after starting again.
-    let previous = reports
-    reports = Task {
-      await previous?.value
-      let _: EmptyResponse? = try? await api.write("/devices/activity", report, method: "PUT")
+  private func signedIn() -> APIClient? {
+    guard let store, let api = store.api, api.token != nil, store.bootstrap != nil, !store.sessionExpired else { return nil }
+    return api
+  }
+  /// One report in flight and at most one waiting behind it. The waiting one is worked out only as it
+  /// goes, so a slow server never receives an old "active" after the app left the foreground, and the
+  /// idle time it carries is the time at sending, which the server stamps.
+  private var waiting = false
+  private var draining = false
+  private func drain() {
+    guard !draining else { return }
+    draining = true
+    Task {
+      while waiting {
+        waiting = false
+        guard let api = signedIn() else { break }
+        let decision = Self.decide(foreground: foreground, lastInput: lastInput, now: now(), reporting: true) ?? ("inactive", nil)
+        let report = DeviceActivityReport(deviceId: NotificationController.shared.deviceId, state: decision.state, idleMs: decision.idleMs)
+        // A hint: a failed report, or a server without the route, only keeps the earlier routing.
+        let _: EmptyResponse? = try? await api.write("/devices/activity", report, method: "PUT")
+      }
+      draining = false
     }
-    return true
   }
 }
 

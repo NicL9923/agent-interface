@@ -115,15 +115,25 @@ enum DraftDiff {
   }
   /// Where an email card sits: the reply's message ID and the card's ID.
   static func key(_ messageId: String, _ cardId: String) -> String { messageId + "\n" + cardId }
-  /// The earlier draft each email card revises, by `key`. Only explicit lineage counts: a card's
-  /// `revises` names the `draftId` of a card earlier in this conversation, and the latest such card
-  /// wins. Subjects and recipients are never matched. A card naming itself or a later card revises nothing.
+  /// An email card's revision lineage, carried in its id because clients released with email cards
+  /// refuse any other field: `NEW__revises__EARLIER` is draft NEW revising draft EARLIER, and any
+  /// other id is a draft of that name revising nothing. Both parts are non-empty; a card cannot revise itself.
+  static func lineage(_ id: String) -> (draft: String, revises: String?) {
+    // The web's pattern exactly. Ids are ASCII, so Characters and UTF-16 split them alike.
+    guard let match = id.wholeMatch(of: /(.+?)__revises__(.+)/) else { return (id, nil) }
+    let draft = String(match.1), revises = String(match.2)
+    return (draft, revises == draft ? nil : revises)
+  }
+  /// The earlier draft each email card revises, by `key`. Only explicit lineage counts: a card's id
+  /// names the draft it revises, and the latest earlier card of that draft wins. Subjects and recipients
+  /// are never matched. A card naming itself or a later card revises nothing.
   static func previousDrafts(_ messages: [Message]) -> [String: ReplyCard] {
     var drafts: [String: ReplyCard] = [:], revisions: [String: ReplyCard] = [:]
     for message in messages where message.role == "assistant" {
       for card in ReplyCards.parse(message.text).flatMap({ $0.cards ?? [] }) where card.type == "email" {
-        if let revises = card.lineage.revises, let previous = drafts[revises] { revisions[key(message.id, card.id)] = previous }
-        if let draftId = card.lineage.draftId { drafts[draftId] = card }
+        let (draft, revises) = lineage(card.id)
+        if let revises, let previous = drafts[revises] { revisions[key(message.id, card.id)] = previous }
+        drafts[draft] = card
       }
     }
     return revisions
@@ -140,21 +150,5 @@ enum DraftDiff {
       }
     }
     return result
-  }
-}
-
-/// A lineage field read leniently: anything but a string, including null, reads as absent, so a
-/// malformed ID drops the lineage and never the draft, as on the web.
-struct LenientId: Decodable, Equatable {
-  var value: String?
-  init(_ value: String?) { self.value = value }
-  init(from decoder: Decoder) throws { value = try? decoder.singleValueContainer().decode(String.self) }
-}
-extension ReplyCard {
-  /// The card's valid draft ID and the ID it revises. A card cannot revise itself.
-  var lineage: (draftId: String?, revises: String?) {
-    let draftId = (self.draftId?.value).flatMap { ReplyCards.validId($0) ? $0 : nil }
-    let revises = (self.revises?.value).flatMap { ReplyCards.validId($0) && $0 != draftId ? $0 : nil }
-    return (draftId, revises)
   }
 }

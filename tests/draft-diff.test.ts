@@ -3,12 +3,15 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { DIFF_CELL_LIMIT, draftChanges, draftKey, draftRevisions, wordDiff, type DiffPart } from "../src/shared/draft-diff";
 import { replyCardsFromText, type EmailCard } from "../src/shared/reply-cards";
+import { replyCardsFromText as releasedCards } from "./fixtures/reply-cards-c2fae16";
+import instructions from "../src/shared/inline-ui-instructions.json" with { type: "json" };
 
 // The same vectors drive the iOS mirror, so both clients highlight a revision identically.
 const file = fileURLToPath(new URL("../ios/AgentInterfaceTests/Vectors/draft-diff.json", import.meta.url));
 const vectors = JSON.parse(readFileSync(file, "utf8")) as {
   diff: { name: string; before: string; after: string; limit?: number; parts: DiffPart[] }[];
   lineage: { name: string; messages: { id: string; role: string; text: string }[]; revises: Record<string, string> }[];
+  budget: { name: string; text: string; id: string; accepted: boolean }[];
 };
 
 describe("word diff vectors", () => {
@@ -22,18 +25,39 @@ describe("word diff vectors", () => {
 });
 describe("revision lineage vectors", () => {
   it.each(vectors.lineage)("$name", ({ messages, revises }) => {
-    expect(Object.fromEntries([...draftRevisions(messages)].map(([key, card]) => [key.replace("\n", "/"), card.id]))).toEqual(revises);
+    expect(Object.fromEntries([...draftRevisions(messages)].map(([key, card]) => [key.replace("\n", "/"), card.body]))).toEqual(revises);
+  });
+});
+
+describe("card id budget vectors", () => {
+  it.each(vectors.budget)("$name", ({ text, id, accepted }) => {
+    // Both the current parser and the one released with email cards agree on what fits.
+    expect(replyCardsFromText(text).map(card => card.id)).toEqual(accepted ? [id] : []);
+    expect(releasedCards(text).map(card => card.id)).toEqual(accepted ? [id] : []);
+  });
+  it("tells assistants the budget and the fallback", () => {
+    expect(instructions).toContain("at most 80 characters");
+    expect(instructions).toContain("new short id without __revises__");
   });
 });
 
 const fence = (card: object) => "```agent-ui\n" + JSON.stringify({ version: 1, cards: [card] }) + "\n```";
 const email = { id: "reply", type: "email", title: "Reply", body: "Hi" };
-it("keeps a draft whose lineage is malformed, without the lineage, and still refuses unknown fields", () => {
-  for (const lineage of [{ draftId: "bad id!" }, { draftId: 7 }, { revises: "x".repeat(81) }, { revises: null }, { draftId: "" }])
-    expect(replyCardsFromText(fence({ ...email, ...lineage })), JSON.stringify(lineage)).toEqual([email]);
-  expect(replyCardsFromText(fence({ ...email, draftId: "d1", revises: "d0" }))).toEqual([{ ...email, draftId: "d1", revises: "d0" }]);
-  expect(replyCardsFromText(fence({ ...email, draftId: "d1", revises: "d1" }))).toEqual([{ ...email, draftId: "d1" }]);
-  expect(replyCardsFromText(fence({ ...email, revision: 2 }))).toEqual([]);
+it("sends lineage only in a shape the parser released with email cards accepts", () => {
+  // Every revision card the vectors hold parses, card for card, on the first clients with email cards.
+  for (const { messages } of vectors.lineage) for (const message of messages) {
+    const now = replyCardsFromText(message.text);
+    expect(now.length).toBeGreaterThan(0);
+    expect(releasedCards(message.text)).toEqual(now);
+  }
+  // Fields outside that shape are refused by both, so nothing new can slip into a card.
+  for (const extra of [{ draftId: "d1" }, { revises: "d0" }, { revision: 2 }]) {
+    expect(releasedCards(fence({ ...email, ...extra })), JSON.stringify(extra)).toEqual([]);
+    expect(replyCardsFromText(fence({ ...email, ...extra })), JSON.stringify(extra)).toEqual([]);
+  }
+  // The guidance teaches the id form and names no field the released parser would refuse.
+  expect(instructions).toContain("NEW__revises__EARLIER");
+  expect(instructions).not.toMatch(/draftId|"revises"/);
 });
 
 it("replaces the middle whole at the size limit and compares token pairs below it", () => {

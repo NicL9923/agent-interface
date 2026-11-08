@@ -7,8 +7,10 @@ import XCTest
   private struct Vectors: Decodable {
     struct Diff: Decodable { var name: String; var before: String; var after: String; var limit: Int?; var parts: [DiffPart] }
     struct Lineage: Decodable { var name: String; var messages: [Message]; var revises: [String: String] }
+    struct Budget: Decodable { var name: String; var text: String; var id: String; var accepted: Bool }
     var diff: [Diff]
     var lineage: [Lineage]
+    var budget: [Budget]
   }
   private func vectors() throws -> Vectors {
     let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Vectors/draft-diff.json")
@@ -29,29 +31,35 @@ import XCTest
   func testRevisionLineageMatchesTheSharedVectors() throws {
     for vector in try vectors().lineage {
       let found = DraftDiff.previousDrafts(vector.messages).reduce(into: [String: String]()) { result, entry in
-        result[entry.key.replacingOccurrences(of: "\n", with: "/")] = entry.value.id
+        result[entry.key.replacingOccurrences(of: "\n", with: "/")] = entry.value.body
       }
       XCTAssertEqual(found, vector.revises, vector.name)
+    }
+  }
+  func testCardIdsFitTheSharedBudget() throws {
+    let cases = try vectors().budget
+    XCTAssertFalse(cases.isEmpty)
+    for vector in cases {
+      XCTAssertEqual(ReplyCards.parseFresh(vector.text).flatMap { $0.cards ?? [] }.map(\.id), vector.accepted ? [vector.id] : [], vector.name)
     }
   }
   func testComposedAndDecomposedLettersAreDifferentWordsAsOnTheWeb() {
     // "é" written two ways: equal to Swift's ==, different code units to JavaScript.
     XCTAssertEqual(DraftDiff.words("caf\u{E9}", "cafe\u{301}").map(\.kind), [.removed, .added])
   }
-  func testMalformedLineageDropsTheLinkButKeepsTheDraft() {
-    func cards(_ extra: String) -> [ReplyCard] {
-      ReplyCards.parseFresh("```agent-ui\n{\"version\":1,\"cards\":[{\"id\":\"reply\",\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Hi\"\(extra)}]}\n```").flatMap { $0.cards ?? [] }
+  func testLineageLivesInTheIdAndNoOtherEmailFieldIsAccepted() {
+    func cards(_ fields: String) -> [ReplyCard] {
+      ReplyCards.parseFresh("```agent-ui\n{\"version\":1,\"cards\":[{\"type\":\"email\",\"title\":\"Reply\",\"body\":\"Hi\"\(fields)}]}\n```").flatMap { $0.cards ?? [] }
     }
-    for extra in [#","draftId":"bad id!""#, #","draftId":7"#, #","revises":null"#, #","draftId":"""#] {
-      let parsed = cards(extra)
-      XCTAssertEqual(parsed.map(\.id), ["reply"], extra)
-      XCTAssertNil(parsed.first?.lineage.draftId, extra); XCTAssertNil(parsed.first?.lineage.revises, extra)
+    XCTAssertEqual(cards(#","id":"b__revises__a""#).map { DraftDiff.lineage($0.id).revises }, ["a"])
+    XCTAssertEqual(DraftDiff.lineage("a__revises__a").revises, nil, "A draft cannot revise itself")
+    XCTAssertEqual(DraftDiff.lineage("__revises__a").draft, "__revises__a")
+    XCTAssertEqual(DraftDiff.lineage("__revises__a__revises__b").revises, "b", "As the web's lazy pattern splits it")
+    XCTAssertNil(DraftDiff.lineage("e__revises__").revises)
+    // As released clients do, any field beyond the first email shape refuses the card.
+    for extra in [#","draftId":"d1""#, #","revises":"d0""#, #","subject":null"#] {
+      XCTAssertEqual(cards(#","id":"reply""# + extra).count, 0, extra)
     }
-    XCTAssertEqual(cards(#","draftId":"d1","revises":"d1""#).first.map { [$0.lineage.draftId, $0.lineage.revises] }, ["d1", nil])
-    XCTAssertEqual(cards(#","draftId":"d1","revises":"d0""#).first.map { [$0.lineage.draftId, $0.lineage.revises] }, ["d1", "d0"])
-    // Lineage is lenient; other unknown fields still refuse the card.
-    XCTAssertEqual(cards(#","revision":2"#).count, 0)
-    XCTAssertEqual(cards(#","subject":null"#).count, 0)
   }
   func testChangesNameEachFieldAndWhetherAnythingChanged() throws {
     let base = ReplyCard(id: "a", type: "email", title: "Reply", to: ["sam@example.com"], subject: "Saturday", body: "See you Saturday.")
@@ -64,6 +72,33 @@ import XCTest
     XCTAssertEqual(EmailDiffText.spoken(changes.to), "sam@example.com, added: kim@example.com")
     XCTAssertEqual(EmailDiffText.spoken(DraftDiff.words("See you Saturday.", "See you Sunday.")), "See you removed: Saturday. added: Sunday.")
     XCTAssertEqual(EmailDiffText.spoken(DraftDiff.words("a\n\nb", "a\nb")), "a removed line break added line break b")
+  }
+}
+
+/// A server that holds each request until the test lets it through, as a slow connection does.
+final class HoldingServer: FakeHost, @unchecked Sendable {
+  let origin = URL(string: "https://hold-\(UUID().uuidString.lowercased()).example.test")!
+  private let lock = NSLock()
+  private var held: [FakeExchange] = []
+  private var bodies: [Data] = []
+  private var urls: [URL] = []
+  func receive(_ exchange: FakeExchange) {
+    let body = FakeExchange.body(exchange.request) ?? Data()
+    lock.withLock { held.append(exchange); bodies.append(body); urls.append(exchange.request.url!) }
+  }
+  /// Each request's path and query, in arrival order.
+  var requests: [String] { lock.withLock { urls.map { $0.path + ($0.query.map { "?" + $0 } ?? "") } } }
+  func releaseNext(body: String) {
+    let exchange = lock.withLock { held.isEmpty ? nil : held.removeFirst() }
+    exchange?.respond(status: 200, data: Data(body.utf8))
+  }
+  var count: Int { lock.withLock { bodies.count } }
+  func json(_ index: Int) -> [String: Any] {
+    lock.withLock { (try? JSONSerialization.jsonObject(with: bodies[index])) as? [String: Any] ?? [:] }
+  }
+  func releaseNext() {
+    let exchange = lock.withLock { held.isEmpty ? nil : held.removeFirst() }
+    exchange?.respond(status: 200, data: Data(#"{"ok":true}"#.utf8))
   }
 }
 
@@ -83,6 +118,39 @@ import XCTest
     XCTAssertNil(decide(false, 0, false))
     // A clock that went back never reports a negative idle time.
     XCTAssertEqual(decide(true, -5, false)?.idleMs, 0)
+  }
+  func testASlowServerNeverGetsAnOldActiveReportAndIdleTimeIsStampedAtSending() async throws {
+    let server = HoldingServer(), store = AppStore()
+    store.widgetSnapshotURL = nil
+    store.api = FakeExchange.client(for: server)
+    let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Contract/bootstrap.json")
+    let envelope = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: fixture)) as? [String: Any])
+    store.bootstrap = try JSONDecoder().decode(Bootstrap.self, from: JSONSerialization.data(withJSONObject: envelope["response"] ?? envelope))
+    let activity = DeviceActivity.shared
+    var clock = start
+    activity.now = { clock }
+    activity.store = store
+    defer { activity.backgrounded(); activity.store = nil; activity.now = Date.init; FakeExchange.remove(host: server.origin.host!) }
+    activity.foregrounded()
+    try await until { server.count == 1 }
+    XCTAssertEqual(server.json(0)["state"] as? String, "active")
+    // Two beats while the first report is held: only the latest waits, worked out when it goes.
+    clock = start.addingTimeInterval(15); activity.update()
+    clock = start.addingTimeInterval(30); activity.update()
+    clock = start.addingTimeInterval(35)
+    server.releaseNext()
+    try await until { server.count == 2 }
+    XCTAssertEqual(server.json(1)["idleMs"] as? Int, 35_000)
+    // Leaving the foreground while that one is held: what goes next is inactive, never an older beat.
+    clock = start.addingTimeInterval(50); activity.update()
+    activity.backgrounded()
+    server.releaseNext()
+    try await until { server.count == 3 }
+    XCTAssertEqual(server.json(2)["state"] as? String, "inactive")
+    server.releaseNext()
+    // Absence: a further report would follow at once, so a short pause shows none went.
+    try await Task.sleep(for: .milliseconds(100))
+    XCTAssertEqual(server.count, 3)
   }
   func testReportsThisInstallInUseAndStopsInTheBackgroundOrAfterSignOut() async throws {
     let server = FakeServer(), store = AppStore()

@@ -248,9 +248,9 @@
       let fence = { (card: [String: Any]) -> String in "```agent-ui\n" + json(["version": 1, "cards": [card]]) + "\n```" }
       let file = { (id: String, name: String, mime: String) -> [String: Any] in ["id": id, "name": name, "mime": mime, "size": 2048, "url": "/api/files/\(id)"] }
       let first: [String: Any] = ["id": "sam1", "type": "email", "title": "Fence help", "to": ["sam@example.com"], "subject": "Fence work Saturday",
-        "body": "Hi Sam,\n\nCan you come Saturday at 9? Bring your post driver.\n\nThanks,\nNicolas", "draftId": "sam-1"]
+        "body": "Hi Sam,\n\nCan you come Saturday at 9? Bring your post driver.\n\nThanks,\nNicolas"]
       var second = first
-      second["id"] = "sam2"; second["draftId"] = "sam-2"; second["revises"] = "sam-1"; second["to"] = ["sam@example.com", "kim@example.com"]
+      second["id"] = "sam2__revises__sam1"; second["to"] = ["sam@example.com", "kim@example.com"]
       second["subject"] = "Fence work Sunday"; second["body"] = "Hi Sam,\n\nCan you come Sunday at 10 instead? Kim will join us. Bring your post driver.\n\nThanks,\nNicolas"
       let me: [String: Any] = ["id": "native-test", "name": "Local test member"]
       return [

@@ -1,5 +1,4 @@
 import type { AccountRepository } from "./store-accounts.js";
-import { deviceBeatTtl } from "../shared/device-activity.js";
 import { presenceTtl } from "./store-notifications.js";
 import type { PersonalRepository } from "./store-personal.js";
 import type { StoreDatabase } from "./store-database.js";
@@ -46,7 +45,9 @@ export class RetentionRepository {
     return this.database.transaction(() => {
       const sessions = this.db.prepare("DELETE FROM sessions WHERE expires<=?").run(now).changes;
       this.db.prepare("DELETE FROM chat_presence WHERE updated_at<?").run(now - presenceTtl);
-      this.db.prepare("DELETE FROM device_activity WHERE beat_at<?").run(now - deviceBeatTtl);
+      // A row holds its device while its session lives; one whose session ended holds nothing.
+      this.db.prepare(`DELETE FROM device_activity WHERE NOT EXISTS(SELECT 1 FROM sessions s WHERE s.hash=device_activity.session_hash AND s.expires>?)
+        AND NOT EXISTS(SELECT 1 FROM native_sessions n WHERE n.hash=device_activity.session_hash AND n.expires>?)`).run(now, now);
       this.db.prepare("DELETE FROM push_subscription_devices WHERE NOT EXISTS(SELECT 1 FROM subscriptions s WHERE s.endpoint=push_subscription_devices.endpoint)").run();
       this.db.prepare("DELETE FROM push_action_tokens WHERE expires<=?").run(now);
       // Pending decisions look back a day.

@@ -1,5 +1,5 @@
 {
- "comment": "Shared by tests/reply-artifacts.test.ts (src/shared/artifacts.ts) and ArtifactsTests.swift (Artifacts.list and Artifacts.replyFiles). Each case lists the panel's files with their source, and the file IDs whose chips show under each reply.",
+ "comment": "Shared by tests/reply-artifacts.test.ts (src/shared/artifacts.ts) and ArtifactsTests.swift (Artifacts.list and Artifacts.replyFiles). Each case lists the panel's files with their source, given the loaded messages and the file-bearing messages before them (earlier), and the file IDs whose chips show under each reply.",
  "cases": [
   {
    "name": "a tool's file and the reply's file show under the reply",
@@ -518,6 +518,103 @@
      "result"
     ]
    }
+  },
+  {
+   "name": "a file the person shared before the loaded window is never a chip, even handed back",
+   "earlier": [
+    {
+     "id": "e1",
+     "role": "user",
+     "files": [
+      {
+       "id": "photo",
+       "name": "photo.png",
+       "mime": "image/png"
+      }
+     ]
+    }
+   ],
+   "messages": [
+    {
+     "id": "u1",
+     "role": "user",
+     "text": "Fix the photo I sent"
+    },
+    {
+     "id": "a1",
+     "role": "assistant",
+     "text": "Fixed",
+     "files": [
+      {
+       "id": "photo",
+       "name": "photo.png",
+       "mime": "image/png"
+      },
+      {
+       "id": "fixed",
+       "name": "fixed.png",
+       "mime": "image/png"
+      }
+     ]
+    }
+   ],
+   "artifacts": [
+    [
+     "photo",
+     "Shared"
+    ],
+    [
+     "fixed",
+     "Generated"
+    ]
+   ],
+   "replies": {
+    "a1": [
+     "fixed"
+    ]
+   }
+  },
+  {
+   "name": "a file generated before the loaded window stays with that earlier turn",
+   "earlier": [
+    {
+     "id": "e2",
+     "role": "assistant",
+     "files": [
+      {
+       "id": "plan",
+       "name": "plan.pdf",
+       "mime": "application/pdf"
+      }
+     ]
+    }
+   ],
+   "messages": [
+    {
+     "id": "u1",
+     "role": "user",
+     "text": "Send the plan again"
+    },
+    {
+     "id": "a1",
+     "role": "assistant",
+     "text": "Here it is",
+     "files": [
+      {
+       "id": "plan",
+       "name": "plan.pdf",
+       "mime": "application/pdf"
+      }
+     ]
+    }
+   ],
+   "artifacts": [
+    [
+     "plan",
+     "Generated"
+    ]
+   ],
+   "replies": {}
   }
  ]
 }

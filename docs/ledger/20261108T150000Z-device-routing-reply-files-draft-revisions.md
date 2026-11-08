@@ -89,3 +89,83 @@ its label and replaced words run together; both were fixed and captured again. i
 chips now size to their names.
 
 Not exercised: Settings > Notifications gained no copy, so there is no routing visual.
+
+## Review round: GPT-6.1 Sol, 846ec70..64080adb
+
+Five findings, all reproduced and fixed at `006b561` plus the documentation and ledger commit
+after it. Checks at that state: `npm test` 153 files and 2,137 tests passed; typecheck, lint,
+build and e2e (2) passed; `npm run test:py` 37 passed. iOS on a fresh WildBots-C simulator
+(iPhone 17, iOS 27.0) through `mac-heavy-lock.sh`: the full `AgentInterfaceTests` suite ran 632
+tests, 2 skipped, 3 failed, all pre-existing on `846ec70` as recorded above (two
+`DirectRouteTests` and the observed list's `sending` versus `sendingRequests`); UI
+`ReplyExtrasFlowTests` (2) and `ChatCardsFlowTests` (1) passed. One build failed first on a
+`private(set)` setter the new chip refresh writes from an extension; fixed before that run.
+
+1. Email lineage broke released parsers. Shipped state, checked read-only: production web runs
+   `release-71753bf9` (before #264), and main's native build is 22, set by #258 before #264
+   merged, so no shipped client parses email cards yet; but main can ship #264 alone. Lineage
+   now lives in the card id, `NEW__revises__EARLIER`; the parser is back to #264's exact email
+   fields on both clients. `tests/fixtures/reply-cards-c2fae16.ts`, a frozen copy of #264's
+   parser, must accept every vector card card for card.
+2. Queued heartbeats. One report in flight, only the latest waiting, worked out (state and
+   `idleMs`) as it goes, on web and iOS. Tests hold the server's answers and check that no
+   active report follows leaving and that idle time is the sending time.
+3. Device takeover. A device ID belongs to the account whose live session last reported it, or
+   that registered it for push; another member's report is refused with 409 and its reason
+   until that session signs out or expires. `inactive` keeps the hold; retention drops rows
+   whose session ended.
+4. Chips versus the panel after pagination. Both attribute from the window plus the
+   file-bearing messages before it, read once per window through a shared cache (web) and the
+   store's earlier-file page (iOS); a window after the start shows no chips until that history
+   is known.
+5. Status against an older server. On 400 the check asks once more without `deviceId`; any other
+   failure is reported as before.
+
+Hand-breaks (`.private/mutants2.py`, not committed): each line broken alone, its suite run,
+source restored. All 17 failed their tests:
+
+- 1: adding `draftId` to the email fields; teaching `draftId` in the guidance; dropping the
+  self-revision check.
+- 2: working the report out when queued instead of when sent; restoring the queue of every report.
+- 3: skipping the ownership check; dropping the push-device owner, the labelled-subscription
+  owner, or the live-session condition (the first run of that one only broke the SQL
+  parameters, so it was rerun as `(1 OR live)` and failed the expired-session test); deleting
+  the row on `inactive`; pruning regardless of session.
+- 5: no legacy retry; retrying on any error.
+- 4: not seeding first appearance from earlier files; chips before the history is known; chips
+  or the panel attributing without the earlier files.
+
+## Re-review round: GPT-6.1 Sol, 64080adb..8f35f7d
+
+Five findings, all reproduced and fixed at `7305ddc` plus the test and ledger commit after it.
+Checks: `npm test` 153 files and 2,142 tests passed; typecheck, lint, build and e2e (2) passed;
+`npm run test:py` 37 passed. iOS on a fresh WildBots-C simulator through `mac-heavy-lock.sh`: the
+full `AgentInterfaceTests` suite ran 635 tests, 2 skipped, 4 failed, all pre-existing on
+`846ec70` (three `DirectRouteTests`, and the observed list's `sending` versus `sendingRequests`,
+checked to be the only difference); UI `ReplyExtrasFlowTests` (2) and `ChatCardsFlowTests` (1)
+passed. After the test fix below, `ArtifactsTests`, `DraftDiffTests` and `DeviceActivityTests`
+ran again: 19 passed.
+
+1. iOS reused an earlier-files page whose start was anywhere in an expanded window. It now
+   takes only the page for the window's exact first message. The web cache was already keyed by
+   the window's first message, so it had no such flaw.
+2, 3. Device ownership is now session-bound only: the account whose live session last reported
+   the device. Push registrations name a device but never hold one, so another member's label
+   cannot lock out its owner, and an expired session frees a shared browser.
+4. Any finished iOS earlier-files read, including one for an assistant left midway, now looks
+   at the window on screen again, so that window's own read is no longer lost. The web keeps
+   one cache entry and one listener set per window, so it had no such race.
+5. The guidance gives the 80-character id budget and its fallback, a new short id without
+   lineage. Shared `budget` vectors pin 80 accepted, 81 refused, by the current parser on both
+   clients and the released parser.
+
+Hand-breaks, each alone:
+
+- Web (`.private/mutants3.py`): letting a labelled subscription hold a device, letting a
+  registered iOS device hold one, and removing the budget from the guidance each failed their
+  tests. The registered-device variant first survived because the test never had the owner use
+  that device; the owner now reports from it, and it fails.
+- iOS: restoring the "boundary anywhere in the window" check first passed, because the
+  expanded test window did not contain the old boundary. With the test window corrected it
+  failed (lines 82 and 84). Removing the refresh when a read finishes failed the
+  assistant-switch test (lines 102 to 105).

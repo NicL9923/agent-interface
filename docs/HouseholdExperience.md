@@ -178,19 +178,23 @@ view instructions in every WildBots conversation.
   **Open in Gmail** opens Gmail's compose window, and **Copy** copies the whole
   draft as text. Nothing is sent from WildBots.
   <!-- BEGIN draft revisions -->
-  An email card may also carry `draftId` and `revises`, each 1 to 80 letters,
-  digits, underscores or hyphens. A card whose `revises` names the `draftId` of
-  an earlier email card in the same conversation shows the recipients, subject
-  and body words it added and removed, with **Hide changes** and **Show changes**.
-  Only that explicit lineage links drafts; subjects and recipients are never
-  matched. When several earlier cards share the ID, the latest wins; a card
-  cannot revise itself or a later card. A malformed `draftId` or `revises` drops
-  the link and keeps the draft. Changes compare word by word: runs of spaces,
-  tabs and line breaks, and runs of everything else. Past a million compared word
-  pairs the changed middle shows as replaced whole. The rules are in
-  `src/shared/draft-diff.ts`, mirrored by iOS's `DraftDiff.swift` with shared
-  vectors in `ios/AgentInterfaceTests/Vectors/draft-diff.json`. Clients from
-  before email cards show the block as code, as they already do for email.
+  A revised draft names the draft it revises in its `id`: `NEW__revises__EARLIER`,
+  where EARLIER is the earlier card's id up to any `__revises__`. The card shape
+  is unchanged, because the first clients with email cards refuse any other field.
+  An id holds at most 80 characters, lineage included, or the whole block shows as
+  code; the guidance asks for short draft ids and, when a revision id would be too
+  long, a new short id without lineage, which keeps the email without highlights.
+  A card that revises an earlier email card in the same conversation shows the
+  recipients, subject and body words it added and removed, with **Hide changes**
+  and **Show changes**. Only that explicit lineage links drafts; subjects and
+  recipients are never matched. When several earlier cards share the name, the
+  latest wins; a card cannot revise itself or a later card. Changes compare word
+  by word: runs of spaces, tabs and line breaks, and runs of everything else. Past
+  a million compared word pairs the changed middle shows as replaced whole. The
+  rules are in `src/shared/draft-diff.ts`, mirrored by iOS's `DraftDiff.swift`
+  with shared vectors in `ios/AgentInterfaceTests/Vectors/draft-diff.json`;
+  `tests/fixtures/reply-cards-c2fae16.ts` keeps the released parser to prove
+  older clients still show these cards.
   <!-- END draft revisions -->
 - `form`, with a title, optional description and submit label, and 1 to 20
   fields. Field kinds are `text`, `textarea`, `number`, `date`, `select`,
