@@ -43,7 +43,7 @@ beforeEach(async () => {
     botId: "ranch", readThrough: {}, view: "conversation", state: "idle",
     connectionLost: false, offline: false, mobile: false, open: true, update: null,
     onSelectBot: vi.fn(), onView: vi.fn(), onNewBot: vi.fn(),
-    onSettings: vi.fn(), onPin: vi.fn(), onBotSettings: vi.fn(),
+    onSettings: vi.fn(), onUsage: vi.fn(), onSignOut: vi.fn(), onPin: vi.fn(), onBotSettings: vi.fn(),
     onMoveToSection: vi.fn(), onNewSection: vi.fn(),
   };
 });

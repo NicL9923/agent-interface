@@ -34,10 +34,10 @@ import XCTest
     XCTAssertTrue(app.textFields["Name"].waitForExistence(timeout: 5))
     screenshot(app, "Fixture iPad native assistant settings")
     app.buttons["Close"].tap()
-    if !app.buttons["Settings"].exists, app.buttons["Show Sidebar"].exists {
+    if !app.profileMenu.exists, app.buttons["Show Sidebar"].exists {
       app.buttons["Show Sidebar"].tap()
     }
-    app.buttons["Settings"].tap()
+    app.openSettingsFromProfileMenu()
     XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
     screenshot(app, "Fixture iPad personal preferences")
     let specimen = app.buttons["Avatar specimen"]

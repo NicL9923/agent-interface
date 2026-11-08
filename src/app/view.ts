@@ -6,7 +6,7 @@ export type TerminalOpening = { at: number; command?: string };
 // Modal overlays. Only one can be interactive at a time.
 export type Panel =
   | { kind: "preferences"; destination?: { kind: "following" } | { kind: "section"; id: string } | { kind: "signout" } }
-  | { kind: "integrations" | "upgrade" }
+  | { kind: "integrations" | "upgrade" | "usage" }
   /** take asks the desktop to take control once it connects; each request is a new number. */
   | { kind: "computer"; tab?: "desktop" | "terminal"; take?: number; terminal?: TerminalOpening }
   | { kind: "settings"; bot: Bot | "new" }

@@ -42,3 +42,21 @@ test("the app opens offline from the service worker, then recovers when the netw
   await context.setOffline(false);
   await expect(assistants(page).getByRole("button", { name: /Ranch Hand/ })).toBeVisible();
 });
+
+test("a member opens Usage from the profile menu and sees each account once", async ({ page }) => {
+  await signIn(page);
+  await page.getByRole("button", { name: "Account" }).click();
+  const menu = page.getByRole("menu", { name: "Account" });
+  await expect(menu.getByRole("menuitem", { name: /Usage.*ChatGPT · 100% of session/ })).toBeVisible();
+  await menu.getByRole("menuitem", { name: /Usage/ }).click();
+  const dialog = page.getByRole("dialog", { name: "Usage" });
+  const chatgpt = dialog.getByRole("article", { name: "ChatGPT" });
+  await expect(chatgpt.getByRole("meter", { name: "Session" })).toHaveAttribute("aria-valuenow", "100");
+  await expect(chatgpt.getByText("Used by Ranch Hand, Trail Cook")).toBeVisible();
+  await expect(dialog.getByRole("article", { name: "OpenRouter" }).getByText("Fallback")).toBeVisible();
+  // Using a reset always asks first; cancelling leaves the account as it was.
+  await chatgpt.getByRole("button", { name: "Use a reset" }).click();
+  await expect(page.getByRole("alertdialog", { name: "Use a banked reset?" })).toBeVisible();
+  await page.getByRole("alertdialog").getByRole("button", { name: "Cancel" }).click();
+  await expect(chatgpt.getByText("2 banked resets")).toBeVisible();
+});

@@ -424,6 +424,375 @@ def run_outcome(row, attempts, ledger, job, newest, now=None):
         deliveryFailed=delivery_failed, error=error[:500] if error and status == "failed" else None)
 
 
+MAX_ACCOUNT_ROUTES = 8
+MAX_ACCOUNTS = 20
+# Hermes's usage lines end with CLI instructions such as "/usage reset" or "/topup". The app offers its
+# own actions, so those lines are dropped rather than shown as commands nobody can type here.
+_CLI_HINTS = ("/usage", "/topup", "(or run", "Top up via", "Top up:")
+_ACCOUNT_KEY = re.compile(r"^[0-9a-f]{32}$")
+_REQUEST_ID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+# A token this close to expiry is refreshed before it is used, rather than retried after a 401.
+_EXPIRY_MARGIN_S = 120
+# Hermes's own reset messages can quote the provider's response, so the app sends only these.
+_RESET_MESSAGES = {
+    "reset": "ChatGPT reset this account's limits.",
+    "nothing_to_reset": "ChatGPT reports nothing to reset. No reset was spent.",
+    "no_credit": "ChatGPT reports no banked reset on this account.",
+    "already_redeemed": "This reset was already used. No other reset was spent.",
+    "not_exhausted": "No limit is used up yet, so Hermes did not spend a reset.",
+    "no_credits_banked": "This account has no banked resets.",
+    "unavailable": "ChatGPT did not confirm the reset. Refresh to see whether it went through before trying again.",
+    "uncertain": "ChatGPT did not answer after the reset was sent. Try again: it goes as the same request, so it cannot spend a second reset.",
+}
+# What ChatGPT's consume answers that settle a request; anything else leaves it uncertain.
+_CONSUME_ANSWERS = ("reset", "nothing_to_reset", "no_credit", "already_redeemed")
+_account_locks = {}
+_account_locks_guard = threading.Lock()
+
+
+def _digest(*parts):
+    return hashlib.sha256("\0".join(("wildbots-account", *parts)).encode()).hexdigest()[:32]
+
+
+def _hermes(module, name):
+    """A Hermes helper that older revisions may not have, or None."""
+    try:
+        return getattr(__import__(module, fromlist=[name]), name)
+    except (ImportError, AttributeError):
+        return None
+
+
+def _account_routes():
+    """(provider, role, base_url, explicit key) for the main route, then Hermes's effective fallback chain.
+
+    "auto" resolves the way Hermes picks a provider, without selecting a credential. A fallback entry
+    keeps its own base URL and inline or ``key_env`` key, as the fallback client uses them.
+    """
+    from hermes_cli.config import load_config_readonly
+    from hermes_cli.runtime_provider import resolve_requested_provider
+    config = load_config_readonly()
+    main = resolve_requested_provider(None)
+    if main == "auto":
+        resolve = _hermes("hermes_cli.auth", "resolve_provider")
+        try:
+            main = resolve("auto") if resolve else ""
+        except Exception:
+            main = ""
+    routes = [(main, "main", None, None)]
+    chain = _hermes("hermes_cli.fallback_config", "get_fallback_chain")
+    entry_key = _hermes("hermes_cli.fallback_config", "resolve_entry_api_key")
+    if chain:
+        entries = chain(config)
+    else:
+        legacy = config.get("fallback_model")
+        entries = [entry for entry in (legacy if isinstance(legacy, list) else [legacy]) if isinstance(entry, dict)]
+    for entry in entries:
+        base_url = str(entry.get("base_url") or "").strip().rstrip("/") or None
+        key = entry_key(entry) if entry_key else (str(entry.get("api_key") or "").strip() or None)
+        routes.append((entry.get("provider"), "fallback", base_url, key))
+    found = []
+    for provider, role, base_url, key in routes:
+        provider = provider.strip().lower() if isinstance(provider, str) else ""
+        if provider and provider != "auto" and len(provider) <= 100:
+            found.append((provider, role, base_url, key))
+    return found[:MAX_ACCOUNT_ROUTES]
+
+
+def _identity(provider, token):
+    """Hermes's account identity for a credential: the decoded ChatGPT principal, else a token fingerprint."""
+    if provider == "openai-codex":
+        principal_of = _hermes("agent.credential_pool", "_codex_principal_identity")
+        principal = principal_of(token) if principal_of else None
+        if principal:
+            return f"codex:{principal[0]}:{principal[1]}"
+    return "fp:" + hashlib.sha256(token.encode()).hexdigest()[:16]
+
+
+def _route_base(provider, base_url):
+    if provider == "openai-codex":
+        route = _hermes("hermes_cli.auth_codex", "_codex_pool_route_base_url")
+        if route:
+            return route(base_url)
+    return base_url or None
+
+
+def _credentials(provider, base_url, explicit):
+    """Each credential a route can run on, read from the pool without selecting, rotating or refreshing one."""
+    if explicit:
+        return [(explicit, base_url, False)]
+    from agent.credential_pool import STATUS_DEAD, load_pool
+    try:
+        entries = load_pool(provider).entries()
+    except Exception:
+        return []
+    found = []
+    for entry in entries:
+        token = str(getattr(entry, "runtime_api_key", "") or "").strip()
+        if token and getattr(entry, "last_status", None) != STATUS_DEAD:
+            found.append((token, base_url or getattr(entry, "runtime_base_url", None), True))
+    return found
+
+
+def _accounts():
+    """This profile's accounts, one per provider account, with the exact credential each is read and spent with.
+
+    Several credentials Hermes identifies as one account are one account. A route with no usable credential
+    still appears, so the app can say why it shows nothing. Nous Portal is read through its account endpoint,
+    which finds its own login, so it is one account per profile.
+    """
+    accounts = {}
+    for provider, role, base_url, explicit in _account_routes():
+        if provider == "nous":
+            # The Portal login is found when it is read, so until then the account is this profile's.
+            from hermes_constants import get_hermes_home
+            found = [dict(key=_digest("nous", "portal", str(get_hermes_home().resolve())), provider="nous", role=role, token=None, base_url=None, identity=None, pooled=False)]
+        else:
+            found = []
+            for token, base, pooled in _credentials(provider, base_url, explicit):
+                identity = _identity(provider, token)
+                # A pooled ChatGPT credential goes to its pool route; an explicit fallback key goes where the fallback names.
+                route = _route_base(provider, base) if pooled else base
+                found.append(dict(key=_digest(provider, (route or "").lower(), identity), provider=provider, role=role,
+                                  token=token, base_url=route, identity=identity, pooled=pooled))
+            if not found:
+                found = [dict(key=_digest(provider, "none", base_url or ""), provider=provider, role=role, token=None, base_url=None, identity=None, pooled=False)]
+        # The main route comes first, so an account it shares with a fallback keeps the main role.
+        for account in found:
+            accounts.setdefault(account["key"], account)
+    return list(accounts.values())[:MAX_ACCOUNTS]
+
+
+def account_list():
+    return dict(accounts=[dict(key=row["key"], provider=row["provider"], role=row["role"]) for row in _accounts()])
+
+
+def _account_for(key):
+    if not isinstance(key, str) or not _ACCOUNT_KEY.match(key):
+        raise ExperienceError("Invalid account.")
+    for account in _accounts():
+        if account["key"] == key:
+            return account
+    raise ExperienceError("This assistant no longer uses that account.", 404)
+
+
+def _finite(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and value == value and value not in (float("inf"), float("-inf"))
+
+
+def _usage_document(provider, key, snapshot, reason, transient=False):
+    """The app's account shape. ``transient`` marks a failed read the app should try again soon, not keep."""
+    if snapshot is None:
+        return dict(key=key, provider=provider, plan=None, title="Account limits", fetchedAt=timestamp(), windows=[], details=[],
+                    unavailableReason=reason, bankedResets=0, identity=None, transient=transient)
+    windows = []
+    for window in getattr(snapshot, "windows", ())[:12]:
+        used = getattr(window, "used_percent", None)
+        reset = getattr(window, "reset_at", None)
+        scope = getattr(window, "scope", "account")
+        windows.append(dict(label=str(window.label)[:100], usedPercent=max(0.0, min(100.0, float(used))) if _finite(used) else None,
+                            resetsAt=reset.isoformat() if isinstance(reset, datetime.datetime) else None,
+                            detail=str(window.detail)[:300] if getattr(window, "detail", None) else None,
+                            scope=scope if scope in ("account", "model") else "account"))
+    raw = getattr(snapshot, "raw", None)
+    banked = 0
+    if provider == "openai-codex" and isinstance(raw, dict):
+        count = (raw.get("rate_limit_reset_credits") or {}).get("available_count")
+        banked = max(0, int(count)) if _finite(count) else 0
+    # The banked-reset line ends in "/usage reset", so it goes with the CLI hints; bankedResets carries the count.
+    details = [str(line)[:300] for line in getattr(snapshot, "details", ()) if not any(hint in str(line) for hint in _CLI_HINTS)][:12]
+    identity = getattr(snapshot, "identity", None)
+    fetched = getattr(snapshot, "fetched_at", None)
+    unavailable = getattr(snapshot, "unavailable_reason", None)
+    return dict(key=key, provider=provider, plan=str(snapshot.plan)[:100] if getattr(snapshot, "plan", None) else None,
+                title=str(getattr(snapshot, "title", None) or "Account limits")[:100],
+                fetchedAt=fetched.isoformat() if isinstance(fetched, datetime.datetime) else timestamp(),
+                windows=windows, details=details, unavailableReason=str(unavailable)[:500] if unavailable else None,
+                bankedResets=banked, identity=_digest(provider, "identity", identity) if isinstance(identity, str) and identity else None,
+                transient=False)
+
+
+def _expiring(token):
+    """Whether a JWT access token expires within the margin. A token that is not a readable JWT is left as it is."""
+    try:
+        payload = token.split(".")[1]
+        claims = json.loads(__import__("base64").urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+        return isinstance(claims.get("exp"), (int, float)) and claims["exp"] - time.time() < _EXPIRY_MARGIN_S
+    except Exception:
+        return False
+
+
+def _fresh(account):
+    """The account with a usable ChatGPT token, or None. An expiring pooled token is refreshed through the pool entry
+    that holds that exact key, and the new token must decode to the same account. Nothing else is ever selected:
+    Hermes's own usage resolver can fall back to another pool account when a refresh fails, so it is never used here.
+    The destination stays the one the account was listed with.
+    """
+    if account["provider"] != "openai-codex" or not _expiring(account["token"]):
+        return account
+    if not account["pooled"]:
+        return None
+    from agent.credential_pool import load_pool
+    try:
+        entry = load_pool("openai-codex").try_refresh_matching(api_key_hint=account["token"])
+    except Exception:
+        return None
+    token = str(getattr(entry, "runtime_api_key", "") or "").strip() if entry is not None else ""
+    if not token or _identity("openai-codex", token) != account["identity"]:
+        return None
+    return dict(account, token=token)
+
+
+def account_usage(data):
+    """One account's limits, read with that account's own credential and never repaired on failure."""
+    from agent import account_usage as usage
+    account = _account_for(data.get("key"))
+    provider, key = account["provider"], account["key"]
+    if provider == "nous":
+        # The Portal resolver finds a singleton, OAuth-pool or inference-key login itself.
+        try:
+            info = usage._fetch_portal_account(10.0)
+        except Exception:
+            return _usage_document(provider, key, None, "Hermes could not read this account's credits right now.", transient=True)
+        if info is None or not getattr(info, "logged_in", False):
+            return _usage_document(provider, key, None, "Sign in to Nous Portal in Hermes to see its credits.")
+        document = _usage_document(provider, key, usage.build_nous_credits_snapshot(info), "Hermes could not read this account's credits right now.", transient=True)
+        # Profiles signed in to one Portal account show as one account.
+        who = getattr(info, "user_id", None) or getattr(info, "email", None)
+        if isinstance(who, str) and who:
+            document["identity"] = _digest("nous", "identity", who, str(getattr(info, "org_id", None) or ""))
+        return document
+    supported = _hermes("agent.account_usage_cache", "has_account_usage")
+    if supported is None:
+        # Hermes before the usage cache (late September 2026) has only the built-in fetchers.
+        def supported(slug):
+            return slug in getattr(usage, "_USAGE_FETCHERS", {})
+    if not supported(provider):
+        return _usage_document(provider, key, None, "This provider does not report plan limits or credits to Hermes.")
+    if account["token"] is None:
+        return _usage_document(provider, key, None, "Hermes has no signed-in account for this provider.")
+    accepted = __import__("inspect").signature(usage.fetch_account_usage).parameters
+    if provider == "openai-codex" and "read_only" not in accepted:
+        # Without a read-only fetch, a 401 sends Hermes's resolver looking for any pooled ChatGPT account.
+        return _usage_document(provider, key, None, "Update Hermes to read ChatGPT limits here.")
+    fresh = _fresh(account)
+    if fresh is None:
+        return _usage_document(provider, key, None, "Hermes could not renew this ChatGPT sign-in. Sign in again in Hermes.", transient=True)
+    options = dict(base_url=fresh["base_url"], api_key=fresh["token"])
+    # Read-only: a failed read is reported, never repaired by Hermes picking or refreshing a credential itself.
+    options.update({name: value for name, value in (("read_only", True), ("identity_id", fresh["identity"])) if name in accepted})
+    snapshot = usage.fetch_account_usage(provider, **options)
+    return _usage_document(provider, key, snapshot, "Hermes could not read this account's limits right now.", transient=snapshot is None)
+
+
+class AccountResets:
+    """Banked ChatGPT resets, spent at most once per request ID and once at a time per account.
+
+    The request ID is ChatGPT's own ``redeem_request_id``, so ChatGPT answers a repeat with ``already_redeemed``
+    instead of spending again. The receipt is written before ChatGPT is asked and marked ``sent`` before the
+    consume goes out. A request with a recorded answer returns it. One that may have been consumed is only ever
+    settled by sending that same consume again: a later preflight read or Hermes's guard never decides it,
+    because the first consume may already have changed what they see.
+    The spend uses Hermes's own guard and outcome mapping with the account's own token, never Hermes's
+    resolver, which can fall back to another pooled account when a refresh fails.
+    """
+    def __init__(self, journal):
+        self.journal = journal
+        with journal.lock, journal.db:
+            journal.db.execute("CREATE TABLE IF NOT EXISTS account_resets(request_id TEXT PRIMARY KEY,account TEXT NOT NULL,result TEXT,sent INTEGER NOT NULL DEFAULT 0)")
+            if "sent" not in {row[1] for row in journal.db.execute("PRAGMA table_info(account_resets)")}:
+                journal.db.execute("ALTER TABLE account_resets ADD COLUMN sent INTEGER NOT NULL DEFAULT 0")
+                # A receipt from before this column with no answer may stand for a consume that went out.
+                journal.db.execute("UPDATE account_resets SET sent=1 WHERE result IS NULL")
+
+    def spend(self, data):
+        request_id, force = data.get("requestId"), data.get("force")
+        if not isinstance(request_id, str) or not _REQUEST_ID.match(request_id):
+            raise ExperienceError("A reset needs its request ID.")
+        if not isinstance(force, bool):
+            raise ExperienceError("Choose whether to use a reset before the limit is reached.")
+        account = _account_for(data.get("key"))
+        if account["provider"] != "openai-codex" or account["token"] is None:
+            raise ExperienceError("Only ChatGPT accounts have banked resets.", 409)
+        owner = _digest(account["provider"], "identity", account["identity"])
+        with _account_locks_guard:
+            lock = _account_locks.setdefault(owner, threading.Lock())
+        if not lock.acquire(blocking=False):
+            raise ExperienceError("A reset for this account is already in progress.", 409)
+        try:
+            with self.journal.lock, self.journal.db:
+                row = self.journal.db.execute("SELECT account,result,sent FROM account_resets WHERE request_id=?", (request_id,)).fetchone()
+                if row is None:
+                    self.journal.db.execute("INSERT INTO account_resets(request_id,account) VALUES(?,?)", (request_id, owner))
+            if row is not None:
+                if row[0] != owner:
+                    raise ExperienceError("That request ID belongs to another reset.", 409)
+                if row[1] is not None:
+                    return json.loads(row[1])
+            result = self._redeem(account, request_id, force, sent=bool(row and row[2]))
+            if result["status"] != "uncertain":
+                with self.journal.lock, self.journal.db:
+                    self.journal.db.execute("UPDATE account_resets SET result=? WHERE request_id=?", (json.dumps(result), request_id))
+            return result
+        finally:
+            lock.release()
+
+    @staticmethod
+    def _result(status, available=0, windows=0):
+        """``available`` None means the count left could not be read."""
+        status = status if status in _RESET_MESSAGES else "unavailable"
+        return dict(status=status, message=_RESET_MESSAGES[status], availableCount=None if available is None else max(0, int(available)),
+                    windowsReset=max(0, int(windows)))
+
+    def _mark_sent(self, request_id):
+        with self.journal.lock, self.journal.db:
+            self.journal.db.execute("UPDATE account_resets SET sent=1 WHERE request_id=?", (request_id,))
+
+    def _redeem(self, account, request_id, force, sent):
+        """Asks ChatGPT. ``sent`` means an earlier attempt may have consumed: then only the same consume is resent,
+        and anything short of ChatGPT's answer to it leaves the request uncertain."""
+        from agent import account_usage as usage
+        import httpx
+        helpers = ("_codex_backend_urls", "_codex_headers", "_codex_banked_resets", "_codex_reset_guard", "_codex_reset_outcome")
+        undecided = "uncertain" if sent else "unavailable"
+        if not all(callable(getattr(usage, name, None)) for name in helpers):
+            return self._result(undecided)
+        fresh = _fresh(account)
+        if fresh is None:
+            return self._result(undecided)
+        usage_url, _credits_url, consume_url = usage._codex_backend_urls(fresh["base_url"] or "")
+        headers = usage._codex_headers(fresh["token"], None)
+        try:
+            with httpx.Client(timeout=15.0) as client:
+                if not sent:
+                    response = client.get(usage_url, headers=headers)
+                    response.raise_for_status()
+                    payload = response.json() or {}
+                    available = usage._codex_banked_resets(payload)
+                    refused = usage._codex_reset_guard(payload, available, force)
+                    if refused is not None:
+                        return self._result(refused.status, refused.available_count)
+                    self._mark_sent(request_id)
+                    sent = True
+                consumed = client.post(consume_url, headers={**headers, "Content-Type": "application/json"}, json={"redeem_request_id": request_id})
+                consumed.raise_for_status()
+                body = consumed.json() or {}
+                # The count before this consume is unknown on a resend, so the count left is read afterwards.
+                try:
+                    after = client.get(usage_url, headers=headers)
+                    after.raise_for_status()
+                    left = usage._codex_banked_resets(after.json() or {})
+                except Exception:
+                    left = None
+        except Exception:
+            # Once the consume may have gone out its answer is unknown; only the same ID is ever sent for it.
+            return self._result("uncertain" if sent else "unavailable")
+        outcome = usage._codex_reset_outcome(body, (left + 1) if left is not None else 1)
+        if outcome.status not in _CONSUME_ANSWERS:
+            # An answer ChatGPT's consume does not document says nothing about whether it spent.
+            return self._result("uncertain")
+        return self._result(outcome.status, 0 if outcome.status == "no_credit" else left, outcome.windows_reset)
+
+
 MAX_MODEL_NAMES = 4000
 
 
@@ -951,6 +1320,7 @@ def install(web, journal, projector):
     from hermes_cli.web_routers._common import config_scoped_to_thread
     from hermes_cli.backend_retirement import retirement
     runs = RoutineRuns(journal)
+    resets = AccountResets(journal)
     original_require_token = web._require_token
     def require_token(request):
         principal = getattr(request.state, "token_principal", None)
@@ -977,6 +1347,16 @@ def install(web, journal, projector):
                 result = await config_scoped_to_thread(profile, lambda: discovery(data, journal, projector))
             elif operation == "memory":
                 result = await config_scoped_to_thread(profile, lambda: profile_memory(profile, getattr(journal, "memory_refresh", None)))
+            elif operation == "accounts":
+                result = await config_scoped_to_thread(profile, account_list)
+            elif operation == "account_usage":
+                result = await config_scoped_to_thread(profile, lambda: account_usage(data))
+            elif operation == "account_reset":
+                # Spending a reset changes the provider account, so it pauses with other writes during an upgrade.
+                with retirement.work() as admitted:
+                    if not admitted:
+                        raise ExperienceError("Hermes is being upgraded. Try the reset again in a minute.", 409)
+                    result = await config_scoped_to_thread(profile, lambda: resets.spend(data))
             elif operation == "model_names":
                 # Cache-only reads need no profile scope, and an earlier add-on answers "Unknown experience operation."
                 result = await asyncio.to_thread(model_names, data)

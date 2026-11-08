@@ -1,5 +1,6 @@
 import type { AutomationOverview as WorkOverview, AutomationTask, AutomationRequest, TaskInput, TriggerInput, SkillContent, SkillDiff, SkillLock, EventSubscription } from "./automation.js";
 import type { AutomationOverview, HistoryPage, SavedItem, SearchHit, Starter } from "./discovery.js";
+import type { AccountUsageOverview, ResetResult } from "./account-usage.js";
 import type { ProfileMemory, RoutinePreview, RoutineRunReceipt, TodayOverview } from "./experience.js";
 import type { RoutineOutput, RoutineResult } from "./collaboration.js";
 import type { RoutineRunPage } from "./routine-runs.js";
@@ -154,6 +155,12 @@ export interface ApiRoutes {
   "POST /saved": { body: SaveItem; response: SavedItem };
   "DELETE /saved/:id": { response: Ok };
   "GET /automations": { query: { days?: number }; response: AutomationOverview };
+  "GET /usage/accounts": { query: { refresh?: "1" }; response: AccountUsageOverview };
+  /**
+   * Spends one banked ChatGPT reset. `confirmed` is the person's answer to the confirmation; `force` spends one before a
+   * limit is used up. Reuse `requestId` to retry the same reset: it is never spent twice.
+   */
+  "POST /usage/accounts/:key/reset": { body: { confirmed: true; requestId: string; force: boolean }; response: ResetResult };
   "GET /bots/:id/starters": { response: Starter[] };
   "GET /bots/:id/memory": { response: ProfileMemory };
   "PUT /bots/:id/memory/:target": { body: MemorySave; response: ProfileMemory };

@@ -165,7 +165,7 @@ import XCTest
 
   func testComputerOpensInTheAppAndTakesOverThenHandsBack() throws {
     let app = launch(home: true)
-    app.buttons["openSettings"].tapWhenReady(timeout: 15)
+    app.openSettingsFromProfileMenu(timeout: 15)
     let row = app.descendants(matching: .any)["sharedComputer"]
     XCTAssertTrue(row.waitForExistence(timeout: 10))
     row.tapWhenReady()
@@ -236,7 +236,7 @@ import XCTest
 
   func testTerminalConfirmsThenTypesIntoAShellAndEndsIt() throws {
     let app = launch(home: true)
-    app.buttons["openSettings"].tapWhenReady(timeout: 15)
+    app.openSettingsFromProfileMenu(timeout: 15)
     app.descendants(matching: .any)["sharedComputer"].tapWhenReady()
     app.buttons["computerTerminal"].tapWhenReady()
     // The sign-in is older than the terminal's 2-hour window, so confirming comes first.
@@ -285,7 +285,7 @@ import XCTest
 
   func testTerminalSaysWhyAnotherMemberCannotOpenIt() throws {
     let app = launch(["TERMINAL_UNAVAILABLE"], home: true)
-    app.buttons["openSettings"].tapWhenReady(timeout: 15)
+    app.openSettingsFromProfileMenu(timeout: 15)
     app.descendants(matching: .any)["sharedComputer"].tapWhenReady()
     app.buttons["computerTerminal"].tapWhenReady()
     let refused = app.descendants(matching: .any)["terminalUnavailable"]

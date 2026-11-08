@@ -23,6 +23,7 @@ import { installVaultRoutes } from "./vault.js";
 import { registerVoiceRoutes } from "./voice.js";
 import { installTalkRoutes } from "./talk.js";
 import { installDiscoveryRoutes } from "./discovery.js";
+import { installAccountUsageRoutes } from "./account-usage.js";
 import { installExperienceRoutes } from "./experience.js";
 import { installAutomationRoutes } from "./automation.js";
 import { installComputerRoutes } from "./computer.js";
@@ -127,6 +128,7 @@ export async function createApp(
   await installExperienceRoutes(app, runtime, store, roster);
   await installAutomationRoutes(app, runtime, store, () => upgrades.maintenance(), canManageIntegrations);
   await installDiscoveryRoutes(app, runtime, store, roster);
+  await installAccountUsageRoutes(app, runtime, store);
   const collaboration = await installCollaborationRoutes(app, runtime, store, roster);
   const groups = new GroupWatch(runtime);
   const catalogs = collaboration.catalogRead && new GroupCatalogWatch(collaboration.catalogRead);

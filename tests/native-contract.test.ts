@@ -12,6 +12,7 @@ import type { HermesUpgrades } from "../src/server/upgrades.js";
 import type { GroupCatalog, GroupContext, GroupPage, GroupRoom, GroupState, RoutineOutput, RoutineResult } from "../src/shared/collaboration.js";
 import type { HistoryPage, SearchHit, UsageSummary } from "../src/shared/discovery.js";
 import type { ProfileMemory, RoutinePreview, RoutineRunReceipt } from "../src/shared/experience.js";
+import type { AccountSnapshot } from "../src/shared/account-usage.js";
 import type { IntegrationCatalog, IntegrationConnection, IntegrationFlow } from "../src/shared/integrations.js";
 import type { Bot, Capabilities, Conversation, FileRef, Message, ModelCatalog, Preferences, Routine, Runtime, RuntimeEvent, RuntimeStatus, Skill, SubmissionReceipt, Tool, ToolCall } from "../src/shared/types.js";
 import type { UpgradeStatus } from "../src/shared/upgrades.js";
@@ -42,6 +43,23 @@ const bots = [
   // Archive's Hermes profile is offline, so its reads fail and report it as unavailable.
   { id: "archive", name: "Archive", model: "claude-haiku", shared: true, avatar: { mode: "portrait", src: portrait.url, origin: "generated" }, activity: "done" },
 ] satisfies Bot[];
+// Household runs on ChatGPT and falls back to OpenRouter; Garden shares the ChatGPT account and falls back to a
+// custom endpoint that reports nothing. Every field the app reads is set somewhere.
+const accountKeys = { chatgpt: "c".repeat(32), openrouter: "b".repeat(32), custom: "d".repeat(32) };
+const accountRows: Record<string, { key: string; provider: string; role: "main" | "fallback" }[]> = {
+  household: [{ key: accountKeys.chatgpt, provider: "openai-codex", role: "main" }, { key: accountKeys.openrouter, provider: "openrouter", role: "fallback" }],
+  garden: [{ key: accountKeys.chatgpt, provider: "openai-codex", role: "main" }, { key: accountKeys.custom, provider: "custom", role: "fallback" }],
+};
+const accountSnapshots: Record<string, AccountSnapshot> = {
+  [accountKeys.chatgpt]: { key: accountKeys.chatgpt, provider: "openai-codex", plan: "Pro", title: "Account limits", fetchedAt: at("11:59"),
+    windows: [{ label: "Session", usedPercent: 100, resetsAt: at("14:00"), detail: null, scope: "account" }, { label: "Weekly", usedPercent: 62.5, resetsAt: "2026-10-04T09:00:00.000Z", detail: null, scope: "account" }],
+    details: ["Credits balance: $4.00"], unavailableReason: null, bankedResets: 2, identity: "e".repeat(32) },
+  [accountKeys.openrouter]: { key: accountKeys.openrouter, provider: "openrouter", plan: null, title: "Account limits", fetchedAt: at("11:59"),
+    windows: [{ label: "API key quota", usedPercent: 25, resetsAt: null, detail: "$15.00 of $20.00 remaining", scope: "account" }, { label: "Opus week", usedPercent: null, resetsAt: null, detail: null, scope: "model" }],
+    details: ["Credits balance: $12.00"], unavailableReason: null, bankedResets: 0, identity: null },
+  [accountKeys.custom]: { key: accountKeys.custom, provider: "custom", plan: null, title: "Account limits", fetchedAt: at("11:59"), windows: [], details: [],
+    unavailableReason: "This provider does not report plan limits or credits to Hermes.", bankedResets: 0, identity: null },
+};
 const supported = { supported: true };
 const capabilities = { chat: supported, steering: supported, approvals: supported, uploads: supported, generatedFiles: supported, botConfiguration: supported, tools: supported,
   skills: supported, routines: supported, durableEvents: supported, idempotency: supported, stop: supported, portraitGeneration: supported, avatarMetadata: supported,
@@ -196,6 +214,9 @@ const runtime = {
     memory: () => memory, save_memory: () => memory, delete_memory: () => memory,
     preview: () => preview, run: input => ({ ...runReceipt, requestId: input.requestId }),
     run_receipt: input => ({ ...runReceipt, requestId: input.requestId }),
+    accounts: input => { if (input.profile === "archive") throw offline(); return { accounts: accountRows[input.profile] ?? [] }; },
+    account_usage: input => accountSnapshots[input.key],
+    account_reset: () => ({ status: "reset", message: "Reset redeemed.", availableCount: 1, windowsReset: 2 }),
   }),
   automationRequest: automationRequester({
     overview: () => structuredClone(profileAutomation), goal_set: () => structuredClone(profileAutomation),
@@ -369,6 +390,8 @@ it("keeps the server responses the iOS app decodes in sync with the committed co
     await record("saved-routine", "POST", "/api/saved", { botId: "household", kind: "routine", routineId: "routine-morning", resultId: "result-1", title: "Dinner ideas" });
     await record("saved", "GET", "/api/saved");
     await record("automations", "GET", "/api/automations");
+    await record("usage-accounts", "GET", "/api/usage/accounts");
+    await record("usage-reset", "POST", `/api/usage/accounts/${accountKeys.chatgpt}/reset`, { confirmed: true, requestId: ids.operation, force: false });
 
     await record("groups", "GET", "/api/groups");
     await record("group-create", "POST", "/api/groups", { requestId: ids.group, name: "Dinner team", botIds: ["household", "garden"] });

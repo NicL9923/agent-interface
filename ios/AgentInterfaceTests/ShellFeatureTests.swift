@@ -303,10 +303,11 @@ import XCTest
     let bots = try [bot("alpha"), bot("kitchen"), bot("ranch")]
     let rooms = [room("quiet", "Quiet room"), room("supper", "Supper planning", at: "2026-10-31T10:00:00Z")]
     let all = QuickSwitch.entries(query: "", bots: bots, pinned: ["ranch", "kitchen"], rooms: rooms)
-    XCTAssertEqual(all.map(\.target), [.bot("ranch"), .bot("kitchen"), .bot("alpha"), .room("supper"), .room("quiet"), .today, .search, .settings])
+    XCTAssertEqual(all.map(\.target), [.bot("ranch"), .bot("kitchen"), .bot("alpha"), .room("supper"), .room("quiet"), .today, .search, .usage, .settings])
     XCTAssertEqual(QuickSwitch.entries(query: "kit", bots: bots, pinned: []).map(\.target), [.bot("kitchen")])
     XCTAssertEqual(QuickSwitch.entries(query: "supper", bots: bots, pinned: [], rooms: rooms).map(\.target), [.room("supper")])
     XCTAssertEqual(QuickSwitch.entries(query: "settings", bots: bots, pinned: []).map(\.target), [.settings])
+    XCTAssertEqual(QuickSwitch.entries(query: "usage", bots: bots, pinned: []).map(\.target), [.usage])
     XCTAssertEqual(QuickSwitch.entries(query: "zzz", bots: bots, pinned: []), [])
   }
   // MARK: Group chats on home

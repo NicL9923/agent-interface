@@ -184,6 +184,10 @@ export const assistantRoutes: Readonly<Record<string, BotScope>> = {
   "POST /api/saved": "body",
   "DELETE /api/saved/:id": "none",
   "GET /api/automations": "list",
+  // Accounts come only from assistants this person sees, and so do the names listed under each one.
+  "GET /api/usage/accounts": "list",
+  // The key must belong to an assistant this person sees; the handler refuses any other.
+  "POST /api/usage/accounts/:key/reset": "list",
   "GET /api/routines": "list",
   "POST /api/routines": "body",
   "PUT /api/routines/:id": "routine and body",
