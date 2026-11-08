@@ -15,14 +15,15 @@ struct DeviceActivityReport: Encodable, Equatable {
 @MainActor final class DeviceActivity {
   static let shared = DeviceActivity()
   /// The same constants as src/shared/device-activity.ts.
-  static let idle: TimeInterval = 5 * 60
-  static let heartbeat: TimeInterval = 15
+  nonisolated static let idle: TimeInterval = 5 * 60
+  nonisolated static let heartbeat: TimeInterval = 15
 
   /// What to report now: `active` with the time since the last input while in use, `inactive` once
   /// that ends after it was reported, and nothing otherwise. Pure, so the boundary is testable.
   nonisolated static func decide(foreground: Bool, lastInput: Date, now: Date, reporting: Bool) -> (state: String, idleMs: Int?)? {
     let idle = max(0, now.timeIntervalSince(lastInput))
-    if foreground && idle < Self.idle { return ("active", Int((idle * 1000).rounded(.down))) }
+    // Whole milliseconds, never past the server's 299999: Date arithmetic can land a hair under a round value.
+    if foreground && idle < Self.idle { return ("active", min(Int((idle * 1000).rounded()), Int(Self.idle * 1000) - 1)) }
     return reporting ? ("inactive", nil) : nil
   }
 

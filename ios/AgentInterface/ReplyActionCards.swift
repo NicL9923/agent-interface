@@ -465,13 +465,13 @@ struct EmailDraftCardView: View {
         if let marked, !marked.subject.isEmpty { header("Subject", EmailDiffText.words(marked.subject), EmailDiffText.spoken(marked.subject)) }
         else { header("Subject", AttributedString(card.subject ?? "No subject")) }
       }
-      Group {
-        if let marked {
-          Text(EmailDiffText.words(marked.body)).accessibilityLabel(EmailDiffText.spoken(marked.body))
-        } else { Text(card.body ?? "") }
-      }.font(.subheadline).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+      (marked.map { Text(EmailDiffText.words($0.body)) } ?? Text(card.body ?? ""))
+        .font(.subheadline).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
         .padding(12).background(Palette.surface(scheme), in: RoundedRectangle(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(Palette.line))
+        // One element read with "added" and "removed" before each change, not the styled runs.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(marked.map { EmailDiffText.spoken($0.body) } ?? card.body ?? "")
         .accessibilityIdentifier("emailBody.\(card.id)")
       ViewThatFits(in: .horizontal) {
         HStack(spacing: 10) { actions }
@@ -506,7 +506,7 @@ struct EmailDraftCardView: View {
     GridRow {
       Text(name).font(.caption).foregroundStyle(Palette.muted)
       Text(value).font(.subheadline).foregroundStyle(card.subject == nil && name == "Subject" && marked == nil ? Palette.muted : Color.primary).textSelection(.enabled)
-        .accessibilityLabel(spoken.map { Text($0) } ?? Text(value))
+        .accessibilityElement(children: .ignore).accessibilityLabel(spoken.map { Text($0) } ?? Text(value))
     }
   }
 }
@@ -859,7 +859,11 @@ struct FormReplyCardView: View {
 /// through, as the web marks them. VoiceOver hears "added" and "removed" before each change.
 enum EmailDiffText {
   static func words(_ parts: [DiffPart]) -> AttributedString {
-    parts.reduce(into: AttributedString()) { result, part in result += styled(AttributedString(part.text), part.kind) }
+    parts.enumerated().reduce(into: AttributedString()) { result, entry in
+      // A replaced word reads as two: a thin space between what went and what came, as the web spaces them.
+      if entry.element.kind == .added, entry.offset > 0, parts[entry.offset - 1].kind == .removed { result += AttributedString("\u{2009}") }
+      result += styled(AttributedString(entry.element.text), entry.element.kind)
+    }
   }
   static func addresses(_ parts: [AddressPart]) -> AttributedString {
     parts.enumerated().reduce(into: AttributedString()) { result, entry in
@@ -882,14 +886,16 @@ enum EmailDiffText {
     return text
   }
   static func spoken(_ parts: [DiffPart]) -> String {
-    parts.map { part in
-      let text = part.text.trimmingCharacters(in: .whitespacesAndNewlines)
+    let text = parts.map { part in
+      let words = part.text.trimmingCharacters(in: .whitespacesAndNewlines)
       switch part.kind {
       case .same: return part.text
-      case .added: return text.isEmpty ? " added line break " : " added: \(text). "
-      case .removed: return text.isEmpty ? " removed line break " : " removed: \(text). "
+      case .added: return words.isEmpty ? " added line break " : " added: \(words) "
+      case .removed: return words.isEmpty ? " removed line break " : " removed: \(words) "
       }
     }.joined()
+    // The markers' own spaces never add a pause the draft does not have.
+    return text.replacingOccurrences(of: " {2,}", with: " ", options: .regularExpression).trimmingCharacters(in: .whitespaces)
   }
   static func spoken(_ parts: [AddressPart]) -> String {
     parts.map { $0.kind == .same ? $0.address : "\($0.kind == .added ? "added" : "removed"): \($0.address)" }.joined(separator: ", ")

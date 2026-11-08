@@ -62,7 +62,8 @@ import XCTest
     XCTAssertEqual(changes.to, [AddressPart(kind: .same, address: "sam@example.com"), AddressPart(kind: .added, address: "kim@example.com")])
     XCTAssertEqual(changes.subject, [DiffPart(kind: .removed, text: "Saturday")])
     XCTAssertEqual(EmailDiffText.spoken(changes.to), "sam@example.com, added: kim@example.com")
-    XCTAssertEqual(EmailDiffText.spoken(DraftDiff.words("See you Saturday.", "See you Sunday.")), "See you  removed: Saturday.  added: Sunday. ")
+    XCTAssertEqual(EmailDiffText.spoken(DraftDiff.words("See you Saturday.", "See you Sunday.")), "See you removed: Saturday. added: Sunday.")
+    XCTAssertEqual(EmailDiffText.spoken(DraftDiff.words("a\n\nb", "a\nb")), "a removed line break added line break b")
   }
 }
 
@@ -75,6 +76,7 @@ import XCTest
     }
     XCTAssertEqual(decide(true, 0, false)?.state, "active")
     XCTAssertEqual(decide(true, 299.999, true)?.idleMs, 299_999)
+    XCTAssertEqual(decide(true, 299.9999, true)?.idleMs, 299_999, "Never past what the server accepts")
     XCTAssertEqual(decide(true, 300, true)?.state, "inactive")
     XCTAssertNil(decide(true, 300, false), "Nothing to end when nothing was reported")
     XCTAssertEqual(decide(false, 0, true)?.state, "inactive")

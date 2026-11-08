@@ -272,9 +272,9 @@ struct ArtifactRow: View {
 }
 
 /// Opens the artifacts sheet from a reply's file chips: on one file, or on the whole list for "+N more".
-private struct OpenReplyFileKey: EnvironmentKey { static let defaultValue: (String?) -> Void = { _ in } }
+private struct OpenReplyFileKey: EnvironmentKey { static let defaultValue: @MainActor (String?) -> Void = { _ in } }
 extension EnvironmentValues {
-  var openReplyFile: (String?) -> Void {
+  var openReplyFile: @MainActor (String?) -> Void {
     get { self[OpenReplyFileKey.self] }
     set { self[OpenReplyFileKey.self] = newValue }
   }
@@ -305,7 +305,8 @@ struct ReplyFilesView: View {
   }
   private func chip(_ action: @escaping () -> Void, @ViewBuilder label: () -> some View) -> some View {
     Button(action: action) {
-      label().font(.footnote).frame(maxWidth: 220, alignment: .leading).padding(.horizontal, 11).frame(minHeight: 36)
+      // Sized to its name; a name too long for the line truncates in the middle.
+      label().font(.footnote).padding(.horizontal, 11).frame(minHeight: 36)
         .background(Palette.surface(scheme), in: Capsule()).overlay(Capsule().stroke(Palette.line))
     }.buttonStyle(.plain)
   }

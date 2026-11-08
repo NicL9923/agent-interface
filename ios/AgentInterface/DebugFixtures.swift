@@ -243,7 +243,7 @@
       ]
     }()
     /// A reply with six generated files and a revised email draft, as `AGENT_INTERFACE_UI_REPLY_EXTRAS` shows them.
-    static let replyExtraMessages: [[String: Any]] = {
+    nonisolated(unsafe) static let replyExtraMessages: [[String: Any]] = {
       let json = { (value: Any) -> String in String(decoding: try! JSONSerialization.data(withJSONObject: value), as: UTF8.self) }
       let fence = { (card: [String: Any]) -> String in "```agent-ui\n" + json(["version": 1, "cards": [card]]) + "\n```" }
       let file = { (id: String, name: String, mime: String) -> [String: Any] in ["id": id, "name": name, "mime": mime, "size": 2048, "url": "/api/files/\(id)"] }

@@ -59,12 +59,13 @@ import XCTest
     // The earlier draft revises nothing, so it has no toggle.
     XCTAssertFalse(element(app, "emailChanges.sam1").exists)
     let body = element(app, "emailBody.sam2")
-    XCTAssertTrue(body.label.contains("removed: Saturday"), body.label)
-    XCTAssertTrue(body.label.contains("added: Sunday"), body.label)
+    let flat = { body.label.replacingOccurrences(of: "\n", with: " / ") }
+    XCTAssertTrue(body.label.contains("removed: Saturday"), "\(body.elementType.rawValue): " + flat())
+    XCTAssertTrue(body.label.contains("added: Sunday"), flat())
     capture(app, name: "Native revised email draft with changes")
     toggle.tap()
     XCTAssertTrue(app.buttons["Show changes"].waitForExistence(timeout: 5))
-    XCTAssertFalse(body.label.contains("removed:"), body.label)
+    XCTAssertFalse(body.label.contains("removed:"), flat())
     capture(app, name: "Native revised email draft without changes")
   }
 }
