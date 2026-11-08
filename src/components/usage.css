@@ -1,7 +1,19 @@
-.usage-panel { width: min(640px, calc(100vw - max(16px, env(safe-area-inset-left)) - max(16px, env(safe-area-inset-right)))); }
+/* Self-contained: the Integrations sheet's styles load only with that sheet. */
+.usage-panel { width: min(640px, calc(100vw - max(16px, env(safe-area-inset-left)) - max(16px, env(safe-area-inset-right)))); max-height: calc(100dvh - 40px); overflow: auto;
+  background: var(--raised); color: var(--ink); border: 1px solid var(--line); border-radius: 24px; padding: 26px; box-shadow: 0 24px 90px #14201926; }
+.usage-panel::backdrop { background: #14201955; }
+.usage-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.usage-header h2 { margin: 4px 0 8px; }
+.usage-intro { max-width: 58ch; margin: 0; font-size: 0.875rem; }
+.usage-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 16px 0; font-size: 0.875rem; }
+.usage-toolbar > button, .usage-resets > button { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 7px 12px; font-size: 0.8125rem; flex-shrink: 0; }
 .usage-accounts { display: grid; gap: 12px; }
+.usage-card { min-width: 0; padding: 18px; border: 1px solid var(--line); border-radius: 16px; }
+.usage-card-heading { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
 .usage-card h3 { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 0; font-size: 1rem; }
-.usage-plan { padding: 2px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 0.8125rem; font-weight: 600; }
+.usage-plan, .usage-tag { padding: 2px 8px; border-radius: 999px; font-size: 0.8125rem; font-weight: 600; }
+.usage-plan { background: var(--accent-soft); color: var(--accent); }
+.usage-tag { background: var(--rail); color: var(--muted); }
 .usage-windows { display: grid; gap: 14px; margin: 16px 0 6px; padding: 0; list-style: none; }
 .usage-window small { display: block; margin-top: 4px; color: var(--muted); font-size: 0.8125rem; }
 .usage-window-row { display: flex; justify-content: space-between; gap: 12px; font-size: 0.875rem; }

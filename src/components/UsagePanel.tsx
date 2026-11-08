@@ -30,11 +30,11 @@ export function UsagePanel({ bots, onClose }: { bots: Bot[]; onClose(): void }) 
   const accounts = usage.data?.accounts ?? [];
   const newest = accounts.map(row => row.fetchedAt).sort().at(-1);
   const name = (id: string) => bots.find(bot => bot.id === id)?.name;
-  return <Dialog className="integrations-panel usage-panel" aria-labelledby="usage-title" onCancel={onClose} onClose={onClose}>
-    <header><div><p className="eyebrow">Your household's accounts</p><h2 id="usage-title">Usage</h2></div>
+  return <Dialog className="usage-panel" aria-labelledby="usage-title" onCancel={onClose} onClose={onClose}>
+    <header className="usage-header"><div><p className="eyebrow">Your household's accounts</p><h2 id="usage-title">Usage</h2></div>
       <Button className="icon-button" aria-label="Close usage" onClick={onClose}><Icon name="close" /></Button></header>
-    <p className="muted">Plan limits and credits for the accounts your assistants use, as each provider reports them.</p>
-    <div className="integration-toolbar">
+    <p className="muted usage-intro">Plan limits and credits for the accounts your assistants use, as each provider reports them.</p>
+    <div className="usage-toolbar">
       <span className="muted" role="status">{usage.loading && !usage.data ? "Reading your accounts…" : newest ? <>Updated <When value={newest} inline /></> : ""}</span>
       <Button disabled={refreshing.busy || usage.loading} onClick={() => void refresh()}><Icon name="refresh" size={16} className={refreshing.busy ? "spin" : undefined} />Refresh</Button>
     </div>
@@ -55,10 +55,10 @@ export function UsagePanel({ bots, onClose }: { bots: Bot[]; onClose(): void }) 
 
 function AccountCard({ account, names, outcome, onReset }: { account: UsageAccount; names: string[]; outcome: string; onReset(force: boolean): Promise<void> }) {
   const title = accountName(account.provider);
-  return <article className="integration-card usage-card" aria-label={title}>
-    <div className="integration-card-heading">
+  return <article className="usage-card" aria-label={title}>
+    <div className="usage-card-heading">
       <h3><ProviderIcon provider={account.provider} size={18} />{title}{account.plan && <span className="usage-plan">{account.plan}</span>}</h3>
-      {account.fallbackOnly && <span className="integration-status">Fallback</span>}
+      {account.fallbackOnly && <span className="usage-tag">Fallback</span>}
     </div>
     {account.windows.length > 0 && <ul className="usage-windows">{account.windows.map((window, index) => <Allowance key={`${window.label}:${index}`} window={window} />)}</ul>}
     {account.details.map((line, index) => <p key={index} className="usage-detail">{line}</p>)}
