@@ -168,6 +168,7 @@ export async function createApp(
     });
   }
   const worker = new BackgroundWorker(store, runtime, config, undefined, options.sendApns, app.log, options.sendLiveActivity);
+  worker.identify = events => mains.identify(events);
   const health = new HealthMonitor({
     store, runtime, worker, config, maintenance: () => upgrades.maintenance(), log: app.log,
     metadataProbe: options.metadataProbe ?? defaultMetadataProbe(config),

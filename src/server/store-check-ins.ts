@@ -30,8 +30,9 @@ export class CheckInRepository {
    * Hermes's silent marker, failed or was stopped leaves no notification and no Today entry.
    * Its chat shows a failed run as a card instead.
    */
-  quiet(event: Pick<RuntimeEvent, "botId" | "routineId" | "kind" | "body">) {
-    if (!this.isCheckIn(event.botId, event.routineId)) return false;
+  quiet(event: Pick<RuntimeEvent, "botId" | "routineId" | "kind" | "body"> & { checkIn?: boolean }) {
+    // `checkIn` marks a run of a check-in that is already gone; see MainAssistants.identify.
+    if (!this.isCheckIn(event.botId, event.routineId) && event.checkIn !== true) return false;
     return event.kind !== "completed" || !event.body?.trim() || isSilentAnswer(event.body);
   }
 }

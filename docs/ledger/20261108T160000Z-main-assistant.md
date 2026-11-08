@@ -4,8 +4,10 @@ Code state `cbe3421` (this record's commit changes no input) on branch `t3/main-
 (origin/main `a3dfff6` plus PR #264), built from NicolasLaptop (Linux, Node 24.22.2,
 Python 3.14.10) and the Mac mini (macOS 27, Xcode 27, iPhone 18 Pro Max simulator
 `270DC27B`). The Mac checkout was a scratch clone at the same commits, delivered as a git
-bundle. Hermes source for the facts below: the production revision
-`3a1e9ef50a570b1544795ddad197ad2dcde430ab`, read only from a fresh shallow clone. No live
+bundle. Hermes source for the facts below: `3a1e9ef50a570b1544795ddad197ad2dcde430ab`, read
+only from a fresh shallow clone. That was wrong: production runs `ed1afb082eb3`, per the
+November 7 release record. The review fixes below were checked against `ed1afb0`, where every
+fact listed here still holds. No live
 Hermes, production VPS, real check-in run, physical device or screen reader was exercised.
 
 Hermes behaviors relied on, read from that source:
@@ -72,3 +74,53 @@ screenshots of the same come from `MainAssistantFlowTests`.
 Not built: A4, the "thanks" filter. Hermes's hosted-room send path has no quiet-post flag
 (`tui_gateway/hosted_room_service.py`, `gateway/hosted_room_discussion.py`), so skipping
 the wake would still allow later processing. It needs an upstream change first.
+
+## Review fixes, November 8
+
+An independent GPT-6.1 Sol review of `846ec70..f57166d` found eight privacy failures. All eight
+held against the code and against Hermes `ed1afb082eb3e46cf2edae9d8f68fb67b09ee4df`, read
+from a fresh clone, and all are fixed:
+
+1. Hand-offs forwarded the model's target words, which Hermes resolves by profile ID first. The
+   add-on now resolves once and forwards the authorized profile ID; a name two roster entries
+   share names neither.
+2. Only `message_agent` was gated. `cronjob_manage` deliveries (`deliver`, `failure_deliver`)
+   are now checked against the roster. Host-level tools (`terminal`, `execute_code`,
+   `process_manage`, `write_file`, `patch`) are guarded for main assistants only, which is a
+   guard and not a boundary, as the privacy limits say. `send_message` is not agent-callable
+   at `ed1afb0`.
+3. Check-in markers are now signed with an HMAC under the installation secret. A kept job
+   must deliver only to its own chat, with no failure delivery, rooms, skills, model pins,
+   toolsets, script, script-only mode or foreign context; anything else is deleted and replaced.
+4. Sharing now checks for check-in jobs on the assistant (recorded, or signed in Hermes; an
+   unreadable Hermes counts as yes), not only the main designation.
+5. A sharing change first pushes a roster where that assistant is listed nowhere and reaches
+   nobody, and is refused when Hermes does not take it; the final roster follows the outcome.
+6. Hermes's native Bot Mode section listed every profile, with descriptions, to every Bot Chat.
+   It is now filtered for every assistant by a per-profile roster, and the roster is mixed
+   into the capability epoch, so cached and stored prompts rebuild once. Once rosters arrive,
+   a profile without one sees and reaches nobody. This also closes native `message_agent` reach
+   from any assistant to another member's personal assistant, which existed before this work.
+7. No replacement check-in is made while a superseded one could still run. A refused delete
+   falls back to a pause.
+8. Discovery identifies untracked routine runs against signed check-in jobs before storing
+   them, holding the cursor when Hermes cannot be read. A run of a check-in already gone
+   stays quiet.
+
+Checks at the review-fix commit: `npm test` 152 files and 2,127 tests passed; typecheck, lint
+and build passed. `tests/hermes_delegation_test.py`: 20 tests passed with `HERMES_SOURCE` at
+the `ed1afb0` clone, including a real `_build_section` that lists "Dad private diary" to Mom's
+main assistant unfiltered and not filtered.
+
+Mutation checks against the fixes, run the same way: 31 lines broke and went red. Finding 1:
+dispatch by ID, ambiguous names. Finding 2: main and personal cron delivery to shared chats,
+rooms and platforms, failure delivery, terminal and file guards. Finding 3: signature,
+failure delivery, single own-chat delivery, script, context, and replacing drifted jobs.
+Finding 4: retry blocked while a job remains, unreadable Hermes blocks sharing (a survivor
+until its test was added). Finding 5: withdraw before the change, refusal when Hermes won't
+take it, a withdrawn assistant reaching nobody. Finding 6: unknown profiles reach nobody,
+section filtering, roster in the epoch, teammates removed from errors, a departed owner's
+assistant reaching nobody, only a main assistant asking. Finding 7: no replacement while an
+old one could run, pause when delete is refused. Finding 8: identify before recording,
+tracking signed jobs, a gone check-in staying quiet. One redundant guard went instead of
+being tested: the marker's assistant name, which the signature already covers.

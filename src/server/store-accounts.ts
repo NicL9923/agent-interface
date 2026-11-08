@@ -23,6 +23,13 @@ export class AccountRepository {
   formKey(userId: string): string {
     return createHmac("sha256", this.formSecret()).update(`wildbots-form-key\u0000${userId}`).digest("base64url");
   }
+  /**
+   * Signs a managed check-in routine as this installation's, for one member on one assistant, so a
+   * routine that copies the marker, from the API or Hermes's own cron tool, is never taken as one.
+   */
+  checkInSignature(botId: string, userId: string): string {
+    return createHmac("sha256", this.formSecret()).update(`wildbots-check-in\u0000${botId}\u0000${userId}`).digest("base64url").slice(0, 32);
+  }
   private secret?: string;
   /**
    * Creates the installation's form-key secret if it is missing. The store calls this once when it

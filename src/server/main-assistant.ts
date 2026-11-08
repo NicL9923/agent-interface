@@ -1,7 +1,9 @@
+import { timingSafeEqual } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { CHECK_IN_ROUTINE_NAME, checkInSchedule, scheduleMinutes, mainEligible, mainIneligibleReason, validCheckInHours } from "../shared/main-assistant.js";
-import type { Bot, CapabilityKey, DelegationPolicies, Preferences, Routine, Runtime } from "../shared/types.js";
+import type { Bot, CapabilityKey, DelegationPolicies, Preferences, Routine, Runtime, RuntimeEvent } from "../shared/types.js";
+import { withoutBotTag } from "../shared/event-copy.js";
 import { apiRoute } from "./api-route.js";
 import { signedIn } from "./auth.js";
 import { notFound, visible } from "./bot-access.js";
@@ -19,16 +21,44 @@ export { scheduleMinutes };
 // pass, so a failed or uncertain create or delete, a deleted or shared assistant and a removed
 // member all end with zero or one job, never an orphan or a duplicate.
 
-/** The first line of a check-in's prompt, which names its member, so a job this server lost track of is still found. */
-export const checkInMarker = (userId: string) => `[WildBots check-in for member ${userId}]`;
-const markerPattern = /^\[WildBots check-in for member ([^\]\s]+)\]/;
-/** The member a job's prompt says it checks in for. */
-export const checkInMember = (prompt: string | undefined) => markerPattern.exec(prompt ?? "")?.[1];
+/**
+ * The first line of a check-in's prompt: its member and assistant, signed with this installation's
+ * secret, so a job this server lost track of is still found and a copied marker is never trusted.
+ */
+export const checkInMarker = (store: Store, botId: string, userId: string) =>
+  `[WildBots check-in for member ${userId} on ${botId}, ${store.accounts.checkInSignature(botId, userId)}]`;
+const markerPattern = /^\[WildBots check-in for member ([^\]\s]+) on ([^\]\s,]+), ([A-Za-z0-9_-]+)\]/;
+/** Anything that looks like a check-in marker, signed or not. */
+const markerPrefix = /^\s*\[WildBots check-in\b/i;
+/** The member a job is a genuine check-in for: its marker names this job's assistant and its signature verifies. */
+export function signedCheckInMember(store: Store, job: Pick<Routine, "botId" | "prompt">): string | undefined {
+  const match = markerPattern.exec(job.prompt ?? "");
+  // The signature covers this job's own assistant, so a marker copied from another assistant's job fails it.
+  if (!match) return undefined;
+  const expected = Buffer.from(store.accounts.checkInSignature(job.botId, match[1])), given = Buffer.from(match[3]);
+  return expected.length === given.length && timingSafeEqual(expected, given) ? match[1] : undefined;
+}
 
-export function checkInPrompt(input: { userId: string; member: string; timezone: string; everyHours: number }) {
+/**
+ * Whether a job runs exactly as a check-in must: into its own assistant's chat only, with no failure
+ * delivery, rooms or execution overrides. Anything else, such as delivery to another assistant's
+ * chat, a group room or a script, would take what the check-in reads to someone else.
+ */
+export function managedConfig(job: Routine) {
+  const tokens = String(job.delivery?.deliver ?? "").split(",").map(part => part.trim().toLowerCase()).filter(Boolean);
+  const failure = job.delivery?.failure_deliver;
+  const empty = (value: unknown) => value === undefined || value === null || value === "" || Array.isArray(value) && value.length === 0;
+  const context = job.contextFrom ?? [];
+  return tokens.length === 1 && (tokens[0] === `bot-chat:${job.botId.toLowerCase()}` || tokens[0] === "bot-chat")
+    && empty(failure) && empty(job.roomIds) && empty(job.skills) && empty(job.model) && empty(job.provider)
+    && empty(job.enabledToolsets) && empty(job.script) && job.noAgent !== true
+    && context.every(ref => ref === "self" || ref === job.id);
+}
+
+export function checkInPrompt(input: { marker: string; member: string; timezone: string; everyHours: number }) {
   const { member } = input;
   return [
-    checkInMarker(input.userId),
+    input.marker,
     `You are ${member}'s main assistant in WildBots, checking in on your own about every ${input.everyHours === 1 ? "hour" : `${input.everyHours} hours`}.`,
     `${member}'s timezone is ${input.timezone}. If it is between 10 PM and 7 AM there right now, reply with exactly [SILENT] and nothing else.`,
     `Otherwise review what you can reach: connected calendars, email and task lists, and your recent conversation with ${member}.`,
@@ -41,7 +71,7 @@ export function checkInPrompt(input: { userId: string; member: string; timezone:
 
 /** Whether a routine is someone's managed check-in, which only its own controls change. */
 export function isManagedCheckIn(store: Store, routine: Pick<Routine, "botId" | "id" | "prompt">) {
-  return store.checkIns.current().some(job => job.botId === routine.botId && job.jobId === routine.id) || !!checkInMember(routine.prompt);
+  return store.checkIns.current().some(job => job.botId === routine.botId && job.jobId === routine.id) || !!signedCheckInMember(store, routine);
 }
 export function assertNotManaged(store: Store, routine: Pick<Routine, "botId" | "id" | "prompt">, botName = "its assistant") {
   if (isManagedCheckIn(store, routine))
@@ -49,7 +79,7 @@ export function assertNotManaged(store: Store, routine: Pick<Routine, "botId" | 
 }
 /** Nobody writes a check-in's marker into a routine of their own, which would make it look managed. */
 export function assertNoMarker(prompt: string) {
-  if (checkInMember(prompt)) throw httpError(400, "Routine instructions can't start with a WildBots check-in marker.", { code: "check_in_marker" });
+  if (markerPrefix.test(prompt)) throw httpError(400, "Routine instructions can't start with a WildBots check-in marker.", { code: "check_in_marker" });
 }
 
 /** A pass that could not finish every step. `members` names whose check-ins it left as they were; a whole-pass failure names nobody. */
@@ -72,6 +102,11 @@ export class MainAssistants {
   private soonTimer?: ReturnType<typeof setTimeout>;
   private unwatch?: () => void;
   private policy = { key: "", at: 0 };
+  /** Assistants whose sharing is changing: no roster lists them, and they reach nobody, until the change settles. */
+  private readonly withdrawn = new Set<string>();
+  /** Withdrawn assistants whose change settled but whose roster Hermes has not taken yet. */
+  private readonly releasing = new Set<string>();
+  private bots: Bot[] = [];
   constructor(private readonly runtime: Runtime, private readonly store: Store, private readonly config: Config, private readonly log: Log = quietLog) {}
 
   start() {
@@ -141,7 +176,11 @@ export class MainAssistants {
       catch (error) { failures.push(error); whole = true; }
     }
     // The roster is guidance and a gate in Hermes, separate from anyone's check-ins.
-    try { await this.pushPolicies(bots, household); } catch (error) { failures.push(error); }
+    this.bots = bots;
+    const released = [...this.releasing];
+    for (const botId of released) this.withdrawn.delete(botId);
+    try { await this.pushPolicies(bots, household, released.length > 0); for (const botId of released) this.releasing.delete(botId); }
+    catch (error) { for (const botId of released) this.withdrawn.add(botId); failures.push(error); }
     if (failures.length) {
       this.log.warn({ errors: failures.map(error => error instanceof Error ? error.message : String(error)) }, "Main assistant check-ins could not be reconciled yet");
       throw new ReconcileError(failures, members, whole);
@@ -158,7 +197,7 @@ export class MainAssistants {
     const bot = bots.find(row => row.id === value.mainBotId);
     if (!bot || !mainEligible(bot, user.id) || !value.checkIns?.enabled || !validCheckInHours(value.checkIns.everyHours)) return undefined;
     return { botId: bot.id, everyHours: value.checkIns.everyHours,
-      prompt: checkInPrompt({ userId: user.id, member: user.name, timezone: value.checkIns.timezone, everyHours: value.checkIns.everyHours }) };
+      prompt: checkInPrompt({ marker: checkInMarker(this.store, bot.id, user.id), member: user.name, timezone: value.checkIns.timezone, everyHours: value.checkIns.everyHours }) };
   }
 
   private async reconcileJobs(bots: Bot[], members: { id: string; name: string }[], failed: (userId: string, error: unknown) => void) {
@@ -169,24 +208,28 @@ export class MainAssistants {
     for (const row of tracked) if (!jobs.some(job => same(job, row))) this.store.checkIns.removed(row.botId, row.jobId);
     const held = new Map<string, Routine[]>();
     for (const job of jobs) {
-      const member = tracked.find(row => same(job, row))?.userId ?? checkInMember(job.prompt);
+      const member = tracked.find(row => same(job, row))?.userId ?? signedCheckInMember(this.store, job);
       if (member) held.set(member, [...held.get(member) ?? [], job]);
     }
     const wanted = new Map(members.flatMap(user => { const want = this.wanted(user, bots); return want ? [[user.id, want] as const] : []; }));
     for (const userId of new Set([...held.keys(), ...wanted.keys()])) {
       const want = wanted.get(userId);
       const have = held.get(userId) ?? [];
-      // The job this server created is kept over any other on the same assistant, such as one whose
-      // creation looked failed but went through.
-      const onBot = have.filter(job => job.botId === want?.botId);
+      // Only a job that runs exactly as a check-in must is kept; one delivering elsewhere or carrying
+      // overrides goes, whoever made it. The job this server created is kept over any other copy.
+      const onBot = have.filter(job => job.botId === want?.botId && managedConfig(job));
       const keep = onBot.find(job => tracked.some(row => same(job, row))) ?? onBot[0];
+      // A replacement waits until every job it would replace is deleted or at least paused.
+      let unsafe = false;
       for (const job of have) if (job !== keep) {
-        try { await this.remove(job); } catch (error) { failed(userId, error); }
+        try { await this.remove(job); }
+        catch (error) { failed(userId, error); if (!(error instanceof RemovalError && error.paused)) unsafe = true; }
       }
       if (!want) continue;
       const input = { botId: want.botId, name: CHECK_IN_ROUTINE_NAME, prompt: want.prompt, schedule: checkInSchedule(want.everyHours), enabled: true, recipientIds: [userId] };
       try {
         if (!keep) {
+          if (unsafe) throw new Error("An earlier check-in is still running in Hermes, so no new one was made.");
           const created = await this.runtime.saveRoutine(input);
           this.store.checkIns.track({ botId: want.botId, jobId: created.id, userId });
           this.store.routineRecipients(want.botId, created.id, [userId]);
@@ -201,56 +244,135 @@ export class MainAssistants {
     }
   }
 
-  /** A run in progress is stopped first, so nothing it finds is delivered after check-ins end. */
+  /**
+   * A run in progress is stopped first, so nothing it finds is delivered after check-ins end. When
+   * Hermes will not delete the job, it is paused instead, and the error says whether that worked.
+   */
   private async remove(job: Routine) {
-    if (job.running && this.runtime.stopRoutineRun) await this.runtime.stopRoutineRun(job.botId, job.id);
-    await this.runtime.deleteRoutine(job.id, job.botId);
+    try {
+      if (job.running && this.runtime.stopRoutineRun) await this.runtime.stopRoutineRun(job.botId, job.id);
+      await this.runtime.deleteRoutine(job.id, job.botId);
+    } catch (error) {
+      let paused = !job.enabled;
+      if (!paused && this.runtime.setRoutineEnabled) {
+        try { await this.runtime.setRoutineEnabled(job.botId, job.id, false); paused = true; } catch { /* Still running. */ }
+      }
+      throw new RemovalError(error, paused);
+    }
     this.store.checkIns.removed(job.botId, job.id);
     this.store.routineRecipients(job.botId, job.id, []);
   }
 
+  /** Whether any check-in job, recorded here or signed in Hermes, is on this assistant. A failed read counts as yes. */
+  async checkInsOn(botId: string) {
+    if (this.store.checkIns.current().some(job => job.botId === botId)) return true;
+    try { return (await this.runtime.routines()).some(job => job.botId === botId && !!signedCheckInMember(this.store, job)); }
+    catch { return true; }
+  }
+
   /**
-   * Each main assistant's roster: its member's other personal assistants, which it may message
-   * freely, and the assistants the whole household sees, which need that member's yes first since
-   * the whole household can read their chats. Another member's personal assistant is never listed.
+   * Records which routines in discovered events are check-ins before the events are stored, so a
+   * check-in whose creation answer was lost, and that this server has not reconciled yet, is still
+   * quiet. A read that fails leaves the events undiscovered for the next tick.
+   */
+  async identify(events: RuntimeEvent[]) {
+    const unknown = events.filter(event => event.routineId && !this.store.checkIns.isCheckIn(event.botId, event.routineId));
+    if (!unknown.length) return;
+    const jobs = await this.runtime.routines();
+    for (const event of unknown) {
+      const job = jobs.find(row => row.botId === event.botId && row.id === event.routineId);
+      const member = job && signedCheckInMember(this.store, job);
+      if (member) this.store.checkIns.track({ botId: event.botId, jobId: event.routineId!, userId: member });
+      // A job already gone cannot be checked. One that was named as a check-in is treated as one, which can only
+      // keep a notification back, never send one.
+      else if (!job && withoutBotTag(event.title).trim() === CHECK_IN_ROUTINE_NAME) (event as RuntimeEvent & { checkIn?: boolean }).checkIn = true;
+    }
+  }
+
+  /**
+   * Every assistant's roster, which Hermes enforces for its prompt, hand-offs and routine deliveries.
+   * A personal assistant sees its owner's other personal assistants and the assistants the whole
+   * household sees; a main assistant must ask its member before reaching the latter. A shared or
+   * ownerless assistant sees only the household's. Another member's personal assistant is never
+   * listed, and nor is an assistant whose sharing is changing.
    */
   policies(bots: Bot[], members: { id: string; name: string }[]): DelegationPolicies {
     const policies: DelegationPolicies = {};
     const target = (bot: Bot) => ({ id: bot.id, name: bot.name, ...(bot.description ? { description: bot.description } : {}) });
-    for (const user of members) {
-      const main = this.store.preferences(user.id).mainBotId;
-      if (!main || !mainEligible(bots.find(bot => bot.id === main), user.id)) continue;
-      const others = bots.filter(bot => bot.id !== main);
-      policies[main] = { member: user.name,
-        personal: others.filter(bot => mainEligible(bot, user.id)).map(target),
-        shared: others.filter(bot => visible(bot, undefined)).map(target) };
+    for (const bot of bots) {
+      const owner = bot.shared === false && bot.ownerId ? bot.ownerId : undefined;
+      const others = bots.filter(other => other.id !== bot.id && !this.withdrawn.has(other.id));
+      const household = others.filter(other => visible(other, undefined)).map(target);
+      if (this.withdrawn.has(bot.id)) { policies[bot.id] = { member: "", main: false, owned: true, personal: [], shared: [] }; continue; }
+      if (!owner) { policies[bot.id] = { member: "the household", main: false, owned: false, personal: [], shared: household }; continue; }
+      const member = members.find(user => user.id === owner);
+      // An owner who left the household keeps nothing reachable.
+      if (!member) { policies[bot.id] = { member: "", main: false, owned: true, personal: [], shared: [] }; continue; }
+      policies[bot.id] = { member: member.name, main: this.store.preferences(owner).mainBotId === bot.id, owned: true,
+        personal: others.filter(other => mainEligible(other, owner)).map(target), shared: household };
     }
     return policies;
   }
 
-  private async pushPolicies(bots: Bot[], members: { id: string; name: string }[]) {
+  private async pushPolicies(bots: Bot[], members: { id: string; name: string }[], force = false) {
     if (!this.runtime.delegationPolicy) return;
     const policies = this.policies(bots, members);
     const key = JSON.stringify(policies);
     // Sent again now and then, in case the add-on restarted from an older copy.
-    if (key === this.policy.key && Date.now() - this.policy.at < policyRefresh) return;
+    if (!force && key === this.policy.key && Date.now() - this.policy.at < policyRefresh) return;
     await this.runtime.delegationPolicy(policies);
     this.policy = { key, at: Date.now() };
+  }
+
+  private household() { return this.store.users().filter(user => allowedIdentity(this.config, user)); }
+
+  /**
+   * Before an assistant's sharing changes, Hermes stops listing it anywhere and stops it reaching
+   * anyone, so no roster built for its old sharing outlives the change. Throws, and nothing should
+   * change, when Hermes did not take that roster.
+   */
+  async withdraw(botId: string) {
+    if (!this.runtime.delegationPolicy) return;
+    this.withdrawn.add(botId);
+    this.releasing.delete(botId);
+    const bots = (await this.roster()) ?? this.bots;
+    try { await this.pushPolicies(bots.map(bot => ({ ...bot, ...this.store.presentation(bot.id) })), this.household(), true); }
+    catch (error) {
+      this.log.warn({ error: error instanceof Error ? error.message : String(error) }, "Hermes did not take the withdrawn roster");
+      throw httpError(502, "Hermes didn't update who this assistant can reach, so its sharing is unchanged. Try again.", { code: "roster_update_failed", expose: true });
+    }
+  }
+  /** After the sharing change settles, either way: its roster follows its sharing again once Hermes takes it. */
+  async release(botId: string) {
+    if (!this.withdrawn.has(botId)) return;
+    this.releasing.add(botId);
+    await this.reconcile().catch(() => {});
+  }
+}
+
+/** A deletion Hermes refused; `paused` says whether the job was at least stopped from running. */
+export class RemovalError extends Error {
+  constructor(readonly cause: unknown, readonly paused: boolean) {
+    super(cause instanceof Error ? cause.message : "Hermes did not remove the routine.");
   }
 }
 
 /**
- * Making someone's main assistant shared again: confirmed first, then its designation and check-ins
- * end before the sharing changes, so its check-ins never run in a chat the household can read.
+ * Making a personal assistant shared: when it is its owner's main assistant, or any check-in job is
+ * still on it (recorded here or signed in Hermes, as after an earlier attempt that cleared the main
+ * designation but could not remove the job), the owner confirms, the designation ends, and every
+ * check-in job on it must be confirmed gone before the sharing changes.
  */
-export async function endMainBeforeSharing(store: Store, mains: MainAssistants, userId: string, botId: string, confirmed: boolean | undefined) {
+export async function endCheckInsBeforeSharing(store: Store, mains: MainAssistants, userId: string, botId: string, confirmed: boolean | undefined) {
   const value = store.preferences(userId);
-  if (value.mainBotId !== botId) return;
-  if (!confirmed) throw httpError(409, `This is your main assistant. Sharing it ends that${value.checkIns?.enabled ? " and turns off its check-ins" : ""}.`, { code: "main_share_confirmation_required" });
-  store.savePreferences(userId, { ...value, mainBotId: undefined, checkIns: value.checkIns && { ...value.checkIns, enabled: false } });
+  const main = value.mainBotId === botId;
+  if (!main && !await mains.checkInsOn(botId)) return;
+  if (!confirmed) throw httpError(409, main ? `This is your main assistant. Sharing it ends that${value.checkIns?.enabled ? " and turns off its check-ins" : ""}.`
+    : "This assistant still has check-ins. Sharing it turns them off.", { code: "main_share_confirmation_required" });
+  if (main) store.savePreferences(userId, { ...value, mainBotId: undefined, checkIns: value.checkIns && { ...value.checkIns, enabled: false } });
   await mains.reconcile().catch(() => {});
-  if (store.checkIns.current().some(job => job.botId === botId))
-    throw httpError(502, "Hermes hasn't removed this assistant's check-ins yet, so it stays personal. Try again in a minute.", { code: "check_in_removal_pending" });
+  if (await mains.checkInsOn(botId))
+    throw httpError(502, "Hermes hasn't removed this assistant's check-ins yet, so it stays personal. Try again in a minute.", { code: "check_in_removal_pending", expose: true });
 }
 
 export function installMainAssistantRoutes(app: FastifyInstance, collaborators: {

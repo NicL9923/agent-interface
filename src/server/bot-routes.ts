@@ -11,7 +11,7 @@ import { assertRoutinesStayPrivate, serialDelivery } from "./routine-delivery.js
 import { avatar, botSaveRequest, id } from "./schemas.js";
 import { TALK_VOICES } from "../shared/voice.js";
 import type { Store } from "./store.js";
-import { endMainBeforeSharing, type MainAssistants } from "./main-assistant.js";
+import { endCheckInsBeforeSharing, type MainAssistants } from "./main-assistant.js";
 
 /** Marks a row unread when its latest message is newer than this person's last read of the chat. */
 function withUnread(bot: Bot, readAt: number | undefined): Bot {
@@ -150,21 +150,30 @@ export function installBotRoutes(app: FastifyInstance, collaborators: {
       throw httpError(409, "Confirm making this assistant personal. It will disappear for the rest of the household.", { code: "private_confirmation_required" });
     // Only its owner can share a personal assistant, so only their main assistant can end this way.
     if (input.shared && previous.shared === false && previous.ownerId === userId && mains)
-      await endMainBeforeSharing(store, mains, userId, id, confirmMainCleared);
+      await endCheckInsBeforeSharing(store, mains, userId, id, confirmMainCleared);
     // Claim the new sharing before Hermes changes anything, and only if nobody changed it first.
     const next = { shared: input.shared, ownerId: input.shared ? undefined : userId };
     // Routines that post in group chats are checked against the new sharing, and no routine's rooms
     // change until this save settles. See src/server/routine-delivery.ts.
-    const bot = await serialDelivery(store, async () => {
-      await assertRoutinesStayPrivate(runtime, store, userId, id, next);
-      const version = store.swapPresentation(id, previous, next);
-      if (version === false)
-        throw httpError(409, "Someone changed who can see this assistant while you were saving. Review it and try again.", { code: "sharing_changed" });
-      // A failed save puts sharing back only if no later save has changed it since.
-      try { return await runtime.saveBot(input, id); }
-      catch (error) { store.restorePresentation(id, version, previous); throw error; }
-    });
-    roster.forget();
+    // Who sees it is changing, so Hermes first stops listing it or letting it reach anyone, and nothing
+    // changes if Hermes did not take that. Its roster follows the outcome once the save settles.
+    const moving = (previous.shared !== false) !== (next.shared !== false) || previous.ownerId !== next.ownerId;
+    let bot;
+    try {
+      bot = await serialDelivery(store, async () => {
+        await assertRoutinesStayPrivate(runtime, store, userId, id, next);
+        if (moving) await mains?.withdraw(id);
+        const version = store.swapPresentation(id, previous, next);
+        if (version === false)
+          throw httpError(409, "Someone changed who can see this assistant while you were saving. Review it and try again.", { code: "sharing_changed" });
+        // A failed save puts sharing back only if no later save has changed it since.
+        try { return await runtime.saveBot(input, id); }
+        catch (error) { store.restorePresentation(id, version, previous); throw error; }
+      });
+    } finally {
+      roster.forget();
+      if (moving) await mains?.release(id);
+    }
     rosterChanged();
     return directory.decorate(directory.remember(bot), await nativeAvatar());
   });

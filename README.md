@@ -47,7 +47,9 @@ Ask entry sends typed words to its draft, and hands specialist work to the membe
 other assistants. A hand-off to a shared assistant asks the member first, because the
 whole household can read that chat. **Check in with me** in its details runs a quiet
 routine every 1 to 4 hours that speaks only when something needs the member and stays
-silent overnight in their timezone. See [main assistant](docs/HouseholdExperience.md#main-assistant).
+silent overnight in their timezone. Every assistant lists and reaches only its own roster
+inside Hermes, so another member's personal assistant never appears in its instructions or
+receives its messages. See [main assistant](docs/HouseholdExperience.md#main-assistant).
 <!-- Main assistant: end -->
 
 Web Settings > Notifications shows whether this account has notifications enabled

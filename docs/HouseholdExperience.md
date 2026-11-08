@@ -35,6 +35,11 @@ WildBots. It does not stop someone deliberately probing the server.
   of their own message.
 - While a Hermes update is waiting, "An assistant" in the busy list shows that
   some assistant is working, without saying which.
+- Hermes keeps no boundary between profiles on the host. An assistant with the
+  terminal, code or file tools can read or write any profile's files. The add-on
+  stops a main assistant from running the Hermes command line or writing into
+  another profile through those tools, but that is a guard against mistakes,
+  not a boundary.
 
 <!-- Main assistant: begin -->
 ## Main assistant
@@ -74,18 +79,35 @@ The routine shows in routine lists as Check-ins, managed from the assistant's
 details: it can't be edited, paused or deleted as a routine. Turning the switch
 off, choosing another main assistant, sharing or deleting the assistant, and the
 member leaving the household all remove it. The server records each check-in job
-it creates and also marks the instructions with the member, so a job created
-after a lost answer is found and adopted or removed. It reconciles after every
+it creates and also marks its instructions with the member, signed with this
+installation's secret, so a job created after a lost answer is found and adopted,
+and a copied marker is never trusted. A check-in must deliver only to its own
+assistant's chat, with no failure delivery, rooms, scripts or other overrides;
+one that does anything else is deleted and replaced. No replacement is made while
+an earlier check-in could still run. A completed run of a check-in this server
+has not recorded yet is still quiet, because discovery checks the job first. It reconciles after every
 change, at startup and every five minutes; a run in progress is stopped before its
 job is deleted. A Hermes without routines hides the switch.
 
 ### Hand-offs
 
-On each turn the main assistant reads a roster of its member's other personal
-assistants and the assistants the whole household sees, and can hand specialist
-work to them with Hermes's agent-message tool. The Hermes add-on enforces the
-roster: a message to an assistant off it, including another member's personal
-one, is refused before it is sent. A message to a shared assistant first asks
+Hermes lists every assistant in each one's instructions and lets any of them
+message any other. WildBots narrows that for every assistant, not only main ones:
+the server sends each its roster, and the Hermes add-on lists and lets it reach
+only that roster. A personal assistant's roster is its owner's other personal
+assistants and the assistants the whole household sees; a shared assistant's,
+or an older one's without an owner, is only the latter. Another member's personal
+assistant is never listed or reached. The add-on sends each hand-off to exactly
+the assistant it checked, by its Hermes ID. Before an assistant's sharing
+changes, Hermes stops listing it and stops it reaching anyone; if Hermes does
+not take that, the change is refused. An assistant the server has not described
+yet reaches nobody. Routines an assistant makes with Hermes's own cron tool
+deliver only within its roster, never into a group room from a personal
+assistant, and a main assistant's deliver only to its own chat or its member's
+personal assistants' chats.
+
+On each turn the main assistant also reads that roster as guidance and can hand
+specialist work to it with Hermes's agent-message tool. A message to a shared assistant first asks
 the member, through the usual question card, "Send this to Ranch Hand? Everyone
 in the household can read its chat," with the message shown; nothing is sent
 unless they choose Send it. Hand-offs to the member's own personal assistants need

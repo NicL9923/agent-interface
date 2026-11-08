@@ -1014,7 +1014,10 @@ struct BotSettingsView: View {
             confirmation = .personal(name: savedName)
           } else if e.code == "main_share_confirmation_required" {
             self.error = nil
-            confirmation = .shareMain(name: savedName, checkIns: store.bootstrap?.preferences.checkIns?.enabled == true)
+            // The server also asks when the assistant is no longer main but a check-in is still on it.
+            confirmation = store.bootstrap?.preferences.mainBotId == bot?.id
+              ? .shareMain(name: savedName, checkIns: store.bootstrap?.preferences.checkIns?.enabled == true)
+              : .shareLeftover(name: savedName)
           } else if e.confirmRequired {
             self.error = nil
             confirmation = .model(warning: e.localizedDescription)
@@ -1030,7 +1033,7 @@ struct BotSettingsView: View {
     switch choice {
     case .model: bot == nil ? saveBot(confirmed: true) : saveChanges(confirmed: true)
     case .personal: bot == nil ? saveBot(personal: true) : saveChanges(personal: true)
-    case .shareMain: saveChanges(mainCleared: true)
+    case .shareMain, .shareLeftover: saveChanges(mainCleared: true)
     case .discard: closeSheet()
     case .leaveMemory:
       memoryDirty = false
@@ -1552,11 +1555,12 @@ private struct RoutineAdvancedFields: View {
 /// The editor's preview: the avatar large, with chips to try each live state.
 private enum SettingsConfirmation: Identifiable {
   case model(warning: String), personal(name: String), delete(name: String), discard, leaveMemory
-  case shareMain(name: String, checkIns: Bool)
+  case shareMain(name: String, checkIns: Bool), shareLeftover(name: String)
   var id: String {
     switch self {
     case .model: "model"
     case .shareMain: "share-main"
+    case .shareLeftover: "share-leftover"
     case .personal: "personal"
     case .delete: "delete"
     case .discard: "discard"
@@ -1567,7 +1571,7 @@ private enum SettingsConfirmation: Identifiable {
     switch self {
     case .model: "Use this model?"
     case .personal(let name): "Make \(name) your personal assistant?"
-    case .shareMain(let name, _): "Share \(name) with the household?"
+    case .shareMain(let name, _), .shareLeftover(let name): "Share \(name) with the household?"
     case .delete(let name): "Delete \(name)?"
     case .discard: "Discard your unsaved changes?"
     case .leaveMemory: "Leave memory without saving?"
@@ -1578,6 +1582,7 @@ private enum SettingsConfirmation: Identifiable {
     case .model(let warning): warning
     case .personal: "It will disappear for the rest of the household, along with its conversation, routines and group chats."
     case .shareMain(let name, let checkIns): "\(name) is your main assistant. Sharing it ends that\(checkIns ? " and turns off its check-ins" : ""), and everyone in the household will see its chat."
+    case .shareLeftover(let name): "\(name) still has check-ins from when it was your main assistant. Sharing it turns them off, and everyone in the household will see its chat."
     case .delete: "This deletes the assistant in Hermes and removes its settings from WildBots."
     case .discard: "Your unsaved changes will be lost."
     case .leaveMemory: "Your unsaved memory edits will be lost. Save them before leaving if you want to keep them."
@@ -1587,7 +1592,7 @@ private enum SettingsConfirmation: Identifiable {
     switch self {
     case .model: "Confirm this model"
     case .personal: "Make it personal"
-    case .shareMain: "Share it"
+    case .shareMain, .shareLeftover: "Share it"
     case .delete: "Yes, delete"
     case .discard: "Discard changes"
     case .leaveMemory: "Discard edits and leave"

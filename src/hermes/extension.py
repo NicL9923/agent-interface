@@ -513,7 +513,12 @@ class Bridge:
         journal.memory_refresh = sibling_module("experience").MemoryRefresh(journal, server,
             lambda profile: (session for sid, session in server._sessions.copy().items() if sid == self.canonical.get(profile)))
         # Main assistants' rosters and the gate on their agent messages; see delegation.py.
-        self.delegation = sibling_module("delegation").Delegation(journal.db, journal.lock, self.profile_for_agent)
+        def hermes_root():
+            home = Path(self.get_hermes_home()).resolve()
+            return home.parent.parent if home.parent.name == "profiles" else home
+        self.delegation = sibling_module("delegation").Delegation(
+            journal.db, journal.lock, self.profile_for_agent,
+            current_profile=lambda: self.profile_name_for_home(self.get_hermes_home()) or "default", hermes_root=hermes_root)
 
     def profile_for_agent(self, agent):
         """The profile a tool-calling agent belongs to, from its own session store, as message_agent finds it."""

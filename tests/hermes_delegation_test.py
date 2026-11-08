@@ -5,6 +5,8 @@ to a Hermes checkout to run the same tests against its real tools/clarify_tool.p
 """
 import json
 import os
+import tempfile
+from pathlib import Path
 import sqlite3
 import sys
 import threading
@@ -16,8 +18,11 @@ from support import load_source
 SOURCE = os.environ.get("HERMES_SOURCE")
 delegation = load_source("src/hermes/delegation.py", "agent_interface_delegation_test")
 
-POLICY = {"mom-main": {"member": "Mom", "personal": [{"id": "mom-notes", "name": "Notes", "description": "Keeps lists"}],
-                       "shared": [{"id": "ranch", "name": "Ranch Hand", "description": "Runs the ranch"}, {"id": "default", "name": "Hermes"}]}}
+POLICY = {"mom-main": {"member": "Mom", "main": True, "owned": True, "personal": [{"id": "mom-notes", "name": "Notes", "description": "Keeps lists"}],
+                       "shared": [{"id": "ranch", "name": "Ranch Hand", "description": "Runs the ranch"}, {"id": "default", "name": "Hermes"}]},
+          "mom-notes": {"member": "Mom", "main": False, "owned": True, "personal": [{"id": "mom-main", "name": "Sage"}],
+                        "shared": [{"id": "ranch", "name": "Ranch Hand"}]},
+          "ranch": {"member": "the household", "main": False, "owned": False, "personal": [], "shared": [{"id": "default", "name": "Hermes"}]}}
 
 
 def stand_in_clarify():
@@ -56,7 +61,10 @@ class DelegationTest(unittest.TestCase):
             sys.modules["tools.clarify_tool"] = stand_in_clarify()
         self.db = sqlite3.connect(":memory:", check_same_thread=False)
         self.lock = threading.RLock()
-        self.gate = delegation.Delegation(self.db, self.lock, lambda agent: getattr(agent, "profile", None))
+        self.profile = "mom-main"
+        self.root = tempfile.mkdtemp()
+        self.gate = delegation.Delegation(self.db, self.lock, lambda agent: getattr(agent, "profile", None),
+                                          current_profile=lambda: self.profile, hermes_root=lambda: self.root)
         self.gate.replace(POLICY)
         self.sent = []
         self.tool = self.gate.gated(lambda **kwargs: self.sent.append(kwargs) or json.dumps({"status": "queued"}))
@@ -77,7 +85,8 @@ class DelegationTest(unittest.TestCase):
     def test_sends_to_the_members_own_assistant_without_asking(self):
         agent = Agent("mom-main", self.answer("Send it"))
         self.tool(target="Notes", message="Add milk", agent=agent)
-        self.assertEqual([call["target"] for call in self.sent], ["Notes"])
+        # Sent to the profile authorized, by ID, never the name the model wrote.
+        self.assertEqual([call["target"] for call in self.sent], ["mom-notes"])
         self.assertEqual(agent.asked, [])
 
     def test_asks_before_a_shared_assistant_and_shows_the_message(self):
@@ -88,6 +97,7 @@ class DelegationTest(unittest.TestCase):
         self.assertIn("Fix the gate on Tuesday", question)
         self.assertIn("Asking for: A time", question)
         self.assertEqual(self.sent[0]["message"], "Fix the gate on Tuesday")
+        self.assertEqual(self.sent[0]["target"], "ranch")
 
     def test_a_declined_or_unanswered_hand_off_sends_nothing_and_says_why(self):
         for answer, words in ((self.answer("Don't send"), "did not approve"), (lambda q: {"answers": {}, "outcome": "cancelled"}, "did not approve"),
@@ -117,19 +127,50 @@ class DelegationTest(unittest.TestCase):
         self.assertIn("Send this to Hermes?", agent.asked[0][0]["question"])
         self.assertEqual(len(self.sent), 1)
 
-    def test_other_assistants_and_withdrawals_are_untouched(self):
-        self.tool(target="anyone", message="x", agent=Agent("dads-diary"))
+    def test_withdrawals_pass_and_profiles_without_a_roster_reach_nobody_once_rosters_arrived(self):
         self.tool(target="ranch", cancel="d-1", agent=Agent("mom-main"))
-        self.assertEqual([call["target"] for call in self.sent], ["anyone", "ranch"])
+        self.assertEqual([call["target"] for call in self.sent], ["ranch"])
+        result = json.loads(self.tool(target="ranch", message="x", agent=Agent("brand-new")))
+        self.assertIn("Targets: none", result["error"])
+        # Before any roster arrives, as with an older WildBots server, Hermes behaves as before.
+        fresh = delegation.Delegation(sqlite3.connect(":memory:"), threading.RLock(), lambda agent: agent.profile)
+        sent = []
+        fresh.gated(lambda **kwargs: sent.append(kwargs) or "{}")(target="anyone", message="x", agent=Agent("dads-diary"))
+        self.assertEqual([call["target"] for call in sent], ["anyone"])
+
+    def test_a_name_that_is_also_another_profiles_id_sends_to_the_one_authorized(self):
+        # Hermes would read "notes" as Dad's profile ID; the gate authorized Mom's "Notes" (mom-notes).
+        self.gate.replace({"mom-main": {**POLICY["mom-main"], "personal": [{"id": "mom-notes", "name": "Notes"}]}})
+        self.tool(target="notes", message="Private list", agent=Agent("mom-main", self.answer("Send it")))
+        self.assertEqual([call["target"] for call in self.sent], ["mom-notes"])
+
+    def test_a_name_two_roster_assistants_share_names_neither(self):
+        self.gate.replace({"mom-main": {**POLICY["mom-main"], "personal": [{"id": "a", "name": "Helper"}, {"id": "b", "name": "Helper"}]}})
+        result = json.loads(self.tool(target="Helper", message="x", agent=Agent("mom-main")))
+        self.assertIn("isn't one of the assistants", result["error"])
+        self.assertEqual(self.sent, [])
+
+    def test_only_a_main_assistant_asks_and_other_assistants_never_reach_outside_their_roster(self):
+        agent = Agent("mom-notes", self.answer("Don't send"))
+        self.tool(target="ranch", message="x", agent=agent)
+        self.assertEqual(agent.asked, [])
+        self.assertEqual([call["target"] for call in self.sent], ["ranch"])
+        result = json.loads(self.tool(target="dad-diary", message="x", agent=Agent("ranch")))
+        self.assertIn("isn't one of the assistants", result["error"])
+
+    def test_the_teammate_list_hermes_puts_in_errors_is_removed(self):
+        tool = self.gate.gated(lambda **kwargs: json.dumps({"error": "busy", "teammates": ["dad-diary", "ranch"]}))
+        self.assertEqual(json.loads(tool(target="Notes", message="x", agent=Agent("mom-main"))), {"error": "busy"})
 
     def test_bad_policies_are_refused_and_the_last_good_one_kept(self):
         for bad in (None, [], {"bad id!": {"member": "x", "personal": [], "shared": []}},
                     {"mom-main": {"member": "x", "personal": [{"id": "../etc", "name": "Etc"}], "shared": []}},
                     {"mom-main": {"member": "x", "personal": "all", "shared": []}},
-                    {"mom-main": {"member": 3, "personal": [], "shared": []}}):
+                    {"mom-main": {"member": 3, "personal": [], "shared": []}},
+                    {"mom-main": {"member": "x", "main": "yes", "personal": [], "shared": []}}):
             with self.assertRaises(delegation.PolicyError):
                 self.gate.replace(bad)
-        self.assertEqual(set(self.gate.policies), {"mom-main"})
+        self.assertEqual(set(self.gate.policies), set(POLICY))
 
     def test_the_roster_survives_a_restart_and_an_empty_replace_clears_it(self):
         again = delegation.Delegation(self.db, self.lock, lambda agent: agent.profile)
@@ -143,7 +184,8 @@ class DelegationTest(unittest.TestCase):
         self.assertIn("WildBots asks Mom before anything is sent to one of these", text)
         self.assertIn('- Ranch Hand (target "ranch"): Runs the ranch', text)
         self.assertIsNone(self.gate.guidance_for("dads-diary"))
-        self.gate.replace({"solo": {"member": "Kid", "personal": [], "shared": []}})
+        self.assertIsNone(self.gate.guidance_for("mom-notes"), "Only a main assistant gets the hand-off guidance")
+        self.gate.replace({"solo": {"member": "Kid", "main": True, "personal": [], "shared": []}})
         self.assertIn("No other assistants are available", self.gate.guidance_for("solo"))
 
     def test_rpc_answers_invalid_params_with_an_error(self):
@@ -152,6 +194,120 @@ class DelegationTest(unittest.TestCase):
         self.assertEqual(handle(1, {"policies": "nope"})["error"][0], -32602)
         self.assertEqual(handle(2, {"policies": POLICY}), {"result": {"ok": True}})
 
+
+
+class DeliveryAndHostTest(unittest.TestCase):
+    def setUp(self):
+        self.root = tempfile.mkdtemp()
+        self.profile = "mom-main"
+        self.gate = delegation.Delegation(sqlite3.connect(":memory:"), threading.RLock(), lambda agent: None,
+                                          current_profile=lambda: self.profile, hermes_root=lambda: self.root)
+        self.gate.replace(POLICY)
+        self.ran = []
+        registry = types.SimpleNamespace(entries={name: types.SimpleNamespace(handler=self.handler(name)) for name in
+                                                  ("cronjob_manage", "terminal", "execute_code", "process_manage", "write_file", "patch")})
+        registry.get_entry = registry.entries.get
+        self.registry = registry
+        self.assertEqual(set(self.gate.gate_registry(registry)), set(registry.entries))
+
+    def handler(self, name):
+        def run(args, task_id=None):
+            self.ran.append((name, args))
+            return "{}"
+        return run
+
+    def call(self, name, args, profile="mom-main"):
+        self.profile = profile
+        return self.registry.entries[name].handler(args, task_id="t")
+
+    def refused(self, name, args, profile="mom-main"):
+        before = len(self.ran)
+        result = self.call(name, args, profile)
+        return len(self.ran) == before and "error" in json.loads(result)
+
+    def test_a_main_assistants_routines_deliver_only_to_its_own_and_its_members_personal_chats(self):
+        for deliver in ("origin", "local", "bot-chat", "bot-chat:mom-main", "bot-chat:mom-notes", "origin,bot-chat:mom-notes"):
+            self.assertFalse(self.refused("cronjob_manage", {"action": "create", "deliver": deliver}), deliver)
+        for deliver in ("bot-chat:ranch", "bot-chat:dad-diary", "room:public", "all", "telegram:-100123", "origin,bot-chat:ranch", ["local", "room:x"]):
+            self.assertTrue(self.refused("cronjob_manage", {"action": "create", "deliver": deliver}), deliver)
+        self.assertTrue(self.refused("cronjob_manage", {"action": "update", "job_id": "j", "failure_deliver": "bot-chat:ranch"}))
+
+    def test_other_assistants_deliver_only_within_their_roster(self):
+        self.assertFalse(self.refused("cronjob_manage", {"action": "create", "deliver": "bot-chat:ranch"}, "mom-notes"))
+        for deliver in ("bot-chat:dad-diary", "room:public"):
+            self.assertTrue(self.refused("cronjob_manage", {"action": "create", "deliver": deliver}, "mom-notes"), deliver)
+        # The household's own assistant may post in rooms, never into a member's private chat.
+        self.assertFalse(self.refused("cronjob_manage", {"action": "create", "deliver": "room:public"}, "ranch"))
+        self.assertTrue(self.refused("cronjob_manage", {"action": "create", "deliver": "bot-chat:mom-notes"}, "ranch"))
+        # A profile WildBots has not described yet reaches nobody.
+        self.assertTrue(self.refused("cronjob_manage", {"action": "create", "deliver": "bot-chat:ranch"}, "brand-new"))
+
+    def test_a_main_assistant_cannot_drive_hermes_or_other_profiles_from_the_host(self):
+        for command in ("hermes -p ranch chat -q hi", "cat ~/.hermes/profiles/dad-diary/memories/MEMORY.md", "HERMES_HOME=/x python run.py"):
+            self.assertTrue(self.refused("terminal", {"command": command}), command)
+        self.assertTrue(self.refused("execute_code", {"code": "import subprocess; subprocess.run(['hermes', 'peer', 'dm'])"}))
+        self.assertFalse(self.refused("terminal", {"command": "ls -la ~/Documents"}))
+        self.assertFalse(self.refused("terminal", {"command": "hermes -p ranch chat"}, "mom-notes"), "Only a main assistant is guarded")
+        other = Path(self.root, "profiles", "dad-diary", "x.md")
+        own = Path(self.root, "profiles", "mom-main", "workspace", "x.md")
+        self.assertTrue(self.refused("write_file", {"path": str(other), "content": "x"}))
+        self.assertFalse(self.refused("write_file", {"path": str(own), "content": "x"}))
+        self.assertTrue(self.refused("patch", {"path": str(other)}))
+
+
+SECTION = """## Messaging other agents
+This install runs Bot Mode.
+You are `@mom-main`. Your teammates (live roster; roles from their profiles):
+- `@dad-diary` — Dad private diary
+- `@ranch` — Ranch Hand — Runs the ranch
+- `@mom-notes` — Notes
+Peers: none."""
+
+
+class RosterSectionTest(unittest.TestCase):
+    def test_lists_only_the_roster_and_says_so_when_empty(self):
+        policy = delegation.validate(POLICY)["mom-main"]
+        text = delegation.filter_section(SECTION, policy, lambda profile: profile)
+        self.assertNotIn("dad-diary", text)
+        self.assertNotIn("Dad private diary", text)
+        self.assertIn("- `@ranch` — Ranch Hand — Runs the ranch", text)
+        self.assertIn("- `@mom-notes` — Notes", text)
+        self.assertIn("Peers: none.", text)
+        empty = delegation.filter_section(SECTION, {"member": "", "main": False, "owned": True, "personal": [], "shared": []}, lambda profile: profile)
+        self.assertIn("- (no teammates yet)", empty)
+        self.assertNotIn("@ranch", empty)
+
+    @unittest.skipUnless(SOURCE, "needs HERMES_SOURCE")
+    def test_the_real_hermes_prompt_section_and_its_epoch(self):
+        sys.path.insert(0, SOURCE)
+        try:
+            import importlib
+            probe = importlib.import_module("tools.bot_mode_probe")
+            root = Path(tempfile.mkdtemp())
+            for profile, description in (("mom-main", "Sage"), ("dad-diary", "Dad private diary"), ("ranch", "Runs the ranch")):
+                home = root / "profiles" / profile
+                home.mkdir(parents=True)
+                (home / "profile.yaml").write_text(f"description: {description}\nui_meta:\n  hermes-bots:\n    title: {profile.title()}\n")
+            (root / "config.yaml").write_text("{}\n")
+            home = root / "profiles" / "mom-main"
+            native = probe.get_bot_mode_protocol_section(home, force_refresh=True)
+            self.assertIn("Dad private diary", native, "Hermes lists every profile; the fix is needed")
+            gate = delegation.Delegation(sqlite3.connect(":memory:"), threading.RLock(), lambda agent: None)
+            gate.replace({"mom-main": {"member": "Mom", "main": True, "owned": True, "personal": [], "shared": [{"id": "ranch", "name": "Ranch"}]}})
+            before = probe.capability_fingerprint(home)
+            gate.install_probe(probe)
+            section = probe.get_bot_mode_protocol_section(home)
+            self.assertNotIn("dad-diary", section)
+            self.assertNotIn("Dad private diary", section)
+            self.assertIn("@ranch", section)
+            # The roster is part of the epoch, so a stored prompt is rebuilt once when it changes.
+            after = probe.capability_fingerprint(home)
+            self.assertNotEqual(before, after)
+            gate.replace({"mom-main": {"member": "Mom", "main": True, "owned": True, "personal": [], "shared": []}})
+            self.assertNotEqual(after, probe.capability_fingerprint(home))
+            self.assertIn("(no teammates yet)", probe.get_bot_mode_protocol_section(home))
+        finally:
+            sys.path.remove(SOURCE)
 
 if __name__ == "__main__":
     unittest.main()

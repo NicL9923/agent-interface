@@ -451,7 +451,9 @@ function LoadedBotSettings({
           onConfirm={() => { setConfirmPersonal(false); void saveChanges(false, true); }} />}
         {confirmation?.kind === "main" && existing && <SettingsConfirmation
           title={`Share ${savedName} with the household?`}
-          detail={`${savedName} is your main assistant. Sharing it ends that${bootstrap.preferences.checkIns?.enabled ? " and turns off its check-ins" : ""}, and everyone in the household will see its chat.`}
+          detail={bootstrap.preferences.mainBotId === existing.id
+            ? `${savedName} is your main assistant. Sharing it ends that${bootstrap.preferences.checkIns?.enabled ? " and turns off its check-ins" : ""}, and everyone in the household will see its chat.`
+            : `${savedName} still has check-ins from when it was your main assistant. Sharing it turns them off, and everyone in the household will see its chat.`}
           confirmLabel="Share it" danger busy={busy}
           fallbackFocus={() => dialog.current?.querySelector<HTMLElement>("[data-settings-save]:not(:disabled)") ?? dialog.current?.querySelector<HTMLElement>("#assistant-settings-title") ?? null}
           onCancel={() => setConfirmation(null)}

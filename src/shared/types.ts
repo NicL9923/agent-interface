@@ -451,8 +451,12 @@ export interface RuntimeEvent {
 }
 // --- Main assistant delegation ---
 export interface DelegationTarget { id: string; name: string; description?: string }
-/** Per main assistant's profile: the member it serves, assistants it may message freely, and those that need that member's yes first. */
-export type DelegationPolicies = Record<string, { member: string; personal: DelegationTarget[]; shared: DelegationTarget[] }>;
+/**
+ * Per profile, every assistant: the member it serves ("the household" for a shared one), whether it is
+ * that member's main assistant (which must ask before reaching `shared`), whether it is anyone's own,
+ * the member's personal assistants it may reach, and the household-visible ones.
+ */
+export type DelegationPolicies = Record<string, { member: string; main: boolean; owned: boolean; personal: DelegationTarget[]; shared: DelegationTarget[] }>;
 // --- End main assistant delegation ---
 export interface RuntimeDiscovery {
   cursor: string;
