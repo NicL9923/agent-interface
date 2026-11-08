@@ -131,7 +131,10 @@ private final class RouteHost: FakeHost, @unchecked Sendable {
     await api.runRouteCheck()
     lan.failing = URLError(.timedOut)
     _ = try await api.data(path: "/api/bootstrap")
-    XCTAssertEqual(primary.lastRequest?.url?.path, "/api/bootstrap")
+    // The failure also started a route check; its route list request can reach the primary origin
+    // before or after the read, and it must not finish during the checks below.
+    await api.routeCheck?.value
+    XCTAssertEqual(primary.requests.filter { $0.url?.path == "/api/bootstrap" }.count, 1)
     XCTAssertNil(api.activeRoute)
     // The route answers again, but a route that just failed is not trusted for a while.
     lan.failing = nil
