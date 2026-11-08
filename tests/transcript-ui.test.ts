@@ -21,6 +21,7 @@ vi.mock("../src/client-api", async original => (await import("./helpers/request-
   clearResponseCache: vi.fn(),
 }))(original)));
 vi.mock("../src/app/use-chat-presence", () => ({ useChatPresence: vi.fn() }));
+vi.mock("../src/app/use-device-activity", () => ({ useDeviceActivity: vi.fn() }));
 vi.mock("../src/components/Avatar", async (original) => ({
   ...await original<typeof import("../src/components/Avatar")>(),
   Avatar: () => createElement("span"),

@@ -23,6 +23,8 @@ const renders = vi.hoisted(() => ({ avatar: 0, markdown: 0 }));
 // SVG geometry and animation are browser concerns, not part of these state regressions.
 // Presence heartbeats would interleave with the writes these tests count; they have their own tests.
 vi.mock("../src/app/use-chat-presence", () => ({ useChatPresence: vi.fn() }));
+// Covered by device-activity-ui.test.ts; here its heartbeats would interleave with the writes under test.
+vi.mock("../src/app/use-device-activity", () => ({ useDeviceActivity: vi.fn() }));
 vi.mock("../src/components/Avatar", async (original) => ({
   ...await original<typeof import("../src/components/Avatar")>(),
   Avatar: (props: { state?: string; size?: number; prop?: string; reducedMotion?: boolean }) => (renders.avatar++, createElement("span", {

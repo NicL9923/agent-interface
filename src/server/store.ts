@@ -88,6 +88,13 @@ export class Store {
   removeNativeDevice(...args: Parameters<DeviceRepository["removeNativeDevice"]>) { return this.devices.removeNativeDevice(...args); }
   nativeDevices(...args: Parameters<DeviceRepository["nativeDevices"]>) { return this.devices.nativeDevices(...args); }
   allNativeDevices(...args: Parameters<DeviceRepository["allNativeDevices"]>) { return this.devices.allNativeDevices(...args); }
+  // BEGIN device activity
+  deviceActivity(...args: Parameters<DeviceRepository["deviceActivity"]>) { return this.devices.deviceActivity(...args); }
+  activeDevices(...args: Parameters<DeviceRepository["activeDevices"]>) { return this.devices.activeDevices(...args); }
+  endSessionActivity(...args: Parameters<DeviceRepository["endSessionActivity"]>) { return this.devices.endSessionActivity(...args); }
+  attachSubscriptionDevice(...args: Parameters<NotificationRepository["attachSubscriptionDevice"]>) { return this.notifications.attachSubscriptionDevice(...args); }
+  subscriptionDevices(...args: Parameters<NotificationRepository["subscriptionDevices"]>) { return this.notifications.subscriptionDevices(...args); }
+  // END device activity
   registerLiveActivity(...args: Parameters<DeviceRepository["registerLiveActivity"]>) { return this.devices.registerLiveActivity(...args); }
   liveActivityContext(...args: Parameters<DeviceRepository["liveActivityContext"]>) { return this.devices.liveActivityContext(...args); }
   removeLiveActivity(...args: Parameters<DeviceRepository["removeLiveActivity"]>) { return this.devices.removeLiveActivity(...args); }

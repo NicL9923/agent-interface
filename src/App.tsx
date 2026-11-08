@@ -13,6 +13,7 @@ import { GROUP_FALLBACK_POLL_MS, GROUP_UNNOTIFIED_POLL_MS, GROUPS_EVENT, useSess
 import { useDraft, useDraftPersistence } from "./app/use-draft";
 import { useConversation } from "./app/use-conversation";
 import { useChatPresence } from "./app/use-chat-presence";
+import { useDeviceActivity } from "./app/use-device-activity";
 import { useSubmission } from "./app/use-submission";
 import { sendingDraft, useSentEchoes, withEchoes } from "./app/sent-echo";
 import { moveSectionEdit, togglePinEdit, type UndoableEdit } from "./app/home-undo";
@@ -113,6 +114,7 @@ export function App() {
   // The chat counts as on screen only when nothing covers it: no panel, and on a phone, not the home list.
   const shownBotId = view === "conversation" && !panel && !(mobile && railOpen) && boot?.bots.some(bot => bot.id === botId) ? botId : undefined;
   useChatPresence(shownBotId, userId);
+  useDeviceActivity(userId);
   const readThrough = useReadThrough(userId, shownBotId, shownBotId
     ? latestMessageAt(boot?.bots.find(bot => bot.id === shownBotId), conversation?.botId === shownBotId ? conversation.messages : undefined) : undefined);
   const connectionLost = session.disconnected || conversationDisconnected || offline;

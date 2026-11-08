@@ -4,7 +4,7 @@ import { allowedIdentity, type Config } from "./config.js";
 import { maxDeliveryAttempts, type Store } from "./store.js";
 import type { Runtime } from "../shared/types.js";
 import { visibleTo } from "./bot-access.js";
-import { accountMarker, ApnsError, createApnsSender, type ApnsClearSender, type ApnsRefreshSender, type ApnsSender, type NativeDevice } from "./apns.js";
+import { accountMarker, ApnsError, createApnsSender, type ApnsBadgeSender, type ApnsClearSender, type ApnsRefreshSender, type ApnsSender, type NativeDevice } from "./apns.js";
 import { WidgetRefresh } from "./widget-refresh.js";
 import { FailureTracker, quietLog, safeError, type Log } from "./logging.js";
 import { LiveActivities, type LiveActivitySender } from "./live-activity.js";
@@ -20,6 +20,34 @@ export function inQuietHours(settings: import('../shared/types.js').Preferences[
   const time = `${parts.find(part=>part.type==='hour')!.value}:${parts.find(part=>part.type==='minute')!.value}`;
   return settings.quietStart < settings.quietEnd ? time >= settings.quietStart && time < settings.quietEnd : time >= settings.quietStart || time < settings.quietEnd;
 }
+/** One place a notification can go: a browser's subscription or an iPhone or iPad. */
+interface DeliveryTarget {
+  endpoint: string;
+  /** The installation behind it, when its client named one. Only such targets can be in use. */
+  deviceId?: string;
+  deliver(): Promise<void>;
+  /** Whether the push service says this endpoint is gone for good. */
+  dead(error: unknown): boolean;
+  drop(): void;
+  describe(error: unknown): string;
+  /** What a device left quiet still gets: the badge, for an iPhone or iPad. */
+  quiet?(): Promise<void>;
+}
+// Delivery records under derived endpoints, so "delivered" to an endpoint always means it showed there.
+const skippedEndpoint = (endpoint: string) => `skipped:${endpoint}`;
+const deadEndpoint = (endpoint: string) => `dead:${endpoint}`;
+/**
+ * A push service's answer for a subscription that will never work again. Measured 2026-11-07 against
+ * unknown endpoints: FCM answers 410, Mozilla 404, and Apple's Web Push 400 with reason BadDeviceToken
+ * (its expired subscriptions answer 410 Unregistered, as APNs does).
+ */
+const webPushDead = (error: unknown) => {
+  const { statusCode, body } = error as { statusCode?: number; body?: unknown };
+  return statusCode === 404 || statusCode === 410 || statusCode === 400 && typeof body === "string" && body.includes("BadDeviceToken");
+};
+/** Apple's answers for a token that will never work again. */
+const apnsTokenDead = (error: unknown) => error instanceof ApnsError
+  && (error.apnsStatus === 410 || error.apnsStatus === 400 && ["BadDeviceToken", "DeviceTokenNotForTopic"].includes(error.reason ?? ""));
 // Reconciling counted approvals against Hermes: at most this many assistants, this often, and
 // for no longer than the budget. A read still pending then is abandoned and checked next pass.
 const approvalCheckInterval = 60000;
@@ -57,6 +85,7 @@ export class BackgroundWorker {
     sendLiveActivity?: LiveActivitySender,
     private sendClear?: ApnsClearSender,
     sendRefresh?: ApnsRefreshSender,
+    private sendBadge?: ApnsBadgeSender,
   ) {
     this.loop = new FailureTracker(log, "Background worker");
     this.discovery = new FailureTracker(log, "Hermes event discovery");
@@ -68,6 +97,7 @@ export class BackgroundWorker {
       sendLiveActivity ??= sender.liveActivity;
       this.sendClear ??= sender.clear;
       sendRefresh ??= sender.refresh;
+      this.sendBadge ??= sender.badge;
       this.closeApns = () => sender.close();
     }
     this.live = new LiveActivities(store, runtime, config, sendLiveActivity, log);
@@ -261,42 +291,74 @@ export class BackgroundWorker {
         // Reading the chat on one device meanwhile likewise stops the alert reaching the others.
         const stillVisible = () => item.items.every(row => security || visibleTo(this.store, JSON.parse(row.payload).botId, item.user_id) && !this.store.seenInChat(row.id));
         let revoked = false;
-        for (const subscription of subscriptions) {
-          if (item.items.every(row => this.store.delivered(row.id, subscription.endpoint))) continue;
-          if (!stillVisible()) { revoked = true; break; }
+        const sendBadge = badge === undefined ? undefined : this.sendBadge;
+        const webDevices = this.store.subscriptionDevices(item.user_id);
+        const targets: DeliveryTarget[] = [
+          ...subscriptions.map((subscription): DeliveryTarget => ({
+            endpoint: subscription.endpoint, deviceId: webDevices.get(subscription.endpoint),
+            deliver: async () => { await this.send!(subscription, webPayload); },
+            dead: webPushDead,
+            drop: () => this.store.unsubscribe(item.user_id, subscription.endpoint),
+            describe: error => `Web Push ${(error as { statusCode?: number }).statusCode ?? "error"}: ${error instanceof Error ? error.message : String(error)}`,
+          })),
+          ...devices.map((device): DeliveryTarget => ({
+            endpoint: `apns:${device.environment}:${device.token}`, deviceId: device.deviceId,
+            deliver: async () => { await this.sendApns!(device, nativePayload); },
+            dead: apnsTokenDead,
+            drop: () => this.store.removeNativeDevice(item.user_id, device.deviceId),
+            describe: error => {
+              const apns = error instanceof ApnsError ? error : undefined;
+              return `APNs ${apns?.apnsStatus ?? "error"}: ${apns?.reason ?? (error instanceof Error ? error.message : String(error))}`;
+            },
+            quiet: sendBadge && (async () => { await sendBadge(device, badge!); }),
+          })),
+        ];
+        const marked = (endpoint: string) => item.items.every(row => this.store.delivered(row.id, endpoint));
+        // "sent" covers an earlier pass; a dead endpoint is recorded apart so it never counts as reached.
+        const attempt = async (target: DeliveryTarget): Promise<"sent" | "done" | "dead" | "failed" | "revoked"> => {
+          if (marked(target.endpoint)) return "sent";
+          if (marked(skippedEndpoint(target.endpoint)) || marked(deadEndpoint(target.endpoint))) return "done";
+          if (!stillVisible()) { revoked = true; return "revoked"; }
           try {
-            await this.send!(subscription, webPayload);
-            for (const row of item.items) this.store.markDelivered(row.id, subscription.endpoint);
+            await target.deliver();
+            for (const row of item.items) this.store.markDelivered(row.id, target.endpoint);
             this.push.success();
+            return "sent";
           } catch (error) {
-            const status = (error as { statusCode?: number }).statusCode;
-            if (status === 404 || status === 410) {
-              this.store.unsubscribe(item.user_id, subscription.endpoint);
-              for (const row of item.items) this.store.markDelivered(row.id, subscription.endpoint);
-            } else {
-              failed = `Web Push ${status ?? "error"}: ${error instanceof Error ? error.message : String(error)}`;
-              this.push.failure(failed);
+            if (target.dead(error)) {
+              target.drop();
+              for (const row of item.items) this.store.markDelivered(row.id, deadEndpoint(target.endpoint));
+              return "dead";
             }
+            failed = target.describe(error);
+            this.push.failure(failed);
+            return "failed";
           }
+        };
+        // Left quiet because the person is using another device: an iPhone still gets the new badge.
+        // The badge is a courtesy, so its failure is never retried; a dead token is still dropped.
+        const skip = async (target: DeliveryTarget) => {
+          if (marked(target.endpoint) || marked(skippedEndpoint(target.endpoint)) || marked(deadEndpoint(target.endpoint))) return;
+          try { await target.quiet?.(); } catch (error) {
+            if (target.dead(error)) target.drop();
+            else this.clears.failure(error);
+          }
+          for (const row of item.items) this.store.markDelivered(row.id, skippedEndpoint(target.endpoint));
+        };
+        // Only the devices the person is using get the alert, when one of them can take it. With none in
+        // use, or none of those reachable, every device does, as before. Security alerts reach every
+        // device, since the one in use could be the one the alert is about.
+        const active = security ? new Set<string>() : this.store.activeDevices(item.user_id);
+        const focused = targets.filter(target => target.deviceId !== undefined && active.has(target.deviceId));
+        let reached = false;
+        for (const target of focused) {
+          if (await attempt(target) === "sent") reached = true;
+          if (revoked) break;
         }
-        for (const device of revoked ? [] : devices) {
-          const endpoint = `apns:${device.environment}:${device.token}`;
-          if (item.items.every(row => this.store.delivered(row.id, endpoint))) continue;
-          if (!stillVisible()) { revoked = true; break; }
-          try {
-            await this.sendApns!(device, nativePayload);
-            for (const row of item.items) this.store.markDelivered(row.id, endpoint);
-            this.push.success();
-          } catch (error) {
-            const apns = error instanceof ApnsError ? error : undefined;
-            if (apns?.apnsStatus === 410 || (apns?.apnsStatus === 400 && ["BadDeviceToken", "DeviceTokenNotForTopic"].includes(apns.reason ?? ""))) {
-              this.store.removeNativeDevice(item.user_id, device.deviceId);
-              for (const row of item.items) this.store.markDelivered(row.id, endpoint);
-            } else {
-              failed = `APNs ${apns?.apnsStatus ?? "error"}: ${apns?.reason ?? (error instanceof Error ? error.message : String(error))}`;
-              this.push.failure(failed);
-            }
-          }
+        for (const target of revoked ? [] : targets) {
+          if (focused.includes(target)) continue;
+          if (reached) await skip(target);
+          else if (await attempt(target) === "revoked") break;
         }
         if (revoked) continue;
         let abandoned = 0;
@@ -314,21 +376,24 @@ export class BackgroundWorker {
       }
     }
   }
-  /** Removes notifications read in one place from the person's other iPhones and iPads. */
+  /** Removes notifications read in one place from the person's other iPhones and iPads, and lowers their badge. */
   private async clearRead() {
     if (!this.sendClear || !this.config.apns) return;
     const environment = this.config.apns.environment;
     const roster = rosterOnce(this.runtime);
-    const byEndpoint = new Map<string, { device?: NativeDevice; userId: string; tags: string[]; rows: string[] }>();
+    const byDevice = new Map<string, { device?: NativeDevice; userId: string; tags: string[]; rows: { id: string; endpoint: string }[] }>();
     for (const row of this.store.readOnDevices()) {
-      const device = this.store.nativeDevices(row.user_id, environment).find(device => `apns:${device.environment}:${device.token}` === row.endpoint);
-      const entry = byEndpoint.get(row.endpoint) ?? { device, userId: row.user_id, tags: [], rows: [] };
-      byEndpoint.set(row.endpoint, entry);
-      entry.rows.push(row.outbox_id);
+      // A device left quiet showed nothing to remove, only a badge to lower.
+      const skipped = row.endpoint.startsWith("skipped:");
+      const endpoint = skipped ? row.endpoint.slice("skipped:".length) : row.endpoint;
+      const device = this.store.nativeDevices(row.user_id, environment).find(device => `apns:${device.environment}:${device.token}` === endpoint);
+      const entry = byDevice.get(endpoint) ?? { device, userId: row.user_id, tags: [], rows: [] };
+      byDevice.set(endpoint, entry);
+      entry.rows.push({ id: row.outbox_id, endpoint: row.endpoint });
       // The device that read the chat already cleared its own notifications.
-      if (device && device.deviceId !== row.reader) entry.tags.push(row.tag);
+      if (!skipped && device && device.deviceId !== row.reader) entry.tags.push(row.tag);
     }
-    for (const [endpoint, entry] of byEndpoint) {
+    for (const entry of byDevice.values()) {
       // iOS throttles background pushes and drops them for a closed app, so a failed clear is
       // not retried. Opening the chat on that device clears the rest.
       if (entry.device && entry.tags.length) try {
@@ -337,7 +402,11 @@ export class BackgroundWorker {
         await this.sendClear(entry.device, entry.tags.reverse(), badgeFor(await roster(), this.store, entry.userId));
         this.clears.success();
       } catch (error) { this.clears.failure(error); }
-      for (const id of entry.rows) this.store.markCleared(id, endpoint);
+      else if (entry.device && this.sendBadge) try {
+        const badge = badgeFor(await roster(), this.store, entry.userId);
+        if (badge !== undefined) { await this.sendBadge(entry.device, badge); this.clears.success(); }
+      } catch (error) { this.clears.failure(error); }
+      for (const row of entry.rows) this.store.markCleared(row.id, row.endpoint);
     }
   }
 }

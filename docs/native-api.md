@@ -715,6 +715,52 @@ the app also clears a chat's notifications when it opens. Browsers get no cleari
 push: Safari revokes a Web Push subscription after three pushes that show no
 notification. A browser closes its own notifications for a chat when it opens.
 
+<!-- BEGIN device activity -->
+### Device activity
+
+Notifications go only to the devices their person is using now. A device is one
+installation, named by a **device ID**: a lowercase UUID chosen once and kept across
+sign-ins. iOS uses the push `deviceId` it registers with `PUT /api/native/push/device`,
+one per install. The web keeps one per browser profile in local storage, shared by its
+tabs, and attaches it to its Web Push subscription with `deviceId` on
+`POST /api/push/subscriptions` or `POST /api/push/subscriptions/status`. The server
+accepts upper case and stores lower case. A registration without `deviceId` clears any
+earlier one for that endpoint.
+
+| Route | Body |
+| --- | --- |
+| `PUT /api/devices/activity` | `{ "deviceId": "UUID", "state": "active", "idleMs": 1200 }` or `{ "deviceId": "UUID", "state": "inactive" }`; returns `{ "ok": true }` |
+
+While the app is in the foreground (iOS) or the window is visible and focused (web),
+and the person touched it in the last five minutes, send `active` every 15 seconds on
+any screen, with `idleMs` the milliseconds since their last input, below 300000. Send
+`inactive` when that stops: the app leaves the foreground, the window loses focus or
+hides, five minutes pass without input, or the account signs out or switches. The
+server answers 400 for a device ID that is not a UUID, a missing or unknown `state`,
+`idleMs` that is not a whole number from 0 to 299999, or any other field.
+
+A device counts as in use while its last beat is under 45 seconds old, its last input
+under five minutes old, and the session that sent it is still signed in. Signing out
+ends it at once. One account holds a device ID at a time: a beat from another account
+on the same device, after switching, takes it over, and one account's `inactive` never
+ends another's.
+
+When the person has a device in use that can receive the notification (an iOS device
+registered for push, or a browser subscription that named its device), only those get
+the alert. Each other iOS device gets the badge alone, `{ "aps": { "badge": N } }` at
+priority 5, and its later read-elsewhere clears lower that badge. Other browsers get
+nothing: Web Push cannot set a badge without showing a notification, so a browser left
+quiet updates its badge when it next opens the app. When no device is in use, or none of
+those in use could take it (no subscription, permission removed, an endpoint the push
+service reports gone, or a failed send), every device gets the alert as before. Security
+alerts always reach every device. A chat open on any device still silences that chat's
+notifications everywhere.
+
+A client that sends no device ID is never in use, so it keeps the earlier behavior: it
+gets alerts unless its person is using another device. A server without this route
+answers 404; clients ignore the failure.
+<!-- END device activity -->
+
 Configure `APNS_TEAM_ID`, `APNS_KEY_ID`, `APNS_TOPIC`, `APNS_PRIVATE_KEY_FILE`, and
 `APNS_ENVIRONMENT` together. `APNS_TOPIC` is the app's actual bundle ID.
 `APNS_PRIVATE_KEY_FILE` points to a private server file containing the Apple

@@ -1,3 +1,4 @@
+import { deviceBeatTtl, deviceIdleMs } from "../shared/device-activity.js";
 import { httpError } from "./http-error.js";
 import type { LiveState } from "./live-activity.js";
 import type { AccountRepository } from "./store-accounts.js";
@@ -67,6 +68,34 @@ export class DeviceRepository {
     return this.db.prepare("SELECT device_id AS deviceId,token,environment FROM native_devices WHERE user_id=? AND environment=?")
       .all(userId, environment) as { deviceId: string; token: string; environment: "sandbox" | "production" }[];
   }
+  // BEGIN device activity
+  /**
+   * Records that this person is using this installation now, `idleMs` after their last input, or
+   * that they stopped. One person holds an installation at a time: a beat from another account,
+   * after switching accounts, takes it over. The session that wrote it must stay signed in.
+   */
+  deviceActivity(userId: string, sessionHash: string, deviceId: string, platform: "web" | "ios", state: "active" | "inactive", idleMs = 0, now = Date.now()) {
+    if (state === "inactive") {
+      this.db.prepare("DELETE FROM device_activity WHERE device_id=? AND user_id=?").run(deviceId, userId);
+      return;
+    }
+    this.db.prepare(`INSERT INTO device_activity(device_id,user_id,session_hash,platform,beat_at,used_at) VALUES(?,?,?,?,?,?)
+      ON CONFLICT(device_id) DO UPDATE SET user_id=excluded.user_id,session_hash=excluded.session_hash,platform=excluded.platform,beat_at=excluded.beat_at,used_at=excluded.used_at`)
+      .run(deviceId, userId, sessionHash, platform, now, now - idleMs);
+  }
+  /** The installations this person is using now, whose sign-in is still current. */
+  activeDevices(userId: string, now = Date.now()): Set<string> {
+    const rows = this.db.prepare(`SELECT device_id FROM device_activity a WHERE user_id=? AND beat_at>? AND used_at>?
+      AND (EXISTS(SELECT 1 FROM sessions s WHERE s.hash=a.session_hash AND s.user_id=a.user_id AND s.expires>?)
+        OR EXISTS(SELECT 1 FROM native_sessions n WHERE n.hash=a.session_hash AND n.user_id=a.user_id AND n.expires>?))`)
+      .all(userId, now - deviceBeatTtl, now - deviceIdleMs, now, now) as { device_id: string }[];
+    return new Set(rows.map(row => row.device_id));
+  }
+  /** Signing out ends that session's activity at once rather than when its beats lapse. */
+  endSessionActivity(sessionHash: string) {
+    this.db.prepare("DELETE FROM device_activity WHERE session_hash=?").run(sessionHash);
+  }
+  // END device activity
   /** Every registered device in this environment, with the person it belongs to. */
   allNativeDevices(environment: "sandbox" | "production") {
     this.accounts.pruneNativeAuth();

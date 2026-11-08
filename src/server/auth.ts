@@ -211,10 +211,14 @@ export async function installAuth(
   });
   app.post("/api/auth/logout", async (req, reply) => {
     if (req.nativeSessionHash) {
+      store.endSessionActivity(req.nativeSessionHash);
       store.deleteNativeSession(req.nativeSessionHash);
       return { ok: true };
     }
-    if (req.cookies.session) store.deleteSession(hash(req.cookies.session));
+    if (req.cookies.session) {
+      store.endSessionActivity(hash(req.cookies.session));
+      store.deleteSession(hash(req.cookies.session));
+    }
     reply.clearCookie("session", { path: "/" });
     return { ok: true };
   });
@@ -225,6 +229,12 @@ export function stillSignedIn(store: Store, config: Config, req: FastifyRequest)
     : req.cookies.session ? store.getSession(hash(req.cookies.session)) : undefined;
   const user = session && session.userId === req.user?.id ? store.getUser(session.userId) : undefined;
   return !!user && allowedIdentity(config, user);
+}
+/** The hash of the session that signed this request in: a native bearer token or the web cookie. */
+export function sessionHash(req: FastifyRequest): string {
+  if (req.nativeSessionHash) return req.nativeSessionHash;
+  if (!req.cookies.session) throw new Error("Authentication hook was not installed");
+  return hash(req.cookies.session);
 }
 export function signedIn(req: FastifyRequest): User {
   if (!req.user) throw new Error("Authentication hook was not installed");
