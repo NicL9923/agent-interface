@@ -940,7 +940,7 @@ class CanonicalOpenTests(unittest.TestCase):
              "app_tool_call": {"id": "first:read", "name": "read_file", "arguments": json.dumps({"path": "report.pdf"})}},
             # A reused call ID keeps its matching output but cannot claim one call's detail.
             {**messages[2], "app_run_id": "first", "app_artifacts": [{"path": "/srv/a.txt"}]},
-            {**messages[3], "app_request_id": "steer", "app_sender_id": "nicolas", "app_run_id": "first", "app_attachments": [], "app_display_text": "Shorter please"},
+            {**messages[3], "app_request_id": "steer", "app_sender_id": "nicolas", "app_run_id": "first", "app_attachments": [], "app_display_text": "Shorter please", "app_steering": True},
             {**messages[4], "app_run_id": "first"},
             {**messages[5], "app_request_id": "photo", "app_sender_id": "nicolas", "app_run_id": "photo", "app_attachments": [photo], "app_display_text": ""},
             {**messages[6], "app_run_id": "photo", "app_artifacts": []},

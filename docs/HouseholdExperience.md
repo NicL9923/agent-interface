@@ -118,6 +118,31 @@ distinguishes pending, next-turn and applied status. Refresh preserves the nativ
 session, history, approvals and task identity. Native memory-tool writes keep
 Hermes's usual snapshot behavior, and other native conversations are unaffected.
 
+## Approvals, questions and steering
+
+An approval card shows what Hermes asks to run and the choices Hermes allows for that
+request. Allow once runs this command. Allow for this conversation lets the assistant
+run that kind of command in this chat without asking again. Always allow, under More
+choices, asks first: it names the kind of command, such as "recursive delete", and
+says the assistant will run any command of that kind without asking, in every
+conversation, until someone removes it in the assistant's Access settings under
+Always-allowed commands. Removing one takes effect at the assistant's next command in
+WildBots; a chat already running in another Hermes app, such as Discord, keeps it
+until that chat ends. Anyone who can see the assistant can remove one. Only an
+integration administrator can turn on Auto-review routine commands, which lets
+Hermes's own guardian run commands it judges safe and send the rest to a person, who
+can then allow only once. Notifications keep Review and Decline only.
+
+Decline stops that step. The card folds to "Declined. The assistant stopped that
+step." and the message box asks what to do instead, until the next message is sent.
+
+When Hermes recommends one answer to a question, the card tags it Recommended and,
+for a single choice, chooses it already, so one tap sends it. Several choices are
+never chosen for the person.
+
+A message sent while the assistant is working joins the task it is on. Once Hermes
+admits it that way, it shows "Added to the current task" on every device.
+
 ## Interactive replies
 
 In assistant Details, choose Enable interactive replies and save. This adds

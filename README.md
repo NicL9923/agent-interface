@@ -60,6 +60,19 @@ approval notification offers **Review** and **Decline** where the browser suppor
 notification buttons, as the iOS notification does. Decline works without opening
 the app and can only decline that one request.
 
+An approval card in a chat offers the choices Hermes allows for that request: Allow
+once, Allow for this conversation, Decline and, under More choices, Always allow.
+Always allow first says which kind of command Hermes will run for that assistant from
+now on, in every conversation. A command Hermes's guardian doubted offers only Allow
+once and Decline, and an older Hermes keeps Approve and Decline. Notifications never
+offer more than Review and Decline. After Decline, the card reads "Declined. The
+assistant stopped that step." and the message box asks what to do instead. Each
+assistant's Access settings list its always-allowed commands with Remove, and an
+integration administrator can turn on Hermes's auto-review of routine commands.
+A question's recommended answer is tagged and, for a single choice, already chosen.
+A message sent while the assistant works says "Added to the current task" once Hermes
+adds it to that task.
+
 ## Run locally
 
 Use Node 24.22 or 26.13 and npm. `.node-version` selects the tested Node 24 LTS
