@@ -217,3 +217,35 @@ and the e2e smoke suite (2) passed; `npm run test:py` 38 files passed. With `HER
 the `ed1afb0` clone, `tests/hermes_delegation_test.py` ran 23 tests, all passing, including the
 real scheduler run, the real resolver, profile list, peers config and roster section. No iOS
 source changed this round, so iOS was not rerun.
+
+## Review fixes, round four
+
+A fourth GPT-6.1 Sol review of `2e6b730..2bd6351` found two issues. Both held against real
+Hermes `ed1afb0`, and both are fixed:
+
+1. Pausing a routine let private results arrive after sharing. Pausing keeps a run in progress
+   and its queued delivery, which the sharing check skipped. Two fixes:
+   - At delivery time, the add-on producer, which Hermes's cron reaches for every Bot Chat the
+     add-on runs, now records the sending profile home on each delivery. The consumer checks
+     that sender against the current rosters before running the turn, and closes a refused
+     delivery as `failed` with reason `not_allowed`, never posting it. The rule matches the
+     share-time one: a personal assistant's routine output goes only to its owner's personal
+     assistants' chats, a shared one's only to household chats, and an agent message only to an
+     assistant on its sender's roster. A delivery whose sender can't be told is held.
+   - At share time, any conflicting routine now refuses the change, paused or running or not.
+   A test queues a private report through `ed1afb0`'s real `_deliver_to_bot_chat` and the real
+   mailbox, shares the destination, and sees the delivery held and never posted. With the
+   destination still personal, the same delivery is posted. Not covered at delivery time, and
+   documented: Bot Chats the add-on doesn't run (never opened in WildBots) and group rooms. For
+   those, the share-time refusal covers every routine that still exists.
+2. Provider failures read as overrides. `unreachable_retry`, `quota_hold_until` and
+   `quota_hold_cron_expr` are now bookkeeping. A real-Hermes test drives `mark_job_run` through a
+   provider outage, a failed retry rung, a quota hold past the next run, a daily routine's quota
+   recovery fire, a timeout and the recoveries between, on an interval and a daily schedule. It
+   checks every field written is listed. The 16 real states joined the fixture, and the
+   reconciliation test keeps a healthy check-in through all of them.
+
+Mutation checks, the same way: 12 lines broke and went red. They cover the consumer check (a
+unit test and the real-Hermes test), the source stamp (both), the routine-output rule, the
+agent-message rule, holding an unknown sender, paused or running routines blocking a sharing
+change, and each of the three bookkeeping fields.

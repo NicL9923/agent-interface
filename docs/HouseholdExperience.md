@@ -40,6 +40,10 @@ WildBots. It does not stop someone deliberately probing the server.
   stops a main assistant from running the Hermes command line or writing into
   another profile through those tools, but that is a guard against mistakes,
   not a boundary.
+- The add-on checks routine deliveries as they run only for the Bot Chats it
+  runs, which are the chats WildBots has opened. A result queued by a routine
+  that has since been deleted, for a chat WildBots never opened or for a group
+  chat, is posted as Hermes queued it.
 
 <!-- Main assistant: begin -->
 ## Main assistant
@@ -121,9 +125,12 @@ routine saves, resumes and trial runs refuse a routine that posts into a chat
 not everyone who sees its assistant can read, or, for a main assistant, anywhere
 outside WildBots, which includes "where it was made" without a recorded origin,
 since Hermes then posts to a platform's home channel. Changing who sees an
-assistant is refused, naming the routines, while an enabled routine posts into
-its chat, or from it into another's, that the change would let the wrong people
-read.
+assistant is refused, naming the routines, while any routine, paused or not,
+posts into its chat, or from it into another's, that the change would let the
+wrong people read: pausing stops future runs, not one in progress or a result
+already queued. The Hermes add-on also checks every Bot Chat delivery it runs at
+the moment it runs, against sharing as it is then, and holds one that would now
+reach the wrong people, recording why instead of posting it.
 
 On each turn the main assistant also reads that roster as guidance and can hand
 specialist work to it with Hermes's agent-message tool. A message to a shared assistant first asks

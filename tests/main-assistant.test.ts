@@ -20,11 +20,19 @@ it("accepts only whole hours from 1 to 4", () => {
 });
 
 // A job as Hermes ed1afb0's real scheduler left it, mid-run and after completing: see the fixture's source.
-const scheduled = JSON.parse(readFileSync(new URL("./fixtures/hermes-ed1afb0-scheduled-job.json", import.meta.url), "utf8")) as Record<"running" | "completed", Record<string, unknown>>;
+const scheduled = JSON.parse(readFileSync(new URL("./fixtures/hermes-ed1afb0-scheduled-job.json", import.meta.url), "utf8")) as
+  Record<"running" | "completed", Record<string, unknown>> & { failures: Record<string, Record<string, unknown>> };
 
 it("counts the scheduler's own bookkeeping, mid-run or after, as no override", () => {
   expect(nativeOverrides(scheduled.running)).toEqual([]);
   expect(nativeOverrides(scheduled.completed)).toEqual([]);
+});
+
+it("counts a provider-failure retry, a quota hold and their recoveries as bookkeeping too", () => {
+  for (const [state, job] of Object.entries(scheduled.failures)) expect(nativeOverrides(job), state).toEqual([]);
+  // The fixture really holds those states, so this can fail.
+  const fields = new Set(Object.values(scheduled.failures).flatMap(job => Object.keys(job)));
+  for (const field of ["unreachable_retry", "quota_hold_until", "quota_hold_cron_expr"]) expect(fields.has(field), field).toBe(true);
 });
 
 it("names every set native field that changes how a job runs", () => {

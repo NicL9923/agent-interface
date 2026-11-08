@@ -92,9 +92,10 @@ export async function assertRoutinesStayPrivate(runtime: Runtime, store: Store, 
   catch { throw unreadable(); }
   const after = (id: string) => id === botId ? next : current(id);
   const sees = (id: string) => { const bot = current(id); return !!bot && visible(bot, userId); };
-  // Hermes's scheduler posts into another assistant's chat whatever the rosters say, so an enabled routine
-  // posting into this assistant's chat, or from it into another's, is checked with the new sharing.
-  const chatConflicts = all.filter(routine => routine.enabled).flatMap(routine => {
+  // A routine posting into this assistant's chat, or from it into another's, is checked with the new sharing.
+  // Paused ones count too: pausing stops future runs, not one in progress or a delivery already queued.
+  // The add-on also checks each Bot Chat delivery as it runs (src/hermes/bot_delivery.py).
+  const chatConflicts = all.flatMap(routine => {
     const found = routineTargets(routine);
     if (found.unknown) throw unreadable();
     return (found.chats ?? []).filter(chat => chat !== routine.botId && (routine.botId === botId || chat === botId)

@@ -190,8 +190,9 @@ def deliver_tokens(value):
 
 
 class Delegation:
-    def __init__(self, db, lock, profile_for_agent, current_profile=None, hermes_root=None):
+    def __init__(self, db, lock, profile_for_agent, current_profile=None, hermes_root=None, profile_of_home=None):
         self.db, self.lock, self.profile_for_agent = db, lock, profile_for_agent
+        self.profile_of_home = profile_of_home or (lambda home: None)
         # The profile a registry tool runs for, from Hermes's profile-scoped home.
         self.current_profile = current_profile or (lambda: None)
         self.hermes_root = hermes_root
@@ -321,6 +322,33 @@ class Delegation:
             return refusal(f"{member} did not approve sending this, so nothing was sent. Do not resend it or try another way unless {member} asks.")
         message_agent_tool.__wrapped__ = original
         return message_agent_tool
+
+    def delivery_permit(self, record, target):
+        """Whether a queued Bot Chat delivery may run in ``target``'s chat, as sharing is now: (allowed, reason).
+
+        A routine's output (no author) follows the routine rule: a personal assistant's results go only to
+        its owner's personal assistants' chats, a shared one's only to chats the household sees. An agent
+        message (``author`` "bot:<profile>") must go to an assistant on its sender's roster; a main
+        assistant's shared hand-offs were approved when sent. A delivery whose sender can't be told is held.
+        """
+        if not self.enforcing:
+            return True, None
+        source = self.profile_of_home(record["source_home"]) if isinstance(record.get("source_home"), str) else None
+        author = record.get("author") if isinstance(record.get("author"), dict) else None
+        if not source and author and isinstance(author.get("id"), str) and author["id"].startswith("bot:"):
+            source = author["id"][len("bot:"):]
+        if not source:
+            return False, "WildBots couldn't tell which assistant sent this, so it was held."
+        if source == target:
+            return True, None
+        policy = self.policy_for(source)
+        if author:
+            allowed = roster_ids(policy)
+        else:
+            allowed = {row["id"] for row in (policy["personal"] if policy["owned"] else policy["shared"])}
+        if target in allowed:
+            return True, None
+        return False, f"Held: {source} can't post in {target}'s chat, which people who can't see {source} could read."
 
     def not_local(self, agent, ids):
         """The first ID Hermes would not deliver to as that local profile, or None. Unreadable counts."""
