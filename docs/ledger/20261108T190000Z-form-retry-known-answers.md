@@ -1,7 +1,7 @@
 # November 8 form retry answers
 
 Base `298c02dfb0e4ca99b77f26be50f21ad43fa48700`, source fingerprint
-`sha256:5edb1aada27e687a6bff10ba6b2cea8b0372400c9d61fc97b735a3b5ce7a2b74`.
+`sha256:1949aeafcbb94381c4b0b48ad6b3f77a2bd276478d8f76f4932f239b3b6d7ea4`.
 NicolasLaptop, Fedora Linux, Node 24.22.2, npm 11.19.1, Vitest 5.1.0.
 
 The new `tests/form-retry-ui.test.ts` regression keeps both copies mounted. B starts
@@ -19,15 +19,21 @@ unknown stored answers. A later attempt's record stays intact.
 Validation:
 
 - `npm test -- tests/form-retry-ui.test.ts tests/transcript-ui.test.ts` unit-passed
-  93 tests across 2 files.
+  94 tests across 2 files.
 - `npm run typecheck` compiled with no errors.
 - `npm run lint` passed.
 - The regression failed without the production fix, then passed with it.
+- Removing the web retry restoration preserved a retired field in storage and
+  failed the new retired-field test. The production code was restored afterward.
 
 No browser session, iOS build, native unit test, simulator or physical device ran.
-The Swift handler uses `FormRecords.keepingKnownAnswers`, whose existing native
-tests cover its decision table. Those tests and the changed native interaction
-still need Xcode on the Mac Mini. Linux results do not establish native behavior.
+The Swift handler calls the extracted `FormRecords.retryAnswers` helper, which
+uses the existing known-answer decision table and restores only current fields.
+A new native regression passes the still-mounted blank answers alongside the
+acceptance saved by another copy and covers unknown, unconfirmed and other
+attempts. That test, its mutation check, compilation and the changed native
+interaction still need Xcode on the Mac Mini. Linux results do not establish
+native behavior.
 
 The other entry points were checked in code: initial form restore, delayed
 acceptance, interruption polling, refusal retry and explicit send-again. Only

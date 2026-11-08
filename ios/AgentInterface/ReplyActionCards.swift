@@ -492,6 +492,13 @@ struct EmailDraftCardView: View {
 enum FormRecords {
   // A Hermes restart turns an accepted request into an interrupted one and never the reverse.
   private static let progress = ["editing": 0, "checking": 1, "sent": 2, "interrupted": 3]
+  /// A mounted copy may miss a delayed acceptance in storage. Restore the same attempt's known
+  /// answers before editing again, treating the mounted copy as stale even if it knew answers.
+  static func retryAnswers(_ stored: SavedFormReply?, attempt: Int, answers: FormAnswers.Answers, card: ReplyCard) -> FormAnswers.Answers {
+    let known = keepingKnownAnswers(stored, SavedFormReply(attempt: attempt, answers: answers, state: "interrupted", elsewhere: true))
+    let start = FormAnswers.start(card)
+    return start.merging(known.answers.filter { start.keys.contains($0.key) }) { $1 }
+  }
   /// A record that only knows the answers went from elsewhere keeps the answers another copy saw
   /// admitted for the same attempt, as the web's `keepKnownAnswers`.
   static func keepingKnownAnswers(_ stored: SavedFormReply?, _ next: SavedFormReply) -> SavedFormReply {
@@ -849,10 +856,7 @@ struct FormReplyCardView: View {
     }
   }
   private func sendAgain() {
-    // A delayed acceptance may have saved known answers while this copy stayed interrupted.
-    let known = FormRecords.keepingKnownAnswers(readSaved(), SavedFormReply(attempt: attempt, answers: answers, state: "interrupted", elsewhere: true))
-    let start = FormAnswers.start(card)
-    answers = start.merging(known.answers.filter { start.keys.contains($0.key) }) { $1 }
+    answers = FormRecords.retryAnswers(readSaved(), attempt: attempt, answers: answers, card: card)
     save(SavedFormReply(attempt: attempt + 1, answers: answers, state: "editing"), from: attempt)
     attempt += 1; elsewhere = false; status = .editing; error = nil
   }

@@ -203,6 +203,25 @@ final class ReplyActionCardsTests: XCTestCase {
     XCTAssertNil(FormRecords.nextRecord(restart, elsewhere(known)))
   }
 
+  func testRetryingAMountedFormRestoresTheSameAttemptsAdmittedAnswers() throws {
+    let card = try XCTUnwrap(cards([form])?.first)
+    let blank = FormAnswers.start(card)
+    let interrupted = SavedFormReply(attempt: 0, answers: blank, state: "interrupted", elsewhere: true)
+    var admitted = blank; admitted["city"] = .text("Marfa"); admitted["retired"] = .text("Old field")
+    let accepted = SavedFormReply(attempt: 0, answers: admitted, state: "sent")
+    let stored = try XCTUnwrap(FormRecords.nextRecord(interrupted, accepted))
+    var expected = blank; expected["city"] = .text("Marfa")
+    XCTAssertEqual(FormRecords.retryAnswers(stored, attempt: 0, answers: blank, card: card), expected,
+      "The mounted copy's blank answers must not replace the acceptance saved by another copy")
+    // Unknown, unconfirmed and other attempts' answers cannot become this attempt's answers.
+    var other = stored; other.attempt = 1
+    var checking = stored; checking.state = "checking"
+    var unknown = stored; unknown.elsewhere = true
+    for candidate in [nil, other, checking, unknown] as [SavedFormReply?] {
+      XCTAssertEqual(FormRecords.retryAnswers(candidate, attempt: 0, answers: blank, card: card), blank)
+    }
+  }
+
   func testAnswerTextSplitsAndTrimsAsTheWebDoes() throws {
     let card = try XCTUnwrap(cards([["id": "f", "type": "form", "title": "  Trip  ", "fields": [["id": "a", "label": "A", "kind": "textarea"]]]])?.first)
     XCTAssertEqual(FormAnswers.text(card, ["a": .text("one\r\ntwo")]), "My answers to \"Trip\":\n- A:\n  one\n  two")

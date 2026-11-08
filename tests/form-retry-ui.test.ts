@@ -86,3 +86,13 @@ it.each<{ reason: string; stored: Saved | null }>([
   else expect(JSON.parse(localStorage.getItem(key)!)).toEqual({ attempt: 3, state: "editing", answers });
   expect(write).not.toHaveBeenCalled();
 });
+
+it("drops retired fields when restoring admitted answers for a retry", async () => {
+  localStorage.setItem(key, JSON.stringify({ attempt: 0, answers: { city: "", dog: false }, state: "interrupted", elsewhere: true }));
+  const copy = show();
+  await copy.open();
+  localStorage.setItem(key, JSON.stringify({ attempt: 0, answers: { ...answers, retired: "Old field" }, state: "sent" }));
+  await click("They didn't arrive. Edit and send again", copy.container);
+  expect(copy.container.querySelector<HTMLInputElement>('input[type="text"]')!.value).toBe("Marfa");
+  expect(JSON.parse(localStorage.getItem(key)!)).toEqual({ attempt: 1, state: "editing", answers });
+});
