@@ -255,3 +255,62 @@ the e2e smoke suite (2) passed; `npm run test:py` 38 files passed. With `HERMES_
 `ed1afb0` clone, `tests/hermes_delegation_test.py` ran 28 tests and `tests/hermes_bot_delivery_test.py`
 18 (one skip, the 6ebd92d rollback case, which needs that older source), all passing. No iOS source
 changed this round.
+
+## Re-scope, round five
+
+The coordinator moved the general routine-delivery enforcement to its own branch,
+`t3/routine-delivery-privacy`, created locally at `a98ea55` and not pushed. Commit `7e4142e`
+removes it here with ordinary edits. No history was rewritten.
+
+Removed. These records above are superseded by the removal:
+- The Bot Chat delivery-time sender check and the producer's sender stamp from round four, item 1.
+  `src/hermes/bot_delivery.py` and its test are back to their `2bd6351` state.
+- The share-time routine refusals: round three, item 2, and the paused-routine rule from round
+  four. `src/server/routine-delivery.ts` is back to `846ec70`, so sharing checks only group
+  rooms, as before this branch.
+- On other assistants' `cronjob_manage`: the merged-job check, the `origin` refusal, the chat
+  checks and the routine-reference resolver. These were round two, item 3, for other assistants,
+  and round three, items 1 and 5. Other assistants' cron calls now pass through as Hermes runs them.
+- The app routine routes' chat checks for other assistants, from round two, item 3.
+
+Kept:
+- Native roster filtering for every assistant: the Bot Mode section, `message_agent` targets,
+  teammate lists, the versioned protocol and serialized publication.
+- For a main assistant: the update, resume and run refusals, the `origin` refusal, the field
+  limits, the host-tool guard, the hand-off pinned to a peer or profile, and the question gate
+  for shared targets.
+- The signed markers, the reconciler fixes and the bookkeeping-field lists with their
+  real-Hermes fixture.
+
+New main-assistant restrictions. Each one fails closed:
+- Its routines deliver only to its own chat. Nothing else is accepted: another assistant's
+  chat, a group room, `origin`, `all` or an outside platform. A missing or unreadable delivery
+  is refused too. This applies at every entry point:
+  - the Hermes cron tool on create, including `failure_deliver`;
+  - the app's routine save, paused or not;
+  - resume;
+  - trial run;
+  - event trigger;
+  - the managed check-in.
+  The app returns 409 `routine_chats`.
+- Making an assistant main is refused while any of its routines delivers elsewhere. The 409
+  `main_routine_delivery` names the routine. It is also refused when its routines can't be read.
+
+The known limit is recorded in `docs/HouseholdExperience.md` (Privacy limits) and
+`docs/HermesCapabilityMatrix.md`.
+
+Mutation checks, the same way: 14 lines broke and all went red. They cover:
+- the save, resume and trial, and event trigger checks;
+- making an assistant main, and the case where its routines are unreadable;
+- each own-chat condition: outward, rooms, other chats, and an `origin` with no provenance;
+- the add-on's create check, its `failure_deliver` check and its update, resume and run refusal;
+- the main-only scope, which a test that leaves other assistants alone turns red;
+- the managed check-in's failure-delivery condition.
+
+Checks at `0efa0ee`:
+- `npm test`: 152 files and 2,147 tests passed.
+- Typecheck, lint, build, Ruff and the e2e smoke suite (2) passed.
+- `npm run test:py`: 38 files passed.
+- With `HERMES_SOURCE` at the `ed1afb0` clone, `tests/hermes_delegation_test.py` ran 24 tests and
+  `tests/hermes_bot_delivery_test.py` ran 17 (one skip, the `6ebd92d` rollback case), all passing.
+- No iOS source changed, so iOS was not rerun.
