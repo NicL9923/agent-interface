@@ -578,6 +578,8 @@ struct BotListView: View {
       .onChange(of: store.scope) { _, scope in pendingGroup = GroupCreation.pending(scope: scope); Task { await store.refreshGroups() } }
       .onChange(of: creatingGroup) { _, _ in pendingGroup = GroupCreation.pending(scope: store.scope) }
       .pollWhileActive(id: "\(store.scope ?? "")|\(store.groupsPollInterval)", every: store.groupsPollInterval) { await store.refreshGroups() }
+      // The profile menu's Usage line: a menu's items need not appear again on each opening, so home keeps it fresh.
+      .pollWhileActive(id: "usage|\(store.scope ?? "")", every: .seconds(60)) { await store.refreshAccountUsageIfStale() }
       .newSectionAlert(for: $sectionFor)
       .signOutConfirmation(isPresented: $signOutConfirm, store: store)
       .undoToast($undo) { change in Task { await store.undo(change) } }
@@ -606,7 +608,7 @@ struct BotListView: View {
         Button(action: openUsage) {
           Label("Usage", systemImage: "gauge.with.dots.needle.50percent")
           Text(store.accountUsage.flatMap { AccountUsage.summary($0.accounts) } ?? "Plans, limits and credits")
-        }.onAppear { Task { await store.refreshAccountUsageIfStale() } }
+        }
         Button(action: openPreferences) { Label("Settings", systemImage: "gearshape") }
       }
       Section {

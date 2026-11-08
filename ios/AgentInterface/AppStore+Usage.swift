@@ -21,8 +21,9 @@ extension AppStore {
   func resetAccountUsage(_ account: UsageAccount, force: Bool, requestId: String) async throws -> ResetResult {
     guard let api else { throw APIError(message: "You are signed out.", status: 0) }
     let scope = self.scope
-    // A read already on its way started before this reset, so its answer is dropped when it lands.
+    // A read on its way before or during this reset is dropped when it lands: it may hold the limits from before.
     accountUsageGeneration += 1
+    defer { accountUsageGeneration += 1 }
     let result: ResetResult = try await api.write("/usage/accounts/\(APIClient.component(account.key))/reset", ResetRequest(confirmed: true, requestId: requestId, force: force))
     if scope == self.scope, let updated = result.account, var overview = accountUsage,
        let index = overview.accounts.firstIndex(where: { $0.key == updated.key }) {

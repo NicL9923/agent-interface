@@ -686,15 +686,19 @@ class AccountResets:
     """Banked ChatGPT resets, spent at most once per request ID and once at a time per account.
 
     The request ID is ChatGPT's own ``redeem_request_id``, so ChatGPT answers a repeat with ``already_redeemed``
-    instead of spending again. The receipt is written before ChatGPT is asked: a request with a recorded answer
-    returns it, and one whose answer was lost, after the consume was sent, is sent again with the same ID.
+    instead of spending again. The receipt is written before ChatGPT is asked and marked ``sent`` before the
+    consume goes out. A request with a recorded answer returns it. One that may have been consumed is only ever
+    settled by sending that same consume again: a later preflight read or Hermes's guard never decides it,
+    because the first consume may already have changed what they see.
     The spend uses Hermes's own guard and outcome mapping with the account's own token, never Hermes's
     resolver, which can fall back to another pooled account when a refresh fails.
     """
     def __init__(self, journal):
         self.journal = journal
         with journal.lock, journal.db:
-            journal.db.execute("CREATE TABLE IF NOT EXISTS account_resets(request_id TEXT PRIMARY KEY,account TEXT NOT NULL,result TEXT)")
+            journal.db.execute("CREATE TABLE IF NOT EXISTS account_resets(request_id TEXT PRIMARY KEY,account TEXT NOT NULL,result TEXT,sent INTEGER NOT NULL DEFAULT 0)")
+            if "sent" not in {row[1] for row in journal.db.execute("PRAGMA table_info(account_resets)")}:
+                journal.db.execute("ALTER TABLE account_resets ADD COLUMN sent INTEGER NOT NULL DEFAULT 0")
 
     def spend(self, data):
         request_id, force = data.get("requestId"), data.get("force")
@@ -712,7 +716,7 @@ class AccountResets:
             raise ExperienceError("A reset for this account is already in progress.", 409)
         try:
             with self.journal.lock, self.journal.db:
-                row = self.journal.db.execute("SELECT account,result FROM account_resets WHERE request_id=?", (request_id,)).fetchone()
+                row = self.journal.db.execute("SELECT account,result,sent FROM account_resets WHERE request_id=?", (request_id,)).fetchone()
                 if row is None:
                     self.journal.db.execute("INSERT INTO account_resets(request_id,account) VALUES(?,?)", (request_id, owner))
             if row is not None:
@@ -720,7 +724,7 @@ class AccountResets:
                     raise ExperienceError("That request ID belongs to another reset.", 409)
                 if row[1] is not None:
                     return json.loads(row[1])
-            result = self._redeem(account, request_id, force)
+            result = self._redeem(account, request_id, force, sent=bool(row and row[2]))
             if result["status"] != "uncertain":
                 with self.journal.lock, self.journal.db:
                     self.journal.db.execute("UPDATE account_resets SET result=? WHERE request_id=?", (json.dumps(result), request_id))
@@ -733,36 +737,51 @@ class AccountResets:
         status = status if status in _RESET_MESSAGES else "unavailable"
         return dict(status=status, message=_RESET_MESSAGES[status], availableCount=max(0, int(available)), windowsReset=max(0, int(windows)))
 
-    def _redeem(self, account, request_id, force):
+    def _mark_sent(self, request_id):
+        with self.journal.lock, self.journal.db:
+            self.journal.db.execute("UPDATE account_resets SET sent=1 WHERE request_id=?", (request_id,))
+
+    def _redeem(self, account, request_id, force, sent):
+        """Asks ChatGPT. ``sent`` means an earlier attempt may have consumed: then only the same consume is resent,
+        and anything short of ChatGPT's answer to it leaves the request uncertain."""
         from agent import account_usage as usage
         import httpx
         helpers = ("_codex_backend_urls", "_codex_headers", "_codex_banked_resets", "_codex_reset_guard", "_codex_reset_outcome")
+        undecided = "uncertain" if sent else "unavailable"
         if not all(callable(getattr(usage, name, None)) for name in helpers):
-            return self._result("unavailable")
+            return self._result(undecided)
         fresh = _fresh(account)
         if fresh is None:
-            return self._result("unavailable")
+            return self._result(undecided)
         usage_url, _credits_url, consume_url = usage._codex_backend_urls(fresh["base_url"] or "")
         headers = usage._codex_headers(fresh["token"], None)
-        sent = False
         try:
             with httpx.Client(timeout=15.0) as client:
-                response = client.get(usage_url, headers=headers)
-                response.raise_for_status()
-                payload = response.json() or {}
-                available = usage._codex_banked_resets(payload)
-                refused = usage._codex_reset_guard(payload, available, force)
-                if refused is not None:
-                    return self._result(refused.status, refused.available_count)
-                sent = True
+                if not sent:
+                    response = client.get(usage_url, headers=headers)
+                    response.raise_for_status()
+                    payload = response.json() or {}
+                    available = usage._codex_banked_resets(payload)
+                    refused = usage._codex_reset_guard(payload, available, force)
+                    if refused is not None:
+                        return self._result(refused.status, refused.available_count)
+                    self._mark_sent(request_id)
+                    sent = True
                 consumed = client.post(consume_url, headers={**headers, "Content-Type": "application/json"}, json={"redeem_request_id": request_id})
                 consumed.raise_for_status()
                 body = consumed.json() or {}
+                # The count before this consume is unknown on a resend, so the count left is read afterwards.
+                try:
+                    after = client.get(usage_url, headers=headers)
+                    after.raise_for_status()
+                    left = usage._codex_banked_resets(after.json() or {})
+                except Exception:
+                    left = None
         except Exception:
-            # Once the consume went out its answer is unknown; the same ID can be sent again safely.
+            # Once the consume may have gone out its answer is unknown; only the same ID is ever sent for it.
             return self._result("uncertain" if sent else "unavailable")
-        outcome = usage._codex_reset_outcome(body, available)
-        return self._result(outcome.status, outcome.available_count, outcome.windows_reset)
+        outcome = usage._codex_reset_outcome(body, (left + 1) if left is not None else 1)
+        return self._result(outcome.status, left if left is not None else outcome.available_count, outcome.windows_reset)
 
 
 MAX_MODEL_NAMES = 4000

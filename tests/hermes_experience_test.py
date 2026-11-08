@@ -11,6 +11,7 @@ import sqlite3
 import sys
 import threading
 import time
+import uuid
 import tempfile
 import types
 import unittest
@@ -891,7 +892,10 @@ class AccountUsageTests(unittest.TestCase):
                portal=None, chatgpt=None, refresh=None, legacy=False, home='/srv/hermes/profiles/ranch'):
         pools = {'openai-codex': [self.entry('codex-acct1-a')], 'openrouter': [self.entry('sk-or-1')], 'anthropic': [self.entry('sk-ant-oat-1')], **(pools or {})}
         self.fetched, self.network, self.refreshed = [], [], []
-        chatgpt = {'banked': 2, 'exhausted': True, 'code': 'reset', **(chatgpt or {})}
+        # Filled in place, so a test holding the dict sees ChatGPT's state and can change it between calls.
+        chatgpt = {} if chatgpt is None else chatgpt
+        for name, value in (('banked', 2), ('exhausted', True), ('code', None), ('consumed', set())):
+            chatgpt.setdefault(name, value)
         config = {'fallback_providers': list(fallback)}
         def fetch(provider, base_url=None, api_key=None, read_only=False, identity_id=None):
             self.fetched.append(dict(provider=provider, base_url=base_url, api_key=api_key, read_only=read_only, identity_id=identity_id))
@@ -915,12 +919,19 @@ class AccountUsageTests(unittest.TestCase):
                 if chatgpt.get('get_error'): raise chatgpt['get_error']
                 return Response({'banked': chatgpt['banked'], 'exhausted': chatgpt['exhausted']})
             def post(this, url, headers, json):
+                # ChatGPT spends once per redeem_request_id and answers a repeat with already_redeemed.
                 self.network.append(('POST', url, headers['Authorization'], json))
-                error = chatgpt.get('post_error')
-                if error:
-                    chatgpt['post_error'] = None
-                    raise error
-                return Response({'code': chatgpt['code']})
+                code = chatgpt['code']
+                if code is None:
+                    code = 'already_redeemed' if json['redeem_request_id'] in chatgpt['consumed'] else 'reset'
+                    if code == 'reset':
+                        chatgpt['consumed'].add(json['redeem_request_id']); chatgpt['banked'] -= 1
+                lost = chatgpt.get('lost_answers', 0)
+                if lost:
+                    # The consume landed; only its answer is lost.
+                    chatgpt['lost_answers'] = lost - 1
+                    raise RuntimeError('connection reset after send')
+                return Response({'code': code})
         guard = lambda payload, available, force: None if force or payload['exhausted'] else types.SimpleNamespace(status='not_exhausted', available_count=available)
         outcome = lambda body, available: types.SimpleNamespace(status=body['code'], available_count=available - 1, windows_reset=2)
         def refresh_matching(api_key_hint=None):
@@ -1052,7 +1063,7 @@ class AccountUsageTests(unittest.TestCase):
             experience.account_usage(dict(key=key))
             self.reset(key)
         self.assertEqual(self.fetched[0]['base_url'], 'https://gateway-b.example/codex')
-        self.assertEqual([call[1] for call in self.network], ['https://gateway-b.example/codex/usage', 'https://gateway-b.example/codex/consume'])
+        self.assertEqual({call[1] for call in self.network}, {'https://gateway-b.example/codex/usage', 'https://gateway-b.example/codex/consume'})
 
     def test_an_older_hermes_without_the_usage_cache_or_read_only_fetches_still_reads(self):
         with self.hermes(main='openrouter', fallback=[dict(provider='spike-fixture', model='m')], pools={'spike-fixture': [self.entry('k')]},
@@ -1101,24 +1112,33 @@ class AccountUsageTests(unittest.TestCase):
                 with self.subTest(request_id=request_id, force=force), self.assertRaisesRegex(experience.ExperienceError, reason):
                     self.reset(codex, request_id, force)
         base = 'https://chatgpt.com/backend-api/codex'
-        self.assertEqual(self.network, [('GET', base + '/usage', 'codex-acct1-a', None), ('POST', base + '/consume', 'codex-acct1-a', {'redeem_request_id': self.REQUEST})])
+        self.assertEqual(self.network, [('GET', base + '/usage', 'codex-acct1-a', None), ('POST', base + '/consume', 'codex-acct1-a', {'redeem_request_id': self.REQUEST}),
+                                        ('GET', base + '/usage', 'codex-acct1-a', None)])
 
     def test_hermes_guard_refuses_a_wasted_reset_unless_forced(self):
         with self.hermes(chatgpt={'exhausted': False}):
             key = experience.account_list()['accounts'][0]['key']
             self.assertEqual(self.reset(key)['status'], 'not_exhausted')
             self.assertEqual(self.reset(key, '7f1d2c3b-4a59-4e7d-8c1b-2a3f4e5d6c7b', force=True)['status'], 'reset')
-        self.assertEqual([call[0] for call in self.network], ['GET', 'GET', 'POST'])
+        self.assertEqual([call[0] for call in self.network], ['GET', 'GET', 'POST', 'GET'])
 
-    def test_a_consume_whose_answer_was_lost_is_sent_again_with_the_same_id_and_chatgpt_dedupes_it(self):
-        with self.hermes(chatgpt={'post_error': RuntimeError('connection reset after send'), 'code': 'already_redeemed'}):
+    def test_a_consume_whose_answer_was_lost_is_settled_only_by_sending_the_same_id_again(self):
+        chatgpt = {'lost_answers': 2}
+        with self.hermes(chatgpt=chatgpt):
             key = experience.account_list()['accounts'][0]['key']
             self.assertEqual(self.reset(key)['status'], 'uncertain')
-            self.assertEqual(self.reset(key)['status'], 'already_redeemed')
-            # Now recorded: a third try never reaches ChatGPT.
-            self.assertEqual(self.reset(key)['status'], 'already_redeemed')
+            # A retry never asks Hermes's guard or a usage read to decide it: the first consume may already have
+            # emptied the bank. Even with ChatGPT's usage read now failing, it stays uncertain until the consume answers.
+            chatgpt['get_error'] = RuntimeError('ChatGPT usage read failed')
+            self.assertEqual(self.reset(key)['status'], 'uncertain')
+            chatgpt['get_error'] = None
+            result = self.reset(key)
+            self.assertEqual((result['status'], result['availableCount']), ('already_redeemed', 1))
+            # Now recorded: another try never reaches ChatGPT.
+            self.assertEqual(self.reset(key), result)
         consumes = [call[3] for call in self.network if call[0] == 'POST']
-        self.assertEqual(consumes, [{'redeem_request_id': self.REQUEST}] * 2)
+        self.assertEqual(consumes, [{'redeem_request_id': self.REQUEST}] * 3)
+        self.assertEqual(chatgpt['banked'], 1, 'One reset was spent')
 
     def test_a_failure_before_the_consume_is_a_definite_no(self):
         with self.hermes(chatgpt={'get_error': RuntimeError('ChatGPT unreachable')}):
@@ -1127,15 +1147,27 @@ class AccountUsageTests(unittest.TestCase):
             self.assertEqual(self.reset(key)['status'], 'unavailable')
         self.assertEqual([call[0] for call in self.network], ['GET'])
 
-    def test_a_request_hermes_stopped_during_is_sent_again_with_the_same_id(self):
-        with self.hermes():
+    def test_a_request_hermes_stopped_during_resumes_where_it_stopped(self):
+        owner = experience._digest('openai-codex', 'identity', 'codex:acct1:user')
+        for sent, calls in ((0, ['GET', 'POST', 'GET']), (1, ['POST', 'GET'])):
+            with self.subTest(sent=sent), self.hermes():
+                key = experience.account_list()['accounts'][0]['key']
+                request_id = str(uuid.uuid4())
+                # A receipt with no answer is what a stop before (sent 0) or after (sent 1) the consume went out leaves.
+                with self.journal.lock, self.journal.db:
+                    self.journal.db.execute('INSERT INTO account_resets(request_id,account,sent) VALUES(?,?,?)', (request_id, owner, sent))
+                self.assertEqual(self.reset(key, request_id)['status'], 'reset')
+                self.assertEqual([call[0] for call in self.network], calls)
+
+    def test_an_unrenewable_token_leaves_a_maybe_consumed_reset_uncertain(self):
+        old = self.jwt('acct1-old', 30)
+        owner = experience._digest('openai-codex', 'identity', 'codex:acct1:user')
+        with self.hermes(pools={'openai-codex': [self.entry(old)]}):
             key = experience.account_list()['accounts'][0]['key']
-            # A receipt with no answer is what a stop between the consume and its record leaves.
             with self.journal.lock, self.journal.db:
-                owner = experience._digest('openai-codex', 'identity', 'codex:acct1:user')
-                self.journal.db.execute('INSERT INTO account_resets(request_id,account) VALUES(?,?)', (self.REQUEST, owner))
-            self.assertEqual(self.reset(key)['status'], 'reset')
-        self.assertEqual([call[3] for call in self.network if call[0] == 'POST'], [{'redeem_request_id': self.REQUEST}])
+                self.journal.db.execute('INSERT INTO account_resets(request_id,account,sent) VALUES(?,?,1)', (self.REQUEST, owner))
+            self.assertEqual(self.reset(key)['status'], 'uncertain')
+        self.assertEqual(self.network, [])
 
     def test_a_request_id_cannot_be_reused_for_another_account(self):
         with self.hermes(pools={'openai-codex': [self.entry('codex-acct1-a'), self.entry('codex-acct2-a')]}):
@@ -1160,7 +1192,7 @@ class AccountUsageTests(unittest.TestCase):
     def test_never_returns_wording_that_can_quote_the_provider(self):
         with self.hermes(chatgpt={'code': 'queued'}):
             result = self.reset(experience.account_list()['accounts'][0]['key'])
-        self.assertEqual(result, dict(status='unavailable', message=experience._RESET_MESSAGES['unavailable'], availableCount=1, windowsReset=2))
+        self.assertEqual(result, dict(status='unavailable', message=experience._RESET_MESSAGES['unavailable'], availableCount=2, windowsReset=2))
 
     def test_an_expiring_token_is_renewed_only_through_its_own_pool_entry_and_only_as_the_same_account(self):
         old, renewed, other = self.jwt('acct1-old', 30), self.jwt('acct1-new', 3600), self.jwt('acct2-new', 3600)
