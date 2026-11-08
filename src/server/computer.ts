@@ -20,6 +20,8 @@ const ticketQuery = z.object({ticket: z.string().regex(/^[A-Za-z0-9_-]{43}$/)}).
 const empty = z.object({}).strict();
 const maxBuffered = 4 * 1024 * 1024;
 const frameSize = (data: RawData) => Array.isArray(data) ? data.reduce((size, item) => size + item.length, 0) : data.byteLength;
+// The WebSocket plugin admits frames up to a linked Mac's 8 MiB; these sockets keep their own 256 KiB limit.
+export const socketFrameLimit = 256 * 1024;
 const confirmationWindow = 2 * 3600000;
 type Terminals = Pick<SystemTerminal, "available" | "target" | "reason" | "sessionId" | "sessions" | "attach" | "end" | "endSession" | "close">;
 const closeCode = (code: number) => (code >= 1000 && code <= 1014 && ![1004, 1005, 1006].includes(code))
@@ -203,6 +205,7 @@ export async function installComputerRoutes(app: FastifyInstance, config: Config
     }
     // Install synchronously so noVNC's first handshake frame cannot be dropped.
     socket.on("message", (data, binary) => {
+      if (frameSize(data) > socketFrameLimit) {stop(1009, "Message too large"); return;}
       if (!check()) return;
       if (maintenance()) {stop(4003, "Computer input is paused for maintenance"); return;}
       if (!binary) {stop(1003, "Desktop requires binary frames"); return;}
@@ -248,6 +251,7 @@ export async function installComputerRoutes(app: FastifyInstance, config: Config
       socket.send(JSON.stringify(data));
     };
     socket.on("message", (data, binary) => {
+      if (frameSize(data) > socketFrameLimit) {socket.close(1009, "Message too large"); return;}
       if (!check()) return;
       if (maintenance()) {send({type: "error", message: "Terminal input is paused for maintenance."}); return;}
       try {
