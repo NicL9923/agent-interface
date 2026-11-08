@@ -476,3 +476,52 @@ Checks at `dc9db64`:
 - With `HERMES_SOURCE` at the `ed1afb0` clone, `tests/hermes_delegation_test.py` ran 34 tests and
   `tests/hermes_bot_delivery_test.py` ran 17 (one skip, the `6ebd92d` rollback case), all passing.
 - No iOS source changed, so iOS was not rerun.
+
+## Re-review fixes: unavailable routines and check-in settings
+
+A GPT-6.1 Sol re-review of `d1cb1f3..114cc06` found three issues. Commit `098e84a` fixes the first two.
+The coordinator ruled the third out of scope; it is documented as a limit.
+
+1. A disconnect erased protection without a successful scan. Hermes's capabilities report routines
+   unsupported while disconnected, and the pass treated that as an empty inventory. Only a pass that
+   listed routines now changes protection or the "no successful scan yet" state. A test restarts with
+   a signed orphan and runs a pass that reports routines unavailable. It then makes another assistant
+   main: the orphan's assistant stays protected. A later pass that lists routines takes protection
+   off only for assistants without a check-in, and a following unavailable pass changes nothing.
+2. Check-in settings bypassed main activation. `PUT /preferences/check-ins` now reads the
+   designation, checks eligibility and writes inside `serialDelivery`, and reconciles after leaving
+   it. Turning the switch back off after a failed setup also runs in that turn, and leaves a newer
+   check-ins change alone.
+   - A test holds a settings request mid-check while main is cleared: main ends cleared, with
+     check-ins off.
+   - Another holds a failed setup's routine read while a newer change waits behind it: the newer
+     frequency survives.
+   Audit of every other write to the main designation or check-in settings:
+   - `PUT /preferences/main` and the main decision in sharing already ran in the lane.
+   - The pass's `clearMain` and assistant deletion (`store.forgetBot`) also run in the lane.
+   - `PATCH /preferences` and `PUT /preferences/models` read and write with no await between, and
+     the first copies the stored designation and check-ins unchanged.
+   Nothing else writes them.
+3. Out of scope, documented: receipt discovery follows `last_delivery_queued`, which Hermes
+   overwrites on each run, so an older run's unfinished delivery can stay hidden. Such a delivery
+   carries content made under non-main rules and would deliver whether or not the assistant became
+   main, so activation adds no exposure. It is part of the cross-profile routine delivery limit on
+   `t3/routine-delivery-privacy`. Promotion's in-flight check is best-effort for each routine's
+   latest run. Recorded in docs/HouseholdExperience.md and the capability matrix.
+
+Hand-breaks: 4 lines broke and 3 went red, each on its own test:
+- treating unavailable routines as an inventory;
+- reading and writing settings outside the lane;
+- turning the switch back off over a newer change.
+One survived, as an equivalent mutant: reading preferences before rather than after the eligibility
+await inside the lane. Every other writer is excluded from the lane or never awaits, so the two
+reads cannot differ.
+
+Checks at `098e84a`:
+- `npm test`: 152 files and 2,167 tests passed. `tests/main-assistant-api.test.ts` passed five more
+  runs in a row.
+- Typecheck, lint, build, Ruff and the e2e smoke suite (2) passed.
+- `npm run test:py`: 38 files passed.
+- With `HERMES_SOURCE` at the `ed1afb0` clone, `tests/hermes_delegation_test.py` ran 34 tests and
+  `tests/hermes_bot_delivery_test.py` ran 17 (one skip, the `6ebd92d` rollback case), all passing.
+- No iOS source changed.
