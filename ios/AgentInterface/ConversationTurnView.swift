@@ -8,6 +8,7 @@ private struct TranscriptConnectedKey: EnvironmentKey { static let defaultValue 
 private struct TranscriptRecipientKey: EnvironmentKey { static let defaultValue = "Assistant" }
 private struct FoundMessageKey: EnvironmentKey { static let defaultValue: String? = nil }
 private struct TranscriptUserKey: EnvironmentKey { static let defaultValue: String? = nil }
+private struct DraftRevisionsKey: EnvironmentKey { static let defaultValue: [String: DraftRevision] = [:] }
 extension EnvironmentValues {
   /// The signed-in person, so only another member's message carries a name.
   var transcriptUserId: String? {
@@ -17,6 +18,11 @@ extension EnvironmentValues {
   var foundMessage: String? {
     get { self[FoundMessageKey.self] }
     set { self[FoundMessageKey.self] = newValue }
+  }
+  /// The turn's revised email drafts, by `DraftDiff.key`.
+  var draftRevisions: [String: DraftRevision] {
+    get { self[DraftRevisionsKey.self] }
+    set { self[DraftRevisionsKey.self] = newValue }
   }
   var transcriptConnected: Bool {
     get { self[TranscriptConnectedKey.self] }
@@ -45,6 +51,9 @@ struct TranscriptTurns: View, Equatable {
   /// Routine runs before each turn and after the last; see `RoutineRunRules.place`.
   var runSlots: [[RoutineRun]] = []
   var botId = ""
+  /// Each reply's file chips and each revised email draft, by message; see AppStore.replyFiles.
+  var replyFiles: [String: [Artifact]] = [:]
+  var revisions: [String: DraftRevision] = [:]
   /// One keyed list, so an opened run card stays open when a new turn lands after it.
   private enum Row: Identifiable {
     case run(RoutineRun), turn(ConversationTurn)
@@ -65,8 +74,11 @@ struct TranscriptTurns: View, Equatable {
     ForEach(rows) { row in
       switch row {
       case .turn(let turn):
+        let ids = Set(turn.messages.map(\.id))
         ConversationTurnView(turn: turn, advanced: advanced,
-          delivery: turn.messages.contains { $0.id == delivery?.id } ? delivery : nil, live: turn.id == liveTurn)
+          delivery: turn.messages.contains { $0.id == delivery?.id } ? delivery : nil, live: turn.id == liveTurn,
+          files: replyFiles.filter { ids.contains($0.key) },
+          revisions: revisions.filter { ids.contains(String($0.key.prefix { $0 != "\n" })) })
       case .run(let run):
         RoutineRunCard(run: run, botId: botId).id(run.key)
       }
@@ -79,10 +91,13 @@ struct ConversationTurnView: View, Equatable {
   var advanced: Bool
   var delivery: SentEcho.Delivery? = nil
   var live = false
+  /// File chips by reply, and revised email drafts, for this turn's messages only.
+  var files: [String: [Artifact]] = [:]
+  var revisions: [String: DraftRevision] = [:]
   @Environment(\.transcriptConnected) private var connected
   @Environment(\.transcriptRecipient) private var recipient
   nonisolated static func == (a: Self, b: Self) -> Bool {
-    a.turn == b.turn && a.advanced == b.advanced && a.delivery == b.delivery && a.live == b.live
+    a.turn == b.turn && a.advanced == b.advanced && a.delivery == b.delivery && a.live == b.live && a.files == b.files && a.revisions == b.revisions
   }
   var body: some View {
     let visible = turn.visibleMessages
@@ -96,10 +111,10 @@ struct ConversationTurnView: View, Equatable {
         case .message(let index, let message):
         let run = turn.replyRun(at: index, in: visible)
         MessageView(message: message, continued: run.continued, endsRun: run.endsRun, when: run.when,
-          delivery: delivery?.id == message.id ? delivery?.status : nil).id(message.id)
+          delivery: delivery?.id == message.id ? delivery?.status : nil, replyFiles: files[message.id]).id(message.id)
         }
       }
-    }
+    }.environment(\.draftRevisions, revisions)
   }
   /// All of a turn's intermediate work behind one row, so the conversation reads as messages.
   /// Expanded, it shows the grouped views as they were: reasoning, tool calls and each activity group.
@@ -174,47 +189,136 @@ struct ReasoningDisclosure: View {
 struct ApprovalDecisionView: View {
   var approval: Approval
   var botId: String
+  var botName = "The assistant"
   var sendStarted: () -> Void = {}
+  /// Runs after a decline is sent, so the conversation can put the person in the message box.
+  var declined: () -> Void = {}
   @Environment(AppStore.self) private var store
   @Environment(\.colorScheme) private var scheme
   @Environment(\.dynamicTypeSize) private var typeSize
   @State private var decision: String?
+  /// How far an approval reaches: nil is one command.
+  @State private var scope: String?
   @State private var settled = false
+  @State private var confirmingAlways = false
+  /// Hermes listed the choices it allows. An older Hermes lists none and keeps Approve and Decline.
+  private var scoped: Bool { approval.choices != nil }
+  private var patterns: [String] { approval.patterns ?? [] }
   var body: some View {
+    if settled && decision == "denied" {
+      DeclinedStepView(botName: botName)
+    } else {
+      card
+    }
+  }
+  private var card: some View {
     VStack(alignment: .leading, spacing: 12) {
       Text("Your decision needed").font(.caption.weight(.semibold)).foregroundStyle(Palette.attention)
       Text(approval.title).font(.headline)
       Text(approval.detail).textSelection(.enabled)
+      if let command = approval.command {
+        Text(command).font(.footnote.monospaced()).textSelection(.enabled).padding(10)
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .background(Palette.surface(scheme), in: RoundedRectangle(cornerRadius: 8))
+          .accessibilityLabel("Command: \(command)").accessibilityIdentifier("approvalCommand")
+      }
       if let expiry = approval.expiresAt, !When.format(expiry).isEmpty { Text("Expires \(When.format(expiry, inline: true))").font(.caption).foregroundStyle(Palette.muted) }
-      let layout = typeSize.isAccessibilitySize
+      let layout = typeSize.isAccessibilitySize || (scoped && approval.offers("session"))
         ? AnyLayout(VStackLayout(alignment: .leading, spacing: 10)) : AnyLayout(HStackLayout(spacing: 10))
       layout {
-        Button(decision == "approved" ? settled ? "Approved" : "Approving…" : "Approve") { decide("approved") }.buttonStyle(.accentProminent)
-        Button(decision == "denied" ? settled ? "Declined" : "Declining…" : "Decline") { decide("denied") }.buttonStyle(.bordered)
+        Button(label("approved", nil, scoped ? "Allow once" : "Approve", scoped ? "Allowing…" : "Approving…")) { decide("approved") }
+          .buttonStyle(.accentProminent).accessibilityIdentifier("approvalAllowOnce")
+        if scoped && approval.offers("session") {
+          Button(label("approved", "session", "Allow for this conversation", "Allowing…")) { decide("approved", scope: "session") }
+            .buttonStyle(.bordered).accessibilityIdentifier("approvalAllowSession")
+        }
+        HStack(spacing: 10) {
+          Button(label("denied", nil, "Decline", "Declining…")) { decide("denied") }.buttonStyle(.bordered)
+            .accessibilityIdentifier("approvalDecline")
+          if scoped && approval.offers("always") {
+            Menu {
+              Button("Always allow…") { confirmingAlways = true }
+            } label: {
+              Image(systemName: "ellipsis").frame(width: 44, height: 44)
+            }.accessibilityLabel("More choices").accessibilityIdentifier("approvalMore")
+          }
+        }
       }.controlSize(.large).disabled(decision != nil || !store.connected || !store.supports(.approvals))
+      if scoped, !patterns.isEmpty, approval.offers("session") || approval.offers("always"), decision == nil {
+        Text("Allowing for longer than once covers every command Hermes flags as \(quoted), not only this one.")
+          .font(.footnote).foregroundStyle(Palette.muted)
+      }
       if settled { Text(confirmation).font(.footnote).foregroundStyle(Palette.muted).accessibilityIdentifier("approvalConfirmation") }
       if !store.supports(.approvals) { Text(store.reason(.approvals)).font(.footnote).foregroundStyle(Palette.muted) }
     }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
       .background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 14))
       .overlay(alignment: .leading) { UnevenRoundedRectangle(topLeadingRadius: 14, bottomLeadingRadius: 14).fill(Palette.attention).frame(width: 4) }
+      .alert("Always allow this for \(botName)?", isPresented: $confirmingAlways) {
+        Button("Cancel", role: .cancel) {}
+        Button("Always allow") { decide("approved", scope: "always") }
+      } message: { Text(alwaysDetail) }
   }
-  private var confirmation: String { decision == "approved" ? "Approval sent." : "Decline sent." }
-  private func decide(_ value: String) {
+  private var quoted: String { patterns.map { "“\($0)”" }.joined(separator: ", ") }
+  /// Names exactly what "Always allow" saves: Hermes's pattern, for this assistant, in every conversation.
+  var alwaysDetail: String {
+    let command = approval.command ?? approval.detail
+    let reach = patterns.isEmpty
+      ? "From now on, \(botName) can run this command without asking, in every conversation:"
+      : "From now on, \(botName) can run any command Hermes flags as \(quoted) without asking, in every conversation. That includes commands other than this one:"
+    return "\(reach)\n\n\(command)\n\nRemove it anytime in \(botName)'s settings, under Always-allowed commands."
+  }
+  private func label(_ value: String, _ reach: String?, _ idle: String, _ busy: String) -> String {
+    guard decision == value, scope == reach else { return idle }
+    if !settled { return busy }
+    if value == "denied" { return "Declined" }
+    return scoped ? String(confirmation.dropLast()) : "Approved"
+  }
+  private var confirmation: String {
+    if decision == "denied" { return "Decline sent." }
+    if !scoped { return "Approval sent." }
+    switch scope {
+    case "session": return "Allowed for this conversation."
+    case "always": return "Always allowed for \(botName)."
+    default: return "Allowed once."
+    }
+  }
+  private func decide(_ value: String, scope reach: String? = nil) {
     guard decision == nil else { return }
     sendStarted()
     store.dismissError()
     decision = value
-    let scope = store.scope
+    scope = value == "approved" ? reach : nil
+    let session = store.scope
+    var body = ["decision": value]
+    if let reach = scope { body["scope"] = reach }
     Task {
       do {
-        try await store.perform(ApprovalDecision.path(botId: botId, approvalId: approval.id), ["decision": value])
-        guard scope == store.scope else { return }
+        try await store.perform(ApprovalDecision.path(botId: botId, approvalId: approval.id), body)
+        guard session == store.scope else { return }
         settled = true
-        AccessibilityNotification.Announcement(confirmation).post()
+        if value == "denied" {
+          store.declinedApprovals[botId] = approval.id
+          AccessibilityNotification.Announcement("Declined. \(botName) stopped that step.").post()
+          declined()
+        } else {
+          AccessibilityNotification.Announcement(confirmation).post()
+        }
         store.buzz(.decided)
         await store.refreshConversation()
-      } catch { if scope == store.scope { decision = nil; store.buzz(.failed); store.report(error) } }
+      } catch { if session == store.scope { decision = nil; scope = nil; store.buzz(.failed); store.report(error) } }
     }
+  }
+}
+
+/// What a declined approval folds to, and what stays once Hermes stops listing it, until the next message.
+struct DeclinedStepView: View {
+  var botName: String
+  @Environment(\.colorScheme) private var scheme
+  var body: some View {
+    Text("Declined. \(botName) stopped that step.").font(.subheadline).foregroundStyle(Palette.muted)
+      .padding(.vertical, 12).padding(.horizontal, 16).frame(maxWidth: .infinity, alignment: .leading)
+      .background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 14))
+      .accessibilityIdentifier("declinedStep")
   }
 }
 

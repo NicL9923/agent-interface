@@ -195,3 +195,14 @@
 .routine-chat-toggle input { margin-top: 3px; }
 .routine-chat-toggle span { display: grid; gap: 2px; }
 .routine-chat-toggle small { font-size: 0.75rem; }
+/* BEGIN email draft revisions: words a revised draft added and removed. */
+.email-draft-revision { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin: 0 0 12px; font-size: 0.875rem; }
+.email-draft-revision .muted { flex: 1 1 12rem; min-width: 0; overflow-wrap: anywhere; }
+.email-draft-revision button { display: inline-flex; align-items: center; gap: 7px; min-height: 36px; padding-block: 6px; flex-shrink: 0; white-space: nowrap; }
+.draft-added { text-decoration: none; color: var(--ink); background: color-mix(in srgb, var(--accent) 22%, transparent); border-radius: 3px; box-shadow: inset 0 -2px 0 var(--accent); }
+.draft-removed { color: var(--muted); background: color-mix(in srgb, var(--danger) 14%, transparent); border-radius: 3px; text-decoration: line-through; text-decoration-color: var(--danger); }
+.draft-space { padding-inline: 0.2em; }
+/* A replaced word reads as two: a hair of room between what went and what came. */
+.draft-removed + .draft-added { margin-left: 0.2em; }
+@media (forced-colors: active) { .draft-added { text-decoration: underline; } }
+/* END email draft revisions */

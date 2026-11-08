@@ -9,6 +9,7 @@ import UserNotifications
   var body: some Scene {
     WindowGroup {
       RootView().appStore(store)
+        .background(DeviceInputWatcher().allowsHitTesting(false))
         .fontDesign(.rounded).tint(Palette.accent)
         .preferredColorScheme(
           store.bootstrap?.preferences.theme == "dark"
@@ -17,6 +18,7 @@ import UserNotifications
         .task {
           NotificationController.shared.store = store
           LiveActivityController.shared.store = store
+          DeviceActivity.shared.store = store
           #if DEBUG
             if await DebugFixtures.configure(store) { return }
           #endif
@@ -26,6 +28,7 @@ import UserNotifications
         .onChange(of: scenePhase) { _, phase in
           if phase == .active {
             MinuteClock.shared.tick()
+            DeviceActivity.shared.foregrounded()
             Task {
               // A control that ran in the widget extension left its link for the app.
               if let link = IntentLinks.takePending() { await NotificationController.shared.open(link.url, at: link.at) }
@@ -35,6 +38,7 @@ import UserNotifications
               await LiveActivityController.shared.foreground()
             }
           } else {
+            DeviceActivity.shared.backgrounded()
             store.suspend()
             LiveActivityController.shared.background()
             if phase == .background { BackgroundRefresh.schedule() }
@@ -48,6 +52,7 @@ import UserNotifications
         .onChange(of: store.scope) { old, new in
           store.deviceNotifications = DeviceNotificationState()
           store.listenRequest = nil
+          DeviceActivity.shared.accountChanged()
           Task {
             if old != nil { await LiveActivityController.shared.endAll(unregister: false) }
             if new != nil {

@@ -3,51 +3,24 @@ import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { NativeSelect } from "./ui/native-select";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { request as apiRequest } from "../client-api";
 import { useResource } from "../app/use-resource";
+import { useEarlierFiles } from "../app/use-earlier-files";
 import type { EarlierFiles } from "../shared/history";
+import { conversationArtifacts, fileKind, fileTypeNames as typeNames, type Artifact, type FileKind } from "../shared/artifacts";
 import type { Bot, Conversation, FileRef } from "../shared/types";
 import { Icon } from "./Icon";
 import "./artifacts.css";
 
-type Artifact = { file: FileRef; source: "Generated" | "Shared" | "Artifact" };
-type FileKind = "image" | "text" | "document" | "audio" | "video" | "other";
 const kinds: { value: FileKind | "all"; label: string }[] = [
   { value: "all", label: "All types" }, { value: "image", label: "Images" },
   { value: "text", label: "Text" }, { value: "document", label: "Documents" },
   { value: "audio", label: "Audio" }, { value: "video", label: "Video" },
   { value: "other", label: "Other files" },
 ];
-const typeNames: Record<FileKind, string> = { image: "Image", text: "Text", document: "PDF", audio: "Audio", video: "Video", other: "File" };
-const rasterTypes = new Set(["image/png", "image/jpeg", "image/webp", "image/gif", "image/avif", "image/bmp"]);
-const textTypes = new Set(["text/plain", "text/markdown", "text/csv", "application/json"]);
-const audioTypes = new Set(["audio/mpeg", "audio/mp4", "audio/ogg", "audio/wav", "audio/x-wav", "audio/webm", "audio/flac"]);
-const videoTypes = new Set(["video/mp4", "video/webm", "video/ogg"]);
-const mimeType = (file: FileRef) => file.mime.split(";", 1)[0]!.trim().toLowerCase();
-function fileKind(file: FileRef): FileKind {
-  const mime = mimeType(file);
-  if (rasterTypes.has(mime)) return "image";
-  if (textTypes.has(mime)) return "text";
-  if (mime === "application/pdf") return "document";
-  if (audioTypes.has(mime)) return "audio";
-  if (videoTypes.has(mime)) return "video";
-  return "other";
-}
 /** A conversation window, which may count files that only its earlier, unloaded messages carry. */
 type ConversationWindow = Conversation & { earlierFiles?: number };
 function artifactsFor(conversation?: ConversationWindow | null, earlier: EarlierFiles["messages"] = []): Artifact[] {
-  if (!conversation) return [];
-  const files = new Map<string, Artifact>();
-  // Earlier files go first, keeping the list in conversation order.
-  for (const message of earlier) for (const file of message.files || []) files.set(file.id, { file, source: "Artifact" });
-  for (const file of conversation.files) if (!files.has(file.id)) files.set(file.id, { file, source: "Artifact" });
-  for (const message of [...earlier, ...conversation.messages]) for (const file of message.files || []) {
-    const previous = files.get(file.id);
-    const source = message.role === "user" || previous?.source === "Shared" ? "Shared"
-      : message.role === "assistant" || message.role === "tool" ? "Generated" : previous?.source || "Artifact";
-    files.set(file.id, { file: { ...file, ...previous?.file }, source });
-  }
-  return [...files.values()];
+  return conversation ? conversationArtifacts(conversation.messages, earlier, conversation.files) : [];
 }
 /** Only the app's authenticated file route can load a preview automatically. */
 function managedFileUrl(file: FileRef): string | undefined {
@@ -76,58 +49,62 @@ export function ArtifactsButton({ bot, conversation, unavailable = false }: {
   bot: Bot; conversation?: ConversationWindow | null; unavailable?: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  // Files of history before the loaded window, fetched while the list is open. They belong
-  // to one session and window start, so history that replaces either fetches them again.
-  const [earlier, setEarlier] = useState<{ session?: string; before?: string; messages?: EarlierFiles["messages"]; loading?: boolean; failed?: boolean }>({});
-  const request = useRef(0);
   const current = conversation?.botId === bot.id ? conversation : undefined;
-  const session = current?.sessionId ?? "", before = current?.messages[0]?.id;
-  const fetched = !!current && earlier.session === session
-    && (!earlier.before || current.messages.some(message => message.id === earlier.before));
-  const older = fetched ? earlier.messages : undefined;
-  const artifacts = useMemo(() => artifactsFor(current, older), [current, older]);
-  const count = artifacts.length + (older ? 0 : current?.earlierFiles ?? 0);
-  useEffect(() => {
-    if (!open || !current?.earlierFiles || fetched) return;
-    const id = ++request.current;
-    const settle = (value: typeof earlier) => { if (request.current === id) setEarlier({ session, before, ...value }); };
-    settle({ loading: true });
-    apiRequest("GET /bots/:id/files", { params: { id: bot.id }, query: { before } })
-      .then(value => settle({ messages: value.messages }), () => settle({ failed: true }));
-  }, [open, bot.id, session, before, !!current?.earlierFiles, fetched]);
-  const show = () => {
-    // Reopening retries a failed fetch.
-    if (earlier.failed) setEarlier({});
-    setOpen(true);
-  };
+  const count = conversationArtifacts(current?.messages ?? [], [], current?.files).length + (current?.earlierFiles ?? 0);
   return <>
     <Button className="icon-button artifacts-button" aria-label={`Artifacts (${count})`}
-      title="Browse artifacts" aria-haspopup="dialog" onClick={show}>
+      title="Browse artifacts" aria-haspopup="dialog" onClick={() => setOpen(true)}>
       <span className="artifacts-button-icon">
         <Icon name="file" />
         {!!count && <span className="artifacts-count" aria-hidden="true">{count}</span>}
       </span>
       <span className="artifacts-button-label">Artifacts</span>
     </Button>
-    {open && <ArtifactsView bot={bot} artifacts={artifacts} reloading={!current}
-      earlier={!fetched ? undefined : earlier.loading ? "loading" : earlier.failed ? "failed" : undefined}
-      unavailable={unavailable} onClose={() => setOpen(false)} />}
+    {open && <ArtifactsPanel bot={bot} conversation={conversation} unavailable={unavailable} onClose={() => setOpen(false)} />}
   </>;
 }
 
-function ArtifactsView({ bot, artifacts, reloading, earlier, unavailable, onClose }: {
-  bot: Bot; artifacts: Artifact[]; reloading: boolean; earlier?: "loading" | "failed"; unavailable: boolean; onClose: () => void;
+/**
+ * The conversation's files in a dialog, opened from the assistant's details or from a reply's file
+ * chips. `focus` selects one file when it opens, with no search or type filter hiding it.
+ */
+export function ArtifactsPanel({ bot, conversation, unavailable = false, focus, onClose }: {
+  bot: Pick<Bot, "id" | "name">; conversation?: ConversationWindow | null; unavailable?: boolean; focus?: string; onClose(): void;
+}) {
+  const current = conversation?.botId === bot.id ? conversation : undefined;
+  // The history before the loaded window, read while the list is open, from the same cache the reply
+  // chips use. Opening the list again retries a failed read.
+  const earlier = useEarlierFiles(bot.id, current, true, true);
+  const older = earlier.messages;
+  const artifacts = useMemo(() => artifactsFor(current, older), [current, older]);
+  return <ArtifactsView bot={bot} artifacts={artifacts} reloading={!current} focus={focus}
+    earlier={!earlier.needed ? undefined : earlier.loading ? "loading" : earlier.failed ? "failed" : undefined}
+    unavailable={unavailable} onClose={onClose} />;
+}
+
+function ArtifactsView({ bot, artifacts, reloading, earlier, unavailable, focus, onClose }: {
+  bot: Pick<Bot, "id" | "name">; artifacts: Artifact[]; reloading: boolean; earlier?: "loading" | "failed"; unavailable: boolean; focus?: string; onClose: () => void;
 }) {
   const titleId = useId();
   const searchId = useId();
   const [query, setQuery] = useState("");
   const [kind, setKind] = useState<FileKind | "all">("all");
-  const [selectedId, setSelectedId] = useState(artifacts[0]?.file.id);
+  const [selectedId, setSelectedId] = useState(focus ?? artifacts[0]?.file.id);
   const filtered = artifacts.filter(({ file }) => file.name.toLowerCase().includes(query.trim().toLowerCase())
     && (kind === "all" || fileKind(file) === kind));
   // Polling can add/remove files. Keep a selection only while it is in the current results.
   const selected = filtered.find(({ file }) => file.id === selectedId) || filtered[0];
-  return <Dialog className="artifacts-dialog" aria-labelledby={titleId}
+  // Opened from a chip, the chosen file's row takes focus, so the list starts where the reader was.
+  const focused = focus && artifacts.some(({ file }) => file.id === focus) ? `[data-file-id="${CSS.escape(focus)}"]` : undefined;
+  // The dialog focuses without scrolling, and on a phone the list shows only its first rows. The
+  // dialog opens after its children's effects run, so the row is brought into view a frame later.
+  const list = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (!focused) return;
+    const frame = requestAnimationFrame(() => list.current?.querySelector<HTMLElement>(focused)?.scrollIntoView?.({ block: "nearest" }));
+    return () => cancelAnimationFrame(frame);
+  }, []);
+  return <Dialog className="artifacts-dialog" aria-labelledby={titleId} initialFocus={focused}
     onCancel={onClose} onClose={onClose}>
     <header className="artifacts-header">
       <div><p className="eyebrow">{bot.name}</p><h2 id={titleId}>Artifacts <span>{artifacts.length}</span></h2></div>
@@ -152,8 +129,8 @@ function ArtifactsView({ bot, artifacts, reloading, earlier, unavailable, onClos
       : !filtered.length ? <div className="artifacts-empty" role="status"><h3>No matching files</h3>
         <p>Try another filename or file type.</p><Button onClick={() => { setQuery(""); setKind("all"); }}>Clear filters</Button></div>
       : <div className="artifacts-browser">
-        <nav className="artifacts-list" aria-label="Conversation files">
-          {filtered.map(artifact => <Button key={artifact.file.id}
+        <nav className="artifacts-list" aria-label="Conversation files" ref={list}>
+          {filtered.map(artifact => <Button key={artifact.file.id} data-file-id={artifact.file.id}
             className={`artifact-item ${selected?.file.id === artifact.file.id ? "selected" : ""}`}
             aria-current={selected?.file.id === artifact.file.id ? "true" : undefined}
             onClick={() => setSelectedId(artifact.file.id)}>

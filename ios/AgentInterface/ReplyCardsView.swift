@@ -148,6 +148,7 @@ enum ReplyCards {
       let type = card["type"] as? String ?? ""
       let allowed: Set<String> = switch type {
       case "event": ["id", "type", "title", "start", "end", "location", "description"]
+      // Released clients refuse any other email field, so revision lineage lives in `id`; see DraftDiff.
       case "email": ["id", "type", "title", "to", "cc", "subject", "body"]
       case "form": ["id", "type", "title", "description", "submitLabel", "fields"]
       default: ["id", "type", "title", "items"]
@@ -223,6 +224,7 @@ struct InteractiveReplyCard: View {
   var messageId: String
   @Environment(AppStore.self) private var store: AppStore?
   @Environment(\.transcriptConnected) private var connected
+  @Environment(\.draftRevisions) private var revisions
   @Environment(\.colorScheme) private var scheme
   @State private var saved = ReplyCardState()
   @State private var draft = ReplyCardState()
@@ -252,7 +254,7 @@ struct InteractiveReplyCard: View {
         Button("Review calendar event", systemImage: "calendar.badge.plus") { eventOpen = true }.buttonStyle(.bordered)
         Text("Review and choose Save in Apple's event editor to add it to your calendar.").font(.caption).foregroundStyle(.secondary)
       } else if card.type == "email" {
-        EmailDraftCardView(card: card)
+        EmailDraftCardView(card: card, revision: revisions[DraftDiff.key(messageId, card.id)])
       } else if card.type == "form" {
         FormReplyCardView(card: card, messageId: messageId)
       } else {

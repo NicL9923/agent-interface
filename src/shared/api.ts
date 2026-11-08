@@ -5,6 +5,7 @@ import type { RoutineOutput, RoutineResult } from "./collaboration.js";
 import type { RoutineRunPage } from "./routine-runs.js";
 import type { ReplyCardState } from "./reply-cards.js";
 import type { Routine } from "./types.js";
+import type { ApprovalScope, ApprovalSettings } from "./types.js";
 import type { routinePresets } from "./routine-presets.js";
 import type { EarlierFiles } from "./history.js";
 import type { LiveState } from "./live-activity.js";
@@ -20,6 +21,7 @@ import type {
   ModelCatalog,
   ModelChoice,
   Preferences,
+  CheckInSettings,
   RuntimeStatus,
   SavedDraft,
   Skill,
@@ -31,6 +33,8 @@ export type Ok = { ok: true };
 export type BotSaveRequest = BotInput & {
   /** Making an assistant personal hides it from everyone else, so the person confirms that. */
   confirmPrivate?: boolean;
+  /** Sharing your main assistant ends it being your main one and turns off its check-ins. */
+  confirmMainCleared?: boolean;
 };
 export interface ReadPosition { messageId?: string; scrollTop?: number }
 /** A conversation read, with this person's draft and read position. */
@@ -192,6 +196,10 @@ export interface ApiRoutes {
   "POST /connection/retry": { response: RuntimeStatus };
   "PATCH /preferences": { body: Preferences; response: Preferences };
   "PUT /preferences/models": { body: { modelFavorites: ModelChoice[] }; response: { modelFavorites: ModelChoice[] } };
+  // --- Main assistant: null clears it. ---
+  "PUT /preferences/main": { body: { botId: string | null }; response: Preferences };
+  "PUT /preferences/check-ins": { body: CheckInSettings; response: Preferences };
+  // --- End main assistant ---
   "GET /models": { query: { botId?: string }; response: ModelCatalog };
   "POST /client-errors": { body: ClientErrorReport; response: Ok };
 
@@ -219,9 +227,16 @@ export interface ApiRoutes {
   "POST /bots/:id/messages": { body: MessageRequest; response: SubmissionReceipt };
   "POST /bots/:id/steer": { body: MessageRequest; response: SubmissionReceipt };
   "GET /submissions/:id": { response: SubmissionReceipt };
-  "POST /bots/:id/requests/:approvalId": { body: { answers: Record<string, string> }; response: Ok };
+  /** `answerFormat: "json"` says multi-select answers are JSON arrays; without it they are read as an older client's comma-joined picks. */
+  "POST /bots/:id/requests/:approvalId": { body: { answers: Record<string, string>; answerFormat?: "json" }; response: Ok };
   "POST /bots/:id/stop": { response: Ok };
-  "POST /bots/:id/approvals/:approvalId": { body: { decision: "approved" | "denied"; account?: string }; response: Ok };
+  /** `scope` reaches past this one command only when Hermes offered it for this approval. Absent means once. */
+  "POST /bots/:id/approvals/:approvalId": { body: { decision: "approved" | "denied"; scope?: ApprovalScope; account?: string }; response: Ok };
+  // --- Approval settings (Workstream B) ---
+  "GET /bots/:id/approval-settings": { response: ApprovalSettings };
+  "PUT /bots/:id/approval-settings": { body: { autoReview: boolean }; response: ApprovalSettings };
+  "DELETE /bots/:id/approval-settings/allowlist": { body: { pattern: string }; response: ApprovalSettings };
+  // --- End approval settings ---
   "GET /bots/:id/draft": { response: SavedDraft | null };
   "PUT /bots/:id/draft": { body: DraftSave; response: SavedDraft };
   "GET /bots/:id/read-position": { response: ReadPosition | null };
@@ -230,8 +245,11 @@ export interface ApiRoutes {
   /** Multipart: the client sends it through uploadFile. */
   "POST /bots/:id/uploads": { response: FileRef };
 
-  "POST /push/subscriptions/status": { body: { endpoint: string }; response: { registered: boolean } };
-  "POST /push/subscriptions": { body: WebPushSubscription; response: Ok };
+  "POST /push/subscriptions/status": { body: { endpoint: string; deviceId?: string }; response: { registered: boolean } };
+  "POST /push/subscriptions": { body: WebPushSubscription & { deviceId?: string }; response: Ok };
+  // BEGIN device activity
+  "PUT /devices/activity": { body: { deviceId: string; state: "active" | "inactive"; idleMs?: number }; response: Ok };
+  // END device activity
   "DELETE /push/subscriptions": { body: { endpoint: string }; response: Ok };
   "POST /push/test": { body: { botId: string }; response: PushTest };
   /** A service worker's notification action, authorized by the single-use token in its push. */
