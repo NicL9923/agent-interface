@@ -36,6 +36,65 @@ WildBots. It does not stop someone deliberately probing the server.
 - While a Hermes update is waiting, "An assistant" in the busy list shows that
   some assistant is working, without saying which.
 
+<!-- Main assistant: begin -->
+## Main assistant
+
+Each member can make one of their own personal assistants their main assistant, on
+web and iOS. Shared assistants and personal ones without a recorded owner can't be
+one: routines, delivery and followers belong to the assistant's profile, so only an
+owned personal assistant keeps check-ins private to that member. The picker says
+why each other assistant can't be chosen and offers **Make it personal**, which
+opens its settings.
+
+The main assistant leads home, above the pinned ones, with a **Main** mark, and
+appears nowhere else on home. It is first in the command palette and the iPad
+"Go to…" switcher, whose **Ask** entry puts the typed words in the main
+assistant's draft for review. A member without one sees a suggestion card,
+"Choose a main assistant: it checks in on what's coming up and hands work to your
+other assistants," until they choose or dismiss it. **Make main** in an
+assistant's details sets or clears it in one tap. Deleting the assistant, sharing
+it, or losing it any other way clears it. Sharing your main assistant asks first
+and turns off its check-ins before anyone else can read its chat.
+
+### Check-ins
+
+**Check in with me** in the main assistant's details is off by default. On, the
+server keeps one routine named Check-ins on that assistant, running every 1 to 4
+hours (2 by default) on a Hermes interval schedule. Its instructions carry the
+member's timezone and tell the assistant to stay silent overnight there, to look
+over connected calendars, email and task lists and the recent conversation, and to
+speak only for something that clearly needs the member soon. When nothing does,
+it answers with Hermes's `[SILENT]` marker. A silent, failed or stopped check-in
+sends no notification and adds no Today entry, and no unread dot appears because
+Hermes delivers nothing to the chat. Only a failed check-in shows as a run card in
+the chat; one that found something is its own message there. Check-ins are not
+listed in Today's scheduled work.
+
+The routine shows in routine lists as Check-ins, managed from the assistant's
+details: it can't be edited, paused or deleted as a routine. Turning the switch
+off, choosing another main assistant, sharing or deleting the assistant, and the
+member leaving the household all remove it. The server records each check-in job
+it creates and also marks the instructions with the member, so a job created
+after a lost answer is found and adopted or removed. It reconciles after every
+change, at startup and every five minutes; a run in progress is stopped before its
+job is deleted. A Hermes without routines hides the switch.
+
+### Hand-offs
+
+On each turn the main assistant reads a roster of its member's other personal
+assistants and the assistants the whole household sees, and can hand specialist
+work to them with Hermes's agent-message tool. The Hermes add-on enforces the
+roster: a message to an assistant off it, including another member's personal
+one, is refused before it is sent. A message to a shared assistant first asks
+the member, through the usual question card, "Send this to Ranch Hand? Everyone
+in the household can read its chat," with the message shown; nothing is sent
+unless they choose Send it. Hand-offs to the member's own personal assistants need
+no approval. Roster changes reach the assistant on its next turn. A hand-off in
+a transcript offers **Open Ranch Hand's chat** when the reader can open that
+chat. An add-on older than this gate gets no roster, and its main assistants
+behave as before.
+<!-- Main assistant: end -->
+
 ## Today
 
 Open Today in the assistant navigation. It shows pending approvals and questions,

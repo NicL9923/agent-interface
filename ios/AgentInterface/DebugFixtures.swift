@@ -121,6 +121,25 @@
             "prompt": "Inspect the pasture.", "schedule": "0 7 * * *", "enabled": false, "recipientIds": [],
             "provider": "openrouter", "model": "fixture-fast", "contextFrom": ["self"]]]
         }
+        // The main assistant: "1" makes My assistant main with check-ins on, a check-in and a handoff in its chat;
+        // "suggest" leaves it unchosen so home suggests one.
+        if let main = environment["AGENT_INTERFACE_UI_MAIN"] {
+          FixtureProtocol.routines = []
+          if main == "1" {
+            FixtureProtocol.preferences["mainBotId"] = "personal"
+            FixtureProtocol.preferences["checkIns"] = ["enabled": true, "everyHours": 2, "timezone": "America/Chicago"]
+            FixtureProtocol.routines = [["id": "checkin", "botId": "personal", "name": "Check-ins", "prompt": "[WildBots check-in for member native-test]",
+              "schedule": "every 120m", "enabled": true, "recipientIds": ["native-test"], "managed": "check-in"]]
+            FixtureProtocol.messages = [
+              ["id": "ask", "role": "user", "text": "Can the ranch hand fix the north gate Tuesday?", "sender": ["id": "native-test", "name": "Local test member"], "createdAt": "2026-11-08T14:00:00Z"],
+              ["id": "handoff", "role": "assistant", "text": "", "toolName": "message_agent", "origin": ["kind": "agent", "visibility": "conversation"], "createdAt": "2026-11-08T14:00:05Z",
+                "toolCall": ["id": "dm-1", "name": "message_agent", "status": "completed", "arguments": "{\"target\":\"ranch\",\"message\":\"Can you fix the north gate on Tuesday morning?\"}", "result": "Ranch hand: Tuesday at 9 works."]],
+              ["id": "done", "role": "assistant", "text": "Ranch hand will fix the north gate Tuesday at 9.", "createdAt": "2026-11-08T14:01:00Z"],
+              ["id": "check", "role": "assistant", "text": "Your 3 PM dentist moved to 4 PM, which overlaps soccer pickup. Want me to ask Ranch hand to cover pickup?",
+                "origin": ["kind": "scheduled", "visibility": "conversation", "title": "Check-ins"], "createdAt": "2026-11-08T16:00:00Z"],
+            ]
+          }
+        }
         if environment["AGENT_INTERFACE_UI_COORDINATION"] == "1" {
           FixtureProtocol.messages = [
             ["id": "cron", "role": "user", "text": "Scheduled job handoff: hay, water, and bunny check", "origin": ["kind": "scheduled", "visibility": "activity", "title": "Bunny care"]],
@@ -988,6 +1007,19 @@
             return item
           }
         }
+      } else if path == "/api/preferences/main" {
+        // As the server: only the member's own personal assistant, and a new one starts without check-ins.
+        let botId = body["botId"] as? String
+        if let botId, botId != "personal" {
+          status = 409; object = ["error": "That assistant can't be your main assistant. Shared with the household.", "code": "main_not_personal"]
+        } else {
+          if Self.preferences["mainBotId"] as? String != botId { Self.preferences["checkIns"] = nil }
+          Self.preferences["mainBotId"] = botId
+          object = Self.preferences
+        }
+      } else if path == "/api/preferences/check-ins" {
+        Self.preferences["checkIns"] = body
+        object = Self.preferences
       } else if path == "/api/preferences/models" {
         if Self.designFixture?["screen"] as? String == "models" { print("DESIGN_FAVORITES_PUT \(body)") }
         if Self.designFixture?["failFavorite"] as? Bool == true, Self.designFailures.insert("favorite").inserted {
@@ -1008,7 +1040,11 @@
         if method == "PATCH" && Self.preferencesFailures > 0 {
           Self.preferencesFailures -= 1; status = 503; object = ["error": "Fixture settings save failed"]
         } else {
-          if method == "PATCH" { let favorites = Self.preferences["modelFavorites"]; Self.preferences = body; Self.preferences["modelFavorites"] = favorites }
+          if method == "PATCH" {
+            // As the server: model stars, the main assistant and its check-ins keep their own routes.
+            let kept = ["modelFavorites", "mainBotId", "checkIns"].reduce(into: [String: Any]()) { $0[$1] = Self.preferences[$1] }
+            Self.preferences = body; Self.preferences.merge(kept) { _, old in old }
+          }
           object = Self.preferences
         }
       } else if path.hasSuffix("/uploads"), method == "POST", Self.designFixture?["screen"] as? String == "avatar" {

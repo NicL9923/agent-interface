@@ -40,6 +40,16 @@ recorded stay visible to everyone. WildBots hides a personal assistant, but the
 Hermes dashboard is household-wide, so anyone with dashboard access can still reach
 its memory and logins.
 
+<!-- Main assistant: begin -->
+Each member can make one of their own personal assistants their **main assistant**, on
+web and iOS. It leads home with a **Main** mark, is first in the command palette, whose
+Ask entry sends typed words to its draft, and hands specialist work to the member's
+other assistants. A hand-off to a shared assistant asks the member first, because the
+whole household can read that chat. **Check in with me** in its details runs a quiet
+routine every 1 to 4 hours that speaks only when something needs the member and stays
+silent overnight in their timezone. See [main assistant](docs/HouseholdExperience.md#main-assistant).
+<!-- Main assistant: end -->
+
 Web Settings > Notifications shows whether this account has notifications enabled
 on the current device. Turn the browser switch on or off there. The iOS app asks the
 same question in its own card after household sign-in when the server supports Apple
