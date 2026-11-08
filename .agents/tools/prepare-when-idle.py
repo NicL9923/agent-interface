@@ -13,6 +13,7 @@ confirms nobody is mid-conversation, does it restart the gateway, once per run, 
 host re-checks those conditions in the same command that restarts it.
 """
 import argparse
+import importlib.util
 import json
 import re
 import shlex
@@ -24,6 +25,9 @@ from pathlib import Path
 import host_access
 
 TOOL = Path(__file__).with_name("release-app.py")
+_spec = importlib.util.spec_from_file_location("release_app", TOOL)
+RELEASE_APP = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(RELEASE_APP)
 # Either native admission owner can report work. Retry only their no-change preflight refusals.
 # Only the fence's own refusal counts. A traceback that merely quotes the fence's source line,
 # as when the gate's status call itself failed on Nov 2, 2026, is a real failure.
@@ -114,24 +118,17 @@ def leaked(report, counted_since, now, window):
 
 
 def main():
+    # prepare's own argument definitions, so every prepare option is accepted here, parsed as prepare
+    # parses it, and passed on to each attempt.
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("commit")
-    parser.add_argument("--host", required=True)
-    parser.add_argument("--app-base", required=True)
-    parser.add_argument("--qualification")
-    parser.add_argument("--accept-helper-change", action="store_true",
-                        help="pass through to release-app.py prepare after reviewing a changed upgrade helper")
+    prepare_actions = RELEASE_APP.add_prepare_arguments(parser)
     parser.add_argument("--minutes", type=float, default=40, help="give up after this long (default 40)")
     parser.add_argument("--interval", type=float, default=120, help="seconds between attempts (default 120)")
     parser.add_argument("--hermes-home", default="~/.hermes", help="Hermes home on the host (default ~/.hermes)")
     parser.add_argument("--household-idle", action="store_true",
                         help="the household confirmed nobody is mid-conversation: restart a leaked gateway count once")
     args = parser.parse_args()
-    command = [sys.executable, str(TOOL), "prepare", args.commit, "--host", args.host, "--app-base", args.app_base]
-    if args.qualification:
-        command += ["--qualification", args.qualification]
-    if args.accept_helper_change:
-        command.append("--accept-helper-change")
+    command = [sys.executable, str(TOOL), "prepare", *RELEASE_APP.prepare_argv(prepare_actions, args)]
     window = QUIET_MINUTES * 60
     deadline = time.monotonic() + args.minutes * 60
     attempt = 0
