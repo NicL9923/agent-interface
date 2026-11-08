@@ -1,8 +1,8 @@
 {
- "comment": "Shared by tests/reply-artifacts.test.ts (src/shared/artifacts.ts) and ArtifactsTests.swift (Artifacts.list and Artifacts.replyFiles). Each case lists the panel's files with their source, given the loaded messages and the file-bearing messages before them (earlier), and the file IDs whose chips show under each reply.",
+ "comment": "Shared by tests/reply-artifacts.test.ts (src/shared/artifacts.ts) and ArtifactsTests.swift (Artifacts.list and Artifacts.replyFiles). Each case lists the panel's files with their source, given the loaded messages and the file-bearing messages before them (earlier), and the file IDs whose chips show under each reply: the turn's generated files that no reply row of the turn already shows.",
  "cases": [
   {
-   "name": "a tool's file and the reply's file show under the reply",
+   "name": "a tool's files show under the reply; files a reply shows itself are not chips",
    "messages": [
     {
      "id": "u1",
@@ -12,12 +12,17 @@
     {
      "id": "t1",
      "role": "tool",
-     "text": "done",
+     "text": "",
      "files": [
       {
        "id": "chart",
        "name": "chart.png",
        "mime": "image/png"
+      },
+      {
+       "id": "csv",
+       "name": "csv.csv",
+       "mime": "text/csv"
       }
      ]
     },
@@ -40,6 +45,10 @@
      "Generated"
     ],
     [
+     "csv",
+     "Generated"
+    ],
+    [
      "notes",
      "Generated"
     ]
@@ -47,111 +56,12 @@
    "replies": {
     "a1": [
      "chart",
-     "notes"
+     "csv"
     ]
    }
   },
   {
-   "name": "a file the person shared is never a chip, even when the assistant hands it back",
-   "messages": [
-    {
-     "id": "u1",
-     "role": "user",
-     "text": "Fix this",
-     "files": [
-      {
-       "id": "photo",
-       "name": "photo.png",
-       "mime": "image/png"
-      }
-     ]
-    },
-    {
-     "id": "a1",
-     "role": "assistant",
-     "text": "Fixed",
-     "files": [
-      {
-       "id": "photo",
-       "name": "photo.png",
-       "mime": "image/png"
-      },
-      {
-       "id": "fixed",
-       "name": "fixed.png",
-       "mime": "image/png"
-      }
-     ]
-    }
-   ],
-   "artifacts": [
-    [
-     "photo",
-     "Shared"
-    ],
-    [
-     "fixed",
-     "Generated"
-    ]
-   ],
-   "replies": {
-    "a1": [
-     "fixed"
-    ]
-   }
-  },
-  {
-   "name": "a file mentioned again in a later turn stays with the turn it first appeared in",
-   "messages": [
-    {
-     "id": "u1",
-     "role": "user",
-     "text": "One"
-    },
-    {
-     "id": "a1",
-     "role": "assistant",
-     "text": "First",
-     "files": [
-      {
-       "id": "plan",
-       "name": "plan.pdf",
-       "mime": "application/pdf"
-      }
-     ]
-    },
-    {
-     "id": "u2",
-     "role": "user",
-     "text": "Again"
-    },
-    {
-     "id": "a2",
-     "role": "assistant",
-     "text": "Same file",
-     "files": [
-      {
-       "id": "plan",
-       "name": "plan.pdf",
-       "mime": "application/pdf"
-      }
-     ]
-    }
-   ],
-   "artifacts": [
-    [
-     "plan",
-     "Generated"
-    ]
-   ],
-   "replies": {
-    "a1": [
-     "plan"
-    ]
-   }
-  },
-  {
-   "name": "a turn still working without a reply has no chips",
+   "name": "a reply that shows every file the turn made has no chips",
    "messages": [
     {
      "id": "u1",
@@ -164,23 +74,35 @@
      "text": "",
      "files": [
       {
-       "id": "draft",
-       "name": "draft.markdown",
-       "mime": "text/markdown"
+       "id": "map",
+       "name": "map.png",
+       "mime": "image/png"
+      }
+     ]
+    },
+    {
+     "id": "a1",
+     "role": "assistant",
+     "text": "Here",
+     "files": [
+      {
+       "id": "map",
+       "name": "map.png",
+       "mime": "image/png"
       }
      ]
     }
    ],
    "artifacts": [
     [
-     "draft",
+     "map",
      "Generated"
     ]
    ],
    "replies": {}
   },
   {
-   "name": "chips go under the last reply of a turn with several",
+   "name": "files an earlier reply part of the turn shows are not chips either",
    "messages": [
     {
      "id": "u1",
@@ -229,10 +151,152 @@
    ],
    "replies": {
     "a2": [
-     "early",
      "late"
     ]
    }
+  },
+  {
+   "name": "a file the person shared is never a chip, even when a tool hands it back",
+   "messages": [
+    {
+     "id": "u1",
+     "role": "user",
+     "text": "Fix this",
+     "files": [
+      {
+       "id": "photo",
+       "name": "photo.png",
+       "mime": "image/png"
+      }
+     ]
+    },
+    {
+     "id": "t1",
+     "role": "tool",
+     "text": "",
+     "files": [
+      {
+       "id": "photo",
+       "name": "photo.png",
+       "mime": "image/png"
+      },
+      {
+       "id": "fixed",
+       "name": "fixed.png",
+       "mime": "image/png"
+      }
+     ]
+    },
+    {
+     "id": "a1",
+     "role": "assistant",
+     "text": "Fixed"
+    }
+   ],
+   "artifacts": [
+    [
+     "photo",
+     "Shared"
+    ],
+    [
+     "fixed",
+     "Generated"
+    ]
+   ],
+   "replies": {
+    "a1": [
+     "fixed"
+    ]
+   }
+  },
+  {
+   "name": "a file mentioned again in a later turn stays with the turn it first appeared in",
+   "messages": [
+    {
+     "id": "u1",
+     "role": "user",
+     "text": "One"
+    },
+    {
+     "id": "t1",
+     "role": "tool",
+     "text": "",
+     "files": [
+      {
+       "id": "plan",
+       "name": "plan.pdf",
+       "mime": "application/pdf"
+      }
+     ]
+    },
+    {
+     "id": "a1",
+     "role": "assistant",
+     "text": "First"
+    },
+    {
+     "id": "u2",
+     "role": "user",
+     "text": "Again"
+    },
+    {
+     "id": "t2",
+     "role": "tool",
+     "text": "",
+     "files": [
+      {
+       "id": "plan",
+       "name": "plan.pdf",
+       "mime": "application/pdf"
+      }
+     ]
+    },
+    {
+     "id": "a2",
+     "role": "assistant",
+     "text": "Same file"
+    }
+   ],
+   "artifacts": [
+    [
+     "plan",
+     "Generated"
+    ]
+   ],
+   "replies": {
+    "a1": [
+     "plan"
+    ]
+   }
+  },
+  {
+   "name": "a turn still working without a reply has no chips",
+   "messages": [
+    {
+     "id": "u1",
+     "role": "user",
+     "text": "Go"
+    },
+    {
+     "id": "t1",
+     "role": "tool",
+     "text": "",
+     "files": [
+      {
+       "id": "draft",
+       "name": "draft.markdown",
+       "mime": "text/markdown"
+      }
+     ]
+    }
+   ],
+   "artifacts": [
+    [
+     "draft",
+     "Generated"
+    ]
+   ],
+   "replies": {}
   },
   {
    "name": "a subagent row filed as a user message continues the turn",
@@ -243,9 +307,9 @@
      "text": "Research"
     },
     {
-     "id": "a1",
-     "role": "assistant",
-     "text": "Asking a helper",
+     "id": "t1",
+     "role": "tool",
+     "text": "",
      "files": [
       {
        "id": "brief",
@@ -260,9 +324,9 @@
      "text": "Subagent Task Completed: notes attached"
     },
     {
-     "id": "a2",
-     "role": "assistant",
-     "text": "Summary",
+     "id": "t2",
+     "role": "tool",
+     "text": "",
      "files": [
       {
        "id": "report",
@@ -270,6 +334,11 @@
        "mime": "application/pdf"
       }
      ]
+    },
+    {
+     "id": "a2",
+     "role": "assistant",
+     "text": "Summary"
     }
    ],
    "artifacts": [
@@ -298,9 +367,9 @@
      "text": "Hi"
     },
     {
-     "id": "a1",
-     "role": "assistant",
-     "text": "Hello",
+     "id": "t1",
+     "role": "tool",
+     "text": "",
      "files": [
       {
        "id": "notes",
@@ -310,14 +379,19 @@
      ]
     },
     {
+     "id": "a1",
+     "role": "assistant",
+     "text": "Hello"
+    },
+    {
      "id": "c1",
      "role": "user",
      "text": "[Cron delivery: Morning brief]"
     },
     {
-     "id": "a2",
-     "role": "assistant",
-     "text": "Your brief",
+     "id": "t2",
+     "role": "tool",
+     "text": "",
      "files": [
       {
        "id": "brief",
@@ -325,6 +399,11 @@
        "mime": "text/markdown"
       }
      ]
+    },
+    {
+     "id": "a2",
+     "role": "assistant",
+     "text": "Your brief"
     }
    ],
    "artifacts": [
@@ -355,9 +434,9 @@
      "text": "Many"
     },
     {
-     "id": "a1",
-     "role": "assistant",
-     "text": "Five",
+     "id": "t1",
+     "role": "tool",
+     "text": "",
      "files": [
       {
        "id": "p1",
@@ -385,6 +464,11 @@
        "mime": "image/png"
       }
      ]
+    },
+    {
+     "id": "a1",
+     "role": "assistant",
+     "text": "Five"
     }
    ],
    "artifacts": [
@@ -449,12 +533,24 @@
    "replies": {}
   },
   {
-   "name": "a reply that is only a file anchors its chips",
+   "name": "a reply that is only a file anchors the turn's other files",
    "messages": [
     {
      "id": "u1",
      "role": "user",
      "text": "Image please"
+    },
+    {
+     "id": "t1",
+     "role": "tool",
+     "text": "",
+     "files": [
+      {
+       "id": "sketch",
+       "name": "sketch.png",
+       "mime": "image/png"
+      }
+     ]
     },
     {
      "id": "a1",
@@ -471,13 +567,17 @@
    ],
    "artifacts": [
     [
+     "sketch",
+     "Generated"
+    ],
+    [
      "only",
      "Generated"
     ]
    ],
    "replies": {
     "a1": [
-     "only"
+     "sketch"
     ]
    }
   },
@@ -490,9 +590,9 @@
      "text": "Go"
     },
     {
-     "id": "a1",
-     "role": "assistant",
-     "text": "Done",
+     "id": "t1",
+     "role": "tool",
+     "text": "",
      "files": [
       {
        "id": "result",
@@ -500,6 +600,11 @@
        "mime": "image/png"
       }
      ]
+    },
+    {
+     "id": "a1",
+     "role": "assistant",
+     "text": "Done"
     },
     {
      "id": "a2",
@@ -541,9 +646,9 @@
      "text": "Fix the photo I sent"
     },
     {
-     "id": "a1",
-     "role": "assistant",
-     "text": "Fixed",
+     "id": "t1",
+     "role": "tool",
+     "text": "",
      "files": [
       {
        "id": "photo",
@@ -556,6 +661,11 @@
        "mime": "image/png"
       }
      ]
+    },
+    {
+     "id": "a1",
+     "role": "assistant",
+     "text": "Fixed"
     }
    ],
    "artifacts": [
@@ -596,9 +706,9 @@
      "text": "Send the plan again"
     },
     {
-     "id": "a1",
-     "role": "assistant",
-     "text": "Here it is",
+     "id": "t1",
+     "role": "tool",
+     "text": "",
      "files": [
       {
        "id": "plan",
@@ -606,6 +716,11 @@
        "mime": "application/pdf"
       }
      ]
+    },
+    {
+     "id": "a1",
+     "role": "assistant",
+     "text": "Here it is"
     }
    ],
    "artifacts": [

@@ -2,7 +2,7 @@ import { Dialog } from "./ui/dialog";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { NativeSelect } from "./ui/native-select";
-import { useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useResource } from "../app/use-resource";
 import { useEarlierFiles } from "../app/use-earlier-files";
 import type { EarlierFiles } from "../shared/history";
@@ -96,6 +96,14 @@ function ArtifactsView({ bot, artifacts, reloading, earlier, unavailable, focus,
   const selected = filtered.find(({ file }) => file.id === selectedId) || filtered[0];
   // Opened from a chip, the chosen file's row takes focus, so the list starts where the reader was.
   const focused = focus && artifacts.some(({ file }) => file.id === focus) ? `[data-file-id="${CSS.escape(focus)}"]` : undefined;
+  // The dialog focuses without scrolling, and on a phone the list shows only its first rows. The
+  // dialog opens after its children's effects run, so the row is brought into view a frame later.
+  const list = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (!focused) return;
+    const frame = requestAnimationFrame(() => list.current?.querySelector<HTMLElement>(focused)?.scrollIntoView?.({ block: "nearest" }));
+    return () => cancelAnimationFrame(frame);
+  }, []);
   return <Dialog className="artifacts-dialog" aria-labelledby={titleId} initialFocus={focused}
     onCancel={onClose} onClose={onClose}>
     <header className="artifacts-header">
@@ -121,7 +129,7 @@ function ArtifactsView({ bot, artifacts, reloading, earlier, unavailable, focus,
       : !filtered.length ? <div className="artifacts-empty" role="status"><h3>No matching files</h3>
         <p>Try another filename or file type.</p><Button onClick={() => { setQuery(""); setKind("all"); }}>Clear filters</Button></div>
       : <div className="artifacts-browser">
-        <nav className="artifacts-list" aria-label="Conversation files">
+        <nav className="artifacts-list" aria-label="Conversation files" ref={list}>
           {filtered.map(artifact => <Button key={artifact.file.id} data-file-id={artifact.file.id}
             className={`artifact-item ${selected?.file.id === artifact.file.id ? "selected" : ""}`}
             aria-current={selected?.file.id === artifact.file.id ? "true" : undefined}

@@ -31,7 +31,8 @@ import XCTest
     let photo = file("photo", "image/png"), fixed = file("fixed", "image/png")
     var window = conversation(files: [photo, fixed], messages: [
       Message(id: "q9", role: "user", text: "Fix the photo I sent", sender: Sender(id: "one", name: "One")),
-      Message(id: "a9", role: "assistant", text: "Fixed", files: [photo, fixed]),
+      Message(id: "t9", role: "tool", text: "", files: [photo, fixed]),
+      Message(id: "a9", role: "assistant", text: "Fixed"),
     ])
     window.earlier = 6
     XCTAssertEqual(Artifacts.windowReplyFiles(window, earlier: nil), [:], "Unknown history: no chip rather than a wrong one")
@@ -55,11 +56,12 @@ import XCTest
     XCTAssertEqual(store.conversationArtifacts.first { $0.id == "photo" }?.source, .shared, "The list agrees")
   }
 
-  /// A window of turns, each a person's prompt and a reply carrying one file.
+  /// A window of turns, each a person's prompt, a tool row with one file, and a reply.
   private func window(_ turns: [(prompt: String, reply: String, file: FileRef)], earlier: Int) -> Conversation {
     var value = conversation(files: turns.map(\.file), messages: turns.flatMap { turn in
       [Message(id: turn.prompt, role: "user", text: "Go", sender: Sender(id: "one", name: "One")),
-       Message(id: turn.reply, role: "assistant", text: "Done", files: [turn.file])]
+       Message(id: "t-" + turn.reply, role: "tool", text: "", files: [turn.file]),
+       Message(id: turn.reply, role: "assistant", text: "Done")]
     })
     value.earlier = earlier
     return value

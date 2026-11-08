@@ -106,20 +106,30 @@ enum Artifacts {
   static let replyChipLimit = 4
   /// The files each turn generated, keyed by the ID of the turn's last reply, where its chips go,
   /// as the web's `replyArtifacts` in src/shared/artifacts.ts. A file belongs to the turn it first
-  /// appears in, and only Generated files count. A person's message or a scheduled prompt starts a
-  /// turn; subagent and agent rows filed as user messages do not.
+  /// appears in, and only Generated files count; files a reply row of the turn already shows as its
+  /// attachments are left out. A person's message or a scheduled prompt starts a turn; subagent and
+  /// agent rows filed as user messages do not.
   static func replyFiles(_ messages: [Message], artifacts: [Artifact], earlier: [EarlierFiles.Entry] = []) -> [String: [Artifact]] {
     let listed = Dictionary(artifacts.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
     // A file that first appeared before these messages belongs to that earlier turn.
     var seen = Set(earlier.flatMap { ($0.files ?? []).map(\.id) }), result: [String: [Artifact]] = [:], files: [Artifact] = [], reply: String?
-    func close() { if let reply, !files.isEmpty { result[reply] = files }; files = []; reply = nil }
+    var shown = Set<String>()
+    func close() {
+      // A reply row shows its own files as attachments, so a chip would repeat them.
+      let chips = files.filter { !shown.contains($0.id) }
+      if let reply, !chips.isEmpty { result[reply] = chips }
+      files = []; shown = []; reply = nil
+    }
     for message in messages {
       if message.role == "user" && [nil, "human", "scheduled"].contains(message.presentationOrigin?.kind) { close() }
       for file in message.files ?? [] where seen.insert(file.id).inserted {
         if let artifact = listed[file.id], artifact.source == .generated { files.append(artifact) }
       }
       if message.role == "assistant" && !message.isInternalActivity
-        && (!message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !(message.files ?? []).isEmpty) { reply = message.id }
+        && (!message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !(message.files ?? []).isEmpty) {
+        reply = message.id
+        for file in message.files ?? [] { shown.insert(file.id) }
+      }
     }
     close()
     return result

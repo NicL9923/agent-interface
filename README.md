@@ -510,9 +510,9 @@ outputs and shared attachments. Search filenames, filter by type, and preview
 images, text, or supported media. PDFs and other files can be opened or downloaded.
 External file sources open only when you choose their link.
 <!-- BEGIN reply files -->
-A reply whose turn produced files lists them as chips under it, up to four and
-then **+N more**. A chip opens Artifacts on that file; **+N more** opens the whole
-list. Files you shared yourself are not chips.
+A reply whose turn produced files it does not already show as attachments lists
+them as chips under it, up to four and then **+N more**. A chip opens Artifacts on
+that file; **+N more** opens the whole list. Files you shared yourself are not chips.
 <!-- END reply files -->
 
 ## Validate

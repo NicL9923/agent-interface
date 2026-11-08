@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, createElement } from "react";
 import type { Root } from "react-dom/client";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
 import { keepKnownAnswers, mayReplace, nextRecord, type Saved } from "../src/components/FormReplyCard";
 import { ApiError, api, write } from "../src/client-api";
@@ -1781,19 +1781,29 @@ describe("reply file chips", () => {
     Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: function(this: HTMLDialogElement) { this.open = false; } });
   });
   const chips = () => [...container.querySelectorAll<HTMLButtonElement>(".reply-file")];
+  const scrolled: string[] = [];
+  beforeEach(() => {
+    scrolled.length = 0;
+    Object.defineProperty(Element.prototype, "scrollIntoView", { configurable: true, value: function(this: Element) { scrolled.push(this.getAttribute("data-file-id") ?? this.tagName); } });
+  });
+  afterEach(() => { Reflect.deleteProperty(Element.prototype, "scrollIntoView"); });
   it("shows a turn's generated files under its last reply and opens the panel on the one chosen", async () => {
     conversation = { ...conversation, messages: [
       prompt("q1", "Photos please", { files: [png("mine")] }),
-      { id: "t1", role: "tool", text: "rendered", files: [png("tool-made")] },
-      answer("a1", "Working on it"),
-      answer("a2", "Here they are", { files: [png("p1"), png("p2"), png("p3"), png("p4")] }),
+      { id: "t1", role: "tool", text: "rendered", files: [png("tool-made"), png("p1"), png("p2"), png("p3"), png("p4"), png("p5")] },
+      answer("a1", "Working on it", { files: [png("draft")] }),
+      answer("a2", "Here they are", { files: [png("final"), png("p1")] }),
       prompt("q2", "Thanks"), answer("a3", "Anytime"),
     ] };
     await render();
-    // Only the turn's last reply carries them; the person's own photo is never one.
+    // Only the turn's last reply carries them; the person's own photo is never one, and neither is a
+    // file a reply row already shows as its attachment.
     const group = container.querySelector('[data-message-id="a2"] .reply-files')!;
     expect(container.querySelectorAll(".reply-files")).toHaveLength(1);
-    expect([...group.querySelectorAll(".reply-file-name")].map(name => name.textContent)).toEqual(["tool-made.png", "p1.png", "p2.png", "p3.png"]);
+    expect([...group.querySelectorAll(".reply-file-name")].map(name => name.textContent)).toEqual(["tool-made.png", "p2.png", "p3.png", "p4.png"]);
+    const shownOnce = (name: string) => [...container.querySelectorAll('[data-message-id="a2"] .file-link span, [data-message-id="a2"] .reply-file-name')]
+      .filter(node => node.textContent?.trim() === name).length;
+    expect([shownOnce("final.png"), shownOnce("p1.png")]).toEqual([1, 1]);
     const more = chips().at(-1)!;
     expect(more.textContent).toBe("+1 more");
     await act(async () => chips()[2].click());
@@ -1801,8 +1811,10 @@ describe("reply file chips", () => {
     await waitForUi(() => expect(container.querySelector(".artifacts-dialog")).not.toBeNull(), 5000);
     const dialog = container.querySelector<HTMLDialogElement>(".artifacts-dialog")!;
     expect(dialog.open).toBe(true);
-    expect(dialog.querySelector('[aria-current="true"]')!.textContent).toContain("p2.png");
-    expect(dialog.querySelector(".artifact-detail h3")!.textContent).toBe("p2.png");
+    expect(dialog.querySelector('[aria-current="true"]')!.textContent).toContain("p3.png");
+    // Its row is scrolled into the list's view, which on a phone shows only the first rows.
+    await waitForUi(() => expect(scrolled).toEqual(["p3"]));
+    expect(dialog.querySelector(".artifact-detail h3")!.textContent).toBe("p3.png");
     await act(async () => labelled("Close artifacts").click());
     expect(container.querySelector(".artifacts-dialog")).toBeNull();
     // "+N more" opens the whole list on its first file.
@@ -1818,7 +1830,7 @@ describe("reply file chips", () => {
       ? new Promise<T>(resolve => { earlierFiles = resolve as (value: unknown) => void; }) : original(path) as Promise<T>);
     // The person shared the photo before the loaded window; the assistant hands it back with a fix.
     conversation = { ...conversation, earlier: 6, earlierFiles: 0, files: [photo, fixed],
-      messages: [prompt("q9", "Fix the photo I sent"), answer("a9", "Fixed", { files: [photo, fixed] })] } as typeof conversation;
+      messages: [prompt("q9", "Fix the photo I sent"), { id: "t9", role: "tool", text: "", files: [photo, fixed] }, answer("a9", "Fixed")] } as typeof conversation;
     await render();
     expect(vi.mocked(api).mock.calls.some(([path]) => path === "/bots/shared/files?before=q9")).toBe(true);
     // Not known yet: no chip rather than a Generated one for the person's own photo.
