@@ -184,6 +184,16 @@ extension AppStore {
   var conversationFileCount: Int {
     conversationFiles.count + (currentEarlierFiles == nil ? conversation?.earlierFiles ?? 0 : 0)
   }
+  /// Each reply's chips, attributed from the same history as the file list. A window that starts after
+  /// the beginning reads the files before it, only when it holds a reply with files of its own; until
+  /// they arrive it shows none rather than a guess.
+  func refreshReplyFiles() {
+    let earlier = currentEarlierFiles?.messages
+    replyFiles = Artifacts.windowReplyFiles(transcript, earlier: earlier)
+    guard let window = transcript, earlier == nil, Artifacts.needsEarlier(window), !loadingEarlierFiles, !earlierFilesFailed,
+      !Artifacts.replyFiles(window.messages, artifacts: Artifacts.list(window)).isEmpty else { return }
+    Task { await loadEarlierFiles() }
+  }
   private var currentEarlierFiles: EarlierFilePage? {
     guard let id = selectedBotId, let page = earlierFileCache[id],
       page.sessionId == conversation?.sessionId,
@@ -194,7 +204,7 @@ extension AppStore {
   /// Fetches the files of the history before the loaded window. Called when the file list opens.
   func loadEarlierFiles() async {
     guard let id = selectedBotId, let api, let current = conversation,
-      (current.earlierFiles ?? 0) > 0, !loadingEarlierFiles, currentEarlierFiles == nil
+      Artifacts.needsEarlier(current), !loadingEarlierFiles, currentEarlierFiles == nil
     else { return }
     let selectedGeneration = selectionGeneration
     let before = current.messages.first?.id

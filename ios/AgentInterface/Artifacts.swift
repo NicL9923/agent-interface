@@ -108,9 +108,10 @@ enum Artifacts {
   /// as the web's `replyArtifacts` in src/shared/artifacts.ts. A file belongs to the turn it first
   /// appears in, and only Generated files count. A person's message or a scheduled prompt starts a
   /// turn; subagent and agent rows filed as user messages do not.
-  static func replyFiles(_ messages: [Message], artifacts: [Artifact]) -> [String: [Artifact]] {
+  static func replyFiles(_ messages: [Message], artifacts: [Artifact], earlier: [EarlierFiles.Entry] = []) -> [String: [Artifact]] {
     let listed = Dictionary(artifacts.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-    var seen = Set<String>(), result: [String: [Artifact]] = [:], files: [Artifact] = [], reply: String?
+    // A file that first appeared before these messages belongs to that earlier turn.
+    var seen = Set(earlier.flatMap { ($0.files ?? []).map(\.id) }), result: [String: [Artifact]] = [:], files: [Artifact] = [], reply: String?
     func close() { if let reply, !files.isEmpty { result[reply] = files }; files = []; reply = nil }
     for message in messages {
       if message.role == "user" && [nil, "human", "scheduled"].contains(message.presentationOrigin?.kind) { close() }
@@ -123,6 +124,17 @@ enum Artifacts {
     close()
     return result
   }
+  /// The chips for a loaded window, attributed exactly as the file list shows the same files, as the
+  /// web's `windowReplyArtifacts`. A window that starts after the beginning needs the file-bearing
+  /// messages before it: until they are known it has no chips.
+  static func windowReplyFiles(_ conversation: Conversation?, earlier: [EarlierFiles.Entry]?) -> [String: [Artifact]] {
+    guard let conversation else { return [:] }
+    if needsEarlier(conversation) && earlier == nil { return [:] }
+    let older = earlier ?? []
+    return replyFiles(conversation.messages, artifacts: list(conversation, earlier: older), earlier: older)
+  }
+  /// Whether a window starts after the beginning, so attributing its files needs the history before it.
+  static func needsEarlier(_ conversation: Conversation) -> Bool { (conversation.earlier ?? 0) > 0 || (conversation.earlierFiles ?? 0) > 0 }
   /// The web's size label: bytes, then KB and MB with one decimal.
   static func size(_ bytes: Int?) -> String {
     guard let bytes, bytes >= 0 else { return "" }

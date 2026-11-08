@@ -229,7 +229,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   @ObservationIgnored var windowGeneration = 0
   /// Files from before the loaded window, fetched when the file list is opened. They are good
   /// while the message they were fetched before is still loaded, as on the web.
-  var earlierFileCache: [String: EarlierFilePage] = [:] { didSet { cachedArtifacts = nil } }
+  var earlierFileCache: [String: EarlierFilePage] = [:] { didSet { cachedArtifacts = nil; refreshReplyFiles() } }
   struct EarlierFilePage {
     var sessionId: String?
     var before: String?
@@ -375,9 +375,8 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     if changed || conversationChanged {
       transcript = SentEcho.transcript(conversation, echoes)
       turns = transcript?.presentationTurns ?? []
-      let messages = transcript?.messages ?? []
-      replyFiles = Artifacts.replyFiles(messages, artifacts: Artifacts.list(transcript))
-      draftRevisions = DraftDiff.revisions(messages)
+      refreshReplyFiles()
+      draftRevisions = DraftDiff.revisions(transcript?.messages ?? [])
     }
     // An accepted message that never shows is checked again once its patience runs out. Only the
     // open conversation can retire one, so another assistant's echo waits for its return.

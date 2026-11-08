@@ -13,18 +13,46 @@ import XCTest
 
   /// The web's src/shared/artifacts.ts reads the same vectors, so chips and the panel agree on both clients.
   func testReplyFilesMatchTheSharedVectors() throws {
-    struct Case: Decodable { var name: String; var messages: [Message]; var files: [FileRef]?; var artifacts: [[String]]; var replies: [String: [String]] }
+    struct Case: Decodable { var name: String; var messages: [Message]; var files: [FileRef]?; var earlier: [EarlierFiles.Entry]?; var artifacts: [[String]]; var replies: [String: [String]] }
     struct Vectors: Decodable { var cases: [Case] }
     let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Vectors/reply-artifacts.json")
     let cases = try JSONDecoder().decode(Vectors.self, from: Data(contentsOf: url)).cases
     XCTAssertFalse(cases.isEmpty)
     for vector in cases {
-      let listed = Artifacts.list(conversation(files: vector.files ?? [], messages: vector.messages))
+      let listed = Artifacts.list(conversation(files: vector.files ?? [], messages: vector.messages), earlier: vector.earlier ?? [])
       XCTAssertEqual(listed.map { [$0.id, $0.source.rawValue] }, vector.artifacts, vector.name)
-      let chips = Artifacts.replyFiles(vector.messages, artifacts: listed)
+      let chips = Artifacts.replyFiles(vector.messages, artifacts: listed, earlier: vector.earlier ?? [])
       XCTAssertEqual(chips.mapValues { $0.map(\.id) }, vector.replies, vector.name)
       for artifact in chips.values.flatMap({ $0 }) { XCTAssertTrue(listed.contains(artifact), vector.name) }
     }
+  }
+
+  func testAWindowAfterTheStartHasNoChipsUntilTheHistoryBeforeItIsKnownThenTheListsOwn() async throws {
+    let photo = file("photo", "image/png"), fixed = file("fixed", "image/png")
+    var window = conversation(files: [photo, fixed], messages: [
+      Message(id: "q9", role: "user", text: "Fix the photo I sent", sender: Sender(id: "one", name: "One")),
+      Message(id: "a9", role: "assistant", text: "Fixed", files: [photo, fixed]),
+    ])
+    window.earlier = 6
+    XCTAssertEqual(Artifacts.windowReplyFiles(window, earlier: nil), [:], "Unknown history: no chip rather than a wrong one")
+    let shared = [EarlierFiles.Entry(id: "q2", role: "user", files: [photo])]
+    XCTAssertEqual(Artifacts.windowReplyFiles(window, earlier: shared).mapValues { $0.map(\.id) }, ["a9": ["fixed"]])
+    window.earlier = 0
+    XCTAssertEqual(Artifacts.windowReplyFiles(window, earlier: nil).mapValues { $0.map(\.id) }, ["a9": ["photo", "fixed"]])
+
+    // The store reads the history before the window itself, and the chips follow it.
+    let server = FakeServer { request in
+      request.url?.path.hasSuffix("/files") == true ? .init(body: #"{"messages":[{"id":"q2","role":"user","files":[{"id":"photo","name":"photo","mime":"image/png"}]}]}"#) : .init()
+    }
+    let store = AppStore(); store.widgetSnapshotURL = nil; store.api = server.api()
+    defer { FakeExchange.remove(host: server.origin.host!) }
+    store.selectedBotId = "bot"
+    window.earlier = 6
+    store.conversation = window
+    XCTAssertEqual(store.replyFiles, [:])
+    try await until { store.replyFiles["a9"]?.map(\.id) == ["fixed"] }
+    XCTAssertEqual(server.requests.first { $0.url?.path.hasSuffix("/files") == true }?.url?.query, "before=q9")
+    XCTAssertEqual(store.conversationArtifacts.first { $0.id == "photo" }?.source, .shared, "The list agrees")
   }
 
   func testAFilePreviewUsesItsOwningSheetInsteadOfTheRootPresenter() async throws {

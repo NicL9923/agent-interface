@@ -45,7 +45,8 @@ import { useRoutineRuns } from "./use-routine-runs";
 import { ReplyFiles } from "./ReplyFiles";
 import { DraftRevisions } from "../components/EmailDraftCard";
 import { draftRevisions } from "../shared/draft-diff";
-import { conversationArtifacts, replyArtifacts, type Artifact } from "../shared/artifacts";
+import { conversationArtifacts, replyArtifacts, windowReplyArtifacts, type Artifact } from "../shared/artifacts";
+import { useEarlierFiles } from "./use-earlier-files";
 import "./transcript.css";
 // The panel loads when a file chip first opens it, as it does from the assistant's details.
 const ArtifactsPanel = lazy(() => import("../components/Artifacts").then(module => ({ default: module.ArtifactsPanel })));
@@ -92,8 +93,11 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
   const prefs = boot.preferences;
   const advanced = prefs.presentation === "advanced";
   const blocks = useMemo(() => turns(conversation, advanced), [conversation, advanced]);
-  // Each reply's files, attributed the same way the Artifacts panel lists them.
-  const replyFiles = useMemo(() => conversation ? replyArtifacts(conversation.messages, conversationArtifacts(conversation.messages, [], conversation.files)) : new Map<string, Artifact[]>(), [conversation]);
+  // Each reply's files, attributed from the same history as the Artifacts panel. A window that starts
+  // after the beginning reads the files before it, only when it holds a reply with files of its own.
+  const candidates = useMemo(() => conversation ? replyArtifacts(conversation.messages, conversationArtifacts(conversation.messages, [], conversation.files)).size > 0 : false, [conversation]);
+  const earlierFiles = useEarlierFiles(botId, conversation, candidates);
+  const replyFiles = useMemo(() => conversation ? windowReplyArtifacts(conversation, earlierFiles.messages) : new Map<string, Artifact[]>(), [conversation, earlierFiles.messages]);
   // Email drafts that revise an earlier one here, so their cards can mark what changed.
   const revisions = useMemo(() => draftRevisions(conversation?.messages ?? []), [conversation?.messages]);
   // The Artifacts panel opened from a chip, on one file or, from "+N more", on the first.

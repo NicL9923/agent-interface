@@ -50,11 +50,13 @@ const startsTurn = (message: Message) => message.role === "user" && [undefined, 
 /**
  * The files each turn generated, keyed by the ID of the turn's last reply, where its chips go. A file
  * belongs to the turn it first appears in, and only Generated files count: a file the person shared
- * is theirs, even when the assistant hands it back. A turn with no reply yet has no chips.
+ * is theirs, even when the assistant hands it back. A turn with no reply yet has no chips. `earlier`
+ * holds the file-bearing messages before `messages`, as the panel reads them.
  */
-export function replyArtifacts(messages: Message[], artifacts: Artifact[]): Map<string, Artifact[]> {
+export function replyArtifacts(messages: Message[], artifacts: Artifact[], earlier: EarlierFiles["messages"] = []): Map<string, Artifact[]> {
   const listed = new Map(artifacts.map(artifact => [artifact.file.id, artifact]));
-  const seen = new Set<string>(), result = new Map<string, Artifact[]>();
+  // A file that first appeared before these messages belongs to that earlier turn.
+  const seen = new Set(earlier.flatMap(message => (message.files ?? []).map(file => file.id))), result = new Map<string, Artifact[]>();
   let files: Artifact[] = [], reply: string | undefined;
   const close = () => { if (reply && files.length) result.set(reply, files); files = []; reply = undefined; };
   for (const message of withMessageOrigins(messages)) {
@@ -69,4 +71,16 @@ export function replyArtifacts(messages: Message[], artifacts: Artifact[]): Map<
   }
   close();
   return result;
+}
+
+/**
+ * The chips for a loaded window of a conversation, attributed exactly as the panel lists the same
+ * files. A window that starts after the beginning needs the file-bearing messages before it
+ * (`earlier`): until they are known it has no chips, since a file there may be the person's or an
+ * earlier turn's.
+ */
+export function windowReplyArtifacts(window: { messages: Message[]; files: FileRef[]; earlier?: number; earlierFiles?: number }, earlier?: EarlierFiles["messages"]): Map<string, Artifact[]> {
+  if (((window.earlier ?? 0) > 0 || (window.earlierFiles ?? 0) > 0) && !earlier) return new Map();
+  const older = earlier ?? [];
+  return replyArtifacts(window.messages, conversationArtifacts(window.messages, older, window.files), older);
 }

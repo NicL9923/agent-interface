@@ -1532,6 +1532,28 @@ describe("reply file chips", () => {
     await waitForUi(() => expect(container.querySelector(".artifacts-dialog")).not.toBeNull());
     expect(container.querySelector('.artifacts-dialog [aria-current="true"]')!.textContent).toContain("mine.png");
   });
+  it("attributes a window's files from the history before it, as the panel does, and shows none until that is known", async () => {
+    const photo = png("photo"), fixed = png("fixed");
+    let earlierFiles!: (value: unknown) => void;
+    const original = vi.mocked(api).getMockImplementation()!;
+    vi.mocked(api).mockImplementation(async <T>(path: string) => path.startsWith("/bots/shared/files")
+      ? new Promise<T>(resolve => { earlierFiles = resolve as (value: unknown) => void; }) : original(path) as Promise<T>);
+    // The person shared the photo before the loaded window; the assistant hands it back with a fix.
+    conversation = { ...conversation, earlier: 6, earlierFiles: 0, files: [photo, fixed],
+      messages: [prompt("q9", "Fix the photo I sent"), answer("a9", "Fixed", { files: [photo, fixed] })] } as typeof conversation;
+    await render();
+    expect(vi.mocked(api).mock.calls.some(([path]) => path === "/bots/shared/files?before=q9")).toBe(true);
+    // Not known yet: no chip rather than a Generated one for the person's own photo.
+    expect(container.querySelector(".reply-files")).toBeNull();
+    await act(async () => earlierFiles({ messages: [{ id: "q2", role: "user", files: [photo] }] }));
+    await advance(20);
+    expect([...container.querySelectorAll(".reply-file-name")].map(name => name.textContent)).toEqual(["fixed.png"]);
+    // The panel, opened from the chip, reads the same history and calls the photo Shared.
+    await act(async () => chips()[0].click());
+    await waitForUi(() => expect(container.querySelector(".artifacts-dialog")).not.toBeNull(), 5000);
+    const sources = Object.fromEntries([...container.querySelectorAll(".artifact-item")].map(item => [item.querySelector("strong")!.textContent, item.querySelector("small")!.textContent!.split(" · ")[0]]));
+    expect(sources).toEqual({ "photo.png": "Shared", "fixed.png": "Generated" });
+  });
   it("shows no chips for a turn that produced no files or has no reply yet", async () => {
     conversation = { ...conversation, activity: { state: "working", runId: "r" }, messages: [
       prompt("q1", "Hi"), answer("a1", "Hello"),
