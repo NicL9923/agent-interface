@@ -10,19 +10,21 @@ import { rankItems, step, type PaletteItem } from "./palette";
 import { formatCombo, shortcuts } from "./shortcuts";
 import { isUnread, type ReadThrough } from "./unread";
 import type { View } from "./view";
+import { mainBot } from "../shared/main-assistant";
 import "./shell.css";
 
 type Command = PaletteItem & { icon: ReactNode; detail?: string; hint?: string; checked?: boolean; run(): void };
 
-/** Pinned assistants first, in pin order, then everyone else as Hermes lists them. */
+/** The main assistant first, then pinned assistants in pin order, then everyone else as Hermes lists them. */
 export function paletteBots(boot: Bootstrap) {
-  const pinned = boot.preferences.favorites.map(id => boot.bots.find(bot => bot.id === id)).filter((bot): bot is Bot => !!bot);
-  return [...pinned, ...boot.bots.filter(bot => !pinned.includes(bot))];
+  const main = mainBot(boot.preferences, boot.bots);
+  const pinned = boot.preferences.favorites.map(id => boot.bots.find(bot => bot.id === id)).filter((bot): bot is Bot => !!bot && bot !== main);
+  return [...main ? [main] : [], ...pinned, ...boot.bots.filter(bot => bot !== main && !pinned.includes(bot))];
 }
 
 const themes: [Preferences["theme"], string][] = [["light", "Light"], ["dark", "Dark"], ["system", "Follow device"]];
 
-export function CommandPalette({ boot, botId, rooms = [], onSelectRoom, onNewGroup, shownBotId, readThrough, connectionLost, onClose, onSelectBot, onView, onSearch, onSettings, onNewBot, onTheme, onShortcuts, onFind }: {
+export function CommandPalette({ boot, botId, rooms = [], onSelectRoom, onNewGroup, shownBotId, readThrough, connectionLost, onClose, onSelectBot, onView, onSearch, onSettings, onNewBot, onTheme, onShortcuts, onFind, onAsk }: {
   boot: Bootstrap;
   botId: string;
   /** The household's group chats, which open like assistants do. */
@@ -43,6 +45,8 @@ export function CommandPalette({ boot, botId, rooms = [], onSelectRoom, onNewGro
   onShortcuts(): void;
   /** Find in the open chat, when one is open. */
   onFind?(): void;
+  /** Puts the typed text in an assistant's draft: "Ask <main>…" targets the main assistant. */
+  onAsk?(botId: string, text: string): void;
 }) {
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
@@ -50,6 +54,7 @@ export function CommandPalette({ boot, botId, rooms = [], onSelectRoom, onNewGro
   const input = useRef<HTMLInputElement>(null);
   const list = useRef<HTMLDivElement>(null);
   const pins = boot.preferences.favorites;
+  const main = mainBot(boot.preferences, boot.bots);
   const commands = useMemo<Command[]>(() => {
     const icon = (name: IconName) => <span className="palette-icon"><Icon name={name} size={18} /></span>;
     const bots = paletteBots(boot).map((bot): Command => {
@@ -61,7 +66,7 @@ export function CommandPalette({ boot, botId, rooms = [], onSelectRoom, onNewGro
         id: `bot:${bot.id}`, group: "Assistants", label: bot.name, keywords: bot.description ? [bot.description] : undefined,
         icon: <span className="palette-avatar"><Avatar avatar={bot.avatar} state={activity === "done" ? "idle" : activity} size={30} name={bot.name} reducedMotion />
           {unread && <span className="unread-mark" />}</span>,
-        detail: working ? stateLabels[activity] : unread ? "Unread" : bot.id === botId ? "Open now" : undefined,
+        detail: working ? stateLabels[activity] : unread ? "Unread" : bot.id === botId ? "Open now" : bot === main ? "Main assistant" : undefined,
         hint: pin >= 0 && pin < 9 ? formatCombo({ ...shortcuts.pinned, key: String(pin + 1) }) : undefined,
         run: () => onSelectBot(bot.id),
       };
@@ -88,9 +93,11 @@ export function CommandPalette({ boot, botId, rooms = [], onSelectRoom, onNewGro
         icon: icon(theme === "dark" ? "sparkle" : theme === "light" ? "sun" : "computer"),
         checked: (boot.preferences.theme || "system") === theme, run: () => onTheme(theme),
       })),
+      // With a main assistant, typed words can go straight to it, ahead of searching for them.
+      ...main && onAsk ? [{ id: "ask", group: "Ask", label: "", trailing: true, icon: icon("sparkle"), run: () => onAsk(main.id, query.trim()) }] : [],
       { id: "search", group: "Search", label: "", trailing: true, icon: icon("search"), run: () => onSearch(query.trim()) },
     ];
-  }, [boot, botId, rooms, onSelectRoom, onNewGroup, shownBotId, readThrough, connectionLost, pins, query, onSelectBot, onView, onNewBot, onSettings, onShortcuts, onTheme, onSearch, onFind]);
+  }, [boot, botId, rooms, onSelectRoom, onNewGroup, shownBotId, readThrough, connectionLost, pins, query, onSelectBot, onView, onNewBot, onSettings, onShortcuts, onTheme, onSearch, onFind, main, onAsk]);
   const searching = !!query.trim();
   const results = useMemo(() => rankItems(query, commands), [query, commands]);
   useEffect(() => setActive(0), [query]);
@@ -105,7 +112,7 @@ export function CommandPalette({ boot, botId, rooms = [], onSelectRoom, onNewGro
     command.run();
   };
   const option = (command: Command, index: number) => {
-    const label = command.trailing ? `Search messages for "${query.trim()}"` : command.label;
+    const label = command.id === "ask" ? `Ask ${main?.name}: "${query.trim()}"` : command.trailing ? `Search messages for "${query.trim()}"` : command.label;
     return <div key={command.id} id={optionId(command)} role="option" aria-selected={index === active}
       className={`palette-option${index === active ? " active" : ""}`}
       onPointerMove={() => { if (index !== active) setActive(index); }}
@@ -156,7 +163,7 @@ export function CommandPalette({ boot, botId, rooms = [], onSelectRoom, onNewGro
         {group.items.map(command => option(command, index++))}
       </div>) : results.map((command, position) => option(command, position))}
     </div>
-    <p className="sr-only" role="status">{searching ? `${results.length - 1 > 0 ? results.length - 1 : "No"} ${results.length - 1 === 1 ? "match" : "matches"}` : ""}</p>
+    <p className="sr-only" role="status">{searching ? (() => { const matches = results.filter(command => !command.trailing).length; return `${matches || "No"} ${matches === 1 ? "match" : "matches"}`; })() : ""}</p>
     <footer className="palette-footer" aria-hidden="true"><span><kbd>↑</kbd><kbd>↓</kbd> move</span><span><kbd>Enter</kbd> open</span><span><kbd>Esc</kbd> close</span></footer>
   </Dialog>;
 }

@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { CHECK_IN_ROUTINE_NAME, checkInSchedule, mainEligible, mainIneligibleReason, validCheckInHours } from "../shared/main-assistant.js";
+import { CHECK_IN_ROUTINE_NAME, checkInSchedule, scheduleMinutes, mainEligible, mainIneligibleReason, validCheckInHours } from "../shared/main-assistant.js";
 import type { Bot, CapabilityKey, DelegationPolicies, Preferences, Routine, Runtime } from "../shared/types.js";
 import { apiRoute } from "./api-route.js";
 import { signedIn } from "./auth.js";
@@ -11,6 +11,7 @@ import { quietLog, type Log } from "./logging.js";
 import { serialDelivery } from "./routine-delivery.js";
 import { id, timezone } from "./schemas.js";
 import type { Store } from "./store.js";
+export { scheduleMinutes };
 
 // A member's main assistant and its check-ins. The member's preferences say what they want; this
 // module keeps Hermes matching: exactly one check-in routine per member who has them on, on their
@@ -37,12 +38,6 @@ export function checkInPrompt(input: { userId: string; member: string; timezone:
   ].join("\n\n");
 }
 
-/** Hermes shows "every 2h" back as "every 120m". Minutes between runs, or NaN when the schedule is something else. */
-export function scheduleMinutes(schedule: string) {
-  const match = /^(?:every\s+)?(\d+)\s*(m|min|minutes?|h|hr|hours?)$/i.exec(schedule.trim());
-  if (!match) return NaN;
-  return Number(match[1]) * (match[2].toLowerCase().startsWith("h") ? 60 : 1);
-}
 
 /** Whether a routine is someone's managed check-in, which only its own controls change. */
 export function isManagedCheckIn(store: Store, routine: Pick<Routine, "botId" | "id" | "prompt">) {

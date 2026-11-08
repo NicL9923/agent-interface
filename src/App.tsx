@@ -28,6 +28,9 @@ import { ChatHeader } from "./app/ChatHeader";
 import { Conversation } from "./app/Conversation";
 import { Composer, useOwnPrompts, useStopResponse } from "./app/Composer";
 import { CommandPalette, paletteBots } from "./app/CommandPalette";
+import { MainAssistantPicker } from "./app/MainAssistantPicker";
+import { chooseMain, saveCheckIns } from "./app/main-assistant";
+import { OPEN_CHAT_EVENT } from "./components/AgentExchange";
 import { ShortcutsDialog } from "./app/ShortcutsDialog";
 import { StopConfirm } from "./app/StopConfirm";
 import { Toast, useToast } from "./app/Toast";
@@ -212,6 +215,29 @@ export function App() {
   };
   const togglePin = useStableCallback((bot: Bot) => { if (boot) undoable(togglePinEdit(boot.preferences, bot.id, bot.name)); });
   const botSettings = useStableCallback((bot: Bot) => setPanel({ kind: "settings", bot }));
+  // --- Main assistant ---
+  const [choosingMain, setChoosingMain] = useState(false);
+  const setMain = useStableCallback((id: string | null) => chooseMain(id).then(saved => { session.applyPreferences(saved); return saved; }));
+  const setCheckIns = useStableCallback((change: Parameters<typeof saveCheckIns>[1]) =>
+    saveCheckIns(boot?.preferences.checkIns, change).then(saved => { session.applyPreferences(saved); return saved; }));
+  const chooseMainFromHome = useStableCallback(() => setChoosingMain(true));
+  const dismissMainSuggestion = useStableCallback(() => void session.editPreferences(value => ({ ...value, mainSuggestionDismissed: true })));
+  // "Ask Sage…" from the palette opens the main assistant's chat with the question in its draft, once that draft has loaded.
+  const asking = useRef<{ botId: string; text: string } | null>(null);
+  const askMain = useStableCallback((id: string, text: string) => { asking.current = { botId: id, text }; setPanel(null); selectBot(id); });
+  useEffect(() => {
+    const ask = asking.current;
+    if (!ask || ask.botId !== botId || !draftReady) return;
+    asking.current = null;
+    setDraft(previous => ({ ...previous, dirty: true, text: previous.text.trim() ? `${previous.text.trimEnd()}\n\n${ask.text}` : ask.text }));
+  }, [botId, draftReady, setDraft]);
+  // A handoff in a transcript opens the other assistant's chat.
+  useEffect(() => {
+    const opened = (event: Event) => { const id = (event as CustomEvent<{ botId?: string }>).detail?.botId; if (id) { setPanel(null); selectBot(id); } };
+    window.addEventListener(OPEN_CHAT_EVENT, opened);
+    return () => window.removeEventListener(OPEN_CHAT_EVENT, opened);
+  }, [selectBot]);
+  // --- End main assistant ---
   const moveToSection = useStableCallback((bot: Bot, sectionId: string | null) => {
     if (boot) undoable(moveSectionEdit(boot.preferences, bot.id, bot.name, sectionId));
   });
@@ -321,7 +347,8 @@ export function App() {
       <Sidebar boot={boot} botId={botId} shownBotId={shownBotId} readThrough={readThrough} groups={homeGroups} view={view} state={state}
         connectionLost={connectionLost} offline={offline} mobile={mobile} open={railOpen} update={update}
         onSelectBot={selectFromHome} onView={showView} onNewBot={newBot} onSettings={openPreferences} onPin={togglePin}
-        onBotSettings={botSettings} onMoveToSection={moveToSection} onNewSection={newSection} />
+        onBotSettings={botSettings} onMoveToSection={moveToSection} onNewSection={newSection}
+        onChooseMain={chooseMainFromHome} onDismissMainSuggestion={dismissMainSuggestion} />
       <main className="conversation-panel" inert={mobile && railOpen} {...(view === "conversation" ? tintProps(selected) : {})}>
         <ChatHeader offline={offline} view={view} boot={boot} selected={selected} room={rooms.find(room => room.room_id === roomId)} modelLocked={connectionLost || sending} onModelSaved={refreshSession} avatarState={avatarState} railOpen={railOpen}
           onOpenRail={backToHome}
@@ -376,7 +403,7 @@ export function App() {
           <BotDetails key={`${boot.user.id}:${detailsBot.id}`} boot={boot} bot={detailsBot}
             avatarState={detailsBot.id === botId ? avatarState : connectionLost ? "disconnected" : detailsBot.activity}
             conversation={conversation} connectionLost={connectionLost} startNewSection={panel.newSection}
-            editPreferences={session.editPreferences} onFind={findInChat}
+            editPreferences={session.editPreferences} onFind={findInChat} onMain={setMain} onCheckIns={setCheckIns}
             onSettings={bot => open({ kind: "settings", bot })} onClose={() => closePanels("details")} />
         </Loading>
       )}
@@ -399,7 +426,8 @@ export function App() {
         connectionLost={connectionLost} onClose={closeOverlay} onSelectBot={id => { setPanel(null); selectBot(id); }}
         onView={next => { setPanel(null); showView(next); }} onSearch={text => { setPanel(null); searchMessages(text); }}
         onSettings={destination => setPanel({ kind: "preferences", destination })} onNewBot={newBot} onTheme={setTheme} onShortcuts={showShortcuts}
-        onFind={selected && view === "conversation" ? () => findInChat(selected.id) : undefined} />}
+        onFind={selected && view === "conversation" ? () => findInChat(selected.id) : undefined} onAsk={askMain} />}
+      {choosingMain && <MainAssistantPicker boot={boot} onChoose={setMain} onMakePersonal={bot => setPanel({ kind: "settings", bot })} onClose={() => setChoosingMain(false)} />}
       {overlay === "shortcuts" && <ShortcutsDialog onClose={closeOverlay} />}
       {overlay === "stop" && liveBot && <StopConfirm name={liveBot.name} onStop={stop} onClose={closeOverlay} />}
       <Toast toast={toast.toast} onDismiss={toast.dismiss} onUndo={toast.undo} />

@@ -29,6 +29,13 @@ export function mainIneligibleReason(bot: { shared?: boolean; ownerId?: string }
 /** The Hermes schedule for checking in every `hours` hours: an interval, so no timezone is involved. */
 export const checkInSchedule = (hours: number) => `every ${hours}h`;
 
+/** Hermes shows "every 2h" back as "every 120m". Minutes between runs, or NaN when the schedule is something else. */
+export function scheduleMinutes(schedule: string) {
+  const match = /^(?:every\s+)?(\d+)\s*(m|min|minutes?|h|hr|hours?)$/i.exec(schedule.trim());
+  if (!match) return NaN;
+  return Number(match[1]) * (match[2].toLowerCase().startsWith("h") ? 60 : 1);
+}
+
 /** Whether this many hours is a frequency the server accepts. */
 export const validCheckInHours = (hours: unknown): hours is number =>
   typeof hours === "number" && Number.isInteger(hours) && hours >= CHECK_IN_HOURS.min && hours <= CHECK_IN_HOURS.max;

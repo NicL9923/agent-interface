@@ -31,6 +31,7 @@ import { VaultPanel } from "./components/VaultPanel";
 import { VoicePicker } from "./components/VoicePicker";
 import { RoutineEnhancements, RoutineSchedulePreview } from "./components/RoutineEnhancements";
 import { interactiveReplyInstructions } from "./shared/reply-cards";
+import { checkInFrequencyLabel, scheduleMinutes } from "./shared/main-assistant";
 import { routinePresets } from "./shared/routine-presets";
 import { runsHidden, withRunsShown } from "./shared/routine-runs";
 import { usePreferenceEdits, type PreferenceEdit } from "./app/use-preference-edits";
@@ -111,7 +112,7 @@ function LoadedBotSettings({
   const section: SettingsTab | null = existing && !showingIndex ? tab : null;
   const [memoryDirty, setMemoryDirty] = useState(false);
   const [memorySaving, setMemorySaving] = useState(false);
-  type Confirmation = { kind: "discard" | "personal" } | { kind: "model"; message: string } | { kind: "memory"; place: SettingsPlace };
+  type Confirmation = { kind: "discard" | "personal" | "main" } | { kind: "model"; message: string } | { kind: "memory"; place: SettingsPlace };
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
   const pendingMemoryPlace = confirmation?.kind === "memory" ? confirmation.place : null;
   const setPendingMemoryPlace = (place: SettingsPlace | null) => setConfirmation(current => place ? { kind: "memory", place } : current?.kind === "memory" ? null : current);
@@ -211,6 +212,7 @@ function LoadedBotSettings({
     success,
     onError: cause => {
       if (cause instanceof ApiError && cause.code === "private_confirmation_required") { setConfirmPersonal(true); return null; }
+      if (cause instanceof ApiError && cause.code === "main_share_confirmation_required") { setConfirmation({ kind: "main" }); return null; }
       if (cause instanceof ApiError && cause.confirmRequired) { setConfirmModel(cause.message); return null; }
     },
   });
@@ -243,7 +245,7 @@ function LoadedBotSettings({
    * Saves every unsaved part of the configuration in turn. Each part that saves becomes its new
    * baseline, so after a failure, saving again sends only what is still unsaved.
    */
-  const saveChanges = (confirmed = false, personal = personalConfirmed) => {
+  const saveChanges = (confirmed = false, personal = personalConfirmed, mainCleared = false) => {
     if (loading) return;
     if (!existing) return createBot(form, confirmed);
     if (!configDirty || portraitIncomplete) return;
@@ -261,6 +263,11 @@ function LoadedBotSettings({
       setConfirmPersonal(true);
       return;
     }
+    // Sharing your main assistant ends it being main and turns off its check-ins, so that needs a yes too.
+    if (formDirty && submitted.shared && existing.shared === false && bootstrap.preferences.mainBotId === existing.id && !mainCleared) {
+      setConfirmation({ kind: "main" });
+      return;
+    }
     setConfirmPersonal(false);
     setPersonalConfirmed(personal);
     const chosenAvatar = avatar;
@@ -269,7 +276,7 @@ function LoadedBotSettings({
         if (formDirty) {
           await request("PATCH /bots/:id", {
             params: { id: existing.id },
-            body: { ...submitted, confirmModel: confirmed, ...(personal ? { confirmPrivate: true } : {}) },
+            body: { ...submitted, confirmModel: confirmed, ...(personal ? { confirmPrivate: true } : {}), ...(mainCleared ? { confirmMainCleared: true } : {}) },
           });
           setConfirmModel(null);
           setBaseline((current) => ({ ...current, form: submitted }));
@@ -442,6 +449,13 @@ function LoadedBotSettings({
           fallbackFocus={() => dialog.current?.querySelector<HTMLElement>("[data-settings-save]:not(:disabled)") ?? dialog.current?.querySelector<HTMLElement>("#assistant-settings-title") ?? null}
           onCancel={() => setConfirmPersonal(false)}
           onConfirm={() => { setConfirmPersonal(false); void saveChanges(false, true); }} />}
+        {confirmation?.kind === "main" && existing && <SettingsConfirmation
+          title={`Share ${savedName} with the household?`}
+          detail={`${savedName} is your main assistant. Sharing it ends that${bootstrap.preferences.checkIns?.enabled ? " and turns off its check-ins" : ""}, and everyone in the household will see its chat.`}
+          confirmLabel="Share it" danger busy={busy}
+          fallbackFocus={() => dialog.current?.querySelector<HTMLElement>("[data-settings-save]:not(:disabled)") ?? dialog.current?.querySelector<HTMLElement>("#assistant-settings-title") ?? null}
+          onCancel={() => setConfirmation(null)}
+          onConfirm={() => { setConfirmation(null); void saveChanges(false, personalConfirmed, true); }} />}
         {confirmModel && <SettingsConfirmation
           title="Use this model?" detail={confirmModel} confirmLabel="Confirm this model" busy={busy}
           fallbackFocus={() => dialog.current?.querySelector<HTMLElement>("[data-settings-save]:not(:disabled)") ?? dialog.current?.querySelector<HTMLElement>("#assistant-settings-title") ?? null}
@@ -817,7 +831,15 @@ function RoutineManager({
         onClick={() => { setEditing(null); setPreviewedSchedule(""); setFocusEditor(true); setForm({ botId, name: preset.name, prompt: preset.prompt, schedule: preset.schedule, enabled: false, recipientIds: [bootstrap.user.id], roomIds: [], contextFrom: ["self"] }); }}>
         <strong>{preset.name}</strong><small>{preset.description}</small></Button>)}</div>
       {routines.length > 0 && <h3>Saved routines</h3>}
-      {routines.map((routine) => (
+      {routines.map((routine) => routine.managed === "check-in" ? (
+        // A member's check-ins: only their switch in the assistant's details changes them.
+        <article className="routine-card routine-managed" key={routine.id}>
+          <h4>{routine.name}</h4>
+          <dl className="routine-meta"><div><dt>Schedule</dt><dd>{(() => { const hours = Math.round(scheduleMinutes(routine.schedule) / 60); return Number.isFinite(hours) && hours > 0 ? checkInFrequencyLabel(hours) : <code>{routine.schedule}</code>; })()}</dd></div>
+            <div><dt>Status</dt><dd><span className="routine-status">Active</span></dd></div></dl>
+          <p className="muted">Check-ins for your main assistant. Change how often, or turn them off, in {bootstrap.bots.find(bot => bot.id === botId)?.name ?? "its"} details.</p>
+        </article>
+      ) : (
         <article className="routine-card" key={routine.id}>
           <h4>{routine.name}</h4>
           <dl className="routine-meta"><div><dt>Schedule</dt><dd><code>{routine.schedule}</code></dd></div><div><dt>Status</dt><dd><span className={routine.enabled ? "routine-status" : "routine-status paused"}>{routine.enabled ? "Active" : "Paused"}</span></dd></div>

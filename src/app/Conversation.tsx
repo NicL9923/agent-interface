@@ -12,7 +12,7 @@ import { Icon } from "../components/Icon";
 import { NotificationOnboarding } from "../components/DeviceNotifications";
 import type { useDeviceNotifications } from "../components/use-device-notifications";
 import { openComputer, usesComputer } from "../components/ComputerHandoffCard";
-import { AgentExchange, isAgentExchange } from "../components/AgentExchange";
+import { AgentExchange, ExchangeBots, isAgentExchange } from "../components/AgentExchange";
 import { ActionReceipt } from "../components/ActionReceipt";
 import { T3ThreadCard } from "../components/T3ThreadCard";
 import { t3ThreadLaunch } from "../shared/t3-code";
@@ -164,6 +164,7 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
     window.addEventListener("wildbots:find", requested);
     return () => { window.removeEventListener("keydown", open); window.removeEventListener("wildbots:find", requested); };
   }, [findable, scroll, botId]);
+  const exchangeBots = useMemo(() => ({ bots: boot.bots, currentBotId: botId }), [boot.bots, botId]);
   const closeFind = useStableCallback(() => {
     setFinding(false);
     const back = findReturn.current;
@@ -171,7 +172,7 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
     (back?.isConnected ? back : scroll.current)?.focus({ preventScroll: true });
   });
   return (
-    <TranscriptTools.Provider value={tools}>
+    <TranscriptTools.Provider value={tools}><ExchangeBots.Provider value={exchangeBots}>
       {error && (
         <div className="notice error" role="alert">
           {error}
@@ -313,7 +314,7 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
       )}
       {peeking && selected && <ComputerPeek name={selected.name} />}
       </div>
-    </TranscriptTools.Provider>
+    </ExchangeBots.Provider></TranscriptTools.Provider>
   );
 }
 /** The last line of reasoning in the running turn, after the person's latest message. */
