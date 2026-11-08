@@ -840,8 +840,12 @@ private struct SendingMessage: ViewModifier {
 struct AgentExchangeView: View {
   var message: Message
   var recipient: String
+  @Environment(AppStore.self) private var store
   var body: some View {
     let handoff = AgentHandoff(message: message)
+    // A handoff to or from one of this person's assistants opens its chat; anyone else's is never named.
+    let partner = MainAssistant.exchangePartner(target: handoff.incoming == nil ? handoff.target : nil, incomingName: handoff.incoming?.name,
+      bots: store.bootstrap?.bots ?? [], currentBotId: store.selectedBotId ?? "")
     VStack(alignment: .leading, spacing: 8) {
       HStack(spacing: 8) {
         Text("↔").accessibilityHidden(true)
@@ -857,6 +861,11 @@ struct AgentExchangeView: View {
             Text(handoff.response).font(.caption.monospaced()).textSelection(.enabled)
           }.frame(maxWidth: .infinity, alignment: .leading).padding(.top, 4)
         }.font(.subheadline)
+      }
+      if let partner {
+        Button("Open \(partner.name)'s chat") { Task { await store.select(partner.id) } }
+          .font(.subheadline.weight(.semibold)).buttonStyle(.bordered).tint(Palette.accent)
+          .accessibilityIdentifier("openExchangeChat.\(partner.id)")
       }
     }.padding(.horizontal, 16).padding(.vertical, 12).frame(maxWidth: .infinity, alignment: .leading)
       .background(Palette.accentSoft, in: UnevenRoundedRectangle(bottomTrailingRadius: 12, topTrailingRadius: 12))

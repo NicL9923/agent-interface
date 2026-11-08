@@ -113,6 +113,13 @@ struct Preferences: Codable, Equatable {
   var followBots: [String] = []
   /// Routines whose runs this person keeps out of their assistant's chat. Older servers omit it.
   var hiddenRoutineRuns: [HiddenRoutineRun]?
+  // --- Main assistant (MainAssistant.swift). Older servers omit all three. ---
+  /// Server-owned: a preferences save never changes it, only PUT /preferences/main.
+  var mainBotId: String?
+  /// Server-owned like mainBotId: PUT /preferences/check-ins.
+  var checkIns: CheckInSettings?
+  var mainSuggestionDismissed: Bool?
+  // --- End main assistant ---
 }
 struct Capability: Codable, Equatable {
   var supported: Bool
@@ -185,6 +192,8 @@ struct BotInput: Encodable, Equatable {
   var shared = true
   /// Sent only after the person agrees that the assistant disappears for everyone else.
   var confirmPrivate: Bool?
+  /// Sent only after the person agrees that sharing their main assistant ends it being main.
+  var confirmMainCleared: Bool?
   init(bot: Bot? = nil, fallback: Bot? = nil) {
     name = bot?.name ?? ""
     description = bot?.description ?? ""
@@ -848,9 +857,12 @@ struct Routine: Codable, Identifiable {
   var lastDeliveryError: String?
   /// A run is in flight now, which Stop run can end. Read only.
   var running: Bool?
+  /// "check-in": a member's main-assistant check-ins, changed only from its details. Read only; older servers omit it.
+  var managed: String? = nil
+  var isCheckIn: Bool { managed == "check-in" }
   enum CodingKeys: String, CodingKey {
     case id, botId, name, prompt, schedule, enabled, recipientIds, roomIds, skills, model, provider
-    case enabledToolsets, script, noAgent, contextFrom, nextRunAt, lastRunAt, lastStatus, lastError, lastDeliveryError, running
+    case enabledToolsets, script, noAgent, contextFrom, nextRunAt, lastRunAt, lastStatus, lastError, lastDeliveryError, running, managed
   }
   // Explicit null releases an override; synthesized encodeIfPresent would omit it
   // and native PUT would retain the old value. Unknown native fields stay server-side.
@@ -1115,17 +1127,18 @@ enum ConnectionAddress {
 }
 
 extension Preferences {
-  /// Pinned assistants appear once, in the person's saved pin order.
+  /// Pinned assistants appear once, in the person's saved pin order. The main assistant leads
+  /// home on its own, so it is never among them.
   func pinnedAssistants(_ bots: [Bot]) -> [Bot] {
     var seen: Set<String> = []
     return favorites.compactMap { id in
-      guard seen.insert(id).inserted else { return nil }
+      guard id != mainBotId, seen.insert(id).inserted else { return nil }
       return bots.first { $0.id == id }
     }
   }
   /// The list below the pins follows the web's sections and original roster order.
   func assistantGroups(_ bots: [Bot]) -> [AssistantGroup] {
-    let unpinned = bots.filter { !favorites.contains($0.id) }
+    let unpinned = bots.filter { !favorites.contains($0.id) && $0.id != mainBotId }
     var seen: Set<String> = []
     var groups: [AssistantGroup] = []
     for section in sections {

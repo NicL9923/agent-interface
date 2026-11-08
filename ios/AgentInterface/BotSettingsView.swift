@@ -926,6 +926,15 @@ struct BotSettingsView: View {
         }
       }
       ForEach(routines) { routine in
+        if routine.isCheckIn {
+          // A member's check-ins: only the switch in the assistant's details changes them.
+          Section(routine.name) {
+            LabeledContent("Schedule") {
+              Text(MainAssistant.scheduleMinutes(routine.schedule).map { MainAssistant.frequencyLabel(max(1, $0 / 60)) } ?? routine.schedule).foregroundStyle(Palette.muted)
+            }
+            Text("Check-ins for your main assistant. Change how often, or turn them off, in \(bot.name)'s details.").font(.footnote).foregroundStyle(Palette.muted)
+          }.accessibilityIdentifier("checkInRoutine")
+        } else {
         Section(routine.name) {
           LabeledContent("Schedule") { Text(routine.schedule).font(.subheadline).monospaced().foregroundStyle(Palette.muted) }
           LabeledContent("Status") {
@@ -953,6 +962,7 @@ struct BotSettingsView: View {
           }
           Button("Edit") { editingRoutine = routine }
           Button("Delete", role: .destructive) { deletingRoutine = routine }
+        }
         }
       }
       Section {
@@ -1002,6 +1012,9 @@ struct BotSettingsView: View {
           if e.code == "private_confirmation_required" {
             self.error = nil
             confirmation = .personal(name: savedName)
+          } else if e.code == "main_share_confirmation_required" {
+            self.error = nil
+            confirmation = .shareMain(name: savedName, checkIns: store.bootstrap?.preferences.checkIns?.enabled == true)
           } else if e.confirmRequired {
             self.error = nil
             confirmation = .model(warning: e.localizedDescription)
@@ -1017,6 +1030,7 @@ struct BotSettingsView: View {
     switch choice {
     case .model: bot == nil ? saveBot(confirmed: true) : saveChanges(confirmed: true)
     case .personal: bot == nil ? saveBot(personal: true) : saveChanges(personal: true)
+    case .shareMain: saveChanges(mainCleared: true)
     case .discard: closeSheet()
     case .leaveMemory:
       memoryDirty = false
@@ -1047,7 +1061,7 @@ struct BotSettingsView: View {
   /// skills, each only if it changed. Each part that saves becomes its new baseline, so after a
   /// failure the next Save sends only what is still unsaved. A model or make-personal
   /// confirmation stops at the first step and, once confirmed, continues the whole save.
-  private func saveChanges(confirmed: Bool = false, personal: Bool? = nil) {
+  private func saveChanges(confirmed: Bool = false, personal: Bool? = nil, mainCleared: Bool = false) {
     // Every way to save, Retry included, checks the name before the fields are sent.
     if form != savedForm && !nameReady {
       if path != [.section(.profile)] { keepMessages = true; path = [.section(.profile)] }
@@ -1059,6 +1073,11 @@ struct BotSettingsView: View {
     let personal = !form.shared && (personal ?? personalConfirmed)
     if form != savedForm && form.hidesFromHousehold(bot) && !personal {
       confirmation = .personal(name: savedName)
+      return
+    }
+    // Sharing your main assistant ends it being main and turns off its check-ins, so that needs a yes too.
+    if form != savedForm && form.shared && bot?.shared == false && bot.map({ store.bootstrap?.preferences.mainBotId == $0.id }) == true && !mainCleared {
+      confirmation = .shareMain(name: savedName, checkIns: store.bootstrap?.preferences.checkIns?.enabled == true)
       return
     }
     personalConfirmed = personal
@@ -1073,6 +1092,7 @@ struct BotSettingsView: View {
           var value = sent
           value.confirmModel = confirmed
           if personal { value.confirmPrivate = true }
+          if mainCleared { value.confirmMainCleared = true }
           let _: Bot = try await api.write("/bots/\(APIClient.component(bot.id))", value, method: "PATCH")
           savedForm = sent
           patched = true
@@ -1532,9 +1552,11 @@ private struct RoutineAdvancedFields: View {
 /// The editor's preview: the avatar large, with chips to try each live state.
 private enum SettingsConfirmation: Identifiable {
   case model(warning: String), personal(name: String), delete(name: String), discard, leaveMemory
+  case shareMain(name: String, checkIns: Bool)
   var id: String {
     switch self {
     case .model: "model"
+    case .shareMain: "share-main"
     case .personal: "personal"
     case .delete: "delete"
     case .discard: "discard"
@@ -1545,6 +1567,7 @@ private enum SettingsConfirmation: Identifiable {
     switch self {
     case .model: "Use this model?"
     case .personal(let name): "Make \(name) your personal assistant?"
+    case .shareMain(let name, _): "Share \(name) with the household?"
     case .delete(let name): "Delete \(name)?"
     case .discard: "Discard your unsaved changes?"
     case .leaveMemory: "Leave memory without saving?"
@@ -1554,6 +1577,7 @@ private enum SettingsConfirmation: Identifiable {
     switch self {
     case .model(let warning): warning
     case .personal: "It will disappear for the rest of the household, along with its conversation, routines and group chats."
+    case .shareMain(let name, let checkIns): "\(name) is your main assistant. Sharing it ends that\(checkIns ? " and turns off its check-ins" : ""), and everyone in the household will see its chat."
     case .delete: "This deletes the assistant in Hermes and removes its settings from WildBots."
     case .discard: "Your unsaved changes will be lost."
     case .leaveMemory: "Your unsaved memory edits will be lost. Save them before leaving if you want to keep them."
@@ -1563,6 +1587,7 @@ private enum SettingsConfirmation: Identifiable {
     switch self {
     case .model: "Confirm this model"
     case .personal: "Make it personal"
+    case .shareMain: "Share it"
     case .delete: "Yes, delete"
     case .discard: "Discard changes"
     case .leaveMemory: "Discard edits and leave"
