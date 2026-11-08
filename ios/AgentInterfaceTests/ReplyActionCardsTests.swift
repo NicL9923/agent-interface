@@ -166,6 +166,7 @@ final class ReplyActionCardsTests: XCTestCase {
     func record(_ attempt: Int, _ state: String, _ requestId: String? = nil) -> SavedFormReply {
       SavedFormReply(attempt: attempt, answers: [:], state: state, requestId: requestId)
     }
+    func elsewhere(_ record: SavedFormReply) -> SavedFormReply { var copy = record; copy.elsewhere = true; return copy }
     let cases: [(String, SavedFormReply?, SavedFormReply, Int?, String?, Bool)] = [
       ("nothing saved yet", nil, record(0, "editing"), nil, nil, true),
       ("a later attempt's record", record(1, "sent"), record(0, "sent"), nil, nil, false),
@@ -179,6 +180,8 @@ final class ReplyActionCardsTests: XCTestCase {
       ("another request's refusal", record(1, "checking", "a"), record(1, "editing"), nil, "b", false),
       ("sending from editing", record(1, "editing"), record(1, "checking", "a"), nil, nil, true),
       ("a request settling as sent", record(1, "checking", "a"), record(1, "sent"), nil, nil, true),
+      ("only knowing the answers went, over a record that holds them", record(1, "sent"), elsewhere(record(1, "sent")), nil, nil, false),
+      ("the answers that went, over a record that only knows they went", elsewhere(record(1, "sent")), record(1, "sent"), nil, nil, true),
     ]
     for (name, stored, next, from, owns, allowed) in cases {
       XCTAssertEqual(FormRecords.mayReplace(stored, with: next, from: from, owns: owns), allowed, name)

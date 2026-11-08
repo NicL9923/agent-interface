@@ -382,12 +382,15 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
     const previous = recorded && (recorded.input.senderId === signedIn(req).id || recorded.input.retryOf !== undefined)
       && visibleTo(store, recorded.input.botId, signedIn(req).id) ? recorded : undefined;
     if (recorded && !previous) return { requestId, status: "uncertain", message: "No admission receipt was found yet. A delayed original request may still arrive. Preserve this request ID and review before retrying the same message." };
+    // The sender also learns what text the request carried; anyone else following a retry does not.
+    const own = previous && previous.input.senderId === signedIn(req).id ? previous.input.text : undefined;
+    const told = (receipt: SubmissionReceipt): SubmissionReceipt => own === undefined ? receipt : { ...receipt, text: own };
     try {
       if ((await runtime.capabilities()).idempotency.supported) {
         const receipt = await runtime.lookupSubmission(requestId);
         if (receipt) {
           if (previous) store.receipt(receipt);
-          return receipt;
+          return told(receipt);
         }
         if (!previous)
           return {
@@ -401,7 +404,7 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
       /* Missing transport evidence stays uncertain, never replay. */
     }
     return (
-      previous?.receipt ?? {
+      (previous && told(previous.receipt)) ?? {
         requestId,
         status: "uncertain",
         message:

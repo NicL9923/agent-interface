@@ -486,14 +486,19 @@ struct EmailDraftCardView: View {
 /// When one saved form record may replace another, as the web's `mayReplace` in FormReplyCard.tsx.
 /// Several copies of a card share one record, so a stale copy never undoes another's progress: a
 /// later attempt's record is never overwritten by what happened to an earlier one (moving on from
-/// attempt `from` counts as happening to `from`), and within an attempt a record never goes back,
-/// except when the copy that owns the checking request learns the server refused it outright.
+/// attempt `from` counts as happening to `from`), within an attempt a record never goes back, except
+/// when the copy that owns the checking request learns the server refused it outright, and at the
+/// same point a record that only knows the answers went elsewhere never replaces one that holds them.
 enum FormRecords {
   private static let progress = ["editing": 0, "checking": 1, "sent": 2, "interrupted": 2]
   static func mayReplace(_ stored: SavedFormReply?, with next: SavedFormReply, from: Int? = nil, owns: String? = nil) -> Bool {
     guard let stored else { return true }
     if stored.attempt > (from ?? next.attempt) { return false }
-    if stored.attempt != next.attempt || progress[next.state, default: 0] >= progress[stored.state, default: 0] { return true }
+    if stored.attempt != next.attempt { return true }
+    let ahead = progress[next.state, default: 0] - progress[stored.state, default: 0]
+    if ahead > 0 { return true }
+    // At the same point, a record that knows the answers outranks one that only knows they went.
+    if ahead == 0 { return next.elsewhere != true || stored.elsewhere == true }
     return stored.state == "checking" && owns != nil && stored.requestId == owns
   }
 }
@@ -785,10 +790,15 @@ struct FormReplyCardView: View {
   }
   /// Settles the one request `from` names, with the attempt and answers it carried.
   private func settle(_ from: Pending, _ receipt: Receipt) {
+    // Another copy may have sent different answers under the same ID. The server's record of the
+    // text says whose went; only matching text makes these answers the ones that were sent.
+    let theirs = from.elsewhere || receipt.text.map { !JS.same($0, FormAnswers.text(card, from.answers)) } == true
+    let kept = theirs ? FormAnswers.start(card) : from.answers
+    if theirs { elsewhere = true }
     switch receipt.status {
     case "accepted":
       pending = nil; status = .sent; error = nil
-      save(SavedFormReply(attempt: from.attempt, answers: from.answers, state: "sent", elsewhere: from.elsewhere ? true : nil))
+      save(SavedFormReply(attempt: from.attempt, answers: kept, state: "sent", elsewhere: theirs ? true : nil))
       store?.buzz(.sent)
     case "rejected":
       // A refused ID stays refused, so the person's next Send is a new attempt.
@@ -797,10 +807,10 @@ struct FormReplyCardView: View {
       save(SavedFormReply(attempt: from.attempt + 1, answers: from.answers, state: "editing"), from: from.attempt)
     case "interrupted":
       pending = nil; status = .interrupted; error = nil
-      save(SavedFormReply(attempt: from.attempt, answers: from.answers, state: "interrupted", elsewhere: from.elsewhere ? true : nil))
+      save(SavedFormReply(attempt: from.attempt, answers: kept, state: "interrupted", elsewhere: theirs ? true : nil))
     default:
       pending = from; status = .checking; error = Self.unconfirmed
-      save(SavedFormReply(attempt: from.attempt, answers: from.answers, state: "checking", requestId: from.id, elsewhere: from.elsewhere ? true : nil))
+      save(SavedFormReply(attempt: from.attempt, answers: kept, state: "checking", requestId: from.id, elsewhere: theirs ? true : nil))
     }
   }
   /// Checks the pending request by its ID, every 2 seconds at first and slowing to 30, until a receipt settles it.

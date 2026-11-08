@@ -54,13 +54,19 @@ type Change = { from?: number; owns?: string };
  * - a later attempt's record is never overwritten by what happened to an earlier one, and moving on
  *   from attempt `from` counts as happening to `from`;
  * - within an attempt a record never goes back, from checking, sent or interrupted to editing,
- *   except when the copy that owns the checking request learns the server refused it outright.
+ *   except when the copy that owns the checking request learns the server refused it outright;
+ * - at the same point, a record that only knows the answers went from elsewhere never replaces
+ *   one that holds them.
  * iOS applies the same rule in `FormRecords.mayReplace`.
  */
 export function mayReplace(stored: Saved | null, next: Saved, { from = next.attempt, owns }: Change = {}): boolean {
   if (!stored) return true;
   if (stored.attempt > from) return false;
-  if (stored.attempt !== next.attempt || progress[next.state] >= progress[stored.state]) return true;
+  if (stored.attempt !== next.attempt) return true;
+  const ahead = progress[next.state] - progress[stored.state];
+  if (ahead > 0) return true;
+  // At the same point, a record that knows the answers outranks one that only knows they went.
+  if (ahead === 0) return !next.elsewhere || !!stored.elsewhere;
   return stored.state === "checking" && owns !== undefined && stored.requestId === owns;
 }
 const refused = "Hermes didn't take your answers.";
@@ -139,7 +145,11 @@ export function FormReplyCard({ card, botId, messageId, userId, unavailable }: {
 
   /** Settles the one request `from` names, with the attempt and answers it carried. */
   const settle = (from: Pending, receipt: SubmissionReceipt) => {
-    const kept = { attempt: from.attempt, answers: from.answers, ...(from.elsewhere && { elsewhere: true }) };
+    // Another copy may have sent different answers under the same ID. The server's record of the
+    // text says whose went; only matching text makes these answers the ones that were sent.
+    const theirs = from.elsewhere || receipt.text !== undefined && receipt.text !== formAnswerText(card, from.answers);
+    const kept = theirs ? { attempt: from.attempt, answers: formStart(card), elsewhere: true } : { attempt: from.attempt, answers: from.answers };
+    if (theirs) setElsewhere(true);
     if (receipt.status === "accepted") {
       setPending(null); setStatus("sent"); setError(""); save({ ...kept, state: "sent" });
       reactAvatar(botId, "cheer");

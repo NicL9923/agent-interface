@@ -411,6 +411,12 @@ export interface SubmissionReceipt {
   runId?: string;
   messageId?: string;
   message?: string;
+  /**
+   * The text the server recorded under this request ID, from `GET /submissions/:id` and only to the
+   * person who sent it. A form card compares it with its own answers, since another tab or device
+   * may have sent different answers under the same derived ID.
+   */
+  text?: string;
 }
 export interface RuntimeEvent {
   id: string;

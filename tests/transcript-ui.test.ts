@@ -1282,6 +1282,8 @@ describe("form replies", () => {
       ["another request's refusal", record(1, "checking", "a"), record(1, "editing"), { owns: "b" }, false],
       ["sending from editing", record(1, "editing"), record(1, "checking", "a"), {}, true],
       ["a request settling as sent", record(1, "checking", "a"), record(1, "sent"), {}, true],
+      ["only knowing the answers went, over a record that holds them", record(1, "sent"), { ...record(1, "sent"), elsewhere: true }, {}, false],
+      ["the answers that went, over a record that only knows they went", { ...record(1, "sent"), elsewhere: true }, record(1, "sent"), {}, true],
     ];
     for (const [name, stored, next, change, allowed] of cases) expect(mayReplace(stored, next, change), name).toBe(allowed);
   });
@@ -1300,6 +1302,48 @@ describe("form replies", () => {
     // This copy moved on to attempt 1 and is editable; typing in it must not reopen the sent form.
     await typeInto(card().querySelector<HTMLInputElement>('input[type="text"]')!, "Marfa2");
     expect(JSON.parse(localStorage.getItem(saved)!)).toEqual(newer);
+  });
+
+  it("shows another copy's different answers as sent from elsewhere, not its own, after losing its response", async () => {
+    // Another copy sent other answers under this attempt's ID; this copy's own request got no answer.
+    const theirs = 'My answers to "Trip details":\n- Destination: Austin\n- Pace: Relaxed\n- Bringing the dog: No';
+    const previous = vi.mocked(api).getMockImplementation()!;
+    // Until this copy sends, the lookup on open finds nothing; after, the server holds the admitted text.
+    let tried = false;
+    vi.mocked(api).mockImplementation(async <T>(path: string, ...rest: unknown[]) => path.startsWith("/submissions/")
+      ? { requestId: path.split("/")[2], status: tried ? "accepted" : "uncertain", ...(tried && { text: theirs }) } as T : previous(path, ...rest as []) as T);
+    vi.mocked(write).mockImplementation(async <T>(path: string) => {
+      if (path === "/bots/shared/messages") { tried = true; throw new TypeError("Failed to fetch"); }
+      return {} as T;
+    });
+    await render();
+    await fill();
+    await send();
+    await posted(1);
+    await advance(2100);
+    await waitForUi(() => expect(sent()).toBe("Sent"));
+    expect(card().textContent).toContain("Your answers were sent from another tab or device.");
+    expect(card().querySelector(".form-reply-answers")).toBeNull();
+    expect(JSON.parse(localStorage.getItem(saved)!)).toMatchObject({ state: "sent", elsewhere: true });
+  });
+
+  it("shows its own answers as sent when the server's text is theirs", async () => {
+    const previous = vi.mocked(api).getMockImplementation()!;
+    // Until this copy sends, the lookup on open finds nothing; after, the server holds the admitted text.
+    let tried = false;
+    vi.mocked(api).mockImplementation(async <T>(path: string, ...rest: unknown[]) => path.startsWith("/submissions/")
+      ? { requestId: path.split("/")[2], status: tried ? "accepted" : "uncertain", ...(tried && { text: answers }) } as T : previous(path, ...rest as []) as T);
+    vi.mocked(write).mockImplementation(async <T>(path: string) => {
+      if (path === "/bots/shared/messages") { tried = true; throw new TypeError("Failed to fetch"); }
+      return {} as T;
+    });
+    await render();
+    await fill();
+    await send();
+    await posted(1);
+    await advance(2100);
+    await waitForUi(() => expect(sent()).toBe("Sent"));
+    expect(card().querySelector(".form-reply-answers")?.textContent).toContain("Marfa");
   });
 
   it("never lets a late refusal of an earlier attempt overwrite a later attempt that was sent", async () => {

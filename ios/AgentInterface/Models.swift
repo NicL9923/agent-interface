@@ -888,6 +888,8 @@ struct Receipt: Codable, Equatable {
   var runId: String?
   var messageId: String?
   var message: String?
+  /// The text the server recorded under this request ID, sent only to its sender by `GET /submissions/:id`.
+  var text: String? = nil
 }
 /// A failed turn's retry as the server records it: the receipt of the request that claimed the turn.
 struct RetryClaim: Codable, Equatable {
