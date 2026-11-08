@@ -415,3 +415,64 @@ Checks at `bdf5dcc`:
   - `SettingsParityTests`: 24
   - `MainAssistantFlowTests`: 2, light and dark
   - `SettingsPolishTests`: 9
+
+## Final review fixes: protection by default
+
+A final GPT-6.1 Sol review of `4edd56a..d1cb1f3` found three issues, all reproduced. Commit `dc9db64`
+applies one rule rather than patching each race. An assistant's Hermes roster marks it main while
+any of these holds:
+- it is a member's designated main;
+- the last successful routine inventory left a signed check-in on it, whether kept, just created,
+  or one Hermes refused to delete;
+- no inventory has succeeded since this server started.
+
+Protection comes off only in a reconciliation pass. Its inventory, its main-designation cleanup and
+its roster send all run inside `serialDelivery`, in turn with routine saves, triggers, sharing and
+main changes. A Hermes without routines counts as an inventory that found nothing.
+
+1. A concurrent request bypassed activation. Every `PUT /preferences/main`, a reaffirmation or a
+   no-op included, now runs in that turn and reads the designation there. So does the main decision
+   in sharing an assistant. Two tests cover it:
+   - A reaffirmation held mid-request, then a clear, then a routine posting elsewhere: the requests
+     take effect in order and the assistant ends cleared.
+   - A share sent while the assistant is being made main now asks for confirmation instead of
+     leaving a shared assistant designated main.
+2. Untracked check-ins lost protection across a restart. The in-memory set is no longer trusted
+   before an inventory. A test restarts with a signed, untracked check-in on an assistant that isn't
+   main and makes another assistant main before any inventory. Every personal assistant stays
+   protected, a failed inventory changes nothing, and protection comes off for the orphan's
+   assistant only once its check-in is confirmed deleted. Two further tests clear main while Hermes
+   can't list routines, after a check-in was just made and after one was kept; both stay protected.
+   Not persisted: the review asked to persist what the inventory found, but the unknown-at-start
+   rule already protects everyone until the first successful scan, and nothing reads a persisted
+   copy before that scan replaces it. A persisted set could not fail a test, so it was left out.
+3. Settled deliveries blocked promotion forever. The runtime no longer treats `last_delivery_queued`
+   as in flight; only `fire_claim` is. The add-on's `routine_deliveries` now reads each queued marker's
+   receipt in the target profile's mailbox with Hermes's `read_delivery_result`. A marker counts only
+   when its receipt is queued or claimed, or is missing with no finished parked record. A real-Hermes
+   test admits receipts into a real mailbox, records the markers with `_record_delivery_verification`,
+   and settles one and fails another with `complete_delivery`. Only the unfinished one still counts,
+   while Hermes keeps all three markers.
+
+The main-assistant API test setup now runs a reconciliation first, as the server's start does.
+
+Hand-breaks: 19 lines broke and all went red:
+- both request-ordering changes, failing on the race tests themselves;
+- the unknown-at-start rule, marking an inventory successful, the no-routines case, and adding kept,
+  just-created and undeleted check-ins to the protected set;
+- the adapter's marker handling;
+- the receipt statuses: claimed, settled or failed, and missing;
+- a finished parked record;
+- the own, default and invalid targets;
+- the three malformed-input guards.
+
+Checks at `dc9db64`:
+- `npm test`: 152 files and 2,165 tests passed. `tests/main-assistant-api.test.ts` passed five more
+  runs in a row.
+- Typecheck, lint, build and Ruff passed.
+- The e2e smoke suite (2) passed on a rerun. The first attempt couldn't start because port 4173 was
+  briefly in use by another process.
+- `npm run test:py`: 38 files passed.
+- With `HERMES_SOURCE` at the `ed1afb0` clone, `tests/hermes_delegation_test.py` ran 34 tests and
+  `tests/hermes_bot_delivery_test.py` ran 17 (one skip, the `6ebd92d` rollback case), all passing.
+- No iOS source changed, so iOS was not rerun.
