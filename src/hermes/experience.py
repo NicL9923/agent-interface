@@ -424,6 +424,142 @@ def run_outcome(row, attempts, ledger, job, newest, now=None):
         deliveryFailed=delivery_failed, error=error[:500] if error and status == "failed" else None)
 
 
+MAX_ACCOUNT_PROVIDERS = 8
+# Hermes's usage lines end with CLI instructions such as "/usage reset" or "/topup". The app offers its
+# own actions, so those lines are dropped rather than shown as commands nobody can type here.
+_CLI_HINTS = ("/usage", "/topup", "(or run", "Top up via", "Top up:")
+_ACCOUNT_KEY = re.compile(r"^[0-9a-f]{32}$")
+_RESET_STATUSES = ("reset", "nothing_to_reset", "no_credit", "already_redeemed", "not_exhausted", "no_credits_banked", "unavailable")
+
+
+def _digest(*parts):
+    return hashlib.sha256("\0".join(("wildbots-account", *parts)).encode()).hexdigest()[:32]
+
+
+def _account_providers():
+    """(provider, role) for the profile's main provider, then each fallback provider, each once.
+
+    "auto" resolves to the provider Hermes would pick. The fetchers resolve their own credentials,
+    as ``hermes usage`` does, so nothing here touches the network or a usage endpoint.
+    """
+    from hermes_cli.config import load_config_readonly
+    from hermes_cli.runtime_provider import resolve_requested_provider, resolve_runtime_provider
+    main = resolve_requested_provider(None)
+    if main == "auto":
+        try:
+            main = str(resolve_runtime_provider().get("provider") or "")
+        except Exception:
+            main = ""
+    pairs = [(main, "main")]
+    fallback = load_config_readonly().get("fallback_model")
+    for entry in fallback if isinstance(fallback, list) else [fallback]:
+        provider = entry.get("provider") if isinstance(entry, dict) else None
+        if isinstance(provider, str):
+            pairs.append((provider, "fallback"))
+    roles = {}
+    for provider, role in pairs:
+        provider = provider.strip().lower() if isinstance(provider, str) else ""
+        if provider and provider != "auto" and 0 < len(provider) <= 100:
+            roles.setdefault(provider, role)
+    return list(roles.items())[:MAX_ACCOUNT_PROVIDERS]
+
+
+def _credential_key(provider):
+    """A stable, one-way account key: the provider and a digest of the credential it resolves to.
+
+    Profiles that share a credential share a key, so the app reads that account once. The credential
+    never leaves Hermes; only the truncated digest does.
+    """
+    try:
+        from hermes_cli.runtime_provider import resolve_runtime_provider
+        secret = str(resolve_runtime_provider(requested=provider).get("api_key") or "")
+    except Exception:
+        secret = ""
+    return _digest(provider, "credential", hashlib.sha256(secret.encode()).hexdigest() if secret else "none")
+
+
+def account_list():
+    return dict(accounts=[dict(key=_credential_key(provider), provider=provider, role=role) for provider, role in _account_providers()])
+
+
+def _account_for(key):
+    if not isinstance(key, str) or not _ACCOUNT_KEY.match(key):
+        raise ExperienceError("Invalid account.")
+    for provider, role in _account_providers():
+        if _credential_key(provider) == key:
+            return provider, role
+    raise ExperienceError("This assistant no longer uses that account.", 404)
+
+
+def _finite(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and value == value and value not in (float("inf"), float("-inf"))
+
+
+def _usage_document(provider, key, snapshot, reason):
+    if snapshot is None:
+        return dict(key=key, provider=provider, plan=None, title="Account limits", fetchedAt=timestamp(), windows=[], details=[],
+                    unavailableReason=reason, bankedResets=0, identity=None)
+    windows = []
+    for window in getattr(snapshot, "windows", ())[:12]:
+        used = getattr(window, "used_percent", None)
+        reset = getattr(window, "reset_at", None)
+        scope = getattr(window, "scope", "account")
+        windows.append(dict(label=str(window.label)[:100], usedPercent=max(0.0, min(100.0, float(used))) if _finite(used) else None,
+                            resetsAt=reset.isoformat() if isinstance(reset, datetime.datetime) else None,
+                            detail=str(window.detail)[:300] if getattr(window, "detail", None) else None,
+                            scope=scope if scope in ("account", "model") else "account"))
+    raw = getattr(snapshot, "raw", None)
+    banked = 0
+    if provider == "openai-codex" and isinstance(raw, dict):
+        count = (raw.get("rate_limit_reset_credits") or {}).get("available_count")
+        banked = max(0, int(count)) if _finite(count) else 0
+    # The banked-reset line ends in "/usage reset", so it goes with the CLI hints; bankedResets carries the count.
+    details = [str(line)[:300] for line in getattr(snapshot, "details", ()) if not any(hint in str(line) for hint in _CLI_HINTS)][:12]
+    identity = getattr(snapshot, "identity", None)
+    fetched = getattr(snapshot, "fetched_at", None)
+    unavailable = getattr(snapshot, "unavailable_reason", None)
+    return dict(key=key, provider=provider, plan=str(snapshot.plan)[:100] if getattr(snapshot, "plan", None) else None,
+                title=str(getattr(snapshot, "title", None) or "Account limits")[:100],
+                fetchedAt=fetched.isoformat() if isinstance(fetched, datetime.datetime) else timestamp(),
+                windows=windows, details=details, unavailableReason=str(unavailable)[:500] if unavailable else None,
+                bankedResets=banked, identity=_digest(provider, "identity", identity) if isinstance(identity, str) and identity else None)
+
+
+def account_usage(data):
+    """One account's limits, read the way ``hermes usage`` reads them, normalized for the app."""
+    from agent import account_usage as usage
+    key = data.get("key")
+    provider, _ = _account_for(key)
+    if provider == "nous":
+        # Nous Portal reports credits through its account endpoint, not a usage fetcher.
+        if not usage._nous_logged_in():
+            return _usage_document(provider, key, None, "Sign in to Nous Portal in Hermes to see its credits.")
+        try:
+            snapshot = usage.build_nous_credits_snapshot(usage._fetch_portal_account(10.0))
+        except Exception:
+            snapshot = None
+        return _usage_document(provider, key, snapshot, "Hermes could not read this account's credits right now.")
+    from agent.account_usage_cache import has_account_usage
+    if not has_account_usage(provider):
+        return _usage_document(provider, key, None, "This provider does not report plan limits or credits to Hermes.")
+    return _usage_document(provider, key, usage.fetch_account_usage(provider), "Hermes could not read this account's limits right now.")
+
+
+def account_reset(data):
+    """Spend one banked ChatGPT reset. Hermes refuses a wasted reset unless ``force`` is set, and never retries the spend."""
+    from agent.account_usage import redeem_codex_reset_credit
+    force = data.get("force")
+    if not isinstance(force, bool):
+        raise ExperienceError("Choose whether to use a reset before the limit is reached.")
+    provider, _ = _account_for(data.get("key"))
+    if provider != "openai-codex":
+        raise ExperienceError("Only ChatGPT accounts have banked resets.", 409)
+    result = redeem_codex_reset_credit(force=force)
+    status = result.status if result.status in _RESET_STATUSES else "unavailable"
+    return dict(status=status, message=str(result.message)[:500], availableCount=max(0, int(result.available_count)),
+                windowsReset=max(0, int(result.windows_reset)))
+
+
 MAX_MODEL_NAMES = 4000
 
 
@@ -977,6 +1113,16 @@ def install(web, journal, projector):
                 result = await config_scoped_to_thread(profile, lambda: discovery(data, journal, projector))
             elif operation == "memory":
                 result = await config_scoped_to_thread(profile, lambda: profile_memory(profile, getattr(journal, "memory_refresh", None)))
+            elif operation == "accounts":
+                result = await config_scoped_to_thread(profile, account_list)
+            elif operation == "account_usage":
+                result = await config_scoped_to_thread(profile, lambda: account_usage(data))
+            elif operation == "account_reset":
+                # Spending a reset changes the provider account, so it pauses with other writes during an upgrade.
+                with retirement.work() as admitted:
+                    if not admitted:
+                        raise ExperienceError("Hermes is being upgraded. Try the reset again in a minute.", 409)
+                    result = await config_scoped_to_thread(profile, lambda: account_reset(data))
             elif operation == "model_names":
                 # Cache-only reads need no profile scope, and an earlier add-on answers "Unknown experience operation."
                 result = await asyncio.to_thread(model_names, data)

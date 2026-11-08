@@ -11,6 +11,7 @@ const text = z.string();
 const number = z.number();
 const flag = z.boolean();
 const role = z.enum(['user', 'assistant', 'tool', 'system']);
+const accountKey = z.string().regex(/^[0-9a-f]{32}$/);
 const memory = z.object({
   botId: text, profile: text, scope: z.literal('profile'), owner: z.literal('Hermes'), notice: text,
   documents: z.array(z.object({ target: z.enum(['memory', 'user']), label: text, revision: text, enabled: flag,
@@ -74,6 +75,14 @@ function experienceSchemas(profile: string, artifacts: Artifacts): { [O in Exper
     model_names: z.object({ names: z.array(z.object({ provider: text, model: text, name: text.nullable() })) }),
     preview: z.object({ botId: text, schedule: text, timezone: text, nextRuns: z.array(text), kind: z.enum(['once', 'interval', 'cron']) }),
     run: receipt, run_receipt: receipt,
+    accounts: z.object({ accounts: z.array(z.object({ key: accountKey, provider: text.min(1).max(100), role: z.enum(['main', 'fallback']) })).max(20) }),
+    account_usage: z.object({ key: accountKey, provider: text.min(1).max(100), plan: text.max(100).nullable(), title: text.max(100), fetchedAt: text,
+      windows: z.array(z.object({ label: text.max(100), usedPercent: number.min(0).max(100).nullable(), resetsAt: text.nullable(),
+        detail: text.max(300).nullable(), scope: z.enum(['account', 'model']) })).max(12),
+      details: z.array(text.max(300)).max(12), unavailableReason: text.max(500).nullable(), bankedResets: number.int().min(0),
+      identity: accountKey.nullable() }),
+    account_reset: z.object({ status: z.enum(['reset', 'nothing_to_reset', 'no_credit', 'already_redeemed', 'not_exhausted', 'no_credits_banked', 'unavailable']),
+      message: text.max(500), availableCount: number.int().min(0), windowsReset: number.int().min(0) }),
   };
 }
 const support = { supported: flag, reason: text.optional() };

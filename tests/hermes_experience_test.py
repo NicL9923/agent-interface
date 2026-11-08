@@ -4,7 +4,9 @@ The actual Hermes store/scheduler qualification lives in experience_probe.py.
 """
 import contextlib
 import copy
+import datetime
 import json
+import re
 import sqlite3
 import sys
 import threading
@@ -856,6 +858,132 @@ class ModelNamesTests(unittest.TestCase):
                        [dict(provider='p', model='m')] * (experience.MAX_MODEL_NAMES + 1)):
             with self.subTest(models=str(models)[:40]), self.assertRaises(experience.ExperienceError):
                 experience.model_names(dict(models=models))
+
+
+def strict(**configured):
+    """A stand-in Hermes module whose unconfigured attributes fail loudly."""
+    class Module(types.SimpleNamespace):
+        def __getattr__(self, name):
+            if name.startswith('__'): raise AttributeError(name)
+            raise AssertionError(f'unexpected Hermes call: {name}')
+    return Module(**configured)
+
+
+class AccountUsageTests(unittest.TestCase):
+    """Hermes's provider resolution and usage fetchers are faked at the module boundary; the add-on runs for real."""
+    def hermes(self, *, main='openai-codex', fallback=None, keys=None, auto='openrouter', snapshots=None, supported=None,
+               nous=False, portal=None, redeem=None):
+        keys = {'openai-codex': 'codex-token', 'openrouter': 'sk-or-1', 'anthropic': 'sk-ant-oat-1', **(keys or {})}
+        self.fetched, self.redeemed = [], []
+        def runtime(requested=None):
+            provider = requested or auto
+            if provider not in keys: raise RuntimeError(f'no credential for {provider}')
+            return {'provider': provider, 'api_key': keys[provider]}
+        def fetch(provider):
+            self.fetched.append(provider)
+            value = (snapshots or {})[provider]
+            if isinstance(value, Exception): raise value
+            return value
+        def redeem_credit(force):
+            self.redeemed.append(force)
+            return redeem
+        usage = strict(fetch_account_usage=fetch, redeem_codex_reset_credit=redeem_credit, _nous_logged_in=lambda: nous,
+                       _fetch_portal_account=lambda timeout: portal, build_nous_credits_snapshot=lambda account: account)
+        cache = strict(has_account_usage=lambda provider: provider in (supported or ('openai-codex', 'openrouter', 'anthropic')))
+        return patch.dict(sys.modules, {
+            'hermes_cli': types.SimpleNamespace(), 'hermes_cli.config': strict(load_config_readonly=lambda: {'fallback_model': fallback}),
+            'hermes_cli.runtime_provider': strict(resolve_requested_provider=lambda requested: main, resolve_runtime_provider=runtime),
+            'agent': types.SimpleNamespace(account_usage=usage, account_usage_cache=cache), 'agent.account_usage': usage, 'agent.account_usage_cache': cache,
+        })
+
+    def accounts(self, **options):
+        with self.hermes(**options):
+            return experience.account_list()['accounts']
+
+    def snapshot(self, **fields):
+        return types.SimpleNamespace(**{'plan': None, 'title': 'Account limits', 'windows': (), 'details': (), 'unavailable_reason': None,
+            'identity': None, 'raw': None, 'fetched_at': datetime.datetime(2026, 11, 8, 12, tzinfo=datetime.timezone.utc), **fields})
+
+    def test_lists_the_main_provider_then_each_fallback_once_with_a_credential_digest(self):
+        rows = self.accounts(main='auto', fallback=[dict(provider='openai-codex', model='m'), dict(provider='OpenRouter', model='m'), 'junk', dict(model='m')])
+        self.assertEqual([(row['provider'], row['role']) for row in rows], [('openrouter', 'main'), ('openai-codex', 'fallback')])
+        self.assertTrue(all(re.fullmatch('[0-9a-f]{32}', row['key']) for row in rows))
+        self.assertNotIn('sk-or-1', json.dumps(rows))
+        single = self.accounts(main='anthropic', fallback=dict(provider='openrouter', model='m'))
+        self.assertEqual([row['provider'] for row in single], ['anthropic', 'openrouter'])
+
+    def test_profiles_share_a_key_only_when_they_share_the_credential(self):
+        first, same, other = (self.accounts(main='openrouter', keys=dict(openrouter=key))[0]['key'] for key in ('sk-or-1', 'sk-or-1', 'sk-or-2'))
+        self.assertEqual(first, same)
+        self.assertNotEqual(first, other)
+        # A provider with no credential still gets a key, distinct from any credentialed one, so it can say why it is empty.
+        self.assertNotEqual(self.accounts(main='custom')[0]['key'], first)
+
+    def test_normalizes_a_codex_snapshot_and_turns_banked_resets_into_a_count(self):
+        window = lambda label, used, scope='account': types.SimpleNamespace(label=label, used_percent=used, scope=scope, detail=None,
+            reset_at=datetime.datetime(2026, 11, 8, 17, tzinfo=datetime.timezone.utc))
+        codex = self.snapshot(plan='Pro', identity='codex:acct:user', raw={'rate_limit_reset_credits': {'available_count': 2}},
+            windows=(window('Session', 120.0), window('Weekly', float('nan'), 'model'), window('Odd', 5, 'weird')),
+            details=('You have 2 resets banked - use /usage reset to activate', 'Credits balance: $4.00', 'Top up via /topup'))
+        with self.hermes(snapshots={'openai-codex': codex}):
+            key = experience.account_list()['accounts'][0]['key']
+            result = experience.account_usage(dict(key=key))
+        self.assertEqual(result['bankedResets'], 2)
+        self.assertEqual(result['details'], ['Credits balance: $4.00'])
+        self.assertEqual([(row['usedPercent'], row['scope']) for row in result['windows']], [(100.0, 'account'), (None, 'model'), (5.0, 'account')])
+        self.assertEqual(result['windows'][0]['resetsAt'], '2026-11-08T17:00:00+00:00')
+        self.assertEqual((result['plan'], result['unavailableReason']), ('Pro', None))
+        self.assertRegex(result['identity'], '^[0-9a-f]{32}$')
+        self.assertNotIn('acct', json.dumps(result))
+
+    def test_explains_an_account_hermes_cannot_read(self):
+        cases = [
+            (dict(main='custom', keys=dict(custom='k')), 'does not report'),
+            (dict(main='openrouter', snapshots={'openrouter': None}), 'could not read'),
+            (dict(main='nous', keys=dict(nous='k')), 'Sign in to Nous Portal'),
+            (dict(main='nous', keys=dict(nous='k'), nous=True, portal=None), 'could not read'),
+        ]
+        for options, reason in cases:
+            with self.subTest(reason=reason), self.hermes(**options):
+                result = experience.account_usage(dict(key=experience.account_list()['accounts'][0]['key']))
+                self.assertIn(reason, result['unavailableReason'])
+                self.assertEqual((result['windows'], result['bankedResets']), ([], 0))
+        self.assertEqual(self.fetched, [])
+
+    def test_reads_nous_credits_from_the_portal_account(self):
+        with self.hermes(main='nous', keys=dict(nous='k'), nous=True, portal=self.snapshot(details=('Top-up credits: $3.00', 'Top up: https://portal'))):
+            result = experience.account_usage(dict(key=experience.account_list()['accounts'][0]['key']))
+        self.assertEqual(result['details'], ['Top-up credits: $3.00'])
+
+    def test_refuses_a_malformed_key_or_one_this_profile_does_not_use(self):
+        with self.hermes():
+            for key in (None, 'x' * 32, 'A' * 32, 3):
+                with self.subTest(key=key), self.assertRaisesRegex(experience.ExperienceError, 'Invalid account') as caught:
+                    experience.account_usage(dict(key=key))
+                self.assertEqual(caught.exception.status, 400)
+            with self.assertRaisesRegex(experience.ExperienceError, 'no longer uses') as caught:
+                experience.account_usage(dict(key='0' * 32))
+            self.assertEqual(caught.exception.status, 404)
+        self.assertEqual(self.fetched, [])
+
+    def test_spends_a_reset_only_for_a_chatgpt_account_and_passes_force_through(self):
+        outcome = types.SimpleNamespace(status='reset', message='Done', available_count=1, windows_reset=2)
+        with self.hermes(fallback=dict(provider='openrouter', model='m'), redeem=outcome):
+            codex, openrouter = (row['key'] for row in experience.account_list()['accounts'])
+            self.assertEqual(experience.account_reset(dict(key=codex, force=True)), dict(status='reset', message='Done', availableCount=1, windowsReset=2))
+            with self.assertRaisesRegex(experience.ExperienceError, 'Only ChatGPT') as caught:
+                experience.account_reset(dict(key=openrouter, force=False))
+            self.assertEqual(caught.exception.status, 409)
+            for force in (None, 'yes', 1):
+                with self.subTest(force=force), self.assertRaisesRegex(experience.ExperienceError, 'Choose whether'):
+                    experience.account_reset(dict(key=codex, force=force))
+        self.assertEqual(self.redeemed, [True])
+
+    def test_an_outcome_hermes_adds_later_reads_as_unavailable(self):
+        outcome = types.SimpleNamespace(status='queued', message='Later', available_count=-1, windows_reset=0)
+        with self.hermes(redeem=outcome):
+            result = experience.account_reset(dict(key=experience.account_list()['accounts'][0]['key'], force=False))
+        self.assertEqual((result['status'], result['availableCount']), ('unavailable', 0))
 
 
 if __name__ == '__main__': unittest.main()

@@ -45,6 +45,9 @@ export function experienceRequester(handlers: ExperienceHandlers): ExperienceReq
       case 'preview': return configured(handlers.preview, input.operation)(input);
       case 'run': return configured(handlers.run, input.operation)(input);
       case 'run_receipt': return configured(handlers.run_receipt, input.operation)(input);
+      case 'accounts': return configured(handlers.accounts, input.operation)(input);
+      case 'account_usage': return configured(handlers.account_usage, input.operation)(input);
+      case 'account_reset': return configured(handlers.account_reset, input.operation)(input);
     }
   }
   return request;
