@@ -66,5 +66,5 @@ it('words every reset outcome in the app\'s own words', () => {
   expect(message('not_exhausted')).toMatch(/would be wasted/);
   // The add-on's sentence is fixed per status; the app's own copy never repeats it, so a provider body cannot reach the page.
   expect(message('unavailable', 0, "Unexpected response: {'account_id': 'private'}")).toMatch(/did not confirm the reset/);
-  expect(message('uncertain')).toMatch(/outcome was never recorded/);
+  expect(message('uncertain')).toMatch(/cannot spend a second reset/);
 });

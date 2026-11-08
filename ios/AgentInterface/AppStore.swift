@@ -29,6 +29,7 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     // Another account's rooms never show.
     groupCatalog = nil
     accountUsage = nil
+    accountUsageReadAt = nil
     // Only a loaded account replaces it; launching, before the account loads, leaves it alone.
     if let next { UserDefaults.standard.set(next, forKey: DeviceDefaults.signedInScope) }
     additions = savedAdditions()
@@ -143,6 +144,10 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   var groupCatalog: GroupCatalog?
   /// The provider accounts' limits and credits, read for the profile menu and the Usage sheet. Nil until the first read for this account.
   var accountUsage: UsageOverview?
+  /// Bumped by every reset, so a read that started before one never replaces the account it changed.
+  @ObservationIgnored var accountUsageGeneration = 0
+  /// When `accountUsage` was last read, for refreshing it once it is a minute old.
+  @ObservationIgnored var accountUsageReadAt: Date?
   /// The account scope whose household stream has sent a `groups` notice: that server pushes catalog changes.
   var groupNoticeScope: String?
   @ObservationIgnored var groupLoadId = UUID()

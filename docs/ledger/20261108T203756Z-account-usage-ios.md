@@ -52,3 +52,15 @@ by label, and a confirmation dialog is a popover here with no Cancel button.
   `/Volumes/DevSSD/scratch/AccountUsage.swift.orig`; this checkout is unmutated. The test that should
   go red is `testAResetWouldBeWastedUnlessAnAccountWideLimitIsUsedUp`.
 - iPad layout, Dynamic Type sizes, VoiceOver, a real server, Hermes or provider accounts, and a physical phone.
+
+## Follow-up the same day
+
+After the parent's review fixes the iOS side sends a request ID with each reset, keeps it across a failed or
+uncertain attempt, drops a read that started before a reset, and refreshes the menu's Usage line once a minute
+old. The Mac task copy was resynced from this checkout (snapshot `0e21f6f`, sources byte-identical to the
+branch), the DevSSD had recovered, and `validate-ios.sh` on the same iPhone 18 Pro simulator ran
+`AccountUsageTests`, `ContractFixtureTests`, `ShellFeatureTests`, `UsageFlowTests` (including the dark
+appearance capture) and `SettingsPolishTests`: 71 passed, 0 failed. Removing the read generation check made
+`testAReadThatStartedBeforeAResetNeverReplacesTheAccountItChanged` fail (2 banked resets instead of 1); the
+check was restored. The earlier `resetWouldBeWasted` hand-break was not rerun.
+

@@ -559,8 +559,8 @@ struct BotListView: View {
       // Split-view reparenting can cancel a view task during a phone push, so the first read does not depend on one.
       .onAppear {
         pendingGroup = GroupCreation.pending(scope: store.scope); Task { await store.refreshGroups() }; store.prefetchLikelyChats()
-        // The profile menu's Usage line reads from this, so it is ready before the menu opens.
-        if store.accountUsage == nil { Task { await store.refreshAccountUsage() } }
+        // The profile menu's Usage line reads from this, so it is ready, and no older than a minute, before the menu opens.
+        Task { await store.refreshAccountUsageIfStale() }
       }
       // A reply that makes a chat unread is the likeliest next tap, so it is read ahead too.
       .onChange(of: store.likelyChatIds) { _, _ in store.prefetchLikelyChats() }
@@ -595,7 +595,7 @@ struct BotListView: View {
         Button(action: openUsage) {
           Label("Usage", systemImage: "gauge.with.dots.needle.50percent")
           Text(store.accountUsage.flatMap { AccountUsage.summary($0.accounts) } ?? "Plans, limits and credits")
-        }
+        }.onAppear { Task { await store.refreshAccountUsageIfStale() } }
         Button(action: openPreferences) { Label("Settings", systemImage: "gearshape") }
       }
       Section {

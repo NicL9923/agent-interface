@@ -113,6 +113,6 @@ export function resetOutcomeMessage(result: ResetOutcome) {
     case 'no_credit': case 'no_credits_banked': return 'This account has no banked resets.';
     case 'not_exhausted': return 'Not reset: no limit is used up yet, so a reset would be wasted.';
     case 'unavailable': return "ChatGPT did not confirm the reset. Refresh to see whether it went through before trying again.";
-    case 'uncertain': return "This reset was sent but its outcome was never recorded. Refresh to see whether it went through before trying again.";
+    case 'uncertain': return "ChatGPT did not answer after the reset was sent. Try again: it goes as the same request, so it cannot spend a second reset.";
   }
 }

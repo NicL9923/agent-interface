@@ -63,6 +63,8 @@ export async function installAccountUsageRoutes(app: FastifyInstance, runtime: R
   const snapshots = new Kept<AccountSnapshot>(now);
   // Keyed by the account, so a reset through one sign-in also waits for one through another.
   const redeeming = new Set<string>();
+  // Each account key's provider, as last listed, so a reset knows which reads could be the same account.
+  const providers = new Map<string, string>();
   function experience() {
     if (!runtime.experienceRequest) throw httpError(409, 'Account usage needs the current qualified Hermes integration.');
     return runtime.experienceRequest.bind(runtime);
@@ -84,6 +86,7 @@ export async function installAccountUsageRoutes(app: FastifyInstance, runtime: R
       if (!group.botIds.includes(bot.id)) group.botIds.push(bot.id);
       group.main ||= row.role === 'main';
       found.set(row.key, group);
+      providers.set(row.key, row.provider);
     }
     return { groups: [...found.values()], unavailableBots: listed.filter(row => 'failed' in row).map(row => row.bot.id) };
   }
@@ -100,12 +103,12 @@ export async function installAccountUsageRoutes(app: FastifyInstance, runtime: R
     ({ ...snapshot, botIds: group.botIds, fallbackOnly: !group.main });
   /**
    * Every key that may hold this account's limits from before a reset: `key`, keys last read as the same account,
-   * and reads still loading whose account is not known yet. Forgetting one only costs a fresh read.
+   * and ChatGPT reads still loading whose account was never identified. Forgetting one only costs a fresh read.
    */
   const aliases = (key: string) => {
     const identity = snapshots.peek(key)?.identity;
     return snapshots.keys().filter(other => other === key || !!identity && snapshots.peek(other)?.identity === identity
-      || snapshots.loading(other) && !snapshots.peek(other));
+      || snapshots.loading(other) && providers.get(other) === CHATGPT && !snapshots.peek(other)?.identity);
   };
 
   apiRoute(app, 'GET /usage/accounts', {}, async req => {

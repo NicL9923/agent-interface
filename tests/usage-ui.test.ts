@@ -134,6 +134,19 @@ it('warns that an early reset is wasted, and sends force only when the person go
   expect(api).toHaveBeenCalledTimes(2);
 });
 
+it('keeps the request when ChatGPT\'s answer was lost, so trying again cannot spend twice', async () => {
+  vi.mocked(write).mockResolvedValueOnce({ status: 'uncertain', message: '', availableCount: 0, windowsReset: 0 })
+    .mockResolvedValueOnce({ status: 'already_redeemed', message: '', availableCount: 1, windowsReset: 0 });
+  await panel();
+  await click('Use a reset', card('ChatGPT'));
+  await click('Use reset', container.querySelector('[role="alertdialog"]')!);
+  expect(card('ChatGPT').textContent).toContain('cannot spend a second reset');
+  await click('Use a reset', card('ChatGPT'));
+  await click('Use reset', container.querySelector('[role="alertdialog"]')!);
+  const ids = vi.mocked(write).mock.calls.map(([, body]) => (body as { requestId: string }).requestId);
+  expect(ids[1]).toBe(ids[0]);
+});
+
 it('closes the question and says why when a reset fails, and retries it as the same reset', async () => {
   vi.mocked(write).mockRejectedValueOnce(new ApiError('A reset for this account is already in progress.', 409))
     .mockResolvedValueOnce({ status: 'reset', message: 'Done', availableCount: 1, windowsReset: 2 }).mockResolvedValueOnce({ status: 'reset', message: 'Done', availableCount: 0, windowsReset: 2 });

@@ -430,7 +430,9 @@ MAX_ACCOUNTS = 20
 # own actions, so those lines are dropped rather than shown as commands nobody can type here.
 _CLI_HINTS = ("/usage", "/topup", "(or run", "Top up via", "Top up:")
 _ACCOUNT_KEY = re.compile(r"^[0-9a-f]{32}$")
-_REQUEST_ID = re.compile(r"^[0-9A-Za-z-]{8,100}$")
+_REQUEST_ID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+# A token this close to expiry is refreshed before it is used, rather than retried after a 401.
+_EXPIRY_MARGIN_S = 120
 # Hermes's own reset messages can quote the provider's response, so the app sends only these.
 _RESET_MESSAGES = {
     "reset": "ChatGPT reset this account's limits.",
@@ -440,7 +442,7 @@ _RESET_MESSAGES = {
     "not_exhausted": "No limit is used up yet, so Hermes did not spend a reset.",
     "no_credits_banked": "This account has no banked resets.",
     "unavailable": "ChatGPT did not confirm the reset. Refresh to see whether it went through before trying again.",
-    "uncertain": "This reset was sent but its outcome was never recorded. Refresh to see whether it went through before trying again.",
+    "uncertain": "ChatGPT did not answer after the reset was sent. Try again: it goes as the same request, so it cannot spend a second reset.",
 }
 _account_locks = {}
 _account_locks_guard = threading.Lock()
@@ -541,7 +543,7 @@ def _accounts():
         if provider == "nous":
             # The Portal login is found when it is read, so until then the account is this profile's.
             from hermes_constants import get_hermes_home
-            found = [dict(key=_digest("nous", "portal", str(get_hermes_home().resolve())), provider="nous", role=role, token=None, base_url=None, identity=None)]
+            found = [dict(key=_digest("nous", "portal", str(get_hermes_home().resolve())), provider="nous", role=role, token=None, base_url=None, identity=None, pooled=False)]
         else:
             found = []
             for token, base, pooled in _credentials(provider, base_url, explicit):
@@ -549,9 +551,9 @@ def _accounts():
                 # A pooled ChatGPT credential goes to its pool route; an explicit fallback key goes where the fallback names.
                 route = _route_base(provider, base) if pooled else base
                 found.append(dict(key=_digest(provider, (route or "").lower(), identity), provider=provider, role=role,
-                                  token=token, base_url=route, identity=identity))
+                                  token=token, base_url=route, identity=identity, pooled=pooled))
             if not found:
-                found = [dict(key=_digest(provider, "none", base_url or ""), provider=provider, role=role, token=None, base_url=None, identity=None)]
+                found = [dict(key=_digest(provider, "none", base_url or ""), provider=provider, role=role, token=None, base_url=None, identity=None, pooled=False)]
         # The main route comes first, so an account it shares with a fallback keeps the main role.
         for account in found:
             accounts.setdefault(account["key"], account)
@@ -607,6 +609,37 @@ def _usage_document(provider, key, snapshot, reason, transient=False):
                 transient=False)
 
 
+def _expiring(token):
+    """Whether a JWT access token expires within the margin. A token that is not a readable JWT is left as it is."""
+    try:
+        payload = token.split(".")[1]
+        claims = json.loads(__import__("base64").urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+        return isinstance(claims.get("exp"), (int, float)) and claims["exp"] - time.time() < _EXPIRY_MARGIN_S
+    except Exception:
+        return False
+
+
+def _fresh(account):
+    """The account with a usable ChatGPT token, or None. An expiring pooled token is refreshed through the pool entry
+    that holds that exact key, and the new token must decode to the same account. Nothing else is ever selected:
+    Hermes's own usage resolver can fall back to another pool account when a refresh fails, so it is never used here.
+    The destination stays the one the account was listed with.
+    """
+    if account["provider"] != "openai-codex" or not _expiring(account["token"]):
+        return account
+    if not account["pooled"]:
+        return None
+    from agent.credential_pool import load_pool
+    try:
+        entry = load_pool("openai-codex").try_refresh_matching(api_key_hint=account["token"])
+    except Exception:
+        return None
+    token = str(getattr(entry, "runtime_api_key", "") or "").strip() if entry is not None else ""
+    if not token or _identity("openai-codex", token) != account["identity"]:
+        return None
+    return dict(account, token=token)
+
+
 def account_usage(data):
     """One account's limits, read with that account's own credential and never repaired on failure."""
     from agent import account_usage as usage
@@ -635,12 +668,16 @@ def account_usage(data):
         return _usage_document(provider, key, None, "This provider does not report plan limits or credits to Hermes.")
     if account["token"] is None:
         return _usage_document(provider, key, None, "Hermes has no signed-in account for this provider.")
-    options = dict(base_url=account["base_url"], api_key=account["token"])
     accepted = __import__("inspect").signature(usage.fetch_account_usage).parameters
-    # Never read_only: an expired ChatGPT token is then refreshed once, and only the credential this account
-    # was listed with (Hermes matches it by the key given), as Hermes's own /usage does. Nothing is selected or rotated.
-    if "identity_id" in accepted:
-        options["identity_id"] = account["identity"]
+    if provider == "openai-codex" and "read_only" not in accepted:
+        # Without a read-only fetch, a 401 sends Hermes's resolver looking for any pooled ChatGPT account.
+        return _usage_document(provider, key, None, "Update Hermes to read ChatGPT limits here.")
+    fresh = _fresh(account)
+    if fresh is None:
+        return _usage_document(provider, key, None, "Hermes could not renew this ChatGPT sign-in. Sign in again in Hermes.", transient=True)
+    options = dict(base_url=fresh["base_url"], api_key=fresh["token"])
+    # Read-only: a failed read is reported, never repaired by Hermes picking or refreshing a credential itself.
+    options.update({name: value for name, value in (("read_only", True), ("identity_id", fresh["identity"])) if name in accepted})
     snapshot = usage.fetch_account_usage(provider, **options)
     return _usage_document(provider, key, snapshot, "Hermes could not read this account's limits right now.", transient=snapshot is None)
 
@@ -648,8 +685,11 @@ def account_usage(data):
 class AccountResets:
     """Banked ChatGPT resets, spent at most once per request ID and once at a time per account.
 
-    The receipt is written before ChatGPT is asked, so a retried request returns what happened, or
-    "uncertain" when Hermes stopped before it could record the answer, and never spends again.
+    The request ID is ChatGPT's own ``redeem_request_id``, so ChatGPT answers a repeat with ``already_redeemed``
+    instead of spending again. The receipt is written before ChatGPT is asked: a request with a recorded answer
+    returns it, and one whose answer was lost, after the consume was sent, is sent again with the same ID.
+    The spend uses Hermes's own guard and outcome mapping with the account's own token, never Hermes's
+    resolver, which can fall back to another pooled account when a refresh fails.
     """
     def __init__(self, journal):
         self.journal = journal
@@ -657,7 +697,6 @@ class AccountResets:
             journal.db.execute("CREATE TABLE IF NOT EXISTS account_resets(request_id TEXT PRIMARY KEY,account TEXT NOT NULL,result TEXT)")
 
     def spend(self, data):
-        from agent.account_usage import redeem_codex_reset_credit
         request_id, force = data.get("requestId"), data.get("force")
         if not isinstance(request_id, str) or not _REQUEST_ID.match(request_id):
             raise ExperienceError("A reset needs its request ID.")
@@ -681,16 +720,49 @@ class AccountResets:
                     raise ExperienceError("That request ID belongs to another reset.", 409)
                 if row[1] is not None:
                     return json.loads(row[1])
-                return dict(status="uncertain", message=_RESET_MESSAGES["uncertain"], availableCount=0, windowsReset=0)
-            outcome = redeem_codex_reset_credit(base_url=account["base_url"], api_key=account["token"], force=force)
-            status = outcome.status if outcome.status in _RESET_MESSAGES else "unavailable"
-            result = dict(status=status, message=_RESET_MESSAGES[status], availableCount=max(0, int(outcome.available_count)),
-                          windowsReset=max(0, int(outcome.windows_reset)))
-            with self.journal.lock, self.journal.db:
-                self.journal.db.execute("UPDATE account_resets SET result=? WHERE request_id=?", (json.dumps(result), request_id))
+            result = self._redeem(account, request_id, force)
+            if result["status"] != "uncertain":
+                with self.journal.lock, self.journal.db:
+                    self.journal.db.execute("UPDATE account_resets SET result=? WHERE request_id=?", (json.dumps(result), request_id))
             return result
         finally:
             lock.release()
+
+    @staticmethod
+    def _result(status, available=0, windows=0):
+        status = status if status in _RESET_MESSAGES else "unavailable"
+        return dict(status=status, message=_RESET_MESSAGES[status], availableCount=max(0, int(available)), windowsReset=max(0, int(windows)))
+
+    def _redeem(self, account, request_id, force):
+        from agent import account_usage as usage
+        import httpx
+        helpers = ("_codex_backend_urls", "_codex_headers", "_codex_banked_resets", "_codex_reset_guard", "_codex_reset_outcome")
+        if not all(callable(getattr(usage, name, None)) for name in helpers):
+            return self._result("unavailable")
+        fresh = _fresh(account)
+        if fresh is None:
+            return self._result("unavailable")
+        usage_url, _credits_url, consume_url = usage._codex_backend_urls(fresh["base_url"] or "")
+        headers = usage._codex_headers(fresh["token"], None)
+        sent = False
+        try:
+            with httpx.Client(timeout=15.0) as client:
+                response = client.get(usage_url, headers=headers)
+                response.raise_for_status()
+                payload = response.json() or {}
+                available = usage._codex_banked_resets(payload)
+                refused = usage._codex_reset_guard(payload, available, force)
+                if refused is not None:
+                    return self._result(refused.status, refused.available_count)
+                sent = True
+                consumed = client.post(consume_url, headers={**headers, "Content-Type": "application/json"}, json={"redeem_request_id": request_id})
+                consumed.raise_for_status()
+                body = consumed.json() or {}
+        except Exception:
+            # Once the consume went out its answer is unknown; the same ID can be sent again safely.
+            return self._result("uncertain" if sent else "unavailable")
+        outcome = usage._codex_reset_outcome(body, available)
+        return self._result(outcome.status, outcome.available_count, outcome.windows_reset)
 
 
 MAX_MODEL_NAMES = 4000

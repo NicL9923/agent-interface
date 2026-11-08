@@ -96,7 +96,7 @@ import XCTest
     XCTAssertEqual(AccountUsage.resetOutcome(result(.unavailable, message: "Unexpected response: {'account_id': 'private'}")),
       "ChatGPT did not confirm the reset. Refresh to see whether it went through before trying again.")
     XCTAssertEqual(AccountUsage.resetOutcome(result(.uncertain)),
-      "This reset was sent but its outcome was never recorded. Refresh to see whether it went through before trying again.")
+      "ChatGPT did not answer after the reset was sent. Try again: it goes as the same request, so it cannot spend a second reset.")
     XCTAssertEqual(AccountUsage.resetOutcome(result(.reset, message: "Reset redeemed.")), "Limits reset. 1 banked reset left.", "A status the app has copy for ignores Hermes's message")
   }
 
@@ -159,6 +159,37 @@ import XCTest
     _ = await value.refreshAccountUsage(refresh: true)
     XCTAssertEqual(server.lastRequest?.url?.path, "/api/usage/accounts")
     XCTAssertEqual(server.lastRequest?.url?.query, "refresh=1")
+  }
+  func testAReadThatStartedBeforeAResetNeverReplacesTheAccountItChanged() async throws {
+    let server = FakeServer(), value = try store(server)
+    defer { clean(server, value) }
+    server.reply = .init(body: try Self.fixtureResponse("usage-accounts"))
+    _ = await value.refreshAccountUsage()
+    let chatgpt = try XCTUnwrap(value.accountUsage?.accounts.first)
+    XCTAssertEqual(chatgpt.bankedResets, 2)
+    // A Refresh goes out first and is answered with the limits from before the reset, but lands last.
+    let release = server.hold(path: "/api/usage/accounts")
+    let seen = server.requests.count
+    let late = Task { await value.refreshAccountUsage(refresh: true) }
+    for _ in 0..<200 where server.requests.count == seen { try await Task.sleep(nanoseconds: 10_000_000) }
+    var after = try JSONSerialization.jsonObject(with: Data(try Self.fixtureResponse("usage-reset").utf8)) as! [String: Any]
+    var updated = after["account"] as! [String: Any]; updated["bankedResets"] = 1; after["account"] = updated
+    server.reply = .init(body: String(decoding: try JSONSerialization.data(withJSONObject: after), as: UTF8.self))
+    _ = try await value.resetAccountUsage(chatgpt, force: false, requestId: UUID().uuidString)
+    release()
+    _ = await late.value
+    XCTAssertEqual(value.accountUsage?.accounts.first?.bankedResets, 1, "The reset's answer stands")
+  }
+  func testTheMenuReadsAgainOnlyOnceTheLastReadIsAMinuteOld() async throws {
+    let server = FakeServer(), value = try store(server)
+    defer { clean(server, value) }
+    server.reply = .init(body: try Self.fixtureResponse("usage-accounts"))
+    await value.refreshAccountUsageIfStale()
+    let readAt = try XCTUnwrap(value.accountUsageReadAt)
+    await value.refreshAccountUsageIfStale(now: readAt.addingTimeInterval(59))
+    XCTAssertEqual(server.requests.count, 1)
+    await value.refreshAccountUsageIfStale(now: readAt.addingTimeInterval(60))
+    XCTAssertEqual(server.requests.count, 2)
   }
   func testAFailedReadReportsTheServersWordsAndKeepsWhatWasShown() async throws {
     let server = FakeServer(), value = try store(server)

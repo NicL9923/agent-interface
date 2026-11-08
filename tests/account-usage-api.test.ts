@@ -229,6 +229,21 @@ it('forgets the other sign-in\'s read of the same account even while it is still
   expect(s.usageCalls().filter(input => input.key === SECOND_CODEX)).toHaveLength(3);
 });
 
+it('forgets a sign-in\'s read loading at a reset when its last read could not say whose account it was', async () => {
+  const s = await setup({ usage: { [SECOND_CODEX]: snapshotFixture(SECOND_CODEX, 'openai-codex', { unavailableReason: "Hermes could not read this account's limits right now.", transient: true }) } });
+  await s.get();
+  s.advance(USAGE_REFRESH_MS);
+  let late!: (value: AccountSnapshot) => void;
+  s.usage[SECOND_CODEX] = new Promise<AccountSnapshot>(resolve => { late = resolve; }) as never;
+  const before = s.get();
+  await vi.waitFor(() => expect(s.usageCalls().filter(input => input.key === SECOND_CODEX)).toHaveLength(2));
+  await s.redeem(CODEX, { confirmed: true, requestId: REQUEST, force: false });
+  late(snapshotFixture(SECOND_CODEX, 'openai-codex', { windows: [window('Weekly', 100)], bankedResets: 2, identity: 'i'.repeat(32) }));
+  await before;
+  await s.get();
+  expect(s.usageCalls().filter(input => input.key === SECOND_CODEX)).toHaveLength(3);
+});
+
 it('keeps another account\'s read that is loading during a reset', async () => {
   const s = await setup();
   await s.get();

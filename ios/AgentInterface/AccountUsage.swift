@@ -137,7 +137,7 @@ enum AccountUsage {
     case .noCredit, .noCreditsBanked: "This account has no banked resets."
     case .notExhausted: "Not reset: no limit is used up yet, so a reset would be wasted."
     case .unavailable: "ChatGPT did not confirm the reset. Refresh to see whether it went through before trying again."
-    case .uncertain: "This reset was sent but its outcome was never recorded. Refresh to see whether it went through before trying again."
+    case .uncertain: "ChatGPT did not answer after the reset was sent. Try again: it goes as the same request, so it cannot spend a second reset."
     case .unknown: result.message.isEmpty ? "The reset finished with a result this app does not know. Refresh to see what is left." : result.message
     }
   }

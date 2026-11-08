@@ -11,7 +11,7 @@ import { routeUrl } from "../shared/api";
 import { useAction } from "../app/use-action";
 import { useResource } from "../app/use-resource";
 import type { Bot } from "../shared/types";
-import type { UsageAccount, UsageWindow } from "../shared/account-usage";
+import type { ResetStatus, UsageAccount, UsageWindow } from "../shared/account-usage";
 import { accountName, resetOutcomeMessage, resetPhrase, resetWouldBeWasted, usageLevel } from "../shared/account-usage";
 import "./usage.css";
 
@@ -47,13 +47,14 @@ export function UsagePanel({ bots, onClose }: { bots: Bot[]; onClose(): void }) 
           const result = await request("POST /usage/accounts/:key/reset", { params: { key: account.key }, body: { confirmed: true, requestId, force } });
           setOutcome({ key: account.key, text: resetOutcomeMessage(result) });
           if (result.account) replace(result.account); else void usage.reload();
+          return result.status;
         }} />)}
     </div>
     {!!usage.data?.unavailableBots.length && <p className="muted usage-unavailable" role="status">Usage unavailable for {plural(usage.data.unavailableBots.length, "assistant")}.</p>}
   </Dialog>;
 }
 
-function AccountCard({ account, names, outcome, onReset }: { account: UsageAccount; names: string[]; outcome: string; onReset(force: boolean, requestId: string): Promise<void> }) {
+function AccountCard({ account, names, outcome, onReset }: { account: UsageAccount; names: string[]; outcome: string; onReset(force: boolean, requestId: string): Promise<ResetStatus> }) {
   const title = accountName(account.provider);
   return <article className="usage-card" aria-label={title}>
     <div className="usage-card-heading">
@@ -82,7 +83,7 @@ function Allowance({ window }: { window: UsageWindow }) {
 }
 
 /** Banked ChatGPT resets, spent only after a confirmation that says plainly when one would be wasted. */
-function Resets({ account, onReset }: { account: UsageAccount; onReset(force: boolean, requestId: string): Promise<void> }) {
+function Resets({ account, onReset }: { account: UsageAccount; onReset(force: boolean, requestId: string): Promise<ResetStatus> }) {
   const [asking, setAsking] = useState(false);
   const action = useAction();
   // One ID per reset the person asked for. A failed attempt keeps it, so trying again can never spend a second reset.
@@ -90,8 +91,9 @@ function Resets({ account, onReset }: { account: UsageAccount; onReset(force: bo
   const early = resetWouldBeWasted(account);
   const left = account.bankedResets - 1;
   // Either way the question is answered: a failure closes it too and says why beside the button.
-  const confirm = () => action.run(async () => { await onReset(early, requestId.current ??= crypto.randomUUID()); },
-    { onSuccess: () => { requestId.current = null; setAsking(false); }, onError: () => { setAsking(false); } });
+  // An uncertain answer keeps the ID too: trying again resends the same request, which ChatGPT never spends twice.
+  const confirm = () => action.run(async () => onReset(early, requestId.current ??= crypto.randomUUID()),
+    { onSuccess: status => { if (status !== "uncertain") requestId.current = null; setAsking(false); }, onError: () => { setAsking(false); } });
   return <div className="usage-resets">
     <span>{plural(account.bankedResets, "banked reset")}</span>
     <Button id={`reset-${account.key}`} disabled={action.busy} onClick={() => setAsking(true)}>Use a reset</Button>

@@ -125,7 +125,8 @@ struct UsageView: View {
       let requestId = resetIds[account.key] ?? UUID().uuidString
       resetIds[account.key] = requestId
       let result = try await store.resetAccountUsage(account, force: force, requestId: requestId)
-      resetIds[account.key] = nil
+      // An uncertain answer keeps the ID: trying again resends the same request, which ChatGPT never spends twice.
+      if result.status != .uncertain { resetIds[account.key] = nil }
       guard scope == store.scope else { return }
       outcomes[account.key] = AccountUsage.resetOutcome(result)
       // The server could not read the account again, so the counts shown are stale: read them.
