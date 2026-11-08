@@ -115,7 +115,7 @@ export function ApprovalCard({ approval, botId, userId, assistantName, disconnec
       {choice("denied", undefined, "Decline", "Declining…")}
       {offered("always") && (alwaysSent ? choice("approved", "always", "Always allow…", "Allowing…") : <span className="approval-more">
         <button type="button" className="icon-button" aria-label="More choices" aria-expanded={menu} aria-controls={menuId}
-          disabled={busy || !!attempt} onClick={() => setMenu(open => !open)}><Icon name="menu" size={18} /></button>
+          disabled={busy || !!attempt} onClick={() => setMenu(open => !open)}><Icon name="more" size={20} /></button>
         {menu && <span className="approval-menu" id={menuId} role="menu">
           <button type="button" role="menuitem" onClick={() => { setMenu(false); setConfirming(true); }}>Always allow…</button>
         </span>}

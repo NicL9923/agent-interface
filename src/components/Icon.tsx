@@ -28,6 +28,7 @@ const paths = {
   spinner: "M20 12a8 8 0 1 1-8-8",
   today: "M5 5h14v15H5ZM8 3v4M16 3v4M5 10h14M8 14h2M14 14h2M8 17h2",
   menu: "M4 7h16M4 12h16M4 17h16",
+  more: "M6.2 12a1.2 1.2 0 1 1-2.4 0a1.2 1.2 0 1 1 2.4 0ZM13.2 12a1.2 1.2 0 1 1-2.4 0a1.2 1.2 0 1 1 2.4 0ZM20.2 12a1.2 1.2 0 1 1-2.4 0a1.2 1.2 0 1 1 2.4 0Z",
   computer: "M4 4h16v12H4ZM9 20h6M12 16v4",
   terminal: "M5 7l5 5-5 5M13 17h6",
   close: "M6 6l12 12M18 6L6 18",
