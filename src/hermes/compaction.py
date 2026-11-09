@@ -8,7 +8,7 @@ the next message starts from a small transcript.
 
 Nobody waits on it. Every input this add-on admits calls ``preempt`` first, and input another
 client queues in Hermes directly is watched for: a running background compaction is cancelled
-with Hermes's explicit stop, and the input runs as an ordinary turn on the uncompacted
+through its own commit fence, and the input runs as an ordinary turn on the uncompacted
 transcript. See docs/HermesCapabilityMatrix.md, "Idle compaction".
 """
 import logging
@@ -24,8 +24,8 @@ SETTING = "HERMES_AGENT_INTERFACE_IDLE_COMPACT_SECONDS"
 # minute in-memory prompt cache, where that applies, so a quick follow-up keeps its warm prefix.
 DEFAULT_DELAY = 600
 POLL_SECONDS = 30
-# How long an input waits for a cancelled compaction to let go of the session. Hermes stops
-# a cancelled summary within a poll of its cancel check; this bounds a stuck one.
+# How long an input waits for a cancelled compaction to let go of the session. Hermes abandons
+# a cancelled summary within a poll of its cancel check; this bounds a commit already under way.
 PREEMPT_WAIT = 30
 
 # Native session state that means work is running or about to run.
@@ -58,11 +58,11 @@ def supported(server):
     meanwhile could lose its reply (Hermes #133504). Never compact there.
     """
     try:
-        from agent.interrupt_compat import request_hard_interrupt  # noqa: F401
+        from agent.conversation_compression import CompressionCommitFence
         from agent.model_metadata import estimate_request_tokens_rough  # noqa: F401
     except ImportError:
         return False
-    return all(callable(getattr(server, name, None)) for name in ("_manual_compress_turn", "_session_uses_compute_host"))
+    return callable(getattr(CompressionCommitFence, "try_cancel_before_commit", None)) and all(callable(getattr(server, name, None)) for name in ("_manual_compress_turn", "_session_uses_compute_host"))
 
 
 def request_size(session):
@@ -87,20 +87,20 @@ def request_size(session):
 
 
 class Attempt:
-    """One background compaction. ``lock`` orders the stop request against the attempt's end."""
+    """One background compaction."""
 
     def __init__(self):
-        self.lock = threading.Lock()
         self.done = threading.Event()
-        self.stopped = False
-        self.finished = False
+        # Its commit fence has answered a cancel: cancelled, or already committing.
+        self.cancelled = False
 
 
 class IdleCompaction:
     """Compacts canonical Bot Chats once each has been idle for ``delay`` seconds.
 
-    Order: submission_lock, then ``lock`` or an attempt's lock. An attempt never takes
-    submission_lock after it registers, so ``preempt`` may wait for it under that lock.
+    Order: submission_lock, then ``lock`` or a session's history_lock. An attempt never takes
+    submission_lock or maintenance_lock after it registers, so ``preempt`` may wait for it under
+    submission_lock. It must not wait under maintenance_lock: Hermes's release takes it.
     """
 
     def __init__(self, server, native, canonical, journal, submission_lock, maintenance_state, delay,
@@ -198,15 +198,6 @@ class IdleCompaction:
             # way the transcript is unchanged; try again after the next turn.
             log.info("Idle compaction of profile %s did not run: %s", profile, str(exc)[:300])
         finally:
-            with attempt.lock:
-                attempt.finished = True
-                if attempt.stopped:
-                    # A stop must not outlive the compaction it stopped. Hermes's turn runner clears
-                    # one as each turn starts too, and a turn Hermes drained from its own queue may
-                    # already run: it owns the agent's stop state, so leave it alone.
-                    with session["history_lock"]:
-                        if not session.get("running"):
-                            session["agent"].clear_interrupt()
             self.settled[sid] = (session.get("session_key"), session.get("history_version"))
             with self.lock:
                 self.attempts.pop(sid, None)
@@ -220,7 +211,7 @@ class IdleCompaction:
                      result.get("before_tokens"), result.get("after_tokens"))
         return result
 
-    def preempt(self, sid, wait=PREEMPT_WAIT):
+    def preempt(self, sid, wait=None):
         """Cancel this session's background compaction and wait for it to let go.
 
         Returns whether a compaction was running. Called before every admitted input, with
@@ -230,6 +221,7 @@ class IdleCompaction:
             attempt = self.attempts.get(sid)
         if attempt is None:
             return False
+        wait = PREEMPT_WAIT if wait is None else wait
         deadline = self.monotonic() + wait
         while not attempt.done.wait(0.02):
             self.stop(sid, attempt)
@@ -239,16 +231,23 @@ class IdleCompaction:
         return True
 
     def stop(self, sid, attempt):
-        with attempt.lock:
-            if attempt.finished or attempt.stopped:
-                return
-            session = self.server._sessions.get(sid) or {}
-            # Before Hermes marks the compaction active, a stop would land on an idle agent.
+        """Cancel this compaction through its own commit fence, never blocking.
+
+        Hermes ends a manual compaction and admits the next turn under the session's
+        history_lock. Holding it while the compaction is active means the fence on the agent is
+        this compaction's own, so a cancel can never reach a later turn. The fence answers None
+        while a commit holds it; that commit finishes on its own.
+        """
+        session = self.server._sessions.get(sid)
+        if session is None or attempt.cancelled:
+            return
+        with session["history_lock"]:
             if not session.get("_manual_compress_active"):
                 return
-            from agent.interrupt_compat import request_hard_interrupt
-            attempt.stopped = True
-            request_hard_interrupt(session.get("agent"))
+            fence = getattr(session.get("agent"), "__dict__", {}).get("_active_compression_commit_fence")
+            cancel = getattr(fence, "try_cancel_before_commit", None)
+            if callable(cancel) and cancel() is not None:
+                attempt.cancelled = True
 
     def watch(self, sid, attempt):
         """Stop the compaction once another client's input waits in Hermes's own queue for it."""
@@ -256,7 +255,7 @@ class IdleCompaction:
             session = self.server._sessions.get(sid) or {}
             if any(session.get(key) for key in NATIVE_QUEUE):
                 self.stop(sid, attempt)
-                if attempt.stopped:
+                if attempt.cancelled:
                     return
 
     def start(self, interval=None):

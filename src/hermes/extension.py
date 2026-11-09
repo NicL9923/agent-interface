@@ -565,6 +565,11 @@ class Bridge:
             return server._err(rid, 403, "Private maintenance authentication required")
         if not self.maintenance_file:
             return server._err(rid, 409, "Host maintenance lease is not configured")
+        if params.get("action") == "acquire":
+            # A background compaction is no work to wait for, so stop it first. Never under
+            # maintenance_lock: Hermes's release of the session takes it.
+            for sid in list(self.canonical.copy().values()):
+                self.compaction.preempt(sid)
         with self.maintenance_lock:
             lease = self.maintenance_state()
             action = params.get("action", "status")
@@ -575,10 +580,6 @@ class Bridge:
                 return server._err(rid, 400, "Invalid maintenance operation")
             if lease and lease.get("operationId") != operation and action != "status":
                 return server._err(rid, 409, "Another maintenance operation owns this lease")
-            if action == "acquire":
-                # A background compaction is no work to wait for. Stop it so maintenance can start.
-                for sid in list(self.canonical.copy().values()):
-                    self.compaction.preempt(sid)
             busy = self.busy_sessions()
             if action == "acquire":
                 # This request holds one native reservation. Queued RPCs and
