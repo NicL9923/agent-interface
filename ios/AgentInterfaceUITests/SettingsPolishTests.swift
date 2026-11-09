@@ -247,6 +247,28 @@ import XCTest
     app.showSettingsSections()
     XCTAssertTrue(app.staticTexts["Ranch hand two"].waitForExistence(timeout: 5), "The name saved on the first try")
   }
+  func testChoosingATalkVoiceSavesItAndSamplesPlayAndStop() throws {
+    let app = launch()
+    openRanchSettings(app)
+    app.selectSettingsTab("Profile")
+    let marin = app.buttons["voiceOption.marin"], cedar = app.buttons["voiceOption.cedar"]
+    reveal(app, cedar)
+    XCTAssertTrue(marin.wait(until: "selected == true"), "The default voice is chosen until one is saved")
+    cedar.tap()
+    XCTAssertTrue(cedar.wait(until: "selected == true"))
+    XCTAssertTrue(marin.wait(until: "selected == false"))
+    let play = app.buttons["Play Cedar sample"]
+    play.tapWhenReady()
+    XCTAssertTrue(app.buttons["Stop Cedar sample"].waitForExistence(timeout: 10))
+    app.buttons["Stop Cedar sample"].tap()
+    XCTAssertTrue(play.waitForExistence(timeout: 5))
+    // What the server holds, not just what the row showed: close the sheet and reopen settings.
+    app.buttons["Close"].tap()
+    app.openAssistantSettings("Ranch hand")
+    app.selectSettingsTab("Profile")
+    reveal(app, app.buttons["voiceOption.cedar"])
+    XCTAssertTrue(app.buttons["voiceOption.cedar"].wait(until: "selected == true"), "The saved voice survives reopening")
+  }
   func testMcpServersAreSwitchesInAdvancedAndHiddenInSimple() throws {
     var app = launch(presentation: "advanced")
     openRanchSettings(app)
