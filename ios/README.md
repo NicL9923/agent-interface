@@ -187,17 +187,20 @@ the repo's validation wrapper:
 bash .agents/tools/validate-ios.sh SIMULATOR_UUID test
 ```
 
-The wrapper holds the lock every checkout of this repository shares,
-`.private/ios-validation.lock` in the main checkout, so two runs never drive
-simulators at once; a second run exits at once instead of waiting. Do not wrap it
-in `lockf` yourself. It refuses to boot a fourth simulator and shuts down the one
-it booted. Tests run from a copy of the built `.xctestrun` that limits XCTest's
-crash-report wait to 15 seconds, because the Mac mini otherwise waits about 300
-seconds after every UI test. A failed test skips the `simctl diagnose` collector,
-which stalls there for ten minutes; pass `-collect-test-diagnostics on-failure` to
-keep it. Each run writes `.private/ios-<run>.txt` beside its result bundle with the
-commit, the fingerprint of the iOS inputs, Xcode, the simulator and the test
-summary. Another run with the same fingerprint, Xcode and runtime can reuse it.
+The wrapper queues on the shared Mac lock and verifies nested ownership. Run it
+directly. Build-only work leaves simulators off. XCTest boots the selected device
+for test execution; the wrapper cleans it up only if it was shut down when that
+execution started. Pre-existing devices stay running. Tests default to serial
+execution and Xcode test timeouts. Pass explicit Xcode options to override them.
+
+Tests use a copy of the built `.xctestrun` that limits XCTest's crash-report wait
+to 15 seconds. A failed test skips the optional `simctl diagnose` collector;
+pass `-collect-test-diagnostics on-failure` to collect it. Each run writes a summary
+beside its result bundle. Ordinary passing tests can reuse evidence for identical
+source contents, options, toolchain, SDK, runtime, device and supported environment
+settings before queuing and after acquisition. Live checks, captures, repetitions
+and custom external inputs run fresh. `IOS_VALIDATION_FRESH=1` forces execution.
+A fresh failure invalidates older matching evidence.
 
 The same wrapper accepts Xcode test filters. The parity suite exercises home,
 pinning, Settings saves and recovery, the model catalog and inference controls,
