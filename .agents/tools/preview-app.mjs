@@ -172,6 +172,21 @@ if (process.env.PREVIEW_LONG_TOOL === '1') {
     { id: 'fixture-final', role: 'assistant', text: 'Fixture final answer follows the tool results.' });
   Object.assign(conversations.ranch, { activity: { state: 'done' }, toolCalls: [], approvals: [] });
 }
+// PREVIEW_PROGRESS=1 replaces Ranch hand's chat with one finished turn that has progress lines (`interim`)
+// before and between its tool work, then a Markdown answer. The second line is a long real-world one.
+if (process.env.PREVIEW_PROGRESS === '1') {
+  const p = (minutes, seconds = 0) => new Date(Date.UTC(2026, 9, 1, 15, minutes, seconds)).toISOString();
+  ranchMessages.splice(0, ranchMessages.length,
+    { id: 'progress-ask', role: 'user', sender: { id: 'preview', name: 'Nicolas' }, text: 'Set up the sign-up links for the barn dance and check Saturday\'s forecast for Austin.', createdAt: p(0) },
+    { id: 'progress-1', role: 'assistant', interim: true, text: 'I\'ll look up Saturday\'s forecast for Austin, then create the sign-up links.', createdAt: p(0, 4) },
+    { id: 'progress-search', role: 'tool', text: '', createdAt: p(0, 21), toolCall: { id: 'progress-call-1', name: 'web_search', status: 'completed', arguments: '{"query":"Austin forecast Saturday"}', result: '{"high":68,"low":47,"rain":"10%"}', startedAt: p(0, 5), completedAt: p(0, 21) } },
+    { id: 'progress-form', role: 'tool', text: '', createdAt: p(1, 2), toolCall: { id: 'progress-call-2', name: 'forms.create', status: 'completed', arguments: '{"title":"Barn dance sign-up"}', result: '{"ok":true}', startedAt: p(0, 25), completedAt: p(1, 2) } },
+    { id: 'progress-2', role: 'assistant', interim: true, text: 'Both links are created and reachable. I also verified the shared calendar exposes **68 tools** across `calendar`, `forms` and `maps`, and none needed new permissions. Next I\'ll check the forecast against the [dance start time](https://example.invalid/barn-dance) and write up the plan.', createdAt: p(1, 10) },
+    { id: 'progress-plan', role: 'tool', text: '', createdAt: p(1, 40), toolCall: { id: 'progress-call-3', name: 'calendar.get_event', status: 'completed', result: '{"start":"19:00"}', startedAt: p(1, 12), completedAt: p(1, 40) } },
+    { id: 'progress-answer', role: 'assistant', createdAt: p(1, 52), text: '### Saturday looks good\n\nIt will be **68 degrees** at the 7 PM start, dropping to 47 overnight, with a **10% chance of rain**. I would keep the dance in the barn and leave the doors open.\n\n| Link | Purpose |\n| --- | --- |\n| Sign-up form | Names and dishes |\n| Carpool sheet | Rides from town |\n\nBoth links are live. Explicit preview fixture, nothing was created.' });
+  Object.assign(conversations.ranch, { activity: { state: 'done' }, toolCalls: [], approvals: [], files: [], attention: [] });
+  ranchMessages.forEach(message => { delete message.files; });
+}
 // Transcript catch-up fixtures: a failed turn to retry, a question with one answer and one with several,
 // a finished turn with timed tool work, and a reply with code in several languages and a table.
 {

@@ -74,10 +74,29 @@ mark, the window cut by rows, `isConversationReply` excluding progress lines (Ta
 no meta row or inline pages on a progress line, the `message-interim` class, the unread counter, Retry
 ignoring a progress line, the duration ending at the answer, and the add-on guidance.
 
+## Web visual check
+
+`PREVIEW_PROGRESS=1 node .agents/tools/preview-app.mjs` shows one finished turn with two progress lines, three
+tool calls and a Markdown answer, the second line long with bold, inline code and a link. Looked at in real
+Chromium through `playwright-cli`, desktop 1280 wide and phone 390 wide, light and dark, work row folded
+and open. Two defects found and fixed:
+
+- The base `.message { margin: 0 0 28px }` in `styles.css` loads after `transcript.css` and beat
+  `.message-interim` at equal specificity, so lines sat 28px apart instead of 8px, away from the work row.
+  The rule is now `.message.message-interim`.
+- Inline code inside a light-mode progress line was 4.28:1 on its chip with `--muted`. The line now uses
+  `--message-meta`: 4.96:1 on the chip, 5.45:1 on the page, same value in dark (7.57:1).
+
+After the fix the lines read as quieter assistant speech, sit visibly apart from the answer, the work row
+folds under them and opens to Tool calls, and neither width scrolls sideways. Not exercised: live streaming
+of a progress line, increase contrast, 200% text.
+
 ## iOS
 
 Written and not compiled or run: `Message.interim`, `isProgressLine`, the turn fold, reply joining, Retry,
 read aloud, the unseen count, copy and listen actions, offline library, saved history reply, quieter style,
 and tests in `ContractFixtureTests`, `PresentationTests`, `ReplyAnnouncementTests`, `ReviewFixTests` and
 `OfflineLibraryTests`. Pending on the Mac mini: the Swift build, those suites, and a simulator look at the
-quieter style.
+quieter style. `AGENT_INTERFACE_UI_PROGRESS=1` seeds the same turn as the web fixture
+(`TranscriptFixtures.progress`), and `TranscriptFlowTests.testProgressLinesStayAboveTheFoldedWorkAndTheAnswer`
+captures `progress-folded` and `progress-expanded`. That test is also written and not compiled or run.

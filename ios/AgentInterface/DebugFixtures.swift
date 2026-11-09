@@ -204,6 +204,11 @@
           FixtureProtocol.preferences["presentation"] = environment["AGENT_INTERFACE_UI_WORK_PRESENTATION"] ?? "simple"
           FixtureProtocol.messages = TranscriptFixtures.work
         }
+        // A finished turn with progress lines before and between its tool work, then a Markdown answer.
+        if environment["AGENT_INTERFACE_UI_PROGRESS"] == "1" {
+          FixtureProtocol.preferences["presentation"] = environment["AGENT_INTERFACE_UI_WORK_PRESENTATION"] ?? "simple"
+          FixtureProtocol.messages = TranscriptFixtures.progress
+        }
         if environment["AGENT_INTERFACE_UI_RETRY"] != nil { FixtureProtocol.messages = TranscriptFixtures.failed }
         if let presentation = environment["AGENT_INTERFACE_UI_LONG_TOOL"] {
           FixtureProtocol.preferences["presentation"] = presentation
@@ -1486,6 +1491,27 @@
       ["id": "work-answer", "role": "assistant", "createdAt": "2026-10-24T15:02:14.000Z", "reasoning": "The gate log shows a low battery.\nA replacement script is simplest.",
        "text": "The north gate battery is low. Here is the check script:\n\n```swift\n// Reads the gate battery\nlet level = try await gate.battery()\nif level < 0.2 { print(\"Replace soon: \\(level)\") }\n```\n\n| Gate | Battery |\n| --- | ---: |\n| North | 18% |\n| South, back | 76% |"],
     ] }
+    /// As the web's `PREVIEW_PROGRESS`: two progress lines (`interim`), the second one long with Markdown, three
+    /// tool calls between and after them, then the answer. The work folds under the lines and above the answer.
+    static var progress: [[String: Any]] {
+      let call = { (id: String, name: String, arguments: String, result: String, start: String, end: String) -> [String: Any] in
+        ["id": "progress-\(id)", "role": "assistant", "text": "", "createdAt": end,
+         "toolCall": ["id": "progress-call-\(id)", "name": name, "arguments": arguments, "status": "completed", "result": result, "startedAt": start, "completedAt": end]]
+      }
+      return [
+        ["id": "progress-ask", "role": "user", "text": "Set up the sign-up links for the barn dance and check Saturday's forecast for Austin.",
+         "createdAt": "2026-10-01T15:00:00.000Z", "sender": ["id": "native-test", "name": "Local test member"]],
+        ["id": "progress-1", "role": "assistant", "interim": true, "createdAt": "2026-10-01T15:00:04.000Z",
+         "text": "I'll look up Saturday's forecast for Austin, then create the sign-up links."],
+        call("search", "web_search", "{\"query\":\"Austin forecast Saturday\"}", "{\"high\":68,\"low\":47,\"rain\":\"10%\"}", "2026-10-01T15:00:05.000Z", "2026-10-01T15:00:21.000Z"),
+        call("form", "forms.create", "{\"title\":\"Barn dance sign-up\"}", "{\"ok\":true}", "2026-10-01T15:00:25.000Z", "2026-10-01T15:01:02.000Z"),
+        ["id": "progress-2", "role": "assistant", "interim": true, "createdAt": "2026-10-01T15:01:10.000Z",
+         "text": "Both links are created and reachable. I also verified the shared calendar exposes **68 tools** across `calendar`, `forms` and `maps`, and none needed new permissions. Next I'll check the forecast against the [dance start time](https://example.invalid/barn-dance) and write up the plan."],
+        call("plan", "calendar.get_event", "{}", "{\"start\":\"19:00\"}", "2026-10-01T15:01:12.000Z", "2026-10-01T15:01:40.000Z"),
+        ["id": "progress-answer", "role": "assistant", "createdAt": "2026-10-01T15:01:52.000Z",
+         "text": "### Saturday looks good\n\nIt will be **68 degrees** at the 7 PM start, dropping to 47 overnight, with a **10% chance of rain**. I would keep the dance in the barn and leave the doors open.\n\n| Link | Purpose |\n| --- | --- |\n| Sign-up form | Names and dishes |\n| Carpool sheet | Rides from town |\n\nBoth links are live. Explicit fixture, nothing was created."],
+      ]
+    }
     static var failed: [[String: Any]] { [
       ["id": "retry-prompt", "role": "user", "text": "Is the north gate closed?", "sender": ["id": "native-test", "name": "Local test member"]],
       ["id": "retry-tool", "role": "tool", "text": "Weather service timed out.", "toolCall": ["id": "retry-call", "name": "gate_status", "status": "failed", "error": "Timed out"]],
