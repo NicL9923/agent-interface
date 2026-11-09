@@ -1,14 +1,14 @@
 # November 9 live Talk reads progress lines aloud
 
-Branch `talk-progress-narration`, stacked on `assistant-progress-lines` (PR 1, head `2e9b344`, which
+Branch `talk-progress-narration`, stacked on `assistant-progress-lines` (PR 1, head `a1ae5ae`, which
 makes the progress lines this reads). Checks ran on NicolasLaptop (Linux, Node 24.22.2) at the commit
 that carries this entry. No Python changed, so the Python suite from PR 1's entry stands. No iOS
 build, simulator, physical device, real Realtime session, live Hermes turn or deployment ran.
 
 ## Web and server
 
-- `npm run lint`, `npm run typecheck` and `npm run build` passed. `npx vitest run`: 168 files,
-  2,460 tests passed.
+- `npm run lint`, `npm run typecheck` and `npm run build` passed. `npx vitest run`: 169 files,
+  2,470 tests passed.
 - A `talk/ask` for a working request now returns as soon as a new progress line exists. The server
   tests drive the real Fastify app with the fake runtime: the early return when a structural change
   arrives mid-wait, the answer winning when it is already there, a new line at the first ask,
@@ -20,11 +20,11 @@ build, simulator, physical device, real Realtime session, live Hermes turn or de
 ## Mutants
 
 Each line below was broken by hand, its focused suites run, and the source restored (the runner is
-not committed). 21 mutants and all 19 that remained after review failed their tests at once.
-Two survived, and both were redundant code, not missing tests: dropping a held line when the
-answer arrives, and clearing held lines on dispose, were each already done by the request's `finally`
-and the disposed guard in `handle`. The duplicates were removed from the TypeScript and Swift loops,
-and the two behaviors were mutated through the remaining line and killed.
+not committed). 19 mutants. 17 failed their tests at once. Two survived, and both were redundant code,
+not missing tests: dropping a held line when the answer arrives, and clearing held lines on dispose, were
+each already done by the request's `finally` and the disposed guard in `handle`. The duplicates were
+removed from the TypeScript and Swift loops, and the two behaviors were mutated through the remaining
+line and killed.
 
 Killed: the `heard` filter, progress-lines-only, naming every new ID, saying the newest line with words,
 progress only while running, returning `progress` on the `working` answer, the 50 ID cap, the
