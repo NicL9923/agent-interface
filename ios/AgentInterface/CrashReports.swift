@@ -149,7 +149,7 @@ extension CrashReport {
 }
 
 /// Subscribes to MetricKit, which hands the app the crashes and hangs of earlier launches.
-final class CrashDiagnosticsSubscriber: NSObject, MXMetricManagerSubscriber {
+final class CrashDiagnosticsSubscriber: NSObject, MXMetricManagerSubscriber, @unchecked Sendable {
   static let shared = CrashDiagnosticsSubscriber()
   func start() { MXMetricManager.shared.add(self) }
   func didReceive(_ payloads: [MXDiagnosticPayload]) {
