@@ -121,10 +121,13 @@ import UIKit
     app.buttons["chatModel"].tap()
     XCTAssertTrue(app.textFields["modelSearch"].waitForExistence(timeout: 10))
     try capture("model-dark")
-    // Three speeds fit as a segmented control: one tap, no menu.
+    // Four speeds fit as a segmented control: one tap, no menu.
     let speed = app.segmentedControls["inferenceSpeed"]
     scroll(app, to: speed); speed.buttons["Fast"].tapWhenReady()
     XCTAssertTrue(speed.buttons["Fast"].wait(until: "selected == true"), "Fast is selected")
+    speed.buttons["Auto"].tapWhenReady()
+    XCTAssertTrue(speed.buttons["Auto"].wait(until: "selected == true"), "Auto is selected and Fast is not")
+    XCTAssertFalse(speed.buttons["Fast"].isSelected)
     let favorite = app.buttons["Add Fixture fast model to favorites"]
     scroll(app, to: favorite); favorite.tap()
     XCTAssertTrue(app.buttons["Remove Fixture fast model from favorites"].waitForExistence(timeout: 5))

@@ -397,7 +397,8 @@ function turns(conversation: SavedConversation | null, advanced: boolean) {
     if (advanced && !isActivityMessage(message) && message.role === "assistant" && message.reasoning?.trim()) block.reasoning.push(message.reasoning.trim());
     // A tool-call row with no reply text would render as an empty bubble.
     if (!isActivityMessage(message) && message.role !== "tool" && visibleMessage(message)) {
-      if (message.role !== "user" && block.tools.size && block.replyAt === undefined) block.replyAt = message.id;
+      // A progress line says what the assistant is about to do, so the work still ahead is not folded above it.
+      if (message.role !== "user" && !message.interim && block.tools.size && block.replyAt === undefined) block.replyAt = message.id;
       block.messages.push(message);
     }
     if (isActivityMessage(message) || message.role === "tool" || message.toolCall) {
@@ -469,7 +470,7 @@ const sameOrigin = (a?: Message["origin"], b?: Message["origin"]) => a === b || 
   && a.title === b.title && a.name === b.name && a.handle === b.handle;
 function sameMessage(a: Message, b: Message) {
   if (a === b) return true;
-  return a.id === b.id && a.role === b.role && a.text === b.text && a.createdAt === b.createdAt && a.reasoning === b.reasoning
+  return a.id === b.id && a.role === b.role && a.text === b.text && a.interim === b.interim && a.createdAt === b.createdAt && a.reasoning === b.reasoning
     && a.toolName === b.toolName && a.runId === b.runId && a.sender?.id === b.sender?.id && a.sender?.name === b.sender?.name
     && sameOrigin(a.origin, b.origin) && sameCall(a.toolCall, b.toolCall)
     && (a.files === b.files || !!a.files && !!b.files && a.files.length === b.files.length && a.files.every((file, index) => sameFile(file, b.files![index])));
@@ -505,7 +506,9 @@ const TurnView = memo(function TurnView({ block, advanced, disconnected, name, b
     // The conversation is with one assistant, so its replies need no name. Consecutive reply parts
     // in a turn read as one reply, with the time under the last part.
     const reply = isReplyRow(message);
-    const joins = (earlier: Message | undefined, later: Message | undefined) => !!later && isReplyRow(later) && earlier?.role === "assistant" && later.id !== block.replyAt;
+    // A progress line stands apart from the answer around it.
+    const joins = (earlier: Message | undefined, later: Message | undefined) => !!later && isReplyRow(later) && earlier?.role === "assistant" && later.id !== block.replyAt
+      && !earlier.interim && !later.interim;
     const continued = joins(block.messages[position - 1], message);
     const endsRun = !joins(message, block.messages[position + 1]);
     const scheduled = messageOrigin(message)?.kind === "scheduled";
@@ -518,11 +521,12 @@ const TurnView = memo(function TurnView({ block, advanced, disconnected, name, b
     const delivery = outgoingId === message.id && outgoing !== "accepted" ? outgoing : undefined;
     const streaming = message.id.endsWith("-inflight");
     const exchange = isAgentExchange(message);
+    const progress = message.interim === true;
     let when = message.createdAt;
     for (let at = position; !when && at > 0 && joins(block.messages[at - 1], block.messages[at]); at--) when = block.messages[at - 1].createdAt;
     const files = message.files?.map(file => <FileLink file={file} key={file.id} />);
     const article = <article
-      className={`message message-${exchange ? "agent" : message.role}${continued ? " message-continued" : ""}${delivery ? ` message-outgoing message-${delivery}` : ""}`}
+      className={`message message-${exchange ? "agent" : message.role}${progress ? " message-interim" : ""}${continued ? " message-continued" : ""}${delivery ? ` message-outgoing message-${delivery}` : ""}`}
       key={message.id}
       data-message-id={message.id}
       aria-busy={delivery === "sending" || undefined}
@@ -532,14 +536,14 @@ const TurnView = memo(function TurnView({ block, advanced, disconnected, name, b
       {exchange ? <AgentExchange message={message} recipient={name} /> : reply ? (
         streaming
           ? <StreamingMarkdown text={message.text} botId={botId} messageId={message.id} userId={userId} unavailable={disconnected} inlineUi={message.role === "assistant"} />
-          : <MessageMarkdown text={message.text} botId={botId} messageId={message.id} userId={userId} unavailable={disconnected} inlineUi={message.role === "assistant"} />
+          : <MessageMarkdown text={message.text} botId={botId} messageId={message.id} userId={userId} unavailable={disconnected} inlineUi={message.role === "assistant" && !progress} />
       ) : message.role !== "tool" && (
         own ? <div className="message-bubble"><div className="message-text">{message.text}</div>{files}</div> : <div className="message-text">{message.text}</div>
       )}
       {own && message.steered && <p className="message-steered">Added to the current task</p>}
       {!own && files}
       {turnFiles?.replyId === message.id && !streaming && <ReplyFiles artifacts={turnFiles.artifacts} onOpen={onOpenFile} />}
-      {!exchange && !streaming && (reply || own) && <MessageMeta message={message} own={own}
+      {!exchange && !streaming && !progress && (reply || own) && <MessageMeta message={message} own={own}
         when={endsRun ? when : undefined} delivery={delivery}
         actions={!!message.text.trim() && (message.role === "assistant" || own)} />}
     </article>;

@@ -129,7 +129,11 @@ private typealias Check = @MainActor (Data) throws -> Void
       XCTAssertEqual($0.activityMessages.compactMap(\.toolCall).map(\.id), ["call-search", "call-calendar"])
       XCTAssertEqual($0.toolCalls?.last?.error, "Calendar access expired.")
       XCTAssertEqual($0.draft?.text, "Add basil"); XCTAssertEqual($0.readPosition?.scrollTop, 240.5)
-      let reply = try XCTUnwrap($0.messages.last { $0.role == "assistant" })
+      // A progress line is the assistant talking before it works, and never its reply.
+      let progress = try XCTUnwrap($0.messages.first { $0.id == "message-progress" })
+      XCTAssertEqual(progress.interim, true); XCTAssertTrue(progress.isProgressLine)
+      XCTAssertEqual($0.messages.filter(\.isProgressLine).map(\.id), ["message-progress"])
+      let reply = try XCTUnwrap($0.messages.first { $0.id == "message-assistant" })
       XCTAssertEqual(reply.reasoning, "Balanced the week around the pantry list."); XCTAssertEqual(reply.files?.first?.size, 18432)
       XCTAssertEqual(ReplyCards.parse(reply.text).compactMap(\.cards).flatMap { $0 }.map(\.id), ["groceries"])
     },

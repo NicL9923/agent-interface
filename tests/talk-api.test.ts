@@ -141,6 +141,19 @@ describe("talk ask", () => {
     expect((await ask(s, requestId, "Something else")).statusCode).toBe(409);
   });
 
+  it("marks a spoken request for Hermes's voice route, never a typed message or the recorded request", async () => {
+    const requestId = randomUUID(), typedId = randomUUID();
+    const s = await setup({ conversation: () => run([asked(requestId), said("reply-1", "Sunny and 72.")]) });
+    await ask(s, requestId);
+    expect(s.submit.mock.calls[0]![0]).toMatchObject({ requestId, voice: true });
+    // Asking again with the same ID must match the recorded request, so the mark is never stored.
+    expect(s.store.submission(requestId)!.input).not.toHaveProperty("voice");
+    const typed = await s.app.inject({ method: "POST", url: "/api/bots/ranch/messages", headers: s.one, payload: { requestId: typedId, text: "Typed" } });
+    expect(typed.statusCode).toBe(200);
+    expect(s.submit.mock.calls[1]![0]).toMatchObject({ requestId: typedId });
+    expect(s.submit.mock.calls[1]![0]).not.toHaveProperty("voice");
+  });
+
   it("answers working after the wait, then the reply once the run settles", async () => {
     const requestId = randomUUID();
     let state = run([asked(requestId)], { state: "working", runId: "run-talk" });
@@ -300,6 +313,16 @@ describe("talk answer states", () => {
     expect(answer.text).not.toContain("feed plan");
     expect(answer.text).toMatch(/^Corrected: feed at six\. Earlier parts are in the chat\.$/);
     expect(spokenReplies(["One.", "Two."])).toBe("One.\n\nTwo.");
+  });
+  it("never reads a progress line back as the answer", () => {
+    const note = (id: string, text: string) => ({ ...said(id, text), interim: true });
+    const settled = run([asked(), note("n1", "I'll check the forecast first."), said("r1", "Sunny, 75.")]);
+    expect(talkAnswer(accepted, settled)).toEqual({ state: "done", text: "Sunny, 75." });
+    // A run that ended having written only a progress line has no reply to read, so Talk says so.
+    expect(talkAnswer(accepted, run([asked(), note("n1", "I'll check the forecast first.")]))).toEqual({ state: "done", text: "" });
+    // And a failed run is refused rather than answered with what it meant to do.
+    expect(talkAnswer(accepted, run([asked(), note("n1", "I'll check the forecast first.")], { state: "failed" })))
+      .toEqual({ state: "refused", text: "The assistant could not finish this request." });
   });
   it("cuts long replies at a sentence and points to the chat", () => {
     const long = "Hay is in. ".repeat(500);

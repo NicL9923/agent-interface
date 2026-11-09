@@ -4,7 +4,7 @@ import type { AutomationOperation, AutomationResult } from '../shared/automation
 import type { FileRef, Message } from '../shared/types.js';
 import { withMessageOrigins, wireOrigin } from '../shared/message-origin.js';
 import { runStatus } from '../shared/routine-runs.js';
-import { exposedText, toolDetails } from './hermes-mapping.js';
+import { displayCopies, exposedText, progressLines, toolDetails } from './hermes-mapping.js';
 import { httpError } from './http-error.js';
 
 const text = z.string();
@@ -31,6 +31,8 @@ const historyRow = z.object({
   name: text.nullish(), args: z.unknown().optional(), tool_call_id: z.union([text, number]).nullish(),
   display_metadata: z.unknown().optional(), display_kind: z.unknown().optional(),
   app_artifacts: z.unknown().optional(), app_attachments: z.unknown().optional(),
+  // Hermes's display projection of progress lines, read by `displayCopies` and `progressLines`, which check their shapes.
+  display_commentary: z.unknown().optional(), display_content: z.unknown().optional(), display_reasoning: z.unknown().optional(),
 });
 const priorPrompt = z.object({ text: text.optional(), app_sender_id: text.optional(),
   display_metadata: z.unknown().optional(), display_kind: z.unknown().optional() });
@@ -45,16 +47,20 @@ function experienceSchemas(profile: string, artifacts: Artifacts): { [O in Exper
       targetMessageId: text.optional(), app_prior_prompt: priorPrompt.optional() }).transform(value => {
       const seed = value.app_prior_prompt;
       const origin = seed ? wireOrigin({ id: 'prior', role: 'user', text: seed.text ?? '' }, seed) : undefined;
-      const messages = value.messages.map((row): Message => {
+      const messages = value.messages.flatMap((row): Message[] => {
+        const copies = displayCopies(row);
         const result: Message & { app_sender_id?: string } = {
-          id: String(row.id), role: row.role, text: exposedText(row.app_tool_result) ?? row.app_display_text ?? row.text ?? '',
-          createdAt: row.createdAt, reasoning: row.reasoning ?? undefined, toolName: row.toolName ?? undefined,
+          id: String(row.id), role: row.role, text: exposedText(row.app_tool_result) ?? copies.text ?? row.app_display_text ?? row.text ?? '',
+          createdAt: row.createdAt, reasoning: copies.reasoning === undefined ? row.reasoning ?? undefined : copies.reasoning ?? undefined, toolName: row.toolName ?? undefined,
           files: artifacts(profile, row),
           ...(typeof row.app_sender_id === 'string' ? { app_sender_id: row.app_sender_id } : {}),
           ...(row.role === 'tool' ? { toolCall: toolDetails({ name: row.name, args: row.args, result: row.app_tool_result ?? row.text }, String(row.tool_call_id ?? row.id), 'completed') } : {}),
         };
         const own = wireOrigin(result, row);
-        return own ? { ...result, origin: own } : result;
+        // Progress lines come first, as in a live read, each with the row's own origin.
+        const lines = progressLines(row, result.text).map((line, position): Message => ({ id: `${result.id}-progress-${position}`, role: 'assistant',
+          text: line, createdAt: row.createdAt, interim: true, ...(own ? { origin: own } : {}) }));
+        return [...lines, own ? { ...result, origin: own } : result];
       });
       return { botId: value.botId, sessionId: value.sessionId, offset: value.offset, hasMore: value.hasMore,
         ...(value.targetMessageId ? { targetMessageId: value.targetMessageId } : {}),

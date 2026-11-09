@@ -136,7 +136,7 @@ struct DiscoveryView: View {
           ForEach(page.messages) { message in
             HistoryMessageRow(message: message, recipient: name(page.botId), userId: store.bootstrap?.user.id ?? "", saved: savedMessage == message.id,
               isPinned: pinned.contains(bookmark(page, message.id)),
-              save: message.role == "assistant" && !message.isInternalActivity ? { saveReply(message, page) } : nil, busy: busy).id(message.id)
+              save: message.role == "assistant" && !message.isProgressLine && !message.isInternalActivity ? { saveReply(message, page) } : nil, busy: busy).id(message.id)
           }
           HStack { Button("Previous page") { Task { await history(page.botId,page.sessionId,max(0,page.offset-100)) } }.disabled(busy || page.offset==0); Spacer(); Button("Next page") { Task { await history(page.botId,page.sessionId,page.offset+100) } }.disabled(busy || !page.hasMore) }
         }

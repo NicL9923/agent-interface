@@ -24,6 +24,7 @@
 
 - `check-inline-ui-browser.js` is an expression to evaluate in a loopback WildBots preview. It checks the real sandbox's DOM, cookie, storage and fetch isolation, then attempts a navigation. Browser diagnostics must show `frame-src about:` blocking that navigation with no outbound request.
 - `PREVIEW_TALK=1 node .agents/tools/preview-app.mjs` replaces the microphone, WebRTC and OpenAI with an offline script, so live Talk runs one spoken question and answer for visual checks. Voice samples play from the build.
+- `PREVIEW_PROGRESS=1 node .agents/tools/preview-app.mjs` replaces Ranch hand's chat with one finished turn that has two progress lines (`interim`, the second long with Markdown), three tool calls and a Markdown answer, for checking progress-line style and the work fold. The iOS Debug fixture is `AGENT_INTERFACE_UI_PROGRESS=1`.
 - `PREVIEW_INLINE_UI=1 node .agents/tools/preview-app.mjs` shows a local hay supply calculator for inline rendering, resizing, theme, keyboard and reset checks. It uses synthetic data.
 
 - `python3 .agents/tools/stage-recovery-tools.py MERGED_COMMIT --host SSH_ALIAS --app-base PATH` copies the exact Git recovery helper and its `deploy_common.py` into a fresh private host audit directory, verifies their hashes and records provenance without changing live services or app source.

@@ -467,6 +467,21 @@ already running, decided under its submission lock. A user `Message` it admitted
 way carries `steered: true`, in every history read and on every device. Show "Added to
 the current task" under it. Absent means unknown, so show nothing.
 
+**Progress lines.** An assistant `Message` with `interim: true` is a progress line: one
+short sentence the assistant wrote before using tools, such as "I'll check the forecast
+first". Show it as the assistant talking, visually lighter than an answer, in order
+with the turn, and never as the reply. Do not offer Copy, Listen, Quote or a time under
+it, do not read it aloud when it arrives, do not count it as a new message or as unread,
+do not take it for the answer when deciding whether a turn replied, and do not render
+inline pages from it. It carries the same `runId` as its turn, and its `id` is the saved
+row's `id` followed by `-progress-` and its position in that row. Lines are never cut or
+merged: a line the stream already showed is matched whole against the saved one. Hermes
+decides which lines exist: a profile that turns off `display.show_commentary` or
+`display.interim_assistant_messages` has none, and an older Hermes sends none. Saved history
+pages (`GET /api/bots/:id/history/:sessionId`) carry them by the same rules, but a progress
+line's `id` is one this app made up, so `POST /api/saved` refuses it with 400 and clients offer
+no Save reply on it. Absent or `false` means an ordinary message.
+
 ## Drafts
 
 Each person has one draft per assistant, shared by their devices.
@@ -550,6 +565,7 @@ Web and native clients share these authenticated operations. See
 | --- | --- |
 | `GET /api/today` | Canonical activity, pending decisions, paged recorded events, recent files, `generatedAt`, `frontier` and `hasMore`. The ETag leaves out `generatedAt`, so an unchanged recap answers 304 and the client keeps the body it has; show your own check time |
 | `PUT /api/today/seen` | `{ "seenAt": "LOADED_GENERATED_AT", "frontier": "LOADED_FRONTIER" }`; advances only the returned page |
+| `GET /api/bots/:id/inference`, `PATCH /api/bots/:id/inference` | Per-conversation `{ "reasoning": "none" \| "minimal" \| "low" \| "medium" \| "high" \| "xhigh" \| "max" \| "ultra", "speed": "normal" \| "auto" \| "fast" \| "ultrafast" }`. `PATCH` takes either field or both and answers 400 to any other word (Hermes's first-turn-only `cold` is not accepted). `auto` runs Fast for `agent.fast_auto_seconds` (60 unless the profile sets it) at the start of each reply, then Normal. Each change is one Hermes write. Hermes does not check the model for `auto`, so on a model without fast mode Auto runs at Normal speed. It answers 409 with a reason, and leaves the earlier speed in place, when Hermes predates Auto (`This Hermes version does not have Auto speed. Update Hermes to use it.`); `fast` and `ultrafast` answer 409 `Fast speed is not available for this model.` or `Ultrafast speed is not available for this model.` the same way. The answer is the settings as Hermes reports them after the change, read through the live session's status (`config.get` reports Auto as `normal`, and the profile default for a session pinned to Normal). When Hermes reports a word outside these lists the answer is a 5xx with the generic Hermes failure message, and nothing is guessed. |
 | `GET /api/bots/:id/memory` | Native profile scope, document revisions, entries and character limits |
 | `PATCH /api/bots/:id/memory/:target` | `{ "revision": "SHA256", "entries": [{ "id": "EXISTING_ID", "text": "FACT" }] }`; target is `memory` or `user` |
 | `DELETE /api/bots/:id/memory/:target` | `{ "revision": "SHA256", "entryId": "EXISTING_ID" }` |

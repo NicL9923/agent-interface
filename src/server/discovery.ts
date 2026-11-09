@@ -82,7 +82,10 @@ export async function installDiscoveryRoutes(app: FastifyInstance, runtime: Runt
       const locate = body.messageId && body.offset === undefined;
       const page = await experience()({ operation: 'history', profile: body.botId, sessionId: body.sessionId, offset: body.offset ?? 0, ...(locate ? {messageId: body.messageId} : {}) });
       if (locate) { body.offset = page.offset; body.messageId = page.targetMessageId ?? body.messageId; }
-      if (body.messageId && !page.messages.some(message=>message.id===body.messageId)) throw httpError(404,'The saved reply is no longer in this history page.');
+      const target = body.messageId ? page.messages.find(message=>message.id===body.messageId) : undefined;
+      if (body.messageId && !target) throw httpError(404,'The saved reply is no longer in this history page.');
+      // A progress line has an ID only this app made up, which Hermes cannot find again to reopen it.
+      if (target?.interim) throw httpError(400,'A progress line cannot be saved. Save the reply it came before.');
     }
     else { if (!runtime.routineOutput) throw httpError(409, 'Routine outputs unavailable'); await runtime.routineOutput(body.botId, body.routineId, body.resultId); }
     return store.saveItem(userId, body);

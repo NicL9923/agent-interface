@@ -144,6 +144,14 @@
         "text": "Keep it vegetarian",
         "createdAt": "2026-10-01T11:06:00.000Z",
         "steered": true
+      },
+      {
+        "id": "message-progress",
+        "runId": "run-dinner",
+        "role": "assistant",
+        "text": "I'll check the menu for meat first.",
+        "createdAt": "2026-10-01T11:07:00.000Z",
+        "interim": true
       }
     ],
     "activity": {

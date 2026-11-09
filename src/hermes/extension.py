@@ -767,7 +767,7 @@ class Bridge:
         if kept != notes:
             agent._gateway_turn_context_notes = kept
         prior = getattr(agent, "ephemeral_system_prompt", None)
-        added = [part for part in (self.inline_instructions, roster) if part and part not in (prior or "")]
+        added = [part for part in (self.inline_instructions, self.progress_instructions, roster) if part and part not in (prior or "")]
         if added:
             agent.ephemeral_system_prompt = "\n\n".join(part for part in (prior, *added) if part)
         try:
@@ -780,6 +780,9 @@ class Bridge:
         # persisted user text, receipt digests, image recovery, or steering matches.
         server = self.server
         self.inline_instructions = json.loads((Path(__file__).resolve().parents[1] / "shared" / "inline-ui-instructions.json").read_text())
+        # Said on every app turn, because a model skips a one-time rule about half the time. Hermes shows the line
+        # it writes before a tool call as a progress line, in the chat and in live Talk.
+        self.progress_instructions = json.loads((Path(__file__).resolve().parents[1] / "shared" / "progress-line-instructions.json").read_text())
         # Newer Hermes splits the invocation from turn setup and model changes.
         # Older qualified revisions enter with an already-built session agent.
         if hasattr(server, "_invoke_agent"):
@@ -1412,7 +1415,12 @@ class Bridge:
                         return self.admitted(rid, request_id, "Image preparation failed before admission: " + str(exc)[:400])
                 try:
                     method = "session.steer" if steering else "prompt.submit"
-                    result = self.native(method, {"session_id": sid, "profile": profile, "text": text})
+                    native = {"session_id": sid, "profile": profile, "text": text}
+                    # A spoken Talk turn runs on Hermes's auxiliary.voice_chat route. A steer joins a
+                    # running turn, whose route is already bound, so it carries no voice mark.
+                    if params.get("voice_turn") is True and not steering:
+                        native["voice_turn"] = True
+                    result = self.native(method, native)
                 except Exception as exc:
                     # Known native admission refusals happen before invoking or queueing a turn.
                     # Crashes and unrecognized errors may follow side effects, so stay uncertain.

@@ -9,7 +9,7 @@ struct ReplyActions: ViewModifier {
   @State private var saving = false
   @State private var saved = false
   private var eligible: Bool {
-    message.role == "assistant" && !message.isInternalActivity && !message.isToolActivity
+    message.role == "assistant" && !message.isProgressLine && !message.isInternalActivity && !message.isToolActivity
       && !message.id.hasSuffix("-inflight") && !message.text.isEmpty
   }
   /// A person's own message offers Copy alone, as on the web.

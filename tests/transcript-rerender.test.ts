@@ -120,6 +120,15 @@ describe("transcript re-rendering", () => {
     expect(grew(before, "markdown", [live])).toEqual([0]);
   });
 
+  it("re-renders a finished turn when a saved line turns out to be a progress line", async () => {
+    const before = await mounted();
+    const marked = structuredClone(base);
+    marked[2]!.interim = true;
+    await view(page(marked));
+    expect(mount.container.querySelector(`[data-message-id="a1"]`)!.classList.contains("message-interim")).toBe(true);
+    expect(grew(before, "markdown", replies)).toEqual([1, 0]);
+  });
+
   it("re-renders the turn whose tool call settles, and no other", async () => {
     const before = await mounted();
     const done: ToolCall = { ...call, status: "completed", completedAt: "2026-10-25T10:01:00Z" };

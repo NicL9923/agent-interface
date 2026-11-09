@@ -172,7 +172,7 @@ import XCTest
     let release = server.hold(path: "/api/usage/accounts")
     let seen = server.requests.count
     let late = Task { await value.refreshAccountUsage(refresh: true) }
-    for _ in 0..<200 where server.requests.count == seen { try await Task.sleep(nanoseconds: 10_000_000) }
+    try await until { server.requests.count > seen }
     var after = try JSONSerialization.jsonObject(with: Data(try Self.fixtureResponse("usage-reset").utf8)) as! [String: Any]
     var updated = after["account"] as! [String: Any]; updated["bankedResets"] = 1; after["account"] = updated
     server.reply = .init(body: String(decoding: try JSONSerialization.data(withJSONObject: after), as: UTF8.self))
@@ -191,7 +191,7 @@ import XCTest
     defer { clean(server, value) }
     _ = await value.refreshAccountUsage()
     let chatgpt = try XCTUnwrap(value.accountUsage?.accounts.first)
-    func waitFor(_ count: Int) async throws { for _ in 0..<200 where server.requests.count < count { try await Task.sleep(nanoseconds: 10_000_000) } }
+    func waitFor(_ count: Int) async throws { try await until { server.requests.count >= count } }
     // The reset goes out first; a Refresh starts while it is out, with the limits from before; the reset answers first.
     let releaseReset = server.hold(path: "/api/usage/accounts/\(chatgpt.key)/reset")
     let reset = Task { try await value.resetAccountUsage(chatgpt, force: false, requestId: UUID().uuidString) }

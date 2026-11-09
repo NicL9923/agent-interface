@@ -85,6 +85,15 @@ it('builds a recap from a recent window and its earlier file context, reading ev
   windowed = { ...windowed, messages: [{ id: 'mine', role: 'user', text: 'Status?', createdAt: at }] };
   expect((await ranch(s.second)).latestMessage.id).toBe('first');
 });
+it('shows the latest reply on Today, never a progress line that came after it', async () => {
+  const s = await setup();
+  const at = new Date().toISOString();
+  s.conversation.mockImplementation(async () => ({ botId: 'ranch', activity: { state: 'working' }, approvals: [], files: [], messages: [
+    { id: 'reply', role: 'assistant', text: 'Fence is up.', createdAt: at },
+    { id: 'note', role: 'assistant', text: "I'll check the gate next.", createdAt: at, interim: true }] }) as never);
+  const ranch = (await s.app.inject({ url: '/api/today', headers: s.first })).json().items.find((item: { botId: string }) => item.botId === 'ranch');
+  expect(ranch.latestMessage).toMatchObject({ id: 'reply', text: 'Fence is up.' });
+});
 it('reads a settled assistant\'s history again only after its roster preview changes', async () => {
   const s = await setup();
   let preview = { text: 'Fence is up.', at: new Date(Date.now() - 60000).toISOString() };

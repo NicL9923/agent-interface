@@ -14,6 +14,7 @@ export function parseInlineDocument(code: string): InlineDocument | null {
 }
 
 export { default as inlineUiInstructions } from "./inline-ui-instructions.json" with { type: "json" };
+export { default as progressLineInstructions } from "./progress-line-instructions.json" with { type: "json" };
 
 /** No network or application authority. The iframe also omits allow-same-origin. */
 export const inlineUiPolicy = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; media-src data:; frame-src 'none'; connect-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'";

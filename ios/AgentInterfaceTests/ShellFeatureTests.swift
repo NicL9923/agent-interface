@@ -354,6 +354,14 @@ import XCTest
     XCTAssertFalse(InferenceChoice.segmented(InferenceSettings.reasoningLevels.count))
     XCTAssertFalse(InferenceChoice.segmented(1))
   }
+  func testSpeedsOfferAutoBeforeFastAndNeverTheFirstTurnOnlyMode() throws {
+    // The server's `serviceTiers` is the contract: it answers 400 to any other word, and Hermes's
+    // first-turn-only "cold" mode is deliberately not offered.
+    XCTAssertEqual(InferenceSettings.speeds, ["normal", "auto", "fast", "ultrafast"])
+    let auto = try JSONDecoder().decode(InferenceSettings.self, from: Data(#"{"reasoning":"high","speed":"auto"}"#.utf8))
+    XCTAssertEqual(auto.speed, "auto")
+    XCTAssertTrue(InferenceSettings.speeds.contains(auto.speed), "A saved Auto selects its segment instead of leaving none selected")
+  }
   func testAssistantCardSheetFitsItsContent() {
     XCTAssertEqual(FittedSheet.detents(contentHeight: 300, available: 900), [.medium, .large], "Fits in the medium detent")
     XCTAssertEqual(FittedSheet.detents(contentHeight: 600, available: 900), [.height(676), .large], "Its own height")

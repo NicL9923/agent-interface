@@ -374,9 +374,10 @@ struct ConversationView: View {
         await store.reconcilePending()
       }
       .onChange(of: visibleMessage) { _, _ in saveReadPosition() }
-      .onChange(of: store.conversation?.visibleMessages.last?.id) { old, new in
+      // A progress line arrives mid-task and is not something to catch up on, so it never counts as new.
+      .onChange(of: store.conversation?.visibleMessages.last(where: { !$0.isProgressLine })?.id) { old, new in
         if let old, old != new, !following {
-          let messages = store.conversation?.visibleMessages ?? []
+          let messages = (store.conversation?.visibleMessages ?? []).filter { !$0.isProgressLine }
           unseen += messages.firstIndex { $0.id == old }.map { messages.count - $0 - 1 } ?? 1
         }
       }
@@ -815,7 +816,7 @@ struct MessageView: View {
         if message.isAgentExchange {
           AgentExchangeView(message: message, recipient: recipient)
         } else if !message.isToolActivity {
-          ReplyContentView(message: message)
+          ReplyContentView(message: message).modifier(ProgressLineStyle(on: message.isProgressLine))
         }
         ForEach(message.files ?? []) { FileAttachmentView(file: $0) }
         if let replyFiles, !message.id.hasSuffix("-inflight") { ReplyFilesView(artifacts: replyFiles) }
@@ -829,7 +830,7 @@ struct MessageView: View {
         Text("Added to the current task").font(.caption).foregroundStyle(Palette.messageMetadata)
           .frame(maxWidth: .infinity, alignment: .trailing).accessibilityIdentifier("steeredLabel")
       }
-      if showsMeta {
+      if showsMeta && !message.isProgressLine {
         MessageMetaRow(message: message, own: own, when: endsRun ? when ?? message.createdAt : nil, delivery: delivery,
           actions: (message.role == "assistant" && !message.isInternalActivity || own) && !message.id.hasSuffix("-inflight")
             && !message.text.isEmpty)
@@ -861,6 +862,13 @@ struct MessageView: View {
     case "tool": return message.toolName ?? "Tool"
     default: return message.role.capitalized
     }
+  }
+}
+/// A progress line reads as the assistant talking, in a quieter voice than its answer, as on the web.
+private struct ProgressLineStyle: ViewModifier {
+  var on: Bool
+  func body(content: Content) -> some View {
+    if on { content.font(.callout).foregroundStyle(Palette.muted) } else { content }
   }
 }
 /// A sent message rises into the transcript at once, faint until Hermes accepts it, as on the web.
@@ -1399,7 +1407,7 @@ struct ReplyWatch: Equatable {
   // Hermes shows the unsaved tail of a reply as a message replaced by saved rows with new IDs.
   private static func saved(_ message: Message) -> Bool { !message.id.hasSuffix("-inflight") }
   private static func speakable(_ message: Message) -> Bool {
-    message.role == "assistant" && !message.isInternalActivity && !message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    message.role == "assistant" && !message.isProgressLine && !message.isInternalActivity && !message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
   }
   static func next(_ watch: ReplyWatch, _ conversation: Conversation, baseline: Bool) -> (ReplyWatch, Message?) {
     let messages = conversation.messages

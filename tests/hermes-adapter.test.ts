@@ -38,6 +38,26 @@ let opening: 'open' | 'close' | 'hang';
 let deferredMethods: Set<string>;
 let rpcErrors: Map<string, {code:number; message:string}>;
 let beforeSend: ((request:Record<string,any>,socket:WireSocket)=>void) | undefined;
+// Hermes ed1afb0's `fast` key. `tier` is the live agent's service_tier. config.set stores the word and a
+// status read answers the live tier (`_set_fast`). config.get reports only Fast and Ultrafast and falls
+// back to the profile default when the session's tier is unset (`_cfg_get_fast`). Only Fast and
+// Ultrafast check the model.
+const hermesSpeed={tier:null as string|null,profileTier:null as string|null,fastModel:true,knowsAuto:true,knowsStatus:true,get:undefined as string|undefined,echo:undefined as string|undefined};
+const speedWords:Record<string,string|null>={fast:'priority',ultrafast:'ultrafast',normal:null,auto:'auto'};
+function speedReply(request:Record<string,any>):{result?:unknown;error?:{code:number;message:string}}|undefined{
+  if(request.params?.key!=='fast')return undefined;
+  const word=request.method==='config.set'?String(request.params.value):'';
+  if(request.method==='config.get')return {result:{value:hermesSpeed.get??({priority:'fast',ultrafast:'ultrafast'} as Record<string,string>)[hermesSpeed.tier??hermesSpeed.profileTier??'']??'normal'}};
+  if(request.method!=='config.set')return undefined;
+  if(word==='status'){
+    if(!hermesSpeed.knowsStatus)return {error:{code:4002,message:'unknown fast mode: status'}};
+    return {result:{key:'fast',value:({priority:'fast'} as Record<string,string>)[hermesSpeed.tier??'']??hermesSpeed.tier??'normal'}};
+  }
+  if(!(word in speedWords)||word==='auto'&&!hermesSpeed.knowsAuto)return {error:{code:4002,message:`unknown fast mode: ${word}`}};
+  if((word==='fast'||word==='ultrafast')&&!hermesSpeed.fastModel)return {error:{code:4002,message:`${word} mode is not available for this model`}};
+  hermesSpeed.tier=speedWords[word];
+  return {result:{key:'fast',value:hermesSpeed.echo??word}};
+}
 class WireSocket extends EventTarget {
   static CONNECTING=0;
   static OPEN=1;
@@ -62,7 +82,12 @@ class WireSocket extends EventTarget {
       queueMicrotask(()=>this.receive({jsonrpc:'2.0',id:request.id,error:rpcErrors.get(request.method)}));
       return;
     }
-    let result:unknown={};
+    const speed=speedReply(request);
+    if (speed?.error) {
+      queueMicrotask(()=>this.receive({jsonrpc:'2.0',id:request.id,error:speed.error}));
+      return;
+    }
+    let result:unknown=speed?.result??{};
     if(request.method==='agent-interface.capabilities')result={revision:reportedRevision,durable_admission:true,durable_events:addonReady,canonical_open:addonReady,executor_epoch:'epoch-one',...(incrementalDiscovery?{incremental_discovery:true}:{}),...(canonicalSubmission?{canonical_submit:true}:{}),...(explicitCredentials?{explicit_credentials:true}:{}),...delegation};
     if(request.method==='agent-interface.open')result=structuredClone(snapshot);
     if(request.method==='file.attach')result={path:'/workspace/staged/portrait.png'};
@@ -70,7 +95,7 @@ class WireSocket extends EventTarget {
     if(request.method==='profiles.list')result={profiles:[{name:'shared',ui_meta:{agent_interface:{name:'Shared',unrelated:'preserve'}},ui_meta_revisions:{agent_interface:3},...(rosterSession?{canonical_session:rosterSession}:{})}]};
     if(request.method==='profiles.describe')result={toolsets:[{name:'terminal',enabled:true}],skills:[],mcp_servers:[{name:'calendar',enabled:true},{name:'notes',enabled:false}]};
     if(request.method==='profiles.configure')result=metadataConflict?{ok:false,applied:{ui_meta:false,ui_meta_conflicts:{agent_interface:{actual:4}}}}:{ok:true,applied:{ui_meta:true}};
-    if(request.method==='config.get')result={value:request.params.key==='reasoning'?'high':'normal'};
+    if(request.method==='config.get'&&!speed)result={value:request.params.key==='reasoning'?'high':'normal'};
     if(request.method==='image.generate')result={available:imageReady,success:false,error:'No image generation backend configured'};
     if(request.method==='profiles.set_asset')result={ok:true};
     if(request.method==='agent-interface.delegation')result={ok:true};
@@ -82,7 +107,7 @@ class WireSocket extends EventTarget {
 }
 beforeEach(()=>{
   reportedRevision=revision;
-  snapshot={session_id:'live-one',canonical_stored_session_id:'stored-one',info:{running:false},messages:[]};calls=[];sockets=[];addonReady=true;explicitCredentials=true;canonicalSubmission=false;incrementalDiscovery=false;delegation={};metadataConflict=false;connectionFails=false;imageReady=false;rosterSession=undefined;opening='open';deferredMethods=new Set();rpcErrors=new Map();beforeSend=undefined;
+  snapshot={session_id:'live-one',canonical_stored_session_id:'stored-one',info:{running:false},messages:[]};calls=[];sockets=[];addonReady=true;explicitCredentials=true;canonicalSubmission=false;incrementalDiscovery=false;delegation={};metadataConflict=false;connectionFails=false;imageReady=false;rosterSession=undefined;opening='open';deferredMethods=new Set();rpcErrors=new Map();beforeSend=undefined;Object.assign(hermesSpeed,{tier:null,profileTier:null,fastModel:true,knowsAuto:true,knowsStatus:true,get:undefined,echo:undefined});
   vi.stubGlobal('WebSocket',WireSocket);
   vi.stubGlobal('fetch',vi.fn(async()=>Response.json({profiles:[]})));
   runtime=createHermesRuntime({url:'http://127.0.0.1:19119',token});
@@ -282,6 +307,13 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     expect(calls[0].params).not.toHaveProperty('session_id');
     rpcErrors.set('agent-interface.submit',{code:4094,message:'Review interruption'});
     await expect(runtime.submit({...input(),text:'Again'})).rejects.toMatchObject({statusCode:409,message:'Review the interrupted task before starting another message.'});
+  });
+  it('asks the add-on for a voice turn only for a spoken request', async () => {
+    canonicalSubmission=true;
+    await runtime.status(); calls=[];
+    await runtime.submit({...input(),text:'Spoken',voice:true});
+    await runtime.submit({...input(),requestId:'typed',text:'Typed'});
+    expect(calls.map(call=>call.params.voice_turn)).toEqual([true,undefined]);
   });
   it('fences a retry to an idle assistant and reports a refusal without admission', async () => {
     canonicalSubmission=true;
@@ -1421,13 +1453,75 @@ it('routes routine history and output through the private scoped native experien
 });
 
 it('scopes reasoning and service tier controls to the canonical assistant session', async () => {
-  expect(await runtime.inferenceSettings!('shared', {reasoning:'ultra',speed:'fast'})).toEqual({reasoning:'high',speed:'normal'});
+  expect(await runtime.inferenceSettings!('shared', {reasoning:'ultra',speed:'fast'})).toEqual({reasoning:'high',speed:'fast'});
   expect(calls.filter(call=>call.method==='config.set').map(call=>call.params)).toEqual([
     {profile:'shared',session_id:'live-one',key:'reasoning',value:'ultra'},
     {profile:'shared',session_id:'live-one',key:'fast',value:'fast'},
+    // The read-back asks the same session for its live tier.
+    {profile:'shared',session_id:'live-one',key:'fast',value:'status'},
   ]);
   rpcErrors.set('config.set', {code:4002,message:'Fast mode is unavailable'});
   await expect(runtime.inferenceSettings!('shared',{speed:'ultrafast'})).rejects.toThrow();
+});
+
+describe('Auto speed', () => {
+  // Every speed write changes the live session at once, so the writes are the behavior.
+  const writes=()=>calls.filter(call=>call.method==='config.set'&&call.params.key==='fast'&&call.params.value!=='status').map(call=>call.params.value);
+  it('saves Auto with one write and reads it back although config.get reports it as normal', async () => {
+    expect(await runtime.inferenceSettings!('shared',{speed:'auto'})).toEqual({reasoning:'high',speed:'auto'});
+    expect(writes()).toEqual(['auto']);
+    expect(hermesSpeed.tier).toBe('auto');
+    expect(await runtime.inferenceSettings!('shared')).toEqual({reasoning:'high',speed:'auto'});
+  });
+
+  it('never probes Fast, even on a model without fast mode, where Hermes runs Auto at normal speed', async () => {
+    hermesSpeed.tier='ultrafast'; hermesSpeed.fastModel=false;
+    expect((await runtime.inferenceSettings!('shared',{speed:'auto'})).speed).toBe('auto');
+    expect(writes()).toEqual(['auto']);
+  });
+
+  it('refuses Auto on a Hermes that predates it and leaves the earlier speed alone', async () => {
+    hermesSpeed.tier='priority'; hermesSpeed.knowsAuto=false;
+    await expect(runtime.inferenceSettings!('shared',{speed:'auto'})).rejects.toMatchObject({statusCode:409,message:'This Hermes version does not have Auto speed. Update Hermes to use it.'});
+    expect(writes()).toEqual(['auto']);
+    expect(hermesSpeed.tier).toBe('priority');
+  });
+
+  it('refuses when Hermes answers Auto with another word, without writing a speed nobody picked', async () => {
+    hermesSpeed.echo='normal';
+    await expect(runtime.inferenceSettings!('shared',{speed:'auto'})).rejects.toMatchObject({statusCode:409,message:'Hermes did not confirm Auto speed. Update Hermes to use it.'});
+    expect(writes()).toEqual(['auto']);
+  });
+
+  it('names the unsupported speed when Fast or Ultrafast is refused', async () => {
+    hermesSpeed.fastModel=false;
+    await expect(runtime.inferenceSettings!('shared',{speed:'ultrafast'})).rejects.toMatchObject({statusCode:409,message:'Ultrafast speed is not available for this model.'});
+  });
+
+  it('reads a session pinned to Normal as normal when the profile default is Fast', async () => {
+    hermesSpeed.profileTier='priority';
+    expect((await runtime.inferenceSettings!('shared')).speed).toBe('normal');
+  });
+
+  it('refuses a speed word the app cannot show, from status or from an older Hermes, instead of guessing', async () => {
+    hermesSpeed.tier='warp';
+    await expect(runtime.inferenceSettings!('shared')).rejects.toThrow('Hermes returned unreadable inference settings.');
+    hermesSpeed.tier=null; hermesSpeed.knowsStatus=false; hermesSpeed.get='warp';
+    await expect(runtime.inferenceSettings!('shared')).rejects.toThrow('Hermes returned unreadable inference settings.');
+  });
+
+  it('passes on a failed status read instead of falling back to the lossy config.get', async () => {
+    hermesSpeed.tier='auto';
+    rpcErrors.set('config.set', {code:5005,message:'session busy'});
+    await expect(runtime.inferenceSettings!('shared')).rejects.toMatchObject({rpcCode:5005});
+  });
+
+  it('reads Cold as normal, and a Hermes without status through config.get', async () => {
+    hermesSpeed.tier='cold';
+    expect((await runtime.inferenceSettings!('shared')).speed).toBe('normal');
+    hermesSpeed.tier='priority'; hermesSpeed.knowsStatus=false;
+    expect((await runtime.inferenceSettings!('shared')).speed).toBe('fast');
+  });
 });
 
 it('preserves native event provenance and inherits scheduled replies without changing roles', async () => {
@@ -1600,6 +1694,121 @@ describe('Hermes conversation and roster read costs', () => {
     delete snapshot.app_window;
     hermesChanged();
     expect((await runtime.conversation('shared', {window: {turns: 20}})).window).toBeUndefined();
+  });
+
+  describe('progress lines', () => {
+    const turn = (rows: Record<string, any>[]) => { snapshot.messages = [{row_id: 1, role: 'user', text: 'Weather?', app_run_id: 'run-1'}, ...rows]; };
+    it('shows each display_commentary line as an interim assistant message ahead of its row', async () => {
+      turn([
+        {row_id: 2, role: 'assistant', text: '', app_run_id: 'run-1', timestamp: 1_700_000_000, display_commentary: ['I will check the forecast first.', 'Then the radar.']},
+        {row_id: 3, role: 'tool', name: 'web_search', app_run_id: 'run-1', content: '{}'},
+        {row_id: 4, role: 'assistant', text: 'Sunny, 75.', app_run_id: 'run-1'},
+      ]);
+      const {messages} = await runtime.conversation('shared');
+      expect(messages.map(message => [message.id, message.role, message.text, message.interim])).toEqual([
+        ['1', 'user', 'Weather?', undefined],
+        ['2-progress-0', 'assistant', 'I will check the forecast first.', true],
+        ['2-progress-1', 'assistant', 'Then the radar.', true],
+        ['2', 'assistant', '', undefined],
+        ['3', 'tool', '{}', undefined],
+        ['4', 'assistant', 'Sunny, 75.', undefined],
+      ]);
+      expect(messages[1]).toMatchObject({runId: 'run-1', createdAt: new Date(1_700_000_000_000).toISOString()});
+    });
+    it('shows nothing when the profile turned commentary off, even with the raw provider items present', async () => {
+      // Hermes sends an empty projection for a disabled profile. The raw items must never be read here.
+      turn([{row_id: 2, role: 'assistant', text: '', display_commentary: [],
+        codex_message_items: [{type: 'message', role: 'assistant', phase: 'commentary', content: [{type: 'output_text', text: 'I will check Search Console.'}]}]}]);
+      expect(JSON.stringify((await runtime.conversation('shared')).messages)).not.toContain('Search Console');
+      // An older Hermes without the projection says nothing either.
+      turn([{row_id: 2, role: 'assistant', text: '', codex_message_items: [{type: 'message', phase: 'commentary', content: [{type: 'output_text', text: 'Raw text.'}]}]}]);
+      expect((await runtime.conversation('shared')).messages.filter(message => message.interim)).toEqual([]);
+    });
+    it.each([
+      ['not a list', 'I will check.'],
+      ['an object', {text: 'I will check.'}],
+      ['null', null],
+      ['a number', 7],
+    ])('ignores a display_commentary that is %s', async (_name, value) => {
+      turn([{row_id: 2, role: 'assistant', text: 'Answer', display_commentary: value}]);
+      expect((await runtime.conversation('shared')).messages.map(message => message.id)).toEqual(['1', '2']);
+    });
+    it('keeps every usable line whole: strings with words, none the answer already says, nothing cut or merged', async () => {
+      turn([{row_id: 2, role: 'assistant', text: 'Sunny, 75.', display_commentary: [
+        42, null, {text: 'x'}, '', '   ', ' Checking. ', 'Checking.', 'Sunny, 75.', 'z'.repeat(5000)]}]);
+      const lines = (await runtime.conversation('shared')).messages.filter(message => message.interim).map(message => message.text);
+      // A line shown cut, or left out, would come back from the stream as its own unmarked reply.
+      expect(lines).toEqual(['Checking.', 'Checking.', 'z'.repeat(5000)]);
+      const many = Array.from({length: 40}, (_, index) => `Step ${index}`);
+      turn([{row_id: 2, role: 'assistant', text: '', display_commentary: many}]);
+      expect((await runtime.conversation('shared')).messages.filter(message => message.interim).map(message => message.text)).toEqual(many);
+    });
+    it('never turns a user or tool row into a progress line', async () => {
+      turn([{row_id: 2, role: 'user', text: 'Hi again', display_commentary: ['injected']}, {row_id: 3, role: 'tool', name: 'x', content: '{}', display_commentary: ['injected']}]);
+      expect((await runtime.conversation('shared')).messages.some(message => message.interim)).toBe(false);
+    });
+    it('uses Hermes display copies of the reply and reasoning, which leave out flattened progress lines', async () => {
+      turn([{row_id: 2, role: 'assistant', text: 'I will check.\n\nSunny.', display_content: 'Sunny.', reasoning: 'I will check.\nPrivate thoughts', display_reasoning: 'Private thoughts', display_commentary: ['I will check.']}]);
+      const reply = (await runtime.conversation('shared')).messages.find(message => message.id === '2')!;
+      expect(reply).toMatchObject({text: 'Sunny.', reasoning: 'Private thoughts'});
+    });
+    it('cuts a window by Hermes rows, not by the messages those rows became', async () => {
+      snapshot.app_window = {earlier: 10, context: 2};
+      snapshot.messages = [
+        {role: 'user', text: 'Old prompt', app_index: 3},
+        {role: 'assistant', text: 'Old answer', app_index: 4, display_commentary: ['Looking.', 'Still looking.']},
+        {role: 'user', text: 'Latest prompt', app_index: 10},
+        {role: 'assistant', text: 'Latest answer', app_index: 11, display_commentary: ['Checking.']},
+      ];
+      const result = await runtime.conversation('shared', {window: {turns: 20}});
+      expect(result.window!.context.map(message => message.id)).toEqual(['live-one-3', 'live-one-4-progress-0', 'live-one-4-progress-1', 'live-one-4']);
+      expect(result.messages.map(message => message.id)).toEqual(['live-one-10', 'live-one-11-progress-0', 'live-one-11']);
+    });
+    it('tells watchers about a progress line as a structural change, so clients read again at once', async () => {
+      await runtime.status();
+      await runtime.conversation('shared');
+      const kinds: unknown[] = [];
+      runtime.watch!('shared', kind => kinds.push(kind));
+      sockets[0].receive({method: 'event', params: {session_id: 'live-one', type: 'message.delta', payload: {text: 'I'}}});
+      expect(kinds).toEqual(['inflight']);
+      sockets[0].receive({method: 'event', params: {session_id: 'live-one', type: 'message.interim', payload: {text: 'I will check.', already_streamed: true}}});
+      // A delta event reports "inflight"; a structural one reports nothing.
+      expect(kinds).toEqual(['inflight', undefined]);
+      snapshot.messages = [{row_id: 1, role: 'user', text: 'Weather?'}, {row_id: 2, role: 'assistant', text: '', display_commentary: ['I will check.']}];
+      expect((await runtime.conversation('shared')).messages.map(message => message.text)).toEqual(['Weather?', 'I will check.', '']);
+    });
+    it.each([
+      ['a very long line', `I will check ${'the forecast and the radar '.repeat(80)}first.`],
+      ['two repeated lines', 'I will check the forecast.\n\nI will check the forecast.'],
+    ])('leaves no tail behind when a streamed progress line is saved, even for %s', async (_name, streamed) => {
+      await runtime.status();
+      snapshot.info.running = true; snapshot.app_run_id = 'run-1';
+      snapshot.messages = [{row_id: 1, role: 'user', text: 'Weather?', app_run_id: 'run-1'}];
+      await runtime.conversation('shared');
+      sockets[0].receive({method: 'event', params: {session_id: 'live-one', type: 'message.start', payload: {}}});
+      sockets[0].receive({method: 'event', params: {session_id: 'live-one', type: 'message.delta', payload: {text: streamed}}});
+      const lines = streamed.includes('\n\n') ? streamed.split('\n\n') : [streamed];
+      snapshot.messages = [{row_id: 1, role: 'user', text: 'Weather?', app_run_id: 'run-1'},
+        {row_id: 2, role: 'assistant', text: '', app_run_id: 'run-1', display_commentary: lines}];
+      const shown = (await runtime.conversation('shared')).messages;
+      expect(shown.filter(message => message.interim).map(message => message.text)).toEqual(lines);
+      // Nothing of the stream is left to read as the reply.
+      expect(shown.some(message => message.id.endsWith('-inflight'))).toBe(false);
+    });
+    it('does not repeat a streamed progress line once its saved row arrives', async () => {
+      await runtime.status();
+      snapshot.info.running = true; snapshot.app_run_id = 'run-1';
+      snapshot.messages = [{row_id: 1, role: 'user', text: 'Weather?', app_run_id: 'run-1'}];
+      await runtime.conversation('shared');
+      sockets[0].receive({method: 'event', params: {session_id: 'live-one', type: 'message.start', payload: {}}});
+      sockets[0].receive({method: 'event', params: {session_id: 'live-one', type: 'message.delta', payload: {text: 'I will check the forecast.'}}});
+      sockets[0].receive({method: 'event', params: {session_id: 'live-one', type: 'message.interim', payload: {text: 'I will check the forecast.', already_streamed: true}}});
+      snapshot.messages = [{row_id: 1, role: 'user', text: 'Weather?', app_run_id: 'run-1'},
+        {row_id: 2, role: 'assistant', text: '', app_run_id: 'run-1', display_commentary: ['I will check the forecast.']}];
+      const shown = (await runtime.conversation('shared')).messages;
+      expect(shown.filter(message => message.text.includes('forecast'))).toHaveLength(1);
+      expect(shown.some(message => message.id.endsWith('-inflight'))).toBe(false);
+    });
   });
 
   it('shares one read among viewers until Hermes or this app changes the conversation', async () => {

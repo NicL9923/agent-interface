@@ -293,6 +293,29 @@ class HistoryWindowTests(unittest.TestCase):
         self.assertNotIn("scaffold", [row["text"] for row in extension.history_window(rows, "sid", None, 0)[0]])
 
 
+class ProgressLineTests(unittest.TestCase):
+    """Hermes projects a model's progress lines onto assistant rows as `display_commentary`. The add-on must hand them on untouched."""
+    PROJECTED = {"display_commentary": ["I'll check the forecast first."], "display_content": "", "display_reasoning": "Private notes"}
+
+    def test_an_open_hands_the_projected_fields_through_unchanged(self):
+        rows = [{"role": "user", "row_id": 11, "text": "Weather?", "timestamp": 100},
+                {"role": "assistant", "row_id": 12, "text": "", "timestamp": 101, **self.PROJECTED},
+                {"role": "tool", "row_id": 13, "tool_call_id": "search", "name": "web_search", "args": {}, "app_tool_result": {"ok": True}},
+                {"role": "assistant", "row_id": 14, "text": "Sunny.", "timestamp": 102}]
+        with FakeGateway(rows) as hermes:
+            messages = hermes.open()["messages"]
+        row = next(message for message in messages if message.get("row_id") == 12)
+        self.assertEqual({key: row[key] for key in self.PROJECTED}, self.PROJECTED)
+        self.assertNotIn("display_commentary", next(message for message in messages if message.get("row_id") == 14))
+
+    def test_a_cut_window_keeps_them_on_the_rows_it_keeps(self):
+        rows = turns(25)
+        rows[-1].update(self.PROJECTED)
+        kept, _ = extension.history_window(rows, "sid", None, 0)
+        self.assertEqual(kept[-1]["display_commentary"], self.PROJECTED["display_commentary"])
+        self.assertEqual(kept[-1]["display_reasoning"], "Private notes")
+
+
 class OpenTests(unittest.TestCase):
     def test_native_refusals_settle_but_unknown_errors_never_allow_replay(self):
         params = {"profile": "default", "request_id": "refused", "sender_id": "member", "text": "Hello"}
@@ -432,6 +455,19 @@ class OpenTests(unittest.TestCase):
             hermes.modules["tui_gateway.server"]._sessions.clear()
             self.assertEqual(submit("again",params)["result"],result)
             self.assertEqual([method for method,_ in hermes.native_calls],["prompt.submit"])
+
+    def test_voice_turn_reaches_native_submit_only_for_a_new_turn(self):
+        base = {"profile": "default", "request_id": "one", "sender_id": "member", "text": "Weather?"}
+        # Only a literal true marks the turn. A steer joins the running turn, whose route is already bound.
+        for mark, running, expected in [(True, False, ("prompt.submit", True)), ("true", False, ("prompt.submit", None)),
+                                        (None, False, ("prompt.submit", None)), (True, True, ("session.steer", None))]:
+            with self.subTest(mark=mark, running=running), FakeGateway([]) as hermes:
+                hermes.open()
+                hermes.native_calls.clear()
+                hermes.modules["tui_gateway.server"]._sessions["sid"]["running"] = running
+                params = {**base, **({"voice_turn": mark} if mark is not None else {})}
+                self.assertEqual(hermes.methods["agent-interface.submit"]("send", params)["result"]["status"], "accepted")
+                self.assertEqual([(method, params.get("voice_turn")) for method, params in hermes.native_calls], [expected])
 
     def test_submit_response_survives_restart_without_canonical_activation(self):
         params = {"profile": "default", "request_id": "one", "sender_id": "member", "text": "Hello"}
@@ -860,6 +896,9 @@ class InlineGuidanceTests(unittest.TestCase):
                 wrapper("request", "sid", session, "Original user text")
             self.assertEqual(observed.ephemeral_system_prompt, "Existing private instructions")
             self.assertEqual(observed.values[0].count("fenced wildbots-html"), 1)
+            # Every app turn says it, once, so the model writes a progress line before slow tool work.
+            self.assertEqual(observed.values[0].count("what you understood and what you will check first"), 1)
+            self.assertIn("Do not name tools", observed.values[0])
             self.assertTrue(observed.values[0].startswith("Existing private instructions\n\n"))
             self.assertEqual(observed.values[0], observed.values[2])
             wrapper("request", "sid", session, "Other client text")

@@ -21,6 +21,15 @@ it('does not let a late history response replace the selected automation view',a
   await act(async()=>resolve({botId:'ranch',sessionId:'history',messages:[{id:'reply',role:'assistant',text:'Late reply'}] as Message[],offset:0,hasMore:false}));
   expect(container.textContent).toContain('Usage over 30 days');expect(container.textContent).not.toContain('Conversation history');expect(container.textContent).not.toContain('Late reply');
 });
+it('offers Save reply on a saved answer but not on a progress line before it',async()=>{
+  vi.mocked(api).mockImplementation(async(path)=>path.startsWith('/search')?{hits:[{botId:'ranch',botName:'Ranch',sessionId:'history',title:'Dinners',snippet:'Plan'}],unavailableBots:[]}:path.includes('/history/')?{botId:'ranch',sessionId:'history',messages:[{id:'2-progress-0',role:'assistant',text:"I'll check.",interim:true},{id:'2',role:'assistant',text:'Sunny.'}] as Message[],offset:0,hasMore:false}:[]);
+  await act(async()=>root.render(createElement(DiscoveryPanel,{bootstrap:{user:{id:'one'},bots:[{id:'ranch',name:'Ranch'}],household:[]} as unknown as Bootstrap,onRoutine:()=>{}})));
+  await act(async()=>container.querySelector('form')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));
+  await act(async()=>container.querySelector<HTMLButtonElement>('.today-row')!.click());
+  expect(container.querySelector('#history-2-progress-0')?.textContent).toContain("I'll check.");
+  expect(container.querySelector('#history-2-progress-0')?.querySelector('button')).toBeNull();
+  expect(container.querySelector('#history-2')?.querySelector('button')).not.toBeNull();
+});
 it('opens the current page of a matching identity and scrolls to the answer',async()=>{
   const scroll=vi.fn();HTMLElement.prototype.scrollIntoView=scroll;
   vi.mocked(api).mockImplementation(async(path)=>path.startsWith('/search')?{hits:[{botId:'ranch',botName:'Ranch',sessionId:'history',title:'Dinners',snippet:'Plan',messageId:'stable',offset:100}],unavailableBots:[]}:path.includes('/history/')?{botId:'ranch',sessionId:'history',messages:[{id:'stable',role:'assistant',text:'The matching answer'}],offset:200,hasMore:false,targetMessageId:'stable'}:[]);
