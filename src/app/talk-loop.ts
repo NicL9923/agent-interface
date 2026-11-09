@@ -1,4 +1,4 @@
-import { finalTalkStates, TALK_TOOL, type TalkAnswer } from "../shared/voice";
+import { finalTalkStates, MAX_HEARD_LINES, TALK_TOOL, type TalkAnswer } from "../shared/voice";
 
 /** What the person sees: who is talking, or what the assistant is doing. */
 export type TalkPhase = "listening" | "thinking" | "working" | "speaking";
@@ -6,8 +6,8 @@ export interface TalkCaptions { you: string; assistant: string }
 export interface TalkLoopHost {
   /** Sends one client event over the "oai-events" data channel. */
   send(event: Record<string, unknown>): void;
-  /** POST /bots/:id/talk/ask. The same request ID never sends twice. */
-  ask(requestId: string, request: string, signal: AbortSignal): Promise<TalkAnswer>;
+  /** POST /bots/:id/talk/ask. The same request ID never sends twice. `heard` names the progress lines already said. */
+  ask(requestId: string, request: string, signal: AbortSignal, heard: readonly string[]): Promise<TalkAnswer>;
   phase(phase: TalkPhase): void;
   captions(captions: TalkCaptions): void;
   /** The person spoke or the assistant answered, which keeps an idle Talk open. */
@@ -37,6 +37,12 @@ export class TalkLoop {
   private assistant = "";
   private assistantDone = false;
   private following = 0;
+  // The newest progress line of each request that came while a response was active, held until it ends. An
+  // answer that arrives first drops it, so the person hears the answer, not what was done on the way to it.
+  private readonly held = new Map<string, string>();
+  // Every progress line said in this Talk, for every request: a steered request shares its run with the one
+  // before it, so a line must not be said once for each. Oldest first, and only the newest are reported.
+  private readonly heard = new Set<string>();
   constructor(private readonly host: TalkLoopHost, private readonly name: string, private readonly now: () => number = () => Date.now()) {}
 
   dispose() { this.disposed = true; this.abort.abort(); }
@@ -79,6 +85,7 @@ export class TalkLoop {
         this.active = false;
         this.host.phase(this.following ? "working" : "listening");
         if (this.queued) { this.queued = false; this.respond(); }
+        else this.flushHeld();
         break;
       case "response.function_call_arguments.done":
         if (event.name === TALK_TOOL) void this.call(String(event.call_id ?? ""), String(event.arguments ?? ""));
@@ -108,6 +115,21 @@ export class TalkLoop {
     this.respond();
   }
 
+  /** Says the oldest held progress line now that no response is active. */
+  private flushHeld() {
+    const next = this.held.entries().next();
+    if (next.done) return;
+    this.held.delete(next.value[0]);
+    this.say(next.value[1]);
+  }
+
+  /** Says a new progress line at once when the voice is free, else holds the newest until it is. */
+  private narrate(requestId: string, request: string, answer: TalkAnswer) {
+    if (!answer.progress) return;
+    const text = `About the earlier request "${request.slice(0, 200)}": ${this.spoken(answer)} Tell the person now, briefly.`;
+    if (this.active || this.queued) { this.held.delete(requestId); this.held.set(requestId, text); } else this.say(text);
+  }
+
   private spoken(answer: TalkAnswer) {
     const text = answer.text?.trim();
     switch (answer.state) {
@@ -116,7 +138,9 @@ export class TalkLoop {
       case "interrupted": return `${this.name}'s work on this was interrupted. Suggest checking the chat.`;
       case "needsApproval": return `${this.name} is waiting for an approval on screen${text ? `: ${text}` : ""}. Tell the person to check the screen. The answer follows once they decide.`;
       case "needsAnswer": return `${this.name} has a question waiting on screen${text ? `: ${text}` : ""}. Tell the person to check the screen to answer it.`;
-      case "working": return `${this.name} is still working on it. Tell the person the answer will follow, then wait.`;
+      case "working": return answer.progress
+        ? `${this.name} is working on it and says: "${answer.progress.text}" Tell the person that in one short sentence, in your own words, then wait. The answer will follow.`
+        : `${this.name} is still working on it. Tell the person the answer will follow, then wait.`;
     }
   }
 
@@ -128,9 +152,14 @@ export class TalkLoop {
     this.following++;
     this.host.phase("working");
     let answered = false;
+    const hear = (answer: TalkAnswer) => {
+      for (const id of answer.progress?.ids ?? []) { this.heard.delete(id); this.heard.add(id); }
+      for (const id of this.heard) { if (this.heard.size <= MAX_HEARD_LINES) break; this.heard.delete(id); }
+    };
     try {
-      let answer = await this.host.ask(requestId, request, this.abort.signal);
+      let answer = await this.host.ask(requestId, request, this.abort.signal, [...this.heard]);
       if (this.disposed) return;
+      hear(answer);
       this.output(callId, this.spoken(answer));
       answered = true;
       const started = this.now();
@@ -139,12 +168,13 @@ export class TalkLoop {
       while (!finalTalkStates.includes(answer.state) && this.now() - started < MAX_FOLLOW_MS) {
         await this.pause(answer.state === "working" ? FOLLOW_MS : DECISION_FOLLOW_MS);
         if (this.disposed) return;
-        answer = await this.host.ask(requestId, request, this.abort.signal);
+        answer = await this.host.ask(requestId, request, this.abort.signal, [...this.heard]);
         if (this.disposed) return;
+        hear(answer);
         if (finalTalkStates.includes(answer.state) || answer.state !== told && answer.state !== "working") {
           this.say(`About the earlier request "${request.slice(0, 200)}": ${this.spoken(answer)} Tell the person now, briefly.`);
           told = answer.state;
-        }
+        } else this.narrate(requestId, request, answer);
       }
     } catch (error) {
       if (this.disposed) return;
@@ -153,6 +183,8 @@ export class TalkLoop {
       // A call is answered once; a failure while following up is said as a new message.
       if (answered) this.say(text); else this.output(callId, text);
     } finally {
+      // A request that ends, with its answer or a failure, leaves no held line: it would only be old news.
+      this.held.delete(requestId);
       this.following--;
     }
   }

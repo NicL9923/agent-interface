@@ -1,8 +1,9 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { isConversationReply } from "../shared/message-origin.js";
+import { isConversationReply, isProgressLine } from "../shared/message-origin.js";
+import { markdownPlain } from "../shared/plain-text.js";
 import type { Bot, CapabilityKey, Conversation, Message, RealtimeSessionInput, Runtime, SubmissionReceipt } from "../shared/types.js";
-import { DEFAULT_TALK_VOICE, MAX_TALK_ANSWER, TALK_TOOL, type TalkAnswer } from "../shared/voice.js";
+import { DEFAULT_TALK_VOICE, MAX_HEARD_LINES, MAX_TALK_ANSWER, MAX_TALK_PROGRESS, TALK_TOOL, type TalkAnswer, type TalkProgress } from "../shared/voice.js";
 import { apiRoute } from "./api-route.js";
 import { signedIn } from "./auth.js";
 import { redactAgents, type Roster } from "./bot-access.js";
@@ -40,6 +41,7 @@ export function talkPersona(bot: Pick<Bot, "name" | "description">) {
     `For every real request, such as a question, task, lookup, reminder or anything that needs knowledge, memory or tools, call ${TALK_TOOL} once with the person's own words in "request". Do not answer from your own knowledge and do not reword what they asked.`,
     "You may answer greetings, thanks and small talk yourself, in a sentence.",
     "While you wait for a result, say one short filler such as \"Let me check.\" Do not repeat it.",
+    `When a result says ${name} is working and quotes what it is doing, tell the person that in one short sentence in your own words, then wait. Do not repeat it and do not read the quote word for word if it is long.`,
     "Read results back conversationally and briefly. Never read Markdown, lists, tables, code or web addresses aloud. Summarize them and say the details are in the chat.",
     "If a result says an approval or a question is waiting, tell the person to check the screen to answer it.",
     "If a result says the work is still going, say the answer will follow, then wait. Do not call the tool again for the same request.",
@@ -79,6 +81,50 @@ export function spokenReplies(texts: string[], limit = MAX_TALK_ANSWER) {
   return kept.length < texts.length && spoken.length <= limit - 32 ? `${spoken} Earlier parts are in the chat.` : spoken;
 }
 
+/**
+ * The saved messages of a conversation read anchored at a request, and which of them belong to it: the
+ * ones after it in its run, else those before the next person's message. Undefined while the request
+ * itself is not readable. Only what came after the request counts: the run's earlier replies answered
+ * something else.
+ */
+function requestMessages(receipt: SubmissionReceipt, conversation: Conversation) {
+  const messages = conversation.messages.filter(message => !message.id.endsWith("-inflight"));
+  // The add-on names a person's message by its request ID; older ones by the receipt's row.
+  const sent = messages.findIndex(message => message.role === "user" && (message.id === receipt.requestId || message.id === receipt.messageId));
+  if (sent < 0) return undefined;
+  const later = messages.slice(sent + 1);
+  const inRun = receipt.runId ? later.filter(message => message.runId === receipt.runId) : [];
+  const next = later.findIndex(message => message.role === "user");
+  const turn = later.slice(0, next < 0 ? undefined : next);
+  return { messages, sent, later, own: inRun.length ? inRun : turn,
+    // A steer joins the run of the message before it. Its lines come after its own prompt, so the earlier
+    // request, which this turn ends at, never takes them to say as well.
+    progress: receipt.runId ? turn.filter(message => message.runId === receipt.runId) : turn };
+}
+
+/** A progress line as one short spoken sentence or two: plain words, cut at a sentence when long. */
+export function spokenProgress(text: string, limit = MAX_TALK_PROGRESS) {
+  const plain = markdownPlain(text).replace(/[\p{Cc}\p{Cf}]+/gu, " ").replace(/\s+/g, " ").trim();
+  if (plain.length <= limit) return plain;
+  const head = plain.slice(0, limit);
+  const sentence = Math.max(...[". ", "! ", "? "].map(mark => head.lastIndexOf(mark)));
+  return (sentence > limit * 0.5 ? head.slice(0, sentence + 1) : head.slice(0, Math.max(head.lastIndexOf(" "), 1))).trim();
+}
+
+/**
+ * What a still-working request has newly said it is doing: the progress lines of its own turn (from its
+ * message to the next person's) that the
+ * client has not reported hearing. Every new line is named so none is said later, but only the newest
+ * is returned to say, so a burst after a pause is one sentence, not a backlog. `reply` turns a message
+ * into what this person may read. Undefined when nothing new can be said.
+ */
+export function talkProgress(receipt: SubmissionReceipt, conversation: Conversation, reply: (message: Message) => Message, heard: ReadonlySet<string>): TalkProgress | undefined {
+  const fresh = (requestMessages(receipt, conversation)?.progress ?? []).map(reply).filter(isProgressLine).filter(message => !heard.has(message.id))
+    .map(message => ({ id: message.id, text: spokenProgress(message.text) }));
+  const text = fresh.findLast(line => line.text)?.text;
+  return text ? { ids: fresh.map(line => line.id), text } : undefined;
+}
+
 export type RunOutcome = "completed" | "failed" | "interrupted";
 /**
  * Where a submitted request stands in a conversation read anchored at its message, with the turn
@@ -100,12 +146,10 @@ export function talkAnswer(receipt: SubmissionReceipt, conversation: Conversatio
   if (ours && activity.state === "blocked") return { state: "needsAnswer", text: conversation.attention?.[0]?.title };
   if (ours && activity.state === "interrupted") return { state: "interrupted" };
   if (ours && running.includes(activity.state)) return undefined;
-  const messages = conversation.messages.filter(message => !message.id.endsWith("-inflight"));
-  // The add-on names a person's message by its request ID; older ones by the receipt's row.
-  const sent = messages.findIndex(message => message.role === "user" && (message.id === receipt.requestId || message.id === receipt.messageId));
-  if (sent < 0) return ours ? undefined : "missing";
+  const request = requestMessages(receipt, conversation);
+  if (!request) return ours ? undefined : "missing";
+  const { messages, sent, later, own } = request;
   if (outcome === "interrupted") return { state: "interrupted" };
-  const later = messages.slice(sent + 1);
   // No other turn followed, so an outcome without a run names this request's turn.
   const latest = !later.some(message => message.role === "user" && (!receipt.runId || message.runId !== receipt.runId));
   if (latest && !activity.runId && activity.state === "interrupted") return { state: "interrupted" };
@@ -113,10 +157,7 @@ export function talkAnswer(receipt: SubmissionReceipt, conversation: Conversatio
   // run's own reported ending tells a finished run from an interrupted one.
   const steered = !!receipt.runId && messages.slice(0, sent).some(message => message.role === "user" && message.runId === receipt.runId);
   if (steered && !outcome) return "settling";
-  // Only what came after the request: the run's earlier replies answered something else.
-  const inRun = receipt.runId ? later.filter(message => message.runId === receipt.runId) : [];
-  const next = later.findIndex(message => message.role === "user");
-  const replies = (inRun.length ? inRun : later.slice(0, next < 0 ? undefined : next)).filter(isConversationReply);
+  const replies = own.filter(isConversationReply);
   const texts = replies.map(message => reply(message)).filter(isConversationReply).map(message => message.text.trim()).filter(Boolean);
   if (!texts.length && (outcome === "failed" || latest && activity.state === "failed")) return { state: "refused", text: "The assistant could not finish this request." };
   return { state: "done", text: spokenReplies(texts) };
@@ -163,7 +204,9 @@ export function installTalkRoutes(app: FastifyInstance, collaborators: {
     reply.header("Cache-Control", "no-store");
     return session;
   });
-  const ask = z.object({ requestId: z.string().uuid(), request: z.string().trim().min(1).max(4000) }).strict();
+  // `heard` names the progress lines this client already said, so the same one is never said twice.
+  const ask = z.object({ requestId: z.string().uuid(), request: z.string().trim().min(1).max(4000),
+    heard: z.array(z.string().min(1).max(512)).max(MAX_HEARD_LINES).optional() }).strict();
   // When each admitted request was first missing from its anchored read, or first seen with its
   // steered run ended but no reported outcome, to tell a slow write from a lost one.
   const missing = new Map<string, number>(), settling = new Map<string, number>();
@@ -172,7 +215,7 @@ export function installTalkRoutes(app: FastifyInstance, collaborators: {
     since.set(requestId, first);
     return now() - first >= limit;
   };
-  apiRoute(app, "POST /bots/:id/talk/ask", { body: ask }, async (req, { requestId, request }, reply) => {
+  apiRoute(app, "POST /bots/:id/talk/ask", { body: ask }, async (req, { requestId, request, heard }, reply) => {
     const botId = req.params.id, userId = signedIn(req).id;
     reply.header("Cache-Control", "no-store");
     // The same ID returns the recorded request instead of sending it twice.
@@ -210,6 +253,9 @@ export function installTalkRoutes(app: FastifyInstance, collaborators: {
           return { state: "refused", text: "I could not confirm this request finished. Check the chat for its answer." };
         }
         if (answer && answer !== "missing" && answer !== "settling") return answer;
+        // Still working: a new progress line is worth telling the person now, not after the answer.
+        const progress = answer === undefined ? talkProgress(receipt, conversation, redact.message, new Set(heard)) : undefined;
+        if (progress) return { state: "working", progress };
         const left = deadline - now();
         if (left <= 0) return { state: "working" };
         await new Promise<void>(resolve => {
