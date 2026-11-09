@@ -133,7 +133,7 @@ systemctl --user restart hermes-dashboard.service
 ```
 
 The launch profile must be signed in to ChatGPT (`openai-codex`) in Hermes.
-`GET /api/agent-interface/voice/status` on the service bridge reports
+`POST /api/agent-interface/voice/status` on the service bridge reports
 `{available, reason}`, and the app shows the reason in place of Talk:
 
 | Reason | Meaning and fix |

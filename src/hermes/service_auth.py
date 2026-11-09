@@ -15,7 +15,7 @@ OPERATIONS = (
     ("POST", re.compile(r"/api/agent-interface/experience")),
     ("POST", re.compile(r"/api/agent-interface/automation")),
     ("POST", re.compile(r"/api/agent-interface/credentials")),
-    ("GET", re.compile(r"/api/agent-interface/voice/status")),
+    ("POST", re.compile(r"/api/agent-interface/voice/status")),
     ("POST", re.compile(r"/api/agent-interface/voice/client-secret")),
     ("POST", re.compile(r"/api/audio/(?:transcribe|speak)")),
     ("GET", re.compile(r"/api/profiles")),
