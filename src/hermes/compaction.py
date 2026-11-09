@@ -11,6 +11,7 @@ client queues in Hermes directly is watched for: a running background compaction
 through its own commit fence, and the input runs as an ordinary turn on the uncompacted
 transcript. See docs/HermesCapabilityMatrix.md, "Idle compaction".
 """
+import contextlib
 import logging
 import os
 import threading
@@ -40,6 +41,8 @@ WATCH_SECONDS = 0.25
 WORKING = "_compression_working_attempt_generation"
 # How long a cancel waits for the session lock before preempt rechecks its deadline.
 LOCK_SECONDS = 0.05
+# The thread whose session.compress Hermes is running, while it holds the session for it.
+OWNER = "_agent_interface_compaction_thread"
 
 
 def delay_from(environ=os.environ):
@@ -97,10 +100,12 @@ class Attempt:
 
     def __init__(self, working=None):
         self.done = threading.Event()
+        self.thread = threading.get_ident()
         # Its commit fence has answered a cancel: cancelled, or already committing.
         self.cancelled = False
-        # The compressor's working-attempt marker before this compaction; it changes when the summary starts.
-        self.working = working
+        # The fence last seen, and the compressor's working-attempt marker before that fence's
+        # summary. A stall fallback publishes a fresh fence for a summary that has not started yet.
+        self.fence, self.working = None, working
 
 
 class IdleCompaction:
@@ -242,24 +247,34 @@ class IdleCompaction:
         """Cancel this compaction through its own commit fence, never blocking for long.
 
         Hermes ends a manual compaction and admits the next turn under the session's
-        history_lock. Holding it while the compaction is active means the fence on the agent is
-        this compaction's own, so a cancel can never reach a later turn. The fence answers None
+        history_lock, and ``owned_turn`` names the thread a compaction runs for while Hermes holds
+        the session. Holding the lock and matching that thread means the fence on the agent is
+        this compaction's own, never a later turn's or another client's. The fence answers None
         while a commit holds it; that commit finishes on its own. The lock is taken with a short
         timeout so preempt keeps its deadline while Hermes holds it.
         """
         session = self.server._sessions.get(sid)
-        if session is None or attempt.cancelled:
+        if session is None or attempt.cancelled or attempt.done.is_set():
             return
         lock = session["history_lock"]
         if not lock.acquire(timeout=LOCK_SECONDS):
             return
         try:
-            if not session.get("_manual_compress_active"):
+            if session.get(OWNER) != attempt.thread:
                 return
             agent = session.get("agent")
-            if getattr(getattr(agent, "context_compressor", None), WORKING, None) == attempt.working:
-                return
             fence = getattr(agent, "__dict__", {}).get("_active_compression_commit_fence")
+            working = getattr(getattr(agent, "context_compressor", None), WORKING, None)
+            if fence is None:
+                return
+            if fence is not attempt.fence:
+                if attempt.fence is not None:
+                    # A stall fallback's fresh fence: its own summary has not been seen to start.
+                    attempt.working = working
+                attempt.fence = fence
+            progress = getattr(fence, "progress_observed", None)
+            if working == attempt.working and not (callable(progress) and progress()):
+                return
             cancel = getattr(fence, "try_cancel_before_commit", None)
             if callable(cancel) and cancel() is not None:
                 attempt.cancelled = True
@@ -275,7 +290,22 @@ class IdleCompaction:
                 if attempt.cancelled:
                     return
 
+    def owned_turn(self, original):
+        """Hermes's manual-compaction hold, naming the thread it holds the session for."""
+        @contextlib.contextmanager
+        def turn(sid, session):
+            with original(sid, session):
+                session[OWNER] = threading.get_ident()
+                try:
+                    yield
+                finally:
+                    # Cleared before Hermes releases the session and admits the next turn.
+                    session.pop(OWNER, None)
+        return turn
+
     def start(self, interval=None):
+        # Hermes's session.compress resolves this seam on the server module, as other wrapped seams do.
+        self.server._manual_compress_turn = self.owned_turn(self.server._manual_compress_turn)
         # A short delay, as in a qualification probe, is checked proportionally more often.
         interval = interval or min(POLL_SECONDS, max(1, self.delay // 4))
         def loop():

@@ -43,8 +43,11 @@ def estimate(messages, *, system_prompt="", tools=None):
 class Fence:
     """A compaction's CompressionCommitFence. ``answers`` are its successive try_cancel results, the last repeating:
     True cancelled, False a commit already started, None a commit holding the fence."""
-    def __init__(self, native, answers):
-        self.native, self.answers, self.cancelled = native, list(answers), False
+    def __init__(self, native, answers, progress=False):
+        self.native, self.answers, self.cancelled, self.progress = native, list(answers), False, progress
+
+    def progress_observed(self):
+        return self.progress
 
     def try_cancel_before_commit(self):
         answer = self.answers.pop(0) if len(self.answers) > 1 else self.answers[0]
@@ -78,6 +81,8 @@ class Native:
         self.hold_before_active.wait(5)
         with session["history_lock"]:
             session["running"] = session["_manual_compress_active"] = True
+            # The add-on's owned_turn seam names the thread Hermes holds the session for.
+            session[compaction.OWNER] = threading.get_ident()
         fence = session["agent"]._active_compression_commit_fence = Fence(self, self.answers)
         self.entered.set()
         try:
@@ -97,6 +102,7 @@ class Native:
         finally:
             del session["agent"]._active_compression_commit_fence
             with session["history_lock"]:
+                session.pop(compaction.OWNER, None)
                 session.pop("_manual_compress_active", None)
                 session["running"] = False
             self.on_release()
@@ -393,27 +399,91 @@ class PreemptTests(unittest.TestCase):
         thread.join(5)
         self.assertEqual((results, fixture.events), ([{"status": "aborted"}], [("cancel", True, True)]))
 
-    def test_a_fence_published_after_the_compaction_let_go_is_never_cancelled(self):
-        fixture = Fixture(self)
-        # A turn that started after the compaction: its own compaction's fence is on the agent.
+    def held(self, fixture, owner=None):
+        """A compaction Hermes holds for ``owner``'s thread, its summary already started."""
+        attempt = compaction.Attempt(working=2)
+        fixture.session["_manual_compress_active"] = True
+        fixture.session[compaction.OWNER] = attempt.thread if owner is None else owner
         fixture.agent._active_compression_commit_fence = Fence(fixture.native, [True])
-        attempt = compaction.Attempt()
+        return attempt
+
+    def test_only_the_compaction_this_attempt_asked_for_is_cancelled(self):
+        cases = [
+            # Hermes released the session; the fence is a later turn's own compaction's.
+            ("released", lambda f, a: f.session.pop(compaction.OWNER)),
+            # Another client's manual compaction won the session.
+            ("another client", lambda f, a: f.session.update({compaction.OWNER: a.thread + 1})),
+            # This attempt already ended; the compaction now held is a later one.
+            ("finished attempt", lambda f, a: a.done.set()),
+        ]
+        for name, change in cases:
+            with self.subTest(name):
+                fixture = Fixture(self)
+                attempt = self.held(fixture)
+                change(fixture, attempt)
+                fixture.idle.stop("sid", attempt)
+                self.assertEqual((fixture.events, attempt.cancelled), ([], False))
+        fixture = Fixture(self)
+        attempt = self.held(fixture)
         fixture.idle.stop("sid", attempt)
-        self.assertEqual((fixture.events, attempt.cancelled), ([], False))
+        self.assertEqual((fixture.events, attempt.cancelled), ([("cancel", True, True)], True))
 
     def test_a_compaction_that_ends_while_the_cancel_waits_for_the_session_lock_is_not_cancelled(self):
         fixture = Fixture(self)
-        fixture.session["_manual_compress_active"] = True
-        fixture.agent._active_compression_commit_fence = Fence(fixture.native, [True])
-        attempt = compaction.Attempt()
+        attempt = self.held(fixture)
         with patch.object(compaction, "LOCK_SECONDS", 5), fixture.session["history_lock"]:
             stopper = threading.Thread(target=fixture.idle.stop, args=("sid", attempt), daemon=True)
             stopper.start()
             time.sleep(0.05)
             # Hermes releases the session, and could admit a turn, under the same lock.
+            fixture.session.pop(compaction.OWNER)
             fixture.session.pop("_manual_compress_active")
         stopper.join(5)
         self.assertEqual((fixture.events, attempt.cancelled), ([], False))
+
+    def test_a_stall_fallback_is_cancelled_only_once_its_own_summary_starts(self):
+        fixture = Fixture(self)
+        compressor = fixture.agent.context_compressor
+        attempt = compaction.Attempt(working=compressor._compression_working_attempt_generation)
+        fixture.session["_manual_compress_active"], fixture.session[compaction.OWNER] = True, attempt.thread
+        primary = fixture.agent._active_compression_commit_fence = Fence(fixture.native, [True])
+        fixture.idle.stop("sid", attempt)
+        self.assertEqual(fixture.events, [])
+        # The primary summary started and stalled; Hermes published a fresh fence for its fallback.
+        compressor._compression_working_attempt_generation += 1
+        fallback = fixture.agent._active_compression_commit_fence = Fence(fixture.native, [True])
+        fixture.idle.stop("sid", attempt)
+        self.assertEqual(fixture.events, [])
+        compressor._compression_working_attempt_generation += 1
+        fixture.idle.stop("sid", attempt)
+        self.assertEqual((primary.cancelled, fallback.cancelled, attempt.cancelled), (False, True, True))
+
+    def test_a_fallback_whose_marker_was_missed_counts_as_started_once_it_reports_progress(self):
+        fixture = Fixture(self)
+        attempt = self.held(fixture)
+        attempt.fence = Fence(fixture.native, [True])
+        fallback = fixture.agent._active_compression_commit_fence = Fence(fixture.native, [True])
+        fixture.idle.stop("sid", attempt)
+        self.assertFalse(fallback.cancelled)
+        fallback.progress = True
+        fixture.idle.stop("sid", attempt)
+        self.assertTrue(fallback.cancelled)
+
+    def test_the_seam_names_the_thread_only_while_hermes_holds_the_session(self):
+        fixture = Fixture(self)
+        seen = []
+        @contextlib.contextmanager
+        def original(sid, session):
+            seen.append(("claim", session.get(compaction.OWNER)))
+            yield
+            # Hermes releases the session and drains its queue here.
+            seen.append(("release", session.get(compaction.OWNER)))
+        fixture.server._manual_compress_turn = original
+        with patch.object(compaction.threading, "Thread"):
+            fixture.idle.start(interval=60)
+        with fixture.server._manual_compress_turn("sid", fixture.session):
+            seen.append(("held", fixture.session.get(compaction.OWNER)))
+        self.assertEqual(seen, [("claim", None), ("held", threading.get_ident()), ("release", None)])
 
     def test_a_compaction_that_cannot_be_cancelled_releases_the_input_after_the_bound(self):
         fixture = Fixture(self)

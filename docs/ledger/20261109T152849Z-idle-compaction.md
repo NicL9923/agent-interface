@@ -24,10 +24,10 @@ browser-harness's Pillow 12.3). Receipt: `docs/evidence/hermes-compaction-probe-
 
 - Passed: app message, steer-flagged message, another client's native `prompt.submit` and a routine
   delivery, each sent while the summary call was held open: admitted in under 0.1 s, answered within
-  0.27 s, routine delivered in 4.5 s, on the uncompacted transcript. The compaction never
+  0.31 s, routine delivered in 5.2 s, on the uncompacted transcript. The compaction never
   committed. A released compaction committed in place; the app's IDs, roles and text were unchanged,
   the anchored read found its request, the next model request carried the summary, and no further
-  compaction ran in 17 s. No compaction status frame reached the client (314 frames).
+  compaction ran in 17 s. No compaction status frame reached the client (325 frames).
 - Found while building it, now fixed: in-place compaction gave the kept head and tail new row IDs, so
   those rows lost their request IDs in the app; the first budget excluded Hermes's protected head and left a
   compaction above it (37,025 against 32,028); a cancelled compaction reports `compressed`.
@@ -57,14 +57,26 @@ The three findings above were confirmed fixed. New:
    Hermes arms a 300 s no-progress backoff on its automatic compaction
    (`agent/conversation_compression.py`, `_record_structural_no_op`). Fixed: the add-on cancels only
    after the compressor's `_compression_working_attempt_generation` changes.
-3. Medium, not fixed: another client's manual compaction could win the session in the instant after
-   the add-on's idle check, and a preempt then would cancel it. It needs a manual compress of the
-   hidden Bot Chat in that window, and the cancel leaves its transcript unchanged. Documented in
-   the capability matrix instead of wrapping another Hermes seam.
+3. Medium: another client's manual compaction could win the session in the instant after the
+   add-on's idle check, and a preempt then would cancel it. First documented as a residual; fixed
+   in the next round.
 
-Real Hermes at the final code: the probe passed with admissions at 0.07 to 0.09 s, answers within
-0.27 s, routine delivery at 4.5 s. All four cancels logged `commit_fence_cancelled`; none logged
-"no progress".
+## Third review: GPT-6.1 Sol, high effort, `733d1d3..14f48db`
+
+Finding 1 above confirmed fixed, including reentrant acquisition. New:
+
+1. Medium, valid: a stall fallback publishes a fresh fence before its own summary starts, and the
+   primary's changed marker let a cancel reach it early, arming the 300 s backoff. Fixed: each new
+   fence takes its own baseline, and the fence's `progress_observed()` also counts as started.
+2. Medium, valid: a preempt holding a finished attempt could cancel a later compaction, the wider
+   form of the earlier residual. Fixed for both: the add-on wraps Hermes's `_manual_compress_turn`
+   to record the thread it holds the session for; a cancel needs that thread to be its own attempt's,
+   and an attempt that is done never cancels.
+
+Real Hermes at the final code: the probe passed with admissions at 0.08 to 0.09 s, answers within
+0.31 s, routine delivery at 5.2 s. All four cancels logged `commit_fence_cancelled`; none logged
+"no progress". A cancel now needs the wrapped seam's owner, so these passes also show the wrapper
+takes effect in Hermes's `session.compress`.
 
 Real-probe mutants, each red, then restored: cancel removed (message waited: "Hermes did not
 settle"), watcher removed (another client's message waited), routine delivery not preempting,
@@ -76,12 +88,14 @@ version, and none of their lines changed since.
 
 ## Unit and integration
 
-- `tests/hermes_compaction_test.py`: 30 tests. `tests/hermes_automation_test.py`: 40 tests, 1 skipped.
+- `tests/hermes_compaction_test.py`: 33 tests. `tests/hermes_automation_test.py`: 40 tests, 1 skipped.
 - `python3 scripts/run-python-tests.py`: 41 files passed. `ruff check .`: passed.
 - `npx vitest run tests/hermes-qualification.test.ts tests/app-probe-scope.test.ts`: 7 tests passed.
-- 34 hand mutants, each red, then restored: cancel removed, a held fence counted as cancelled,
-  cancel before Hermes marks the compaction active, cancel before the summary starts, cancel outside
-  the session lock, the session lock taken without a bound, watcher ignoring
+- 39 hand mutants, each red, then restored: cancel removed, a held fence counted as cancelled,
+  ownership ignored, a stale attempt still cancelling, the seam never installed, its owner kept
+  after release, cancel before the summary starts, a fallback fence keeping the primary baseline,
+  fence progress ignored, cancel outside the session lock, the session lock taken without a bound,
+  watcher ignoring
   native input, old Hermes or a fence without the non-blocking cancel supported, maintenance, submit,
   delivery and automation not preempting, no preempt bound, result size recorded for a cancelled
   compaction, doubling guard, budget and idle boundaries, tail ceiling, busy, open request,
