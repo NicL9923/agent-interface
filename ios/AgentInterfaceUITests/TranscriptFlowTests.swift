@@ -255,8 +255,15 @@ import XCTest
     let work = app.buttons["turnWork"]
     XCTAssertTrue(work.waitForExistence(timeout: 15), app.debugDescription)
     let progress = { (prefix: String) in app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", prefix)).firstMatch }
-    XCTAssertTrue(progress("I'll look up Saturday's forecast").exists, "A progress line shows without opening the work")
-    XCTAssertTrue(progress("Both links are created and reachable.").exists)
+    let first = progress("I'll look up Saturday's forecast"), second = progress("Both links are created and reachable.")
+    let answer = progress("Saturday looks good")
+    XCTAssertTrue(first.exists, "A progress line shows without opening the work")
+    XCTAssertTrue(second.exists)
+    XCTAssertTrue(answer.exists, "The answer shows below its work")
+    // In order: both lines, then the folded work, then the answer. A line moved below the answer fails here.
+    XCTAssertLessThan(first.frame.minY, second.frame.minY)
+    XCTAssertLessThan(second.frame.maxY, work.frame.minY)
+    XCTAssertLessThan(work.frame.maxY, answer.frame.minY)
     XCTAssertTrue(work.label.contains("3 tool calls"), work.label)
     XCTAssertFalse(app.buttons["Tool calls"].exists, "Tool calls stay inside the fold")
     try capture(app, "progress-folded")
