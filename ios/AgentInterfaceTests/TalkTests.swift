@@ -249,6 +249,7 @@ final class TalkPlaybackTests: XCTestCase {
   override func tearDown() async throws { MicrophoneOwnership.shared.owner = nil }
 
   private func talk(_ server: FakeServer, socket: FakeSocket, audio: FakeAudio, allowed: Bool = true,
+    // The production timer's own sleep, which a test replaces when it drives the clock.
     clock: @escaping () -> Date = Date.init, sleep: @escaping (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) -> TalkController {
     let talk = TalkController()
     talk.api = server.api()
@@ -442,6 +443,7 @@ final class TalkPlaybackTests: XCTestCase {
           clock += 4 * 60
           socket.emit(["type": "input_audio_buffer.speech_started"])
           ticks.continuation.yield()
+          // An absence check: a tick within the limits must not end it.
           try await Task.sleep(for: .milliseconds(20))
           XCTAssertTrue(talk.live)
         }
