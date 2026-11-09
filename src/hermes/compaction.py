@@ -254,13 +254,14 @@ class IdleCompaction:
         timeout so preempt keeps its deadline while Hermes holds it.
         """
         session = self.server._sessions.get(sid)
-        if session is None or attempt.cancelled or attempt.done.is_set():
+        if session is None or attempt.cancelled:
             return
         lock = session["history_lock"]
         if not lock.acquire(timeout=LOCK_SECONDS):
             return
         try:
-            if session.get(OWNER) != attempt.thread:
+            # Rechecked under the lock: the poll thread that ran a finished attempt may run the next one.
+            if attempt.done.is_set() or session.get(OWNER) != attempt.thread:
                 return
             agent = session.get("agent")
             fence = getattr(agent, "__dict__", {}).get("_active_compression_commit_fence")
@@ -272,8 +273,8 @@ class IdleCompaction:
                     # A stall fallback's fresh fence: its own summary has not been seen to start.
                     attempt.working = working
                 attempt.fence = fence
-            progress = getattr(fence, "progress_observed", None)
-            if working == attempt.working and not (callable(progress) and progress()):
+            # CompressionCommitFence.progress_observed is a property: provider progress for this fence.
+            if working == attempt.working and getattr(fence, "progress_observed", False) is not True:
                 return
             cancel = getattr(fence, "try_cancel_before_commit", None)
             if callable(cancel) and cancel() is not None:

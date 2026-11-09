@@ -24,10 +24,10 @@ browser-harness's Pillow 12.3). Receipt: `docs/evidence/hermes-compaction-probe-
 
 - Passed: app message, steer-flagged message, another client's native `prompt.submit` and a routine
   delivery, each sent while the summary call was held open: admitted in under 0.1 s, answered within
-  0.31 s, routine delivered in 5.2 s, on the uncompacted transcript. The compaction never
+  0.30 s, routine delivered in 4.2 s, on the uncompacted transcript. The compaction never
   committed. A released compaction committed in place; the app's IDs, roles and text were unchanged,
   the anchored read found its request, the next model request carried the summary, and no further
-  compaction ran in 17 s. No compaction status frame reached the client (325 frames).
+  compaction ran in 17 s. No compaction status frame reached the client (321 frames).
 - Found while building it, now fixed: in-place compaction gave the kept head and tail new row IDs, so
   those rows lost their request IDs in the app; the first budget excluded Hermes's protected head and left a
   compaction above it (37,025 against 32,028); a cancelled compaction reports `compressed`.
@@ -73,10 +73,26 @@ Finding 1 above confirmed fixed, including reentrant acquisition. New:
    to record the thread it holds the session for; a cancel needs that thread to be its own attempt's,
    and an attempt that is done never cancels.
 
-Real Hermes at the final code: the probe passed with admissions at 0.08 to 0.09 s, answers within
-0.31 s, routine delivery at 5.2 s. All four cancels logged `commit_fence_cancelled`; none logged
-"no progress". A cancel now needs the wrapped seam's owner, so these passes also show the wrapper
-takes effect in Hermes's `session.compress`.
+## Fourth review: GPT-6.1 Sol, high effort, `14f48db..bad2d95`
+
+Both earlier findings were partly open:
+
+1. Medium, accepted as a residual: if no input arrives during a stalled primary summary, the first
+   fence the add-on sees is the fallback's, which Hermes gives nothing to tell from a primary already
+   summarizing. A cancel in the fallback's prompt-building moments arms the 300 s backoff on top of
+   the stall cooldown Hermes already armed. Documented in the capability matrix.
+2. Medium, valid, a real bug: `CompressionCommitFence.progress_observed` is a property, and the add-on
+   called it as a method, so progress never counted. The test fake had the same wrong API. Fixed both;
+   a mutant reading it as a method now goes red.
+3. Medium, valid: `stop()` checked for a finished attempt before taking the lock, and the same poll
+   thread could start the next attempt meanwhile. Fixed: rechecked under the lock; the early check
+   was then redundant and removed.
+
+Real Hermes at the final code: the probe passed with admissions at 0.08 s, answers within 0.30 s and
+routine delivery at 4.2 s; all four cancels logged `commit_fence_cancelled`, none "no progress".
+One earlier run at the same code admitted in 1.1 s while the host's load average was 7.4; the
+rerun under load 3.9 matched the others. A cancel needs the wrapped seam's owner, so these passes
+also show the wrapper takes effect in Hermes's `session.compress`.
 
 Real-probe mutants, each red, then restored: cancel removed (message waited: "Hermes did not
 settle"), watcher removed (another client's message waited), routine delivery not preempting,
@@ -88,11 +104,12 @@ version, and none of their lines changed since.
 
 ## Unit and integration
 
-- `tests/hermes_compaction_test.py`: 33 tests. `tests/hermes_automation_test.py`: 40 tests, 1 skipped.
+- `tests/hermes_compaction_test.py`: 34 tests. `tests/hermes_automation_test.py`: 40 tests, 1 skipped.
 - `python3 scripts/run-python-tests.py`: 41 files passed. `ruff check .`: passed.
 - `npx vitest run tests/hermes-qualification.test.ts tests/app-probe-scope.test.ts`: 7 tests passed.
-- 39 hand mutants, each red, then restored: cancel removed, a held fence counted as cancelled,
-  ownership ignored, a stale attempt still cancelling, the seam never installed, its owner kept
+- 40 hand mutants, each red, then restored: cancel removed, a held fence counted as cancelled,
+  ownership ignored, a finished attempt not rechecked under the lock, fence progress read as a
+  method, the seam never installed, its owner kept
   after release, cancel before the summary starts, a fallback fence keeping the primary baseline,
   fence progress ignored, cancel outside the session lock, the session lock taken without a bound,
   watcher ignoring

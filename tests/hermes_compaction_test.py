@@ -43,9 +43,10 @@ def estimate(messages, *, system_prompt="", tools=None):
 class Fence:
     """A compaction's CompressionCommitFence. ``answers`` are its successive try_cancel results, the last repeating:
     True cancelled, False a commit already started, None a commit holding the fence."""
-    def __init__(self, native, answers, progress=False):
-        self.native, self.answers, self.cancelled, self.progress = native, list(answers), False, progress
+    def __init__(self, native, answers):
+        self.native, self.answers, self.cancelled, self.progress = native, list(answers), False, False
 
+    @property
     def progress_observed(self):
         return self.progress
 
@@ -438,6 +439,19 @@ class PreemptTests(unittest.TestCase):
             # Hermes releases the session, and could admit a turn, under the same lock.
             fixture.session.pop(compaction.OWNER)
             fixture.session.pop("_manual_compress_active")
+        stopper.join(5)
+        self.assertEqual((fixture.events, attempt.cancelled), ([], False))
+
+    def test_an_attempt_that_finishes_while_the_cancel_waits_for_the_lock_cancels_nothing_after_it(self):
+        fixture = Fixture(self)
+        attempt = self.held(fixture)
+        with patch.object(compaction, "LOCK_SECONDS", 5), fixture.session["history_lock"]:
+            stopper = threading.Thread(target=fixture.idle.stop, args=("sid", attempt), daemon=True)
+            stopper.start()
+            time.sleep(0.05)
+            # The attempt ended, and the same poll thread now holds the session for the next one.
+            attempt.done.set()
+            fixture.agent._active_compression_commit_fence = Fence(fixture.native, [True])
         stopper.join(5)
         self.assertEqual((fixture.events, attempt.cancelled), ([], False))
 
