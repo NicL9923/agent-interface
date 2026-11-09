@@ -45,10 +45,15 @@ findings, each verified before it was fixed:
   `!message.isProgressLine`, and a vector in `reply-artifacts.json`, which both clients read. Not
   compiled or run.
 
+A second review of the fix commit and PR 2 (same reviewer) found one more defect in this PR: the web's
+saved-history view offered Save reply on a progress line, which saved a made-up ID that Hermes's
+`history_pointer` cannot resolve, so the bookmark never reopened. The save route now refuses one with 400
+and a reason, and the view offers no button; iOS already offered none. Both are tested and mutated.
+
 ## Mutants
 
 Each line below was broken by hand, its focused suites run, and the source restored (the runner is
-not committed). 30 mutants over the final code. 28 failed their tests at once. Three of the first 22
+not committed). 32 mutants over the final code. 30 failed their tests at once. Three of the first 22
 survived, and each got a sharper test and then failed:
 
 - Skipping progress lines when choosing where the work folds survived, because the tools had come
