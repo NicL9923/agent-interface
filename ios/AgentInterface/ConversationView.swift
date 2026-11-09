@@ -34,6 +34,7 @@ struct ConversationView: View {
   var edit: () -> Void
   @Environment(AppStore.self) private var store
   @Environment(\.colorScheme) private var scheme
+  @Environment(\.horizontalSizeClass) private var sizeClass
   private let reachability = NetworkReachability.shared
   @State private var earlierFailed = false
   @State private var visibleMessage: String?
@@ -124,11 +125,18 @@ struct ConversationView: View {
       modelBar
       banners
       if findOpen { findBar }
-      transcript
-      composer
+      // The transcript runs under the message box, which floats over it; at the end the last
+      // message still rests just above the box.
+      transcript.safeAreaInset(edge: .bottom, spacing: 0) { composer }
     }.modifier(ReadingChat(botId: bot.id)).background(Palette.surface(scheme)).navigationTitle(bot.name)
     .navigationBarTitleDisplayMode(.inline)
     .bareToolbarItem(.principal) { header }
+    .toolbar {
+      // On a phone the model sits at the end of the header row as its provider's mark alone.
+      if modelShown && sizeClass == .compact {
+        ToolbarItem(placement: .topBarTrailing) { modelButton(iconOnly: true) }
+      }
+    }
     .onChange(of: bot.id) { _, _ in earlierFailed = false; speech.reset(); configureSpeech() }
     .environment(speech)
     .onAppear { configureSpeech() }
@@ -167,12 +175,14 @@ struct ConversationView: View {
     speech.botId = bot.id
     speech.botName = bot.name
   }
-  /// Advanced only: the model chip under the assistant's name. Simple never shows the model.
+  /// Advanced only: the model chip, under the assistant's name on a wide screen and at the end of
+  /// the header on a phone. Simple never shows the model.
+  private var modelShown: Bool { store.bootstrap?.preferences.presentation == "advanced" }
   @ViewBuilder private var modelBar: some View {
-    if store.bootstrap?.preferences.presentation == "advanced" {
-      ModelChipButton(bot: bot, disabled: !store.supports(.botConfiguration) || !store.connected || store.sending) { modelOpen = true }
-        .frame(maxWidth: .infinity)
-    }
+    if modelShown && sizeClass != .compact { modelButton(iconOnly: false).frame(maxWidth: .infinity) }
+  }
+  private func modelButton(iconOnly: Bool) -> some View {
+    ModelChipButton(bot: bot, disabled: !store.supports(.botConfiguration) || !store.connected || store.sending, iconOnly: iconOnly) { modelOpen = true }
   }
   private var cardShown: Bool {
     !(store.offlineSavedAt != nil && store.householdConnected && !reachability.offline)
@@ -411,7 +421,8 @@ struct ConversationView: View {
       }
     }
     .onGeometryChange(for: CGFloat.self) {
-      $0.size.height
+      // What the reader can see: the message box covers the bottom inset.
+      $0.size.height - $0.safeAreaInsets.bottom
     } action: {
       viewportHeight = $0
       // The keyboard or a rotation resizes the view; a follower stays at the end, and a found

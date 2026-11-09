@@ -212,8 +212,16 @@ import XCTest
     let model = app.buttons["chatModel"]
     XCTAssertTrue(model.waitForExistence(timeout: 10))
     XCTAssertTrue(model.isEnabled, "Lean roster bots have no instructions; capability enables the model picker")
-    XCTAssertLessThan(model.frame.maxY, app.textViews["messageComposer"].frame.minY, "The chip sits under the assistant's name, not in the composer")
+    XCTAssertLessThan(model.frame.maxY, app.textViews["messageComposer"].frame.minY, "The chip sits in the header, not in the composer")
     XCTAssertGreaterThanOrEqual(model.frame.height, 44, "The chip's touch target reaches 44 points")
+    if UIDevice.current.userInterfaceIdiom == .phone {
+      // On a phone it is the provider's mark alone, at the end of the assistant's header row.
+      let header = app.buttons["botProfile"]
+      XCTAssertTrue(app.navigationBars.buttons["chatModel"].exists, "The mark sits in the header row")
+      XCTAssertGreaterThan(model.frame.minX, header.frame.maxX, "It sits after the assistant, at the row's end")
+      XCTAssertLessThan(abs(model.frame.midY - header.frame.midY), 24, "It shares the assistant's row")
+      XCTAssertLessThanOrEqual(model.frame.width, 60, "Only the mark shows, not the model name; VoiceOver reads the model")
+    }
     screenshot(app, "Advanced chat with the model chip")
     model.tap()
     let fast = app.buttons["Fixture fast model"]
