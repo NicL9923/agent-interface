@@ -113,7 +113,13 @@ repair_worker["Worker"].approved_repair(repair_owner, baseline[0], baseline[1],
 browser_facts = home / "tools/facts.json"
 browser = repair_worker["native_chromium"](home)
 qualification = runpy.run_path(str(release / "src/hermes/qualification.py"))
-probe_browser = qualification["computer_probe_browser"](PAYLOAD.get("computerProbeBrowser"))
+requested_probe_browser = PAYLOAD.get("computerProbeBrowser")
+if requested_probe_browser is None and PAYLOAD.get("inheritComputerProbeBrowser"):
+    # The live receipt's selection, so a host whose PM Chromium cannot sandbox keeps the browser
+    # its last qualification passed with (Nov 9, 2026: a release qualified without it failed).
+    inherited = qualification["receipt_computer_probe_browser"](json.loads(Path(PAYLOAD["liveQualificationReceipt"]).read_text()))
+    requested_probe_browser = inherited and inherited["requested"]
+probe_browser = qualification["computer_probe_browser"](requested_probe_browser)
 host_files = {p: sha(p) for p in {str(worker_path), str(runner), str(browser_facts), str(browser), *worker["qualificationFiles"]}}
 if probe_browser:
     host_files[probe_browser["executable"]] = probe_browser["sha256"]
@@ -184,7 +190,7 @@ try:
     assert all(sha(p) == expected for p, expected in host_files.items())
     assert qualification["integration_digest"](release) == digest
     assert qualification["integration_digest"](isolated_app) == digest
-    assert qualification["computer_probe_browser"](PAYLOAD.get("computerProbeBrowser")) == probe_browser, "Computer probe browser changed during qualification"
+    assert qualification["computer_probe_browser"](requested_probe_browser) == probe_browser, "Computer probe browser changed during qualification"
     receipt = dict(schemaVersion=1, revision=baseline[0], trackedPatchSha256=baseline[1], integrationDigest=digest,
         qualifiedAt=datetime.datetime.now(datetime.timezone.utc).isoformat(), checks=dict(realIntegration=True, hostRegressions=True))
     if probe_browser: receipt["computerProbeBrowser"] = probe_browser
@@ -207,7 +213,11 @@ finish(dict(qualificationComplete=True, receipt=str(receipt_path), integrationDi
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("name", help="staged release name from release-app.py prepare")
-    parser.add_argument("--computer-probe-browser", help="absolute host path to a sandboxed browser ELF for the local-network probe only")
+    browser = parser.add_mutually_exclusive_group()
+    browser.add_argument("--computer-probe-browser", help="absolute host path to a sandboxed browser ELF for the local-network probe only; "
+                         "by default the live qualification receipt's selection is reused")
+    browser.add_argument("--pinned-probe-browser", action="store_true",
+                         help="use the release's pinned PM Chromium even when the live receipt selected another browser")
     args = parser.parse_args(argv)
     if Path(args.name).name != args.name:
         parser.error("Use a release name, not a path")
@@ -221,7 +231,9 @@ def main(argv=None):
         parser.error("Qualify an unactivated staged release only")
     facts = release_app.host_facts(manifest["host"], manifest["appBase"])
     # The runtime the staged release was built with and will deploy with, recorded at preparation.
-    payload = {**manifest, "node": manifest.get("node") or facts["prior"]["node"], "computerProbeBrowser": args.computer_probe_browser}
+    payload = {**manifest, "node": manifest.get("node") or facts["prior"]["node"], "computerProbeBrowser": args.computer_probe_browser,
+               "inheritComputerProbeBrowser": not (args.computer_probe_browser or args.pinned_probe_browser),
+               "liveQualificationReceipt": facts["prior"]["qualificationReceipt"]}
     result = release_app.remote(manifest["host"], REMOTE, payload, timeout=7200)
     release_app.MANIFESTS.joinpath(args.name + "-qualification.json").write_text(json.dumps(result, indent=2) + "\n")
     print(json.dumps(result, indent=2))
