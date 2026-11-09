@@ -249,7 +249,7 @@ final class TalkPlaybackTests: XCTestCase {
   override func tearDown() async throws { MicrophoneOwnership.shared.owner = nil }
 
   private func talk(_ server: FakeServer, socket: FakeSocket, audio: FakeAudio, allowed: Bool = true,
-    // The production timer's own sleep, which a test replaces when it drives the clock.
+    // A production timer sleeps here; a test that drives the clock replaces it.
     clock: @escaping () -> Date = Date.init, sleep: @escaping (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) -> TalkController {
     let talk = TalkController()
     talk.api = server.api()
