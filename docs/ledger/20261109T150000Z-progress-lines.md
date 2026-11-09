@@ -7,8 +7,8 @@ build, simulator, physical device, live Hermes turn or deployment ran.
 
 ## Web and server
 
-- `npm run lint`, `npm run typecheck` and `npm run build` passed. `npx vitest run`: 168 files,
-  2,439 tests passed. `npm run test:py`: 40 files passed (the add-on test reads the new
+- `npm run lint`, `npm run typecheck` and `npm run build` passed. `npx vitest run`: 169 files,
+  2,449 tests passed. `npm run test:py`: 40 files passed (the add-on test reads the new
   `src/shared/progress-line-instructions.json`). `ruff` is not installed here, so `lint:py` did not
   run; no Python beyond one line in `extension.py` changed.
 - `tests/native-contract.test.ts` regenerated `ios/AgentInterfaceTests/Contract/conversation.json`
@@ -27,11 +27,29 @@ script was copied to `/tmp` on the host and deleted afterwards; nothing else on 
 `load_config` was not called, so the gate itself was not read from the host. Not exercised: a live turn,
 the `message.interim` frame on a real socket, and a model obeying the new guidance.
 
+## Independent review
+
+GPT-6.1 Sol (`gpt-6.1-sol`, high effort, read-only, a separate worktree) reviewed `2e9b344`. Three
+findings, each verified before it was fixed:
+
+- A saved progress line cut at 1,200 characters left the rest in the live tail, which
+  `watchReplies` then announced as a reply. Confirmed by the reviewer through the real mapping
+  functions. Fixed by never cutting or dropping a line (the length, count and repeat limits are
+  gone), with a test that streams a 2,000 character line and a repeated line and expects no tail.
+- Saved history pages decode through another schema that stripped `display_commentary`,
+  `display_content` and `display_reasoning`, so archived chats lost their lines and kept flattened
+  ones, including with commentary off. Confirmed: the add-on projects those rows with the same native
+  function (`experience.py` `discovery`). Fixed in `hermes-operation-contracts.ts`, sharing
+  `progressLines` and `displayCopies` with the live read, with `tests/history-progress.test.ts`.
+- iOS `Artifacts.replyFiles` took a progress line as the reply and put file chips under it. Fixed with
+  `!message.isProgressLine`, and a vector in `reply-artifacts.json`, which both clients read. Not
+  compiled or run.
+
 ## Mutants
 
 Each line below was broken by hand, its focused suites run, and the source restored (the runner is
-not committed). 22 mutants. 19 failed their tests at once. Three survived, each got a sharper test,
-and then failed:
+not committed). 30 mutants over the final code. 28 failed their tests at once. Three of the first 22
+survived, and each got a sharper test and then failed:
 
 - Skipping progress lines when choosing where the work folds survived, because the tools had come
   first in the first fixtures. A turn with tools, a line, then the answer now pins it.
@@ -40,12 +58,16 @@ and then failed:
 - The memo comparison ignoring `interim` survived. A rerender test now marks a saved line after
   the fact.
 
+After the review, the length, count and repeat mutants were replaced by mutants that put a cut and a
+repeat drop back (both killed), and nine more covered the history page: lines shown, the display copy
+of the reply and of the reasoning, the row's origin on its lines, and display copies for assistant rows
+only. That last one survived until a test fed a user row and a tool row display copies.
+
 Killed on the first pass: the `display_commentary` array guard, the assistant-only guard, the string
-check, the 1,200 character cap, the repeat guard, the guard against repeating the answer, the
-12 line cap, `display_content`, `display_reasoning`, the `interim` mark, the window cut by rows,
-`isConversationReply` excluding progress lines (Talk, read aloud, Today), no meta row or inline pages on
-a progress line, the `message-interim` class, the unread counter, Retry ignoring a progress line, the
-duration ending at the answer, and the add-on guidance.
+check, the guard against repeating the answer, `display_content`, `display_reasoning`, the `interim`
+mark, the window cut by rows, `isConversationReply` excluding progress lines (Talk, read aloud, Today),
+no meta row or inline pages on a progress line, the `message-interim` class, the unread counter, Retry
+ignoring a progress line, the duration ending at the answer, and the add-on guidance.
 
 ## iOS
 

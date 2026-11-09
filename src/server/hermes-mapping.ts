@@ -214,19 +214,19 @@ function explicitLogin(value: unknown): {explicit?: ExplicitLoginRequest} {
 
 // Hermes's display projection of a model's progress lines, already redacted, for one assistant row.
 // A bad shape shows nothing: a disabled gate sends [], and an older Hermes sends no field at all.
-const MAX_PROGRESS_LINES = 12;
-const MAX_PROGRESS_LINE = 1200;
+// No line is cut or dropped for length, count or repeats: a streamed line is matched against the saved
+// ones whole (see `unseen`), so a line left out here would reappear as the live tail, as a reply.
 /** The progress lines Hermes chose to show for an assistant row. Never read from its raw provider items. */
 export function progressLines(row: Wire, text: string): string[] {
   if (row.role !== 'assistant' || !Array.isArray(row.display_commentary)) return [];
-  const lines: string[] = [];
-  for (const value of row.display_commentary) {
-    const line = typeof value === 'string' ? value.trim().slice(0, MAX_PROGRESS_LINE) : '';
-    // The same line twice in a row, or one the row's own text already says, would show twice.
-    if (line && line !== lines.at(-1) && line !== text.trim()) lines.push(line);
-    if (lines.length === MAX_PROGRESS_LINES) break;
-  }
-  return lines;
+  // A line the row's own text already says would show twice, and that text is saved to match the stream too.
+  return row.display_commentary.flatMap((value: unknown) => typeof value === 'string' && value.trim() && value.trim() !== text.trim() ? [value.trim()] : []);
+}
+/** The shown copies of an assistant row's reply and reasoning, which leave out its progress lines. Other rows keep their own. */
+export function displayCopies(row: Wire): {text?: string; reasoning?: string | null} {
+  if (row.role !== 'assistant') return {};
+  return {...(typeof row.display_content === 'string' ? {text: row.display_content} : {}),
+    ...(typeof row.display_reasoning === 'string' ? {reasoning: row.display_reasoning || null} : {})};
 }
 
 /**
@@ -240,12 +240,12 @@ export function historyRows(sid: string, history: Wire[], files: (row: Wire) => 
     // A windowed read keeps each row's position among all visible rows, so positional IDs never change.
     const index = typeof row.app_index === 'number' ? row.app_index : listed;
     // Hermes's display copies leave out progress lines that a flattened reply or reasoning also repeats.
-    const shown = row.role === 'assistant' && typeof row.display_content === 'string' ? row.display_content : undefined;
-    const text = exposedText(row.app_tool_result) ?? shown ??
+    const copies = displayCopies(row);
+    const text = exposedText(row.app_tool_result) ?? copies.text ??
       (typeof row.app_display_text === 'string' ? row.app_display_text : row.text ?? (typeof row.content === 'string' ? row.content : row.context ?? ''));
     const raw = typeof row.reasoning === 'string' && row.reasoning ? row.reasoning
       : typeof row.reasoning_content === 'string' ? row.reasoning_content : undefined;
-    const reasoning = row.role === 'assistant' && typeof row.display_reasoning === 'string' ? row.display_reasoning || undefined : raw;
+    const reasoning = copies.reasoning === undefined ? raw : copies.reasoning ?? undefined;
     const createdAt = typeof row.timestamp === 'number' && Number.isFinite(row.timestamp) ? new Date(row.timestamp * 1000).toISOString() : undefined;
     let toolCall: ToolCall | undefined;
     if (row.role === 'tool') {
