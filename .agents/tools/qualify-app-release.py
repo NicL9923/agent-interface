@@ -73,7 +73,7 @@ def sweep_stale_stages(operations, now):
 '''
 
 REMOTE = PRUNE + r'''
-import datetime, importlib.util, types, uuid
+import datetime, importlib.util, stat, types, uuid
 base = Path(PAYLOAD["appBase"])
 release = Path(PAYLOAD["release"])
 ops = Path(PAYLOAD["operationDir"])
@@ -113,11 +113,31 @@ repair_worker["Worker"].approved_repair(repair_owner, baseline[0], baseline[1],
 browser_facts = home / "tools/facts.json"
 browser = repair_worker["native_chromium"](home)
 qualification = runpy.run_path(str(release / "src/hermes/qualification.py"))
+
+def live_probe_browser(path):
+    """The live receipt's browser selection, bound afresh. The receipt picks an executable this
+    program runs, so it must be the runtime's own private file, read without following a link,
+    and a requested path that now resolves elsewhere is refused, as the in-app updater does."""
+    path = Path(path)
+    if not path.is_absolute():
+        raise ValueError("Live qualification receipt must be an absolute path: " + str(path))
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError as error:
+        raise ValueError("Live qualification receipt is missing or a link: " + str(path)) from error
+    with os.fdopen(descriptor, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077 or info.st_size > 8192:
+            raise ValueError("Live qualification receipt must be owner-only and owned by this runtime")
+        receipt = json.loads(stream.read())
+    return qualification["receipt_computer_probe_browser"](receipt, rebind=True)
+
+
 requested_probe_browser = PAYLOAD.get("computerProbeBrowser")
 if requested_probe_browser is None and PAYLOAD.get("inheritComputerProbeBrowser"):
-    # The live receipt's selection, so a host whose PM Chromium cannot sandbox keeps the browser
-    # its last qualification passed with (Nov 9, 2026: a release qualified without it failed).
-    inherited = qualification["receipt_computer_probe_browser"](json.loads(Path(PAYLOAD["liveQualificationReceipt"]).read_text()))
+    # A host whose PM Chromium cannot sandbox keeps the browser its last qualification passed
+    # with (Nov 9, 2026: a release qualified without the flag failed the local-network probe).
+    inherited = live_probe_browser(PAYLOAD["liveQualificationReceipt"])
     requested_probe_browser = inherited and inherited["requested"]
 probe_browser = qualification["computer_probe_browser"](requested_probe_browser)
 host_files = {p: sha(p) for p in {str(worker_path), str(runner), str(browser_facts), str(browser), *worker["qualificationFiles"]}}

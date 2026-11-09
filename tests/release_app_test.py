@@ -189,7 +189,7 @@ if __name__ == "__main__":
             # so a browser update since the last qualification is picked up rather than refused.
             live = base / 'shared/hermes-qualified.json'
             stale = dict(descriptor, sha256='0' * 64)
-            live.write_text(json.dumps({'computerProbeBrowser': stale}))
+            live.write_text(json.dumps({'computerProbeBrowser': stale})); live.chmod(0o600)
             inherit = {**payload, 'computerProbeBrowser': None, 'inheritComputerProbeBrowser': True,
                        'liveQualificationReceipt': str(live)}
             code, output, error = run_remote(qualify_app.REMOTE, inherit)
@@ -206,13 +206,26 @@ if __name__ == "__main__":
             code, output, error = run_remote(qualify_app.REMOTE, inherit)
             self.assertEqual(code, 0, error)
             self.assertNotIn('computerProbeBrowser', json.loads(Path(json.loads(output)['receipt']).read_text()))
-            # Malformed live metadata refuses before staging rather than guessing a browser.
-            live.write_text(json.dumps({'computerProbeBrowser': {'requested': 'chrome'}}))
+            # The live receipt picks an executable qualification runs, so each untrusted receipt or
+            # selection refuses before staging rather than guessing a browser.
             stages = sorted(base.rglob('.agent-interface-upgrade-stage'))
-            code, _, error = run_remote(qualify_app.REMOTE, inherit)
-            self.assertNotEqual(code, 0)
-            self.assertIn('malformed computer probe browser metadata', error)
-            self.assertEqual(sorted(base.rglob('.agent-interface-upgrade-stage')), stages)
+            elsewhere = base / 'other-chrome'; elsewhere.write_bytes(b'\x7fELFother'); elsewhere.chmod(0o700)
+            linked = base / 'linked-receipt.json'; linked.symlink_to(live)
+            def refused(setup, reason, receipt=live):
+                live.write_text(json.dumps({'computerProbeBrowser': stale})); live.chmod(0o600)
+                setup()
+                code, _, error = run_remote(qualify_app.REMOTE, {**inherit, 'liveQualificationReceipt': str(receipt)})
+                self.assertNotEqual(code, 0)
+                self.assertIn(reason, error)
+                self.assertEqual(sorted(base.rglob('.agent-interface-upgrade-stage')), stages)
+            refused(lambda: live.write_text(json.dumps({'computerProbeBrowser': {'requested': 'chrome'}})),
+                    'malformed computer probe browser metadata')
+            refused(lambda: live.chmod(0o666), 'must be owner-only and owned by this runtime')
+            refused(lambda: None, 'Live qualification receipt is missing or a link', receipt=linked)
+            refused(lambda: None, 'Live qualification receipt is missing or a link', receipt=base / 'absent.json')
+            def retarget():
+                selected.unlink(); selected.symlink_to(elsewhere)
+            refused(retarget, 'resolved path changed since selection')
 
     def test_cli_forwards_host_path_without_resolving_it_on_operator_machine(self):
         with tempfile.TemporaryDirectory() as directory:
