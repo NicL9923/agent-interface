@@ -478,8 +478,9 @@ row's `id` followed by `-progress-` and its position in that row. Lines are neve
 merged: a line the stream already showed is matched whole against the saved one. Hermes
 decides which lines exist: a profile that turns off `display.show_commentary` or
 `display.interim_assistant_messages` has none, and an older Hermes sends none. Saved history
-pages (`GET /api/bots/:id/history/:sessionId`) carry them by the same rules. Absent or `false`
-means an ordinary message.
+pages (`GET /api/bots/:id/history/:sessionId`) carry them by the same rules, but a progress
+line's `id` is one this app made up, so `POST /api/saved` refuses it with 400 and clients offer
+no Save reply on it. Absent or `false` means an ordinary message.
 
 ## Drafts
 

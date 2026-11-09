@@ -127,7 +127,7 @@ export function DiscoveryPanel({ bootstrap, search, onRoutine, onOpenMessage }: 
       {page.messages.map(message=><article className="history-message" id={`history-${message.id}`} key={message.id} style={savedMessage===message.id?{borderLeft:"3px solid var(--accent)",paddingLeft:12}:undefined}>
         {(speaker(message)||message.role==='assistant'&&!isActivityMessage(message))&&<div className="history-message-heading">
           {speaker(message)&&<small>{speaker(message)}</small>}
-          {message.role==='assistant'&&!isActivityMessage(message)&&saveControl({kind:'session',botId:page.botId,sessionId:page.sessionId,messageId:message.id,offset:page.offset,title:'Saved reply'},message.text)}
+          {message.role==='assistant'&&!message.interim&&!isActivityMessage(message)&&saveControl({kind:'session',botId:page.botId,sessionId:page.sessionId,messageId:message.id,offset:page.offset,title:'Saved reply'},message.text)}
         </div>}
         {isActivityMessage(message)?<details><summary>{withoutBotTag(messageOrigin(message)?.title ?? "") || "Activity details"}</summary><MessageMarkdown text={message.text}/></details>:isAgentExchange(message)?<AgentExchange message={message} recipient={name(page.botId)}/>:message.toolCall?<ActionReceipt call={message.toolCall}/>:<MessageMarkdown text={message.text}/>}
         {message.files?.map(file=><a key={file.id} href={`/api/files/${encodeURIComponent(file.id)}`} target="_blank" rel="noreferrer">{file.name}</a>)}
