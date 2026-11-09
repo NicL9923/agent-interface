@@ -1696,6 +1696,121 @@ describe('Hermes conversation and roster read costs', () => {
     expect((await runtime.conversation('shared', {window: {turns: 20}})).window).toBeUndefined();
   });
 
+  describe('progress lines', () => {
+    const turn = (rows: Record<string, any>[]) => { snapshot.messages = [{row_id: 1, role: 'user', text: 'Weather?', app_run_id: 'run-1'}, ...rows]; };
+    it('shows each display_commentary line as an interim assistant message ahead of its row', async () => {
+      turn([
+        {row_id: 2, role: 'assistant', text: '', app_run_id: 'run-1', timestamp: 1_700_000_000, display_commentary: ['I will check the forecast first.', 'Then the radar.']},
+        {row_id: 3, role: 'tool', name: 'web_search', app_run_id: 'run-1', content: '{}'},
+        {row_id: 4, role: 'assistant', text: 'Sunny, 75.', app_run_id: 'run-1'},
+      ]);
+      const {messages} = await runtime.conversation('shared');
+      expect(messages.map(message => [message.id, message.role, message.text, message.interim])).toEqual([
+        ['1', 'user', 'Weather?', undefined],
+        ['2-progress-0', 'assistant', 'I will check the forecast first.', true],
+        ['2-progress-1', 'assistant', 'Then the radar.', true],
+        ['2', 'assistant', '', undefined],
+        ['3', 'tool', '{}', undefined],
+        ['4', 'assistant', 'Sunny, 75.', undefined],
+      ]);
+      expect(messages[1]).toMatchObject({runId: 'run-1', createdAt: new Date(1_700_000_000_000).toISOString()});
+    });
+    it('shows nothing when the profile turned commentary off, even with the raw provider items present', async () => {
+      // Hermes sends an empty projection for a disabled profile. The raw items must never be read here.
+      turn([{row_id: 2, role: 'assistant', text: '', display_commentary: [],
+        codex_message_items: [{type: 'message', role: 'assistant', phase: 'commentary', content: [{type: 'output_text', text: 'I will check Search Console.'}]}]}]);
+      expect(JSON.stringify((await runtime.conversation('shared')).messages)).not.toContain('Search Console');
+      // An older Hermes without the projection says nothing either.
+      turn([{row_id: 2, role: 'assistant', text: '', codex_message_items: [{type: 'message', phase: 'commentary', content: [{type: 'output_text', text: 'Raw text.'}]}]}]);
+      expect((await runtime.conversation('shared')).messages.filter(message => message.interim)).toEqual([]);
+    });
+    it.each([
+      ['not a list', 'I will check.'],
+      ['an object', {text: 'I will check.'}],
+      ['null', null],
+      ['a number', 7],
+    ])('ignores a display_commentary that is %s', async (_name, value) => {
+      turn([{row_id: 2, role: 'assistant', text: 'Answer', display_commentary: value}]);
+      expect((await runtime.conversation('shared')).messages.map(message => message.id)).toEqual(['1', '2']);
+    });
+    it('keeps every usable line whole: strings with words, none the answer already says, nothing cut or merged', async () => {
+      turn([{row_id: 2, role: 'assistant', text: 'Sunny, 75.', display_commentary: [
+        42, null, {text: 'x'}, '', '   ', ' Checking. ', 'Checking.', 'Sunny, 75.', 'z'.repeat(5000)]}]);
+      const lines = (await runtime.conversation('shared')).messages.filter(message => message.interim).map(message => message.text);
+      // A line shown cut, or left out, would come back from the stream as its own unmarked reply.
+      expect(lines).toEqual(['Checking.', 'Checking.', 'z'.repeat(5000)]);
+      const many = Array.from({length: 40}, (_, index) => `Step ${index}`);
+      turn([{row_id: 2, role: 'assistant', text: '', display_commentary: many}]);
+      expect((await runtime.conversation('shared')).messages.filter(message => message.interim).map(message => message.text)).toEqual(many);
+    });
+    it('never turns a user or tool row into a progress line', async () => {
+      turn([{row_id: 2, role: 'user', text: 'Hi again', display_commentary: ['injected']}, {row_id: 3, role: 'tool', name: 'x', content: '{}', display_commentary: ['injected']}]);
+      expect((await runtime.conversation('shared')).messages.some(message => message.interim)).toBe(false);
+    });
+    it('uses Hermes display copies of the reply and reasoning, which leave out flattened progress lines', async () => {
+      turn([{row_id: 2, role: 'assistant', text: 'I will check.\n\nSunny.', display_content: 'Sunny.', reasoning: 'I will check.\nPrivate thoughts', display_reasoning: 'Private thoughts', display_commentary: ['I will check.']}]);
+      const reply = (await runtime.conversation('shared')).messages.find(message => message.id === '2')!;
+      expect(reply).toMatchObject({text: 'Sunny.', reasoning: 'Private thoughts'});
+    });
+    it('cuts a window by Hermes rows, not by the messages those rows became', async () => {
+      snapshot.app_window = {earlier: 10, context: 2};
+      snapshot.messages = [
+        {role: 'user', text: 'Old prompt', app_index: 3},
+        {role: 'assistant', text: 'Old answer', app_index: 4, display_commentary: ['Looking.', 'Still looking.']},
+        {role: 'user', text: 'Latest prompt', app_index: 10},
+        {role: 'assistant', text: 'Latest answer', app_index: 11, display_commentary: ['Checking.']},
+      ];
+      const result = await runtime.conversation('shared', {window: {turns: 20}});
+      expect(result.window!.context.map(message => message.id)).toEqual(['live-one-3', 'live-one-4-progress-0', 'live-one-4-progress-1', 'live-one-4']);
+      expect(result.messages.map(message => message.id)).toEqual(['live-one-10', 'live-one-11-progress-0', 'live-one-11']);
+    });
+    it('tells watchers about a progress line as a structural change, so clients read again at once', async () => {
+      await runtime.status();
+      await runtime.conversation('shared');
+      const kinds: unknown[] = [];
+      runtime.watch!('shared', kind => kinds.push(kind));
+      sockets[0].receive({method: 'event', params: {session_id: 'live-one', type: 'message.delta', payload: {text: 'I'}}});
+      expect(kinds).toEqual(['inflight']);
+      sockets[0].receive({method: 'event', params: {session_id: 'live-one', type: 'message.interim', payload: {text: 'I will check.', already_streamed: true}}});
+      // A delta event reports "inflight"; a structural one reports nothing.
+      expect(kinds).toEqual(['inflight', undefined]);
+      snapshot.messages = [{row_id: 1, role: 'user', text: 'Weather?'}, {row_id: 2, role: 'assistant', text: '', display_commentary: ['I will check.']}];
+      expect((await runtime.conversation('shared')).messages.map(message => message.text)).toEqual(['Weather?', 'I will check.', '']);
+    });
+    it.each([
+      ['a very long line', `I will check ${'the forecast and the radar '.repeat(80)}first.`],
+      ['two repeated lines', 'I will check the forecast.\n\nI will check the forecast.'],
+    ])('leaves no tail behind when a streamed progress line is saved, even for %s', async (_name, streamed) => {
+      await runtime.status();
+      snapshot.info.running = true; snapshot.app_run_id = 'run-1';
+      snapshot.messages = [{row_id: 1, role: 'user', text: 'Weather?', app_run_id: 'run-1'}];
+      await runtime.conversation('shared');
+      sockets[0].receive({method: 'event', params: {session_id: 'live-one', type: 'message.start', payload: {}}});
+      sockets[0].receive({method: 'event', params: {session_id: 'live-one', type: 'message.delta', payload: {text: streamed}}});
+      const lines = streamed.includes('\n\n') ? streamed.split('\n\n') : [streamed];
+      snapshot.messages = [{row_id: 1, role: 'user', text: 'Weather?', app_run_id: 'run-1'},
+        {row_id: 2, role: 'assistant', text: '', app_run_id: 'run-1', display_commentary: lines}];
+      const shown = (await runtime.conversation('shared')).messages;
+      expect(shown.filter(message => message.interim).map(message => message.text)).toEqual(lines);
+      // Nothing of the stream is left to read as the reply.
+      expect(shown.some(message => message.id.endsWith('-inflight'))).toBe(false);
+    });
+    it('does not repeat a streamed progress line once its saved row arrives', async () => {
+      await runtime.status();
+      snapshot.info.running = true; snapshot.app_run_id = 'run-1';
+      snapshot.messages = [{row_id: 1, role: 'user', text: 'Weather?', app_run_id: 'run-1'}];
+      await runtime.conversation('shared');
+      sockets[0].receive({method: 'event', params: {session_id: 'live-one', type: 'message.start', payload: {}}});
+      sockets[0].receive({method: 'event', params: {session_id: 'live-one', type: 'message.delta', payload: {text: 'I will check the forecast.'}}});
+      sockets[0].receive({method: 'event', params: {session_id: 'live-one', type: 'message.interim', payload: {text: 'I will check the forecast.', already_streamed: true}}});
+      snapshot.messages = [{row_id: 1, role: 'user', text: 'Weather?', app_run_id: 'run-1'},
+        {row_id: 2, role: 'assistant', text: '', app_run_id: 'run-1', display_commentary: ['I will check the forecast.']}];
+      const shown = (await runtime.conversation('shared')).messages;
+      expect(shown.filter(message => message.text.includes('forecast'))).toHaveLength(1);
+      expect(shown.some(message => message.id.endsWith('-inflight'))).toBe(false);
+    });
+  });
+
   it('shares one read among viewers until Hermes or this app changes the conversation', async () => {
     vi.useFakeTimers();
     // A new connection is itself a change, so start from a connected server.

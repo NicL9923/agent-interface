@@ -46,6 +46,14 @@ it('validates original reply identity and scoped saved references',async()=>{
   const response=await s.app.inject({url:'/api/saved',method:'POST',headers:s.headers,payload:body});expect(response.statusCode).toBe(200);expect(s.experienceRequest).toHaveBeenLastCalledWith({operation:'history',profile:'shared',sessionId:'history',offset:100});
   expect((await s.app.inject({url:'/api/saved',method:'POST',headers:s.headers,payload:{...body,messageId:'missing'}})).statusCode).toBe(404);expect((await s.app.inject({url:'/api/saved',method:'POST',headers:{cookie:s.headers.cookie,origin:s.headers.origin},payload:body})).statusCode).toBe(403);
 });
+it('refuses to save a progress line, whose ID only this app made up, and names why',async()=>{
+  const s=await setup();
+  s.history.mockImplementation(input=>({botId:input.profile,sessionId:input.sessionId,offset:input.offset,hasMore:false,messages:[{id:'2-progress-0',role:'assistant',text:"I'll check.",interim:true},{id:'2',role:'assistant',text:'Sunny.'}]}));
+  const body={kind:'session',botId:'shared',sessionId:'history',offset:0,title:'Weather'};
+  const refused=await s.app.inject({url:'/api/saved',method:'POST',headers:s.headers,payload:{...body,messageId:'2-progress-0'}});
+  expect(refused.statusCode).toBe(400);expect(refused.json().error).toContain('progress line cannot be saved');
+  expect((await s.app.inject({url:'/api/saved',method:'POST',headers:s.headers,payload:{...body,messageId:'2'}})).statusCode).toBe(200);
+});
 it('pauses without resaving a stale prompt, schedule or recipients',async()=>{
   const s=await setup();const response=await s.app.inject({url:'/api/routines/routine/state',method:'PATCH',headers:s.headers,payload:{enabled:false}});expect(response.statusCode).toBe(200);expect(s.setRoutineEnabled).toHaveBeenCalledWith('shared','routine',false);expect(s.saveRoutine).not.toHaveBeenCalled();
 });

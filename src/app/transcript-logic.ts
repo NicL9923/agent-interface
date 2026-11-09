@@ -18,7 +18,7 @@ export function retryTarget(messages: Message[], state: ActivityState): Message 
   const index = messages.findLastIndex(isHumanMessage);
   if (index < 0) return undefined;
   const replied = messages.slice(index + 1).some(message =>
-    message.role === "assistant" && !isActivityMessage(message) && !!message.text.trim());
+    message.role === "assistant" && !message.interim && !isActivityMessage(message) && !!message.text.trim());
   return replied || messages[index].id.endsWith("-inflight") ? undefined : messages[index];
 }
 
@@ -58,7 +58,7 @@ const time = (value?: string) => {
  * final reply. Undefined when either end has no usable timestamp.
  */
 export function turnDuration(turn: { messages: Message[]; work: Message[] }) {
-  const reply = turn.messages.findLast(message => message.role === "assistant" && !!message.text.trim());
+  const reply = turn.messages.findLast(message => message.role === "assistant" && !message.interim && !!message.text.trim());
   const end = time(reply?.createdAt);
   const starts = [...turn.messages, ...turn.work].flatMap(message => [time(message.createdAt), time(message.toolCall?.startedAt)])
     .filter((value): value is number => value !== undefined);

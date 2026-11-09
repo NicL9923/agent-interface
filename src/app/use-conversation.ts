@@ -41,8 +41,9 @@ const placeElement = (container: HTMLElement, id: string) =>
   [...container.querySelectorAll<HTMLElement>(placeRows)].find(item => placeId(item) === id);
 const editable = (target: EventTarget | null) =>
   target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName));
+// A progress line arrives mid-task and is not something to catch up on, so it never counts.
 const countsAsNew = (message: Message) =>
-  !isActivityMessage(message) && (message.role === "user" || message.role === "assistant" && (!!message.text.trim() || !!message.files?.length));
+  !isActivityMessage(message) && message.interim !== true && (message.role === "user" || message.role === "assistant" && (!!message.text.trim() || !!message.files?.length));
 /** onMissing hears that this person may no longer see the assistant, so polling stops. */
 export function useConversation(botId: string, userId?: string, onMissing?: (botId: string) => void) {
   const missing = useRef(onMissing);

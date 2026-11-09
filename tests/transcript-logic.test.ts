@@ -30,6 +30,10 @@ describe("retry eligibility", () => {
     expect(retryTarget([user("mine"), cron, agent], "failed")?.id).toBe("mine");
     expect(retryTarget([cron], "failed")).toBeUndefined();
   });
+  it("counts a progress line as no reply, so a failed turn that only said what it would do can retry", () => {
+    const progress: Message = { id: "p", role: "assistant", text: "I'll check the gate first.", interim: true };
+    expect(retryTarget([user("q"), progress], "failed")?.id).toBe("q");
+  });
   it("counts an activity reply as no reply", () => {
     const diagnostic: Message = { id: "d", role: "assistant", text: "Retrying delivery", origin: { kind: "diagnostic", visibility: "activity" } };
     expect(retryTarget([user("q"), diagnostic], "failed")?.id).toBe("q");
@@ -61,6 +65,13 @@ describe("fold summary", () => {
     expect(turnDuration({ messages: [user("q"), reply], work: [call] })).toBe(129_000);
     expect(turnDuration({ messages: [prompt], work: [call] })).toBeUndefined();
     expect(turnDuration({ messages: [prompt, { ...reply, createdAt: "not a date" }], work: [] })).toBeUndefined();
+  });
+  it("ends a turn at its answer, never at a progress line that came earlier", () => {
+    const prompt = { ...user("q"), createdAt: "2026-10-01T16:00:00Z" };
+    const progress: Message = { ...assistant("p", "I'll check."), interim: true, createdAt: "2026-10-01T16:00:03Z" };
+    expect(turnDuration({ messages: [prompt, progress, { ...assistant("a", "Done."), createdAt: "2026-10-01T16:01:00Z" }], work: [] })).toBe(60_000);
+    // With no answer yet there is no duration to claim.
+    expect(turnDuration({ messages: [prompt, progress], work: [] })).toBeUndefined();
   });
 });
 

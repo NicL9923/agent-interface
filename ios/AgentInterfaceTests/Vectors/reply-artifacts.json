@@ -730,6 +730,41 @@
     ]
    ],
    "replies": {}
+  },
+  {
+   "name": "a progress line is not the reply: a turn with only one has no chips",
+   "messages": [
+    {
+     "id": "u1",
+     "role": "user",
+     "text": "Chart it"
+    },
+    {
+     "id": "n1",
+     "role": "assistant",
+     "text": "I'll build the chart first.",
+     "interim": true
+    },
+    {
+     "id": "t1",
+     "role": "tool",
+     "text": "",
+     "files": [
+      {
+       "id": "chart",
+       "name": "chart.png",
+       "mime": "image/png"
+      }
+     ]
+    }
+   ],
+   "artifacts": [
+    [
+     "chart",
+     "Generated"
+    ]
+   ],
+   "replies": {}
   }
  ]
 }

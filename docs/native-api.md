@@ -467,6 +467,21 @@ already running, decided under its submission lock. A user `Message` it admitted
 way carries `steered: true`, in every history read and on every device. Show "Added to
 the current task" under it. Absent means unknown, so show nothing.
 
+**Progress lines.** An assistant `Message` with `interim: true` is a progress line: one
+short sentence the assistant wrote before using tools, such as "I'll check the forecast
+first". Show it as the assistant talking, visually lighter than an answer, in order
+with the turn, and never as the reply. Do not offer Copy, Listen, Quote or a time under
+it, do not read it aloud when it arrives, do not count it as a new message or as unread,
+do not take it for the answer when deciding whether a turn replied, and do not render
+inline pages from it. It carries the same `runId` as its turn, and its `id` is the saved
+row's `id` followed by `-progress-` and its position in that row. Lines are never cut or
+merged: a line the stream already showed is matched whole against the saved one. Hermes
+decides which lines exist: a profile that turns off `display.show_commentary` or
+`display.interim_assistant_messages` has none, and an older Hermes sends none. Saved history
+pages (`GET /api/bots/:id/history/:sessionId`) carry them by the same rules, but a progress
+line's `id` is one this app made up, so `POST /api/saved` refuses it with 400 and clients offer
+no Save reply on it. Absent or `false` means an ordinary message.
+
 ## Drafts
 
 Each person has one draft per assistant, shared by their devices.

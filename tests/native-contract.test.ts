@@ -77,6 +77,7 @@ const messages = [
   { id: "message-assistant", runId: "run-dinner", role: "assistant", text: "Here are five dinners.\n\n```agent-ui\n" + JSON.stringify(cards) + "\n```", createdAt: at("11:05"),
     reasoning: "Balanced the week around the pantry list.", files: [generated] },
   { id: "message-steer", runId: "run-dinner", role: "user", text: "Keep it vegetarian", createdAt: at("11:06"), steered: true },
+  { id: "message-progress", runId: "run-dinner", role: "assistant", text: "I'll check the menu for meat first.", createdAt: at("11:07"), interim: true },
 ] satisfies Message[];
 const conversation = {
   attention: [

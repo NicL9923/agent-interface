@@ -125,7 +125,7 @@ enum Artifacts {
       for file in message.files ?? [] where seen.insert(file.id).inserted {
         if let artifact = listed[file.id], artifact.source == .generated { files.append(artifact) }
       }
-      if message.role == "assistant" && !message.isInternalActivity
+      if message.role == "assistant" && !message.isProgressLine && !message.isInternalActivity
         && (!message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !(message.files ?? []).isEmpty) {
         reply = message.id
         for file in message.files ?? [] { shown.insert(file.id) }

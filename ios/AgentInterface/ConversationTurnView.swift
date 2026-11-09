@@ -359,6 +359,8 @@ extension ConversationTurn {
     func joins(_ earlier: Int, _ later: Int) -> Bool {
       visible.indices.contains(earlier) && visible.indices.contains(later)
         && visible[earlier].role == "assistant" && visible[later].role == "assistant" && visible[later].id != replyStart
+        // A progress line stands apart from the answer around it.
+        && !visible[earlier].isProgressLine && !visible[later].isProgressLine
     }
     var when = visible[index].createdAt
     var at = index
@@ -480,7 +482,7 @@ enum RetryTurn {
   static func target(_ conversation: Conversation) -> Message? {
     guard conversation.activity.state == .failed, let index = conversation.messages.lastIndex(where: \.isHumanMessage) else { return nil }
     let replied = conversation.messages[(index + 1)...].contains {
-      $0.role == "assistant" && !$0.isInternalActivity && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      $0.role == "assistant" && !$0.isProgressLine && !$0.isInternalActivity && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
     let message = conversation.messages[index]
     // Only a saved message can be retried; a live row never counts.

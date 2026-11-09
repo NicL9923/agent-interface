@@ -44,7 +44,7 @@ struct OfflineLibrary: Codable {
       $0.isConversationVisible && !$0.isInternalActivity && !$0.isToolActivity && $0.toolCall == nil && !$0.id.hasSuffix("-inflight")
     }.suffix(100)).map { message in
       Message(id: message.id, role: message.role, text: message.text, createdAt: message.createdAt,
-        sender: message.sender, files: message.files, origin: message.origin)
+        sender: message.sender, files: message.files, origin: message.origin, interim: message.interim)
     }
     copy.attention = nil; copy.approvals = []; copy.toolCalls = nil; copy.draft = nil; copy.readPosition = nil
     copy.activity = Activity(state: .disconnected)

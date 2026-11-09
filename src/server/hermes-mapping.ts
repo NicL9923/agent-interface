@@ -135,6 +135,9 @@ export function applyFrame(state: LiveState, frame: Wire, fallbackSeq: number): 
       state.state = payload.status === 'error' ? 'failed' : payload.status === 'interrupted' ? 'interrupted' : 'done';
       state.tools = [];
     }
+    // message.interim announces a progress line Hermes has already saved to history, whose own row carries the
+    // text through `display_commentary`. Nothing accumulates here: the frame only has to reach the caller as
+    // a structural change, which every frame outside its delta list is, so open chats read the saved line now.
     if (type === 'error') state.state = 'failed';
     if (type === 'request.cancel') state.requests = state.requests.filter(x => x.id !== payload.id);
   } else if (frame.id && frame.method) {
@@ -209,15 +212,40 @@ function explicitLogin(value: unknown): {explicit?: ExplicitLoginRequest} {
     ...(typeof row.requesterId === 'string' && row.requesterId ? {requestedBy: {id: row.requesterId}} : {})}};
 }
 
-/** Visible history rows as messages, each keeping its position among all visible rows. */
-export function historyMessages(sid: string, history: Wire[], files: (row: Wire) => FileRef[]): Message[] {
-  return history.filter((x: Wire) => x.display_kind !== 'hidden').map((row: Wire, listed: number) => {
+// Hermes's display projection of a model's progress lines, already redacted, for one assistant row.
+// A bad shape shows nothing: a disabled gate sends [], and an older Hermes sends no field at all.
+// No line is cut or dropped for length, count or repeats: a streamed line is matched against the saved
+// ones whole (see `unseen`), so a line left out here would reappear as the live tail, as a reply.
+/** The progress lines Hermes chose to show for an assistant row. Never read from its raw provider items. */
+export function progressLines(row: Wire, text: string): string[] {
+  if (row.role !== 'assistant' || !Array.isArray(row.display_commentary)) return [];
+  // A line the row's own text already says would show twice, and that text is saved to match the stream too.
+  return row.display_commentary.flatMap((value: unknown) => typeof value === 'string' && value.trim() && value.trim() !== text.trim() ? [value.trim()] : []);
+}
+/** The shown copies of an assistant row's reply and reasoning, which leave out its progress lines. Other rows keep their own. */
+export function displayCopies(row: Wire): {text?: string; reasoning?: string | null} {
+  if (row.role !== 'assistant') return {};
+  return {...(typeof row.display_content === 'string' ? {text: row.display_content} : {}),
+    ...(typeof row.display_reasoning === 'string' ? {reasoning: row.display_reasoning || null} : {})};
+}
+
+/**
+ * Visible history rows as messages, each keeping its position among all visible rows. An assistant row
+ * that carries progress lines yields each as its own `interim` message ahead of the row's message, so
+ * `starts[i]` is where row `i` begins in the result, for cutting a window that Hermes counted in rows.
+ */
+export function historyRows(sid: string, history: Wire[], files: (row: Wire) => FileRef[]): {messages: Message[]; starts: number[]} {
+  const messages: Message[] = [], starts: number[] = [];
+  history.filter((x: Wire) => x.display_kind !== 'hidden').forEach((row: Wire, listed: number) => {
     // A windowed read keeps each row's position among all visible rows, so positional IDs never change.
     const index = typeof row.app_index === 'number' ? row.app_index : listed;
-    const text = exposedText(row.app_tool_result) ??
+    // Hermes's display copies leave out progress lines that a flattened reply or reasoning also repeats.
+    const copies = displayCopies(row);
+    const text = exposedText(row.app_tool_result) ?? copies.text ??
       (typeof row.app_display_text === 'string' ? row.app_display_text : row.text ?? (typeof row.content === 'string' ? row.content : row.context ?? ''));
-    const reasoning = typeof row.reasoning === 'string' && row.reasoning ? row.reasoning
+    const raw = typeof row.reasoning === 'string' && row.reasoning ? row.reasoning
       : typeof row.reasoning_content === 'string' ? row.reasoning_content : undefined;
+    const reasoning = copies.reasoning === undefined ? raw : copies.reasoning ?? undefined;
     const createdAt = typeof row.timestamp === 'number' && Number.isFinite(row.timestamp) ? new Date(row.timestamp * 1000).toISOString() : undefined;
     let toolCall: ToolCall | undefined;
     if (row.role === 'tool') {
@@ -229,9 +257,11 @@ export function historyMessages(sid: string, history: Wire[], files: (row: Wire)
         toolCall.completedAt = createdAt;
       }
     }
+    const id = String(row.app_request_id ?? row.row_id ?? `${sid}-${index}`);
+    const runId = typeof row.app_run_id === 'string' ? row.app_run_id : undefined;
     const message: Message = {
-      id: String(row.app_request_id ?? row.row_id ?? `${sid}-${index}`),
-      runId: typeof row.app_run_id === 'string' ? row.app_run_id : undefined,
+      id,
+      runId,
       role: ['user', 'assistant', 'tool'].includes(row.role) ? row.role : 'system',
       text,
       createdAt,
@@ -242,9 +272,15 @@ export function historyMessages(sid: string, history: Wire[], files: (row: Wire)
       ...(row.role === 'user' && row.app_steering === true ? {steered: true} : {}),
     };
     const origin = wireOrigin(message, row);
-    return origin ? {...message, origin} : message;
+    starts.push(messages.length);
+    progressLines(row, text).forEach((line, position) =>
+      messages.push({id: `${id}-progress-${position}`, runId, role: 'assistant', text: line, createdAt, interim: true, ...(origin ? {origin} : {})}));
+    messages.push(origin ? {...message, origin} : message);
   });
+  return {messages, starts};
 }
+/** Visible history rows as messages. See `historyRows`. */
+export const historyMessages = (sid: string, history: Wire[], files: (row: Wire) => FileRef[]): Message[] => historyRows(sid, history, files).messages;
 
 /** The approvals and other requests an open session is waiting on. */
 /**

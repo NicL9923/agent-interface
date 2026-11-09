@@ -15,6 +15,7 @@ final class OfflineLibraryTests: XCTestCase {
     bootstrap.csrfToken = "must-not-persist"
     var chat = try fixture("conversation", as: Conversation.self)
     chat.messages.append(Message(id: "stream-inflight", role: "assistant", text: "unfinished"))
+    chat.messages.append(Message(id: "kept-note", role: "assistant", text: "I'll check first.", interim: true))
     let snapshot = OfflineLibrary(savedAt: Date(), bootstrap: bootstrap, conversations: [chat.botId: chat], selected: chat.botId)
     snapshot.write(url)
     let restored = try XCTUnwrap(OfflineLibrary.read(url))
@@ -24,6 +25,8 @@ final class OfflineLibraryTests: XCTestCase {
     let copy = try XCTUnwrap(restored.conversations[chat.botId])
     XCTAssertNil(copy.attention); XCTAssertTrue(copy.approvals.isEmpty); XCTAssertNil(copy.draft); XCTAssertNil(copy.toolCalls)
     XCTAssertFalse(copy.messages.contains { $0.id == "stream-inflight" || $0.reasoning != nil || $0.toolCall != nil })
+    // A saved progress line stays one, so it does not come back from the library as the assistant's answer.
+    XCTAssertEqual(copy.messages.first { $0.id == "kept-note" }?.interim, true)
     XCTAssertFalse(String(decoding: try Data(contentsOf: url), as: UTF8.self).contains("must-not-persist"))
     XCTAssertNotEqual(url, OfflineLibrary.url(origin: "https://two.test", token: "session", root: root))
     XCTAssertNotEqual(url, OfflineLibrary.url(origin: "https://one.test", token: "different-account-session", root: root))

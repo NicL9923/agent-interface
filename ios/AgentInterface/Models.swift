@@ -270,6 +270,13 @@ struct Message: Codable, Identifiable, Equatable {
   var origin: MessageOrigin?
   /// The add-on admitted this person's message into the task already running. Nil when unknown.
   var steered: Bool? = nil
+  /// A progress line the assistant wrote before using tools, such as "I'll check the forecast first". It is the
+  /// assistant talking but never the answer, as the web's `interim`. Nil on every other message.
+  var interim: Bool? = nil
+  /// As the web's `isProgressLine`: it is not read aloud, copied, counted as new, or taken for the reply.
+  var isProgressLine: Bool {
+    role == "assistant" && interim == true && !isInternalActivity && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+  }
   var presentationOrigin: MessageOrigin? {
     if role == "user", sender != nil { return nil }
     if let origin { return origin }
@@ -650,7 +657,8 @@ struct Conversation: Codable, Equatable {
         turns.append(ConversationTurn(id: message.id, messages: []))
         sawActivity = false
       }
-      if message.isConversationVisible && message.role != "user" && sawActivity && turns[turns.count - 1].replyStart == nil {
+      // A progress line says what the assistant is about to do, so the work still ahead is not folded above it.
+      if message.isConversationVisible && message.role != "user" && !message.isProgressLine && sawActivity && turns[turns.count - 1].replyStart == nil {
         turns[turns.count - 1].replyStart = message.id
       }
       if message.isInternalActivity || message.isToolActivity || message.toolCall != nil {

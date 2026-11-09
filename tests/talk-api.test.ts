@@ -314,6 +314,16 @@ describe("talk answer states", () => {
     expect(answer.text).toMatch(/^Corrected: feed at six\. Earlier parts are in the chat\.$/);
     expect(spokenReplies(["One.", "Two."])).toBe("One.\n\nTwo.");
   });
+  it("never reads a progress line back as the answer", () => {
+    const note = (id: string, text: string) => ({ ...said(id, text), interim: true });
+    const settled = run([asked(), note("n1", "I'll check the forecast first."), said("r1", "Sunny, 75.")]);
+    expect(talkAnswer(accepted, settled)).toEqual({ state: "done", text: "Sunny, 75." });
+    // A run that ended having written only a progress line has no reply to read, so Talk says so.
+    expect(talkAnswer(accepted, run([asked(), note("n1", "I'll check the forecast first.")]))).toEqual({ state: "done", text: "" });
+    // And a failed run is refused rather than answered with what it meant to do.
+    expect(talkAnswer(accepted, run([asked(), note("n1", "I'll check the forecast first.")], { state: "failed" })))
+      .toEqual({ state: "refused", text: "The assistant could not finish this request." });
+  });
   it("cuts long replies at a sentence and points to the chat", () => {
     const long = "Hay is in. ".repeat(500);
     const spoken = spokenText(long);
