@@ -250,6 +250,21 @@ import XCTest
     choose(app.buttons["Copy as CSV"])
   }
 
+  func testProgressLinesStayAboveTheFoldedWorkAndTheAnswer() throws {
+    let app = launch(["AGENT_INTERFACE_UI_PROGRESS": "1"])
+    let work = app.buttons["turnWork"]
+    XCTAssertTrue(work.waitForExistence(timeout: 15), app.debugDescription)
+    let progress = { (prefix: String) in app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", prefix)).firstMatch }
+    XCTAssertTrue(progress("I'll look up Saturday's forecast").exists, "A progress line shows without opening the work")
+    XCTAssertTrue(progress("Both links are created and reachable.").exists)
+    XCTAssertTrue(work.label.contains("3 tool calls"), work.label)
+    XCTAssertFalse(app.buttons["Tool calls"].exists, "Tool calls stay inside the fold")
+    try capture(app, "progress-folded")
+    work.tapWhenReady()
+    XCTAssertTrue(app.buttons["Tool calls"].waitForExistence(timeout: 5))
+    try capture(app, "progress-expanded")
+  }
+
   func testAdvancedWorkKeepsReasoningInsideTheFold() throws {
     let app = launch(["AGENT_INTERFACE_UI_WORK": "1", "AGENT_INTERFACE_UI_WORK_PRESENTATION": "advanced"])
     let work = app.buttons["turnWork"]
