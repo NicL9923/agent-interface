@@ -46,8 +46,10 @@ SKILL_NAME = re.compile(r"[A-Za-z0-9_./-]{1,200}")
 class Controller:
     error_type = AutomationError
 
-    def __init__(self, server, native, open_bot, submission_lock, maintenance_lock, maintenance_state, journal, submit=None):
+    def __init__(self, server, native, open_bot, submission_lock, maintenance_lock, maintenance_state, journal, submit=None, preempt=None):
         self.submit = submit
+        # Stops a canonical session's background compaction, which holds it running but is no work.
+        self.preempt = preempt
         self.server, self.native, self.open_bot = server, native, open_bot
         self.submission_lock = submission_lock
         self.maintenance_lock, self.maintenance_state, self.journal = maintenance_lock, maintenance_state, journal
@@ -109,6 +111,8 @@ class Controller:
         from tui_gateway import server_requests
         with self.submission_lock, self.profile_mutation():
             value, session = self.session(profile)
+            if self.preempt:
+                self.preempt(value["session_id"])
             with session["history_lock"]:
                 busy = any(session.get(key) for key in ("running", "queued_prompt", "queued_prompts", "pending_steer", "_auto_continue_scheduled", "_compute_host_open_request", "resume_hydrating", "_closing"))
                 with server_requests._lock:
@@ -794,8 +798,8 @@ def approval_operation(data, server):
         return dict(ok=True, **approval_settings())
 
 
-def install_runtime(server, native, open_bot, submission_lock, maintenance_lock, maintenance_state, journal, submit):
-    journal.automation = Controller(server, native, open_bot, submission_lock, maintenance_lock, maintenance_state, journal, submit)
+def install_runtime(server, native, open_bot, submission_lock, maintenance_lock, maintenance_state, journal, submit, preempt=None):
+    journal.automation = Controller(server, native, open_bot, submission_lock, maintenance_lock, maintenance_state, journal, submit, preempt)
 
 
 def install(web, journal):

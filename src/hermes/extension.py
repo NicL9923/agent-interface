@@ -520,6 +520,10 @@ class Bridge:
         self.delegation = sibling_module("delegation").Delegation(
             journal.db, journal.lock, self.profile_for_agent,
             current_profile=lambda: self.profile_name_for_home(self.get_hermes_home()) or "default", hermes_root=hermes_root)
+        # Idle Bot Chats compact in the background; every admitted input preempts it. See compaction.py.
+        compaction = sibling_module("compaction")
+        self.compaction = compaction.IdleCompaction(server, self.native, self.canonical, journal, self.submission_lock,
+                                                    self.maintenance_state, compaction.delay_from() if compaction.supported(server) else 0)
 
     def profile_for_agent(self, agent):
         """The profile a tool-calling agent belongs to, from its own session store, as message_agent finds it."""
@@ -561,6 +565,11 @@ class Bridge:
             return server._err(rid, 403, "Private maintenance authentication required")
         if not self.maintenance_file:
             return server._err(rid, 409, "Host maintenance lease is not configured")
+        if params.get("action") == "acquire":
+            # A background compaction is no work to wait for, so stop it first. Never under
+            # maintenance_lock: Hermes's release of the session takes it.
+            for sid in list(self.canonical.copy().values()):
+                self.compaction.preempt(sid)
         with self.maintenance_lock:
             lease = self.maintenance_state()
             action = params.get("action", "status")
@@ -832,6 +841,10 @@ class Bridge:
         kind = params.get("type")
         payload = params.get("payload") or {}
         session = server._sessions.get(sid, {}) if sid else {}
+        if sid and kind == "status.update" and self.compaction.owns(sid):
+            # A background compaction's progress line. Nobody asked for it, so no client shows it.
+            return True
+        self.compaction.touch(sid)
         if sid and kind == "message.start":
             session["app_live_tools"] = {}
             session["app_live_tool_row_floors"] = {}
@@ -1036,7 +1049,13 @@ class Bridge:
                     request["app_credential"] = credential
 
     def describe_task(self, profile, sid, session, value):
-        if session.get("running") and session.get("app_exposed_reasoning"):
+        if self.compaction.owns(sid):
+            # Hermes holds the session running while it compacts. That is not anyone's task,
+            # and a client that saw it would send its next message as steering.
+            for holder in (value, value.get("info")):
+                if isinstance(holder, dict) and "running" in holder:
+                    holder["running"] = False
+        elif session.get("running") and session.get("app_exposed_reasoning"):
             value.setdefault("inflight", {})
             if value["inflight"] is None:
                 value["inflight"] = {}
@@ -1058,6 +1077,30 @@ class Bridge:
         value["app_interruption"] = {"requestId": interruption[0], "runId": interruption[0], "detail": "Hermes restarted during this task. Review its results before retrying."} if interruption else None
         value["app_run_id"] = current[0] if current else None
         value["app_task_state"] = {"completed": "done", "failed": "failed", "interrupted": "interrupted"}.get(terminal[0]) if terminal and not current else None
+
+    def original_rows(self, session, messages):
+        """Show each copy native in-place compaction makes under the row ID of the message it copies.
+
+        Compaction archives every row and stores its kept head and tail again as new rows. Every
+        copy keeps the message's ``message_uid``. Without this, the copies of recent messages would
+        lose their receipts (sender, files, run) and every copy would change its message ID.
+        """
+        ids = [m["row_id"] for m in messages if type(m.get("row_id")) is int]
+        key = session.get("session_key")
+        if not ids or not key or not callable(getattr(self.server, "_session_db", None)):
+            return
+        with self.server._session_db(session) as db:
+            if db is None:
+                return
+            visible = json.dumps(ids)
+            # The session index finds every copy; a uid join instead takes seconds on a long chat.
+            first = dict(db._read_all("SELECT message_uid,MIN(id) FROM messages WHERE session_id=? AND message_uid IN "
+                                      "(SELECT message_uid FROM messages WHERE id IN (SELECT value FROM json_each(?))) GROUP BY message_uid", (key, visible)))
+            uids = dict(db._read_all("SELECT id,message_uid FROM messages WHERE session_id=? AND id IN (SELECT value FROM json_each(?))", (key, visible)))
+        for message in messages:
+            original = first.get(uids.get(message.get("row_id")))
+            if type(original) is int and original < message["row_id"]:
+                message["row_id"] = original
 
     def attribute(self, profile, sid, value):
         """Bind app receipts, files and tool details to native history rows.
@@ -1219,6 +1262,9 @@ class Bridge:
         sid = value["session_id"]
         session = server._sessions[sid]
         self.describe_task(profile, sid, session, value)
+        if cached is None:
+            # Reads the session store, so never under journal.lock, which native writers take.
+            self.original_rows(session, value.get("messages", []))
         with journal.lock:
             if cached is None:
                 messages, bound_mutation, cacheable = self.attribute(profile, sid, value)
@@ -1326,6 +1372,8 @@ class Bridge:
                     return server._ok(rid, journal.admission_response(request_id))
             if sid is None:
                 sid = self.open_canonical(profile)
+            # Stop a background compaction before reading run state. Its running flag is no task.
+            preempted = sid is not None and self.compaction.preempt(sid)
             with journal.lock:
                 if sid is None or self.canonical.get(profile) != sid:
                     return server._err(rid, -32602, "Open this profile's canonical conversation before admission")
@@ -1343,6 +1391,10 @@ class Bridge:
                         journal.db.execute(INSERT_REJECTED, rejected)
                         return self.admitted(rid, request_id, "Hermes is finishing the preceding task. Your input was not admitted; send it again after the task settles.")
                 steering = bool(params.get("steer")) or bool(server._sessions.get(sid, {}).get("running"))
+                if preempted and not current:
+                    # No app task was open, so nothing can be steered: the compaction this input
+                    # just stopped was the only work. Hermes queues it if a native turn started meanwhile.
+                    steering = False
                 if steering and any(str(x.get("mime", "")).startswith("image/") for x in attachments):
                     with journal.db:
                         journal.db.execute(INSERT_REJECTED, rejected)
@@ -1474,7 +1526,7 @@ class Bridge:
             rows = self.journal.db.execute("SELECT id,profile,session_id,run_id,kind,title,body,occurred,routine_id,event_key FROM events WHERE id>? ORDER BY id LIMIT 250", (cursor,)).fetchall()
         ready = []
         for row in rows:
-            if row[4] == "completed" and server._sessions.get(row[2], {}).get("running"):
+            if row[4] == "completed" and server._sessions.get(row[2], {}).get("running") and not self.compaction.owns(row[2]):
                 # A turn boundary can precede queued guidance/goal continuation.
                 break
             ready.append(row)
@@ -1496,6 +1548,7 @@ class Bridge:
     def delivery_admission(self, sid):
         # Same order as submit: no delivery starts beside an unsettled app task or maintenance.
         with self.submission_lock:
+            self.compaction.preempt(sid)
             with self.maintenance_lock:
                 closed = bool(self.maintenance_state())
             with self.journal.lock:
@@ -1519,7 +1572,8 @@ class Bridge:
 
     def install_automation(self):
         sibling_module("automation").install_runtime(self.server, self.native, self.open_bot, self.submission_lock,
-                                                     self.maintenance_lock, self.maintenance_state, self.journal, self.submit)
+                                                     self.maintenance_lock, self.maintenance_state, self.journal, self.submit,
+                                                     preempt=self.compaction.preempt)
 
 def install(path=None):
     actual_revision, patch_hash = source_state()
@@ -1538,11 +1592,13 @@ def install(path=None):
     # A Hermes without message_agent gets no roster or gate, and says so.
     delegation = bridge.delegation.install()
     from agent.skill_utils import ESSENTIAL_SKILLS
-    server.register_method("agent-interface.capabilities", lambda rid, _: server._ok(rid, {"revision": actual_revision, "tracked_patch_sha256": patch_hash, "executor_epoch": journal.epoch, "durable_admission": True, "durable_events": True, "canonical_open": True, "explicit_credentials": True, "canonical_submit": True, "incremental_discovery": True, "delegation": delegation, "delegation_version": sibling_module("delegation").PROTOCOL if delegation else 0, "essential_skills": sorted(ESSENTIAL_SKILLS), "steering_decision": True, "approval_settings": True}))
+    server.register_method("agent-interface.capabilities", lambda rid, _: server._ok(rid, {"revision": actual_revision, "tracked_patch_sha256": patch_hash, "executor_epoch": journal.epoch, "durable_admission": True, "durable_events": True, "canonical_open": True, "explicit_credentials": True, "canonical_submit": True, "incremental_discovery": True, "delegation": delegation, "delegation_version": sibling_module("delegation").PROTOCOL if delegation else 0, "essential_skills": sorted(ESSENTIAL_SKILLS), "steering_decision": True, "approval_settings": True, "idle_compaction_seconds": bridge.compaction.delay}))
     for name, handler in bridge.rpc_methods().items():
         server.register_method(name, handler)
     bridge.install_delivery()
     bridge.install_automation()
+    if bridge.compaction.enabled:
+        bridge.compaction.start()
     return journal
 
 if __name__ == "__main__":

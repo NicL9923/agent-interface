@@ -1,0 +1,42 @@
+{
+  "revision": "ed1afb082eb3e46cf2edae9d8f68fb67b09ee4df",
+  "provider": "deterministic fixture; real Hermes compaction",
+  "idle_seconds": 4,
+  "checks": {
+    "plain_message": {
+      "admission_seconds": 0.08,
+      "settled_seconds": 0.224,
+      "steering": false,
+      "uncompacted_transcript": true,
+      "answered_once": true
+    },
+    "steer_flag_message": {
+      "admission_seconds": 0.075,
+      "settled_seconds": 0.227,
+      "steering": false,
+      "uncompacted_transcript": true,
+      "answered_once": true
+    },
+    "native_client_message": {
+      "native_status": "queued",
+      "answered_seconds": 0.295
+    },
+    "routine_delivery": {
+      "delivered_seconds": 4.218,
+      "compaction_still_held": true
+    },
+    "committed": {
+      "app_view_unchanged": true,
+      "anchored_read": true,
+      "model_sees_summary": true,
+      "model_messages_after": 28
+    },
+    "no_repeat": {
+      "waited_seconds": 17
+    },
+    "progress_private": {
+      "compaction_status_frames": 0,
+      "frames_seen": 321
+    }
+  }
+}

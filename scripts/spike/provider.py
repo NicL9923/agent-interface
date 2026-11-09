@@ -29,7 +29,14 @@ class Provider(BaseHTTPRequestHandler):
         tool_names = {x.get("function", {}).get("name") for x in tools}
         after_tool = bool(messages and messages[-1]["role"] == "tool")
         system = next((str(x.get("content", "")) for x in messages if x["role"] == "system"), "")
-        if "security reviewer for an AI coding agent" in system:
+        if any("summarization agent creating a context checkpoint" in str(x.get("content", "")) for x in messages):
+            # Hermes's compaction summary. While the gate file exists the call stays open, so a
+            # probe can act during a compaction and see whether it was cancelled.
+            gate = os.environ.get("HERMES_SPIKE_SUMMARY_GATE")
+            while gate and os.path.exists(gate):
+                time.sleep(0.05)
+            message = {"role": "assistant", "content": "## Goal\nSynthetic compaction summary.\n\n## Progress\nEarlier synthetic turns were answered."}
+        elif "security reviewer for an AI coding agent" in system:
             # Hermes's smart-approval guardian. A command naming smart-approve passes; anything else is denied.
             message = {"role": "assistant", "content": "APPROVE" if "smart-approve" in user else "DENY"}
         elif ("PROBE_TOOL" in user or "PROBE_SLOW_TOOL" in user or "PROBE_APPROVAL" in user or "PROBE_FILE" in user or "PROBE_READ" in user) and not after_tool and "terminal" in tool_names:
