@@ -79,9 +79,6 @@ struct TalkCaptions: Equatable {
     calls = []
   }
 
-  /// A response is under way or asked for.
-  var responding: Bool { active }
-
   /// Asks for a spoken response now, or after the current one ends.
   func respond() {
     guard !disposed else { return }

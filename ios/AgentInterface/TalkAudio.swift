@@ -162,7 +162,9 @@ private final class MuteFlag: Sendable {
   /// what was heard before the microphone and speaker start again.
   private func restart() {
     guard running else { return }
-    let lost = ledger.unheard(at: now)
+    // The engine stopped before this notification ran, so playback ended a moment ago. Counting from
+    // a little earlier errs toward unheard: the voice may repeat a word, but never skips one.
+    let lost = ledger.unheard(at: now - Int64(Self.stopAllowance * TalkPlaybackLedger.rate))
     engine.stop()
     do { try begin() } catch { fail("The microphone stopped. Start Talk again."); return }
     if !lost.isEmpty { cut?(lost) }
@@ -171,6 +173,8 @@ private final class MuteFlag: Sendable {
   /// The host clock in output frames. The voice plays in real time, and unlike the player's own
   /// clock this one keeps counting when a configuration change has already stopped the engine.
   private let origin = ContinuousClock.now
+  /// How long before a configuration change reaches the app the engine may already have stopped.
+  static let stopAllowance = 0.25
   private var now: Int64 {
     let elapsed = origin.duration(to: .now).components
     return Int64((Double(elapsed.seconds) + Double(elapsed.attoseconds) / 1e18) * TalkPlaybackLedger.rate)

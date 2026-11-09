@@ -50,6 +50,9 @@ import Foundation
   @ObservationIgnored private let owner = UUID()
   /// Voice items cut short, whose late audio is dropped.
   @ObservationIgnored private var cutItems: Set<String> = []
+  /// Which response each voice item belongs to, and the responses still generating.
+  @ObservationIgnored private var itemResponses: [String: String] = [:]
+  @ObservationIgnored private var activeResponses: Set<String> = []
 
   init() {
     #if DEBUG
@@ -152,9 +155,14 @@ import Foundation
     switch event["type"] as? String {
     case "session.created":
       open(run: run)
+    case "response.created":
+      if let id = (event["response"] as? [String: Any])?["id"] as? String { activeResponses.insert(id) }
+    case "response.done":
+      if let id = (event["response"] as? [String: Any])?["id"] as? String { activeResponses.remove(id) }
     case "response.output_audio.delta":
       // Audio still arriving for an item already cut would play its end after a gap.
       let item = event["item_id"] as? String ?? ""
+      if let response = event["response_id"] as? String, !item.isEmpty { itemResponses[item] = response }
       if !cutItems.contains(item), let delta = event["delta"] as? String, let pcm = Data(base64Encoded: delta) {
         audio?.play(pcm, item: item)
       }
@@ -173,7 +181,10 @@ import Foundation
       cutItems.insert(heard.item)
       host?.send(["type": "conversation.item.truncate", "item_id": heard.item, "content_index": 0, "audio_end_ms": heard.milliseconds])
     }
-    if cancel, !lost.isEmpty, loop?.responding == true { host?.send(["type": "response.cancel"]) }
+    guard cancel else { return }
+    // Only a response still generating a cut item; a newer answer already under way goes on.
+    let responses = Set(lost.compactMap { itemResponses[$0.item] }).intersection(activeResponses)
+    for response in responses.sorted() { host?.send(["type": "response.cancel", "response_id": response]) }
   }
   fileprivate func phase(_ phase: TalkPhase, run: Int) {
     guard generation == run, status != .idle else { return }
@@ -188,7 +199,7 @@ import Foundation
     starting?.cancel(); starting = nil
     timer?.cancel(); timer = nil
     loop?.dispose(); loop = nil
-    cutItems = []
+    cutItems = []; itemResponses = [:]; activeResponses = []
     host = nil
     transport?.close(); transport = nil
     audio?.stop(); audio = nil

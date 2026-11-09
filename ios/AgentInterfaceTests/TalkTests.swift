@@ -296,15 +296,35 @@ final class TalkPlaybackTests: XCTestCase {
     socket.emit(["type": "response.output_audio.delta", "item_id": "item-7", "delta": Data([0, 1]).base64EncodedString()])
     XCTAssertEqual(audio.played.count, 1)
     // A headset change that dropped queued voice tells the model what was heard, cancels the
-    // response still speaking, and Talk goes on.
-    socket.emit(["type": "response.created"])
+    // response still generating it, and Talk goes on.
+    socket.emit(["type": "response.created", "response": ["id": "resp-9"]])
+    socket.emit(["type": "response.output_audio.delta", "response_id": "resp-9", "item_id": "item-9", "delta": Data([0, 3]).base64EncodedString()])
     audio.cut?([.init(item: "item-9", milliseconds: 400)])
     let cut = socket.sent.last { $0["type"] as? String == "conversation.item.truncate" }
     XCTAssertEqual(cut?["item_id"] as? String, "item-9")
     XCTAssertEqual(cut?["audio_end_ms"] as? Int, 400)
     XCTAssertEqual(socket.sent.last?["type"] as? String, "response.cancel")
-    socket.emit(["type": "response.output_audio.delta", "item_id": "item-9", "delta": Data([0, 2]).base64EncodedString()])
-    XCTAssertEqual(audio.played.count, 1, "The cut item's later audio never plays")
+    XCTAssertEqual(socket.sent.last?["response_id"] as? String, "resp-9")
+    socket.emit(["type": "response.output_audio.delta", "response_id": "resp-9", "item_id": "item-9", "delta": Data([0, 2]).base64EncodedString()])
+    XCTAssertEqual(audio.played.count, 2, "The cut item's later audio never plays")
+    XCTAssertTrue(talk.live)
+  }
+
+  func testAHeadsetCutCancelsOnlyTheResponseItCut() async throws {
+    let server = FakeServer { _ in .init(body: self.session) }
+    let socket = FakeSocket(), audio = FakeAudio()
+    let talk = talk(server, socket: socket, audio: audio)
+    talk.start()
+    try await until { socket.opened != nil }
+    socket.emit(["type": "session.created"])
+    // A finished generating while its audio still plays; B, the answer, has started.
+    socket.emit(["type": "response.created", "response": ["id": "resp-a"]])
+    socket.emit(["type": "response.output_audio.delta", "response_id": "resp-a", "item_id": "item-a", "delta": Data([0, 1]).base64EncodedString()])
+    socket.emit(["type": "response.done", "response": ["id": "resp-a"]])
+    socket.emit(["type": "response.created", "response": ["id": "resp-b"]])
+    audio.cut?([.init(item: "item-a", milliseconds: 300)])
+    XCTAssertEqual(socket.sent.last?["type"] as? String, "conversation.item.truncate")
+    XCTAssertFalse(socket.sent.contains { $0["type"] as? String == "response.cancel" }, "The answer under way is not cancelled")
     XCTAssertTrue(talk.live)
   }
 
