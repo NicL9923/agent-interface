@@ -129,7 +129,11 @@ export interface CheckInSettings {
 }
 // --- End main assistant ---
 export const reasoningLevels = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"] as const;
-export const serviceTiers = ["normal", "fast", "ultrafast"] as const;
+/**
+ * Auto is Hermes's bounded fast window: Fast opens at the start of every reply and closes after
+ * `agent.fast_auto_seconds`. Hermes's first-turn-only `cold` mode is not offered.
+ */
+export const serviceTiers = ["normal", "auto", "fast", "ultrafast"] as const;
 export interface InferenceSettings {
   reasoning: typeof reasoningLevels[number];
   speed: typeof serviceTiers[number];
@@ -434,6 +438,12 @@ export interface Submission {
   draftBaseRevision?: number;
   /** The user message this one retries. A retry never reads, merges or clears the sender's draft. */
   retryOf?: string;
+  /**
+   * Spoken in live Talk. A new turn runs on Hermes's voice route (`auxiliary.voice_chat`), which
+   * sets its own reasoning effort; a steer joins the running turn unchanged. Only the server sets it,
+   * on the send to Hermes, never in the recorded request.
+   */
+  voice?: boolean;
 }
 export interface SubmissionReceipt {
   requestId: string;

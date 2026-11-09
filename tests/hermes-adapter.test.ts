@@ -38,6 +38,26 @@ let opening: 'open' | 'close' | 'hang';
 let deferredMethods: Set<string>;
 let rpcErrors: Map<string, {code:number; message:string}>;
 let beforeSend: ((request:Record<string,any>,socket:WireSocket)=>void) | undefined;
+// Hermes ed1afb0's `fast` key. `tier` is the live agent's service_tier. config.set stores the word and a
+// status read answers the live tier (`_set_fast`). config.get reports only Fast and Ultrafast and falls
+// back to the profile default when the session's tier is unset (`_cfg_get_fast`). Only Fast and
+// Ultrafast check the model.
+const hermesSpeed={tier:null as string|null,profileTier:null as string|null,fastModel:true,knowsAuto:true,knowsStatus:true,get:undefined as string|undefined,echo:undefined as string|undefined};
+const speedWords:Record<string,string|null>={fast:'priority',ultrafast:'ultrafast',normal:null,auto:'auto'};
+function speedReply(request:Record<string,any>):{result?:unknown;error?:{code:number;message:string}}|undefined{
+  if(request.params?.key!=='fast')return undefined;
+  const word=request.method==='config.set'?String(request.params.value):'';
+  if(request.method==='config.get')return {result:{value:hermesSpeed.get??({priority:'fast',ultrafast:'ultrafast'} as Record<string,string>)[hermesSpeed.tier??hermesSpeed.profileTier??'']??'normal'}};
+  if(request.method!=='config.set')return undefined;
+  if(word==='status'){
+    if(!hermesSpeed.knowsStatus)return {error:{code:4002,message:'unknown fast mode: status'}};
+    return {result:{key:'fast',value:({priority:'fast'} as Record<string,string>)[hermesSpeed.tier??'']??hermesSpeed.tier??'normal'}};
+  }
+  if(!(word in speedWords)||word==='auto'&&!hermesSpeed.knowsAuto)return {error:{code:4002,message:`unknown fast mode: ${word}`}};
+  if((word==='fast'||word==='ultrafast')&&!hermesSpeed.fastModel)return {error:{code:4002,message:`${word} mode is not available for this model`}};
+  hermesSpeed.tier=speedWords[word];
+  return {result:{key:'fast',value:hermesSpeed.echo??word}};
+}
 class WireSocket extends EventTarget {
   static CONNECTING=0;
   static OPEN=1;
@@ -62,7 +82,12 @@ class WireSocket extends EventTarget {
       queueMicrotask(()=>this.receive({jsonrpc:'2.0',id:request.id,error:rpcErrors.get(request.method)}));
       return;
     }
-    let result:unknown={};
+    const speed=speedReply(request);
+    if (speed?.error) {
+      queueMicrotask(()=>this.receive({jsonrpc:'2.0',id:request.id,error:speed.error}));
+      return;
+    }
+    let result:unknown=speed?.result??{};
     if(request.method==='agent-interface.capabilities')result={revision:reportedRevision,durable_admission:true,durable_events:addonReady,canonical_open:addonReady,executor_epoch:'epoch-one',...(incrementalDiscovery?{incremental_discovery:true}:{}),...(canonicalSubmission?{canonical_submit:true}:{}),...(explicitCredentials?{explicit_credentials:true}:{}),...delegation};
     if(request.method==='agent-interface.open')result=structuredClone(snapshot);
     if(request.method==='file.attach')result={path:'/workspace/staged/portrait.png'};
@@ -70,7 +95,7 @@ class WireSocket extends EventTarget {
     if(request.method==='profiles.list')result={profiles:[{name:'shared',ui_meta:{agent_interface:{name:'Shared',unrelated:'preserve'}},ui_meta_revisions:{agent_interface:3},...(rosterSession?{canonical_session:rosterSession}:{})}]};
     if(request.method==='profiles.describe')result={toolsets:[{name:'terminal',enabled:true}],skills:[],mcp_servers:[{name:'calendar',enabled:true},{name:'notes',enabled:false}]};
     if(request.method==='profiles.configure')result=metadataConflict?{ok:false,applied:{ui_meta:false,ui_meta_conflicts:{agent_interface:{actual:4}}}}:{ok:true,applied:{ui_meta:true}};
-    if(request.method==='config.get')result={value:request.params.key==='reasoning'?'high':'normal'};
+    if(request.method==='config.get'&&!speed)result={value:request.params.key==='reasoning'?'high':'normal'};
     if(request.method==='image.generate')result={available:imageReady,success:false,error:'No image generation backend configured'};
     if(request.method==='profiles.set_asset')result={ok:true};
     if(request.method==='agent-interface.delegation')result={ok:true};
@@ -82,7 +107,7 @@ class WireSocket extends EventTarget {
 }
 beforeEach(()=>{
   reportedRevision=revision;
-  snapshot={session_id:'live-one',canonical_stored_session_id:'stored-one',info:{running:false},messages:[]};calls=[];sockets=[];addonReady=true;explicitCredentials=true;canonicalSubmission=false;incrementalDiscovery=false;delegation={};metadataConflict=false;connectionFails=false;imageReady=false;rosterSession=undefined;opening='open';deferredMethods=new Set();rpcErrors=new Map();beforeSend=undefined;
+  snapshot={session_id:'live-one',canonical_stored_session_id:'stored-one',info:{running:false},messages:[]};calls=[];sockets=[];addonReady=true;explicitCredentials=true;canonicalSubmission=false;incrementalDiscovery=false;delegation={};metadataConflict=false;connectionFails=false;imageReady=false;rosterSession=undefined;opening='open';deferredMethods=new Set();rpcErrors=new Map();beforeSend=undefined;Object.assign(hermesSpeed,{tier:null,profileTier:null,fastModel:true,knowsAuto:true,knowsStatus:true,get:undefined,echo:undefined});
   vi.stubGlobal('WebSocket',WireSocket);
   vi.stubGlobal('fetch',vi.fn(async()=>Response.json({profiles:[]})));
   runtime=createHermesRuntime({url:'http://127.0.0.1:19119',token});
@@ -282,6 +307,13 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     expect(calls[0].params).not.toHaveProperty('session_id');
     rpcErrors.set('agent-interface.submit',{code:4094,message:'Review interruption'});
     await expect(runtime.submit({...input(),text:'Again'})).rejects.toMatchObject({statusCode:409,message:'Review the interrupted task before starting another message.'});
+  });
+  it('asks the add-on for a voice turn only for a spoken request', async () => {
+    canonicalSubmission=true;
+    await runtime.status(); calls=[];
+    await runtime.submit({...input(),text:'Spoken',voice:true});
+    await runtime.submit({...input(),requestId:'typed',text:'Typed'});
+    expect(calls.map(call=>call.params.voice_turn)).toEqual([true,undefined]);
   });
   it('fences a retry to an idle assistant and reports a refusal without admission', async () => {
     canonicalSubmission=true;
@@ -1421,13 +1453,75 @@ it('routes routine history and output through the private scoped native experien
 });
 
 it('scopes reasoning and service tier controls to the canonical assistant session', async () => {
-  expect(await runtime.inferenceSettings!('shared', {reasoning:'ultra',speed:'fast'})).toEqual({reasoning:'high',speed:'normal'});
+  expect(await runtime.inferenceSettings!('shared', {reasoning:'ultra',speed:'fast'})).toEqual({reasoning:'high',speed:'fast'});
   expect(calls.filter(call=>call.method==='config.set').map(call=>call.params)).toEqual([
     {profile:'shared',session_id:'live-one',key:'reasoning',value:'ultra'},
     {profile:'shared',session_id:'live-one',key:'fast',value:'fast'},
+    // The read-back asks the same session for its live tier.
+    {profile:'shared',session_id:'live-one',key:'fast',value:'status'},
   ]);
   rpcErrors.set('config.set', {code:4002,message:'Fast mode is unavailable'});
   await expect(runtime.inferenceSettings!('shared',{speed:'ultrafast'})).rejects.toThrow();
+});
+
+describe('Auto speed', () => {
+  // Every speed write changes the live session at once, so the writes are the behavior.
+  const writes=()=>calls.filter(call=>call.method==='config.set'&&call.params.key==='fast'&&call.params.value!=='status').map(call=>call.params.value);
+  it('saves Auto with one write and reads it back although config.get reports it as normal', async () => {
+    expect(await runtime.inferenceSettings!('shared',{speed:'auto'})).toEqual({reasoning:'high',speed:'auto'});
+    expect(writes()).toEqual(['auto']);
+    expect(hermesSpeed.tier).toBe('auto');
+    expect(await runtime.inferenceSettings!('shared')).toEqual({reasoning:'high',speed:'auto'});
+  });
+
+  it('never probes Fast, even on a model without fast mode, where Hermes runs Auto at normal speed', async () => {
+    hermesSpeed.tier='ultrafast'; hermesSpeed.fastModel=false;
+    expect((await runtime.inferenceSettings!('shared',{speed:'auto'})).speed).toBe('auto');
+    expect(writes()).toEqual(['auto']);
+  });
+
+  it('refuses Auto on a Hermes that predates it and leaves the earlier speed alone', async () => {
+    hermesSpeed.tier='priority'; hermesSpeed.knowsAuto=false;
+    await expect(runtime.inferenceSettings!('shared',{speed:'auto'})).rejects.toMatchObject({statusCode:409,message:'This Hermes version does not have Auto speed. Update Hermes to use it.'});
+    expect(writes()).toEqual(['auto']);
+    expect(hermesSpeed.tier).toBe('priority');
+  });
+
+  it('refuses when Hermes answers Auto with another word, without writing a speed nobody picked', async () => {
+    hermesSpeed.echo='normal';
+    await expect(runtime.inferenceSettings!('shared',{speed:'auto'})).rejects.toMatchObject({statusCode:409,message:'Hermes did not confirm Auto speed. Update Hermes to use it.'});
+    expect(writes()).toEqual(['auto']);
+  });
+
+  it('names the unsupported speed when Fast or Ultrafast is refused', async () => {
+    hermesSpeed.fastModel=false;
+    await expect(runtime.inferenceSettings!('shared',{speed:'ultrafast'})).rejects.toMatchObject({statusCode:409,message:'Ultrafast speed is not available for this model.'});
+  });
+
+  it('reads a session pinned to Normal as normal when the profile default is Fast', async () => {
+    hermesSpeed.profileTier='priority';
+    expect((await runtime.inferenceSettings!('shared')).speed).toBe('normal');
+  });
+
+  it('refuses a speed word the app cannot show, from status or from an older Hermes, instead of guessing', async () => {
+    hermesSpeed.tier='warp';
+    await expect(runtime.inferenceSettings!('shared')).rejects.toThrow('Hermes returned unreadable inference settings.');
+    hermesSpeed.tier=null; hermesSpeed.knowsStatus=false; hermesSpeed.get='warp';
+    await expect(runtime.inferenceSettings!('shared')).rejects.toThrow('Hermes returned unreadable inference settings.');
+  });
+
+  it('passes on a failed status read instead of falling back to the lossy config.get', async () => {
+    hermesSpeed.tier='auto';
+    rpcErrors.set('config.set', {code:5005,message:'session busy'});
+    await expect(runtime.inferenceSettings!('shared')).rejects.toMatchObject({rpcCode:5005});
+  });
+
+  it('reads Cold as normal, and a Hermes without status through config.get', async () => {
+    hermesSpeed.tier='cold';
+    expect((await runtime.inferenceSettings!('shared')).speed).toBe('normal');
+    hermesSpeed.tier='priority'; hermesSpeed.knowsStatus=false;
+    expect((await runtime.inferenceSettings!('shared')).speed).toBe('fast');
+  });
 });
 
 it('preserves native event provenance and inherits scheduled replies without changing roles', async () => {

@@ -1248,5 +1248,5 @@ struct InferenceSettings: Codable, Equatable {
   var reasoning: String
   var speed: String
   static let reasoningLevels = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
-  static let speeds = ["normal", "fast", "ultrafast"]
+  static let speeds = ["normal", "auto", "fast", "ultrafast"]
 }

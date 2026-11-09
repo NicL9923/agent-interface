@@ -134,7 +134,7 @@ export function ChatModelPicker({ bot, bootstrap, disabled, onSaved }: {
             <Segmented label="Speed" value={settings.speed} options={speedOptions} busy={busy || settingsBusy}
               onChange={speed => void changeSettings({ speed })} />
             {settingsError && settingsErrorScope === "Speed" && <FormMessage ref={inferenceError} tabIndex={-1} className="model-update-error" tone="error"><strong>Speed</strong><span>{settingsError}</span></FormMessage>}
-            <small className="muted">Available levels and speeds depend on the model.</small>
+            <small className="muted">Auto uses Fast at the start of each reply, then Normal. Available levels and speeds depend on the model.</small>
           </> : !settingsError && <span role="status" className="muted">Loading reasoning and speed…</span>}
           {settingsBusy && <span role="status"><Icon name="spinner" className="spin" size={14} /> Saving…</span>}
           {settingsError && !settings && <FormMessage ref={inferenceError} tabIndex={-1} className="model-update-error" tone="error"><span>{settingsError}</span></FormMessage>}

@@ -1363,7 +1363,12 @@ class Bridge:
                         return self.admitted(rid, request_id, "Image preparation failed before admission: " + str(exc)[:400])
                 try:
                     method = "session.steer" if steering else "prompt.submit"
-                    result = self.native(method, {"session_id": sid, "profile": profile, "text": text})
+                    native = {"session_id": sid, "profile": profile, "text": text}
+                    # A spoken Talk turn runs on Hermes's auxiliary.voice_chat route. A steer joins a
+                    # running turn, whose route is already bound, so it carries no voice mark.
+                    if params.get("voice_turn") is True and not steering:
+                        native["voice_turn"] = True
+                    result = self.native(method, native)
                 except Exception as exc:
                     # Known native admission refusals happen before invoking or queueing a turn.
                     # Crashes and unrecognized errors may follow side effects, so stay uncertain.
