@@ -799,3 +799,428 @@ no simulator or native build remains owned by this follow-up. The scheduled
 completion task stays enabled because PR 273 still needs a defensible fix,
 strict red-to-green/mutation evidence, broader native checks and eligible final
 review. No production, TestFlight or App Store action ran.
+
+
+## Passive responder-chain diagnostic stopped at Device discovery
+
+Native GPT-6.1 Sol high, no children. Local checkout HEAD is
+4c7a555d63cf83838941f3a04c1c22da34493eeb with the parent-transferred patch.
+The iOS fingerprint before and after is
+sha256:cdb10e0e737afb99c40da4c57a503555231dde6b8ac553df078a2ff8af5acb7d
+across 329 source files. The before/after patch bytes match.
+DevSSD UUID verified as A6506932-2021-45AD-8C2E-91FCFD595A87.
+Xcode 27.2 build 27B52, iOS 27.0 build 24A434.
+
+The lock queued for 0.174 seconds and was held for 33.725 seconds, including
+creation and deletion of owned iPhone 18 Pro
+5A31A7FB-23E8-4D6C-85F6-86B551AB31A5. No test execution time exists.
+The device was never booted. The cleanup shutdown returned code 405 because
+it was already Shutdown; deletion succeeded before lock release. The wrapper
+exit 70 reflects cancellation of the waiting script, not an XCTest result.
+
+Device list initially succeeded. Device open failed twice, including after
+following its instruction to refresh the device list, with:
+"No device 5A31A7FB-23E8-4D6C-85F6-86B551AB31A5 on 'This machine' (hostId local). Call device_list for current ids."
+The refreshed Device inventory omitted the new device. The applicable device
+instructions require stopping after the retry fails. No alternative device or
+manual simulator interaction was used. No Device panel was established.
+
+No compile, build, test iteration, result bundle, console, or OSLog collection
+ran. Registered f versus k chain membership and previous-launch success cannot
+be compared from this attempt. The test's single Cmd+F and focus assertions
+remain unchanged. No fix, final review, commit, push, watch or deployment.
+PR 273 was untouched; the supplied draft head remains
+5d8cc87b00d9fa90c998807c30319545c1790226, not re-queried in this diagnostic.
+
+Patch SHA-256: 428edc11d5ced3e21465d1f931f88f4992c40fc9c2dc05c711616f2bbf01fcba
+
+Evidence uses prefix
+`/Volumes/DevSSD/scratch/agent-interface-followup-20261108/273-passive-chain`.
+The `.summary.txt`, `.command.txt`, `.lock.log`, `.metadata.txt`, `.patch`,
+`.after.patch`, before/after source fingerprints and `.cleanup-verification.txt`
+retain the local evidence. No xcresult or application log exists for this attempt.
+
+
+The completed Grok 4.7 diagnostic re-check rejected both prior experiments as
+fixes. Its session could not confirm high effort, so this response is design
+advice and does not satisfy final independent review. A passive public responder
+chain can establish an earlier competing f command if one is present, but its
+absence cannot establish that the synthesized event reached UIKit. A view-tree
+scan also cannot prove that no non-view first responder exists. If the chain
+observation is inconclusive, the proposed next diagnostic observes sendEvent and
+sendAction without changing either original implementation, calibrated against
+Cmd+1 in the same launch. These are hypotheses pending runtime evidence.
+
+The Device panel attempt above did not run XCTest. Direct interaction remains
+stopped after the two discovery failures. The user's explicit authorization for
+project XCTest runners still applies. A separate GPT-6.1 Sol high task now runs
+only the current signed XCTest runner, with no manual app or Device panel
+interaction, at the same diagnostic fingerprint. It selects the strict parity
+test for up to 10 relaunch iterations and stops on the first failure. This is
+not a retry of a failed native test, because the earlier test never started.
+No diagnostic or production fix has passed compilation at this checkpoint.
+
+
+## XCTest-only passive responder-chain run, November 9 UTC
+
+The signed build-for-testing compiled successfully at HEAD
+`4c7a555d63cf83838941f3a04c1c22da34493eeb` plus the supplied temporary patch.
+The iOS fingerprint remained
+`sha256:cdb10e0e737afb99c40da4c57a503555231dde6b8ac553df078a2ff8af5acb7d`
+for all 329 source files before and after execution. The iOS patch SHA-256 remained
+`428edc11d5ced3e21465d1f931f88f4992c40fc9c2dc05c711616f2bbf01fcba`.
+The full before/after patch bytes also matched before this ledger append.
+No source edits were made. DevSSD UUID matched the required
+`A6506932-2021-45AD-8C2E-91FCFD595A87` before output creation.
+
+The current project runner was used unchanged, with ad hoc simulator signing
+`CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=`.
+Exact invocation:
+
+```sh
+IOS_VALIDATION_FRESH=1 IOS_DERIVED_DATA=/Volumes/DevSSD/scratch/agent-interface-followup-20261108/derived-273 bash .agents/tools/validate-ios.sh 045DADBD-3893-42A1-9A2A-AA6E62707B0B test -only-testing:AgentInterfaceUITests/ParityFlowTests/testSwipingARowPinsItAndCommandShortcutsOpenAndFind -test-iterations 10 -test-repetition-relaunch-enabled YES -run-tests-until-failure
+```
+
+An outer `~/.agents/tools/mac-heavy-lock.sh` held the lock from simulator creation
+through log capture and owned deletion. The lock queued for 0.175 seconds and was
+held for 141.253 seconds. Runner execution was 139 seconds including build,
+XCTest startup, repetitions and runner cleanup. Xcode reported 108.329 seconds
+for test execution startup/completion. Iteration 1 took 26.105 seconds and passed;
+iteration 2 took 19.584 seconds and failed. The run stopped on that first failure,
+with exit 65. Iterations 3 through 10 did not run. The result bundle represents
+one unique test with two repetitions, one successful and one failed. Its top-level
+passedTests is 0 because that unique test failed overall; its per-device counts
+report one passed and one failed repetition.
+
+Toolchain: Xcode 27.2 build 27B52, macOS 27.0.1, arm64. First-launch check passed.
+Owned simulator: iPhone 18 Pro `045DADBD-3893-42A1-9A2A-AA6E62707B0B`,
+iOS 27.0 build 24A434. XCTest booted it; no manual application interactions,
+Device panel operations, manual screenshots, launch/io commands or substitute
+runner were used. The runner shut it down. The outer cleanup's shutdown returned
+405 because it was already Shutdown; deletion succeeded and the final device
+inventory confirms its absence. No other simulator was modified.
+
+The failed repetition reached Ranch hand after one Cmd+1 attempt, then sent
+Cmd+F once at t=13.43 seconds. `findConversation` never appeared, failing at
+ParityFlowTests.swift:92. The separate focus assertion was not reached.
+The successful repetition sent Cmd+F once at t=22.08 seconds and passed both
+field appearance and keyboard focus. App PIDs were 15604 for success and 15740
+for failure, confirming the comparison spans separate launches.
+
+OSLog subsystem `dev.agentinterface.keyboardtrace` was captured using a read-only
+log stream while XCTest ran and before deletion. Exported xcresult diagnostics
+are retained too. In the last recorded pre-F snapshots, success at local
+18:57:08.421 and failure at 18:57:34.172, both reported a key window, first=nil,
+and scene=0. The observed fallback next-responder walk was UIWindow,
+UIWindowScene, SwiftUIApplication, SwiftUI.AppDelegate, nil. Neither f nor k was
+listed on that fallback walk. Both were present on the visible chat's
+NavigationStackHostingController in the separately enumerated controller tree.
+The old home controller had window=nil and no listed commands in both snapshots.
+The f registration used assistantFind:, Command modifiers 1048576 and
+priority=true; k used assistantQuickSwitch:, the same modifiers and priority=false.
+Both launches' registration logs reported target=SwiftUI.AppDelegate,
+eligible=true and keyWindow=true for f and k.
+
+The successful launch logged `native route find bound=true bootstrap=true
+viewing=ranch` at 18:57:14.401. The failed launch logged pinned navigation at
+18:57:33.481 but no native Find callback. This trace does not establish a cause
+or a fix. Snapshots are sampled every 250 ms and logged only when their contents
+change; they are not an input-event interception trace.
+
+Evidence prefix: `/Volumes/DevSSD/scratch/agent-interface-followup-20261108/273-xctest-only-20261109`.
+The `.runner.log`, `.command.txt`, `.metadata.txt`, `.execution.txt`, `.lock.log`,
+`.oslog-stream.log`, `.pre-find-comparison.txt`, `.trace-readable.txt`,
+`.verification.txt`, source fingerprints, before/after patches and copied
+`.validate-ios.sh` preserve the exact state and commands. The controller comparison
+includes original raw-log line numbers 203 through 218 and 456 through 471.
+
+The unchanged project runner initially generated its hardcoded `.private` result
+paths. Only this invocation's new artifacts were then moved into the task scratch
+folder. `.artifact-map.txt` records those original and final paths. The final
+result bundle is `/Volumes/DevSSD/scratch/agent-interface-followup-20261108/273-xctest-only-20261109.ios-test-20261109T005529Z-13815.xcresult`.
+Its build bundle uses `-build.xcresult`; the wrapper summary is
+`/Volumes/DevSSD/scratch/agent-interface-followup-20261108/273-xctest-only-20261109.ios-test-20261109T005529Z-13815.txt`.
+Both bundles' exported diagnostics and JSON summaries sit beside them.
+
+No production fix was accepted, no commit/push/PR change or watch occurred,
+and no independent review was performed. PR 273's draft state was supplied by
+the parent and was not re-queried. The requested scope was only this test; other
+keyboard entry points and platforms were not revalidated.
+
+
+The passive comparison shows the same public Find and K registration on the
+visible chat controller in both launches. No competing public f command appears
+in the captured window chain. This is inconclusive about event delivery, as the
+completed diagnostic review predicted. The next temporary DEBUG-only observation
+wraps UIApplication.sendEvent and sendAction, logs their inputs and calls the
+original method without modifying its result. It calibrates visibility against
+Cmd+1 in the same launch. It remains unaccepted diagnostic code.
+
+
+## XCTest-only event/action observation, November 9 UTC
+
+Native GPT-6.1 Sol high ran this diagnostic without children or source edits.
+The signed build-for-testing succeeded. The strict parity test passed iteration 1
+in 19.601 seconds and failed iteration 2 in 26.624 seconds. Run-until-failure stopped
+there, exit 65; iterations 3 through 10 did not run. The failure at
+ParityFlowTests.swift:92 was missing `findConversation` after one Cmd+F, following
+one Cmd+1 attempt. It did not reach the separate focus assertion. The passing
+repetition passed both field appearance and focus. This is simulator runtime
+execution, not physical-device verification or a production fix.
+
+HEAD remained `4c7a555d63cf83838941f3a04c1c22da34493eeb`. Before and after,
+the 329-file iOS fingerprint was
+`sha256:2bff37ef2541a79b53df2dc85bc47cd563e56a1b11eb8d6dc3990e90633983be`.
+The iOS patch SHA-256 was
+`e4f9a9103117866838f2416aa2dec325b54cd928cc45c4b7533402d66e77feab`.
+Full patch bytes matched before this ledger append, SHA-256
+`56d719cc786c1fcb9cc15c8ae68c18b6ad4c08470f8aca992c7fdfdf2ec9cfc9`.
+The saved patch comparison against the prior passive run shows only ObjectiveC
+import, installation of the DEBUG fixture-gated UIApplication observation and
+its sendEvent/sendAction wrappers. Both wrappers call the exchanged original
+method. No handler, focus or test sequence was changed. The unchanged current
+runner SHA-256 is `1dccac1cf07083acb46ddd5b101b049c2c5a6539beca00cd777209691ad36caf`.
+
+DevSSD UUID was verified as `A6506932-2021-45AD-8C2E-91FCFD595A87` before
+scratch writes. Host Nicolass-Mini, arm64, macOS 27.0.1; Xcode 27.2 build 27B52,
+selected at `/Applications/Xcode.app/Contents/Developer`, first-launch check passed.
+Owned iPhone 18 Pro `066FCB81-883B-4D08-B963-60855CF6296B` used iOS 27.0
+build 24A434. The outer mac-heavy-lock covered creation, XCTest, log collection
+and deletion. Queue time was 0.163 seconds, lock hold 117.875 seconds, runner
+117 seconds including build and cleanup. Xcode reported 85.218 seconds for test
+startup/completion. The run spanned 01:00:51 through 01:02:49 UTC November 9.
+
+Exact inner command:
+
+```sh
+IOS_VALIDATION_FRESH=1 IOS_DERIVED_DATA=/Volumes/DevSSD/scratch/agent-interface-followup-20261108/derived-273 bash .agents/tools/validate-ios.sh 066FCB81-883B-4D08-B963-60855CF6296B test -only-testing:AgentInterfaceUITests/ParityFlowTests/testSwipingARowPinsItAndCommandShortcutsOpenAndFind -test-iterations 10 -test-repetition-relaunch-enabled YES -run-tests-until-failure
+```
+
+The outer invocation was `~/.agents/tools/mac-heavy-lock.sh bash
+/Volumes/DevSSD/scratch/agent-interface-followup-20261108/273-event-observation-20261109.run.sh`. Simulator signing stayed
+`CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=`.
+The runner added parallel testing NO, test timeouts YES and diagnostics never.
+XCTest alone booted and interacted with the app. No Device panel operations,
+manual launch/tap/type/screenshots, simctl launch/io or substitute interactions
+ran. The runner shut down the simulator. Outer shutdown returned 405 because it
+was already Shutdown; deletion succeeded and the final inventory confirms absence.
+Other devices were not modified.
+
+### Same-launch calibration and failed delivery observation
+
+All following timestamps are November 8 local CST, UTC minus 6 hours. Raw stream
+line references are retained in `.trace-readable.txt`. Both launches include
+root-registration, responder-chain and event-observation categories from subsystem
+`dev.agentinterface.keyboardtrace`, streamed while XCTest ran and before deletion.
+The exported per-iteration app stdout independently contains the same key traces.
+
+In passing app PID 18914, Cmd+1 appears in sendEvent at 19:02:07.664, then
+sendAction logs `assistantPinned:` with target `SwiftUI.AppDelegate`, input=1,
+modifiers=1048576 and event=-1 at 19:02:07.673. The pinned callback runs at
+19:02:07.679. Cmd+F appears in sendEvent at 19:02:09.704, followed by
+sendAction `assistantFind:` with the same target, input=f, modifiers=1048576,
+event=-1. Its native Find callback logs bound=true, bootstrap=true, viewing=ranch.
+Both keys have phase 0 and phase 3 press records. These are raw stream lines
+179 through 183 and 231 through 233 plus 272. The probe sees both shortcuts
+within this single launch, so it is not generally blind to XCTest shortcuts.
+
+In failing app PID 19414, Cmd+1 appears in sendEvent at 19:02:29.605 and
+sendAction `assistantPinned:` at 19:02:29.633, targeting SwiftUI.AppDelegate,
+input=1, modifiers=1048576, event=-1. The callback runs at 19:02:29.637,
+and key release appears at 19:02:29.731. See stream lines 455 through 464.
+XCTest records its single Cmd+F at t=15.21 seconds, but neither sendEvent key=f
+nor sendAction input=f/assistantFind: nor a native Find callback appears in this
+launch's stream or app stdout. Its only other observed sendAction selector is
+`__backButtonAction:` targeting UIKit.NavigationBarContentView for test navigation.
+The failed launch therefore has a visible Cmd+1 calibration, rather than a callback
+with both keys invisible. This establishes absence at these instrumented app
+methods, not where or why the input was lost. No raw HID or system-wide input
+capture ran. No cause or fix is proven.
+
+The last pre-F snapshots at 19:02:08.489 for success and 19:02:30.304 for failure
+both show a key window, first=nil and scene=0. The fallback chain is UIWindow,
+UIWindowScene, SwiftUIApplication, SwiftUI.AppDelegate, nil. Both visible chat
+NavigationStackHostingControllers list f and k. Their registered targets are
+SwiftUI.AppDelegate with eligible=true and keyWindow=true; f uses assistantFind:
+and priority=true, k uses assistantQuickSwitch: and priority=false. Both have
+Command modifiers 1048576. The old home controller has window=nil and no commands
+in these snapshots. Thus registration and sampled responder state still do not
+explain the failure. The successful post-F snapshot shows SwiftUI.UIKitTextField
+as first responder. Snapshots remain sampled at 250 ms and log only changes.
+
+Evidence prefix: `/Volumes/DevSSD/scratch/agent-interface-followup-20261108/273-event-observation-20261109`.
+The `.runner.log`, `.oslog-stream.log`, `.trace-readable.txt`, `.execution.txt`,
+`.metadata.txt`, `.command.txt`, `.lock.log`, `.cleanup.log`, `.instrumentation-delta.txt`,
+source fingerprints, before/after patches, copied runner and device inventories
+retain the exact run. The runner's new artifacts were moved from .private to
+scratch after execution; `.artifact-map.txt` records the original and final paths.
+Result: `/Volumes/DevSSD/scratch/agent-interface-followup-20261108/273-event-observation-20261109.ios-test-20261109T010052Z-17956.xcresult`.
+Runner summary: `/Volumes/DevSSD/scratch/agent-interface-followup-20261108/273-event-observation-20261109.ios-test-20261109T010052Z-17956.txt`.
+Build result uses `-build.xcresult`; both bundles have exported diagnostics and
+JSON summaries alongside them. The xcresult records one unique failed test with
+two repetitions, one passed and one failed, zero skips and zero expected failures.
+Its top-level passedTests=0 summarizes the unique test, not the repetitions.
+
+Only the authorized strict test was rerun. Other keyboard entry points, iPad,
+web and physical devices were not revalidated. No production fix, commit, push,
+watch, PR mutation or deployment occurred. Final independent review remains incomplete.
+
+
+The observation wraps UIApplication base methods. Because the actual application
+is a SwiftUI subclass, the next trace first records whether that concrete class
+overrides either method, then wraps the original implementation on that concrete
+class instead. It preserves inherited methods by adding owned entries before
+exchanging the diagnostic methods. No event, action, return value or focus is
+changed. This closes a measurement gap before attributing missing F to injection.
+
+
+Primary API references checked on November 9 UTC support the observation's scope,
+not a cause. Apple's [UIKeyCommand documentation](https://developer.apple.com/documentation/uikit/uikeycommand)
+says system commands can route to standard responder methods. Its
+[sendEvent documentation](https://developer.apple.com/documentation/uikit/uiapplication/sendevent(_:))
+requires forwarding intercepted events, and its
+[sendAction documentation](https://developer.apple.com/documentation/uikit/uiapplication/sendaction(_:to:from:for:))
+defines nil-target responder routing. The temporary instrumentation always invokes
+the original implementation and preserves the action's return value. These APIs
+do not guarantee which entry point synthesized XCTest input takes, so the
+same-launch Cmd+1 calibration remains required.
+
+
+
+
+## Concrete UIApplication event observation, November 9 2026 01:06 UTC
+
+The signed native test build succeeded. The unchanged strict parity selection
+stopped at its first failure, after two repetitions, one passed and one failed.
+Exit status was 65. In the second launch, the single Cmd+F did not show
+`findConversation` after Cmd+1 opened the chat in one attempt. The separate
+focus assertion was not reached in that launch. This is simulator runtime
+execution, not physical-device verification or a fix.
+
+Exact checkout: `/Volumes/DevSSD/dev/agent-interface-worktrees/followup-273-20261108`.
+HEAD remained `4c7a555d63cf83838941f3a04c1c22da34493eeb`.
+The requested 329-file iOS fingerprint matched before and after:
+`sha256:6d873cb8fb9efa24365baa6f4cfedde9ae52cc1126c99c574089b504e4b9d1db`.
+The iOS patch SHA-256 was
+`8cb6819d809a23ea630cc5e5f9daec020f189706a7a1beb5adf67a45fce51629`.
+Full patch bytes matched before this ledger append, SHA-256
+`159f2027de19aed2258dbbb0e3bc3d16dedc80dc3719a13d4023676baf3f56e3`.
+The current runner matched its saved copy, SHA-256
+`1dccac1cf07083acb46ddd5b101b049c2c5a6539beca00cd777209691ad36caf`.
+No application or test source was edited during this diagnostic. The saved
+instrumentation delta against `273-event-observation-20261109` contains only
+the requested concrete-class instrumentation. The original method implementations
+are retained before exchange; inherited methods are added to the concrete class.
+
+DevSSD UUID was verified as `A6506932-2021-45AD-8C2E-91FCFD595A87` before
+scratch writes. Host Nicolass-Mini, arm64, macOS 27.0.1. Selected Xcode was
+`/Applications/Xcode.app/Contents/Developer`, version 27.2 build 27B52;
+first-launch check passed. Owned iPhone 18 Pro
+`7A84FFFC-EE18-4DFD-B795-729C76452E50` used iOS 27.0 build 24A434.
+The global Mac heavy lock covered device creation, build, XCTest, live log
+capture, diagnostics export and owned deletion. Queue time was 0.164 seconds;
+lock hold was 112.323 seconds, and the runner took 111 seconds including build
+and shutdown. Xcode reported 96.167 seconds for test startup/completion.
+Outer run spanned 01:06:25 through 01:08:17 UTC November 9.
+
+Exact inner command:
+
+```sh
+IOS_VALIDATION_FRESH=1 IOS_DERIVED_DATA=/Volumes/DevSSD/scratch/agent-interface-followup-20261108/derived-273 bash .agents/tools/validate-ios.sh 7A84FFFC-EE18-4DFD-B795-729C76452E50 test -only-testing:AgentInterfaceUITests/ParityFlowTests/testSwipingARowPinsItAndCommandShortcutsOpenAndFind -test-iterations 10 -test-repetition-relaunch-enabled YES -run-tests-until-failure
+```
+
+Outer command: `~/.agents/tools/mac-heavy-lock.sh bash
+/Volumes/DevSSD/scratch/agent-interface-followup-20261108/273-concrete-event-observation-20261109.run.sh`.
+Simulator signing stayed `CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=`.
+Runner defaults were parallel testing NO, test timeouts YES and diagnostics never.
+Its validated input key before and after was
+`008228514a499d4cc77e0a9a0350aaeb5a93b4169fca8993782f9932a8bbc06d`.
+
+### Concrete entry observations
+
+Timestamps below are November 8 CST, UTC minus 6 hours. Both app launches logged
+concrete class `_TtC7SwiftUIP33_ACC2C5639A7D76F611E170E831FCA49118SwiftUIApplication`.
+For both `sendEvent:` and `sendAction:to:from:forEvent:`, both launches report
+`overridesBase=false`. Installation is captured at stream lines 4 and 5 for
+passing PID 22938, and 277 and 278 for failing PID 23042.
+
+In passing PID 22938, Cmd+1 enters sendEvent at 19:07:38.274, sendAction
+`assistantPinned:` at 19:07:38.284, and the native pinned callback at
+19:07:38.290. Key release follows at 19:07:38.314. Cmd+F enters sendEvent,
+sendAction `assistantFind:` and the native Find callback at 19:07:40.471.
+Its callback reports bound=true, bootstrap=true, viewing=ranch. F release is
+19:07:40.809. Both actions target SwiftUI.AppDelegate and use Command modifiers
+1048576 with event=-1. See raw stream lines 180 through 184, 233 through 235
+and 274. The passing repetition reached Find appearance and keyboard focus.
+
+In failing PID 23042, Cmd+1 enters sendEvent at 19:08:02.128,
+sendAction `assistantPinned:` at 19:08:02.154 and its native callback at
+19:08:02.159. Release follows at 19:08:02.256. See stream lines 452 through
+454 and 461. XCTest records the single Cmd+F at t=13.99 seconds and its
+Synthesize event at t=14.01 seconds, runner lines 653 through 657. Neither
+key=f at sendEvent, assistantFind:/input=f at sendAction, nor a native Find
+callback appears in this launch's subsystem stream or exported app stdout.
+The failed assertion is runner lines 684 and 685, at ParityFlowTests.swift:92.
+
+The observation boundary was moved to the concrete class, but F remains absent
+at that entry in the failed launch. The earlier base-class probe also saw no F
+in its failed launch. This run does not support a base-method observation gap
+as the explanation for this failure. It establishes neither an injection cause
+nor where or why input was lost. No raw HID or system-wide input capture ran.
+
+### Evidence and cleanup
+
+Evidence prefix:
+`/Volumes/DevSSD/scratch/agent-interface-followup-20261108/273-concrete-event-observation-20261109`.
+Suffixes `.runner.log`, `.oslog-stream.log`, `.trace-readable.txt`,
+`.app-stdout-readable.txt`, `.metadata.txt`, `.execution.txt`, `.command.txt`,
+`.lock.log`, `.cleanup.log`, `.verification.txt`, `.instrumentation-delta.txt`,
+source fingerprints, before/after binary patches, copied runner and device
+inventories preserve the exact state and run. `.artifact-map.txt` records the
+move of this invocation's runner artifacts from .private to scratch.
+
+Result bundle:
+`/Volumes/DevSSD/scratch/agent-interface-followup-20261108/273-concrete-event-observation-20261109.ios-test-20261109T010626Z-21808.xcresult`.
+Runner summary:
+`/Volumes/DevSSD/scratch/agent-interface-followup-20261108/273-concrete-event-observation-20261109.ios-test-20261109T010626Z-21808.txt`.
+Build result has the corresponding `-build.xcresult` suffix. Exported diagnostics
+and JSON summaries are beside the bundles. Per-configuration totals are one
+passed and one failed repetition, zero skips and zero expected failures. The
+top-level passedTests=0 summarizes the unique test rather than repetitions.
+
+Logs were streamed before owned cleanup. The runner shut down the owned device;
+outer shutdown returned 405 because it was already Shutdown. Owned deletion
+succeeded, and the final inventory confirms absence. No other devices were
+modified. XCTest alone booted and interacted with the app. Device panel stayed
+stopped. No manual app interaction, device_open, simctl launch/io, signing
+disable, shutdown-all, other checkout, commit, push, watch, PR mutation or
+deployment occurred. Only the requested test selection ran. Other keyboard
+entry points, iPad, web and physical devices were not revalidated. No fix is
+claimed; independent review was not part of this diagnostic.
+
+
+### Decision checkpoint after concrete event observation
+
+All three new signed XCTest-only comparisons reproduced the strict failure on
+the second launch after a passing first launch. They establish a missing Find
+event/action at the observed concrete UIApplication entry points, despite Cmd+1
+reaching those same entry points in the failing launch. They do not identify a
+cause in the app, UIKit, or XCTest. No further production routing candidate is
+accepted. The DEBUG diagnostics and earlier failing UIKit implementation remain
+local and uncommitted. The published branch contains the strict regression and
+this evidence record.
+
+Claude Opus 5.5 was explicitly requested with effort high for a focused
+read-only pressure-test of the new event evidence and next discriminating
+experiment. This is design feedback, not final approval, and completion resumes
+the parent thread. The completed Grok re-check did not confirm high effort and
+is not counted as final review. No native job or owned simulator remains after
+these three comparisons. Direct Device panel interaction remains unavailable;
+XCTest-only runners worked and are not blocked by that discovery failure.
+
+The requested follow-up is still incomplete. PR 271 remains merged at
+3150bca03708cb0eab4ea9a501f329eb984dd289. PR 273 stays draft and issue 178
+stays open. A defensible fix, unchanged strict red-to-green proof, mutation,
+full native unit validation, other shortcut and iPhone/iPad checks, eligible
+final review and current CI are still required. The exact scheduled completion
+task remains enabled. No deployment or distribution action occurred.
