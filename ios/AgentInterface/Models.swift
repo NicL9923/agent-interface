@@ -133,7 +133,7 @@ enum CapabilityKey: String, CaseIterable {
   case chat, steering, approvals, uploads, generatedFiles, botConfiguration, tools, skills
   case routines, durableEvents, idempotency, imageGeneration, stop, portraitGeneration
   case avatarMetadata
-  /// Live Talk is web-only for now; the app decodes it so the contract stays exact.
+  /// Live Talk: a spoken conversation through OpenAI's Realtime voice, on the web and in the app.
   case liveVoice
 }
 /// The bot settings tabs that load a catalog from the server; each is named for its capability.

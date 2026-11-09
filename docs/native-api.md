@@ -574,8 +574,13 @@ Preserve memory drafts after a 409 revision conflict. Persist a trial's request 
 before dispatch and reuse it after an uncertain admission. Do not replay a trial
 automatically. iOS read aloud plays `POST /api/bots/:id/voice/speak` audio from Hermes, as
 the web does, and refuses replies over 12,000 characters; transcription uses Hermes.
-Live Talk is web-only for now. iOS decodes the `liveVoice` capability and ignores
-a bot's `voice`.
+iOS live Talk mints a session with `POST /api/bots/:id/talk/session` and sends
+spoken requests with `POST /api/bots/:id/talk/ask`, as the web does. The app talks
+to OpenAI over the Realtime WebSocket (`wss://api.openai.com/v1/realtime?model=`
+the session's model) with the short-lived `clientSecret` as its bearer token and
+nothing else; the add-on fixes the session, so the app sends only microphone audio
+(24 kHz mono PCM), the tool loop's events, and `conversation.item.truncate` when
+the person speaks over the voice.
 
 <!-- Main assistant: begin -->
 ### Main assistant and check-ins

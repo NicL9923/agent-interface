@@ -1,12 +1,13 @@
 import XCTest
 
 @MainActor final class DailyFlowTests: XCTestCase {
-  private func launch(missingTarget: Bool = false) -> XCUIApplication {
+  private func launch(missingTarget: Bool = false, liveVoice: Bool = true) -> XCUIApplication {
     let app = XCUIApplication()
     app.launchEnvironment["AGENT_INTERFACE_UI_FIXTURE"] = "1"
     app.launchEnvironment["AGENT_INTERFACE_UI_RESET"] = "1"
     app.launchEnvironment["AGENT_INTERFACE_UI_SCOPE"] = UUID().uuidString.lowercased()
     if missingTarget { app.launchEnvironment["AGENT_INTERFACE_UI_MISSING_SEARCH_TARGET"] = "1" }
+    if !liveVoice { app.launchEnvironment["AGENT_INTERFACE_UI_LIVE_VOICE"] = "off" }
     app.launch()
     return app
   }
@@ -43,6 +44,15 @@ import XCTest
     if back.exists { back.tap() } else { app.navigationBars.buttons.firstMatch.tap() }
     XCTAssertTrue(app.buttons["openSettings"].waitForExistence(timeout: 5))
   }
+  /// The transcript runs under the floating message box, so text scrolls beneath it.
+  func testTranscriptRunsUnderTheMessageBox() throws {
+    let app = launch()
+    let composer = app.textViews["messageComposer"]
+    XCTAssertTrue(composer.waitForExistence(timeout: 15), app.debugDescription)
+    let transcript = app.scrollViews["conversationTranscript"]
+    XCTAssertGreaterThan(transcript.frame.maxY, composer.frame.maxY, "The transcript reaches under the message box")
+    try capture(app, "daily-transcript-under-composer")
+  }
   func testKeyboardHidesFromItsButtonAndFromATapOnTheTranscript() throws {
     let app = launch()
     let composer = app.textViews["messageComposer"]
@@ -55,7 +65,8 @@ import XCTest
     XCTAssertTrue(app.buttons["hideKeyboard"].waitForDisappearance())
     // The fixture chat is too short to drag, so a plain tap on it must be enough.
     composer.tap(); XCTAssertTrue(composer.waitForKeyboardFocus(true))
-    app.scrollViews["conversationTranscript"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9)).tap()
+    // High enough to land on the transcript, not on the message box floating over its bottom.
+    app.scrollViews["conversationTranscript"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35)).tap()
     XCTAssertTrue(composer.waitForKeyboardFocus(false))
     XCTAssertEqual(composer.value as? String, "Short chat")
   }
@@ -110,9 +121,10 @@ import XCTest
     composer.wait(until: "value == %@", "Fixture transcript: check the north gate.")
     XCTAssertEqual(composer.value as? String, "Fixture transcript: check the north gate.")
   }
-  /// The Talk to assistant control's link: the chat opens from home and a voice message starts.
+  /// The Talk to assistant control's link where Hermes offers no live Talk: the chat opens from
+  /// home and a voice message starts.
   func testTalkLinkOpensTheChatAndStartsRecording() throws {
-    let app = launch()
+    let app = launch(liveVoice: false)
     XCTAssertTrue(app.textViews["messageComposer"].waitForExistence(timeout: 15)); home(app)
     XCTAssertFalse(app.textViews["messageComposer"].exists)
     app.open(DeepLinkFixture.talk("ranch"))

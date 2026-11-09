@@ -206,7 +206,7 @@ device acceptance.
 
 ### Live Talk
 
-Talk, beside Record voice in the web composer, holds a live spoken conversation
+Talk, beside Record voice in the composer on the web and in the iOS app, holds a live spoken conversation
 with the open assistant. A voice model listens and speaks; the assistant does the
 work. Each real request goes to the assistant as an ordinary message from the
 person speaking, in their words, so it appears in the chat, uses the same
@@ -220,9 +220,9 @@ The panel above the composer shows whether Talk is connecting, listening,
 thinking, working or speaking, the latest words from each side, Mute and End.
 Starting Talk stops a reply being read aloud and turns off recording and read
 aloud until it ends. Talk ends when you press End, switch assistants, leave the
-chat or the page, after five quiet minutes, after 30 minutes, and on a phone when
-the app goes to the background. The voice knows only this assistant's name and
-description.
+chat or the page, after five quiet minutes, after 30 minutes, and in a phone's
+browser when the page goes to the background. The voice knows only this
+assistant's name and description.
 
 Talk needs the WildBots voice plugin enabled in Hermes and the launch profile
 signed in to ChatGPT; see [Hosting](Hosting.md#live-voice-plugin). When it is
@@ -235,7 +235,12 @@ Ballad, Coral, Echo, Sage, Shimmer, Verse, Marin (the default) and Cedar. Each
 has a short sample to play; one plays at a time, and closing settings stops it.
 Choosing a voice saves it for the household with the assistant's profile.
 
-Live Talk is web-only for now. The iOS app keeps recording and read aloud.
+In the iOS app, Talk sits beside Record voice whenever the keyboard is down, and
+the Talk to assistant control in Control Center, on the Lock Screen and on the
+Action button starts it, or a voice message where Hermes offers no live Talk.
+Talk keeps going with the screen locked, and Apple's voice processing cancels
+the voice's own echo, so you can interrupt it without headphones. A phone call
+or another app taking the audio ends it.
 
 ## Memory
 
