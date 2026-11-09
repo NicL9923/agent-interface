@@ -695,3 +695,107 @@ passes. The existing private copies were already limited to owned devices;
 these completed native comparisons remain tied to their exact recorded inputs.
 The next validation phase will use the updated runbook after a normal target
 merge, without rewriting published history or repeating unrelated passing work.
+
+
+### Post-review routing check
+
+The scheduled follow-up refreshed GitHub on November 9 UTC. PR 271 is already
+merged at `3150bca03708cb0eab4ea9a501f329eb984dd289`; its native evidence and eligible
+reviews remain complete. PR 273 remains draft at
+`ff377705b9a6364dd55dd731b7aa79168b4b0bad`. Current origin/main remains
+`f218e65233cda4e9bb1c549cdaf5723045d5dd3d`, already integrated normally.
+The production candidate is uncommitted and unaccepted.
+
+Grok 4.7 at high reasoning effort completed its read-only review of the failing
+integration. It explicitly rejects approval. It identifies the standard Find
+responder action and system Settings conflict as boundaries not resolved by
+moving registration or by the passing dispatch unit tests. Its proposed next
+check sends Cmd+K after the verified pinned navigation, then keeps the single
+Cmd+F assertion. If Cmd+K works but Find fails, its proposed experiment removes
+the standard Find command in a non-nil UIKit menu build handler and gives both
+Find and Settings priority over system behavior. These remain hypotheses to test,
+not findings that establish a production fix.
+
+SSH reads of the lock helper and Git checkout work again. DevSSD is mounted with
+UUID `A6506932-2021-45AD-8C2E-91FCFD595A87`; Xcode is 27.2 build 27B52.
+The linked Mac T3 environment is now reachable. Parent device discovery still
+exposes only Linux, so no Mac Device panel is claimed.
+
+A temporary test-only control opens Cmd+K after Cmd+1, closes the switcher and
+then sends the existing single Cmd+F. This changes the interaction sequence and
+cannot establish final regression success. Its iOS fingerprint is
+`sha256:c5374bca6bd90e8e6d221aeca04bc0c71262fa59ce29c7ba030b00aeb87c6a2c`,
+verified on both machines. The exact patch is retained in the parent audit as
+`native-273/post-pin-k-control.patch`, with the prior test file saved as
+`native-273/pre-post-pin-control.swift`. The Mac remains based on normal merge
+`4c7a555d63cf83838941f3a04c1c22da34493eeb`; the parent includes the later
+ledger-only commit. A linked Mac GPT-6.1 Sol high task runs only this strict
+parity method, signed, through the current repository runner and global lock.
+It creates and deletes only an owned iPhone. No native result is available at
+this checkpoint. The completion schedule remains enabled.
+
+
+The temporary post-pin Cmd+K control compiled and passed its one selected
+UI test, with 1 passed, 0 failed and 0 skipped. Cmd+1 genuinely navigated in one
+attempt; Cmd+K opened the switcher; closing it restored the chat; the subsequent
+single Cmd+F showed Find and assigned keyboard focus. This is diagnostic evidence
+only. Opening and dismissing the switcher changes focus and responder state, so
+this pass cannot replace the original strict regression or establish a fix.
+The unchanged fingerprint was the post-pin control fingerprint above.
+Validation input key was
+`eff786832628bcee65a2f441e235ddb21eedaa637dae92869164b9352d08d9dc`.
+The signed Xcode 27.2 run used owned iPhone 18 Pro
+`D92CA6E3-FCEA-4437-8764-9F248E073551`, iOS 27.0 build 24A434. Its bundle is
+`.private/ios-test-20261109T003336Z-380.xcresult` in the Mac task checkout.
+The global lock covered creation through shutdown and deletion. The parent audit
+retains `native-273/273-post-pin-k-control-phone.log`, `.summary.txt`,
+`.metadata.txt` and `.patch`; the same names exist in Mac scratch.
+
+The original strict test sequence was restored byte-for-byte from its saved
+copy. The next experiment adds the review's non-nil UIKit menu build handler,
+sets findingPreference to removed and removes the standard `find:` action with
+a nil property list. It also grants system priority to both Find and Settings.
+Unlike the earlier nil-handler experiment, this replaces the responder menu
+build handler. Both APIs were checked against installed Xcode 27.2 headers and
+Apple's current UIMainMenuSystem and UIMenuBuilder documentation on November 9.
+This remains an unaccepted experiment. The passing post-pin control did not
+reproduce the review's exact conditional outcome because Find also worked; it
+establishes delivery under the changed interaction sequence only.
+
+The new candidate fingerprint is
+`sha256:5e26b08e8c309a17b0a1711dbe180cff76d2f7bf37886ac5f92c8027181cef24`,
+verified on both machines. The parent audit retains
+`native-273/menu-builder-removal-candidate.patch`. A linked Mac Sol high task
+runs focused Find, the original strict pin sequence, Settings shortcuts, Cmd+K
+and Cmd+period once through the signed current runner on an owned phone. No
+candidate result is available at this checkpoint. It will stop if Find fails.
+
+
+The non-nil menu-builder removal experiment compiled but failed. XCTest reported
+2 passed, 3 failed, 0 skipped and exit 65. Cmd+period and the complete Cmd+K flow
+passed. Focused Find did not appear, Cmd+, did not open Settings, and the strict
+pin flow genuinely navigated in one Cmd+1 attempt before its single Cmd+F failed
+to show Find. This rejects the candidate as a fix. The added menu configuration
+and comma priority were removed from the working candidate. No speculative menu
+change is accepted from these results.
+
+The run used owned iPhone 18 Pro `9E453065-0DFB-4105-A44E-6A0867FC767D`, iOS
+27.0, signed Xcode 27.2 build 27B52, at unchanged candidate fingerprint above.
+It waited 0.191 seconds for the global lock and held it 145.237 seconds through
+owned-device deletion. The result bundle is
+`.private/ios-test-20261109T003848Z-3851.xcresult` in the Mac task checkout. The
+parent audit retains all `native-273/273-menu-builder-removal-phone.*` artifacts,
+including exact command, summary, metadata, patch and full log. The same artifacts
+remain in the Mac scratch directory. The next step is passive responder-chain
+observation, not another untested production routing change. PR 273 remains draft
+and issue 178 remains open.
+
+
+Verified Grok 4.7 high was explicitly requested for a focused re-check of the
+new evidence and proposed passive responder-chain diagnostic. This is a design
+pressure-test of the unresolved failure, not final production approval. It will
+resume the parent thread on completion. All new native test tasks are complete;
+no simulator or native build remains owned by this follow-up. The scheduled
+completion task stays enabled because PR 273 still needs a defensible fix,
+strict red-to-green/mutation evidence, broader native checks and eligible final
+review. No production, TestFlight or App Store action ran.
