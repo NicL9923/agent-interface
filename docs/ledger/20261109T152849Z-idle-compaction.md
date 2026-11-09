@@ -23,11 +23,11 @@ home, provider, guarded native gateway and add-on gateway, with a four-second de
 browser-harness's Pillow 12.3). Receipt: `docs/evidence/hermes-compaction-probe-ed1afb0.json`.
 
 - Passed: app message, steer-flagged message, another client's native `prompt.submit` and a routine
-  delivery, each sent while the summary call was held open: admitted in about 0.1 s, answered within
-  0.31 s, routine delivered in 3.3 s, on the uncompacted transcript. The compaction never
+  delivery, each sent while the summary call was held open: admitted in under 0.1 s, answered within
+  0.27 s, routine delivered in 4.5 s, on the uncompacted transcript. The compaction never
   committed. A released compaction committed in place; the app's IDs, roles and text were unchanged,
   the anchored read found its request, the next model request carried the summary, and no further
-  compaction ran in 17 s. No compaction status frame reached the client (332 frames).
+  compaction ran in 17 s. No compaction status frame reached the client (314 frames).
 - Found while building it, now fixed: in-place compaction gave the kept head and tail new row IDs, so
   those rows lost their request IDs in the app; the first budget excluded Hermes's protected head and left a
   compaction above it (37,025 against 32,028); a cancelled compaction reports `compressed`.
@@ -47,8 +47,24 @@ browser-harness's Pillow 12.3). Receipt: `docs/evidence/hermes-compaction-probe-
 3. Medium, valid: maintenance preempted under `maintenance_lock`, which Hermes's release of the
    session takes through the guarded retirement gate. Fixed: it preempts before taking the lock.
 
-Real Hermes after the change, at the final code: the probe passed with admissions at 0.08 to 0.11 s,
-answers within 0.31 s, routine delivery at 3.3 s, and no cooldown or backoff in the add-on's log.
+## Re-review: GPT-6.1 Sol, high effort, `a8091c5..733d1d3`
+
+The three findings above were confirmed fixed. New:
+
+1. High, valid: taking `history_lock` still blocked, so preempt could not check its deadline while
+   Hermes held the lock to persist queued input. Fixed: a 50 ms timed acquire, retried by preempt.
+2. Medium, valid: a cancel before the summary call starts leaves the transcript unchanged, and
+   Hermes arms a 300 s no-progress backoff on its automatic compaction
+   (`agent/conversation_compression.py`, `_record_structural_no_op`). Fixed: the add-on cancels only
+   after the compressor's `_compression_working_attempt_generation` changes.
+3. Medium, not fixed: another client's manual compaction could win the session in the instant after
+   the add-on's idle check, and a preempt then would cancel it. It needs a manual compress of the
+   hidden Bot Chat in that window, and the cancel leaves its transcript unchanged. Documented in
+   the capability matrix instead of wrapping another Hermes seam.
+
+Real Hermes at the final code: the probe passed with admissions at 0.07 to 0.09 s, answers within
+0.27 s, routine delivery at 4.5 s. All four cancels logged `commit_fence_cancelled`; none logged
+"no progress".
 
 Real-probe mutants, each red, then restored: cancel removed (message waited: "Hermes did not
 settle"), watcher removed (another client's message waited), routine delivery not preempting,
@@ -60,11 +76,12 @@ version, and none of their lines changed since.
 
 ## Unit and integration
 
-- `tests/hermes_compaction_test.py`: 28 tests. `tests/hermes_automation_test.py`: 40 tests, 1 skipped.
+- `tests/hermes_compaction_test.py`: 30 tests. `tests/hermes_automation_test.py`: 40 tests, 1 skipped.
 - `python3 scripts/run-python-tests.py`: 41 files passed. `ruff check .`: passed.
 - `npx vitest run tests/hermes-qualification.test.ts tests/app-probe-scope.test.ts`: 7 tests passed.
-- 32 hand mutants, each red, then restored: cancel removed, a held fence counted as cancelled,
-  cancel before Hermes marks the compaction active, cancel outside the session lock, watcher ignoring
+- 34 hand mutants, each red, then restored: cancel removed, a held fence counted as cancelled,
+  cancel before Hermes marks the compaction active, cancel before the summary starts, cancel outside
+  the session lock, the session lock taken without a bound, watcher ignoring
   native input, old Hermes or a fence without the non-blocking cancel supported, maintenance, submit,
   delivery and automation not preempting, no preempt bound, result size recorded for a cancelled
   compaction, doubling guard, budget and idle boundaries, tail ceiling, busy, open request,

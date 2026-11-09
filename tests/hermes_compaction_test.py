@@ -29,7 +29,8 @@ DELAY = 600
 class Agent:
     """What the add-on reads from Hermes's agent. Anything else is an AttributeError."""
     def __init__(self, tail=1000, summary=200):
-        self.context_compressor = types.SimpleNamespace(tail_token_budget=tail, max_summary_tokens=summary)
+        self.context_compressor = types.SimpleNamespace(tail_token_budget=tail, max_summary_tokens=summary,
+                                                        _compression_working_attempt_generation=3)
         self._cached_system_prompt = "s" * 400
         self.tools = None
 
@@ -62,8 +63,9 @@ class Native:
     def __init__(self, server, sid, events, rows_after=None):
         self.server, self.sid, self.events, self.rows_after = server, sid, events, rows_after
         self.calls, self.entered, self.release = [], threading.Event(), threading.Event()
-        self.hold_before_active = threading.Event()
+        self.hold_before_active, self.hold_before_dispatch = threading.Event(), threading.Event()
         self.hold_before_active.set()
+        self.hold_before_dispatch.set()
         self.answers = [True]
         # Hermes's release of the session: it admits a queued turn, which reserves native admission.
         self.on_release = lambda: None
@@ -79,6 +81,9 @@ class Native:
         fence = session["agent"]._active_compression_commit_fence = Fence(self, self.answers)
         self.entered.set()
         try:
+            # Hermes builds the summary prompt, then marks this attempt's summary as working.
+            self.hold_before_dispatch.wait(5)
+            session["agent"].context_compressor._compression_working_attempt_generation += 1
             for _ in range(500):
                 if fence.cancelled:
                     return {"status": "aborted"}
@@ -342,6 +347,35 @@ class PreemptTests(unittest.TestCase):
         thread.join(5)
         self.assertEqual((preempted, fixture.events), ([True], [("cancel", True, True)]))
 
+    def test_the_cancel_waits_until_the_summary_has_started(self):
+        # Cancelled before its summary starts, Hermes would read no progress and back off its own compaction.
+        fixture = Fixture(self)
+        fixture.native.hold_before_dispatch.clear()
+        thread, results = fixture.running()
+        preempted = []
+        waiter = threading.Thread(target=lambda: preempted.append(fixture.idle.preempt("sid")), daemon=True)
+        waiter.start()
+        time.sleep(0.1)
+        self.assertEqual(fixture.events, [])
+        fixture.native.hold_before_dispatch.set()
+        waiter.join(5)
+        thread.join(5)
+        self.assertEqual((preempted, results, fixture.events), ([True], [{"status": "aborted"}], [("cancel", True, True)]))
+
+    def test_a_held_session_lock_cannot_keep_an_input_past_the_bound(self):
+        fixture = Fixture(self)
+        thread, _ = fixture.running()
+        fixture.idle.monotonic = time.monotonic
+        holder = threading.Thread(target=lambda: (fixture.session["history_lock"].acquire(), time.sleep(2), fixture.session["history_lock"].release()), daemon=True)
+        with self.assertLogs(compaction.log, logging.WARNING):
+            holder.start()
+            time.sleep(0.05)
+            started = time.monotonic()
+            self.assertTrue(fixture.idle.preempt("sid", wait=0.3))
+            self.assertLess(time.monotonic() - started, 1)
+        holder.join(5)
+        thread.join(5)
+
     def test_a_commit_holding_the_fence_is_retried_then_left_to_finish(self):
         fixture = Fixture(self)
         fixture.native.answers = [None, None, False]
@@ -372,7 +406,7 @@ class PreemptTests(unittest.TestCase):
         fixture.session["_manual_compress_active"] = True
         fixture.agent._active_compression_commit_fence = Fence(fixture.native, [True])
         attempt = compaction.Attempt()
-        with fixture.session["history_lock"]:
+        with patch.object(compaction, "LOCK_SECONDS", 5), fixture.session["history_lock"]:
             stopper = threading.Thread(target=fixture.idle.stop, args=("sid", attempt), daemon=True)
             stopper.start()
             time.sleep(0.05)

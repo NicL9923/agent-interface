@@ -4,25 +4,25 @@
   "idle_seconds": 4,
   "checks": {
     "plain_message": {
-      "admission_seconds": 0.075,
-      "settled_seconds": 0.232,
+      "admission_seconds": 0.092,
+      "settled_seconds": 0.245,
       "steering": false,
       "uncompacted_transcript": true,
       "answered_once": true
     },
     "steer_flag_message": {
-      "admission_seconds": 0.108,
-      "settled_seconds": 0.294,
+      "admission_seconds": 0.065,
+      "settled_seconds": 0.207,
       "steering": false,
       "uncompacted_transcript": true,
       "answered_once": true
     },
     "native_client_message": {
       "native_status": "queued",
-      "answered_seconds": 0.314
+      "answered_seconds": 0.266
     },
     "routine_delivery": {
-      "delivered_seconds": 3.267,
+      "delivered_seconds": 4.484,
       "compaction_still_held": true
     },
     "committed": {
@@ -36,7 +36,7 @@
     },
     "progress_private": {
       "compaction_status_frames": 0,
-      "frames_seen": 332
+      "frames_seen": 314
     }
   }
 }
