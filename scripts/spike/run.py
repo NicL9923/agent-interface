@@ -183,6 +183,8 @@ approvals:
     evidence_root = root / "evidence"
     evidence_root.mkdir(exist_ok=True)
     env["HERMES_SPIKE_EVIDENCE_DIR"] = str(evidence_root)
+    # The compaction probe holds Hermes's summary call open while this file exists.
+    env["HERMES_SPIKE_SUMMARY_GATE"] = str(root / "summary.gate")
     env["PYTHONPATH"] = str(source)
     env["HERMES_SPIKE_REVISION"] = args.revision
     env["HERMES_SPIKE_PATCH_SHA256"] = patch_hash or ""
@@ -202,9 +204,9 @@ approvals:
     access.chmod(0o600)
     provider = subprocess.Popen([str(python), str(REPO / "scripts/spike/provider.py")], env=env, stdout=(root / "provider.log").open("w"), stderr=subprocess.STDOUT)
     gateway = None
-    def start(extension=False):
+    def start(extension=False, extra=None):
         command = [str(python), str(REPO / "src/hermes/extension.py"), "--port", str(gateway_port)] if extension else [str(python), "-c", "from hermes_cli.web_server import start_server; start_server(host=\"127.0.0.1\",port=" + str(gateway_port) + ",open_browser=False,headless=True,isolated=True)"]
-        process = subprocess.Popen(command, env=env, cwd=source, stdout=(root / ("extension.log" if extension else "native.log")).open("w"), stderr=subprocess.STDOUT)
+        process = subprocess.Popen(command, env={**env, **(extra or {})}, cwd=source, stdout=(root / ("extension.log" if extension else "native.log")).open("w"), stderr=subprocess.STDOUT)
         for _ in range(300):
             if process.poll() is not None:
                 raise RuntimeError("Isolated Hermes exited; inspect the private startup log.")
@@ -260,6 +262,13 @@ approvals:
             subprocess.run([str(python), str(REPO / "scripts/spike/service_probe.py")], cwd=REPO, env=env, check=True)
             run_computer_probes(python, env)
             subprocess.run([str(python), str(REPO / "scripts/spike/maintenance_guard_probe.py"), "--source", str(source)], cwd=REPO, env=env, check=True)
+            # Idle compaction runs only in its own gateway: a short delay must not touch other probes.
+            compaction = {"HERMES_AGENT_INTERFACE_IDLE_COMPACT_SECONDS": "4"}
+            stop(gateway)
+            gateway = start(extension=True, extra=compaction)
+            subprocess.run([str(python), str(REPO / "scripts/spike/compaction_probe.py")], cwd=REPO, env={**env, **compaction}, check=True)
+            stop(gateway)
+            gateway = start(extension=True)
         control = root / "app-control"
         control.mkdir(exist_ok=True)
         (control / ".agent-interface-isolated").write_text("agent-interface-disposable-spike")

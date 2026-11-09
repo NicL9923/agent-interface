@@ -87,7 +87,8 @@ starting another owner against the same Hermes home is not a deployment method.
 The existing Google login, dashboard address, gateway service and unrelated Caddy
 routes remain in place.
 
-The deployed Hermes revision is `d23cc6b06455b8551fb6f61d3cad040a0e82f5b6`, with
+The deployed Hermes revision is `ed1afb082eb3e46cf2edae9d8f68fb67b09ee4df`
+([release receipt](evidence/production-release-d1d95d7f-20261106T024133Z.json)), with
 the existing tracked OAuth repair preserved. The wrapper uses Hermes's managed
 launcher and loads the add-on into the original dashboard process. If a future
 revision or service key fails qualification, the original dashboard still starts;
@@ -394,6 +395,30 @@ minutes, it sends one push notification to each Hermes update and integration
 administrator who has signed in, and another when the check clears. Both
 transitions are also logged. A push outage cannot report itself by push, so it
 appears only in the logs and in the loopback detail.
+
+## Idle compaction
+
+The add-on compacts each assistant's Bot Chat in the background once it has been idle
+for 10 minutes and its next request would be larger than Hermes's own compaction target.
+Smaller requests answer faster. Nobody waits on it: a message, a routine delivery, a goal
+change or a maintenance lease stops a running compaction first. A message from another
+Hermes client that queues behind it stops it too. See
+[Idle compaction](HermesCapabilityMatrix.md#idle-compaction) for the rules and evidence.
+
+It is on by default. To change the delay or turn it off, set this in
+`shared/hermes-service.env`, the environment file the dashboard unit loads, then restart
+the dashboard:
+
+```sh
+HERMES_AGENT_INTERFACE_IDLE_COMPACT_SECONDS=0    # off; any other whole number is the idle delay
+```
+
+A value that is not a whole number turns it off and logs an error. Hermes revisions
+before `ed1afb0` never compact this way, because their manual compaction did not hold
+the session (Hermes #133504). `agent-interface.capabilities` reports the delay in effect
+as `idle_compaction_seconds`, and 0 when it is off. Hermes's own
+`compression.idle_compact_after_seconds` stays 0: it compacts at the start of the next
+turn, so a person would wait for it.
 
 ## Hermes upgrades and activity
 

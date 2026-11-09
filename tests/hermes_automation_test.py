@@ -74,6 +74,19 @@ class BoundaryTests(unittest.TestCase):
         self.patcher.stop()
         self.db.close()
 
+    def test_admission_stops_a_background_compaction_before_reading_busy_state(self):
+        # A background compaction holds the session running; it is no work to refuse a change for.
+        preempted = []
+        def preempt(sid):
+            preempted.append(sid)
+            self.session.pop('running', None)
+            return True
+        controller = automation.Controller(self.server, lambda *_: {'profiles': [{'name': 'ranch'}]}, lambda *_: {'result': self.value},
+            threading.RLock(), threading.RLock(), lambda: self.maintenance, self.journal, None, preempt)
+        self.session['running'] = True
+        with controller.admitted('ranch'):
+            self.assertEqual(preempted, [self.value['session_id']])
+
     def test_admission_refuses_running_queued_unanswered_and_native_leased_owners(self):
         for key in ('running', 'queued_prompt', 'pending_steer', '_auto_continue_scheduled', '_compute_host_open_request'):
             self.session[key] = True
