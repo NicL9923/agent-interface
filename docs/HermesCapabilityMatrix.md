@@ -188,6 +188,14 @@ are checked against Hermes 0.15.2 source only, and their absence fails closed. A
 older Hermes without the module reports live voice as unavailable. See
 [Hosting](Hosting.md#live-voice-plugin).
 
+A spoken Talk request that starts a new turn passes `voice_turn: true` to native
+`prompt.submit`, which Hermes `ed1afb082e` stores for the turn
+(`tui_gateway/methods_prompt.py` `session["voice_turn"]`) and binds through
+`agent/voice_turn_route.py` `begin_voice_turn_route` to `auxiliary.voice_chat`: that
+route's reasoning effort, and its model when one is set. The route is read from
+config at each turn. A steer carries no mark. This was read from source, not run;
+the add-on tests use a fake gateway.
+
 The November 4 follow-up for Hermes 3a1e9ef adopts three native features and
 degrades on an older revision. Without native skill locks, the overview omits
 `lockSupported` and both clients hide the lock control. Without `needs_auth`

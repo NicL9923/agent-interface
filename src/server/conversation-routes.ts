@@ -322,7 +322,7 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
       message: "A retry is not written on a draft",
     });
   // Shared with live Talk, whose spoken requests are ordinary messages from the person speaking.
-  const submit = async (target: { botId: string; requesterId: string }, body: z.output<typeof message>, explicitSteering = false): Promise<SubmissionReceipt> => {
+  const submit = async (target: { botId: string; requesterId: string }, body: z.output<typeof message>, explicitSteering = false, voice = false): Promise<SubmissionReceipt> => {
     const { reviewedInterruption, reviewedUncertain, ...message } = body;
     if (message.retryOf !== undefined && explicitSteering) throw httpError(400, "Retry a message by sending it, not by steering");
     const { requesterId } = target;
@@ -399,9 +399,11 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
     if (conversation?.activity.runId)
       for (const userId of new Set([input.senderId, requesterId])) store.participate(conversation.activity.runId, userId);
     try {
+      // The voice mark goes only to Hermes. It is not part of the recorded request, so asking again
+      // with the same ID never conflicts with a request recorded before Talk carried it.
       const receipt = await (steering
         ? runtime.steer({ ...input, reviewedInterruption })
-        : runtime.submit({ ...input, reviewedInterruption }));
+        : runtime.submit({ ...input, reviewedInterruption, ...(voice ? { voice: true } : {}) }));
       store.receipt(receipt, undefined, retryInterruption);
       if (receipt.runId) for (const userId of new Set([input.senderId, requesterId])) store.participate(receipt.runId, userId);
       return receipt;
@@ -568,8 +570,11 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
     return reply.send(Readable.fromWeb(file.body as import("node:stream/web").ReadableStream<Uint8Array>));
   });
   return {
-    /** Sends a message as this person, with the same idempotency, admission and steering as the chat. */
+    /**
+     * Sends a spoken Talk request as this person, with the same idempotency, admission and steering as
+     * the chat. A new turn runs on Hermes's voice route.
+     */
     send: (botId: string, requesterId: string, requestId: string, text: string) =>
-      submit({ botId, requesterId }, message.parse({ requestId, text })),
+      submit({ botId, requesterId }, message.parse({ requestId, text }), false, true),
   };
 }

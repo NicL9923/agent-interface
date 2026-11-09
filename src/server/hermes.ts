@@ -329,6 +329,8 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
       const value = await rpc('agent-interface.submit', {profile: input.botId, ...(state ? {session_id: state.session_id} : {}),
         request_id: input.requestId, sender_id: input.senderId, text: input.text + (references ? '\n' + references : ''),
         attachments, steer, reviewed_interruption: input.reviewedInterruption === true,
+        // An older add-on ignores it, so a spoken request still runs, at the profile's own effort.
+        ...(input.voice ? {voice_turn: true} : {}),
         // A retry answers its failed turn. Hermes refuses it under its submission lock if another
         // turn started since the app checked, instead of steering the old question into that turn.
         ...(input.retryOf !== undefined ? {require_idle: true} : {})});

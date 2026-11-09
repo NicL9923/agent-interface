@@ -308,6 +308,13 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     rpcErrors.set('agent-interface.submit',{code:4094,message:'Review interruption'});
     await expect(runtime.submit({...input(),text:'Again'})).rejects.toMatchObject({statusCode:409,message:'Review the interrupted task before starting another message.'});
   });
+  it('asks the add-on for a voice turn only for a spoken request', async () => {
+    canonicalSubmission=true;
+    await runtime.status(); calls=[];
+    await runtime.submit({...input(),text:'Spoken',voice:true});
+    await runtime.submit({...input(),requestId:'typed',text:'Typed'});
+    expect(calls.map(call=>call.params.voice_turn)).toEqual([true,undefined]);
+  });
   it('fences a retry to an idle assistant and reports a refusal without admission', async () => {
     canonicalSubmission=true;
     await runtime.status(); calls=[];
