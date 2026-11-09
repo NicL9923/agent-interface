@@ -25,16 +25,18 @@ import os
 struct TalkPlaybackLedger: Equatable {
   struct Heard: Equatable { var item: String; var milliseconds: Int }
   static let rate: Double = 24_000
+  /// How long a finished item stays counted, longer than any look-back a recovery makes.
+  static let retention: Int64 = 24_000
   private struct Segment: Equatable { var item: String; var start: Int64; var frames: Int64 }
   private var segments: [Segment] = []
   private var end: Int64 = 0
 
   mutating func schedule(item: String, frames: Int, at now: Int64) {
     if end < now { end = now }
-    // Earlier items that finished playing need no truncation. The newest item may still stream
-    // more audio, so its played segments stay counted.
+    // Earlier items that finished playing a while ago need no truncation. The newest item may
+    // still stream more audio, so its played segments stay counted.
     let finished = Set(segments.map(\.item)).filter { name in
-      name != item && !segments.contains { $0.item == name && $0.start + $0.frames > now }
+      name != item && !segments.contains { $0.item == name && $0.start + $0.frames > now - Self.retention }
     }
     if !finished.isEmpty { segments.removeAll { finished.contains($0.item) } }
     segments.append(Segment(item: item, start: end, frames: Int64(frames)))

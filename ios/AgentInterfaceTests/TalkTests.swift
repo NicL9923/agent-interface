@@ -169,6 +169,17 @@ final class TalkPlaybackTests: XCTestCase {
     XCTAssertEqual(ledger.unheard(at: 72_000), [], "Finished audio needs no truncation")
   }
 
+  func testARecoveryLookingBackStillFindsAnItemThatJustFinished() {
+    var ledger = TalkPlaybackLedger()
+    // A ends at 1.00 s; B arrives at 1.05 s; a recovery then looks back to 0.90 s.
+    ledger.schedule(item: "a", frames: 24_000, at: 0)
+    ledger.schedule(item: "b", frames: 24_000, at: 25_200)
+    XCTAssertEqual(ledger.unheard(at: 21_600), [.init(item: "a", milliseconds: 900), .init(item: "b", milliseconds: 0)])
+    // Long after A finished, scheduling more of B lets A go.
+    ledger.schedule(item: "b", frames: 24_000, at: 74_400)
+    XCTAssertEqual(ledger.unheard(at: 21_600).map(\.item), ["b"])
+  }
+
   func testSilenceWhileThePlayerRanDryIsNotHeard() {
     var ledger = TalkPlaybackLedger()
     // 100 ms of one item, a 900 ms stall, then 100 ms more of the same item.
