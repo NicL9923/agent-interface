@@ -17,3 +17,8 @@ Two `AgentInterfaceTests` failed on `main`. Both rule tests caught real drift fr
 
 Both tests failed on `main` at `7a1f782`, on the Mac mini, earlier on November 9 (PR #284 and #285 runs). That is the
 red half of the proof. The Mac mini results for this branch are below.
+
+Simulator-verified at `1f873b2` on the Mac mini, iPhone 18 Pro, iOS 27, through `validate-ios.sh`. The full
+`AgentInterfaceTests` target ran 733 tests: 0 failures, and 2 skipped (`testRenderPropEvidence` and
+`testRenderEvidence`, which need `AGENT_INTERFACE_EVIDENCE_DIR`). Both rule tests and all 20 `AccountUsageTests` passed.
+`AccountUsageTests` ran twice more with no failures, so the `until` waits did not flake in 3 runs.
