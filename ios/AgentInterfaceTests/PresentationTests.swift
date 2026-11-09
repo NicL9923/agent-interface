@@ -55,6 +55,25 @@ final class PresentationTests: XCTestCase {
       XCTAssertEqual(turn.activityGroups[0].messages.count, 3)
     }
   }
+  func testProgressLinesNeverBecomeTheReplyStartOrJoinTheAnswer() {
+    let call = ToolCall(id: "call", name: "terminal", status: "completed", result: "Result")
+    func note(_ id: String) -> Message { Message(id: id, role: "assistant", text: "I'll check first.", interim: true) }
+    let conversation = Conversation(botId: "b", messages: [
+      Message(id: "prompt", role: "user", text: "Check both"),
+      note("note-one"),
+      Message(id: "first-tool", role: "tool", text: "First result", toolCall: call),
+      note("note-two"),
+      Message(id: "second-tool", role: "tool", text: "Second result", toolCall: call),
+      Message(id: "answer", role: "assistant", text: "Both reports are ready."),
+    ], activity: Activity(state: .idle), approvals: [], files: [], toolCalls: [call])
+    let turn = conversation.presentationTurns[0]
+    // The work folds above the answer, not above the second progress line that came after the first tool.
+    XCTAssertEqual(turn.replyStart, "answer")
+    let visible = turn.visibleMessages
+    let answerAt = visible.firstIndex { $0.id == "answer" }!
+    XCTAssertFalse(turn.replyRun(at: answerAt, in: visible).continued)
+    XCTAssertTrue(turn.replyRun(at: visible.firstIndex { $0.id == "note-two" }!, in: visible).endsRun)
+  }
   func testReasoningPrecedesToolsAndFinalReplyAsOnTheWeb() {
     var conversation = Conversation(botId: "b", messages: [
       Message(id: "question", role: "user", text: "Join the NAS"),

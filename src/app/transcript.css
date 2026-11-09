@@ -21,6 +21,12 @@
 .transcript-frame .tool-calls > summary::after,
 .transcript-frame .turn-work > summary::after { margin: 0 3px; }
 
+/* A progress line is the assistant saying what it will check before it works. It reads as speech, in a
+   quieter voice than the answer, and sits close to the work row that follows it. */
+.message-interim { margin-bottom: 8px; color: var(--muted); }
+.message-interim .message-markdown { font-size: 0.9375rem; line-height: 1.6; }
+.message-interim .message-markdown a { color: inherit; }
+
 /* One quiet row per turn's work; open, the grouped accordions sit under a guide line. */
 .turn-work { margin: 0 0 16px; color: var(--muted); font-size: 0.8125rem; }
 .turn-work > summary {

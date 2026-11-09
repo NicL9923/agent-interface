@@ -19,6 +19,16 @@ final class ReplyAnnouncementTests: XCTestCase {
     }
   }
 
+  func testAProgressLineIsNeverReadAloudButTheAnswerAfterItIs() {
+    let prompt = user("u2", "Status?")
+    let note = Message(id: "n", role: "assistant", text: "I'll check first.", interim: true)
+    XCTAssertEqual(read([
+      conversation(settled),
+      conversation(settled + [prompt, note], .done),
+      conversation(settled + [prompt, note, reply("a2", "All clear.")]),
+    ]), [nil, nil, "All clear."])
+  }
+
   func testTheReplyAlreadyThereOnOpenStaysQuiet() {
     XCTAssertEqual(read([conversation(settled), conversation(settled)]), [nil, nil])
   }

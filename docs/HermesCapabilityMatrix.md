@@ -86,7 +86,17 @@ Hermes `3a1e9ef50a570b1544795ddad197ad2dcde430ab` adds three room features the a
 | Room purpose, shared notes and lead | `groups.context` with `event_id`, `purpose`, `notes`, `routing` (`everyone` or `lead`) and `lead_member_id`; `groups.state` returns `context` (`gateway/hosted_room_context.py`). Lead hand-offs are `room.assignment` events | Application tests only. Offered when `groups.capabilities.methods` lists `groups.context`; it is a room-log write, so it needs no running coordinator. The app always sends `routing`, since Hermes keeps the current routing only when it is omitted. Hermes limits purpose to 500 characters and trimmed notes to 4,096 UTF-8 bytes, which the server checks first |
 | Routine results in a group chat | `deliver: room:<id>` beside `bot-chat:<profile>` in the comma-separated target list, plus `failure_deliver` and `origin` delivery (`cron/scheduler_delivery_room.py`, `cron/scheduler_delivery.py`), mirrored in `src/server/delivery-targets.ts` | Application tests only. The app edits only its own `room:<id>` targets and keeps any other target, including `room:<id>@<profile>`. A post starts a round only for the members it @mentions. Hermes writes it as `message.user` with a `cron:<job>` actor and the routine name as `display_name`, which the app shows as the routine's post. The app offers it with `groups.context`, which arrived in the same upstream change. Delivery errors name `room:<id>`; the app shows only rooms the reader can open |
 
-<!-- Main assistant: begin -->
+### Progress lines
+
+Read from the production revision `ed1afb082eb3e46cf2edae9d8f68fb67b09ee4df`. A GPT model on the openai-codex route writes progress lines as phase `commentary` items in `messages.codex_message_items` and leaves `content` empty.
+
+| Requirement | Official implementation | Recorded result |
+| --- | --- | --- |
+| Saved lines, shown by the profile's own policy | `agent/history_commentary.py` `project_history_commentary` adds `display_commentary` (visible, think-stripped, redacted strings) to assistant rows, plus `display_content` and `display_reasoning` without them. `tui_gateway/session_history.py` `_history_to_messages` applies it. Gates: `display.show_commentary` and `display.interim_assistant_messages`, both default true. A disabled or unreadable gate sends `[]`, and a `commentary_withheld` row sends none | The app reads only `display_commentary`, never `codex_message_items`. Application tests for a malformed field, a disabled gate, repeats and a window cut. Run against the production revision's real function and a copy of real rows, read-only |
+| Live line | `agent/turn_tool_round.py` emits interim commentary after the database append; `tui_gateway/prompt_turn.py` sends `message.interim` `{text, already_streamed}` only when `_load_interim_assistant_messages()` is on | The frame is a structural change, so open chats read the saved row at once; the text itself comes from history, not the frame |
+| Asking for the line | The add-on's `with_inline_guidance` adds `src/shared/progress-line-instructions.json` to the turn's ephemeral system prompt on every app turn | Python test for the wording, once per turn, app turns only |
+
+<!-- Main assistant: begin --><!-- Main assistant: begin -->
 ### Main assistant check-ins and hand-offs
 
 Read from the production revision `ed1afb082eb3e46cf2edae9d8f68fb67b09ee4df` (an earlier version of this section named `3a1e9ef`, which production no longer runs).

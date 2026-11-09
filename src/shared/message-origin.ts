@@ -25,7 +25,13 @@ export function messageOrigin(message: Message): MessageOrigin | undefined {
   return undefined;
 }
 export const isActivityMessage = (message: Message) => messageOrigin(message)?.visibility === "activity";
-export const isConversationReply = (message: Message) => message.role === "assistant" && !isActivityMessage(message) && (!!message.text.trim() || !!message.files?.length);
+/** A progress line, which the assistant wrote before using tools. It is not an answer. */
+export const isProgressLine = (message: Message) => message.role === "assistant" && message.interim === true && !isActivityMessage(message) && !!message.text.trim();
+/**
+ * An answer a person can read, hear, copy or be told about. A progress line is not one, so every
+ * place that decides "did the assistant reply" goes through here and ignores progress lines.
+ */
+export const isConversationReply = (message: Message) => message.role === "assistant" && message.interim !== true && !isActivityMessage(message) && (!!message.text.trim() || !!message.files?.length);
 
 /** Normalize the upstream display contract at the wire boundary; unknown types stay visible. */
 export function wireOrigin(message: Message, row: Record<string, unknown>): MessageOrigin | undefined {

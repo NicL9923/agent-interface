@@ -18,7 +18,7 @@ import jobFields from '../shared/hermes-job-fields.json' with { type: 'json' };
 import { createHermesTransport, TransportError, type Connection, type HermesOptions, type Wire } from './hermes-transport.js';
 import { fileSigner, safeStagedPath, type RegisteredFile } from './hermes-files.js';
 import { deliverRooms, withDeliverRooms } from './delivery-targets.js';
-import { applyFrame, bot, emptyLiveState, historyMessages, inflightMessage, openRequests, receipt, unbridged, type LiveState } from './hermes-mapping.js';
+import { applyFrame, bot, emptyLiveState, historyRows, inflightMessage, openRequests, receipt, unbridged, type LiveState } from './hermes-mapping.js';
 
 export type { HermesOptions } from './hermes-transport.js';
 
@@ -375,7 +375,8 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     const current = !supersededOpens.has(value);
     const sid = value.session_id;
     const history = value.messages ?? (await rpc('session.history', {session_id: sid, profile: botId})).messages;
-    const rows = historyMessages(sid, history, row => artifacts(botId, row));
+    const {messages: rows, starts} = historyRows(sid, history, row => artifacts(botId, row));
+    const savedRows = rows.length;
     const state = current ? transient.get(sid) : undefined, inflight = value.inflight ?? {}, active = !!value.info?.running || !!value.app_run_id;
     // Seed a socket attached mid-turn, without replacing text that already advanced during the read.
     if (active && state && typeof inflight.assistant === 'string' &&
@@ -422,12 +423,14 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
       ? value.app_window as {earlier: number; context: number}
       : undefined;
     const shown = withMessageOrigins(rows);
+    // Hermes counted the window's context in history rows, and a row can show as several messages.
+    const contextEnd = cut ? starts[cut.context] ?? savedRows : 0;
     return {
       botId,
       sessionId: value.canonical_stored_session_id ?? value.stored_session_id ?? value.info?.stored_session_id ?? sid,
       requestSessionId: sid,
-      messages: cut ? shown.slice(cut.context) : shown,
-      ...(cut ? {window: {earlier: cut.earlier, context: shown.slice(0, cut.context)}} : {}),
+      messages: cut ? shown.slice(contextEnd) : shown,
+      ...(cut ? {window: {earlier: cut.earlier, context: shown.slice(0, contextEnd)}} : {}),
       activity: {state: value.app_interruption ? 'interrupted' : attention.length ? 'blocked' : activity, detail, runId},
       toolCalls: active ? toolCalls : [],
       approvals,

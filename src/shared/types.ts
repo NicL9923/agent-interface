@@ -603,6 +603,12 @@ export interface Approval {
 export interface Message {
   /** The add-on admitted this person's message into the task that was already running. Absent when unknown. */
   steered?: boolean;
+  /**
+   * An assistant message that is a progress line, such as "I'll check the forecast first", written
+   * before it used tools. It is the assistant talking, but never the answer: it is not a reply to
+   * read aloud, copy, notify about or count as unread. Absent on every other message.
+   */
+  interim?: boolean;
 }
 export interface SubmissionReceipt {
   /** Whether this message joined the running task. Absent from an older add-on. */

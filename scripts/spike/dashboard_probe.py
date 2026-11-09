@@ -35,6 +35,7 @@ for name, content in files.items():
     (wrapper / name).write_bytes(base64.b64decode(content))
 (root / "shared").mkdir()
 (root / "shared/inline-ui-instructions.json").write_bytes(base64.b64decode(payload["inlineInstructions"]))
+(root / "shared/progress-line-instructions.json").write_bytes(base64.b64decode(payload["progressInstructions"]))
 (wrapper / "agent_interface_dashboard.py").symlink_to(wrapper / "dashboard.py")
 runtime = json.loads(subprocess.check_output([str(launcher), "--print-runtime-command"]))
 assert runtime[1:3] == ["-I", "-c"]
@@ -97,7 +98,7 @@ def main(argv=None, evidence=EVIDENCE):
     parser.add_argument("--hermes-home", default="~/.hermes")
     parser.add_argument("--source", default="~/.hermes/hermes-agent")
     args = parser.parse_args(argv)
-    payload = {"files": bundle(), "inlineInstructions": base64.b64encode((REPO / "src/shared/inline-ui-instructions.json").read_bytes()).decode(), "hermesHome": args.hermes_home, "launcher": args.launcher, "source": args.source}
+    payload = {"files": bundle(), "inlineInstructions": base64.b64encode((REPO / "src/shared/inline-ui-instructions.json").read_bytes()).decode(), "progressInstructions": base64.b64encode((REPO / "src/shared/progress-line-instructions.json").read_bytes()).decode(), "hermesHome": args.hermes_home, "launcher": args.launcher, "source": args.source}
     try:
         result = host_access.ssh(args.ssh_host, "python3 -c " + shlex.quote(REMOTE), input=json.dumps(payload), timeout=TIMEOUT, check=False, capture=True)
     except subprocess.TimeoutExpired as error:

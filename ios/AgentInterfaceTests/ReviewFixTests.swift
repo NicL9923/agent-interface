@@ -82,6 +82,10 @@ import XCTest
       Conversation(botId: "bot", messages: messages, activity: Activity(state: .failed), approvals: [], files: [])
     }
     XCTAssertTrue(explicit.isHumanMessage)
+    // A turn that failed after only saying what it would do has no reply, so it can still retry.
+    let note = Message(id: "note", role: "assistant", text: "I'll check the gate first.", interim: true)
+    XCTAssertEqual(RetryTurn.target(conversation([explicit, note]))?.id, "explicit")
+    XCTAssertNil(RetryTurn.target(conversation([explicit, Message(id: "reply", role: "assistant", text: "The gate service is down.")])))
     XCTAssertEqual(RetryTurn.target(conversation([explicit]))?.id, "explicit", "The only prompt is explicitly human")
     XCTAssertEqual(RetryTurn.target(conversation([older, explicit]))?.id, "explicit", "Never the older prompt before it")
     let activity = Message(id: "a", role: "user", text: "Subagent done", origin: MessageOrigin(kind: "human", visibility: "activity"))

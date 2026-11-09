@@ -758,7 +758,7 @@ class Bridge:
         if kept != notes:
             agent._gateway_turn_context_notes = kept
         prior = getattr(agent, "ephemeral_system_prompt", None)
-        added = [part for part in (self.inline_instructions, roster) if part and part not in (prior or "")]
+        added = [part for part in (self.inline_instructions, self.progress_instructions, roster) if part and part not in (prior or "")]
         if added:
             agent.ephemeral_system_prompt = "\n\n".join(part for part in (prior, *added) if part)
         try:
@@ -771,6 +771,9 @@ class Bridge:
         # persisted user text, receipt digests, image recovery, or steering matches.
         server = self.server
         self.inline_instructions = json.loads((Path(__file__).resolve().parents[1] / "shared" / "inline-ui-instructions.json").read_text())
+        # Said on every app turn, because a model skips a one-time rule about half the time. Hermes shows the line
+        # it writes before a tool call as a progress line, in the chat and in live Talk.
+        self.progress_instructions = json.loads((Path(__file__).resolve().parents[1] / "shared" / "progress-line-instructions.json").read_text())
         # Newer Hermes splits the invocation from turn setup and model changes.
         # Older qualified revisions enter with an already-built session agent.
         if hasattr(server, "_invoke_agent"):

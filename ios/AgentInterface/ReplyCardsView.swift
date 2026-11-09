@@ -208,7 +208,7 @@ struct ReplyContentView: View {
   var body: some View {
     if message.isReply {
       let streaming = message.id.hasSuffix("-inflight")
-      ForEach(ReplyCards.parse(message.text, inlineUi: message.role == "assistant", cached: !streaming)) { part in
+      ForEach(ReplyCards.parse(message.text, inlineUi: message.role == "assistant" && !message.isProgressLine, cached: !streaming)) { part in
         if let markdown = part.markdown { MarkdownView(text: markdown, streaming: streaming) }
         if let inline = part.inline { InlineUiView(document: inline) }
         if let cards = part.cards { ForEach(cards) { card in InteractiveReplyCard(card: card, messageId: message.id) } }

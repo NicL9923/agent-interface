@@ -284,6 +284,21 @@ never chosen for the person.
 A message sent while the assistant is working joins the task it is on. Once Hermes
 admits it that way, it shows "Added to the current task" on every device.
 
+## Progress lines
+
+Before slow work, an assistant says what it understood and what it will check first, in
+one short plain sentence such as "I'll look up today's forecast for Austin." The add-on
+asks for this on every app turn, because a model skips a one-time rule about half the
+time, and the assistant skips it when it needs no tool. A GPT model on the openai-codex
+route often writes such a line on its own; Hermes keeps it apart from the reply as
+commentary and the app shows it in the chat as that assistant talking, in a quieter voice
+than the answer, with no time or reply actions. It follows the profile's Hermes display
+settings (`display.show_commentary` and `display.interim_assistant_messages`): when
+either is off, no progress line shows, in the chat or in Talk. A progress line is never
+the reply. It is not read aloud, copied or counted as new, and a turn that ended after
+only a progress line has no answer. Earlier chats show the lines their assistants wrote
+before this existed.
+
 ## Interactive replies
 
 In assistant Details, choose Enable interactive replies and save. This adds

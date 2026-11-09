@@ -65,6 +65,16 @@ it("rejects missing assistants, unsupported, empty, oversized and malformed reco
   expect((await s.app.inject({ method: "POST", url: "/api/bots/ranch/voice/transcribe", headers: { ...upload.headers, ...s.first }, payload: extra })).statusCode).toBe(413);
   expect(s.transcribeVoice).not.toHaveBeenCalled();
 });
+it("does not read a progress line aloud, because it is not a reply", async () => {
+  const s = await setup();
+  s.conversation.mockImplementation(async () => conversationFixture({ botId: "ranch", messages: [{ id: "note", role: "assistant", text: "I'll check the list.", interim: true }, { id: "reply", role: "assistant", text: "The list is ready." }] }));
+  const speak = (messageId: string) => s.app.inject({ method: "POST", url: "/api/bots/ranch/voice/speak", headers: s.first, payload: { messageId } });
+  const refused = await speak("note");
+  expect(refused.statusCode).toBe(404);
+  expect(refused.json().error).toBe("Choose a completed assistant reply to listen to.");
+  expect(s.synthesizeVoice).not.toHaveBeenCalled();
+  expect((await speak("reply")).statusCode).toBe(200);
+});
 it("reads only stored assistant replies and delivers speech once to its requesting identity", async () => {
   const s = await setup();
   for (const payload of [{ messageId: "user" }, { messageId: "missing" }, { messageId: "reply", text: "client-controlled" }])

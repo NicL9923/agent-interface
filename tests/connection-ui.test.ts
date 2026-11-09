@@ -161,6 +161,22 @@ describe('setup and recovery interface',()=>{
     }finally{size.mockRestore();}
   });
 
+  it('does not count a progress line as a new message while reading earlier ones',async()=>{
+    const size=transcriptSize();
+    try{
+      await renderApp();await advance(20);
+      const transcript=container.querySelector<HTMLElement>('.transcript')!;
+      transcript.scrollTop=300;
+      await scrolled(transcript);
+      conversation={...conversation,messages:[...conversation.messages,{id:'note',role:'assistant',text:'I will check the forecast first.',interim:true}]};
+      await changed();
+      expect(container.querySelector('.jump-latest')!.textContent).toBe('Jump to latest');
+      conversation={...conversation,messages:[...conversation.messages,{id:'fresh',role:'assistant',text:'Sunny.'}]};
+      await changed();
+      expect(container.querySelector('.jump-latest')!.textContent).toBe('1 new message');
+    }finally{size.mockRestore();}
+  });
+
   it('counts replies that arrive while reading earlier messages and jumps back to them',async()=>{
     const size=transcriptSize();
     try{

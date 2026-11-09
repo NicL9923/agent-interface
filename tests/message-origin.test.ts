@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isActivityMessage, messageOrigin, wireOrigin, withMessageOrigins } from "../src/shared/message-origin";
+import { isActivityMessage, isConversationReply, isProgressLine, messageOrigin, wireOrigin, withMessageOrigins } from "../src/shared/message-origin";
 import { watchReplies } from "../src/app/reply-announcement";
 import type { Message } from "../src/shared/types";
 
@@ -44,5 +44,30 @@ describe("message provenance", () => {
     expect(watchReplies({}, { ...base, messages: [diagnostic] }, false).reply).toBeUndefined();
     const answer: Message = { ...diagnostic, id: "s", text: "Your reminder is ready.", origin: { kind: "scheduled", visibility: "conversation" } };
     expect(watchReplies({}, { ...base, messages: [answer] }, false).reply?.id).toBe("s");
+  });
+});
+
+describe("progress lines", () => {
+  const line: Message = { id: "n", role: "assistant", text: "I'll check the forecast first.", interim: true };
+  it("is assistant speech, but never a reply", () => {
+    expect(isProgressLine(line)).toBe(true);
+    expect(isConversationReply(line)).toBe(false);
+    expect(isConversationReply({ ...line, interim: undefined })).toBe(true);
+  });
+  it.each([
+    ["an empty line", { ...line, text: "  " }],
+    ["a user message", { ...line, role: "user" as const }],
+    ["an activity message", { ...line, origin: { kind: "diagnostic" as const, visibility: "activity" as const } }],
+    ["not marked", { ...line, interim: undefined }],
+    ["marked false", { ...line, interim: false }],
+  ])("is not a progress line when it is %s", (_name, message) => expect(isProgressLine(message)).toBe(false));
+  it("is not read aloud when it arrives, and the answer after it is", () => {
+    const base = { watch: { lastId: "q" }, activity: { state: "idle" as const } };
+    const conversation = (messages: Message[]) => ({ botId: "shared", messages, approvals: [], files: [], activity: base.activity, draft: null, readPosition: null });
+    const question: Message = { id: "q", role: "user", text: "Weather?" };
+    const heard = watchReplies(base.watch, conversation([question, line]), false);
+    expect(heard.reply).toBeUndefined();
+    const answer: Message = { id: "a", role: "assistant", text: "Sunny." };
+    expect(watchReplies(heard.watch, conversation([question, line, answer]), false).reply?.id).toBe("a");
   });
 });

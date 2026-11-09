@@ -779,6 +779,82 @@ describe("opening a message", () => {
   });
 });
 
+describe("progress lines", () => {
+  const progress = (id: string, text: string, extra: Partial<Message> = {}): Message => answer(id, text, { interim: true, createdAt: "2026-10-01T16:00:03Z", ...extra });
+  const call = { id: "c1", name: "terminal", status: "completed" as const };
+  it("reads as the assistant talking before the work, apart from the answer, with no reply actions", async () => {
+    conversation = { ...conversation, messages: [
+      prompt("q", "Weather?", { createdAt: "2026-10-01T16:00:00Z" }),
+      progress("n", "I'll check the forecast first."),
+      { id: "t", role: "tool", text: "", toolCall: call },
+      answer("a", "Sunny, 75.", { createdAt: "2026-10-01T16:00:30Z" }),
+    ] };
+    await render();
+    const rows = [...container.querySelectorAll(".conversation-turn > *")].map(node => node.getAttribute("data-message-id") ?? node.className);
+    // The progress line comes first, then the folded work, then the answer.
+    expect(rows).toEqual(["q", "n", "turn-work", "a"]);
+    const line = container.querySelector<HTMLElement>('[data-message-id="n"]')!;
+    expect(line.classList.contains("message-interim")).toBe(true);
+    expect(line.textContent).toBe("I'll check the forecast first.");
+    // Nothing to copy, listen to or quote, and no time under it.
+    expect(line.querySelector(".message-meta, .message-actions")).toBeNull();
+    expect(container.querySelector('[data-message-id="a"] .message-actions')).not.toBeNull();
+    expect(container.querySelector('[data-message-id="a"]')!.classList.contains("message-continued")).toBe(false);
+    expect(container.querySelector(".turn-work summary")?.textContent).toBe("Worked for 30s · 1 tool call");
+  });
+  it("keeps the work row after the line while the turn is still running", async () => {
+    conversation = { ...conversation, activity: { state: "working", runId: "r" }, messages: [
+      prompt("q", "Weather?"),
+      progress("n", "I'll check the forecast first."),
+      { id: "t", role: "tool", text: "", toolCall: { ...call, status: "running" } },
+    ] };
+    await render();
+    const rows = [...container.querySelectorAll(".conversation-turn > *")].map(node => node.getAttribute("data-message-id") ?? node.className);
+    expect(rows).toEqual(["q", "n", "turn-work"]);
+  });
+  it("does not fold the work above a second progress line that comes after tools", async () => {
+    conversation = { ...conversation, messages: [
+      prompt("q", "Weather?"),
+      progress("n1", "I'll check the forecast."),
+      { id: "t1", role: "tool", text: "", toolCall: call },
+      progress("n2", "Now the radar."),
+      { id: "t2", role: "tool", text: "", toolCall: { ...call, id: "c2" } },
+      answer("a", "Sunny."),
+    ] };
+    await render();
+    const rows = [...container.querySelectorAll(".conversation-turn > *")].map(node => node.getAttribute("data-message-id") ?? node.className);
+    expect(rows).toEqual(["q", "n1", "n2", "turn-work", "a"]);
+  });
+  it("places the work before the answer even when a progress line comes after the tools", async () => {
+    conversation = { ...conversation, messages: [prompt("q", "Weather?"), { id: "t", role: "tool", text: "", toolCall: call },
+      progress("n", "Now I'll write it up."), answer("a", "Sunny.")] };
+    await render();
+    const rows = [...container.querySelectorAll(".conversation-turn > *")].map(node => node.getAttribute("data-message-id") ?? node.className);
+    expect(rows).toEqual(["q", "n", "turn-work", "a"]);
+  });
+  it("keeps a progress line apart from the answer beside it, with or without work between", async () => {
+    conversation = { ...conversation, messages: [prompt("q", "Weather?"), progress("n", "I'll check the forecast."), answer("a", "Sunny.")] };
+    await render();
+    const line = container.querySelector('[data-message-id="n"]')!, reply = container.querySelector('[data-message-id="a"]')!;
+    expect(reply.classList.contains("message-continued")).toBe(false);
+    expect(line.classList.contains("message-continued")).toBe(false);
+    // The answer keeps its own time, since the line above it is not one of its parts.
+    expect(reply.querySelector(".message-meta")).not.toBeNull();
+  });
+  it("shows a historical line sensibly when it is the only assistant text of an old turn", async () => {
+    conversation = { ...conversation, messages: [prompt("q", "Check search console"), progress("n", "I'll check Search Console and re-test the live site..."),
+      { id: "t", role: "tool", text: "", toolCall: call }] };
+    await render();
+    expect(container.querySelector('[data-message-id="n"]')?.textContent).toBe("I'll check Search Console and re-test the live site...");
+  });
+  it("does not render inline pages from a progress line", async () => {
+    const page = "```wildbots-html\n" + JSON.stringify({ version: 1, title: "Chart", html: "<p>hi</p>" }) + "\n```";
+    conversation = { ...conversation, messages: [prompt("q", "Chart?"), progress("n", page)] };
+    await render();
+    expect(container.querySelector('[data-message-id="n"] iframe')).toBeNull();
+  });
+});
+
 describe("turn work", () => {
   it("folds a finished turn's tools into one row with its duration, outside of which decisions stay", async () => {
     const call = { id: "c1", name: "terminal", status: "completed" as const, startedAt: "2026-10-01T16:00:05Z" };
