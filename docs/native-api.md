@@ -474,10 +474,12 @@ with the turn, and never as the reply. Do not offer Copy, Listen, Quote or a tim
 it, do not read it aloud when it arrives, do not count it as a new message or as unread,
 do not take it for the answer when deciding whether a turn replied, and do not render
 inline pages from it. It carries the same `runId` as its turn, and its `id` is the saved
-row's `id` followed by `-progress-` and its position in that row. A row can carry up to
-12 lines, each up to 1200 characters. Hermes decides which lines exist: a profile that turns
-off `display.show_commentary` or `display.interim_assistant_messages` has none, and an
-older Hermes sends none. Absent or `false` means an ordinary message.
+row's `id` followed by `-progress-` and its position in that row. Lines are never cut or
+merged: a line the stream already showed is matched whole against the saved one. Hermes
+decides which lines exist: a profile that turns off `display.show_commentary` or
+`display.interim_assistant_messages` has none, and an older Hermes sends none. Saved history
+pages (`GET /api/bots/:id/history/:sessionId`) carry them by the same rules. Absent or `false`
+means an ordinary message.
 
 ## Drafts
 

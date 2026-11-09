@@ -1639,14 +1639,15 @@ describe('Hermes conversation and roster read costs', () => {
       turn([{row_id: 2, role: 'assistant', text: 'Answer', display_commentary: value}]);
       expect((await runtime.conversation('shared')).messages.map(message => message.id)).toEqual(['1', '2']);
     });
-    it('keeps only usable lines: strings with words, bounded, no repeats, none the answer already says', async () => {
+    it('keeps every usable line whole: strings with words, none the answer already says, nothing cut or merged', async () => {
       turn([{row_id: 2, role: 'assistant', text: 'Sunny, 75.', display_commentary: [
-        42, null, {text: 'x'}, '', '   ', ' Checking. ', 'Checking.', 'Sunny, 75.', 'z'.repeat(5000), 'Checking.']}]);
+        42, null, {text: 'x'}, '', '   ', ' Checking. ', 'Checking.', 'Sunny, 75.', 'z'.repeat(5000)]}]);
       const lines = (await runtime.conversation('shared')).messages.filter(message => message.interim).map(message => message.text);
-      expect(lines).toEqual(['Checking.', 'z'.repeat(1200), 'Checking.']);
+      // A line shown cut, or left out, would come back from the stream as its own unmarked reply.
+      expect(lines).toEqual(['Checking.', 'Checking.', 'z'.repeat(5000)]);
       const many = Array.from({length: 40}, (_, index) => `Step ${index}`);
       turn([{row_id: 2, role: 'assistant', text: '', display_commentary: many}]);
-      expect((await runtime.conversation('shared')).messages.filter(message => message.interim)).toHaveLength(12);
+      expect((await runtime.conversation('shared')).messages.filter(message => message.interim).map(message => message.text)).toEqual(many);
     });
     it('never turns a user or tool row into a progress line', async () => {
       turn([{row_id: 2, role: 'user', text: 'Hi again', display_commentary: ['injected']}, {row_id: 3, role: 'tool', name: 'x', content: '{}', display_commentary: ['injected']}]);
@@ -1681,6 +1682,24 @@ describe('Hermes conversation and roster read costs', () => {
       expect(kinds).toEqual(['inflight', undefined]);
       snapshot.messages = [{row_id: 1, role: 'user', text: 'Weather?'}, {row_id: 2, role: 'assistant', text: '', display_commentary: ['I will check.']}];
       expect((await runtime.conversation('shared')).messages.map(message => message.text)).toEqual(['Weather?', 'I will check.', '']);
+    });
+    it.each([
+      ['a very long line', `I will check ${'the forecast and the radar '.repeat(80)}first.`],
+      ['two repeated lines', 'I will check the forecast.\n\nI will check the forecast.'],
+    ])('leaves no tail behind when a streamed progress line is saved, even for %s', async (_name, streamed) => {
+      await runtime.status();
+      snapshot.info.running = true; snapshot.app_run_id = 'run-1';
+      snapshot.messages = [{row_id: 1, role: 'user', text: 'Weather?', app_run_id: 'run-1'}];
+      await runtime.conversation('shared');
+      sockets[0].receive({method: 'event', params: {session_id: 'live-one', type: 'message.start', payload: {}}});
+      sockets[0].receive({method: 'event', params: {session_id: 'live-one', type: 'message.delta', payload: {text: streamed}}});
+      const lines = streamed.includes('\n\n') ? streamed.split('\n\n') : [streamed];
+      snapshot.messages = [{row_id: 1, role: 'user', text: 'Weather?', app_run_id: 'run-1'},
+        {row_id: 2, role: 'assistant', text: '', app_run_id: 'run-1', display_commentary: lines}];
+      const shown = (await runtime.conversation('shared')).messages;
+      expect(shown.filter(message => message.interim).map(message => message.text)).toEqual(lines);
+      // Nothing of the stream is left to read as the reply.
+      expect(shown.some(message => message.id.endsWith('-inflight'))).toBe(false);
     });
     it('does not repeat a streamed progress line once its saved row arrives', async () => {
       await runtime.status();
