@@ -191,6 +191,26 @@ import XCTest
     XCTAssertTrue(app.descendants(matching: .any)["computerStatus"].waitForExistence(timeout: 10), app.debugDescription)
     XCTAssertTrue(app.buttons["computerControl"].wait(until: "label == %@", "Take over", timeout: 15), "Watch does not take control")
   }
+  func testComputerPreviewDocksWhileAComputerToolRunsAndOpensTheComputer() {
+    let app = launchHandoff(["AGENT_INTERFACE_UI_LIVE_COMPUTER": "1"])
+    let peek = app.buttons["computerPeek"]
+    XCTAssertTrue(peek.waitForExistence(timeout: 15), app.debugDescription)
+    XCTAssertEqual(peek.label, "Watch Ranch hand on the computer")
+    XCTAssertGreaterThanOrEqual(app.buttons["computerPeekClose"].frame.height.rounded(), 44)
+    peek.tapWhenReady()
+    XCTAssertTrue(app.descendants(matching: .any)["computerStatus"].waitForExistence(timeout: 10), app.debugDescription)
+    XCTAssertTrue(app.buttons["computerControl"].wait(until: "label == %@", "Take over", timeout: 15), "The preview must open the computer watching")
+  }
+  func testClosingTheComputerPreviewHidesItForTheTurn() {
+    let app = launchHandoff(["AGENT_INTERFACE_UI_LIVE_COMPUTER": "1"])
+    XCTAssertTrue(app.buttons["computerPeek"].waitForExistence(timeout: 15), app.debugDescription)
+    app.buttons["computerPeekClose"].tapWhenReady()
+    XCTAssertTrue(app.buttons["computerPeek"].waitForNonExistence(timeout: 5), "Close hides the preview")
+    // The conversation refreshes while the turn runs; the preview stays hidden through it.
+    XCTAssertTrue(app.buttons["liveWatch"].exists)
+    Thread.sleep(forTimeInterval: 6)
+    XCTAssertFalse(app.buttons["computerPeek"].exists, "A dismissed preview stays hidden for the turn")
+  }
   func testTerminalRequestOffersTheCommandToPasteNeverRunsIt() {
     let app = launchHandoff(["AGENT_INTERFACE_UI_TERMINAL": "1", "AGENT_INTERFACE_UI_TERMINAL_CONFIRMED": "1"])
     let open = app.buttons["terminal.open"]

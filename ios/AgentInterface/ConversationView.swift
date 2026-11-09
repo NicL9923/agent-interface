@@ -61,6 +61,7 @@ struct ConversationView: View {
   @State private var speech = SpeechController()
   @State private var profileAction: BotProfileAction?
   @State private var composerFocused = false
+  @State private var peekDismissedTurn: String?
   @State private var visible = false
   @State private var findOpen = false
   @State private var findQuery = ""
@@ -126,8 +127,9 @@ struct ConversationView: View {
       banners
       if findOpen { findBar }
       // The transcript runs under the message box, which floats over it; at the end the last
-      // message still rests just above the box.
-      transcript.safeAreaInset(edge: .bottom, spacing: 0) { composer }
+      // message still rests just above the box, and so does the computer preview.
+      transcript.overlay(alignment: .bottomTrailing) { computerPeek }
+        .safeAreaInset(edge: .bottom, spacing: 0) { composer }
     }.modifier(ReadingChat(botId: bot.id)).background(Palette.surface(scheme)).navigationTitle(bot.name)
     .navigationBarTitleDisplayMode(.inline)
     .bareToolbarItem(.principal) { header }
@@ -737,6 +739,15 @@ struct ConversationView: View {
       .accessibilityHint(offer.checking ? "Sends the same request again, so it can't run twice. Your draft stays as it is."
         : "Sends your last message again. Your draft stays as it is.")
       .accessibilityIdentifier("retryTurn")
+  }
+  /// The watch-only desktop view docked above the composer while the turn's tools use the computer.
+  /// Dismissing hides it until the next turn.
+  @ViewBuilder private var computerPeek: some View {
+    let turn = store.turns.last?.id
+    if ComputerPeekRules.shows(selected: true, computerOpen: store.openComputer != nil, active: store.activity.active,
+      toolNames: store.conversation?.toolCalls?.map(\.name) ?? [], turn: turn, dismissedTurn: peekDismissedTurn) {
+      ComputerPeekView(name: bot.name, open: { store.openComputer = ComputerOpening(take: false) }, dismiss: { peekDismissedTurn = turn })
+    }
   }
   private var composer: some View {
     ComposerView(bot: bot, focused: $composerFocused) { latestTrigger += 1 }
