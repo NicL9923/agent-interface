@@ -39,7 +39,8 @@
       event = nil
     }
 
-    func start(chunk: @escaping @Sendable (Data) -> Void, failed: @escaping @MainActor (String) -> Void) throws {
+    func start(chunk: @escaping @Sendable (Data) -> Void, failed: @escaping @MainActor (String) -> Void,
+      cut: @escaping @MainActor ([TalkPlaybackLedger.Heard]) -> Void) throws {
       run([
         ["type": "input_audio_buffer.speech_started"],
         ["type": "conversation.item.input_audio_transcription.completed", "transcript": Self.question],
@@ -50,7 +51,7 @@
       ])
     }
     func play(_ pcm: Data, item: String) {}
-    func interrupt() -> TalkPlaybackLedger.Heard? { nil }
+    func interrupt() -> [TalkPlaybackLedger.Heard] { [] }
     func setMuted(_ muted: Bool) {}
     func stop() { script?.cancel(); script = nil }
 

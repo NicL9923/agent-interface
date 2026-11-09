@@ -2,13 +2,14 @@ import XCTest
 
 @testable import AgentInterface
 
-/// A synthetic MetricKit diagnostic, shaped like `MXCrashDiagnostic.jsonRepresentation()`.
-private func diagnostic(meta: [String: Any], frames: [[String: Any]]? = nil) -> Data {
+/// A synthetic MetricKit diagnostic, shaped like `MXCrashDiagnostic.jsonRepresentation()`. Crashes and
+/// hangs send per-thread trees, rooted at the innermost frame as in Apple's documented example.
+private func diagnostic(meta: [String: Any], frames: [[String: Any]]? = nil, perThread: Bool = true) -> Data {
   var root: [String: Any] = ["diagnosticMetaData": meta]
-  if let frames { root["callStackTree"] = ["callStackPerThread": false, "callStacks": [["threadAttributed": true, "callStackRootFrames": frames]]] }
+  if let frames { root["callStackTree"] = ["callStackPerThread": perThread, "callStacks": [["threadAttributed": true, "callStackRootFrames": frames]]] }
   return try! JSONSerialization.data(withJSONObject: root)
 }
-/// A chain of frames, outermost first, nested through `subFrames`.
+/// A chain of frames, the first as the root, each next one nested in `subFrames`.
 private func chain(_ names: [(String, Int)]) -> [[String: Any]] {
   var inner: [[String: Any]] = []
   for (name, offset) in names.reversed() {
@@ -49,13 +50,14 @@ final class CrashReportTests: XCTestCase {
     XCTAssertNil(report.release, "No version, no release: the field is optional")
   }
   func testTheStackListsTheInnermostFramesFirstAsBinaryAndOffsetOnly() {
-    let frames = chain([("dyld", 0x10), ("AgentInterface", 0x1a2b4), ("UIKitCore", 0x9f00), ("AgentInterface", 255)])
+    // Per-thread: the faulting frame is the root, and its callers nest down to dyld.
+    let frames = chain([("AgentInterface", 255), ("UIKitCore", 0x9f00), ("AgentInterface", 0x1a2b4), ("dyld", 0x10)])
     let stack = CrashReport.make(kind: .crash, json: diagnostic(meta: meta, frames: frames), fallbackVersion: nil, fallbackBuild: nil).stack
     XCTAssertEqual(stack, "0 AgentInterface +0xff\n1 UIKitCore +0x9f00\n2 AgentInterface +0x1a2b4\n3 dyld +0x10")
     XCTAssertFalse(stack?.contains("4300000000") ?? true, "Addresses are not sent")
   }
   func testTheStackKeepsOnlyTheTopFramesAndFitsTheServerLimit() {
-    let deep = chain((0..<200).map { ("Binary\($0)-" + String(repeating: "x", count: 100), $0) })
+    let deep = chain((0..<200).reversed().map { ("Binary\($0)-" + String(repeating: "x", count: 100), $0) })
     let stack = try! XCTUnwrap(CrashReport.make(kind: .crash, json: diagnostic(meta: meta, frames: deep), fallbackVersion: nil, fallbackBuild: nil).stack)
     XCTAssertEqual(stack.split(separator: "\n").count, CrashReport.maxFrames)
     XCTAssertTrue(stack.hasPrefix("0 Binary199-"), "The innermost frame leads")
@@ -65,7 +67,8 @@ final class CrashReportTests: XCTestCase {
     let busy: [String: Any] = ["binaryName": "Busy", "offsetIntoBinaryTextSegment": 2, "sampleCount": 9, "subFrames": []]
     let idle: [String: Any] = ["binaryName": "Idle", "offsetIntoBinaryTextSegment": 1, "sampleCount": 1, "subFrames": []]
     let root: [[String: Any]] = [["binaryName": "main", "offsetIntoBinaryTextSegment": 0, "sampleCount": 10, "subFrames": [idle, busy]]]
-    let stack = CrashReport.make(kind: .hang, json: diagnostic(meta: [:], frames: root), fallbackVersion: nil, fallbackBuild: nil).stack
+    // An aggregated tree is rooted at the outermost frame, so it reads backwards.
+    let stack = CrashReport.make(kind: .hang, json: diagnostic(meta: [:], frames: root, perThread: false), fallbackVersion: nil, fallbackBuild: nil).stack
     XCTAssertEqual(stack, "0 Busy +0x2\n1 main +0x0")
   }
   func testNoCallStackMeansNoStack() {

@@ -118,6 +118,10 @@ import Foundation
         failed: { [weak self] message in
           guard let self, generation == run else { return }
           fail(message)
+        },
+        cut: { [weak self] lost in
+          guard let self, generation == run else { return }
+          truncate(lost)
         })
     } catch {
       fail((error as? APIError)?.message ?? "The microphone could not start. Close other apps using it, then try again.")
@@ -152,14 +156,18 @@ import Foundation
     case "input_audio_buffer.speech_started":
       // The person spoke over the voice: stop it now, and tell the model how much was heard so it
       // does not think the rest was said.
-      if let heard = audio?.interrupt(), !heard.item.isEmpty {
-        host?.send(["type": "conversation.item.truncate", "item_id": heard.item, "content_index": 0, "audio_end_ms": heard.milliseconds])
-      }
+      if let audio { truncate(audio.interrupt()) }
     default: break
     }
     loop?.handle(event)
   }
 
+  /// Cuts each item to what the person heard; one never reached is cut to nothing.
+  private func truncate(_ lost: [TalkPlaybackLedger.Heard]) {
+    for heard in lost where !heard.item.isEmpty {
+      host?.send(["type": "conversation.item.truncate", "item_id": heard.item, "content_index": 0, "audio_end_ms": heard.milliseconds])
+    }
+  }
   fileprivate func phase(_ phase: TalkPhase, run: Int) {
     guard generation == run, status != .idle else { return }
     status = .live(phase)

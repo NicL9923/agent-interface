@@ -5,36 +5,50 @@ import os
 /// The microphone and speaker for live Talk.
 @MainActor protocol TalkAudioIO: AnyObject {
   /// Opens the microphone and speaker. Each microphone chunk arrives as 24 kHz mono 16-bit PCM,
-  /// off the main actor. `failed` reports a stop the person did not ask for.
-  func start(chunk: @escaping @Sendable (Data) -> Void, failed: @escaping @MainActor (String) -> Void) throws
+  /// off the main actor. `failed` reports a stop the person did not ask for, and `cut` the voice
+  /// lost without being asked, as when a headset change restarts the audio.
+  func start(chunk: @escaping @Sendable (Data) -> Void, failed: @escaping @MainActor (String) -> Void,
+    cut: @escaping @MainActor ([TalkPlaybackLedger.Heard]) -> Void) throws
   /// Queues the voice's 24 kHz mono 16-bit PCM for one output item.
   func play(_ pcm: Data, item: String)
-  /// Stops the voice at once. Answers the item still playing and how much of it was heard, so the
-  /// voice model can forget what the person never heard.
-  func interrupt() -> TalkPlaybackLedger.Heard?
+  /// Stops the voice at once. Answers each item with audio still to play and how much of it was
+  /// heard, so the voice model can forget what the person never heard.
+  func interrupt() -> [TalkPlaybackLedger.Heard]
   func setMuted(_ muted: Bool)
   func stop()
 }
 
-/// Which output item plays and how far it got, in the player's own sample clock. Content queued
-/// after a gap starts at the clock's current time, not where earlier audio ended.
+/// What the voice queued and how far it played, in the player's own sample clock. Each chunk is a
+/// segment: one queued after the player ran dry starts at the clock's current time, and the silence
+/// before it is not counted as heard. Items can overlap in the queue, as a filler still playing
+/// when the answer arrives.
 struct TalkPlaybackLedger: Equatable {
   struct Heard: Equatable { var item: String; var milliseconds: Int }
   static let rate: Double = 24_000
-  private(set) var item: String?
-  private var itemStart: Int64 = 0
+  private struct Segment: Equatable { var item: String; var start: Int64; var frames: Int64 }
+  private var segments: [Segment] = []
   private var end: Int64 = 0
 
   mutating func schedule(item: String, frames: Int, at now: Int64) {
     if end < now { end = now }
-    if item != self.item { self.item = item; itemStart = end }
+    // Earlier items that finished playing need no truncation. The newest item may still stream
+    // more audio, so its played segments stay counted.
+    let finished = Set(segments.map(\.item)).filter { name in
+      name != item && !segments.contains { $0.item == name && $0.start + $0.frames > now }
+    }
+    if !finished.isEmpty { segments.removeAll { finished.contains($0.item) } }
+    segments.append(Segment(item: item, start: end, frames: Int64(frames)))
     end += Int64(frames)
   }
-  /// The item still playing at `now` and how much of it was heard; nil once its audio has finished.
-  func heard(at now: Int64) -> Heard? {
-    guard let item, now < end else { return nil }
-    let frames = max(0, now - itemStart)
-    return Heard(item: item, milliseconds: Int((Double(frames) * 1000 / Self.rate).rounded(.down)))
+  /// Each item with audio still to play at `now`, in queue order, with how much of it was heard:
+  /// the one playing up to where it is, and any not reached yet at zero.
+  func unheard(at now: Int64) -> [Heard] {
+    var items: [String] = []
+    for segment in segments where segment.start + segment.frames > now && !items.contains(segment.item) { items.append(segment.item) }
+    return items.map { item in
+      let played = segments.filter { $0.item == item }.reduce(Int64(0)) { $0 + min(max(now - $1.start, 0), $1.frames) }
+      return Heard(item: item, milliseconds: Int((Double(played) * 1000 / Self.rate).rounded(.down)))
+    }
   }
   mutating func reset() { self = TalkPlaybackLedger() }
 }
@@ -73,13 +87,16 @@ private final class MuteFlag: Sendable {
   private var ledger = TalkPlaybackLedger()
   private var chunk: (@Sendable (Data) -> Void)?
   private var failed: (@MainActor (String) -> Void)?
+  private var cut: (@MainActor ([TalkPlaybackLedger.Heard]) -> Void)?
   private var observers: [NSObjectProtocol] = []
   private var running = false
   private var sessionActive = false
 
-  func start(chunk: @escaping @Sendable (Data) -> Void, failed: @escaping @MainActor (String) -> Void) throws {
+  func start(chunk: @escaping @Sendable (Data) -> Void, failed: @escaping @MainActor (String) -> Void,
+    cut: @escaping @MainActor ([TalkPlaybackLedger.Heard]) -> Void) throws {
     self.chunk = chunk
     self.failed = failed
+    self.cut = cut
     let session = AVAudioSession.sharedInstance()
     var options: AVAudioSession.CategoryOptions = [.defaultToSpeaker]
     if #available(iOS 26.0, *) { options.insert(.allowBluetoothHFP) } else { options.insert(.allowBluetooth) }
@@ -141,10 +158,14 @@ private final class MuteFlag: Sendable {
     }
   }
 
+  /// A headset coming or going stops the engine and drops the queued voice, so the model is told
+  /// what was heard before the microphone and speaker start again.
   private func restart() {
     guard running else { return }
+    let lost = ledger.unheard(at: now)
     engine.stop()
-    do { try begin() } catch { fail("The microphone stopped. Start Talk again.") }
+    do { try begin() } catch { fail("The microphone stopped. Start Talk again."); return }
+    if !lost.isEmpty { cut?(lost) }
   }
 
   private var now: Int64 {
@@ -165,8 +186,8 @@ private final class MuteFlag: Sendable {
     if !player.isPlaying { player.play() }
   }
 
-  func interrupt() -> TalkPlaybackLedger.Heard? {
-    let heard = ledger.heard(at: now)
+  func interrupt() -> [TalkPlaybackLedger.Heard] {
+    let heard = ledger.unheard(at: now)
     player.stop()
     ledger.reset()
     if running { player.play() }
@@ -186,6 +207,7 @@ private final class MuteFlag: Sendable {
     observers = []
     chunk = nil
     failed = nil
+    cut = nil
     if running {
       running = false
       engine.inputNode.removeTap(onBus: 0)

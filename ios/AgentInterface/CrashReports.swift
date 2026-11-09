@@ -59,10 +59,12 @@ extension CrashReport {
 
   /// The top frames as `index Binary +0xoffset`, innermost first, one per line. Follows the
   /// attributed thread's heaviest branch: a crash has one chain, a hang's busiest path is the likely
-  /// culprit. Nothing but binary names and offsets, never an address a process could be located by
+  /// culprit. A per-thread tree, as crashes and hangs send, starts at the innermost frame and nests
+  /// its callers; an aggregated one starts at the outermost and nests callees. Nothing but binary names and offsets, never an address a process could be located by
   /// or any path.
   static func stack(_ tree: Any?) -> String? {
     guard let tree = tree as? [String: Any], let stacks = tree["callStacks"] as? [[String: Any]] else { return nil }
+    let perThread = tree["callStackPerThread"] as? Bool ?? true
     let attributed = stacks.first { $0["threadAttributed"] as? Bool == true } ?? stacks.first
     var frames: [[String: Any]] = []
     var level = attributed?["callStackRootFrames"] as? [[String: Any]] ?? []
@@ -70,7 +72,8 @@ extension CrashReport {
       frames.append(next)
       level = next["subFrames"] as? [[String: Any]] ?? []
     }
-    let lines = frames.reversed().prefix(maxFrames).enumerated().map { index, frame in
+    let innermostFirst = perThread ? frames : frames.reversed()
+    let lines = innermostFirst.prefix(maxFrames).enumerated().map { index, frame in
       let name = text(frame["binaryName"]) ?? "?"
       let offset = int(frame["offsetIntoBinaryTextSegment"]).map { "+0x" + String($0, radix: 16) } ?? ""
       return "\(index) \(name) \(offset)".trimmingCharacters(in: .whitespaces)

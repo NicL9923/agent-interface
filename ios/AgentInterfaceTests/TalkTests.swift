@@ -157,23 +157,25 @@ private struct Refused: LocalizedError { var errorDescription: String? { "Talk i
 }
 
 final class TalkPlaybackTests: XCTestCase {
-  func testHeardTimeCountsFromWhereTheItemStartedPlaying() {
+  func testAnItemQueuedBehindAnotherLeavesTheFirstToBeCutWhereItPlays() {
     var ledger = TalkPlaybackLedger()
-    // Earlier audio plays from 0 to 24,000 (one second); the next item queues behind it.
-    ledger.schedule(item: "a", frames: 24_000, at: 0)
-    ledger.schedule(item: "b", frames: 48_000, at: 12_000)
-    XCTAssertEqual(ledger.heard(at: 36_000), .init(item: "b", milliseconds: 500))
-    XCTAssertEqual(ledger.heard(at: 20_000), .init(item: "b", milliseconds: 0), "Before its start nothing of it was heard")
-    XCTAssertNil(ledger.heard(at: 72_000), "Finished audio needs no truncation")
+    // A filler plays from 0 to 24,000 (one second); the answer queues behind it.
+    ledger.schedule(item: "filler", frames: 24_000, at: 0)
+    ledger.schedule(item: "answer", frames: 48_000, at: 12_000)
+    XCTAssertEqual(ledger.unheard(at: 18_000), [.init(item: "filler", milliseconds: 750), .init(item: "answer", milliseconds: 0)],
+      "The filler is cut where it plays, and the answer never reached is cut to nothing")
+    XCTAssertEqual(ledger.unheard(at: 36_000), [.init(item: "answer", milliseconds: 500)])
+    XCTAssertEqual(ledger.unheard(at: 72_000), [], "Finished audio needs no truncation")
   }
 
-  func testAudioQueuedAfterAGapStartsNow() {
+  func testSilenceWhileThePlayerRanDryIsNotHeard() {
     var ledger = TalkPlaybackLedger()
+    // 100 ms of one item, a 900 ms stall, then 100 ms more of the same item.
     ledger.schedule(item: "a", frames: 2_400, at: 0)
-    ledger.schedule(item: "b", frames: 24_000, at: 48_000)
-    XCTAssertEqual(ledger.heard(at: 60_000), .init(item: "b", milliseconds: 500))
+    ledger.schedule(item: "a", frames: 2_400, at: 24_000)
+    XCTAssertEqual(ledger.unheard(at: 25_200), [.init(item: "a", milliseconds: 150)])
     ledger.reset()
-    XCTAssertNil(ledger.heard(at: 60_000))
+    XCTAssertEqual(ledger.unheard(at: 25_200), [])
   }
 
   func testPCMBecomesFloatsLittleEndian() {
@@ -212,16 +214,18 @@ final class TalkPlaybackTests: XCTestCase {
   var starts = 0, stops = 0
   var played: [(Data, String)] = []
   var muted: Bool?
-  var heard: TalkPlaybackLedger.Heard?
+  var heard: [TalkPlaybackLedger.Heard] = []
   var chunk: (@Sendable (Data) -> Void)?
   var failed: (@MainActor (String) -> Void)?
+  var cut: (@MainActor ([TalkPlaybackLedger.Heard]) -> Void)?
   var refuse: Error?
-  func start(chunk: @escaping @Sendable (Data) -> Void, failed: @escaping @MainActor (String) -> Void) throws {
+  func start(chunk: @escaping @Sendable (Data) -> Void, failed: @escaping @MainActor (String) -> Void,
+    cut: @escaping @MainActor ([TalkPlaybackLedger.Heard]) -> Void) throws {
     if let refuse { throw refuse }
-    starts += 1; self.chunk = chunk; self.failed = failed
+    starts += 1; self.chunk = chunk; self.failed = failed; self.cut = cut
   }
   func play(_ pcm: Data, item: String) { played.append((pcm, item)) }
-  func interrupt() -> TalkPlaybackLedger.Heard? { defer { heard = nil }; return heard }
+  func interrupt() -> [TalkPlaybackLedger.Heard] { defer { heard = [] }; return heard }
   func setMuted(_ muted: Bool) { self.muted = muted }
   func stop() { stops += 1 }
 }
@@ -278,15 +282,20 @@ final class TalkPlaybackTests: XCTestCase {
     socket.emit(["type": "response.output_audio.delta", "item_id": "item-7", "delta": Data([0, 64]).base64EncodedString()])
     XCTAssertEqual(audio.played.first?.1, "item-7")
     XCTAssertEqual(audio.played.first?.0, Data([0, 64]))
-    audio.heard = .init(item: "item-7", milliseconds: 1_250)
+    audio.heard = [.init(item: "item-7", milliseconds: 1_250), .init(item: "item-8", milliseconds: 0)]
     socket.emit(["type": "input_audio_buffer.speech_started"])
-    let truncate = socket.sent.first { $0["type"] as? String == "conversation.item.truncate" }
-    XCTAssertEqual(truncate?["item_id"] as? String, "item-7")
-    XCTAssertEqual(truncate?["audio_end_ms"] as? Int, 1_250)
-    XCTAssertEqual(truncate?["content_index"] as? Int, 0)
+    let truncates = socket.sent.filter { $0["type"] as? String == "conversation.item.truncate" }
+    XCTAssertEqual(truncates.map { $0["item_id"] as? String }, ["item-7", "item-8"], "A queued item the person never reached is cut too")
+    XCTAssertEqual(truncates.map { $0["audio_end_ms"] as? Int }, [1_250, 0])
+    XCTAssertEqual(truncates.first?["content_index"] as? Int, 0)
     // Speech with nothing playing truncates nothing.
     socket.emit(["type": "input_audio_buffer.speech_started"])
-    XCTAssertEqual(socket.sent.filter { $0["type"] as? String == "conversation.item.truncate" }.count, 1)
+    XCTAssertEqual(socket.sent.filter { $0["type"] as? String == "conversation.item.truncate" }.count, 2)
+    // A headset change that dropped queued voice tells the model what was heard, and Talk goes on.
+    audio.cut?([.init(item: "item-9", milliseconds: 400)])
+    XCTAssertEqual(socket.sent.last?["item_id"] as? String, "item-9")
+    XCTAssertEqual(socket.sent.last?["audio_end_ms"] as? Int, 400)
+    XCTAssertTrue(talk.live)
   }
 
   func testMuteAndEndReleaseEverything() async throws {
