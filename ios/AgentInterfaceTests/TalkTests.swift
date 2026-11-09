@@ -165,6 +165,7 @@ private struct Refused: LocalizedError { var errorDescription: String? { "Talk i
     var pauses = 0
     return { _ in
       pauses += 1
+      // Timer: stands in for the follow-up pause, held past the test so the loop is still following; dispose cancels it.
       if pauses > free { try await Task.sleep(for: .seconds(60)) }
     }
   }
@@ -217,7 +218,7 @@ private struct Refused: LocalizedError { var errorDescription: String? { "Talk i
     XCTAssertEqual(host.heardWithAsk[2], ["n1"], "A line of a shared run is said once, not once per request")
     loop.dispose()
 
-    let big = LoopHost(), bigLoop = loop(big, sleeps: gated(1))
+    let big = LoopHost(), bigLoop = self.loop(big, sleeps: gated(1))
     let ids = (0..<600).map { "n\($0)" }
     big.answers = [.success(TalkAnswer(state: .working, progress: TalkProgress(ids: ids, text: "Checking."))), .success(TalkAnswer(state: .working))]
     bigLoop.handle(call(#"{"request":"Weather?"}"#))
