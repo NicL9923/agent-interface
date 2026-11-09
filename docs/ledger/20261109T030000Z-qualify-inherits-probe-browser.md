@@ -30,3 +30,8 @@ in the tool, not `src/hermes/qualification.py`, so the integration digest is unc
   reached through a link, a missing receipt and a retargeted browser path.
 - Mutants confirmed red, then restored: following links, the mode check removed, no rebind,
   plus the six earlier mutants. The owner check needs a second account and is not exercised.
+
+A scoped re-review closed the receipt finding and found that the inherited path was still
+resolved a second time after validation, so a link swapped between the two could run another
+browser. Inheritance now uses the validated descriptor directly; the end-of-run check still
+re-resolves the requested path and refuses a change during qualification.

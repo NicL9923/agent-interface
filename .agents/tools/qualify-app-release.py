@@ -137,9 +137,11 @@ requested_probe_browser = PAYLOAD.get("computerProbeBrowser")
 if requested_probe_browser is None and PAYLOAD.get("inheritComputerProbeBrowser"):
     # A host whose PM Chromium cannot sandbox keeps the browser its last qualification passed
     # with (Nov 9, 2026: a release qualified without the flag failed the local-network probe).
-    inherited = live_probe_browser(PAYLOAD["liveQualificationReceipt"])
-    requested_probe_browser = inherited and inherited["requested"]
-probe_browser = qualification["computer_probe_browser"](requested_probe_browser)
+    # Use the descriptor rebind validated; resolving `requested` again could bind a retargeted link.
+    probe_browser = live_probe_browser(PAYLOAD["liveQualificationReceipt"])
+    requested_probe_browser = probe_browser and probe_browser["requested"]
+else:
+    probe_browser = qualification["computer_probe_browser"](requested_probe_browser)
 host_files = {p: sha(p) for p in {str(worker_path), str(runner), str(browser_facts), str(browser), *worker["qualificationFiles"]}}
 if probe_browser:
     host_files[probe_browser["executable"]] = probe_browser["sha256"]
