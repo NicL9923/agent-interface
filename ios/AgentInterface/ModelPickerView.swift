@@ -217,7 +217,7 @@ struct ChatModelSheet: View {
               InferenceChoice(title: "Speed", options: InferenceSettings.speeds, identifier: "inferenceSpeed",
                 label: { $0.capitalized },
                 selection: Binding(get: { settings.speed }, set: { changeSettings(["speed": $0]) }))
-              Text("Available levels and speeds depend on the model.").font(.footnote).foregroundStyle(Palette.muted)
+              Text("Auto uses Fast at the start of each reply, then Normal. Available levels and speeds depend on the model.").font(.footnote).foregroundStyle(Palette.muted)
             } else if settingsError == nil { ProgressView("Loading reasoning and speed…") }
             if let settingsError {
               ErrorBanner(message: settingsError)

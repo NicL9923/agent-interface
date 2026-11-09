@@ -174,6 +174,17 @@ it("saves conversation reasoning and restores the saved value after an unsupport
   expect(document.activeElement).toBe(document.body.querySelector('[role="alert"]'));
 });
 
+it("offers Auto between Normal and Fast with its hint and saves it", async () => {
+  vi.mocked(write).mockResolvedValueOnce({ reasoning: "high", speed: "auto" });
+  await render(); await openPicker();
+  const speeds = [...document.body.querySelectorAll('[role="radiogroup"]')].find(item => document.getElementById(item.getAttribute("aria-labelledby")!)?.textContent === "Speed")!;
+  expect([...speeds.querySelectorAll('[role="radio"]')].map(item => item.textContent)).toEqual(["Normal", "Auto", "Fast", "Ultrafast"]);
+  expect(document.body.textContent).toContain("Auto uses Fast at the start of each reply, then Normal.");
+  await act(async () => segment("Speed", "Auto").click());
+  expect(write).toHaveBeenCalledWith("/bots/ranch/inference", { speed: "auto" }, "PATCH");
+  expect(checked("Speed")).toBe("Auto");
+});
+
 it("moves and saves reasoning with the arrow keys, keeping focus in the group while it saves", async () => {
   let finish!: (value: unknown) => void;
   vi.mocked(write).mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
