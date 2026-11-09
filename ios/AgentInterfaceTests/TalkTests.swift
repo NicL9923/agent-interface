@@ -9,12 +9,15 @@ import XCTest
   var shown: [TalkCaptions] = []
   var problems: [String] = []
   var asks: [(id: String, request: String)] = []
+  /// The progress lines the loop reported as heard with each ask.
+  var heardWithAsk: [[String]] = []
   var answers: [Result<TalkAnswer, Error>] = []
   var activity_ = 0
   private var ids = 0
   func send(_ event: [String: Any]) { sent.append(event) }
-  func ask(requestId: String, request: String) async throws -> TalkAnswer {
+  func ask(requestId: String, request: String, heard: [String]) async throws -> TalkAnswer {
     asks.append((requestId, request))
+    heardWithAsk.append(heard)
     guard !answers.isEmpty else { throw Refused() }
     return try answers.removeFirst().get()
   }
@@ -138,6 +141,92 @@ private struct Refused: LocalizedError { var errorDescription: String? { "Talk i
     let note = second.sent.compactMap { $0["item"] as? [String: Any] }.last
     XCTAssertEqual(note?["type"] as? String, "message", "A call is answered once; a later failure is a new message")
     XCTAssertEqual(note?["role"] as? String, "system")
+  }
+
+  private func line(_ id: String, _ text: String) -> Result<TalkAnswer, Error> {
+    .success(TalkAnswer(state: .working, progress: TalkProgress(ids: [id], text: text)))
+  }
+  private func creates(_ host: LoopHost) -> Int { host.types.filter { $0 == "response.create" }.count }
+
+  func testTheFirstProgressLineAnswersTheCallAndFollowUpsReportItHeard() async throws {
+    let host = LoopHost(), loop = loop(host)
+    host.answers = [line("n1", "Checking the forecast."), .success(TalkAnswer(state: .done, text: "Sunny."))]
+    loop.handle(call(#"{"request":"Weather?"}"#))
+    try await until { host.asks.count == 2 && host.items.count == 2 }
+    XCTAssertEqual(host.heardWithAsk, [[], ["n1"]], "The server leaves out a line this app already said")
+    XCTAssertEqual((host.sent.first?["item"] as? [String: Any])?["type"] as? String, "function_call_output")
+    XCTAssertTrue(host.items[0].contains("Checking the forecast."), host.items[0])
+    XCTAssertFalse(host.items[0].contains("still working"))
+    XCTAssertTrue(host.items[1].hasSuffix("Ranch answered: Sunny. Tell the person now, briefly."), host.items[1])
+  }
+
+  /// Pauses return at once for the first `free` asks and then wait, so a test can look at a loop that is still following.
+  private func gated(_ free: Int) -> (Duration) async throws -> Void {
+    var pauses = 0
+    return { _ in
+      pauses += 1
+      // Timer: stands in for the follow-up pause, held past the test so the loop is still following; dispose cancels it.
+      if pauses > free { try await Task.sleep(for: .seconds(60)) }
+    }
+  }
+
+  func testALaterLineIsSaidOnceWhenTheVoiceIsFreeAndHeldWhenItIsNot() async throws {
+    let host = LoopHost(), loop = loop(host, sleeps: gated(2))
+    host.answers = [line("n1", "Checking the forecast."), line("n2", "Now the radar."), .success(TalkAnswer(state: .working))]
+    loop.handle(call(#"{"request":"Weather?"}"#))
+    try await until { host.asks.count == 3 }
+    // The first line was still being said when the second arrived, so it waits for that response to end.
+    XCTAssertEqual(host.items.count, 1)
+    XCTAssertEqual(creates(host), 1)
+    loop.handle(["type": "response.done"])
+    XCTAssertEqual(host.items.count, 2)
+    XCTAssertTrue(host.items[1].contains("Now the radar."), host.items[1])
+    XCTAssertEqual(creates(host), 2, "One response at a time")
+    XCTAssertEqual(host.heardWithAsk, [[], ["n1"], ["n1", "n2"]])
+    loop.dispose()
+  }
+
+  func testTheAnswerIsSpokenAloneWhenItArrivesBeforeAHeldLine() async throws {
+    let host = LoopHost(), loop = loop(host)
+    host.answers = [line("n1", "Checking the forecast."), line("n2", "Now the radar."), .success(TalkAnswer(state: .done, text: "Sunny, 75."))]
+    loop.handle(call(#"{"request":"Weather?"}"#))
+    try await until { host.asks.count == 3 }
+    loop.handle(["type": "response.done"])
+    loop.handle(["type": "response.done"])
+    let said = host.items.joined(separator: "\n")
+    XCTAssertTrue(said.contains("Sunny, 75."), said)
+    XCTAssertFalse(said.contains("Now the radar."), "The answer drops a line that is only old news")
+  }
+
+  func testDisposingNeverSpeaksAHeldLine() async throws {
+    let host = LoopHost(), loop = loop(host, sleeps: gated(1))
+    host.answers = [line("n1", "Checking the forecast."), line("n2", "Now the radar.")]
+    loop.handle(call(#"{"request":"Weather?"}"#))
+    try await until { host.asks.count == 2 }
+    loop.dispose()
+    loop.handle(["type": "response.done"])
+    XCTAssertEqual(host.items.count, 1)
+  }
+
+  func testWhatWasHeardIsSharedBetweenRequestsAndBoundedToTheNewest() async throws {
+    let host = LoopHost(), loop = loop(host, sleeps: gated(1))
+    host.answers = [line("n1", "Checking."), .success(TalkAnswer(state: .done, text: "Sunny.")), .success(TalkAnswer(state: .working))]
+    loop.handle(call(#"{"request":"Weather today?"}"#))
+    try await until { host.asks.count == 2 }
+    loop.handle(call(#"{"request":"And tomorrow?"}"#, id: "call-2"))
+    try await until { host.asks.count == 3 }
+    XCTAssertEqual(host.heardWithAsk[2], ["n1"], "A line of a shared run is said once, not once per request")
+    loop.dispose()
+
+    let big = LoopHost(), bigLoop = self.loop(big, sleeps: gated(1))
+    let ids = (0..<600).map { "n\($0)" }
+    big.answers = [.success(TalkAnswer(state: .working, progress: TalkProgress(ids: ids, text: "Checking."))), .success(TalkAnswer(state: .working))]
+    bigLoop.handle(call(#"{"request":"Weather?"}"#))
+    try await until { big.asks.count == 2 }
+    XCTAssertEqual(big.heardWithAsk[1].count, TalkLoop.maxHeard)
+    XCTAssertEqual(big.heardWithAsk[1].first, "n100")
+    XCTAssertEqual(big.heardWithAsk[1].last, "n599")
+    bigLoop.dispose()
   }
 
   func testDisposingStopsFollowingWithoutAnotherWord() async throws {

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/server/app.js";
 import { loadConfig } from "../src/server/config.js";
-import { MintLimit, spokenReplies, spokenText, talkAnswer, talkPersona } from "../src/server/talk.js";
+import { MintLimit, spokenProgress, spokenReplies, spokenText, talkAnswer, talkPersona, talkProgress } from "../src/server/talk.js";
 import type { Bot, Conversation, ConversationOptions, RealtimeSessionInput, Submission, SubmissionReceipt } from "../src/shared/types.js";
 import { botFixture, capabilitiesFixture, conversationFixture } from "./helpers/runtime-fixtures.js";
 import { fakeRuntime, localLogin } from "./helpers/server.js";
@@ -122,8 +122,9 @@ const anchored = (messages: Conversation["messages"], activity?: Conversation["a
 };
 const event = (kind: "completed" | "interrupted", runId = "run-talk") =>
   ({ id: `${runId}:${kind}`, botId: "ranch", runId, kind, title: `Hermes ${kind}`, occurredAt: new Date().toISOString() });
-const ask = (s: Awaited<ReturnType<typeof setup>>, requestId: string, request = "What's the weather?") =>
-  s.app.inject({ method: "POST", url: "/api/bots/ranch/talk/ask", headers: s.one, payload: { requestId, request } });
+const ask = (s: Awaited<ReturnType<typeof setup>>, requestId: string, request = "What's the weather?", extra: Record<string, unknown> = {}) =>
+  s.app.inject({ method: "POST", url: "/api/bots/ranch/talk/ask", headers: s.one, payload: { requestId, request, ...extra } });
+const noted = (id: string, text: string, runId = "run-talk") => ({ ...said(id, text, runId), interim: true });
 async function fakeTime() {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
   // The request reaches its wait through real I/O turns, so time moves a step at a time between them.
@@ -278,6 +279,138 @@ describe("talk ask", () => {
       asked("someone-else", "run-next")], { state: "working", runId: "run-next" }) });
     receipt = { requestId, status: "interrupted", runId: "run-talk" };
     expect((await ask(s, requestId)).json()).toEqual({ state: "interrupted" });
+  });
+});
+
+describe("talk progress", () => {
+  const accepted: SubmissionReceipt = { requestId: "r", status: "accepted", runId: "run-talk" };
+  const working = { state: "working" as const, runId: "run-talk" };
+  const none = new Set<string>();
+  const same = (message: Conversation["messages"][number]) => message;
+  it("returns every new line of the request's own turn, naming all of them and saying the newest", () => {
+    const read = run([said("old-note", "Earlier.", "run-old"), asked(), noted("n1", "I'll check the forecast."), noted("n2", "Now the radar."), noted("other", "Someone else's.", "run-other")], working);
+    expect(talkProgress(accepted, read, same, none)).toEqual({ ids: ["n1", "n2"], text: "Now the radar." });
+  });
+  it("leaves out lines already heard, and says nothing when none is new", () => {
+    const read = run([asked(), noted("n1", "I'll check the forecast."), noted("n2", "Now the radar.")], working);
+    expect(talkProgress(accepted, read, same, new Set(["n1"]))).toEqual({ ids: ["n2"], text: "Now the radar." });
+    expect(talkProgress(accepted, read, same, new Set(["n1", "n2"]))).toBeUndefined();
+    // An ID the conversation never had is ignored, not an error.
+    expect(talkProgress(accepted, read, same, new Set(["nope", "n1", "n2"]))).toBeUndefined();
+  });
+  it("gives a steer's lines to the steer only: the earlier request in the same run stops at the next person's message", () => {
+    const read = run([asked("first"), noted("n1", "For the first."), asked("r"), noted("n2", "For the steer.")], working);
+    // The first request's turn ends where the steer begins, whichever receipt asks.
+    expect(talkProgress({ requestId: "first", status: "accepted", runId: "run-talk" }, read, same, none)).toEqual({ ids: ["n1"], text: "For the first." });
+    expect(talkProgress(accepted, read, same, none)).toEqual({ ids: ["n2"], text: "For the steer." });
+  });
+  it("ignores an answer, an earlier turn's lines, a line before the request and a request not yet readable", () => {
+    expect(talkProgress(accepted, run([asked(), said("a", "The answer.")], working), same, none)).toBeUndefined();
+    expect(talkProgress(accepted, run([noted("before", "Before it."), asked(), said("a", "x")], working), same, none)).toBeUndefined();
+    // A steer joins a run an earlier message started: that message's lines answered something else.
+    const steered = run([asked("first"), noted("early", "For the first question."), asked("r"), noted("mine", "For the steer.")], working);
+    expect(talkProgress(accepted, steered, same, none)).toEqual({ ids: ["mine"], text: "For the steer." });
+    expect(talkProgress(accepted, run([], working), same, none)).toBeUndefined();
+    // The unsaved tail is not a saved line.
+    expect(talkProgress(accepted, run([asked(), noted("sid-inflight", "Still arriving")], working), same, none)).toBeUndefined();
+  });
+  it("never counts activity rows or empty lines, and takes lines of a request without a run ID by position", () => {
+    const diagnostic = { ...noted("d", "Retrying delivery."), origin: { kind: "diagnostic" as const, visibility: "activity" as const } };
+    expect(talkProgress(accepted, run([asked(), diagnostic, noted("blank", "   ")], working), same, none)).toBeUndefined();
+    const legacy = run([asked("r", "run-x"), noted("n1", "Checking.", "run-x"), asked("next", "run-y"), noted("n2", "Another's.", "run-y")], { state: "working" });
+    expect(talkProgress({ requestId: "r", status: "accepted" }, legacy, same, none)).toEqual({ ids: ["n1"], text: "Checking." });
+  });
+  it("says what this person may read: the redaction applies to the line", () => {
+    const read = run([asked(), noted("n1", "Checking the vault password hunter2.")], working);
+    expect(talkProgress(accepted, read, message => ({ ...message, text: message.text.replace("hunter2", "[hidden]") }), none)?.text).toBe("Checking the vault password [hidden].");
+  });
+  it("makes plain, short speech from Markdown, cutting a long line at a sentence", () => {
+    expect(spokenProgress("I'll check **Search Console** and [the site](https://example.invalid) first.")).toBe("I'll check Search Console and the site first.");
+    expect(spokenProgress("Short.\n\nWith  a   break.")).toBe("Short. With a break.");
+    const long = "I rechecked the existing setup. ".repeat(20);
+    const spoken = spokenProgress(long);
+    expect(spoken.length).toBeLessThanOrEqual(280);
+    expect(spoken.endsWith("setup.")).toBe(true);
+    expect(spokenProgress("word ".repeat(200)).length).toBeLessThanOrEqual(280);
+    expect(spokenProgress("```\ncode\n```")).not.toContain("`");
+    expect(spokenProgress("  \u200b ")).toBe("");
+  });
+  it("skips a line that has no words to say, but still names it as heard", () => {
+    const read = run([asked(), noted("n1", "I'll check."), noted("blank", "\u200b")], working);
+    expect(talkProgress(accepted, read, same, none)).toEqual({ ids: ["n1", "blank"], text: "I'll check." });
+    expect(talkProgress(accepted, run([asked(), noted("blank", "\u200b")], working), same, none)).toBeUndefined();
+  });
+});
+
+describe("talk ask with progress", () => {
+  it("returns working with the new line as soon as it exists, without waiting for the answer", async () => {
+    const requestId = randomUUID();
+    let state = run([asked(requestId)], { state: "working", runId: "run-talk" });
+    const s = await setup({ conversation: () => state });
+    const pass = await fakeTime();
+    const first = ask(s, requestId);
+    await pass(2_000);
+    // The line is saved while the run is still working, and a structural change reaches the waiting ask.
+    s.setConversation(() => state = run([asked(requestId), noted("n1", "I'll check the forecast first.")], { state: "working", runId: "run-talk" }));
+    await new Promise(resolve => setImmediate(resolve));
+    const early = await first;
+    expect(early.json()).toEqual({ state: "working", progress: { ids: ["n1"], text: "I'll check the forecast first." } });
+    expect(early.headers["cache-control"]).toBe("no-store");
+    // Asking again with the line heard waits as before.
+    const next = ask(s, requestId, "What's the weather?", { heard: ["n1"] });
+    await pass(21_000);
+    expect((await next).json()).toEqual({ state: "working" });
+    // The request was sent once, whatever was asked after it.
+    expect(s.submit).toHaveBeenCalledTimes(1);
+  });
+  it("answers at once with only the answer when it is already there beside progress lines", async () => {
+    const requestId = randomUUID();
+    const s = await setup({ conversation: () => run([asked(requestId), noted("n1", "I'll check."), said("a", "Sunny, 75.")]) });
+    expect((await ask(s, requestId)).json()).toEqual({ state: "done", text: "Sunny, 75." });
+  });
+  it("returns a line already saved at the first ask, and never repeats one the client heard", async () => {
+    const requestId = randomUUID();
+    const s = await setup({ conversation: () => run([asked(requestId), noted("n1", "I'll check."), noted("n2", "Now the radar.")], { state: "working", runId: "run-talk" }) });
+    expect((await ask(s, requestId)).json()).toEqual({ state: "working", progress: { ids: ["n1", "n2"], text: "Now the radar." } });
+    // One new line after n1 is what is said, and a repeat of the same ask returns the same, as it is stateless.
+    const again = await ask(s, requestId, "What's the weather?", { heard: ["n1"] });
+    expect(again.json()).toEqual({ state: "working", progress: { ids: ["n2"], text: "Now the radar." } });
+  });
+  it("does not return progress for a steered run that ended without a reported outcome", async () => {
+    const requestId = randomUUID();
+    // Someone's question started run-talk; the spoken request steered it. Its lines are in the read, but the run has ended.
+    const s = await setup({ lookup: id => id === requestId ? { requestId: id, status: "accepted", runId: "run-talk" } : null,
+      conversation: anchored([asked("first"), asked(requestId), noted("n1", "Checking.")], { state: "idle" }) });
+    const pass = await fakeTime();
+    const waiting = ask(s, requestId);
+    await pass(21_000);
+    expect((await waiting).json()).toEqual({ state: "working" });
+  });
+  it("reports an approval before a progress line, since the person has to act", async () => {
+    const requestId = randomUUID();
+    const s = await setup({ conversation: () => run([asked(requestId), noted("n1", "I'll check.")], { state: "waiting", runId: "run-talk" }, { approvals: [{ id: "a", title: "Run a command?", detail: "", status: "pending" }] }) });
+    expect((await ask(s, requestId)).json()).toEqual({ state: "needsApproval", text: "Run a command?" });
+  });
+  it("shows no progress when the assistant wrote none, as when the profile turns commentary off", async () => {
+    const requestId = randomUUID();
+    const s = await setup({ conversation: () => run([asked(requestId)], { state: "working", runId: "run-talk" }) });
+    const pass = await fakeTime();
+    const waiting = ask(s, requestId);
+    await pass(21_000);
+    expect((await waiting).json()).toEqual({ state: "working" });
+  });
+  it("refuses a malformed list of heard lines before sending anything", async () => {
+    const requestId = randomUUID();
+    const s = await setup({ conversation: () => run([asked(requestId), said("a", "Fine.")]) });
+    const bad: [string, unknown][] = [["not a list", "n1"], ["an object", { n1: true }], ["a number in it", [1]], ["an empty ID", [""]],
+      ["a long ID", ["x".repeat(513)]], ["too many", Array.from({ length: 501 }, (_, index) => `n${index}`)], ["null", null]];
+    for (const [name, heard] of bad) {
+      const response = await ask(s, requestId, "Hi", { heard });
+      expect(response.statusCode, name).toBe(400);
+    }
+    expect((await ask(s, requestId, "Hi", { heard: [], extra: 1 })).statusCode).toBe(400);
+    expect(s.submit).not.toHaveBeenCalled();
+    expect((await ask(s, requestId, "Hi", { heard: Array.from({ length: 500 }, (_, index) => `n${index}`) })).statusCode).toBe(200);
   });
 });
 

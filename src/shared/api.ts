@@ -225,8 +225,12 @@ export interface ApiRoutes {
   "PUT /bots/:id/voice": { body: { voice: TalkVoice }; response: { voice: TalkVoice } };
   /** A Realtime credential for live Talk with this assistant. Never cached. */
   "POST /bots/:id/talk/session": { response: TalkSession };
-  /** Sends a spoken request through the normal message path and waits briefly for its answer. */
-  "POST /bots/:id/talk/ask": { body: { requestId: string; request: string }; response: TalkAnswer };
+  /**
+   * Sends a spoken request through the normal message path and waits briefly for its answer, or returns
+   * `working` with `progress` as soon as the assistant says something new about what it is doing.
+   * `heard` names the progress lines this client already said.
+   */
+  "POST /bots/:id/talk/ask": { body: { requestId: string; request: string; heard?: string[] }; response: TalkAnswer };
   "POST /bots/:id/portrait": { body: { prompt: string }; response: FileRef };
   "GET /bots/:id/inference": { response: InferenceSettings };
   "PATCH /bots/:id/inference": { body: Partial<InferenceSettings>; response: InferenceSettings };
