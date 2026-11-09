@@ -29,6 +29,8 @@ extension AppStore {
       "retryAttempt": \.retryAttempt, "focusedMessage": \.focusedMessage, "attentionScrollRequest": \.attentionScrollRequest,
       // The decline handoff (Workstream B).
       "declinedApprovals": \.declinedApprovals,
+      // Subscription limits and credits in the profile menu.
+      "accountUsage": \.accountUsage,
     ]
   }
   /// The names of the stored properties the Observation macro tracks, read from the backing storage it generates.
