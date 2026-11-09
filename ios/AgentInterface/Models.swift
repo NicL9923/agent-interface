@@ -175,6 +175,8 @@ struct Bot: Codable, Identifiable, Equatable {
   /// Whether this person has read the chat before and `lastMessage` is newer than that read.
   /// Older servers omit it. `AppStore.unread(_:)` applies the chats read on this device since.
   var unread: Bool? = nil
+  /// The Realtime voice it speaks with in live Talk. Unset means the default, marin. Older servers omit it.
+  var voice: String? = nil
 }
 /// The newest message in an assistant's canonical conversation, for list and widget previews.
 struct LastMessage: Codable, Equatable {

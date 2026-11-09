@@ -212,6 +212,82 @@ final class SettingsParityTests: XCTestCase {
     }
   }
 
+  // MARK: Talk voice
+
+  func testBotDecodesItsTalkVoiceAndOlderServersOmitIt() throws {
+    let base = #"{"id":"ranch","name":"Ranch hand","model":"m","shared":true,"activity":"idle""#
+    XCTAssertEqual(try JSONDecoder().decode(Bot.self, from: Data((base + #","voice":"cedar"}"#).utf8)).voice, "cedar")
+    XCTAssertNil(try JSONDecoder().decode(Bot.self, from: Data((base + "}").utf8)).voice)
+  }
+  func testTalkVoicesMatchTheWebListWithMarinTheDefault() {
+    XCTAssertEqual(TalkVoice.all, ["alloy", "ash", "ballad", "coral", "echo", "sage", "shimmer", "verse", "marin", "cedar"])
+    XCTAssertEqual(TalkVoice.default, "marin")
+    XCTAssertEqual(TalkVoice.title("shimmer"), "Shimmer")
+  }
+  func testUnavailableLiveTalkNoteNamesTheReasonAndOnlyShowsWhenUnsupported() {
+    XCTAssertEqual(TalkVoice.unavailableNote(Capability(supported: false, reason: "Add an OpenAI key.")), "Live Talk isn't available yet. Add an OpenAI key.")
+    XCTAssertEqual(TalkVoice.unavailableNote(Capability(supported: false, reason: nil)), "Live Talk isn't available yet.")
+    XCTAssertNil(TalkVoice.unavailableNote(Capability(supported: true, reason: nil)))
+    XCTAssertNil(TalkVoice.unavailableNote(nil))
+  }
+  @MainActor func testChoosingAVoiceSavesItAtOnceWithAnEscapedPath() async throws {
+    let server = FakeServer()
+    server.reply = .init(status: 200, body: #"{"voice":"cedar"}"#)
+    let model = TalkVoiceModel(botId: "ranch/../x", voice: nil)
+    model.api = server.api()
+    XCTAssertEqual(model.chosen, "marin")
+    let saved = await model.choose("cedar")
+    XCTAssertTrue(saved)
+    XCTAssertEqual(model.chosen, "cedar")
+    XCTAssertEqual(server.lastRequest?.httpMethod, "PUT")
+    XCTAssertEqual(server.lastRequest?.url?.path(percentEncoded: true), "/api/bots/ranch%2F..%2Fx/voice")
+    XCTAssertEqual(try server.lastJSON()["voice"] as? String, "cedar")
+    // The voice already chosen sends nothing.
+    let again = await model.choose("cedar")
+    XCTAssertFalse(again)
+    XCTAssertEqual(server.requests.count, 1)
+  }
+  @MainActor func testAFailedVoiceSaveRollsBackAndSaysWhy() async throws {
+    let server = FakeServer()
+    server.reply = .init(status: 503, body: #"{"error":"Hermes is restarting."}"#)
+    let model = TalkVoiceModel(botId: "ranch", voice: "ash")
+    model.api = server.api()
+    let saved = await model.choose("coral")
+    XCTAssertFalse(saved)
+    XCTAssertEqual(model.chosen, "ash")
+    XCTAssertEqual(model.error, "Coral wasn't saved: Hermes is restarting.")
+    XCTAssertNil(model.saving)
+    // The next successful save clears the message.
+    server.reply = .init(status: 200, body: #"{"voice":"coral"}"#)
+    let retried = await model.choose("coral")
+    XCTAssertTrue(retried)
+    XCTAssertEqual(model.error, "")
+  }
+  @MainActor func testASampleThatCannotLoadReportsItAndPlaysNothing() async throws {
+    let server = FakeServer()
+    server.reply = .init(status: 404, body: #"{"error":"Not found"}"#)
+    let model = TalkVoiceModel(botId: "ranch", voice: nil)
+    model.api = server.api()
+    model.toggleSample("echo")
+    XCTAssertEqual(model.playing, "echo")
+    try await until { model.failed == "echo" }
+    XCTAssertNil(model.playing)
+    // The sample is public: it is fetched without the session token.
+    XCTAssertEqual(server.lastRequest?.url?.path, "/voice-previews/echo.m4a")
+    XCTAssertNil(server.lastRequest?.value(forHTTPHeaderField: "Authorization"))
+  }
+  @MainActor func testStoppingASampleReleasesTheSharedAudioClaim() async throws {
+    let server = FakeServer()
+    server.reply = .init(status: 404, body: "{}")
+    let model = TalkVoiceModel(botId: "ranch", voice: nil)
+    model.api = server.api()
+    model.toggleSample("echo")
+    XCTAssertNotNil(MicrophoneOwnership.shared.stopPlayback)
+    model.stop()
+    XCTAssertNil(model.playing)
+    XCTAssertNil(MicrophoneOwnership.shared.stopPlayback)
+  }
+
   // MARK: Vault
 
   func testVaultSourceStatusAndLoginBackendUseTheWebWording() {

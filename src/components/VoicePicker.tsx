@@ -58,7 +58,7 @@ export function VoicePicker({ botId, name, voice, liveVoice, onSaved }: {
   };
   return <section className="voice-picker" aria-labelledby={`${group}-title`}>
     <h3 id={`${group}-title`}>Voice for live Talk</h3>
-    <p className="muted">How {name} sounds when you talk with it out loud. Choosing a voice saves it for everyone in the household. Live Talk works in the web app.</p>
+    <p className="muted">How {name} sounds when you talk with it out loud. Choosing a voice saves it for everyone in the household.</p>
     {liveVoice && !liveVoice.supported && <p className="capability-note">Live Talk isn't available yet. {liveVoice.reason}</p>}
     {error && <p className="form-error" role="alert">{error}</p>}
     <div className="voice-options" role="radiogroup" aria-labelledby={`${group}-title`}>
