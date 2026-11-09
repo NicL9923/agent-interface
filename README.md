@@ -175,7 +175,9 @@ every edit, so a reload keeps them. While someone is signed in, the web client s
 that crash, uncaught errors and unhandled rejections to `POST /api/client-errors`: each
 distinct report once, at most five per page load, and never chunk-load failures the
 screens already handle. The server logs each one as a `Client error` warning with the
-person's id and stores nothing. It accepts 20 reports per person every 10 minutes.
+person's id and stores nothing. It accepts 20 reports per person every 10 minutes. The iOS
+app sends the crashes and hangs that MetricKit delivers on the next launch to the same route,
+as `crash` and `hang` reports with `platform: "ios"`; see `docs/native-api.md`.
 
 ### Offline cache
 

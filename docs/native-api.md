@@ -1052,6 +1052,17 @@ is admitted, so the assistant reads it next. A login the assistant asked for by
 address stays open unless the sender is the member whose task asked for it. An
 answer that reaches Hermes after its request closed answers `{ "status": "expired" }`.
 
+## Crash reports
+
+While signed in, the app sends the crashes and hangs MetricKit delivers on a later launch to
+`POST /api/client-errors`, the route the web client uses for render crashes and uncaught errors.
+One request per diagnostic, with `kind` `crash` or `hang`, `platform` `ios`, a `message` naming
+the exception, signal and termination reason with the app version, a `stack` of the top frames as
+binary name and offset, `route` `/ios/crash` or `/ios/hang`, and `release` as `<version>-<build>`.
+The bounds are `CLIENT_ERROR_LIMITS` in `src/shared/api.ts`. The server logs each report as a
+`Client error` warning and stores nothing. It accepts 20 reports per person every 10 minutes and
+answers 429 beyond that: drop the report, do not retry it. Never send a token or a URL with a query.
+
 ## Linked Macs
 
 `GET /api/mac/devices` lists the signed-in person's Macs linked with WildBots for
