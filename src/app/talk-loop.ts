@@ -1,4 +1,4 @@
-import { finalTalkStates, TALK_TOOL, type TalkAnswer } from "../shared/voice";
+import { finalTalkStates, MAX_HEARD_LINES, TALK_TOOL, type TalkAnswer } from "../shared/voice";
 
 /** What the person sees: who is talking, or what the assistant is doing. */
 export type TalkPhase = "listening" | "thinking" | "working" | "speaking";
@@ -40,6 +40,9 @@ export class TalkLoop {
   // The newest progress line of each request that came while a response was active, held until it ends. An
   // answer that arrives first drops it, so the person hears the answer, not what was done on the way to it.
   private readonly held = new Map<string, string>();
+  // Every progress line said in this Talk, for every request: a steered request shares its run with the one
+  // before it, so a line must not be said once for each. Oldest first, and only the newest are reported.
+  private readonly heard = new Set<string>();
   constructor(private readonly host: TalkLoopHost, private readonly name: string, private readonly now: () => number = () => Date.now()) {}
 
   dispose() { this.disposed = true; this.abort.abort(); }
@@ -149,11 +152,12 @@ export class TalkLoop {
     this.following++;
     this.host.phase("working");
     let answered = false;
-    // The progress lines already said, so a request never says one twice.
-    const heard = new Set<string>();
-    const hear = (answer: TalkAnswer) => { for (const id of answer.progress?.ids ?? []) heard.add(id); };
+    const hear = (answer: TalkAnswer) => {
+      for (const id of answer.progress?.ids ?? []) { this.heard.delete(id); this.heard.add(id); }
+      for (const id of this.heard) { if (this.heard.size <= MAX_HEARD_LINES) break; this.heard.delete(id); }
+    };
     try {
-      let answer = await this.host.ask(requestId, request, this.abort.signal, [...heard]);
+      let answer = await this.host.ask(requestId, request, this.abort.signal, [...this.heard]);
       if (this.disposed) return;
       hear(answer);
       this.output(callId, this.spoken(answer));
@@ -164,7 +168,7 @@ export class TalkLoop {
       while (!finalTalkStates.includes(answer.state) && this.now() - started < MAX_FOLLOW_MS) {
         await this.pause(answer.state === "working" ? FOLLOW_MS : DECISION_FOLLOW_MS);
         if (this.disposed) return;
-        answer = await this.host.ask(requestId, request, this.abort.signal, [...heard]);
+        answer = await this.host.ask(requestId, request, this.abort.signal, [...this.heard]);
         if (this.disposed) return;
         hear(answer);
         if (finalTalkStates.includes(answer.state) || answer.state !== told && answer.state !== "working") {

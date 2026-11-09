@@ -34,7 +34,10 @@ export const finalTalkStates: readonly TalkState[] = ["done", "interrupted", "re
 export interface TalkProgress { ids: string[]; text: string }
 /** `progress` rides on a `working` answer, which the server returns as soon as a new line exists. */
 export interface TalkAnswer { state: TalkState; text?: string; progress?: TalkProgress }
-/** Progress line IDs a client reports as heard, so the server returns only new ones. */
-export const MAX_HEARD_LINES = 50;
+/**
+ * Progress line IDs a client reports as heard, so the server returns only new ones. A client keeps the
+ * newest this many, and the server refuses more, so a long run cannot make its own next ask invalid.
+ */
+export const MAX_HEARD_LINES = 500;
 /** A progress line is spoken whole when it fits, else cut at a sentence. Nothing points to the chat: it is not the answer. */
 export const MAX_TALK_PROGRESS = 280;

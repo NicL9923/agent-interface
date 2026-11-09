@@ -75,6 +75,11 @@ struct TalkCaptions: Equatable {
   /// The newest progress line of each request that came while a response was active, held until it ends. An
   /// answer that arrives first drops it, so the person hears the answer, not what was done on the way to it.
   private var held: [(requestId: String, text: String)] = []
+  /// Every progress line said in this Talk, for every request: a steered request shares its run with the one
+  /// before it, so a line must not be said once for each. Oldest first, and only the newest are reported.
+  private var heard: [String] = []
+  /// As `MAX_HEARD_LINES` in `src/shared/voice.ts`, which the server enforces.
+  static let maxHeard = 500
 
   init(host: TalkLoopHost, name: String, now: @escaping () -> Date = Date.init,
     sleep: @escaping (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) {
@@ -208,9 +213,10 @@ struct TalkCaptions: Equatable {
     // A request that ends, with its answer or a failure, leaves no held line: it would only be old news.
     defer { held.removeAll { $0.requestId == requestId }; following -= 1 }
     var answered = false
-    // The progress lines already said, so a request never says one twice.
-    var heard: [String] = []
-    func hear(_ answer: TalkAnswer) { for id in answer.progress?.ids ?? [] where !heard.contains(id) { heard.append(id) } }
+    func hear(_ answer: TalkAnswer) {
+      for id in answer.progress?.ids ?? [] { heard.removeAll { $0 == id }; heard.append(id) }
+      if heard.count > Self.maxHeard { heard.removeFirst(heard.count - Self.maxHeard) }
+    }
     do {
       var answer = try await host.ask(requestId: requestId, request: request, heard: heard)
       if disposed || Task.isCancelled { return }

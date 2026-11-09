@@ -207,6 +207,27 @@ private struct Refused: LocalizedError { var errorDescription: String? { "Talk i
     XCTAssertEqual(host.items.count, 1)
   }
 
+  func testWhatWasHeardIsSharedBetweenRequestsAndBoundedToTheNewest() async throws {
+    let host = LoopHost(), loop = loop(host, sleeps: gated(1))
+    host.answers = [line("n1", "Checking."), .success(TalkAnswer(state: .done, text: "Sunny.")), .success(TalkAnswer(state: .working))]
+    loop.handle(call(#"{"request":"Weather today?"}"#))
+    try await until { host.asks.count == 2 }
+    loop.handle(call(#"{"request":"And tomorrow?"}"#, id: "call-2"))
+    try await until { host.asks.count == 3 }
+    XCTAssertEqual(host.heardWithAsk[2], ["n1"], "A line of a shared run is said once, not once per request")
+    loop.dispose()
+
+    let big = LoopHost(), bigLoop = loop(big, sleeps: gated(1))
+    let ids = (0..<600).map { "n\($0)" }
+    big.answers = [.success(TalkAnswer(state: .working, progress: TalkProgress(ids: ids, text: "Checking."))), .success(TalkAnswer(state: .working))]
+    bigLoop.handle(call(#"{"request":"Weather?"}"#))
+    try await until { big.asks.count == 2 }
+    XCTAssertEqual(big.heardWithAsk[1].count, TalkLoop.maxHeard)
+    XCTAssertEqual(big.heardWithAsk[1].first, "n100")
+    XCTAssertEqual(big.heardWithAsk[1].last, "n599")
+    bigLoop.dispose()
+  }
+
   func testDisposingStopsFollowingWithoutAnotherWord() async throws {
     let host = LoopHost()
     let gate = AsyncStream<Void>.makeStream()

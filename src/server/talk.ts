@@ -95,7 +95,11 @@ function requestMessages(receipt: SubmissionReceipt, conversation: Conversation)
   const later = messages.slice(sent + 1);
   const inRun = receipt.runId ? later.filter(message => message.runId === receipt.runId) : [];
   const next = later.findIndex(message => message.role === "user");
-  return { messages, sent, later, own: inRun.length ? inRun : later.slice(0, next < 0 ? undefined : next) };
+  const turn = later.slice(0, next < 0 ? undefined : next);
+  return { messages, sent, later, own: inRun.length ? inRun : turn,
+    // A steer joins the run of the message before it. Its lines come after its own prompt, so the earlier
+    // request, which this turn ends at, never takes them to say as well.
+    progress: receipt.runId ? turn.filter(message => message.runId === receipt.runId) : turn };
 }
 
 /** A progress line as one short spoken sentence or two: plain words, cut at a sentence when long. */
@@ -108,13 +112,14 @@ export function spokenProgress(text: string, limit = MAX_TALK_PROGRESS) {
 }
 
 /**
- * What a still-working request has newly said it is doing: the progress lines of its own turn that the
+ * What a still-working request has newly said it is doing: the progress lines of its own turn (from its
+ * message to the next person's) that the
  * client has not reported hearing. Every new line is named so none is said later, but only the newest
  * is returned to say, so a burst after a pause is one sentence, not a backlog. `reply` turns a message
  * into what this person may read. Undefined when nothing new can be said.
  */
 export function talkProgress(receipt: SubmissionReceipt, conversation: Conversation, reply: (message: Message) => Message, heard: ReadonlySet<string>): TalkProgress | undefined {
-  const fresh = (requestMessages(receipt, conversation)?.own ?? []).map(reply).filter(isProgressLine).filter(message => !heard.has(message.id))
+  const fresh = (requestMessages(receipt, conversation)?.progress ?? []).map(reply).filter(isProgressLine).filter(message => !heard.has(message.id))
     .map(message => ({ id: message.id, text: spokenProgress(message.text) }));
   const text = fresh.findLast(line => line.text)?.text;
   return text ? { ids: fresh.map(line => line.id), text } : undefined;

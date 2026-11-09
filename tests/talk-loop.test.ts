@@ -217,6 +217,26 @@ describe("talk progress narration", () => {
     expect(s.items().join("\n")).not.toContain("Now the radar.");
     expect(s.items().join("\n")).toContain("could not reach");
   });
+  it("reports at most the newest 500 lines heard, so a long run never makes its own next ask invalid", async () => {
+    const ids = Array.from({ length: 600 }, (_, index) => `n${index}`);
+    const s = setup([{ state: "working", progress: { ids, text: "Checking." } }, { state: "done", text: "Sunny." }]);
+    s.call();
+    await s.settle();
+    s.loop.handle({ type: "response.done" });
+    await s.settle(FOLLOW_MS);
+    expect(s.heardWith[1]).toHaveLength(500);
+    expect(s.heardWith[1]![0]).toBe("n100");
+    expect(s.heardWith[1]!.at(-1)).toBe("n599");
+  });
+  it("shares what it has heard between requests, so a line of a shared run is said once", async () => {
+    const s = setup([line("n1", "Checking the forecast."), { state: "done", text: "Sunny." }, { state: "working" }]);
+    s.call({ request: "Weather today?" });
+    await s.settle(); await s.settle(FOLLOW_MS);
+    s.call({ request: "And tomorrow?" });
+    await s.settle();
+    // The second request starts out knowing the first's line was said.
+    expect(s.heardWith.at(-1)).toEqual(["n1"]);
+  });
   it("never speaks held lines after Talk ends", async () => {
     const s = setup([line("n1", "Checking the forecast."), line("n2", "Now the radar.")]);
     s.call();

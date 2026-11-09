@@ -285,6 +285,12 @@ describe("talk progress", () => {
     // An ID the conversation never had is ignored, not an error.
     expect(talkProgress(accepted, read, same, new Set(["nope", "n1", "n2"]))).toBeUndefined();
   });
+  it("gives a steer's lines to the steer only: the earlier request in the same run stops at the next person's message", () => {
+    const read = run([asked("first"), noted("n1", "For the first."), asked("r"), noted("n2", "For the steer.")], working);
+    // The first request's turn ends where the steer begins, whichever receipt asks.
+    expect(talkProgress({ requestId: "first", status: "accepted", runId: "run-talk" }, read, same, none)).toEqual({ ids: ["n1"], text: "For the first." });
+    expect(talkProgress(accepted, read, same, none)).toEqual({ ids: ["n2"], text: "For the steer." });
+  });
   it("ignores an answer, an earlier turn's lines, a line before the request and a request not yet readable", () => {
     expect(talkProgress(accepted, run([asked(), said("a", "The answer.")], working), same, none)).toBeUndefined();
     expect(talkProgress(accepted, run([noted("before", "Before it."), asked(), said("a", "x")], working), same, none)).toBeUndefined();
@@ -384,14 +390,14 @@ describe("talk ask with progress", () => {
     const requestId = randomUUID();
     const s = await setup({ conversation: () => run([asked(requestId), said("a", "Fine.")]) });
     const bad: [string, unknown][] = [["not a list", "n1"], ["an object", { n1: true }], ["a number in it", [1]], ["an empty ID", [""]],
-      ["a long ID", ["x".repeat(513)]], ["too many", Array.from({ length: 51 }, (_, index) => `n${index}`)], ["null", null]];
+      ["a long ID", ["x".repeat(513)]], ["too many", Array.from({ length: 501 }, (_, index) => `n${index}`)], ["null", null]];
     for (const [name, heard] of bad) {
       const response = await ask(s, requestId, "Hi", { heard });
       expect(response.statusCode, name).toBe(400);
     }
     expect((await ask(s, requestId, "Hi", { heard: [], extra: 1 })).statusCode).toBe(400);
     expect(s.submit).not.toHaveBeenCalled();
-    expect((await ask(s, requestId, "Hi", { heard: Array.from({ length: 50 }, (_, index) => `n${index}`) })).statusCode).toBe(200);
+    expect((await ask(s, requestId, "Hi", { heard: Array.from({ length: 500 }, (_, index) => `n${index}`) })).statusCode).toBe(200);
   });
 });
 
