@@ -28,3 +28,15 @@ The global Testing rules apply in full. The ones this repo has tripped on, resta
   One smoke case plus specific assertions beats fifty "the SVG changed" cases.
 - A test written to protect a specific line is broken by hand once to prove it
   goes red before it is committed. Record the run in `docs/ledger/`.
+
+# Production host
+
+- Read Hermes source on the production host with `cat`, `sed` or `grep` only.
+  Never run `git` in its Hermes checkout (`~/.hermes/hermes-agent`), not even
+  `git log` or `git show`. It is a `tree:0` partial clone: a history command
+  fetches missing objects lazily and can start an automatic repack, and the
+  host's git 2.43 drops objects from such a repack. Release qualification then
+  fails on the missing objects. This happened on October 14 and again on
+  November 9, when a reviewer's history read removed 42 objects and blocked a
+  release until they were restored. Read history from a local clone of
+  upstream instead.
