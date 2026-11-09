@@ -60,7 +60,7 @@
 	<key>NSCameraUsageDescription</key>
 	<string>Take a photo to attach to your message. Nothing is sent until you choose Send.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Record a voice message for transcription on your app server. Review the transcript before sending.</string>
+	<string>Record voice messages you review before sending, and talk live with your assistants through OpenAI's voice service.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Connect to your self-hosted WildBots app server.</string>
 	<key>NSUserActivityTypes</key>
