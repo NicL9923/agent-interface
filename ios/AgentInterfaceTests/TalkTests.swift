@@ -57,6 +57,7 @@ private struct Refused: LocalizedError { var errorDescription: String? { "Talk i
     let host = LoopHost(), loop = loop(host)
     loop.handle(["type": "response.created"])
     loop.handle(["type": "error", "error": ["code": "conversation_already_has_active_response", "message": "busy"]])
+    loop.handle(["type": "error", "error": ["code": "response_cancel_not_active", "message": "nothing to cancel"]])
     XCTAssertTrue(host.problems.isEmpty)
     loop.handle(["type": "response.done"])
     XCTAssertEqual(host.types, ["response.create"], "The queued response goes once the active one ends")
@@ -291,10 +292,19 @@ final class TalkPlaybackTests: XCTestCase {
     // Speech with nothing playing truncates nothing.
     socket.emit(["type": "input_audio_buffer.speech_started"])
     XCTAssertEqual(socket.sent.filter { $0["type"] as? String == "conversation.item.truncate" }.count, 2)
-    // A headset change that dropped queued voice tells the model what was heard, and Talk goes on.
+    // Audio still arriving for an interrupted item is dropped, not played after the gap.
+    socket.emit(["type": "response.output_audio.delta", "item_id": "item-7", "delta": Data([0, 1]).base64EncodedString()])
+    XCTAssertEqual(audio.played.count, 1)
+    // A headset change that dropped queued voice tells the model what was heard, cancels the
+    // response still speaking, and Talk goes on.
+    socket.emit(["type": "response.created"])
     audio.cut?([.init(item: "item-9", milliseconds: 400)])
-    XCTAssertEqual(socket.sent.last?["item_id"] as? String, "item-9")
-    XCTAssertEqual(socket.sent.last?["audio_end_ms"] as? Int, 400)
+    let cut = socket.sent.last { $0["type"] as? String == "conversation.item.truncate" }
+    XCTAssertEqual(cut?["item_id"] as? String, "item-9")
+    XCTAssertEqual(cut?["audio_end_ms"] as? Int, 400)
+    XCTAssertEqual(socket.sent.last?["type"] as? String, "response.cancel")
+    socket.emit(["type": "response.output_audio.delta", "item_id": "item-9", "delta": Data([0, 2]).base64EncodedString()])
+    XCTAssertEqual(audio.played.count, 1, "The cut item's later audio never plays")
     XCTAssertTrue(talk.live)
   }
 

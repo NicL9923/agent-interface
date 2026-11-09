@@ -79,6 +79,9 @@ struct TalkCaptions: Equatable {
     calls = []
   }
 
+  /// A response is under way or asked for.
+  var responding: Bool { active }
+
   /// Asks for a spoken response now, or after the current one ends.
   func respond() {
     guard !disposed else { return }
@@ -123,6 +126,8 @@ struct TalkCaptions: Equatable {
       let error = event["error"] as? [String: Any] ?? [:]
       // Our response.create raced one the server started itself; send it after that one ends.
       if error["code"] as? String == "conversation_already_has_active_response" { queued = true; return }
+      // A cancel that crossed the response's own end changes nothing.
+      if error["code"] as? String == "response_cancel_not_active" { return }
       active = false
       queued = false
       host.phase(following > 0 ? .working : .listening)

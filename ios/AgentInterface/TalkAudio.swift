@@ -18,7 +18,7 @@ import os
   func stop()
 }
 
-/// What the voice queued and how far it played, in the player's own sample clock. Each chunk is a
+/// What the voice queued and how far it played, in output frames of the host clock. Each chunk is a
 /// segment: one queued after the player ran dry starts at the clock's current time, and the silence
 /// before it is not counted as heard. Items can overlap in the queue, as a filler still playing
 /// when the answer arrives.
@@ -168,9 +168,12 @@ private final class MuteFlag: Sendable {
     if !lost.isEmpty { cut?(lost) }
   }
 
+  /// The host clock in output frames. The voice plays in real time, and unlike the player's own
+  /// clock this one keeps counting when a configuration change has already stopped the engine.
+  private let origin = ContinuousClock.now
   private var now: Int64 {
-    guard let render = player.lastRenderTime, let time = player.playerTime(forNodeTime: render) else { return 0 }
-    return time.sampleTime
+    let elapsed = origin.duration(to: .now).components
+    return Int64((Double(elapsed.seconds) + Double(elapsed.attoseconds) / 1e18) * TalkPlaybackLedger.rate)
   }
 
   func play(_ pcm: Data, item: String) {

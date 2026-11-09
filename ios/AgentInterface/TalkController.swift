@@ -48,6 +48,8 @@ import Foundation
   @ObservationIgnored private var started = Date.distantPast
   @ObservationIgnored private var heard = Date.distantPast
   @ObservationIgnored private let owner = UUID()
+  /// Voice items cut short, whose late audio is dropped.
+  @ObservationIgnored private var cutItems: Set<String> = []
 
   init() {
     #if DEBUG
@@ -121,7 +123,8 @@ import Foundation
         },
         cut: { [weak self] lost in
           guard let self, generation == run else { return }
-          truncate(lost)
+          // Nothing told the model to stop, as speech does, so the response is cancelled too.
+          truncate(lost, cancel: true)
         })
     } catch {
       fail((error as? APIError)?.message ?? "The microphone could not start. Close other apps using it, then try again.")
@@ -150,23 +153,27 @@ import Foundation
     case "session.created":
       open(run: run)
     case "response.output_audio.delta":
-      if let delta = event["delta"] as? String, let pcm = Data(base64Encoded: delta) {
-        audio?.play(pcm, item: event["item_id"] as? String ?? "")
+      // Audio still arriving for an item already cut would play its end after a gap.
+      let item = event["item_id"] as? String ?? ""
+      if !cutItems.contains(item), let delta = event["delta"] as? String, let pcm = Data(base64Encoded: delta) {
+        audio?.play(pcm, item: item)
       }
     case "input_audio_buffer.speech_started":
       // The person spoke over the voice: stop it now, and tell the model how much was heard so it
       // does not think the rest was said.
-      if let audio { truncate(audio.interrupt()) }
+      if let audio { truncate(audio.interrupt(), cancel: false) }
     default: break
     }
     loop?.handle(event)
   }
 
   /// Cuts each item to what the person heard; one never reached is cut to nothing.
-  private func truncate(_ lost: [TalkPlaybackLedger.Heard]) {
+  private func truncate(_ lost: [TalkPlaybackLedger.Heard], cancel: Bool) {
     for heard in lost where !heard.item.isEmpty {
+      cutItems.insert(heard.item)
       host?.send(["type": "conversation.item.truncate", "item_id": heard.item, "content_index": 0, "audio_end_ms": heard.milliseconds])
     }
+    if cancel, !lost.isEmpty, loop?.responding == true { host?.send(["type": "response.cancel"]) }
   }
   fileprivate func phase(_ phase: TalkPhase, run: Int) {
     guard generation == run, status != .idle else { return }
@@ -181,6 +188,7 @@ import Foundation
     starting?.cancel(); starting = nil
     timer?.cancel(); timer = nil
     loop?.dispose(); loop = nil
+    cutItems = []
     host = nil
     transport?.close(); transport = nil
     audio?.stop(); audio = nil
