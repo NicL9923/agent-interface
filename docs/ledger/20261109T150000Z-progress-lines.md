@@ -8,7 +8,7 @@ build, simulator, physical device, live Hermes turn or deployment ran.
 ## Web and server
 
 - `npm run lint`, `npm run typecheck` and `npm run build` passed. `npx vitest run`: 169 files,
-  2,449 tests passed. `npm run test:py`: 40 files passed (the add-on test reads the new
+  2,451 tests passed. `npm run test:py`: 40 files passed (the add-on test reads the new
   `src/shared/progress-line-instructions.json`). `ruff` is not installed here, so `lint:py` did not
   run; no Python beyond one line in `extension.py` changed.
 - `tests/native-contract.test.ts` regenerated `ios/AgentInterfaceTests/Contract/conversation.json`
