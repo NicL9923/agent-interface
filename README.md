@@ -28,8 +28,8 @@ The selected provider starts expanded. Search the catalog, refresh it after
 changing connected providers, and star models to keep personal favorites. Shared assistants keep one shared model. Existing selections remain
 saved when a provider is unavailable, and Hermes model warnings still require
 confirmation. In Advanced presentation, the model chip under the assistant's name in the web and iOS chat headers, with the provider's mark and the model's display name, switches
-the assistant's model from the same catalog without opening settings. Simple presentation never shows the model. Display names come from Hermes's cached models.dev catalog through the add-on, and the server formats the identifier itself (`claude-opus-5-5` becomes Claude Opus 5.5) when the add-on is older or does not know the model. Both pickers control reasoning effort and Normal/Fast/Ultrafast speed for the current
-conversation. The native picker includes search, provider groups, refresh and model favorites. Hermes validates support for the selected model.
+the assistant's model from the same catalog without opening settings. Simple presentation never shows the model. Display names come from Hermes's cached models.dev catalog through the add-on, and the server formats the identifier itself (`claude-opus-5-5` becomes Claude Opus 5.5) when the add-on is older or does not know the model. Both pickers control reasoning effort and Normal/Auto/Fast/Ultrafast speed for the current
+conversation. Auto runs Fast at the start of each reply and drops back to Normal for long work, using Hermes's `agent.service_tier: auto` window (`agent.fast_auto_seconds`, 60 seconds unless the profile sets it). A Hermes without Auto, or a model without fast mode, refuses it with the reason instead of saving Normal. The native picker includes search, provider groups, refresh and model favorites. Hermes validates support for the selected model.
 
 An assistant is either shared with the household or personal. A personal assistant
 is private to its owner in WildBots: nobody else sees it in lists, Today, search,

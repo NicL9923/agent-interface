@@ -57,11 +57,13 @@ it("protects inference settings with sign-in and CSRF and only accepts native re
   expect(s.inferenceSettings).toHaveBeenCalledWith("house");
   const request = {method:"PATCH" as const,url,payload:{reasoning:"ultra"}};
   expect((await s.app.inject({...request,headers:{origin,cookie:s.one.cookie}})).statusCode).toBe(403);
-  for (const payload of [{reasoning:"unknown"}, {speed:"turbo"}, {}, {scope:"global",reasoning:"low"}])
+  for (const payload of [{reasoning:"unknown"}, {speed:"turbo"}, {speed:"cold"}, {speed:"AUTO"}, {}, {scope:"global",reasoning:"low"}])
     expect((await s.app.inject({...request,headers:s.one,payload})).statusCode).toBe(400);
   expect(s.inferenceSettings).toHaveBeenCalledTimes(1);
   expect((await s.app.inject({...request,headers:s.one})).statusCode).toBe(200);
   expect(s.inferenceSettings).toHaveBeenLastCalledWith("house",{reasoning:"ultra"});
+  expect((await s.app.inject({...request,headers:s.one,payload:{speed:"auto"}})).statusCode).toBe(200);
+  expect(s.inferenceSettings).toHaveBeenLastCalledWith("house",{speed:"auto"});
   delete s.runtime.inferenceSettings;
   expect((await s.app.inject({url,headers:s.one})).statusCode).toBe(409);
 });

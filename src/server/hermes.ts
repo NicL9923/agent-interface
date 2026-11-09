@@ -1,5 +1,5 @@
 import { botIdFor, reasoningLevels, serviceTiers } from "../shared/types.js";
-import type { ActivityState, Avatar, Bot, BotInput, Capabilities, Conversation, ConversationOptions, Inflight, Message, ReadTiming, Routine, Runtime, RuntimeDiscovery, Skill, Submission, SubmissionReceipt, Tool, ToolCall } from '../shared/types.js';
+import type { ActivityState, InferenceSettings, Avatar, Bot, BotInput, Capabilities, Conversation, ConversationOptions, Inflight, Message, ReadTiming, Routine, Runtime, RuntimeDiscovery, Skill, Submission, SubmissionReceipt, Tool, ToolCall } from '../shared/types.js';
 import ClientWebSocket from 'ws';
 import { TALK_MODEL } from '../shared/voice.js';
 import type { ComputerAttachment, ComputerStatus } from '../shared/computer.js';
@@ -51,6 +51,34 @@ export function nativeOverrides(job: Wire): string[] {
     && !(Array.isArray(value) && !value.length) && !(typeof value === 'object' && !Array.isArray(value) && !Object.keys(value as object).length);
   return Object.entries(job ?? {}).filter(([key, value]) => !KNOWN_FIELDS.has(key) && !key.startsWith('_') && set(value)
     && !(key === 'repeat' && typeof value === 'object' && value !== null && (value as Wire).times == null)).map(([key]) => key).sort();
+}
+
+/**
+ * Sets the conversation's speed. Hermes checks model support only for Fast and Ultrafast, so a model
+ * without fast mode would save Auto and never speed up. Auto therefore asks for Fast first, which Hermes
+ * refuses before changing anything, and puts the earlier speed back if Auto then fails.
+ */
+async function changeSpeed(word: string, readSpeed: () => Promise<string>, setSpeed: (word: string) => Promise<Wire>): Promise<void> {
+  const refused = (error: unknown, as: string): unknown => {
+    if (!(error instanceof TransportError) || error.rpcCode !== 4002) return error;
+    // Hermes versions before Auto answer "unknown fast mode".
+    if (as === 'auto' && /unknown fast mode/i.test(error.rpcMessage ?? ''))
+      return httpError(409, 'This Hermes version does not have Auto speed. Update Hermes to use it.');
+    return httpError(409, `${as.charAt(0).toUpperCase()}${as.slice(1)} speed is not available for this model.`);
+  };
+  if (word !== 'auto') {
+    try { await setSpeed(word); } catch (error) { throw refused(error, word); }
+    return;
+  }
+  const previous = await readSpeed();
+  try { await setSpeed('fast'); } catch (error) { throw refused(error, 'auto'); }
+  try {
+    const set = await setSpeed('auto');
+    if (set.value !== 'auto') throw httpError(409, 'Hermes did not confirm Auto speed. Update Hermes to use it.');
+  } catch (error) {
+    await setSpeed(previous).catch(() => undefined);
+    throw refused(error, 'auto');
+  }
 }
 
 export function createHermesRuntime(options: HermesOptions = {}): Runtime {
@@ -530,15 +558,23 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     async inferenceSettings(botId, update) {
       const session = await open(botId);
       const scope = { profile: botId, session_id: session.session_id };
+      const setSpeed = (word: string) => rpc('config.set', { ...scope, key: 'fast', value: word });
       for (const [key, value] of Object.entries(update || {})) {
-        await rpc('config.set', { ...scope, key: key === 'speed' ? 'fast' : 'reasoning', value });
+        if (key === 'speed') await changeSpeed(value as string, readSpeed, setSpeed);
+        else await rpc('config.set', { ...scope, key: 'reasoning', value });
       }
-      const [reasoning, speed] = await Promise.all([
-        rpc('config.get', { ...scope, key: 'reasoning' }), rpc('config.get', { ...scope, key: 'fast' }),
-      ]);
-      if (!reasoningLevels.includes(reasoning.value) || !serviceTiers.includes(speed.value))
+      const [reasoning, speed] = await Promise.all([rpc('config.get', { ...scope, key: 'reasoning' }), readSpeed()]);
+      if (!reasoningLevels.includes(reasoning.value) || !(serviceTiers as readonly string[]).includes(speed))
         throw new Error('Hermes returned unreadable inference settings.');
-      return { reasoning: reasoning.value, speed: speed.value };
+      return { reasoning: reasoning.value, speed: speed as InferenceSettings['speed'] };
+      // Hermes's config.get reports Auto, and its first-turn-only Cold mode, as "normal". A status read
+      // through config.set changes nothing and keeps the real word. A Hermes without status reads as normal.
+      async function readSpeed(): Promise<string> {
+        const read = await rpc('config.get', { ...scope, key: 'fast' });
+        if (read.value !== 'normal') return read.value;
+        try { return (await setSpeed('status')).value === 'auto' ? 'auto' : 'normal'; }
+        catch (error) { if (error instanceof TransportError && error.rpcCode === 4002) return 'normal'; throw error; }
+      }
     },
     async modelOptions(profile) {
       // Use Hermes's account-aware catalog, including custom provider aliases.

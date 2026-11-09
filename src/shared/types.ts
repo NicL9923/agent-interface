@@ -129,7 +129,11 @@ export interface CheckInSettings {
 }
 // --- End main assistant ---
 export const reasoningLevels = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"] as const;
-export const serviceTiers = ["normal", "fast", "ultrafast"] as const;
+/**
+ * Auto is Hermes's bounded fast window: Fast opens at the start of every reply and closes after
+ * `agent.fast_auto_seconds`. Hermes's first-turn-only `cold` mode is not offered.
+ */
+export const serviceTiers = ["normal", "auto", "fast", "ultrafast"] as const;
 export interface InferenceSettings {
   reasoning: typeof reasoningLevels[number];
   speed: typeof serviceTiers[number];
