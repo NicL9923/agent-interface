@@ -155,9 +155,7 @@ still win.
   messages and the composer's focus ring. Photo avatars keep the app's green.
 - The chat header lifts with a border and shadow once messages scroll under it. This uses
   scroll-driven animations where the browser supports them.
-- While a turn runs, the live row shows its tools as a strip that fills in as each finishes. While
-  an assistant uses the computer, a small watch-only view of the desktop docks in the transcript's
-  corner. It opens the full computer view and can be dismissed for the turn.
+- While a turn runs, the live row shows its tools as a strip that fills in as each finishes.
 - On a computer, pinned avatars glance at a nearby mouse pointer. When a pinned assistant finishes,
   it hops and the other pinned ones look over. Approving a request or answering a question makes
   the assistant cheer, and settled approval cards fold away.
@@ -165,7 +163,12 @@ still win.
 - Home shows the season with a slight accent shift and a few faint drifting shapes. The calendar
   decides first. Between holidays, a pinned seasonal character brings its own season.
 
-These are web-only. The avatar conductor and pose math that iOS mirrors are unchanged.
+While an assistant uses the computer, a small watch-only view of the desktop docks in the
+transcript's corner on the web and in the iOS app, with its own ticket that never takes control.
+It opens the full computer view, can be dismissed for the turn, and holds no connection when
+hidden, dismissed or failed.
+
+The rest of this section is web-only. The avatar conductor and pose math that iOS mirrors are unchanged.
 
 ### Crash reports
 
