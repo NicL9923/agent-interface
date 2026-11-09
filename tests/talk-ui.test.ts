@@ -84,6 +84,27 @@ describe("live talk", () => {
     expect(mount.container.querySelector(".talk-panel")).toBeNull();
   });
 
+  it("reports the progress lines it said with each follow-up ask, and the request is never sent twice", async () => {
+    vi.useFakeTimers();
+    try {
+      const answers = [{ state: "working", progress: { ids: ["n1"], text: "Checking the forecast." } }, { state: "done", text: "Sunny." }];
+      write.mockImplementation(async (path: string) => path.endsWith("/talk/session") ? session : answers.shift());
+      const mount = mountRoot();
+      await mount.render(createElement(Harness, { botId: "ranch" }));
+      await act(async () => talk.start());
+      const message = JSON.stringify({ type: "response.function_call_arguments.done", name: "ask_assistant", call_id: "c1", arguments: JSON.stringify({ request: "Weather?" }) });
+      await act(async () => (peers[0]!.channel.onmessage as (event: { data: string }) => void)({ data: message }));
+      await act(async () => { await vi.advanceTimersByTimeAsync(2_500); });
+      const asks = write.mock.calls.filter(([path]) => String(path).endsWith("/talk/ask")).map(([, body]) => body as { requestId: string; request: string; heard?: string[] });
+      expect(asks).toHaveLength(2);
+      // The first ask has heard nothing, so it sends no list. The follow-up names the line it said.
+      expect(asks[0]).not.toHaveProperty("heard");
+      expect(asks[1]).toMatchObject({ request: "Weather?", heard: ["n1"] });
+      expect(asks[1]!.requestId).toBe(asks[0]!.requestId);
+      await press("End talk");
+    } finally { vi.useRealTimers(); }
+  });
+
   it("ends when the assistant changes", async () => {
     write.mockResolvedValue(session);
     const mount = mountRoot();

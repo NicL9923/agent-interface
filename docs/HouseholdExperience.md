@@ -211,8 +211,11 @@ with the open assistant. A voice model listens and speaks; the assistant does th
 work. Each real request goes to the assistant as an ordinary message from the
 person speaking, in their words, so it appears in the chat, uses the same
 admission and steering as typing, and never sends twice for one spoken request.
-While the assistant works, the voice says a short filler and then reads the
-answer back briefly. Long answers end at a sentence and point to the chat. When
+While the assistant works, the voice says a short filler. When the assistant says
+what it is checking (a [progress line](#progress-lines)), the voice passes that on
+in one short sentence as soon as it exists, and again for each later line, once each
+and only when it is not already speaking. If the answer arrives first, the voice
+reads only the answer. It then reads the answer back briefly. Long answers end at a sentence and point to the chat. When
 an approval or a question is waiting, the voice asks the person to check the
 screen, and reads the answer once they decide.
 

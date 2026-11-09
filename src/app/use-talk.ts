@@ -92,7 +92,7 @@ export function useTalk(botId: string, name: string): Talk {
       const channel = current.channel = pc.createDataChannel("oai-events");
       const loop = current.loop = new TalkLoop({
         send: event => { if (channel.readyState === "open") channel.send(JSON.stringify(event)); },
-        ask: (requestId, text, signal) => request("POST /bots/:id/talk/ask", { params: { id: botId }, body: { requestId, request: text }, signal }),
+        ask: (requestId, text, signal, heard) => request("POST /bots/:id/talk/ask", { params: { id: botId }, body: { requestId, request: text, ...(heard.length ? { heard: [...heard] } : {}) }, signal }),
         phase: phase => { if (!stale()) setStatus(phase); },
         captions: next => { if (!stale()) setCaptions(next); },
         activity: () => { current.heard = Date.now(); },

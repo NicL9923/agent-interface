@@ -27,4 +27,14 @@ export interface TalkSession { clientSecret: string; expiresAt: number; model: s
 /** Where the assistant is with one spoken request. `done`, `interrupted` and `refused` are final; the others mean ask again with the same request ID. */
 export type TalkState = "done" | "working" | "needsApproval" | "needsAnswer" | "interrupted" | "refused";
 export const finalTalkStates: readonly TalkState[] = ["done", "interrupted", "refused"];
-export interface TalkAnswer { state: TalkState; text?: string }
+/**
+ * What a working assistant has newly said it is doing. `ids` names every new progress line, so the client
+ * can report them as heard, and `text` is the newest one, plain and short enough to say aloud.
+ */
+export interface TalkProgress { ids: string[]; text: string }
+/** `progress` rides on a `working` answer, which the server returns as soon as a new line exists. */
+export interface TalkAnswer { state: TalkState; text?: string; progress?: TalkProgress }
+/** Progress line IDs a client reports as heard, so the server returns only new ones. */
+export const MAX_HEARD_LINES = 50;
+/** A progress line is spoken whole when it fits, else cut at a sentence. Nothing points to the chat: it is not the answer. */
+export const MAX_TALK_PROGRESS = 280;

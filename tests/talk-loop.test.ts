@@ -9,12 +9,15 @@ import type { TalkAnswer } from "../src/shared/voice";
 function setup(answers: (TalkAnswer | Error)[]) {
   const sent: Record<string, unknown>[] = [];
   const asks: [string, string][] = [];
+  // The progress line IDs the loop reported as heard with each ask.
+  const heardWith: string[][] = [];
   const phases: string[] = [];
   const pending = [...answers];
   const host: TalkLoopHost = {
     send: event => { sent.push(event); },
-    ask: async (requestId, request) => {
+    ask: async (requestId, request, _signal, heard) => {
       asks.push([requestId, request]);
+      heardWith.push([...heard]);
       const next = pending.shift() ?? { state: "working" };
       if (next instanceof Error) throw next;
       return next;
@@ -28,7 +31,8 @@ function setup(answers: (TalkAnswer | Error)[]) {
     loop.handle({ type: "response.function_call_arguments.done", name: "ask_assistant", call_id: "call-1", arguments: JSON.stringify(args) });
   const types = () => sent.map(event => event.type);
   const settle = (ms = 0) => vi.advanceTimersByTimeAsync(ms);
-  return { loop, host, sent, asks, phases, call, types, settle };
+  const items = () => sent.filter(event => event.type === "conversation.item.create").map(event => JSON.stringify(event.item));
+  return { loop, host, sent, asks, heardWith, phases, call, types, settle, items };
 }
 
 describe("talk tool loop", () => {
@@ -141,6 +145,85 @@ describe("talk tool loop", () => {
     s.loop.handle({ type: "response.output_audio_transcript.done", transcript: "Hey there." });
     s.loop.handle({ type: "response.output_audio_transcript.delta", delta: "Next" });
     expect(s.host.captions).toHaveBeenLastCalledWith({ you: "Howdy", assistant: "Next" });
+  });
+});
+
+describe("talk progress narration", () => {
+  const line = (id: string, text: string) => ({ state: "working" as const, progress: { ids: [id], text } });
+  it("answers the call with the first progress line, then follows without saying it twice", async () => {
+    const s = setup([line("n1", "Checking the forecast."), { state: "done", text: "Sunny." }]);
+    s.call();
+    await s.settle();
+    expect(s.sent[0]).toMatchObject({ type: "conversation.item.create", item: { type: "function_call_output", call_id: "call-1" } });
+    expect(s.items()[0]).toContain("Checking the forecast.");
+    expect(s.items()[0]).not.toContain("still working");
+    s.loop.handle({ type: "response.done" });
+    await s.settle(FOLLOW_MS);
+    // The follow-up reports the line as heard, so the server leaves it out.
+    expect(s.heardWith).toEqual([[], ["n1"]]);
+    expect(s.items()).toHaveLength(2);
+    expect(s.items()[1]).toContain("Sunny.");
+  });
+  it("says each later line once, as its own spoken note, when the voice is free", async () => {
+    const s = setup([line("n1", "Checking the forecast."), line("n2", "Now the radar."), { state: "working" }, { state: "done", text: "Sunny." }]);
+    s.call();
+    await s.settle();
+    s.loop.handle({ type: "response.done" });
+    await s.settle(FOLLOW_MS);
+    expect(s.items()[1]).toContain("Now the radar.");
+    expect(s.items()[1]).toContain("About the earlier request");
+    expect(s.types().filter(type => type === "response.create")).toHaveLength(2);
+    s.loop.handle({ type: "response.done" });
+    await s.settle(FOLLOW_MS);
+    expect(s.heardWith).toEqual([[], ["n1"], ["n1", "n2"]]);
+    // The third answer is working with nothing new, which says nothing.
+    expect(s.items()).toHaveLength(2);
+  });
+  it("holds a line that arrives while the voice is busy and says it once the response ends", async () => {
+    const s = setup([line("n1", "Checking the forecast."), line("n2", "Now the radar."), { state: "working" }]);
+    s.call();
+    await s.settle();
+    // The first line is still being said when the second arrives.
+    await s.settle(FOLLOW_MS);
+    expect(s.items()).toHaveLength(1);
+    expect(s.types().filter(type => type === "response.create")).toHaveLength(1);
+    s.loop.handle({ type: "response.done" });
+    expect(s.items()).toHaveLength(2);
+    expect(s.items()[1]).toContain("Now the radar.");
+    expect(s.types().filter(type => type === "response.create")).toHaveLength(2);
+    // That one response is active now, so nothing else is sent over it.
+    await s.settle(FOLLOW_MS);
+    expect(s.types().filter(type => type === "response.create")).toHaveLength(2);
+  });
+  it("speaks only the answer when it arrives before a held line could be said", async () => {
+    const s = setup([line("n1", "Checking the forecast."), line("n2", "Now the radar."), { state: "done", text: "Sunny, 75." }]);
+    s.loop.handle({ type: "response.created" });
+    s.call();
+    await s.settle(); await s.settle(FOLLOW_MS); await s.settle(FOLLOW_MS);
+    const said = s.items().join("\n");
+    expect(said).toContain("Sunny, 75.");
+    expect(said).not.toContain("Now the radar.");
+    s.loop.handle({ type: "response.done" });
+    s.loop.handle({ type: "response.done" });
+    expect(s.items().join("\n")).not.toContain("Now the radar.");
+  });
+  it("keeps a held line apart for each request and drops it when its request ends", async () => {
+    const s = setup([line("n1", "Checking the forecast."), line("n2", "Now the radar."), new Error("Hermes restarted.")]);
+    s.call();
+    await s.settle(); await s.settle(FOLLOW_MS); await s.settle(FOLLOW_MS);
+    // The failure while following is said, and the held radar line is old news with it.
+    s.loop.handle({ type: "response.done" });
+    s.loop.handle({ type: "response.done" });
+    expect(s.items().join("\n")).not.toContain("Now the radar.");
+    expect(s.items().join("\n")).toContain("could not reach");
+  });
+  it("never speaks held lines after Talk ends", async () => {
+    const s = setup([line("n1", "Checking the forecast."), line("n2", "Now the radar.")]);
+    s.call();
+    await s.settle(); await s.settle(FOLLOW_MS);
+    s.loop.dispose();
+    s.loop.handle({ type: "response.done" });
+    expect(s.items()).toHaveLength(1);
   });
 });
 

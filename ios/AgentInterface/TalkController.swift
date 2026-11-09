@@ -239,8 +239,15 @@ import Foundation
       guard let data = try? JSONSerialization.data(withJSONObject: event), let text = String(data: data, encoding: .utf8) else { return }
       transport?.send(text)
     }
-    func ask(requestId: String, request: String) async throws -> TalkAnswer {
-      try await api.write("/bots/\(APIClient.component(botId))/talk/ask", ["requestId": requestId, "request": request])
+    /// The request, and the progress lines this app already said, which the server leaves out of its reply.
+    private struct AskBody: Encodable {
+      var requestId: String
+      var request: String
+      var heard: [String]?
+    }
+    func ask(requestId: String, request: String, heard: [String]) async throws -> TalkAnswer {
+      try await api.write("/bots/\(APIClient.component(botId))/talk/ask",
+        AskBody(requestId: requestId, request: request, heard: heard.isEmpty ? nil : heard))
     }
     func phase(_ phase: TalkPhase) { controller?.phase(phase, run: run) }
     func captions(_ captions: TalkCaptions) { controller?.show(captions, run: run) }
