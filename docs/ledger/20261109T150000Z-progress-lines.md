@@ -100,3 +100,14 @@ and tests in `ContractFixtureTests`, `PresentationTests`, `ReplyAnnouncementTest
 quieter style. `AGENT_INTERFACE_UI_PROGRESS=1` seeds the same turn as the web fixture
 (`TranscriptFixtures.progress`), and `TranscriptFlowTests.testProgressLinesStayAboveTheFoldedWorkAndTheAnswer`
 captures `progress-folded` and `progress-expanded`. That test is also written and not compiled or run.
+
+## Order check, simulator-verified on the Mac mini
+
+GPT-6.1 Sol's follow-up review (P3) noted that `TranscriptFlowTests.testProgressLinesStayAboveTheFoldedWorkAndTheAnswer`
+found the lines and the fold but never their order. `96f2245` adds frame-order assertions: both lines, then the
+folded work row, then the answer. At `f0b0cf2` on an iPhone 18 Pro simulator, iOS 27: the test passed (14.7 s).
+With `progress-2` moved after `progress-answer` in `TranscriptFixtures.progress`, it failed at
+`XCTAssertLessThan(second.frame.maxY, work.frame.minY)` (715 is not less than 198). The fixture was then restored.
+At `4cdae97` the full `AgentInterfaceTests` target ran 740 tests: 736 passed, 2 skipped, and 2 failed, the two that
+also fail on `main` (`NativeContractTests/testTheObservedListNamesEveryTrackedProperty`,
+`FixedWaitRuleTests/testEveryFixedSleepSaysWhyItIsNotABoundedWait`).
