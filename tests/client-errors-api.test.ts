@@ -31,6 +31,21 @@ it("logs a signed-in person's report with their id and stores nothing", async ()
   expect(s.logged()).toEqual([expect.objectContaining({ level: 40, userId: "one", clientError: report })]);
 });
 
+it("logs an iOS crash and hang report with their platform, and refuses an unknown platform or kind", async () => {
+  const s = await setup();
+  const crash = { kind: "crash", platform: "ios", message: "EXC_BAD_ACCESS (SIGSEGV) KERN_INVALID_ADDRESS 1.4.0 (23)",
+    stack: "0 AgentInterface +0x1a2b4\n1 UIKitCore +0x9f00", route: "/ios/crash", release: "1.4.0-23" };
+  const hang = { ...crash, kind: "hang", message: "Hang of 3.2s 1.4.0 (23)", route: "/ios/hang" };
+  for (const accepted of [crash, hang]) expect((await s.app.inject(post(s.one, accepted))).statusCode).toBe(200);
+  expect(s.logged().map(line => line.clientError)).toEqual([crash, hang]);
+  for (const [refused, field] of [[{ ...crash, platform: "android" }, "platform"], [{ ...crash, kind: "freeze" }, "kind"]] as const) {
+    const response = await s.app.inject(post(s.one, refused));
+    expect(response.statusCode).toBe(400);
+    expect(JSON.stringify(response.json()), field).toContain(field);
+  }
+  expect(s.logged()).toHaveLength(2);
+});
+
 it("logs no URL query or hash from a report's message or stack, whatever the client sent", async () => {
   const s = await setup();
   const leaky = { ...report,

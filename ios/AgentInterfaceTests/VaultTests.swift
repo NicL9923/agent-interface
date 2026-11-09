@@ -58,6 +58,21 @@ import SwiftUI
     XCTAssertEqual(SendAnchor.room(viewport: 600, contentEnd: 1900, anchorTop: 1800), 484)
     XCTAssertEqual(SendAnchor.room(viewport: 600, contentEnd: 2700, anchorTop: 1800), 0)
   }
+  func testComputerPreviewShowsOnlyForAComputerToolInTheLiveTurnUntilDismissed() {
+    func shows(selected: Bool = true, open: Bool = false, active: Bool = true, tools: [String] = ["web_search", "browser_click"],
+      turn: String? = "t2", dismissed: String? = nil) -> Bool {
+      ComputerPeekRules.shows(selected: selected, computerOpen: open, active: active, toolNames: tools, turn: turn, dismissedTurn: dismissed)
+    }
+    XCTAssertTrue(shows())
+    XCTAssertTrue(shows(tools: ["computer_use"]))
+    XCTAssertFalse(shows(tools: ["web_search"]), "Other tools never dock the preview")
+    XCTAssertFalse(shows(tools: []))
+    XCTAssertFalse(shows(open: true), "The full computer view replaces it")
+    XCTAssertFalse(shows(selected: false), "No selected assistant")
+    XCTAssertFalse(shows(active: false), "Only while the turn runs")
+    XCTAssertFalse(shows(dismissed: "t2"), "Dismissed for this turn")
+    XCTAssertTrue(shows(dismissed: "t1"), "A new turn shows it again")
+  }
   func testExplicitLoginDecodesAndOnlyItsRequesterMayAnswer() throws {
     let json = #"{"epoch":"e","sessionId":"s","method":"vault.save_login","origin":"https://kvm.example.test","site":"kvm.example.test","explicit":{"label":"Comet KVM","purpose":"Why","profile":"patch","requestedBy":{"id":"one","name":"One"}}}"#
     let decoded = try JSONDecoder().decode(SecureRequest.self, from: Data(json.utf8))

@@ -243,16 +243,17 @@ class RouteTests(unittest.TestCase):
         return asyncio.run(self.routes[key](request))
 
     def test_routes_need_the_service_credential_and_never_cache(self):
-        self.assertEqual(set(self.routes), {("GET", "/api/agent-interface/voice/status"), ("POST", "/api/agent-interface/voice/client-secret")})
+        # Hermes's dashboard registers a GET catch-all for /api/ before the add-on, so a GET route here would never be reached.
+        self.assertEqual(set(self.routes), {("POST", "/api/agent-interface/voice/status"), ("POST", "/api/agent-interface/voice/client-secret")})
         for key in self.routes:
             status, _, headers = self.call(key, service=False)
             self.assertEqual((status, headers), (401, {"Cache-Control": "no-store"}))
 
     def test_status_and_mint_answers(self):
         with patch.object(voice, "plugin_state", lambda root=None: (False, "The WildBots voice plugin is not linked.")):
-            self.assertEqual(self.call(("GET", "/api/agent-interface/voice/status"))[:2], (200, {"available": False, "reason": "The WildBots voice plugin is not linked."}))
+            self.assertEqual(self.call(("POST", "/api/agent-interface/voice/status"))[:2], (200, {"available": False, "reason": "The WildBots voice plugin is not linked."}))
         with patch.object(voice, "plugin_state", lambda root=None: (True, None)):
-            self.assertEqual(self.call(("GET", "/api/agent-interface/voice/status"))[:2], (200, {"available": True}))
+            self.assertEqual(self.call(("POST", "/api/agent-interface/voice/status"))[:2], (200, {"available": True}))
         key = ("POST", "/api/agent-interface/voice/client-secret")
         self.assertEqual(self.call(key, b"not json")[0], 400)
         self.assertEqual(self.call(key, b"x" * 40000)[0], 400)

@@ -19,6 +19,7 @@ import XCTest
   }
   private func reveal(_ target: XCUIElement, in app: XCUIApplication) {
     for _ in 0..<8 where !target.canTap { app.swipeUp() }
+    target.revealAboveComposer()
   }
   /// Scrolls in small steps until the element sits in the middle of the screen, for a capture
   /// that shows it. An element off screen still exists, so `exists` alone proves nothing here.
@@ -49,6 +50,7 @@ import XCTest
     XCTAssertTrue(mail.waitForExistence(timeout: 5))
     center(app.staticTexts["Hay delivery on Saturday"], in: app)
     XCTAssertTrue(app.staticTexts["Saturday hay delivery"].exists)
+    element(app, "emailCopy.sam").revealAboveComposer()
     element(app, "emailCopy.sam").tap()
     XCTAssertTrue(app.buttons["Copied"].waitForExistence(timeout: 5))
     capture(app, name: "Native email draft card")

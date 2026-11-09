@@ -18,6 +18,7 @@ struct ComposerView: View {
   @Environment(\.dynamicTypeSize) private var dynamicTypeSize
   @ScaledMetric(relativeTo: .headline) private var sendGlyphSize = 18.0
   @State private var voice = VoiceController()
+  @State private var talk = TalkController()
   @Environment(SpeechController.self) private var speech: SpeechController?
   @State private var importFiles = false
   @State private var importPhotos = false
@@ -33,9 +34,11 @@ struct ComposerView: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
       StatusDock(botId: bot.id, discardConfirm: $discardConfirm)
+      TalkPanel(talk: talk, name: bot.name)
       card.fixedSize(horizontal: false, vertical: true)
-    }.padding(.horizontal, 12).padding(.top, 6).padding(.bottom, 8)
-      .frame(maxWidth: 752).frame(maxWidth: .infinity).background(Palette.surface(scheme))
+    }.padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 8)
+      .frame(maxWidth: 752).frame(maxWidth: .infinity).background { ComposerBackdrop() }
+      .accessibilityElement(children: .contain).accessibilityIdentifier("composerArea")
       .onDrop(of: [.item], isTargeted: $dropTargeted) { providers in
         drop(providers)
         return true
@@ -44,7 +47,10 @@ struct ComposerView: View {
       .modifier(ComposerPickers(
         bot: bot, importFiles: $importFiles, importPhotos: $importPhotos, takePhoto: $takePhoto, photos: $photos,
         discardConfirm: $discardConfirm))
-      .onAppear { configureVoice() }
+      .onAppear { configureVoice(); configureTalk() }
+      // Talk belongs to one assistant and one sign-in: another one ends it.
+      .onChange(of: bot.id) { _, _ in talk.end(); talk.dismiss(); configureTalk() }
+      .onChange(of: store.scope) { _, _ in talk.end(); talk.dismiss(); configureTalk() }
       #if DEBUG
       .onChange(of: store.draftReady, initial: true) { _, ready in
         guard ready else { return }
@@ -70,6 +76,7 @@ struct ComposerView: View {
         if phase == .background || phase == .inactive && voice.state == .recording { voice.preserveRecording() }
       }
       .onDisappear {
+        talk.end()
         if voice.recordingURL == store.voiceRecordingURL(botId: bot.id) { voice.preserveRecording(); voice.cancel() }
         else { voice.reset() }
       }
@@ -95,8 +102,12 @@ struct ComposerView: View {
         HStack(spacing: 4) { attachMenu }
         input
         HStack(spacing: 4) {
-          VoiceButtons(voice: voice, bot: bot, disabled: voiceDisabled, beforeRecording: { speech?.cancel() })
-          if focused { hideKeyboardButton }
+          VoiceButtons(voice: voice, bot: bot, disabled: voiceDisabled || talk.live, beforeRecording: { speech?.cancel() })
+          // Talking and typing do not mix, so the keyboard's button takes Talk's place while typing.
+          if focused { hideKeyboardButton } else {
+            TalkButton(talk: talk, bot: bot, capability: store.bootstrap?[capability: .liveVoice],
+              busy: voice.state != .idle || voice.recording != nil, connected: store.connected, beforeStart: { speech?.cancel() })
+          }
           sendButton
         }
       }
@@ -104,6 +115,7 @@ struct ComposerView: View {
       footnotes
     }.padding(4).background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 26, style: .continuous))
       .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).stroke(Palette.line, lineWidth: 1))
+      .accessibilityElement(children: .contain).accessibilityIdentifier("composerCard")
   }
   private var input: some View {
     // While a message is on its way the transcript shows it, so the box reads empty and is
@@ -194,15 +206,27 @@ struct ComposerView: View {
   private var voiceDisabled: Bool {
     !store.draftReady || store.pending != nil || store.sending || !store.connected
   }
-  /// The Talk to assistant control opened this chat to record. A kept recording waits for review
-  /// instead, and a request that cannot start soon lapses.
+  /// The Talk to assistant control opened this chat: live Talk where Hermes offers it, otherwise a
+  /// voice message. A kept recording waits for review instead, and a request that cannot start
+  /// soon lapses.
   private func startRequestedRecording() {
     guard let request = store.listenRequest, request.botId == bot.id else { return }
-    guard request.fresh(), request.scope == store.scope, voice.recording == nil, voice.state == .idle else { store.listenRequest = nil; return }
+    guard request.fresh(), request.scope == store.scope, voice.recording == nil, voice.state == .idle, !talk.live
+    else { store.listenRequest = nil; return }
     guard !voiceDisabled else { return }
     store.listenRequest = nil
     speech?.cancel()
-    Task { await voice.startRecording() }
+    if store.supports(.liveVoice) {
+      configureTalk()
+      talk.start()
+    } else {
+      Task { await voice.startRecording() }
+    }
+  }
+  private func configureTalk() {
+    talk.api = store.api
+    talk.botId = bot.id
+    talk.botName = bot.name
   }
   /// Steps through earlier messages from an empty composer. Never while a message is on its way:
   /// until it settles, the draft is told apart from its send only by its text.
@@ -487,5 +511,16 @@ private struct ComposerRowLayout: Layout {
       subviews[1].place(at: CGPoint(x: bounds.minX + value.lead.width + 4, y: bounds.midY), anchor: .leading,
         proposal: ProposedViewSize(width: max(0, bounds.width - value.lead.width - value.trail.width - 8), height: value.input.height))
     }
+  }
+}
+
+/// Behind the message box as the transcript scrolls under it: a blur that fades in over its top
+/// edge, reaching down past the home indicator. Reduce Transparency makes it solid.
+private struct ComposerBackdrop: View {
+  var body: some View {
+    Rectangle().fill(.regularMaterial)
+      .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.12)], startPoint: .top, endPoint: .bottom))
+      .ignoresSafeArea(edges: .bottom)
+      .accessibilityHidden(true)
   }
 }

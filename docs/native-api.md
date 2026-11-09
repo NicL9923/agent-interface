@@ -574,8 +574,13 @@ Preserve memory drafts after a 409 revision conflict. Persist a trial's request 
 before dispatch and reuse it after an uncertain admission. Do not replay a trial
 automatically. iOS read aloud plays `POST /api/bots/:id/voice/speak` audio from Hermes, as
 the web does, and refuses replies over 12,000 characters; transcription uses Hermes.
-Live Talk is web-only for now. iOS decodes the `liveVoice` capability and ignores
-a bot's `voice`.
+iOS live Talk mints a session with `POST /api/bots/:id/talk/session` and sends
+spoken requests with `POST /api/bots/:id/talk/ask`, as the web does. The app talks
+to OpenAI over the Realtime WebSocket (`wss://api.openai.com/v1/realtime?model=`
+the session's model) with the short-lived `clientSecret` as its bearer token and
+nothing else; the add-on fixes the session, so the app sends only microphone audio
+(24 kHz mono PCM), the tool loop's events, and `conversation.item.truncate` when
+the person speaks over the voice.
 
 <!-- Main assistant: begin -->
 ### Main assistant and check-ins
@@ -1051,6 +1056,17 @@ question, a secure request, a handoff or a connection request closes those reque
 is admitted, so the assistant reads it next. A login the assistant asked for by
 address stays open unless the sender is the member whose task asked for it. An
 answer that reaches Hermes after its request closed answers `{ "status": "expired" }`.
+
+## Crash reports
+
+While signed in, the app sends the crashes and hangs MetricKit delivers on a later launch to
+`POST /api/client-errors`, the route the web client uses for render crashes and uncaught errors.
+One request per diagnostic, with `kind` `crash` or `hang`, `platform` `ios`, a `message` naming
+the exception, signal and termination reason with the app version, a `stack` of the top frames as
+binary name and offset, `route` `/ios/crash` or `/ios/hang`, and `release` as `<version>-<build>`.
+The bounds are `CLIENT_ERROR_LIMITS` in `src/shared/api.ts`. The server logs each report as a
+`Client error` warning and stores nothing. It accepts 20 reports per person every 10 minutes and
+answers 429 beyond that: drop the report, do not retry it. Never send a token or a URL with a query.
 
 ## Linked Macs
 

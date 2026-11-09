@@ -15,6 +15,19 @@ import XCTest
 }
 
 extension XCUIElement {
+  /// The message box floats over the chat's bottom, and XCUITest still calls what it covers
+  /// hittable, so a tap there lands on the box. Drags the transcript until this element clears it.
+  func revealAboveComposer(file: StaticString = #filePath, line: UInt = #line) {
+    let app = XCUIApplication()
+    let area = app.descendants(matching: .any)["composerArea"]
+    let transcript = app.scrollViews["conversationTranscript"]
+    for _ in 0..<12 {
+      guard exists, area.exists, frame.maxY > area.frame.minY - 8 else { return }
+      transcript.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.55))
+        .press(forDuration: 0.05, thenDragTo: transcript.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.35)))
+    }
+    if exists, area.exists, frame.maxY > area.frame.minY - 8 { XCTFail("\(self) stayed behind the message box", file: file, line: line) }
+  }
   /// Waits until `format`, an NSPredicate over this element such as `"value == %@"`, holds. Use it
   /// instead of reading `value`, `label` or `isSelected` right after the action that changes it.
   @discardableResult

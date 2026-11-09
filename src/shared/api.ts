@@ -110,10 +110,15 @@ export function withoutUrlQueries(text: string, { stack = false } = {}) {
     });
   }).join("\n");
 }
-/** A crash or uncaught error in the web client, reported so a white screen on a phone is not silent. */
+/** A crash or uncaught error in a client, reported so a white screen on a phone is not silent. */
 export interface ClientErrorReport {
-  /** Where it was caught: the root error boundary, a window `error`, or an unhandled rejection. */
-  kind: "render" | "error" | "rejection";
+  /**
+   * Where it was caught: the web's root error boundary, a window `error`, or an unhandled rejection;
+   * or, from the iOS app, a crash or hang that MetricKit delivered after the fact.
+   */
+  kind: "render" | "error" | "rejection" | "crash" | "hang";
+  /** The client that sent it. The web client leaves it out. */
+  platform?: "web" | "ios";
   message: string;
   stack?: string;
   /** The page's path, without its query string or hash. */

@@ -1005,6 +1005,8 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     expect((await runtime.capabilities()).liveVoice).toEqual({supported:false,reason:'The WildBots voice plugin is not linked into Hermes.'});
     const status=fetcher.mock.calls.find(call=>new URL(call[0]).pathname.endsWith('/voice/status'))!;
     expect(new URL(status[0]).pathname).toBe('/api/agent-interface/service/agent-interface/voice/status');
+    // Hermes's dashboard answers every unmatched GET under /api/ itself, ahead of the add-on.
+    expect(status[1]!.method).toBe('POST');
     expect(new Headers(status[1]!.headers).get('Authorization')).toBe('Bearer '+token);
     const input={voice:'marin' as const,instructions:'Speak for Shared.',tools:[]};
     expect(await runtime.realtimeSession!(input)).toEqual({clientSecret:'ek_fixture',expiresAt:1790000000,model:'gpt-realtime-2.1',voice:'marin'});

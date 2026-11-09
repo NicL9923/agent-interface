@@ -10,7 +10,9 @@ export const CLIENT_ERRORS_PER_WINDOW = 20;
 export const CLIENT_ERROR_WINDOW_MS = 10 * 60_000;
 
 const report = z.object({
-  kind: z.enum(["render", "error", "rejection"]),
+  kind: z.enum(["render", "error", "rejection", "crash", "hang"]),
+  // Unset means the web client, which never sends it. The iOS app's MetricKit reports say "ios".
+  platform: z.enum(["web", "ios"]).optional(),
   // The client strips URL queries too; doing it again here keeps an older or altered client's from the log.
   message: z.string().min(1).max(CLIENT_ERROR_LIMITS.message).transform(text => withoutUrlQueries(text)),
   stack: z.string().max(CLIENT_ERROR_LIMITS.stack).transform(text => withoutUrlQueries(text, { stack: true })).optional(),
@@ -20,7 +22,7 @@ const report = z.object({
 }).strict();
 
 /**
- * Logs web client crashes, so a render failure on a phone reaches the operator instead of being a
+ * Logs web and iOS client crashes, so a render failure on a phone reaches the operator instead of being a
  * white screen nobody hears about. Nothing is stored. Each person may send a bounded number per
  * window, counted in memory; a restart forgets the counts.
  */

@@ -1,7 +1,7 @@
 """Live voice: OpenAI Realtime client secrets on the household ChatGPT sign-in.
 
 Two service-token routes, admitted only through src/hermes/service_auth.py:
-  GET  /api/agent-interface/voice/status         {available, reason?}
+  POST /api/agent-interface/voice/status         {available, reason?}
   POST /api/agent-interface/voice/client-secret  {model, voice, instructions, tools}
 
 The app sends only the parts it owns: the voice, a short persona and its one tool.
@@ -199,5 +199,7 @@ def install(web):
             return answer({"error": "Hermes could not start a voice session."}, 502)
 
     globals()["Request"] = Request
-    web.app.add_api_route("/api/agent-interface/voice/status", status_endpoint, methods=["GET"])
+    # Both are POST, like every add-on route: Hermes's dashboard answers any unmatched GET under
+    # /api/ with its own 404, and that catch-all is registered before the add-on's routes.
+    web.app.add_api_route("/api/agent-interface/voice/status", status_endpoint, methods=["POST"])
     web.app.add_api_route("/api/agent-interface/voice/client-secret", secret_endpoint, methods=["POST"])

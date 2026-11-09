@@ -440,7 +440,8 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     const at = Date.now();
     const value = voiceRead ??= (async () => {
       try {
-        const response = await http('/api/agent-interface/voice/status');
+        // POST: Hermes's dashboard answers every unmatched GET under /api/ before the add-on's routes.
+        const response = await http('/api/agent-interface/voice/status', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'});
         const status = await response.json() as Wire;
         return supported(status.available === true, typeof status.reason === 'string' ? status.reason.slice(0, 500) : 'Hermes live voice is unavailable.');
       } catch (error) {

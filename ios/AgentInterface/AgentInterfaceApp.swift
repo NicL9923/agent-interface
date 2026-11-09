@@ -19,6 +19,8 @@ import UserNotifications
           NotificationController.shared.store = store
           LiveActivityController.shared.store = store
           DeviceActivity.shared.store = store
+          CrashReporter.shared.api = { [weak store] in store?.api }
+          CrashDiagnosticsSubscriber.shared.start()
           #if DEBUG
             if await DebugFixtures.configure(store) { return }
           #endif
@@ -45,7 +47,10 @@ import UserNotifications
           }
         }
         .onChange(of: store.connected) { _, connected in
-          if connected { Task { await NotificationController.shared.synchronize() } }
+          if connected {
+            Task { await NotificationController.shared.synchronize() }
+            Task { await CrashReporter.shared.flush() }
+          }
         }
         // Sign-out, another account or another server: the old account's activity ends, and
         // the new one starts from its own state.
@@ -56,6 +61,7 @@ import UserNotifications
           Task {
             if old != nil { await LiveActivityController.shared.endAll(unregister: false) }
             if new != nil {
+              await CrashReporter.shared.flush()
               await NotificationController.shared.synchronize()
               await LiveActivityController.shared.foreground()
             }

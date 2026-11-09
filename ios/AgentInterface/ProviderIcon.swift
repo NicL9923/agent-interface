@@ -35,24 +35,33 @@ struct ProviderIcon: View {
   }
 }
 
-/// The model chip under the assistant's name in an Advanced chat: the provider's mark, the model's
-/// display name and a caret. It opens the model, reasoning and speed picker.
+/// The model chip in an Advanced chat: the provider's mark, the model's display name and a caret,
+/// or on a phone's header row the mark alone. It opens the model, reasoning and speed picker.
 struct ModelChipButton: View {
   var bot: Bot
   var disabled: Bool
+  var iconOnly = false
   var action: () -> Void
   var body: some View {
     Button(action: action) {
-      HStack(spacing: 6) {
-        ProviderIcon(provider: bot.provider)
-        Text(bot.modelName ?? bot.model).lineLimit(1)
-        Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold)).accessibilityHidden(true)
-      }.font(.caption).foregroundStyle(Palette.muted).padding(.horizontal, 10).frame(height: 26)
-        .overlay(Capsule().stroke(Palette.line, lineWidth: 1))
-        // The capsule stays light, and the touch target reaches 44 points.
-        .frame(minHeight: 44).contentShape(Rectangle())
+      if iconOnly {
+        ProviderIcon(provider: bot.provider, size: 20).foregroundStyle(.primary)
+          .frame(width: 44, height: 44).contentShape(Rectangle())
+      } else {
+        chip
+      }
     }.buttonStyle(.plain).disabled(disabled).opacity(disabled ? 0.6 : 1)
       .accessibilityLabel("Model: \(bot.modelName ?? bot.model)").accessibilityHint("Change the model, reasoning and speed")
       .accessibilityIdentifier("chatModel")
+  }
+  private var chip: some View {
+    HStack(spacing: 6) {
+      ProviderIcon(provider: bot.provider)
+      Text(bot.modelName ?? bot.model).lineLimit(1)
+      Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold)).accessibilityHidden(true)
+    }.font(.caption).foregroundStyle(Palette.muted).padding(.horizontal, 10).frame(height: 26)
+      .overlay(Capsule().stroke(Palette.line, lineWidth: 1))
+      // The capsule stays light, and the touch target reaches 44 points.
+      .frame(minHeight: 44).contentShape(Rectangle())
   }
 }

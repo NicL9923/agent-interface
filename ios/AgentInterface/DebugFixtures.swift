@@ -83,6 +83,7 @@
       precondition(!(environment["AGENT_INTERFACE_UI_AUTOMATION"] == "1" && FixtureProtocol.designFixture?["screen"] as? String == "work"),
         "The Work design fixture cannot be combined with the automation flow fixture.")
       VoiceController.fixtureRecording = true
+      TalkController.fixture = true
       let config = URLSessionConfiguration.ephemeral
       config.protocolClasses = [FixtureProtocol.self]
       let session = URLSession(configuration: config)
@@ -449,7 +450,15 @@
       ]
       return ["accounts": [chatgpt, openrouter, custom], "unavailableBots": ["archive"]]
     }
+    /// Talk voices chosen through `PUT /api/bots/:id/voice`, by assistant id.
+    nonisolated(unsafe) static var voices: [String: String] = [:]
     static var bots: [[String: Any]] {
+      baseBots.map { bot in
+        guard let voice = voices[bot["id"] as? String ?? ""] else { return bot }
+        return bot.merging(["voice": voice]) { $1 }
+      }
+    }
+    private static var baseBots: [[String: Any]] {
       if let bots = designFixture?["bots"] as? [[String: Any]] {
         return (bots.map { settingsOverrides[$0["id"] as? String ?? ""] ?? $0 } + createdBots)
           .filter { !deletedSettingsBotIds.contains($0["id"] as? String ?? "") }
@@ -561,6 +570,10 @@
         respond(raw: Data("event: groups\ndata: groups\n\n".utf8), type: "text/event-stream")
         return
       }
+      if path.hasPrefix("/voice-previews/") {
+        respond(raw: Self.silence(seconds: 5), type: "audio/wav")
+        return
+      }
       if path.hasPrefix("/api/voice/audio/") {
         // Ten seconds of quiet, so a test can stop the reply while it plays.
         respond(raw: Self.silence(seconds: 10), type: "audio/wav")
@@ -576,8 +589,17 @@
         status = result.status; object = result.object
       } else if let fixture = Self.automation.response(path: path, method: method, body: body, url: request.url!) {
         status = fixture.status; object = fixture.object
+      } else if path.hasSuffix("/voice"), method == "PUT", path.hasPrefix("/api/bots/"), let voice = body["voice"] as? String {
+        if TalkVoice.all.contains(voice) {
+          Self.voices[path.split(separator: "/")[2].description] = voice; object = ["voice": voice]
+        } else { status = 400; object = ["error": "Choose one of the supported voices."] }
       } else if path.hasSuffix("/voice/transcribe") {
         object = ["text": "Fixture transcript: check the north gate."]
+      } else if path.hasSuffix("/talk/session") {
+        object = ["clientSecret": "fixture-talk-secret", "expiresAt": 1_791_000_000, "model": "gpt-realtime-2.1", "voice": "marin"]
+      } else if path.hasSuffix("/talk/ask") {
+        precondition(body["requestId"] is String && body["request"] is String, "Talk asks carry a request ID and the request")
+        object = ["state": "done", "text": "The north gate is closed."]
       } else if path.hasSuffix("/voice/speak") {
         object = ["url": "/api/voice/audio/\(UUID().uuidString.lowercased())", "mime": "audio/wav", "expiresAt": "2026-10-02T12:05:00Z"]
       } else if path == "/api/search", let hits = TranscriptFixtures.searchHits(request.url!, Self.messages) {
@@ -637,6 +659,11 @@
         if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_CAPTURE_SURVIVAL"] == "share-offline", var bootstrap = object as? [String: Any] {
           bootstrap["connection"] = ["connected": false, "code": "unreachable"]
           object = bootstrap
+        }
+        if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_LIVE_VOICE"] == "off", var bootstrap = object as? [String: Any],
+          var capabilities = bootstrap["capabilities"] as? [String: Any] {
+          capabilities["liveVoice"] = ["supported": false, "reason": "Enable the wildbots-voice plugin in Hermes."]
+          bootstrap["capabilities"] = capabilities; object = bootstrap
         }
         if Self.designFixture?["approvalSupported"] as? Bool == false {
           var bootstrap = object as! [String: Any]

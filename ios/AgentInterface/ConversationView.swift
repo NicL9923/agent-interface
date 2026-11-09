@@ -34,6 +34,7 @@ struct ConversationView: View {
   var edit: () -> Void
   @Environment(AppStore.self) private var store
   @Environment(\.colorScheme) private var scheme
+  @Environment(\.horizontalSizeClass) private var sizeClass
   private let reachability = NetworkReachability.shared
   @State private var earlierFailed = false
   @State private var visibleMessage: String?
@@ -41,6 +42,8 @@ struct ConversationView: View {
   @State private var readSaveTask: Task<Void, Never>?
   @State private var latestTrigger = 0
   @State private var viewportHeight: CGFloat = 0
+  /// The message box floating over the transcript's bottom, which the transcript keeps room for.
+  @State private var composerHeight: CGFloat = 0
   @State private var content = TranscriptMetrics()
   /// Following keeps the latest message in view as replies and cards grow, as on the web.
   @State private var following = true
@@ -60,6 +63,7 @@ struct ConversationView: View {
   @State private var speech = SpeechController()
   @State private var profileAction: BotProfileAction?
   @State private var composerFocused = false
+  @State private var peekDismissedTurn: String?
   @State private var visible = false
   @State private var findOpen = false
   @State private var findQuery = ""
@@ -117,18 +121,28 @@ struct ConversationView: View {
   }
   private var openAnchorRoom: CGFloat {
     guard anchoredMessage != nil, let anchorTop else { return 0 }
-    return SendAnchor.room(viewport: viewportHeight, contentEnd: contentEnd, anchorTop: anchorTop)
+    return SendAnchor.room(viewport: max(0, viewportHeight - composerHeight), contentEnd: contentEnd, anchorTop: anchorTop)
   }
   var body: some View {
     VStack(spacing: 0) {
       modelBar
       banners
       if findOpen { findBar }
-      transcript
-      composer
+      // The transcript runs under the message box, which floats over it. The transcript ends with
+      // room as tall as the box, so its end, and anything placed there, rests just above it.
+      transcript.overlay(alignment: .bottomTrailing) { computerPeek.padding(.bottom, composerHeight) }
+        .overlay(alignment: .bottom) {
+          composer.onGeometryChange(for: CGFloat.self) { $0.size.height } action: { composerHeight = $0 }
+        }
     }.modifier(ReadingChat(botId: bot.id)).background(Palette.surface(scheme)).navigationTitle(bot.name)
     .navigationBarTitleDisplayMode(.inline)
     .bareToolbarItem(.principal) { header }
+    .toolbar {
+      // On a phone the model sits at the end of the header row as its provider's mark alone.
+      if modelShown && sizeClass == .compact {
+        ToolbarItem(placement: .topBarTrailing) { modelButton(iconOnly: true) }
+      }
+    }
     .onChange(of: bot.id) { _, _ in earlierFailed = false; speech.reset(); configureSpeech() }
     .environment(speech)
     .onAppear { configureSpeech() }
@@ -167,12 +181,14 @@ struct ConversationView: View {
     speech.botId = bot.id
     speech.botName = bot.name
   }
-  /// Advanced only: the model chip under the assistant's name. Simple never shows the model.
+  /// Advanced only: the model chip, under the assistant's name on a wide screen and at the end of
+  /// the header on a phone. Simple never shows the model.
+  private var modelShown: Bool { store.bootstrap?.preferences.presentation == "advanced" }
   @ViewBuilder private var modelBar: some View {
-    if store.bootstrap?.preferences.presentation == "advanced" {
-      ModelChipButton(bot: bot, disabled: !store.supports(.botConfiguration) || !store.connected || store.sending) { modelOpen = true }
-        .frame(maxWidth: .infinity)
-    }
+    if modelShown && sizeClass != .compact { modelButton(iconOnly: false).frame(maxWidth: .infinity) }
+  }
+  private func modelButton(iconOnly: Bool) -> some View {
+    ModelChipButton(bot: bot, disabled: !store.supports(.botConfiguration) || !store.connected || store.sending, iconOnly: iconOnly) { modelOpen = true }
   }
   private var cardShown: Bool {
     !(store.offlineSavedAt != nil && store.householdConnected && !reachability.offline)
@@ -349,7 +365,9 @@ struct ConversationView: View {
       .onChange(of: store.receipt) { _, receipt in
         if let receipt, receipt.requestId == sentAnchor, let id = receipt.messageId { sentAnchorMessage = id }
       }
-      .overlay(alignment: .bottom) { if !following && !atEnd && attentionPosition == nil && store.conversation != nil { jumpButton(proxy) } }
+      .overlay(alignment: .bottom) {
+        if !following && !atEnd && attentionPosition == nil && store.conversation != nil { jumpButton(proxy).padding(.bottom, composerHeight) }
+      }
       .animation(.easeOut(duration: 0.15), value: following)
       .refreshable {
         await store.refreshConversation()
@@ -400,7 +418,7 @@ struct ConversationView: View {
     }
     .scrollPosition(id: $visibleMessage, anchor: .top)
     .coordinateSpace(name: "transcript")
-    .undoToast($runUndo) { change in Task { await store.undo(change) } }
+    .undoToast($runUndo, above: composerHeight) { change in Task { await store.undo(change) } }
     // Runs reread every minute, every 15 seconds while one runs, and when a saved message arrives.
     .task(id: "\(store.scope ?? ""):\(bot.id):\(runsEnabled):\(store.conversation?.messages.last { !$0.id.hasSuffix("-inflight") }?.id ?? "")") {
       guard runsEnabled else { return }
@@ -411,6 +429,7 @@ struct ConversationView: View {
       }
     }
     .onGeometryChange(for: CGFloat.self) {
+      // The whole frame, under the message box too: the transcript's end includes room for the box.
       $0.size.height
     } action: {
       viewportHeight = $0
@@ -479,6 +498,8 @@ struct ConversationView: View {
       Color.clear.frame(height: 0)
         .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(SentAnchorTop.space)).minY } action: { contentEnd = $0 }
       if anchorRoom > 0 { Color.clear.frame(height: anchorRoom).accessibilityHidden(true) }
+      // Under the floating message box, so the latest message ends above it.
+      Color.clear.frame(height: composerHeight).accessibilityHidden(true)
       Color.clear.frame(height: 1).id("latest")
     }.coordinateSpace(name: SentAnchorTop.space)
   }
@@ -726,6 +747,15 @@ struct ConversationView: View {
       .accessibilityHint(offer.checking ? "Sends the same request again, so it can't run twice. Your draft stays as it is."
         : "Sends your last message again. Your draft stays as it is.")
       .accessibilityIdentifier("retryTurn")
+  }
+  /// The watch-only desktop view docked above the composer while the turn's tools use the computer.
+  /// Dismissing hides it until the next turn.
+  @ViewBuilder private var computerPeek: some View {
+    let turn = store.turns.last?.id
+    if ComputerPeekRules.shows(selected: true, computerOpen: store.openComputer != nil, active: store.activity.active,
+      toolNames: store.conversation?.toolCalls?.map(\.name) ?? [], turn: turn, dismissedTurn: peekDismissedTurn) {
+      ComputerPeekView(name: bot.name, open: { store.openComputer = ComputerOpening(take: false) }, dismiss: { peekDismissedTurn = turn })
+    }
   }
   private var composer: some View {
     ComposerView(bot: bot, focused: $composerFocused) { latestTrigger += 1 }

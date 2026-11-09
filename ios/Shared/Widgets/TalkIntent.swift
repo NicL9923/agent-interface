@@ -1,12 +1,13 @@
 import AppIntents
 import Foundation
 
-/// Opens an assistant's chat and starts a voice message: the action behind the Talk to assistant
-/// control in Control Center, on the Lock Screen and on the Action button. It is built into both
-/// the app and the widget extension, as controls that open the app must be.
+/// Opens an assistant's chat and starts live Talk, or a voice message where Hermes offers no live
+/// Talk: the action behind the Talk to assistant control in Control Center, on the Lock Screen and
+/// on the Action button. It is built into both the app and the widget extension, as controls that
+/// open the app must be.
 struct TalkToAssistantIntent: OpenIntent {
   static var title: LocalizedStringResource { "Talk to assistant" }
-  static var description: IntentDescription { IntentDescription("Opens a conversation with one of your assistants and starts a voice message.") }
+  static var description: IntentDescription { IntentDescription("Opens a conversation with one of your assistants and starts talking with it out loud.") }
   @Parameter(title: "Assistant") var target: AssistantEntity
   init() {}
   init(target: AssistantEntity) { self.target = target }

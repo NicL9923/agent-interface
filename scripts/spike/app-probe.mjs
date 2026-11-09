@@ -210,6 +210,11 @@ try {
     assert(data.connection.connected, data.connection.detail ?? "Native fixture connection must be ready");
     assert(data.capabilities.chat.supported, data.capabilities.chat.reason ?? "Native fixture must support chat");
     assert.equal(data.household.length, 2);
+    // The add-on's voice status must be reachable through real Hermes routing. A disposable home
+    // has no voice plugin, so Talk is unavailable for that reason, never a missing route.
+    assert(data.capabilities.liveVoice, "Bootstrap must report live voice");
+    assert(!/predates live voice|could not report live voice/i.test(data.capabilities.liveVoice.reason ?? ""),
+      `Live voice status must reach the add-on: ${data.capabilities.liveVoice.reason}`);
     return {
       householdMembers: 2,
       imageBackendAvailable: data.capabilities.imageGeneration.supported,
