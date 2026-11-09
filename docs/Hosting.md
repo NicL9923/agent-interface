@@ -155,6 +155,24 @@ The browser sends its WebRTC offer straight to `https://api.openai.com`, which
 the document Content-Security-Policy allows in `connect-src`. Caddy needs no
 change.
 
+### Talk reasoning effort
+
+A spoken request that starts a new turn is sent to Hermes with `voice_turn: true`.
+Hermes then runs that turn on its `auxiliary.voice_chat` route, which sets the
+turn's reasoning effort and can name a faster model. A request that joins a
+running turn changes nothing about that turn. Hermes's default effort for the
+route is `none`. The household sets `low` in every profile, because spoken requests
+still use tools. Hermes reads it at the start of each turn, so no restart is needed:
+
+```sh
+for home in ~/.hermes ~/.hermes/profiles/*; do
+  HERMES_HOME="$home" hermes config set auxiliary.voice_chat.reasoning_effort low
+done
+```
+
+Leaving `auxiliary.voice_chat.model` unset keeps the assistant's own model. An
+add-on older than this flag ignores it, and Talk turns run at the profile's effort.
+
 ## Metadata egress floor
 
 The host is an OpenStack instance, and its metadata service at

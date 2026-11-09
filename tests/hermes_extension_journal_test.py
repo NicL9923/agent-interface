@@ -433,6 +433,19 @@ class OpenTests(unittest.TestCase):
             self.assertEqual(submit("again",params)["result"],result)
             self.assertEqual([method for method,_ in hermes.native_calls],["prompt.submit"])
 
+    def test_voice_turn_reaches_native_submit_only_for_a_new_turn(self):
+        base = {"profile": "default", "request_id": "one", "sender_id": "member", "text": "Weather?"}
+        # Only a literal true marks the turn. A steer joins the running turn, whose route is already bound.
+        for mark, running, expected in [(True, False, ("prompt.submit", True)), ("true", False, ("prompt.submit", None)),
+                                        (None, False, ("prompt.submit", None)), (True, True, ("session.steer", None))]:
+            with self.subTest(mark=mark, running=running), FakeGateway([]) as hermes:
+                hermes.open()
+                hermes.native_calls.clear()
+                hermes.modules["tui_gateway.server"]._sessions["sid"]["running"] = running
+                params = {**base, **({"voice_turn": mark} if mark is not None else {})}
+                self.assertEqual(hermes.methods["agent-interface.submit"]("send", params)["result"]["status"], "accepted")
+                self.assertEqual([(method, params.get("voice_turn")) for method, params in hermes.native_calls], [expected])
+
     def test_submit_response_survives_restart_without_canonical_activation(self):
         params = {"profile": "default", "request_id": "one", "sender_id": "member", "text": "Hello"}
         with tempfile.TemporaryDirectory() as directory:

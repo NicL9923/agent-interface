@@ -434,6 +434,12 @@ export interface Submission {
   draftBaseRevision?: number;
   /** The user message this one retries. A retry never reads, merges or clears the sender's draft. */
   retryOf?: string;
+  /**
+   * Spoken in live Talk. A new turn runs on Hermes's voice route (`auxiliary.voice_chat`), which
+   * sets its own reasoning effort; a steer joins the running turn unchanged. Only the server sets it,
+   * on the send to Hermes, never in the recorded request.
+   */
+  voice?: boolean;
 }
 export interface SubmissionReceipt {
   requestId: string;

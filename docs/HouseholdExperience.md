@@ -212,7 +212,9 @@ work. Each real request goes to the assistant as an ordinary message from the
 person speaking, in their words, so it appears in the chat, uses the same
 admission and steering as typing, and never sends twice for one spoken request.
 While the assistant works, the voice says a short filler and then reads the
-answer back briefly. Long answers end at a sentence and point to the chat. When
+answer back briefly. A spoken request that starts a new turn runs on Hermes's
+voice route at the reasoning effort set for it, `low` in this household, so it
+answers faster than the same words typed. Long answers end at a sentence and point to the chat. When
 an approval or a question is waiting, the voice asks the person to check the
 screen, and reads the answer once they decide.
 
