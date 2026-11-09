@@ -423,8 +423,9 @@ struct ConversationView: View {
       }
     }
     .onGeometryChange(for: CGFloat.self) {
-      // What the reader can see: the message box covers the bottom inset.
-      $0.size.height - $0.safeAreaInsets.bottom
+      // Laid out above the message box's inset already, so this is what the reader can see; the
+      // scroll view only draws on under the box.
+      $0.size.height
     } action: {
       viewportHeight = $0
       // The keyboard or a rotation resizes the view; a follower stays at the end, and a found
