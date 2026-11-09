@@ -185,11 +185,53 @@ if __name__ == "__main__":
             self.assertNotEqual(code, 0)
             self.assertIn(payload['node'] + ' is no longer the runtime the release was built with', error)
             self.assertEqual(sorted(base.rglob('.agent-interface-upgrade-stage')), stages)
+            # Without an explicit choice, the live receipt's selection carries over and is bound afresh,
+            # so a browser update since the last qualification is picked up rather than refused.
+            live = base / 'shared/hermes-qualified.json'
+            stale = dict(descriptor, sha256='0' * 64)
+            live.write_text(json.dumps({'computerProbeBrowser': stale})); live.chmod(0o600)
+            inherit = {**payload, 'computerProbeBrowser': None, 'inheritComputerProbeBrowser': True,
+                       'liveQualificationReceipt': str(live)}
+            code, output, error = run_remote(qualify_app.REMOTE, inherit)
+            self.assertEqual(code, 0, error)
+            self.assertEqual(json.loads(Path(json.loads(output)['receipt']).read_text())['computerProbeBrowser'], descriptor)
+            self.assertEqual(json.loads(seen.read_text())['HERMES_COMPUTER_PROBE_BROWSER'], str(browser))
+            # --pinned-probe-browser ignores the live selection and runs the release's PM Chromium.
+            code, output, error = run_remote(qualify_app.REMOTE, {**inherit, 'inheritComputerProbeBrowser': False})
+            self.assertEqual(code, 0, error)
+            self.assertNotIn('computerProbeBrowser', json.loads(Path(json.loads(output)['receipt']).read_text()))
+            self.assertIsNone(json.loads(seen.read_text())['HERMES_COMPUTER_PROBE_BROWSER'])
+            # A live receipt that never selected one leaves the pinned browser in place.
+            live.write_text(json.dumps({'revision': revision}))
+            code, output, error = run_remote(qualify_app.REMOTE, inherit)
+            self.assertEqual(code, 0, error)
+            self.assertNotIn('computerProbeBrowser', json.loads(Path(json.loads(output)['receipt']).read_text()))
+            # The live receipt picks an executable qualification runs, so each untrusted receipt or
+            # selection refuses before staging rather than guessing a browser.
+            stages = sorted(base.rglob('.agent-interface-upgrade-stage'))
+            elsewhere = base / 'other-chrome'; elsewhere.write_bytes(b'\x7fELFother'); elsewhere.chmod(0o700)
+            linked = base / 'linked-receipt.json'; linked.symlink_to(live)
+            def refused(setup, reason, receipt=live):
+                live.write_text(json.dumps({'computerProbeBrowser': stale})); live.chmod(0o600)
+                setup()
+                code, _, error = run_remote(qualify_app.REMOTE, {**inherit, 'liveQualificationReceipt': str(receipt)})
+                self.assertNotEqual(code, 0)
+                self.assertIn(reason, error)
+                self.assertEqual(sorted(base.rglob('.agent-interface-upgrade-stage')), stages)
+            refused(lambda: live.write_text(json.dumps({'computerProbeBrowser': {'requested': 'chrome'}})),
+                    'malformed computer probe browser metadata')
+            refused(lambda: live.chmod(0o666), 'must be owner-only and owned by this runtime')
+            refused(lambda: None, 'Live qualification receipt is missing or a link', receipt=linked)
+            refused(lambda: None, 'Live qualification receipt is missing or a link', receipt=base / 'absent.json')
+            def retarget():
+                selected.unlink(); selected.symlink_to(elsewhere)
+            refused(retarget, 'resolved path changed since selection')
 
     def test_cli_forwards_host_path_without_resolving_it_on_operator_machine(self):
         with tempfile.TemporaryDirectory() as directory:
             manifest = dict(name="release-test", status="preparing", host="host", appBase="/srv/app")
-            remote = Mock(side_effect=[{"prior": {"node": "/pm/node"}}, {"qualificationComplete": True}])
+            facts = {"prior": {"node": "/pm/node", "qualificationReceipt": "/srv/app/shared/hermes-qualified.json"}}
+            remote = Mock(side_effect=[facts, {"qualificationComplete": True}])
             # The real release module, so qualification calls the same host_facts() prepare does.
             module = load_source(".agents/tools/release-app.py", "release_app_for_qualify")
             spec = types.SimpleNamespace(loader=types.SimpleNamespace(exec_module=lambda _: None))
@@ -205,16 +247,27 @@ if __name__ == "__main__":
             self.assertLessEqual(read, set(facts_call.args[2]))
             payload = qualify_call.args[2]
             self.assertEqual(payload["computerProbeBrowser"], "/host-only/chrome")
+            self.assertFalse(payload["inheritComputerProbeBrowser"])
             self.assertEqual(payload["node"], "/pm/node")
             # A release prepared with --node qualifies with that runtime, not the last release's.
             manifest["node"] = "/srv/app/runtime/node-v24.22.2/bin/node"
-            remote.side_effect = [{"prior": {"node": "/pm/node"}}, {"qualificationComplete": True}]
-            with patch.object(module, "remote", remote), patch.object(module, "load_manifest", lambda _: manifest), \
-                    patch.object(module, "MANIFESTS", Path(directory)), \
-                    patch.object(qualify_app.importlib.util, "spec_from_file_location", return_value=spec), \
-                    patch.object(qualify_app.importlib.util, "module_from_spec", return_value=module):
-                qualify_app.main(["release-test"])
-            self.assertEqual(remote.call_args_list[-1].args[2]["node"], "/srv/app/runtime/node-v24.22.2/bin/node")
+            def qualify(*argv):
+                remote.side_effect = [facts, {"qualificationComplete": True}]
+                with patch.object(module, "remote", remote), patch.object(module, "load_manifest", lambda _: manifest), \
+                        patch.object(module, "MANIFESTS", Path(directory)), \
+                        patch.object(qualify_app.importlib.util, "spec_from_file_location", return_value=spec), \
+                        patch.object(qualify_app.importlib.util, "module_from_spec", return_value=module):
+                    qualify_app.main(["release-test", *argv])
+                return remote.call_args_list[-1].args[2]
+            payload = qualify()
+            self.assertEqual(payload["node"], "/srv/app/runtime/node-v24.22.2/bin/node")
+            # No browser flag reuses the live receipt's selection on the host.
+            self.assertIsNone(payload["computerProbeBrowser"])
+            self.assertTrue(payload["inheritComputerProbeBrowser"])
+            self.assertEqual(payload["liveQualificationReceipt"], "/srv/app/shared/hermes-qualified.json")
+            self.assertFalse(qualify("--pinned-probe-browser")["inheritComputerProbeBrowser"])
+            with self.assertRaises(SystemExit), patch("sys.stderr"):
+                qualify_app.main(["release-test", "--pinned-probe-browser", "--computer-probe-browser", "/host-only/chrome"])
 
 
 class Host:
