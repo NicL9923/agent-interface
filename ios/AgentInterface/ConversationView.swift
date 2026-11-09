@@ -42,6 +42,8 @@ struct ConversationView: View {
   @State private var readSaveTask: Task<Void, Never>?
   @State private var latestTrigger = 0
   @State private var viewportHeight: CGFloat = 0
+  /// The message box floating over the transcript's bottom, which the transcript keeps room for.
+  @State private var composerHeight: CGFloat = 0
   @State private var content = TranscriptMetrics()
   /// Following keeps the latest message in view as replies and cards grow, as on the web.
   @State private var following = true
@@ -119,17 +121,19 @@ struct ConversationView: View {
   }
   private var openAnchorRoom: CGFloat {
     guard anchoredMessage != nil, let anchorTop else { return 0 }
-    return SendAnchor.room(viewport: viewportHeight, contentEnd: contentEnd, anchorTop: anchorTop)
+    return SendAnchor.room(viewport: max(0, viewportHeight - composerHeight), contentEnd: contentEnd, anchorTop: anchorTop)
   }
   var body: some View {
     VStack(spacing: 0) {
       modelBar
       banners
       if findOpen { findBar }
-      // The transcript runs under the message box, which floats over it; at the end the last
-      // message still rests just above the box, and so does the computer preview.
-      transcript.overlay(alignment: .bottomTrailing) { computerPeek }
-        .safeAreaInset(edge: .bottom, spacing: 0) { composer }
+      // The transcript runs under the message box, which floats over it. The transcript ends with
+      // room as tall as the box, so its end, and anything placed there, rests just above it.
+      transcript.overlay(alignment: .bottomTrailing) { computerPeek.padding(.bottom, composerHeight) }
+        .overlay(alignment: .bottom) {
+          composer.onGeometryChange(for: CGFloat.self) { $0.size.height } action: { composerHeight = $0 }
+        }
     }.modifier(ReadingChat(botId: bot.id)).background(Palette.surface(scheme)).navigationTitle(bot.name)
     .navigationBarTitleDisplayMode(.inline)
     .bareToolbarItem(.principal) { header }
@@ -361,7 +365,9 @@ struct ConversationView: View {
       .onChange(of: store.receipt) { _, receipt in
         if let receipt, receipt.requestId == sentAnchor, let id = receipt.messageId { sentAnchorMessage = id }
       }
-      .overlay(alignment: .bottom) { if !following && !atEnd && attentionPosition == nil && store.conversation != nil { jumpButton(proxy) } }
+      .overlay(alignment: .bottom) {
+        if !following && !atEnd && attentionPosition == nil && store.conversation != nil { jumpButton(proxy).padding(.bottom, composerHeight) }
+      }
       .animation(.easeOut(duration: 0.15), value: following)
       .refreshable {
         await store.refreshConversation()
@@ -412,7 +418,7 @@ struct ConversationView: View {
     }
     .scrollPosition(id: $visibleMessage, anchor: .top)
     .coordinateSpace(name: "transcript")
-    .undoToast($runUndo) { change in Task { await store.undo(change) } }
+    .undoToast($runUndo, above: composerHeight) { change in Task { await store.undo(change) } }
     // Runs reread every minute, every 15 seconds while one runs, and when a saved message arrives.
     .task(id: "\(store.scope ?? ""):\(bot.id):\(runsEnabled):\(store.conversation?.messages.last { !$0.id.hasSuffix("-inflight") }?.id ?? "")") {
       guard runsEnabled else { return }
@@ -423,8 +429,7 @@ struct ConversationView: View {
       }
     }
     .onGeometryChange(for: CGFloat.self) {
-      // Laid out above the message box's inset already, so this is what the reader can see; the
-      // scroll view only draws on under the box.
+      // The whole frame, under the message box too: the transcript's end includes room for the box.
       $0.size.height
     } action: {
       viewportHeight = $0
@@ -493,6 +498,8 @@ struct ConversationView: View {
       Color.clear.frame(height: 0)
         .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(SentAnchorTop.space)).minY } action: { contentEnd = $0 }
       if anchorRoom > 0 { Color.clear.frame(height: anchorRoom).accessibilityHidden(true) }
+      // Under the floating message box, so the latest message ends above it.
+      Color.clear.frame(height: composerHeight).accessibilityHidden(true)
       Color.clear.frame(height: 1).id("latest")
     }.coordinateSpace(name: SentAnchorTop.space)
   }

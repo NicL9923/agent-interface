@@ -77,19 +77,22 @@ struct UndoToastView: View {
 }
 
 extension View {
-  /// Shows home's undo toast over the bottom edge and clears it after five seconds.
-  func undoToast(_ queue: Binding<UndoQueue>, undo: @escaping (UndoToast.Change) -> Void) -> some View {
-    modifier(UndoToastHost(queue: queue, undo: undo))
+  /// Shows home's undo toast over the bottom edge, above anything floating there, and clears it
+  /// after five seconds.
+  func undoToast(_ queue: Binding<UndoQueue>, above floating: CGFloat = 0, undo: @escaping (UndoToast.Change) -> Void) -> some View {
+    modifier(UndoToastHost(queue: queue, floating: floating, undo: undo))
   }
 }
 private struct UndoToastHost: ViewModifier {
   @Binding var queue: UndoQueue
+  var floating: CGFloat
   var undo: (UndoToast.Change) -> Void
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   func body(content: Content) -> some View {
     content.overlay(alignment: .bottom) {
       if let toast = queue.current {
         UndoToastView(toast: toast) { if let change = queue.undo(toast.id) { undo(change) } }
+          .padding(.bottom, floating)
           .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
           .task(id: toast.id) {
             AccessibilityNotification.Announcement(toast.announcement).post()

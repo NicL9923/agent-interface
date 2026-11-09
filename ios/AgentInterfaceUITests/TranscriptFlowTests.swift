@@ -72,6 +72,7 @@ import XCTest
     XCTAssertTrue(app.buttons["questionOption-feed-0"].wait(until: "isSelected == true"), "The recommended answer starts chosen")
     XCTAssertTrue(app.buttons["questionOption-feed-0"].label.hasSuffix("recommended"))
     try capture(app, "approval-scopes")
+    app.buttons["approvalMore"].revealAboveComposer()
     app.buttons["approvalMore"].tapWhenReady()
     app.buttons["Always allow…"].tapWhenReady()
     let alert = app.alerts.firstMatch
@@ -81,6 +82,7 @@ import XCTest
     try capture(app, "approval-always-confirm")
     alert.buttons["Cancel"].tapWhenReady()
     XCTAssertTrue(alert.waitForDisappearance())
+    app.buttons["approvalDecline"].revealAboveComposer()
     app.buttons["approvalDecline"].tapWhenReady()
     XCTAssertTrue(app.descendants(matching: .any)["declinedStep"].waitForExistence(timeout: 10))
     XCTAssertTrue(app.textViews["messageComposer"].waitForKeyboardFocus(true), "The message box takes the next step")

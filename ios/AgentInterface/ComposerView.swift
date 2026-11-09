@@ -38,6 +38,7 @@ struct ComposerView: View {
       card.fixedSize(horizontal: false, vertical: true)
     }.padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 8)
       .frame(maxWidth: 752).frame(maxWidth: .infinity).background { ComposerBackdrop() }
+      .accessibilityElement(children: .contain).accessibilityIdentifier("composerArea")
       .onDrop(of: [.item], isTargeted: $dropTargeted) { providers in
         drop(providers)
         return true
@@ -114,6 +115,7 @@ struct ComposerView: View {
       footnotes
     }.padding(4).background(Palette.raised(scheme), in: RoundedRectangle(cornerRadius: 26, style: .continuous))
       .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).stroke(Palette.line, lineWidth: 1))
+      .accessibilityElement(children: .contain).accessibilityIdentifier("composerCard")
   }
   private var input: some View {
     // While a message is on its way the transcript shows it, so the box reads empty and is
