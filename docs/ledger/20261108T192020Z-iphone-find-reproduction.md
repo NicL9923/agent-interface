@@ -1224,3 +1224,138 @@ stays open. A defensible fix, unchanged strict red-to-green proof, mutation,
 full native unit validation, other shortcut and iPhone/iPad checks, eligible
 final review and current CI are still required. The exact scheduled completion
 task remains enabled. No deployment or distribution action occurred.
+
+
+## Raw keyboard and system-routing observation, November 9 01:18 UTC
+
+Claude Opus 5.5, model `claude-opus-5-5`, explicitly at high effort completed
+its read-only diagnostic review. It found missing standalone Command presses
+before Cmd+1 in both previously observed failing launches, with full Command
+presses in both passing launches. That is a small, correlated sample, not a cause.
+It recommended a passive GameController witness plus simulator-wide system logs.
+This is design feedback and grants no production approval.
+
+The DEBUG, fixture-gated observer uses the public `GCKeyboard.coalesced` and
+connection notifications and logs `keyChangedHandler` key codes and pressed
+state. It preserves an existing handler instead of replacing it. It changes no
+focus, responder, capture mode, command registration or action. The installed
+Xcode 27.2 `GCKeyboard.h` and `GCKeyboardInput.h` describe these public APIs.
+Apple's documentation also identifies this
+[key-change callback](https://developer.apple.com/documentation/gamecontroller/gckeyboardinput/keychangedhandler).
+The concrete UIApplication observer continues forwarding to the original methods.
+
+The signed build succeeded. The unchanged strict test passed launch 1 and failed
+launch 2 with one F press, after Cmd+1 navigated in one attempt. No focus assertion
+was reached on failure. The exact 329-file iOS fingerprint before and after was
+`sha256:fa1518d429490b341e3dd31acfc146f838b91d7ff8702a4c618551850d99bca0`.
+The Mac task checkout remained at `4c7a555d63cf83838941f3a04c1c22da34493eeb`,
+with the rejected UIKit candidate and temporary instrumentation uncommitted.
+The parent was at `84da6b5388d38bd0e2a9048921641a3a7bfd04d1`.
+
+The run verified the expected mounted DevSSD UUID. Xcode was 27.2 build 27B52.
+Owned iPhone 18 Pro `ACEADEE4-F3F6-4620-B3C9-D1E86282CE50` ran iOS 27.0,
+build 24A434. The global lock waited 0.154 seconds and was held 119.770 seconds.
+The runner took 118 seconds and exited 65. It retained signing, disabled parallel
+testing and diagnostic collection, and ran:
+
+```sh
+IOS_VALIDATION_FRESH=1 \
+IOS_DERIVED_DATA=/Volumes/DevSSD/scratch/agent-interface-followup-20261108/derived-273 \
+bash .agents/tools/validate-ios.sh ACEADEE4-F3F6-4620-B3C9-D1E86282CE50 test \
+-only-testing:AgentInterfaceUITests/ParityFlowTests/testSwipingARowPinsItAndCommandShortcutsOpenAndFind \
+-test-iterations 10 -test-repetition-relaunch-enabled YES -run-tests-until-failure
+```
+
+The outer locked script also streamed `backboardd`, `SpringBoard`, `testmanagerd`
+and the app's keyboard-trace subsystem from the owned simulator. XCTest alone
+booted and interacted with the app. The runner shut down the selected device;
+the outer wrapper's redundant shutdown returned 405 because it was already
+Shutdown, then owned deletion succeeded. No other simulator was changed.
+
+Both exported app-stdout logs calibrate the GameController witness. Passing PID
+29320 received HID codes 227, Command, and 30, digit 1, followed by releases.
+It then received 227 and 9, F, with releases, and both UIKit command callbacks.
+Failing PID 29403 received only code 30 down/up, not 227 or 9. UIKit likewise
+received digit 1 and its action, but no F. The first-launch validity condition
+passed, and GameController saw both shortcuts in that launch.
+
+The system log positively records the failing F input and its destination.
+At November 8 19:20:26.951 CST, raw line 96553 posts HID page 0x7, usage 0x9,
+downEvent 1 to keyboardFocus at SpringBoard PID 28691. Lines 96452 and 96461
+send Command to that same PID's system overlay and keyboardFocus. In the passing
+launch, line 42558 posts F's release to the app PID 29320, and line 42606 sends
+Command to that app. The app's passing stdout independently contains F's press
+and action. Thus the failing event was synthesized and routed outside the app;
+this does not yet explain why app registrations were not selected or establish
+a simulator-only defect. System log internals are diagnostic evidence, not an
+API contract. The broad debug stream omitted some first-launch app messages;
+exported per-launch app stdout provides the complete app-side comparison.
+
+Evidence prefix on the Mac:
+`/Volumes/DevSSD/scratch/agent-interface-followup-20261108/273-raw-keyboard-observation-20261109`.
+The result is the prefix plus `.ios-test-20261109T011842Z-28203.xcresult`.
+The summary, runner, system stream, source fingerprints, command, cleanup,
+execution, and per-launch app stdout are copied under the same prefix basename
+in `/home/nic/.cache/agent-interface-backlog/native-273/` on NicolasLaptop.
+The positive routing extraction is `.routing-positive.txt`; the full rejected
+candidate is preserved as `raw-keyboard-candidate-complete.patch` there.
+
+### Published-routing control
+
+The preceding comparison still used the rejected UIKit routing candidate.
+Before attributing the new routing evidence to product or simulator, the agent
+archived that complete candidate and restored the published SwiftUI production
+routing. The only application additions are the DEBUG passive observers and a
+DEBUG log at `AppStore.command`. The test retains its strict single F and the
+stronger precondition that Cmd+1 must open a different assistant; it requests no
+focus and sends no extra shortcut. Unrelated candidate tests were removed from
+this temporary control source.
+
+Its iOS fingerprint is
+`sha256:4e9c609b57ead5e18d8bd0a8f4b23ac865e8b42c1cf77e3bc7ba8eace53c9d56`,
+matched on both machines. The exact patch is
+`native-273/raw-keyboard-published-routing.patch` in the parent audit.
+The same locked, signed ten-relaunch run-until-failure selection is running.
+No result is claimed at this checkpoint. No production fix is accepted,
+independent final review remains incomplete, PR 273 stays draft, issue 178
+stays open, and the exact completion schedule remains enabled.
+
+
+### Published-routing control result at 01:25 UTC
+
+The signed control build succeeded, but the first launch failed before Find.
+Cmd+1 did not open Ranch hand on any of three attempts. The new precondition
+checks real navigation from home after visiting Kitchen companion; the original
+published test could accept a composer already mounted after pinning. The
+first-launch validity condition failed, so this run cannot validate the
+GameController/system-routing experiment for a Find failure on published routing.
+It is not counted as another missing-F sample.
+
+All three synthesized Cmd+1 presses reached GameController and concrete
+UIApplication in app PID 31920, including standalone Command down/up. None
+called `AppStore.command`. The application uses its published `AssistantCommands`
+and `.commands` registration in this control. This is a separate command-delivery
+failure from the rejected UIKit candidate's later missing-F input, and prevents
+attributing both failures to a single simulator defect. No production cause or
+fix has been proven.
+
+The unchanged iOS fingerprint before and after remains
+`sha256:4e9c609b57ead5e18d8bd0a8f4b23ac865e8b42c1cf77e3bc7ba8eace53c9d56`.
+The run used Xcode 27.2 build 27B52 and an owned iPhone 18 Pro on iOS 27.0.
+The global lock waited 0.157 seconds, held 134.682 seconds and returned 65.
+The runner summary reports one failed repetition and no passing or skipped tests.
+
+Evidence prefix is
+`/Volumes/DevSSD/scratch/agent-interface-followup-20261108/273-published-routing-observation-20261109`.
+The result bundle is the prefix plus `.ios-test-20261109T012252Z-30752.xcresult`.
+The exact command and runner metadata are beside it. The parent audit copied
+its summary, log, full system stream, per-launch app stdout, source fingerprints,
+execution and cleanup records under `native-273/` with the same basename.
+The source archive `raw-keyboard-published-routing.patch` preserves the exact
+control. Only the task-owned simulator was shut down and deleted.
+
+The agent requested a new focused Claude Opus 5.5 high pressure-test of this
+separate missing-Cmd+1 result and the positive SpringBoard routing evidence.
+The request asks for a discriminating supported routing experiment, not menu
+or focus guesses. It also covers the stronger test precondition. This remains
+design advice, not final approval. No production implementation is accepted.
