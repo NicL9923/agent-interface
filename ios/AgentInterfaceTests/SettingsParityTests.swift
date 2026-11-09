@@ -240,7 +240,7 @@ final class SettingsParityTests: XCTestCase {
     XCTAssertTrue(saved)
     XCTAssertEqual(model.chosen, "cedar")
     XCTAssertEqual(server.lastRequest?.httpMethod, "PUT")
-    XCTAssertEqual(server.lastRequest?.url?.path(percentEncoded: true), "/api/bots/ranch%2F..%2Fx/voice")
+    XCTAssertEqual(server.lastRequest?.url?.path(percentEncoded: true), "/api/bots/ranch%2F%2E%2E%2Fx/voice")
     XCTAssertEqual(try server.lastJSON()["voice"] as? String, "cedar")
     // The voice already chosen sends nothing.
     let again = await model.choose("cedar")
