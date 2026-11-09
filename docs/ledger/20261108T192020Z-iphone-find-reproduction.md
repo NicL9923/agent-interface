@@ -504,3 +504,194 @@ Its log is `273-navigation-delivery.log`. The selected tests are the permanent
 focused-Find control and the strict pin sequence. The test remains limited to
 one Cmd+F. The trace is pending; no production fix is accepted, and no final
 review or merge gate has passed. The completion schedule stays enabled.
+
+The initial passive-trace build failed because the diagnostic logger passed its
+non-escaping autoclosure through os.Logger's escaping interpolation. Evaluating
+that string before logging fixed the diagnostic code. The corrected iOS
+fingerprint is
+`sha256:9d3663225416801ef6333ed968ef0d698860a812bf3c8c2723fa28b546ca0d0e`.
+Both the parent and Mac reported that exact fingerprint before the run.
+
+The corrected signed run passed both selected tests, with 0 failures and 0 skips,
+on owned iPhone `F510CB58-B658-4C36-B141-881AD2BA530C`. The bundle is
+`.private/ios-test-20261108T225047Z-49529.xcresult`. The parent audit retains
+`native-273/273-navigation-delivery-summary.txt`,
+`native-273/273-navigation-delivery-fixed.log` and
+`native-273/273-key-trace-navigation-delivery.log`.
+
+In the successful strict sequence, `command pinned(0)` ran at 16:52:58.060 Mac
+local time with Kitchen selected and no viewed chat. Ranch's visibility update
+and Find-handler appearance followed at 16:52:58.104 and 16:52:58.105.
+`command find` ran at 16:52:59.861 with Ranch selected and viewed. Its snapshot
+reported an active key window, hardware-keyboard detection and no first responder
+in the view tree. The handler and `openFind` then ran at 16:52:59.865.
+This proves that this path can work without composer focus. It does not establish
+a fix: both the temporary trace and timing differ from earlier failed runs.
+There were no input-watcher press lines even in this successful run, so the
+absence of those lines cannot establish that a key failed to reach the app.
+
+Claude Opus 5.5 returned a read-only design pressure-test with unconfirmed effort.
+It identified potential visibility or observer races if the command callback
+runs, and proposed separate focused/unfocused navigation controls if it does not.
+Its no-input-watcher inference is not accepted, because the successful control
+above provides a counterexample. It approved no production fix. The requested
+model and tool options were Opus 5.5 with high effort, but this feedback does not
+count toward the final eligible review gate.
+
+The unchanged corrected trace is now selected for 20 strict iterations with
+relaunch, stopping on the first failure. The private runner starts 10 owned CPU
+load workers after the build and kills them at cleanup. The locked script is
+`run-273-navigation-loaded.sh`; output is `273-navigation-loaded.log` in the same
+Mac scratch directory. No production or test assertion changed for this run.
+PR 273 stays draft and the completion schedule remains enabled.
+
+The loaded trace ran two iterations before stopping at a failure. The first
+iteration delivered Find and passed. On the second launch, Cmd+1 genuinely
+opened Ranch in one attempt, its ReadingChat and Find-handler appearance logs
+reported Ranch viewed with an active key window and hardware keyboard detected,
+and the single Cmd+F never reached AppStore.command. There was no `command find`
+line for failing app PID 68965. This localizes the failure before the app's Find
+handler and rejects a stale viewed-chat guard as the cause of that occurrence.
+The absence of input-watcher lines still distinguishes nothing, because both
+passing and failing iterations lack them.
+
+This used the unchanged trace fingerprint above, signed Xcode 27.2, owned iPhone
+`07908C9F-6A38-4646-AF6D-94D97AFCC883` and iOS 27.0. It waited 354 seconds for the
+shared lock before execution. The result bundle is
+`.private/ios-test-20261108T230103Z-68015.xcresult`. The overall test summary marks
+the repeated test failed, while its device configuration counts 1 passed and
+1 failed iteration, with no skips. The 20-iteration cap was not reached.
+The parent audit retains `native-273/273-navigation-loaded-summary.txt`,
+`native-273/273-navigation-loaded.log` and
+`native-273/273-key-trace-navigation-loaded.log`. All 10 owned load workers were
+stopped, and the owned simulator was deleted.
+
+A new candidate removes the automatic UIKit Find menu group through
+`UIMainMenuSystem.Configuration.findingPreference = .removed` at app launch,
+on iOS 26 and later, with a nil build handler. SwiftUI retains menu construction.
+This is a hypothesis about competing command registration, not an established
+framework cause. It uses the separate Find-group configuration API verified in
+Apple's current documentation and the Xcode 27.2 SDK interface. It does not
+repeat the earlier textEditing-group replacement or add another Find shortcut.
+No focus changes or diagnostic source remain.
+
+The candidate retains the Settings button but removes its Cmd+, binding, which
+already prevented the other menu controls from working. The newly written
+Cmd+, control is replaced with a check that Settings remains reachable through
+Cmd+K followed by its Settings result, and through the home menu. That deliberate
+binding removal is not an assertion relaxation in the strict Find regression;
+Find still gets exactly one press after actual pinned navigation. The candidate
+iOS fingerprint is
+`sha256:53845e5c427de0e194652cf2cd9efa713e04011975bb006ff47ba0f4d5502530`,
+verified on both parent and Mac. Five targeted native UI checks are starting on
+an owned phone through `run-273-native-selection.sh find-config phone 0`, with
+the three ParityFlowTests shortcut cases, ShellFlowTests Cmd+K and NativeFlowTests
+Cmd+period. The script preserves signing and the global lock, and never shuts
+down a device it did not create. Broader validation waits for these results.
+
+The system-Find configuration candidate built but failed both focused Find and
+the strict post-pin Find sequence. Cmd+period, Settings via Cmd+K/home, and the
+full Cmd+K flow passed. XCTest reported 3 passed, 2 failed and no skips in
+`.private/ios-test-20261108T230610Z-70374.xcresult`. The retained artifacts are
+`native-273/273-find-config-phone-summary.txt` and
+`native-273/273-find-config-phone.log`. The configuration change is rejected and
+removed from the working candidate.
+
+A DEBUG-only UIKit global-menu Cmd+7 control then built but failed to open the
+quick switcher from home. Its fingerprint is
+`sha256:8df9d323953ea6964e3a4af1bff85f4ce0f30de478d269cadf48ecf938556190`.
+The native trace reported `proxyResponds=true target=SwiftUI.AppDelegate` for
+its distinct action selector, so the delegate target exists. The menu
+registration still did not dispatch that control. This does not establish
+whether its build handler ran or whether the phone consults that menu for the
+injected key. The parent retains the three `273-global-menu-control-phone`
+artifacts and its key trace in `native-273`. No production implementation was
+accepted from this control.
+
+The same control is now registered through public `addKeyCommand` on the existing
+root view controller, after fixture configuration. It does not replace the
+controller, change focus or change the test's single key press. This separates
+action-target reachability from key registration at that controller. Its source
+fingerprint is
+`sha256:1610eded7cb850bcd08ba2b4eebb8ffdd165eb78363bac3a8854609436293b61`,
+verified on parent and Mac. The locked command uses
+`run-273-native-selection.sh root-key-command-control phone 0` with only
+`ParityFlowTests/testGlobalUIKitMenuCommandControl`. The log is
+`273-root-key-command-control-phone.log`. Temporary controls will be removed
+before any production validation or final independent review.
+
+The direct root-controller Cmd+7 control passed its single test with no skips.
+Its retained summary and log are `273-root-key-command-control-phone-*` in the
+parent audit. The trace confirmed that the existing UIHostingController reported
+the added key command. No editor focus or controller replacement was required.
+
+A production candidate then replaced the SwiftUI shortcut declarations with
+owned UIKit key commands and retained all existing store handlers. It added
+native tests for command registration, unchanged-command stability, controller
+changes, pin order and rename, sign-out removal, each action's event and startup,
+missing-index and stale-index rejection. On fingerprint
+`sha256:cc22e4bfdaf012aedfb9b13766b5ee2d4273b286effb8c68e1ce6648b2bc5dbf`,
+all 23 AssistantSurfaceTests and three non-Find UI checks passed; both Find checks
+failed. The parent retains `273-root-registration-phone-summary.txt` and its log.
+This was not accepted as a working fix.
+
+Giving only Find UIKit's priority-over-system-behavior flag still failed Find
+and Cmd+, in the six selected UI checks. Stop, Settings via the quick switcher
+and home menu, and Cmd+K passed. Its fingerprint is
+`sha256:173bd8dd880f38a148f194224be69bd6555960b6f960e9e15386ee3e9cd6c43e`.
+The parent retains `273-find-priority-phone-summary.txt` and its log.
+A temporary registration trace at
+`sha256:c099cb7d2437392d6411c45deb3af37fda4006bf9c58fb45173e0f52950fa9e3`
+reported the app's Find descriptor registered with priority true, a key window,
+SwiftUI.AppDelegate as target and canPerformAction true. Focused Find and Cmd+K
+passed in that traced run, but post-pin Find still did not reach the delegate.
+The parent retains `273-root-registration-trace-phone-summary.txt` and the key
+trace. These observations reject an unavailable delegate or signed-out gate as
+the reason for that failure.
+
+The next candidate registers with the navigation content's nearest existing
+view controller instead of the outer app root. The installer moves and clears
+only its owned commands through normal UIView lifecycle callbacks. Home, all
+phone navigation destinations, both iPad columns and the quick switcher use the
+same registration. It changes no focus or controller hierarchy. Five focused
+UI checks are starting at fingerprint
+`sha256:287614ba362c3bcd27623cd1fbdbefe4e5470354a2e6de3d074e86e61f7bb89b`.
+The exact command is `run-273-native-selection.sh controller-registration phone 0`
+with focused Find, the strict pin flow, Cmd+, from home/quick switcher, Cmd+K and
+Cmd+period. Its log is `273-controller-registration-phone.log`. Diagnostics remain
+temporary and no final native pass or eligible review is claimed yet.
+
+Registering on each navigation content's closest controller also failed focused
+Find, post-pin Find and Cmd+, while Cmd+period and Cmd+K passed. Its selected
+five-test run is retained as `native-273/273-controller-registration-phone-summary.txt`
+and its controller registration trace. This implementation is still unaccepted.
+A temporary alternative-key control now uses the same Find selector on Cmd+G,
+without focusing the composer, to distinguish the Find handler from the reserved
+key's routing. Its fingerprint is
+`sha256:d8f8767655add5f6990007ff77f69493bfe70083632f2e70f0fa72751ed267b7`.
+The locked command selects only `ParityFlowTests/testAlternativeFindKeyControl`
+through `run-273-native-selection.sh alternative-find-control phone 0`.
+An independent review was explicitly requested from verified Grok 4.7 with high
+reasoning effort before further production changes. The reviewer is reviewing
+this failing integration and is not asked to approve a merge. The original
+strict regression still sends one Cmd+F and remains failing. The schedule stays
+enabled, and issue 178 remains open.
+
+The alternative-key control passed its one native test with no skips. Cmd+G
+reached `assistantFind`, which logged a bound store, present bootstrap and Ranch
+viewed, and opened the ordinary Find UI without composer focus. The parent audit
+retains `273-alternative-find-control-phone-summary.txt`, its full log and its key
+trace. This establishes that the same delegate handler and presentation path
+work under another shortcut; Cmd+F matching or routing remains the unresolved
+boundary. The alternative descriptor also has a diagnostic title and does not
+request Find's priority flag, so this is not claimed as a complete one-variable
+proof of which system component consumes Cmd+F. No further production code has
+been accepted. The requested Grok review is still the pending independent check.
+
+Origin/main advanced to `f218e65233cda4e9bb1c549cdaf5723045d5dd3d`, which changes
+the validation runner and runbooks through PR 277, not application code. Its
+runner removes shutdown all, verifies lock ancestry and reuses exact matching
+passes. The existing private copies were already limited to owned devices;
+these completed native comparisons remain tied to their exact recorded inputs.
+The next validation phase will use the updated runbook after a normal target
+merge, without rewriting published history or repeating unrelated passing work.
