@@ -382,6 +382,7 @@ struct BotSettingsView: View {
       avatarControls
       descriptionSection
       sharingSection
+      if let bot { TalkVoiceSection(bot: bot) }
       Section {
         Button("Delete assistant", role: .destructive) { confirmation = .delete(name: savedName) }.disabled(
           !store.supports(.botConfiguration) || !store.connected)
