@@ -9,7 +9,8 @@
  * sets how many characters arrive every 40 ms (default 6, about 150 a second). With CODE_BLOCK=1 the
  * answer is one open code block that starts at 20,000 characters and keeps growing, the case where
  * each paint re-parses the most. SAVE_DELAY_MS holds the finished answer live that long before
- * saving it (default 0), to select text before the hand-off. Nothing leaves the machine.
+ * saving it (default 0), to select text before the hand-off. ANSWER_PARAGRAPHS sets how many closing
+ * paragraphs the answer has (default 6; 80 makes it about 21,000 characters). Nothing leaves the machine.
  */
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -34,7 +35,7 @@ const prose = [
   "3. Hay in the lean-to is dry, but the tarp has a tear on the west side.", "",
   "```sh", "gate-log --pasture north --since today", "# 06:12 latched by Nic", "# 18:40 checked by Ranch Hand", "```", "",
   "| Gate | State | Checked |", "| --- | --- | --- |", "| North | Latched | 6:12 pm |", "| East | Open | 2:05 pm |", "",
-  ...Array.from({ length: 6 }, (_, index) => `Paragraph ${index + 1}: the weather turns tomorrow, so feed early and keep the horses `
+  ...Array.from({ length: Number(process.env.ANSWER_PARAGRAPHS ?? 6) }, (_, index) => `Paragraph ${index + 1}: the weather turns tomorrow, so feed early and keep the horses `
     + "in the barn if the wind picks up. Check the trough again at dusk, and walk the east fence before dark so the loose wire "
     + "is found while there is still light to fix it.\n"),
   "That is everything for today.",

@@ -6,7 +6,7 @@ import { clearResponseCache } from "../src/client-api";
 import { CATCH_UP_MS } from "../src/components/streaming-reveal";
 import { defaultPreferences, type Bootstrap, type Conversation, type Inflight, type InflightDelta, type Message, type ToolCall, type TurnEvent } from "../src/shared/types";
 import { FakeEventSource } from "./fake-event-source";
-import { advance, mountRoot, stubMatchMedia } from "./ui-harness";
+import { advance, mountRoot, stubMatchMedia, waitForUi } from "./ui-harness";
 import type { Mount } from "./ui-harness";
 
 // The app runs whole, through the real client API, against a fake server at fetch and a fake
@@ -29,6 +29,8 @@ let server: Conversation;
 let generation: number;
 const version = () => `boot:0:${generation}`;
 let unexpected: string[];
+// The replies saved with "Save reply", and the messages a Retry named, by ID.
+let saves: string[] = [], retries: string[] = [];
 let mount: Mount;
 const respond = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
 
@@ -44,6 +46,8 @@ beforeEach(() => {
   // jsdom has no layout. The Quote button measures a selection in a reply.
   Range.prototype.getBoundingClientRect ??= () => new DOMRect();
   unexpected = [];
+  saves = [];
+  retries = [];
   generation = 1;
   server = { botId: "home", messages: [question], approvals: [], files: [], activity: running, version: version() };
   vi.stubGlobal("fetch", vi.fn(async (input: string, init: RequestInit = {}) => {
@@ -60,6 +64,12 @@ beforeEach(() => {
       "GET /bots/home/routine-runs": { runs: [], unavailable: [] },
     };
     if (call in empty) return respond(empty[call]);
+    if (call === "POST /saved") { saves.push((JSON.parse(String(init.body)) as { messageId: string }).messageId); return respond({}); }
+    if (call === "POST /bots/home/messages") {
+      const body = JSON.parse(String(init.body)) as { requestId: string; retryOf?: string };
+      if (body.retryOf) retries.push(body.retryOf);
+      return respond({ requestId: body.requestId, status: "accepted", runId: "run-2" });
+    }
     if (/^PUT \/(bots\/[^/]+\/(presence|read-position)|devices\/activity)$/.test(call)) return respond({});
     unexpected.push(call);
     throw new TypeError(`Unexpected request ${call}`);
@@ -124,6 +134,15 @@ const saved = (id: string, text: string): Message => ({ id, role: "assistant", t
 const toolRow = (status: ToolCall["status"]): Message => ({ id: "t1", role: "tool", text: "", runId: "run-1", createdAt: "2026-11-10T14:59:30Z",
   toolCall: { id: "call-1", name: "terminal", status, startedAt: "2026-11-10T14:59:30Z" } });
 const meta = (element: Element) => element.querySelector(".message-meta");
+/** Selects characters of a row's first paragraph, as a person dragging over the reply would. */
+function select(element: Element, from: number, to: number) {
+  const words = element.querySelector(".message-markdown p")!.firstChild as Text;
+  const range = document.createRange();
+  range.setStart(words, from);
+  range.setEnd(words, to);
+  document.getSelection()!.removeAllRanges();
+  document.getSelection()!.addRange(range);
+}
 
 describe("a live reply's row when it is saved", () => {
   it("keeps the reply's nodes and a selection in it, takes the saved ID, and reveals its meta row in the place it held", async () => {
@@ -144,7 +163,6 @@ describe("a live reply's row when it is saved", () => {
 
     await save([saved("m2", "The north gate is latched.")]);
     expect(row("m2")).toBe(live1);
-    expect(live1.dataset.messageId).toBe("m2");
     expect(row("m2")!.querySelector(".message-markdown")).toBe(body);
     expect(document.getSelection()!.toString()).toBe("north gate");
     expect(meta(live1)).toBe(held);
@@ -193,17 +211,134 @@ describe("a live reply's row when it is saved", () => {
     expect(mount.container.querySelector(".streaming-caret")).toBeNull();
   });
 
-  it("keeps the node when a failed turn saves the reply so far, showing its raw text and its meta row", async () => {
+  it.each(["failed", "interrupted"] as const)("keeps the node when a turn ends %s, as a stopped one does, with the reply so far saved, showing its raw text and its meta row", async state => {
     await open();
     await send("inflight", live("Checking the **north"));
     const partial = row("s1-inflight")!;
     // Live, the unfinished bold is held back.
     expect(replyText("s1-inflight")).toBe("Checking the");
-    await save([saved("m2", "Checking the **north")], { state: "failed" });
+    await save([saved("m2", "Checking the **north")], { state });
     expect(row("m2")).toBe(partial);
     // Saved, the reply shows as written, with no hold-back.
     expect(replyText("m2")).toBe("Checking the **north");
     expect(meta(partial)!.hasAttribute("inert")).toBe(false);
     expect(mount.container.querySelector(".streaming-caret")).toBeNull();
+  });
+
+  it("never hands the live node to a progress line saved before the final reply, and rebuilds the reply as main does", async () => {
+    server = { ...server, messages: [question, saved("m2", "First segment."), toolRow("completed")] };
+    await open();
+    await send("inflight", live("Second live."));
+    const first = row("m2")!, liveNode = row("s1-inflight")!;
+    select(liveNode, 0, 6);
+    expect(document.getSelection()!.toString()).toBe("Second");
+    // Two rows appear where the live one was, so neither may claim its node.
+    await save([saved("m2", "First segment."), toolRow("completed"), { ...saved("p1", "Checking the gate."), interim: true }, saved("m3", "Second live.")]);
+    expect(row("p1")).not.toBe(liveNode);
+    expect(row("m3")).not.toBe(liveNode);
+    expect(liveNode.isConnected).toBe(false);
+    expect(row("m2")).toBe(first);
+    // The selection went with the node, rather than moving to another message's text.
+    expect(document.getSelection()!.toString()).toBe("");
+    expect(replyText("p1")).toBe("Checking the gate.");
+    expect(replyText("m3")).toBe("Second live.");
+  });
+
+  it("keeps each reply's own node and actions when redaction hides an earlier reply", async () => {
+    server = { ...server, sessionId: "session-1", activity: { state: "idle" }, messages: [question, saved("m2", "The gate is latched."), saved("m3", "The trough is full.")] };
+    saves = [];
+    await open();
+    const second = row("m3")!;
+    await act(async () => row("m2")!.querySelector<HTMLButtonElement>('button[aria-label="Save reply"]')!.click());
+    // Saving loads the reply titler first, which takes real time.
+    await waitForUi(() => expect(row("m2")!.querySelector('button[aria-label="Reply saved"]')).not.toBeNull());
+    expect(saves).toEqual(["m2"]);
+    // The first reply turns out to be another member's private assistant, and becomes a hidden activity row.
+    await save([{ ...saved("m2", "Message from another member's assistant: This message is private."), origin: { kind: "agent", visibility: "activity" } }, saved("m3", "The trough is full.")]);
+    expect(row("m2")).toBeNull();
+    expect(row("m3")).toBe(second);
+    expect(row("m3")!.querySelector('button[aria-label="Save reply"]')).not.toBeNull();
+    expect(row("m3")!.querySelector('button[aria-label="Reply saved"]')).toBeNull();
+  });
+
+  it("hands each live node to its own saved segment across several segments", async () => {
+    await open();
+    await send("inflight", live("Checking the gate log."));
+    const one = row("s1-inflight")!;
+    await turn([saved("m2", "Checking the gate log."), toolRow("running")], "");
+    await send("inflight-delta", { botId: "home", messageId: "s1-inflight", baseTextLength: 0, baseReasoningLength: 0, appendText: "Now the trough.", activity: running });
+    const two = row("s1-inflight")!;
+    await turn([saved("m2", "Checking the gate log."), toolRow("running"), saved("m3", "Now the trough."), { ...toolRow("running"), id: "t2" }], "");
+    await send("inflight-delta", { botId: "home", messageId: "s1-inflight", baseTextLength: 0, baseReasoningLength: 0, appendText: "All latched.", activity: running });
+    const three = row("s1-inflight")!;
+    await turn([saved("m2", "Checking the gate log."), toolRow("completed"), saved("m3", "Now the trough."), { ...toolRow("completed"), id: "t2" },
+      saved("m4", "All latched.")], "", { state: "idle" });
+    expect(new Set([one, two, three]).size).toBe(3);
+    expect([row("m2"), row("m3"), row("m4")]).toEqual([one, two, three]);
+    expect([replyText("m2"), replyText("m3"), replyText("m4")]).toEqual(["Checking the gate log.", "Now the trough.", "All latched."]);
+  });
+
+  it("hands the live node to the segment a tool call saves when the next live reply starts in the same update", async () => {
+    await open();
+    await send("inflight", live("Checking the gate log."));
+    const segment = row("s1-inflight")!;
+    await turn([saved("m2", "Checking the gate log."), toolRow("completed")], "The north gate is latched.");
+    expect(row("m2")).toBe(segment);
+    // The new live reply is another message, so it never takes over the node that showed the segment.
+    expect(row("s1-inflight")).not.toBe(segment);
+    expect(replyText("s1-inflight")).toBe("The north gate is latched.");
+    expect(replyText("m2")).toBe("Checking the gate log.");
+  });
+
+  it("streams a retried turn's reply in a new node and hands it to that reply's saved copy", async () => {
+    await open();
+    await send("inflight", live("Let me look"));
+    const failed = row("s1-inflight")!;
+    await save([], { state: "failed" });
+    expect(failed.isConnected).toBe(false);
+    await act(async () => mount.container.querySelector<HTMLButtonElement>("button.retry-turn")!.click());
+    await advance(0);
+    expect(retries).toEqual([question.id]);
+    await save([], { state: "working", runId: "run-2" });
+    await send("inflight", { ...live("The gate is latched."), activity: { state: "working", runId: "run-2" } });
+    const retried = row("s1-inflight")!;
+    expect(retried).not.toBe(failed);
+    await save([{ ...saved("m3", "The gate is latched."), runId: "run-2" }]);
+    expect(row("m3")).toBe(retried);
+  });
+
+  it("rebuilds the live reply when a steer starts a new turn below it, as main does, and hands no node to another message", async () => {
+    await open();
+    await send("inflight", live("The north gate"));
+    const before = row("s1-inflight")!;
+    const steer: Message = { id: "u2", role: "user", text: "Check the east gate too.", steered: true, sender: { id: "one", name: "One" }, createdAt: "2026-11-10T15:00:10Z" };
+    await save([steer], running);
+    await send("inflight", live("The north gate is latched. The east gate too."));
+    await advance(CATCH_UP_MS + 100);
+    expect(before.isConnected).toBe(false);
+    expect(row("u2")).not.toBe(before);
+    expect(replyText("s1-inflight")).toBe("The north gate is latched. The east gate too.");
+  });
+
+  it("keeps the live node and its selection when an earlier page of history loads above", async () => {
+    const older: Message[] = [{ ...question, id: "u0", text: "Did the hay come?" }, saved("m0", "It came this morning.")];
+    // The route tells the client how many messages lie before the page it sent.
+    server = Object.assign({}, server, { earlier: 2 });
+    await open();
+    await send("inflight", live("The north gate is latched."));
+    const node = row("s1-inflight")!;
+    select(node, 4, 14);
+    server = Object.assign({}, server, { earlier: 0, messages: [...older, ...server.messages] });
+    await act(async () => [...mount.container.querySelectorAll("button")].find(item => item.textContent === "Show earlier messages")!.click());
+    await advance(0);
+    expect(replyText("m0")).toBe("It came this morning.");
+    expect(row("s1-inflight")).toBe(node);
+    generation++;
+    server = { ...server, messages: [...older, question, saved("m2", "The north gate is latched.")], activity: { state: "idle" }, version: version() };
+    await act(async () => stream().emit("message", "change"));
+    await advance(0);
+    expect(replyText("m0")).toBe("It came this morning.");
+    expect(row("m2")).toBe(node);
+    expect(document.getSelection()!.toString()).toBe("north gate");
   });
 });

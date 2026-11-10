@@ -1,5 +1,5 @@
 import { matchCombo, shortcuts } from "./shortcuts";
-import { lazy, memo, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, memo, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode, RefCallback, RefObject } from "react";
 import type { ActivityState, Bootstrap, Bot, FileRef, Message, ToolCall } from "../shared/types";
 import { Avatar } from "../components/Avatar";
@@ -30,6 +30,7 @@ import type { SentEcho } from "./sent-echo";
 import type { useConversation } from "./use-conversation";
 import { useStableCallback } from "./use-stable-callback";
 import { useTurnRetry } from "./use-turn-retry";
+import { emptyReplyKeys, replyKeys } from "./reply-keys";
 import { AttentionList } from "./AttentionList";
 import { ApprovalCard, DeclinedStep } from "./ApprovalCard";
 import { useDeclined } from "./decline-handoff";
@@ -506,10 +507,12 @@ const TurnView = memo(function TurnView({ block, advanced, disconnected, name, b
   });
   const afterFold = fold ? [fold, ...shown] : [];
   // One keyed list, so the fold keeps its open state when finishing moves it above the reply.
-  // An assistant reply is keyed by its place among the turn's replies, not its ID. The live reply is
-  // always the turn's last, and its saved copy takes that place under Hermes's own ID, so React
-  // keeps the row's node, with any selection in it, instead of building the reply again.
-  let replies = 0;
+  // Each row is keyed by its own identity. A streamed reply's saved copy takes the live row's key
+  // when the hand-off is unambiguous (see replyKeys), so React keeps the row's node, with any
+  // selection in it, instead of building the reply again.
+  const handoff = useRef(emptyReplyKeys());
+  const { key: rowKey, record } = replyKeys(handoff.current, block.messages);
+  useLayoutEffect(() => { handoff.current = record; });
   const rows = block.messages.flatMap((message, position) => {
     // The conversation is with one assistant, so its replies need no name. Consecutive reply parts
     // in a turn read as one reply, with the time under the last part.
@@ -535,7 +538,7 @@ const TurnView = memo(function TurnView({ block, advanced, disconnected, name, b
     const files = message.files?.map(file => <FileLink file={file} key={file.id} />);
     const article = <article
       className={`message message-${exchange ? "agent" : message.role}${progress ? " message-interim" : ""}${continued ? " message-continued" : ""}${delivery ? ` message-outgoing message-${delivery}` : ""}`}
-      key={reply && !exchange && message.role === "assistant" ? `reply:${replies++}` : message.id}
+      key={rowKey(message)}
       data-message-id={message.id}
       aria-busy={delivery === "sending" || undefined}
     >
