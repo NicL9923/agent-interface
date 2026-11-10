@@ -10,7 +10,7 @@ import { chromium, devices } from '@playwright/test';
 
 const [base = 'http://127.0.0.1:3000', report] = process.argv.slice(2);
 // [width, height, visible frames with the keyboard up; null is no keyboard]
-const views = [[375, 667, [null, 363]], [430, 932, [null, 548]], [667, 375, [null, 120]], [932, 430, [null, 190, 150]], [1280, 800, [null]]];
+const views = [[375, 667, [null, 363]], [430, 932, [null, 548]], [667, 375, [null, 120]], [932, 430, [null, 250, 190, 150]], [1280, 800, [null]]];
 const long = Array.from({ length: 10 }, (_, line) => `Line ${line + 1} of the feed order`).join('\n');
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
 const cases = [
@@ -61,21 +61,23 @@ for (const [width, height, frames] of views) for (const frame of frames) for (co
   });
   const visible = frame ?? height;
   // After a failed send, the explanation must be readable too: with the panel scrolled to its top, the composer
-  // must not lie over it. A landscape keyboard frame under 300 px cannot hold the explanation and a one-line
-  // composer together, so there it is reported and not required; it shows once the keyboard closes.
+  // must not lie over it. That is required wherever the frame can hold the panel's least height, which is the
+  // explanation, a one-line draft and the composer's other rows. In a shorter frame the two cannot both fit, so
+  // it is reported and not required; it shows once the keyboard closes.
   const note = !item.fail ? null : await page.locator('.group-panel [role="alert"]').evaluate(alert => {
-    alert.closest('.group-panel').scrollTop = 0;
+    const panel = alert.closest('.group-panel');
+    panel.scrollTop = 0;
     const box = alert.getBoundingClientRect();
     const uncovered = [box.top + 2, (box.top + box.bottom) / 2, box.bottom - 2].every(y => alert.contains(document.elementFromPoint(box.left + box.width / 2, y)));
-    return { top: Math.round(box.top), bottom: Math.round(box.bottom), uncovered };
+    return { top: Math.round(box.top), bottom: Math.round(box.bottom), uncovered, least: Math.round(parseFloat(getComputedStyle(panel).minHeight)) };
   });
-  const ok = seen.top >= 0 && seen.bottom <= visible && seen.tappable && seen.shellScrolled === 0 && (!note || note.uncovered || visible < 300);
+  const ok = seen.top >= 0 && seen.bottom <= visible && seen.tappable && seen.shellScrolled === 0 && (!note || note.uncovered || visible < note.least);
   rows.push({ width, height, frame, chat: item.chat, draft: item.draft === long ? 'long' : item.draft ? 'short' : 'empty',
     attach: !!item.attach, thread: !!item.thread, failed: !!item.fail, button: String(item.button), ...seen, note, ok });
   await context.close();
 }
 await browser.close();
-for (const row of rows) console.log(`${row.ok ? 'ok  ' : 'FAIL'} ${row.width}x${row.height} frame=${row.frame ?? 'none'} ${row.chat} ${row.draft}${row.attach ? '+files' : ''}${row.thread ? '+thread' : ''}${row.failed ? '+failed send' : ''}: ${String(row.button)} at ${row.top}-${row.bottom}${row.note ? `, explanation at ${row.note.top}-${row.note.bottom}${row.note.uncovered ? '' : ' covered'}` : ''}`);
+for (const row of rows) console.log(`${row.ok ? 'ok  ' : 'FAIL'} ${row.width}x${row.height} frame=${row.frame ?? 'none'} ${row.chat} ${row.draft}${row.attach ? '+files' : ''}${row.thread ? '+thread' : ''}${row.failed ? '+failed send' : ''}: ${String(row.button)} at ${row.top}-${row.bottom}${row.note ? `, explanation at ${row.note.top}-${row.note.bottom}${row.note.uncovered ? '' : ' covered'}, panel needs ${row.note.least}` : ''}`);
 const failed = rows.filter(row => !row.ok).length;
 console.log(`${rows.length - failed} of ${rows.length} cases keep the button whole and tappable.`);
 if (report) writeFileSync(report, JSON.stringify(rows, null, 1));

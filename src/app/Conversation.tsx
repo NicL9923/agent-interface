@@ -23,7 +23,7 @@ import { prefersReducedMotion } from "./reduced-motion";
 import { receipt } from "../shared/discovery";
 import { activityAction } from "../shared/activity-sentence";
 import { MAX_ATTACHMENTS } from "../shared/uploads";
-import { isActivityMessage, messageOrigin, withMessageOrigins } from "../shared/message-origin";
+import { messageOrigin } from "../shared/message-origin";
 import { withoutBotTag } from "../shared/event-copy";
 import type { SavedConversation } from "./storage";
 import type { SentEcho } from "./sent-echo";
@@ -44,13 +44,16 @@ import { placeRuns, type RoutineRun } from "../shared/routine-runs";
 import { useRoutineRuns } from "./use-routine-runs";
 import { ReplyFiles } from "./ReplyFiles";
 import { DraftRevisions } from "../components/EmailDraftCard";
-import { draftRevisions } from "../shared/draft-diff";
-import { conversationArtifacts, replyArtifacts, windowReplyArtifacts, type Artifact } from "../shared/artifacts";
+import { continueDraftRevisions } from "../shared/draft-diff";
+import { unknownEarlierFiles, type Artifact } from "../shared/artifacts";
+import { continueChips, continueTurns, settleChips, settleRevisions, settleTurns, useSettledWindow, type Turn } from "./transcript-window";
 import { useEarlierFiles } from "./use-earlier-files";
 import "./transcript.css";
 // The panel loads when a file chip first opens it, as it does from the assistant's details.
 const ArtifactsPanel = lazy(() => import("../components/Artifacts").then(module => ({ default: module.ArtifactsPanel })));
 const activeStates: ActivityState[] = ["thinking", "working", "waiting", "blocked"];
+const noMessages: Message[] = [];
+const noChips = new Map<string, Artifact[]>();
 /**
  * Memoized, with stable callbacks from App, so a keystroke in the composer, which changes App's draft,
  * does not re-render the transcript, its decisions, or its activity avatar.
@@ -99,14 +102,27 @@ export const Conversation = memo(function Conversation({ boot, selected, botId, 
 }) {
   const prefs = boot.preferences;
   const advanced = prefs.presentation === "advanced";
-  const blocks = useMemo(() => turns(conversation, advanced), [conversation, advanced]);
+  // Work over the whole window is done once for the settled messages and continued over the live
+  // rows, so a streaming reply costs its own rows, not the window's. See transcript-window.ts.
+  const { settled, live } = useSettledWindow(conversation?.messages ?? noMessages);
+  const settledTurns = useMemo(() => settleTurns(settled, advanced), [settled, advanced]);
+  const blocks = useMemo(() => continueTurns(settledTurns, live, conversation?.toolCalls), [settledTurns, live, conversation?.toolCalls]);
   // Each reply's files, attributed from the same history as the Artifacts panel. A window that starts
   // after the beginning reads the files before it, only when it holds a reply with files of its own.
-  const candidates = useMemo(() => conversation ? replyArtifacts(conversation.messages, conversationArtifacts(conversation.messages, [], conversation.files)).size > 0 : false, [conversation]);
+  const files = conversation?.files, loaded = !!conversation;
+  const ownChips = useMemo(() => settleChips(settled, files, noMessages), [settled, files]);
+  const candidates = useMemo(() => loaded && continueChips(ownChips, settled, live, files, noMessages).size > 0, [loaded, ownChips, settled, live, files]);
   const earlierFiles = useEarlierFiles(botId, conversation, candidates);
-  const replyFiles = useMemo(() => conversation ? windowReplyArtifacts(conversation, earlierFiles.messages) : new Map<string, Artifact[]>(), [conversation, earlierFiles.messages]);
-  // Email drafts that revise an earlier one here, so their cards can mark what changed.
-  const revisions = useMemo(() => draftRevisions(conversation?.messages ?? []), [conversation?.messages]);
+  // Until the files before the window are known, a file in it may be the person's or an earlier turn's, so it has no chips.
+  const unknownEarlier = !!conversation && unknownEarlierFiles(conversation, earlierFiles.messages);
+  const earlier = earlierFiles.messages ?? noMessages;
+  const windowChips = useMemo(() => earlier.length ? settleChips(settled, files, earlier) : ownChips, [earlier, ownChips, settled, files]);
+  const replyFiles = useMemo(() => !loaded || unknownEarlier ? noChips : continueChips(windowChips, settled, live, files, earlier),
+    [loaded, unknownEarlier, windowChips, settled, live, files, earlier]);
+  // Email drafts that revise an earlier one here, so their cards can mark what changed. The map keeps
+  // its identity while the live rows add no draft, so the cards reading it do not re-render.
+  const settledRevisions = useMemo(() => settleRevisions(settled), [settled]);
+  const revisions = useMemo(() => continueDraftRevisions(settledRevisions, live).revisions, [settledRevisions, live]);
   // The Artifacts panel opened from a chip, on one file or, from "+N more", on the first.
   const [artifactFocus, setArtifactFocus] = useState<{ fileId?: string } | null>(null);
   const openFile = useStableCallback((fileId?: string) => setArtifactFocus({ fileId }));
@@ -393,44 +409,6 @@ function HistoryEdge({ history, scroll, name, disabled }: {
     </button>
   </div>;
 }
-type Turn = { messages: Message[]; tools: Map<string, Message>; reasoning: string[]; replyAt?: string };
-const startsTurn = (message: Message) => isHumanMessage(message) || message.role === "user" && messageOrigin(message)?.kind === "scheduled";
-function turns(conversation: SavedConversation | null, advanced: boolean) {
-  const blocks: Turn[] = [];
-  for (const message of withMessageOrigins(conversation?.messages || [])) {
-    // A person's message or a scheduled prompt starts a turn. Subagent, process and agent rows that
-    // Hermes files as user messages belong to the work of the turn they arrive in.
-    if (!blocks.length || startsTurn(message)) blocks.push({ messages: [], tools: new Map(), reasoning: [] });
-    const block = blocks.at(-1)!;
-    // A turn's reasoning parts share one accordion instead of a block per reply row.
-    if (advanced && !isActivityMessage(message) && message.role === "assistant" && message.reasoning?.trim()) block.reasoning.push(message.reasoning.trim());
-    // A tool-call row with no reply text would render as an empty bubble.
-    if (!isActivityMessage(message) && message.role !== "tool" && visibleMessage(message)) {
-      // A progress line says what the assistant is about to do, so the work still ahead is not folded above it.
-      if (message.role !== "user" && !message.interim && block.tools.size && block.replyAt === undefined) block.replyAt = message.id;
-      block.messages.push(message);
-    }
-    if (isActivityMessage(message) || message.role === "tool" || message.toolCall) {
-      block.tools.set(message.id, message);
-      block.replyAt = undefined;
-    }
-  }
-  for (const call of conversation?.toolCalls || []) {
-    // Native history can reuse a tool ID. Only a unique row is safe to reconcile.
-    const matches = blocks.flatMap(block => [...block.tools.values()].filter(message => message.toolCall?.id === call.id)
-      .map(message => ({ block, message })));
-    if (matches.length === 1) {
-      const { block, message } = matches[0];
-      block.tools.set(message.id, { ...message, toolCall: call });
-    } else {
-      if (!blocks.length) blocks.push({ messages: [], tools: new Map(), reasoning: [] });
-      blocks.at(-1)!.tools.set(`live-${call.id}`, { id: `live-${call.id}`, role: "tool", text: "", toolCall: call });
-    }
-  }
-  // Live calls update receipts, but only saved row order establishes where the reply starts.
-  for (const block of blocks) if ([...block.tools.values()].some(message => message.toolCall?.status === "running")) block.replyAt = undefined;
-  return blocks;
-}
 type TurnProps = {
   block: Turn; advanced: boolean; name: string; botId: string; userId: string;
   /** Actions that need the connection are refused. Only a turn whose replies hold reply cards gets it. */
@@ -595,9 +573,6 @@ function TurnWork({ work, reasoning, messages, advanced, disconnected, recipient
   </details>;
 }
 const isReplyRow = (message: Message) => message.role === "assistant" || messageOrigin(message)?.kind === "scheduled";
-function visibleMessage(message: Message) {
-  return message.role !== "assistant" || isAgentExchange(message) || !!message.text.trim() || !!message.files?.length;
-}
 function Reasoning({ parts }: { parts: string[] }) {
   return <details className="tool-calls reasoning-calls">
     <summary><Icon name="brain" size={16} /><span>Reasoning</span>{parts.length > 1 && <span className="tool-count">{parts.length}</span>}</summary>
