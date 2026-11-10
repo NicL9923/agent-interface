@@ -5,7 +5,7 @@ import { interruptionPendingMessage, submissionConflictMessage } from "../shared
 import { filesBefore, historyWindow, MAX_HISTORY_TURNS, windowFiles } from "../shared/history.js";
 import { messageOrigin } from "../shared/message-origin.js";
 import { isRetryRequestId, retryRequestId } from "../shared/retry-id.js";
-import type { Approval, ApprovalChoice, ApprovalScope, CapabilityKey, InflightDelta, ReadTiming, Runtime, Submission, SubmissionReceipt } from "../shared/types.js";
+import type { Approval, ApprovalChoice, ApprovalScope, CapabilityKey, InflightDelta, ReadTiming, Runtime, Submission, SubmissionReceipt, TurnEvent } from "../shared/types.js";
 import { MAX_MESSAGE_TEXT } from "../shared/api.js";
 import { formatBytes, MAX_ATTACHMENTS, MAX_DOWNLOAD_BYTES, MAX_UPLOAD_BYTES, UPLOAD_KINDS, UPLOAD_MIME_TYPES } from "../shared/uploads.js";
 import { accountMarker } from "./apns.js";
@@ -20,6 +20,7 @@ import { SendTimings, sendTimingHeader, type SendPhases } from "./send-timing.js
 import { fileRef, id } from "./schemas.js";
 import type { Store } from "./store.js";
 import { nameRequesters } from "./vault.js";
+import { shownMessages } from "./conversation-view.js";
 
 // Longer than the runtime shares one history read among readers.
 const sharedReadMargin = 60000;
@@ -134,24 +135,13 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
     // Hermes's open requests settle approvals answered outside the app. A history read can be
     // shared for a few seconds, so only approvals notified well before it count.
     store.reconcileApprovals(req.params.id, requestSessionId, result.approvals.map(approval => approval.id), readAt - sharedReadMargin);
-    // Attribution augments the canonical Hermes history, never stores a transcript.
     const redact = await redactAgents(store, roster, signedIn(req).id);
     if (result.toolCalls) result.toolCalls = result.toolCalls.map(redact.call);
     // A runtime that already cut the window adds only the earlier messages still needed for files.
     const context = cut?.context ?? [];
     const rows = [...context, ...result.messages];
     const originalFileIds = new Set(rows.flatMap(message => message.files ?? []).map(file => file.id));
-    const shown = rows.map((message) => {
-      const attribution =
-        store.submissionForMessage(req.params.id, message.id) ??
-        store.submission(message.id);
-      const user = attribution
-        ? store.getUser(attribution.input.senderId)
-        : undefined;
-      return user
-        ? { ...message, origin: undefined, sender: { id: user.id, name: user.name } }
-        : message;
-    }).map(redact.message);
+    const shown = shownMessages(store, req.params.id, redact, rows);
     result.attention = nameRequesters(result.attention, userId => store.getUser(userId)?.name);
     const visibleFileIds = new Set(shown.flatMap(message => message.files ?? []).map(file => file.id));
     result.files = result.files?.filter(file => !originalFileIds.has(file.id) || visibleFileIds.has(file.id));
@@ -213,10 +203,15 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
     // Followed before the first await, so a client that leaves during setup leaves no watcher.
     const connection = eventStreamConnection(reply);
     const botId = id.parse((req.params as { id: string }).id);
-    // ?inflight=1 sends each live reply whole, as the iOS app and cached web bundles read it.
-    // ?inflight=2 sends only what a reply grew by since the last event this stream sent.
+    // ?inflight=1 sends each live reply whole, as older installed iOS builds and cached web bundles read it.
+    // ?inflight=2 sends only what a reply grew by since the last event this stream sent. The iOS app
+    // and web bundles from before turn events read this one.
+    // ?inflight=3 sends growth too, and the running turn's saved messages with each whole reply, as one
+    // `turn` event, whenever the read the reply is built on changes. The server then reads the turn
+    // itself after each change to its structure, so live text never waits for a client's refetch. The
+    // web app reads this one.
     const mode = (req.query as { inflight?: string }).inflight;
-    const optedIn = mode === "1" || mode === "2", deltas = mode === "2";
+    const optedIn = mode === "1" || mode === "2" || mode === "3", deltas = mode === "2" || mode === "3", turns = mode === "3";
     // ?drafts=1 adds `event: draft` notices. Without it none are sent: the iOS app reads any
     // unnamed or unknown data line as a conversation change and would refetch on every draft save.
     const draftNotices = (req.query as { drafts?: string }).drafts === "1";
@@ -230,13 +225,15 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
     let stream: EventStream | undefined;
     // What this stream last sent of the live reply, after redaction, so growth is measured on what
     // the viewer may see and never on the raw reply.
-    let sent: { id: string; text: string; reasoning: string; rest: string; tools: string; activity: string } | undefined;
+    // A turn stream's growth is based on the version its last whole event carried.
+    let sent: { id: string; text: string; reasoning: string; rest: string; tools: string; activity: string; version?: string } | undefined;
     // A streamed reply changes on every token. Notices go at most once a second.
     const changed = () => {
       pending ??= setTimeout(() => {
         pending = undefined; last = Date.now();
-        // A client drops the live reply it holds on this notice, so the next one goes whole.
-        sent = undefined;
+        // A client drops the live reply it holds on this notice, so the next one goes whole. A turn
+        // stream's client keeps it: versions, not this notice, say which read it belongs with.
+        if (!turns) sent = undefined;
         stream?.send("data: change\n\n");
       }, Math.max(0, last + 1000 - Date.now()));
     };
@@ -247,6 +244,8 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
         changed(); return;
       }
       livePending ??= setTimeout(() => {
+        // On a turn stream, a tick that finds no reply to send leaves the window open, so the reply restored next goes at once.
+        const previous = liveLast;
         livePending = undefined; liveLast = Date.now();
         void (async () => {
           // Privacy can change through another assistant's settings while this stream stays open.
@@ -257,18 +256,23 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
             if (store.privacyVersion !== version) { changed(); return; }
             seen = version;
           }
-          const value = runtime.inflight?.(botId);
-          // A structural read is already pending when its snapshot was invalidated.
-          if (!value || !redact) return;
+          // A turn stream's reply carries the read it is built on, so a runtime without turns sends it nothing live.
+          const turn = turns ? runtime.turn?.(botId) : undefined;
+          const value = turns ? turn : runtime.inflight?.(botId);
+          // A structural read is already pending when its snapshot was invalidated. On a turn stream that read is
+          // the server's own, and the reply it restores goes at once.
+          if (!value || !redact) { if (turns) liveLast = previous; return; }
           const message = redact.message(value.message), toolCalls = value.toolCalls.map(redact.call);
           if (deltas) {
             const reasoning = message.reasoning ?? "";
             const next = { id: message.id, text: message.text, reasoning, tools: JSON.stringify(toolCalls),
               // Everything else about the message, which a growth notice cannot carry.
-              rest: JSON.stringify({ ...message, text: "", reasoning: undefined }), activity: JSON.stringify(value.activity) };
+              rest: JSON.stringify({ ...message, text: "", reasoning: undefined }), activity: JSON.stringify(value.activity),
+              ...(turn ? { version: turn.version } : {}) };
             const base = sent;
             sent = next;
-            if (base && base.id === next.id && base.rest === next.rest && next.text.startsWith(base.text) && reasoning.startsWith(base.reasoning)) {
+            if (base && base.id === next.id && base.rest === next.rest && base.version === next.version
+              && next.text.startsWith(base.text) && reasoning.startsWith(base.reasoning)) {
               const appendText = next.text.slice(base.text.length), appendReasoning = reasoning.slice(base.reasoning.length);
               const toolsChanged = base.tools !== next.tools;
               if (!appendText && !appendReasoning && !toolsChanged && base.activity === next.activity) return;
@@ -280,6 +284,12 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
               return;
             }
           }
+          if (turn) {
+            const event: TurnEvent = { botId: turn.botId, version: turn.version, messages: shownMessages(store, botId, redact, turn.turn.messages),
+              ...(turn.turn.after !== undefined ? { after: turn.turn.after } : {}), message, activity: turn.activity, toolCalls };
+            if (stream?.send(`event: turn\ndata: ${JSON.stringify(event)}\n\n`)) timings.written(botId, turn.activity.runId);
+            return;
+          }
           if (stream?.send(`event: inflight\ndata: ${JSON.stringify({ ...value, message, toolCalls })}\n\n`)) timings.written(botId, value.activity.runId);
         })().catch(() => changed());
       }, Math.max(0, liveLast + 250 - Date.now()));
@@ -288,9 +298,10 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
     const ownDraft = draftKey(signedIn(req).id, botId);
     const drafts = draftStreams.get(ownDraft) ?? new Set();
     const draftChanged = (revision: number) => stream?.send(`event: draft\ndata: ${revision}\n\n`);
-    let unwatch: (() => void) | undefined;
+    let unwatch: (() => void) | undefined, unfollow: (() => void) | undefined;
     const teardown = () => {
       unwatch?.();
+      unfollow?.();
       listeners.delete(changed);
       if (!listeners.size && watchers.get(botId) === listeners) watchers.delete(botId);
       drafts.delete(draftChanged);
@@ -303,6 +314,8 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
         watchers.set(botId, listeners.add(changed));
         if (draftNotices) draftStreams.set(ownDraft, drafts.add(draftChanged));
         unwatch = runtime.watch?.(botId, notice);
+        // Only turn streams hear the server's own turn reads; ?inflight=1 and ?inflight=2 wait for a client's read.
+        if (turns) unfollow = runtime.followTurns?.(botId, () => notice("inflight"));
       },
       // Ends, sending nothing more, once the person signs out or the assistant becomes someone else's.
       allowed: () => stillSignedIn(store, config, req) && visibleTo(store, botId, req.user?.id),

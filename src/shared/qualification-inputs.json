@@ -56,6 +56,7 @@
   "src/server/concurrency.ts",
   "src/server/config.ts",
   "src/server/conversation-routes.ts",
+  "src/server/conversation-view.ts",
   "src/server/delivery-targets.ts",
   "src/server/discovery.ts",
   "src/server/effect-support.ts",

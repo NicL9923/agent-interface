@@ -547,6 +547,9 @@ One longer than about a short sentence shows as typed until it closes. A table h
 while its line is typed, shows as typed while the delimiter row, the `| --- |` line under it,
 arrives, and becomes a table once that row is recognized. Code blocks show every character as
 it arrives, and a code block still arriving keeps your text selection.
+On the web, the reply keeps growing across tool calls: after each tool the server reads the
+running turn itself and sends its saved parts with the reply, so text resumes about one Hermes
+read later instead of waiting for the chat to reload. The iOS app still reloads after each tool.
 Scrolling up stops the view from following; it follows again once you return to
 the end. Each finished turn folds its tool calls and delegated work into one row,
 such as "Worked for 2m 14s · 3 tool calls". Expand it for the details. While the

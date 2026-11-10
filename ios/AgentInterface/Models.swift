@@ -606,11 +606,30 @@ struct ConversationTurn: Identifiable, Equatable {
     return groups
   }
 }
-struct Inflight: Codable {
+struct Inflight: Codable, Equatable {
   var botId: String
   var message: Message
   var activity: Activity
   var toolCalls: [ToolCall]
+  /// This reply grown by a notice from a stream opened with `?inflight=2`, as the web's
+  /// `applyInflightDelta` (src/shared/inflight.ts) grows it. Nil when the notice does not continue
+  /// exactly this reply, so the caller reloads instead of guessing. The server counts lengths in
+  /// UTF-16 code units, as JavaScript's `String.length` does; `count` counts characters, which
+  /// differs for emoji and combining marks.
+  func extended(by delta: InflightDelta) -> Inflight? {
+    guard botId == delta.botId, message.id == delta.messageId,
+      message.text.utf16.count == delta.baseTextLength,
+      (message.reasoning ?? "").utf16.count == delta.baseReasoningLength
+    else { return nil }
+    var value = self
+    value.message.text = message.text + (delta.appendText ?? "")
+    let reasoning = (message.reasoning ?? "") + (delta.appendReasoning ?? "")
+    if !reasoning.isEmpty { value.message.reasoning = reasoning }
+    value.activity = delta.activity
+    // Absent means the tool calls did not change.
+    if let toolCalls = delta.toolCalls { value.toolCalls = toolCalls }
+    return value
+  }
   func applying(to conversation: Conversation) -> Conversation {
     guard conversation.botId == botId,
       [.thinking, .working, .waiting, .blocked].contains(conversation.activity.state),
@@ -623,6 +642,19 @@ struct Inflight: Codable {
     value.toolCalls = toolCalls
     return value
   }
+}
+/// What `event: inflight-delta` carries (src/shared/types.ts `InflightDelta`): growth of the reply
+/// the stream last sent whole. The base lengths are UTF-16 code units of the text and reasoning the
+/// sender had already sent; `toolCalls` is present only when they changed.
+struct InflightDelta: Codable, Equatable {
+  var botId: String
+  var messageId: String
+  var baseTextLength: Int
+  var baseReasoningLength: Int
+  var appendText: String?
+  var appendReasoning: String?
+  var activity: Activity
+  var toolCalls: [ToolCall]?
 }
 struct Conversation: Codable, Equatable {
   var attention: [Attention]?

@@ -233,6 +233,9 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   static let bootstrapInterval: Duration = .seconds(45)
   /// Tests substitute a clock they advance by hand.
   @ObservationIgnored var now: () -> ContinuousClock.Instant = { .now }
+  /// The wait before reconnecting after repeated refused growth notices. A production timer;
+  /// tests substitute one they control, so no test waits real seconds for the backoff.
+  @ObservationIgnored var resyncPause: (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
   @ObservationIgnored var bootstrapRefreshedAt: ContinuousClock.Instant?
   @ObservationIgnored var bootstrapReads = 0
   @ObservationIgnored var appliedBootstrapRead = 0

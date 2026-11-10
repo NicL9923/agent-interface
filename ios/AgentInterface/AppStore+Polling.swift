@@ -74,7 +74,7 @@ extension AppStore {
       var failures = 0
       while !Task.isCancelled {
         do {
-          let lines = try await api.events("/api/events")
+          let stream = try await api.events("/api/events")
           guard let self, !Task.isCancelled else { return }
           failures = 0
           // Notices sent before the subscription are lost, so connecting counts as one. A server
@@ -83,7 +83,7 @@ extension AppStore {
           // Until then home polls as for an older server; the poll sleeps first, so this costs no read.
           self.groupNoticeScope = nil
           await self.refreshBootstrap()
-          for try await line in lines {
+          for try await line in stream.lines {
             guard !Task.isCancelled else { return }
             if line == "data: roster" { await self.refreshBootstrap() }
             if line == "data: groups" { self.groupNoticeScope = self.scope; await self.refreshGroups() }
@@ -96,6 +96,8 @@ extension AppStore {
     }
   }
   /// Follows the change stream of the conversation on screen, reconnecting with a growing delay.
+  /// The stream sends a live reply whole once, then only what it grew by (`?inflight=2`), so a long
+  /// reply is not sent again in full on every tick.
   func watchConversation() {
     let followed = followedBotId
     guard eventBotId != followed || eventTask == nil else { return }
@@ -106,34 +108,54 @@ extension AppStore {
     guard let id = followed, let api else { eventTask = nil; return }
     eventTask = Task { [weak self] in
       var failures = 0
+      // Growth notices refused since one last applied. The first reconnects at once; repeats wait
+      // longer each time, so a reply this app cannot read never reconnects on every tick.
+      var refused = 0
       while !Task.isCancelled {
+        var resync = false
         do {
-          let lines = try await api.events("/api/bots/\(APIClient.component(id))/events?inflight=1")
+          let stream = try await api.events("/api/bots/\(APIClient.component(id))/events?inflight=2")
           guard let self, !Task.isCancelled else { return }
           failures = 0
           self.streamHeardAt = self.now()
-          // Notices sent before the subscription are lost, so connecting counts as one.
+          // Notices sent before the subscription are lost, so connecting counts as one. A new
+          // stream starts from a whole reply, so nothing held from the last one is extended.
           self.latestInflight = nil
           self.requestConversationRefresh()
           var event = ""
-          for try await line in lines {
+          reading: for try await line in stream.lines {
             guard !Task.isCancelled else { return }
             self.streamHeardAt = self.now()
             if line.hasPrefix("event:") { event = String(line.dropFirst(6)).trimmingCharacters(in: .whitespaces) }
             if line.hasPrefix("data:") {
               if event == "inflight" {
-                // Each patch carries the whole reply so far, so it decodes away from the main actor.
+                // The whole reply so far, so it decodes away from the main actor.
+                var patch: Inflight?
                 if let data = String(line.dropFirst(5)).data(using: .utf8),
-                  let patch: Inflight = try? await APIClient.decoded(data, from: "/api/bots/events"),
-                  !Task.isCancelled, self.selectedBotId == patch.botId {
-                  self.latestInflight = patch
-                  if let current = self.conversation {
-                    let value = patch.applying(to: current)
-                    self.conversation = value
-                    self.conversationCache[patch.botId] = value
-                  }
+                  let decoded: Inflight = try? await APIClient.decoded(data, from: "/api/bots/events") {
+                  patch = decoded
                 }
+                guard !Task.isCancelled else { return }
+                // Growth notices extend exactly this reply. One this app cannot read, or one for
+                // another chat, leaves nothing to extend, so the next notice reconnects.
+                if let patch, self.selectedBotId == patch.botId { self.showLive(patch) } else { self.latestInflight = nil }
+              } else if event == "inflight-delta" {
+                // Applies only when it continues exactly the reply held. Anything else is not
+                // guessed at: drop the reply, close this stream and open a new one, whose connect
+                // reads the conversation and whose server starts again from a whole reply.
+                guard let data = String(line.dropFirst(5)).data(using: .utf8),
+                  let delta: InflightDelta = try? APIClient.decode(data, from: "/api/bots/events"),
+                  let next = self.latestInflight?.extended(by: delta)
+                else {
+                  self.latestInflight = nil
+                  resync = true
+                  stream.task.cancel()
+                  break reading
+                }
+                refused = 0
+                self.showLive(next)
               } else if line != "data: ping" {
+                // The server sends the next live reply whole after this notice.
                 self.latestInflight = nil
                 // The conversation changed, so an unconfirmed send there is worth asking about now.
                 if let pending = self.pendings[id] { self.submissionChecks[pending.requestId] = nil }
@@ -145,9 +167,24 @@ extension AppStore {
         } catch {}
         guard let self, !Task.isCancelled, !self.sessionExpired else { return }
         self.streamHeardAt = nil
+        if resync {
+          refused += 1
+          // Timer: the first reconnect after a refused notice is immediate; repeats back off.
+          if refused > 1 { try? await self.resyncPause(.seconds(min(30, 3 * (refused - 1)))) }
+          continue
+        }
         failures += 1
         try? await Task.sleep(for: .seconds(min(30, 3 * failures)))
       }
+    }
+  }
+  /// Shows a live reply from the stream and keeps it for conversation reads to lay over theirs.
+  private func showLive(_ patch: Inflight) {
+    latestInflight = patch
+    if let current = conversation {
+      let value = patch.applying(to: current)
+      conversation = value
+      conversationCache[patch.botId] = value
     }
   }
   /// One refresh at a time; a notice during one asks for one more after it.
