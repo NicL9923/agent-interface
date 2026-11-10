@@ -9,7 +9,8 @@ import type { ErrorCode } from "../shared/errors";
 import { replySnippet, watchReplies } from "./reply-announcement";
 import type { ReplyWatch } from "./reply-announcement";
 import type { SavedConversation } from "./storage";
-import { DRAFT_EVENT } from "./use-draft";
+import { DRAFT_EVENT, type DraftNotice } from "./use-draft";
+import { chatStream, LIVE_POLL_MS, reportStream, streamUp } from "./stream-health";
 import { firstPage, firstQuery, prefetchedFirstPage, type PageQuery } from "./conversation-page";
 import { ANCHOR_GAP, afterIntent, atTrueEnd, distanceToEnd, endReserve, scrollIntent } from "./scroll-follow";
 import type { Intent, ScrollMode } from "./scroll-follow";
@@ -71,7 +72,13 @@ export const provesDisconnected = (error: unknown) => navigator.onLine === false
 const countsAsNew = (message: Message) =>
   !isActivityMessage(message) && message.interim !== true && (message.role === "user" || message.role === "assistant" && (!!message.text.trim() || !!message.files?.length));
 /** onMissing hears that this person may no longer see the assistant, so polling stops. */
-export function useConversation(botId: string, userId?: string, onMissing?: (botId: string) => void) {
+/** How often the open chat is read while its stream is down, as `main` always did. */
+export const CHAT_POLL_MS = 30_000;
+/**
+ * `sessionId` is the open assistant's canonical session as bootstrap names it. Hermes announces a new
+ * one on the household roster only, so a change reloads the chat and reconnects its stream.
+ */
+export function useConversation(botId: string, userId?: string, onMissing?: (botId: string) => void, sessionId?: string) {
   const missing = useRef(onMissing);
   missing.current = onMissing;
   const [conversation, setConversation] = useState<SavedConversation | null>(
@@ -129,6 +136,7 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
   current.current = conversation;
   const requestEarlier = useRef<() => void>(() => {});
   const requestStart = useRef<(messageId: string) => void>(() => {});
+  const rebind = useRef<() => void>(() => {});
   const botIdRef = useRef(botId);
   botIdRef.current = botId;
   useEffect(() => {
@@ -225,7 +233,7 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
       }
       grace = setTimeout(() => { grace = undefined; if (live) setDisconnectedFor(botId); }, DISCONNECT_GRACE_MS);
     };
-    let loading = false, again = false, more = false, gone = false;
+    let loading = false, again = false, more = false, gone = false, lastRead = 0;
     let firstConversation = true;
     let watch: ReplyWatch = {};
     let announced = 0;
@@ -298,6 +306,10 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
           if (heldTurn && versionBoot(heldTurn.version) === from && versionBoot(latestInflight?.version) !== from) latestInflight = inflightOf(heldTurn);
         }
         setConversation(compose(result));
+        lastRead = Date.now();
+        // Every read carries this person's draft. A reconnect's read is how a draft changed while the
+        // stream was down shows at once; the draft hook applies it only if it is newer than its copy.
+        if ("draft" in result) window.dispatchEvent(new CustomEvent<DraftNotice>(DRAFT_EVENT, { detail: { botId, revision: result.draft?.revision ?? 0, draft: result.draft } }));
         readOk();
         if (earlierPage) setEarlier({ loading: false, failed: false });
       } catch (error) {
@@ -381,32 +393,59 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
       if (pending) pending.turn = grown(pending.turn, latestInflight!.message, value)!;
       showInflight(value);
       return true;
-    });
+    }, { onHealth: up => reportStream(chatStream(botId), up) });
     if (document.visibilityState !== "hidden") stream.open();
     const wake = () => {
       if (navigator.onLine === false || document.visibilityState === "hidden") return;
       stream.open();
       void load();
     };
-    // Change notices drive updates. This slow poll covers a stream that fails unnoticed.
-    const stopPolling = pollWhileVisible(wake, 30_000);
-    // A hidden page holds no stream; showing it again reloads and reopens one.
-    const hide = () => { if (document.visibilityState === "hidden") stream.close(); };
-    window.addEventListener("online", wake);
-    window.addEventListener("agent-interface:reconnect", wake);
+    // The network returning, or a manual retry that reached the server, makes the stream's earlier failures
+    // stale. The stream holds a signal that arrives while the page is hidden until it is shown.
+    const revive = () => {
+      stream.reconnect();
+      if (navigator.onLine === false || document.visibilityState === "hidden") return;
+      void load();
+    };
+    // Change notices drive updates, and this poll is their safety net: every 30 seconds while the stream is
+    // down, as from a cut until its watchdog reconnects it, and every LIVE_POLL_MS while it is live. Showing
+    // the page reads too: a hidden page suspended the stream, so it is not up then.
+    const stopPolling = pollWhileVisible(() => {
+      if (!streamUp(chatStream(botId)) || Date.now() - lastRead >= LIVE_POLL_MS) wake();
+    }, CHAT_POLL_MS);
+    // A new canonical session: the server's stream state for this chat followed the old one. The stream is
+    // suspended, not closed, so it keeps its retry budget: the bootstrap read that named the session says
+    // nothing about whether this stream's endpoint recovered. A stream that never failed reopens at once.
+    rebind.current = () => {
+      stream.suspend();
+      if (document.visibilityState !== "hidden") stream.open();
+      void load();
+    };
+    // A hidden page holds no stream; showing it again reloads and reopens one when its retry budget allows.
+    const hide = () => { if (document.visibilityState === "hidden") stream.suspend(); };
+    window.addEventListener("online", revive);
+    window.addEventListener("agent-interface:reconnect", revive);
     document.addEventListener("visibilitychange", hide);
     return () => {
       live = false;
       stopWaiting();
       requestEarlier.current = () => {};
       requestStart.current = () => {};
+      rebind.current = () => {};
       stopPolling();
       stream.close();
-      window.removeEventListener("online", wake);
-      window.removeEventListener("agent-interface:reconnect", wake);
+      window.removeEventListener("online", revive);
+      window.removeEventListener("agent-interface:reconnect", revive);
       document.removeEventListener("visibilitychange", hide);
     };
   }, [botId, userId]);
+  // Only a change from one known session to another rebinds: a first value, or none, is not a new session.
+  const bound = useRef<{ botId: string; sessionId?: string }>(undefined);
+  useEffect(() => {
+    const previous = bound.current;
+    bound.current = { botId, sessionId };
+    if (previous?.botId === botId && previous.sessionId && sessionId && previous.sessionId !== sessionId) rebind.current();
+  }, [botId, sessionId]);
   // Only messages with something to read count as seen, so a reply that was still
   // reasoning when the reader looked away is new once its text arrives.
   const markSeen = (messages: Message[]) => {

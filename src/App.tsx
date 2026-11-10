@@ -9,6 +9,7 @@ import { TodayPanel } from "./components/TodayPanel";
 import "./components/discovery.css";
 import { hasDestination, initialPanel, initialRoom, initialView, startsOnToday, useUrlSync } from "./app/view";
 import type { Panel, View } from "./app/view";
+import { chatStream, STREAM_NOTICE_MS, useStreamsDown } from "./app/stream-health";
 import { GROUP_FALLBACK_POLL_MS, GROUP_UNNOTIFIED_POLL_MS, GROUPS_EVENT, useSession } from "./app/use-session";
 import { useDraft, useDraftPersistence } from "./app/use-draft";
 import { useConversation } from "./app/use-conversation";
@@ -40,8 +41,8 @@ import { headerAvatar, morphNavigate, railAvatar } from "./app/navigation-morph"
 import { tintProps } from "./app/bot-tint";
 import { waitingPlaceholder } from "./app/waiting-input";
 import { badgeCount, useAppBadge } from "./app/badge";
-import { ConnectionPanel } from "./components/ConnectionPanel";
-import { DecisionsNotice, reviewFirstDecision, type DockItem } from "./app/StatusDock";
+import { ConnectionAnnouncer, ConnectionPanel } from "./components/ConnectionPanel";
+import { DecisionsNotice, reviewFirstDecision, StatusDock, type DockItem } from "./app/StatusDock";
 import { useWorkerOpens, type Destination } from "./app/worker-opens";
 import { waitingOnClose, type SheetClose } from "./app/close-request";
 import { rememberTheme } from "./app/saved-theme";
@@ -86,8 +87,10 @@ export function App() {
   // A read that finds nothing new returns the copy already held, so home does not redraw for it.
   const groupsHeld = useRef<{ json: string; value: { userId: string; catalog: GroupCatalog } }>(undefined);
   const groupLoad = useResource<{ userId: string; catalog: GroupCatalog }>(userId ? "/groups" : null, {
-    // A server that never sends `groups` notices gets the 30-second poll home always had.
-    deps: [userId], pollMs: session.groupsNotified ? GROUP_FALLBACK_POLL_MS : GROUP_UNNOTIFIED_POLL_MS, wake: true,
+    // A server that never sends `groups` notices gets the 30-second poll home always had, unless its catalog
+    // says group chats are unsupported: that changes only with the server, so the slow poll is enough.
+    deps: [userId], pollMs: session.groupsNotified || groupsHeld.current?.value.catalog?.supported === false
+      ? GROUP_FALLBACK_POLL_MS : GROUP_UNNOTIFIED_POLL_MS, wake: true,
     load: async (path, signal) => {
       const catalog = await api<GroupCatalog>(path, { signal });
       const json = JSON.stringify([userId, catalog]);
@@ -116,7 +119,7 @@ export function App() {
     gone(id);
     setBotId("");
     void session.refresh();
-  });
+  }, boot?.bots.find(bot => bot.id === botId)?.sessionId);
   // The chat counts as on screen only when nothing covers it: no panel, and on a phone, not the home list.
   const shownBotId = view === "conversation" && !panel && !(mobile && railOpen) && boot?.bots.some(bot => bot.id === botId) ? botId : undefined;
   useChatPresence(shownBotId, userId);
@@ -351,17 +354,27 @@ export function App() {
   const prompts = useOwnPrompts(ownConversation?.messages, userId);
   const decisions = (ownConversation?.attention?.length ?? 0) + (ownConversation?.approvals.filter(approval => approval.status === "pending").length ?? 0);
   const checkingConnection = session.checkingConnection;
+  // Live updates stopped for long enough to matter: the household stream or this chat's has been down for
+  // STREAM_NOTICE_MS without a break. The polls stand in meanwhile, so the notice is a quiet one.
+  const liveDown = useStreamsDown(useMemo(() => ["household", ...botId ? [chatStream(botId)] : []], [botId]), STREAM_NOTICE_MS);
   // Notices from the rest of the app, rebuilt only when one of them changes.
   const dock = useMemo(() => {
     const items: DockItem[] = [];
     if (!boot) return items;
-    if (connectionShown) items.push({ id: "connection", kind: "connection", node: <ConnectionPanel compact connection={boot.connection} offline={offline}
-      appUnavailable={appUnavailable} busy={checkingConnection} retry={reconnect} /> });
+    // One notice either way: a lost connection says so, and otherwise a stopped stream says updates are late.
+    if (connectionShown || liveDown) items.push({ id: "connection", kind: "connection", node: <ConnectionPanel compact connection={boot.connection} offline={offline}
+      appUnavailable={appUnavailable} liveOnly={!connectionShown} busy={checkingConnection} retry={reconnect} /> });
     if (decisions) items.push({ id: "decisions", kind: "decisions", node: <DecisionsNotice disconnected={connectionShown} count={decisions} onReview={() => reviewFirstDecision()} /> });
     if (mobile && update) items.push({ id: "update", kind: "update", node: <UpdateNotice update={update} /> });
     return items;
-  }, [boot, connectionShown, offline, appUnavailable, checkingConnection, reconnect, decisions, mobile, update]);
+  }, [boot, connectionShown, liveDown, offline, appUnavailable, checkingConnection, reconnect, decisions, mobile, update]);
+  // Today, Find, a group chat and a chat with no assistant have no composer, so the same connection item
+  // shows at the top of the view instead. A chat with no assistant shows its own full panel once the
+  // connection is lost, so there it adds only the live-updates notice.
+  const inChat = view !== "find" && view !== "group" && view !== "today";
   const liveBot = boot?.bots.find(bot => bot.id === botId);
+  const viewDock = useMemo(() => inChat && liveBot ? [] : dock.filter(item => item.kind === "connection" && !(inChat && connectionShown)),
+    [inChat, liveBot, dock, connectionShown]);
   const liveState = conversation?.botId === botId ? conversation.activity.state : liveBot?.activity;
   const canStop = !!liveBot && view === "conversation" && !connectionLost && !!boot?.capabilities.stop.supported
     && ["thinking", "working", "waiting", "blocked"].includes(liveState ?? "idle");
@@ -404,6 +417,7 @@ export function App() {
 
   return (
     <div className="app-shell">
+      <ConnectionAnnouncer shown={connectionShown || liveDown} connection={boot.connection} offline={offline} appUnavailable={appUnavailable} liveOnly={!connectionShown} />
       <Sidebar boot={boot} botId={botId} shownBotId={shownBotId} readThrough={readThrough} groups={homeGroups} view={view} state={state}
         connectionLost={connectionShown} offline={offline} mobile={mobile} open={railOpen} update={update}
         onSelectBot={selectFromHome} onView={showView} onNewBot={newBot} onSettings={openPreferences} onUsage={openUsage} onSignOut={confirmSignOut} onPin={togglePin}
@@ -413,6 +427,7 @@ export function App() {
         <ChatHeader offline={offline} view={view} boot={boot} selected={selected} room={rooms.find(room => room.room_id === roomId)} modelLocked={connectionLost || sending} onModelSaved={refreshSession} avatarState={avatarState} railOpen={railOpen}
           onOpenRail={backToHome}
           onDetails={bot => open({ kind: "details", botId: bot.id })} />
+        {viewDock.length > 0 && <div className="view-dock"><StatusDock items={viewDock} /></div>}
         {/* On a computer the rail is always beside this, so its notice is enough. In a chat it joins the composer's dock. */}
         {mobile && !(view === "conversation" && selected) && <UpdateNotice update={update} />}
         {view === "find" ? <Loading key="find"><DiscoveryPanel key={boot.user.id} bootstrap={boot} search={findQuery} onOpenMessage={openMessage} onRoutine={(id,routineId,resultId)=>setPanel({kind:"routine",botId:id,routineId,resultId})} /></Loading> : view === "group" ? <Loading key="group"><GroupRoomView key={`${boot.user.id}:${roomId}`} bootstrap={boot} roomId={roomId} canSend={catalog?.canSend ?? false} reason={catalog?.reason} onChanged={reloadGroups} /></Loading> : view === "today" ? <TodayPanel key={boot.user.id} bootstrap={boot} onOpen={(id, routineId) => { selectBot(id); if (routineId) setPanel({ kind: "routine", botId: id, routineId }); }} /> : <>

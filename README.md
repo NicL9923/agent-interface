@@ -415,7 +415,34 @@ link when the host sets `IOS_APP_LATEST_BUILD` and `IOS_APP_UPDATE_URL`; see the
 
 During an outage, the app retains loaded conversations and personal drafts,
 rechecks the connection automatically, and refreshes when the browser comes back
-online or into view. Manual reconnect checks immediately. One failed conversation read
+online or into view. Each event stream the web app opens asks the server to ping every 10 seconds,
+and a stream silent for 25 seconds is replaced, as when a proxy, a sleeping laptop or a phone's radio
+cut it without closing it. A refused, dropped or silent stream waits before its next attempt: 1 to 2
+seconds after the first failure, doubling to at most 5 minutes, each wait a random half or more of its
+ceiling so a household's tabs do not reconnect in step. Periodic checks never start an attempt sooner.
+The count starts over once a stream stays healthy past its opening ping, so a server that greets and
+then stalls keeps backing off. A timer that fires far late, as after a laptop wakes, gives the stream
+one more deadline instead of replacing it. A hidden tab holds no stream but keeps its place in the
+backoff: showing it connects at once if the stream never failed or its next attempt fell due while
+hidden, and otherwise when that attempt falls due. The network returning or a manual reconnect connects
+at once the first time in an outage, or when the tab is shown if it arrived while hidden; repeats start
+the next attempt 2 to 4 seconds after the last one they forced, or sooner if the ordinary retry is due
+first, until a stream proves itself.
+
+Streams are the fast path and polls the safety net, so polls slow down while their stream is live and
+never stop. The open chat's conversation and draft are read every 30 seconds while the chat's stream is
+down and every 2 minutes while it is live. Bootstrap is read every 45 seconds while the household stream
+is down and every 5 minutes while it is live. Every conversation read carries the draft, so a draft
+changed while the stream was reconnecting shows with the reconnect's read, and a new canonical session
+in bootstrap reloads the open chat and reconnects its stream. A stream counts as live only on data
+after its opening ping, never on connecting alone. Today, chat presence and device activity keep their
+own intervals. When the household stream or the open chat's has been down for 20 seconds, the
+connection notice says live updates are reconnecting, above the composer in a chat and at the top of
+Today, Find and group chats. It clears once the stream is live again. A screen reader hears each
+connection change once, from one status region the whole app shares; the sidebar's Offline chip and the
+notice show the state without announcing it again.
+
+One failed conversation read
 is not an outage: a chat shows it is disconnected after a second failure in a row, or
 3 seconds without a successful read, and at once when the browser is offline or the
 server answers that Hermes is unavailable. The next successful read clears it. From the
@@ -524,7 +551,8 @@ Hermes profile; a run with only a saved preview says so.
 in the home list beside the assistants, with overlapping member faces, the last
 message and who said it, and its time. Rooms follow the assistants, newest message first, because assistant rows keep
 the roster's order and do not jump. Home reads Hermes's room catalog when the household event stream
-says this person's rooms changed, when it reconnects or the page wakes, and every 5 minutes as a fallback.
+says this person's rooms changed, when it reconnects or the page wakes, and every 5 minutes as a fallback,
+as it does for a catalog that says group chats are unsupported.
 While any household stream is open, the server checks the catalog once for everyone at most every
 30 seconds, and right away after a group or assistant change made in the app, and tells only the people
 whose visible rooms changed. It adds each room's newest message to the catalog and re-reads a room's log

@@ -129,16 +129,16 @@ describe("conversation state", () => {
 
   it("reopens a refused household stream at the fallback interval", async () => {
     await render();
-    const stream=[...FakeEventSource.streams].find(stream=>stream.url==="/api/events")!;
+    const stream=[...FakeEventSource.streams].find(stream=>stream.url==="/api/events?ping=10")!;
     await act(async()=>stream.fail());
     await advance(45_000);
-    expect(FakeEventSource.created.filter(url=>url==="/api/events")).toHaveLength(2);
+    expect(FakeEventSource.created.filter(url=>url==="/api/events?ping=10")).toHaveLength(2);
   });
   it("refreshes bootstrap on a household roster notice", async () => {
     await render();
     const reads=()=>vi.mocked(api).mock.calls.filter(([path])=>path==="/bootstrap?roster=lean").length;
     const before=reads();
-    await act(async()=>{for(const stream of FakeEventSource.streams)if(stream.url==="/api/events")stream.emit("roster","roster");});
+    await act(async()=>{for(const stream of FakeEventSource.streams)if(stream.url==="/api/events?ping=10")stream.emit("roster","roster");});
     expect(reads()).toBe(before+1);
   });
   it("patches an inflight reply without fetching the transcript", async () => {
@@ -160,7 +160,7 @@ describe("conversation state", () => {
     it("opts in to growth notices and applies one that continues the reply it holds", async () => {
       conversation = { ...conversation, activity: run, messages: [{ id: "u", role: "user", text: "Hello" }] };
       await render();
-      expect(FakeEventSource.created).toContain("/api/bots/shared/events?inflight=3&drafts=1");
+      expect(FakeEventSource.created).toContain("/api/bots/shared/events?inflight=3&drafts=1&ping=10");
       await act(async () => open().emit("inflight", whole("Growing")));
       const before = vi.mocked(api).mock.calls.length;
       await act(async () => open().emit("inflight-delta", growth({ appendText: " reply" })));
@@ -584,7 +584,8 @@ describe("conversation state", () => {
     });
     expect(container.textContent).toContain("Old tail");
     conversation = { ...conversation, activity: { state: mode === "done" ? "done" : "thinking", runId: mode === "done" ? "run" : "next-run" }, messages: [{ id: "saved", role: "assistant", text: "Persisted reply" }] };
-    await advance(30_000);
+    await act(async () => FakeEventSource.notifyAll());
+    await advance(1500);
     expect(container.textContent).not.toContain("Old tail");
     expect(container.textContent).toContain("Persisted reply");
   });
@@ -688,13 +689,26 @@ describe("conversation state", () => {
     expect(container.querySelector<HTMLDialogElement>(".hermes-upgrade-panel")?.open).toBe(false);
   });
 
-  it("does not re-render the app when bootstrap and conversation polls are unchanged", async () => {
+  it("does not re-render the app when bootstrap and conversation reads find nothing new", async () => {
     await render();
+    // Live streams: each greets as it connects and is up once it pings again 10 seconds later.
+    await act(async () => { for (const stream of FakeEventSource.streams) { stream.connect(); stream.emit("ping", "10"); } });
+    await advance(10_000);
+    await act(async () => { for (const stream of FakeEventSource.streams) stream.emit("ping", "10"); });
     await advance(2000);
     const settled = renders.avatar;
     expect(settled).toBeGreaterThan(0);
-    await advance(90_000);
-    expect(vi.mocked(api).mock.calls.filter(([path]) => path === "/bootstrap?roster=lean").length).toBeGreaterThanOrEqual(3);
+    const bootstraps = () => vi.mocked(api).mock.calls.filter(([path]) => path === "/bootstrap?roster=lean").length;
+    const before = bootstraps();
+    // Six minutes of live streams, as a server that pings every 10 seconds keeps them: the bootstrap
+    // fallback reads once, and a change notice reads the conversation.
+    for (let tick = 0; tick < 36; tick++) {
+      await act(async () => { for (const stream of FakeEventSource.streams) stream.emit("ping", "10"); });
+      await advance(10_000);
+    }
+    await act(async () => FakeEventSource.notifyAll());
+    await advance(1500);
+    expect(bootstraps()).toBeGreaterThan(before);
     expect(renders.avatar).toBe(settled);
   });
 
@@ -1425,7 +1439,7 @@ describe("conversation state", () => {
     vi.mocked(api).mockImplementation(async <T>(path: string) => (path === "/bootstrap?roster=lean"
       ? { ...bootstrap, preferences: {...defaultPreferences, startPage:"assistant", presentation: "advanced" } }
       : path.startsWith("/bots/shared/conversation?") ? conversation : savedDraft) as T);
-    await act(async()=>{ for(const stream of FakeEventSource.streams)if(stream.url==="/api/events")stream.emit("roster","roster"); });
+    await act(async()=>{ for(const stream of FakeEventSource.streams)if(stream.url==="/api/events?ping=10")stream.emit("roster","roster"); });
     expect(container.querySelectorAll('[data-tool-call-id="call-1"]')).toHaveLength(1);
     expect(container.querySelectorAll(".tool-call-detail")).toHaveLength(2);
     const completed = container.querySelector<HTMLDetailsElement>('[data-tool-call-id="call-1"]')!;
