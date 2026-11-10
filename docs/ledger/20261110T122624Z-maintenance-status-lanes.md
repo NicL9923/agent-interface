@@ -170,7 +170,7 @@ the lock order and every mutation. One P2, in a test; the production code is unc
 Source fingerprint sha256:2dd08b075bca0d038358a65ddfed65d77c6dfa5eb1d92eae398a70cea1abc74b (1697 source files); `src/hermes` alone sha256:6ee032a194cd9433af9a2f3085720f874304814c11aa74b1ac826d1285c2ae6d (20 source files), unchanged from the first round. Same host and versions (Python 3.14.10).
 
 - `tests/hermes_send_lanes_test.py` 100 times, each in a fresh process with bytecode writing off (`python3 -B`,
-  `PYTHONDONTWRITEBYTECODE=1`), on an otherwise idle loop: 100 passed, 0 failed (17 minutes). A first loop of 100 ran
+  `PYTHONDONTWRITEBYTECODE=1`), with no other test runs of this round alongside: 100 passed, 0 failed (17 minutes). A first loop of 100 ran
   while mutant runs loaded the host: 98 passed. Both failures, runs 14 and 15, were
   `test_a_send_waiting_for_a_compaction_holds_up_no_other_assistant` from `t3/send-lanes`, whose `wait` timing
   threshold read 101.6 and 345.9 ms against 100; the boundary test passed in all 100.
