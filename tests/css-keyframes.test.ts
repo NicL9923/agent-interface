@@ -12,6 +12,8 @@ interface Declaration {
   line: number;
   /** The enclosing blocks, outermost first: at-rule preludes and the rule's selector list. */
   blocks: string[];
+  /** The line the rule's selector list starts on, so two rules for one selector in one file stay two. */
+  ruleLine: number;
   property: string;
   value: string;
 }
@@ -37,6 +39,7 @@ const declarations = (path: string, source: string): Declaration[] => {
   const text = source.replace(/\/\*[\s\S]*?\*\//g, comment => comment.replace(/[^\n]/g, " "));
   const found: Declaration[] = [];
   const stack: string[] = [];
+  const lines: number[] = [];
   let start = 0;
   let quote = "";
   const lineAt = (index: number) => text.slice(0, index).split("\n").length;
@@ -49,7 +52,9 @@ const declarations = (path: string, source: string): Declaration[] => {
     }
     if (char === "\"" || char === "'") quote = char;
     else if (char === "{") {
-      stack.push(text.slice(start, index).trim().replace(/\s+/g, " "));
+      const prelude = text.slice(start, index);
+      stack.push(prelude.trim().replace(/\s+/g, " "));
+      lines.push(lineAt(start + Math.max(0, prelude.search(/\S/))));
       start = index + 1;
     } else if (char === ";" || char === "}") {
       const chunk = text.slice(start, index);
@@ -59,11 +64,12 @@ const declarations = (path: string, source: string): Declaration[] => {
           path,
           line: lineAt(start + chunk.search(/\S/)),
           blocks: [...stack],
+          ruleLine: lines.at(-1) ?? 0,
           property: chunk.slice(0, colon).trim().toLowerCase(),
           value: chunk.slice(colon + 1).trim(),
         });
       }
-      if (char === "}") stack.pop();
+      if (char === "}") { stack.pop(); lines.pop(); }
       start = index + 1;
     }
   }
@@ -111,10 +117,10 @@ describe("CSS keyframes", () => {
     // A second rule silently loses to whichever loads later, as `.message-outgoing`'s 380 ms rise in styles.css
     // did to motion.css's. `animation: none` under reduced motion removes an animation rather than giving one.
     // Other media, container and supports conditions are part of the context, so a narrow-screen variant of an
-    // animation is not a second rule for the same screen.
+    // animation is not a second rule for the same screen. A rule is its file and the line its selector starts on.
     const rules = new Map<string, Set<string>>();
     for (const declaration of animating.filter(declaration => !removesAnimation(declaration))) {
-      const rule = `${declaration.path} ${declaration.blocks.join(" > ")}`;
+      const rule = `${declaration.path}:${declaration.ruleLine}`;
       const conditions = declaration.blocks.slice(0, -1)
         .map(block => block.replace(/\(\s*prefers-reduced-motion\s*:\s*[\w-]+\s*\)/g, "").replace(/^@media(\s+and)?\s*$/, ""))
         .filter(Boolean).join(" > ");
@@ -125,11 +131,32 @@ describe("CSS keyframes", () => {
         }
       }
     }
-    const repeated = [...rules].filter(([, owners]) => owners.size > 1).map(([key]) => key);
-    // The same dead base rule motion.css's springs replace, as `.message-outgoing` had. Removing these is its own
-    // change; a selector that stops repeating may leave this list, and no new one may join it.
-    const known = ["no-preference | .bot-menu", "no-preference | .dock-item", "no-preference | .toast", "no-preference | .jump-latest"];
-    expect(repeated.filter(key => !known.includes(key))).toEqual([]);
+    // Pairs that already exist, each a base rule and a spring in motion.css. The built app links its stylesheets in
+    // the order index (styles.css with motion.css), home, shell, so at equal specificity the later file wins. Read in
+    // Chromium on the built app: `.bot-menu` runs home.css's bot-menu-in 140 ms ease-out, `.dock-item` shell.css's
+    // dock-in 200 ms and `.toast` shell.css's toast-in 200 ms, so motion.css's springs for those three do not apply
+    // today, a defect of its own for a separate change. Only `.jump-latest` runs motion.css's 420 ms spring; its
+    // 180 ms base in styles.css loses. Each entry allows exactly one rule from each file it lists, matched by file so
+    // an edit that moves lines does not fail it: a known selector that gains a rule, in a new file or as a second in
+    // the same one, fails, and one that loses a rule passes.
+    const known: Record<string, string[]> = {
+      "no-preference | .bot-menu": ["src/app/home.css", "src/motion.css"],
+      "no-preference | .dock-item": ["src/app/shell.css", "src/motion.css"],
+      "no-preference | .toast": ["src/app/shell.css", "src/motion.css"],
+      "no-preference | .jump-latest": ["src/styles.css", "src/motion.css"],
+    };
+    const beyondKnown = (key: string, owners: Set<string>) => {
+      const allowed = [...known[key] ?? []];
+      return [...owners].filter(owner => {
+        const index = allowed.indexOf(owner.replace(/:\d+$/, ""));
+        if (index >= 0) allowed.splice(index, 1);
+        return index < 0;
+      });
+    };
+    const repeated = [...rules].filter(([, owners]) => owners.size > 1)
+      .map(([key, owners]) => ({ key, unknown: beyondKnown(key, owners) }))
+      .filter(({ unknown }) => unknown.length);
+    expect(repeated).toEqual([]);
   });
 
   it("animates the sent message from one rule, only when motion is allowed", () => {
